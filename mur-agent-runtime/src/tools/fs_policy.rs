@@ -144,6 +144,25 @@ pub(crate) fn for_file_tools(
     if !fs.write.contains(&home) {
         fs.write.push(home);
     }
+    // `<mur_home>/artifacts/<agent>`: the sandbox grants it (see
+    // `from_entitlements`) because the system prompt's output-locations rule
+    // sends every agent there for reports and scratch output. Unlike the other
+    // runtime-owned grants this one is FOR the model, so it belongs in this
+    // gate too — otherwise the kernel allows the write and `write_file`
+    // refuses it, which is how an agent ended up probing `/tmp` instead.
+    if let (Some(mur_home), Some(agent_name)) = (
+        agent_home.parent().and_then(|p| p.parent()),
+        agent_home.file_name(),
+    ) {
+        let mine = mur_home
+            .join("artifacts")
+            .join(agent_name)
+            .to_string_lossy()
+            .into_owned();
+        if !fs.write.contains(&mine) {
+            fs.write.push(mine);
+        }
+    }
     for f in crate::sandbox::policy::SELF_PROTECTED_AGENT_FILES {
         let p = agent_home.join(f).to_string_lossy().into_owned();
         if !fs.deny.contains(&p) {
@@ -222,6 +241,30 @@ mod tests {
     /// purpose: those are written by the RUNTIME, and this gate bounds what
     /// the MODEL may write. Granting them here would let a prompt-injected
     /// agent forge channel events through `write_file`.
+    /// Same grant, other layer: `write_file`/`edit_file` must accept the path
+    /// the system prompt sends the agent to. The sandbox granting it is not
+    /// enough — the kernel allowed the write while this gate refused it, which
+    /// is exactly how the agent ended up probing `/tmp`.
+    #[test]
+    fn the_agents_own_artifacts_dir_is_writable_by_the_file_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = std::fs::canonicalize(tmp.path()).unwrap();
+        let agent_home = mur_home.join("agents/rustsmith");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+        let fs = for_file_tools(FilesystemEntitlement::default(), &agent_home);
+
+        check_write_entitlement(
+            &fs,
+            &mur_home.join("artifacts/rustsmith/task4/check.rs"),
+            &chain,
+        )
+        .expect("the path the system prompt names must be writable");
+
+        check_write_entitlement(&fs, &mur_home.join("artifacts/pm/report.md"), &chain)
+            .expect_err("a sibling agent's artifacts must not be writable");
+    }
+
     #[test]
     fn agent_home_is_writable_by_the_file_tools() {
         let tmp = tempfile::tempdir().unwrap();

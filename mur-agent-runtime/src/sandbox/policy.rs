@@ -339,6 +339,31 @@ impl SandboxPolicy {
             fs_write.push(channel_index_dir);
         }
 
+        // `<mur_home>/artifacts/<agent>` — where the system prompt's
+        // output-locations rule (`task_runner::OUTPUT_LOCATIONS_RULE`) tells
+        // every agent to put reports, quarantined files and scratch output.
+        // Nothing granted it, so an agent following its own instructions was
+        // refused; on 2026-09-13 one then reached for `/tmp`, and that denial
+        // withdrew `bash` for the rest of the turn. MUR telling an agent to
+        // write somewhere it forbids is the same contradiction `PATH_FORMS`
+        // exists to prevent, one layer down.
+        //
+        // Scoped to THIS agent's subdir, never `artifacts/` itself: every
+        // other agent's output lives there, and a prompt-injected agent must
+        // not be able to rewrite a sibling's report. Same create-before-grant
+        // idiom as `channels` (Landlock skips rules on paths absent at seal
+        // time, and the rule names `<run>` subdirs the agent creates itself).
+        if let (Some(mur_home), Some(agent_name)) = (
+            agent_home.parent().and_then(|p| p.parent()),
+            agent_home.file_name(),
+        ) {
+            let mine = mur_home.join("artifacts").join(agent_name);
+            if !fs_write.contains(&mine) {
+                let _ = std::fs::create_dir_all(&mine);
+                fs_write.push(mine);
+            }
+        }
+
         // fleet_run carve-ins (config-gated, deny-by-default): when THIS agent
         // is allowlisted in `~/.mur/config.yaml` `fleet_run.agents`, the
         // spawned `mur fleet run` / `mur deep-research` child (which inherits
@@ -1980,6 +2005,45 @@ mod tests {
         assert!(connect_tcp_ports(&off).is_empty());
         let unr = SandboxPolicy::default(); // Unrestricted: net_allow_ports = None
         assert!(connect_tcp_ports(&unr).is_empty());
+    }
+
+    /// The system prompt's output-locations rule (`OUTPUT_LOCATIONS_RULE`)
+    /// tells every agent to put reports and scratch output in
+    /// `~/.mur/artifacts/<agent>/<run>/`. Nothing granted it, so an agent
+    /// following its own instructions was refused — observed 2026-09-13, after
+    /// which it reached for `/tmp` and tripped the tool-withdrawal path.
+    /// Two MUR-authored strings in direct contradiction, the same failure
+    /// shape `PATH_FORMS` exists to prevent.
+    #[test]
+    fn the_agents_own_artifacts_dir_is_granted_but_not_a_siblings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("w1");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let ent = minimal_entitlements();
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        let mine = mur_home.join("artifacts").join("w1");
+        assert!(
+            policy.fs_write.contains(&mine),
+            "the agent must be able to write where the system prompt sends it: {:?}",
+            policy.fs_write
+        );
+        // The grant idiom creates the dir so Landlock rules stick.
+        assert!(mine.is_dir());
+
+        // Negative controls: scoped to this agent, not the shared tree.
+        assert!(
+            !policy.fs_write.contains(&mur_home.join("artifacts")),
+            "the whole artifacts tree must NOT be granted — every other \
+             agent's output lives there"
+        );
+        assert!(
+            !policy
+                .fs_write
+                .contains(&mur_home.join("artifacts").join("w2")),
+            "a sibling agent's artifacts dir must never be writable"
+        );
     }
 
     #[test]
