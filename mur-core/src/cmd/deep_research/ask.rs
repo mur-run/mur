@@ -234,8 +234,18 @@ async fn ask_inner(mur_home: &Path, question: &str, run_id: &str) -> Result<()> 
         .unwrap_or(0);
 
     // Budget comes from fleet.yaml loop.budget_usd (set by setup); pass None
-    // overrides so the existing precedence applies unchanged.
-    super::run::cmd_deep_research_run(mur_home, DEFAULT_FLEET_NAME, None, None, None).await?;
+    // overrides so the existing precedence applies unchanged. `run_id` is
+    // threaded through so the loop self-registers under the same id this
+    // process already printed as `run_id: …`.
+    super::run::cmd_deep_research_run(
+        mur_home,
+        DEFAULT_FLEET_NAME,
+        None,
+        None,
+        None,
+        Some(run_id.to_string()),
+    )
+    .await?;
 
     // Persist the synthesized report so the answer outlives the console
     // scrollback — and so a sandboxed caller (fleet_run tool) gets a file

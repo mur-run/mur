@@ -158,6 +158,12 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             let output = app.finish_shell(&end);
             finish_shell_turn(app, &cmd, &end, output, tx);
         }
+        StreamMsg::ShellCardDone { gen_id, end } => {
+            app.shell.done(gen_id);
+            if app.shell.accepts(gen_id) {
+                let _ = app.finish_shell(&end);
+            }
+        }
         StreamMsg::StepStarted {
             step_id,
             name,

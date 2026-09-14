@@ -68,6 +68,12 @@ pub enum StreamMsg {
         cmd: String,
         end: super::shell::ShellEnd,
     },
+    /// An argv-launched slash command ended. Its output stays in the shell
+    /// card and is never forwarded to the conversational agent.
+    ShellCardDone {
+        gen_id: u64,
+        end: super::shell::ShellEnd,
+    },
     /// A tool call started running (name + args).
     StepStarted {
         task_id: String,
@@ -108,7 +114,8 @@ impl StreamMsg {
             StreamMsg::Note(_)
             | StreamMsg::Expired { .. }
             | StreamMsg::ShellOutput { .. }
-            | StreamMsg::ShellDone { .. } => None,
+            | StreamMsg::ShellDone { .. }
+            | StreamMsg::ShellCardDone { .. } => None,
         }
     }
 }

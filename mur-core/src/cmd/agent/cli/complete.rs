@@ -179,6 +179,11 @@ const SKILL_SUBS: &[(&str, &str)] = &[
     ("add", "install a skill"),
     ("remove", "uninstall a skill"),
 ];
+const DEEP_RESEARCH_SUBS: &[(&str, &str)] = &[
+    ("status", "show the fleet panel"),
+    ("stop", "write the kill-switch"),
+    ("setup", "how to run the wizard"),
+];
 const PANEL_TABS: &[(&str, &str)] = &[
     ("information", ""),
     ("activities", ""),
@@ -207,6 +212,11 @@ const COMMANDS: &[(&str, &str, Args)] = &[
         Args::Fixed(CHANNELS_ARGS),
     ),
     ("clear", "start a new conversation", Args::None),
+    (
+        "deep-research",
+        "run the research fleet, or show its status",
+        Args::Fixed(DEEP_RESEARCH_SUBS),
+    ),
     ("effort", "reasoning effort for this model", Args::Effort),
     ("forget", "drop an agent-local memory", Args::Note),
     ("help", "show the command cheatsheet", Args::None),
