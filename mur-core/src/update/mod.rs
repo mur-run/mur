@@ -152,6 +152,7 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         println!("Updated to v{latest}");
         refresh_siblings(asset_name, &bin_bytes, &target);
         resign::post_upgrade(opts.restart_agents, fresh_runtime.as_deref())?;
+        warn_stale_interactive_sessions(&target);
     }
     #[cfg(windows)]
     {
@@ -248,6 +249,81 @@ fn stale_hub_nudge_from(host_path_contents: &str, cli_version: &str) -> Option<S
     }
 }
 
+/// A process snapshot used to identify interactive sessions that still execute
+/// the image `mur update` just replaced. Keeping this independent of `sysinfo`
+/// makes the selection boundary testable without reading the host process table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InteractiveProcess {
+    pid: u32,
+    name: String,
+    exe: std::path::PathBuf,
+}
+
+impl InteractiveProcess {
+    fn new(pid: u32, name: impl Into<String>, exe: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            pid,
+            name: name.into(),
+            exe: exe.into(),
+        }
+    }
+}
+
+/// Return peer terminal sessions that retain the image replaced by this update.
+/// The updater is intentionally absent: it gets a dedicated warning because it
+/// necessarily keeps running the previous image until its own command exits.
+fn stale_interactive_sessions(
+    processes: impl IntoIterator<Item = InteractiveProcess>,
+    updater_pid: u32,
+    replaced_executable: &std::path::Path,
+) -> Vec<InteractiveProcess> {
+    let mut sessions: Vec<_> = processes
+        .into_iter()
+        .filter(|process| process.pid != updater_pid)
+        .filter(|process| process.exe == replaced_executable)
+        .filter(|process| matches!(process.name.trim_end_matches(".exe"), "mur" | "murmur"))
+        .collect();
+    sessions.sort_by_key(|process| process.pid);
+    sessions
+}
+
+fn format_stale_interactive_session_notice(peers: &[InteractiveProcess]) -> String {
+    let mut peers = peers.to_vec();
+    peers.sort_by_key(|process| process.pid);
+    let mut notice =
+        "⚠ This terminal is still running the previous MUR binary. Close and reopen it before starting jobs."
+            .to_string();
+    if !peers.is_empty() {
+        notice.push_str("\nℹ Other interactive MUR sessions still running the previous binary:");
+        for process in peers {
+            notice.push_str(&format!(
+                "\n  • {} (PID {}, {})",
+                process.name,
+                process.pid,
+                process.exe.display()
+            ));
+        }
+    }
+    notice
+}
+
+/// Enumerate other interactive MUR sessions best-effort. Process-table access
+/// and executable paths may be unavailable under platform privacy controls, so
+/// this diagnostic must never change an otherwise successful update result.
+#[cfg(unix)]
+fn warn_stale_interactive_sessions(replaced_executable: &std::path::Path) {
+    let system = sysinfo::System::new_all();
+    let processes = system.processes().values().filter_map(|process| {
+        Some(InteractiveProcess::new(
+            process.pid().as_u32(),
+            process.name(),
+            process.exe()?.to_path_buf(),
+        ))
+    });
+    let peers = stale_interactive_sessions(processes, std::process::id(), replaced_executable);
+    println!("{}", format_stale_interactive_session_notice(&peers));
+}
+
 /// Best-effort, after an upgrade: name the mur-compress writer versions that
 /// were active in the last two days yet are older than this CLI. Those are
 /// long-lived processes outside `mur update`'s reach — the model gateway is
@@ -333,7 +409,10 @@ fn stale_writer_versions(stats: &serde_json::Value, days: &[String], current: &s
 mod tests {
     #[cfg(unix)]
     use super::refresh_siblings;
-    use super::{stale_hub_nudge_from, stale_writer_versions};
+    use super::{
+        InteractiveProcess, format_stale_interactive_session_notice, stale_hub_nudge_from,
+        stale_interactive_sessions, stale_writer_versions,
+    };
 
     const HOST_PATH: &str = "/Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui\n2.26.0";
 
@@ -414,6 +493,49 @@ mod tests {
         assert!(stale_writer_versions(&serde_json::json!({}), &days, "2.66.0").is_empty());
         assert!(
             stale_writer_versions(&serde_json::json!({"buckets": 3}), &days, "2.66.0").is_empty()
+        );
+    }
+
+    #[test]
+    fn stale_session_notice_names_terminal_and_sorted_peers() {
+        let peers = vec![
+            InteractiveProcess::new(42, "mur", "/opt/homebrew/bin/mur"),
+            InteractiveProcess::new(11, "murmur", "/opt/homebrew/bin/mur"),
+        ];
+        assert_eq!(
+            format_stale_interactive_session_notice(&peers),
+            concat!(
+                "⚠ This terminal is still running the previous MUR binary. Close and reopen it before starting jobs.\n",
+                "ℹ Other interactive MUR sessions still running the previous binary:\n",
+                "  • murmur (PID 11, /opt/homebrew/bin/mur)\n",
+                "  • mur (PID 42, /opt/homebrew/bin/mur)"
+            )
+        );
+        assert_eq!(
+            format_stale_interactive_session_notice(&[]),
+            "⚠ This terminal is still running the previous MUR binary. Close and reopen it before starting jobs."
+        );
+    }
+
+    #[test]
+    fn stale_sessions_exclude_updater_and_noninteractive_binaries() {
+        let replaced = std::path::Path::new("/opt/homebrew/bin/mur");
+        let sessions = stale_interactive_sessions(
+            [
+                InteractiveProcess::new(7, "mur", replaced),
+                InteractiveProcess::new(42, "mur", replaced),
+                InteractiveProcess::new(11, "murmur", replaced),
+                InteractiveProcess::new(8, "murmurd", replaced),
+                InteractiveProcess::new(9, "mur-agent-runtime", replaced),
+                InteractiveProcess::new(10, "mur-mcp-server", replaced),
+                InteractiveProcess::new(12, "mur", "/elsewhere/mur"),
+            ],
+            7,
+            replaced,
+        );
+        assert_eq!(
+            sessions.iter().map(|session| session.pid).collect::<Vec<_>>(),
+            vec![11, 42]
         );
     }
 

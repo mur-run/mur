@@ -29,10 +29,10 @@
 - **Consumes:** `std::path::{Path, PathBuf}` and process data supplied by tests.
 - **Produces:** `InteractiveProcess { pid: u32, name: String, exe: PathBuf }` plus `stale_interactive_sessions(processes: impl IntoIterator<Item = InteractiveProcess>, updater_pid: u32, replaced_executable: &Path) -> Vec<InteractiveProcess>`.
 
-- [ ] Add a test `stale_sessions_exclude_updater_and_noninteractive_binaries` with snapshots for: updater `mur` PID 7 at `/opt/homebrew/bin/mur`; peer `mur` PID 42 at that path; peer `murmur` PID 11 at that path; `murmurd`, `mur-agent-runtime`, and `mur-mcp-server` at that path; and a `mur` at another path. Assert only PIDs 11 and 42 return, ordered by PID.
-- [ ] Run `cargo test -p mur-core stale_sessions_exclude_updater_and_noninteractive_binaries`; observe failure because the type/function do not exist.
-- [ ] Add the minimal private snapshot type and pure selector. Compare paths exactly, normalize `.exe` only in the basename predicate, exclude the updater PID, and sort by PID.
-- [ ] Re-run the same test; observe pass.
+- [x] Add a test `stale_sessions_exclude_updater_and_noninteractive_binaries` with snapshots for: updater `mur` PID 7 at `/opt/homebrew/bin/mur`; peer `mur` PID 42 at that path; peer `murmur` PID 11 at that path; `murmurd`, `mur-agent-runtime`, and `mur-mcp-server` at that path; and a `mur` at another path. Assert only PIDs 11 and 42 return, ordered by PID.
+- [x] Run `cargo test -p mur-core stale_sessions_exclude_updater_and_noninteractive_binaries`; observe failure because the type/function do not exist.
+- [x] Add the minimal private snapshot type and pure selector. Compare paths exactly, normalize `.exe` only in the basename predicate, exclude the updater PID, and sort by PID.
+- [x] Re-run the same test; observe pass.
 - [ ] Commit with `test(update): cover stale interactive session selection`.
 
 ## Task 2 — Print and invoke the best-effort notice (TDD)
@@ -42,11 +42,11 @@
 - **Consumes:** `stale_interactive_sessions`, `sysinfo::System::processes()`, `std::process::id()`, and the successful Unix update target path.
 - **Produces:** `warn_stale_interactive_sessions(replaced_executable: &Path)`; no return value and no propagated error.
 
-- [ ] Add a pure formatting test `stale_session_notice_names_terminal_and_sorted_peers`. Supply `mur` PID 42 and `murmur` PID 11 and assert the exact two-part output: mandatory current-terminal warning plus peer heading and PID-ordered bullet lines. Add a second assertion that an empty peer list omits the peer heading.
-- [ ] Run `cargo test -p mur-core stale_session_notice_names_terminal_and_sorted_peers`; observe failure because the formatter does not exist.
-- [ ] Add a pure `format_stale_interactive_session_notice(&[InteractiveProcess]) -> String`, then a thin `warn_stale_interactive_sessions` adapter that snapshots only processes with an executable path and prints non-empty formatter output. Do not let adapter errors escape.
-- [ ] In the Unix update branch, call the adapter after `resign::post_upgrade` succeeds, passing `target`; retain the target before temporary-directory cleanup.
-- [ ] Re-run the focused test; observe pass.
+- [x] Add a pure formatting test `stale_session_notice_names_terminal_and_sorted_peers`. Supply `mur` PID 42 and `murmur` PID 11 and assert the exact two-part output: mandatory current-terminal warning plus peer heading and PID-ordered bullet lines. Add a second assertion that an empty peer list omits the peer heading.
+- [x] Run `cargo test -p mur-core stale_session_notice_names_terminal_and_sorted_peers`; observe failure because the formatter does not exist.
+- [x] Add a pure `format_stale_interactive_session_notice(&[InteractiveProcess]) -> String`, then a thin `warn_stale_interactive_sessions` adapter that snapshots only processes with an executable path and prints non-empty formatter output. Do not let adapter errors escape.
+- [x] In the Unix update branch, call the adapter after `resign::post_upgrade` succeeds, passing `target`; retain the target before temporary-directory cleanup.
+- [x] Re-run the focused test; observe pass.
 - [ ] Run `cargo test -p mur-core update::` and then `cargo test -p mur-core`; observe all pass.
 - [ ] Commit with `feat(update): warn about stale interactive sessions`.
 
