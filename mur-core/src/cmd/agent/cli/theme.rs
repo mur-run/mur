@@ -296,11 +296,22 @@ mod tests {
             ("mur", &MUR, ASSUMED_BG_MUR),
             ("clay", &CLAY, ASSUMED_BG_CLAY),
         ] {
-            let settlement_bg = theme.settlement_surface.bg.unwrap_or(bg);
-            for (background_name, background) in [("terminal", bg), ("settlement", settlement_bg)] {
-                let r = contrast_ratio(theme.text.fg.expect("text token has a colour"), background);
-                assert!(r >= 7.0, "{name}/{background_name}: text is {r:.1}:1");
-                for (label, s) in [
+            // Each surface is judged against the tokens actually painted on
+            // it: the settlement card never draws with the terminal-surface
+            // tokens, so checking those against its background is meaningless.
+            let check = |surface: &str, bg: Color, text: Style, tokens: &[(&str, Style)]| {
+                let r = contrast_ratio(text.fg.expect("text token has a colour"), bg);
+                assert!(r >= 7.0, "{name}/{surface}: text is {r:.1}:1");
+                for (label, s) in tokens {
+                    let r = contrast_ratio(s.fg.expect("text token has a colour"), bg);
+                    assert!(r >= 4.5, "{name}/{surface}: {label} is {r:.1}:1");
+                }
+            };
+            check(
+                "terminal",
+                bg,
+                theme.text,
+                &[
                     ("muted", theme.muted),
                     ("emphasis", theme.emphasis),
                     ("accent", theme.accent),
@@ -308,11 +319,20 @@ mod tests {
                     ("ok", theme.ok),
                     ("warn", theme.warn),
                     ("error", theme.error),
-                ] {
-                    let r = contrast_ratio(s.fg.expect("text token has a colour"), background);
-                    assert!(r >= 4.5, "{name}/{background_name}: {label} is {r:.1}:1");
-                }
-            }
+                ],
+            );
+            check(
+                "settlement",
+                theme.settlement_surface.bg.unwrap_or(bg),
+                theme.settlement_text,
+                &[
+                    ("muted", theme.settlement_muted),
+                    ("accent", theme.settlement_accent),
+                    ("ok", theme.settlement_ok),
+                    ("warn", theme.settlement_warn),
+                    ("error", theme.settlement_error),
+                ],
+            );
             let badge_bg = theme.badge.bg.expect("badge has a background");
             let r = contrast_ratio(theme.badge.fg.expect("badge has a foreground"), badge_bg);
             assert!(r >= 4.5, "{name}: badge is {r:.1}:1");

@@ -48,9 +48,9 @@ pub const RAIL: &str = "▎";
 /// The title chip. Padded on both sides so the badge renders as a block.
 const TITLE: &str = " SETTLEMENT ";
 /// Deliberate inset on the left and right edge of every settlement card.
+/// ponytail: no vertical counterpart — the title row already separates the
+/// card from the prose above it, so blank surface rows would only add height.
 const HORIZONTAL_PADDING: usize = 2;
-/// The card is compact: its title provides separation without blank surface rows.
-const VERTICAL_PADDING: usize = 0;
 
 /// Narrower than this and the hanging indent costs more than it buys, so the
 /// card falls back to flush-left rows.
@@ -191,13 +191,7 @@ pub fn card_lines(
             _ => {}
         }
     }
-    let mut out = Vec::with_capacity(body.lines().count() + 2 * VERTICAL_PADDING + 1);
-    for _ in 0..VERTICAL_PADDING {
-        out.push(Line::from(Span::styled(
-            " ".repeat(w),
-            theme.settlement_surface,
-        )));
-    }
+    let mut out = Vec::with_capacity(body.lines().count() + 1);
     out.push(title_line(
         theme,
         w,
@@ -330,7 +324,7 @@ mod tests {
     }
 
     use super::super::theme::{CLAY, LIGHT, MUR};
-    use super::{HORIZONTAL_PADDING, RAIL, VERTICAL_PADDING};
+    use super::{HORIZONTAL_PADDING, RAIL};
     use ratatui::style::Modifier;
 
     /// Settlement uses a quiet label, not the strong filled badge reserved for
@@ -344,7 +338,7 @@ mod tests {
                 theme,
                 60,
             );
-            let title = &out[VERTICAL_PADDING];
+            let title = &out[0];
             let chip = title
                 .spans
                 .iter()
@@ -366,7 +360,7 @@ mod tests {
                 "title must not borrow the identity badge foreground"
             );
 
-            let first_row = &out[VERTICAL_PADDING + 1];
+            let first_row = &out[1];
             assert_eq!(
                 first_row.spans[1].style,
                 theme.settlement_accent.patch(theme.settlement_surface)
@@ -387,9 +381,8 @@ mod tests {
     #[test]
     fn every_body_row_carries_the_accent_rail() {
         let out = card_lines("  ✔ bash\n  a note line", &ANSI, 40);
-        assert_eq!(out.len(), 2 * VERTICAL_PADDING + 3);
-        // Outer rows are deliberate vertical padding, not rail rows.
-        for line in &out[VERTICAL_PADDING + 1..out.len() - VERTICAL_PADDING] {
+        assert_eq!(out.len(), 3);
+        for line in &out[1..] {
             let rail = &line.spans[1];
             assert_eq!(rail.content.as_ref(), RAIL);
             assert_eq!(rail.style, ANSI.accent.patch(ANSI.settlement_surface));
@@ -399,13 +392,13 @@ mod tests {
     #[test]
     fn settlement_has_compact_horizontal_padding() {
         let out = card_lines("  ✔ bash", &ANSI, 40);
-        assert_eq!(out.len(), VERTICAL_PADDING + 2);
-        let title = &out[VERTICAL_PADDING];
+        assert_eq!(out.len(), 2);
+        let title = &out[0];
         assert_eq!(
             title.spans[0].content.as_ref(),
             " ".repeat(HORIZONTAL_PADDING)
         );
-        let body = &out[VERTICAL_PADDING + 1];
+        let body = &out[1];
         assert_eq!(
             body.spans[0].content.as_ref(),
             " ".repeat(HORIZONTAL_PADDING)
@@ -448,6 +441,6 @@ mod tests {
     #[test]
     fn the_card_names_itself() {
         let out = plain(&card_lines("  ✔ bash", &ANSI, 40));
-        assert!(out[VERTICAL_PADDING].contains("SETTLEMENT"), "{out:?}");
+        assert!(out[0].contains("SETTLEMENT"), "{out:?}");
     }
 }
