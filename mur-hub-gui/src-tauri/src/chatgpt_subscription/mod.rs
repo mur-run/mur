@@ -21,7 +21,8 @@ pub type SubscriptionModelView = ChatGptModelView;
 pub type SubscriptionModelPick = registry::ChatGptModelPick;
 
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tokio::process::Command;
 
 /// What the panel needs to know about the Codex login. `cli_present: false`
 /// is the whole story when `codex` is not installed; the other fields are
@@ -67,11 +68,41 @@ pub fn resolve_codex() -> Option<PathBuf> {
 }
 
 pub(crate) async fn resolve_codex_async() -> Option<PathBuf> {
-    // `shell_which` runs a login shell; keep it off the async executor.
-    tokio::task::spawn_blocking(resolve_codex)
-        .await
-        .ok()
-        .flatten()
+    // `shell_which` runs a login shell; keep it off the async executor — and
+    // warm the PATH probe on the same trip, so the spawn that follows finds a
+    // hot cache instead of blocking a worker on a second shell.
+    tokio::task::spawn_blocking(|| {
+        #[cfg(unix)]
+        let _ = crate::cli_tools::shell_path();
+        resolve_codex()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Every spawn of a shell-resolved binary in this provider goes through here.
+///
+/// [`resolve_codex`] finds `codex` in the shell's world, so it has to run in
+/// that world too — see [`crate::cli_tools::shell_path`] for what breaks
+/// otherwise. The gateway gets the same treatment: it spawns `codex` itself.
+pub(crate) fn shell_command(bin: &Path) -> Command {
+    #[cfg(unix)]
+    let cmd = command_with_path(bin, crate::cli_tools::shell_path());
+    #[cfg(not(unix))]
+    let cmd = command_with_path(bin, None);
+    cmd
+}
+
+/// Split out from [`shell_command`] so the PATH is an argument rather than an
+/// ambient fact, which is the only way to test this without mutating the
+/// process environment out from under every other test.
+pub(crate) fn command_with_path(bin: &Path, path: Option<&str>) -> Command {
+    let mut cmd = Command::new(bin);
+    if let Some(p) = path {
+        cmd.env("PATH", p);
+    }
+    cmd
 }
 
 #[tauri::command]
