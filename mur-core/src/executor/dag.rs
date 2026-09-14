@@ -375,6 +375,70 @@ fn extract_usage_tokens(task: &serde_json::Value) -> u64 {
     field("input_tokens").saturating_add(field("output_tokens"))
 }
 
+/// Why a runtime guard cut a delegated turn short, if one did.
+///
+/// The runtime reports a guard stop in `Task.usage.stop_reason`
+/// (`task_runner.rs`, the `Completed` branch): `loop_detected`, `stuck`,
+/// `deadline`, or `iteration_ceiling`. The task itself still says `Completed`
+/// on purpose — partial work is preserved rather than thrown away — so the
+/// state field cannot be used to tell a finished turn from an aborted one.
+/// This field can.
+fn guard_stop(task: &serde_json::Value) -> Option<String> {
+    let usage = task.get("usage")?;
+    let reason = usage.get("stop_reason")?.as_str()?;
+    Some(match usage.get("iterations").and_then(|v| v.as_u64()) {
+        Some(n) => format!("{reason} after {n} iterations"),
+        None => reason.to_string(),
+    })
+}
+
+/// Turn a delegated `Task` into a step verdict.
+///
+/// Success used to be `!reply.trim().is_empty()` — the ONLY test was whether
+/// the specialist said anything at all. A turn that a guard aborted still ends
+/// with a summary message, so it scored as a clean `done`: on 2026-09-13 a
+/// delegate burned 95K tokens, was stopped by the doom-loop detector after 54
+/// iterations, reported "Task 4 is blocked", wrote no code — and the run
+/// recorded `"state": "done"`. Three dispatches were spent before anyone
+/// looked past the status.
+///
+/// A guard stop is a failure, not a `blocked`: `blocked` means "waiting on a
+/// human, nothing ran" and deliberately skips the ledger and `on_failure`,
+/// whereas an aborted turn did run, did spend, and did not deliver.
+///
+/// Deliberately NOT read here: the `Completion:` checklist that
+/// [`DELEGATE_REPLY_CONTRACT`] asks the specialist to end with. Deciding a
+/// step's fate by pattern-matching model prose trades one silent wrong answer
+/// for another; the structured signal above covers every guard the runtime
+/// can apply to itself. An agent that declares itself blocked while ending its
+/// turn cleanly still scores as success, and wiring that up needs a structured
+/// channel (an A2A task state), not a parser.
+fn delegate_result(
+    task: &serde_json::Value,
+    step_description: &str,
+    duration_ms: u64,
+) -> StepResult {
+    // Reply text is extracted ONLY to fill StepResult.output_text — the
+    // specialist already wrote+signed the reply Message itself.
+    let reply = extract_agent_reply(task);
+    let stopped = guard_stop(task);
+    let landed = !reply.trim().is_empty() && stopped.is_none();
+    let output_text = match &stopped {
+        Some(why) => format!("[delegate stopped short: {why}]\n{reply}"),
+        None => reply,
+    };
+    StepResult {
+        exit_code: if landed { 0 } else { 1 },
+        output_text,
+        duration_ms,
+        failed_step: (!landed).then(|| step_description.to_string()),
+        success: landed,
+        blocked: false,
+        // Real tokens the specialist's turn consumed, from Task.usage.
+        tokens_used: extract_usage_tokens(task),
+    }
+}
+
 // ── Graph types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -812,24 +876,7 @@ async fn execute_step(
 
         let result = match dial {
             Ok(task) => {
-                // Reply text is extracted ONLY to fill StepResult.output_text —
-                // the specialist already wrote+signed the reply Message itself.
-                let reply = extract_agent_reply(&task);
-                let empty = reply.trim().is_empty();
-                StepResult {
-                    exit_code: if empty { 1 } else { 0 },
-                    output_text: reply,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                    failed_step: if empty {
-                        Some(step.description.clone())
-                    } else {
-                        None
-                    },
-                    success: !empty,
-                    blocked: false,
-                    // Real tokens the specialist's turn consumed, from Task.usage.
-                    tokens_used: extract_usage_tokens(&task),
-                }
+                delegate_result(&task, &step.description, start.elapsed().as_millis() as u64)
             }
             Err(e) => {
                 // Nothing partial is attributed; record a failure Note + fail the
@@ -1808,6 +1855,89 @@ mod tests {
         assert!(e.ends_with("…[truncated]"));
         // Short input passes through untouched.
         assert_eq!(dep_output_excerpt("ok"), "ok");
+    }
+
+    /// The bug this whole seam exists for: a turn a runtime guard aborted
+    /// still ends with a summary message, and `success = !reply.is_empty()`
+    /// scored that as a clean `done`. Observed 2026-09-13 — 95K tokens, 54
+    /// iterations, no code written, `"state": "done"`, three dispatches spent.
+    #[test]
+    fn a_guard_stopped_delegate_is_not_a_success() {
+        let task = serde_json::json!({
+            "id": "t1",
+            "state": "completed",
+            "messages": [
+                {"role":"user","parts":[{"kind":"text","text":"do task 4"}]},
+                {"role":"agent","parts":[{"kind":"text","text":"Task 4 is blocked."}]}
+            ],
+            "usage": {"input_tokens": 95000, "output_tokens": 200,
+                      "stop_reason": "loop_detected", "iterations": 54}
+        });
+        let r = delegate_result(&task, "task 4", 1);
+        assert!(!r.success, "a loop-aborted turn must not score as success");
+        assert_eq!(r.exit_code, 1);
+        assert_eq!(r.failed_step.as_deref(), Some("task 4"));
+        assert!(
+            r.output_text.contains("loop_detected after 54 iterations"),
+            "the verdict must say which guard fired: {}",
+            r.output_text
+        );
+        assert!(
+            r.output_text.contains("Task 4 is blocked."),
+            "the specialist's own words must survive: {}",
+            r.output_text
+        );
+        // Not `blocked`: that means "waiting on a human, nothing ran", and it
+        // skips the ledger + on_failure. This turn ran and spent 95K tokens.
+        assert!(!r.blocked);
+        assert_eq!(r.tokens_used, 95_200, "spend is still accounted");
+    }
+
+    /// Negative control: without a guard stop the old contract still holds, so
+    /// the assertion above is about `stop_reason` and not a broken extractor.
+    #[test]
+    fn a_clean_delegate_reply_is_still_a_success() {
+        let task = serde_json::json!({
+            "id": "t1",
+            "state": "completed",
+            "messages": [
+                {"role":"user","parts":[{"kind":"text","text":"do task 4"}]},
+                {"role":"agent","parts":[{"kind":"text","text":"Done; tests pass."}]}
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        let r = delegate_result(&task, "task 4", 1);
+        assert!(r.success);
+        assert_eq!(r.exit_code, 0);
+        assert!(r.failed_step.is_none());
+        assert_eq!(
+            r.output_text, "Done; tests pass.",
+            "no note on a clean turn"
+        );
+    }
+
+    /// An empty reply was already a failure; it must stay one.
+    #[test]
+    fn an_empty_delegate_reply_is_still_a_failure() {
+        let task = serde_json::json!({"id": "t1", "state": "completed", "messages": []});
+        let r = delegate_result(&task, "task 4", 1);
+        assert!(!r.success);
+        assert_eq!(r.exit_code, 1);
+    }
+
+    /// Every guard the runtime can apply to itself, not just the one observed.
+    #[test]
+    fn every_guard_stop_reason_fails_the_step() {
+        for reason in ["loop_detected", "stuck", "deadline", "iteration_ceiling"] {
+            let task = serde_json::json!({
+                "id": "t1",
+                "messages": [{"role":"agent","parts":[{"kind":"text","text":"summary"}]}],
+                "usage": {"stop_reason": reason}
+            });
+            let r = delegate_result(&task, "s", 1);
+            assert!(!r.success, "{reason} must fail the step");
+            assert!(r.output_text.contains(reason), "{reason} must be named");
+        }
     }
 
     #[test]
