@@ -2817,8 +2817,45 @@ fn rate_limit_backoff_delay(attempt: u8) -> std::time::Duration {
 /// Deterministic hash of a tool call's arguments. Serializes to canonical JSON
 /// (sorted keys via `serde_json::Value`'s BTreeMap-backed object) before hashing
 /// so logically-identical args always fingerprint the same.
+/// Fields a tool takes for NARRATION, not for the work. Excluded from the
+/// doom-loop fingerprint below.
+///
+/// `description` is the whole reason the guard never fired in production. The
+/// bash schema asks for "what you are doing and why, 5-10 words" and the tool
+/// never reads it — but the fingerprint hashed the entire input object, so a
+/// model that narrates each attempt (they do; one numbered them "1 of 6",
+/// "2 of 6", …) minted a fresh `args` hash every call. `repeats` stayed at 1
+/// forever and the guard could not fire for `bash`, the tool most likely to be
+/// looped on. Instrumented against a live agent 2026-09-14: six `echo` calls,
+/// one identical `content` hash, six distinct `args` hashes.
+///
+/// `remember` does read its `description`, and still loses nothing that
+/// matters: `name`, `content` and `kind` stay in the fingerprint, so what
+/// defines that action is intact — and three calls that agree on all of those
+/// AND return identical results are a loop whatever the narration says.
+const NARRATION_FIELDS: [&str; 1] = ["description"];
+
+/// Hash the part of a tool's input that determines what it DOES.
+///
+/// Only top-level narration keys are dropped; everything else, including
+/// nested objects, is hashed as-is. Non-object inputs hash whole.
 fn fingerprint_args(args: &serde_json::Value) -> u64 {
-    fingerprint_str(&args.to_string())
+    let Some(map) = args.as_object() else {
+        return fingerprint_str(&args.to_string());
+    };
+    if !NARRATION_FIELDS.iter().any(|k| map.contains_key(*k)) {
+        return fingerprint_str(&args.to_string());
+    }
+    // `serde_json::Map` preserves insertion order unless the `preserve_order`
+    // feature is off (then it is a BTreeMap and sorted) — either way the same
+    // input yields the same string within a build, which is all the window
+    // comparison needs.
+    let stripped: serde_json::Map<String, serde_json::Value> = map
+        .iter()
+        .filter(|(k, _)| !NARRATION_FIELDS.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    fingerprint_str(&serde_json::Value::Object(stripped).to_string())
 }
 
 /// Deterministic hash of an arbitrary string (used for canonical tool-result
@@ -5830,6 +5867,183 @@ mod tests {
             .as_u64()
             .expect("iterations is a number");
         assert!(iters < 5, "expected early abort, got {iters} iterations");
+    }
+
+    /// The production shape, which the guard could not catch: the command is
+    /// identical every time and only the model's narration changes. Captured
+    /// from a live agent on 2026-09-14 — it even numbered them "(1 of 6)".
+    /// Before the narration fields were dropped from the fingerprint, all six
+    /// `args` hashes were distinct, `repeats` never left 1, and the turn ran
+    /// to completion with nothing to show.
+    #[tokio::test]
+    async fn doom_loop_fires_when_only_the_description_varies() {
+        use crate::llm::stub::SequenceLlm;
+        let dir = tempfile::tempdir().unwrap();
+        let call = |n: u32| crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: format!("d-{n}"),
+                tool_name: "bash".into(),
+                input: serde_json::json!({
+                    "command": "echo LOOPTEST",
+                    // Identical work, fresh narration — exactly what a model
+                    // produces, and what the guard used to hash.
+                    "description": format!("Running echo LOOPTEST ({n} of 6)"),
+                }),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        };
+        let responses = vec![
+            call(0),
+            call(1),
+            call(2),
+            call(3),
+            call(4),
+            call(5),
+            end_turn_response("done"),
+        ];
+        let bash = crate::tools::bash::BashTool::new(
+            dir.path().to_path_buf(),
+            crate::tools::fs_policy::SessionCwd::new(dir.path().to_path_buf()),
+        );
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(bash)])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "bash".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_iteration_ceiling(50),
+        );
+        let outcome = runner.run_sync(loop_spec("narration")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let usage = task.usage.expect("usage");
+        assert_eq!(
+            usage["stop_reason"], "loop_detected",
+            "narration must not hide a repeated action; usage={usage}"
+        );
+    }
+
+    /// Negative control: dropping narration must not make DIFFERENT work look
+    /// the same. Same tool, same narration, genuinely different commands —
+    /// the guard must stay quiet and the turn must reach its own end.
+    #[tokio::test]
+    async fn different_commands_sharing_a_description_do_not_trip_the_guard() {
+        use crate::llm::stub::SequenceLlm;
+        let dir = tempfile::tempdir().unwrap();
+        let call = |n: u32| crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: format!("v-{n}"),
+                tool_name: "bash".into(),
+                input: serde_json::json!({
+                    "command": format!("echo DIFFERENT-{n}"),
+                    "description": "Probing the tree",
+                }),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        };
+        let responses = vec![
+            call(0),
+            call(1),
+            call(2),
+            call(3),
+            end_turn_response("all four ran"),
+        ];
+        let bash = crate::tools::bash::BashTool::new(
+            dir.path().to_path_buf(),
+            crate::tools::fs_policy::SessionCwd::new(dir.path().to_path_buf()),
+        );
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(bash)])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "bash".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_iteration_ceiling(50),
+        );
+        let outcome = runner.run_sync(loop_spec("varied")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(reply.contains("all four ran"), "reply={reply}");
+    }
+
+    /// REPRO PROBE: the doom-loop guard passes with a stub tool but was
+    /// observed NOT firing in production against the REAL bash tool — six
+    /// identical `echo` calls, six separate job logs, clean completion
+    /// (2026-09-14, agent `rustsmith`). Same command, same output, same
+    /// arguments: the fingerprint should repeat and abort at the third.
+    #[tokio::test]
+    async fn doom_loop_fires_against_the_real_bash_tool() {
+        use crate::llm::stub::SequenceLlm;
+        let dir = tempfile::tempdir().unwrap();
+        let call = |n: u32| crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: format!("c-{n}"),
+                tool_name: "bash".into(),
+                // IDENTICAL arguments every time.
+                input: serde_json::json!({"command": "echo LOOPTEST"}),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        };
+        let responses = vec![
+            call(0),
+            call(1),
+            call(2),
+            call(3),
+            call(4),
+            call(5),
+            end_turn_response("done"),
+        ];
+        let bash = crate::tools::bash::BashTool::new(
+            dir.path().to_path_buf(),
+            crate::tools::fs_policy::SessionCwd::new(dir.path().to_path_buf()),
+        );
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(bash)])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "bash".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_iteration_ceiling(50),
+        );
+        let outcome = runner.run_sync(loop_spec("real-bash")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let usage = task.usage.expect("usage");
+        assert_eq!(
+            usage["stop_reason"], "loop_detected",
+            "six identical bash calls must trip the guard; usage={usage}"
+        );
     }
 
     /// Fix #2 — graceful_exit must sanitize a dangling tool_use before the
