@@ -314,9 +314,15 @@ mod tests {
     #[test]
     fn spawn_denied_path_resolves_a_relative_path_against_cwd() {
         let stderr = "bash: line 7: ./cmdtest: Operation not permitted\n";
+        let cwd = Path::new("/work/repo");
+        // Built with the same `join`, not a hand-written separator: the value
+        // is compared against the spawn allowlist by `who_can_exec`, which
+        // holds native paths, so `\` is correct on Windows and normalizing to
+        // `/` would be the bug. A literal "/work/repo/cmdtest" here failed CI
+        // on windows-latest while the production behaviour was right.
         assert_eq!(
-            spawn_denied_path(Some(126), stderr, Path::new("/work/repo")),
-            Some("/work/repo/cmdtest".to_string())
+            spawn_denied_path(Some(126), stderr, cwd),
+            Some(cwd.join("cmdtest").to_string_lossy().into_owned())
         );
     }
 
