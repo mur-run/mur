@@ -3,6 +3,7 @@
 //! pulling the vector store in. Adapters that need `mur-core` live there.
 pub mod adapter;
 pub mod backoff;
+pub mod deadline;
 pub mod spec;
 pub mod state;
 pub mod store;
