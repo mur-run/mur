@@ -4,6 +4,7 @@
 pub mod adapter;
 pub mod backoff;
 pub mod deadline;
+pub mod scheduler;
 pub mod spec;
 pub mod state;
 pub mod store;
