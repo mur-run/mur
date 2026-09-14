@@ -3,6 +3,8 @@ name = "mur-monitor"
 version.workspace = true
 edition.workspace = true
 description = "Durable monitor engine: spec, SQLite store, leases, backoff, scheduler"
+# Internal to the workspace: consumed only via path deps, never from crates.io.
+publish = false
 
 [dependencies]
 mur-common = { path = "../mur-common" }

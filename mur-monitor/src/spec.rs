@@ -205,7 +205,9 @@ pub enum SpecError {
     Empty(&'static str),
     #[error("name is longer than {MAX_NAME_LEN} characters")]
     NameTooLong,
-    #[error("credential_ref is not a secret reference (env:/keychain:/file:/cmd:): {0}")]
+    #[error(
+        "credential_ref is not a secret reference (expected env:NAME, keychain:service/account, file:PATH, or cmd:...)"
+    )]
     Credential(String),
     #[error("policy durations must satisfy stalled_after < soft_deadline < hard_deadline: {0}")]
     DeadlineOrder(String),
@@ -236,7 +238,8 @@ impl MonitorSpec {
             return Err(SpecError::Empty("source.reference"));
         }
         if let Some(c) = &self.source.credential_ref {
-            SecretRef::from_str(c).map_err(|e| SpecError::Credential(e.to_string()))?;
+            SecretRef::from_str(c)
+                .map_err(|_| SpecError::Credential("invalid secret reference format".into()))?;
         }
         let (s, m, h) = (
             mur_common::limits::parse_duration(&self.policy.stalled_after),
@@ -378,5 +381,17 @@ created_by:
             MonitorSpec::from_yaml(&y).unwrap().validate().unwrap_err(),
             SpecError::Empty("source.reference")
         ));
+    }
+
+    #[test]
+    fn credential_error_does_not_leak_the_secret() {
+        let secret_token = "ghp_plaintexttoken_1234567890abcdef";
+        let y = EXAMPLE.replace("keychain:mur/github-default", secret_token);
+        let e = MonitorSpec::from_yaml(&y).unwrap().validate().unwrap_err();
+        let error_msg = e.to_string();
+        assert!(
+            !error_msg.contains(secret_token),
+            "error message leaked the secret: {error_msg}"
+        );
     }
 }
