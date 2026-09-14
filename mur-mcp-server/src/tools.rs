@@ -842,13 +842,32 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 mur_core::run_status::State::Failed => "failed",
                 mur_core::run_status::State::Stopped => "stopped",
             };
-            Ok(Value::String(format!(
+            let mut output = format!(
                 "run {} — state: {state}, liveness: {liveness}\nlabel: {}\nstarted: {}\nsteps: {}",
                 status.run.run_id,
                 status.run.label,
                 status.run.started_at.to_rfc3339(),
                 status.run.steps.len()
-            )))
+            );
+            if status.run.kind == mur_core::run_status::RunKind::Fleet
+                && let Some(view) =
+                    mur_core::cmd::fleet::progress::load_view(&mur_home, &status.run.label)
+                && view.progress.run_id == run_id
+            {
+                output.push_str("\nprogress: ");
+                output.push_str(&mur_core::cmd::fleet::progress::iteration_summary_line(
+                    &view.progress,
+                ));
+                for step in
+                    view.progress.steps.iter().filter(|step| {
+                        step.state == mur_core::cmd::fleet::progress::StepState::Running
+                    })
+                {
+                    output.push_str("\n  running: ");
+                    output.push_str(&step.desc);
+                }
+            }
+            Ok(Value::String(output))
         }
 
         _ => Err(format!("Unknown tool: {}", name)),
@@ -1086,6 +1105,79 @@ mod job_status_tests {
             v["follow"].as_str().unwrap().contains("mur_job_status"),
             "{v}"
         );
+    }
+
+    #[tokio::test]
+    async fn mur_job_status_appends_only_matching_fleet_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        mur_core::run_status::store::save(
+            mur_home,
+            &mur_core::run_status::RunState {
+                schema: mur_core::run_status::RUN_SCHEMA,
+                run_id: "run-fleet".into(),
+                channel_id: None,
+                kind: mur_core::run_status::RunKind::Fleet,
+                label: "deep-research".into(),
+                pid: std::process::id(),
+                started_at: chrono::Utc::now(),
+                last_heartbeat_at: Some(chrono::Utc::now()),
+                state: mur_core::run_status::State::Running,
+                steps: vec![],
+                blocked_on: None,
+                binary_version: "0.0.0-test".into(),
+                build_sha: "deadbee".into(),
+            },
+        )
+        .unwrap();
+        let progress = mur_core::cmd::fleet::progress::RunProgress {
+            schema_version: 1,
+            run_id: "run-fleet".into(),
+            question: "q".into(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            finished_at: None,
+            outcome: None,
+            iteration: 2,
+            model: Some("test-model".into()),
+            budget_usd: None,
+            spend_usd: 0.0,
+            billable: Some(false),
+            steps: vec![mur_core::cmd::fleet::progress::StepProgress {
+                id: "s2".into(),
+                worker: Some("worker".into()),
+                phase: mur_core::cmd::fleet::progress::Phase::Verify,
+                desc: "verify s2".into(),
+                state: mur_core::cmd::fleet::progress::StepState::Running,
+                cost_usd: None,
+                started_at: None,
+                ended_at: None,
+            }],
+            artifact_path: None,
+            error: None,
+        };
+        progress.save(mur_home, "deep-research");
+
+        let out = call_tool_in(
+            mur_home,
+            "mur_job_status",
+            serde_json::json!({ "run_id": "run-fleet" }),
+        )
+        .await
+        .unwrap();
+        assert!(out.contains("progress: iteration 2"), "{out}");
+        assert!(out.contains("running: verify s2"), "{out}");
+
+        let mut other = progress;
+        other.run_id = "run-other".into();
+        other.save(mur_home, "deep-research");
+        let out = call_tool_in(
+            mur_home,
+            "mur_job_status",
+            serde_json::json!({ "run_id": "run-fleet" }),
+        )
+        .await
+        .unwrap();
+        assert!(!out.contains("progress:"), "{out}");
     }
 
     #[tokio::test]

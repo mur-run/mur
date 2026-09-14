@@ -1,5 +1,5 @@
 name: mur-deep-research
-version: 0.1.0
+version: 0.2.0
 publisher: human:mur
 description: "Use when asked to research a topic, do web/deep research, or survey sources — 研究, 深入研究, 查資料, 調查."
 category: workflow
@@ -12,8 +12,25 @@ content:
   context: |
     # mur-deep-research — native research fleet
 
-    When the user asks for research on a topic, check the fleet before
-    hand-rolling ad-hoc web searches:
+    When the user asks for research on a topic, choose the path that matches
+    who is acting instead of hand-rolling ad-hoc web searches.
+
+    ## Agent path
+
+    Agents use the built-in `fleet_run` tool — never shell out to `mur`:
+
+    ```json
+    {"fleet":"deep-research","goal":"the question"}
+    ```
+
+    It returns a `run_id` immediately. Poll that id with `mur_job_status`;
+    the result lands in the fleet channel, not in the tool reply. A refusal
+    is a deny-by-default config fact (`fleet_run.agents` and
+    `fleet_run.fleets` in `~/.mur/config.yaml`), not something to bypass.
+    The run remains bounded by its fleet deadline, iteration/stuck limits,
+    optional cost cap, and `mur fleet stop deep-research`.
+
+    ## Human CLI path
 
     1. `mur deep-research` (bare) — status panel: provisioned or not,
        model, worker count, budget, egress state.
@@ -24,13 +41,21 @@ content:
        checks, then a guarded fleet loop (iteration cap, deadline,
        budget, kill-switch, RESEARCH_COMPLETE marker convergence).
 
-    Advanced flag-based path: `mur deep-research provision` creates
-    restricted worker agents that mount the `research-gateway` MCP
-    server (workers have no egress of their own; the per-server egress
-    grant is a separate consent step). `mur deep-research run` is a thin
-    wrapper over `mur fleet run --loop` — same guard rails.
+    ## CLI flags
 
-    Kill-switch: `mur fleet stop deep-research`.
+    | Command | Meaning |
+    |---|---|
+    | `mur deep-research` | Show status |
+    | `mur deep-research setup` | Interactive one-time setup |
+    | `mur deep-research provision` | Create restricted workers and gateway |
+    | `mur deep-research "question"` | Run guarded research |
+    | `mur fleet stop deep-research` | Stop the active run |
+
+    Workers mount the `research-gateway` MCP server and have no egress of
+    their own; the per-server egress grant remains a separate human consent.
+    Read progress through the returned handle with `mur_job_status`, or at
+    `~/.mur/fleets/deep-research/.run_progress.json`; unfinished records older
+    than 600 seconds are stale.
 tags: [mur, deep-research, fleet, builtin]
 triggers:
   - type: keyword

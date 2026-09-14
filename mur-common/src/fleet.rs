@@ -7,6 +7,12 @@ use crate::parallel::ParallelConfig;
 
 pub const CONCIERGE_AGENT: &str = "mur";
 
+/// Env var carrying the run id a caller (e.g. the `fleet_run` MCP tool) mints
+/// for a fleet-loop invocation. When set, the loop uses this value as
+/// `RunProgress.run_id` instead of minting its own, so a poller handed this
+/// id back from `fleet_run` can find the same progress file the loop writes.
+pub const RUN_ID_ENV: &str = "MUR_RUN_ID";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fleet {
     pub name: String,
@@ -247,6 +253,14 @@ pub struct Job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_name_is_stable() {
+        // The literal is the contract other crates (mur-core, mur-agent-runtime)
+        // pass this same value across process boundaries — pin it against
+        // accidental rename.
+        assert_eq!(RUN_ID_ENV, "MUR_RUN_ID");
+    }
 
     #[test]
     fn valid_fleet_name_accepts_and_rejects() {

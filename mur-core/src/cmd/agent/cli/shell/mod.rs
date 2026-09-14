@@ -58,7 +58,7 @@ mod run;
 
 pub use run::{
     SHELL_CARD_MAX_BYTES, SHELL_MAX_BYTES, SIGKILL_NUM, SIGTERM_NUM, ShellEnd, cap_tail, run,
-    signal_group, spawn,
+    signal_group, spawn, spawn_argv,
 };
 
 use tokio::sync::oneshot;

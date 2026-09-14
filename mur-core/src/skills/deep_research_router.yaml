@@ -36,27 +36,23 @@ content:
           per the verify skill) — never fold in an unverified or refuted
           claim just to fill out the report.
       - description: |
-          SYNTHESIZE: once enough sub-questions have confirmed claims (or the
-          iteration budget/deadline is close), weave the surviving claims
-          into a cited report. Every statement in the report must trace back
-          to a specific claim's URL + supporting quote — no uncited
-          sentences. Note open sub-questions or conflicting sources
-          explicitly rather than silently dropping them.
+          SYNTHESIZE is an explicit runtime phase after delegated steps finish;
+          do not put synthesis into the JSON work plan. When asked for final
+          synthesis, write the cited answer directly from the supplied worker
+          evidence, note gaps honestly, and do not delegate again.
       - description: |
-          CONVERGE: when the report is complete (or no further iteration
-          would materially improve it within budget), end your synthesis
-          turn with the marker completely alone on its own line, exactly
-          like this — nothing else on that line, not embedded in a
-          sentence, not quoted, not negated:
+          CONVERGE: every final synthesis must end with the marker completely
+          alone on its own line, exactly like this — nothing else on that line,
+          not embedded in a sentence, not quoted, not negated:
 
           RESEARCH_COMPLETE
 
-          The fleet's `done_when: marker:RESEARCH_COMPLETE` only matches an
-          own-line sentinel emitted this run, so mentioning the word in
-          prose elsewhere (e.g. explaining this rule) will NOT falsely
-          converge the loop. If the report is not yet done, do NOT emit the
-          marker — instead state what remains and let the loop continue to
-          the next iteration.
+          The runtime asks for this synthesis after the delegated DAG and the
+          fleet's `done_when: marker:RESEARCH_COMPLETE` matches the own-line
+          sentinel emitted this run. Planning output remains JSON-only; never
+          include the marker in a plan. A synthesis that names evidence gaps
+          is still final and must emit the marker rather than buying another
+          identical iteration.
 tags: [deep-research, fleet, router, decompose, synthesis, convergence]
 triggers:
   - type: session_start

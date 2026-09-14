@@ -28,6 +28,33 @@ pub const FLEET_RUN: &str = "fleet_run";
 /// naming it once keeps a rename of either from silently half-applying.
 const DEEP_RESEARCH: &str = "deep-research";
 
+/// Keep this in step with `mur_core::cmd::fleet::progress::STALE_AFTER_SECS`.
+const PROGRESS_STALE_AFTER_SECS: u64 = 600;
+
+/// Return the active run id when this fleet's single progress slot still
+/// describes a fresh, unfinished run. Corrupt or old files are inert.
+fn live_run_id(mur_home: &std::path::Path, fleet: &str) -> Option<String> {
+    let path = mur_home
+        .join("fleets")
+        .join(fleet)
+        .join(".run_progress.json");
+    let body = std::fs::read(&path).ok()?;
+    let progress: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    if !progress.get("finished_at")?.is_null() {
+        return None;
+    }
+    let age = std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .unwrap_or_default()
+        .as_secs();
+    (age <= PROGRESS_STALE_AFTER_SECS)
+        .then(|| progress.get("run_id")?.as_str().map(str::to_owned))
+        .flatten()
+}
+
 pub struct FleetRunTool {
     pub mur_home: PathBuf,
     /// Canonical (on-disk) name of the agent this runtime hosts.
@@ -157,6 +184,14 @@ cost_usd) and by `mur fleet stop`."
         // No budget gate here since 2.80: every fleet is bounded by its
         // resolved limits (built-in deadline at least), and a cost cap means
         // nothing on a local model — see `mur limits <fleet>`.
+
+        // One progress file per fleet means concurrent runs would overwrite
+        // each other's state and make the returned handle lie.
+        if let Some(active_run_id) = live_run_id(&self.mur_home, &fleet) {
+            return Err(ToolError::Execution(format!(
+                "a {fleet} run is already live: run_id {active_run_id}"
+            )));
+        }
 
         // The handle: minted here, handed to the child with --run-id, and
         // what the caller polls. One path segment under ~/.mur/runs/.
@@ -380,6 +415,46 @@ mod tests {
         let def = tool.def();
         assert_eq!(def.name, FLEET_RUN);
         assert_eq!(def.input_schema["required"][0], "fleet");
+    }
+
+    #[test]
+    fn live_progress_record_exposes_its_run_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("fleets").join("deep-research");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".run_progress.json"),
+            r#"{"run_id":"run-live","finished_at":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            live_run_id(tmp.path(), "deep-research").as_deref(),
+            Some("run-live")
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_when_the_fleet_progress_slot_is_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(
+            tmp.path(),
+            "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
+        );
+        write_fleet(tmp.path(), "deep-research", 0.0);
+        let progress = tmp.path().join("fleets/deep-research/.run_progress.json");
+        std::fs::write(progress, r#"{"run_id":"run-live","finished_at":null}"#).unwrap();
+        let tool = FleetRunTool {
+            mur_home: tmp.path().to_path_buf(),
+            agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
+        };
+        let err = tool
+            .execute(serde_json::json!({"fleet": "deep-research", "goal": "q"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("already live"), "{err}");
+        assert!(err.to_string().contains("run-live"), "{err}");
     }
 
     /// §3.6: the tool returns a handle within a second while the fleet keeps
