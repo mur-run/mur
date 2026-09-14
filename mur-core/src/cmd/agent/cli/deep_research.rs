@@ -1,7 +1,6 @@
 //! `/deep-research` murmur command: argv-safe subprocesses and live progress.
 
 use std::path::Path;
-use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -9,9 +8,6 @@ use super::app::App;
 use super::shell;
 use super::stream::StreamMsg;
 use crate::cmd::deep_research::status::DEFAULT_FLEET_NAME;
-use crate::cmd::fleet::progress::{iteration_summary_line, load_view};
-
-const TICK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeepResearchAction {
@@ -27,8 +23,14 @@ pub fn classify(args: &[String]) -> DeepResearchAction {
         [word] if word == "status" => DeepResearchAction::Status,
         [word] if word == "stop" => DeepResearchAction::Stop,
         [word] if word == "setup" => DeepResearchAction::Setup,
+        [word] if word == "ask" => DeepResearchAction::Ask(String::new()),
+        [word, rest @ ..] if word == "ask" => DeepResearchAction::Ask(rest.join(" ")),
         _ => DeepResearchAction::Ask(args.join(" ")),
     }
+}
+
+fn uses_shell_slot(action: &DeepResearchAction) -> bool {
+    !matches!(action, DeepResearchAction::Stop | DeepResearchAction::Setup)
 }
 
 /// Dispatch without involving the conversational model. Commands use the
@@ -40,34 +42,37 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
         app.push_system("run `mur deep-research setup` in a terminal — it asks for egress consent");
         return;
     }
-    if app.shell.is_running() {
+    // The kill-switch is out-of-band control, not another foreground job.
+    // It must remain usable precisely while the research child owns the slot.
+    if action == DeepResearchAction::Stop {
+        match crate::cmd::fleet::control::cmd_fleet_stop(&app.home, DEFAULT_FLEET_NAME) {
+            Ok(()) => app.push_system(
+                "stopping deep-research — the in-flight iteration may finish before outcome becomes stopped",
+            ),
+            Err(error) => app.push_system(format!("could not stop deep-research: {error}")),
+        }
+        return;
+    }
+    if uses_shell_slot(&action) && app.shell.is_running() {
         app.push_system("a local command is already running — Ctrl-C to stop it");
         return;
     }
 
     let run_id = uuid::Uuid::now_v7().to_string();
-    let (argv, display, ticker) = match action {
+    let is_research = matches!(&action, DeepResearchAction::Ask(_));
+    let (argv, display) = match action {
         DeepResearchAction::Status => (
             vec!["deep-research".to_string()],
             "mur deep-research".to_string(),
-            false,
         ),
-        DeepResearchAction::Stop => {
-            app.push_system("kill-switch written — the loop exits at its next guard check");
-            (
-                vec![
-                    "fleet".to_string(),
-                    "stop".to_string(),
-                    DEFAULT_FLEET_NAME.to_string(),
-                ],
-                format!("mur fleet stop {DEFAULT_FLEET_NAME}"),
-                false,
-            )
+        DeepResearchAction::Stop => unreachable!("handled out of band above"),
+        DeepResearchAction::Ask(question) if question.is_empty() => {
+            app.push_system("usage: /deep-research ask <question>");
+            return;
         }
         DeepResearchAction::Ask(question) => (
             vec!["deep-research".to_string(), question],
             "mur deep-research <question>".to_string(),
-            true,
         ),
         DeepResearchAction::Setup => unreachable!("handled above"),
     };
@@ -96,62 +101,34 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
     };
     app.begin_shell(&display);
 
-    let (ticker_stop_tx, ticker_stop_rx) = oneshot::channel();
-    if ticker {
-        tokio::spawn(progress_ticker(
-            app.home.clone(),
-            run_id,
-            tx.clone(),
-            ticker_stop_rx,
-        ));
-    }
-
     let tx = tx.clone();
+    let home = app.home.clone();
     tokio::spawn(async move {
         let end = shell::run(child, pid, gen_id, tx.clone(), cancel_rx).await;
-        let _ = ticker_stop_tx.send(());
+        if is_research && end == shell::ShellEnd::Cancelled {
+            let _ = crate::cmd::fleet::control::cmd_fleet_stop(&home, DEFAULT_FLEET_NAME);
+            mark_interrupted_stopped(&home, &run_id);
+            let _ = tx
+                .send(StreamMsg::Note(
+                    "deep-research stopped — outcome: stopped".to_string(),
+                ))
+                .await;
+        }
         let _ = tx.send(StreamMsg::ShellCardDone { gen_id, end }).await;
     });
 }
 
-async fn progress_ticker(
-    home: std::path::PathBuf,
-    run_id: String,
-    tx: mpsc::Sender<StreamMsg>,
-    mut stop: oneshot::Receiver<()>,
-) {
-    let mut last_iteration = None;
-    loop {
-        tokio::select! {
-            _ = &mut stop => break,
-            _ = tokio::time::sleep(TICK_INTERVAL) => {}
-        }
-        let Some(view) = load_matching_view(&home, &run_id) else {
-            continue;
-        };
-        if !view.live {
-            break;
-        }
-        let iteration = view.progress.iteration;
-        if last_iteration == Some(iteration) {
-            continue;
-        }
-        last_iteration = Some(iteration);
-        if tx
-            .send(StreamMsg::Note(iteration_summary_line(&view.progress)))
-            .await
-            .is_err()
-        {
-            break;
-        }
+fn mark_interrupted_stopped(home: &Path, run_id: &str) {
+    let Some((mut progress, _)) = crate::cmd::fleet::progress::load(home, DEFAULT_FLEET_NAME)
+    else {
+        return;
+    };
+    if progress.run_id != run_id || progress.finished_at.is_some() {
+        return;
     }
-}
-
-fn load_matching_view(
-    home: &Path,
-    run_id: &str,
-) -> Option<crate::cmd::fleet::progress::ProgressView> {
-    load_view(home, DEFAULT_FLEET_NAME).filter(|view| view.progress.run_id == run_id)
+    progress.outcome = Some("stopped".to_string());
+    progress.finished_at = Some(chrono::Utc::now().to_rfc3339());
+    progress.save(home, DEFAULT_FLEET_NAME);
 }
 
 #[cfg(test)]
@@ -175,8 +152,44 @@ mod tests {
         );
         assert_eq!(
             classify(&s(&["ask", "why", "now"])),
-            Ask("ask why now".to_string())
+            Ask("why now".to_string())
         );
+    }
+
+    #[test]
+    fn stop_is_out_of_band_but_status_and_ask_use_the_shell_slot() {
+        assert!(!uses_shell_slot(&DeepResearchAction::Stop));
+        assert!(uses_shell_slot(&DeepResearchAction::Status));
+        assert!(uses_shell_slot(&DeepResearchAction::Ask("q".into())));
+    }
+
+    #[test]
+    fn interrupted_run_is_stamped_stopped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut progress = crate::cmd::fleet::progress::RunProgress {
+            schema_version: 1,
+            run_id: "r-stop".into(),
+            question: "q".into(),
+            started_at: chrono::Utc::now().to_rfc3339(),
+            finished_at: None,
+            outcome: None,
+            iteration: 2,
+            model: None,
+            budget_usd: Some(1.0),
+            spend_usd: 0.25,
+            steps: vec![],
+            artifact_path: None,
+            error: None,
+        };
+        progress.save(tmp.path(), DEFAULT_FLEET_NAME);
+
+        mark_interrupted_stopped(tmp.path(), "r-stop");
+
+        progress = crate::cmd::fleet::progress::load(tmp.path(), DEFAULT_FLEET_NAME)
+            .unwrap()
+            .0;
+        assert_eq!(progress.outcome.as_deref(), Some("stopped"));
+        assert!(progress.finished_at.is_some());
     }
 
     #[test]

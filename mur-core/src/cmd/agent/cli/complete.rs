@@ -320,9 +320,15 @@ fn build_top_level(skills: &[Candidate], ctx: &MenuContext) -> Vec<Candidate> {
         .iter()
         .map(|(word, desc, args)| Candidate {
             display: format!("/{word}"),
-            insert: format!("/{word} "),
+            insert: if *word == "deep-research" {
+                format!("/{word}")
+            } else {
+                format!("/{word} ")
+            },
             desc: (*desc).to_string(),
-            has_children: !build_args(word, *args, ctx).is_empty(),
+            // Bare `/deep-research` means status and must be directly
+            // sendable; a manually typed trailing space still opens layer 2.
+            has_children: *word != "deep-research" && !build_args(word, *args, ctx).is_empty(),
         })
         .collect();
     out.extend_from_slice(skills);
@@ -635,6 +641,21 @@ mod tests {
         let s = compute("/panel ", &[], &ctx(), &cur()).unwrap();
         assert!(s.items.iter().any(|c| c.insert == "/panel preview "));
         assert_eq!(s.items.len(), 6);
+    }
+
+    #[test]
+    fn bare_deep_research_is_a_sendable_leaf() {
+        let s = compute("/deep-research", &[], &ctx(), &cur()).unwrap();
+        let row = s
+            .items
+            .iter()
+            .find(|c| c.display == "/deep-research")
+            .unwrap();
+        assert!(!row.has_children);
+        assert_eq!(row.insert, "/deep-research");
+
+        let subs = compute("/deep-research ", &[], &ctx(), &cur()).unwrap();
+        assert!(subs.items.iter().any(|c| c.display == "status"));
     }
 
     #[test]
