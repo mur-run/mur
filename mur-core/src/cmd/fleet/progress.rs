@@ -70,6 +70,13 @@ pub struct RunProgress {
     pub model: Option<String>,
     pub budget_usd: Option<f64>,
     pub spend_usd: f64,
+    /// Whether this fleet actually costs money (`billing::fleet_billing`).
+    /// `spend_usd` is token-count times list price either way, so on a
+    /// subscription/local fleet it is an equivalent, not a bill — see
+    /// [`fmt_spend`]. `None` on records written before this field existed:
+    /// those render as they always did rather than guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billable: Option<bool>,
     pub steps: Vec<StepProgress>,
     /// Path to the saved report, filled in after `save_report` succeeds.
     /// `None` while a terminal, done-set outcome is still writing its
@@ -251,15 +258,26 @@ pub fn progress_phase(p: &RunProgress) -> ProgressPhase {
     }
 }
 
+/// The money token, told straight. A non-billable fleet still accumulates a
+/// figure — tokens times list price — but nobody is charged it, so printing a
+/// bare `$7.90` next to "cannot spend" made the two lines contradict each
+/// other. Unknown billing keeps the old bare form.
+pub fn fmt_spend(spend_usd: f64, billable: Option<bool>) -> String {
+    match billable {
+        Some(false) => format!("≈${spend_usd:.2} (not billed)"),
+        _ => format!("${spend_usd:.2}"),
+    }
+}
+
 pub fn iteration_summary_line(p: &RunProgress) -> String {
     let t = p.totals();
     format!(
-        "iteration {} done: {}✓ {}✗ {} pending · spend ${:.2}{} · model {}",
+        "iteration {} done: {}✓ {}✗ {} pending · spend {}{} · model {}",
         p.iteration,
         t.done,
         t.failed,
         t.pending,
-        p.spend_usd,
+        fmt_spend(p.spend_usd, p.billable),
         p.budget_usd
             .map(|b| format!("/${b:.2}"))
             .unwrap_or_default(),
@@ -270,6 +288,26 @@ pub fn iteration_summary_line(p: &RunProgress) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The banner says a subscription fleet "cannot spend"; a bare `$7.90`
+    /// next to it read as a bill. Non-billable runs must mark the figure as
+    /// an equivalent, and billable ones must NOT (that one is a real charge).
+    #[test]
+    fn a_non_billable_run_never_reports_a_bare_dollar_amount() {
+        assert_eq!(fmt_spend(7.90, Some(true)), "$7.90");
+        assert_eq!(fmt_spend(7.90, None), "$7.90");
+        let hedged = fmt_spend(7.90, Some(false));
+        assert!(hedged.contains("not billed"), "{hedged}");
+        assert!(hedged.contains("7.90"), "{hedged}");
+
+        let mut p = sample();
+        p.billable = Some(false);
+        p.spend_usd = 7.90;
+        let line = iteration_summary_line(&p);
+        assert!(line.contains("not billed"), "{line}");
+        // The contradiction was "cannot spend" + a bare price token.
+        assert!(!line.contains("· spend $"), "{line}");
+    }
 
     #[test]
     fn classify_phase_heuristics() {
@@ -304,6 +342,7 @@ mod tests {
             model: Some("claude_haiku".into()),
             budget_usd: Some(2.0),
             spend_usd: 0.31,
+            billable: None,
             steps: vec![
                 StepProgress {
                     id: "s1".into(),

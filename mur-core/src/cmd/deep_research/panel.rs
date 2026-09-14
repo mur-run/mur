@@ -49,9 +49,9 @@ pub fn render_progress(view: &ProgressView) -> String {
     // Finished run → one recap line.
     if let Some(ended) = &p.finished_at {
         return format!(
-            "\nlast run: {} · ${:.2} · {} iteration{} · {ended}\n",
+            "\nlast run: {} · {} · {} iteration{} · {ended}\n",
             p.outcome.as_deref().unwrap_or("?"),
-            p.spend_usd,
+            crate::cmd::fleet::progress::fmt_spend(p.spend_usd, p.billable),
             p.iteration,
             if p.iteration == 1 { "" } else { "s" },
         );
@@ -97,8 +97,8 @@ pub fn render_progress(view: &ProgressView) -> String {
     }
 
     out.push_str(&format!(
-        "  spend ${:.2}{}\n",
-        p.spend_usd,
+        "  spend {}{}\n",
+        crate::cmd::fleet::progress::fmt_spend(p.spend_usd, p.billable),
         p.budget_usd
             .map(|b| format!("/${b:.2}"))
             .unwrap_or_default(),
@@ -195,6 +195,7 @@ mod tests {
             model: Some("claude_haiku".into()),
             budget_usd: Some(2.0),
             spend_usd: 0.31,
+            billable: None,
             steps: vec![
                 StepProgress {
                     id: "s1".into(),

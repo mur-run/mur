@@ -585,6 +585,7 @@ pub async fn run_guarded(
             .and_then(|p| p.model_ref),
         budget_usd: budget,
         spend_usd: 0.0,
+        billable: Some(billing.billable),
         steps: vec![],
         artifact_path: None,
         error: None,
@@ -1012,9 +1013,14 @@ pub async fn cmd_fleet_run_loop(
 ) -> Result<()> {
     let (stop, iteration, spent) =
         run_guarded(mur_home, name, max_iterations, deadline, budget_usd, run_id).await?;
+    // Read back what the run recorded rather than recomputing billing: the
+    // figure and its "was this actually charged" label must come from the
+    // same place, or this line can contradict the panel again.
+    let billable = super::progress::load_view(mur_home, name).and_then(|v| v.progress.billable);
     println!(
-        "fleet '{}' loop stopped after {iteration} iteration(s) (~${spent:.2} spent): {stop:?}",
-        name
+        "fleet '{}' loop stopped after {iteration} iteration(s), cost {}: {stop:?}",
+        name,
+        super::progress::fmt_spend(spent, billable)
     );
     Ok(())
 }

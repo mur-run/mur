@@ -177,6 +177,7 @@ mod tests {
             model: None,
             budget_usd: Some(1.0),
             spend_usd: 0.25,
+            billable: None,
             steps: vec![],
             artifact_path: None,
             error: None,
