@@ -585,7 +585,10 @@ pub async fn run_guarded(
             .and_then(|p| p.model_ref),
         budget_usd: budget,
         spend_usd: 0.0,
+        billable: Some(billing.billable),
         steps: vec![],
+        artifact_path: None,
+        error: None,
     }));
     lock_progress(&progress).save(mur_home, name);
 
@@ -835,6 +838,26 @@ pub async fn run_guarded(
         let out =
             crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
                 .await?;
+        // Marker policies need an explicit router synthesis turn. Planning is
+        // JSON-only, and delegated workers cannot speak for the router, so
+        // without this phase no one can legitimately emit the convergence
+        // sentinel and the same paid plan repeats until a guard fires.
+        let done_when = fleet
+            .loop_cfg
+            .as_ref()
+            .map(|l| l.done_when.as_str())
+            .unwrap_or("");
+        let synthesis_tokens = match done_policy(done_when) {
+            DonePolicy::Marker(marker) => synthesize_via_router(
+                mur_home,
+                &fleet,
+                &iter_goal,
+                marker,
+                out.output_text.as_deref().unwrap_or_default(),
+            )
+            .unwrap_or(0),
+            _ => 0,
+        };
         iteration += 1;
         // A blocked iteration reached an action that needs a human and stopped
         // there. Mark the job blocked (not Done — nothing finished) and leave
@@ -863,8 +886,9 @@ pub async fn run_guarded(
         // Account REAL cost from this iteration's token usage. A 0-token result
         // (older runtime, stub, or a reply that carried no usage) falls back to
         // the projection so the budget guard never silently under-counts.
-        spent += if out.tokens_used > 0 {
-            iteration_cost_usd(out.tokens_used, price_per_1k)
+        let iteration_tokens = out.tokens_used.saturating_add(synthesis_tokens);
+        spent += if iteration_tokens > 0 {
+            iteration_cost_usd(iteration_tokens, price_per_1k)
         } else {
             projection
         };
@@ -989,11 +1013,128 @@ pub async fn cmd_fleet_run_loop(
 ) -> Result<()> {
     let (stop, iteration, spent) =
         run_guarded(mur_home, name, max_iterations, deadline, budget_usd, run_id).await?;
+    // Read back what the run recorded rather than recomputing billing: the
+    // figure and its "was this actually charged" label must come from the
+    // same place, or this line can contradict the panel again.
+    let billable = super::progress::load_view(mur_home, name).and_then(|v| v.progress.billable);
     println!(
-        "fleet '{}' loop stopped after {iteration} iteration(s) (~${spent:.2} spent): {stop:?}",
-        name
+        "fleet '{}' loop stopped after {iteration} iteration(s), cost {}: {stop:?}",
+        name,
+        super::progress::fmt_spend(spent, billable)
     );
     Ok(())
+}
+
+fn build_synthesis_prompt(goal: &str, marker: &str, evidence: &str) -> String {
+    format!(
+        "You are the final synthesizer. Goal: {goal}\n\nWorker evidence:\n{evidence}\n\nWrite the final cited answer now. Do not delegate or propose more work. If the evidence is insufficient, state the limitations explicitly but still finish with the convergence marker as the last non-blank line, alone exactly as:\n{marker}\n"
+    )
+}
+
+fn finalize_synthesis(reply: &str, marker: &str) -> String {
+    let mut lines: Vec<&str> = reply.lines().collect();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    if lines.last().is_some_and(|line| line.trim() == marker) {
+        return lines.join("\n");
+    }
+    let body = lines.join("\n");
+    if body.is_empty() {
+        marker.to_string()
+    } else {
+        format!("{body}\n\n{marker}")
+    }
+}
+
+fn extract_task_reply(task: &serde_json::Value) -> String {
+    task.get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|messages| {
+            messages
+                .iter()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("agent"))
+        })
+        .and_then(|m| m.get("parts").and_then(|p| p.as_array()))
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
+}
+
+fn task_tokens(task: &serde_json::Value) -> u64 {
+    let Some(usage) = task.get("usage") else {
+        return 0;
+    };
+    usage
+        .get("input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+        .saturating_add(
+            usage
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+        )
+}
+
+fn synthesize_via_router(
+    mur_home: &Path,
+    fleet: &mur_common::fleet::Fleet,
+    goal: &str,
+    marker: &str,
+    evidence: &str,
+) -> Result<u64> {
+    let prompt = build_synthesis_prompt(goal, marker, evidence);
+    let params = serde_json::json!({
+        "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] },
+        "context": { "channel_id": fleet.channel_id }
+    });
+    let mut streamed = String::new();
+    let task = crate::a2a_dial::dial_message_streaming(
+        mur_home,
+        fleet.router_or_concierge(),
+        params,
+        |delta, thinking, _id| {
+            if !thinking {
+                streamed.push_str(delta);
+            }
+        },
+        |_hitl| {},
+        |_step| {},
+    )?;
+    let reply = finalize_synthesis(
+        &{
+            let final_reply = extract_task_reply(&task);
+            if final_reply.trim().is_empty() {
+                streamed
+            } else {
+                final_reply
+            }
+        },
+        marker,
+    );
+    {
+        let svc = mur_channel::ChannelService::open(mur_home)?;
+        crate::channel_writer::append_as_writer(
+            &svc,
+            mur_home,
+            &fleet.channel_id,
+            fleet.router_or_concierge(),
+            ChannelActor::Agent {
+                id: fleet.router_or_concierge().to_string(),
+            },
+            mur_common::channel::EventKind::Message,
+            serde_json::json!({ "text": reply }),
+            None,
+        )?;
+    }
+    Ok(task_tokens(&task))
 }
 
 /// Ask the router agent whether the goal is complete. Streams a one-word reply.
@@ -1067,6 +1208,29 @@ mod tests {
             sig: None,
             key_version: None,
         }
+    }
+
+    #[test]
+    fn final_synthesis_always_has_exactly_one_terminal_marker() {
+        assert_eq!(
+            finalize_synthesis("answer", "RESEARCH_COMPLETE"),
+            "answer\n\nRESEARCH_COMPLETE"
+        );
+        assert_eq!(
+            finalize_synthesis("answer\nRESEARCH_COMPLETE\n", "RESEARCH_COMPLETE"),
+            "answer\nRESEARCH_COMPLETE"
+        );
+    }
+
+    #[test]
+    fn synthesis_prompt_requires_report_and_own_line_marker() {
+        let prompt =
+            build_synthesis_prompt("What changed?", "RESEARCH_COMPLETE", "worker evidence");
+        assert!(prompt.contains("What changed?"));
+        assert!(prompt.contains("worker evidence"));
+        assert!(prompt.contains("final cited answer"));
+        assert!(prompt.contains("\nRESEARCH_COMPLETE\n"));
+        assert!(prompt.contains("last non-blank line"));
     }
 
     #[test]

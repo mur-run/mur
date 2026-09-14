@@ -2083,6 +2083,18 @@ mod builtin_skill_tests {
         }
     }
 
+    #[test]
+    fn deep_research_skill_teaches_agent_dispatch_and_polling() {
+        let m =
+            mur_common::skill::parse_canonical(include_str!("../skills/mur_deep_research.yaml"))
+                .expect("mur-deep-research must parse");
+        assert_eq!(m.version.to_string(), "0.2.0");
+        let body = m.content.context.unwrap_or_default();
+        assert!(body.contains("fleet_run"), "{body}");
+        assert!(body.contains("mur_job_status"), "{body}");
+        assert!(!body.contains("MUR_RUN_ID"), "{body}");
+    }
+
     /// Every built-in skill YAML must deserialize into a `SkillManifest`.
     ///
     /// The case list above — and the two other lists in this file — are

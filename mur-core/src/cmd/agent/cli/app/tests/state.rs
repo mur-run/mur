@@ -101,6 +101,25 @@ fn parses_panel() {
 }
 
 #[test]
+fn parses_deep_research() {
+    assert_eq!(
+        parse_slash("/deep-research"),
+        Some(SlashCmd::DeepResearch(vec![]))
+    );
+    assert_eq!(
+        parse_slash("/research ask why is the sky blue"),
+        Some(SlashCmd::DeepResearch(vec![
+            "ask".into(),
+            "why".into(),
+            "is".into(),
+            "the".into(),
+            "sky".into(),
+            "blue".into()
+        ]))
+    );
+}
+
+#[test]
 fn parse_slash_skin_variants() {
     assert_eq!(parse_slash("/skin"), Some(SlashCmd::Skin(None)));
     assert_eq!(

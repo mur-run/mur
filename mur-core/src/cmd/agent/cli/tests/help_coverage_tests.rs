@@ -38,6 +38,7 @@ fn help_name(cmd: &SlashCmd) -> Option<&'static str> {
         SlashCmd::Skin(_) => Some("skin"),
         SlashCmd::Panel(_) => Some("panel"),
         SlashCmd::Open => Some("open"),
+        SlashCmd::DeepResearch(_) => Some("deep-research"),
         SlashCmd::Model(_) => Some("model"),
         SlashCmd::Effort { .. } => Some("effort"),
         SlashCmd::Login(_) => Some("login"),
@@ -76,6 +77,7 @@ fn one_of_each() -> Vec<SlashCmd> {
         SlashCmd::Skin(None),
         SlashCmd::Panel(vec![]),
         SlashCmd::Open,
+        SlashCmd::DeepResearch(vec![]),
         SlashCmd::Model(None),
         SlashCmd::Effort {
             level: None,

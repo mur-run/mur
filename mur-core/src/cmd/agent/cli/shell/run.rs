@@ -194,6 +194,39 @@ pub async fn spawn(cmd: &str) -> std::io::Result<(tokio::process::Child, u32)> {
     Ok((child, pid))
 }
 
+/// Start an argv-shaped command as its own process group.
+///
+/// Unlike [`spawn`], this never invokes a shell: every argument remains data,
+/// which is required for slash commands whose free-text tail came from the
+/// user. The returned child otherwise has the same streaming/cancellation
+/// contract as a `!command` child and can be passed straight to [`run`].
+pub async fn spawn_argv(
+    program: &std::path::Path,
+    args: &[String],
+    env: &[(&str, &str)],
+) -> std::io::Result<(tokio::process::Child, u32)> {
+    use tokio::process::Command;
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .envs(env.iter().copied())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn()?;
+    let Some(pid) = child.id() else {
+        let _ = child.kill().await;
+        return Err(std::io::Error::other(
+            "spawned command reported no pid; refusing to run a command we could not signal",
+        ));
+    };
+    Ok((child, pid))
+}
+
 /// Read one pipe to EOF, forwarding decoded text.
 ///
 /// The decode is per read, and a read boundary is chosen by the kernel, so a
@@ -462,6 +495,27 @@ mod tests {
             text.push_str(&chunk);
         }
         assert!(text.contains("FINAL"), "{text}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn argv_spawn_does_not_interpret_shell_syntax() {
+        let (child, pid) = spawn_argv(
+            std::path::Path::new("/bin/echo"),
+            &["$(printf injected)".to_string()],
+            &[],
+        )
+        .await
+        .expect("spawn argv");
+        let (tx, mut rx) = mpsc::channel(16);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+        let end = run(child, pid, 1, tx, cancel_rx).await;
+        assert_eq!(end, ShellEnd::Exited(0));
+        let mut output = String::new();
+        while let Ok(StreamMsg::ShellOutput { chunk, .. }) = rx.try_recv() {
+            output.push_str(&chunk);
+        }
+        assert_eq!(output.trim(), "$(printf injected)");
     }
 
     /// Tests 3 + 4 — D5: cancel kills the whole group (the grandchild dies,
