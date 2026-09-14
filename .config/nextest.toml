@@ -32,3 +32,25 @@ test-group = 'heavy'
 
 [test-groups]
 heavy = { max-threads = 2 }
+mcp-serial = { max-threads = 1 }
+
+# mur-mcp-server runs one test at a time. Not for resources — for a fd race in
+# the runner that no code in this repo can prevent.
+#
+# Rust std on macOS has no pipe2, so a test's captured-stdout pipe is created
+# with pipe() and only then marked CLOEXEC (std/src/sys/pipe/unix.rs), and its
+# posix_spawn sets no POSIX_SPAWN_CLOEXEC_DEFAULT (std/src/sys/process/unix/
+# unix.rs). nextest spawns tests from several threads, so a test spawned in
+# that window inherits a sibling's stdout write end at some fd ≥ 3 — lsof
+# showed the same fd number and pipe peer in an integration-* process, in the
+# mur-mcp-server child it spawned, and in nextest itself, across 8 leaky runs
+# out of 30. When the inheritor is a 12–25 s integration test, the sibling
+# unit test (whichever was being spawned at that instant) exits, nextest never
+# sees EOF, and reports it leaky. Leak-timeout is not the lever: 1 ms, 100 ms,
+# 2 s and 30 s all leaked at ~25%, because the holder lives longer than any
+# of them. Neither test binary leaks when run alone (10 runs each); only the
+# two together. Serialising the package removes the concurrent spawn, and with
+# it the race. Costs the parallelism of five ~5 s integration tests.
+[[profile.default.overrides]]
+filter = 'package(mur-mcp-server)'
+test-group = 'mcp-serial'
