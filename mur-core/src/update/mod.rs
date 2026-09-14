@@ -148,11 +148,12 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
             release::extract_binary(asset_name, &bin_bytes, "mur-agent-runtime", &tmp_runtime)
                 .ok()
                 .map(|_| tmp_runtime);
+        let preexisting_interactive_sessions = interactive_sessions_at(&target);
         swap::swap(&tmp_bin, &target)?;
         println!("Updated to v{latest}");
         refresh_siblings(asset_name, &bin_bytes, &target);
         resign::post_upgrade(opts.restart_agents, fresh_runtime.as_deref())?;
-        warn_stale_interactive_sessions(&target);
+        warn_stale_interactive_sessions(&target, preexisting_interactive_sessions);
     }
     #[cfg(windows)]
     {
@@ -307,19 +308,34 @@ fn format_stale_interactive_session_notice(peers: &[InteractiveProcess]) -> Stri
     notice
 }
 
-/// Enumerate other interactive MUR sessions best-effort. Process-table access
-/// and executable paths may be unavailable under platform privacy controls, so
-/// this diagnostic must never change an otherwise successful update result.
+/// Snapshot the interactive processes using `replaced_executable` *before* the
+/// atomic rename. On macOS, process paths after the rename can resolve to the
+/// new file pathname, so inspecting afterward would miss the old mapped image.
 #[cfg(unix)]
-fn warn_stale_interactive_sessions(replaced_executable: &std::path::Path) {
+fn interactive_sessions_at(replaced_executable: &std::path::Path) -> Vec<InteractiveProcess> {
     let system = sysinfo::System::new_all();
-    let processes = system.processes().values().filter_map(|process| {
-        Some(InteractiveProcess::new(
-            process.pid().as_u32(),
-            process.name(),
-            process.exe()?.to_path_buf(),
-        ))
-    });
+    system
+        .processes()
+        .values()
+        .filter_map(|process| {
+            Some(InteractiveProcess::new(
+                process.pid().as_u32(),
+                process.name(),
+                process.exe()?.to_path_buf(),
+            ))
+        })
+        .filter(|process| process.exe == replaced_executable)
+        .collect()
+}
+
+/// Print the post-swap warning from the pre-swap process snapshot. Process
+/// inspection may be restricted by platform privacy controls; an empty snapshot
+/// simply leaves this best-effort diagnostic silent.
+#[cfg(unix)]
+fn warn_stale_interactive_sessions(
+    replaced_executable: &std::path::Path,
+    processes: Vec<InteractiveProcess>,
+) {
     let peers = stale_interactive_sessions(processes, std::process::id(), replaced_executable);
     println!("{}", format_stale_interactive_session_notice(&peers));
 }
@@ -534,7 +550,10 @@ mod tests {
             replaced,
         );
         assert_eq!(
-            sessions.iter().map(|session| session.pid).collect::<Vec<_>>(),
+            sessions
+                .iter()
+                .map(|session| session.pid)
+                .collect::<Vec<_>>(),
             vec![11, 42]
         );
     }

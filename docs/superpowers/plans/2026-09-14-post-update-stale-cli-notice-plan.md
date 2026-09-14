@@ -33,7 +33,7 @@
 - [x] Run `cargo test -p mur-core stale_sessions_exclude_updater_and_noninteractive_binaries`; observe failure because the type/function do not exist.
 - [x] Add the minimal private snapshot type and pure selector. Compare paths exactly, normalize `.exe` only in the basename predicate, exclude the updater PID, and sort by PID.
 - [x] Re-run the same test; observe pass.
-- [ ] Commit with `test(update): cover stale interactive session selection`.
+- [x] Commit with `test(update): cover stale interactive session selection`.
 
 ## Task 2 — Print and invoke the best-effort notice (TDD)
 
@@ -47,8 +47,8 @@
 - [x] Add a pure `format_stale_interactive_session_notice(&[InteractiveProcess]) -> String`, then a thin `warn_stale_interactive_sessions` adapter that snapshots only processes with an executable path and prints non-empty formatter output. Do not let adapter errors escape.
 - [x] In the Unix update branch, call the adapter after `resign::post_upgrade` succeeds, passing `target`; retain the target before temporary-directory cleanup.
 - [x] Re-run the focused test; observe pass.
-- [ ] Run `cargo test -p mur-core update::` and then `cargo test -p mur-core`; observe all pass.
-- [ ] Commit with `feat(update): warn about stale interactive sessions`.
+- [x] Run `cargo test -p mur-core update::`; 46 update tests pass. `cargo test -p mur-core` was also run: 2,783 passed and 29 pre-existing sandbox-blocked tests failed because the harness denies `sh`, `echo`, `true`, and `git`; it is not a green full-suite verification.
+- [x] Commit with `feat(update): warn about stale interactive sessions`.
 
 ## Verification
 
