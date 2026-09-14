@@ -148,12 +148,12 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
             release::extract_binary(asset_name, &bin_bytes, "mur-agent-runtime", &tmp_runtime)
                 .ok()
                 .map(|_| tmp_runtime);
-        let preexisting_interactive_sessions = interactive_sessions_at(&target);
+        let preexisting_interactive_sessions = interactive_sessions_at();
         swap::swap(&tmp_bin, &target)?;
         println!("Updated to v{latest}");
         refresh_siblings(asset_name, &bin_bytes, &target);
         resign::post_upgrade(opts.restart_agents, fresh_runtime.as_deref())?;
-        warn_stale_interactive_sessions(&target, preexisting_interactive_sessions);
+        warn_stale_interactive_sessions(preexisting_interactive_sessions);
     }
     #[cfg(windows)]
     {
@@ -270,19 +270,28 @@ impl InteractiveProcess {
     }
 }
 
-/// Return peer terminal sessions that retain the image replaced by this update.
+/// Return peer processes that may retain an image made stale by this update.
 /// The updater is intentionally absent: it gets a dedicated warning because it
 /// necessarily keeps running the previous image until its own command exits.
+///
+/// Match known user-facing MUR binaries by basename rather than the replaced
+/// pathname. A second installation (for example Homebrew beside `~/.local/bin`)
+/// is not swapped by this update but can still run an older MUR crate; naming it
+/// makes that skew visible. `mur-mcp-server` is included because its client,
+/// not MUR, owns its lifecycle. Managed agents and daemons remain excluded.
 fn stale_interactive_sessions(
     processes: impl IntoIterator<Item = InteractiveProcess>,
     updater_pid: u32,
-    replaced_executable: &std::path::Path,
 ) -> Vec<InteractiveProcess> {
     let mut sessions: Vec<_> = processes
         .into_iter()
         .filter(|process| process.pid != updater_pid)
-        .filter(|process| process.exe == replaced_executable)
-        .filter(|process| matches!(process.name.trim_end_matches(".exe"), "mur" | "murmur"))
+        .filter(|process| {
+            matches!(
+                process.name.trim_end_matches(".exe"),
+                "mur" | "murmur" | "mur-mcp-server"
+            )
+        })
         .collect();
     sessions.sort_by_key(|process| process.pid);
     sessions
@@ -295,7 +304,7 @@ fn format_stale_interactive_session_notice(peers: &[InteractiveProcess]) -> Stri
         "⚠ This terminal is still running the previous MUR binary. Close and reopen it before starting jobs."
             .to_string();
     if !peers.is_empty() {
-        notice.push_str("\nℹ Other interactive MUR sessions still running the previous binary:");
+        notice.push_str("\nℹ Other MUR processes may still be using an older binary:");
         for process in peers {
             notice.push_str(&format!(
                 "\n  • {} (PID {}, {})",
@@ -308,11 +317,12 @@ fn format_stale_interactive_session_notice(peers: &[InteractiveProcess]) -> Stri
     notice
 }
 
-/// Snapshot the interactive processes using `replaced_executable` *before* the
-/// atomic rename. On macOS, process paths after the rename can resolve to the
-/// new file pathname, so inspecting afterward would miss the old mapped image.
+/// Snapshot candidate processes before the atomic rename. On macOS, process
+/// paths after the rename can resolve to the new file pathname, so inspecting
+/// afterward would miss the old mapped image. Keep all known candidates here:
+/// a separate MUR installation may be stale even though its pathname differs.
 #[cfg(unix)]
-fn interactive_sessions_at(replaced_executable: &std::path::Path) -> Vec<InteractiveProcess> {
+fn interactive_sessions_at() -> Vec<InteractiveProcess> {
     let system = sysinfo::System::new_all();
     system
         .processes()
@@ -324,7 +334,6 @@ fn interactive_sessions_at(replaced_executable: &std::path::Path) -> Vec<Interac
                 process.exe()?.to_path_buf(),
             ))
         })
-        .filter(|process| process.exe == replaced_executable)
         .collect()
 }
 
@@ -332,11 +341,8 @@ fn interactive_sessions_at(replaced_executable: &std::path::Path) -> Vec<Interac
 /// inspection may be restricted by platform privacy controls; an empty snapshot
 /// simply leaves this best-effort diagnostic silent.
 #[cfg(unix)]
-fn warn_stale_interactive_sessions(
-    replaced_executable: &std::path::Path,
-    processes: Vec<InteractiveProcess>,
-) {
-    let peers = stale_interactive_sessions(processes, std::process::id(), replaced_executable);
+fn warn_stale_interactive_sessions(processes: Vec<InteractiveProcess>) {
+    let peers = stale_interactive_sessions(processes, std::process::id());
     println!("{}", format_stale_interactive_session_notice(&peers));
 }
 
@@ -522,7 +528,7 @@ mod tests {
             format_stale_interactive_session_notice(&peers),
             concat!(
                 "⚠ This terminal is still running the previous MUR binary. Close and reopen it before starting jobs.\n",
-                "ℹ Other interactive MUR sessions still running the previous binary:\n",
+                "ℹ Other MUR processes may still be using an older binary:\n",
                 "  • murmur (PID 11, /opt/homebrew/bin/mur)\n",
                 "  • mur (PID 42, /opt/homebrew/bin/mur)"
             )
@@ -544,17 +550,16 @@ mod tests {
                 InteractiveProcess::new(8, "murmurd", replaced),
                 InteractiveProcess::new(9, "mur-agent-runtime", replaced),
                 InteractiveProcess::new(10, "mur-mcp-server", replaced),
-                InteractiveProcess::new(12, "mur", "/elsewhere/mur"),
+                InteractiveProcess::new(12, "mur", "/elsewhere/mur"), // Separate stale install.
             ],
             7,
-            replaced,
         );
         assert_eq!(
             sessions
                 .iter()
                 .map(|session| session.pid)
                 .collect::<Vec<_>>(),
-            vec![11, 42]
+            vec![10, 11, 12, 42]
         );
     }
 
