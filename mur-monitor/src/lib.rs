@@ -5,3 +5,4 @@ pub mod adapter;
 pub mod backoff;
 pub mod spec;
 pub mod state;
+pub mod store;
