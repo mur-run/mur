@@ -1623,7 +1623,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 json,
                 all,
             } => cmd::project::cmd_project_search(query, project, limit, json, all).await?,
-            ProjectAction::Status { path } => cmd::project::cmd_project_status(path)?,
+            ProjectAction::Status { path, json } => cmd::project::cmd_project_status(path, json)?,
             ProjectAction::List => cmd::project::cmd_project_list()?,
             ProjectAction::Remove { path } => cmd::project::cmd_project_remove(path)?,
         },

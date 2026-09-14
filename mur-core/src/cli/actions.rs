@@ -1345,6 +1345,9 @@ pub enum ProjectAction {
     Status {
         #[arg(long)]
         path: Option<String>,
+        /// Machine-readable JSON (schema_version 1) instead of the text summary
+        #[arg(long)]
+        json: bool,
     },
     /// List all indexed projects
     List,
