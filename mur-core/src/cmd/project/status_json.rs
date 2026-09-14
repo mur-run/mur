@@ -3,14 +3,19 @@ use anyhow::Result;
 use super::ProjectStatusInfo;
 
 /// Version of the `mur project status --json` payload. Bump ONLY on a
-/// breaking field change — skills and agents gate their "is the index
-/// usable" decision on this number, so a silent shape change is worse than
-/// a loud version bump.
+/// breaking field change. No consumer gates on this number today — the
+/// only reader (`mur-core/src/skills/mur_project_search.yaml`) decides
+/// index usability from `indexed` / `indexing_in_progress` / `stale_dims`
+/// — it is emitted so a future breaking change is loud rather than silent.
 pub const PROJECT_STATUS_SCHEMA_VERSION: u32 = 1;
 
 /// Machine-readable envelope for `mur project status --json`.
 /// `info` is flattened so the JSON keys stay identical to
 /// `ProjectStatusInfo`'s — the version is additive, not a nesting change.
+///
+/// `info.last_indexed` is always `null` on this path: `do_project_status`
+/// (in `cmd/project/mod.rs`) never fills it, only `do_project_list` does
+/// for its own view. Do not read it as a freshness signal here.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProjectStatusJson {
     pub schema_version: u32,
