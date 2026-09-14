@@ -10,13 +10,21 @@ use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::task::JoinHandle;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// A model page is a few KiB; anything past this is not a reply we want.
 const MAX_LINE_BYTES: usize = 1 << 20;
+/// Enough of codex's stderr to name the real failure — a missing interpreter
+/// is one line — while staying small enough to put in a UI error string.
+const MAX_STDERR_BYTES: usize = 8 * 1024;
+/// How long EOF waits for the stderr drain to finish. The pipe closes when the
+/// process does, so this is a backstop, not a delay anyone pays in practice.
+const STDERR_GRACE: Duration = Duration::from_millis(250);
 const MODEL_PAGE_LIMIT: u64 = 100;
 /// Bounds the pagination loop against a server that keeps handing out cursors.
 const MAX_MODEL_PAGES: usize = 50;
@@ -28,8 +36,8 @@ pub enum ControlError {
     CliMissing,
     #[error("could not start codex app-server: {0}")]
     Spawn(String),
-    #[error("codex app-server closed the connection")]
-    Eof,
+    #[error("codex app-server closed the connection{}", stderr_detail(.0))]
+    Eof(String),
     #[error("codex app-server did not answer within {0:?}")]
     Timeout(Duration),
     #[error("codex app-server error: {0}")]
@@ -38,33 +46,78 @@ pub enum ControlError {
     Protocol(String),
 }
 
+/// Codex's own words appended to the EOF message, or nothing when it died
+/// without saying anything. Without this the caller sees only "closed the
+/// connection" and cannot tell a crashed server from a shim that never found
+/// its interpreter.
+fn stderr_detail(s: &str) -> String {
+    if s.is_empty() {
+        String::new()
+    } else {
+        format!(": {s}")
+    }
+}
+
 struct JsonlSession {
     child: Child,
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
     next_id: u64,
     timeout: Duration,
+    /// Bounded tail of the child's stderr, filled by `drain`.
+    stderr: Arc<Mutex<String>>,
+    drain: Option<JoinHandle<()>>,
 }
 
 impl JsonlSession {
     async fn start(codex: &Path) -> Result<Self, ControlError> {
-        let mut child = Command::new(codex)
+        Self::start_with(super::shell_command(codex)).await
+    }
+
+    /// Takes the command already built so the caller owns the environment the
+    /// server runs in — `start` uses the shell's PATH, tests supply their own.
+    async fn start_with(mut cmd: Command) -> Result<Self, ControlError> {
+        let mut child = cmd
             .args(["app-server", "--listen", "stdio://"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // ponytail: stderr dropped — nothing here surfaces it; pipe it when a diagnostic needs it.
-            .stderr(Stdio::null())
+            // Piped, not dropped: when the spawn dies on its shebang this is
+            // the only place that says why ("env: node: No such file or
+            // directory"), and an unread pipe would stall a chatty server once
+            // the kernel buffer filled.
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| ControlError::Spawn(e.to_string()))?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
+        let stderr_pipe = child.stderr.take().expect("piped stderr");
+        let stderr = Arc::new(Mutex::new(String::new()));
+        let sink = Arc::clone(&stderr);
+        // Keeps reading after the buffer is full — it stops *recording*, not
+        // draining, so a noisy server still cannot block on a full pipe.
+        let drain = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr_pipe).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let mut buf = sink.lock().expect("stderr buffer not poisoned");
+                if buf.len() >= MAX_STDERR_BYTES {
+                    continue;
+                }
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
+                buf.push_str(&line);
+                buf.truncate(MAX_STDERR_BYTES);
+            }
+        });
         let mut s = Self {
             child,
             stdin,
             lines: BufReader::new(stdout).lines(),
             next_id: 0,
             timeout: REQUEST_TIMEOUT,
+            stderr,
+            drain: Some(drain),
         };
         s.request(
             "initialize",
@@ -82,10 +135,26 @@ impl JsonlSession {
     async fn write_line(&mut self, v: &Value) -> Result<(), ControlError> {
         let mut line = v.to_string();
         line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|_| ControlError::Eof)
+        if self.stdin.write_all(line.as_bytes()).await.is_err() {
+            return Err(self.eof().await);
+        }
+        Ok(())
+    }
+
+    /// EOF says the child is gone; its stderr is the only thing that says why.
+    /// The drain task ends when the pipe closes with the process, so this
+    /// awaits it briefly rather than reporting a half-read buffer.
+    async fn eof(&mut self) -> ControlError {
+        if let Some(drain) = self.drain.take() {
+            let _ = tokio::time::timeout(STDERR_GRACE, drain).await;
+        }
+        let tail = self
+            .stderr
+            .lock()
+            .expect("stderr buffer not poisoned")
+            .trim()
+            .to_string();
+        ControlError::Eof(tail)
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), ControlError> {
@@ -108,12 +177,14 @@ impl JsonlSession {
 
     async fn await_reply(&mut self, id: u64) -> Result<Value, ControlError> {
         loop {
-            let line = self
+            let next = self
                 .lines
                 .next_line()
                 .await
-                .map_err(|e| ControlError::Protocol(e.to_string()))?
-                .ok_or(ControlError::Eof)?;
+                .map_err(|e| ControlError::Protocol(e.to_string()))?;
+            let Some(line) = next else {
+                return Err(self.eof().await);
+            };
             if line.len() > MAX_LINE_BYTES {
                 return Err(ControlError::Protocol(format!(
                     "reply longer than {MAX_LINE_BYTES} bytes"
@@ -142,11 +213,20 @@ impl JsonlSession {
     /// happy path deterministic instead of leaving a zombie to the runtime.
     async fn close(mut self) {
         let _ = self.child.kill().await;
+        if let Some(drain) = self.drain.take() {
+            drain.abort();
+        }
     }
 }
 
 pub async fn read_account(codex: &Path) -> Result<ChatGptAccountView, ControlError> {
-    let mut s = JsonlSession::start(codex).await?;
+    read_account_with(super::shell_command(codex)).await
+}
+
+/// The body of [`read_account`], with the command injectable so a test can
+/// pin the environment the server is spawned into.
+pub(crate) async fn read_account_with(cmd: Command) -> Result<ChatGptAccountView, ControlError> {
+    let mut s = JsonlSession::start_with(cmd).await?;
     let r = s
         .request("account/read", json!({"refreshToken": false}))
         .await;
@@ -237,10 +317,29 @@ mod tests {
 
     /// A fake `codex app-server`: logs every line it receives, answers by id.
     fn fake_codex(dir: &tempfile::TempDir, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        write_fake_codex(dir, "#!/bin/sh", body)
+    }
+
+    /// `fake_codex` under a `#!/usr/bin/env <interp>` shebang — the shape npm,
+    /// nvm and friends install `codex` as, and the shape that made this bug.
+    fn fake_codex_shim(
+        dir: &tempfile::TempDir,
+        interp: &str,
+        body: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        write_fake_codex(dir, &format!("#!/usr/bin/env {interp}"), body)
+    }
+
+    fn write_fake_codex(
+        dir: &tempfile::TempDir,
+        shebang: &str,
+        body: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
         let log = dir.path().join("requests.log");
         let script = dir.path().join("codex");
         let src = format!(
-            "#!/bin/sh\nLOG='{}'\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" >> \"$LOG\"\n  id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\n  [ -z \"$id\" ] && continue\n  case \"$line\" in\n{}\n  esac\ndone\n",
+            "{}\nLOG='{}'\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" >> \"$LOG\"\n  id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\n  [ -z \"$id\" ] && continue\n  case \"$line\" in\n{}\n  esac\ndone\n",
+            shebang,
             log.display(),
             body
         );
@@ -255,6 +354,77 @@ mod tests {
 
     const INIT_OK: &str =
         r#"    *'"initialize"'*) printf '{"id":%s,"result":{"userAgent":"codex/test"}}\n' "$id";;"#;
+
+    /// Named so it cannot exist in a real PATH dir — the test controls
+    /// entirely whether this interpreter is findable.
+    const INTERP: &str = "murtest-fake-node";
+
+    /// Writes an interpreter that only exists in `dir`, so the shim above it
+    /// runs exactly when `dir` is on the spawn's PATH and not otherwise.
+    fn fake_interpreter(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let p = dir.path().join(INTERP);
+        std::fs::File::create(&p)
+            .unwrap()
+            .write_all(b"#!/bin/sh\nexec /bin/sh \"$@\"\n")
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    /// The Finder-launched-app bug, both halves.
+    ///
+    /// `resolve_codex` finds the shim through an interactive shell, so it is
+    /// found in a world where its interpreter exists. Spawning it with the
+    /// Hub's own PATH — launchd hands GUI apps a bare
+    /// `/usr/bin:/bin:/usr/sbin:/sbin` — kills it on its shebang before it
+    /// reads a byte, which surfaced as a bare "closed the connection".
+    #[tokio::test]
+    async fn shim_runs_on_shell_path_and_eof_names_the_missing_interpreter() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        fake_interpreter(&bin);
+        let body = format!(
+            "{INIT_OK}\n    *'\"account/read\"'*) printf '{{\"id\":%s,\"result\":{{\"account\":{{\"type\":\"chatgpt\",\"email\":\"u@example.com\",\"planType\":\"plus\"}}}}}}\\n' \"$id\";;"
+        );
+        let (codex, _log) = fake_codex_shim(&dir, INTERP, &body);
+
+        // The world the binary was found in: the shim runs.
+        let shell_path = format!("{}:/usr/bin:/bin", bin.path().display());
+        let view = read_account_with(super::super::command_with_path(&codex, Some(&shell_path)))
+            .await
+            .expect("shim spawned with the shell's PATH must reach its interpreter");
+        assert!(view.logged_in);
+        assert_eq!(view.email.as_deref(), Some("u@example.com"));
+
+        // The world a Finder-launched Hub spawns into: it dies on the shebang,
+        // and the error has to say which interpreter went missing.
+        let err = read_account_with(super::super::command_with_path(
+            &codex,
+            Some("/usr/bin:/bin:/usr/sbin:/sbin"),
+        ))
+        .await
+        .expect_err("shim without its interpreter cannot answer");
+        assert!(matches!(err, ControlError::Eof(_)), "got {err:?}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(INTERP),
+            "EOF must carry codex's stderr, got: {msg}"
+        );
+    }
+
+    /// A server that dies silently still reports the plain message — the
+    /// stderr tail is an addition, not a new requirement.
+    #[tokio::test]
+    async fn eof_without_stderr_keeps_the_bare_message() {
+        let _serial = super::super::FAKE_BIN_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let body = format!("{INIT_OK}\n    *'\"account/read\"'*) exit 0;;");
+        let (codex, _log) = fake_codex(&dir, &body);
+        let err = read_account(&codex).await.unwrap_err();
+        assert_eq!(err.to_string(), "codex app-server closed the connection");
+    }
 
     #[tokio::test]
     async fn handshake_then_account_read_skips_notifications() {
@@ -328,7 +498,7 @@ mod tests {
         let body = format!("{INIT_OK}\n    *'\"account/read\"'*) exit 0;;");
         let (codex, _) = fake_codex(&dir, &body);
         let err = read_account(&codex).await.err().unwrap();
-        assert!(matches!(err, ControlError::Eof), "{err}");
+        assert!(matches!(err, ControlError::Eof(_)), "{err}");
 
         let dir = tempfile::tempdir().unwrap();
         let body = format!("{INIT_OK}\n    *'\"account/read\"'*) sleep 30;;");

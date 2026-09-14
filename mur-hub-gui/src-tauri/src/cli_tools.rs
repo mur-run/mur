@@ -95,6 +95,48 @@ pub(crate) fn shell_which(name: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// The PATH an interactive login shell exports, probed once per process.
+///
+/// Resolving a tool through [`shell_which`] and then spawning it with the
+/// Hub's own PATH is only half the job. A tool installed by a version manager
+/// (nvm, BitL, rbenv, …) is a `#!/usr/bin/env <interp>` shim whose interpreter
+/// lives on that same shell PATH — so it exits 127 the moment a Finder-launched
+/// app runs it, because launchd hands GUI apps a bare
+/// `/usr/bin:/bin:/usr/sbin:/sbin`. Spawn shell-resolved tools with this and
+/// they run in the world they were found in.
+///
+/// `None` on any failure, which leaves the inherited PATH in place: degrading
+/// to today's behaviour beats spawning with a PATH we failed to read.
+#[cfg(unix)]
+pub(crate) fn shell_path() -> Option<&'static str> {
+    static CACHE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(probe_shell_path).as_deref()
+}
+
+/// `-ilc` for the same reason [`shell_which`] needs it: PATH is commonly
+/// exported from `.zshrc`, which only an INTERACTIVE shell reads.
+///
+/// `printf` rather than `echo` so the value arrives without a trailing
+/// newline, and the LAST line is taken because an interactive shell is free
+/// to print a banner first.
+#[cfg(unix)]
+fn probe_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").ok()?;
+    let out = Command::new(shell)
+        .args(["-ilc", "printf %s \"$PATH\""])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next_back()?
+        .trim()
+        .to_string();
+    (!path.is_empty()).then_some(path)
+}
+
 /// The `mur` the user's shell would run, for callers that need to invoke it
 /// rather than just report on it.
 pub fn resolve_mur() -> Option<PathBuf> {

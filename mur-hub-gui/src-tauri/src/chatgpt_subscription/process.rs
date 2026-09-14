@@ -120,7 +120,7 @@ pub async fn login(codex: &Path) -> LoginResult {
         authenticated: false,
         error: Some(error),
     };
-    let mut cmd = Command::new(codex);
+    let mut cmd = super::shell_command(codex);
     cmd.arg("login");
     let output = match run_bounded(cmd, LOGIN_TIMEOUT).await {
         Ok((true, out)) => out,
@@ -148,7 +148,7 @@ pub async fn logout(codex: &Path, confirmed: bool) -> Result<(), String> {
     if !confirmed {
         return Err(LOGOUT_CONFIRMATION_REQUIRED.into());
     }
-    let mut cmd = Command::new(codex);
+    let mut cmd = super::shell_command(codex);
     cmd.arg("logout");
     let (ok, out) = run_bounded(cmd, SHORT_TIMEOUT).await?;
     if !ok {
@@ -346,7 +346,7 @@ pub async fn gateway_install(gateway: &Path, consented: bool) -> Result<GatewayS
     let keep_compress = fetch_health(HEALTH_URL)
         .await
         .is_some_and(|h| h.compression);
-    let mut cmd = Command::new(gateway);
+    let mut cmd = super::shell_command(gateway);
     cmd.args(["install", "--token-source-codex", "codex"]);
     if keep_compress {
         cmd.arg("--compress");
