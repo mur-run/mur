@@ -9,6 +9,15 @@ use crate::codebase::{
 use crate::store::config::load_config;
 use crate::store::embedding::{EmbeddingConfig, embed};
 
+// Public so `PROJECT_STATUS_SCHEMA_VERSION` and `ProjectStatusJson` stay
+// reachable (as `cmd::project::status_json::*`) without a re-export the lib
+// itself never uses — a re-export like that only compiles warning-free under
+// an `#[allow(unused_imports)]`, and suppressing the warning hides the next
+// genuinely dead import. The function is imported by value below; a module
+// and a function may share a name, they live in different namespaces.
+pub mod status_json;
+use status_json::status_json;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BackgroundMode {
     /// Auto-detect: background if chunks > BACKGROUND_CHUNK_THRESHOLD
@@ -449,8 +458,13 @@ pub async fn cmd_project_search(
     Ok(())
 }
 
-pub fn cmd_project_status(path: Option<String>) -> Result<()> {
+pub fn cmd_project_status(path: Option<String>, json: bool) -> Result<()> {
     let info = do_project_status(path.as_deref())?;
+
+    if json {
+        println!("{}", status_json(&info)?);
+        return Ok(());
+    }
 
     println!("Project: {}", info.name);
     println!("  Path: {}", info.path);

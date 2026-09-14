@@ -1,48 +1,103 @@
 name: mur-project-search
-version: 0.1.0
+version: 0.2.0
 publisher: human:mur
 description: "Search project code by meaning. Use for concept/intent queries; use grep for exact strings and exhaustive matches."
 category: context
 hosts: [all]
 content:
   abstract: |
-    For "where is the code that does X" style questions, use semantic search:
-    `mur project search "<intent>"` (or the mur_project_search MCP tool).
-    Keep grep for exact symbols, strings, and exhaustive matches.
+    Route by query type: exact symbols, strings and exhaustive sweeps go to
+    `rg`; intent questions go to `mur project search` (or the
+    mur_project_search MCP tool) when `mur project status --json` says the
+    index is usable, plus `rg` over git-changed paths when the tree is dirty.
   context: |
-    # mur-project-search — Pick the right code search tool
+    # mur-project-search — route a code search to the right tool
 
-    Semantic search (hybrid vector + BM25) answers *intent* questions and is
-    usually cheaper than grepping then opening many files. But grep is exact,
-    exhaustive, and always reflects the working tree right now. Choose per query:
+    Semantic search (hybrid vector + BM25) answers *intent* questions from an
+    indexed snapshot. `rg` is exact, exhaustive, and always reflects the
+    working tree right now. Route per query; neither tool is the default.
 
-    ## Use `mur project search "<query>"` (or mur_project_search MCP tool) when
-    - You are looking for a concept or behavior, not a known token:
-      "where is the logic that handles retries", "how does auth work",
-      "which file is responsible for decay scoring".
+    ## 1. Classify the query first
+    - **exact** — a known symbol, string, import, config key, error message.
+    - **exhaustive** — every occurrence: rename, find all callers, dead-code
+      sweep, "is this still used anywhere".
+    - **intent** — a concept or behavior: "where is retry handled", "how does
+      auth work", "which file scores decay".
 
-    ## Use grep when
-    - You know the exact symbol, string, import, or config key.
-    - You need every occurrence (rename, find all callers, dead-code removal).
-      Semantic search returns ranked top-k, not all matches — it will miss some.
+    exact or exhaustive → whole-project `rg`, immediately. Skip the rest of
+    this skill: index state cannot change the answer to a question `rg`
+    answers exactly and completely.
 
-    ## Scope (important)
-    - By default `mur project search` searches across ALL indexed projects, not
-      just the current directory — top results may come from unrelated repos.
-      To restrict to one project, pass `--project <name>` (and `--limit <n>` to
-      widen/narrow the ranked results). The mur_project_search MCP tool takes the
-      same optional `project` argument.
+    ## 2. For intent queries, read index state as JSON
+    ```bash
+    root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    mur project status --path "$root" --json
+    ```
+    Never scrape the human text output. The index is **usable** when
+    `indexed == true` AND `indexing_in_progress == false` AND
+    `stale_dims == null`. If the command fails, treat the index as unusable
+    and say so — do not wait for indexing, do not start an index.
+
+    ## 3. Ask git what the snapshot cannot know
+    ```bash
+    git status --porcelain=v1 -z | tr '\0' '\n'
+    ```
+    Entries are `XY <path>`; a rename emits the new path and then the old one.
+    Every path git prints is relative to `$root` — **not** your cwd — even
+    when you ran the command from a subdirectory. `rg`'s cwd is the variable
+    here, not git's paths: `rg` resolves a bare path against wherever you run
+    it, so every git-reported path must be joined to `$root` before it
+    reaches `rg`. Keep `$root` from step 2 and reuse it.
+    **changed paths** = modified + staged + untracked + renamed-to, each one
+    only meaningful joined to `$root` (`"$root/<path>"`).
+    Deleted paths and renamed-from paths are NOT searched — they are the list
+    of paths whose semantic hits you must distrust.
+    A git failure means "not a Git project", not "search failed".
+
+    ## 4. Route
+    | Query | Index usable | Git | Do |
+    |---|---|---|---|
+    | exact / exhaustive | any | any | whole-project `rg` |
+    | intent | yes | clean | `mur_project_search` |
+    | intent | yes | dirty | `mur_project_search` + `rg` over changed paths |
+    | intent | yes | non-Git | `mur_project_search` |
+    | intent | no | any | whole-project `rg` |
+
+    A failing semantic call routes like an unusable index: whole-project `rg`,
+    and report why.
+
+    Hybrid is two searches and one answer: run the semantic call, then
+    `rg -n "<term>" -- "$root/<path>"` for each changed path — joined to
+    `$root`, never left as the bare string git printed. A git-reported path
+    run from the wrong cwd looks "missing" to `rg`, and the stale-path rule
+    below will silently swallow that as an ordinary stale hit instead of the
+    path-resolution bug it actually is. One unrelated dirty file never
+    cancels the semantic half — that is the whole point of asking git for
+    paths instead of asking it whether the tree is clean. An intent query has
+    no ready-made `<term>`: try several candidate terms drawn from the
+    question, and an empty `rg` result on the changed paths is not evidence
+    those files are unrelated.
+
+    ## 5. Scope
+    `mur project search` and the `mur_project_search` MCP tool search **the
+    current directory's project** by default. Pass `--project <name>` for a
+    different one. Pass `--all` only when the user actually asked to look
+    across projects. `--limit <n>` widens or narrows the ranked list.
+    For the MCP tool, "current directory" is the MCP server process's cwd,
+    not the repo you're discussing — pass `project` / `--project` explicitly
+    rather than relying on the default.
 
     ## Hard rules (correctness)
-    - Code you created or edited this session and have NOT committed/indexed is
-      not in the index yet — use grep for it. Semantic results always lag
-      un-committed edits.
-    - Before trusting semantic results, check freshness with
-      `mur project status`. If it reports no index or indexing in progress,
-      fall back to grep.
-
-    The index is kept fresh automatically by a post-commit hook (installed on
-    first `mur project index`). See the mur-project-index skill.
+    - A semantic hit in a deleted or renamed-from path is stale. Do not report
+      it as current; check the working tree first.
+    - Zero semantic results is not evidence of absence — it is ranked top-k
+      over a snapshot. Confirm with `rg` before saying code does not exist.
+    - Label each finding by origin: indexed snapshot or working tree. Open the
+      file when the answer has to be current.
+    - If a changed path no longer exists when `rg` runs, skip that path and
+      note it; never fail the whole search on one stale path.
+    - Code you edited this session and have not committed is not in the index.
+      The post-commit hook refreshes it — see the mur-project-index skill.
 tags: [mur, project, search, grep, builtin]
 triggers:
   - type: keyword

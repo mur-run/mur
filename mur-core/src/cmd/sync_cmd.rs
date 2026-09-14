@@ -2045,6 +2045,11 @@ mod builtin_skill_tests {
                 include_str!("../skills/mur_skill_authoring.yaml"),
                 true,
             ),
+            (
+                "mur-project-search",
+                include_str!("../skills/mur_project_search.yaml"),
+                false,
+            ),
         ];
         use mur_common::skill::manifest::Visibility;
         for (name, yaml, on_demand) in cases {
@@ -2106,6 +2111,44 @@ mod builtin_skill_tests {
             checked += 1;
         }
         assert!(checked > 0, "no built-in skill YAML found in {dir:?}");
+    }
+
+    /// The routing contract IS this skill: delete a rule and the agent
+    /// silently loses a branch — no parse error, no failing build, just a
+    /// worse search forever after.
+    ///
+    /// What this proves: the rules survive an edit and the file still parses.
+    /// What it does NOT prove: that a model obeys them. That check is the
+    /// fresh-context routing eval in
+    /// docs/superpowers/plans/2026-09-14-smart-project-search-routing.md.
+    #[test]
+    fn project_search_skill_carries_the_routing_contract() {
+        let m =
+            mur_common::skill::parse_canonical(include_str!("../skills/mur_project_search.yaml"))
+                .expect("mur-project-search must parse");
+        let body = m.content.context.clone().unwrap_or_default();
+        for needle in [
+            "mur project status",
+            "--json",
+            "indexing_in_progress",
+            "stale_dims",
+            "git status --porcelain=v1 -z",
+            "changed paths",
+            "--all",
+            "--project",
+        ] {
+            assert!(
+                body.contains(needle),
+                "routing rule missing from mur-project-search: {needle}"
+            );
+        }
+        // The old body claimed the default scope was every indexed project.
+        // The code defaults to the current directory's project; a skill that
+        // says otherwise teaches agents to misread their own results.
+        assert!(
+            !body.contains("searches across ALL indexed projects"),
+            "stale scope claim still present in mur-project-search"
+        );
     }
 }
 
