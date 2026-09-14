@@ -148,7 +148,6 @@ impl MonitorStore {
         Ok(me)
     }
 
-    #[allow(dead_code)] // consumed by store::lease / store::observe (Task 5/6); tests use it now
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
