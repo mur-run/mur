@@ -219,8 +219,11 @@ pub(super) fn push_message(
                 // paragraph when it sat flush against it.
                 lines.push(Line::default());
                 let inner = width.saturating_sub(u16::from(theme.inner_padding) * 2);
+                // A settlement is an execution summary, not a full-width alert.
+                // Cap it so wide terminals leave it visually subordinate to prose.
+                let card_width = inner.min(72);
                 lines.extend(crate::cmd::agent::cli::settlement::card_lines(
-                    body, theme, inner,
+                    body, theme, card_width,
                 ));
             }
         }
