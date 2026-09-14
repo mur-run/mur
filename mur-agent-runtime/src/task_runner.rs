@@ -493,6 +493,13 @@ enum LoopStop {
     LoopDetected,
     Deadline,
     Stuck,
+    /// The model kept calling a tool that was withdrawn this turn. Every such
+    /// call is refused without running anything, so further iterations cannot
+    /// make progress — and the doom-loop detector will not catch it quickly,
+    /// because it fingerprints (tool, ARGS, result) and a model that varies
+    /// its arguments produces a fresh fingerprint each time. That is how a
+    /// withdrawn `bash` still burned 54 iterations on 2026-09-13.
+    ToolWithdrawn,
 }
 
 impl LoopStop {
@@ -502,6 +509,7 @@ impl LoopStop {
             LoopStop::LoopDetected => "loop_detected",
             LoopStop::Deadline => "deadline",
             LoopStop::Stuck => "stuck",
+            LoopStop::ToolWithdrawn => "tool_withdrawn",
         }
     }
 }
@@ -1878,6 +1886,12 @@ impl TaskRunner {
                 is_error: true,
                 status: crate::tools::ToolStatus::Denied {
                     detail: format!("unknown tool: {}", call.tool_name),
+                    // Not `Tool`: an unknown name was never in the request
+                    // list, so there is nothing to withdraw. This used to be
+                    // special-cased by sniffing the content string for
+                    // "unknown tool" — the exact anti-pattern `ToolStatus`
+                    // exists to end.
+                    scope: crate::tools::DenialScope::Action,
                 },
                 images: Vec::new(),
             });
@@ -1911,6 +1925,7 @@ impl TaskRunner {
                         is_error: true,
                         status: crate::tools::ToolStatus::Denied {
                             detail: format!("Tool `{}` is denied by policy.", call.tool_name),
+                            scope: crate::tools::DenialScope::Tool,
                         },
                         images: Vec::new(),
                     });
@@ -1949,7 +1964,10 @@ impl TaskRunner {
                                 "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
                                 call.tool_name
                             ),
-                            crate::tools::ToolStatus::Denied { detail: msg },
+                            crate::tools::ToolStatus::Denied {
+                                detail: msg,
+                                scope: crate::tools::DenialScope::Tool,
+                            },
                             true,
                             Vec::new(),
                         ),
@@ -2045,7 +2063,10 @@ impl TaskRunner {
                     "{msg} — `{}` is unavailable for the rest of this turn; do not call it again",
                     call.tool_name
                 ),
-                crate::tools::ToolStatus::Denied { detail: msg },
+                crate::tools::ToolStatus::Denied {
+                    detail: msg,
+                    scope: crate::tools::DenialScope::Tool,
+                },
                 true,
                 Vec::new(),
             ),
@@ -2172,6 +2193,12 @@ impl TaskRunner {
         // Tools a gate refused this turn (spec §3.8): told once, then not
         // offered again, so the model cannot spin on "not authorized" ×3.
         let mut disabled: HashSet<String> = HashSet::new();
+        /// A withdrawn tool answers every call the same way without running
+        /// anything, so repeated calls are pure burn. Counted across the turn,
+        /// not per-fingerprint: varying the arguments is exactly what defeats
+        /// the doom-loop detector here.
+        const WITHDRAWN_CALL_LIMIT: usize = 3;
+        let mut withdrawn_calls = 0usize;
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory; this turn's tool scaffolding is appended
         // below and stays ephemeral (never persisted into chat memory).
@@ -2457,6 +2484,7 @@ impl TaskRunner {
                 // after a refusal; a model that calls it anyway is told so
                 // again without the gate or the tool running.
                 if disabled.contains(&call.tool_name) {
+                    withdrawn_calls += 1;
                     durations_ms.push(0);
                     results.push(crate::llm::ToolResultEntry {
                         call_id: call.call_id.clone(),
@@ -2467,6 +2495,7 @@ impl TaskRunner {
                         is_error: true,
                         status: crate::tools::ToolStatus::Denied {
                             detail: "withdrawn this turn".into(),
+                            scope: crate::tools::DenialScope::Tool,
                         },
                         images: Vec::new(),
                     });
@@ -2560,6 +2589,31 @@ impl TaskRunner {
                 }
             }
 
+            // Nothing this iteration ran: every call went to a tool that is
+            // gone for the turn. Settle now rather than let the model keep
+            // paying for refusals it cannot act on. Placed after the ledger
+            // loop above so the wasted calls are still on the audit record.
+            if withdrawn_calls >= WITHDRAWN_CALL_LIMIT {
+                history.push(RichMessage::ToolResults { results });
+                let msg = self
+                    .graceful_exit(
+                        client,
+                        &history,
+                        LoopStop::ToolWithdrawn,
+                        &ledger,
+                        iteration,
+                        &progress,
+                    )
+                    .await;
+                return Ok((
+                    msg,
+                    Some(LoopExit {
+                        reason: LoopStop::ToolWithdrawn,
+                        iterations: iteration,
+                    }),
+                ));
+            }
+
             history.push(RichMessage::ToolResults { results });
 
             // Note: `suggest_replies` does NOT hard-end the turn. Whether to stop
@@ -2647,6 +2701,11 @@ impl TaskRunner {
             LoopStop::IterationCeiling => {
                 format!("the {ITERATION_CEILING}-iteration safety ceiling was hit")
             }
+            LoopStop::ToolWithdrawn => {
+                "a tool you kept calling was withdrawn earlier this turn after a refusal; \
+                 it will not come back before the turn ends"
+                    .to_string()
+            }
         };
         let nudge = format!(
             "Stop calling tools: {why}. Summarize what you completed, the current \
@@ -2704,6 +2763,7 @@ impl TaskRunner {
                 LoopStop::Stuck => crate::turn_ledger::StopKind::Stuck {
                     last_calls: progress.last_calls(),
                 },
+                LoopStop::ToolWithdrawn => crate::turn_ledger::StopKind::ToolWithdrawn,
             },
             // Use the live counter passed in, not `ledger.iterations`: on the
             // early-exit paths the caller's ledger was never updated with the
@@ -2900,9 +2960,22 @@ fn last_assistant_text(history: &[crate::llm::RichMessage]) -> Option<String> {
 /// Does this result take its tool off the table for the rest of the turn?
 /// A gate's refusal does (policy Deny, `ToolError::NotAuthorized`); a name the
 /// model invented does not — there is nothing to withdraw.
+/// Does this result take the tool off the table for the rest of the turn?
+///
+/// Only a `Tool`-scoped denial does — a policy denial or an authorization
+/// refusal, which is what CLAUDE.md documents ("any authorization refusal
+/// (`not authorized:`) withdraws that tool for the rest of the turn"). An
+/// `Action`-scoped denial refused one path or one binary; the tool still
+/// works for everything else, and withdrawing it there cost a whole job on
+/// 2026-09-13. See [`crate::tools::DenialScope`].
 fn withdraws(entry: &crate::llm::ToolResultEntry) -> bool {
-    matches!(entry.status, crate::tools::ToolStatus::Denied { .. })
-        && !entry.content.starts_with("unknown tool")
+    matches!(
+        entry.status,
+        crate::tools::ToolStatus::Denied {
+            scope: crate::tools::DenialScope::Tool,
+            ..
+        }
+    )
 }
 
 fn decide_without_asking(
@@ -4222,6 +4295,162 @@ mod tests {
         );
     }
 
+    /// A sandbox-denying stand-in: returns the same `Denied { Action }` shape
+    /// `tools::bash` returns for a kernel EPERM on a path or a binary.
+    struct SandboxDenyingTool {
+        calls: Arc<AtomicU64>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for SandboxDenyingTool {
+        fn name(&self) -> &str {
+            crate::tools::fleet_run::FLEET_RUN
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: crate::tools::fleet_run::FLEET_RUN.into(),
+                description: "sandbox-denying".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(crate::tools::ToolOutput {
+                text: "[sandbox] ./cmdtest: Operation not permitted".into(),
+                status: crate::tools::ToolStatus::Denied {
+                    detail: "not in the spawn allowlist".into(),
+                    scope: crate::tools::DenialScope::Action,
+                },
+                images: Vec::new(),
+            })
+        }
+    }
+
+    /// B: a sandbox denial must NOT withdraw the tool. The kernel refused one
+    /// path; the tool works for everything else. Withdrawing it is what turned
+    /// a denied `./cmdtest` into a whole lost turn on 2026-09-13 — every later
+    /// `bash` call came back refused and the agent flailed until the doom-loop
+    /// detector stopped it 54 iterations in, with nothing written.
+    #[tokio::test]
+    async fn a_sandbox_denial_does_not_withdraw_the_tool() {
+        use crate::llm::stub::SequenceLlm;
+        let offered = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let responses = vec![
+            fleet_run_call_response("sd-0"),
+            fleet_run_call_response("sd-1"),
+            fleet_run_call_response("sd-2"),
+            end_turn_response("done"),
+        ];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(OfferRecordingLlm {
+                inner: SequenceLlm::new(responses),
+                offered: offered.clone(),
+            }))
+            .with_tools(vec![Arc::new(SandboxDenyingTool {
+                calls: calls.clone(),
+            })])
+            .with_tools_policy(vec![mur_common::agent::ToolRule {
+                pattern: crate::tools::fleet_run::FLEET_RUN.into(),
+                policy: mur_common::agent::ToolPolicy::Allow,
+                risk: None,
+            }])
+            .with_pending_approvals(empty_pending_approvals())
+            .with_notifier(tokio::sync::mpsc::channel(16).0)
+            .with_hitl_timeout_secs(1)
+            .with_iteration_ceiling(6),
+        );
+        let _ = runner.run_sync(loop_spec("sandbox")).await;
+
+        // "I actually reached it": the tool really executed every time, so the
+        // assertion below is about withdrawal and not about a stub that was
+        // never called.
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            3,
+            "the tool must keep running after a sandbox denial"
+        );
+        let offered = offered.lock().unwrap();
+        let fr = crate::tools::fleet_run::FLEET_RUN;
+        // Every request that carried tools at all offered it. The trailing
+        // tools-less request is `graceful_exit`'s summary turn (it passes
+        // `tools: vec![]` on purpose), not a withdrawal — the doom-loop guard
+        // fires here because this stub repeats one command with one identical
+        // result, which is exactly what that guard is for.
+        let with_tools: Vec<_> = offered.iter().filter(|n| !n.is_empty()).collect();
+        assert_eq!(with_tools.len(), 3, "offered={offered:?}");
+        assert!(
+            with_tools.iter().all(|names| names.iter().any(|n| n == fr)),
+            "the tool must stay on the list after an Action-scoped denial: {offered:?}"
+        );
+    }
+
+    /// D: once a tool IS withdrawn (a real authorization refusal), calling it
+    /// again can only be refused again — so the turn settles instead of paying
+    /// for more. The doom-loop detector does not cover this: it fingerprints
+    /// (tool, ARGS, result), and a model that varies its arguments defeats it,
+    /// which is how a withdrawn `bash` still burned 54 iterations.
+    #[tokio::test]
+    async fn repeated_calls_to_a_withdrawn_tool_settle_the_turn() {
+        use crate::llm::stub::SequenceLlm;
+        // Varying arguments on purpose: identical ones are the doom-loop
+        // detector's job (it fingerprints tool + ARGS + result). The real
+        // agent cycled `pwd` / `true` / `echo hello` / `echo probe`, minting a
+        // fresh fingerprint every time, and that is how it reached 54
+        // iterations against a tool that could never run again.
+        let varied = |n: u32| crate::llm::LlmResponse {
+            text: String::new(),
+            input_tokens: 5,
+            output_tokens: 5,
+            model: "test".into(),
+            tool_calls: vec![crate::llm::ToolCallResult {
+                call_id: format!("w-{n}"),
+                tool_name: crate::tools::fleet_run::FLEET_RUN.into(),
+                input: serde_json::json!({ "fleet": format!("probe-{n}") }),
+            }],
+            stop_reason: crate::llm::StopReason::ToolUse,
+        };
+        let responses = vec![
+            varied(0),
+            varied(1),
+            varied(2),
+            varied(3),
+            varied(4),
+            end_turn_response("summary after the withdrawal"),
+        ];
+        let calls = Arc::new(AtomicU64::new(0));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_tools(vec![Arc::new(RefusingFleetRunTool {
+                    calls: calls.clone(),
+                })])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: crate::tools::fleet_run::FLEET_RUN.into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1)
+                .with_iteration_ceiling(50),
+        );
+        let outcome = runner.run_sync(loop_spec("withdrawn")).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed (graceful exit), got {outcome:?}");
+        };
+        let usage = task.usage.expect("a guard exit must populate usage");
+        assert_eq!(usage["stop_reason"], "tool_withdrawn", "usage={usage}");
+        // The refused tool ran once; everything after was a synthetic refusal.
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let iters = usage["iterations"]
+            .as_u64()
+            .expect("iterations is a number");
+        assert!(iters < 6, "expected an early settle, got {iters}");
+    }
+
     #[test]
     fn only_a_gates_refusal_withdraws_a_tool() {
         use crate::llm::ToolResultEntry;
@@ -4233,17 +4462,34 @@ mod tests {
             status,
             images: Vec::new(),
         };
+        let denied = |scope| ToolStatus::Denied {
+            detail: "d".into(),
+            scope,
+        };
+        // Withdrawn: the TOOL is gone for the rest of the turn.
         assert!(withdraws(&mk(
             "not authorized: x",
-            ToolStatus::Denied { detail: "x".into() }
+            denied(crate::tools::DenialScope::Tool)
         )));
         assert!(withdraws(&mk(
             "Tool `bash` is denied by policy",
-            ToolStatus::Denied { detail: "d".into() }
+            denied(crate::tools::DenialScope::Tool)
         )));
+        // NOT withdrawn: only this ACTION was refused. The regression this
+        // guards is the whole point of `DenialScope` — a sandbox EPERM on one
+        // path used to take `bash` away for the turn, and the agent then
+        // flailed through `pwd`/`true`/`echo` until the doom-loop detector
+        // stopped it 54 iterations later with nothing written (2026-09-13).
+        assert!(!withdraws(&mk(
+            "[sandbox] ./cmdtest is not in the spawn allowlist",
+            denied(crate::tools::DenialScope::Action)
+        )));
+        // An unknown name was never in the request list; nothing to withdraw.
+        // Structural now — this used to be decided by sniffing the content
+        // string for "unknown tool".
         assert!(!withdraws(&mk(
             "unknown tool: made_up",
-            ToolStatus::Denied { detail: "u".into() }
+            denied(crate::tools::DenialScope::Action)
         )));
         assert!(!withdraws(&mk(
             "tool error: boom",
