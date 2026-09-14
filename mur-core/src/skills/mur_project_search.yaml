@@ -44,9 +44,10 @@ content:
     ```
     Entries are `XY <path>`; a rename emits the new path and then the old one.
     Every path git prints is relative to `$root` — **not** your cwd — even
-    when you ran the command from a subdirectory. Keep `$root` from step 2 and
-    reuse it: don't let a fresh `git status` from wherever you happen to be
-    reintroduce the cwd mismatch.
+    when you ran the command from a subdirectory. `rg`'s cwd is the variable
+    here, not git's paths: `rg` resolves a bare path against wherever you run
+    it, so every git-reported path must be joined to `$root` before it
+    reaches `rg`. Keep `$root` from step 2 and reuse it.
     **changed paths** = modified + staged + untracked + renamed-to, each one
     only meaningful joined to `$root` (`"$root/<path>"`).
     Deleted paths and renamed-from paths are NOT searched — they are the list
@@ -72,13 +73,19 @@ content:
     below will silently swallow that as an ordinary stale hit instead of the
     path-resolution bug it actually is. One unrelated dirty file never
     cancels the semantic half — that is the whole point of asking git for
-    paths instead of asking it whether the tree is clean.
+    paths instead of asking it whether the tree is clean. An intent query has
+    no ready-made `<term>`: try several candidate terms drawn from the
+    question, and an empty `rg` result on the changed paths is not evidence
+    those files are unrelated.
 
     ## 5. Scope
     `mur project search` and the `mur_project_search` MCP tool search **the
     current directory's project** by default. Pass `--project <name>` for a
     different one. Pass `--all` only when the user actually asked to look
     across projects. `--limit <n>` widens or narrows the ranked list.
+    For the MCP tool, "current directory" is the MCP server process's cwd,
+    not the repo you're discussing — pass `project` / `--project` explicitly
+    rather than relying on the default.
 
     ## Hard rules (correctness)
     - A semantic hit in a deleted or renamed-from path is stale. Do not report
