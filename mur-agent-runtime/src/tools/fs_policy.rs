@@ -107,17 +107,62 @@ pub fn format_io_error(verb: &str, path: &Path, base: &Path, err: &std::io::Erro
     msg
 }
 
-/// Harden an agent's filesystem entitlement for the file tools: append the
-/// self-protected files (issue #712 — the agent's own `profile.yaml` and
-/// `identity.key`) to the deny list, so the tool-level gate refuses reads
-/// and writes on them even when a write grant covers the whole agent dir.
+/// Adapt a raw profile entitlement for the file tools: grant the agent its own
+/// home, then carve the self-protected files back out.
+///
+/// **Why the write grant is here and not in the profile.** The sandbox builder
+/// force-grants `agent_home` unconditionally ("runtime cannot function without
+/// it" — [`crate::sandbox::policy::SandboxPolicy::from_entitlements`]), but the
+/// file tools were handed `profile.entitlements.filesystem` verbatim. So the
+/// kernel allowed a write the tool gate refused, and an agent whose profile did
+/// not happen to list its own home could not write there at all:
+/// `path not write-entitled: ~/.mur/agents/<name>/… (grant it via mur agent
+/// perm allow-write)`. Observed 2026-09-13, where it pushed the agent to reach
+/// for `/tmp` instead and trip the tool-withdrawal path.
+///
+/// **Why only `agent_home`.** The sandbox force-grants three more paths —
+/// `<mur_home>/channels`, `<mur_home>/index/channels`, `open-items.jsonl` —
+/// and those deliberately stay out. The two layers answer different questions:
+/// the kernel policy bounds what this PROCESS may write (the runtime appends
+/// signed channel events itself), while this gate bounds what the MODEL may
+/// write through `write_file`/`edit_file`. Aligning the lists wholesale would
+/// hand a prompt-injected agent a way to forge channel events and corrupt the
+/// channels read-model. `open_item` does not route through this gate at all.
+///
+/// Issue #712: the agent's own `profile.yaml` and `identity.key` are appended
+/// to the deny list, so the gate refuses them even under a grant covering the
+/// whole agent dir — including the one added just above. `deny` is checked
+/// before `write` in [`check_write_entitlement`], so the carve-out wins.
 /// On Linux this gate is the enforcement point (Landlock cannot express
 /// deny-within-allow); on macOS it fronts the SBPL kernel deny with a clear
 /// error instead of a raw EPERM.
-pub(crate) fn self_protected(
+pub(crate) fn for_file_tools(
     mut fs: FilesystemEntitlement,
     agent_home: &Path,
 ) -> FilesystemEntitlement {
+    let home = agent_home.to_string_lossy().into_owned();
+    if !fs.write.contains(&home) {
+        fs.write.push(home);
+    }
+    // `<mur_home>/artifacts/<agent>`: the sandbox grants it (see
+    // `from_entitlements`) because the system prompt's output-locations rule
+    // sends every agent there for reports and scratch output. Unlike the other
+    // runtime-owned grants this one is FOR the model, so it belongs in this
+    // gate too — otherwise the kernel allows the write and `write_file`
+    // refuses it, which is how an agent ended up probing `/tmp` instead.
+    if let (Some(mur_home), Some(agent_name)) = (
+        agent_home.parent().and_then(|p| p.parent()),
+        agent_home.file_name(),
+    ) {
+        let mine = mur_home
+            .join("artifacts")
+            .join(agent_name)
+            .to_string_lossy()
+            .into_owned();
+        if !fs.write.contains(&mine) {
+            fs.write.push(mine);
+        }
+    }
     for f in crate::sandbox::policy::SELF_PROTECTED_AGENT_FILES {
         let p = agent_home.join(f).to_string_lossy().into_owned();
         if !fs.deny.contains(&p) {
@@ -183,6 +228,66 @@ pub(crate) fn check_write_entitlement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R5: the sandbox force-grants `agent_home` ("runtime cannot function
+    /// without it" — `sandbox::policy::from_entitlements`), but the file tools
+    /// were handed the RAW profile entitlement, so `write_file` refused a path
+    /// the kernel would have allowed and the agent could not write inside its
+    /// own home (`path not write-entitled: ~/.mur/agents/<name>/…`, observed
+    /// 2026-09-13; it then reached for `/tmp` and tripped the withdrawal).
+    ///
+    /// Only `agent_home` is aligned. The other paths the sandbox force-grants
+    /// (`channels/`, `index/channels/`, `open-items.jsonl`) stay out on
+    /// purpose: those are written by the RUNTIME, and this gate bounds what
+    /// the MODEL may write. Granting them here would let a prompt-injected
+    /// agent forge channel events through `write_file`.
+    /// Same grant, other layer: `write_file`/`edit_file` must accept the path
+    /// the system prompt sends the agent to. The sandbox granting it is not
+    /// enough — the kernel allowed the write while this gate refused it, which
+    /// is exactly how the agent ended up probing `/tmp`.
+    #[test]
+    fn the_agents_own_artifacts_dir_is_writable_by_the_file_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = std::fs::canonicalize(tmp.path()).unwrap();
+        let agent_home = mur_home.join("agents/rustsmith");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+        let fs = for_file_tools(FilesystemEntitlement::default(), &agent_home);
+
+        check_write_entitlement(
+            &fs,
+            &mur_home.join("artifacts/rustsmith/task4/check.rs"),
+            &chain,
+        )
+        .expect("the path the system prompt names must be writable");
+
+        check_write_entitlement(&fs, &mur_home.join("artifacts/pm/report.md"), &chain)
+            .expect_err("a sibling agent's artifacts must not be writable");
+    }
+
+    #[test]
+    fn agent_home_is_writable_by_the_file_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(tmp.path()).unwrap();
+        let agent_home = home.join("agents/rustsmith");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+
+        // Grants nothing — exactly the profile rustsmith had for its own home.
+        let fs = for_file_tools(FilesystemEntitlement::default(), &agent_home);
+
+        check_write_entitlement(&fs, &agent_home.join("task4_check.rs"), &chain)
+            .expect("an agent must be able to write inside its own home");
+
+        // Negative controls: the carve-outs still hold, so the line above is a
+        // scoped grant and not a blanket allow.
+        check_write_entitlement(&fs, &agent_home.join("profile.yaml"), &chain)
+            .expect_err("the agent's own profile stays denied (#712)");
+        check_write_entitlement(&fs, &home.join("agents/pm/notes.md"), &chain)
+            .expect_err("a sibling agent's home is not granted");
+        check_write_entitlement(&fs, &home.join("channels/x/events.jsonl"), &chain)
+            .expect_err("runtime-owned channel store must NOT be model-writable");
+    }
 
     #[test]
     fn launch_chain_beats_an_explicit_write_grant() {
@@ -347,7 +452,7 @@ mod tests {
         std::fs::create_dir_all(&agent_home).unwrap();
         std::fs::write(agent_home.join("profile.yaml"), "name: mur\n").unwrap();
         std::fs::write(agent_home.join("identity.key"), "KEY").unwrap();
-        let fs = self_protected(
+        let fs = for_file_tools(
             FilesystemEntitlement {
                 read: vec![],
                 write: vec![agent_home.to_string_lossy().into_owned()],
