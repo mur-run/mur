@@ -87,13 +87,15 @@ that exists but cannot be trusted.
   reproduced `git status --porcelain=v1 -z` rename ordering and root-relative
   paths in a scratch repository.
 
-## Appendix — the situations, verbatim
+## Appendix — the situations as given
 
 Each subagent received the skill body file path plus exactly one of these, and
 the instruction to answer with a `TOOL:` line and a one-sentence `WHY:`. They
 are recorded because a reason quoted above can only be judged against the input
 that produced it — scenario 4's "exit 128", for instance, was given, not
-inferred by the model.
+inferred by the model. Items 3, 5 and 6 elide with `…` the JSON fields that
+were identical to scenario 1's; every field a quoted `WHY:` turns on is
+reproduced in full.
 
 1. The user asks "where is the logic that decides when to retry a failed
    request?" You already ran `mur project status --path "$root" --json` and it
