@@ -368,7 +368,7 @@ pub async fn build_provider_runner(
     let bash_def = bash_exec.def();
     // Issue #712: the file tools must never touch the agent's own
     // profile.yaml / identity.key, whatever the profile grants.
-    let tool_fs = crate::tools::fs_policy::self_protected(
+    let tool_fs = crate::tools::fs_policy::for_file_tools(
         profile.inner.entitlements.filesystem.clone(),
         agent_home,
     );
