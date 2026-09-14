@@ -12,6 +12,7 @@ members = [
     "mur-compress",
     "mur-channel",
     "mur-open-items",
+    "mur-monitor",
     "mur-mobile-sdk",
     "mur-zfs-agent",
     "mur-browser",

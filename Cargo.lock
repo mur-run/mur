@@ -6679,6 +6679,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-monitor"
+version = "2.82.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "mur-common",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mur-open-items"
 version = "2.82.0"
 dependencies = [
