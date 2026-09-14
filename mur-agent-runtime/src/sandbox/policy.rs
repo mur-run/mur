@@ -257,7 +257,7 @@ impl SandboxPolicy {
         // macOS the SBPL builder emits fs_deny after the write allows
         // (last-match-wins) so this beats any overlapping grant; Landlock
         // cannot express deny-within-allow, so the same paths are also
-        // injected into the tool-level gate (`tools::fs_policy::self_protected`).
+        // injected into the tool-level gate (`tools::fs_policy::for_file_tools`).
         for f in SELF_PROTECTED_AGENT_FILES {
             let p = agent_home.join(f);
             if !fs_deny.contains(&p) {
