@@ -16,7 +16,9 @@ conversation history, no repository access beyond that one file — plus a
 situation and the instruction to answer with a `TOOL:` line and a one-sentence
 `WHY:`. Six scenarios cover all five rows of the routing table.
 
-Model: **Sonnet**, the tier that actually executes these skills. A cheaper model
+Model: **Sonnet**, passed as an explicit per-dispatch override (the plan's text
+omitted it, so without the override these would have run on the session default
+instead). It is the tier that actually executes these skills; a cheaper model
 failing would not separate "the text is ambiguous" from "the model is weak", so
 the eval is run at the tier the result has to hold for.
 
@@ -84,3 +86,30 @@ that exists but cannot be trusted.
   The shell in the skill was verified separately by the Task 2 reviewer, which
   reproduced `git status --porcelain=v1 -z` rename ordering and root-relative
   paths in a scratch repository.
+
+## Appendix — the situations, verbatim
+
+Each subagent received the skill body file path plus exactly one of these, and
+the instruction to answer with a `TOOL:` line and a one-sentence `WHY:`. They
+are recorded because a reason quoted above can only be judged against the input
+that produced it — scenario 4's "exit 128", for instance, was given, not
+inferred by the model.
+
+1. The user asks "where is the logic that decides when to retry a failed
+   request?" You already ran `mur project status --path "$root" --json` and it
+   returned `{"schema_version":1,"indexed":true,"chunks":4210,"last_indexed":null,"indexing_in_progress":false,"progress":null,"stale_dims":null}`.
+   You already ran `git status --porcelain=v1 -z` and it produced no output at all.
+2. The user asks "find every caller of `resolve_secret` so I can rename it."
+   The project's index is fully usable and the git working tree is clean.
+3. The user asks "how does the channel signing flow work?" … `{"schema_version":1,"indexed":true,…,"indexing_in_progress":false,"progress":null,"stale_dims":null}`.
+   You already ran `git status --porcelain=v1 -z | tr '\0' '\n'` and it printed
+   two lines: ` M README.md` and `?? notes.txt`.
+4. The user asks "which file is responsible for decay scoring?" … `"indexed":true,…,"stale_dims":null`.
+   `git rev-parse --show-toplevel` failed with exit 128 — this directory is not
+   inside a git repository at all.
+5. The user asks "where is the code that renders the status panel?" …
+   `"indexed":true,…,"indexing_in_progress":true,"progress":{"done_chunks":40,"total_chunks":200,"pct":20.0,"errors":0},"stale_dims":null}`.
+   The git working tree is clean.
+6. The user asks "how does the companion decide when to nudge?" …
+   `"indexed":true,…,"indexing_in_progress":false,"progress":null,"stale_dims":[768,1024]}`.
+   The git working tree is clean.
