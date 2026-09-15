@@ -53,6 +53,15 @@ fn snippet(body: &str) -> String {
 }
 
 pub fn classify(status: u16, body: &str, retry_after_secs: Option<u64>) -> Observation {
+    // Redact before truncating. `snippet()` cuts at a fixed character count,
+    // and the redaction patterns (e.g. `ghp_[A-Za-z0-9]{36}`) are fixed-length
+    // matches: if a secret straddles that cut, truncating first leaves a
+    // partial fragment that no longer matches the pattern and `.redacted()`
+    // at the end would let it through unredacted. Redacting the full raw
+    // body up front is safe either way — truncating a redaction placeholder
+    // loses nothing, whereas truncating a secret defeats the pattern.
+    let body = mur_common::redact::redact_secrets(body).into_owned();
+    let body = body.as_str();
     let obs = match status {
         200 => classify_ok(body),
         401 => Observation::unknown(format!("credential rejected (401): {}", snippet(body))),
@@ -314,5 +323,73 @@ mod tests {
             o.evidence
         );
         assert!(!o.evidence.contains(&"A".repeat(36)), "{}", o.evidence);
+    }
+
+    /// A secret positioned to straddle the `EVIDENCE_MAX_CHARS` truncation
+    /// boundary must never leave a recognisable fragment in evidence. Prior
+    /// to the redact-before-truncate fix, `classify` truncated the raw body
+    /// first and only redacted the already-cut string; a 36-char GitHub PAT
+    /// cut at char 20 no longer matches the fixed-length redaction pattern,
+    /// so the leading `ghp_` plus a run of the token's characters survived
+    /// untouched. Redacting the full body before truncating closes that gap.
+    #[test]
+    fn secret_straddling_truncation_boundary_is_fully_redacted() {
+        // Word boundaries (space) on both sides so the `ghp_...` pattern's
+        // `\b` anchors match once the secret is whole.
+        let prefix = "z ".repeat(70); // 140 chars, ends in a space
+        let secret = format!("ghp_{}", "A".repeat(36)); // 40 chars
+        let body = format!("{prefix}{secret} trailing text after the secret, well past the cut");
+        assert!(
+            body.len() > EVIDENCE_MAX_CHARS,
+            "fixture must be long enough to truncate"
+        );
+
+        let o = classify(401, &body, None);
+
+        assert!(!o.evidence.contains("ghp_"), "{}", o.evidence);
+        assert!(!o.evidence.contains(&"A".repeat(10)), "{}", o.evidence);
+    }
+
+    /// An unresolvable configured `credential_ref` must pause the query at
+    /// resolution and never fall back to an unauthenticated request — the
+    /// difference between "this private repo is unreachable, tell someone"
+    /// and "this private repo reads 404 forever and the monitor lies
+    /// quietly". `env:` with a variable that is guaranteed unset resolves to
+    /// `None` deterministically, with no network or keychain involved, so
+    /// this exercises `observe()` without any I/O double.
+    #[test]
+    fn unresolvable_credential_ref_pauses_and_does_not_fall_back_unauthenticated() {
+        const MISSING_VAR: &str = "MUR_TEST_GITHUB_ACTIONS_CRED_DEFINITELY_NOT_SET_XJ9K";
+        assert!(
+            std::env::var_os(MISSING_VAR).is_none(),
+            "fixture var must not be set in this environment"
+        );
+
+        let adapter = GithubActionsAdapter::default();
+        let credential_ref = format!("env:{MISSING_VAR}");
+
+        let started = std::time::Instant::now();
+        let o = adapter.observe("mur-run/mur/123", Some(&credential_ref));
+        let elapsed = started.elapsed();
+
+        assert_eq!(o.outcome, Outcome::Unknown);
+        let err = o
+            .adapter_error
+            .expect("unresolved credential must report an error");
+        assert!(
+            err.contains(MISSING_VAR),
+            "error should name the unresolved credential reference, got: {err}"
+        );
+        assert!(
+            !err.to_ascii_lowercase().contains("request")
+                && !err.to_ascii_lowercase().contains("http"),
+            "error must show it stopped at credential resolution, not an HTTP call: {err}"
+        );
+        // No network call should have happened — this must return long
+        // before the adapter's own 30s HTTP timeout could ever fire.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "observe() took {elapsed:?}; an unresolvable credential must short-circuit before any network call"
+        );
     }
 }
