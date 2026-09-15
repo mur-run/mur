@@ -224,6 +224,11 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     ("mcp", "manage MCP servers", Args::Fixed(MCP_SUBS)),
     ("memories", "list this agent's memories", Args::None),
     ("model", "list or hot-switch the model", Args::Model),
+    (
+        "monitor",
+        "list durable monitors that want attention",
+        Args::None,
+    ),
     ("open", "what is still outstanding", Args::None),
     (
         "panel",
@@ -814,5 +819,24 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    /// `/monitor` sits alphabetically between its `model`/`open` neighbours
+    /// in the completion table, and `SlashCmd::Monitor` parses from both its
+    /// long and short spellings.
+    #[test]
+    fn monitor_is_offered_between_its_alphabetical_neighbours_and_parses() {
+        let words: Vec<&str> = COMMANDS.iter().map(|(w, _, _)| *w).collect();
+        let idx = words.iter().position(|w| *w == "monitor").unwrap();
+        assert_eq!(words[idx - 1], "model");
+        assert_eq!(words[idx + 1], "open");
+        assert!(offers("monitor"));
+
+        use super::super::app::{SlashCmd, parse_slash};
+        assert!(matches!(
+            parse_slash("/monitor"),
+            Some(SlashCmd::Monitor(_))
+        ));
+        assert!(matches!(parse_slash("/mon"), Some(SlashCmd::Monitor(_))));
     }
 }

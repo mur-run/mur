@@ -163,6 +163,7 @@ pub(super) async fn event_loop(
             secret_cmd::after_delete(app, key).await;
         }
         arm_input_debounce(app, StdInstant::now());
+        app.refresh_monitor_counts(StdInstant::now());
         // Flush the live band's overflow into native scrollback BEFORE the
         // draw, so the band always paints a screenful of the newest content
         // and the composer stays glued to the screen bottom. No-op in
@@ -525,6 +526,11 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 KeyCode::Char('o') if ctrl => {
                     scrollback_dump(app);
                 }
+                // Ctrl+T (moniTor) — never Ctrl+M: `^M` IS Enter on every
+                // terminal, so binding it would shadow submitting a message.
+                KeyCode::Char('t') if ctrl => {
+                    monitor::handle(app, &[], tx).await;
+                }
                 // Ctrl+R — re-run the request whose approval expired (#8):
                 // refill the composer from the stashed `expired_retry` so the
                 // user can resend with one key. Only when something is stashed
@@ -644,4 +650,15 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
         Event::FocusLost => app.focused = false,
         _ => {}
     }
+}
+
+/// Which `Ctrl+<char>` combinations the key-dispatch match above binds.
+/// Hand-maintained beside those arms (there is no way to introspect a
+/// `match` at runtime) so a test can assert `Ctrl+M` is never one of them —
+/// `^M` IS Enter on every terminal, so binding it would shadow submitting a
+/// message — without having to drive the whole event loop. Test-only: there
+/// is no other caller.
+#[cfg(test)]
+pub(super) fn binds_ctrl(c: char) -> bool {
+    matches!(c, 'd' | 'c' | 'u' | 'v' | 'o' | 't' | 'r')
 }

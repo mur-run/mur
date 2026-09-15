@@ -25,6 +25,7 @@ mod manage;
 mod markdown;
 pub mod memory_cmds;
 mod model_cmd;
+mod monitor;
 mod multiplex;
 mod notify;
 mod panel;
@@ -234,7 +235,7 @@ fn help_text() -> String {
     [
         "commands",
         "  chat      /clear (new conversation) · /sessions · /channels [N] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
-        "  look      /card · /open (outstanding items) · /memories",
+        "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T)",
         settings.as_str(),
         "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> · /forget <name|last>",

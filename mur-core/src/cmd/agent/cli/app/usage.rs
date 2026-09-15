@@ -26,6 +26,28 @@ impl App {
         }
     }
 
+    /// Refresh `monitor_conditions` from the monitor store, at most once per
+    /// `MONITOR_REFRESH_SECS` — opening SQLite on every frame would be a
+    /// per-keystroke file open. A store that fails to open (or doesn't exist
+    /// yet, the common case for an agent with no monitors) leaves the
+    /// previous count: the footer is not a diagnostic surface.
+    pub fn refresh_monitor_counts(&mut self, now: std::time::Instant) {
+        if let Some(last) = self.last_monitor_refresh
+            && now.duration_since(last)
+                < std::time::Duration::from_secs(super::super::footer::MONITOR_REFRESH_SECS)
+        {
+            return;
+        }
+        self.last_monitor_refresh = Some(now);
+        let Ok(store) = mur_monitor::store::MonitorStore::open(&self.home) else {
+            return;
+        };
+        let Ok(rows) = store.list(&mur_monitor::store::ListFilter::default()) else {
+            return;
+        };
+        self.monitor_conditions = super::super::footer::conditions(&rows);
+    }
+
     /// The in-flight agent bubble, if any. Searched from the back instead of
     /// only checking `last()`: a system note pushed mid-turn (HITL "approved
     /// `tool`", a hint, a warning) lands AFTER the streaming bubble, and the

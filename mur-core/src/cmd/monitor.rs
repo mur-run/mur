@@ -178,6 +178,17 @@ fn list(
         state,
         include_completed: all,
     })?;
+    render_list(&rows, out, now)
+}
+
+/// The `mur monitor list` row rendering, factored out so the murmur TUI's
+/// `/monitor` (and `Ctrl+T`) can print the same card into the scrollback
+/// instead of maintaining a second renderer.
+pub(crate) fn render_list(
+    rows: &[MonitorRow],
+    out: &mut dyn Write,
+    now: DateTime<Utc>,
+) -> Result<()> {
     if rows.is_empty() {
         writeln!(out, "no monitors")?;
         return Ok(());
@@ -203,7 +214,7 @@ fn list(
             r.outcome.as_str(),
             ago(now, r.last_progress_at),
             until(now, r.next_check_at),
-            hard_deadline_at(&r).to_rfc3339(),
+            hard_deadline_at(r).to_rfc3339(),
             id_w = ID_SHORT
         )?;
     }
