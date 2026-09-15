@@ -33,11 +33,15 @@ pub struct Notification {
     pub next_step: String,
 }
 
+/// Short display length for monitor IDs. Must match `mur-core::cmd::monitor::ID_SHORT`
+/// (cannot be imported due to architectural boundary: `mur-monitor` sits below `mur-core`).
+const ID_SHORT_LEN: usize = 13;
+
 /// The single action the user should take. §通知策略 requires one — not a
 /// list of options, which is how a notification becomes something people
 /// dismiss without reading.
 fn next_step(row: &MonitorRow, kind: &str) -> String {
-    let short = &row.id[..row.id.len().min(13)];
+    let short = &row.id[..row.id.len().min(ID_SHORT_LEN)];
     match kind {
         "stalled" => format!(
             "no progress since {}. Check the source, or `mur monitor show {short} --history`",
@@ -52,7 +56,7 @@ fn next_step(row: &MonitorRow, kind: &str) -> String {
             row.outcome.as_str()
         ),
         "monitor_unhealthy" => format!(
-            "the monitor cannot read its source ({} consecutive unknown checks) — this is a monitor problem, not a failure of the work. Check the credential reference and the source's reachability",
+            "monitor cannot read source ({} unknown checks) — this is a monitor issue, not work failure. `mur monitor show {short}` to diagnose",
             row.unknown_streak
         ),
         // A hard-deadline exhaustion cannot be retried: `reactivate` leaves
@@ -122,7 +126,7 @@ mod tests {
             idempotency_key: "k".into(),
             created_at: t,
             work_started_at: t,
-            next_check_at: t + chrono::Duration::minutes(5),
+            next_check_at: t + chrono::Duration::minutes(10),
             last_checked_at: Some(t),
             last_progress_at: t,
             progress_token: None,
@@ -184,8 +188,8 @@ mod tests {
             "wait-for-ci",
             "mur-run/mur/123",
             "pending",
-            "—",
-            "2026-09-15T12:05",
+            "actions: —",
+            "next check: 2026-09-15T12:10",
             "mur monitor show",
         ] {
             assert!(
@@ -207,7 +211,7 @@ mod tests {
             steps.insert(n.next_step.clone());
         }
         assert!(
-            steps.len() > 1,
+            steps.len() == NOTIFIABLE.len(),
             "every kind got the same next step — the field is decoration"
         );
     }
