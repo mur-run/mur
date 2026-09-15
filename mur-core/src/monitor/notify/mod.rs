@@ -2,6 +2,7 @@
 //! (below this crate, deliberately — it must not spawn processes); the
 //! channels live here because they do.
 
+pub mod desktop;
 pub mod log;
 
 use mur_monitor::notify::Notification;
