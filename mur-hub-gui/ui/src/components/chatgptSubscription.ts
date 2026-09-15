@@ -109,20 +109,6 @@ export function gatewayHookState(
   return hookState(r.hook === "codex" ? g.codex_hook : g.claude_hook);
 }
 
-/**
- * Rail visibility. Hidden ONLY on a definite `false` — a build that told us it
- * has no such hook, so the provider could never work and offering it is a
- * dead end. Unknown stays visible: the "install gateway" button lives inside
- * this provider's own panel, so hiding on unknown would strand anyone who has
- * not installed the gateway yet with no way in.
- */
-export function subscriptionVisible(
-  g: GatewayStatus | null | undefined,
-  r: GatewayReadiness,
-): boolean {
-  return gatewayHookState(g, r) !== "false";
-}
-
 export function gatewayProblem(g: GatewayStatus, r: GatewayReadiness): GatewayProblem | null {
   if (!g.running) return "not-running";
   const hook = gatewayHookState(g, r);
