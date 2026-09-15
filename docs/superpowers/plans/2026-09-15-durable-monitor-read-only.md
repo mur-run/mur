@@ -4222,3 +4222,125 @@ git commit -m "feat(daemon): durable-monitor worker thread — recover, then tic
 **Type consistency:** `Observation::{pending,terminal,unknown}` (3) used in 8–13; `claim_due(now, owner, lease, max)` (5) in 8, 12; `apply_cycle(id, fence, &u)` (6) in 8; `CycleUpdate` fields (6) filled completely in 8; `registry(mur_home)` (9) in 12, 13; `service::{tick_once(mur_home, now, owner), recover(mur_home, now), TICK_INTERVAL}` (12) in 14; `MonitorState::ALL` (2) in 13; `store.list(&ListFilter)` (4) in 8, 13.
 
 **Known ceilings, named:** stalled re-entry within one cycle is not re-announced (comment in 8); no heartbeat during `observe` because the longest adapter timeout is 30 s vs a 120 s lease (comment in 8); `list` prints RFC 3339 rather than local time.
+
+---
+
+### Task 15: `monitor(n)` in the murmur footer + a shortcut
+
+**Files:**
+- Modify: `mur-core/src/cmd/agent/cli/footer.rs` (pure count → label)
+- Modify: `mur-core/src/cmd/agent/cli/app/mod.rs` or wherever `App` state lives (cached count + refresh stamp)
+- Modify: `mur-core/src/cmd/agent/cli/events.rs` (the Ctrl+T binding, beside the other `if ctrl` arms at `:515-532`)
+- Create: `mur-core/src/cmd/agent/cli/monitor.rs` (the `/monitor` handler)
+- Modify: `mur-core/src/cmd/agent/cli/slash_cmds.rs` + `app.rs` parser + `complete.rs` (the `/monitor` slash command, mirroring `/deep-research` from #1320)
+- Test: `footer.rs` (pure), `app/tests/` (key action), `complete.rs` (parity)
+
+**Interfaces:**
+- Consumes: `mur_monitor::store::{MonitorStore, ListFilter}`, `mur_monitor::state::MonitorState`, `mur_core::cmd::monitor` (Task 13)
+- Produces: `footer::{has_condition(&MonitorRow) -> bool, conditions(&[MonitorRow]) -> usize, monitor_label(usize) -> Option<String>}`, `App::monitor_conditions` + `App::refresh_monitor_counts(now)`, `SlashCmd::Monitor(Vec<String>)`
+
+**Design decisions — do not relitigate:**
+1. **`Ctrl+M` is forbidden.** In a terminal `^M` IS Enter (carriage return); crossterm delivers it as `KeyCode::Enter`, so a `Char('m') + CONTROL` arm either never fires or shadows submitting a message. The binding is **`Ctrl+T`** (moni**t**or), which is free — `events.rs:515-532` already uses Ctrl+D/C/U/V/O/R and `:470-474` uses Ctrl+P/N.
+2. **The count is cached, never computed during render.** Opening SQLite on every frame is a per-keystroke file open. `App` holds `monitor_counts: (usize, usize)` plus a `last_monitor_refresh: Instant`, refreshed at most every `MONITOR_REFRESH_SECS` (30) from the existing event-loop tick — the same cadence the daemon polls at, so a fresher number would be fiction anyway.
+3. **Silent unless something has happened.** The segment counts monitors with a live *condition*, not monitors that exist. Three monitors quietly polling a healthy CI run show NOTHING — a permanent number in a status bar stops being read within a day, and this mirrors the design doc's own rule for notifications (正常 polling 不通知). `monitor_label` returns `None` at `n == 0`.
+4. **What counts as a condition** — computable from `MonitorRow` alone, no extra query:
+   - `state` is `exhausted` or `action_pending` — it will not move again without a human;
+   - `stalled_since.is_some()` — no progress for `stalled_after`;
+   - `unknown_streak >= UNHEALTHY_AFTER_UNKNOWN` — the monitor itself is sick (credential dead, source unreachable), which is a monitor problem, not a work failure.
+   Anything else — `active`, `sleeping`, healthy `pending` — contributes nothing. One number, no `!` split: `monitor(2)` means two things want you.
+   The count clears when the condition clears (a stall recovers, a retry reactivates an exhausted monitor); there is no separate acknowledge state. `exhausted`/`action_pending` persist until a human acts, which is correct — they genuinely still need one.
+5. **The shortcut opens nothing modal.** `Ctrl+T` runs the same handler as `/monitor`, which prints the list into the scrollback as a card — no overlay, no alternate screen. The TUI's overlay path has a standing defect (a HITL request is invisible outside `--plain`), and a status list is not worth inheriting it.
+
+- [ ] **Step 1: Write the failing tests**
+
+`footer.rs` `mod tests`:
+```rust
+#[test]
+fn monitor_label_is_silent_without_a_condition() {
+    assert_eq!(monitor_label(0), None);
+}
+
+#[test]
+fn monitor_label_counts_conditions() {
+    assert_eq!(monitor_label(1).as_deref(), Some("monitor(1)"));
+    assert_eq!(monitor_label(4).as_deref(), Some("monitor(4)"));
+}
+
+#[test]
+fn quiet_monitors_do_not_count() {
+    // The three states a healthy monitor cycles through contribute nothing;
+    // only a live condition does.
+    let quiet = row(MonitorState::Sleeping, None, 0);
+    let active = row(MonitorState::Active, None, 0);
+    let checking = row(MonitorState::Checking, None, 0);
+    assert_eq!(conditions(&[quiet, active, checking]), 0);
+}
+
+#[test]
+fn each_condition_counts_once() {
+    let needs_human = row(MonitorState::Exhausted, None, 0);
+    let parked = row(MonitorState::ActionPending, None, 0);
+    let stalled = row(MonitorState::Sleeping, Some(t0()), 0);
+    let sick = row(MonitorState::Sleeping, None, UNHEALTHY_AFTER_UNKNOWN);
+    assert_eq!(conditions(&[needs_human, parked, stalled, sick]), 4);
+    // A monitor that is both stalled AND sick is still one monitor.
+    let both = row(MonitorState::Sleeping, Some(t0()), UNHEALTHY_AFTER_UNKNOWN);
+    assert_eq!(conditions(&[both]), 1);
+}
+```
+(`row(state, stalled_since, unknown_streak)` is a local helper building a `MonitorRow`; `conditions(&[MonitorRow]) -> usize` is the pure counter you implement in Step 3 beside `monitor_label`.)
+
+`app/tests/overlay_key_action_tests.rs` (or beside the existing key tests):
+```rust
+#[test]
+fn ctrl_t_is_the_monitor_shortcut_and_ctrl_m_is_never_bound() {
+    // ^M is Enter on every terminal; binding it would shadow submit.
+    assert!(!binds_ctrl(KeyCode::Char('m')), "Ctrl+M must never be bound");
+    assert!(binds_ctrl(KeyCode::Char('t')));
+}
+```
+(Write `binds_ctrl` against whatever the existing key-dispatch test helper is; if there is none, assert on the `overlay_key_action`/`events` path the neighbouring tests already use.)
+
+`complete.rs` parity test: `/monitor` appears in the completion list between its alphabetical neighbours, and `SlashCmd::Monitor` parses from both `monitor` and `mon`.
+
+- [ ] **Step 2: Run to verify they fail**
+
+`ORT_STRATEGY=download MUR_WEB_DIST=$HOME/Projects/mur-web/dist RUST_MIN_STACK=33554432 cargo nextest run -p mur-core cli:: footer::`
+Expected: compile errors — `monitor_label`, `SlashCmd::Monitor` undefined.
+
+- [ ] **Step 3: Implement `monitor_label` (pure)**
+
+```rust
+/// Does this monitor want a human or a second look? Quiet polling does not
+/// count: a footer number that is always present stops being read.
+pub fn has_condition(row: &MonitorRow) -> bool {
+    matches!(row.state, MonitorState::Exhausted | MonitorState::ActionPending)
+        || row.stalled_since.is_some()
+        || row.unknown_streak >= UNHEALTHY_AFTER_UNKNOWN
+}
+
+/// How many monitors currently have a condition. One per monitor, however
+/// many conditions it has at once.
+pub fn conditions(rows: &[MonitorRow]) -> usize {
+    rows.iter().filter(|r| has_condition(r)).count()
+}
+
+/// Footer segment, or `None` when nothing wants attention.
+pub fn monitor_label(n: usize) -> Option<String> {
+    (n > 0).then(|| format!("monitor({n})"))
+}
+```
+
+- [ ] **Step 4: Cache the counts on `App`**
+
+Add `monitor_conditions: usize` and `last_monitor_refresh: Option<Instant>`; `refresh_monitor_counts` opens `MonitorStore`, calls `list(&ListFilter::default())`, passes the rows to `conditions()`, and returns early if the last refresh is newer than `MONITOR_REFRESH_SECS`. A store that fails to open (or does not exist yet — the common case for a user who has never added a monitor) leaves the previous count and is not an error the user sees: the footer is not a diagnostic surface.
+
+- [ ] **Step 5: Bind Ctrl+T and add `/monitor`**
+
+In `events.rs`, beside `Char('o') if ctrl`: `KeyCode::Char('t') if ctrl => monitor::handle(app, &[], tx),`. Add `SlashCmd::Monitor(Vec<String>)` following the `DeepResearch` shape from #1320 (parser arm, dispatch arm, `help_text` row, `complete.rs` entry). `monitor::handle` renders the same rows `mur monitor list` prints, into the scrollback as a card — reuse Task 13's row formatting rather than writing a second renderer.
+
+- [ ] **Step 6: Manual check** (record in the commit message)
+
+`mur agent cli <agent>` with zero monitors → no footer segment. Add a healthy one (`mur monitor add --file …`) → **still no segment** (it is quietly polling; this is the point of the change). Force a condition — `mur monitor cancel` is not one, so use a monitor whose source is unreachable until `unknown_streak` reaches the threshold, or point one at a finished run with a failure action so it parks in `action_pending` → `monitor(1)` appears within 30s. `Ctrl+T` prints the list without disturbing a half-typed message. Press Enter → the message still sends (proves Ctrl+M was not shadowed).
+
+- [ ] **Step 7:** fmt + clippy; commit `feat(murmur): monitor(n) in the footer and Ctrl+T to list them`.
