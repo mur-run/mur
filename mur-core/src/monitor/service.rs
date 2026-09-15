@@ -39,6 +39,55 @@ pub fn recover(mur_home: &Path, now: DateTime<Utc>) -> Result<RecoveryReport> {
     scheduler::recover(&store, now)
 }
 
+/// Notifications delivered per tick. Bounded so a backlog after downtime
+/// spreads across ticks instead of firing a hundred banners at once.
+pub const DRAIN_MAX_PER_TICK: usize = 20;
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DrainReport {
+    pub delivered: usize,
+    pub failed: usize,
+    pub parked: usize,
+}
+
+/// Deliver what the tick recorded. Never creates a store (a user who has
+/// never run `mur monitor` acquires nothing) and never fails the caller: a
+/// delivery problem is recorded on the queue and retried, per spec §錯誤處理
+/// ("notification failure: 不回滾已完成 action").
+pub fn drain_notifications(mur_home: &Path, now: DateTime<Utc>) -> Result<DrainReport> {
+    let Some(store) = MonitorStore::open_existing(mur_home)? else {
+        return Ok(DrainReport::default());
+    };
+    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    let registry = super::notify::registry_from_config(&cfg.notifications);
+    let mut rep = DrainReport::default();
+    for channel in registry.iter() {
+        for p in store.pending_notifications(channel.name(), now, DRAIN_MAX_PER_TICK)? {
+            let n = mur_monitor::notify::render(&p.row, &p.event);
+            match channel.deliver(&n) {
+                Ok(()) => {
+                    store.mark_delivered(p.event_id, channel.name(), now)?;
+                    rep.delivered += 1;
+                }
+                Err(reason) => {
+                    let state = store.mark_delivery_failed(p.event_id, channel.name(), now)?;
+                    tracing::warn!(
+                        channel = channel.name(),
+                        event_id = p.event_id,
+                        %reason,
+                        "monitor notification delivery failed"
+                    );
+                    match state {
+                        mur_monitor::store::DeliveryState::Failed => rep.parked += 1,
+                        _ => rep.failed += 1,
+                    }
+                }
+            }
+        }
+    }
+    Ok(rep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +234,61 @@ mod tests {
         // `stalled_then_recovered_are_each_one_event` already proves the
         // stalled semantics directly.
         assert!(kinds.contains(&"soft_deadline".to_string()), "{kinds:?}");
+    }
+
+    /// Same rule as `tick_once_against_a_home_with_no_store_creates_nothing`:
+    /// a user who has never run `mur monitor` acquires no database, even by
+    /// draining. Asserts on the filesystem, not only the returned report —
+    /// an empty `DrainReport` would come back either way (nothing pending
+    /// either), which would pass without the fix.
+    #[test]
+    fn a_home_with_no_store_drains_nothing_and_creates_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = mur_monitor::store::db_dir(d.path());
+        assert!(!dir.exists());
+        let r = drain_notifications(d.path(), t0()).unwrap();
+        assert_eq!(r, DrainReport::default());
+        assert!(!dir.exists(), "draining must not create the store");
+    }
+
+    #[test]
+    fn a_notifiable_event_is_delivered_once_and_not_again() {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.create(&spec(), t0(), None).unwrap().id;
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
+            .unwrap();
+        drop(s);
+
+        let first = drain_notifications(d.path(), t0()).unwrap();
+        assert_eq!(first.delivered, 1);
+        let second = drain_notifications(d.path(), t0()).unwrap();
+        assert_eq!(
+            second.delivered, 0,
+            "a delivered notification must not repeat"
+        );
+    }
+
+    #[test]
+    fn bookkeeping_events_are_never_delivered() {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.create(&spec(), t0(), None).unwrap().id; // writes `created`
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(
+            &id,
+            &cyc,
+            "lease_recovered",
+            serde_json::json!({}),
+            false,
+            t0(),
+        )
+        .unwrap();
+        drop(s);
+        assert_eq!(
+            drain_notifications(d.path(), t0()).unwrap(),
+            DrainReport::default()
+        );
     }
 }
