@@ -1,0 +1,16 @@
+//! Durable-monitor adapters and the daemon-facing service. The engine
+//! itself is `mur-monitor`; this module is what needs `mur-core` (run
+//! records) or a network client, and what assembles the registry.
+
+pub mod adapters;
+
+use std::path::Path;
+
+use mur_monitor::adapter::AdapterRegistry;
+
+/// Every adapter this build ships. Task 10 and 11 add theirs here.
+pub fn registry(mur_home: &Path) -> AdapterRegistry {
+    let mut r = AdapterRegistry::new();
+    r.register(Box::new(adapters::mur_run::MurRunAdapter::new(mur_home)));
+    r
+}
