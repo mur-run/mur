@@ -12,5 +12,8 @@ use mur_monitor::adapter::AdapterRegistry;
 pub fn registry(mur_home: &Path) -> AdapterRegistry {
     let mut r = AdapterRegistry::new();
     r.register(Box::new(adapters::mur_run::MurRunAdapter::new(mur_home)));
+    r.register(Box::new(
+        adapters::github_actions::GithubActionsAdapter::default(),
+    ));
     r
 }
