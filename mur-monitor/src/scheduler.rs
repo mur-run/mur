@@ -46,6 +46,18 @@ fn ev(kind: &'static str, payload: serde_json::Value) -> Event {
         kind,
         payload,
         dedup: true,
+        dedup_key: None,
+    }
+}
+
+/// Same as `ev`, but dedups on `dedup_key` instead of the bare `kind` — for
+/// an event that can legitimately recur within one (non-rotating) cycle.
+fn ev_keyed(kind: &'static str, dedup_key: String, payload: serde_json::Value) -> Event {
+    Event {
+        kind,
+        payload,
+        dedup: true,
+        dedup_key: Some(dedup_key),
     }
 }
 
@@ -147,8 +159,17 @@ pub fn plan_cycle(row: &MonitorRow, obs: Observation, now: DateTime<Utc>) -> Cyc
     let (base, attempt_seed) = if obs.outcome == Outcome::Unknown {
         u.unknown_streak = row.unknown_streak + 1;
         if u.unknown_streak == UNHEALTHY_AFTER_UNKNOWN {
-            events.push(ev(
+            // `cycle_id` never rotates for a monitor that keeps getting
+            // reobserved, so a bare-`kind` dedup key (like `stalled`'s
+            // above) would announce `monitor_unhealthy` at most once ever
+            // per monitor — a recovery followed by a second run of bad luck
+            // would never be seen. Keying on the streak episode instead
+            // means a later, higher streak announces again while repeated
+            // ticks at the *same* streak (there are none — it only equals
+            // the ceiling on the one tick it's first reached) stay quiet.
+            events.push(ev_keyed(
                 "monitor_unhealthy",
+                format!("monitor_unhealthy:{}", u.unknown_streak),
                 serde_json::json!({ "streak": u.unknown_streak, "error": obs.adapter_error }),
             ));
         }
@@ -162,8 +183,19 @@ pub fn plan_cycle(row: &MonitorRow, obs: Observation, now: DateTime<Utc>) -> Cyc
     // requirement 5: the hard deadline is not a failure verdict. Past it, a
     // monitor whose policy retains monitoring keeps polling read-only at
     // `RETAIN_INTERVAL`; one that does not goes to `Exhausted`. Neither
-    // marks the work failed — `obs.outcome` (still `Pending`) is untouched.
-    let base = if v.hard_reached && obs.outcome == Outcome::Pending {
+    // marks the work failed — `obs.outcome` is untouched either way. This
+    // guard used to also require `obs.outcome == Outcome::Pending`, which
+    // silently excluded `Unknown` (the only other non-terminal outcome by
+    // construction: `obs.outcome.is_terminal()` returns at the top of this
+    // function, so everything reaching here is `Pending` or `Unknown` and
+    // there is no third case for the dropped clause to have been guarding
+    // against). With `retain: true` that left an `Unknown` past the hard
+    // deadline polling at the `unknown` cap (5m) instead of dropping to
+    // `RETAIN_INTERVAL` (2h); with `retain: false` it never reached
+    // `Exhausted` at all and polled forever — exactly the "automatic work
+    // stops after the hard deadline" guarantee the spec's MVP criterion 5
+    // makes, broken for a source that has gone unreadable.
+    let base = if v.hard_reached {
         if policy.retain_monitoring_after_hard_deadline {
             RETAIN_INTERVAL
         } else {
@@ -206,6 +238,16 @@ pub fn tick(
     owner: &str,
     max_claims: usize,
 ) -> Result<TickReport> {
+    // Sweep expired leases before claiming. `recover` also calls this, but
+    // only runs once at daemon startup — a monitor whose lease expires while
+    // the daemon keeps running (a transient error earlier in `tick` left it
+    // `checking` with a live lease, or a worker genuinely died mid-check) is
+    // otherwise stranded forever: `claim_due`'s `WHERE state IN (claimable)`
+    // excludes `checking` outright, so an expired-but-unswept lease is never
+    // picked back up no matter how long `next_check_at` sits in the past.
+    // Cheap and idempotent — it only touches rows whose lease has genuinely
+    // expired.
+    store.expire_leases(now)?;
     let claimed = store.claim_due(now, owner, DEFAULT_LEASE, max_claims)?;
     let mut rep = TickReport {
         claimed: claimed.len(),

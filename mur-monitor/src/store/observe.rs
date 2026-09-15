@@ -33,6 +33,12 @@ pub struct Event {
     /// True = at most once per (monitor, cycle, kind) — the notable events.
     /// False = every time (`observed`, `lease_recovered`).
     pub dedup: bool,
+    /// Overrides the dedup key that would otherwise be derived from `kind`
+    /// alone. `None` is the common case (dedup key == `kind`). `Some` lets
+    /// an event that can legitimately recur within the same (non-rotating)
+    /// cycle — e.g. `monitor_unhealthy` re-announcing a later, higher
+    /// streak — dedup on `kind:<episode>` instead of `kind`.
+    pub dedup_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,20 +82,20 @@ fn insert_event(
     conn: &rusqlite::Connection,
     id: &str,
     cycle_id: &str,
-    kind: &str,
-    payload: &serde_json::Value,
-    dedup: bool,
+    event: &Event,
     now: DateTime<Utc>,
 ) -> rusqlite::Result<bool> {
-    let dedup_key = if dedup {
-        kind.to_string()
+    let dedup_key = if let Some(k) = &event.dedup_key {
+        k.clone()
+    } else if event.dedup {
+        event.kind.to_string()
     } else {
-        format!("{kind}:{}", uuid::Uuid::now_v7())
+        format!("{}:{}", event.kind, uuid::Uuid::now_v7())
     };
     let n = conn.execute(
         "INSERT OR IGNORE INTO monitor_events (monitor_id, cycle_id, kind, dedup_key, payload, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, cycle_id, kind, dedup_key, payload.to_string(), ts(now)],
+        params![id, cycle_id, event.kind, dedup_key, event.payload.to_string(), ts(now)],
     )?;
     Ok(n == 1)
 }
@@ -165,15 +171,7 @@ impl MonitorStore {
                 ],
             )?;
             for e in &u.events {
-                insert_event(
-                    self.conn(),
-                    id,
-                    &cycle_id,
-                    e.kind,
-                    &e.payload,
-                    e.dedup,
-                    u.observed_at,
-                )?;
+                insert_event(self.conn(), id, &cycle_id, e, u.observed_at)?;
             }
             if u.finish_cycle {
                 self.conn().execute(
@@ -198,20 +196,18 @@ impl MonitorStore {
         &self,
         id: &str,
         cycle_id: &str,
-        kind: &str,
+        kind: &'static str,
         payload: serde_json::Value,
         dedup: bool,
         now: DateTime<Utc>,
     ) -> Result<bool> {
-        Ok(insert_event(
-            self.conn(),
-            id,
-            cycle_id,
+        let event = Event {
             kind,
-            &payload,
+            payload,
             dedup,
-            now,
-        )?)
+            dedup_key: None,
+        };
+        Ok(insert_event(self.conn(), id, cycle_id, &event, now)?)
     }
 
     /// Newest first — it is evidence.
@@ -362,6 +358,7 @@ mod tests {
             kind: "terminal",
             payload: serde_json::json!({"outcome": "succeeded"}),
             dedup: true,
+            dedup_key: None,
         });
         assert!(s.apply_cycle(&c.id, cl.fence, &u).unwrap());
         let (finished, term): (Option<String>, Option<String>) = s

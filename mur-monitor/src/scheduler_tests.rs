@@ -1,4 +1,5 @@
 use super::*;
+use crate::adapter::SourceAdapter;
 use crate::backoff::{
     RETAIN_INTERVAL, UNHEALTHY_AFTER_UNKNOWN, pending_delay, seed, unknown_delay, with_jitter,
 };
@@ -245,6 +246,50 @@ fn unknown_uses_its_own_backoff_never_fails_and_flags_health_once() {
     assert_eq!(health, 1);
 }
 
+/// The bug this guards: `cycle_id` never rotates for a monitor that keeps
+/// getting reobserved (it is minted once at `create` and lives until a
+/// terminal outcome), and the pre-fix dedup key was the bare `kind` string
+/// — scoped to `(monitor_id, cycle_id, dedup_key)`, that meant
+/// `monitor_unhealthy` could insert at most once, ever, for the whole life
+/// of a monitor. A recovery (any non-`Unknown` observation resets
+/// `unknown_streak` to 0) followed by climbing back up to the ceiling a
+/// second time silently produced no second event — the on-call would never
+/// hear about it again. Keying on `monitor_unhealthy:<the streak value
+/// that triggered it>` instead means the second episode reaches the
+/// ceiling under a *different* dedup key, so it inserts.
+#[test]
+fn monitor_unhealthy_re_announces_after_a_recovery_and_a_second_climb() {
+    let (_d, s, id) = fresh("  on_success: []", true);
+    let mut script = Vec::new();
+    for _ in 0..UNHEALTHY_AFTER_UNKNOWN {
+        script.push(Observation::unknown("down"));
+    }
+    script.push(Observation::pending("p", "recovered"));
+    for _ in 0..UNHEALTHY_AFTER_UNKNOWN {
+        script.push(Observation::unknown("down again"));
+    }
+    let reg = registry(script);
+
+    let mut now = t0();
+    for _ in 0..(2 * UNHEALTHY_AFTER_UNKNOWN + 1) {
+        let rep = tick(&s, &reg, now, "w", 8).unwrap();
+        assert_eq!(rep.claimed, 1);
+        let r = s.get(&id).unwrap().unwrap();
+        now = r.next_check_at;
+    }
+
+    let health = s
+        .events(&id)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "monitor_unhealthy")
+        .count();
+    assert_eq!(
+        health, 2,
+        "a recovery followed by a second climb to the ceiling must re-announce, not stay silent forever"
+    );
+}
+
 #[test]
 fn terminal_completes_once_and_is_never_reclaimed() {
     let (_d, s, id) = fresh("  on_success: []", true);
@@ -386,6 +431,52 @@ fn hard_deadline_retains_at_two_hours_or_exhausts() {
     );
 }
 
+/// The regression: the hard-deadline branch used to also require
+/// `obs.outcome == Outcome::Pending`, which silently let `Unknown` — the
+/// only other non-terminal outcome — skip both consequences below. Against
+/// the pre-fix code this monitor would poll at `unknown_delay(0) == 10s`
+/// (retain) or never reach `Exhausted` at all (no retain), forever, because
+/// a source gone unreadable never reports anything BUT `unknown`.
+#[test]
+fn hard_deadline_also_governs_an_unknown_observation() {
+    let (_d, s, id) = fresh("  on_success: []", true);
+    let reg = registry(vec![
+        Observation::pending("p", "x"),
+        Observation::unknown("source unreachable"),
+    ]);
+    tick(&s, &reg, t0(), "w", 8).unwrap();
+    let now = t0() + CD::hours(8);
+    tick(&s, &reg, now, "w", 8).unwrap();
+    let r = s.get(&id).unwrap().unwrap();
+    assert!(r.hard_reached);
+    assert_eq!(r.outcome, Outcome::Unknown);
+    assert_eq!(r.state, MonitorState::Sleeping, "retained, not exhausted");
+    assert_eq!(
+        r.next_check_at,
+        now + cd(with_jitter(RETAIN_INTERVAL, seed(&id, r.unknown_streak))),
+        "an unknown past the hard deadline must drop to the retain cadence, \
+         not the unknown table's own (much shorter) cap"
+    );
+
+    let (_d2, s2, id2) = fresh("  on_success: []", false);
+    let reg2 = registry(vec![Observation::unknown("source unreachable")]);
+    tick(&s2, &reg2, t0() + CD::hours(8), "w", 8).unwrap();
+    let r2 = s2.get(&id2).unwrap().unwrap();
+    assert_eq!(
+        r2.state,
+        MonitorState::Exhausted,
+        "an unknown past the hard deadline must still exhaust when not retained"
+    );
+    assert_eq!(
+        s2.events(&id2)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "exhausted")
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn soft_deadline_is_an_event_not_a_failure() {
     let (_d, s, id) = fresh("  on_success: []", true);
@@ -435,6 +526,57 @@ fn missed_check_is_caught_up_after_recovery() {
     )
     .unwrap();
     assert_eq!(rep.observed, 1);
+}
+
+/// The bug this guards: `apply_cycle` returning `Err` (a contended
+/// `SQLITE_BUSY` past the busy_timeout, a transient I/O error) leaves the
+/// monitor `checking` with a live lease and nothing ever re-observes it,
+/// because `MonitorState::is_claimable` excludes `checking` and the daemon
+/// only calls `recover` (which sweeps expired leases) once at startup.
+/// Simulated here without forcing an actual `apply_cycle` error: a worker
+/// that claims and then simply never calls `heartbeat`/`apply_cycle` again
+/// (crashed, or any other reason the write-back never lands) leaves the
+/// monitor in the identical state — `checking`, with a lease that will
+/// eventually expire. Against the pre-fix `tick` (no `expire_leases` sweep
+/// of its own), `claim_due`'s `WHERE state IN (claimable)` excludes
+/// `checking` outright regardless of the expired lease, so this monitor
+/// would never be reclaimed by `tick` alone — only an explicit `recover`
+/// call (which this test deliberately does NOT make) would free it, and
+/// `rep.observed` would stay 0 forever. The fix makes `tick` sweep expired
+/// leases itself before claiming, so a plain `tick` call recovers it.
+#[test]
+fn a_stranded_checking_monitor_is_recovered_by_tick_alone() {
+    let (_d, s, id) = fresh("  on_success: []", true);
+    // Worker claims and then the process disappears — no heartbeat, no
+    // apply_cycle, ever.
+    let cl = s.claim_due(t0(), "dead-worker", DEFAULT_LEASE, 8).unwrap();
+    assert_eq!(cl.len(), 1);
+    assert_eq!(s.get(&id).unwrap().unwrap().state, MonitorState::Checking);
+
+    let later = t0() + cd(DEFAULT_LEASE) + CD::seconds(1);
+    // `tick`, not `recover` — the fix under test.
+    let rep = tick(
+        &s,
+        &registry(vec![Observation::pending("p", "still going")]),
+        later,
+        "new-worker",
+        8,
+    )
+    .unwrap();
+
+    assert_eq!(
+        rep.observed, 1,
+        "tick alone must sweep the expired lease and reclaim the monitor"
+    );
+    let r = s.get(&id).unwrap().unwrap();
+    assert_eq!(r.state, MonitorState::Sleeping);
+    assert!(
+        s.events(&id)
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "lease_recovered"),
+        "expire_leases must still record the recovery event"
+    );
 }
 
 #[test]
