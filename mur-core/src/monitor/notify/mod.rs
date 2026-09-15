@@ -5,6 +5,7 @@
 pub mod desktop;
 pub mod log;
 
+use mur_common::config::NotificationsConfig;
 use mur_monitor::notify::Notification;
 
 pub trait Channel: Send + Sync {
@@ -30,6 +31,18 @@ impl ChannelRegistry {
     pub fn iter(&self) -> impl Iterator<Item = &dyn Channel> {
         self.channels.iter().map(|b| b.as_ref())
     }
+}
+
+/// Builds the registry the drain actually uses. `log` is always registered
+/// (it cannot be switched off — see the module doc on `NotificationsConfig`);
+/// `desktop` is added only when the user has opted in.
+pub fn registry_from_config(cfg: &NotificationsConfig) -> ChannelRegistry {
+    let mut r = ChannelRegistry::new();
+    r.register(Box::new(log::LogChannel));
+    if cfg.desktop {
+        r.register(Box::new(desktop::DesktopChannel));
+    }
+    r
 }
 
 #[cfg(test)]
@@ -79,5 +92,20 @@ mod tests {
             body: "b".into(),
             next_step: "s".into(),
         }
+    }
+
+    #[test]
+    fn log_is_always_registered_and_desktop_only_when_enabled() {
+        let off = registry_from_config(&NotificationsConfig { desktop: false });
+        assert_eq!(
+            off.iter().map(|c| c.name()).collect::<Vec<_>>(),
+            vec!["log"]
+        );
+
+        let on = registry_from_config(&NotificationsConfig { desktop: true });
+        assert_eq!(
+            on.iter().map(|c| c.name()).collect::<Vec<_>>(),
+            vec!["log", "desktop"]
+        );
     }
 }
