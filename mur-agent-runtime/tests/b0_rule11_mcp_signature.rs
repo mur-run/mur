@@ -20,9 +20,18 @@ fn minimal_profile() -> AgentProfile {
 #[test]
 fn unsigned_mcp_binary_fails_startup() {
     let dir = TempDir::new().unwrap();
-    // Create an unsigned executable (just a small file).
+    // An unsigned *native image*: Mach-O magic (MH_MAGIC_64) and nothing
+    // `codesign` can verify behind it.
+    //
+    // This fixture used to be `#!/bin/sh\nexit 0\n`, which is a script, not a
+    // binary — and rule 11 refused it, which is precisely the bug that made an
+    // agent with an `npx` MCP server unbootable: `npx` canonicalizes to a
+    // `.js` file no signature can ever cover. The rule now enforces on
+    // signable images only, so the fixture has to actually be one for this
+    // test to still be testing what its name says. The skip side is covered by
+    // `b0_rule11_signability.rs`.
     let bin = dir.path().join("fake-mcp");
-    std::fs::write(&bin, b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(&bin, b"\xcf\xfa\xed\xfenot-a-real-macho").unwrap();
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(&bin).unwrap().permissions();
     perms.set_mode(0o755);

@@ -160,6 +160,54 @@ pub fn repoint_in(bin_dir: &Path, agent: &str) -> std::io::Result<PathBuf> {
     Ok(canonical)
 }
 
+/// Create `agent`'s launcher symlink in `bin_dir` if it is MISSING, pointing at
+/// the canonical runtime beside it. Returns the path when it created one, and
+/// `Ok(None)` when a link was already there.
+///
+/// Distinct from [`repoint_in`] on purpose. Repointing changes which binary the
+/// next start executes — a trust boundary, so it waits to be asked. Creating an
+/// absent link does not: it writes exactly what `mur agent create` would have
+/// written, and the alternative is a service descriptor naming a path that
+/// cannot exec.
+///
+/// The gap this closes: an agent that has only ever come up through
+/// `direct_respawn` never gets a link (that path falls back to
+/// [`runtime_path_for`]), and `mur agent install-service` then emitted a unit
+/// whose ExecStart was that never-created link — so the service installed fine
+/// and every start after it failed with `resolve …/mur_agent_<name>`
+/// (field report, 2026-09-15).
+///
+/// No canonical runtime to point at → `Ok(None)`: a link into thin air is worse
+/// than none, and the caller's own attestation reports the real problem.
+pub fn ensure_link_in(bin_dir: &Path, agent: &str) -> std::io::Result<Option<PathBuf>> {
+    let link = bin_dir.join(format!("mur_agent_{agent}"));
+    if link.symlink_metadata().is_ok() {
+        return Ok(None);
+    }
+    let canonical = bin_dir.join(if cfg!(windows) {
+        "mur-agent-runtime.exe"
+    } else {
+        "mur-agent-runtime"
+    });
+    if !canonical.exists() {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&canonical, &link)?;
+    #[cfg(windows)]
+    std::fs::copy(&canonical, &link)?;
+    Ok(Some(link))
+}
+
+/// [`ensure_link_in`] against the installed bin dir. Best-effort: an
+/// unresolvable bin dir is not itself a reason to fail the caller.
+pub fn ensure_link(agent: &str) -> std::io::Result<Option<PathBuf>> {
+    match resolve_bin_dir() {
+        Ok(dir) => ensure_link_in(&dir, agent),
+        Err(_) => Ok(None),
+    }
+}
+
 /// [`link_drift_in`] against the installed bin dir.
 pub fn link_drift(agent: &str) -> Option<LinkDrift> {
     link_drift_in(&resolve_bin_dir().ok()?, agent)
@@ -276,5 +324,43 @@ mod tests {
         std::os::unix::fs::symlink(&canonical, &alias).unwrap();
         std::os::unix::fs::symlink(&alias, bin.join("mur_agent_qa")).unwrap();
         assert_eq!(link_drift_in(&bin, "qa"), None, "same file, different name");
+    }
+
+    /// `ensure_link_in` fills an absent launcher and keeps its hands off an
+    /// existing one — including a deliberately repointed one, which is the
+    /// user's call to make, not a startup side effect.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_link_creates_only_when_absent() {
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        // No canonical runtime yet → nothing to point at, so no link.
+        assert_eq!(ensure_link_in(&bin, "qa").unwrap(), None, "nothing to link");
+        assert!(!bin.join("mur_agent_qa").exists());
+
+        let canonical = bin.join("mur-agent-runtime");
+        std::fs::write(&canonical, b"rt").unwrap();
+        let made = ensure_link_in(&bin, "qa").unwrap().expect("link created");
+        assert_eq!(made, bin.join("mur_agent_qa"));
+        assert_eq!(
+            std::fs::canonicalize(&made).unwrap(),
+            std::fs::canonicalize(&canonical).unwrap()
+        );
+
+        // Second call is a no-op.
+        assert_eq!(ensure_link_in(&bin, "qa").unwrap(), None, "already linked");
+
+        // An existing link elsewhere is left exactly where the user put it.
+        let other = t.path().join("other-runtime");
+        std::fs::write(&other, b"other").unwrap();
+        std::fs::remove_file(&made).unwrap();
+        std::os::unix::fs::symlink(&other, &made).unwrap();
+        assert_eq!(ensure_link_in(&bin, "qa").unwrap(), None);
+        assert_eq!(
+            std::fs::canonicalize(&made).unwrap(),
+            std::fs::canonicalize(&other).unwrap()
+        );
     }
 }
