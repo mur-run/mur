@@ -16,6 +16,7 @@ import {
   type SubscriptionDescriptor,
 } from "./modelLibraryHelpers";
 import { SubscriptionProviderPanel } from "./SubscriptionProviderPanel";
+import { subscriptionVisible, type GatewayStatus } from "./chatgptSubscription";
 import { useT } from "../i18n";
 import {
   ConnectedPanel,
@@ -103,6 +104,11 @@ export function ModelLibrary({ open, onClose, embedded = false }: Props) {
   // ── Detected local providers ────────────────────────────────────────────
   const [localProviders, setLocalProviders] = useState<DetectedLocalView[]>([]);
 
+  // ── Gateway hook readiness (drives rail visibility) ─────────────────────
+  // One gateway serves both subscription providers, so one fetch answers for
+  // both. `null` = not loaded / unreachable = unknown, which stays visible.
+  const [gateway, setGateway] = useState<GatewayStatus | null>(null);
+
   // ── Active panel selection ──────────────────────────────────────────────
   const [panel, setPanel] = useState<PanelKind | null>(null);
 
@@ -114,6 +120,10 @@ export function ModelLibrary({ open, onClose, embedded = false }: Props) {
       .catch(() => {});
     invoke<DetectedLocalView[]>("probe_local_providers")
       .then(setLocalProviders)
+      .catch(() => {});
+    // On failure `gateway` stays null — unknown, never a fabricated `false`.
+    invoke<GatewayStatus>("chatgpt_gateway_status")
+      .then(setGateway)
       .catch(() => {});
   }, [open]);
 
@@ -226,7 +236,9 @@ export function ModelLibrary({ open, onClose, embedded = false }: Props) {
 
             <div className="ml-rail__h">{t("lib.section.add")}</div>
             {SUBSCRIPTION_PROVIDERS.filter(
-              (d) => !connected.some((cp) => cp.key === d.provider),
+              (d) =>
+                !connected.some((cp) => cp.key === d.provider) &&
+                subscriptionVisible(gateway, d.readiness),
             ).map((d) => (
               <button
                 key={d.key}
