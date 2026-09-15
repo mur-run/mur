@@ -533,3 +533,58 @@ fn show_reports_every_candidate_on_an_ambiguous_prefix() {
     assert!(msg.contains("(t2)"), "{msg}");
     assert!(msg.contains("more characters"), "{msg}");
 }
+
+#[test]
+fn show_renders_notification_delivery_state() {
+    // spec §錯誤處理: a delivery failure must be visible in the CLI.
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+    let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+    s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
+        .unwrap();
+    let ev = s.pending_notifications("log", t0(), 1).unwrap();
+    s.mark_delivery_failed(ev[0].event_id, "log", t0()).unwrap();
+
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(out.contains("  notifications:"), "{out}");
+    // Pinned to a single line naming the event, the "log" channel, and its
+    // "pending" state together — a bare `contains("log")` would also pass
+    // if "log" ever showed up elsewhere in `show`'s output for unrelated
+    // reasons, so this requires all three tokens on the same line.
+    assert!(
+        out.lines()
+            .any(|l| l.contains("event") && l.contains("log") && l.contains("pending")),
+        "{out}"
+    );
+}
+
+// A monitor with no notification rows must still render `show` cleanly —
+// the `notifications:` header is conditional on `deliveries` being
+// non-empty, so this pins the empty-vec path staying silent rather than
+// printing an empty header.
+#[test]
+fn show_omits_notifications_section_when_there_are_none() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(!out.contains("notifications:"), "{out}");
+    assert!(out.contains("recent observations:"), "{out}");
+}
