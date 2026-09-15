@@ -122,17 +122,33 @@ pub fn plan_cycle(row: &MonitorRow, obs: Observation, now: DateTime<Utc>) -> Cyc
     u.stalled_since = v.stalled_since;
     u.soft_notified = v.soft_notified;
     u.hard_reached = v.hard_reached;
-    // dedup is per (monitor, cycle, kind): a second stall inside the same
-    // cycle after a recovery is not re-announced. Acceptable for MVP; a
-    // per-stall dedup key is the upgrade if that proves noisy in practice.
+    // `v.stalled_newly`/`v.recovered` ARE the deduplicators: each is true on
+    // exactly the one tick where the stall state flips (stalled_since goes
+    // None -> Some, or Some -> None), so a monitor that stalls, recovers,
+    // and stalls again fires each event exactly once per episode with no
+    // help from the database. DB-level dedup is deliberately NOT used here
+    // (`dedup: false`, so `insert_event` appends a fresh uuid to the key
+    // every time): `cycle_id` never rotates for a monitor that keeps
+    // getting reobserved, and both events always use the same bare `kind`
+    // as their key, so a `UNIQUE(monitor_id, cycle_id, dedup_key)` dedup
+    // would collide the second episode's key with the first's and silently
+    // drop it — recover, stall again, and neither event would ever fire
+    // again.
     if v.stalled_newly {
-        events.push(ev(
-            "stalled",
-            serde_json::json!({ "since": v.stalled_since }),
-        ));
+        events.push(Event {
+            kind: "stalled",
+            payload: serde_json::json!({ "since": v.stalled_since }),
+            dedup: false,
+            dedup_key: None,
+        });
     }
     if v.recovered {
-        events.push(ev("stalled_recovered", serde_json::json!({ "at": now })));
+        events.push(Event {
+            kind: "stalled_recovered",
+            payload: serde_json::json!({ "at": now }),
+            dedup: false,
+            dedup_key: None,
+        });
     }
     if v.soft_newly {
         events.push(ev("soft_deadline", serde_json::json!({ "at": now })));
@@ -196,10 +212,27 @@ pub fn plan_cycle(row: &MonitorRow, obs: Observation, now: DateTime<Utc>) -> Cyc
             RETAIN_INTERVAL
         } else {
             u.new_state = MonitorState::Exhausted;
-            events.push(ev(
-                "exhausted",
-                serde_json::json!({ "reason": "hard deadline, monitoring not retained" }),
-            ));
+            // Unlike `hard_deadline` above, this guard is the raw sticky
+            // `v.hard_reached` flag, not an edge-triggered `_newly` check —
+            // it has no need for one under normal operation, because firing
+            // it also moves the monitor to `Exhausted`, which
+            // `MonitorState::is_claimable` excludes from `claim_due`, so
+            // `plan_cycle` is never invoked again... UNLESS `mur monitor
+            // retry` calls `MonitorStore::reactivate`, which resets `state`
+            // back to `active` but deliberately leaves `hard_reached` (and
+            // `cycle_id`) untouched. The very next tick recomputes
+            // `hard_reached = true` (still sticky) and this branch fires
+            // again. So `dedup: false` here too: the reachability of this
+            // branch is itself the deduplicator (at most once between
+            // retries), and DB-level dedup on the bare `"exhausted"` kind
+            // would collide a post-retry re-exhaustion with the first one
+            // under the same never-rotating `cycle_id` and drop it silently.
+            events.push(Event {
+                kind: "exhausted",
+                payload: serde_json::json!({ "reason": "hard deadline, monitoring not retained" }),
+                dedup: false,
+                dedup_key: None,
+            });
             base
         }
     } else {

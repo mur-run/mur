@@ -384,6 +384,60 @@ fn stalled_then_recovered_are_each_one_event() {
     assert_eq!(kinds, vec!["stalled", "stalled_recovered"]);
 }
 
+/// The bug this guards: same shape as
+/// `monitor_unhealthy_re_announces_after_a_recovery_and_a_second_climb`.
+/// `cycle_id` never rotates, and the pre-fix `stalled`/`stalled_recovered`
+/// events keyed on the bare `kind`, so a second stall-then-recover episode
+/// collided with the first episode's dedup key and was silently dropped —
+/// a monitor that stalled, recovered, and stalled again went permanently
+/// silent about it. `v.stalled_newly`/`v.recovered` are each true on
+/// exactly one tick per episode, so `dedup: false` (a fresh uuid key every
+/// insert) lets both episodes land.
+#[test]
+fn stalled_re_announces_after_a_recovery_and_a_second_stall() {
+    let (_d, s, id) = fresh("  on_success: []", true);
+    // Offsets are chosen with generous slack over the worst-case (+20%
+    // jitter) pending backoff so every tick below is guaranteed to land on
+    // its intended scripted observation rather than being skipped because
+    // `next_check_at` had not yet arrived (pending backoff grows with each
+    // pending observation: 30s, 1m, 2m, 5m, 15m, 30m, capped).
+    let reg = registry(vec![
+        Observation::pending("p1", "a"),      // m=0: establishes progress
+        Observation::pending("p1", "same"),   // m=25: stalled (newly)
+        Observation::pending("p1", "same"),   // m=70: still stalled
+        Observation::pending("p2", "moved"),  // m=110: recovered
+        Observation::pending("p2", "same"),   // m=125: fresh progress, no stall yet
+        Observation::pending("p2", "same"),   // m=160: stalled again (newly)
+        Observation::pending("p2", "same"),   // m=210: still stalled
+        Observation::pending("p3", "moved2"), // m=280: recovered again
+    ]);
+    for m in [0i64, 25, 70, 110, 125, 160, 210, 280] {
+        let rep = tick(&s, &reg, t0() + CD::minutes(m), "w", 8).unwrap();
+        assert_eq!(
+            rep.claimed, 1,
+            "tick at m={m} must land on its scripted observation"
+        );
+    }
+
+    let kinds: Vec<_> = s
+        .events(&id)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .filter(|k| k.starts_with("stalled"))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "stalled",
+            "stalled_recovered",
+            "stalled",
+            "stalled_recovered"
+        ],
+        "a recovery followed by a second stall must re-announce both events, not stay silent forever"
+    );
+}
+
 #[test]
 fn hard_deadline_retains_at_two_hours_or_exhausts() {
     let (_d, s, id) = fresh("  on_success: []", true);
