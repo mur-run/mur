@@ -48,25 +48,28 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
     }
 
     let mut notes = Vec::new();
-    let binary_sha256 = match crate::cmd::agent_mcp_pin::resolve_command(command) {
-        Ok(p) => match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
-            Ok(h) => {
-                notes.push(format!("binary sha256 {}…", &h[..16.min(h.len())]));
-                Some(h)
-            }
-            Err(e) => {
-                notes.push(format!(
-                    "warning: could not hash {} ({e}); no binary pin",
-                    p.display()
-                ));
-                None
-            }
-        },
+    let (binary_sha256, resolved_path) = match crate::cmd::agent_mcp_pin::resolve_command(command) {
+        Ok(p) => {
+            let sha = match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
+                Ok(h) => {
+                    notes.push(format!("binary sha256 {}…", &h[..16.min(h.len())]));
+                    Some(h)
+                }
+                Err(e) => {
+                    notes.push(format!(
+                        "warning: could not hash {} ({e}); no binary pin",
+                        p.display()
+                    ));
+                    None
+                }
+            };
+            (sha, Some(p))
+        }
         Err(_) => {
             notes.push(format!(
                 "warning: `{command}` not found on PATH; no binary pin"
             ));
-            None
+            (None, None)
         }
     };
 
@@ -101,6 +104,22 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
             .allowed
             .push(command.to_string());
     }
+    // Same gate as `mur agent mcp add`, through the same function: a slash
+    // command that reports "added" for a server which cannot start produces
+    // the same unbootable agent, and this path used to skip the check purely
+    // because it reimplements the install rather than calling it.
+    if let Some(resolved) = resolved_path.as_deref() {
+        let (hash, tools) =
+            crate::cmd::agent::mcp::probe_new_entry(agent, &profile, server_id, resolved)?;
+        if let Some(e) = profile.mcp_servers.last_mut() {
+            e.description_hash = Some(hash);
+        }
+        notes.push(format!(
+            "probe ok — {tools} tool{} listed, description hash pinned",
+            if tools == 1 { "" } else { "s" }
+        ));
+    }
+
     save_profile(&path, &mut profile)?;
 
     let mut out = format!(

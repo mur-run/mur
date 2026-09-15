@@ -57,6 +57,11 @@ fn mcp_add_syncs_profile_and_spawn_allowlist() {
             // B0 rule 6 / M9.2 — install confirm prompt blocks the
             // (non-TTY) test runner without --force.
             "--force",
+            // Bookkeeping fixtures: /bin/echo is not an MCP server and never
+            // was. These assert profile sync, the spawn allowlist, list,
+            // rename and remove — not whether the server starts, which is
+            // `agent_mcp_add_probe.rs`.
+            "--no-probe",
         ],
     );
     assert!(
@@ -97,6 +102,11 @@ fn mcp_list_prints_server_ids() {
             "--command",
             "/bin/echo",
             "--force",
+            // Bookkeeping fixtures: /bin/echo is not an MCP server and never
+            // was. These assert profile sync, the spawn allowlist, list,
+            // rename and remove — not whether the server starts, which is
+            // `agent_mcp_add_probe.rs`.
+            "--no-probe",
         ],
     );
 
@@ -127,6 +137,11 @@ fn mcp_remove_and_rename() {
             "--command",
             "/bin/echo",
             "--force",
+            // Bookkeeping fixtures: /bin/echo is not an MCP server and never
+            // was. These assert profile sync, the spawn allowlist, list,
+            // rename and remove — not whether the server starts, which is
+            // `agent_mcp_add_probe.rs`.
+            "--no-probe",
         ],
     );
     let _ = run(

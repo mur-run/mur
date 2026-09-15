@@ -207,7 +207,12 @@ pub fn cmd_mcp_add(
     if !pin.no_probe
         && let Some(resolved) = resolved_path.as_deref()
     {
-        let hash = probe_new_entry(name, &profile, server_id, resolved)?;
+        println!("  probing:        spawning '{server_id}' under this agent's sandbox…");
+        let (hash, tools) = probe_new_entry(name, &profile, server_id, resolved)?;
+        println!(
+            "  probe:          ok — {tools} tool{} listed, description hash pinned",
+            if tools == 1 { "" } else { "s" }
+        );
         if let Some(entry) = profile.mcp_servers.last_mut() {
             entry.description_hash = Some(hash);
         }
@@ -223,12 +228,12 @@ pub fn cmd_mcp_add(
 /// that cannot start is not "installed", and leaving the entry behind produces
 /// an agent that fails at boot over a decision the user thought had succeeded.
 /// `--no-probe` is the door out, and every failure message names it.
-fn probe_new_entry(
+pub(crate) fn probe_new_entry(
     agent: &str,
     profile: &mur_common::AgentProfile,
     server_id: &str,
     resolved: &std::path::Path,
-) -> Result<String> {
+) -> Result<(String, usize)> {
     let entry = profile
         .mcp_servers
         .last()
@@ -244,7 +249,8 @@ fn probe_new_entry(
     );
     let timeout = crate::cmd::agent_mcp_pin::probe_timeout();
 
-    println!("  probing:        spawning '{server_id}' under this agent's sandbox…");
+    // Prints nothing: the murmur slash command renders its own notes into a
+    // TUI pane and cannot have stdout written underneath it. Callers report.
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(
             crate::cmd::agent_mcp_pin::probe_mcp_descriptions(&probe_entry, timeout, &policy),
@@ -252,14 +258,7 @@ fn probe_new_entry(
     });
 
     match result {
-        Ok((hash, tools)) => {
-            println!(
-                "  probe:          ok — {} tool{} listed, description hash pinned",
-                tools.len(),
-                if tools.len() == 1 { "" } else { "s" }
-            );
-            Ok(hash)
-        }
+        Ok((hash, tools)) => Ok((hash, tools.len())),
         Err(e) => {
             let timed_out = matches!(e, crate::cmd::agent_mcp_pin::ProbeError::Timeout(_));
             bail!(
