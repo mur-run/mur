@@ -37,7 +37,8 @@ pub enum SlashCmd {
     /// `/deep-research [question|status|stop|setup]` — research fleet control.
     DeepResearch(Vec<String>),
     /// `/monitor` (or `/mon`) — list durable monitors (Task 13's `mur monitor
-    /// list` rows), printed into the scrollback. Same handler as `Ctrl+T`.
+    /// list` rows), printed into the scrollback. Same handler as `Ctrl+T` /
+    /// `Alt+M`.
     Monitor(Vec<String>),
     /// `/model [N|name]` — list registry models, or hot-switch to one.
     Model(Option<String>),

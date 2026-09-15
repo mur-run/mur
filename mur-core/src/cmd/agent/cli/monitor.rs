@@ -1,4 +1,4 @@
-//! `/monitor` (and `Ctrl+T`) murmur command: prints the same rows
+//! `/monitor` (and `Ctrl+T` / `Alt+M`) murmur command: prints the same rows
 //! `mur monitor list` prints, into the scrollback as a card. No overlay, no
 //! alternate screen — the TUI's overlay path has a standing defect (a HITL
 //! request is invisible outside `--plain`), and a status list isn't worth

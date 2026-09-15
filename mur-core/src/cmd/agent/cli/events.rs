@@ -526,9 +526,17 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 KeyCode::Char('o') if ctrl => {
                     scrollback_dump(app);
                 }
-                // Ctrl+T (moniTor) — never Ctrl+M: `^M` IS Enter on every
-                // terminal, so binding it would shadow submitting a message.
+                // Ctrl+T (moniTor) works on every terminal; Alt+Monitor is the
+                // better mnemonic but on macOS types a literal 'µ' unless
+                // Option-as-Meta is enabled, so both are bound to the same
+                // handler — whichever the terminal actually delivers. Never
+                // Ctrl+M: `^M` IS Enter (carriage return) on every terminal,
+                // so binding it would submit the half-typed message instead
+                // of opening the monitor list.
                 KeyCode::Char('t') if ctrl => {
+                    monitor::handle(app, &[], tx).await;
+                }
+                KeyCode::Char('m' | 'M') if alt => {
                     monitor::handle(app, &[], tx).await;
                 }
                 // Ctrl+R — re-run the request whose approval expired (#8):
@@ -661,4 +669,14 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
 #[cfg(test)]
 pub(super) fn binds_ctrl(c: char) -> bool {
     matches!(c, 'd' | 'c' | 'u' | 'v' | 'o' | 't' | 'r')
+}
+
+/// Whether `Alt+m`/`Alt+M` reaches the monitor handler — the mnemonic
+/// alternative to `Ctrl+T`, safe to bind because a stray `Alt+M` on a
+/// terminal without Option-as-Meta just types a literal 'µ' (one backspace),
+/// unlike `Ctrl+M` which IS carriage return. Test-only: there is no other
+/// caller.
+#[cfg(test)]
+pub(super) fn binds_alt_m() -> bool {
+    true
 }

@@ -235,7 +235,7 @@ fn help_text() -> String {
     [
         "commands",
         "  chat      /clear (new conversation) · /sessions · /channels [N] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
-        "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T)",
+        "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T / Alt+M)",
         settings.as_str(),
         "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> · /forget <name|last>",
