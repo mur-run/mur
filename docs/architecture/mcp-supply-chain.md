@@ -73,7 +73,7 @@ For `command: npx, args: [@scope/pkg]` the pin hashes **npx**. Enforcing it woul
 
 ### Rule 11 checks signatures, not scripts
 
-Resolving an entry's `command` canonicalizes through symlinks, so `npx` lands on `npm/bin/npx-cli.js` — a JavaScript file. `codesign` can never verify one, so the check was not strict, it was **unsatisfiable**: an agent given two `npx` MCP servers could not boot again, and the failure hint told the user to run `codesign` on a `.js` file. (#1327)
+Resolving an entry's `command` canonicalizes through symlinks, so `npx` lands on `npm/bin/npx-cli.js` — a JavaScript file. `codesign` can never verify one, so the check was not strict, it was **unsatisfiable**: an agent given two `npx` MCP servers could not boot again, and the failure hint told the user to run `codesign` on a `.js` file. (#1326)
 
 The scope is now the file header — Mach-O or PE — and not a list of interpreter names, because `npx` today is `bunx`/`pnpm dlx`/`uvx` tomorrow and such a list goes stale in exactly the direction that bricks agents. Everything rule 11 protected before, it still protects: a native image that cannot be verified refuses startup.
 
@@ -81,7 +81,7 @@ What covers an interpreter-launched entry is the row above — nothing, until it
 
 ### Admission covers what the agent spawns
 
-Rules 6 and 11 read `enabled_mcp_servers()`, not every entry in the profile. A disabled server never reaches `McpPool`, so letting one refuse startup made `mur agent mcp disable` — the recovery the failure message itself points at — unable to recover anything. (#1327)
+Rules 6 and 11 read `enabled_mcp_servers()`, not every entry in the profile. A disabled server never reaches `McpPool`, so letting one refuse startup made `mur agent mcp disable` — the recovery the failure message itself points at — unable to recover anything. (#1326)
 
 ### Vendoring: a MUR-owned install, fingerprinted by the lockfile
 
