@@ -7,6 +7,7 @@ pub mod adapters;
 use std::path::Path;
 
 use mur_monitor::adapter::AdapterRegistry;
+use mur_monitor::spec::SourceType;
 
 /// Every adapter this build ships. Task 10 and 11 add theirs here.
 pub fn registry(mur_home: &Path) -> AdapterRegistry {
@@ -15,5 +16,13 @@ pub fn registry(mur_home: &Path) -> AdapterRegistry {
     r.register(Box::new(
         adapters::github_actions::GithubActionsAdapter::default(),
     ));
+    r.register(Box::new(adapters::subprocess::SubprocessAdapter::new(
+        mur_home,
+        SourceType::Codex,
+    )));
+    r.register(Box::new(adapters::subprocess::SubprocessAdapter::new(
+        mur_home,
+        SourceType::ClaudeCode,
+    )));
     r
 }
