@@ -127,37 +127,50 @@ fn classify_ok(body: &str) -> Observation {
 
 impl GithubActionsAdapter {
     fn fetch(&self, owner: &str, repo: &str, run_id: u64, token: Option<&str>) -> Observation {
-        let client = match reqwest::blocking::Client::builder()
-            .user_agent(USER_AGENT)
-            .timeout(self.timeout)
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return Observation::unknown(format!("http client: {e}")),
-        };
-        let url = format!(
-            "{}/repos/{owner}/{repo}/actions/runs/{run_id}",
-            self.api_base
-        );
-        let mut req = client
-            .get(url)
-            .header("Accept", "application/vnd.github+json");
-        if let Some(t) = token {
-            req = req.bearer_auth(t);
-        }
-        match req.send() {
-            Err(e) => Observation::unknown(format!("request failed: {e}")),
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let retry_after = resp
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok());
-                let body = resp.text().unwrap_or_default();
-                classify(status, &body, retry_after)
+        let api_base = self.api_base.clone();
+        let timeout = self.timeout;
+        let owner = owner.to_string();
+        let repo = repo.to_string();
+        let token = token.map(str::to_string);
+        // `reqwest::blocking::ClientBuilder::build` panics when dropped inside
+        // a Tokio runtime context (`cmd::monitor::add` runs on the CLI's
+        // `block_on`) — documented behaviour, and the exact hazard this repo
+        // already defends against in `dispatch.rs`, `model_prices.rs`, and
+        // `model_discovery.rs::discover_models_for`. Mirror that fix: run the
+        // whole request on a dedicated OS thread with no ambient runtime, so
+        // the caller's context never matters.
+        std::thread::spawn(move || -> Observation {
+            let client = match reqwest::blocking::Client::builder()
+                .user_agent(USER_AGENT)
+                .timeout(timeout)
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => return Observation::unknown(format!("http client: {e}")),
+            };
+            let url = format!("{api_base}/repos/{owner}/{repo}/actions/runs/{run_id}");
+            let mut req = client
+                .get(url)
+                .header("Accept", "application/vnd.github+json");
+            if let Some(t) = &token {
+                req = req.bearer_auth(t);
             }
-        }
+            match req.send() {
+                Err(e) => Observation::unknown(format!("request failed: {e}")),
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let retry_after = resp
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|h| h.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+                    let body = resp.text().unwrap_or_default();
+                    classify(status, &body, retry_after)
+                }
+            }
+        })
+        .join()
+        .unwrap_or_else(|_| Observation::unknown("github fetch worker thread panicked"))
     }
 }
 
@@ -415,6 +428,42 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(5),
             "observe() took {elapsed:?}; an unresolvable credential must short-circuit before any network call"
+        );
+    }
+
+    /// The regression this exists for: nothing else in this file ever drives
+    /// `observe()` through to `fetch()`'s HTTP layer — every other test
+    /// above exercises the pure `classify` function or the credential
+    /// short-circuit, which returns before `fetch` builds a client. Against
+    /// the pre-fix code (`reqwest::blocking::Client::builder().build()`
+    /// called directly on the calling thread), this test — run inside a
+    /// Tokio runtime via `#[tokio::test]`, the same context `cmd::monitor
+    /// ::add` runs in via the CLI's `block_on` — panics with "Cannot drop a
+    /// runtime in a context where blocking is not allowed" the moment the
+    /// blocking client is built/dropped, which unwinds this test as a
+    /// failure (panic in an async test surfaces as a failed task) rather
+    /// than returning any `Observation` at all. Binding a `TcpListener` to
+    /// port 0 and dropping it hands back a port nothing is listening on, so
+    /// the connect itself fails fast with no network and no fixture server.
+    #[tokio::test]
+    async fn observe_runs_through_the_http_layer_without_panicking_in_an_async_context() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // certainly closed: nothing is listening on it now
+
+        let adapter = GithubActionsAdapter {
+            api_base: format!("http://127.0.0.1:{port}"),
+            timeout: Duration::from_secs(2),
+        };
+        let obs = adapter.observe("owner/repo/1", None);
+
+        assert_eq!(obs.outcome, Outcome::Unknown, "{obs:?}");
+        let err = obs
+            .adapter_error
+            .expect("a failed connection must report an adapter_error");
+        assert!(
+            err.contains("request failed"),
+            "expected the request-failure message, got: {err}"
         );
     }
 }
