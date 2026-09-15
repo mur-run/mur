@@ -658,7 +658,8 @@ export const en = {
   "lib.chatgpt.gateway.installBtn": "Install gateway",
   "lib.chatgpt.gateway.repairBtn": "Start / repair gateway",
   "lib.chatgpt.gateway.notRunning": "The gateway is installed but not running.",
-  "lib.chatgpt.gateway.hookMissing": "This gateway build has no ChatGPT support. Reinstall mur-model-gateway.",
+  "lib.chatgpt.gateway.hookMissing":
+    "This gateway build was compiled without the hook this provider needs, so it cannot route here. Reinstalling the same build will not change that — you need a gateway build that includes the hook.",
   "lib.chatgpt.gateway.hookUnknown": "Cannot confirm whether this gateway build includes the hook this provider needs. Install or start the gateway, then retry.",
   "lib.chatgpt.gateway.credentialApikey": "The gateway is using an OpenAI API key, which would be usage-billed. Repair it to use your ChatGPT login instead.",
   "lib.chatgpt.gateway.credentialMissing": "The gateway cannot see a ChatGPT login. Sign in, then repair the gateway.",

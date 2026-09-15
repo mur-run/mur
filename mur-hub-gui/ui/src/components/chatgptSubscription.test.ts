@@ -11,7 +11,6 @@ import {
   type ChatGPTStateInput,
   type GatewayStatus,
   hookState,
-  subscriptionVisible,
 } from "./chatgptSubscription";
 import { CHATGPT_SUBSCRIPTION, CLAUDE_SUBSCRIPTION } from "./modelLibraryHelpers";
 
@@ -159,7 +158,7 @@ describe("readiness is descriptor-driven", () => {
   });
 });
 
-describe("hook tri-state drives rail visibility", () => {
+describe("hook tri-state separates a denial from an unanswered question", () => {
   it("only a literal false is a denial; null/undefined are unknown", () => {
     expect(hookState(true)).toBe("true");
     expect(hookState(false)).toBe("false");
@@ -167,25 +166,23 @@ describe("hook tri-state drives rail visibility", () => {
     expect(hookState(undefined)).toBe("unknown");
   });
 
-  it("hides a provider only when its own hook says false", () => {
-    const g = { ...ready, codex_hook: false, claude_hook: true };
-    expect(subscriptionVisible(g, CHATGPT_READINESS)).toBe(false);
-    // Same gateway, other provider: unaffected. Each reads its own hook.
-    expect(subscriptionVisible(g, CLAUDE_READINESS)).toBe(true);
+  it("each provider reads its own hook", () => {
+    const g = {
+      ...ready,
+      codex_hook: false,
+      claude_hook: true,
+      claude_credential_mode: "oauth",
+    };
+    expect(gatewayProblem(g, CHATGPT_READINESS)).toBe("hook-missing");
+    // Same gateway, other provider: unaffected.
+    expect(gatewayProblem(g, CLAUDE_READINESS)).toBe(null);
   });
 
-  it("keeps both visible when the gateway is unreachable", () => {
-    // The install button lives inside these panels, so hiding on unknown
-    // would leave a fresh machine with no way to install the gateway.
-    for (const r of [CHATGPT_READINESS, CLAUDE_READINESS]) {
-      expect(subscriptionVisible(null, r)).toBe(true);
-      expect(subscriptionVisible({ ...ready, codex_hook: null, claude_hook: null }, r)).toBe(true);
-    }
-  });
-
-  it("visible-but-unknown is still not usable", () => {
+  it("unknown reports its own problem, never hook-missing", () => {
+    // The rail no longer filters, so both states reach the panel. They must
+    // not collapse into one message: `false` is the gateway's denial,
+    // `unknown` only means we could not ask.
     const g = { ...ready, claude_hook: null, claude_credential_mode: "oauth" };
-    expect(subscriptionVisible(g, CLAUDE_READINESS)).toBe(true);
     expect(gatewayProblem(g, CLAUDE_READINESS)).toBe("hook-unknown");
   });
 });
