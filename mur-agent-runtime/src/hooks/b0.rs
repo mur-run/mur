@@ -90,7 +90,13 @@ pub fn verify_mcp_supply_chain(
     }
 
     // ── Rule 6 (M9.3): install-time pin verification.
-    for entry in &profile.mcp_servers {
+    //
+    // Only over what this agent actually spawns. A disabled entry never
+    // reaches `McpPool`, so letting one refuse startup made `mur agent mcp
+    // disable` — the recovery the failure message points at — unable to
+    // recover anything: the agent stayed down over a server it would not have
+    // launched (field report, 2026-09-15).
+    for entry in &profile.enabled_mcp_servers() {
         // A vendored package is the one interpreter-launched shape that CAN be
         // verified: MUR installed it into a directory it owns, so the lockfile
         // recorded at approval still describes the tree unless something

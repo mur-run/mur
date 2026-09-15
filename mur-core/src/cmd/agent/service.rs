@@ -139,6 +139,15 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
     }
     let bin_dir = resolve_bin_dir()?;
     let symlink = bin_dir.join(format!("mur_agent_{name}"));
+    // The unit about to be written execs `symlink`, so it has to exist. An
+    // agent that has only ever been started by `mur agent cli` / `restart` has
+    // no launcher — those resolve the runtime themselves — and installing a
+    // service for one used to produce a unit that loaded fine and could never
+    // exec (field report, 2026-09-15). Not in `--dry-run`: printing a template
+    // writes nothing.
+    if !dry_run && let Ok(Some(link)) = super::stale::ensure_link_in(&bin_dir, name) {
+        println!("Created runtime launcher {}", link.display());
+    }
 
     #[cfg(target_os = "macos")]
     {

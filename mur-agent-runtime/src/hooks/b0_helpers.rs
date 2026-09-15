@@ -367,12 +367,61 @@ mod redact_tests {
     }
 }
 
+/// True when `path` is a native executable image the platform code-signing
+/// tools can actually verify: Mach-O (thin or fat) on macOS, PE on Windows.
+///
+/// Anything else — a JavaScript file, a `#!` wrapper, a `.py` entry point — is
+/// a *script*, and no amount of `codesign` will ever say yes to one. What runs
+/// it is an interpreter resolved at exec time, which the entry's pin does not
+/// cover either (see `docs/architecture/mcp-supply-chain.md`,
+/// "Interpreter-launched entries are reported, not enforced").
+///
+/// Detected from the file header rather than from a list of interpreter names,
+/// because such a list is exactly the thing that goes stale: `npx` today,
+/// `bunx`/`pnpm dlx`/`uvx` tomorrow. The header is the property that matters.
+///
+/// Unreadable → `false`: rule 11 treats a binary it cannot read as a soft
+/// failure, and a hard refusal here would resurrect the brick this guards.
+fn is_native_image(path: &std::path::Path) -> bool {
+    use std::io::Read as _;
+    let mut head = [0u8; 4];
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(n) = f.read(&mut head) else {
+        return false;
+    };
+    if cfg!(windows) {
+        return n >= 2 && &head[..2] == b"MZ";
+    }
+    if n < 4 {
+        return false;
+    }
+    // Mach-O MH_MAGIC / MH_CIGAM (32- and 64-bit) and FAT_MAGIC / FAT_CIGAM.
+    matches!(
+        u32::from_be_bytes(head),
+        0xFEED_FACE | 0xCEFA_EDFE | 0xFEED_FACF | 0xCFFA_EDFE | 0xCAFE_BABE | 0xBEBA_FECA
+    )
+}
+
 /// Returns Ok(()) if the binary at `path` is signed (or sig-checks
 /// don't apply on this platform). Returns Err with a user-actionable
 /// reason on macOS/Windows when the signature is missing or invalid.
+///
+/// **Scripts are out of scope, and saying so is the point.** Resolving an MCP
+/// entry's `command` follows symlinks, so `npx` lands on `npm/bin/npx-cli.js`;
+/// demanding a signature there refused startup for a condition the user cannot
+/// fix at all, with a hint telling them to run `codesign` on a `.js` file. An
+/// agent given two such entries could not boot again (field report,
+/// 2026-09-15). What protects an interpreter-launched entry is `mur agent mcp
+/// vendor` — a MUR-owned install whose lockfile rule 6 then enforces — not a
+/// signature that cannot exist.
 pub fn verify_signed(path: &std::path::Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("binary missing: {}", path.display()));
+    }
+    if !is_native_image(path) {
+        return Ok(());
     }
     #[cfg(target_os = "macos")]
     {

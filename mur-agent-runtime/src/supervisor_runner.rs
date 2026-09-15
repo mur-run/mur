@@ -869,10 +869,14 @@ pub(crate) async fn prepare_runtime(
         // path that doesn't exist, which silently skips both checks.
         // Unresolvable → drop (treated as "uninstalled", matching the
         // soft-fail behaviour in rule 6).
+        //
+        // Enabled entries only, for the same reason rule 6 filters: a disabled
+        // server is never spawned, so it has no business refusing startup —
+        // and `mcp disable` has to stay a way out.
         let aug_path = mur_common::exec::augmented_path_var();
         profile
             .inner
-            .mcp_servers
+            .enabled_mcp_servers()
             .iter()
             .filter_map(|s| {
                 let prog = s.command.split_whitespace().next().unwrap_or(&s.command);
