@@ -8,6 +8,7 @@
 //! length as the progress token; pid gone with no exit file → `unknown`.
 //! Losing the stdout pipe is never a failure verdict.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -18,6 +19,22 @@ use mur_monitor::state::Outcome;
 use serde::{Deserialize, Serialize};
 
 const MAX_ID_LEN: usize = 96;
+/// A legitimate exit record is a handful of digits. Same reasoning as
+/// GitHub's `EVIDENCE_MAX_CHARS`: this file is read every poll for the life
+/// of the monitor, and it is launcher-written, not ours to trust blindly —
+/// cap the read instead of `read_to_string`-ing however large it happens
+/// to be.
+const EXIT_RECORD_MAX_BYTES: usize = 160;
+
+/// Reads at most `max_bytes` of `path` as UTF-8 (lossily — this is only
+/// ever fed to `str::trim().parse::<i32>()`, which rejects anything that
+/// doesn't look like a clean integer regardless).
+fn read_capped(path: &Path, max_bytes: usize) -> std::io::Result<String> {
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = Vec::with_capacity(max_bytes.min(4096));
+    f.by_ref().take(max_bytes as u64).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessRecord {
@@ -70,7 +87,7 @@ pub fn load_record(mur_home: &Path, id: &str) -> Result<Option<ProcessRecord>> {
 }
 
 pub fn observe_record(rec: &ProcessRecord) -> Observation {
-    if let Ok(raw) = std::fs::read_to_string(&rec.exit_path) {
+    if let Ok(raw) = read_capped(&rec.exit_path, EXIT_RECORD_MAX_BYTES) {
         return match raw.trim().parse::<i32>() {
             Ok(0) => Observation::terminal(Outcome::Succeeded, "exit 0"),
             Ok(n) => Observation::terminal(Outcome::Failed, format!("exit {n}")),
@@ -188,6 +205,19 @@ mod tests {
         std::fs::write(&r.exit_path, "3").unwrap();
         assert_eq!(observe_record(&r).outcome, Outcome::Failed);
         std::fs::write(&r.exit_path, "garbage").unwrap();
+        assert_eq!(observe_record(&r).outcome, Outcome::Unknown);
+    }
+
+    #[test]
+    fn an_oversized_exit_record_is_capped_not_read_in_full() {
+        let d = tempfile::tempdir().unwrap();
+        let r = rec(d.path(), std::process::id());
+        // Not a real launcher shape, but proves the read is bounded: a file
+        // far larger than `EXIT_RECORD_MAX_BYTES` must not make `observe_record`
+        // read (or allocate for) the whole thing — it should just fail to
+        // parse as an exit code, same as any other garbage.
+        let huge = "9".repeat(EXIT_RECORD_MAX_BYTES * 10);
+        std::fs::write(&r.exit_path, &huge).unwrap();
         assert_eq!(observe_record(&r).outcome, Outcome::Unknown);
     }
 

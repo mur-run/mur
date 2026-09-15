@@ -4221,7 +4221,7 @@ git commit -m "feat(daemon): durable-monitor worker thread — recover, then tic
 
 **Type consistency:** `Observation::{pending,terminal,unknown}` (3) used in 8–13; `claim_due(now, owner, lease, max)` (5) in 8, 12; `apply_cycle(id, fence, &u)` (6) in 8; `CycleUpdate` fields (6) filled completely in 8; `registry(mur_home)` (9) in 12, 13; `service::{tick_once(mur_home, now, owner), recover(mur_home, now), TICK_INTERVAL}` (12) in 14; `MonitorState::ALL` (2) in 13; `store.list(&ListFilter)` (4) in 8, 13.
 
-**Known ceilings, named:** stalled re-entry within one cycle is not re-announced (comment in 8); no heartbeat during `observe` because the longest adapter timeout is 30 s vs a 120 s lease (comment in 8); `list` prints RFC 3339 rather than local time.
+**Known ceilings, named:** stalled re-entry within one cycle is not re-announced (comment in 8); `tick` heartbeats each claimed monitor's lease right before its own `observe` call (task 12's `scheduler::tick`), so a single-monitor timeout is covered by construction — the remaining ceiling is a `max_claims`-sized *batch* running serially against one lease length, which the per-claim heartbeat is exactly what bounds; `list` prints RFC 3339 rather than local time.
 
 ---
 

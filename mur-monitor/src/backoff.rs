@@ -42,8 +42,11 @@ pub fn with_jitter(base: Duration, seed: u64) -> Duration {
     Duration::from_millis(jittered.max(0) as u64)
 }
 
-/// An adapter's `recommended_poll_after` (e.g. GitHub `Retry-After`) may
-/// lengthen a wait but never shorten it below the global floor.
+/// An adapter's `recommended_poll_after` (e.g. GitHub `Retry-After`) fully
+/// replaces the computed interval rather than only lengthening it — a
+/// `Retry-After: 1` pins polling at `MIN_INTERVAL` even when `computed` was
+/// much longer. Only the floor is shared with the no-recommendation path:
+/// neither case is ever allowed below `MIN_INTERVAL`.
 pub fn clamp_recommended(recommended: Option<Duration>, computed: Duration) -> Duration {
     match recommended {
         Some(r) => r.max(MIN_INTERVAL),

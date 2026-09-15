@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
-use crate::adapter::{AdapterRegistry, Observation, SourceAdapter};
+use crate::adapter::{AdapterRegistry, Observation};
 use crate::backoff::{
     RETAIN_INTERVAL, UNHEALTHY_AFTER_UNKNOWN, clamp_recommended, pending_delay, seed,
     unknown_delay, with_jitter,
@@ -329,10 +329,6 @@ pub fn recover(store: &MonitorStore, now: DateTime<Utc>) -> Result<RecoveryRepor
         overdue,
     })
 }
-
-// keep the trait import used when no adapter is registered in a build
-#[allow(dead_code)]
-fn _assert_object_safe(_: &dyn SourceAdapter) {}
 
 #[cfg(test)]
 #[path = "scheduler_tests.rs"]

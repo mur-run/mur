@@ -231,7 +231,10 @@ impl MonitorSpec {
         if self.name.trim().is_empty() {
             return Err(SpecError::Empty("name"));
         }
-        if self.name.len() > MAX_NAME_LEN {
+        // Character count, not `.len()`'s byte count — a CJK name spends 3
+        // bytes/char in UTF-8, so `.len()` would reject a name a fifth this
+        // long and (worse) accept a byte-huge one made of single-byte chars.
+        if self.name.chars().count() > MAX_NAME_LEN {
             return Err(SpecError::NameTooLong);
         }
         if self.source.reference.trim().is_empty() {
@@ -340,6 +343,24 @@ created_by:
         let y = EXAMPLE.replace("schema_version: 1", "schema_version: 2");
         let e = MonitorSpec::from_yaml(&y).unwrap().validate().unwrap_err();
         assert!(matches!(e, SpecError::Schema(2)));
+    }
+
+    /// The bug: `.len()` counts UTF-8 bytes, not characters. A CJK name
+    /// spends 3 bytes/char, so a 64-character CJK name (well within the
+    /// spec's stated character limit) is 192 bytes and would have been
+    /// wrongly rejected; `.chars().count()` is the fix.
+    #[test]
+    fn name_length_is_counted_in_characters_not_bytes() {
+        let cjk_64 = "測".repeat(MAX_NAME_LEN);
+        assert_eq!(cjk_64.chars().count(), MAX_NAME_LEN);
+        assert!(cjk_64.len() > MAX_NAME_LEN, "sanity: bytes, not chars");
+        let y = EXAMPLE.replace("name: wait-for-ci", &format!("name: {cjk_64}"));
+        MonitorSpec::from_yaml(&y).unwrap().validate().unwrap();
+
+        let cjk_65 = "測".repeat(MAX_NAME_LEN + 1);
+        let y = EXAMPLE.replace("name: wait-for-ci", &format!("name: {cjk_65}"));
+        let e = MonitorSpec::from_yaml(&y).unwrap().validate().unwrap_err();
+        assert!(matches!(e, SpecError::NameTooLong), "{e}");
     }
 
     #[test]
