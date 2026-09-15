@@ -18,13 +18,24 @@ pub const TICK_INTERVAL: Duration = Duration::from_secs(15);
 pub const TICK_MAX_CLAIMS: usize = 8;
 
 pub fn tick_once(mur_home: &Path, now: DateTime<Utc>, owner: &str) -> Result<TickReport> {
-    let store = MonitorStore::open(mur_home)?;
+    let Some(store) = MonitorStore::open_existing(mur_home)? else {
+        // No store yet — the common case for a daemon whose owner has never
+        // run `mur monitor add`. Truthfully "claimed nothing, observed
+        // nothing", not an error: an absent store is normal, not a fault,
+        // and must not be the thing that creates itself just by being
+        // asked. The next `mur monitor add` creates it and the very next
+        // tick (<= TICK_INTERVAL later) picks it up.
+        return Ok(TickReport::default());
+    };
     let registry = super::registry(mur_home);
     scheduler::tick(&store, &registry, now, owner, TICK_MAX_CLAIMS)
 }
 
 pub fn recover(mur_home: &Path, now: DateTime<Utc>) -> Result<RecoveryReport> {
-    let store = MonitorStore::open(mur_home)?;
+    let Some(store) = MonitorStore::open_existing(mur_home)? else {
+        // Same reasoning as `tick_once`: no store means nothing to recover.
+        return Ok(RecoveryReport::default());
+    };
     scheduler::recover(&store, now)
 }
 
@@ -69,6 +80,42 @@ mod tests {
     #[test]
     fn tick_interval_is_well_inside_the_lease() {
         assert!(TICK_INTERVAL * 4 < mur_monitor::scheduler::DEFAULT_LEASE);
+    }
+
+    /// Same bug class as the murmur footer (fix round 3): the daemon must
+    /// not materialise `monitors.db` for a user who has never run `mur
+    /// monitor add`, just by ticking. Asserts on the filesystem, not only
+    /// the returned report — an empty `TickReport` would come back either
+    /// way (an empty store's tick claims nothing too) and would pass
+    /// without the fix.
+    #[test]
+    fn tick_once_against_a_home_with_no_store_creates_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = mur_monitor::store::db_dir(d.path());
+        assert!(!dir.exists(), "sanity: bare tempdir has no monitor dir yet");
+
+        let r = tick_once(d.path(), t0(), "t").unwrap();
+
+        assert!(
+            !dir.exists(),
+            "a tick against a store-less home must not create the monitor directory"
+        );
+        assert_eq!(r, mur_monitor::scheduler::TickReport::default());
+    }
+
+    #[test]
+    fn recover_against_a_home_with_no_store_creates_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = mur_monitor::store::db_dir(d.path());
+        assert!(!dir.exists(), "sanity: bare tempdir has no monitor dir yet");
+
+        let r = recover(d.path(), t0()).unwrap();
+
+        assert!(
+            !dir.exists(),
+            "recovery against a store-less home must not create the monitor directory"
+        );
+        assert_eq!(r, mur_monitor::scheduler::RecoveryReport::default());
     }
 
     #[test]

@@ -35,7 +35,7 @@ pub struct TickReport {
     pub stale_fence: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecoveryReport {
     pub recovered_leases: Vec<String>,
     pub overdue: usize,
