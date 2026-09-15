@@ -58,7 +58,7 @@ impl Channel for DesktopChannel {
     fn deliver(&self, n: &Notification) -> Result<(), String> {
         // Lead with the next step: a banner truncates, and the step is the
         // part that is worth the interruption.
-        let body = format!("{} — {}", n.next_step, n.body.replace('\n', " · "));
+        let body = format!("{} — {}", n.next_step, n.body).replace('\n', NEWLINE_PLACEHOLDER);
         #[cfg(target_os = "macos")]
         {
             std::process::Command::new("osascript")
