@@ -29,15 +29,7 @@ export interface ChatGPTModel {
 export interface GatewayStatus {
   installed: boolean;
   running: boolean;
-  /**
-   * Tri-state. `true`/`false` are the gateway's own answer; `null` or absent
-   * is unknown — no readable health, or a gateway older than the field.
-   * Unknown is NOT false: false means "this build has no hook", unknown
-   * means we could not ask.
-   */
-  codex_hook?: boolean | null;
-  /** Same tri-state, for the disguise hook the Anthropic route needs. */
-  claude_hook?: boolean | null;
+  codex_hook: boolean;
   /** `chatgpt` / `apikey` / `missing`; only `chatgpt` is usable here. */
   credential_mode?: string | null;
   /** `oauth` / `missing`; absent on a gateway older than the field. */
@@ -59,7 +51,6 @@ export interface ChatGPTStateInput {
 export type GatewayProblem =
   | "not-running"
   | "hook-missing"
-  | "hook-unknown"
   | "credential-apikey"
   | "credential-missing";
 
@@ -83,53 +74,17 @@ export type ChatGPTPanelState =
 
 /** What a gateway must report before this provider may route through it. */
 export interface GatewayReadiness {
-  /** Which compiled-in gateway hook this provider's route needs. */
-  hook: "codex" | "claude";
+  /** ChatGPT needs the compiled Codex hook; the Anthropic path is plain header attachment. */
+  requiresHook: boolean;
   credential: "codex" | "claude";
 }
 
-export const CHATGPT_READINESS: GatewayReadiness = { hook: "codex", credential: "codex" };
-export const CLAUDE_READINESS: GatewayReadiness = { hook: "claude", credential: "claude" };
-
-export type HookState = "true" | "false" | "unknown";
-
-/** `null`/`undefined` -> unknown. Only a literal `false` is a denial. */
-export function hookState(v: boolean | null | undefined): HookState {
-  if (v === true) return "true";
-  if (v === false) return "false";
-  return "unknown";
-}
-
-/** The hook state that matters for this provider. No gateway at all = unknown. */
-export function gatewayHookState(
-  g: GatewayStatus | null | undefined,
-  r: GatewayReadiness,
-): HookState {
-  if (!g) return "unknown";
-  return hookState(r.hook === "codex" ? g.codex_hook : g.claude_hook);
-}
-
-/**
- * Rail visibility. Hidden ONLY on a definite `false` — a build that told us it
- * has no such hook, so the provider could never work and offering it is a
- * dead end. Unknown stays visible: the "install gateway" button lives inside
- * this provider's own panel, so hiding on unknown would strand anyone who has
- * not installed the gateway yet with no way in.
- */
-export function subscriptionVisible(
-  g: GatewayStatus | null | undefined,
-  r: GatewayReadiness,
-): boolean {
-  return gatewayHookState(g, r) !== "false";
-}
+export const CHATGPT_READINESS: GatewayReadiness = { requiresHook: true, credential: "codex" };
+export const CLAUDE_READINESS: GatewayReadiness = { requiresHook: false, credential: "claude" };
 
 export function gatewayProblem(g: GatewayStatus, r: GatewayReadiness): GatewayProblem | null {
   if (!g.running) return "not-running";
-  const hook = gatewayHookState(g, r);
-  if (hook === "false") return "hook-missing";
-  // Running, but it never told us about this hook (gateway older than the
-  // field). Usable-unknown is still not usable: disable, and say why.
-  if (hook === "unknown") return "hook-unknown";
+  if (r.requiresHook && !g.codex_hook) return "hook-missing";
   if (r.credential === "codex") {
     if (g.credential_mode === "apikey") return "credential-apikey";
     if (g.credential_mode !== "chatgpt") return "credential-missing";

@@ -39,8 +39,7 @@ interface LoginResult {
 const NO_GATEWAY: GatewayStatus = {
   installed: false,
   running: false,
-  codex_hook: null,
-  claude_hook: null,
+  codex_hook: false,
   credential_mode: null,
   compression: false,
 };
@@ -48,7 +47,6 @@ const NO_GATEWAY: GatewayStatus = {
 const PROBLEM_KEY: Record<GatewayProblem, TranslationKey> = {
   "not-running": "lib.chatgpt.gateway.notRunning",
   "hook-missing": "lib.chatgpt.gateway.hookMissing",
-  "hook-unknown": "lib.chatgpt.gateway.hookUnknown",
   "credential-apikey": "lib.chatgpt.gateway.credentialApikey",
   "credential-missing": "lib.chatgpt.gateway.credentialMissing",
 };

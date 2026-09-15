@@ -10,8 +10,6 @@ import {
   type ChatGPTAccount,
   type ChatGPTStateInput,
   type GatewayStatus,
-  hookState,
-  subscriptionVisible,
 } from "./chatgptSubscription";
 import { CHATGPT_SUBSCRIPTION, CLAUDE_SUBSCRIPTION } from "./modelLibraryHelpers";
 
@@ -26,7 +24,6 @@ const ready: GatewayStatus = {
   installed: true,
   running: true,
   codex_hook: true,
-  claude_hook: true,
   credential_mode: "chatgpt",
   compression: false,
 };
@@ -92,8 +89,6 @@ describe("subscription readiness is strict", () => {
       [{ credential_mode: "missing" }, "credential-missing"],
       [{ credential_mode: null }, "credential-missing"],
       [{ codex_hook: false }, "hook-missing"],
-      [{ codex_hook: null }, "hook-unknown"],
-      [{ codex_hook: undefined }, "hook-unknown"],
       [{ running: false }, "not-running"],
     ] as const) {
       const s = deriveChatGPTState({ ...base, gateway: { ...ready, ...patch } });
@@ -135,7 +130,6 @@ describe("readiness is descriptor-driven", () => {
     installed: true,
     running: true,
     codex_hook: false,
-    claude_hook: true,
     credential_mode: "missing",
     claude_credential_mode: "oauth",
     compression: false,
@@ -156,36 +150,5 @@ describe("readiness is descriptor-driven", () => {
     expect(deriveChatGPTState(input)).toEqual(deriveSubscriptionState(input, CHATGPT_READINESS));
     expect(deriveSubscriptionState(input, CLAUDE_READINESS).kind).toBe("ready");
     expect(deriveChatGPTState(input).kind).toBe("gateway-stopped");
-  });
-});
-
-describe("hook tri-state drives rail visibility", () => {
-  it("only a literal false is a denial; null/undefined are unknown", () => {
-    expect(hookState(true)).toBe("true");
-    expect(hookState(false)).toBe("false");
-    expect(hookState(null)).toBe("unknown");
-    expect(hookState(undefined)).toBe("unknown");
-  });
-
-  it("hides a provider only when its own hook says false", () => {
-    const g = { ...ready, codex_hook: false, claude_hook: true };
-    expect(subscriptionVisible(g, CHATGPT_READINESS)).toBe(false);
-    // Same gateway, other provider: unaffected. Each reads its own hook.
-    expect(subscriptionVisible(g, CLAUDE_READINESS)).toBe(true);
-  });
-
-  it("keeps both visible when the gateway is unreachable", () => {
-    // The install button lives inside these panels, so hiding on unknown
-    // would leave a fresh machine with no way to install the gateway.
-    for (const r of [CHATGPT_READINESS, CLAUDE_READINESS]) {
-      expect(subscriptionVisible(null, r)).toBe(true);
-      expect(subscriptionVisible({ ...ready, codex_hook: null, claude_hook: null }, r)).toBe(true);
-    }
-  });
-
-  it("visible-but-unknown is still not usable", () => {
-    const g = { ...ready, claude_hook: null, claude_credential_mode: "oauth" };
-    expect(subscriptionVisible(g, CLAUDE_READINESS)).toBe(true);
-    expect(gatewayProblem(g, CLAUDE_READINESS)).toBe("hook-unknown");
   });
 });

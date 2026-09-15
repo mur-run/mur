@@ -47,15 +47,7 @@ pub struct GatewayStatusView {
     pub installed: bool,
     /// A valid health reply came back — not merely a service file.
     pub running: bool,
-    /// `None` = unknown (no readable health), NOT false. A build that
-    /// answers `false` said "this binary has no hook"; unknown only means we
-    /// could not ask. The Hub hides a provider on false and disables it on
-    /// unknown, so collapsing the two would strand anyone whose gateway is
-    /// merely not installed yet.
-    pub codex_hook: Option<bool>,
-    /// Same tri-state, for the disguise hook the Anthropic route needs.
-    /// `None` also covers a gateway older than the `claudeHook` field.
-    pub claude_hook: Option<bool>,
+    pub codex_hook: bool,
     /// `chatgpt` / `apikey` / `missing`; only `chatgpt` is ready for the
     /// ChatGPT provider.
     pub credential_mode: Option<String>,
@@ -207,8 +199,6 @@ pub fn resolve_gateway() -> Option<PathBuf> {
 #[derive(Debug, PartialEq, Eq)]
 struct Health {
     codex_hook: bool,
-    /// `claudeHook`; `None` on a gateway older than the field.
-    claude_hook: Option<bool>,
     credential: String,
     /// `claudeCredential`; `None` on a gateway older than the field.
     claude_credential: Option<String>,
@@ -238,15 +228,8 @@ fn parse_health(v: &serde_json::Value) -> Option<Health> {
             Some(c.to_string())
         }
     };
-    // Absent on a gateway older than the field: unknown, not false. Strict
-    // about the type when present, permissive about its absence.
-    let claude_hook = match v.get("claudeHook") {
-        None => None,
-        Some(b) => Some(b.as_bool()?),
-    };
     Some(Health {
         codex_hook: v["codexHook"].as_bool()?,
-        claude_hook,
         credential: credential.to_string(),
         claude_credential,
         compression: v["compression"].as_bool()?,
@@ -277,8 +260,7 @@ async fn status_at(url: &str, installed: bool) -> GatewayStatusView {
         Some(h) => GatewayStatusView {
             installed: true,
             running: true,
-            codex_hook: Some(h.codex_hook),
-            claude_hook: h.claude_hook,
+            codex_hook: h.codex_hook,
             credential_mode: Some(h.credential),
             claude_credential_mode: h.claude_credential,
             compression: h.compression,
@@ -511,32 +493,12 @@ mod tests {
     }
 
     #[test]
-    fn claude_hook_absent_is_unknown_never_false() {
-        // The whole point of the tri-state: a gateway that predates the field
-        // must read as unknown. Folding it to `false` would hide Claude
-        // Subscription from the rail on a build that may well support it.
-        let old = serde_json::json!({"status":"ok","codexHook":true,"codexCredential":"missing","compression":false});
-        assert_eq!(parse_health(&old).unwrap().claude_hook, None);
-
-        for (v, want) in [(true, Some(true)), (false, Some(false))] {
-            let j = serde_json::json!({"status":"ok","codexHook":true,"claudeHook":v,"codexCredential":"missing","compression":false});
-            assert_eq!(parse_health(&j).unwrap().claude_hook, want);
-        }
-
-        // Present but not a bool: a gateway we do not understand, so not
-        // "running" at all — same strictness the other fields get.
-        let bad = serde_json::json!({"status":"ok","codexHook":true,"claudeHook":"yes","codexCredential":"missing","compression":false});
-        assert_eq!(parse_health(&bad), None);
-    }
-
-    #[test]
     fn health_is_parsed_strictly() {
         let ok = serde_json::json!({"status":"ok","codexHook":true,"codexCredential":"apikey","compression":false});
         assert_eq!(
             parse_health(&ok),
             Some(Health {
                 codex_hook: true,
-                claude_hook: None,
                 credential: "apikey".into(),
                 claude_credential: None,
                 compression: false

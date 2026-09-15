@@ -661,7 +661,6 @@ export const zhTW: Table = {
   "lib.chatgpt.gateway.repairBtn": "啟動／修復閘道",
   "lib.chatgpt.gateway.notRunning": "閘道已安裝但未在執行。",
   "lib.chatgpt.gateway.hookMissing": "這個閘道版本不支援 ChatGPT。請重新安裝 mur-model-gateway。",
-  "lib.chatgpt.gateway.hookUnknown": "尚未偵測到閘道，無法確認此版本是否包含此供應商所需的 hook。請先安裝／啟動閘道後再試。",
   "lib.chatgpt.gateway.credentialApikey": "閘道目前使用 OpenAI API key，那會按用量計費。請修復閘道改用你的 ChatGPT 登入。",
   "lib.chatgpt.gateway.credentialMissing": "閘道看不到 ChatGPT 登入。請先登入，再修復閘道。",
   "lib.chatgpt.gateway.consentTitle": "要安裝模型閘道嗎？",
