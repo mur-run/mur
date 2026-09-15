@@ -991,6 +991,16 @@ pub enum AgentMcpAction {
         /// Use for scripted / non-interactive installs.
         #[arg(long)]
         force: bool,
+        /// Install without spawning the server to check it works.
+        ///
+        /// The install normally runs `initialize` + `tools/list` under this
+        /// agent's real sandbox, and refuses to write an entry that fails —
+        /// an entry that cannot start is an agent that cannot start. Use this
+        /// for servers that legitimately cannot be probed (side-effecting
+        /// init, hardware, a login flow), or raise `MUR_MCP_PROBE_TIMEOUT_S`
+        /// first if the server is merely slow to boot.
+        #[arg(long = "no-probe")]
+        no_probe: bool,
         /// Publisher name shown in the install prompt and pinned into
         /// the profile for audit (e.g. "Anthropic" or "@alice").
         #[arg(long = "publisher-name")]

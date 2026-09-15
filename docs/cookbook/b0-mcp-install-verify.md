@@ -14,9 +14,9 @@ artefacts and writes them into `~/.mur/agents/<name>/profile.yaml`:
    bytes on disk changed" — even between two signed versions from the
    same publisher.
 2. **Description hash** (M9.3.5) — SHA-256 over the canonical-JSON of
-   the MCP's `tools/list` response. Captured at install time + on
-   every `mur agent mcp pin`; verified on demand via
-   `mur agent mcp inspect --probe`. Catches the pure-prompt-injection
+   the MCP's `tools/list` response. Captured at install time by the
+   install probe (below) and on every `mur agent mcp pin`; verified on
+   demand via `mur agent mcp inspect --probe`. Catches the pure-prompt-injection
    update where the binary doesn't change but a
    tool's description gains a "IGNORE PREVIOUS INSTRUCTIONS …"
    prefix.
@@ -44,16 +44,46 @@ About to install MCP server "weather":
                   https://github.com/anthropic-mcp/weather
                   @anthropic-mcp/weather@1.2.3
   binary sha256:  3f4abca8b0e6e2c1…  (full: 3f4abca8…b81c)
-  description hash: <deferred to live MCP probe — will be set on first run via M9.3>
+  description hash: <pinned by the install probe, below>
 
 Approve? [y/N]
 ```
 
-`y` writes the entry. Anything else aborts without modifying the
-profile.
+`y` runs the probe and writes the entry. Anything else aborts without
+modifying the profile.
 
 For scripted installs (CI / cookbook examples), pass `--force` to
-skip the prompt — the hashes are still captured.
+skip the prompt — the hashes are still captured and the probe still
+runs.
+
+## The install probe
+
+Approval is not the last gate. The install spawns the staged entry,
+runs `initialize` + `tools/list` and tears it down — under the agent's
+**real** sandbox policy, built from the profile as it stands after the
+entry and its `--state-path` grants are added:
+
+```
+  probing:        spawning 'weather' under this agent's sandbox…
+  probe:          ok — 4 tools listed, description hash pinned
+```
+
+A permissive probe would be worse than none: it reports fine for
+exactly the servers that die on startup under the policy the
+supervisor actually seals (#1161).
+
+**A failed probe writes nothing.** A server that cannot start is not
+installed, and an entry left behind is how a command that looked like
+it succeeded produces an agent that will not boot at the next restart.
+The failure names what to fix, chosen from the failure shape — a
+timeout points at `MUR_MCP_PROBE_TIMEOUT_S`, a sandbox denial points at
+`--state-path`, anything else points at the command itself — and every
+one of them names `--no-probe`, which installs unchecked for servers
+that legitimately cannot be probed (side-effecting init, hardware, a
+login flow).
+
+`--force` does not imply `--no-probe`: one skips the approval prompt,
+the other skips the check that the thing being approved works.
 
 ## Startup enforcement
 
