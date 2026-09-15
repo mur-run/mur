@@ -39,8 +39,11 @@ pub fn recover(mur_home: &Path, now: DateTime<Utc>) -> Result<RecoveryReport> {
     scheduler::recover(&store, now)
 }
 
-/// Notifications delivered per tick. Bounded so a backlog after downtime
-/// spreads across ticks instead of firing a hundred banners at once.
+/// Notifications drained per channel per tick. Bounded so a backlog after
+/// downtime spreads across ticks instead of firing a hundred banners at
+/// once. Per channel is the unit that matters: this caps what a user can
+/// actually be interrupted by, and the same events queued for `log` cost
+/// nobody an interruption.
 pub const DRAIN_MAX_PER_TICK: usize = 20;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
