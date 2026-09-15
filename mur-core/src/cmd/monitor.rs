@@ -14,7 +14,17 @@ use mur_monitor::store::{ListFilter, MonitorRow, MonitorStore};
 
 /// Observations shown by `show` without `--history`.
 const SHOW_RECENT_OBSERVATIONS: usize = 5;
-const ID_SHORT: usize = 8;
+/// Characters of the id `list`/`show` display and `resolve_id` accepts as a
+/// prefix. Ids are UUIDv7 (`xxxxxxxx-xxxx-Vxxx-...`): the first 13 characters
+/// (8 hex + `-` + 4 hex) are exactly the 48-bit millisecond timestamp, so any
+/// two monitors created in *different* milliseconds are always distinct at
+/// this length — 8 was too short: it only covers the top 32 of those 48
+/// bits, so any two monitors created within the same ~65-second window (2^16
+/// ms) shared it. Two monitors created in the very same millisecond still
+/// collide even at 13 (the random bits start after the version nibble at
+/// index 14) — that residual case is exactly what `resolve_id`'s ambiguous
+/// match error is for.
+const ID_SHORT: usize = 13;
 
 #[derive(Debug, Subcommand)]
 pub enum MonitorAction {
@@ -172,13 +182,19 @@ fn list(
     }
     writeln!(
         out,
-        "{:<8}  {:<20}  {:<17}  {:<9}  {:>10}  {:>10}  HARD DEADLINE",
-        "ID", "NAME", "STATE", "OUTCOME", "PROGRESS", "NEXT"
+        "{:<id_w$}  {:<20}  {:<17}  {:<9}  {:>10}  {:>10}  HARD DEADLINE",
+        "ID",
+        "NAME",
+        "STATE",
+        "OUTCOME",
+        "PROGRESS",
+        "NEXT",
+        id_w = ID_SHORT
     )?;
     for r in rows {
         writeln!(
             out,
-            "{:<8}  {:<20}  {:<17}  {:<9}  {:>10}  {:>10}  {}",
+            "{:<id_w$}  {:<20}  {:<17}  {:<9}  {:>10}  {:>10}  {}",
             &r.id[..ID_SHORT.min(r.id.len())],
             truncate(&r.name, 20),
             r.state.as_str(),
@@ -186,12 +202,45 @@ fn list(
             ago(now, r.last_progress_at),
             until(now, r.next_check_at),
             hard_deadline_at(&r).to_rfc3339(),
+            id_w = ID_SHORT
         )?;
     }
     Ok(())
 }
 
+/// Resolve a user-typed id the way `git` resolves a short SHA: an exact id
+/// always wins immediately, otherwise the argument is a prefix candidate.
+/// `list` only ever shows the first `ID_SHORT` characters, so `show` /
+/// `cancel` / `retry` must accept exactly what `list` printed — searching
+/// completed monitors too, since `show` must still work on finished work
+/// that `list`'s default filter hides.
+fn resolve_id(store: &MonitorStore, id: &str) -> Result<String> {
+    if store.get(id)?.is_some() {
+        return Ok(id.to_string());
+    }
+    let all = store.list(&ListFilter {
+        state: None,
+        include_completed: true,
+    })?;
+    let matches: Vec<&MonitorRow> = all.iter().filter(|r| r.id.starts_with(id)).collect();
+    match matches.len() {
+        0 => bail!("no monitor `{id}`"),
+        1 => Ok(matches[0].id.clone()),
+        n => {
+            let candidates: Vec<String> = matches
+                .iter()
+                .map(|r| format!("{} ({})", &r.id[..ID_SHORT.min(r.id.len())], r.name))
+                .collect();
+            bail!(
+                "ambiguous id `{id}` matches {n} monitors: {} — give more characters",
+                candidates.join(", ")
+            );
+        }
+    }
+}
+
 fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> Result<()> {
+    let id = &resolve_id(store, id)?;
     let r = store
         .get(id)?
         .with_context(|| format!("no monitor `{id}`"))?;
@@ -269,6 +318,7 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
 }
 
 fn cancel(store: &MonitorStore, id: &str, out: &mut dyn Write, now: DateTime<Utc>) -> Result<()> {
+    let id = &resolve_id(store, id)?;
     let r = store
         .get(id)?
         .with_context(|| format!("no monitor `{id}`"))?;
@@ -298,6 +348,7 @@ fn retry(
     out: &mut dyn Write,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    let id = &resolve_id(store, id)?;
     let r = store
         .get(id)?
         .with_context(|| format!("no monitor `{id}`"))?;
@@ -556,5 +607,123 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.to_string().contains("awaiting_approval"), "{e:#}");
+    }
+
+    // `list` truncates ids to `ID_SHORT` for the table, so that truncated
+    // string is the only identifier a user ever sees on screen — `show` /
+    // `cancel` / `retry` must accept it, not just the full 36-character id.
+    #[test]
+    fn show_accepts_the_prefix_list_prints_and_the_full_id_and_rejects_unknown() {
+        let d = home();
+        go(
+            d.path(),
+            MonitorAction::Add {
+                file: spec_file(d.path(), "mur_run", "run-1"),
+                started_at: None,
+            },
+        )
+        .unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+
+        let by_prefix = go(
+            d.path(),
+            MonitorAction::Show {
+                id: id[..8].to_string(),
+                history: false,
+            },
+        )
+        .unwrap();
+        assert!(by_prefix.contains("mur_run run-1"), "{by_prefix}");
+
+        let by_full_id = go(
+            d.path(),
+            MonitorAction::Show {
+                id: id.clone(),
+                history: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            by_prefix, by_full_id,
+            "a prefix and the full id must resolve to the same monitor"
+        );
+
+        let e = go(
+            d.path(),
+            MonitorAction::Show {
+                id: "no-such-prefix".into(),
+                history: false,
+            },
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("no monitor"), "{e:#}");
+    }
+
+    // Two monitors minted moments apart by the real store: UUIDv7 ids are
+    // time-ordered, so within one fast test run they reliably share a
+    // multi-character timestamp prefix (see `ID_SHORT`'s doc comment) —
+    // deriving the shared prefix from the real ids instead of hardcoding a
+    // length keeps the test honest about what actually collided.
+    #[test]
+    fn show_reports_every_candidate_on_an_ambiguous_prefix() {
+        let d = home();
+        go(
+            d.path(),
+            MonitorAction::Add {
+                file: spec_file(d.path(), "mur_run", "run-1"),
+                started_at: None,
+            },
+        )
+        .unwrap();
+        let f2 = d.path().join("spec2.yaml");
+        std::fs::write(
+            &f2,
+            "schema_version: 1\nname: t2\nsource: { type: mur_run, reference: run-1 }\nidempotency_key: k2\ncreated_by: { actor: user:test }\n",
+        )
+        .unwrap();
+        go(
+            d.path(),
+            MonitorAction::Add {
+                file: f2,
+                started_at: None,
+            },
+        )
+        .unwrap();
+
+        let s = MonitorStore::open(d.path()).unwrap();
+        let ids: Vec<String> = s
+            .list(&ListFilter::default())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids.len(), 2);
+        let common: String = ids[0]
+            .chars()
+            .zip(ids[1].chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a)
+            .collect();
+        assert!(
+            !common.is_empty(),
+            "test assumes two UUIDv7 ids minted in the same test share a \
+             timestamp prefix; got {ids:?} — if this ever flakes, the store \
+             is generating ids without the expected time-ordering"
+        );
+
+        let e = go(
+            d.path(),
+            MonitorAction::Show {
+                id: common,
+                history: false,
+            },
+        )
+        .unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("ambiguous"), "{msg}");
+        assert!(msg.contains("(t)"), "{msg}");
+        assert!(msg.contains("(t2)"), "{msg}");
+        assert!(msg.contains("more characters"), "{msg}");
     }
 }
