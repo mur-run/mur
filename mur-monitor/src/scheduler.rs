@@ -223,18 +223,24 @@ pub fn tick(
         }
         .redacted();
         let u = plan_cycle(&c.row, obs, now);
-        match u.new_state {
-            MonitorState::Completed => rep.completed += 1,
-            MonitorState::ActionPending => rep.action_pending += 1,
-            MonitorState::Exhausted => rep.exhausted += 1,
-            _ => {}
-        }
-        if u.outcome == Outcome::Unknown {
-            rep.unknown += 1;
-        }
         // requirement 2: exactly one `apply_cycle` call per claim, no retry.
+        // The semantic counters below only reflect a cycle that ACTUALLY
+        // LANDED: a stale fence (another worker reclaimed this monitor
+        // mid-cycle) means `apply_cycle` wrote nothing at all — no
+        // observation row, no column change, no event, no cycle finish —
+        // so counting `u.new_state`/`u.outcome` in that case would report a
+        // write that never happened on disk.
         if store.apply_cycle(&c.row.id, c.fence, &u)? {
             rep.observed += 1;
+            match u.new_state {
+                MonitorState::Completed => rep.completed += 1,
+                MonitorState::ActionPending => rep.action_pending += 1,
+                MonitorState::Exhausted => rep.exhausted += 1,
+                _ => {}
+            }
+            if u.outcome == Outcome::Unknown {
+                rep.unknown += 1;
+            }
         } else {
             rep.stale_fence += 1;
             tracing::warn!(monitor = %c.row.id, fence = c.fence, "monitor: stale fence, cycle dropped");
@@ -588,5 +594,80 @@ created_by: {{ actor: user:test }}
                 .contains("no adapter"),
             "{obs:?}"
         );
+    }
+
+    /// Test-only escape hatch from `SourceAdapter: Send + Sync`: rusqlite's
+    /// `Connection` is `!Sync`, so a borrowed `&MonitorStore` cannot live in
+    /// a `Box<dyn SourceAdapter>` (which also needs `'static`, and this test
+    /// only has a stack-local store). A raw pointer carries neither bound —
+    /// safe here because `a_stale_fence_cycle_is_not_counted_as_landed`
+    /// keeps `s` alive for the whole test and every dereference happens
+    /// synchronously, on the same thread, while `s` is still in scope.
+    struct RawStorePtr(*const MonitorStore);
+    unsafe impl Send for RawStorePtr {}
+    unsafe impl Sync for RawStorePtr {}
+
+    /// A one-shot adapter whose `observe` call yanks the fence out from
+    /// under the monitor `tick` just claimed — by releasing the lease back
+    /// to `Sleeping` and letting a second, unrelated worker reclaim it
+    /// (which bumps the fence) — before returning an observation. `tick`
+    /// still holds the OLD (pre-bump) fence it claimed under, so its
+    /// `apply_cycle` call afterwards is exactly the stale-fence case:
+    /// nothing lands on disk.
+    struct FenceYanker(RawStorePtr, String);
+    impl SourceAdapter for FenceYanker {
+        fn source_type(&self) -> SourceType {
+            SourceType::MurRun
+        }
+        fn validate_reference(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn observe(&self, _: &str, _: Option<&str>) -> Observation {
+            // SAFETY: see `RawStorePtr` above.
+            let store = unsafe { &*self.0.0 };
+            let fence = store.lease_of(&self.1).unwrap().unwrap().fence;
+            assert!(
+                store
+                    .release(&self.1, fence, MonitorState::Sleeping)
+                    .unwrap(),
+                "releasing under the fence tick claimed must succeed"
+            );
+            let reclaimed = store.claim_due(t0(), "intruder", DEFAULT_LEASE, 8).unwrap();
+            assert_eq!(reclaimed.len(), 1, "the intruder must reclaim the monitor");
+            Observation::terminal(Outcome::Succeeded, "done")
+        }
+    }
+
+    #[test]
+    fn a_stale_fence_cycle_is_not_counted_as_landed() {
+        // No actions: a normal (non-yanked) terminal-success cycle would set
+        // `new_state = Completed`, exercising the counter that the plan's
+        // sample code (wrongly) set from the plan BEFORE `apply_cycle`
+        // rather than from its result.
+        let (_d, s, id) = fresh("  on_success: []", true);
+        let mut reg = AdapterRegistry::new();
+        reg.register(Box::new(FenceYanker(
+            RawStorePtr(&s as *const MonitorStore),
+            id.clone(),
+        )));
+        let rep = tick(&s, &reg, t0(), "w", 8).unwrap();
+
+        assert_eq!(rep.claimed, 1);
+        assert_eq!(rep.stale_fence, 1);
+        assert_eq!(rep.observed, 0);
+        // The dropped cycle planned `Completed`, but since `apply_cycle`
+        // wrote nothing, the report must not say so.
+        assert_eq!(
+            rep.completed, 0,
+            "a write that never landed must not be counted"
+        );
+        assert_eq!((rep.action_pending, rep.exhausted, rep.unknown), (0, 0, 0));
+
+        // Confirms nothing landed: the row is exactly where the intruder's
+        // reclaim left it (`Checking`, under the intruder's lease), not
+        // `Completed` and not back on `Sleeping`.
+        let r = s.get(&id).unwrap().unwrap();
+        assert_eq!(r.state, MonitorState::Checking);
+        assert_eq!(s.lease_of(&id).unwrap().unwrap().owner, "intruder");
     }
 }
