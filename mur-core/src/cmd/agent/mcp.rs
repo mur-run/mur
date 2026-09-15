@@ -251,11 +251,36 @@ pub(crate) fn probe_new_entry(
 
     // Prints nothing: the murmur slash command renders its own notes into a
     // TUI pane and cannot have stdout written underneath it. Callers report.
-    let result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(
-            crate::cmd::agent_mcp_pin::probe_mcp_descriptions(&probe_entry, timeout, &policy),
-        )
+    //
+    // Runs on its own thread with its own runtime, rather than reaching for
+    // the caller's. `Handle::current()` panics outside a runtime and
+    // `block_in_place` panics on a current_thread one, and the callers do not
+    // all look alike: the CLI is inside a multi-thread runtime, but
+    // `agent_admin::mcp::add` is a synchronous Tauri command that is not
+    // inside one at all — so the convenient version would have turned a GUI
+    // install into a panic. A thread costs one probe's worth of nothing and
+    // makes this callable from anywhere, unit tests included.
+    let result = std::thread::scope(|s| {
+        s.spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("build probe runtime: {e}"))
+                .map(|rt| {
+                    rt.block_on(crate::cmd::agent_mcp_pin::probe_mcp_descriptions(
+                        &probe_entry,
+                        timeout,
+                        &policy,
+                    ))
+                })
+        })
+        .join()
+        .map_err(|_| "probe thread panicked".to_string())
     });
+    let result = match result {
+        Ok(Ok(inner)) => inner,
+        Ok(Err(e)) | Err(e) => bail!("could not probe '{server_id}': {e}"),
+    };
 
     match result {
         Ok((hash, tools)) => Ok((hash, tools.len())),
@@ -771,6 +796,9 @@ mod tests {
 
         // `true` (the `true` binary, present on every unix box) resolves on
         // PATH, so this also exercises the hash-computation branch.
+        // `no_probe` because `true` is not an MCP server: this asserts the
+        // consent/pin plumbing, and liveness has its own tests below and in
+        // `tests/agent_mcp_add_probe.rs`.
         cmd_mcp_add(
             "carol",
             "echo-srv",
@@ -779,6 +807,7 @@ mod tests {
             &[],
             McpAddPin {
                 force: true,
+                no_probe: true,
                 ..Default::default()
             },
         )
@@ -793,6 +822,54 @@ mod tests {
         assert!(
             e.binary_sha256.is_some(),
             "force must skip only the prompt, not the binary hash pin"
+        );
+    }
+
+    /// `--force` skips the consent prompt. It must NOT skip the check that
+    /// the server runs — they are different questions, and conflating them is
+    /// how scripted and GUI installs would go back to writing entries that
+    /// cannot start.
+    #[test]
+    fn force_does_not_imply_no_probe() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("carol");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        // `true` resolves and hashes; it exits without speaking MCP.
+        let err = cmd_mcp_add(
+            "carol",
+            "dead-srv",
+            "true",
+            &[],
+            &[],
+            McpAddPin {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .expect_err("a server that cannot start must not install");
+        let msg = err.to_string();
+        assert!(msg.contains("did not start"), "got {msg}");
+        assert!(
+            msg.contains("--no-probe"),
+            "the way out must be named: {msg}"
+        );
+
+        let (_p, profile) = load_profile_for_edit("carol").unwrap();
+        assert!(
+            !profile.mcp_servers.iter().any(|m| m.name == "dead-srv"),
+            "a failed probe must leave no entry behind"
         );
     }
 
