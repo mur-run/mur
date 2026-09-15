@@ -163,6 +163,7 @@ pub(super) async fn event_loop(
             secret_cmd::after_delete(app, key).await;
         }
         arm_input_debounce(app, StdInstant::now());
+        app.refresh_monitor_counts(StdInstant::now());
         // Flush the live band's overflow into native scrollback BEFORE the
         // draw, so the band always paints a screenful of the newest content
         // and the composer stays glued to the screen bottom. No-op in
@@ -524,6 +525,19 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 }
                 KeyCode::Char('o') if ctrl => {
                     scrollback_dump(app);
+                }
+                // Ctrl+T (moniTor) works on every terminal; Alt+Monitor is the
+                // better mnemonic but on macOS types a literal 'µ' unless
+                // Option-as-Meta is enabled, so both are bound to the same
+                // handler — whichever the terminal actually delivers. Never
+                // Ctrl+M: `^M` IS Enter (carriage return) on every terminal,
+                // so binding it would submit the half-typed message instead
+                // of opening the monitor list.
+                KeyCode::Char('t') if ctrl => {
+                    monitor::handle(app, &[], tx).await;
+                }
+                KeyCode::Char('m' | 'M') if alt => {
+                    monitor::handle(app, &[], tx).await;
                 }
                 // Ctrl+R — re-run the request whose approval expired (#8):
                 // refill the composer from the stashed `expired_retry` so the

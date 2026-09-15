@@ -106,6 +106,19 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::raw("  "));
     }
+    // `monitor(n)` — silent unless a monitor has a live condition (exhausted,
+    // action_pending, stalled, or unhealthy). Cached on `App`, refreshed at
+    // most every `footer::MONITOR_REFRESH_SECS`; never queried here.
+    if let Some(label) = crate::cmd::agent::cli::footer::monitor_label(app.monitor_conditions) {
+        spans.push(Span::styled(
+            format!(" {label} "),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+    }
     if let Some(meta) = &app.channel {
         // Id only. The chip used to append `meta.state`, a persisted channel
         // lifecycle word refreshed at just two points, next to the live turn
@@ -440,5 +453,39 @@ mod status_chip_tests {
             !dump.contains("019ff831:"),
             "the chip must not append a second state word: {dump}"
         );
+    }
+}
+
+/// Task 15: the `monitor(n)` badge is silent at `n == 0` and shows a count
+/// once `App::monitor_conditions` is non-zero — no query happens here, the
+/// count is whatever was last cached.
+#[cfg(test)]
+mod monitor_badge_tests {
+    use super::render_status;
+    use crate::cmd::agent::cli::app::App;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn silent_with_no_conditions() {
+        let app = App::test_fixture();
+        assert_eq!(app.monitor_conditions, 0);
+        let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        term.draw(|f| render_status(f, &app, f.area())).unwrap();
+        let dump = term.backend().to_string();
+        assert!(
+            !dump.contains("monitor("),
+            "quiet run must show nothing: {dump}"
+        );
+    }
+
+    #[test]
+    fn shows_the_count_once_something_has_a_condition() {
+        let mut app = App::test_fixture();
+        app.monitor_conditions = 2;
+        let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        term.draw(|f| render_status(f, &app, f.area())).unwrap();
+        let dump = term.backend().to_string();
+        assert!(dump.contains("monitor(2)"), "expected monitor(2): {dump}");
     }
 }

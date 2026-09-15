@@ -3,6 +3,7 @@
 mod awaiting_tests;
 mod esc_action_tests;
 mod footer_state_tests;
+mod monitor_refresh_tests;
 mod open_items_notice_tests;
 mod over_budget_tests;
 mod overlay_key_action_tests;

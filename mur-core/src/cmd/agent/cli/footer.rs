@@ -1,12 +1,21 @@
 //! Pure footer math: tokens, cost, and context-window fill from `Task.usage`
 //! plus the agent's `models.yaml` pricing. No ratatui, no I/O — unit-tested.
 
+use mur_monitor::backoff::UNHEALTHY_AFTER_UNKNOWN;
+use mur_monitor::state::MonitorState;
+use mur_monitor::store::MonitorRow;
 use serde_json::Value;
 
 /// Context bar thresholds (percent) and width.
 pub const CTX_YELLOW_PCT: u8 = 70;
 pub const CTX_RED_PCT: u8 = 90;
 pub const CTX_BAR_WIDTH: usize = 6;
+
+/// How often `App::refresh_monitor_counts` is allowed to reopen the monitor
+/// store — double `mur_core::monitor::service::TICK_INTERVAL` (15s, the
+/// daemon's own poll cadence), so the footer never re-opens SQLite faster
+/// than the daemon could possibly have changed anything.
+pub const MONITOR_REFRESH_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UsageCounts {
@@ -82,9 +91,122 @@ pub fn ctx_bar(pct: u8, width: usize) -> String {
     format!("{}{}", "▓".repeat(filled), "░".repeat(width - filled))
 }
 
+/// Does this monitor want a human or a second look? Quiet polling does not
+/// count: a footer number that is always present stops being read.
+pub fn has_condition(row: &MonitorRow) -> bool {
+    matches!(
+        row.state,
+        MonitorState::Exhausted | MonitorState::ActionPending
+    ) || row.stalled_since.is_some()
+        || row.unknown_streak >= UNHEALTHY_AFTER_UNKNOWN
+}
+
+/// How many monitors currently have a condition. One per monitor, however
+/// many conditions it has at once.
+pub fn conditions(rows: &[MonitorRow]) -> usize {
+    rows.iter().filter(|r| has_condition(r)).count()
+}
+
+/// Footer segment, or `None` when nothing wants attention.
+pub fn monitor_label(n: usize) -> Option<String> {
+    (n > 0).then(|| format!("monitor({n})"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
+    use mur_monitor::spec::{CreatedBy, MonitorSpec, Source, SourceType};
+    use mur_monitor::state::Outcome;
+
+    fn t0() -> DateTime<Utc> {
+        DateTime::UNIX_EPOCH
+    }
+
+    /// Build a `MonitorRow` with only the fields a condition check cares
+    /// about varied; everything else is a fixed, healthy default.
+    fn row(
+        state: MonitorState,
+        stalled_since: Option<DateTime<Utc>>,
+        unknown_streak: u32,
+    ) -> MonitorRow {
+        MonitorRow {
+            id: "m1".to_string(),
+            name: "test monitor".to_string(),
+            spec: MonitorSpec {
+                schema_version: 1,
+                name: "test monitor".to_string(),
+                source: Source {
+                    r#type: SourceType::GithubActions,
+                    reference: "owner/repo#1".to_string(),
+                    credential_ref: None,
+                },
+                outcomes: Default::default(),
+                actions: Default::default(),
+                policy: Default::default(),
+                notifications: Default::default(),
+                idempotency_key: "key1".to_string(),
+                created_by: CreatedBy {
+                    actor: "human".to_string(),
+                    reason: String::new(),
+                    originating_run_id: None,
+                },
+            },
+            state,
+            outcome: Outcome::Pending,
+            source_type: SourceType::GithubActions,
+            reference: "owner/repo#1".to_string(),
+            idempotency_key: "key1".to_string(),
+            created_at: t0(),
+            work_started_at: t0(),
+            next_check_at: t0(),
+            last_checked_at: None,
+            last_progress_at: t0(),
+            progress_token: None,
+            pending_attempts: 0,
+            unknown_streak,
+            remediation_attempts: 0,
+            cycle_id: "cycle1".to_string(),
+            stalled_since,
+            soft_notified: false,
+            hard_reached: false,
+            fence: 0,
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn monitor_label_is_silent_without_a_condition() {
+        assert_eq!(monitor_label(0), None);
+    }
+
+    #[test]
+    fn monitor_label_counts_conditions() {
+        assert_eq!(monitor_label(1).as_deref(), Some("monitor(1)"));
+        assert_eq!(monitor_label(4).as_deref(), Some("monitor(4)"));
+    }
+
+    #[test]
+    fn quiet_monitors_do_not_count() {
+        // The three states a healthy monitor cycles through contribute nothing;
+        // only a live condition does.
+        let quiet = row(MonitorState::Sleeping, None, 0);
+        let active = row(MonitorState::Active, None, 0);
+        let checking = row(MonitorState::Checking, None, 0);
+        assert_eq!(conditions(&[quiet, active, checking]), 0);
+    }
+
+    #[test]
+    fn each_condition_counts_once() {
+        let needs_human = row(MonitorState::Exhausted, None, 0);
+        let parked = row(MonitorState::ActionPending, None, 0);
+        let stalled = row(MonitorState::Sleeping, Some(t0()), 0);
+        let sick = row(MonitorState::Sleeping, None, UNHEALTHY_AFTER_UNKNOWN);
+        assert_eq!(conditions(&[needs_human, parked, stalled, sick]), 4);
+        // A monitor that is both stalled AND sick is still one monitor.
+        let both = row(MonitorState::Sleeping, Some(t0()), UNHEALTHY_AFTER_UNKNOWN);
+        assert_eq!(conditions(&[both]), 1);
+    }
 
     #[test]
     fn parses_usage_fields() {

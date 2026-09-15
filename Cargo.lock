@@ -6542,6 +6542,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-compress",
+ "mur-monitor",
  "mur-open-items",
  "notify",
  "oauth2",
@@ -6675,6 +6676,23 @@ dependencies = [
  "tokio-tungstenite 0.29.0",
  "tracing",
  "uniffi",
+ "uuid",
+]
+
+[[package]]
+name = "mur-monitor"
+version = "2.82.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "mur-common",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
  "uuid",
 ]
 
