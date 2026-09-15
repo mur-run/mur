@@ -17,6 +17,10 @@ use super::{load_profile_for_edit, resolve_mur_home, save_profile};
 #[derive(Debug, Clone, Default)]
 pub struct McpAddPin {
     pub force: bool,
+    /// Skip the live probe that decides whether this entry can actually run.
+    /// `force` does NOT imply this: one skips the approval prompt, the other
+    /// skips the check that the thing being approved works at all.
+    pub no_probe: bool,
     pub publisher_name: Option<String>,
     pub publisher_homepage: Option<String>,
     pub publisher_registry_id: Option<String>,
@@ -131,9 +135,12 @@ pub fn cmd_mcp_add(
             // the publisher's release notes.
             println!("  binary sha256:  {}…  (full: {h})", &h[..16]);
         }
-        println!(
-            "  description hash: <deferred to live MCP probe — will be set on first run via M9.3>",
-        );
+        if pin.no_probe {
+            println!("  description hash: <deferred — --no-probe; set on first run via M9.3>",);
+            println!("  probe:            SKIPPED — this entry is not known to start");
+        } else {
+            println!("  description hash: <pinned by the install probe, below>");
+        }
         print!("\nApprove? [y/N] ");
         use std::io::{self, Write};
         io::stdout().flush().ok();
@@ -151,9 +158,9 @@ pub fn cmd_mcp_add(
         command: command.to_string(),
         args: args.to_vec(),
         binary_sha256,
-        // description_hash is populated by the runtime supervisor on
-        // first successful spawn (M9.3). Leaving it `None` here keeps
-        // the entry in "warn but don't block" mode until then.
+        // Filled in by the probe below when it runs. Left `None` under
+        // `--no-probe`, which keeps the entry in "warn but don't block" mode
+        // until the runtime hashes it on first successful spawn (M9.3).
         description_hash: None,
         publisher,
         installed_at: Some(chrono::Utc::now()),
@@ -182,7 +189,140 @@ pub fn cmd_mcp_add(
             .push(command.to_string());
     }
     grant_state_paths(name, &mut profile, state_paths)?;
+
+    // ── Does it actually run? ──
+    //
+    // Everything above this line checks provenance: the binary resolves, its
+    // bytes hash, a publisher is recorded. None of it asks whether the server
+    // starts — so `mcp add` could report success for an entry that had never
+    // been spawned once, and the user found out at the next restart, from an
+    // agent that would not come up. Probing here moves that discovery to the
+    // moment the user is sitting in front of it and can still say no.
+    //
+    // Under the agent's REAL sandbox policy, for the reason #1161 records: a
+    // permissive probe reports fine for exactly the servers that die on
+    // startup. The policy is built from the profile as it now stands —
+    // including the entry and the state-path grants added just above — so this
+    // is the configuration the supervisor will seal, not an approximation.
+    if !pin.no_probe
+        && let Some(resolved) = resolved_path.as_deref()
+    {
+        let hash = probe_new_entry(name, &profile, server_id, resolved)?;
+        if let Some(entry) = profile.mcp_servers.last_mut() {
+            entry.description_hash = Some(hash);
+        }
+    }
+
     save_profile(&path, &mut profile)
+}
+
+/// Spawn the freshly-added entry under the agent's own sandbox, run
+/// `initialize` + `tools/list`, and return the description hash.
+///
+/// `Err` means do not write the entry. That is the whole point: an MCP server
+/// that cannot start is not "installed", and leaving the entry behind produces
+/// an agent that fails at boot over a decision the user thought had succeeded.
+/// `--no-probe` is the door out, and every failure message names it.
+fn probe_new_entry(
+    agent: &str,
+    profile: &mur_common::AgentProfile,
+    server_id: &str,
+    resolved: &std::path::Path,
+) -> Result<String> {
+    let entry = profile
+        .mcp_servers
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("internal: entry not staged before probe"))?;
+    let probe_entry = McpServerEntry {
+        command: resolved.display().to_string(),
+        ..entry.clone()
+    };
+    let agent_home = super::resolve_mur_home()?.join("agents").join(agent);
+    let policy = mur_agent_runtime::sandbox::policy::SandboxPolicy::from_entitlements(
+        &profile.entitlements,
+        &agent_home,
+    );
+    let timeout = crate::cmd::agent_mcp_pin::probe_timeout();
+
+    println!("  probing:        spawning '{server_id}' under this agent's sandbox…");
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(
+            crate::cmd::agent_mcp_pin::probe_mcp_descriptions(&probe_entry, timeout, &policy),
+        )
+    });
+
+    match result {
+        Ok((hash, tools)) => {
+            println!(
+                "  probe:          ok — {} tool{} listed, description hash pinned",
+                tools.len(),
+                if tools.len() == 1 { "" } else { "s" }
+            );
+            Ok(hash)
+        }
+        Err(e) => {
+            let timed_out = matches!(e, crate::cmd::agent_mcp_pin::ProbeError::Timeout(_));
+            bail!(
+                "'{server_id}' did not start, so it was NOT installed on '{agent}'.\n  {e}\n{}",
+                probe_failure_advice(timed_out, &e.to_string())
+            )
+        }
+    }
+}
+
+/// What to suggest when the install probe fails, chosen from the failure shape.
+///
+/// Split out as a pure function because the three shapes lead to three
+/// different actions, and getting that wrong sends the user to fix the wrong
+/// thing — which is how a sandbox denial ends up "fixed" by a timeout bump.
+fn probe_failure_advice(timed_out: bool, msg: &str) -> String {
+    let lower = msg.to_lowercase();
+    let specific = if timed_out {
+        "  The server was still starting when the budget ran out. If it is merely slow \
+         (model warm-up, network discovery), raise it:\n    \
+         MUR_MCP_PROBE_TIMEOUT_S=60 mur agent mcp add …"
+    } else if lower.contains("denied")
+        || lower.contains("eperm")
+        || lower.contains("permission")
+        || lower.contains("operation not permitted")
+    {
+        "  This looks like a sandbox denial — the server tried to touch something it \
+         was not granted. Servers that write config or a device id on first launch \
+         need that directory declared:\n    \
+         mur agent mcp add … --state-path <dir>"
+    } else {
+        "  The server exited or failed the handshake. Check that the command and args \
+         are the ones its README gives, and that it speaks MCP over stdio."
+    };
+    format!("{specific}\n  To install it anyway, unchecked: --no-probe")
+}
+
+#[cfg(test)]
+mod probe_advice_tests {
+    use super::probe_failure_advice;
+
+    /// Three failure shapes, three different things to go fix. Sending a
+    /// sandbox denial to "raise the timeout" is how a real misconfiguration
+    /// gets papered over.
+    #[test]
+    fn each_failure_shape_points_somewhere_different() {
+        let slow = probe_failure_advice(true, "probe timed out after 10s");
+        assert!(slow.contains("MUR_MCP_PROBE_TIMEOUT_S"), "{slow}");
+        assert!(!slow.contains("--state-path"), "{slow}");
+
+        let denied =
+            probe_failure_advice(false, "spawn failed: Operation not permitted (os error 1)");
+        assert!(denied.contains("--state-path"), "{denied}");
+        assert!(!denied.contains("MUR_MCP_PROBE_TIMEOUT_S"), "{denied}");
+
+        let broken = probe_failure_advice(false, "unexpected EOF reading initialize response");
+        assert!(broken.contains("speaks MCP over stdio"), "{broken}");
+
+        // Every shape names the escape hatch, or the advice is a dead end.
+        for a in [&slow, &denied, &broken] {
+            assert!(a.contains("--no-probe"), "{a}");
+        }
+    }
 }
 
 /// Create each declared state path if missing, then grant read+write on it.
