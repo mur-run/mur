@@ -59,13 +59,3 @@ fn ctrl_c_is_ignored_overlay_only_recognises_ctrl_d() {
         OverlayKeyAction::Ignore
     );
 }
-
-#[test]
-fn monitor_shortcut_is_ctrl_t_and_alt_m_never_ctrl_m() {
-    // ^M is Enter on every terminal; binding it would shadow submit. Alt+M
-    // is safe (worst case types a stray 'µ') so it's the mnemonic backup.
-    use crate::cmd::agent::cli::events::{binds_alt_m, binds_ctrl};
-    assert!(!binds_ctrl('m'), "Ctrl+M must never be bound");
-    assert!(binds_ctrl('t'), "Ctrl+T must reach the monitor handler");
-    assert!(binds_alt_m(), "Alt+M must reach the monitor handler");
-}

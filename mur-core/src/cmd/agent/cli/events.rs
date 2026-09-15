@@ -659,24 +659,3 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
         _ => {}
     }
 }
-
-/// Which `Ctrl+<char>` combinations the key-dispatch match above binds.
-/// Hand-maintained beside those arms (there is no way to introspect a
-/// `match` at runtime) so a test can assert `Ctrl+M` is never one of them —
-/// `^M` IS Enter on every terminal, so binding it would shadow submitting a
-/// message — without having to drive the whole event loop. Test-only: there
-/// is no other caller.
-#[cfg(test)]
-pub(super) fn binds_ctrl(c: char) -> bool {
-    matches!(c, 'd' | 'c' | 'u' | 'v' | 'o' | 't' | 'r')
-}
-
-/// Whether `Alt+m`/`Alt+M` reaches the monitor handler — the mnemonic
-/// alternative to `Ctrl+T`, safe to bind because a stray `Alt+M` on a
-/// terminal without Option-as-Meta just types a literal 'µ' (one backspace),
-/// unlike `Ctrl+M` which IS carriage return. Test-only: there is no other
-/// caller.
-#[cfg(test)]
-pub(super) fn binds_alt_m() -> bool {
-    true
-}

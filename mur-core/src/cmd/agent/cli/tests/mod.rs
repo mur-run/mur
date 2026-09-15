@@ -3,6 +3,7 @@
 mod fallback_visibility_tests;
 mod help_coverage_tests;
 mod hitl_key_tests;
+mod monitor_shortcut_tests;
 mod notify_tests;
 mod persist_skin_tests;
 mod pricing_book_tests;
