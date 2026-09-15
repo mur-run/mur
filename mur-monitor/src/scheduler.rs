@@ -278,6 +278,7 @@ mod tests {
     use crate::store::tests::t0;
     use chrono::Duration as CD;
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     /// Hands back a scripted sequence; `unknown("script exhausted")` after.
@@ -596,25 +597,20 @@ created_by: {{ actor: user:test }}
         );
     }
 
-    /// Test-only escape hatch from `SourceAdapter: Send + Sync`: rusqlite's
-    /// `Connection` is `!Sync`, so a borrowed `&MonitorStore` cannot live in
-    /// a `Box<dyn SourceAdapter>` (which also needs `'static`, and this test
-    /// only has a stack-local store). A raw pointer carries neither bound —
-    /// safe here because `a_stale_fence_cycle_is_not_counted_as_landed`
-    /// keeps `s` alive for the whole test and every dereference happens
-    /// synchronously, on the same thread, while `s` is still in scope.
-    struct RawStorePtr(*const MonitorStore);
-    unsafe impl Send for RawStorePtr {}
-    unsafe impl Sync for RawStorePtr {}
-
     /// A one-shot adapter whose `observe` call yanks the fence out from
     /// under the monitor `tick` just claimed — by releasing the lease back
     /// to `Sleeping` and letting a second, unrelated worker reclaim it
     /// (which bumps the fence) — before returning an observation. `tick`
     /// still holds the OLD (pre-bump) fence it claimed under, so its
     /// `apply_cycle` call afterwards is exactly the stale-fence case:
-    /// nothing lands on disk.
-    struct FenceYanker(RawStorePtr, String);
+    /// nothing lands on disk. The "second worker" opens its own connection
+    /// to the same SQLite file (`MonitorStore::open` on the shared temp
+    /// dir) rather than reaching back into the caller's `MonitorStore` —
+    /// the same pattern the race tests in `store/mod.rs`/`store/lease.rs`
+    /// use, and a closer match for the real scenario (another process, its
+    /// own connection) than sharing one `&MonitorStore` across threads
+    /// would be.
+    struct FenceYanker(PathBuf, String);
     impl SourceAdapter for FenceYanker {
         fn source_type(&self) -> SourceType {
             SourceType::MurRun
@@ -623,16 +619,17 @@ created_by: {{ actor: user:test }}
             Ok(())
         }
         fn observe(&self, _: &str, _: Option<&str>) -> Observation {
-            // SAFETY: see `RawStorePtr` above.
-            let store = unsafe { &*self.0.0 };
-            let fence = store.lease_of(&self.1).unwrap().unwrap().fence;
+            let intruder = MonitorStore::open(&self.0).unwrap();
+            let fence = intruder.lease_of(&self.1).unwrap().unwrap().fence;
             assert!(
-                store
+                intruder
                     .release(&self.1, fence, MonitorState::Sleeping)
                     .unwrap(),
                 "releasing under the fence tick claimed must succeed"
             );
-            let reclaimed = store.claim_due(t0(), "intruder", DEFAULT_LEASE, 8).unwrap();
+            let reclaimed = intruder
+                .claim_due(t0(), "intruder", DEFAULT_LEASE, 8)
+                .unwrap();
             assert_eq!(reclaimed.len(), 1, "the intruder must reclaim the monitor");
             Observation::terminal(Outcome::Succeeded, "done")
         }
@@ -644,12 +641,9 @@ created_by: {{ actor: user:test }}
         // `new_state = Completed`, exercising the counter that the plan's
         // sample code (wrongly) set from the plan BEFORE `apply_cycle`
         // rather than from its result.
-        let (_d, s, id) = fresh("  on_success: []", true);
+        let (d, s, id) = fresh("  on_success: []", true);
         let mut reg = AdapterRegistry::new();
-        reg.register(Box::new(FenceYanker(
-            RawStorePtr(&s as *const MonitorStore),
-            id.clone(),
-        )));
+        reg.register(Box::new(FenceYanker(d.path().to_path_buf(), id.clone())));
         let rep = tick(&s, &reg, t0(), "w", 8).unwrap();
 
         assert_eq!(rep.claimed, 1);
