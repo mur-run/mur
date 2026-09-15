@@ -262,6 +262,17 @@ impl MonitorStore {
                 delivery_state TEXT NOT NULL,
                 updated_at     TEXT NOT NULL
             );
+            -- Per-channel high-water mark: the event id a channel starts
+            -- watching from. Added so that enabling a channel does not
+            -- replay every notifiable event ever recorded as a backlog of
+            -- banners (store/notify.rs `first_event_id_for_channel`).
+            -- Additive table, so no SCHEMA_USER_VERSION bump is needed:
+            -- migrate() runs on every open and an existing database simply
+            -- gains the table the first time it is opened after this change.
+            CREATE TABLE IF NOT EXISTS monitor_notification_channels (
+                channel         TEXT PRIMARY KEY,
+                first_event_id  INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS monitor_registration_outbox (
                 id         TEXT PRIMARY KEY,
                 spec_json  TEXT NOT NULL,

@@ -16,14 +16,19 @@
 //! EXISTS`, and an `ALTER` would need a `user_version` step this plan does
 //! not want to introduce). Attempts are therefore encoded in the
 //! `delivery_state` column itself as `"<state>:<attempts>"` (e.g.
-//! `"pending:3"`) rather than kept in a side table — one table stays the
-//! whole footprint of this feature, and `DeliveryState::parse` already has
-//! to tolerate unknown suffixes for forward-compatibility, so accepting the
-//! attempt count there costs nothing extra. `DeliveryState` itself stays the
-//! fieldless three-variant enum callers expect; only the free functions in
-//! this module know about the `:N` suffix.
+//! `"pending:3"`) rather than kept in a side table, and `DeliveryState::parse`
+//! already has to tolerate unknown suffixes for forward-compatibility, so
+//! accepting the attempt count there costs nothing extra. `DeliveryState`
+//! itself stays the fieldless three-variant enum callers expect; only the
+//! free functions in this module know about the `:N` suffix.
+//!
+//! `monitor_notification_channels` is the one additional table this module
+//! owns: a per-channel high-water mark (`first_event_id`) so that enabling a
+//! channel starts it watching from the moment it is enabled rather than
+//! replaying every notifiable event ever recorded as a backlog of banners.
+//! See `first_event_id_for_channel`.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 
@@ -94,6 +99,71 @@ fn key(event_id: i64, channel: &str) -> String {
 }
 
 impl MonitorStore {
+    /// The event id a channel starts watching from: every `monitor_events`
+    /// row with `id <= first_event_id` is history the channel does not
+    /// inherit.
+    ///
+    /// A channel seeing the store for the first time is stamped with the
+    /// current `MAX(id)` (`COALESCE`d to 0 on an empty table) and told
+    /// there is nothing pending yet — flipping `notifications.desktop: true`
+    /// must start watching from that moment, not replay every notifiable
+    /// event ever recorded as a backlog of banners. A channel with a row
+    /// already just returns it, so a caught-up-from-downtime backlog (rows
+    /// with `id > first_event_id` that accumulated while the daemon was
+    /// down) is untouched.
+    ///
+    /// Read-then-write, so this runs under `BEGIN IMMEDIATE` rather than a
+    /// deferred transaction: under WAL a deferred transaction fixes its
+    /// read snapshot on the first statement, and a writer racing between
+    /// the SELECT and the INSERT fails with `SQLITE_BUSY_SNAPSHOT`, which
+    /// the busy handler deliberately does not retry (see
+    /// `mur-channel/src/index.rs`'s `rebuild_from` for the same pattern and
+    /// rationale).
+    fn first_event_id_for_channel(&self, channel: &str) -> Result<i64> {
+        self.conn()
+            .execute_batch("BEGIN IMMEDIATE")
+            .context("begin high-water-mark transaction")?;
+
+        let result = (|| -> Result<i64> {
+            let existing: Option<i64> = self
+                .conn()
+                .query_row(
+                    "SELECT first_event_id FROM monitor_notification_channels WHERE channel = ?1",
+                    [channel],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(v) = existing {
+                return Ok(v);
+            }
+            let max_id: i64 =
+                self.conn()
+                    .query_row("SELECT COALESCE(MAX(id), 0) FROM monitor_events", [], |r| {
+                        r.get(0)
+                    })?;
+            self.conn().execute(
+                "INSERT INTO monitor_notification_channels (channel, first_event_id) VALUES (?1, ?2)",
+                params![channel, max_id],
+            )?;
+            Ok(max_id)
+        })();
+
+        match result {
+            Ok(v) => {
+                self.conn()
+                    .execute_batch("COMMIT")
+                    .context("commit high-water-mark transaction")?;
+                Ok(v)
+            }
+            Err(e) => {
+                // Best-effort: the original error is what's worth
+                // surfacing even if the rollback itself fails.
+                let _ = self.conn().execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
     /// 0 when no row exists yet for this (event, channel) — nothing has
     /// ever been attempted.
     fn delivery_attempts(&self, event_id: i64, channel: &str) -> Result<u32> {
@@ -112,8 +182,16 @@ impl MonitorStore {
     /// whose retry time (if any) has arrived. Oldest first — someone reading
     /// a backlog wants it in the order it happened.
     ///
+    /// Bounded below by the channel's high-water mark
+    /// (`first_event_id_for_channel`): a channel is never offered an event
+    /// recorded before it started watching, so flipping
+    /// `notifications.desktop: true` does not replay history as a burst of
+    /// banners. A channel that has been watching for a while still catches
+    /// up on everything recorded while the daemon was down — the bound is
+    /// fixed once, at first sight, not moved forward on every call.
+    ///
     /// Every placeholder is numbered explicitly, including the kind list
-    /// generated below (`?4, ?5, …`) — never a bare `?`, which SQLite binds
+    /// generated below (`?5, ?6, …`) — never a bare `?`, which SQLite binds
     /// by argument-vector position rather than by the number written here.
     /// Mixing the two styles happens to work only as long as the vector is
     /// built in exactly the order the bare `?`s expect; reorder it and a
@@ -125,14 +203,16 @@ impl MonitorStore {
         now: DateTime<Utc>,
         max: usize,
     ) -> Result<Vec<Pending>> {
+        let first_event_id = self.first_event_id_for_channel(channel)?;
         let kind_placeholders: Vec<String> = (0..NOTIFIABLE.len())
-            .map(|i| format!("?{}", i + 4))
+            .map(|i| format!("?{}", i + 5))
             .collect();
         let sql = format!(
             "SELECT e.id, e.monitor_id, e.cycle_id, e.kind, e.payload, e.created_at, n.delivery_state \
              FROM monitor_events e \
              LEFT JOIN monitor_notifications n ON n.event_key = (e.id || ':' || ?1) \
              WHERE e.kind IN ({kinds}) \
+               AND e.id > ?4 \
                AND (n.delivery_state IS NULL \
                     OR (n.delivery_state LIKE 'pending%' AND n.updated_at <= ?2)) \
              ORDER BY e.id ASC LIMIT ?3",
@@ -143,6 +223,7 @@ impl MonitorStore {
             Box::new(channel.to_string()),
             Box::new(ts(now)),
             Box::new(max as i64),
+            Box::new(first_event_id),
         ];
         for k in NOTIFIABLE {
             args.push(Box::new(k.to_string()));
@@ -273,6 +354,19 @@ mod tests {
     fn store_with_events(kinds: &[&'static str]) -> (tempfile::TempDir, MonitorStore, String) {
         let d = tempfile::tempdir().unwrap();
         let s = MonitorStore::open(d.path()).unwrap();
+        // Prime "log" and "desktop" before any monitor/event exists, so
+        // their high-water mark is stamped at 0 — this is what "the
+        // channel has been watching since before this test's events were
+        // created" looks like in production (both channels are registered
+        // at daemon startup, before events accrue). Every test below that
+        // uses this helper relies on events being visible on the first
+        // real query, which `first_event_id_for_channel` would otherwise
+        // withhold. The one test that wants the un-primed, first-sight
+        // behavior (`a_new_channel_does_not_inherit_the_backlog`) builds
+        // its own store instead of using this helper.
+        for channel in ["log", "desktop"] {
+            s.pending_notifications(channel, t0(), 10).unwrap();
+        }
         let id = s.create(&spec("k"), t0(), None).unwrap().id;
         let cyc = s.get(&id).unwrap().unwrap().cycle_id;
         for k in kinds {
@@ -409,5 +503,75 @@ mod tests {
     fn max_bounds_a_drain() {
         let (_d, s, _id) = store_with_events(&["stalled", "soft_deadline", "terminal"]);
         assert_eq!(s.pending_notifications("log", t0(), 2).unwrap().len(), 2);
+    }
+
+    /// The regression test for finding 1: flipping `notifications.desktop:
+    /// true` after a monitor already has notifiable history must not
+    /// replay that history as a burst of banners.
+    ///
+    /// Deliberately does not use `store_with_events` (which primes "log"
+    /// and "desktop" before any event exists) — this test needs a channel
+    /// seeing the store for the very first time *after* events are already
+    /// recorded, exactly like a user enabling `desktop` mid-history.
+    #[test]
+    fn a_new_channel_does_not_inherit_the_backlog() {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.create(&spec("k"), t0(), None).unwrap().id;
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
+            .unwrap();
+
+        // First-ever call for "desktop": nothing, even though a notifiable
+        // event already exists — the channel starts watching from now.
+        let first = s.pending_notifications("desktop", t0(), 10).unwrap();
+        assert!(
+            first.is_empty(),
+            "a channel's first-ever call must not inherit pre-existing events"
+        );
+
+        // Distinguish "correctly withheld" from "pending_notifications is
+        // broken and returns nothing forever": an event recorded AFTER the
+        // channel's first sight must still come through on a later call.
+        s.append_event(&id, &cyc, "terminal", serde_json::json!({}), false, t0())
+            .unwrap();
+        let after = s.pending_notifications("desktop", t0(), 10).unwrap();
+        let kinds: Vec<_> = after.iter().map(|p| p.event.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["terminal"],
+            "events recorded after the channel's first sight must still be delivered"
+        );
+    }
+
+    /// The property finding 1's fix must not regress: a channel that has
+    /// already been watching (its high-water mark is already stamped) still
+    /// catches up on everything that piled up while nothing drained it —
+    /// that backlog is the entire point of the queue.
+    #[test]
+    fn a_known_channel_still_catches_up_after_downtime() {
+        // `store_with_events(&[])` primes "desktop" at id 0 with no events
+        // yet — the channel is "known" before the daemon goes quiet.
+        let (_d, s, id) = store_with_events(&[]);
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+
+        // Simulate the daemon being down: two notifiable events land with
+        // no `pending_notifications` call in between.
+        s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
+            .unwrap();
+        s.append_event(&id, &cyc, "terminal", serde_json::json!({}), false, t0())
+            .unwrap();
+
+        let kinds: Vec<_> = s
+            .pending_notifications("desktop", t0(), 10)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.event.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["stalled", "terminal"],
+            "a known channel must still receive a backlog that accumulated while nothing drained it"
+        );
     }
 }
