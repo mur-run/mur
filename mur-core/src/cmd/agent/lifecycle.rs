@@ -720,8 +720,25 @@ fn describe_unloadable(dir: &std::path::Path) -> String {
         (false, true) => "has no profile.yaml but still holds a signing key",
         (false, false) => "has no profile.yaml",
     };
+    // Naming the command is the difference between a warning and a remedy.
+    // Without it the reader's obvious move is `rm -rf` on the directory — which
+    // does not touch the launcher symlink or the service descriptor, so a
+    // launchd job with `RunAtLoad` recreates the directory and the warning
+    // comes back (field report, 2026-09-15). `mur agent remove` never loads the
+    // profile, so it works on exactly these directories; the name is the
+    // directory name, which is what it resolves by.
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let purge = if dir.join("identity.key").exists() {
+        " — `--purge` also deletes the directory and destroys its signing key"
+    } else {
+        " — add `--purge` to delete the directory too"
+    };
     format!(
-        "is not a loadable agent: it {what} — not listed, not running, and not covered by anything that iterates agents"
+        "is not a loadable agent: it {what} — not listed, not running, and not covered by anything that iterates agents. \
+         `mur agent remove {name}` clears its launcher and service{purge}"
     )
 }
 
@@ -1346,5 +1363,35 @@ mod tests_unloadable_agent_dirs {
         let m = describe_unloadable(&empty);
         assert!(m.contains("no profile.yaml"), "{m}");
         assert!(!m.contains("signing key"), "{m}");
+    }
+
+    /// A warning without a command is why the user reaches for `rm -rf` — and
+    /// `rm -rf` leaves the launcher and the service behind, so the directory
+    /// comes back at the next login.
+    #[test]
+    fn the_message_names_the_command_that_actually_clears_it() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let stray = tmp.path().join("kelp");
+        std::fs::create_dir_all(&stray).unwrap();
+        let m = describe_unloadable(&stray);
+        assert!(
+            m.contains("mur agent remove kelp"),
+            "the remedy must name the agent, not <name>: {m}"
+        );
+        assert!(m.contains("launcher and service"), "{m}");
+        assert!(m.contains("--purge"), "{m}");
+        assert!(
+            !m.contains("destroys its signing key"),
+            "no key here, so no key warning: {m}"
+        );
+
+        // With a key, `--purge` is destructive in a way worth saying out loud.
+        let with_key = tmp.path().join("author");
+        std::fs::create_dir_all(&with_key).unwrap();
+        std::fs::write(with_key.join("identity.key"), b"k").unwrap();
+        let m = describe_unloadable(&with_key);
+        assert!(m.contains("mur agent remove author"), "{m}");
+        assert!(m.contains("destroys its signing key"), "{m}");
     }
 }
