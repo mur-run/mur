@@ -45,6 +45,7 @@ pub mod model_discovery;
 pub mod model_download;
 pub mod model_prices;
 pub mod model_setup;
+pub mod monitor;
 pub mod nudge;
 pub mod official;
 pub mod open_items;

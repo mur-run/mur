@@ -1,0 +1,535 @@
+use super::*;
+use crate::run_status::{RunKind, RunState, State, store as run_store};
+use chrono::{TimeZone, Utc};
+use mur_monitor::store::{ListFilter, MonitorStore};
+
+fn t0() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 0).unwrap()
+}
+
+fn home() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    run_store::save(
+        d.path(),
+        &RunState {
+            schema: 1,
+            run_id: "run-1".into(),
+            channel_id: None,
+            kind: RunKind::Fleet,
+            label: "x".into(),
+            pid: std::process::id(),
+            started_at: t0(),
+            last_heartbeat_at: Some(t0()),
+            state: State::Running,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: String::new(),
+            build_sha: String::new(),
+        },
+    )
+    .unwrap();
+    d
+}
+
+fn spec_file(d: &Path, source: &str, reference: &str) -> PathBuf {
+    let p = d.join("spec.yaml");
+    std::fs::write(
+            &p,
+            format!(
+                "schema_version: 1\nname: t\nsource: {{ type: {source}, reference: {reference} }}\nidempotency_key: k\ncreated_by: {{ actor: user:test }}\n"
+            ),
+        )
+        .unwrap();
+    p
+}
+
+fn go(d: &Path, a: MonitorAction) -> Result<String> {
+    let mut out = Vec::new();
+    run_to(d, a, &mut out, t0())?;
+    Ok(String::from_utf8(out).unwrap())
+}
+
+#[test]
+fn add_creates_once_and_reports_the_existing_one() {
+    let d = home();
+    let f = spec_file(d.path(), "mur_run", "run-1");
+    let first = go(
+        d.path(),
+        MonitorAction::Add {
+            file: f.clone(),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    assert!(first.starts_with("monitor "), "{first}");
+    assert!(first.contains("first check"), "{first}");
+    let second = go(
+        d.path(),
+        MonitorAction::Add {
+            file: f,
+            started_at: None,
+        },
+    )
+    .unwrap();
+    assert!(second.contains("already exists"), "{second}");
+    assert_eq!(
+        MonitorStore::open(d.path())
+            .unwrap()
+            .list(&ListFilter::default())
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn add_refuses_what_can_never_be_queried() {
+    let d = home();
+    let e = go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "custom", "x"),
+            started_at: None,
+        },
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("no adapter"), "{e:#}");
+    let e = go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "'bad id!'"),
+            started_at: None,
+        },
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("reference"), "{e:#}");
+}
+
+/// The rule this protects: a probe that reports the credential itself is
+/// the blocker must refuse `add` immediately, never silently create a
+/// monitor that can only ever answer `unknown`. `env:` with a variable
+/// guaranteed unset resolves to `None` deterministically (Task 10), so
+/// this drives the real `credential_failure` path with no network.
+#[test]
+fn add_refuses_when_the_probe_reports_a_credential_failure() {
+    const MISSING_VAR: &str = "MUR_TEST_MONITOR_ADD_CRED_DEFINITELY_NOT_SET_Q7Z";
+    assert!(std::env::var_os(MISSING_VAR).is_none());
+    let d = home();
+    let p = d.path().join("gha.yaml");
+    std::fs::write(
+            &p,
+            format!(
+                "schema_version: 1\nname: t\nsource: {{ type: github_actions, reference: o/r/1, credential_ref: env:{MISSING_VAR} }}\nidempotency_key: k\ncreated_by: {{ actor: user:test }}\n"
+            ),
+        )
+        .unwrap();
+    let e = go(
+        d.path(),
+        MonitorAction::Add {
+            file: p,
+            started_at: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        e.to_string().contains("fix the credential reference"),
+        "{e:#}"
+    );
+    assert_eq!(
+        MonitorStore::open(d.path())
+            .unwrap()
+            .list(&ListFilter::default())
+            .unwrap()
+            .len(),
+        0,
+        "a refused probe must not create a monitor"
+    );
+}
+
+/// The converse rule: an `unknown` probe for a reason that has nothing to
+/// do with credentials (here, a `mur_run` reference with no run record
+/// yet) must NOT refuse — a monitor for work that hasn't appeared yet is
+/// legitimate, and only `credential_failure` should ever block `add`.
+#[test]
+fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
+    let d = home();
+    let out = go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-does-not-exist-yet"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    assert!(out.contains("probe: unknown"), "{out}");
+    let list = go(
+        d.path(),
+        MonitorAction::List {
+            state: None,
+            all: false,
+        },
+    )
+    .unwrap();
+    assert!(list.contains("active"), "{list}");
+}
+
+/// The bug: `mur monitor add` (CLI/murmur) resolves its home via
+/// `crate::paths::mur_root`, which honors `MUR_HOME`, but the daemon —
+/// what actually polls the monitor going forward — always resolves its
+/// home via `crate::store::yaml::default_mur_dir()`, which ignores
+/// `MUR_HOME` entirely. A monitor created while `MUR_HOME` points anywhere
+/// other than the daemon's default is silently written where the daemon
+/// never looks, and just sits `sleeping` forever with no error anywhere.
+/// `add` must say so up front.
+#[test]
+fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
+    let _g = crate::conversations::ENV_LOCK.lock().unwrap();
+    let d = home();
+    let f = spec_file(d.path(), "mur_run", "run-1");
+    let prev = std::env::var("MUR_HOME").ok();
+    unsafe { std::env::set_var("MUR_HOME", d.path()) };
+    let out = go(
+        d.path(),
+        MonitorAction::Add {
+            file: f,
+            started_at: None,
+        },
+    );
+    match prev {
+        Some(p) => unsafe { std::env::set_var("MUR_HOME", p) },
+        None => unsafe { std::env::remove_var("MUR_HOME") },
+    }
+    let out = out.unwrap();
+    assert!(out.contains("warning: MUR_HOME"), "{out}");
+    assert!(
+        out.contains(&d.path().display().to_string()),
+        "must name the CLI-side path: {out}"
+    );
+}
+
+#[test]
+fn list_show_cancel_retry() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+
+    let list = go(
+        d.path(),
+        MonitorAction::List {
+            state: None,
+            all: false,
+        },
+    )
+    .unwrap();
+    assert!(list.contains(&id[..8]) && list.contains("active"), "{list}");
+    let show = go(
+        d.path(),
+        MonitorAction::Show {
+            id: id.clone(),
+            history: true,
+        },
+    )
+    .unwrap();
+    assert!(
+        show.contains("mur_run run-1") && show.contains("created"),
+        "{show}"
+    );
+
+    let e = go(
+        d.path(),
+        MonitorAction::Retry {
+            id: id.clone(),
+            reset_remediation_budget: false,
+        },
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("exhausted"), "{e:#}");
+
+    let c = go(d.path(), MonitorAction::Cancel { id: id.clone() }).unwrap();
+    assert!(c.contains("NOT cancelled"), "{c}");
+    assert_eq!(s.get(&id).unwrap().unwrap().state, MonitorState::Completed);
+    assert!(
+        go(
+            d.path(),
+            MonitorAction::List {
+                state: None,
+                all: false
+            }
+        )
+        .unwrap()
+        .contains("no monitors")
+    );
+
+    // NOTE: the brief's placeholder `conn_for_test_set_state` does not
+    // exist. This is the real public API: a direct state write so the
+    // test can reach `exhausted` without waiting on the scheduler.
+    s.set_state(&id, MonitorState::Exhausted, t0()).unwrap();
+    let r = go(
+        d.path(),
+        MonitorAction::Retry {
+            id: id.clone(),
+            reset_remediation_budget: true,
+        },
+    )
+    .unwrap();
+    assert!(r.contains("reactivated"), "{r}");
+    assert_eq!(s.get(&id).unwrap().unwrap().state, MonitorState::Active);
+}
+
+// The "ordinary" exhaustion path: plan-2's remediation-attempt ceiling will
+// also land a monitor in `Exhausted` without ever setting `hard_reached`.
+// `retry` must keep reactivating that case cleanly — only the hard-deadline
+// case (below) is special-cased.
+#[test]
+fn retry_reactivates_cleanly_when_exhausted_without_a_hard_deadline() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+
+    s.set_state(&id, MonitorState::Exhausted, t0()).unwrap();
+    assert!(!s.get(&id).unwrap().unwrap().hard_reached);
+
+    let r = go(
+        d.path(),
+        MonitorAction::Retry {
+            id: id.clone(),
+            reset_remediation_budget: true,
+        },
+    )
+    .unwrap();
+    assert!(r.contains("reactivated"), "{r}");
+    assert_eq!(s.get(&id).unwrap().unwrap().state, MonitorState::Active);
+}
+
+// The hard-deadline path: in this slice, `hard_reached` is the ONLY way a
+// monitor reaches `Exhausted`, and `reactivate` deliberately never clears
+// it. So retrying it would be a guaranteed no-op — the very next tick would
+// re-exhaust the monitor while this command had already reported success.
+// `retry` must refuse instead, naming the deadline, without mutating any
+// state (state stays `exhausted`, `hard_reached` stays set).
+#[test]
+fn retry_refuses_when_the_hard_deadline_has_already_passed() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+
+    s.set_state(&id, MonitorState::Exhausted, t0()).unwrap();
+    {
+        // No public API sets `hard_reached` directly (by design — it is an
+        // internal fact the scheduler alone should set); reach it via a raw
+        // connection to the same on-disk db, the same way `set_state` above
+        // is itself a test-only backdoor around the scheduler.
+        let db = mur_monitor::store::db_dir(d.path()).join(mur_monitor::store::DB_FILE);
+        let conn = rusqlite::Connection::open(db).unwrap();
+        let n = conn
+            .execute(
+                "UPDATE monitors SET hard_reached = 1 WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+    assert!(s.get(&id).unwrap().unwrap().hard_reached);
+
+    let e = go(
+        d.path(),
+        MonitorAction::Retry {
+            id: id.clone(),
+            reset_remediation_budget: true,
+        },
+    )
+    .unwrap_err();
+    let msg = e.to_string();
+    assert!(msg.contains("hard deadline"), "{msg}");
+    assert!(msg.contains("already passed"), "{msg}");
+    assert!(msg.contains("exhausted"), "{msg}");
+    assert!(msg.contains("new monitor"), "{msg}");
+    assert!(msg.contains("hard_deadline"), "{msg}");
+
+    // Refused, not silently reactivated-then-re-exhausted: state and
+    // `hard_reached` are both untouched.
+    let row = s.get(&id).unwrap().unwrap();
+    assert_eq!(row.state, MonitorState::Exhausted);
+    assert!(row.hard_reached);
+}
+
+#[test]
+fn bad_state_filter_lists_the_valid_ones() {
+    let d = home();
+    let e = go(
+        d.path(),
+        MonitorAction::List {
+            state: Some("bogus".into()),
+            all: false,
+        },
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("awaiting_approval"), "{e:#}");
+}
+
+// `list` truncates ids to `ID_SHORT` for the table, so that truncated
+// string is the only identifier a user ever sees on screen — `show` /
+// `cancel` / `retry` must accept it, not just the full 36-character id.
+#[test]
+fn show_accepts_the_prefix_list_prints_and_the_full_id_and_rejects_unknown() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+
+    let by_prefix = go(
+        d.path(),
+        MonitorAction::Show {
+            id: id[..8].to_string(),
+            history: false,
+        },
+    )
+    .unwrap();
+    assert!(by_prefix.contains("mur_run run-1"), "{by_prefix}");
+
+    let by_full_id = go(
+        d.path(),
+        MonitorAction::Show {
+            id: id.clone(),
+            history: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        by_prefix, by_full_id,
+        "a prefix and the full id must resolve to the same monitor"
+    );
+
+    let e = go(
+        d.path(),
+        MonitorAction::Show {
+            id: "no-such-prefix".into(),
+            history: false,
+        },
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("no monitor"), "{e:#}");
+}
+
+// `footer::has_condition` (the murmur `monitor(n)` badge) counts
+// `stalled_since`/`unknown_streak`; `show` used to print neither
+// `stalled_since`, `soft_notified`, nor `hard_reached`, so a user staring at
+// a monitor `show` called "fine" had no way to see why the footer badge lit
+// up elsewhere.
+#[test]
+fn show_prints_the_stall_and_deadline_condition_fields() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(out.contains("condition:"), "{out}");
+    assert!(out.contains("stalled since"), "{out}");
+    assert!(out.contains("soft notified"), "{out}");
+    assert!(out.contains("hard reached"), "{out}");
+}
+
+// Two monitors minted moments apart by the real store: UUIDv7 ids are
+// time-ordered, so within one fast test run they reliably share a
+// multi-character timestamp prefix (see `ID_SHORT`'s doc comment) —
+// deriving the shared prefix from the real ids instead of hardcoding a
+// length keeps the test honest about what actually collided.
+#[test]
+fn show_reports_every_candidate_on_an_ambiguous_prefix() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let f2 = d.path().join("spec2.yaml");
+    std::fs::write(
+            &f2,
+            "schema_version: 1\nname: t2\nsource: { type: mur_run, reference: run-1 }\nidempotency_key: k2\ncreated_by: { actor: user:test }\n",
+        )
+        .unwrap();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: f2,
+            started_at: None,
+        },
+    )
+    .unwrap();
+
+    let s = MonitorStore::open(d.path()).unwrap();
+    let ids: Vec<String> = s
+        .list(&ListFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(ids.len(), 2);
+    let common: String = ids[0]
+        .chars()
+        .zip(ids[1].chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a)
+        .collect();
+    assert!(
+        !common.is_empty(),
+        "test assumes two UUIDv7 ids minted in the same test share a \
+             timestamp prefix; got {ids:?} — if this ever flakes, the store \
+             is generating ids without the expected time-ordering"
+    );
+
+    let e = go(
+        d.path(),
+        MonitorAction::Show {
+            id: common,
+            history: false,
+        },
+    )
+    .unwrap_err();
+    let msg = e.to_string();
+    assert!(msg.contains("ambiguous"), "{msg}");
+    assert!(msg.contains("(t)"), "{msg}");
+    assert!(msg.contains("(t2)"), "{msg}");
+    assert!(msg.contains("more characters"), "{msg}");
+}

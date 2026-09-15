@@ -5,6 +5,7 @@ mod fleet_tick;
 mod inbox;
 mod lock;
 mod mobile_server;
+mod monitor_tick;
 mod relay_client;
 mod signal_server;
 mod skill_upgrade_tick;
@@ -103,6 +104,11 @@ async fn main() -> Result<()> {
     // Memory-federation P0 — serve signed snapshot requests (best-effort loop;
     // verification + scope assembly happen here, outside every agent sandbox).
     snapshot_requests::spawn(mur_dir.clone());
+
+    // Durable monitor (P1) — recover stranded leases once at startup, then
+    // poll due monitors every `TICK_INTERVAL` on its own OS thread (blocking
+    // adapters must never occupy a tokio worker).
+    monitor_tick::spawn(mur_dir.clone());
 
     // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal).
     // No persistent pairing token: enrollment uses on-demand single-use windows

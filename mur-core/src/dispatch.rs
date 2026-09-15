@@ -242,6 +242,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             let mur_home = crate::paths::mur_root(None);
             crate::cmd::job::run(&mur_home, action)?
         }
+        Commands::Monitor { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            cmd::monitor::run(&mur_home, action)?
+        }
         // Deprecated: use `mur internals reindex`
         Commands::Reindex { bootstrap } => {
             eprintln!("# mur reindex: use `mur internals reindex`");
