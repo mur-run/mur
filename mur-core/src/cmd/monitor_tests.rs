@@ -284,6 +284,99 @@ fn list_show_cancel_retry() {
     assert_eq!(s.get(&id).unwrap().unwrap().state, MonitorState::Active);
 }
 
+// The "ordinary" exhaustion path: plan-2's remediation-attempt ceiling will
+// also land a monitor in `Exhausted` without ever setting `hard_reached`.
+// `retry` must keep reactivating that case cleanly — only the hard-deadline
+// case (below) is special-cased.
+#[test]
+fn retry_reactivates_cleanly_when_exhausted_without_a_hard_deadline() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+
+    s.set_state(&id, MonitorState::Exhausted, t0()).unwrap();
+    assert!(!s.get(&id).unwrap().unwrap().hard_reached);
+
+    let r = go(
+        d.path(),
+        MonitorAction::Retry {
+            id: id.clone(),
+            reset_remediation_budget: true,
+        },
+    )
+    .unwrap();
+    assert!(r.contains("reactivated"), "{r}");
+    assert_eq!(s.get(&id).unwrap().unwrap().state, MonitorState::Active);
+}
+
+// The hard-deadline path: in this slice, `hard_reached` is the ONLY way a
+// monitor reaches `Exhausted`, and `reactivate` deliberately never clears
+// it. So retrying it would be a guaranteed no-op — the very next tick would
+// re-exhaust the monitor while this command had already reported success.
+// `retry` must refuse instead, naming the deadline, without mutating any
+// state (state stays `exhausted`, `hard_reached` stays set).
+#[test]
+fn retry_refuses_when_the_hard_deadline_has_already_passed() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+
+    s.set_state(&id, MonitorState::Exhausted, t0()).unwrap();
+    {
+        // No public API sets `hard_reached` directly (by design — it is an
+        // internal fact the scheduler alone should set); reach it via a raw
+        // connection to the same on-disk db, the same way `set_state` above
+        // is itself a test-only backdoor around the scheduler.
+        let db = mur_monitor::store::db_dir(d.path()).join(mur_monitor::store::DB_FILE);
+        let conn = rusqlite::Connection::open(db).unwrap();
+        let n = conn
+            .execute(
+                "UPDATE monitors SET hard_reached = 1 WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+    assert!(s.get(&id).unwrap().unwrap().hard_reached);
+
+    let e = go(
+        d.path(),
+        MonitorAction::Retry {
+            id: id.clone(),
+            reset_remediation_budget: true,
+        },
+    )
+    .unwrap_err();
+    let msg = e.to_string();
+    assert!(msg.contains("hard deadline"), "{msg}");
+    assert!(msg.contains("already passed"), "{msg}");
+    assert!(msg.contains("exhausted"), "{msg}");
+    assert!(msg.contains("new monitor"), "{msg}");
+    assert!(msg.contains("hard_deadline"), "{msg}");
+
+    // Refused, not silently reactivated-then-re-exhausted: state and
+    // `hard_reached` are both untouched.
+    let row = s.get(&id).unwrap().unwrap();
+    assert_eq!(row.state, MonitorState::Exhausted);
+    assert!(row.hard_reached);
+}
+
 #[test]
 fn bad_state_filter_lists_the_valid_ones() {
     let d = home();

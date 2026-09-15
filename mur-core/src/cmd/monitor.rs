@@ -408,6 +408,35 @@ fn retry(
 ) -> Result<()> {
     let r = resolve_id(store, id)?;
     let id = r.id.as_str();
+    // In this slice, `hard_reached` is the ONLY way a monitor reaches
+    // `Exhausted` — the remediation-attempt ceiling that would be the other
+    // route is plan-2. `reactivate` deliberately does not (and must not)
+    // clear `hard_reached`: a passed deadline is a fact about the work's
+    // age, not a state to un-set, and clearing it would restart automatic
+    // work past a deadline the spec says must stop it. So retrying a
+    // hard-deadline exhaustion would be a guaranteed no-op: the next tick
+    // observes once, sees `hard_reached` still true, and re-exhausts the
+    // monitor — while this command would already have told the caller it
+    // succeeded. Refuse before touching any state, rather than reactivate
+    // and then lie about it; unlike the plan-2 remediation-ceiling case
+    // (which genuinely can retry cleanly, below), there is nothing this
+    // command can do to make the deadline case work, and this crate has no
+    // verb to edit a spec's `hard_deadline` in place.
+    if r.hard_reached {
+        let deadline_at = r.work_started_at
+            + chrono::Duration::from_std(r.spec.policy.hard_deadline())
+                .unwrap_or(chrono::Duration::MAX);
+        bail!(
+            "monitor {id} cannot be usefully retried: its hard deadline ({}, {} after work \
+             started at {}) has already passed. Reactivating would observe once and land back \
+             in `exhausted` on the very next tick, reporting success for nothing. Register a \
+             new monitor for this work, or the same spec with a longer `hard_deadline`, if it \
+             is still worth watching — this slice has no verb to edit a deadline in place.",
+            deadline_at.to_rfc3339(),
+            r.spec.policy.hard_deadline,
+            r.work_started_at.to_rfc3339(),
+        );
+    }
     if !store.reactivate(id, now, reset_budget)? {
         bail!(
             "only an exhausted monitor can be retried (state: {})",
