@@ -3,7 +3,7 @@
 //! about backoff, deadlines, terminal settlement and health lives there and
 //! is table-testable. `tick` is the thin I/O wrapper the daemon calls.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -18,7 +18,10 @@ use crate::state::{MonitorState, Outcome};
 use crate::store::{CycleUpdate, Event, ListFilter, MonitorRow, MonitorStore};
 
 /// Longer than any single `observe` may take (GitHub client timeout is 30 s,
-/// the others are local reads), so no heartbeat is needed in this plan.
+/// the others are local reads). A batch of `max_claims` claims is NOT
+/// covered by one lease each staying alive for the whole batch — `tick`
+/// beats each monitor's own lease immediately before its `observe` call, so
+/// this only ever has to outlast one observe, not the sum of several.
 pub const DEFAULT_LEASE: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -208,7 +211,28 @@ pub fn tick(
         claimed: claimed.len(),
         ..Default::default()
     };
+    let started = Instant::now();
     for c in claimed {
+        // Refresh this monitor's own lease right before its observe, so the
+        // lease only has to cover one observe (worst case ~30s for the
+        // GitHub adapter) rather than the whole batch of `max_claims`
+        // observes running serially. `now` advanced by real elapsed time
+        // keeps the stored expiry honest about wall-clock progress through
+        // the batch while `now` itself stays the logical clock the rest of
+        // this function (and `plan_cycle`) reasons with.
+        let beat_at = now
+            + chrono::Duration::from_std(started.elapsed())
+                .unwrap_or_else(|_| chrono::Duration::zero());
+        if !store.heartbeat(&c.row.id, c.fence, beat_at, DEFAULT_LEASE)? {
+            // Someone else already reclaimed this monitor (its lease
+            // expired and another worker took it, bumping the fence).
+            // Observing it now would be wasted work: `apply_cycle` would
+            // reject the write with the same stale fence anyway. Skip
+            // straight to the next claim without calling the adapter.
+            rep.stale_fence += 1;
+            tracing::warn!(monitor = %c.row.id, fence = c.fence, "monitor: stale fence before observe, skipped");
+            continue;
+        }
         // requirement 4: a missing adapter is an `unknown` observation, not
         // a crash — `registry.get()` returning `None` never panics or bails.
         let obs = match registry.get(c.row.source_type) {
@@ -360,6 +384,72 @@ created_by: {{ actor: user:test }}
             t0() + cd(with_jitter(pending_delay(0), seed(&id, 1)))
         );
         assert!(s.lease_of(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn tick_beats_the_lease_before_each_observe() {
+        // Proves the fix for the batch-vs-single-lease finding: `tick` must
+        // refresh a monitor's own lease immediately before calling its
+        // adapter, not rely on the lease `claim_due` stamped for the whole
+        // batch. The adapter below opens a second connection to the same
+        // store and snapshots the lease's `expires_at` from INSIDE its own
+        // `observe()` call — i.e. after `tick`'s pre-observe heartbeat (if
+        // any) has already run, before `apply_cycle` releases the lease.
+        //
+        // The adapter sleeps briefly first. Without that, the real elapsed
+        // time between `claim_due` and the heartbeat is sub-millisecond,
+        // and `expires_at` is stored with millisecond precision (`ts()`
+        // uses `SecondsFormat::Millis`) — a beaten and an unbeaten lease
+        // would then round to the identical string and the assertion could
+        // pass whether or not `heartbeat` was ever called. The sleep makes
+        // the two genuinely distinguishable.
+        let (d, s, id) = fresh("  on_success: []", true);
+        let home = d.path().to_path_buf();
+        let seen: std::sync::Arc<Mutex<Option<DateTime<Utc>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+
+        struct SleepyProbe {
+            home: PathBuf,
+            id: String,
+            seen: std::sync::Arc<Mutex<Option<DateTime<Utc>>>>,
+        }
+        impl SourceAdapter for SleepyProbe {
+            fn source_type(&self) -> SourceType {
+                SourceType::MurRun
+            }
+            fn validate_reference(&self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn observe(&self, _: &str, _: Option<&str>) -> Observation {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                let probe = MonitorStore::open(&self.home).unwrap();
+                *self.seen.lock().unwrap() =
+                    probe.lease_of(&self.id).unwrap().map(|l| l.expires_at);
+                Observation::pending("p", "running")
+            }
+        }
+
+        let mut reg = AdapterRegistry::new();
+        reg.register(Box::new(SleepyProbe {
+            home,
+            id: id.clone(),
+            seen: seen.clone(),
+        }));
+
+        let claim_time = t0();
+        let rep = tick(&s, &reg, claim_time, "w", 8).unwrap();
+        assert_eq!((rep.claimed, rep.observed, rep.stale_fence), (1, 1, 0));
+
+        let original_expiry = claim_time + cd(DEFAULT_LEASE);
+        let beat_expiry = seen
+            .lock()
+            .unwrap()
+            .expect("observe should have seen a live lease");
+        assert!(
+            beat_expiry > original_expiry,
+            "expected the pre-observe heartbeat to move expires_at beyond \
+             the claim_due stamp: {beat_expiry} vs {original_expiry}"
+        );
     }
 
     #[test]
