@@ -64,16 +64,21 @@ pub fn classify(status: u16, body: &str, retry_after_secs: Option<u64>) -> Obser
     let body = body.as_str();
     let obs = match status {
         200 => classify_ok(body),
-        401 => Observation::unknown(format!("credential rejected (401): {}", snippet(body))),
+        401 => Observation::unknown(format!("credential rejected (401): {}", snippet(body)))
+            .credential_failure(),
         403 if body.to_ascii_lowercase().contains("rate limit") => {
             Observation::unknown("rate limited (403)").with_poll_after(Duration::from_secs(
                 retry_after_secs.unwrap_or(RATE_LIMIT_DEFAULT_SECS),
             ))
         }
+        // Not rate-limited, so this 403 means the token itself lacks scope —
+        // a credential problem, not a transient one (the rate-limit arm above
+        // already claimed the other 403 cause).
         403 => Observation::unknown(format!(
             "forbidden (403) — token may lack actions:read: {}",
             snippet(body)
-        )),
+        ))
+        .credential_failure(),
         404 => Observation::unknown(
             "not found (404): eventual consistency, permissions, or deleted — not proven",
         ),
@@ -184,6 +189,7 @@ impl SourceAdapter for GithubActionsAdapter {
                     return Observation::unknown(format!(
                         "credential_ref `{c}` could not be resolved — update the reference"
                     ))
+                    .credential_failure()
                     .redacted();
                 }
             },
@@ -297,6 +303,21 @@ mod tests {
         );
     }
 
+    /// `credential_failure` is the structural signal `cmd::monitor::add`
+    /// refuses on — it must be set on the two response shapes that genuinely
+    /// mean the credential is the problem (401, and a 403 that is not a rate
+    /// limit) and never on an `Unknown` caused by something else, so a
+    /// transient/unrelated failure never blocks monitor creation.
+    #[test]
+    fn credential_failure_flags_401_and_scope_403_only() {
+        assert!(classify(401, "{\"message\":\"Bad credentials\"}", None).credential_failure);
+        assert!(classify(403, "Resource not accessible by integration", None).credential_failure);
+        assert!(!classify(403, "API rate limit exceeded", None).credential_failure);
+        assert!(!classify(404, "", None).credential_failure);
+        assert!(!classify(429, "", None).credential_failure);
+        assert!(!classify(500, "", None).credential_failure);
+    }
+
     #[test]
     fn rate_limit_recommends_retry_after_or_the_default() {
         assert_eq!(
@@ -373,6 +394,10 @@ mod tests {
         let elapsed = started.elapsed();
 
         assert_eq!(o.outcome, Outcome::Unknown);
+        assert!(
+            o.credential_failure,
+            "an unresolvable credential_ref must set credential_failure so `add` refuses"
+        );
         let err = o
             .adapter_error
             .expect("unresolved credential must report an error");

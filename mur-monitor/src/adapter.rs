@@ -19,6 +19,13 @@ pub struct Observation {
     pub recommended_poll_after: Option<Duration>,
     /// Set when `outcome == Unknown` for a monitor-side reason.
     pub adapter_error: Option<String>,
+    /// Set by an adapter that knows, structurally, that the credential
+    /// itself is the blocker (unresolvable ref, 401, or a non-rate-limit
+    /// 403) — never inferred by sniffing `adapter_error`'s prose, which is
+    /// free-form per adapter and not a contract. `cmd::monitor::add` refuses
+    /// on this flag so the caller learns immediately, instead of creating a
+    /// monitor that would report `unknown` forever for a fixable problem.
+    pub credential_failure: bool,
 }
 
 impl Observation {
@@ -29,6 +36,7 @@ impl Observation {
             evidence: evidence.into(),
             recommended_poll_after: None,
             adapter_error: None,
+            credential_failure: false,
         }
     }
     pub fn terminal(outcome: Outcome, evidence: impl Into<String>) -> Self {
@@ -39,6 +47,7 @@ impl Observation {
             evidence: evidence.into(),
             recommended_poll_after: None,
             adapter_error: None,
+            credential_failure: false,
         }
     }
     pub fn unknown(error: impl Into<String>) -> Self {
@@ -49,10 +58,17 @@ impl Observation {
             evidence: e.clone(),
             recommended_poll_after: None,
             adapter_error: Some(e),
+            credential_failure: false,
         }
     }
     pub fn with_poll_after(mut self, d: Duration) -> Self {
         self.recommended_poll_after = Some(d);
+        self
+    }
+    /// Marks this `Unknown` observation as caused by the credential itself
+    /// (not a transient network/server issue) — see the field doc.
+    pub fn credential_failure(mut self) -> Self {
+        self.credential_failure = true;
         self
     }
     /// The single redaction chokepoint before store, CLI, or (plan-2) agent.

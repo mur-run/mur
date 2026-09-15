@@ -117,9 +117,11 @@ fn add(
         &spec.source.reference,
         spec.source.credential_ref.as_deref(),
     );
-    if let Some(err) = &probe.adapter_error
-        && err.contains("credential")
-    {
+    if probe.credential_failure {
+        let err = probe
+            .adapter_error
+            .as_deref()
+            .unwrap_or("credential failure");
         bail!(
             "{err} — fix the credential reference before adding; a monitor that can never query is not created"
         );
@@ -213,19 +215,20 @@ fn list(
 /// `list` only ever shows the first `ID_SHORT` characters, so `show` /
 /// `cancel` / `retry` must accept exactly what `list` printed — searching
 /// completed monitors too, since `show` must still work on finished work
-/// that `list`'s default filter hides.
-fn resolve_id(store: &MonitorStore, id: &str) -> Result<String> {
-    if store.get(id)?.is_some() {
-        return Ok(id.to_string());
+/// that `list`'s default filter hides. Returns the resolved row itself (not
+/// just the id) so callers don't repeat the lookup they just did to resolve it.
+fn resolve_id(store: &MonitorStore, id: &str) -> Result<MonitorRow> {
+    if let Some(r) = store.get(id)? {
+        return Ok(r);
     }
     let all = store.list(&ListFilter {
         state: None,
         include_completed: true,
     })?;
-    let matches: Vec<&MonitorRow> = all.iter().filter(|r| r.id.starts_with(id)).collect();
+    let mut matches: Vec<MonitorRow> = all.into_iter().filter(|r| r.id.starts_with(id)).collect();
     match matches.len() {
         0 => bail!("no monitor `{id}`"),
-        1 => Ok(matches[0].id.clone()),
+        1 => Ok(matches.remove(0)),
         n => {
             let candidates: Vec<String> = matches
                 .iter()
@@ -240,10 +243,8 @@ fn resolve_id(store: &MonitorStore, id: &str) -> Result<String> {
 }
 
 fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> Result<()> {
-    let id = &resolve_id(store, id)?;
-    let r = store
-        .get(id)?
-        .with_context(|| format!("no monitor `{id}`"))?;
+    let r = resolve_id(store, id)?;
+    let id = r.id.as_str();
     writeln!(out, "monitor {} ({})", r.id, r.name)?;
     writeln!(
         out,
@@ -282,12 +283,16 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
     match store.lease_of(id)? {
         Some(l) => writeln!(
             out,
-            "  lease:         {} until {} (fence {})",
+            "  lease:         {} until {} (fence {} — guards against a reclaimed worker overwriting a newer cycle)",
             l.owner,
             l.expires_at.to_rfc3339(),
             l.fence
         )?,
-        None => writeln!(out, "  lease:         none (fence {})", r.fence)?,
+        None => writeln!(
+            out,
+            "  lease:         none (fence {} — guards against a reclaimed worker overwriting a newer cycle)",
+            r.fence
+        )?,
     }
     writeln!(out, "  recent observations:")?;
     for o in store.observations(id, SHOW_RECENT_OBSERVATIONS)? {
@@ -318,10 +323,8 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
 }
 
 fn cancel(store: &MonitorStore, id: &str, out: &mut dyn Write, now: DateTime<Utc>) -> Result<()> {
-    let id = &resolve_id(store, id)?;
-    let r = store
-        .get(id)?
-        .with_context(|| format!("no monitor `{id}`"))?;
+    let r = resolve_id(store, id)?;
+    let id = r.id.as_str();
     if r.state == MonitorState::Completed {
         bail!("monitor {id} is already completed");
     }
@@ -348,10 +351,8 @@ fn retry(
     out: &mut dyn Write,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    let id = &resolve_id(store, id)?;
-    let r = store
-        .get(id)?
-        .with_context(|| format!("no monitor `{id}`"))?;
+    let r = resolve_id(store, id)?;
+    let id = r.id.as_str();
     if !store.reactivate(id, now, reset_budget)? {
         bail!(
             "only an exhausted monitor can be retried (state: {})",
@@ -516,6 +517,74 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.to_string().contains("reference"), "{e:#}");
+    }
+
+    /// The rule this protects: a probe that reports the credential itself is
+    /// the blocker must refuse `add` immediately, never silently create a
+    /// monitor that can only ever answer `unknown`. `env:` with a variable
+    /// guaranteed unset resolves to `None` deterministically (Task 10), so
+    /// this drives the real `credential_failure` path with no network.
+    #[test]
+    fn add_refuses_when_the_probe_reports_a_credential_failure() {
+        const MISSING_VAR: &str = "MUR_TEST_MONITOR_ADD_CRED_DEFINITELY_NOT_SET_Q7Z";
+        assert!(std::env::var_os(MISSING_VAR).is_none());
+        let d = home();
+        let p = d.path().join("gha.yaml");
+        std::fs::write(
+            &p,
+            format!(
+                "schema_version: 1\nname: t\nsource: {{ type: github_actions, reference: o/r/1, credential_ref: env:{MISSING_VAR} }}\nidempotency_key: k\ncreated_by: {{ actor: user:test }}\n"
+            ),
+        )
+        .unwrap();
+        let e = go(
+            d.path(),
+            MonitorAction::Add {
+                file: p,
+                started_at: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            e.to_string().contains("fix the credential reference"),
+            "{e:#}"
+        );
+        assert_eq!(
+            MonitorStore::open(d.path())
+                .unwrap()
+                .list(&ListFilter::default())
+                .unwrap()
+                .len(),
+            0,
+            "a refused probe must not create a monitor"
+        );
+    }
+
+    /// The converse rule: an `unknown` probe for a reason that has nothing to
+    /// do with credentials (here, a `mur_run` reference with no run record
+    /// yet) must NOT refuse — a monitor for work that hasn't appeared yet is
+    /// legitimate, and only `credential_failure` should ever block `add`.
+    #[test]
+    fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
+        let d = home();
+        let out = go(
+            d.path(),
+            MonitorAction::Add {
+                file: spec_file(d.path(), "mur_run", "run-does-not-exist-yet"),
+                started_at: None,
+            },
+        )
+        .unwrap();
+        assert!(out.contains("probe: unknown"), "{out}");
+        let list = go(
+            d.path(),
+            MonitorAction::List {
+                state: None,
+                all: false,
+            },
+        )
+        .unwrap();
+        assert!(list.contains("active"), "{list}");
     }
 
     #[test]
