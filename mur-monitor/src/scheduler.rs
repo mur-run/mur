@@ -17,11 +17,10 @@ use crate::deadline;
 use crate::state::{MonitorState, Outcome};
 use crate::store::{CycleUpdate, Event, ListFilter, MonitorRow, MonitorStore};
 
-/// Longer than any single `observe` may take (GitHub client timeout is 30 s,
-/// the others are local reads). A batch of `max_claims` claims is NOT
-/// covered by one lease each staying alive for the whole batch — `tick`
-/// beats each monitor's own lease immediately before its `observe` call, so
-/// this only ever has to outlast one observe, not the sum of several.
+/// Longer than any single `observe` may take (GitHub client timeout is 30s,
+/// the others are local reads). `tick` beats each monitor's own lease right
+/// before its `observe` call, so this only has to outlast one observe, not
+/// a whole batch.
 pub const DEFAULT_LEASE: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -386,34 +385,51 @@ created_by: {{ actor: user:test }}
         assert!(s.lease_of(&id).unwrap().is_none());
     }
 
-    #[test]
-    fn tick_beats_the_lease_before_each_observe() {
-        // Proves the fix for the batch-vs-single-lease finding: `tick` must
-        // refresh a monitor's own lease immediately before calling its
-        // adapter, not rely on the lease `claim_due` stamped for the whole
-        // batch. The adapter below opens a second connection to the same
-        // store and snapshots the lease's `expires_at` from INSIDE its own
-        // `observe()` call — i.e. after `tick`'s pre-observe heartbeat (if
-        // any) has already run, before `apply_cycle` releases the lease.
-        //
-        // The adapter sleeps briefly first. Without that, the real elapsed
-        // time between `claim_due` and the heartbeat is sub-millisecond,
-        // and `expires_at` is stored with millisecond precision (`ts()`
-        // uses `SecondsFormat::Millis`) — a beaten and an unbeaten lease
-        // would then round to the identical string and the assertion could
-        // pass whether or not `heartbeat` was ever called. The sleep makes
-        // the two genuinely distinguishable.
-        let (d, s, id) = fresh("  on_success: []", true);
-        let home = d.path().to_path_buf();
-        let seen: std::sync::Arc<Mutex<Option<DateTime<Utc>>>> =
-            std::sync::Arc::new(Mutex::new(None));
+    fn spec_yaml_with_idem(idem: &str) -> MonitorSpec {
+        MonitorSpec::from_yaml(&format!(
+            r#"
+schema_version: 1
+name: t
+source: {{ type: mur_run, reference: run-1 }}
+actions:
+  on_success: []
+policy: {{ retain_monitoring_after_hard_deadline: true }}
+idempotency_key: {idem}
+created_by: {{ actor: user:test }}
+"#
+        ))
+        .unwrap()
+    }
 
-        struct SleepyProbe {
+    #[test]
+    fn a_later_claims_lease_is_beaten_after_earlier_observes_burn_time() {
+        // A single monitor can't exercise this: its beat fires back-to-back
+        // with claim_due (~0 real elapsed time), so nothing moves. The fix
+        // matters for the Nth monitor in a batch — A and B here share one
+        // claim_due stamp, but B's beat only runs after A's observe burns
+        // real time.
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let home = d.path().to_path_buf();
+
+        // 1ms-staggered next_check_at makes claim_due's ORDER BY
+        // deterministic: A before B, not an SQLite tie-break guess.
+        let id_a = s.create(&spec_yaml_with_idem("a"), t0(), None).unwrap().id;
+        let id_b = s
+            .create(&spec_yaml_with_idem("b"), t0() + CD::milliseconds(1), None)
+            .unwrap()
+            .id;
+        let tick_time = t0() + CD::milliseconds(1);
+
+        struct Probe {
             home: PathBuf,
-            id: String,
-            seen: std::sync::Arc<Mutex<Option<DateTime<Utc>>>>,
+            id_a: String,
+            id_b: String,
+            calls: Mutex<usize>,
+            seen_a: std::sync::Arc<Mutex<Option<DateTime<Utc>>>>,
+            seen_b: std::sync::Arc<Mutex<Option<DateTime<Utc>>>>,
         }
-        impl SourceAdapter for SleepyProbe {
+        impl SourceAdapter for Probe {
             fn source_type(&self) -> SourceType {
                 SourceType::MurRun
             }
@@ -421,34 +437,60 @@ created_by: {{ actor: user:test }}
                 Ok(())
             }
             fn observe(&self, _: &str, _: Option<&str>) -> Observation {
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                let mut calls = self.calls.lock().unwrap();
+                *calls += 1;
                 let probe = MonitorStore::open(&self.home).unwrap();
-                *self.seen.lock().unwrap() =
-                    probe.lease_of(&self.id).unwrap().map(|l| l.expires_at);
+                if *calls == 1 {
+                    // A: snapshot its just-beaten expiry, then burn real
+                    // time (20ms, well above ms-precision timestamps) so
+                    // B's own beat has something non-zero to advance past.
+                    *self.seen_a.lock().unwrap() =
+                        probe.lease_of(&self.id_a).unwrap().map(|l| l.expires_at);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                } else {
+                    *self.seen_b.lock().unwrap() =
+                        probe.lease_of(&self.id_b).unwrap().map(|l| l.expires_at);
+                }
                 Observation::pending("p", "running")
             }
         }
 
+        let seen_a: std::sync::Arc<Mutex<Option<DateTime<Utc>>>> =
+            std::sync::Arc::new(Mutex::new(None));
+        let seen_b: std::sync::Arc<Mutex<Option<DateTime<Utc>>>> =
+            std::sync::Arc::new(Mutex::new(None));
         let mut reg = AdapterRegistry::new();
-        reg.register(Box::new(SleepyProbe {
+        reg.register(Box::new(Probe {
             home,
-            id: id.clone(),
-            seen: seen.clone(),
+            id_a: id_a.clone(),
+            id_b: id_b.clone(),
+            calls: Mutex::new(0),
+            seen_a: seen_a.clone(),
+            seen_b: seen_b.clone(),
         }));
 
-        let claim_time = t0();
-        let rep = tick(&s, &reg, claim_time, "w", 8).unwrap();
-        assert_eq!((rep.claimed, rep.observed, rep.stale_fence), (1, 1, 0));
+        let rep = tick(&s, &reg, tick_time, "w", 8).unwrap();
+        assert_eq!((rep.claimed, rep.observed, rep.stale_fence), (2, 2, 0));
 
-        let original_expiry = claim_time + cd(DEFAULT_LEASE);
-        let beat_expiry = seen
-            .lock()
-            .unwrap()
-            .expect("observe should have seen a live lease");
+        // Stamp claim_due itself gave both A and B — same `now`, same
+        // lease, same call.
+        let claim_time_stamp = tick_time + cd(DEFAULT_LEASE);
+
+        let a_expiry = seen_a.lock().unwrap().expect("A observed");
+        let b_expiry = seen_b.lock().unwrap().expect("B observed");
+
+        // A's beat fires with ~0 real elapsed time since claim_due, so its
+        // refreshed expiry is indistinguishable from the claim-time stamp.
+        // This is CORRECT — do not turn this into an inequality later.
+        assert_eq!(a_expiry, claim_time_stamp);
+
+        // B shares A's claim_due stamp, but its beat only runs after A's
+        // observe burned 20ms — its expiry must move strictly past it.
         assert!(
-            beat_expiry > original_expiry,
-            "expected the pre-observe heartbeat to move expires_at beyond \
-             the claim_due stamp: {beat_expiry} vs {original_expiry}"
+            b_expiry > claim_time_stamp,
+            "expected B's pre-observe heartbeat (after A's observe burned \
+             real time) to move its expiry beyond the shared claim_due \
+             stamp: {b_expiry} vs {claim_time_stamp}"
         );
     }
 
