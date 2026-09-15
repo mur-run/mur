@@ -50,17 +50,6 @@ fn ev(kind: &'static str, payload: serde_json::Value) -> Event {
     }
 }
 
-/// Same as `ev`, but dedups on `dedup_key` instead of the bare `kind` — for
-/// an event that can legitimately recur within one (non-rotating) cycle.
-fn ev_keyed(kind: &'static str, dedup_key: String, payload: serde_json::Value) -> Event {
-    Event {
-        kind,
-        payload,
-        dedup: true,
-        dedup_key: Some(dedup_key),
-    }
-}
-
 fn plus(now: DateTime<Utc>, d: Duration) -> DateTime<Utc> {
     now + chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX)
 }
@@ -159,19 +148,26 @@ pub fn plan_cycle(row: &MonitorRow, obs: Observation, now: DateTime<Utc>) -> Cyc
     let (base, attempt_seed) = if obs.outcome == Outcome::Unknown {
         u.unknown_streak = row.unknown_streak + 1;
         if u.unknown_streak == UNHEALTHY_AFTER_UNKNOWN {
-            // `cycle_id` never rotates for a monitor that keeps getting
-            // reobserved, so a bare-`kind` dedup key (like `stalled`'s
-            // above) would announce `monitor_unhealthy` at most once ever
-            // per monitor — a recovery followed by a second run of bad luck
-            // would never be seen. Keying on the streak episode instead
-            // means a later, higher streak announces again while repeated
-            // ticks at the *same* streak (there are none — it only equals
-            // the ceiling on the one tick it's first reached) stay quiet.
-            events.push(ev_keyed(
-                "monitor_unhealthy",
-                format!("monitor_unhealthy:{}", u.unknown_streak),
-                serde_json::json!({ "streak": u.unknown_streak, "error": obs.adapter_error }),
-            ));
+            // This `==` transition guard IS the deduplicator: it fires on
+            // the single tick where the streak first reaches the ceiling,
+            // and the very next tick's streak is one higher so the guard
+            // is false again — exactly one event per episode, with no
+            // help from the database. DB-level dedup is deliberately NOT
+            // used here (`dedup: false`, so `insert_event` appends a fresh
+            // uuid to the key every time): `cycle_id` never rotates for a
+            // monitor that keeps getting reobserved, and the ceiling value
+            // itself never changes between episodes (it is always
+            // `UNHEALTHY_AFTER_UNKNOWN`), so a `kind`- or even a
+            // streak-keyed `UNIQUE(monitor_id, cycle_id, dedup_key)` would
+            // collide on the second episode's key with the first's and be
+            // silently dropped — recover, climb back to the ceiling a
+            // second time, and nothing would fire again, forever.
+            events.push(Event {
+                kind: "monitor_unhealthy",
+                payload: serde_json::json!({ "streak": u.unknown_streak, "error": obs.adapter_error }),
+                dedup: false,
+                dedup_key: None,
+            });
         }
         (unknown_delay(u.unknown_streak - 1), u.unknown_streak)
     } else {
