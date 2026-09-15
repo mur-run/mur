@@ -73,18 +73,23 @@ fn shell_wrapper_is_not_a_signature_failure() {
 /// still handed to the platform verifier.
 #[test]
 fn native_images_are_still_checked() {
-    let signed = Path::new(if cfg!(windows) {
-        r"C:\Windows\System32\cmd.exe"
-    } else {
-        "/bin/ls"
-    });
-    if !signed.exists() {
-        return; // no platform binary to lean on
+    // macOS only for the positive direction: `codesign` ships with the OS, so
+    // a system binary verifying is a fact a test can lean on. `signtool` does
+    // NOT ship with Windows — it comes with the SDK and is absent on CI
+    // runners — where `verify_signed` returns a spawn error for every native
+    // image. That is pre-existing behaviour this change does not touch (see
+    // `windows_unsigned_binary_fails_startup`, which already tolerates a
+    // `signtool` error), and asserting otherwise would be asserting a fiction.
+    #[cfg(target_os = "macos")]
+    {
+        let signed = Path::new("/bin/ls");
+        if signed.exists() {
+            assert!(
+                verify_signed(signed).is_ok(),
+                "a system binary must verify where codesign is guaranteed present"
+            );
+        }
     }
-    assert!(
-        verify_signed(signed).is_ok(),
-        "the platform's own binary must verify"
-    );
 
     // Truncated Mach-O/PE header: claims to be a native image, cannot verify.
     let dir = TempDir::new().unwrap();
