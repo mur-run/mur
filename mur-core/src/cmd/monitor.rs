@@ -96,6 +96,7 @@ fn add(
     out: &mut dyn Write,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    warn_on_mur_home_divergence(mur_home, out)?;
     let yaml = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
     let spec = MonitorSpec::from_yaml(&yaml)?;
     spec.validate()?;
@@ -150,6 +151,37 @@ fn add(
             spec.source.reference,
             c.next_check_at.to_rfc3339(),
             probe.outcome.as_str()
+        )?;
+    }
+    Ok(())
+}
+
+/// `mur monitor add` (CLI/murmur) resolves its home via `crate::paths::mur_root`,
+/// which honors `MUR_HOME`. The daemon — which is what actually polls this
+/// monitor every `TICK_INTERVAL` — resolves its home via
+/// `crate::store::yaml::default_mur_dir()`, which does NOT (see that
+/// function's doc comment; changing daemon path resolution is out of scope
+/// here, it is a repo-wide condition affecting every daemon subsystem, not
+/// just monitors). With `MUR_HOME` set to something other than the default,
+/// a monitor created here would silently be written under a directory the
+/// daemon never looks at and would just never advance — say so instead of
+/// letting the user discover it by staring at a monitor stuck at `sleeping`
+/// forever.
+fn warn_on_mur_home_divergence(mur_home: &Path, out: &mut dyn Write) -> Result<()> {
+    let Ok(configured) = std::env::var("MUR_HOME") else {
+        return Ok(());
+    };
+    if configured.is_empty() {
+        return Ok(());
+    }
+    let daemon_home = crate::store::yaml::default_mur_dir();
+    if mur_home != daemon_home {
+        writeln!(
+            out,
+            "warning: MUR_HOME={configured} makes `mur monitor add` use {} — the daemon \
+             polls monitors under {} and will never see this one",
+            mur_home.display(),
+            daemon_home.display()
         )?;
     }
     Ok(())
@@ -290,6 +322,18 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
         r.next_check_at.to_rfc3339(),
         r.pending_attempts,
         r.unknown_streak
+    )?;
+    // `footer::has_condition` counts exactly these three fields toward the
+    // murmur `monitor(n)` badge — `show` must surface them too, or a user
+    // staring at one monitor has no way to see why the footer is lit.
+    writeln!(
+        out,
+        "  condition:     stalled since {} · soft notified {} · hard reached {}",
+        r.stalled_since
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_else(|| "-".to_string()),
+        r.soft_notified,
+        r.hard_reached
     )?;
     match store.lease_of(id)? {
         Some(l) => writeln!(

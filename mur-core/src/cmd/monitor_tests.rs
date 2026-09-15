@@ -173,6 +173,40 @@ fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
     assert!(list.contains("active"), "{list}");
 }
 
+/// The bug: `mur monitor add` (CLI/murmur) resolves its home via
+/// `crate::paths::mur_root`, which honors `MUR_HOME`, but the daemon —
+/// what actually polls the monitor going forward — always resolves its
+/// home via `crate::store::yaml::default_mur_dir()`, which ignores
+/// `MUR_HOME` entirely. A monitor created while `MUR_HOME` points anywhere
+/// other than the daemon's default is silently written where the daemon
+/// never looks, and just sits `sleeping` forever with no error anywhere.
+/// `add` must say so up front.
+#[test]
+fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
+    let _g = crate::conversations::ENV_LOCK.lock().unwrap();
+    let d = home();
+    let f = spec_file(d.path(), "mur_run", "run-1");
+    let prev = std::env::var("MUR_HOME").ok();
+    unsafe { std::env::set_var("MUR_HOME", d.path()) };
+    let out = go(
+        d.path(),
+        MonitorAction::Add {
+            file: f,
+            started_at: None,
+        },
+    );
+    match prev {
+        Some(p) => unsafe { std::env::set_var("MUR_HOME", p) },
+        None => unsafe { std::env::remove_var("MUR_HOME") },
+    }
+    let out = out.unwrap();
+    assert!(out.contains("warning: MUR_HOME"), "{out}");
+    assert!(
+        out.contains(&d.path().display().to_string()),
+        "must name the CLI-side path: {out}"
+    );
+}
+
 #[test]
 fn list_show_cancel_retry() {
     let d = home();
@@ -313,6 +347,31 @@ fn show_accepts_the_prefix_list_prints_and_the_full_id_and_rejects_unknown() {
     )
     .unwrap_err();
     assert!(e.to_string().contains("no monitor"), "{e:#}");
+}
+
+// `footer::has_condition` (the murmur `monitor(n)` badge) counts
+// `stalled_since`/`unknown_streak`; `show` used to print neither
+// `stalled_since`, `soft_notified`, nor `hard_reached`, so a user staring at
+// a monitor `show` called "fine" had no way to see why the footer badge lit
+// up elsewhere.
+#[test]
+fn show_prints_the_stall_and_deadline_condition_fields() {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(out.contains("condition:"), "{out}");
+    assert!(out.contains("stalled since"), "{out}");
+    assert!(out.contains("soft notified"), "{out}");
+    assert!(out.contains("hard reached"), "{out}");
 }
 
 // Two monitors minted moments apart by the real store: UUIDv7 ids are
