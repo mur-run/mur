@@ -28,9 +28,13 @@ impl App {
 
     /// Refresh `monitor_conditions` from the monitor store, at most once per
     /// `MONITOR_REFRESH_SECS` — opening SQLite on every frame would be a
-    /// per-keystroke file open. A store that fails to open (or doesn't exist
-    /// yet, the common case for an agent with no monitors) leaves the
-    /// previous count: the footer is not a diagnostic surface.
+    /// per-keystroke file open. Uses `open_existing`, not `open`: a home
+    /// that has never run `mur monitor` has no `monitors.db`, and this timer
+    /// runs for the life of every murmur session whether or not the feature
+    /// has ever been touched — the footer must not be the thing that
+    /// materialises the database for a user who never asked for one. A
+    /// missing store, or one that fails to open, leaves the previous count:
+    /// the footer is not a diagnostic surface.
     pub fn refresh_monitor_counts(&mut self, now: std::time::Instant) {
         if let Some(last) = self.last_monitor_refresh
             && now.duration_since(last)
@@ -39,7 +43,7 @@ impl App {
             return;
         }
         self.last_monitor_refresh = Some(now);
-        let Ok(store) = mur_monitor::store::MonitorStore::open(&self.home) else {
+        let Ok(Some(store)) = mur_monitor::store::MonitorStore::open_existing(&self.home) else {
             return;
         };
         let Ok(rows) = store.list(&mur_monitor::store::ListFilter::default()) else {

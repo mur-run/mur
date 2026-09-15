@@ -12,8 +12,9 @@ pub const CTX_RED_PCT: u8 = 90;
 pub const CTX_BAR_WIDTH: usize = 6;
 
 /// How often `App::refresh_monitor_counts` is allowed to reopen the monitor
-/// store — the same cadence the daemon polls at, so a fresher number would
-/// be fiction anyway.
+/// store — double `mur_core::monitor::service::TICK_INTERVAL` (15s, the
+/// daemon's own poll cadence), so the footer never re-opens SQLite faster
+/// than the daemon could possibly have changed anything.
 pub const MONITOR_REFRESH_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, Default)]

@@ -831,6 +831,11 @@ gone without an exit record — is reported as exactly that, never as `failed`.
 Deadlines (stalled 20m · soft 3h · hard 8h) count from when the work really
 started. Design: `docs/superpowers/specs/2026-09-11-durable-monitor-design.md`.
 
+Inside a murmur session the footer shows `monitor(n)` only when something
+needs attention — exhausted, parked awaiting an action, stalled, or
+unhealthy, never for ordinary healthy polling. `Ctrl+T` or `Alt+M` prints
+the same list `mur monitor list` prints into the transcript.
+
 ---
 
 ## 🔨 Build from source

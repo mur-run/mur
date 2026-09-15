@@ -135,6 +135,26 @@ impl MonitorStore {
         let dir = db_dir(mur_home);
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let conn = Connection::open(dir.join(DB_FILE)).context("open monitors.db")?;
+        Self::finish_open(conn)
+    }
+
+    /// Like [`open`](Self::open), but never creates the database: a caller
+    /// that only wants to know whether this home has any monitors at all —
+    /// murmur's footer badge refreshes on a timer for the life of every
+    /// session, whether or not the user has ever run `mur monitor` — must
+    /// not materialise `monitors.db`/`-wal`/`-shm` just by asking. Returns
+    /// `Ok(None)` when the store is absent instead of creating it, so the
+    /// on-disk layout (`db_dir`/`DB_FILE`) stays known only to this module.
+    pub fn open_existing(mur_home: &Path) -> Result<Option<Self>> {
+        let db_path = db_dir(mur_home).join(DB_FILE);
+        if !db_path.exists() {
+            return Ok(None);
+        }
+        let conn = Connection::open(db_path).context("open monitors.db")?;
+        Self::finish_open(conn).map(Some)
+    }
+
+    fn finish_open(conn: Connection) -> Result<Self> {
         // busy_timeout BEFORE journal_mode — see mur-channel/src/index.rs for why:
         // switching journal mode takes a lock on the database, and when several
         // processes open the DB concurrently that lock is contended — without a
