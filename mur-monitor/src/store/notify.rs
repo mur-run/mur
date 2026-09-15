@@ -373,6 +373,38 @@ mod tests {
         );
     }
 
+    /// `a_failure_backs_off_then_parks_as_failed` only proves the negative
+    /// direction (withheld too early; never returns once `Failed`). Nothing
+    /// there proves a retryable row ever comes back — a suite that never
+    /// exercises the `<=` branch of the retry gate would stay green even if
+    /// that comparison were inverted or removed outright. This test drives
+    /// `now` from `unknown_delay` itself (the same call
+    /// `mark_delivery_failed` makes for the first failure, `unknown_delay(0)`)
+    /// rather than an arbitrary large duration, so it actually pins the
+    /// backoff length rather than merely "eventually".
+    #[test]
+    fn a_retryable_notification_returns_once_its_backoff_elapses() {
+        let (_d, s, _id) = store_with_events(&["stalled"]);
+        let id0 = s.pending_notifications("log", t0(), 10).unwrap()[0].event_id;
+        let state = s.mark_delivery_failed(id0, "log", t0()).unwrap();
+        assert_eq!(state, DeliveryState::Pending);
+
+        // Withheld right away: the backoff has not elapsed yet.
+        assert!(s.pending_notifications("log", t0(), 10).unwrap().is_empty());
+
+        // `mark_delivery_failed` computed not-before as
+        // `now + unknown_delay(attempts - 1)` with attempts == 1, i.e.
+        // `unknown_delay(0)`. Query at exactly that instant.
+        let due = t0() + chrono::Duration::from_std(unknown_delay(0)).unwrap();
+        let p = s.pending_notifications("log", due, 10).unwrap();
+        assert_eq!(p.len(), 1, "must be offered again once its backoff elapses");
+        assert_eq!(p[0].event_id, id0);
+        assert_eq!(
+            p[0].attempts, 1,
+            "attempts must reflect the earlier failure"
+        );
+    }
+
     #[test]
     fn max_bounds_a_drain() {
         let (_d, s, _id) = store_with_events(&["stalled", "soft_deadline", "terminal"]);
