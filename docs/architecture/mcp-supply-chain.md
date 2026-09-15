@@ -33,7 +33,8 @@ Both are worth having. Confusing them is what produced the defect this whole thr
 | Interpreter, version-pinned (npx with an `@1.2.3` suffix) | which release is *requested* | no | the bytes of that release |
 | Vendored npm (`node <install>/…`) | sha256 of `package-lock.json` | **yes** | post-install edits inside `node_modules` |
 | Vendored PyPI (`<install>/venv/bin/<script>`) | sha256 of `requirements.lock` | **yes** | post-install edits inside the venv |
-| Unsigned binary (macOS/Windows) | — | **yes** — rule 11 refuses startup | — |
+| Unsigned *native* binary (macOS/Windows) | — | **yes** — rule 11 refuses startup | — |
+| Interpreter script (`npx-cli.js`, a `#!` wrapper) | — | **no** — not a signable image | — |
 
 `mur doctor` reports every one of these states across all agents, so the answer arrives before a failed startup does.
 
@@ -69,6 +70,18 @@ Rule 6 hashed the binary `mur_common::exec::resolve_command` found on the **ambi
 ### Interpreter-launched entries are reported, not enforced
 
 For `command: npx, args: [@scope/pkg]` the pin hashes **npx**. Enforcing it would brick agents on any unrelated Node upgrade while covering none of the code that actually runs. Six agents on this machine were in exactly that state; all six drifted entries were `npx`, all seven direct-binary entries were clean. (#795)
+
+### Rule 11 checks signatures, not scripts
+
+Resolving an entry's `command` canonicalizes through symlinks, so `npx` lands on `npm/bin/npx-cli.js` — a JavaScript file. `codesign` can never verify one, so the check was not strict, it was **unsatisfiable**: an agent given two `npx` MCP servers could not boot again, and the failure hint told the user to run `codesign` on a `.js` file. (#1327)
+
+The scope is now the file header — Mach-O or PE — and not a list of interpreter names, because `npx` today is `bunx`/`pnpm dlx`/`uvx` tomorrow and such a list goes stale in exactly the direction that bricks agents. Everything rule 11 protected before, it still protects: a native image that cannot be verified refuses startup.
+
+What covers an interpreter-launched entry is the row above — nothing, until it is vendored. That was already true; the signature check never added anything to it.
+
+### Admission covers what the agent spawns
+
+Rules 6 and 11 read `enabled_mcp_servers()`, not every entry in the profile. A disabled server never reaches `McpPool`, so letting one refuse startup made `mur agent mcp disable` — the recovery the failure message itself points at — unable to recover anything. (#1327)
 
 ### Vendoring: a MUR-owned install, fingerprinted by the lockfile
 

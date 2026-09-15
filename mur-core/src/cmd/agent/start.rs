@@ -20,6 +20,20 @@ use mur_common::LockFile;
 use super::attest::verify_runtime_at;
 use super::{pid_alive, resolve_bin_dir, resolve_mur_home};
 
+/// Fill a missing launcher symlink for an agent a service unit already names.
+///
+/// Best-effort and quiet on failure: this is a repair, and the attestation
+/// immediately after it reports anything still wrong with a better message
+/// than a bin-dir error would.
+fn heal_launcher(name: &str) {
+    if let Ok(Some(link)) = super::stale::ensure_link(name) {
+        println!(
+            "created missing runtime launcher {} (the service unit names it)",
+            link.display()
+        );
+    }
+}
+
 pub fn cmd_start(name: &str) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
@@ -57,6 +71,12 @@ pub fn cmd_start(name: &str) -> Result<()> {
             .context("no home dir")?
             .join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist"));
         if plist.exists() {
+            // The unit's ExecStart IS this path, so it is the one to verify —
+            // no fallback here, or we would attest a binary launchd will not
+            // run. A missing link is filled rather than reported: the unit is
+            // already committed to it, and `mur agent create` would have
+            // written exactly this.
+            heal_launcher(name);
             verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
             let label = format!("run.mur.agent.{name}");
             let uid = unsafe { libc::getuid() };
@@ -90,6 +110,8 @@ pub fn cmd_start(name: &str) -> Result<()> {
             .context("no config dir")?
             .join(format!("systemd/user/mur-agent-{name}.service"));
         if unit.exists() {
+            // Same reasoning as the launchd leg above.
+            heal_launcher(name);
             verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
             let out = Command::new("systemctl")
                 .args(["--user", "start", &format!("mur-agent-{name}.service")])
@@ -105,14 +127,15 @@ pub fn cmd_start(name: &str) -> Result<()> {
         }
     }
 
-    // 3. No unit — detached spawn of the per-agent symlink.
-    let symlink = resolve_bin_dir()?.join(format!("mur_agent_{name}"));
-    if !symlink.exists() {
-        bail!(
-            "no service unit and no runtime symlink at {} — create it with `mur agent create` or install a service with `mur agent install-service {name}`",
-            symlink.display()
-        );
-    }
+    // 3. No unit — detached spawn of the agent's runtime.
+    //
+    // `runtime_path_for` is the same resolution `direct_respawn` uses: the
+    // agent's own launcher when it has one, else the canonical runtime beside
+    // `mur`. Requiring the launcher here made `start` refuse for agents that
+    // had been coming up perfectly well through `restart` for months — the two
+    // paths disagreed about where an agent's runtime is (field report,
+    // 2026-09-15). One answer, given in one place.
+    let symlink = super::stale::runtime_path_for(name);
     verify_runtime_at(&symlink)?;
     let stdout = fs::OpenOptions::new()
         .create(true)
