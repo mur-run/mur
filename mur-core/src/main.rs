@@ -49,6 +49,11 @@ mod inject;
 #[allow(dead_code)]
 mod install_request;
 mod interactive;
+// `service.rs` (daemon tick/recover) and the subprocess adapter's
+// `write_record` are consumed by the daemon binary; the CLI only calls
+// `registry()` from `cmd::monitor`.
+#[allow(dead_code)]
+mod monitor;
 #[allow(dead_code, unused_imports)]
 mod nudge;
 mod official;

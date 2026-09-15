@@ -138,6 +138,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: crate::cmd::job::JobAction,
     },
+    /// Durable monitors for asynchronous work (CI runs, MUR runs, subprocesses)
+    Monitor {
+        #[command(subcommand)]
+        action: crate::cmd::monitor::MonitorAction,
+    },
     /// Rebuild index from YAML files
     #[command(hide = true)]
     Reindex {

@@ -812,6 +812,25 @@ the in-flight run (per-phase counts, running steps, spend vs budget) or the last
 outcome. Progress lives in `~/.mur/fleets/deep-research/.run_progress.json` (best-effort;
 never affects the run).
 
+### Durable monitors
+
+Work that outlives the turn that started it — a CI run, a MUR fleet run, a Codex
+or Claude Code subprocess — gets a monitor that keeps checking until the source
+gives a real answer, across daemon restarts:
+
+```
+mur monitor add --file wait-for-ci.yaml   # validates, probes once, registers
+mur monitor list                          # what still needs attention
+mur monitor show <id> --history           # evidence + append-only history
+mur monitor cancel <id>                   # stop watching (never cancels the work)
+mur monitor retry <id>                    # bring an exhausted monitor back
+```
+
+`unknown` — the API rate-limited us, the run is not found yet, the process is
+gone without an exit record — is reported as exactly that, never as `failed`.
+Deadlines (stalled 20m · soft 3h · hard 8h) count from when the work really
+started. Design: `docs/superpowers/specs/2026-09-11-durable-monitor-design.md`.
+
 ---
 
 ## 🔨 Build from source
