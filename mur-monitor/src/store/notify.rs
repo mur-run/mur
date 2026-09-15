@@ -136,11 +136,11 @@ impl MonitorStore {
             if let Some(v) = existing {
                 return Ok(v);
             }
-            let max_id: i64 =
-                self.conn()
-                    .query_row("SELECT COALESCE(MAX(id), 0) FROM monitor_events", [], |r| {
-                        r.get(0)
-                    })?;
+            let max_id: i64 = self.conn().query_row(
+                "SELECT COALESCE(MAX(id), 0) FROM monitor_events",
+                [],
+                |r| r.get(0),
+            )?;
             self.conn().execute(
                 "INSERT INTO monitor_notification_channels (channel, first_event_id) VALUES (?1, ?2)",
                 params![channel, max_id],
