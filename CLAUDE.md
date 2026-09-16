@@ -24,8 +24,8 @@ MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo build --release
 cargo test --workspace
 cargo test -p mur-core <test_name>
 
-# ── Lint ──
-cargo clippy --workspace -- -D warnings
+# ── Lint ── (CI's own invocation; --all-targets is load-bearing)
+cargo clippy --all --all-targets --no-deps -- -D warnings
 cargo fmt --check
 
 # ── Run locally ──
