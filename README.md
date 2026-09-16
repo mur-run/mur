@@ -842,6 +842,27 @@ needs attention — exhausted, parked awaiting an action, stalled, or
 unhealthy, never for ordinary healthy polling. `Ctrl+T` or `Alt+M` prints
 the same list `mur monitor list` prints into the transcript.
 
+A monitor can act on what it finds, not just report it. Recording evidence,
+rescheduling the next check, and sending the notification happen on their
+own. Anything that would change something outside MUR stops and asks first:
+`mur monitor show <id>` prints the exact `mur channel approve monitor-<id>
+<hitl-id>` line that releases it, the request is pinned to that one action,
+and approving a different action never releases it. The wait has no clock —
+a parked approval does not expire and does not count against anything.
+Remediation itself does have a limit: MUR gives up after
+`policy.max_remediation_attempts` (default 3) failed remedies and marks the
+monitor `exhausted` rather than retrying forever. Rerunning a job, kicking
+off downstream work, and applying a known remedy are recognized action types
+but do not execute yet — approving one is recorded, and MUR says plainly
+that this build cannot carry it out, rather than pretending it did.
+
+A `mur fleet run` registers its own monitor for you automatically. When
+registration can't complete right away, the run still proceeds — it names
+the run id and says whether tracking is queued to retry or has given up,
+never leaving you thinking it is watched when it isn't. A queued
+registration that keeps failing eventually gives up too; because there is no
+monitor yet to show that on, look for it in the daemon log.
+
 ---
 
 ## 🔨 Build from source
