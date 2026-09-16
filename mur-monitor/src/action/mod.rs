@@ -9,18 +9,14 @@ pub mod risk;
 /// observation was written. Including it means a re-observed terminal (a
 /// child cycle after a remedy) claims afresh, while a daemon restart
 /// replaying the same terminal collides with the row already there.
-pub struct ActionKey;
-
-impl ActionKey {
-    pub fn new(
-        monitor_id: &str,
-        cycle_id: &str,
-        observed_terminal_version: i64,
-        action_type: &str,
-        action_index: usize,
-    ) -> String {
-        format!("{monitor_id}:{cycle_id}:{observed_terminal_version}:{action_type}:{action_index}")
-    }
+pub fn action_key(
+    monitor_id: &str,
+    cycle_id: &str,
+    observed_terminal_version: i64,
+    action_type: &str,
+    action_index: usize,
+) -> String {
+    format!("{monitor_id}:{cycle_id}:{observed_terminal_version}:{action_type}:{action_index}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,10 +58,7 @@ mod tests {
     #[test]
     fn the_key_is_the_specs_five_field_shape() {
         // spec §冪等與事件紀錄: <monitor-id>:<cycle-id>:<version>:<type>:<index>
-        assert_eq!(
-            ActionKey::new("m1", "c1", 7, "notify", 0),
-            "m1:c1:7:notify:0"
-        );
+        assert_eq!(action_key("m1", "c1", 7, "notify", 0), "m1:c1:7:notify:0");
     }
 
     #[test]
@@ -74,8 +67,8 @@ mod tests {
         // observation (higher fence). A fresh claim must be possible, or a
         // child cycle after a remedy could never act.
         assert_ne!(
-            ActionKey::new("m1", "c1", 7, "notify", 0),
-            ActionKey::new("m1", "c1", 8, "notify", 0)
+            action_key("m1", "c1", 7, "notify", 0),
+            action_key("m1", "c1", 8, "notify", 0)
         );
     }
 
@@ -84,8 +77,8 @@ mod tests {
         // The whole point of the claim: this must collide so the unique
         // constraint refuses the second attempt.
         assert_eq!(
-            ActionKey::new("m1", "c1", 7, "collect_logs", 2),
-            ActionKey::new("m1", "c1", 7, "collect_logs", 2)
+            action_key("m1", "c1", 7, "collect_logs", 2),
+            action_key("m1", "c1", 7, "collect_logs", 2)
         );
     }
 
@@ -94,7 +87,7 @@ mod tests {
         // A verb added to KNOWN_ACTIONS without a tier must not silently
         // become auto-executable. `classify` is total and its fallback is
         // the most restrictive tier, not the least.
-        for a in mur_monitor::spec::KNOWN_ACTIONS {
+        for a in crate::spec::KNOWN_ACTIONS {
             let t = risk::classify(a);
             if *a == "notify" || *a == "collect_logs" || *a == "reschedule_monitor" {
                 assert_eq!(t, RiskTier::Read, "{a}");
