@@ -88,7 +88,7 @@ fn attempt(
             if attempts_after >= OUTBOX_MAX_ATTEMPTS {
                 give_up(store, row, &e, rep)?;
             } else {
-                store.outbox_record_failure(&row.id, &e.to_string())?;
+                store.outbox_record_failure(&row.id, &e.to_string(), now)?;
                 rep.retried += 1;
             }
         }
@@ -147,11 +147,20 @@ fn give_up(
 /// schedule would have allowed. That direction is harmless: it only ever
 /// makes a row eligible to retry *earlier*, never delays giving up on it.
 fn is_due(row: &OutboxRow, now: DateTime<Utc>) -> bool {
-    let elapsed = now.signed_duration_since(row.created_at);
-    let required: i64 = (0..row.attempts)
-        .map(|attempt| mur_monitor::backoff::unknown_delay(attempt).as_secs() as i64)
-        .sum();
-    elapsed >= chrono::Duration::seconds(required)
+    // Measured from the LAST ATTEMPT, not from creation. Summing every
+    // delay since `created_at` looks equivalent while ticks are continuous,
+    // but after any gap — a daemon that was down, or a row starved behind
+    // others — the elapsed time already exceeds the cumulative sum for every
+    // remaining attempt, so the row becomes due on every tick and burns its
+    // whole budget in a few seconds. The outbox exists to survive exactly the
+    // outage that also restarts the daemon, so it must not collapse there.
+    let Some(since) = row.last_attempt_at else {
+        // Never retried: due now. Also covers rows written before
+        // `last_attempt_at` existed.
+        return true;
+    };
+    let wait = mur_monitor::backoff::unknown_delay(row.attempts.saturating_sub(1));
+    now.signed_duration_since(since) >= chrono::Duration::seconds(wait.as_secs() as i64)
 }
 
 #[cfg(test)]
@@ -308,5 +317,37 @@ mod tests {
         // Past the window: retried again.
         let r3 = drain_outbox(&home, t0() + chrono::Duration::seconds(11)).unwrap();
         assert_eq!(r3.retried, 1, "past the backoff window, must retry");
+    }
+
+    #[test]
+    fn a_gap_in_ticking_does_not_collapse_the_backoff_into_a_busy_loop() {
+        // The failure this pins. `is_due` used to sum every delay since
+        // `created_at`. That is indistinguishable from per-attempt backoff
+        // while ticks are continuous — but after a gap (a daemon that was
+        // down, or a row starved behind others) the elapsed time already
+        // exceeds the cumulative sum for EVERY remaining attempt, so the row
+        // became due on every tick and burned its whole budget in seconds.
+        // The outbox exists to survive exactly the outage that also restarts
+        // the daemon, so collapsing there defeats it.
+        let (_d, home, _) = home_with_permanently_unregisterable_spec();
+
+        // Two attempts, then a long silence.
+        assert_eq!(drain_outbox(&home, t0()).unwrap().retried, 1);
+        let far = t0() + chrono::Duration::hours(6);
+        assert_eq!(drain_outbox(&home, far).unwrap().retried, 1);
+
+        // One second after that second attempt. Anchored on the last attempt
+        // this is far inside the window; anchored on `created_at`, six hours
+        // have "elapsed" and it would retry immediately.
+        let r = drain_outbox(&home, far + chrono::Duration::seconds(1)).unwrap();
+        assert_eq!(
+            r,
+            OutboxReport::default(),
+            "a long gap must not make every later tick due"
+        );
+
+        // And it is not stuck either — past the window it retries once.
+        let after = drain_outbox(&home, far + chrono::Duration::minutes(30)).unwrap();
+        assert_eq!(after.retried, 1, "must still retry once the window passes");
     }
 }

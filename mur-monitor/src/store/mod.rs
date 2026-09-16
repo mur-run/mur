@@ -290,6 +290,23 @@ impl MonitorStore {
                 last_error TEXT
             );",
         )?;
+        // Additive column for the outbox's retry clock. `CREATE TABLE IF NOT
+        // EXISTS` cannot add a column to a table that already exists, so this
+        // is an `ALTER` that tolerates having run before — the same
+        // idempotence every statement above has, expressed the only way
+        // SQLite offers for a column. Nullable, so existing rows read as
+        // "never attempted" and become due immediately, which is the right
+        // answer for a row that was waiting when the upgrade landed.
+        // No `SCHEMA_USER_VERSION` bump: nothing already written changes
+        // meaning, and an older build simply ignores the column.
+        match self.conn.execute(
+            "ALTER TABLE monitor_registration_outbox ADD COLUMN last_attempt_at TEXT",
+            [],
+        ) {
+            Ok(_) => {}
+            Err(e) if e.to_string().contains("duplicate column name") => {}
+            Err(e) => return Err(e).context("add monitor_registration_outbox.last_attempt_at"),
+        }
         self.conn
             .pragma_update(None, "user_version", SCHEMA_USER_VERSION)?;
         Ok(())

@@ -28,6 +28,11 @@ pub struct OutboxRow {
     pub created_at: DateTime<Utc>,
     pub attempts: u32,
     pub last_error: Option<String>,
+    /// When the last retry was attempted. `None` for a row that has never
+    /// been retried — and for rows written before this column existed, which
+    /// read as "never attempted" and become due at once. That is the right
+    /// answer for a row that was already waiting when the upgrade landed.
+    pub last_attempt_at: Option<DateTime<Utc>>,
 }
 
 impl MonitorStore {
@@ -51,11 +56,15 @@ impl MonitorStore {
     /// this task is explicitly told not to make. A caller wanting backoff
     /// between retries computes it from `attempts` via `crate::backoff` at
     /// the call site instead.
+    /// Ordered by when each row was last tried, not when it was created, so
+    /// a handful of permanently-failing rows cannot hold the oldest-first
+    /// window and starve rows queued after them.
     pub fn outbox_due(&self, now: DateTime<Utc>, max: usize) -> Result<Vec<OutboxRow>> {
         let _ = now;
         let mut stmt = self.conn().prepare(
-            "SELECT id, spec_json, created_at, attempts, last_error \
-             FROM monitor_registration_outbox ORDER BY created_at ASC, id ASC LIMIT ?1",
+            "SELECT id, spec_json, created_at, attempts, last_error, last_attempt_at \
+             FROM monitor_registration_outbox \
+             ORDER BY COALESCE(last_attempt_at, created_at) ASC, id ASC LIMIT ?1",
         )?;
         let rows = stmt.query_map(rusqlite::params![max as i64], row_to_outbox)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -75,11 +84,15 @@ impl MonitorStore {
     /// Record a failed retry: bumps `attempts` and stores the error,
     /// redacted first — same rule as `store/action.rs`'s stored action
     /// results, a secret must never reach history.
-    pub fn outbox_record_failure(&self, id: &str, error: &str) -> Result<()> {
+    pub fn outbox_record_failure(&self, id: &str, error: &str, now: DateTime<Utc>) -> Result<()> {
         self.conn().execute(
-            "UPDATE monitor_registration_outbox SET attempts = attempts + 1, last_error = ?1 \
-             WHERE id = ?2",
-            rusqlite::params![mur_common::redact::redact_secrets(error), id],
+            "UPDATE monitor_registration_outbox SET attempts = attempts + 1, last_error = ?1, \
+             last_attempt_at = ?2 WHERE id = ?3",
+            rusqlite::params![
+                mur_common::redact::redact_secrets(error),
+                crate::store::ts(now),
+                id
+            ],
         )?;
         Ok(())
     }
@@ -99,6 +112,7 @@ fn row_to_outbox(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<OutboxRow>> {
         created_at: parse_ts(&r.get::<_, String>(2)?),
         attempts: r.get::<_, i64>(3)? as u32,
         last_error: r.get(4)?,
+        last_attempt_at: r.get::<_, Option<String>>(5)?.map(|t| parse_ts(&t)),
     }))
 }
 
@@ -127,7 +141,7 @@ mod tests {
         let s = MonitorStore::open(d.path()).unwrap();
         let id = s.outbox_enqueue(&spec("k1"), t0()).unwrap();
         let token = format!("ghp_{}", "A".repeat(36));
-        s.outbox_record_failure(&id, &format!("token={token} denied"))
+        s.outbox_record_failure(&id, &format!("token={token} denied"), t0())
             .unwrap();
         let due = s.outbox_due(t0(), 10).unwrap();
         assert_eq!(due[0].attempts, 1);
@@ -137,7 +151,7 @@ mod tests {
             "secret must not reach history: {err:?}"
         );
         assert!(err.contains("denied"));
-        s.outbox_record_failure(&id, "denied again").unwrap();
+        s.outbox_record_failure(&id, "denied again", t0()).unwrap();
         assert_eq!(s.outbox_due(t0(), 10).unwrap()[0].attempts, 2);
     }
 
