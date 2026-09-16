@@ -3,6 +3,7 @@
 //! point Task 4's gate and Task 5's drain consult; `gate.rs` (Task 4) lives
 //! beside this file — this module is where its `pub mod gate;` line goes.
 
+pub mod gate;
 pub mod local;
 
 use chrono::{DateTime, Utc};
