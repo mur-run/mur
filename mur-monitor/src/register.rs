@@ -114,32 +114,37 @@ pub fn attach_reference(
         let mut spec: MonitorSpec =
             serde_json::from_str(&spec_json).context("parse stored spec_json")?;
         spec.source.reference = reference.to_string();
-        store.conn().execute(
+        // `AND state = ?6`. Without it this is a way to force ANY monitor
+        // back to `Active` and overwrite its spec: `begin_registering`
+        // returns an existing row when the idempotency key matches, and
+        // that row may be live — `AwaitingApproval` with a parked action,
+        // say. Resurrecting it would drop the reference it is actually
+        // watching and reset its version. Only a monitor this function
+        // itself parked in `Registering` is a valid target.
+        let n = store.conn().execute(
             "UPDATE monitors SET spec_json = ?1, reference = ?2, state = ?3, \
-             next_check_at = ?4, version = version + 1 WHERE id = ?5",
+             next_check_at = ?4, version = version + 1 WHERE id = ?5 AND state = ?6",
             rusqlite::params![
                 serde_json::to_string(&spec)?,
                 reference,
                 MonitorState::Active.as_str(),
                 ts(now),
                 id,
+                MonitorState::Registering.as_str(),
             ],
         )?;
+        if n != 1 {
+            anyhow::bail!("monitor {id} is not registering; refusing to overwrite it");
+        }
         Ok(())
     })();
 
-    match result {
-        Ok(()) => store
-            .conn()
-            .execute_batch("COMMIT")
-            .context("commit attach_reference transaction"),
-        Err(e) => {
-            // Best-effort: if the rollback itself fails, the original error
-            // is still the one worth surfacing, not the rollback failure.
-            let _ = store.conn().execute_batch("ROLLBACK");
-            Err(e)
-        }
-    }
+    // The shared tail, not a fourth hand-rolled copy: this one omitted the
+    // rollback-on-COMMIT-failure arm, which is the case the helper exists
+    // for — a COMMIT that fails leaves the transaction open, and every later
+    // statement on that connection silently joins it instead of
+    // autocommitting.
+    crate::store::commit_or_rollback(store.conn(), result, "attach_reference")
 }
 
 #[cfg(test)]
@@ -234,6 +239,45 @@ created_by: {{ actor: user:test }}
         // built from the wrong input, would still pass a bare length check.
         assert_eq!(due[0].spec.idempotency_key, spec.idempotency_key);
         assert_eq!(due[0].spec.source.reference, spec.source.reference);
+    }
+
+    #[test]
+    fn attach_reference_refuses_a_monitor_it_did_not_park() {
+        // `begin_registering` returns an EXISTING row when the idempotency
+        // key matches, and that row may be live. Without the state guard,
+        // attaching would force it back to `Active`, overwrite the spec and
+        // reference it is actually watching, and bump its version — a live
+        // monitor silently repointed at different work.
+        let (_d, s) = store();
+        let id = s
+            .create(&spec_with_reference("run-1"), t0(), None)
+            .unwrap()
+            .id;
+        s.set_state(&id, MonitorState::AwaitingApproval, t0())
+            .unwrap();
+        let before = s.get(&id).unwrap().unwrap();
+
+        let err = attach_reference(&s, &id, "run-hijacked", t0()).unwrap_err();
+        assert!(
+            err.to_string().contains("not registering"),
+            "must say why it refused: {err}"
+        );
+
+        let after = s.get(&id).unwrap().unwrap();
+        assert_eq!(
+            after.state,
+            MonitorState::AwaitingApproval,
+            "state must not move"
+        );
+        assert_eq!(after.reference, before.reference, "reference must not move");
+        assert_eq!(
+            after.spec.source.reference, before.spec.source.reference,
+            "the spec's copy must not move either"
+        );
+        assert_eq!(
+            after.version, before.version,
+            "and no write may have happened"
+        );
     }
 
     #[test]
