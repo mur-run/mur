@@ -109,9 +109,12 @@ fn a_gated_action_parks_and_keeps_waiting_without_spending_the_budget() {
 /// tick proceeds without asking again (`gate.rs` proves the gate does
 /// this; nothing proved the drain acts on it).
 ///
-/// What a released action can DO is bounded by this build: every gated
-/// verb has no executor here, so the honest terminal state is `Failed`
-/// naming the verb plus a `remediation_failed` event — never silence.
+/// What a released action can DO is bounded by the fixture: this monitor is
+/// a `mur_run`, and `rerun` only works on `github_actions`, so the honest
+/// terminal state is `Failed` naming the verb plus a `remediation_failed`
+/// event — never silence. (Until the rerun slice, the reason was "no
+/// executor" for every gated verb; `rerun` has one now, which is why this
+/// asserts on the verb rather than on that phrase.)
 /// That makes `Blocked` → `Failed`-with-that-reason the proof the gate
 /// released: a still-deferring gate leaves the row `Blocked`, spends no
 /// budget and appends no `remediation_failed`. All three are asserted,
@@ -145,9 +148,15 @@ fn an_approval_that_lands_later_releases_the_parked_action() {
         "an approved action must leave Blocked, not sit there forever"
     );
     let result = action.result.unwrap_or_default();
+    // This assertion used to read `contains("no executor")`, written when no
+    // verb both gated and had an executor. `rerun` now has one, so an
+    // approved `rerun` reaches it — and refuses here only because this
+    // fixture's monitor is a `mur_run`, which has nothing to rerun. What the
+    // test guards is unchanged: the approval released the action and the
+    // reason names the verb, rather than the action sitting Blocked forever.
     assert!(
-        result.contains("no executor") && result.contains("rerun"),
-        "the reason must name the verb this build cannot run: {result}"
+        result.contains("rerun"),
+        "the reason must name the verb that was approved: {result}"
     );
     let kinds = event_kinds(&s, &id);
     assert!(
@@ -462,8 +471,8 @@ fn an_approval_on_the_eleventh_parked_action_still_releases_it() {
     );
     let result = released.result.unwrap_or_default();
     assert!(
-        result.contains("no executor") && result.contains("rerun"),
-        "the reason must name the verb this build cannot run: {result}"
+        result.contains("rerun"),
+        "the reason must name the verb that was approved: {result}"
     );
     assert!(
         event_kinds(&s, &last_id).contains(&"remediation_failed".to_string()),
