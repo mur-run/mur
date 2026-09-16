@@ -6646,6 +6646,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-mcp-proto"
+version = "2.84.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "mur-mcp-server"
 version = "2.84.0"
 dependencies = [
@@ -6654,6 +6663,7 @@ dependencies = [
  "mur-common",
  "mur-compress",
  "mur-core",
+ "mur-mcp-proto",
  "serde",
  "serde_json",
  "tempfile",
