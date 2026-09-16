@@ -961,6 +961,7 @@ async fn execute_step(
             deferred: false,
             reason: "gate error".into(),
             action_hash: String::new(),
+            hitl_id: None,
         });
         if decision.deferred {
             // Parked, not refused: the request is durable in the channel and

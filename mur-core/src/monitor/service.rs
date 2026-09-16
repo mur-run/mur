@@ -11,6 +11,15 @@ use chrono::{DateTime, Utc};
 use mur_monitor::scheduler::{self, RecoveryReport, TickReport};
 use mur_monitor::store::MonitorStore;
 
+// `drain_actions` and its supporting types live in their own module —
+// moved out of this file as pure code movement to stay under CLAUDE.md's
+// 800-line-per-file rule (see `drain_actions.rs`'s module doc). Callers
+// reach them at `mur_core::monitor::drain_actions` rather than through a
+// re-export here: `mur-core` builds as both a lib and a bin from the same
+// sources, and a `pub use` with no consumer inside the bin target trips
+// `unused_imports` under `-D warnings` even though the lib's external
+// consumers do use it.
+
 /// How often the daemon thread wakes. Well inside `DEFAULT_LEASE` so a
 /// slow tick never lets its own leases expire under it.
 pub const TICK_INTERVAL: Duration = Duration::from_secs(15);
@@ -81,7 +90,15 @@ pub(crate) fn drain_with(
     let mut rep = DrainReport::default();
     for channel in registry.iter() {
         for p in store.pending_notifications(channel.name(), now, DRAIN_MAX_PER_TICK)? {
-            let n = mur_monitor::notify::render(&p.row, &p.event);
+            // §通知策略's 「執行過的動作」 field. Scoped to the row's own cycle,
+            // so a monitor that was retried does not report the previous
+            // episode's actions as this one's.
+            let actions: Vec<_> = store
+                .actions_for(&p.row.id)?
+                .into_iter()
+                .filter(|a| a.cycle_id == p.row.cycle_id)
+                .collect();
+            let n = mur_monitor::notify::render(&p.row, &p.event, &actions);
             match channel.deliver(&n) {
                 Ok(()) => {
                     store.mark_delivered(p.event_id, channel.name(), now)?;

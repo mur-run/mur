@@ -87,18 +87,47 @@ fn unresolved_gates_in(channel_id: &str, events: &[ChannelEvent]) -> Vec<Pending
 }
 
 pub fn approve(channel_id: &str, hitl_id: &str, deny: bool, reason: Option<String>) -> Result<()> {
-    let home = crate::paths::mur_root(None);
-    let svc = ChannelService::open(&home)?;
+    approve_in(
+        &crate::paths::mur_root(None),
+        channel_id,
+        hitl_id,
+        deny,
+        reason,
+    )
+}
+
+/// The body of `approve`, with `mur_home` passed in so a test can drive the
+/// real command against a temp root instead of the user's own — the same
+/// seam `backfill_purpose` already uses.
+pub(crate) fn approve_in(
+    home: &Path,
+    channel_id: &str,
+    hitl_id: &str,
+    deny: bool,
+    reason: Option<String>,
+) -> Result<()> {
+    let svc = ChannelService::open(home)?;
 
     // Find the matching HitlRequest to echo its action_hash (so the gate's
     // re-verify passes). Refuse if there is no such pending request.
+    //
+    // The id selects the request, never the other way round: this was
+    // `find_map(parse).filter(|r| r.hitl_id == hitl_id)`, where the `filter`
+    // is `Option::filter` and so ran on the ONE request `find_map` had
+    // already settled on — the newest parseable one. Naming any older
+    // pending request reported "no pending HitlRequest". One channel can
+    // carry several at once: the monitor drain walks a whole action list in
+    // a single pass and parks one request per gated verb on the derived
+    // `monitor-<id>` channel, and `mur monitor show` then prints an approve
+    // command for each. Predicate inside the iterator, so the search
+    // continues past a non-match.
     let evs = svc.load_events(channel_id)?;
     let request: HitlRequest = evs
         .iter()
         .rev()
         .filter(|e| e.kind == EventKind::HitlRequest)
-        .find_map(|e| serde_json::from_value::<HitlRequest>(e.payload.clone()).ok())
-        .filter(|r| r.hitl_id == hitl_id)
+        .filter_map(|e| serde_json::from_value::<HitlRequest>(e.payload.clone()).ok())
+        .find(|r| r.hitl_id == hitl_id)
         .with_context(|| format!("no pending HitlRequest {hitl_id} in channel {channel_id}"))?;
 
     let resp = HitlResponse {
@@ -114,7 +143,7 @@ pub fn approve(channel_id: &str, hitl_id: &str, deny: bool, reason: Option<Strin
     // workflow/HITL channels is the concierge "mur".
     crate::channel_writer::append_as_writer(
         &svc,
-        &home,
+        home,
         channel_id,
         ROUTER_AGENT,
         ChannelActor::local_human(),
@@ -346,6 +375,123 @@ mod pending_hitl_tests {
         let gates = unresolved_gates_in("chan-x", &events);
         assert_eq!(gates.len(), 1);
         assert_eq!(gates[0].hitl_id, "hitl-open");
+    }
+}
+
+#[cfg(test)]
+mod approve_tests {
+    use super::*;
+    use mur_channel::ChannelService;
+    use mur_common::channel::{ChannelActor, EventKind};
+    use tempfile::TempDir;
+
+    /// Park one `HitlRequest` on `channel_id`, with its own `action_hash` so
+    /// the response can be traced back to the request it settled.
+    fn park(home: &std::path::Path, channel_id: &str, hitl_id: &str, action_hash: &str) {
+        let req = HitlRequest {
+            hitl_id: hitl_id.to_string(),
+            action_hash: action_hash.to_string(),
+            tier: RiskTier::Write,
+            tool_name: "monitor:rerun".into(),
+            tool_input: serde_json::json!({}),
+            step_or_call_id: "cyc-1:0".into(),
+            agent_id: "monitor:m1".into(),
+            timeout_ms: 60_000,
+            summary: "rerun".into(),
+        };
+        ChannelService::open(home)
+            .unwrap()
+            .append(
+                channel_id,
+                ChannelActor::System,
+                EventKind::HitlRequest,
+                serde_json::to_value(&req).unwrap(),
+                None,
+            )
+            .unwrap();
+    }
+
+    fn responses(home: &std::path::Path, channel_id: &str) -> Vec<HitlResponse> {
+        ChannelService::open(home)
+            .unwrap()
+            .load_events(channel_id)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == EventKind::HitlResponse)
+            .filter_map(|e| serde_json::from_value::<HitlResponse>(e.payload).ok())
+            .collect()
+    }
+
+    /// H2 (whole-branch review). The lookup was
+    /// `.rev().filter(kind).find_map(parse).filter(|r| r.hitl_id == hitl_id)`,
+    /// whose trailing `filter` is `Option::filter` — it ran on the single
+    /// request `find_map` had already stopped at, the newest one. Approving
+    /// anything older returned "no pending HitlRequest".
+    ///
+    /// This bites the monitor drain, which walks a whole action list in one
+    /// pass and parks one request per gated verb on the same derived
+    /// `monitor-<id>` channel (the spec's own example,
+    /// `on_failure: [apply_known_remedy, rerun]`, is exactly that shape).
+    /// `mur monitor show` then printed an approve command that errored — the
+    /// user does precisely what they were told and it fails.
+    ///
+    /// The `unwrap()` on `approve_in` IS the red assertion: with the bug it
+    /// is an `Err` and this panics. The `action_hash` check is the second
+    /// half — an implementation that found the right request but echoed the
+    /// newest one's hash would satisfy `hitl_id` alone while writing a
+    /// response no gate can match, since `scan_prior` keys on the hash.
+    #[test]
+    fn approving_the_older_of_two_parked_requests_settles_that_one() {
+        let tmp = TempDir::new().unwrap();
+        let channel = "monitor-m1";
+        park(tmp.path(), channel, "hitl-older", "hash-older");
+        park(tmp.path(), channel, "hitl-newer", "hash-newer");
+
+        approve_in(tmp.path(), channel, "hitl-older", false, None).unwrap();
+
+        let rs = responses(tmp.path(), channel);
+        assert_eq!(rs.len(), 1, "exactly one response must be written: {rs:?}");
+        assert_eq!(rs[0].hitl_id, "hitl-older");
+        assert_eq!(
+            rs[0].action_hash, "hash-older",
+            "the response must echo the hash of the request it names — the gate \
+             matches on the hash, not the id"
+        );
+        assert!(rs[0].allow);
+    }
+
+    /// The positive control for the test above: without it, an `approve_in`
+    /// that ignored `hitl_id` entirely and always took the OLDEST request
+    /// would pass. Here the newest is the one named, and it must win.
+    #[test]
+    fn approving_the_newer_of_two_parked_requests_still_settles_that_one() {
+        let tmp = TempDir::new().unwrap();
+        let channel = "monitor-m1";
+        park(tmp.path(), channel, "hitl-older", "hash-older");
+        park(tmp.path(), channel, "hitl-newer", "hash-newer");
+
+        approve_in(tmp.path(), channel, "hitl-newer", true, Some("no".into())).unwrap();
+
+        let rs = responses(tmp.path(), channel);
+        assert_eq!(rs.len(), 1);
+        assert_eq!(rs[0].hitl_id, "hitl-newer");
+        assert_eq!(rs[0].action_hash, "hash-newer");
+        assert!(!rs[0].allow, "--deny must write a refusal, not an approval");
+    }
+
+    #[test]
+    fn an_unknown_id_is_still_refused() {
+        // The guard the fix must not have traded away: a typo'd id must not
+        // silently settle whichever request happens to be there.
+        let tmp = TempDir::new().unwrap();
+        let channel = "monitor-m1";
+        park(tmp.path(), channel, "hitl-older", "hash-older");
+        let err = approve_in(tmp.path(), channel, "hitl-nope", false, None).unwrap_err();
+        assert!(err.to_string().contains("hitl-nope"), "{err}");
+        assert!(
+            responses(tmp.path(), channel).is_empty(),
+            "a refused approve must write nothing"
+        );
     }
 }
 

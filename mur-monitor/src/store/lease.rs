@@ -71,7 +71,7 @@ fn claimable_states_sql() -> String {
 /// `BEGIN IMMEDIATE` methods below (see module doc for why they cannot use
 /// rusqlite's safe `transaction()` wrapper). `pub(super)` so `observe.rs`
 /// (Task 6's `apply_cycle`) can reuse it instead of writing a fourth copy.
-pub(super) fn commit_or_rollback<T>(conn: &Connection, result: Result<T>, what: &str) -> Result<T> {
+pub(crate) fn commit_or_rollback<T>(conn: &Connection, result: Result<T>, what: &str) -> Result<T> {
     match result {
         Ok(v) => match conn.execute_batch("COMMIT") {
             Ok(()) => Ok(v),

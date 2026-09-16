@@ -44,6 +44,13 @@ pub struct GateDecision {
     pub deferred: bool,
     pub reason: String,
     pub action_hash: String,
+    /// The id of the parked request, set only when `deferred`. A caller that
+    /// defers has to be able to tell a human WHICH request to answer, and
+    /// `mur channel approve` matches strictly on this id — not on
+    /// `action_hash`. Without it a caller can only print a command the
+    /// approve path rejects, which is how a monitor ends up parked with no
+    /// reachable way to release it.
+    pub hitl_id: Option<String>,
 }
 
 /// How often the wait loop re-reads the log, and the default wait budget.
@@ -116,12 +123,14 @@ pub async fn gate(
             deferred: false,
             reason: "read-tier: auto".into(),
             action_hash: hash,
+            hitl_id: None,
         }),
         HitlMode::Deny => Ok(GateDecision {
             allow: false,
             deferred: false,
             reason: "policy: deny".into(),
             action_hash: hash,
+            hitl_id: None,
         }),
         HitlMode::Ask => {
             // Policy floor: refuse before looking anything up, so an approval
@@ -133,6 +142,7 @@ pub async fn gate(
                     deferred: false,
                     reason: "policy: approvals disabled for this run".into(),
                     action_hash: hash,
+                    hitl_id: None,
                 });
             }
             let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
@@ -169,6 +179,7 @@ pub async fn gate(
                         deferred: true,
                         reason: format!("awaiting approval ({existing_id})"),
                         action_hash: hash,
+                        hitl_id: Some(existing_id),
                     });
                 }
                 _ => {}
@@ -226,6 +237,7 @@ pub async fn gate(
                     deferred: true,
                     reason: format!("awaiting approval ({hitl_id})"),
                     action_hash: hash,
+                    hitl_id: Some(hitl_id),
                 });
             }
 
@@ -264,6 +276,7 @@ pub async fn gate(
                     deferred: false,
                     reason: format!("auto-approved ({why})"),
                     action_hash: hash.clone(),
+                    hitl_id: None,
                 }
             } else {
                 wait_for_response(mur_home, channel_id, &hitl_id, &hash, require_sig, timeout)
@@ -342,6 +355,7 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str, require_sig: bool) 
                             format!("denied earlier ({})", r.hitl_id)
                         },
                         action_hash: hash.to_string(),
+                        hitl_id: None,
                     });
                 }
             }
@@ -425,6 +439,7 @@ async fn wait_for_response(
                     deferred: false,
                     reason: "hitl_drift: response action_hash mismatch".into(),
                     action_hash: expected_hash.to_string(),
+                    hitl_id: None,
                 });
             }
             let allow = resp
@@ -441,6 +456,7 @@ async fn wait_for_response(
                     "denied".into()
                 },
                 action_hash: expected_hash.to_string(),
+                hitl_id: None,
             });
         }
         if start.elapsed() >= timeout {
@@ -449,6 +465,7 @@ async fn wait_for_response(
                 deferred: false,
                 reason: "hitl timeout".into(),
                 action_hash: expected_hash.to_string(),
+                hitl_id: None,
             });
         }
         tokio::time::sleep(POLL_INTERVAL).await;

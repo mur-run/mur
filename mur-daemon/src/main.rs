@@ -107,8 +107,12 @@ async fn main() -> Result<()> {
 
     // Durable monitor (P1) — recover stranded leases once at startup, then
     // poll due monitors every `TICK_INTERVAL` on its own OS thread (blocking
-    // adapters must never occupy a tokio worker).
-    monitor_tick::spawn(mur_dir.clone());
+    // adapters must never occupy a tokio worker). `Handle::current()` is
+    // taken here, on the tokio runtime, and handed to the plain OS thread so
+    // its `drain_actions` gate calls can `Handle::block_on` back onto the
+    // runtime for the async HITL channel — the mirror-image bug (calling
+    // `block_on` from a tokio worker) never applies to this thread.
+    monitor_tick::spawn(mur_dir.clone(), tokio::runtime::Handle::current());
 
     // P1 — start the mobile WebSocket endpoint (best-effort; failure is non-fatal).
     // No persistent pairing token: enrollment uses on-demand single-use windows

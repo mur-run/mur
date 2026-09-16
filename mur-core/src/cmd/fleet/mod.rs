@@ -20,6 +20,7 @@ pub mod plan;
 pub mod progress;
 pub mod roster;
 pub mod run;
+pub mod run_monitor;
 pub mod settings;
 pub mod show;
 pub mod status;

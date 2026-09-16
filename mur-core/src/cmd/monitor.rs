@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use clap::Subcommand;
+use mur_common::hitl::RiskTier;
+use mur_monitor::action::ActionState;
 use mur_monitor::spec::MonitorSpec;
 use mur_monitor::state::MonitorState;
 use mur_monitor::store::{ListFilter, MonitorRow, MonitorStore};
@@ -365,6 +367,60 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
             )?;
         }
     }
+    let actions = store.actions_for(id)?;
+    if !actions.is_empty() {
+        writeln!(out, "  actions:")?;
+        for a in &actions {
+            // Single parser for the (positional, colon-delimited) action-key
+            // format — `crate::monitor::drain_actions::verb_and_index_from_key`
+            // is the same recovery Phase 2's retry path uses; a second,
+            // hand-rolled copy here would be how a later change to the key
+            // silently breaks only one caller. Falls back to the raw key
+            // rather than failing `show` on a row it cannot fully explain.
+            let verb = crate::monitor::drain_actions::verb_and_index_from_key(&a.action_key)
+                .map_or(a.action_key.as_str(), |(v, _)| v);
+            let attempt = if a.attempt > 0 {
+                format!(
+                    " ({} attempt{})",
+                    a.attempt,
+                    if a.attempt == 1 { "" } else { "s" }
+                )
+            } else {
+                String::new()
+            };
+            // Rule 1: a blocked action that does not also print the exact
+            // command that releases it is, from the user's side, a monitor
+            // that silently stopped — this line is the whole payoff of the
+            // slice, not a nice-to-have.
+            let unblock = match (a.state, &a.approval_id) {
+                (ActionState::Blocked, Some(hitl_id)) => format!(
+                    "  → mur channel approve {} {hitl_id}",
+                    crate::monitor::actions::gate::channel_id_for(&a.monitor_id)
+                ),
+                _ => String::new(),
+            };
+            writeln!(
+                out,
+                "    {:<13} {:<6} {}{attempt}{unblock}",
+                verb,
+                risk_str(a.risk),
+                a.state.as_str(),
+            )?;
+            // The stored `result` — the reason a remedy failed, or what a
+            // `collect_logs` collected. `remediation_failed`'s notification
+            // sends the user here ("`mur monitor show <id>` for what was
+            // tried") and until now the only place this column was visible
+            // was the raw event payload behind `--history`. It is already
+            // redacted and length-capped by `store_result`, so it is safe to
+            // print as-is; its own line, because it is prose and the columns
+            // above are not.
+            if let Some(result) = a.result.as_deref().map(str::trim)
+                && !result.is_empty()
+            {
+                writeln!(out, "      {result}")?;
+            }
+        }
+    }
     writeln!(out, "  recent observations:")?;
     for o in store.observations(id, SHOW_RECENT_OBSERVATIONS)? {
         writeln!(
@@ -477,6 +533,17 @@ fn retry(
         }
     )?;
     Ok(())
+}
+
+/// `RiskTier` has no `as_str`/`Display` — it round-trips through its own
+/// `Serialize` (kebab-case), same as `mur_monitor::store::action::risk_to_sql`
+/// does for the DB column, so a tier renamed in `mur_common::hitl` cannot
+/// silently drift out of sync with what this prints.
+fn risk_str(tier: RiskTier) -> String {
+    match serde_json::to_value(tier) {
+        Ok(serde_json::Value::String(s)) => s,
+        _ => "?".to_string(),
+    }
 }
 
 fn truncate(s: &str, n: usize) -> String {
