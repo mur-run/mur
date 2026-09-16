@@ -574,3 +574,32 @@ mod tests {
         assert_eq!(v.credential_mode, None);
     }
 }
+
+#[cfg(test)]
+mod hook_present_build_tests {
+    use super::*;
+
+    /// The real `/__mur/health` of a gateway built WITH `codex_impl.rs` and
+    /// `disguise_impl.rs` present (mur-model-gateway 0.4.1, captured
+    /// 2026-09-16). Not a hand-written fixture: this is the byte payload the
+    /// binary served on 127.0.0.1.
+    const HOOK_PRESENT_HEALTH: &str = r#"{
+        "claudeCredential": "oauth",
+        "claudeHook": true,
+        "codexCredential": "chatgpt",
+        "codexHook": true,
+        "compression": false,
+        "status": "ok",
+        "version": "0.4.1"
+    }"#;
+
+    #[test]
+    fn a_hook_present_build_reports_both_hooks_true() {
+        let v: serde_json::Value = serde_json::from_str(HOOK_PRESENT_HEALTH).expect("json");
+        let h = parse_health(&v).expect("health parses");
+        assert!(h.codex_hook, "codexHook must survive as true");
+        assert_eq!(h.claude_hook, Some(true), "claudeHook must survive as true");
+        assert_eq!(h.credential, "chatgpt");
+        assert_eq!(h.claude_credential.as_deref(), Some("oauth"));
+    }
+}
