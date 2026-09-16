@@ -33,7 +33,7 @@ Both are worth having. Confusing them is what produced the defect this whole thr
 | Interpreter, version-pinned (npx with an `@1.2.3` suffix) | which release is *requested* | no | the bytes of that release |
 | Vendored npm (`node <install>/…`) | sha256 of `package-lock.json` | **yes** | post-install edits inside `node_modules` |
 | Vendored PyPI (`<install>/venv/bin/<script>`) | sha256 of `requirements.lock` | **yes** | post-install edits inside the venv |
-| Unsigned *native* binary (macOS/Windows) | — | **yes** — rule 11 refuses startup | — |
+| Unsigned *native* binary (macOS/Windows) | — | **yes** — rule 11 refuses startup | a signed binary whose chain does not validate locally |
 | Interpreter script (`npx-cli.js`, a `#!` wrapper) | — | **no** — not a signable image | — |
 
 `mur doctor` reports every one of these states across all agents, so the answer arrives before a failed startup does.
@@ -78,6 +78,16 @@ Resolving an entry's `command` canonicalizes through symlinks, so `npx` lands on
 The scope is now the file header — Mach-O or PE — and not a list of interpreter names, because `npx` today is `bunx`/`pnpm dlx`/`uvx` tomorrow and such a list goes stale in exactly the direction that bricks agents. Everything rule 11 protected before, it still protects: a native image that cannot be verified refuses startup.
 
 What covers an interpreter-launched entry is the row above — nothing, until it is vendored. That was already true; the signature check never added anything to it.
+
+### Windows verifies through `wintrust.dll`, not `signtool`
+
+`signtool` ships with the Windows SDK, not with Windows. Shelling out to it meant that on a stock machine *every* native MCP binary failed rule 11 with "signtool could not be spawned" — the same shape as the `npx` defect above: a startup gate on a question the machine could not answer and the operator could not fix. (#1332)
+
+`WinVerifyTrust` is in `wintrust.dll`, present on every install, so the question is now answerable everywhere.
+
+The policy is presence and integrity, **not trust chain**, which matches what macOS already did — `codesign -dv` reports whether a signature is there, it does not demand the chain validate locally. No signature, a digest that does not match the bytes, or an explicit distrust refuses the startup. An expired certificate or a root this machine does not trust does not: rule 11 exists to catch a binary that was swapped, a swapped binary fails the digest, and an expired cert is for the publisher to reissue — not something the agent's operator can act on.
+
+The FFI is kept to a single function returning the raw status, with the policy in a pure `wintrust_verdict` compiled and tested on every platform. Code only a Windows CI runner can execute is code nobody reads a test failure for.
 
 ### Admission covers what the agent spawns
 
