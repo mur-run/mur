@@ -353,7 +353,7 @@ impl ConversationStore {
 /// The bool is the half that matters: a one-shot `mur agent send` receives
 /// deltas and step events perfectly well, so the sink alone cannot tell it from
 /// a murmur TUI with a human watching.
-type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bool);
+pub(crate) type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bool);
 
 pub struct TaskRunner {
     backend: RunnerBackend,
@@ -1799,6 +1799,26 @@ impl TaskRunner {
     /// sink → deny; a caller that declared `can_approve: false` → deny without
     /// asking. Returns `call_id → decision` and `call_id → step_id` (the id the
     /// notification carried, so the client can mark the card that ran it).
+    /// A `GuardedToolCall` over this runner's current configuration.
+    ///
+    /// Built per call rather than held as a field: `tools` and `tools_policy`
+    /// are replaced by the `with_*` builders after construction, so a cached
+    /// copy would serve a stale policy — the one kind of staleness that
+    /// silently widens what a tool may do.
+    fn guarded(&self) -> crate::tools::guarded::GuardedToolCall {
+        crate::tools::guarded::GuardedToolCall {
+            tools: self.tools.clone(),
+            tools_policy: self.tools_policy.clone(),
+            secrets: self.secrets.clone(),
+            notifier: self.notifier.clone(),
+            client_notifiers: self.client_notifiers.clone(),
+            agent_name: self.agent_name.clone(),
+            decision_store: self.decision_store.clone(),
+            hitl_timeout_secs: self.hitl_timeout_secs,
+            pending_approvals: self.pending_approvals.clone(),
+        }
+    }
+
     async fn gate_response(
         &self,
         task_id: &str,
