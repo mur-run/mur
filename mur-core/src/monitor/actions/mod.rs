@@ -348,7 +348,7 @@ mod tests {
     /// in `KNOWN_ACTIONS` and still classifies `Read`, so `MonitorSpec`
     /// accepts it and the gate waves it through — the ONLY thing standing
     /// between a user writing it and the unbounded re-observation loop is
-    /// this `None`. Asserted separately from the three verbs above because
+    /// this `None`. Asserted separately from the runnable verbs above because
     /// those are unrunnable for a different reason (out of scope, no
     /// credential scope); this one is unrunnable because running it was
     /// unsafe.
@@ -374,7 +374,7 @@ mod tests {
     fn every_executor_is_registered_under_the_verb_it_reports() {
         // Paired with `an_unknown_verb_has_no_executor`: that test alone
         // would pass an `executor_for` stubbed to always return `None`.
-        // This one requires the three known verbs to come back `Some` and
+        // This one requires every runnable verb to come back `Some` and
         // self-report the same verb they were looked up by.
         for v in ["notify", "collect_logs"] {
             assert_eq!(executor_for(v).unwrap().verb(), v);

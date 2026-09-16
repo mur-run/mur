@@ -365,9 +365,13 @@ fn attempt_action(
             }
             match executor_for(action_type) {
                 None => {
-                    // `executor_for` covers exactly the three `Read`-tier
-                    // verbs, so every GATED verb — `rerun`,
-                    // `start_downstream`, `apply_known_remedy` — lands here:
+                    // `executor_for` covers exactly two verbs, `notify` and
+                    // `collect_logs`. Everything else lands here: the gated
+                    // verbs (`rerun`, `start_downstream`,
+                    // `apply_known_remedy`) and also `reschedule_monitor`,
+                    // which is `Read`-tier but deliberately has no executor —
+                    // returning a settled monitor to a claimable state
+                    // un-freezes its fence and re-runs the whole list:
                     // deliberately out of scope for this slice (no
                     // credential scope for an external write, no remedy
                     // catalogue). Say so instead of pretending. Approval
@@ -436,8 +440,11 @@ fn attempt_action(
 ///   `AwaitingApproval` monitor — Phase 1's `ActionPending` filter no
 ///   longer sees it once it has been blocked once.
 ///
-/// Bounded by `DRAIN_MAX_ACTIONS_PER_TICK` across both phases combined
-/// (Rule 6).
+/// Two budgets, not one: `DRAIN_MAX_ACTIONS_PER_TICK` for work that runs a
+/// side effect, and `DRAIN_MAX_BLOCKED_PER_TICK` for re-checking rows already
+/// parked on a human. They are separate because sharing one lets fresh claims
+/// crowd out the re-checks, and a re-check that never happens is an approval
+/// that never takes effect.
 pub fn drain_actions(
     mur_home: &Path,
     handle: &tokio::runtime::Handle,
