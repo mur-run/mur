@@ -244,4 +244,76 @@ mod tests {
             .expect("handler");
         assert_eq!(out["call_id"], json!("given-by-caller"));
     }
+
+    #[tokio::test]
+    async fn a_denied_tool_is_refused_without_executing() {
+        use mur_common::agent::{ToolPolicy, ToolRule};
+        let runner = runner_with_probe().with_tools_policy(vec![ToolRule {
+            pattern: "*".into(),
+            policy: ToolPolicy::Deny,
+            risk: None,
+        }]);
+        let h = ToolsCallHandler::new(Arc::new(runner));
+        let out = h
+            .handle(
+                Some(json!({ "task_id": "t-1", "name": "probe_tool" })),
+                &ctx(),
+            )
+            .await
+            .expect("handler");
+        assert_eq!(out["is_error"], json!(true));
+        assert!(
+            out["content"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("denied by policy"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ask_tool_with_no_approval_sink_denies_rather_than_hanging() {
+        // This slice's boundary, asserted so it reads as a boundary rather
+        // than a bug: until the shim registers as the task's approval sink,
+        // an `Ask` tool has nobody to ask, and the gate's answer to that is
+        // to deny at once. Never to run it, and never to wait out the
+        // timeout against nobody.
+        use mur_common::agent::{ToolPolicy, ToolRule};
+        let runner = runner_with_probe().with_tools_policy(vec![ToolRule {
+            pattern: "*".into(),
+            policy: ToolPolicy::Ask,
+            risk: None,
+        }]);
+        let h = ToolsCallHandler::new(Arc::new(runner));
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            h.handle(
+                Some(json!({ "task_id": "t-1", "name": "probe_tool" })),
+                &ctx(),
+            ),
+        )
+        .await
+        .expect("must not hang: an unanswerable gate denies, it does not wait")
+        .expect("handler");
+        assert_eq!(out["is_error"], json!(true));
+        // The code, not the prose: a shim distinguishing a refusal from a
+        // crash must not have to match on a message.
+        assert_eq!(out["error_code"], json!("hitl_denied"));
+    }
+
+    #[tokio::test]
+    async fn tool_output_reaching_this_caller_is_masked() {
+        // The obligation that fails most quietly. If a future change routes
+        // `tools/call` around `GuardedToolCall`, this is what notices.
+        let vault = crate::secrets::SecretVault::new();
+        vault
+            .set("PROBE_TOKEN", "sk-probe-abcdefghijklmnop")
+            .expect("set");
+        let runner = runner_with_probe().with_secrets(Arc::new(vault));
+        let masked = runner
+            .guarded()
+            .masked("leaked sk-probe-abcdefghijklmnop here".into());
+        assert!(!masked.contains("sk-probe-abcdefghijklmnop"), "{masked}");
+        assert!(masked.contains("PROBE_TOKEN"), "{masked}");
+    }
 }
