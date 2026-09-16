@@ -7,13 +7,22 @@
 //! claim/heartbeat/expiry; `observe.rs` owns observations, events and the
 //! write-back of one check cycle.
 
+mod action;
 mod lease;
+/// The shared `COMMIT`-or-`ROLLBACK` tail. Re-exported so sibling modules
+/// use the one implementation instead of hand-rolling a copy that forgets
+/// the rollback-on-COMMIT-failure arm — which three of the four copies in
+/// this crate's history did.
+pub(crate) use lease::commit_or_rollback;
 mod notify;
 mod observe;
+mod outbox;
 
+pub use action::ActionRow;
 pub use lease::{Claimed, Lease};
 pub use notify::{DELIVERY_MAX_ATTEMPTS, DeliveryState, Pending};
 pub use observe::{CycleUpdate, Event, EventRow, ObservationRow};
+pub use outbox::OutboxRow;
 
 use std::path::{Path, PathBuf};
 
@@ -281,6 +290,36 @@ impl MonitorStore {
                 last_error TEXT
             );",
         )?;
+        // Additive column for the outbox's retry clock. `CREATE TABLE IF NOT
+        // EXISTS` cannot add a column to a table that already exists, so this
+        // is an `ALTER` that tolerates having run before — the same
+        // idempotence every statement above has, expressed the only way
+        // SQLite offers for a column. Nullable, so existing rows read as
+        // "never attempted" and become due immediately, which is the right
+        // answer for a row that was waiting when the upgrade landed.
+        // No `SCHEMA_USER_VERSION` bump: nothing already written changes
+        // meaning, and an older build simply ignores the column.
+        //
+        // Probed structurally via `PRAGMA table_info` rather than by
+        // matching SQLite's "duplicate column name" error text: the pragma
+        // is a stable, documented interface, while the error text is
+        // `rusqlite`'s `Display` over whatever SQLite happens to say, which
+        // this crate does not control.
+        let has_last_attempt_at = self
+            .conn
+            .prepare("PRAGMA table_info(monitor_registration_outbox)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|name| name == "last_attempt_at");
+        if !has_last_attempt_at {
+            self.conn
+                .execute(
+                    "ALTER TABLE monitor_registration_outbox ADD COLUMN last_attempt_at TEXT",
+                    [],
+                )
+                .context("add monitor_registration_outbox.last_attempt_at")?;
+        }
         self.conn
             .pragma_update(None, "user_version", SCHEMA_USER_VERSION)?;
         Ok(())
@@ -319,6 +358,38 @@ impl MonitorStore {
         now: DateTime<Utc>,
         work_started_at: Option<DateTime<Utc>>,
     ) -> Result<Created> {
+        self.create_in_state(spec, now, work_started_at, MonitorState::Active)
+    }
+
+    /// `create`, but choosing the state the row starts in.
+    ///
+    /// Exists for auto-registration (spec §自動註冊邊界 clause 1), which must
+    /// persist a monitor BEFORE the work starts and must not let the daemon
+    /// poll it in the meantime — the reference is not known yet. Doing that
+    /// as `create` followed by `set_state` leaves a window in which the row
+    /// is `Active` with no reference, and `is_claimable` includes `Active`,
+    /// so a tick landing in that window claims and polls a monitor that
+    /// cannot be queried. One INSERT closes the window.
+    pub(crate) fn create_in_state(
+        &self,
+        spec: &MonitorSpec,
+        now: DateTime<Utc>,
+        work_started_at: Option<DateTime<Utc>>,
+        initial_state: MonitorState,
+    ) -> Result<Created> {
+        // Only two states are a legitimate *beginning*. Everything else is
+        // reached by the state machine, and a row created directly in, say,
+        // `Completed` would be invisible to every drain and every tick with
+        // no event explaining why.
+        if !matches!(
+            initial_state,
+            MonitorState::Active | MonitorState::Registering
+        ) {
+            anyhow::bail!(
+                "a monitor cannot be created in state {}",
+                initial_state.as_str()
+            );
+        }
         self.conn
             .execute_batch("BEGIN IMMEDIATE")
             .context("begin create transaction")?;
@@ -351,7 +422,7 @@ impl MonitorStore {
                     id,
                     spec.name,
                     serde_json::to_string(spec)?,
-                    MonitorState::Active.as_str(),
+                    initial_state.as_str(),
                     Outcome::Pending.as_str(),
                     spec.source.r#type.as_str(),
                     spec.source.reference,
@@ -462,191 +533,29 @@ impl MonitorStore {
         )?;
         Ok(n == 1)
     }
+
+    /// Count one remediation attempt against `policy.max_remediation_attempts`
+    /// (Task 5, spec §行動執行器 rule 2). The caller counts only actions above
+    /// `Read` tier — this method just does the write and hands back the new
+    /// total so the drain can compare it against the cap without a separate
+    /// `get` round-trip. Never derived from `monitor_actions` (a max over
+    /// `attempt` there conflates one retried action with three distinct
+    /// remedies); this column is the single source of truth for the budget.
+    pub fn record_remediation_attempt(&self, id: &str) -> Result<u32> {
+        self.conn.execute(
+            "UPDATE monitors SET remediation_attempts = remediation_attempts + 1, \
+             version = version + 1 WHERE id = ?1",
+            params![id],
+        )?;
+        let n: i64 = self.conn.query_row(
+            "SELECT remediation_attempts FROM monitors WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )?;
+        Ok(n as u32)
+    }
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-    use chrono::TimeZone;
-
-    pub(crate) fn spec(idem: &str) -> MonitorSpec {
-        MonitorSpec::from_yaml(&format!(
-            r#"
-schema_version: 1
-name: t
-source: {{ type: mur_run, reference: run-1 }}
-idempotency_key: {idem}
-created_by: {{ actor: user:test }}
-"#
-        ))
-        .unwrap()
-    }
-
-    pub(crate) fn t0() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 0).unwrap()
-    }
-
-    #[test]
-    fn open_twice_and_migrate_is_idempotent() {
-        let d = tempfile::tempdir().unwrap();
-        MonitorStore::open(d.path()).unwrap();
-        let s = MonitorStore::open(d.path()).unwrap();
-        let v: i64 = s
-            .conn()
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(v, SCHEMA_USER_VERSION);
-        assert!(d.path().join("monitor").join(DB_FILE).exists());
-    }
-
-    #[test]
-    fn create_is_idempotent_on_active_key() {
-        let d = tempfile::tempdir().unwrap();
-        let s = MonitorStore::open(d.path()).unwrap();
-        let a = s.create(&spec("k1"), t0(), None).unwrap();
-        let b = s.create(&spec("k1"), t0(), None).unwrap();
-        assert!(!a.existing);
-        assert!(b.existing);
-        assert_eq!(a.id, b.id);
-        assert_eq!(a.next_check_at, t0(), "first check is immediate");
-        let row = s.get(&a.id).unwrap().unwrap();
-        assert_eq!(row.state, MonitorState::Active);
-        assert_eq!(row.outcome, Outcome::Pending);
-        assert_eq!(row.work_started_at, t0());
-        assert_eq!(row.fence, 0);
-        // a completed monitor no longer reserves its key
-        assert!(s.set_state(&a.id, MonitorState::Completed, t0()).unwrap());
-        let c = s.create(&spec("k1"), t0(), None).unwrap();
-        assert!(!c.existing);
-        assert_ne!(c.id, a.id);
-    }
-
-    #[test]
-    fn work_started_at_is_the_callers_when_given() {
-        let d = tempfile::tempdir().unwrap();
-        let s = MonitorStore::open(d.path()).unwrap();
-        let started = t0() - chrono::Duration::minutes(30);
-        let c = s.create(&spec("k2"), t0(), Some(started)).unwrap();
-        assert_eq!(s.get(&c.id).unwrap().unwrap().work_started_at, started);
-    }
-
-    #[test]
-    fn list_hides_completed_by_default_and_filters_by_state() {
-        let d = tempfile::tempdir().unwrap();
-        let s = MonitorStore::open(d.path()).unwrap();
-        let a = s.create(&spec("a"), t0(), None).unwrap();
-        let b = s.create(&spec("b"), t0(), None).unwrap();
-        s.set_state(&a.id, MonitorState::Completed, t0()).unwrap();
-        s.set_state(&b.id, MonitorState::Exhausted, t0()).unwrap();
-        let ids = |f: &ListFilter| -> Vec<String> {
-            s.list(f).unwrap().into_iter().map(|r| r.id).collect()
-        };
-        assert_eq!(
-            ids(&ListFilter::default()),
-            vec![b.id.clone()],
-            "exhausted needs a human, completed does not"
-        );
-        assert_eq!(
-            ids(&ListFilter {
-                include_completed: true,
-                ..Default::default()
-            })
-            .len(),
-            2
-        );
-        assert_eq!(
-            ids(&ListFilter {
-                state: Some(MonitorState::Completed),
-                include_completed: true
-            }),
-            vec![a.id]
-        );
-    }
-
-    #[test]
-    fn reactivate_only_from_exhausted() {
-        let d = tempfile::tempdir().unwrap();
-        let s = MonitorStore::open(d.path()).unwrap();
-        let a = s.create(&spec("a"), t0(), None).unwrap();
-        assert!(
-            !s.reactivate(&a.id, t0(), false).unwrap(),
-            "active is not retryable"
-        );
-        s.set_state(&a.id, MonitorState::Exhausted, t0()).unwrap();
-        s.conn()
-            .execute(
-                "UPDATE monitors SET remediation_attempts = 3, unknown_streak = 9 WHERE id = ?1",
-                [&a.id],
-            )
-            .unwrap();
-        assert!(s.reactivate(&a.id, t0(), false).unwrap());
-        let r = s.get(&a.id).unwrap().unwrap();
-        assert_eq!(r.state, MonitorState::Active);
-        assert_eq!(r.unknown_streak, 0);
-        assert_eq!(r.remediation_attempts, 3, "budget kept unless asked");
-        s.set_state(&a.id, MonitorState::Exhausted, t0()).unwrap();
-        assert!(s.reactivate(&a.id, t0(), true).unwrap());
-        assert_eq!(s.get(&a.id).unwrap().unwrap().remediation_attempts, 0);
-    }
-
-    /// Rule 6 under the deployment this file's module doc describes: the
-    /// CLI, the daemon and (plan-2) an agent runtime each open independent
-    /// connections to the same `monitors.db`. A single in-process
-    /// connection (every other test here) can never observe a cross-process
-    /// race, so this test opens one `MonitorStore` per thread against the
-    /// same on-disk file and lines them up with a `Barrier` to force
-    /// concurrent `create()` calls on the same idempotency key.
-    #[test]
-    fn concurrent_create_on_one_key_never_errors_and_never_duplicates() {
-        let d = tempfile::tempdir().unwrap();
-        let dir = d.path().to_path_buf();
-        // Migrate once up front so every thread's own `open()` below only
-        // has to race on `create()`, not on schema creation too.
-        MonitorStore::open(&dir).unwrap();
-
-        const N: usize = 8;
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(N));
-        let handles: Vec<_> = (0..N)
-            .map(|_| {
-                let dir = dir.clone();
-                let barrier = std::sync::Arc::clone(&barrier);
-                std::thread::spawn(move || {
-                    let s = MonitorStore::open(&dir).unwrap();
-                    barrier.wait();
-                    s.create(&spec("race"), t0(), None)
-                })
-            })
-            .collect();
-        let results: Vec<Result<Created>> =
-            handles.into_iter().map(|h| h.join().unwrap()).collect();
-
-        let mut ids = std::collections::HashSet::new();
-        let (mut created, mut existing) = (0, 0);
-        for r in &results {
-            let c = r
-                .as_ref()
-                .expect("create() must never error under a racing insert");
-            ids.insert(c.id.clone());
-            if c.existing {
-                existing += 1;
-            } else {
-                created += 1;
-            }
-        }
-        assert_eq!(created, 1, "exactly one caller creates the monitor");
-        assert_eq!(existing, N - 1, "everyone else finds it existing");
-        assert_eq!(ids.len(), 1, "every caller must agree on the same id");
-
-        let s = MonitorStore::open(&dir).unwrap();
-        assert_eq!(
-            s.list(&ListFilter {
-                include_completed: true,
-                ..Default::default()
-            })
-            .unwrap()
-            .len(),
-            1,
-            "no duplicate row was inserted"
-        );
-    }
-}
+#[path = "mod_tests.rs"]
+pub(crate) mod tests;

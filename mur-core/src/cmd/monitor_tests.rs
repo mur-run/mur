@@ -1,6 +1,8 @@
 use super::*;
 use crate::run_status::{RunKind, RunState, State, store as run_store};
 use chrono::{TimeZone, Utc};
+use mur_common::hitl::RiskTier;
+use mur_monitor::action::action_key;
 use mur_monitor::store::{ListFilter, MonitorStore};
 
 fn t0() -> DateTime<Utc> {
@@ -47,6 +49,69 @@ fn go(d: &Path, a: MonitorAction) -> Result<String> {
     let mut out = Vec::new();
     run_to(d, a, &mut out, t0())?;
     Ok(String::from_utf8(out).unwrap())
+}
+
+/// One registered monitor, nothing else — the common starting point for
+/// `show` tests that don't care about actions/notifications.
+fn home_with_monitor() -> (tempfile::TempDir, String) {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+    (d, id)
+}
+
+/// One registered monitor with one `write`-tier action of the given verb
+/// claimed and then parked `Blocked` on the given approval id — mirrors
+/// `mur-monitor::store::action`'s own `an_action_can_be_blocked_on_approval`
+/// fixture so `show`'s rendering is exercised against the same shape the
+/// store itself is tested with.
+fn home_with_blocked_action(verb: &str, hitl_id: &str) -> (tempfile::TempDir, String) {
+    let (d, id) = home_with_monitor();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+    let k = action_key(&id, &cyc, 1, verb, 0);
+    s.claim_action(&k, &id, &cyc, RiskTier::Write, t0())
+        .unwrap();
+    s.block_action(&k, hitl_id).unwrap();
+    (d, id)
+}
+
+/// Two actions on one monitor, neither `blocked` — nothing else exercises
+/// this: `home_with_blocked_action` only ever produces a `blocked` row, so
+/// `risk_str`'s output, the attempt-count text, and the non-blocked branch
+/// of `show`'s action line were all unprotected. `notify` goes through
+/// `block_action` twice before finishing `done` (attempt 2, exercising the
+/// plural "attempts" text and proving `unblock` gates on STATE, not on
+/// `approval_id`'s presence — `finish_action` never clears it); `rerun`
+/// goes through it once before finishing `failed` (attempt 1, singular).
+fn home_with_settled_actions() -> (tempfile::TempDir, String) {
+    let (d, id) = home_with_monitor();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+
+    let done_key = action_key(&id, &cyc, 1, "notify", 0);
+    s.claim_action(&done_key, &id, &cyc, RiskTier::Read, t0())
+        .unwrap();
+    s.block_action(&done_key, "hitl-irrelevant-1").unwrap();
+    s.block_action(&done_key, "hitl-irrelevant-2").unwrap();
+    s.finish_action(&done_key, ActionState::Done, "sent")
+        .unwrap();
+
+    let failed_key = action_key(&id, &cyc, 1, "rerun", 1);
+    s.claim_action(&failed_key, &id, &cyc, RiskTier::Write, t0())
+        .unwrap();
+    s.block_action(&failed_key, "hitl-irrelevant-3").unwrap();
+    s.finish_action(&failed_key, ActionState::Failed, "no executor for `rerun`")
+        .unwrap();
+    (d, id)
 }
 
 #[test]
@@ -593,5 +658,107 @@ fn show_omits_notifications_section_when_there_are_none() {
     let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
     let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
     assert!(!out.contains("notifications:"), "{out}");
+    assert!(out.contains("recent observations:"), "{out}");
+}
+
+#[test]
+fn show_renders_actions_with_the_command_that_unblocks_them() {
+    // spec: a blocked action whose command the user cannot find is the
+    // silent-stop failure this whole slice exists to remove.
+    let (d, id) = home_with_blocked_action("rerun", "hitl-abc");
+    let out = go(
+        d.path(),
+        MonitorAction::Show {
+            id: id.clone(),
+            history: false,
+        },
+    )
+    .unwrap();
+    assert!(out.contains("  actions:"), "{out}");
+    assert!(
+        out.lines().any(|l| l.contains("rerun")
+            && l.contains("blocked")
+            && l.contains("mur channel approve")
+            && l.contains("hitl-abc")),
+        "a blocked action must print the command that releases it: {out}"
+    );
+}
+
+// Fix round 2: the shipped suite had a blocked-action test and an
+// omitted-section test, but nothing for `done`/`failed`/`claimed` —
+// `risk_str`'s output, the attempt-count text, and the non-blocked branch
+// of the action line were all unprotected. The shipped `notifications:`
+// test made exactly this mistake once already: three separate `contains`
+// checks that could each be satisfied by unrelated lines, so this pins
+// verb+tier+state+attempt-count together on ONE line per action instead.
+#[test]
+fn show_renders_a_non_blocked_actions_verb_tier_state_and_attempts_on_one_line() {
+    let (d, id) = home_with_settled_actions();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(out.contains("  actions:"), "{out}");
+    assert!(
+        out.lines().any(|l| l.contains("notify")
+            && l.contains("read")
+            && l.contains("done")
+            && l.contains("(2 attempts)")),
+        "a done action's verb, tier, state and attempt count must share one line: {out}"
+    );
+    assert!(
+        out.lines().any(|l| l.contains("rerun")
+            && l.contains("write")
+            && l.contains("failed")
+            && l.contains("(1 attempt)")),
+        "a failed action's verb, tier, state and attempt count must share one line: {out}"
+    );
+    // Neither action is blocked, so there is nothing to approve — and this
+    // also proves `show`'s unblock text is gated on STATE, not merely on
+    // `approval_id` being set: both fixture rows went through
+    // `block_action` (which stamps `approval_id`) before finishing, so a
+    // gate that checked presence instead of state would leak this text.
+    assert!(
+        !out.contains("mur channel approve"),
+        "a non-blocked action must not print an approve command: {out}"
+    );
+}
+
+/// M6 (whole-branch review). `show` printed verb, tier, state, attempts
+/// and (when blocked) the approve command — but never the `result`
+/// column, which is where the reason lives. `remediation_failed`'s
+/// notification says "`mur monitor show <id>` for what was tried", so the
+/// one surface the user is sent to did not carry the answer; it was
+/// reachable only through `--history`'s raw event payload.
+///
+/// `history: false` here on purpose: with `--history` on, the same text
+/// would appear in the event dump and this test would pass without `show`
+/// rendering the column at all. Both rows are asserted — a `failed` row
+/// (the reason) and a `done` row (the summary) — so an implementation that
+/// only printed reasons for failures would still be caught.
+#[test]
+fn show_renders_an_actions_recorded_result() {
+    let (d, id) = home_with_settled_actions();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(
+        out.contains("no executor for `rerun`"),
+        "the failed action's reason must be visible without --history: {out}"
+    );
+    assert!(
+        out.contains("sent"),
+        "a done action's summary must be rendered too: {out}"
+    );
+    assert!(
+        !out.contains("history:"),
+        "fixture sanity: this must not be passing via the history dump: {out}"
+    );
+}
+
+// Would this pass if `show` were broken and printed nothing at all? No: it
+// also asserts `recent observations:` is present, which only appears once
+// `show` has run its full, unconditional body — a blank/aborted output
+// fails that half regardless of the `actions:` absence check.
+#[test]
+fn show_omits_the_actions_section_when_there_are_none() {
+    let (d, id) = home_with_monitor();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(!out.contains("actions:"), "{out}");
     assert!(out.contains("recent observations:"), "{out}");
 }
