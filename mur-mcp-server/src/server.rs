@@ -1,6 +1,6 @@
 // mur-mcp-server/src/server.rs
-use crate::jsonrpc::{Request, Response};
 use crate::tools;
+use mur_mcp_proto::{Request, Response};
 use serde_json::{Value, json};
 
 pub struct McpServer {
