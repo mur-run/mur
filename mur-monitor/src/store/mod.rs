@@ -299,13 +299,26 @@ impl MonitorStore {
         // answer for a row that was waiting when the upgrade landed.
         // No `SCHEMA_USER_VERSION` bump: nothing already written changes
         // meaning, and an older build simply ignores the column.
-        match self.conn.execute(
-            "ALTER TABLE monitor_registration_outbox ADD COLUMN last_attempt_at TEXT",
-            [],
-        ) {
-            Ok(_) => {}
-            Err(e) if e.to_string().contains("duplicate column name") => {}
-            Err(e) => return Err(e).context("add monitor_registration_outbox.last_attempt_at"),
+        //
+        // Probed structurally via `PRAGMA table_info` rather than by
+        // matching SQLite's "duplicate column name" error text: the pragma
+        // is a stable, documented interface, while the error text is
+        // `rusqlite`'s `Display` over whatever SQLite happens to say, which
+        // this crate does not control.
+        let has_last_attempt_at = self
+            .conn
+            .prepare("PRAGMA table_info(monitor_registration_outbox)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|name| name == "last_attempt_at");
+        if !has_last_attempt_at {
+            self.conn
+                .execute(
+                    "ALTER TABLE monitor_registration_outbox ADD COLUMN last_attempt_at TEXT",
+                    [],
+                )
+                .context("add monitor_registration_outbox.last_attempt_at")?;
         }
         self.conn
             .pragma_update(None, "user_version", SCHEMA_USER_VERSION)?;

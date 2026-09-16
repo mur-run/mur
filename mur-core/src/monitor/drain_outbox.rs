@@ -128,32 +128,27 @@ fn give_up(
 }
 
 /// Whether `row` has waited long enough to be worth retrying.
-/// `monitor_registration_outbox` has no `next_attempt_at` column (task 7's
-/// documented gap — a schema change was explicitly out of scope for that
-/// task, and still is for this one), so this is derived on every call from
-/// the two columns the table does have, `created_at` and `attempts`,
-/// instead of being read back from storage.
-///
-/// The schedule is `crate::backoff::unknown_delay` — the "our problem to
-/// notice quickly, not the work's" table, which is the right one here: a
-/// registration retry is retrying our own store write, not asking the
-/// monitored work anything — summed across every attempt so far and
-/// anchored at `created_at`, because no timestamp of the *last* attempt is
-/// persisted either. This is restart-safe: both inputs live in the row, so
-/// a daemon restart costs the wait nothing. What it does cost is precision
-/// on the fast path — the schedule is measured from creation, not from the
-/// most recent failure, so a slow tick (or a daemon that was down for a
-/// while) can make the next retry land sooner than a last-attempt-anchored
-/// schedule would have allowed. That direction is harmless: it only ever
-/// makes a row eligible to retry *earlier*, never delays giving up on it.
+/// `monitor_registration_outbox` has no `next_attempt_at` column
+/// (task 7's documented gap — a schema change was explicitly out of scope
+/// for that task, and still is for this one), so this is derived on every
+/// call from `row.last_attempt_at` and `row.attempts` instead of being read
+/// back from storage. The schedule itself is `crate::backoff::unknown_delay`
+/// — the "our problem to notice quickly, not the work's" table, which is
+/// the right one here: a registration retry is retrying our own store
+/// write, not asking the monitored work anything. See the anchoring
+/// rationale in the function body below.
 fn is_due(row: &OutboxRow, now: DateTime<Utc>) -> bool {
-    // Measured from the LAST ATTEMPT, not from creation. Summing every
-    // delay since `created_at` looks equivalent while ticks are continuous,
-    // but after any gap — a daemon that was down, or a row starved behind
-    // others — the elapsed time already exceeds the cumulative sum for every
-    // remaining attempt, so the row becomes due on every tick and burns its
-    // whole budget in a few seconds. The outbox exists to survive exactly the
-    // outage that also restarts the daemon, so it must not collapse there.
+    // Anchored at `last_attempt_at` — the timestamp of the row's own most
+    // recent try, persisted alongside `attempts` — NOT at `created_at`.
+    // Summing every attempt's delay since `created_at` looks equivalent
+    // while ticks are continuous, but after any gap — a daemon that was
+    // down, or a row starved behind others — the elapsed time already
+    // exceeds the cumulative sum for every remaining attempt, so the row
+    // becomes due on every tick and burns its whole retry budget in a few
+    // seconds instead of respecting backoff. The outbox exists to survive
+    // exactly the kind of outage that also restarts the daemon, so it must
+    // not collapse there. Still restart-safe: both inputs live in the row,
+    // so a daemon restart costs the wait nothing.
     let Some(since) = row.last_attempt_at else {
         // Never retried: due now. Also covers rows written before
         // `last_attempt_at` existed.
