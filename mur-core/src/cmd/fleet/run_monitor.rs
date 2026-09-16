@@ -250,11 +250,20 @@ mod tests {
             "Outboxed must promise a retry: {msg}"
         );
 
+        // Count through a raw connection, not `list`: the `monitors` table
+        // here is deliberately missing a column (that is what makes `create`
+        // fail), so any reader that needs the real schema fails too — which
+        // would report a broken fixture as a broken assertion.
+        let raw =
+            rusqlite::Connection::open(mur_monitor::store::db_dir(d.path()).join("monitors.db"))
+                .unwrap();
+        let monitors: i64 = raw
+            .query_row("SELECT COUNT(*) FROM monitors", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(monitors, 0, "Outboxed must create no monitor row");
+        drop(raw);
+
         let store = MonitorStore::open_existing(d.path()).unwrap().unwrap();
-        assert!(
-            store.list(&ListFilter::default()).unwrap().is_empty(),
-            "Outboxed must create no monitor row"
-        );
         let due = store.outbox_due(Utc::now(), 10).unwrap();
         assert_eq!(due.len(), 1, "the spec must land in the outbox");
         assert_eq!(due[0].spec.idempotency_key, "fleet:demo:run-5");
