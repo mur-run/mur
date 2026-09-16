@@ -58,16 +58,35 @@ fn linux_signature_check_is_a_noop() {
     );
 }
 
+/// Windows goes through `WinVerifyTrust` (`wintrust.dll`), which is present on
+/// every install — unlike `signtool`, which ships with the SDK and whose
+/// absence used to refuse startup for every native binary on a stock machine
+/// (#1332).
+///
+/// What this asserts is deliberately narrow. Nobody here knows which HRESULT
+/// Authenticode returns for a four-byte file claiming to be a PE, and asserting
+/// a guess is how the previous version of this suite ended up asserting that
+/// `cmd.exe` verifies on a runner with no SDK. The verdict *policy* — which
+/// statuses refuse a startup — is pinned exhaustively and on every platform by
+/// `b0_helpers::wintrust_tests`. What is left to check here is that the call
+/// completes and never speaks of `signtool` again.
 #[cfg(target_os = "windows")]
 #[test]
-fn windows_unsigned_binary_fails_startup() {
+fn windows_signature_check_needs_no_sdk() {
     let dir = TempDir::new().unwrap();
     let bin = dir.path().join("fake-mcp.exe");
     std::fs::write(&bin, b"MZ\0\0").unwrap();
-    let err = verify_mcp_supply_chain(&[bin], &minimal_profile())
-        .expect_err("unsigned windows binary should refuse startup");
-    assert!(
-        err.to_lowercase().contains("not signed") || err.contains("signtool"),
-        "got {err}"
-    );
+    match verify_mcp_supply_chain(&[bin], &minimal_profile()) {
+        Ok(()) => {}
+        Err(msg) => {
+            assert!(
+                !msg.contains("signtool"),
+                "the SDK-dependent path is gone; got {msg}"
+            );
+            assert!(
+                msg.contains("B0 rule 11"),
+                "a refusal must still name the rule: {msg}"
+            );
+        }
+    }
 }
