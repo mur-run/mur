@@ -196,7 +196,6 @@ pub fn write_notification(method: &str, params: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use std::io::Cursor;
 
     fn read(s: &str) -> Option<Incoming> {
