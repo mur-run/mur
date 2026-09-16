@@ -140,6 +140,63 @@ One stdio server per spawned turn, not a long-lived daemon on a port:
   obligation 3 (task scope) hold without the server having to be told which
   task a call belongs to.
 
+## HITL has a transport: `elicitation/create`
+
+An earlier draft of this document claimed MCP has no "ask the human and come
+back" state. That was wrong, and the correction changes the design rather
+than just a sentence.
+
+`elicitation/create` is a **server → client** request: the server pauses
+inside `tools/call`, asks the client to obtain something from the user, and
+resumes when the reply arrives. That is precisely the shape obligation 2
+needs.
+
+It is also not merely in the specification. Probed against `claude` 2.1.273
+by standing up a minimal MCP server and reading the `initialize` params it
+received:
+
+```json
+{
+  "protocolVersion": "2025-11-25",
+  "capabilities": { "roots": { "listChanged": true }, "elicitation": {} },
+  "clientInfo": { "name": "claude-code", "version": "2.1.273" }
+}
+```
+
+The client declares `elicitation`, and the round trip completes. The same
+probe server issued an `elicitation/create` from inside a `tools/call`, and
+the call returned normally carrying the outcome.
+
+### Unattended is already fail-closed
+
+In `-p` (headless) mode, with no human to ask, the client answered:
+
+```json
+{ "action": "cancel" }
+```
+
+Immediately — it did not hang, and it did not approve. That matters more
+than the happy path, because it is the behaviour MUR's unattended-HITL
+design already specifies: an approval that cannot be obtained parks rather
+than blocking, and is never assumed. `cancel` maps onto parking the
+`HitlRequest` and returning at once; the step is blocked, not failed, and
+the existing `action_hash` matching lets an approval given later release the
+gate on a subsequent run. See
+`docs/superpowers/specs/2026-08-19-unattended-hitl-defer-design.md`.
+
+So the gate does not need a new concept for the spawned case. It needs a
+second transport for one it already has.
+
+### What is not established
+
+The probe ran headless, so it shows the unattended path and the protocol
+round trip. It does **not** show an interactive `claude` session actually
+prompting a human and returning `accept` — that needs a session a script
+cannot drive. Nor does it say anything about `codex` or `agy`: neither was
+probed for elicitation support, and a client that does not declare the
+capability leaves this backend without a HITL transport, which under the
+activation gate keeps it disabled.
+
 ## Open questions
 
 1. Whether `GuardedToolCall` needs to be re-entrant. An in-process turn
@@ -147,14 +204,10 @@ One stdio server per spawned turn, not a long-lived daemon on a port:
    requests. The HITL batch gate is written around a turn's worth of calls
    arriving together, and it is not yet established that it behaves
    correctly when calls arrive independently.
-2. How a HITL pause is surfaced to a CLI that is blocked in `tools/call`.
-   MCP has no "ask the human and come back" state; the options are to block
-   the response, or to answer with a refusal that the model can retry.
-   Blocking risks the CLI's own timeout, which MUR does not control.
-3. Whether `codex` and `agy` can even be offered this. Both mount MCP
+2. Whether `codex` and `agy` can even be offered this. Both mount MCP
    *persistently*, into a config file, so a per-turn stdio command implies
    writing that file per turn into their private home. Verified for neither.
-4. What `step/started` and `step/completed` mean when the step was initiated
+3. What `step/started` and `step/completed` mean when the step was initiated
    by a model MUR is not running. The events are how a channel renders a
    turn; a spawned turn's shape is the CLI's, not MUR's.
 
@@ -175,4 +228,11 @@ One stdio server per spawned turn, not a long-lived daemon on a port:
   `ToolResultEntry` — asserted as one test over both paths, so they cannot
   drift apart quietly.
 - **Empty before mount**: spawn `claude` with the three flags and assert its
-  `system init` lists MUR's tools and nothing else.
+  `system init` lists MUR's tools and nothing else. Already demonstrated with
+  a stub server: the list came back as exactly `["mcp__probe__probe_noop"]`.
+- **Elicitation capability, per backend, before that backend ships**: assert
+  the client declared `elicitation` in `initialize`. A backend without it has
+  no HITL transport, and the activation gate keeps it disabled rather than
+  spawning it with obligation 2 unenforceable.
+- **Unattended never approves**: drive a gated tool headless and assert the
+  outcome is `cancel` or `decline` — never `accept`, and never a hang.
