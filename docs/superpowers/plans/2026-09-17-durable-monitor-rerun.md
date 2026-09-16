@@ -202,60 +202,89 @@ MSG
 
 The endpoint is `POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs`. **Failed jobs, not the whole run**: a monitor reruns because something failed, and re-running green jobs costs minutes and can re-trigger their side effects.
 
-- [ ] **Step 1: Write the failing tests** (against a local `TcpListener` stub, the shape this file's existing tests already use)
+**This file has no HTTP stub server and must not grow one.** Its established shape is a pure `classify(status, body, retry_after) -> Observation` tested exhaustively with no I/O, plus exactly one test for the I/O layer (bind a port, drop it, assert the connection failure is reported). Follow it: add a pure `classify_rerun(status: u16, body: &str) -> Result<String, String>` and test that directly.
+
+- [ ] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
-fn a_successful_rerun_reports_which_run_it_restarted() {
-    let srv = stub(201, "");
-    let a = adapter_pointing_at(&srv);
-    let out = a.rerun("o/r/12345", Some("env:TEST_TOKEN")).unwrap();
-    assert!(out.contains("12345"), "must name the run: {out}");
+fn a_rerun_accepted_reports_which_run_it_restarted() {
+    // GitHub answers 201 with an empty body on success.
+    let out = classify_rerun(201, "").unwrap();
+    assert!(out.contains("rerun"), "{out}");
 }
 
 #[test]
-fn a_403_says_the_token_lacks_write_scope_and_does_not_echo_it() {
-    let srv = stub(403, r#"{"message":"Resource not accessible by personal access token"}"#);
-    let a = adapter_pointing_at(&srv);
-    let e = a.rerun("o/r/12345", Some("env:TEST_TOKEN")).unwrap_err();
-    assert!(e.contains("actions:write"), "must name the missing scope: {e}");
-    assert!(!e.contains(TEST_TOKEN_VALUE), "must not echo the token: {e}");
+fn a_403_names_the_missing_scope_and_keeps_the_body_out() {
+    let e = classify_rerun(403, r#"{"message":"Resource not accessible by personal access token"}"#)
+        .unwrap_err();
+    assert!(e.contains("actions:write"), "must name the scope a user can act on: {e}");
+}
+
+#[test]
+fn a_404_says_the_run_is_gone_not_that_the_token_is_wrong() {
+    // Sending someone at their token when the run was deleted wastes their
+    // afternoon. These two 4xx must not read alike.
+    let e = classify_rerun(404, "").unwrap_err();
+    assert!(!e.contains("actions:write"), "{e}");
+}
+
+#[test]
+fn an_unexpected_status_reports_it_with_a_redacted_body() {
+    let e = classify_rerun(500, &format!("ghp_{}", "A".repeat(36))).unwrap_err();
+    assert!(e.contains("500"), "{e}");
+    assert!(!e.contains("ghp_AAAA"), "a body can echo a token back: {e}");
 }
 
 #[test]
 fn a_rerun_without_a_grant_refuses_before_any_request() {
     // Belt to Task 1's braces: validation should have caught it, but the
-    // adapter must not fall back to an unauthenticated POST.
-    let srv = stub(201, "");
-    let a = adapter_pointing_at(&srv);
+    // adapter must never fall back to an unauthenticated POST. Points at a
+    // port nothing listens on, so a request would fail loudly rather than
+    // silently succeeding against GitHub.
+    let a = adapter_pointing_at_a_closed_port();
     let e = a.rerun("o/r/12345", None).unwrap_err();
     assert!(e.contains("write_credential_ref"), "{e}");
-    assert_eq!(srv.hits(), 0, "must not have called GitHub at all");
+    assert!(!e.contains("request failed"), "it must refuse before connecting: {e}");
 }
 
 #[test]
-fn an_unresolvable_grant_refuses_without_echoing_the_reference() {
-    let a = adapter_pointing_at(&stub(201, ""));
+fn an_unresolvable_grant_refuses_before_any_request() {
+    let a = adapter_pointing_at_a_closed_port();
     let e = a.rerun("o/r/12345", Some("env:DEFINITELY_NOT_SET")).unwrap_err();
     assert!(e.contains("could not be resolved"), "{e}");
+    assert!(!e.contains("request failed"), "{e}");
 }
 
+#[tokio::test]
+async fn rerun_runs_through_the_http_layer_without_panicking_in_an_async_context() {
+    // The one test that exercises the real client, and the reason it is
+    // `#[tokio::test]`: `reqwest::blocking::ClientBuilder::build` panics when
+    // dropped inside a runtime context, which is the context
+    // `cmd::monitor::add` runs in. The predecessor slice shipped exactly
+    // that panic. Mirrors the existing `observe_runs_through_the_http_layer
+    // _without_panicking_in_an_async_context` test directly above.
+    let a = adapter_pointing_at_a_closed_port();
+    let e = a.rerun("o/r/12345", Some("env:TEST_TOKEN_SET_BY_THIS_TEST")).unwrap_err();
+    assert!(e.contains("request failed"), "{e}");
+}
+```
+
+The URL shape is asserted by construction, not by a mock: build it in a tiny `rerun_url(api_base, owner, repo, run_id) -> String` and test that string directly.
+
+```rust
 #[test]
-fn the_request_is_a_post_to_rerun_failed_jobs() {
-    // Re-running the whole run costs minutes and can re-fire the side
-    // effects of jobs that already succeeded.
-    let srv = stub(201, "");
-    let a = adapter_pointing_at(&srv);
-    a.rerun("o/r/12345", Some("env:TEST_TOKEN")).unwrap();
-    let req = srv.last_request();
-    assert_eq!(req.method, "POST");
-    assert!(req.path.ends_with("/actions/runs/12345/rerun-failed-jobs"), "{}", req.path);
+fn the_url_targets_rerun_failed_jobs_not_the_whole_run() {
+    // Re-running the whole run costs minutes and re-fires the side effects
+    // of jobs that already passed.
+    let u = rerun_url("https://api.github.com", "o", "r", 12345);
+    assert!(u.ends_with("/repos/o/r/actions/runs/12345/rerun-failed-jobs"), "{u}");
 }
 ```
 
 - [ ] **Step 2: Run to verify they fail.**
 
-- [ ] **Step 3: Implement.** Copy the shape of `fetch` exactly — including `std::thread::spawn` and the comment explaining why. Do not call `reqwest::blocking` on the caller's thread; do not reach for the async client. Resolve the grant with `SecretRef::from_str(...).resolve_to_string_blocking()`, same as `observe` does for the read credential. Map the status: `201`/`204` → `Ok`, `403` → an error naming `actions:write`, `404` → run not found, anything else → the status and a redacted body.
+- [ ] **Step 3: Implement.** `rerun` = resolve the grant, build the URL, POST on a dedicated thread, hand the status and body to `classify_rerun`. Copy the shape of `fetch` exactly — including `std::thread::spawn` and the comment explaining why. Do not call `reqwest::blocking` on the caller's thread; do not reach for the async client. Resolve the grant with `SecretRef::from_str(...).resolve_to_string_blocking()`, same as `observe` does for the read credential. Map the status: `201`/`204` → `Ok`, `403` → an error naming `actions:write`, `404` → run not found, anything else → the status and a redacted body.
 
 - [ ] **Step 4: Run to verify they pass.**
 
