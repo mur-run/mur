@@ -42,10 +42,11 @@ Cargo workspace of small crates plus two workspace-excluded Tauri apps. The load
 - **`mur-core`** — All CLI logic and the `mur` binary. Modules map to the four-stage pipeline. Hosts `mur agent ...` user-facing subcommands.
 - **`mur-agent-runtime`** — Per-agent A2A v0.3 supervisor (P0a). One binary, one BusyBox-style symlink per agent (`mur_agent_<name>` → `mur-agent-runtime`). Crate README has the walkthrough.
 - **`mur-daemon`** — Long-running background daemon binary.
+- **`mur-mcp-proto`** — JSON-RPC 2.0 types and stdio framing for MCP. Protocol only, no dispatch loop: `mur-mcp-server` answers requests while the runtime's shim must also *originate* them (`elicitation/create`, the HITL transport), so the two loops are different shapes.
 - **`mur-mcp-server`** — MCP server binary (stdio JSON-RPC). Exposes interactive lookup tools so AI tools can call MUR mid-conversation. Read-only; mutations go through hooks.
 - **`mur-gui-core`** — Shared GUI library (sidecar supervisor, companion bridge, A2A client). Consumed by `mur-hub-gui` and during migration also by `mur-agent-gui`. See `docs/superpowers/specs/2026-05-11-mur-hub-companion-design.md` §3.1.
 
-**Shared state with its own file format gets its own crate** — `mur-channel`, `mur-compress`, `mur-open-items`. The rule exists because `mur-agent-runtime` must not depend on `mur-core` (that pulls LanceDB + Arrow into every agent process), so anything both of them read or write has to live below both. Reach for this before adding I/O to `mur-common`.
+**Shared state with its own file format gets its own crate** — `mur-channel`, `mur-compress`, `mur-open-items`, `mur-mcp-proto`. The rule exists because `mur-agent-runtime` must not depend on `mur-core` (that pulls LanceDB + Arrow into every agent process), so anything both of them read or write has to live below both. Reach for this before adding I/O to `mur-common`.
 
 Workspace-excluded Tauri 2 GUI apps (built via their own manifests so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2):
 
