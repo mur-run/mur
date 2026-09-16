@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 mur-common = { path = "../mur-common" }
+mur-mcp-proto = { path = "../mur-mcp-proto" }
 mur-compress = { path = "../mur-compress" }
 mur-core = { path = "../mur-core" }
 tokio = { workspace = true }

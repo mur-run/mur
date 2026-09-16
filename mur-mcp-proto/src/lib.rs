@@ -1,4 +1,14 @@
-// mur-mcp-server/src/jsonrpc.rs
+//! JSON-RPC 2.0 types and stdio framing for MCP.
+//!
+//! Lives below both `mur-mcp-server` and `mur-agent-runtime` because each
+//! serves MCP and neither may depend on the other — `mur-agent-runtime` must
+//! not pull in `mur-core` (LanceDB and Arrow in every agent process).
+//!
+//! Only the protocol is here. The dispatch loop is not: `mur-mcp-server`
+//! answers requests, while the runtime's server must also *originate* them
+//! (`elicitation/create`, the HITL transport), so the two loops are different
+//! shapes and sharing one would fit neither.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, Write};

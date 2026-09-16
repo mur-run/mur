@@ -1,6 +1,5 @@
 use tracing_subscriber::EnvFilter;
 
-mod jsonrpc;
 mod server;
 mod tools;
 
@@ -17,13 +16,13 @@ async fn main() {
 
     let mut server = server::McpServer::new();
 
-    while let Some(request) = jsonrpc::read_request() {
+    while let Some(request) = mur_mcp_proto::read_request() {
         // JSON-RPC notifications (no `id`, e.g. `notifications/initialized`) must
         // NOT receive a response. Compute this before `request` is moved into handle.
         let is_notification = request.id.is_none() && request.method.starts_with("notifications/");
         let response = server.handle(request).await;
         if !is_notification {
-            jsonrpc::write_response(&response);
+            mur_mcp_proto::write_response(&response);
         }
     }
 
