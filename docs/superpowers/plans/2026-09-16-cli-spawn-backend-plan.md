@@ -453,7 +453,7 @@ was written during the turn.
 - [ ] Lint and format:
 
 ```bash
-cargo clippy -p mur-agent-runtime -p mur-common -- -D warnings && cargo fmt --check
+cargo clippy --all --all-targets --no-deps -- -D warnings && cargo fmt --check
 ```
 
 - [ ] Commit: `git add -A && git commit -m "feat(runtime): CliSpawn backend, and claude is enabled"`
@@ -465,6 +465,9 @@ cargo clippy -p mur-agent-runtime -p mur-common -- -D warnings && cargo fmt --ch
 - [ ] `execute_is_called_from_guarded_only` — passes.
 - [ ] A real spawn answers, with MUR's tools and only MUR's tools mounted.
 - [ ] `~/.claude` unchanged by a spawn.
+- [ ] `cargo clippy --all --all-targets --no-deps -- -D warnings` — clean.
+      `--all-targets` is load-bearing: without it clippy never reads test
+      code, which is how #1355 passed locally and failed CI.
 
 ## Not in this plan
 
