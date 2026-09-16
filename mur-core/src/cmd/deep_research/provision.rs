@@ -5,7 +5,7 @@
 //! (`cmd::agent::lifecycle::cmd_create`, whose default entitlements already
 //! set `network.outbound = restricted` with an empty allow-list) and the
 //! exact MCP-attach path `mur agent mcp add` uses
-//! (`cmd::agent::mcp::cmd_mcp_add`, which persists through the existing
+//! (`cmd::agent::mcp_add::cmd_mcp_add`, which persists through the existing
 //! load/save-atomic helpers) — no hand-rolled profile YAML here.
 //!
 //! Egress for the gateway MCP entry itself is left `None` (Inherit): the
@@ -18,7 +18,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::cmd::agent::lifecycle::cmd_create;
-use crate::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_set_network};
+use crate::cmd::agent::mcp_add::{McpAddPin, cmd_mcp_add};
+use crate::cmd::agent::mcp_network::cmd_mcp_set_network;
 use crate::cmd::agent::{load_profile_for_edit, save_profile};
 
 /// Default number of workers `mur deep-research provision` creates when

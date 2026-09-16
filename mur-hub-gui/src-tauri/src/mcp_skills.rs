@@ -5,7 +5,8 @@
 //! `AgentDetail` so the panel re-renders without a second round-trip.
 
 use crate::detail::{AgentDetail, get_agent_detail};
-use mur_core::cmd::agent::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_remove, cmd_mcp_set_enabled};
+use mur_core::cmd::agent::mcp::{cmd_mcp_remove, cmd_mcp_set_enabled};
+use mur_core::cmd::agent::mcp_add::{McpAddPin, cmd_mcp_add};
 use mur_core::cmd::agent::skill::{
     cmd_skill_add, cmd_skill_convert, cmd_skill_remove, cmd_skill_set_enabled,
 };
@@ -179,7 +180,7 @@ pub async fn agent_mcp_add_remote(
     url: String,
     bearer: Option<String>,
 ) -> Result<AgentDetail, String> {
-    use mur_core::cmd::agent::mcp::cmd_mcp_add_remote;
+    use mur_core::cmd::agent::mcp_add::cmd_mcp_add_remote;
     use mur_core::cmd::agent::mcp_remote::{
         compute_probe_description_hash, probe_remote, store_remote_mcp_bearer, validate_remote_url,
     };
@@ -229,7 +230,7 @@ pub async fn agent_mcp_oauth_login(
     server_id: String,
     url: String,
 ) -> Result<AgentDetail, String> {
-    use mur_core::cmd::agent::mcp::cmd_mcp_add_remote;
+    use mur_core::cmd::agent::mcp_add::cmd_mcp_add_remote;
     use mur_core::cmd::agent::mcp_login::cmd_mcp_login;
     use mur_core::cmd::agent::mcp_remote::validate_remote_url;
 

@@ -230,7 +230,7 @@ async fn route_install(mur_home: &Path, req: &InstallRequestView) -> Result<()> 
             let yaml = fetch_item(mur_home, "mcp", &req.id).await?;
             let entry: McpRemoteEntry =
                 serde_yaml_ng::from_str(&yaml).context("invalid mcp registry entry")?;
-            mur_core::cmd::agent::mcp::cmd_mcp_add_remote(
+            mur_core::cmd::agent::mcp_add::cmd_mcp_add_remote(
                 "mur",
                 &entry.name,
                 &entry.url,

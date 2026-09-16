@@ -110,7 +110,7 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
     // because it reimplements the install rather than calling it.
     if let Some(resolved) = resolved_path.as_deref() {
         let (hash, tools) =
-            crate::cmd::agent::mcp::probe_new_entry(agent, &profile, server_id, resolved)?;
+            crate::cmd::agent::mcp_add::probe_new_entry(agent, &profile, server_id, resolved)?;
         if let Some(e) = profile.mcp_servers.last_mut() {
             e.description_hash = Some(hash);
         }

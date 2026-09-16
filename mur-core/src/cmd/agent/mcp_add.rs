@@ -1,0 +1,630 @@
+//! `mur agent mcp add` — install an MCP server onto an agent profile.
+//!
+//! Moved verbatim out of `mcp.rs`, which had reached 1069 lines against the
+//! repo's 800-line rule. No behaviour change: this is the install path —
+//! binary pin, approval prompt, live probe, state-path grants — plus the
+//! remote-URL variant.
+
+use anyhow::{Context, Result, bail};
+use mur_common::agent::{McpNetMode, McpServerEntry};
+
+use super::{load_profile_for_edit, save_profile};
+
+/// Optional install-time pinning fields for `cmd_mcp_add` (B0 rule 6 / M9.2).
+///
+/// `force = true` skips the y/N confirm prompt — for scripted /
+/// non-interactive installers. Publisher fields are passed through
+/// from `--publisher-name` / `--publisher-homepage` /
+/// `--publisher-registry-id` CLI flags; they're display-only and
+/// don't affect the binary hash.
+#[derive(Debug, Clone, Default)]
+pub struct McpAddPin {
+    pub force: bool,
+    /// Skip the live probe that decides whether this entry can actually run.
+    /// `force` does NOT imply this: one skips the approval prompt, the other
+    /// skips the check that the thing being approved works at all.
+    pub no_probe: bool,
+    pub publisher_name: Option<String>,
+    pub publisher_homepage: Option<String>,
+    pub publisher_registry_id: Option<String>,
+}
+
+pub fn cmd_mcp_add(
+    name: &str,
+    server_id: &str,
+    command: &str,
+    args: &[String],
+    state_paths: &[String],
+    pin: McpAddPin,
+) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if profile.mcp_servers.iter().any(|s| s.name == server_id) {
+        bail!("MCP server '{server_id}' already exists on '{name}'");
+    }
+
+    // ── B0 rule 6 / M9.2: install-time hash + publisher prompt. ──
+    // Best-effort: if the binary can't be located on PATH yet, we
+    // proceed without a hash and the entry behaves as a pre-M9
+    // entry (warn-but-don't-block on startup). This keeps the
+    // existing `mur agent mcp add foo --command not-yet-installed`
+    // workflow alive for users who add the entry before installing
+    // the binary.
+    let (binary_sha256, resolved_path) = match crate::cmd::agent_mcp_pin::resolve_command(command) {
+        Ok(p) => match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
+            Ok(h) => (Some(h), Some(p)),
+            Err(e) => {
+                eprintln!(
+                    "warning: could not hash {} ({e}); entry will be installed without binary pin",
+                    p.display(),
+                );
+                (None, Some(p))
+            }
+        },
+        Err(_) => {
+            eprintln!(
+                "warning: could not resolve `{command}` on PATH; entry will be installed without binary pin",
+            );
+            (None, None)
+        }
+    };
+
+    let publisher = pin
+        .publisher_name
+        .as_ref()
+        .map(|n| mur_common::agent::McpPublisherInfo {
+            name: n.clone(),
+            homepage: pin.publisher_homepage.clone(),
+            registry_id: pin.publisher_registry_id.clone(),
+        });
+
+    if !pin.force {
+        // Render summary + prompt.
+        println!("About to install MCP server \"{server_id}\":");
+        if let Some(p) = &resolved_path {
+            println!("  command:        {}", p.display());
+        } else {
+            println!("  command:        {command} (not yet on PATH)");
+        }
+        if !args.is_empty() {
+            println!("  args:           {}", args.join(" "));
+        }
+        if let Some(p) = &publisher {
+            println!("  publisher:      {}", p.name);
+            if let Some(h) = &p.homepage {
+                println!("                  {h}");
+            }
+            if let Some(r) = &p.registry_id {
+                println!("                  {r}");
+            }
+        }
+        if let Some(h) = &binary_sha256 {
+            // Show a short prefix so the user can spot-check against
+            // the publisher's release notes.
+            println!("  binary sha256:  {}…  (full: {h})", &h[..16]);
+        }
+        if pin.no_probe {
+            println!("  description hash: <deferred — --no-probe; set on first run via M9.3>",);
+            println!("  probe:            SKIPPED — this entry is not known to start");
+        } else {
+            println!("  description hash: <pinned by the install probe, below>");
+        }
+        print!("\nApprove? [y/N] ");
+        use std::io::{self, Write};
+        io::stdout().flush().ok();
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .with_context(|| "read confirmation from stdin")?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            bail!("install cancelled");
+        }
+    }
+
+    profile.mcp_servers.push(McpServerEntry {
+        name: server_id.to_string(),
+        command: command.to_string(),
+        args: args.to_vec(),
+        binary_sha256,
+        // Filled in by the probe below when it runs. Left `None` under
+        // `--no-probe`, which keeps the entry in "warn but don't block" mode
+        // until the runtime hashes it on first successful spawn (M9.3).
+        description_hash: None,
+        publisher,
+        installed_at: Some(chrono::Utc::now()),
+        timeout_secs: None,
+        network: None,
+        url: None,
+        auth: None,
+        requires_programs: Vec::new(),
+        state_paths: state_paths.to_vec(),
+        package: None,
+    });
+    // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
+    if !profile
+        .entitlements
+        .processes
+        .spawn
+        .allowed
+        .iter()
+        .any(|a| a == command)
+    {
+        profile
+            .entitlements
+            .processes
+            .spawn
+            .allowed
+            .push(command.to_string());
+    }
+    grant_state_paths(name, &mut profile, state_paths)?;
+
+    // ── Does it actually run? ──
+    //
+    // Everything above this line checks provenance: the binary resolves, its
+    // bytes hash, a publisher is recorded. None of it asks whether the server
+    // starts — so `mcp add` could report success for an entry that had never
+    // been spawned once, and the user found out at the next restart, from an
+    // agent that would not come up. Probing here moves that discovery to the
+    // moment the user is sitting in front of it and can still say no.
+    //
+    // Under the agent's REAL sandbox policy, for the reason #1161 records: a
+    // permissive probe reports fine for exactly the servers that die on
+    // startup. The policy is built from the profile as it now stands —
+    // including the entry and the state-path grants added just above — so this
+    // is the configuration the supervisor will seal, not an approximation.
+    if !pin.no_probe
+        && let Some(resolved) = resolved_path.as_deref()
+    {
+        println!("  probing:        spawning '{server_id}' under this agent's sandbox…");
+        let (hash, tools) = probe_new_entry(name, &profile, server_id, resolved)?;
+        println!(
+            "  probe:          ok — {tools} tool{} listed, description hash pinned",
+            if tools == 1 { "" } else { "s" }
+        );
+        if let Some(entry) = profile.mcp_servers.last_mut() {
+            entry.description_hash = Some(hash);
+        }
+    }
+
+    save_profile(&path, &mut profile)
+}
+
+/// Spawn the freshly-added entry under the agent's own sandbox, run
+/// `initialize` + `tools/list`, and return the description hash.
+///
+/// `Err` means do not write the entry. That is the whole point: an MCP server
+/// that cannot start is not "installed", and leaving the entry behind produces
+/// an agent that fails at boot over a decision the user thought had succeeded.
+/// `--no-probe` is the door out, and every failure message names it.
+pub(crate) fn probe_new_entry(
+    agent: &str,
+    profile: &mur_common::AgentProfile,
+    server_id: &str,
+    resolved: &std::path::Path,
+) -> Result<(String, usize)> {
+    let entry = profile
+        .mcp_servers
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("internal: entry not staged before probe"))?;
+    let probe_entry = McpServerEntry {
+        command: resolved.display().to_string(),
+        ..entry.clone()
+    };
+    let agent_home = super::resolve_mur_home()?.join("agents").join(agent);
+    let policy = mur_agent_runtime::sandbox::policy::SandboxPolicy::from_entitlements(
+        &profile.entitlements,
+        &agent_home,
+    );
+    let timeout = crate::cmd::agent_mcp_pin::probe_timeout();
+
+    // Prints nothing: the murmur slash command renders its own notes into a
+    // TUI pane and cannot have stdout written underneath it. Callers report.
+    //
+    // Runs on its own thread with its own runtime, rather than reaching for
+    // the caller's. `Handle::current()` panics outside a runtime and
+    // `block_in_place` panics on a current_thread one, and the callers do not
+    // all look alike: the CLI is inside a multi-thread runtime, but
+    // `agent_admin::mcp::add` is a synchronous Tauri command that is not
+    // inside one at all — so the convenient version would have turned a GUI
+    // install into a panic. A thread costs one probe's worth of nothing and
+    // makes this callable from anywhere, unit tests included.
+    let result = std::thread::scope(|s| {
+        s.spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("build probe runtime: {e}"))
+                .map(|rt| {
+                    rt.block_on(crate::cmd::agent_mcp_pin::probe_mcp_descriptions(
+                        &probe_entry,
+                        timeout,
+                        &policy,
+                    ))
+                })
+        })
+        .join()
+        .map_err(|_| "probe thread panicked".to_string())
+    });
+    let result = match result {
+        Ok(Ok(inner)) => inner,
+        Ok(Err(e)) | Err(e) => bail!("could not probe '{server_id}': {e}"),
+    };
+
+    match result {
+        Ok((hash, tools)) => Ok((hash, tools.len())),
+        Err(e) => {
+            let timed_out = matches!(e, crate::cmd::agent_mcp_pin::ProbeError::Timeout(_));
+            bail!(
+                "'{server_id}' did not start, so it was NOT installed on '{agent}'.\n  {e}\n{}",
+                probe_failure_advice(timed_out, &e.to_string())
+            )
+        }
+    }
+}
+
+/// What to suggest when the install probe fails, chosen from the failure shape.
+///
+/// Split out as a pure function because the three shapes lead to three
+/// different actions, and getting that wrong sends the user to fix the wrong
+/// thing — which is how a sandbox denial ends up "fixed" by a timeout bump.
+fn probe_failure_advice(timed_out: bool, msg: &str) -> String {
+    let lower = msg.to_lowercase();
+    let specific = if timed_out {
+        "  The server was still starting when the budget ran out. If it is merely slow \
+         (model warm-up, network discovery), raise it:\n    \
+         MUR_MCP_PROBE_TIMEOUT_S=60 mur agent mcp add …"
+    } else if lower.contains("denied")
+        || lower.contains("eperm")
+        || lower.contains("permission")
+        || lower.contains("operation not permitted")
+    {
+        "  This looks like a sandbox denial — the server tried to touch something it \
+         was not granted. Servers that write config or a device id on first launch \
+         need that directory declared:\n    \
+         mur agent mcp add … --state-path <dir>"
+    } else {
+        "  The server exited or failed the handshake. Check that the command and args \
+         are the ones its README gives, and that it speaks MCP over stdio."
+    };
+    format!("{specific}\n  To install it anyway, unchecked: --no-probe")
+}
+
+#[cfg(test)]
+mod probe_advice_tests {
+    use super::probe_failure_advice;
+
+    /// Three failure shapes, three different things to go fix. Sending a
+    /// sandbox denial to "raise the timeout" is how a real misconfiguration
+    /// gets papered over.
+    #[test]
+    fn each_failure_shape_points_somewhere_different() {
+        let slow = probe_failure_advice(true, "probe timed out after 10s");
+        assert!(slow.contains("MUR_MCP_PROBE_TIMEOUT_S"), "{slow}");
+        assert!(!slow.contains("--state-path"), "{slow}");
+
+        let denied =
+            probe_failure_advice(false, "spawn failed: Operation not permitted (os error 1)");
+        assert!(denied.contains("--state-path"), "{denied}");
+        assert!(!denied.contains("MUR_MCP_PROBE_TIMEOUT_S"), "{denied}");
+
+        let broken = probe_failure_advice(false, "unexpected EOF reading initialize response");
+        assert!(broken.contains("speaks MCP over stdio"), "{broken}");
+
+        // Every shape names the escape hatch, or the advice is a dead end.
+        for a in [&slow, &denied, &broken] {
+            assert!(a.contains("--no-probe"), "{a}");
+        }
+    }
+}
+
+/// Create each declared state path if missing, then grant read+write on it.
+///
+/// Creation is the point, not a convenience. `SandboxPolicy::from_entitlements`
+/// drops entitlement paths that do not exist when the profile is sealed, and
+/// the servers this exists for create their state on FIRST launch — which is
+/// the launch that gets denied. Granting a path that is not there yet would be
+/// accepted here and still return EPERM, which is the failure #1161 is about.
+///
+/// Grants go through the same guards as `mur agent perm allow-write`: the
+/// launch chain can never be granted, and neither can a home or volume root.
+/// A declared path is a claim by a server author, so it gets no more trust
+/// than a path the user typed.
+fn grant_state_paths(
+    agent: &str,
+    profile: &mut mur_common::AgentProfile,
+    state_paths: &[String],
+) -> Result<()> {
+    for raw in state_paths {
+        let expanded = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw);
+        crate::cmd::agent::perm::reject_ungrantable_path(agent, raw, true)?;
+        if !expanded.exists() {
+            std::fs::create_dir_all(&expanded)
+                .with_context(|| format!("create declared state path {}", expanded.display()))?;
+            println!("  created {}", expanded.display());
+        }
+        for list in [
+            &mut profile.entitlements.filesystem.read,
+            &mut profile.entitlements.filesystem.write,
+        ] {
+            if !list.iter().any(|p| p == raw) {
+                list.push(raw.clone());
+            }
+        }
+        println!("  granted read+write on {raw}");
+    }
+    Ok(())
+}
+
+/// Add a remote (Streamable HTTP) MCP server to `agent`. No binary pin — the
+/// server runs elsewhere; trust comes from the URL + bearer/OAuth auth.
+///
+/// `description_hash` pins the tool-schema fingerprint at add-time; if `Some`,
+/// it is stored as-is (caller computes via `sha2`).  `egress_host` defaults
+/// the server's network policy to `Restricted { allow_hosts: [host] }` so the
+/// agent can reach the server's own host without extra configuration.
+pub fn cmd_mcp_add_remote(
+    agent: &str,
+    name: &str,
+    url: &str,
+    bearer: Option<mur_common::secret::SecretRef>,
+    description_hash: Option<String>,
+    egress_host: Option<&str>,
+) -> anyhow::Result<()> {
+    let (path, mut profile) = load_profile_for_edit(agent)?;
+    if profile.mcp_servers.iter().any(|m| m.name == name) {
+        anyhow::bail!("MCP server '{name}' already exists on '{agent}'; remove it first");
+    }
+    let network = egress_host.map(|host| mur_common::agent::McpServerNetwork {
+        mode: McpNetMode::Restricted,
+        allow_hosts: vec![host.to_string()],
+        deny_hosts: vec![],
+        authorization: None,
+    });
+    profile.mcp_servers.push(mur_common::agent::McpServerEntry {
+        name: name.to_string(),
+        url: Some(url.to_string()),
+        auth: bearer.map(|token| mur_common::agent::McpAuth::Bearer { token }),
+        description_hash,
+        network,
+        installed_at: Some(chrono::Utc::now()),
+        ..Default::default()
+    });
+    save_profile(&path, &mut profile)?;
+    println!("Added remote MCP server '{name}' → {url} for agent '{agent}'.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::MUR_HOME_LOCK;
+    use super::*;
+
+    /// A declared state path must be CREATED, not just listed. The sandbox
+    /// drops entitlement paths that are missing when the profile is sealed, so
+    /// a grant on a directory the server has not made yet is accepted here and
+    /// still returns EPERM — which is the failure #1161 is about, reintroduced
+    /// by the feature meant to fix it.
+    #[test]
+    fn a_declared_state_path_is_created_and_granted_read_and_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let want = tmp.path().join("dot-server-state");
+        assert!(!want.exists(), "fixture must start absent");
+        let raw = want.display().to_string();
+
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        grant_state_paths("agent", &mut profile, std::slice::from_ref(&raw)).unwrap();
+
+        assert!(
+            want.exists(),
+            "the path the sandbox will look for must exist"
+        );
+        assert!(
+            profile.entitlements.filesystem.read.contains(&raw),
+            "read grant missing"
+        );
+        assert!(
+            profile.entitlements.filesystem.write.contains(&raw),
+            "write grant missing"
+        );
+    }
+
+    /// A state path is a claim by a server author, so it gets no more trust
+    /// than a path the user typed: the same guard that stops
+    /// `perm allow-write ~` has to stop this too.
+    #[test]
+    fn a_declared_state_path_cannot_smuggle_in_an_overbroad_grant() {
+        let mut profile = mur_common::AgentProfile::default_for_tests();
+        let err = grant_state_paths("agent", &mut profile, &["~".to_string()]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("too broad"),
+            "home directory must be refused, got: {err:#}"
+        );
+        assert!(
+            profile.entitlements.filesystem.write.is_empty(),
+            "a refused path must leave no grant behind"
+        );
+    }
+
+    /// Serialize tests that mutate the `MUR_HOME` env var to avoid races.
+
+    #[test]
+    fn add_with_force_skips_prompt_and_installs() {
+        // Regression test for dogfood issue 3: `force = true` must install
+        // without touching stdin (the y/N prompt is skipped entirely), and
+        // the resulting entry must still carry a real binary_sha256 pin —
+        // `force` only bypasses the *consent prompt*, never the hash.
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+
+        let agent_home = mur_home.join("agents").join("carol");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        // `true` (the `true` binary, present on every unix box) resolves on
+        // PATH, so this also exercises the hash-computation branch.
+        // `no_probe` because `true` is not an MCP server: this asserts the
+        // consent/pin plumbing, and liveness has its own tests below and in
+        // `tests/agent_mcp_add_probe.rs`.
+        cmd_mcp_add(
+            "carol",
+            "echo-srv",
+            "true",
+            &[],
+            &[],
+            McpAddPin {
+                force: true,
+                no_probe: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let (_p, profile) = load_profile_for_edit("carol").unwrap();
+        let e = profile
+            .mcp_servers
+            .iter()
+            .find(|m| m.name == "echo-srv")
+            .unwrap();
+        assert!(
+            e.binary_sha256.is_some(),
+            "force must skip only the prompt, not the binary hash pin"
+        );
+    }
+
+    /// `--force` skips the consent prompt. It must NOT skip the check that
+    /// the server runs — they are different questions, and conflating them is
+    /// how scripted and GUI installs would go back to writing entries that
+    /// cannot start.
+    #[test]
+    fn force_does_not_imply_no_probe() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let agent_home = mur_home.join("agents").join("carol");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        // `true` resolves and hashes; it exits without speaking MCP.
+        let err = cmd_mcp_add(
+            "carol",
+            "dead-srv",
+            "true",
+            &[],
+            &[],
+            McpAddPin {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .expect_err("a server that cannot start must not install");
+        let msg = err.to_string();
+        assert!(msg.contains("did not start"), "got {msg}");
+        assert!(
+            msg.contains("--no-probe"),
+            "the way out must be named: {msg}"
+        );
+
+        let (_p, profile) = load_profile_for_edit("carol").unwrap();
+        assert!(
+            !profile.mcp_servers.iter().any(|m| m.name == "dead-srv"),
+            "a failed probe must leave no entry behind"
+        );
+    }
+
+    #[test]
+    fn add_remote_writes_url_and_bearer() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+
+        // Create agent dir with a default profile so load_profile_for_edit works.
+        let agent_home = mur_home.join("agents").join("alice");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        cmd_mcp_add_remote(
+            "alice",
+            "gh",
+            "https://api.example.com/mcp",
+            Some(mur_common::secret::SecretRef::Env("GH_TOKEN".into())),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let (_p, profile) = load_profile_for_edit("alice").unwrap();
+        let e = profile.mcp_servers.iter().find(|m| m.name == "gh").unwrap();
+        assert_eq!(e.url.as_deref(), Some("https://api.example.com/mcp"));
+        assert!(matches!(
+            e.auth,
+            Some(mur_common::agent::McpAuth::Bearer { .. })
+        ));
+    }
+
+    #[test]
+    fn add_remote_sets_hash_and_default_egress() {
+        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+
+        let agent_home = mur_home.join("agents").join("bob");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let p = mur_common::agent::AgentProfile::default_for_tests();
+        std::fs::write(
+            agent_home.join("profile.yaml"),
+            serde_yaml_ng::to_string(&p).unwrap(),
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var("MUR_HOME", mur_home);
+        }
+
+        cmd_mcp_add_remote(
+            "bob",
+            "srv",
+            "https://mcp.example.com/mcp",
+            None,
+            Some("abc123".into()),
+            Some("mcp.example.com"),
+        )
+        .unwrap();
+
+        let (_p, profile) = load_profile_for_edit("bob").unwrap();
+        let e = profile
+            .mcp_servers
+            .iter()
+            .find(|m| m.name == "srv")
+            .unwrap();
+        assert_eq!(e.description_hash.as_deref(), Some("abc123"));
+        let net = e.network.as_ref().expect("network should be set");
+        assert_eq!(net.mode, McpNetMode::Restricted);
+        assert_eq!(net.allow_hosts, vec!["mcp.example.com"]);
+    }
+}
