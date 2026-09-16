@@ -256,11 +256,19 @@ no sink to ask.
         // Answering is the shim's job; this asserts only that the question
         // was asked, which is what #1351 could not do.
         use mur_common::agent::{ToolPolicy, ToolRule};
-        let runner = Arc::new(runner_with_probe().with_tools_policy(vec![ToolRule {
-            pattern: "*".into(),
-            policy: ToolPolicy::Ask,
-            risk: None,
-        }]));
+        // `with_pending_approvals` is load-bearing: without it the gate has
+        // no map to park a pending answer in and fails closed at once, so
+        // the prompt this test waits for is never sent. `new_stub_echo()`
+        // leaves it `None`.
+        let runner = Arc::new(
+            runner_with_probe()
+                .with_tools_policy(vec![ToolRule {
+                    pattern: "*".into(),
+                    policy: ToolPolicy::Ask,
+                    risk: None,
+                }])
+                .with_pending_approvals(Default::default()),
+        );
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(8);
         let ctx = RequestContext {
             notifier: Some(tx),
