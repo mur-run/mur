@@ -1,8 +1,11 @@
 //! `source.type: github_actions` — one GET per check against
 //! `/repos/{owner}/{repo}/actions/runs/{run_id}` (spec §MVP Adapter →
-//! GitHub Actions). Read-only: rerun and log download are plan-2 actions.
-//! `classify` is pure over (status, body) so every fixture in the spec's
-//! adapter contract tests runs without a network.
+//! GitHub Actions). `observe` is read-only; `rerun` is the one write action
+//! this adapter supports, gated on a separate write-scoped credential
+//! (`write_credential_ref`) so a read-only monitor can never issue it. Log
+//! download remains a plan-2 action. `classify`/`classify_rerun` are pure
+//! over (status, body) so every fixture in the spec's adapter contract tests
+//! runs without a network.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -50,6 +53,36 @@ pub fn parse_reference(r: &str) -> Result<(String, String, u64), String> {
 
 fn snippet(body: &str) -> String {
     body.chars().take(EVIDENCE_MAX_CHARS).collect()
+}
+
+/// `POST .../actions/runs/{run_id}/rerun-failed-jobs` — failed jobs only,
+/// never the whole run: re-running green jobs costs minutes and can re-fire
+/// their side effects.
+fn rerun_url(api_base: &str, owner: &str, repo: &str, run_id: u64) -> String {
+    format!("{api_base}/repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs")
+}
+
+/// Pure classification of a rerun response, mirroring `classify` above:
+/// no I/O, exhaustively tested. `201`/`204` is GitHub's documented success
+/// shape for this endpoint (empty body); everything else is an error.
+fn classify_rerun(status: u16, body: &str) -> Result<String, String> {
+    match status {
+        201 | 204 => Ok(format!("rerun requested (http {status})")),
+        // The scope named here is the one a user can actually act on —
+        // `actions:read` (observe's 403 message) would send them chasing the
+        // wrong grant.
+        403 => Err("forbidden (403) — the credential needs actions:write to rerun jobs".into()),
+        // Must not read like a credential problem: sending someone at their
+        // token when the run was simply deleted wastes their afternoon.
+        404 => Err("not found (404): the run no longer exists".into()),
+        s => {
+            // Redact before truncating — same ordering as `classify`, and for
+            // the same reason: truncating a raw secret first can leave a
+            // partial fragment that no longer matches the redaction pattern.
+            let redacted = mur_common::redact::redact_secrets(body).into_owned();
+            Err(format!("github {s}: {}", snippet(&redacted)))
+        }
+    }
 }
 
 pub fn classify(status: u16, body: &str, retry_after_secs: Option<u64>) -> Observation {
@@ -171,6 +204,60 @@ impl GithubActionsAdapter {
         })
         .join()
         .unwrap_or_else(|_| Observation::unknown("github fetch worker thread panicked"))
+    }
+
+    /// Reruns the failed jobs of a completed run. A monitor reruns because
+    /// something failed — `write_credential_ref` is the write-scoped grant
+    /// (spec §Task 1: `MonitorSpec::validate` refuses an action needing a
+    /// write when it is absent). This must never fall back to an
+    /// unauthenticated POST, so both the missing-grant and
+    /// cannot-resolve-grant cases are refused before any connection is
+    /// attempted.
+    pub fn rerun(
+        &self,
+        reference: &str,
+        write_credential_ref: Option<&str>,
+    ) -> Result<String, String> {
+        let (owner, repo, run_id) = parse_reference(reference)?;
+        let credential_ref = write_credential_ref.ok_or_else(|| {
+            "no write_credential_ref configured for this monitor — a rerun requires a \
+             write-scoped credential"
+                .to_string()
+        })?;
+        let token = SecretRef::from_str(credential_ref)
+            .ok()
+            .and_then(|r| r.resolve_to_string_blocking())
+            .ok_or_else(|| {
+                format!(
+                    "write_credential_ref `{credential_ref}` could not be resolved — \
+                     update the reference"
+                )
+            })?;
+
+        let url = rerun_url(&self.api_base, &owner, &repo, run_id);
+        let timeout = self.timeout;
+        // Same hazard as `fetch` above: `reqwest::blocking::ClientBuilder::build`
+        // panics when dropped inside a Tokio runtime context. Run the whole
+        // request on a dedicated OS thread with no ambient runtime, so the
+        // caller's context never matters.
+        std::thread::spawn(move || -> Result<String, String> {
+            let client = reqwest::blocking::Client::builder()
+                .user_agent(USER_AGENT)
+                .timeout(timeout)
+                .build()
+                .map_err(|e| format!("http client: {e}"))?;
+            let resp = client
+                .post(url)
+                .header("Accept", "application/vnd.github+json")
+                .bearer_auth(&token)
+                .send()
+                .map_err(|e| format!("request failed: {e}"))?;
+            let status = resp.status().as_u16();
+            let body = resp.text().unwrap_or_default();
+            classify_rerun(status, &body)
+        })
+        .join()
+        .unwrap_or_else(|_| Err("github rerun worker thread panicked".to_string()))
     }
 }
 
@@ -431,6 +518,19 @@ mod tests {
         );
     }
 
+    /// Binds an ephemeral port and drops it, handing back an adapter pointed
+    /// at a port nothing is listening on — a request against it fails fast
+    /// with no network and no fixture server needed.
+    fn adapter_pointing_at_a_closed_port() -> GithubActionsAdapter {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener); // certainly closed: nothing is listening on it now
+        GithubActionsAdapter {
+            api_base: format!("http://127.0.0.1:{port}"),
+            timeout: Duration::from_secs(2),
+        }
+    }
+
     /// The regression this exists for: nothing else in this file ever drives
     /// `observe()` through to `fetch()`'s HTTP layer — every other test
     /// above exercises the pure `classify` function or the credential
@@ -447,14 +547,7 @@ mod tests {
     /// the connect itself fails fast with no network and no fixture server.
     #[tokio::test]
     async fn observe_runs_through_the_http_layer_without_panicking_in_an_async_context() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener); // certainly closed: nothing is listening on it now
-
-        let adapter = GithubActionsAdapter {
-            api_base: format!("http://127.0.0.1:{port}"),
-            timeout: Duration::from_secs(2),
-        };
+        let adapter = adapter_pointing_at_a_closed_port();
         let obs = adapter.observe("owner/repo/1", None);
 
         assert_eq!(obs.outcome, Outcome::Unknown, "{obs:?}");
@@ -464,6 +557,116 @@ mod tests {
         assert!(
             err.contains("request failed"),
             "expected the request-failure message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_rerun_accepted_reports_which_run_it_restarted() {
+        // GitHub answers 201 with an empty body on success.
+        let out = classify_rerun(201, "").unwrap();
+        assert!(out.contains("rerun"), "{out}");
+    }
+
+    #[test]
+    fn a_403_names_the_missing_scope_and_keeps_the_body_out() {
+        let e = classify_rerun(
+            403,
+            r#"{"message":"Resource not accessible by personal access token"}"#,
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("actions:write"),
+            "must name the scope a user can act on: {e}"
+        );
+        assert!(
+            !e.contains("Resource not accessible"),
+            "must not echo the raw body: {e}"
+        );
+    }
+
+    #[test]
+    fn a_404_says_the_run_is_gone_not_that_the_token_is_wrong() {
+        // Sending someone at their token when the run was deleted wastes their
+        // afternoon. These two 4xx must not read alike.
+        //
+        // Self-review: an empty error string would also satisfy
+        // `!e.contains("actions:write")`, so this also asserts the message
+        // says the run is gone, closing that hole.
+        let e = classify_rerun(404, "").unwrap_err();
+        assert!(!e.contains("actions:write"), "{e}");
+        assert!(
+            e.contains("no longer exists") || e.contains("not found"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn an_unexpected_status_reports_it_with_a_redacted_body() {
+        let e = classify_rerun(500, &format!("ghp_{}", "A".repeat(36))).unwrap_err();
+        assert!(e.contains("500"), "{e}");
+        assert!(!e.contains("ghp_AAAA"), "a body can echo a token back: {e}");
+    }
+
+    #[test]
+    fn a_rerun_without_a_grant_refuses_before_any_request() {
+        // Belt to Task 1's braces: validation should have caught it, but the
+        // adapter must never fall back to an unauthenticated POST. Points at a
+        // port nothing listens on, so a request would fail loudly rather than
+        // silently succeeding against GitHub.
+        let a = adapter_pointing_at_a_closed_port();
+        let e = a.rerun("o/r/12345", None).unwrap_err();
+        assert!(e.contains("write_credential_ref"), "{e}");
+        assert!(
+            !e.contains("request failed"),
+            "it must refuse before connecting: {e}"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_grant_refuses_before_any_request() {
+        let a = adapter_pointing_at_a_closed_port();
+        let e = a
+            .rerun("o/r/12345", Some("env:DEFINITELY_NOT_SET"))
+            .unwrap_err();
+        assert!(e.contains("could not be resolved"), "{e}");
+        assert!(!e.contains("request failed"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn rerun_runs_through_the_http_layer_without_panicking_in_an_async_context() {
+        // The one test that exercises the real client, and the reason it is
+        // `#[tokio::test]`: `reqwest::blocking::ClientBuilder::build` panics
+        // when dropped inside a runtime context, which is the context
+        // `cmd::monitor::add` runs in. The predecessor slice shipped exactly
+        // that panic. Mirrors `observe_runs_through_the_http_layer_without
+        // _panicking_in_an_async_context` above.
+        //
+        // The brief's version of this test named the env var
+        // `TEST_TOKEN_SET_BY_THIS_TEST` but never set it, so the credential
+        // would fail to resolve and the test would assert on the wrong error
+        // ("could not be resolved" instead of "request failed"). Setting it
+        // here is the fix; `env::set_var` is `unsafe` under edition 2024,
+        // matching every other env-mutating test in this crate.
+        const VAR: &str = "TEST_TOKEN_SET_BY_THIS_TEST";
+        unsafe { std::env::set_var(VAR, "dummy-token-for-this-test") };
+
+        let a = adapter_pointing_at_a_closed_port();
+        let e = a
+            .rerun("o/r/12345", Some(&format!("env:{VAR}")))
+            .unwrap_err();
+        assert!(e.contains("request failed"), "{e}");
+
+        unsafe { std::env::remove_var(VAR) };
+    }
+
+    #[test]
+    fn the_url_targets_rerun_failed_jobs_not_the_whole_run() {
+        // Re-running the whole run costs minutes and re-fires the side effects
+        // of jobs that already passed.
+        let u = rerun_url("https://api.github.com", "o", "r", 12345);
+        assert!(
+            u.ends_with("/repos/o/r/actions/runs/12345/rerun-failed-jobs"),
+            "{u}"
         );
     }
 }
