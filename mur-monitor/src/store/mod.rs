@@ -7,10 +7,12 @@
 //! claim/heartbeat/expiry; `observe.rs` owns observations, events and the
 //! write-back of one check cycle.
 
+mod action;
 mod lease;
 mod notify;
 mod observe;
 
+pub use action::ActionRow;
 pub use lease::{Claimed, Lease};
 pub use notify::{DELIVERY_MAX_ATTEMPTS, DeliveryState, Pending};
 pub use observe::{CycleUpdate, Event, EventRow, ObservationRow};
