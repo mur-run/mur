@@ -474,6 +474,143 @@ fn a_failing_executor_does_not_fail_the_tick() {
     // `unwrap()` above IS the assertion: an Err would have panicked.
 }
 
+/// Fix round 2: a Phase-2 row whose key names a verb the monitor's current
+/// action list no longer has at that index used to `continue` forever —
+/// `Claimed`/`Blocked`, permanently occupying one of the ten oldest-first
+/// `pending_actions` slots. Reproduces the real mechanism the
+/// `action.r#type != verb` comment already describes: the monitor's
+/// OUTCOME flips under a parked row (never its `spec`, which `MonitorRow`
+/// holds fixed for the monitor's whole life — `spec_json` is written once
+/// at `create` and there is no update verb), so index 0 resolves against a
+/// different list without `cycle_id` ever rotating (it is set once at
+/// `create` and never touched again — `store/mod.rs`), which is exactly
+/// what lets Phase 2's `cycle_id` check pass through to the verb check.
+#[test]
+fn a_row_whose_verb_drifted_out_from_under_it_is_retired_not_skipped_forever() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    let spec = MonitorSpec::from_yaml(
+        "schema_version: 1\nname: t\nsource: { type: mur_run, reference: r1 }\n\
+         actions:\n  on_failure:\n    - type: rerun\n  on_success:\n    - type: notify\n\
+         idempotency_key: k\ncreated_by: { actor: user:test }\n",
+    )
+    .unwrap();
+    let id = {
+        let s = MonitorStore::open(&home).unwrap();
+        settle_into(&s, &spec, Outcome::Failed)
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    // Tick 1: claims `rerun` at index 0 of `on_failure` and parks it — gated,
+    // no TTY, nothing approved yet (same shape as
+    // `a_gated_action_parks_and_keeps_waiting_without_spending_the_budget`).
+    let first = drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!((first.executed, first.blocked, first.failed), (0, 1, 0));
+    let action_key = {
+        let s = store(&home);
+        let a = s.actions_for(&id).unwrap().into_iter().next().unwrap();
+        assert_eq!(
+            a.state,
+            ActionState::Blocked,
+            "must really be parked before the flip"
+        );
+        a.action_key
+    };
+
+    // The outcome flips under the parked row without rotating `cycle_id` —
+    // hand-built the same way `an_unknown_outcome_produces_no_actions_at_all`
+    // manufactures a combination the real scheduler races into only rarely.
+    // After this, Phase 2 resolves index 0 against `on_success` (`notify`)
+    // instead of the `on_failure` (`rerun`) list the parked key named.
+    {
+        let s = store(&home);
+        let row = s.get(&id).unwrap().unwrap();
+        let update = CycleUpdate {
+            outcome: Outcome::Succeeded,
+            observation: Observation::terminal(Outcome::Succeeded, "flipped for the test"),
+            observed_at: t0(),
+            new_state: MonitorState::AwaitingApproval,
+            next_check_at: t0(),
+            pending_attempts: row.pending_attempts,
+            unknown_streak: row.unknown_streak,
+            last_progress_at: row.last_progress_at,
+            progress_token: row.progress_token.clone(),
+            stalled_since: row.stalled_since,
+            soft_notified: row.soft_notified,
+            hard_reached: row.hard_reached,
+            finish_cycle: true,
+            events: Vec::new(),
+        };
+        assert!(
+            s.apply_cycle(&id, row.fence, &update).unwrap(),
+            "fixture write was refused: the flip never landed"
+        );
+    }
+
+    // Tick 2: Phase 2 must retire the row now, not skip it again.
+    let second = drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!(
+        second.failed, 1,
+        "the drifted row must be retired this tick, not skipped"
+    );
+    let (state, result) = {
+        let s = store(&home);
+        let a = s
+            .actions_for(&id)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.action_key == action_key)
+            .unwrap();
+        (a.state, a.result.unwrap_or_default())
+    };
+    assert_eq!(
+        state,
+        ActionState::Failed,
+        "a row that can never resolve must be retired terminally, not left parked"
+    );
+    assert!(
+        result.contains("rerun") && result.contains("notify"),
+        "the reason must name the drift — what the key said and what is there now: {result}"
+    );
+
+    // "Must not come back" is the negative-assertion trap the brief warns
+    // about: `ActionReport::default()` on a further call proves nothing by
+    // itself — the OLD `continue` behaviour also produced an empty report
+    // on every tick after the first, forever, because a silently skipped
+    // row makes no noise either. `pending_actions()` only ever returns
+    // `Claimed`/`Blocked` rows (`store/action.rs`), so a genuinely `Failed`
+    // row structurally cannot be re-claimed or re-blocked — snapshot the
+    // row's exact `attempt`/`result` and prove a further drain leaves both
+    // byte-identical, not merely that the report stayed quiet.
+    let before = store(&home)
+        .actions_for(&id)
+        .unwrap()
+        .into_iter()
+        .find(|a| a.action_key == action_key)
+        .unwrap();
+    let third = drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!(
+        third,
+        ActionReport::default(),
+        "nothing is left for this monitor to do"
+    );
+    let after = store(&home)
+        .actions_for(&id)
+        .unwrap()
+        .into_iter()
+        .find(|a| a.action_key == action_key)
+        .unwrap();
+    assert_eq!(after.state, before.state, "the row must not come back");
+    assert_eq!(
+        after.attempt, before.attempt,
+        "the row must not be reprocessed"
+    );
+    assert_eq!(
+        after.result, before.result,
+        "the recorded reason must not change"
+    );
+}
+
 #[test]
 fn a_key_yields_both_its_verb_and_its_index() {
     // Phase 2's only handle on what a parked row was FOR: the index

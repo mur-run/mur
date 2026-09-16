@@ -84,6 +84,36 @@ fn home_with_blocked_action(verb: &str, hitl_id: &str) -> (tempfile::TempDir, St
     (d, id)
 }
 
+/// Two actions on one monitor, neither `blocked` — nothing else exercises
+/// this: `home_with_blocked_action` only ever produces a `blocked` row, so
+/// `risk_str`'s output, the attempt-count text, and the non-blocked branch
+/// of `show`'s action line were all unprotected. `notify` goes through
+/// `block_action` twice before finishing `done` (attempt 2, exercising the
+/// plural "attempts" text and proving `unblock` gates on STATE, not on
+/// `approval_id`'s presence — `finish_action` never clears it); `rerun`
+/// goes through it once before finishing `failed` (attempt 1, singular).
+fn home_with_settled_actions() -> (tempfile::TempDir, String) {
+    let (d, id) = home_with_monitor();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+
+    let done_key = action_key(&id, &cyc, 1, "notify", 0);
+    s.claim_action(&done_key, &id, &cyc, RiskTier::Read, t0())
+        .unwrap();
+    s.block_action(&done_key, "hitl-irrelevant-1").unwrap();
+    s.block_action(&done_key, "hitl-irrelevant-2").unwrap();
+    s.finish_action(&done_key, ActionState::Done, "sent")
+        .unwrap();
+
+    let failed_key = action_key(&id, &cyc, 1, "rerun", 1);
+    s.claim_action(&failed_key, &id, &cyc, RiskTier::Write, t0())
+        .unwrap();
+    s.block_action(&failed_key, "hitl-irrelevant-3").unwrap();
+    s.finish_action(&failed_key, ActionState::Failed, "no executor for `rerun`")
+        .unwrap();
+    (d, id)
+}
+
 #[test]
 fn add_creates_once_and_reports_the_existing_one() {
     let d = home();
@@ -651,6 +681,43 @@ fn show_renders_actions_with_the_command_that_unblocks_them() {
             && l.contains("mur channel approve")
             && l.contains("hitl-abc")),
         "a blocked action must print the command that releases it: {out}"
+    );
+}
+
+// Fix round 2: the shipped suite had a blocked-action test and an
+// omitted-section test, but nothing for `done`/`failed`/`claimed` —
+// `risk_str`'s output, the attempt-count text, and the non-blocked branch
+// of the action line were all unprotected. The shipped `notifications:`
+// test made exactly this mistake once already: three separate `contains`
+// checks that could each be satisfied by unrelated lines, so this pins
+// verb+tier+state+attempt-count together on ONE line per action instead.
+#[test]
+fn show_renders_a_non_blocked_actions_verb_tier_state_and_attempts_on_one_line() {
+    let (d, id) = home_with_settled_actions();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(out.contains("  actions:"), "{out}");
+    assert!(
+        out.lines().any(|l| l.contains("notify")
+            && l.contains("read")
+            && l.contains("done")
+            && l.contains("(2 attempts)")),
+        "a done action's verb, tier, state and attempt count must share one line: {out}"
+    );
+    assert!(
+        out.lines().any(|l| l.contains("rerun")
+            && l.contains("write")
+            && l.contains("failed")
+            && l.contains("(1 attempt)")),
+        "a failed action's verb, tier, state and attempt count must share one line: {out}"
+    );
+    // Neither action is blocked, so there is nothing to approve — and this
+    // also proves `show`'s unblock text is gated on STATE, not merely on
+    // `approval_id` being set: both fixture rows went through
+    // `block_action` (which stamps `approval_id`) before finishing, so a
+    // gate that checked presence instead of state would leak this text.
+    assert!(
+        !out.contains("mur channel approve"),
+        "a non-blocked action must not print an approve command: {out}"
     );
 }
 

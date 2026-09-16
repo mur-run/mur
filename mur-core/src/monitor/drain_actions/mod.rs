@@ -73,11 +73,37 @@ fn actions_for_outcome(row: &MonitorRow) -> &[Action] {
 /// may now name a different verb. Writing `Done` onto the old key would
 /// record in the action ledger — the spec's evidence (§冪等與事件紀錄) —
 /// that a remedy completed when it never ran.
-fn verb_and_index_from_key(key: &str) -> Option<(&str, usize)> {
+pub(crate) fn verb_and_index_from_key(key: &str) -> Option<(&str, usize)> {
     let mut segments = key.rsplit(':');
     let index = segments.next()?.parse().ok()?;
     let verb = segments.next()?;
     Some((verb, index))
+}
+
+/// Retires a Phase-2 row whose key names a verb/index the monitor's CURRENT
+/// action list no longer agrees with (fix round 2, following on from
+/// `verb_and_index_from_key`'s doc above): the outcome flipped, or the spec
+/// was edited, out from under a `Claimed`/`Blocked` row, so the index this
+/// key recorded can never again resolve to the verb it named. Left
+/// `Claimed`/`Blocked`, that row would keep occupying one of the ten
+/// oldest-first `pending_actions` slots on every future tick forever —
+/// starving real work behind a row that structurally cannot make progress —
+/// so it is retired terminally (`Failed`) instead of skipped again.
+/// `reason` names the drift for the human reading `mur monitor show`.
+fn retire_drifted_action(
+    store: &MonitorStore,
+    row: &MonitorRow,
+    key: &str,
+    reason: &str,
+    now: DateTime<Utc>,
+    rep: &mut ActionReport,
+) -> Result<()> {
+    store.finish_action(key, ActionState::Failed, reason)?;
+    rep.failed += 1;
+    if let Some(fresh) = store.get(&row.id)? {
+        maybe_complete_monitor(store, &fresh, now)?;
+    }
+    Ok(())
 }
 
 /// Rule 5: once every action row for the monitor's current cycle has
@@ -448,7 +474,23 @@ pub fn drain_actions(
             // is not the list the row came from.
             continue;
         }
-        let Some(action) = actions_for_outcome(&row).get(index) else {
+        let current_list = actions_for_outcome(&row);
+        let Some(action) = current_list.get(index) else {
+            // The index this key recorded no longer exists in the current
+            // list at all — never recoverable (see `retire_drifted_action`).
+            retire_drifted_action(
+                &store,
+                &row,
+                &action_row.action_key,
+                &format!(
+                    "action key named verb `{verb}` at index {index}, but the current \
+                     action list for this outcome has only {} action(s) — the spec \
+                     changed underneath this row",
+                    current_list.len()
+                ),
+                now,
+                &mut rep,
+            )?;
             continue;
         };
         if action.r#type != verb {
@@ -459,6 +501,20 @@ pub fn drain_actions(
             // THIS key would record that `verb` completed when it never
             // ran, and would run the verb at that slot twice in one tick —
             // once under its own key from Phase 1, once under this one.
+            // Never recoverable either: index N in THIS cycle's list will
+            // never again name `verb` (see `retire_drifted_action`).
+            retire_drifted_action(
+                &store,
+                &row,
+                &action_row.action_key,
+                &format!(
+                    "action key named verb `{verb}` at index {index}, but the current \
+                     action list now has `{}` there — the spec changed underneath this row",
+                    action.r#type
+                ),
+                now,
+                &mut rep,
+            )?;
             continue;
         }
         budget -= 1;

@@ -371,7 +371,14 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
     if !actions.is_empty() {
         writeln!(out, "  actions:")?;
         for a in &actions {
-            let verb = verb_from_action_key(&a.action_key);
+            // Single parser for the (positional, colon-delimited) action-key
+            // format — `crate::monitor::drain_actions::verb_and_index_from_key`
+            // is the same recovery Phase 2's retry path uses; a second,
+            // hand-rolled copy here would be how a later change to the key
+            // silently breaks only one caller. Falls back to the raw key
+            // rather than failing `show` on a row it cannot fully explain.
+            let verb = crate::monitor::drain_actions::verb_and_index_from_key(&a.action_key)
+                .map_or(a.action_key.as_str(), |(v, _)| v);
             let attempt = if a.attempt > 0 {
                 format!(
                     " ({} attempt{})",
@@ -513,17 +520,6 @@ fn retry(
         }
     )?;
     Ok(())
-}
-
-/// Recovers the verb out of an `ActionRow::action_key`
-/// (`<monitor-id>:<cycle-id>:<version>:<verb>:<index>`) — the row itself
-/// carries no separate verb column. Safe for the same reason
-/// `mur-core::monitor::drain_actions::verb_and_index_from_key` gives for the
-/// index: no field may contain `:`, ids are UUIDs, so the verb is always the
-/// second-from-last colon-delimited segment. Falls back to the raw key
-/// rather than panicking on a row `show` cannot fully explain.
-fn verb_from_action_key(key: &str) -> &str {
-    key.rsplit(':').nth(1).unwrap_or(key)
 }
 
 /// `RiskTier` has no `as_str`/`Display` — it round-trips through its own
