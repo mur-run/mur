@@ -89,7 +89,7 @@ impl App {
     /// the pane's own channel is never followed (its turns already render).
     pub fn arm_auto_fleet(&mut self, step_id: &str, fleet: &str, now: std::time::Instant) {
         self.auto_fleet_step = Some(step_id.to_string());
-        if !self.fleet.as_ref().is_some_and(|r| r.fleet() == fleet) {
+        if self.fleet.as_ref().is_none_or(|r| r.fleet() != fleet) {
             self.fleet = Some(super::super::fleet_rail::FleetRail::start_auto(fleet));
         }
         if let Some(rail) = self.fleet.as_mut() {
