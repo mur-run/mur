@@ -90,6 +90,7 @@ mod tests {
     use mur_monitor::adapter::{Observation, SourceAdapter};
     use mur_monitor::spec::{MonitorSpec, SourceType};
     use mur_monitor::state::MonitorState;
+    use serde_json::{Map, Value};
 
     fn t0() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 9, 16, 9, 0, 0).unwrap()
