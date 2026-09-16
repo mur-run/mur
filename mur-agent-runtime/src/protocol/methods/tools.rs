@@ -351,9 +351,7 @@ mod tests {
                 .with_pending_approvals(Default::default()),
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(8);
-        let ctx = RequestContext {
-            notifier: Some(tx),
-        };
+        let ctx = RequestContext { notifier: Some(tx) };
         let h = ToolsCallHandler::new(runner);
         let call = tokio::spawn(async move {
             h.handle(

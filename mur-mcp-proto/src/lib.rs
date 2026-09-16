@@ -229,7 +229,10 @@ mod tests {
     fn garbage_is_reported_not_treated_as_eof() {
         // EOF ends the loop. A malformed frame must not, or one bad line
         // from the peer would look like the peer hanging up.
-        assert!(matches!(read("not json at all\n"), Some(Incoming::Unparseable(_))));
+        assert!(matches!(
+            read("not json at all\n"),
+            Some(Incoming::Unparseable(_))
+        ));
     }
 
     #[test]

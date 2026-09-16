@@ -167,7 +167,10 @@ mod tests {
     fn garbage_is_reported_not_treated_as_eof() {
         // EOF ends the loop. A malformed frame must not, or one bad line
         // from the peer would look like the peer hanging up.
-        assert!(matches!(read("not json at all\n"), Some(Incoming::Unparseable(_))));
+        assert!(matches!(
+            read("not json at all\n"),
+            Some(Incoming::Unparseable(_))
+        ));
     }
 
     #[test]
@@ -270,9 +273,7 @@ no sink to ask.
                 .with_pending_approvals(Default::default()),
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(8);
-        let ctx = RequestContext {
-            notifier: Some(tx),
-        };
+        let ctx = RequestContext { notifier: Some(tx) };
         let h = ToolsCallHandler::new(runner);
         let call = tokio::spawn(async move {
             h.handle(
@@ -736,8 +737,20 @@ printf '%s\n' \
 
 Expected: two JSON lines on stdout — an `initialize` result declaring
 `"capabilities":{"tools":{}}`, then a `tools/list` result whose `tools` array
-is the agent's own. If the second is an error naming the socket, the agent is
-not running; start it and retry.
+is the agent's own.
+
+Three failure shapes, and they mean different things:
+
+- `connect …: Connection refused` — the socket file is stale and nothing is
+  listening. That agent is not running; pick one that is.
+- `method not found: tools/list` — the agent **is** running, and the shim
+  reached it, but that process was started from a binary predating #1352.
+  A long-running agent does not acquire a method because `main` moved; it
+  has to be restarted. Seeing this relayed faithfully still proves the
+  forwarding path, since the message came from the agent rather than the
+  shim's own fallthrough arm.
+- `MUR agent unreachable: …` inside a `tools/call` result — the fail-closed
+  path, reported to the model as `isError` rather than as an empty success.
 
 - [ ] Lint and format:
 

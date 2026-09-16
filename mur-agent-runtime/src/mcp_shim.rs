@@ -272,3 +272,39 @@ async fn elicit(
         let _ = sock.lock().await.write_all(&bytes).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_numeric_and_a_string_id_key_the_same_map() {
+        // JSON-RPC allows both, and the peer picks. Keying on only one shape
+        // would strand every answer the other kind of peer sends.
+        assert_eq!(id_key(&json!("e-1")).as_deref(), Some("e-1"));
+        assert_eq!(id_key(&json!(7)).as_deref(), Some("7"));
+        assert!(id_key(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn only_an_explicit_allow_is_an_approval() {
+        // The decision table, stated once. `decline` and `cancel` are
+        // denials; so is an accept whose payload does not actually say yes,
+        // and so is a malformed answer. Unattended CLIs answer `cancel`,
+        // which is why this is the branch that matters most.
+        let allow = |v: Value| {
+            v["result"]["action"] == json!("accept")
+                && v["result"]["content"]["allow"] == json!(true)
+        };
+        assert!(allow(
+            json!({"result": {"action": "accept", "content": {"allow": true}}})
+        ));
+        assert!(!allow(
+            json!({"result": {"action": "accept", "content": {"allow": false}}})
+        ));
+        assert!(!allow(json!({"result": {"action": "decline"}})));
+        assert!(!allow(json!({"result": {"action": "cancel"}})));
+        assert!(!allow(json!({"error": {"code": -32601}})));
+        assert!(!allow(json!({})));
+    }
+}
