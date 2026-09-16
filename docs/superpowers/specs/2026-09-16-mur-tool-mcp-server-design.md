@@ -108,12 +108,17 @@ every agent process. But the dependency is not in the protocol — measured:
 | `server.rs` | 124 | **0** |
 | `tools.rs` | 1198 | 50 |
 
-So the protocol and the dispatch loop are already free of it; only the tool
-set is bound. Extract those 250 lines into a crate below both — working name
-`mur-mcp-proto` — exactly as the repo rule prescribes for anything two
-crates on either side of that line must share. `mur-mcp-server` keeps its
-`mur-core` tools; `mur-agent-runtime` serves the agent's tools; neither
-grows a dependency on the other.
+That table measured the wrong thing, and the extraction (#1348) corrected
+it. `server.rs` does reach `mur-core`, indirectly through `crate::tools` —
+but the disqualifying fact is its shape, not its dependencies: it is
+`handle(&mut self, Request) -> Response`, a pure responder, and the
+runtime's server must also *originate* requests to carry a HITL pause. A
+loop that cannot send a request is the wrong loop to share.
+
+So `mur-mcp-proto` holds `jsonrpc.rs` alone — the `Request` / `Response`
+types and the stdio framing, 126 lines, moved verbatim. `mur-mcp-server`
+keeps its own loop and its `mur-core` tools; the runtime writes the loop it
+actually needs; neither crate grows a dependency on the other.
 
 ## What the CLI is offered
 
@@ -136,9 +141,57 @@ One stdio server per spawned turn, not a long-lived daemon on a port:
 - A server that dies with its turn cannot be reached by anything outside
   that turn. A listening socket is an authorization surface; not opening one
   is cheaper than defending one.
-- `task_id` is fixed for the life of the process, which is what makes
-  obligation 3 (task scope) hold without the server having to be told which
-  task a call belongs to.
+
+### The server is not in the agent's process
+
+An earlier draft stopped at "one stdio server per turn" without saying which
+process runs it, and the rest of the document quietly assumed the agent's.
+It cannot be: `--mcp-config` gives the client a **command to spawn**, so the
+MCP server is a child of the CLI, which is a child of MUR. It has no access
+to the agent's memory, and therefore none to `GuardedToolCall`.
+
+Verified rather than reasoned: the probe server that produced the
+`elicitation` measurements above was a separate `python3` process that
+`claude` started from its `--mcp-config` entry.
+
+So the shape is a **shim**:
+
+```
+agent runtime ──spawn──► CLI ──spawn──► mur MCP shim
+      ▲                                       │
+      └────────── unix socket (A2A) ──────────┘
+                  GuardedToolCall lives here
+```
+
+The shim speaks MCP on stdio to the CLI and forwards to the running agent
+over the socket it already listens on — the boundary `mur agent dial`
+already treats as the trust boundary. **The shim executes nothing.** It has
+no tools, no policy, no vault; it is a translator. Execution stays in the
+agent process, behind `GuardedToolCall`, so the one-execution-path test in
+`tools/guarded.rs` keeps its meaning across the process split rather than
+being quietly escaped by it.
+
+What this costs: two new A2A methods (list the agent's tools; run one), and
+a shim that must be told which agent and which task it belongs to. What it
+buys: no second copy of the obligations, and no new trust boundary — the
+socket is the one that already exists.
+
+`task_id` is passed to the shim at spawn and fixed for its life, which is
+what makes obligation 3 (task scope) hold without the shim having to work
+out which task a call belongs to.
+
+### HITL crosses the same socket, on a channel that already exists
+
+The pause originates inside `GuardedToolCall`, in the agent process, and
+must reach a CLI blocked in `tools/call` two processes away. Nothing new is
+needed for the agent half: `gate_response` already pushes
+`tool/approval_needed` to the `ApprovalSink` registered for that task, which
+is how an attached `murmur` client is asked today.
+
+So the shim registers as that task's approval sink, receives
+`tool/approval_needed`, and re-frames it as `elicitation/create` on stdio.
+The answer travels back the same way. Both halves already exist; what is new
+is the translation between them.
 
 ## HITL has a transport: `elicitation/create`
 
@@ -199,15 +252,15 @@ activation gate keeps it disabled.
 
 ## Open questions
 
-1. Whether `GuardedToolCall` needs to be re-entrant. An in-process turn
-   holds the loop; a spawned CLI may issue concurrent `tools/call`
-   requests. The HITL batch gate is written around a turn's worth of calls
-   arriving together, and it is not yet established that it behaves
-   correctly when calls arrive independently.
-2. Whether `codex` and `agy` can even be offered this. Both mount MCP
+*Re-entrancy is closed: the approvals map is keyed by a `hitl_id` minted per
+pending call, so two batches on one task cannot cross-answer. Asserted in
+`hitl::batch::tests::concurrent_gates_on_one_task_do_not_cross_answer`
+(#1347).*
+
+1. Whether `codex` and `agy` can even be offered this. Both mount MCP
    *persistently*, into a config file, so a per-turn stdio command implies
    writing that file per turn into their private home. Verified for neither.
-3. What `step/started` and `step/completed` mean when the step was initiated
+2. What `step/started` and `step/completed` mean when the step was initiated
    by a model MUR is not running. The events are how a channel renders a
    turn; a spawned turn's shape is the CLI's, not MUR's.
 
@@ -236,3 +289,7 @@ activation gate keeps it disabled.
   spawning it with obligation 2 unenforceable.
 - **Unattended never approves**: drive a gated tool headless and assert the
   outcome is `cancel` or `decline` — never `accept`, and never a hang.
+- **The shim executes nothing**: assert the shim binary links no
+  `ToolExecutor` — the one-execution-path test covers the agent's process,
+  and the shim is a second process it cannot see. A shim that grew a local
+  fast path would satisfy that test and defeat its purpose.
