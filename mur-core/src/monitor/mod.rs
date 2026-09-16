@@ -5,6 +5,7 @@
 pub mod actions;
 pub mod adapters;
 pub mod drain_actions;
+pub mod drain_outbox;
 pub mod notify;
 pub mod service;
 

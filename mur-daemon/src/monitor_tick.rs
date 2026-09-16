@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use mur_core::monitor::drain_actions;
+use mur_core::monitor::drain_outbox;
 use mur_core::monitor::service::{self, TICK_INTERVAL};
 
 pub fn spawn(mur_home: PathBuf, handle: tokio::runtime::Handle) {
@@ -33,9 +34,21 @@ fn run_loop(mur_home: &Path, handle: &tokio::runtime::Handle) {
         Err(e) => tracing::error!(error = %e, "monitor: recovery failed; ticking anyway"),
     }
     loop {
-        // Space held for Task 8's future `drain_outbox` call, before
-        // `tick_once` — outbox delivery is independent of this tick's own
-        // observation/action work and belongs ahead of it in the sequence.
+        // Drains the registration outbox FIRST, before `tick_once` — a spec
+        // that becomes a real monitor on this pass must be polled this same
+        // tick, not up to `TICK_INTERVAL` later. Outbox delivery is
+        // independent of this tick's own observation/action work, which is
+        // why it belongs ahead of it rather than folded into it.
+        match drain_outbox::drain_outbox(mur_home, Utc::now()) {
+            Ok(r) if r.registered + r.retried + r.gave_up > 0 => tracing::info!(
+                registered = r.registered,
+                retried = r.retried,
+                gave_up = r.gave_up,
+                "monitor outbox drain"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::error!(error = %e, "monitor outbox drain failed"),
+        }
 
         match service::tick_once(mur_home, Utc::now(), &owner) {
             Ok(r) if r.claimed > 0 => tracing::info!(
