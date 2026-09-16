@@ -2,6 +2,7 @@
 //! itself is `mur-monitor`; this module is what needs `mur-core` (run
 //! records) or a network client, and what assembles the registry.
 
+pub mod actions;
 pub mod adapters;
 pub mod notify;
 pub mod service;

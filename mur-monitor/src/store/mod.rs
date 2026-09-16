@@ -464,6 +464,35 @@ impl MonitorStore {
         )?;
         Ok(n == 1)
     }
+
+    /// The `reschedule_monitor` action executor's one write (plan-2): push
+    /// `next_check_at` out and return the monitor to `Sleeping` — the only
+    /// action verb that keeps a monitor alive. Unlike `reactivate` this is
+    /// not gated on `exhausted`: it is the `on_unknown` remedy for a
+    /// monitor that is still `active`/`checking`/`sleeping` and just needs
+    /// to wait longer. Added for Task 3 of the durable-monitor actions plan
+    /// — `mur-core`'s action executors have no other way to write
+    /// `next_check_at`, since `apply_cycle` requires a fenced
+    /// `CycleUpdate` (a full check-cycle write-back) and `reactivate` only
+    /// accepts an `exhausted` row.
+    pub fn reschedule(
+        &self,
+        id: &str,
+        next_check_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE monitors SET state = ?1, next_check_at = ?2, version = version + 1, \
+             last_checked_at = COALESCE(last_checked_at, ?3) WHERE id = ?4",
+            params![
+                MonitorState::Sleeping.as_str(),
+                ts(next_check_at),
+                ts(now),
+                id
+            ],
+        )?;
+        Ok(n == 1)
+    }
 }
 
 #[cfg(test)]
@@ -589,6 +618,28 @@ created_by: {{ actor: user:test }}
         s.set_state(&a.id, MonitorState::Exhausted, t0()).unwrap();
         assert!(s.reactivate(&a.id, t0(), true).unwrap());
         assert_eq!(s.get(&a.id).unwrap().unwrap().remediation_attempts, 0);
+    }
+
+    #[test]
+    fn reschedule_moves_next_check_out_and_sleeps_from_any_open_state() {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let a = s.create(&spec("a"), t0(), None).unwrap();
+        // Unlike `reactivate`, this must not require `exhausted` — it is
+        // the `on_unknown` remedy for a monitor still being watched.
+        assert_eq!(s.get(&a.id).unwrap().unwrap().state, MonitorState::Active);
+        let later = t0() + chrono::Duration::minutes(10);
+        assert!(s.reschedule(&a.id, later, t0()).unwrap());
+        let r = s.get(&a.id).unwrap().unwrap();
+        assert_eq!(r.state, MonitorState::Sleeping);
+        assert_eq!(r.next_check_at, later);
+    }
+
+    #[test]
+    fn reschedule_of_a_missing_monitor_reports_false() {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        assert!(!s.reschedule("nope", t0(), t0()).unwrap());
     }
 
     /// Rule 6 under the deployment this file's module doc describes: the
