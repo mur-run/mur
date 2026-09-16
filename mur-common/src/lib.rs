@@ -12,6 +12,7 @@ pub mod bundle;
 pub mod canonical;
 pub mod capability;
 pub mod channel;
+pub mod cli_backend;
 pub mod commander;
 pub mod companion;
 pub mod config;
