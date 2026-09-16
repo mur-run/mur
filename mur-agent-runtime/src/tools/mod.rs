@@ -4,6 +4,7 @@ pub mod bash_jobs;
 mod denial;
 pub mod edit_file;
 pub mod fleet_run;
+pub mod guarded;
 pub(crate) mod fs_policy;
 pub mod mcp;
 pub mod naming;
