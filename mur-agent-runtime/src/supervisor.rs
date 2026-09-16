@@ -36,6 +36,14 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 pub async fn entrypoint() -> anyhow::Result<()> {
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("mcp-shim") {
+        let socket = crate::subcommand::flag_value(&argv, "--socket")
+            .ok_or_else(|| anyhow::anyhow!("mcp-shim: --socket is required"))?;
+        let task_id = crate::subcommand::flag_value(&argv, "--task-id")
+            .ok_or_else(|| anyhow::anyhow!("mcp-shim: --task-id is required"))?;
+        return crate::mcp_shim::run(std::path::PathBuf::from(socket), task_id).await;
+    }
     // Handle --help/--version before any side effects (process-group changes,
     // socket creation, serve loop). Running the symlink with these flags must
     // print and exit, not silently start the supervisor daemon.
