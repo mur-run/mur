@@ -365,11 +365,11 @@ fn attempt_action(
             }
             match executor_for(action_type) {
                 None => {
-                    // `executor_for` covers exactly two verbs, `notify` and
-                    // `collect_logs`. Everything else lands here: the gated
-                    // verbs (`rerun`, `start_downstream`,
-                    // `apply_known_remedy`) and also `reschedule_monitor`,
-                    // which is `Read`-tier but deliberately has no executor —
+                    // `executor_for` covers `notify`, `collect_logs` and
+                    // `rerun`. Everything else lands here: the gated verbs
+                    // still without one (`start_downstream`,
+                    // `apply_known_remedy`) and `reschedule_monitor`, which
+                    // is `Read`-tier but deliberately has no executor —
                     // returning a settled monitor to a claimable state
                     // un-freezes its fence and re-runs the whole list:
                     // deliberately out of scope for this slice (no

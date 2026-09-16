@@ -1,7 +1,7 @@
 //! The `rerun` executor (spec §行動執行器, durable-monitor-rerun plan, Task
 //! 3): the first executor that performs an external WRITE, gated on the
 //! spec's separate `source.write_credential_ref` grant (plan Task 1) and
-//! reached through `Task` 2's `GithubActionsAdapter::rerun`.
+//! reached through Task 2's `GithubActionsAdapter::rerun`.
 //!
 //! Two decisions this module encodes rather than leaves to the caller:
 //!

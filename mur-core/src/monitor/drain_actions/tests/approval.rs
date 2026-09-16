@@ -155,8 +155,10 @@ fn an_approval_that_lands_later_releases_the_parked_action() {
     // test guards is unchanged: the approval released the action and the
     // reason names the verb, rather than the action sitting Blocked forever.
     assert!(
-        result.contains("rerun"),
-        "the reason must name the verb that was approved: {result}"
+        result.contains("github_actions"),
+        "must prove the approval reached the LIVE executor, not the no-executor \
+         arm: only the executor's own refusal names the required source type, \
+         while the verb name appears in both messages: {result}"
     );
     let kinds = event_kinds(&s, &id);
     assert!(
@@ -471,8 +473,10 @@ fn an_approval_on_the_eleventh_parked_action_still_releases_it() {
     );
     let result = released.result.unwrap_or_default();
     assert!(
-        result.contains("rerun"),
-        "the reason must name the verb that was approved: {result}"
+        result.contains("github_actions"),
+        "must prove the approval reached the LIVE executor, not the no-executor \
+         arm: only the executor's own refusal names the required source type, \
+         while the verb name appears in both messages: {result}"
     );
     assert!(
         event_kinds(&s, &last_id).contains(&"remediation_failed".to_string()),
