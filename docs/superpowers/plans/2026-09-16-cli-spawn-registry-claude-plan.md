@@ -130,25 +130,32 @@ pub struct CliBackend {
     pub capability_notes: &'static str,
 }
 
-/// `claude`, measured at 2.1.272 by scraping its own `--help`.
+/// `claude`, measured at 2.1.273 by running it, not only by reading `--help`.
 ///
-/// Disabled on purpose. `--disallowedTools` appearing in `--help` proves the
-/// flag exists, not that it can disable *every* built-in rather than a named
-/// list — open question 5. Until that probe passes, the activation gate keeps
-/// this off rather than falling back to a weaker guarantee.
+/// `tool_disable_flags` is `--tools ""`, not `--disallowedTools`: the latter
+/// is a named deny list, and denying `Bash` merely sent the model to `Glob`.
+///
+/// Both halves of the disable are required. `--tools ""` alone left 44 tools
+/// mounted — every MCP server in the user's own config — so the flags below
+/// are the pair, and `--strict-mcp-config` is load-bearing. Verified from the
+/// `system init` event's `tools` array, which reported `[]`.
+///
+/// Still disabled, for a different reason than the earlier draft: the probe
+/// is answered, but nothing can spawn this yet. MUR does not serve its tools
+/// over MCP, so there is no loop for the CLI to call back into.
 pub const CLAUDE: CliBackend = CliBackend {
     key: "claude",
     binary: "claude",
     headless_invocation: &["-p"],
     stream_flags: &["--output-format", "stream-json"],
-    tool_disable_flags: &["--disallowedTools"],
+    tool_disable_flags: &["--tools", "", "--strict-mcp-config"],
     mcp_mount: McpMount::PerCall,
     home_env_var: "CLAUDE_CONFIG_DIR",
     activation: Activation::Disabled {
-        reason: "tool isolation unverified: --disallowedTools scope is open question 5",
+        reason: "spawn path not implemented: MUR does not yet serve its tools over MCP",
     },
-    capability_notes: "per-call --mcp-config and --strict-mcp-config mean no \
-                       config is written to the user's own home",
+    capability_notes: "--tools \"\" disables built-ins but NOT the user's own MCP \
+                       servers; --strict-mcp-config is what empties the tool list",
 };
 
 /// Every backend whose record is complete. Absence is a statement: a CLI
@@ -179,18 +186,35 @@ mod tests {
         assert_eq!(CLAUDE.binary, "claude");
         assert_eq!(CLAUDE.headless_invocation, &["-p"]);
         assert_eq!(CLAUDE.stream_flags, &["--output-format", "stream-json"]);
+        assert_eq!(
+            CLAUDE.tool_disable_flags,
+            &["--tools", "", "--strict-mcp-config"]
+        );
         assert_eq!(CLAUDE.mcp_mount, McpMount::PerCall);
         assert_eq!(CLAUDE.home_env_var, "CLAUDE_CONFIG_DIR");
     }
 
     #[test]
-    fn claude_is_disabled_until_its_probe_answers() {
-        // The activation gate, as a test: an unverified tool-disable is an
-        // unknown result, and unknown keeps the backend off.
+    fn claude_is_disabled_because_nothing_can_spawn_it_yet() {
+        // The activation gate, as a test. The blocker is no longer the tool
+        // probe — that is answered — but the missing spawn path.
         match CLAUDE.activation {
-            Activation::Disabled { reason } => assert!(reason.contains("open question 5")),
-            Activation::Enabled => panic!("claude must stay disabled while Q5 is open"),
+            Activation::Disabled { reason } => assert!(reason.contains("spawn path")),
+            Activation::Enabled => panic!("nothing can spawn a backend yet"),
         }
+    }
+
+    #[test]
+    fn the_tool_disable_carries_both_halves() {
+        // Regression guard for the measured hazard: `--tools ""` on its own
+        // left 44 of the user's own MCP tools mounted. Dropping
+        // --strict-mcp-config here would silently reopen that hole.
+        assert!(CLAUDE.tool_disable_flags.contains(&"--tools"));
+        assert!(CLAUDE.tool_disable_flags.contains(&"--strict-mcp-config"));
+        assert!(
+            !CLAUDE.tool_disable_flags.contains(&"--disallowedTools"),
+            "--disallowedTools is a named deny list, not a disable"
+        );
     }
 
     #[test]
@@ -237,7 +261,7 @@ mod tests {
 cargo test -p mur-common cli_backend
 ```
 
-Expected: `test result: ok. 5 passed; 0 failed`.
+Expected: `test result: ok. 6 passed; 0 failed`.
 
 - [ ] Run lint and format:
 
@@ -370,7 +394,7 @@ where
 cargo test -p mur-common cli_backend
 ```
 
-Expected: `test result: ok. 9 passed; 0 failed`.
+Expected: `test result: ok. 10 passed; 0 failed`.
 
 - [ ] Run lint and format:
 
@@ -498,7 +522,7 @@ pub fn ensure_home(
 cargo test -p mur-common cli_backend
 ```
 
-Expected: `test result: ok. 13 passed; 0 failed`.
+Expected: `test result: ok. 14 passed; 0 failed`.
 
 - [ ] Run lint and format:
 
@@ -681,7 +705,7 @@ Expected: no output from either, exit 0.
 
 ## Done when
 
-- [ ] `cargo test -p mur-common cli_backend` — 13 passed.
+- [ ] `cargo test -p mur-common cli_backend` — 14 passed.
 - [ ] `cd mur-hub-gui/ui && npx vitest run src/components/cliTrack.test.ts` — 11 passed.
 - [ ] `cargo clippy --workspace -- -D warnings && cargo fmt --check` — clean.
 - [ ] `claude` appears in `available()` on a machine that has it, with `usable: false`.

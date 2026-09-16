@@ -47,19 +47,64 @@ or `llm/loopback.rs` changes behaviour. See "Non-goals".
 
 ## Measured capabilities
 
-All verified on this machine, 2026-09-16, by scraping each CLI's own help.
-Nothing here is inferred.
+Rows marked **run** were produced by executing the CLI and reading what came
+back; the rest by scraping its own help. Nothing here is inferred. Measured
+2026-09-16.
 
-| | `claude` 2.1.272 | `codex` 0.154.0 | `agy` 1.2.3 |
+| | `claude` 2.1.273 | `codex` 0.154.0 | `agy` 1.2.3 |
 |---|---|---|---|
-| headless | `-p` / `--print` | `exec` | `-p` / `--print` |
-| streaming | `--output-format stream-json` | unverified | `--output-format stream-json` |
-| disable built-in tools | **yes** — `--disallowedTools` (scope: Q5) | **no** — shell is core; only `-s read-only` | **no** — only `--mode plan` |
+| headless | `-p` / `--print` | `exec` (prompt on **stdin**) | `-p` / `--print` |
+| streaming flag | `--output-format stream-json` | `--json` | `--output-format stream-json` |
+| incremental deltas (**run**) | yes | **no** — completed items only | yes — `text_delta` |
+| envelope key (**run**) | `type` | `type` | `event` |
+| disable built-in tools (**run**) | **yes** — `--tools ""` | **no** — shell is core; only `-s read-only` | **no** — 57 built-ins, no disable flag |
 | mount host tools (MCP) | **per-call** — `--mcp-config`, `--strict-mcp-config` | persistent — config `mcp_servers` | persistent — `agy mcp add` only |
+| private home | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` | **none** — only `HOME` |
 | system prompt | `--append-system-prompt` | unverified | not exposed |
 
 `agy` reports **zero** per-call MCP/tool flags. That single fact drives the
 isolation decision below.
+
+### `--disallowedTools` is not the tool-disable flag
+
+The earlier draft named it. It is a *named deny list* — "Comma or space-
+separated list of tool names to deny". Denying `Bash` and asking for a
+directory listing got `WORKED Glob`: the model simply reached for another
+built-in. Enumerating every built-in to deny would be a list that rots on
+each release.
+
+`--tools ""` is the real mechanism ("Use `""` to disable all tools"). Asked
+to run a shell command with it set, `claude` answered `NO_TOOLS`; the same
+prompt without it ran the command.
+
+### Disabling built-ins does not empty the tool list
+
+`--tools ""` alone left **44 tools** mounted — every MCP server in the user's
+own `~/.claude` config (chrome-devtools, a database client, others). Read off
+the `system init` event's `tools` array, so this is what the model was
+actually offered, not what it said about itself.
+
+That is the hazard the private home exists for, stated concretely: spawning
+`claude` against the user's own config would hand the model dozens of tools
+MUR never authorized, none of them passing MUR's handler, its entitlements or
+its HITL gate.
+
+The verified recipe is all three flags together:
+
+```
+claude -p --tools "" --strict-mcp-config --mcp-config <mur's own>
+```
+
+`system init` then reports `tools: []` — exactly empty, before MUR mounts its
+own. `--strict-mcp-config` is load-bearing, not decoration.
+
+### What `agy` tells us about itself
+
+Its `init` event lists **57 built-in tools**, including `run_command`,
+`write_to_file`, `send_command_input`, `execute_browser_javascript` and a full
+browser-control set. So the activation gate does not have to guess at agy's
+capabilities — the CLI enumerates them every turn. It also has no equivalent
+of `--tools ""`, which is why no exception is accepted for it below.
 
 ## Rejected: "CLI as a model"
 
@@ -106,10 +151,15 @@ Two facts force this:
    of their own CLI**. This is precisely why `mur-model-gateway` is the sole
    token holder today.
 
-So each spawn backend gets its own home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
-`agy`'s equivalent — to be confirmed) under `~/.mur/cli-homes/<backend>/`.
+So each spawn backend gets its own home under `~/.mur/cli-homes/<backend>/`.
 MUR's MCP config is written **once into that home**. The user's own CLI
 configuration is never read or written.
+
+The lever differs per backend, and `agy`'s is blunt: `CODEX_HOME` and
+`CLAUDE_CONFIG_DIR` relocate one CLI's config, but agy has no such variable,
+so only `HOME` works (probe 1). Redirecting `HOME` moves everything that
+process resolves under it, which is more isolation than intended and has to
+be handled deliberately rather than inherited by accident.
 
 Accepted cost, confirmed by the user: **one extra login per backend.** The
 private home starts empty, so the user authenticates once inside it. We do
@@ -214,26 +264,58 @@ folded into `false` — including in this table, which is why no row groups them
 - Mediating codex's built-in shell through MUR's HITL gate (enforcing and
   verifying its process sandbox remains a requirement).
 
+## Answered by probe (2026-09-16)
+
+1. **`agy`'s home environment variable: there is none.** No `AGY_HOME`, no
+   `ANTIGRAVITY_HOME`; `XDG_CONFIG_HOME` is read by the binary but does not
+   relocate the config. Only `HOME` does. Its MCP config lives at
+   `$HOME/.gemini/config/mcp_config.json` — a Gemini CLI inheritance, not
+   under `.antigravity` at all.
+
+   This is a coarser lever than `CODEX_HOME` / `CLAUDE_CONFIG_DIR` and the
+   design must say so: relocating `HOME` moves *everything* that process
+   resolves under it — login, caches, anything else agy reads — not just the
+   MCP config.
+
+2. **Streaming envelopes: both captured**, shapes in the capability table
+   above. The finding that matters is that `codex exec --json` emits no
+   incremental text: a 40-line reply still arrived as exactly four events,
+   the whole body inside one `item.completed`. A codex-backed turn therefore
+   cannot stream partial output to a MUR channel. `agy` can, via
+   `step_update.text_delta`.
+
+3. **`agy mcp add` can target a non-default home, via `HOME` only.** It has
+   no scope or config-path flag. Verified both ways: with `HOME` redirected
+   the entry landed in the temp home and the user's real config was
+   untouched; with `XDG_CONFIG_HOME` redirected it was written to the user's
+   real config instead.
+
+5. **`--disallowedTools` is a named deny list, not a tool-disable.** See the
+   capability table. `--tools ""` is the mechanism, and it is only sufficient
+   alongside `--strict-mcp-config`.
+
 ## Open questions
 
-1. `agy`'s home environment variable — not yet identified; `CODEX_HOME` and
-   `CLAUDE_CONFIG_DIR` are known.
-2. `codex exec` and `agy` streaming envelope shapes — `claude`'s
-   `stream-json` is confirmed; the other two need a probe.
-3. Whether `agy mcp add` can target a non-default home purely via env.
-4. Whether `claude` should keep a private home at all, now that the Goal
-   prices it. The alternative is per-call `--mcp-config --strict-mcp-config
-   --disallowedTools` against the user's own home: it writes nothing and
-   leaves the CLI as sole token holder, so (2) does not apply and the second
-   login disappears. Cost of the alternative: one backend whose lifecycle
-   differs from the other two.
-5. What `--disallowedTools` actually disables. The capability table's **yes**
-   rests on the flag appearing in `claude --help`, which does not establish
-   that it can disable *every* built-in rather than a named list. Probe before
-   relying on it as the tool-isolation mechanism.
+4. Whether `claude` should keep a private home at all. The probe strengthens
+   the alternative: `--tools "" --strict-mcp-config --mcp-config <file>`
+   yields an empty tool list *even against the user's own home*, so tool
+   isolation does not require one. What a private home still buys is a
+   separate credential; what it costs is the second login the Goal prices.
+   The trade is now fully informed and is a decision, not a probe.
+
+6. Whether `agy --sandbox` ("Run in a sandbox with terminal restrictions
+   enabled") is a verifiable boundary. It was not in the earlier draft. It
+   does not change agy's status — 57 built-ins with no disable flag keeps it
+   off — but it is the only candidate mechanism found so far, so it should be
+   probed before agy is reconsidered.
 
 ## Verification plan
 
+- Tool-list emptiness, per spawn, asserted from the CLI's own report rather
+  than the model's: `claude`'s `system init` event must show `tools: []`
+  before MUR mounts its own. A behavioural prompt ("do you have a tool?") is
+  not evidence — the model answered `NO_TOOLS` in a run where 44 ambient MCP
+  tools were in fact mounted.
 - Token lineage, per vendor, gating that backend's ship: log in inside the
   private home, force a refresh there, then assert the user's own CLI is still
   authenticated — and the reverse. The isolation check below is not sufficient
