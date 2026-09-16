@@ -497,7 +497,7 @@ fn a_poisoned_gate_stops_its_own_monitor_and_no_other() {
         "the reason must be recorded on the row, not only propagated away"
     );
     assert!(
-        s.pending_actions(t0(), 10)
+        s.pending_actions(t0(), 10, 10)
             .unwrap()
             .iter()
             .any(|a| a.monitor_id == poisoned),

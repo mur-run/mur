@@ -31,6 +31,24 @@ use super::actions::{ActionCtx, executor_for};
 /// unbounded number of actions in one pass.
 pub const DRAIN_MAX_ACTIONS_PER_TICK: usize = 10;
 
+/// Bounds how many BLOCKED (parked-awaiting-approval) rows Phase 2
+/// re-checks each tick — separate from, and not decremented by,
+/// `DRAIN_MAX_ACTIONS_PER_TICK` (M2, whole-branch review).
+///
+/// Re-checking a blocked row is a cheap gate lookup that almost always
+/// defers again (waiting is not attempting — see `block_action`'s doc); it
+/// is not "an action attempted" in rule 6's sense, so it must not compete
+/// with fresh claims for the same ten-row window. Sharing one budget/limit
+/// meant that past `DRAIN_MAX_ACTIONS_PER_TICK` simultaneously-parked
+/// actions, the oldest ten occupied `pending_actions`'s window on every
+/// tick forever and an approval written for the eleventh was never looked
+/// at again — the same starvation class fix round 2 closed for drifted
+/// rows, but blocked rows are permanent occupants by design, not a bug to
+/// retire. A much larger, still-bounded cap (rather than none at all) keeps
+/// the query and the tick itself from growing unbounded if the table were
+/// ever driven pathologically large.
+pub const DRAIN_MAX_BLOCKED_PER_TICK: usize = 500;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ActionReport {
     pub executed: usize,
@@ -469,9 +487,21 @@ pub fn drain_actions(
         }
     }
 
-    for action_row in store.pending_actions(now, DRAIN_MAX_ACTIONS_PER_TICK)? {
-        if budget == 0 {
-            break;
+    let mut blocked_budget = DRAIN_MAX_BLOCKED_PER_TICK;
+    for action_row in
+        store.pending_actions(now, DRAIN_MAX_ACTIONS_PER_TICK, DRAIN_MAX_BLOCKED_PER_TICK)?
+    {
+        let spend = if action_row.state == ActionState::Blocked {
+            &mut blocked_budget
+        } else {
+            &mut budget
+        };
+        if *spend == 0 {
+            // Not `break`: rows governed by the OTHER budget can appear
+            // later in this concatenated vec (blocked rows are appended
+            // after claimed rows — see `pending_actions`), and exhausting
+            // this budget must not skip them (M2, whole-branch review).
+            continue;
         }
         if attempted_this_tick.contains(&action_row.action_key) {
             // Phase 1 created and attempted this row moments ago.
@@ -539,7 +569,7 @@ pub fn drain_actions(
             )?;
             continue;
         }
-        budget -= 1;
+        *spend -= 1;
         // Contained per row, for the same reason as Phase 1 above.
         if let Err(error) = attempt_action(
             &store,

@@ -382,3 +382,106 @@ fn a_row_whose_verb_drifted_out_from_under_it_is_retired_not_skipped_forever() {
         "the recorded reason must not change"
     );
 }
+
+/// M2, whole-branch review. `pending_actions`'s old single query
+/// (`ORDER BY created_at ASC LIMIT max`) let BLOCKED rows fill the whole
+/// window forever: a blocked row's `created_at` never changes
+/// (`block_action` does not touch it), so past
+/// `DRAIN_MAX_ACTIONS_PER_TICK` simultaneously-parked actions, the
+/// newest ones dropped out of every future Phase 2 pass — an approval
+/// written for one of them was never looked at again. The fix gives
+/// blocked-row rechecks their own budget
+/// (`DRAIN_MAX_BLOCKED_PER_TICK`), independent of and much larger than
+/// the fresh-claim budget, so a parked row's position among its peers
+/// can never exclude it.
+///
+/// Eleven monitors, one over `DRAIN_MAX_ACTIONS_PER_TICK` (10): the
+/// eleventh is deliberately the one still `ActionPending` after tick 1
+/// (Phase 1's budget is spent on the other ten), so tick 2 claims and
+/// gates it with a strictly LATER `created_at` than the other ten — the
+/// exact ordering an oldest-first `LIMIT` would drop first.
+#[test]
+fn an_approval_on_the_eleventh_parked_action_still_releases_it() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    let ids: Vec<String> = {
+        let s = MonitorStore::open(&home).unwrap();
+        (0..11)
+            .map(|i| {
+                settle_into(
+                    &s,
+                    &spec_for("mur_run", &["rerun"], Outcome::Failed, &format!("k{i}"), ""),
+                    Outcome::Failed,
+                )
+            })
+            .collect()
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    // Tick 1: Phase 1's budget (10) claims and gates ten of the eleven,
+    // leaving exactly one monitor still `ActionPending`.
+    drain_actions(&home, rt.handle(), t0()).unwrap();
+    let s = store(&home);
+    let still_pending = s
+        .list(&ListFilter {
+            state: Some(MonitorState::ActionPending),
+            include_completed: true,
+        })
+        .unwrap();
+    assert_eq!(
+        still_pending.len(),
+        1,
+        "the fixture must have more parked actions than one tick's budget"
+    );
+    let last_id = still_pending[0].id.clone();
+
+    // Tick 2, a later `now`: claims and gates the eleventh action, giving
+    // it a `created_at` strictly after the other ten's.
+    let later = t0() + chrono::Duration::seconds(1);
+    drain_actions(&home, rt.handle(), later).unwrap();
+    let s = store(&home);
+    for id in &ids {
+        assert_eq!(
+            s.actions_for(id).unwrap().remove(0).state,
+            ActionState::Blocked,
+            "all eleven must be parked before the approval: {id}"
+        );
+    }
+
+    // Approve only the eleventh (last-in-line) action.
+    let last_row = s.get(&last_id).unwrap().unwrap();
+    approve(&home, &last_row, "rerun", 0);
+    drain_actions(&home, rt.handle(), later + chrono::Duration::seconds(1)).unwrap();
+
+    let s = store(&home);
+    let released = s.actions_for(&last_id).unwrap().remove(0);
+    assert_eq!(
+        released.state,
+        ActionState::Failed,
+        "the approved action, even though it is last in line, must still be released"
+    );
+    let result = released.result.unwrap_or_default();
+    assert!(
+        result.contains("no executor") && result.contains("rerun"),
+        "the reason must name the verb this build cannot run: {result}"
+    );
+    assert!(
+        event_kinds(&s, &last_id).contains(&"remediation_failed".to_string()),
+        "approval then silence is exactly the starvation this test guards against"
+    );
+
+    // Negative control: a drain that "releases everything regardless"
+    // would also satisfy every assertion above. The other ten were never
+    // approved and must still be sitting there untouched.
+    for id in &ids {
+        if id == &last_id {
+            continue;
+        }
+        assert_eq!(
+            s.actions_for(id).unwrap().remove(0).state,
+            ActionState::Blocked,
+            "an un-approved action must not be released just because \
+             a budget fix shipped: {id}"
+        );
+    }
+}

@@ -173,21 +173,40 @@ impl MonitorStore {
     /// part of the interface the daemon poll loop dials, kept here for
     /// forward compatibility even though this slice has no time-based
     /// filter to apply (there is no retry-delay column on this table yet).
-    pub fn pending_actions(&self, now: DateTime<Utc>, max: usize) -> Result<Vec<ActionRow>> {
+    ///
+    /// Two limits, not one (M2, whole-branch review): a single combined
+    /// `LIMIT` ordered oldest-first lets `blocked` rows alone fill the
+    /// window, and a `blocked` row never leaves it until answered — so past
+    /// `claimed_max + blocked_max` (formerly one shared cap) parked
+    /// actions, the newest ones are excluded from every future call and an
+    /// approval landing on one of them is never looked at again. Re-checking
+    /// a parked approval is a cheap gate lookup, not real work (the same
+    /// principle `block_action`'s doc already applies to `attempt`), so it
+    /// must not compete with fresh `claimed` rows for the same window —
+    /// hence its own, separate limit. `claimed` and `blocked` rows are
+    /// queried and ordered independently, then concatenated: callers that
+    /// need to bound `claimed` and `blocked` work separately (the drain)
+    /// can tell them apart by `ActionRow::state`; callers that do not
+    /// (existing tests) can pass the same value for both.
+    pub fn pending_actions(
+        &self,
+        now: DateTime<Utc>,
+        claimed_max: usize,
+        blocked_max: usize,
+    ) -> Result<Vec<ActionRow>> {
         let _ = now;
+        let mut rows = self.actions_in_state(ActionState::Claimed, claimed_max)?;
+        rows.extend(self.actions_in_state(ActionState::Blocked, blocked_max)?);
+        Ok(rows)
+    }
+
+    fn actions_in_state(&self, state: ActionState, max: usize) -> Result<Vec<ActionRow>> {
         let mut stmt = self.conn().prepare(
             "SELECT action_key, monitor_id, cycle_id, risk, approval_id, state, attempt, result, created_at \
-             FROM monitor_actions WHERE state IN (?1, ?2) \
-             ORDER BY created_at ASC, action_key ASC LIMIT ?3",
+             FROM monitor_actions WHERE state = ?1 \
+             ORDER BY created_at ASC, action_key ASC LIMIT ?2",
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![
-                ActionState::Claimed.as_str(),
-                ActionState::Blocked.as_str(),
-                max as i64
-            ],
-            row_to_action,
-        )?;
+        let rows = stmt.query_map(rusqlite::params![state.as_str(), max as i64], row_to_action)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map(|v| v.into_iter().flatten().collect())
             .map_err(Into::into)
@@ -330,7 +349,7 @@ mod tests {
         let row = &s.actions_for(&id).unwrap()[0];
         assert_eq!(row.state, ActionState::Blocked);
         assert_eq!(row.approval_id.as_deref(), Some("hitl-abc"));
-        let pending: Vec<_> = s.pending_actions(t0(), 10).unwrap();
+        let pending: Vec<_> = s.pending_actions(t0(), 10, 10).unwrap();
         assert_eq!(
             pending.len(),
             1,
@@ -367,7 +386,7 @@ mod tests {
              redacted on the same chokepoint: {result}"
         );
         assert_eq!(
-            s.pending_actions(t0(), 10).unwrap().len(),
+            s.pending_actions(t0(), 10, 10).unwrap().len(),
             1,
             "and the next tick must pick it back up"
         );
@@ -379,7 +398,7 @@ mod tests {
         let k = action_key(&id, &cyc, 1, "notify", 0);
         s.claim_action(&k, &id, &cyc, RiskTier::Read, t0()).unwrap();
         s.finish_action(&k, ActionState::Done, "sent").unwrap();
-        assert!(s.pending_actions(t0(), 10).unwrap().is_empty());
+        assert!(s.pending_actions(t0(), 10, 10).unwrap().is_empty());
     }
 
     /// `attempt` counts times the action was parked on something new, not
