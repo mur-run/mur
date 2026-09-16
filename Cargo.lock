@@ -6346,6 +6346,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-compress",
+ "mur-mcp-proto",
  "mur-open-items",
  "ndarray 0.17.2",
  "ort",

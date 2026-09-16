@@ -27,6 +27,11 @@ pub mod llm;
 pub mod lock_file;
 pub mod mcp;
 pub mod mcp_repin;
+/// Unix-only: the shim dials the agent's unix socket, which Windows has no
+/// equivalent of in `tokio::net`. The subcommand is absent there rather than
+/// present and broken.
+#[cfg(unix)]
+pub mod mcp_shim;
 pub mod multi_call;
 pub mod multimodal;
 pub mod oauth;
