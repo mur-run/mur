@@ -37,8 +37,10 @@ mod hub;
 pub(crate) mod install;
 pub mod lifecycle;
 pub mod mcp;
+pub mod mcp_add;
 pub mod mcp_discover;
 pub mod mcp_login;
+pub mod mcp_network;
 pub mod mcp_registry;
 pub mod start;
 mod who;
@@ -90,10 +92,11 @@ pub use install::{cmd_inspect, cmd_install, cmd_uninstall};
 #[allow(unused_imports)]
 pub use lifecycle::{cmd_create, cmd_list, cmd_remove, cmd_rename, cmd_status, cmd_stop};
 #[allow(unused_imports)]
-pub use mcp::{
-    McpAddPin, cmd_mcp_add, cmd_mcp_list, cmd_mcp_remove, cmd_mcp_rename, cmd_mcp_set_enabled,
-    cmd_mcp_set_network,
-};
+pub use mcp::{cmd_mcp_list, cmd_mcp_remove, cmd_mcp_rename, cmd_mcp_set_enabled};
+#[allow(unused_imports)]
+pub use mcp_add::{McpAddPin, cmd_mcp_add};
+#[allow(unused_imports)]
+pub use mcp_network::cmd_mcp_set_network;
 #[allow(unused_imports)]
 pub use peers::cmd_peers;
 #[allow(unused_imports)]
@@ -340,6 +343,15 @@ pub(super) fn refuse_if_running(agent_home: &Path, name: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Serialises tests that set the `MUR_HOME` environment variable.
+///
+/// Lives here, not in a test module, because the tests that need it were split
+/// across `mcp.rs`, `mcp_add.rs` and `mcp_network.rs` — and a lib test binary
+/// runs them all in ONE process. Two copies of this static would be two locks
+/// guarding one environment variable, which is not a lock at all.
+#[cfg(test)]
+pub(crate) static MUR_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {

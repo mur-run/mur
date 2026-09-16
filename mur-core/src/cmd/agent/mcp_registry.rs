@@ -10,7 +10,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-use super::mcp::{McpAddPin, cmd_mcp_add, cmd_mcp_add_remote};
+use super::mcp_add::{McpAddPin, cmd_mcp_add, cmd_mcp_add_remote};
 
 /// Base URL of the official registry. Documented endpoint, not a tunable.
 const REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io";
