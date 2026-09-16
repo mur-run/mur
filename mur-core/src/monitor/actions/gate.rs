@@ -36,6 +36,7 @@ use mur_monitor::action::risk;
 use mur_monitor::store::MonitorRow;
 
 use crate::hitl::gate::{ActionRequest, GateDecision, GatePolicy, gate};
+use crate::hitl::pin::action_hash;
 
 /// The channel a monitor's HITL traffic lives on. Derived, not stored, so an
 /// approval survives anything that rewrites the monitor row (spec: "the
@@ -93,6 +94,33 @@ pub fn decide(
     };
     let channel_id = channel_id_for(&row.id);
     handle.block_on(gate(mur_home, &channel_id, &req, &policy, None, None))
+}
+
+/// Recompute the pin for `(row, action_type, action_index, params)`, using
+/// the exact same five field derivations `decide` feeds into
+/// `ActionRequest` and `gate` in turn feeds into `action_hash`. Duplicated
+/// rather than routed back through `decide` (which needs a `handle` and
+/// calls `gate`, an `async` I/O function) because the drain's Rule 1
+/// re-verification step must recompute the pin FROM the current inputs
+/// without going through the gate again — that is what "re-verify" means.
+///
+/// Task 5's drain calls this immediately before executing an approved
+/// action; a mismatch against `GateDecision::action_hash` means the action
+/// changed after approval and the caller must fail closed rather than run
+/// it (spec: the executor re-verifies the hash at the execute boundary).
+pub fn expected_hash(
+    row: &MonitorRow,
+    action_type: &str,
+    action_index: usize,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    action_hash(
+        &format!("monitor:{action_type}"),
+        &serde_json::Value::Object(params.clone()),
+        &channel_id_for(&row.id),
+        &format!("{}:{action_index}", row.cycle_id),
+        &format!("monitor:{}", row.id),
+    )
 }
 
 #[cfg(test)]
@@ -276,5 +304,35 @@ mod tests {
     #[test]
     fn the_channel_id_is_derived_from_the_monitor_id() {
         assert_eq!(channel_id_for("01a0a75e-c532"), "monitor-01a0a75e-c532");
+    }
+
+    #[test]
+    fn expected_hash_matches_what_decide_actually_computed() {
+        // The re-verification helper must derive the identical pin `decide`
+        // got back — not merely "a" hash. A formula that silently diverges
+        // (e.g. forgetting `action_index`) would make Rule 1's re-check
+        // either always-fail (breaking every approved action) or a no-op
+        // that only coincidentally passes.
+        let (_d, home, row) = fixture();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let d = decide(
+            rt.handle(),
+            &home,
+            &row,
+            "rerun",
+            0,
+            &params_with_job("x"),
+            t0(),
+        )
+        .unwrap();
+        assert_eq!(
+            expected_hash(&row, "rerun", 0, &params_with_job("x")),
+            d.action_hash
+        );
+        assert_ne!(
+            expected_hash(&row, "rerun", 0, &params_with_job("y")),
+            d.action_hash,
+            "a changed input must not re-verify against the old pin"
+        );
     }
 }

@@ -11,6 +11,13 @@ use chrono::{DateTime, Utc};
 use mur_monitor::scheduler::{self, RecoveryReport, TickReport};
 use mur_monitor::store::MonitorStore;
 
+// `drain_actions` and its supporting types live in `drain_actions.rs` —
+// moved out of this file as pure code movement to stay under CLAUDE.md's
+// 800-line-per-file rule (see drain_actions.rs's module doc). Re-exported
+// here so the daemon's call sites and this module's own doc comment
+// ("everything it does is in `mur_core::monitor::service`") stay accurate.
+pub use super::drain_actions::{ActionReport, DRAIN_MAX_ACTIONS_PER_TICK, drain_actions};
+
 /// How often the daemon thread wakes. Well inside `DEFAULT_LEASE` so a
 /// slow tick never lets its own leases expire under it.
 pub const TICK_INTERVAL: Duration = Duration::from_secs(15);

@@ -508,6 +508,27 @@ impl MonitorStore {
         )?;
         Ok(n == 1)
     }
+
+    /// Count one remediation attempt against `policy.max_remediation_attempts`
+    /// (Task 5, spec §行動執行器 rule 2). The caller counts only actions above
+    /// `Read` tier — this method just does the write and hands back the new
+    /// total so the drain can compare it against the cap without a separate
+    /// `get` round-trip. Never derived from `monitor_actions` (a max over
+    /// `attempt` there conflates one retried action with three distinct
+    /// remedies); this column is the single source of truth for the budget.
+    pub fn record_remediation_attempt(&self, id: &str) -> Result<u32> {
+        self.conn.execute(
+            "UPDATE monitors SET remediation_attempts = remediation_attempts + 1, \
+             version = version + 1 WHERE id = ?1",
+            params![id],
+        )?;
+        let n: i64 = self.conn.query_row(
+            "SELECT remediation_attempts FROM monitors WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )?;
+        Ok(n as u32)
+    }
 }
 
 #[cfg(test)]
@@ -539,6 +560,17 @@ pub(crate) mod tests {
         let row = s.get(&id).unwrap().unwrap();
         assert_eq!(row.state, MonitorState::Sleeping);
         assert_eq!(row.next_check_at, later);
+    }
+
+    #[test]
+    fn record_remediation_attempt_counts_up_and_persists() {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.create(&spec("k"), t0(), None).unwrap().id;
+        assert_eq!(s.get(&id).unwrap().unwrap().remediation_attempts, 0);
+        assert_eq!(s.record_remediation_attempt(&id).unwrap(), 1);
+        assert_eq!(s.record_remediation_attempt(&id).unwrap(), 2);
+        assert_eq!(s.get(&id).unwrap().unwrap().remediation_attempts, 2);
     }
 
     use super::*;
