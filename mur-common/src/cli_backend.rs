@@ -132,6 +132,32 @@ where
         .collect()
 }
 
+/// `<mur_home>/cli-homes/<key>/` — this backend's private CLI home.
+///
+/// `mur_home` is a parameter rather than a call to `trust::mur_home()` so the
+/// path is a pure function of its inputs and every test runs against a temp
+/// dir. Same shape as `local_llm::local_model_dir`.
+pub fn home_dir(mur_home: &std::path::Path, key: &str) -> std::path::PathBuf {
+    mur_home.join("cli-homes").join(key)
+}
+
+/// Create this backend's private home if absent and return the environment
+/// variable that points the CLI at it.
+///
+/// The home starts empty and stays MUR's: the user authenticates once inside
+/// it, and their own `~/.claude` / `~/.codex` is never read or written. We do
+/// not copy `auth.json` — two holders of one refresh-token lineage each
+/// rotating would log the user out of their own CLI, which is why the gateway
+/// is the sole token holder on the other track.
+pub fn ensure_home(
+    mur_home: &std::path::Path,
+    b: &CliBackend,
+) -> std::io::Result<(&'static str, std::path::PathBuf)> {
+    let dir = home_dir(mur_home, b.key);
+    std::fs::create_dir_all(&dir)?;
+    Ok((b.home_env_var, dir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +277,60 @@ mod tests {
                 matches!(a.backend.activation, Activation::Enabled)
             );
         }
+    }
+
+    #[test]
+    fn home_dir_is_namespaced_under_cli_homes() {
+        let got = home_dir(std::path::Path::new("/tmp/murhome"), "claude");
+        assert_eq!(got, PathBuf::from("/tmp/murhome/cli-homes/claude"));
+    }
+
+    #[test]
+    fn ensure_home_creates_the_dir_and_returns_the_env_var() {
+        let tmp = std::env::temp_dir().join(format!("mur-cli-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (var, dir) = ensure_home(&tmp, &CLAUDE).expect("create");
+        assert_eq!(var, "CLAUDE_CONFIG_DIR");
+        assert_eq!(dir, tmp.join("cli-homes").join("claude"));
+        assert!(dir.is_dir());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn ensure_home_is_idempotent() {
+        let tmp = std::env::temp_dir().join(format!("mur-cli-home-idem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        ensure_home(&tmp, &CLAUDE).expect("first");
+        let marker = home_dir(&tmp, "claude").join("settings.json");
+        std::fs::write(&marker, b"{}").expect("write marker");
+        ensure_home(&tmp, &CLAUDE).expect("second");
+        assert_eq!(std::fs::read(&marker).expect("read marker"), b"{}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn ensure_home_never_touches_the_users_own_cli_config() {
+        // The Global Constraint, asserted rather than assumed. A stand-in for
+        // ~/.claude sits OUTSIDE the mur home; creating the private home must
+        // leave its bytes untouched.
+        let base = std::env::temp_dir().join(format!("mur-cli-iso-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let user_cfg = base.join("user-claude");
+        std::fs::create_dir_all(&user_cfg).expect("user cfg");
+        let cred = user_cfg.join(".credentials.json");
+        std::fs::write(&cred, b"user-token").expect("seed");
+
+        ensure_home(&base.join("murhome"), &CLAUDE).expect("create");
+
+        assert_eq!(std::fs::read(&cred).expect("still there"), b"user-token");
+        assert!(
+            !base
+                .join("murhome")
+                .join("cli-homes")
+                .join("claude")
+                .join(".credentials.json")
+                .exists()
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 }
