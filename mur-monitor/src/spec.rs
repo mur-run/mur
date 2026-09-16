@@ -357,6 +357,49 @@ mod tests {
         }
     }
 
+    /// The design doc publishes a YAML block users copy. It has been wrong
+    /// twice: once missing `write_credential_ref` after this slice required
+    /// it, and once carrying bare strings (`github-default`) that are not
+    /// `SecretRef`s at all — so the documented example was refused by
+    /// `mur monitor add` while every test stayed green.
+    ///
+    /// Skips when the file is absent, which happens only outside this
+    /// repository (a packaged crate ships no `docs/`). Inside the repo it
+    /// fails loudly, which is the point.
+    #[test]
+    fn the_design_docs_example_is_a_spec_that_actually_validates() {
+        let doc = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/superpowers/specs/2026-09-11-durable-monitor-design.md");
+        let Ok(text) = std::fs::read_to_string(&doc) else {
+            return;
+        };
+        let yaml = text
+            .split("```yaml")
+            .nth(1)
+            .and_then(|b| b.split("```").next())
+            .expect("the design doc must still contain a yaml example");
+        let spec = MonitorSpec::from_yaml(yaml)
+            .unwrap_or_else(|e| panic!("the documented example no longer parses: {e}"));
+        spec.validate().unwrap_or_else(|e| {
+            panic!("the documented example would be refused by `mur monitor add`: {e}")
+        });
+    }
+
+    #[test]
+    fn a_grant_needing_verb_is_caught_in_every_action_list() {
+        // The gap this closes: the check walked all three lists but only
+        // `on_failure` was ever tested. A verb hiding in a list nobody
+        // thought about is exactly how a write slips past the grant.
+        for list in ["on_success", "on_failure", "on_unknown"] {
+            let s = spec_with_actions(&format!("{list}:\n    - type: rerun"), None);
+            assert!(
+                matches!(s.validate(), Err(SpecError::WriteGrantMissing(_))),
+                "{list} must be checked too, got {:?}",
+                s.validate()
+            );
+        }
+    }
+
     #[test]
     fn the_same_spec_with_a_write_grant_validates() {
         let s = spec_with_actions("on_failure:\n    - type: rerun", Some("env:GH_WRITE"));
