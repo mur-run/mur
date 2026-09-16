@@ -208,8 +208,13 @@ through its own handler, not arbitrary built-in CLI actions.
 
 ## Activation gate: agy remains disabled
 
-`--mode plan` is not a verified tool-disable or security boundary. Unlike the
-conditional codex exception, no exception is accepted for agy's built-in tools.
+`--mode plan` is not a verified tool-disable or security boundary, and
+`--sandbox` has now been measured and is not one either: with the approval
+layer disabled it still read outside the workspace, read from `$HOME`, wrote
+outside the workspace and reached the public internet (probe 6). Unlike the
+conditional codex exception, no exception is accepted for agy's built-in
+tools — of which its own `init` event enumerates 57, including `run_command`
+and `write_to_file`.
 Keep agy CLI spawn disabled until probes verify private-home selection, MCP
 configuration isolation, built-in tool capabilities, and effective filesystem,
 secret-access and network restrictions (including child processes). Every
@@ -294,6 +299,28 @@ folded into `false` — including in this table, which is why no row groups them
    capability table. `--tools ""` is the mechanism, and it is only sufficient
    alongside `--strict-mcp-config`.
 
+6. **`agy --sandbox` restricts none of the four requirements.** Probed with
+   `--dangerously-skip-permissions` so the approval layer was out of the way
+   and the sandbox was the only thing that could refuse:
+
+   | attempted with `--sandbox` | result |
+   |---|---|
+   | read a file outside the workspace | contents returned |
+   | read `$HOME/.gemini/config/mcp_config.json` | contents returned |
+   | write a file outside the workspace | written — verified on disk |
+   | `curl https://example.com` | `200` |
+
+   The binary does contain Seatbelt machinery (`sandbox-exec`,
+   `sandbox_mounts`, `sandbox_allow_network`, `sandbox_system_allowlist`), so
+   a policy engine exists. What the probe shows is that the documented flag,
+   invoked the way its help describes, engages nothing that meets the
+   activation gate's filesystem, secret-access or network requirements.
+
+   Scope of the claim: this is the bare `--sandbox` flag. Those same strings
+   hint at configuration (`sandbox_mode`, `sandbox_override`) that may be
+   settable by some other route. "Not a boundary as offered" is the finding;
+   "agy cannot be sandboxed" is not.
+
 ## Open questions
 
 4. Whether `claude` should keep a private home at all. The probe strengthens
@@ -302,12 +329,6 @@ folded into `false` — including in this table, which is why no row groups them
    isolation does not require one. What a private home still buys is a
    separate credential; what it costs is the second login the Goal prices.
    The trade is now fully informed and is a decision, not a probe.
-
-6. Whether `agy --sandbox` ("Run in a sandbox with terminal restrictions
-   enabled") is a verifiable boundary. It was not in the earlier draft. It
-   does not change agy's status — 57 built-ins with no disable flag keeps it
-   off — but it is the only candidate mechanism found so far, so it should be
-   probed before agy is reconsidered.
 
 ## Verification plan
 
