@@ -323,6 +323,25 @@ impl MonitorStore {
         now: DateTime<Utc>,
         work_started_at: Option<DateTime<Utc>>,
     ) -> Result<Created> {
+        self.create_in_state(spec, now, work_started_at, MonitorState::Active)
+    }
+
+    /// `create`, but choosing the state the row starts in.
+    ///
+    /// Exists for auto-registration (spec §自動註冊邊界 clause 1), which must
+    /// persist a monitor BEFORE the work starts and must not let the daemon
+    /// poll it in the meantime — the reference is not known yet. Doing that
+    /// as `create` followed by `set_state` leaves a window in which the row
+    /// is `Active` with no reference, and `is_claimable` includes `Active`,
+    /// so a tick landing in that window claims and polls a monitor that
+    /// cannot be queried. One INSERT closes the window.
+    pub fn create_in_state(
+        &self,
+        spec: &MonitorSpec,
+        now: DateTime<Utc>,
+        work_started_at: Option<DateTime<Utc>>,
+        initial_state: MonitorState,
+    ) -> Result<Created> {
         self.conn
             .execute_batch("BEGIN IMMEDIATE")
             .context("begin create transaction")?;
@@ -355,7 +374,7 @@ impl MonitorStore {
                     id,
                     spec.name,
                     serde_json::to_string(spec)?,
-                    MonitorState::Active.as_str(),
+                    initial_state.as_str(),
                     Outcome::Pending.as_str(),
                     spec.source.r#type.as_str(),
                     spec.source.reference,

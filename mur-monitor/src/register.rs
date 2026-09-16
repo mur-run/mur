@@ -69,10 +69,12 @@ pub fn begin_registering(
     spec: &MonitorSpec,
     now: DateTime<Utc>,
 ) -> Result<String> {
-    let created = store.create(spec, now, None)?;
-    if !created.existing {
-        store.set_state(&created.id, MonitorState::Registering, now)?;
-    }
+    // One INSERT, already `Registering`. `create` + `set_state` would leave a
+    // window in which the row is `Active` with no reference — and
+    // `is_claimable` includes `Active`, so a tick landing there would claim
+    // and poll a monitor that cannot be queried. Clause 1 asks for atomic
+    // semantics 「盡可能」; this is the version that has them.
+    let created = store.create_in_state(spec, now, None, MonitorState::Registering)?;
     Ok(created.id)
 }
 
