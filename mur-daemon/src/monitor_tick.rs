@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use mur_core::monitor::drain_actions;
 use mur_core::monitor::service::{self, TICK_INTERVAL};
 
 pub fn spawn(mur_home: PathBuf, handle: tokio::runtime::Handle) {
@@ -54,7 +55,7 @@ fn run_loop(mur_home: &Path, handle: &tokio::runtime::Handle) {
         // an action that appends a notifiable event (e.g. `exhausted`,
         // `approval_required`) gets it delivered this same tick, rather
         // than waiting up to `TICK_INTERVAL` for the next one.
-        match service::drain_actions(mur_home, handle, Utc::now()) {
+        match drain_actions::drain_actions(mur_home, handle, Utc::now()) {
             Ok(a) if a.executed + a.blocked + a.failed + a.exhausted > 0 => tracing::info!(
                 executed = a.executed,
                 blocked = a.blocked,

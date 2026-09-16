@@ -317,6 +317,14 @@ pub fn drain_actions(
     let registry = super::registry(mur_home);
     let mut rep = ActionReport::default();
     let mut budget = DRAIN_MAX_ACTIONS_PER_TICK;
+    // Keys phase 1 has already attempted this tick. Phase 2 reads
+    // `pending_actions`, which returns every `Claimed`/`Blocked` row — and a
+    // row phase 1 just created and blocked is exactly that. Without this set
+    // a freshly gated action is attempted twice in one pass: `attempt` is
+    // bumped twice, so the retry budget burns at double rate and the report
+    // double-counts it.
+    let mut attempted_this_tick: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     'monitors: for row in store.list(&ListFilter {
         state: Some(MonitorState::ActionPending),
@@ -352,6 +360,7 @@ pub fn drain_actions(
                 now,
                 &mut rep,
             )?;
+            attempted_this_tick.insert(key);
         }
         if let Some(fresh) = store.get(&row.id)? {
             maybe_complete_monitor(&store, &fresh, now)?;
@@ -361,6 +370,10 @@ pub fn drain_actions(
     for action_row in store.pending_actions(now, DRAIN_MAX_ACTIONS_PER_TICK)? {
         if budget == 0 {
             break;
+        }
+        if attempted_this_tick.contains(&action_row.action_key) {
+            // Phase 1 created and attempted this row moments ago.
+            continue;
         }
         let Some(row) = store.get(&action_row.monitor_id)? else {
             continue;
