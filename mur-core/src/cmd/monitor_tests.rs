@@ -1,6 +1,8 @@
 use super::*;
 use crate::run_status::{RunKind, RunState, State, store as run_store};
 use chrono::{TimeZone, Utc};
+use mur_common::hitl::RiskTier;
+use mur_monitor::action::action_key;
 use mur_monitor::store::{ListFilter, MonitorStore};
 
 fn t0() -> DateTime<Utc> {
@@ -47,6 +49,39 @@ fn go(d: &Path, a: MonitorAction) -> Result<String> {
     let mut out = Vec::new();
     run_to(d, a, &mut out, t0())?;
     Ok(String::from_utf8(out).unwrap())
+}
+
+/// One registered monitor, nothing else — the common starting point for
+/// `show` tests that don't care about actions/notifications.
+fn home_with_monitor() -> (tempfile::TempDir, String) {
+    let d = home();
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
+    (d, id)
+}
+
+/// One registered monitor with one `write`-tier action of the given verb
+/// claimed and then parked `Blocked` on the given approval id — mirrors
+/// `mur-monitor::store::action`'s own `an_action_can_be_blocked_on_approval`
+/// fixture so `show`'s rendering is exercised against the same shape the
+/// store itself is tested with.
+fn home_with_blocked_action(verb: &str, hitl_id: &str) -> (tempfile::TempDir, String) {
+    let (d, id) = home_with_monitor();
+    let s = MonitorStore::open(d.path()).unwrap();
+    let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+    let k = action_key(&id, &cyc, 1, verb, 0);
+    s.claim_action(&k, &id, &cyc, RiskTier::Write, t0())
+        .unwrap();
+    s.block_action(&k, hitl_id).unwrap();
+    (d, id)
 }
 
 #[test]
@@ -593,5 +628,40 @@ fn show_omits_notifications_section_when_there_are_none() {
     let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
     let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
     assert!(!out.contains("notifications:"), "{out}");
+    assert!(out.contains("recent observations:"), "{out}");
+}
+
+#[test]
+fn show_renders_actions_with_the_command_that_unblocks_them() {
+    // spec: a blocked action whose command the user cannot find is the
+    // silent-stop failure this whole slice exists to remove.
+    let (d, id) = home_with_blocked_action("rerun", "hitl-abc");
+    let out = go(
+        d.path(),
+        MonitorAction::Show {
+            id: id.clone(),
+            history: false,
+        },
+    )
+    .unwrap();
+    assert!(out.contains("  actions:"), "{out}");
+    assert!(
+        out.lines().any(|l| l.contains("rerun")
+            && l.contains("blocked")
+            && l.contains("mur channel approve")
+            && l.contains("hitl-abc")),
+        "a blocked action must print the command that releases it: {out}"
+    );
+}
+
+// Would this pass if `show` were broken and printed nothing at all? No: it
+// also asserts `recent observations:` is present, which only appears once
+// `show` has run its full, unconditional body — a blank/aborted output
+// fails that half regardless of the `actions:` absence check.
+#[test]
+fn show_omits_the_actions_section_when_there_are_none() {
+    let (d, id) = home_with_monitor();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(!out.contains("actions:"), "{out}");
     assert!(out.contains("recent observations:"), "{out}");
 }
