@@ -9,6 +9,8 @@ use std::time::Duration;
 use mur_common::secret::SecretRef;
 use serde::{Deserialize, Serialize};
 
+use crate::action::risk;
+
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Action names the executor (plan-2) knows. Validation by name here so a
@@ -68,6 +70,14 @@ pub struct Source {
     /// A `SecretRef` string (`keychain:svc/acct`, `env:NAME`, …). Never the secret.
     #[serde(default)]
     pub credential_ref: Option<String>,
+    /// A second `SecretRef`, for actions that WRITE to the source. Separate
+    /// from `credential_ref` on purpose: the HITL gate approves an action,
+    /// not a capability, and a user who supplied a credential so MUR could
+    /// watch a run never consented to MUR restarting it. Absent means this
+    /// monitor may only read — and a spec whose actions need a write is
+    /// refused at creation rather than failing after someone approves it.
+    #[serde(default)]
+    pub write_credential_ref: Option<String>,
 }
 
 /// Stored verbatim; evaluated by the PolicyEngine (plan-2). Adapters already
@@ -213,6 +223,11 @@ pub enum SpecError {
     DeadlineOrder(String),
     #[error("unknown action type `{0}`")]
     Action(String),
+    #[error(
+        "action `{0}` writes to the source, so the spec needs a `source.write_credential_ref` \
+         (env:NAME, keychain:service/account, file:PATH or cmd:...) — `credential_ref` is read-only"
+    )]
+    WriteGrantMissing(String),
     #[error("created_by.reason is required when the actor is an agent")]
     MissingReason,
     #[error("yaml: {0}")]
@@ -222,6 +237,22 @@ pub enum SpecError {
 impl MonitorSpec {
     pub fn from_yaml(s: &str) -> Result<Self, SpecError> {
         Ok(serde_yaml::from_str(s)?)
+    }
+
+    /// Every action type across all three outcome lists, in the order
+    /// `validate` already checks them in (success, failure, unknown). Lives
+    /// here — not as a free function — because it is a view over `self`,
+    /// and it exists so the two questions "is every action type known?"
+    /// and "does any action type need a write grant?" walk the actions
+    /// exactly once, the same way, instead of drifting into two separate
+    /// chains that could disagree about which lists count.
+    fn all_action_types(&self) -> impl Iterator<Item = &str> {
+        self.actions
+            .on_success
+            .iter()
+            .chain(&self.actions.on_failure)
+            .chain(&self.actions.on_unknown)
+            .map(|a| a.r#type.as_str())
     }
 
     pub fn validate(&self) -> Result<(), SpecError> {
@@ -244,6 +275,15 @@ impl MonitorSpec {
             SecretRef::from_str(c)
                 .map_err(|_| SpecError::Credential("invalid secret reference format".into()))?;
         }
+        if let Some(c) = &self.source.write_credential_ref {
+            SecretRef::from_str(c)
+                .map_err(|_| SpecError::Credential("invalid secret reference format".into()))?;
+        }
+        if self.source.write_credential_ref.is_none()
+            && let Some(v) = self.all_action_types().find(|v| risk::needs_write_grant(v))
+        {
+            return Err(SpecError::WriteGrantMissing(v.to_string()));
+        }
         let (s, m, h) = (
             mur_common::limits::parse_duration(&self.policy.stalled_after),
             mur_common::limits::parse_duration(&self.policy.soft_deadline),
@@ -258,16 +298,8 @@ impl MonitorSpec {
                 )));
             }
         }
-        for a in self
-            .actions
-            .on_success
-            .iter()
-            .chain(&self.actions.on_failure)
-            .chain(&self.actions.on_unknown)
-        {
-            if !KNOWN_ACTIONS.contains(&a.r#type.as_str()) {
-                return Err(SpecError::Action(a.r#type.clone()));
-            }
+        if let Some(v) = self.all_action_types().find(|v| !KNOWN_ACTIONS.contains(v)) {
+            return Err(SpecError::Action(v.to_string()));
         }
         if self.idempotency_key.trim().is_empty() {
             return Err(SpecError::Empty("idempotency_key"));
@@ -285,6 +317,102 @@ impl MonitorSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal valid spec with a caller-chosen `actions:` block (e.g.
+    /// `"on_failure:\n    - type: rerun"`) and an optional
+    /// `source.write_credential_ref`. Everything else is fixed, valid
+    /// filler — these tests are about the grant, not the rest of the spec.
+    fn spec_with_actions(actions_yaml: &str, write_credential_ref: Option<&str>) -> MonitorSpec {
+        let write_line = match write_credential_ref {
+            Some(v) => format!("  write_credential_ref: {v}\n"),
+            None => String::new(),
+        };
+        let y = format!(
+            "schema_version: 1\n\
+             name: wait-for-ci\n\
+             source:\n\
+             \x20\x20type: github_actions\n\
+             \x20\x20reference: owner/repo/123\n\
+             \x20\x20credential_ref: keychain:mur/github-default\n\
+             {write_line}\
+             actions:\n\
+             \x20\x20{actions_yaml}\n\
+             idempotency_key: ci:owner/repo:123\n\
+             created_by:\n\
+             \x20\x20actor: agent:commander\n\
+             \x20\x20reason: \"CI was started and returned a trackable run id\"\n"
+        );
+        MonitorSpec::from_yaml(&y).unwrap()
+    }
+
+    #[test]
+    fn a_spec_with_rerun_and_no_write_grant_is_refused() {
+        // Refused at `add`, not after a human presses approve. Approving
+        // something that was never going to run is worse than a clear
+        // refusal.
+        let s = spec_with_actions("on_failure:\n    - type: rerun", None);
+        match s.validate() {
+            Err(SpecError::WriteGrantMissing(v)) => assert_eq!(v, "rerun"),
+            other => panic!("must refuse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_same_spec_with_a_write_grant_validates() {
+        let s = spec_with_actions("on_failure:\n    - type: rerun", Some("env:GH_WRITE"));
+        assert!(s.validate().is_ok(), "{:?}", s.validate());
+    }
+
+    #[test]
+    fn a_read_only_spec_needs_no_write_grant() {
+        // The property that must not regress: every monitor that exists
+        // today keeps validating without touching its YAML.
+        let s = spec_with_actions("on_failure:\n    - type: collect_logs", None);
+        assert!(s.validate().is_ok(), "{:?}", s.validate());
+    }
+
+    #[test]
+    fn a_gated_verb_this_build_cannot_run_still_needs_no_grant() {
+        // `start_downstream` is above Read but has no executor. Requiring a
+        // grant for it would refuse specs that validate today, for a write
+        // that cannot happen. Out of scope means out of scope.
+        let s = spec_with_actions("on_failure:\n    - type: start_downstream", None);
+        assert!(s.validate().is_ok(), "{:?}", s.validate());
+    }
+
+    #[test]
+    fn a_malformed_write_grant_is_refused_without_echoing_it() {
+        // The predecessor slice leaked a pasted PAT through a parse error
+        // that embedded its input. The message names the accepted schemes
+        // and never the value.
+        let s = spec_with_actions(
+            "on_failure:\n    - type: rerun",
+            Some("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        );
+        let e = s.validate().unwrap_err().to_string();
+        assert!(!e.contains("ghp_"), "must not echo the value: {e}");
+        assert!(
+            e.contains("env:") || e.contains("keychain:"),
+            "must name the schemes: {e}"
+        );
+    }
+
+    #[test]
+    fn needs_write_grant_names_only_verbs_this_build_executes_as_a_write() {
+        assert!(risk::needs_write_grant("rerun"));
+        for v in [
+            "notify",
+            "collect_logs",
+            "reschedule_monitor",
+            "start_downstream",
+            "apply_known_remedy",
+        ] {
+            assert!(!risk::needs_write_grant(v), "{v}");
+        }
+        // Unknown verbs are already refused by `SpecError::Action`; a grant
+        // question about them never arises.
+        assert!(!risk::needs_write_grant("nonsense"));
+    }
 
     const EXAMPLE: &str = r#"
 schema_version: 1

@@ -140,6 +140,7 @@ mod tests {
                     r#type: SourceType::GithubActions,
                     reference: "owner/repo#1".to_string(),
                     credential_ref: None,
+                    write_credential_ref: None,
                 },
                 outcomes: Default::default(),
                 actions: Default::default(),
