@@ -40,6 +40,18 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // socket creation, serve loop). Running the symlink with these flags must
     // print and exit, not silently start the supervisor daemon.
     let argv: Vec<String> = std::env::args().collect();
+    // Unix only: the shim dials the agent's unix socket, which Windows has
+    // no `tokio::net` equivalent of. Absent there rather than present and
+    // broken — and gated as one block, since gating only the binding would
+    // leave the branch below referring to a name that does not exist.
+    #[cfg(unix)]
+    if argv.get(1).map(String::as_str) == Some("mcp-shim") {
+        let socket = crate::subcommand::flag_value(&argv, "--socket")
+            .ok_or_else(|| anyhow::anyhow!("mcp-shim: --socket is required"))?;
+        let task_id = crate::subcommand::flag_value(&argv, "--task-id")
+            .ok_or_else(|| anyhow::anyhow!("mcp-shim: --task-id is required"))?;
+        return crate::mcp_shim::run(std::path::PathBuf::from(socket), task_id).await;
+    }
     if crate::subcommand::has_flag(&argv, &["--help", "-h"]) {
         let exe = argv
             .first()

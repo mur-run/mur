@@ -388,10 +388,22 @@ mod tests {
             description: "do x".into(),
             assignee: "ghost".into(),
         }];
-        let t0 = std::time::Instant::now();
         let d = dispatch_parallel_jobs(home, &jobs, Some(1), false).unwrap();
-        assert!(t0.elapsed() < std::time::Duration::from_secs(2));
+        // No wall-clock bound here, deliberately. The previous
+        // `elapsed() < 2s` measured what `dispatch_parallel_jobs` does
+        // *synchronously* before it spawns — authorize, open the channel
+        // store, write a channel row — which is SQLite I/O and took over six
+        // seconds on the Windows runner, failing on `main` for changes that
+        // never touched this crate.
+        //
+        // It also could not test what it claimed. "Returns before the run
+        // finishes" is guaranteed structurally: the run is on a
+        // `tokio::spawn`ed task and reaches the caller as `handle`, so there
+        // is no version of this code that returns a `Dispatched` *after*
+        // awaiting it. A timer cannot tell that apart from a fast runner.
         assert!(d.run_id.starts_with("run-"));
+        // The handle is still ours to await — which is the property, stated
+        // as the API rather than as a stopwatch.
         let _ = d.handle.await;
         let rec = crate::run_status::store::load(home, &d.run_id)
             .unwrap()

@@ -65,7 +65,7 @@ impl MethodHandler for ToolsCallHandler {
     async fn handle(
         &self,
         params: Option<Value>,
-        _ctx: &RequestContext,
+        ctx: &RequestContext,
     ) -> Result<Value, HandlerError> {
         let p = params.ok_or_else(|| HandlerError::InvalidParams("missing params".into()))?;
         let task_id = p
@@ -95,6 +95,22 @@ impl MethodHandler for ToolsCallHandler {
         // first, then execute with whatever the gate decided. Calling
         // `handle_tool_call` without `gate_response` would skip the HITL
         // prompt for an `Ask` tool and execute it unasked.
+        // Route this task's approval prompts back to the connection that
+        // asked, exactly as `message_send` does. Without this the gate has
+        // no sink and an `Ask` tool is denied — correct, but unusable.
+        //
+        // `can_approve` defaults to false: a caller that cannot answer must
+        // say so, because claiming otherwise makes the gate wait out its
+        // full timeout for nobody.
+        let can_approve = p
+            .get("can_approve")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if let Some(n) = ctx.notifier.clone() {
+            self.runner
+                .register_client_notifier(&task_id, n, can_approve)
+                .await;
+        }
         let guarded = self.runner.guarded();
         let (decisions, step_ids) = guarded
             .gate_response(&task_id, std::slice::from_ref(&call))
@@ -117,6 +133,7 @@ impl MethodHandler for ToolsCallHandler {
             // nothing. The code travels with it so the shim can still tell a
             // refusal from a crash instead of guessing from a message string.
             Err(e) => {
+                self.runner.unregister_client_notifier(&task_id).await;
                 return Ok(json!({
                     "call_id": call_id,
                     "content": e.message,
@@ -126,6 +143,7 @@ impl MethodHandler for ToolsCallHandler {
             }
         };
 
+        self.runner.unregister_client_notifier(&task_id).await;
         Ok(json!({
             "call_id": entry.call_id,
             "content": entry.content,
@@ -315,5 +333,45 @@ mod tests {
             .masked("leaked sk-probe-abcdefghijklmnop here".into());
         assert!(!masked.contains("sk-probe-abcdefghijklmnop"), "{masked}");
         assert!(masked.contains("PROBE_TOKEN"), "{masked}");
+    }
+
+    #[tokio::test]
+    async fn an_ask_tool_asks_the_calling_connection() {
+        // The Task 2 property: the prompt reaches the caller's own sink.
+        // Answering is the shim's job; this asserts only that the question
+        // was asked, which is what #1351 could not do.
+        use mur_common::agent::{ToolPolicy, ToolRule};
+        let runner = Arc::new(
+            runner_with_probe()
+                .with_tools_policy(vec![ToolRule {
+                    pattern: "*".into(),
+                    policy: ToolPolicy::Ask,
+                    risk: None,
+                }])
+                .with_pending_approvals(Default::default()),
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(8);
+        let ctx = RequestContext { notifier: Some(tx) };
+        let h = ToolsCallHandler::new(runner);
+        let call = tokio::spawn(async move {
+            h.handle(
+                Some(json!({
+                    "task_id": "t-1",
+                    "name": "probe_tool",
+                    "can_approve": true,
+                })),
+                &ctx,
+            )
+            .await
+        });
+        let note = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("no approval prompt reached the caller")
+            .expect("sink closed");
+        assert_eq!(note["method"], json!("tool/approval_needed"));
+        assert_eq!(note["params"]["task_id"], json!("t-1"));
+        // Nobody answers, so the gate times out and denies. That the prompt
+        // arrived at all is the assertion; the denial is #1351's behaviour.
+        drop(call);
     }
 }
