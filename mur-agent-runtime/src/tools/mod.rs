@@ -5,6 +5,7 @@ mod denial;
 pub mod edit_file;
 pub mod fleet_run;
 pub(crate) mod fs_policy;
+pub mod guarded;
 pub mod mcp;
 pub mod naming;
 pub mod open_item;
