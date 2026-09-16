@@ -11,11 +11,13 @@ mod action;
 mod lease;
 mod notify;
 mod observe;
+mod outbox;
 
 pub use action::ActionRow;
 pub use lease::{Claimed, Lease};
 pub use notify::{DELIVERY_MAX_ATTEMPTS, DeliveryState, Pending};
 pub use observe::{CycleUpdate, Event, EventRow, ObservationRow};
+pub use outbox::OutboxRow;
 
 use std::path::{Path, PathBuf};
 
