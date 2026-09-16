@@ -44,21 +44,41 @@ pub trait ActionExecutor: Sync {
 
 static NOTIFY: local::Notify = local::Notify;
 static COLLECT: local::CollectLogs = local::CollectLogs;
-static RESCHEDULE: local::Reschedule = local::Reschedule;
 
 /// `None` means "this build cannot run that verb" — including `rerun`,
-/// `start_downstream` and `apply_known_remedy`, which are real entries in
-/// `mur_monitor::spec::KNOWN_ACTIONS` but have no local executor yet.
-/// Paired with Task 1's `risk::classify` fallback (`Privileged` for
-/// anything it does not recognise), an unclassified verb is both gated
+/// `start_downstream`, `apply_known_remedy` and `reschedule_monitor`, which
+/// are real entries in `mur_monitor::spec::KNOWN_ACTIONS` but have no local
+/// executor. Paired with Task 1's `risk::classify` fallback (`Privileged`
+/// for anything it does not recognise), an unclassified verb is both gated
 /// (never auto-approved) and unrunnable (no executor exists): two
 /// independent defences, deliberately. Do not add a catch-all arm here —
 /// a verb only becomes runnable by naming it explicitly.
+///
+/// `reschedule_monitor` is absent on purpose (whole-branch review H1). It
+/// is the only verb that ever wrote a CLAIMABLE monitor state, and the
+/// claim mechanism's exactly-once property rests on the opposite: a settled
+/// monitor is never claimed again, so its fence is frozen, so the action
+/// keys derived from that fence are fixed for the terminal's lifetime.
+/// Returning a settled monitor to `Sleeping` unfroze the fence, the same
+/// terminal was re-observed, and the entire action list re-ran under fresh
+/// keys every poll interval. The invariant this restores is the MVP
+/// acceptance criterion 「同一成功／失敗終態即使被觀測多次,也只執行一次副作用」,
+/// and it holds structurally: NO executor in this module may write
+/// `Active` or `Sleeping`, so nothing here can unfreeze a fence.
+///
+/// `reschedule_monitor`'s intended home was `on_unknown`, which ruling R4
+/// established cannot reach the drain at all (`Outcome::Unknown` is not
+/// terminal, and the terminal branch is the only thing that ever assigns
+/// `ActionPending`). The unknown path already backs off through
+/// `mur_monitor::backoff::unknown_delay` inside the scheduler; the deleted
+/// executor duplicated that schedule, it did not enable it. Re-adding it
+/// needs a way for the drain to tell "the same terminal, re-observed" from
+/// "a human asked for another attempt" — today only the fence carries that,
+/// and it is exactly what the verb destroyed.
 pub fn executor_for(verb: &str) -> Option<&'static dyn ActionExecutor> {
     match verb {
         "notify" => Some(&NOTIFY),
         "collect_logs" => Some(&COLLECT),
-        "reschedule_monitor" => Some(&RESCHEDULE),
         _ => None,
     }
 }
@@ -82,9 +102,8 @@ mod tests {
         .unwrap()
     }
 
-    /// A generic monitor row — source type does not matter for `notify` /
-    /// `reschedule_monitor` / the dispatch tests, which never touch
-    /// `ctx.registry`.
+    /// A generic monitor row — source type does not matter for `notify` or
+    /// the dispatch tests, which never touch `ctx.registry`.
     fn fixture() -> (tempfile::TempDir, MonitorStore, MonitorRow) {
         let d = tempfile::tempdir().unwrap();
         let s = MonitorStore::open(d.path()).unwrap();
@@ -161,35 +180,6 @@ mod tests {
     }
 
     #[test]
-    fn reschedule_pushes_the_next_check_out_and_returns_it_to_sleeping() {
-        let (_d, s, row) = fixture();
-        let before = s.get(&row.id).unwrap().unwrap().next_check_at;
-        let reg = AdapterRegistry::default();
-        let ctx = ActionCtx {
-            store: &s,
-            row: &row,
-            now: t0(),
-            registry: &reg,
-        };
-        executor_for("reschedule_monitor")
-            .unwrap()
-            .run(&ctx, &Default::default())
-            .unwrap();
-        let after = s.get(&row.id).unwrap().unwrap();
-        // `after > before` alone would pass a literal duration, which rule 3
-        // forbids. Pin it to the schedule the code must actually use: the
-        // delay has to sit inside the jitter band `unknown_delay` produces for
-        // this streak, not merely be positive.
-        let base = mur_monitor::backoff::unknown_delay(row.unknown_streak);
-        let moved = (after.next_check_at - before).to_std().unwrap();
-        assert!(
-            moved >= base / 2 && moved <= base * 2,
-            "next check moved by {moved:?}, outside the backoff band around {base:?}"
-        );
-        assert_eq!(after.state, MonitorState::Sleeping);
-    }
-
-    #[test]
     fn collect_logs_records_evidence_and_no_secret() {
         // The adapter fixture returns evidence containing a token-shaped
         // string; the executor's own output must already be clean, not
@@ -235,13 +225,39 @@ mod tests {
         assert!(executor_for("nonsense").is_none());
     }
 
+    /// Whole-branch review H1. `reschedule_monitor` is still a valid entry
+    /// in `KNOWN_ACTIONS` and still classifies `Read`, so `MonitorSpec`
+    /// accepts it and the gate waves it through — the ONLY thing standing
+    /// between a user writing it and the unbounded re-observation loop is
+    /// this `None`. Asserted separately from the three verbs above because
+    /// those are unrunnable for a different reason (out of scope, no
+    /// credential scope); this one is unrunnable because running it was
+    /// unsafe.
+    #[test]
+    fn reschedule_monitor_is_named_and_classified_but_deliberately_unrunnable() {
+        assert!(
+            mur_monitor::spec::KNOWN_ACTIONS.contains(&"reschedule_monitor"),
+            "the verb must still be a known action, or this test proves nothing"
+        );
+        assert_eq!(
+            mur_monitor::action::risk::classify("reschedule_monitor"),
+            mur_common::hitl::RiskTier::Read,
+            "still Read tier, so nothing else would stop it running"
+        );
+        assert!(
+            executor_for("reschedule_monitor").is_none(),
+            "a runnable reschedule_monitor unfreezes a settled monitor's fence \
+             and re-runs its whole action list on every poll"
+        );
+    }
+
     #[test]
     fn every_executor_is_registered_under_the_verb_it_reports() {
         // Paired with `an_unknown_verb_has_no_executor`: that test alone
         // would pass an `executor_for` stubbed to always return `None`.
         // This one requires the three known verbs to come back `Some` and
         // self-report the same verb they were looked up by.
-        for v in ["notify", "collect_logs", "reschedule_monitor"] {
+        for v in ["notify", "collect_logs"] {
             assert_eq!(executor_for(v).unwrap().verb(), v);
         }
     }

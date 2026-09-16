@@ -1,23 +1,20 @@
-//! The three action executors this build ships (spec §行動執行器, plan-2
-//! Task 3): `notify`, `collect_logs`, `reschedule_monitor`. All three are
-//! Read-risk-tier and runnable without HITL — see
-//! `mur_monitor::action::risk::classify`.
+//! The action executors this build can actually run (spec §行動執行器,
+//! plan-2 Task 3): `notify` and `collect_logs`. Both are Read-risk-tier and
+//! runnable without HITL — see `mur_monitor::action::risk::classify`.
+//!
+//! `reschedule_monitor` used to live here as a third executor and was
+//! removed by the whole-branch review's H1: it wrote `Sleeping` onto a
+//! monitor the scheduler had already settled, and `MonitorState::is_claimable`
+//! is `Active | Sleeping`, so the next tick re-claimed the monitor, bumped
+//! its fence, re-observed the SAME terminal and re-parked it in
+//! `ActionPending` — with a new fence, hence new action keys, hence the
+//! whole action list running again every poll interval, forever. See
+//! `super::executor_for` for why nothing in this module may ever write a
+//! claimable monitor state again.
 
 use serde_json::{Map, Value};
 
-use mur_monitor::backoff::{MIN_INTERVAL, clamp_recommended, seed, unknown_delay, with_jitter};
-
 use super::{ActionCtx, ActionExecutor};
-
-/// `now + d`, saturating rather than panicking on overflow — same idiom as
-/// `mur_monitor::scheduler`'s private `plus` helper, duplicated here because
-/// that one is not `pub`.
-fn plus(
-    now: chrono::DateTime<chrono::Utc>,
-    d: std::time::Duration,
-) -> chrono::DateTime<chrono::Utc> {
-    now + chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX)
-}
 
 pub struct Notify;
 
@@ -68,38 +65,5 @@ impl ActionExecutor for CollectLogs {
         let credential_ref = ctx.row.spec.source.credential_ref.as_deref();
         let observation = adapter.observe(&ctx.row.reference, credential_ref);
         Ok(mur_common::redact::redact_secrets(&observation.evidence).into_owned())
-    }
-}
-
-pub struct Reschedule;
-
-impl ActionExecutor for Reschedule {
-    fn verb(&self) -> &'static str {
-        "reschedule_monitor"
-    }
-
-    /// The `on_unknown` remedy: push `next_check_at` out using the existing
-    /// `unknown` backoff schedule (never a literal duration) and return the
-    /// monitor to `Sleeping` — the only verb that keeps a monitor alive.
-    fn run(&self, ctx: &ActionCtx<'_>, _params: &Map<String, Value>) -> Result<String, String> {
-        let base = unknown_delay(ctx.row.unknown_streak);
-        let jittered = with_jitter(base, seed(&ctx.row.id, ctx.row.unknown_streak));
-        let delay = clamp_recommended(None, jittered).max(MIN_INTERVAL);
-        let next_check_at = plus(ctx.now, delay);
-        let ok = ctx
-            .store
-            .reschedule(&ctx.row.id, next_check_at, ctx.now)
-            .map_err(|e| e.to_string())?;
-        if !ok {
-            // `reschedule` is guarded on `state = action_pending`, so a
-            // false here means the monitor left that state between the
-            // drain reading it and this write — cancelled, completed, or
-            // rescheduled by another pass. Not an error worth retrying.
-            return Err(format!(
-                "monitor {} is no longer action-pending",
-                ctx.row.id
-            ));
-        }
-        Ok(format!("rescheduled to {next_check_at}, state Sleeping"))
     }
 }

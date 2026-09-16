@@ -534,50 +534,6 @@ impl MonitorStore {
         Ok(n == 1)
     }
 
-    /// The `reschedule_monitor` action executor's one write (plan-2): push
-    /// `next_check_at` out and return the monitor to `Sleeping` — the only
-    /// action verb that keeps a monitor alive. Unlike `reactivate` this is
-    /// not gated on `exhausted`: it is the `on_unknown` remedy for a
-    /// monitor that is still `active`/`checking`/`sleeping` and just needs
-    /// to wait longer. Added for Task 3 of the durable-monitor actions plan
-    /// — `mur-core`'s action executors have no other way to write
-    /// `next_check_at`, since `apply_cycle` requires a fenced
-    /// `CycleUpdate` (a full check-cycle write-back) and `reactivate` only
-    /// accepts an `exhausted` row.
-    /// Move a settled monitor back to `Sleeping` for another look
-    /// (the `reschedule_monitor` action). `Ok(false)` when the monitor was
-    /// not in `ActionPending` — it was cancelled, completed or rescheduled
-    /// by someone else in the meantime.
-    ///
-    /// The `AND state = ?5` precondition is the guard, not a fence. Every
-    /// other write-back after a claim presents its fence, but there is no
-    /// fence to present here: `is_claimable` is `Active | Sleeping`, so a
-    /// monitor in `ActionPending` is never leased and its fence is frozen.
-    /// A numeric fence would be decorative. What can actually race this is
-    /// `cancel`/`set_state`, which bypass the fence too — so the
-    /// precondition names the state this transition is valid from and lets
-    /// the database refuse the rest.
-    pub fn reschedule(
-        &self,
-        id: &str,
-        next_check_at: DateTime<Utc>,
-        now: DateTime<Utc>,
-    ) -> Result<bool> {
-        let n = self.conn.execute(
-            "UPDATE monitors SET state = ?1, next_check_at = ?2, version = version + 1, \
-             last_checked_at = COALESCE(last_checked_at, ?3) \
-             WHERE id = ?4 AND state = ?5",
-            params![
-                MonitorState::Sleeping.as_str(),
-                ts(next_check_at),
-                ts(now),
-                id,
-                MonitorState::ActionPending.as_str()
-            ],
-        )?;
-        Ok(n == 1)
-    }
-
     /// Count one remediation attempt against `policy.max_remediation_attempts`
     /// (Task 5, spec §行動執行器 rule 2). The caller counts only actions above
     /// `Read` tier — this method just does the write and hands back the new

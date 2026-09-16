@@ -8,8 +8,9 @@ use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::hitl::HitlResponse;
 use mur_monitor::adapter::Observation;
+use mur_monitor::adapter::SourceAdapter;
 use mur_monitor::scheduler;
-use mur_monitor::spec::MonitorSpec;
+use mur_monitor::spec::{MonitorSpec, SourceType};
 use mur_monitor::store::CycleUpdate;
 
 use crate::monitor::actions::gate::channel_id_for;
@@ -608,6 +609,163 @@ fn a_row_whose_verb_drifted_out_from_under_it_is_retired_not_skipped_forever() {
     assert_eq!(
         after.result, before.result,
         "the recorded reason must not change"
+    );
+}
+
+/// Observes the same terminal every time it is asked, so a monitor that is
+/// wrongly returned to a claimable state really does re-settle on the SAME
+/// outcome — the shape H1 produced in production. An empty registry would
+/// yield `Observation::unknown` instead, which never re-parks
+/// `ActionPending` and would hide the bug.
+struct AlwaysTheSameTerminal;
+
+impl SourceAdapter for AlwaysTheSameTerminal {
+    fn source_type(&self) -> SourceType {
+        SourceType::MurRun
+    }
+    fn validate_reference(&self, _reference: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn observe(&self, _reference: &str, _credential_ref: Option<&str>) -> Observation {
+        Observation::terminal(Outcome::Failed, "still the same failed run")
+    }
+}
+
+/// Whole-branch review H1, and the MVP acceptance criterion
+/// 「同一成功／失敗終態即使被觀測多次,也只執行一次副作用」.
+///
+/// `reschedule_monitor` used to be a live executor that wrote `Sleeping`
+/// onto a monitor the scheduler had just settled. `is_claimable` is
+/// `Active | Sleeping`, so the next tick re-claimed it — bumping the fence
+/// — re-observed the same terminal, and `plan_cycle`'s terminal branch
+/// re-parked it in `ActionPending`. The bumped fence produced fresh
+/// `action_key`s, so `claim_action` did not collide and the WHOLE list ran
+/// again. Every poll interval. Forever, and silently: the `terminal` event
+/// is deduped per (monitor, cycle) and `cycle_id` never rotates, so nothing
+/// was ever notified about the loop.
+///
+/// Four independent assertions, because no single one of them is safe on
+/// its own:
+/// - the settled monitor's fence must not move across a real
+///   `scheduler::tick` — that IS the mechanism, and it fails under the old
+///   code even if the adapter below were misconfigured;
+/// - the control monitor's fence MUST move in the same tick, so "the fence
+///   did not move" can never be green merely because this fixture cannot
+///   claim anything at all;
+/// - exactly ONE `action_notify` event after the second drain — `== 1`, so
+///   a `drain_actions` that ran nothing (the emptiness trap this project
+///   keeps hitting) goes red here rather than passing;
+/// - exactly TWO action rows, so a second terminal episode minting fresh
+///   keys is caught even if its side effect were deduped somewhere else.
+#[test]
+fn a_terminal_list_with_reschedule_monitor_runs_once_and_leaves_the_fence_frozen() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    let (id, control) = {
+        let s = MonitorStore::open(&home).unwrap();
+        let id = settle_into(
+            &s,
+            &spec_for(
+                "mur_run",
+                &["reschedule_monitor", "notify"],
+                Outcome::Failed,
+                "k-loop",
+                "",
+            ),
+            Outcome::Failed,
+        );
+        // An ordinary, never-settled monitor with no action list: the
+        // positive control for the tick below. Same store, same tick call.
+        let control = s
+            .create(
+                &MonitorSpec::from_yaml(
+                    "schema_version: 1\nname: control\nsource: { type: mur_run, reference: r2 }\n\
+                     idempotency_key: k-control\ncreated_by: { actor: user:test }\n",
+                )
+                .unwrap(),
+                t0(),
+                None,
+            )
+            .unwrap()
+            .id;
+        (id, control)
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let first = drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!(
+        (first.executed, first.blocked, first.failed),
+        (1, 0, 1),
+        "notify runs; reschedule_monitor is classified Read but has no executor"
+    );
+
+    let (fence_before, control_fence_before) = {
+        let s = store(&home);
+        let m = s.get(&id).unwrap().unwrap();
+        assert_eq!(m.state, MonitorState::Completed);
+        assert!(
+            !m.state.is_claimable(),
+            "an actioned terminal must never be claimable again"
+        );
+        let rows = s.actions_for(&id).unwrap();
+        let resched = rows
+            .iter()
+            .find(|a| verb_and_index_from_key(&a.action_key) == Some(("reschedule_monitor", 0)))
+            .expect("the reschedule_monitor row must exist — it was claimed, just not runnable");
+        assert_eq!(resched.state, ActionState::Failed);
+        let why = resched.result.clone().unwrap_or_default();
+        assert!(
+            why.contains("no executor") && why.contains("reschedule_monitor"),
+            "the row must say why it did not run, not fail silently: {why}"
+        );
+        (m.fence, s.get(&control).unwrap().unwrap().fence)
+    };
+
+    // A real scheduler pass, with an adapter that keeps returning the same
+    // terminal — exactly what the daemon does ~10 s after a reschedule.
+    let later = t0() + chrono::Duration::hours(1);
+    let mut registry = AdapterRegistry::new();
+    registry.register(Box::new(AlwaysTheSameTerminal));
+    let report = scheduler::tick(&store(&home), &registry, later, "test-owner", 10).unwrap();
+    assert_eq!(
+        report.claimed, 1,
+        "only the control is claimable; if this is 0 the tick proved nothing"
+    );
+
+    {
+        let s = store(&home);
+        assert_eq!(
+            s.get(&id).unwrap().unwrap().fence,
+            fence_before,
+            "a settled monitor must never be re-claimed — its frozen fence is what \
+             keeps this terminal's action keys stable"
+        );
+        assert_ne!(
+            s.get(&control).unwrap().unwrap().fence,
+            control_fence_before,
+            "the control must really have been claimed, or the assertion above is vacuous"
+        );
+    }
+
+    let second = drain_actions(&home, rt.handle(), later).unwrap();
+    assert_eq!(
+        second,
+        ActionReport::default(),
+        "the same terminal must not be actioned a second time"
+    );
+
+    let s = store(&home);
+    let notifies = s
+        .events(&id)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "action_notify")
+        .count();
+    assert_eq!(notifies, 1, "one terminal, one side effect");
+    assert_eq!(
+        s.actions_for(&id).unwrap().len(),
+        2,
+        "no fresh action key may be minted for a terminal that was already actioned"
     );
 }
 

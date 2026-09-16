@@ -2,35 +2,6 @@
 //! under CLAUDE.md's 800-line-per-file rule; nothing changed in the move.
 
 #[test]
-fn reschedule_refuses_a_monitor_that_is_not_action_pending() {
-    // The guard's own test. Without it, removing `AND state = ?5` from
-    // the UPDATE would leave every other test green: they all use a
-    // fixture that IS action-pending, so the precondition never bites.
-    let d = tempfile::tempdir().unwrap();
-    let s = MonitorStore::open(d.path()).unwrap();
-    let id = s.create(&spec("k"), t0(), None).unwrap().id;
-
-    // `create` leaves it Active — the state a live monitor is polled in.
-    let later = t0() + chrono::Duration::hours(1);
-    assert!(
-        !s.reschedule(&id, later, t0()).unwrap(),
-        "rescheduling a monitor that was never parked for actions must refuse"
-    );
-    let row = s.get(&id).unwrap().unwrap();
-    assert_ne!(
-        row.next_check_at, later,
-        "and must not have moved the check"
-    );
-
-    // Parked for actions: now it is the transition's valid source.
-    s.set_state(&id, MonitorState::ActionPending, t0()).unwrap();
-    assert!(s.reschedule(&id, later, t0()).unwrap());
-    let row = s.get(&id).unwrap().unwrap();
-    assert_eq!(row.state, MonitorState::Sleeping);
-    assert_eq!(row.next_check_at, later);
-}
-
-#[test]
 fn record_remediation_attempt_counts_up_and_persists() {
     let d = tempfile::tempdir().unwrap();
     let s = MonitorStore::open(d.path()).unwrap();
@@ -161,34 +132,6 @@ fn reactivate_only_from_exhausted() {
     s.set_state(&a.id, MonitorState::Exhausted, t0()).unwrap();
     assert!(s.reactivate(&a.id, t0(), true).unwrap());
     assert_eq!(s.get(&a.id).unwrap().unwrap().remediation_attempts, 0);
-}
-
-#[test]
-fn reschedule_moves_the_check_out_and_sleeps_from_action_pending() {
-    // Was `..._from_any_open_state`. Rescheduling from any state is a
-    // capability nothing in this slice can reach: the only caller is the
-    // `reschedule_monitor` action, the only thing that runs actions is
-    // the drain, and the only monitors the drain sees are the ones the
-    // scheduler parked in `ActionPending` on a TERMINAL observation.
-    // `Outcome::Unknown` is not terminal, so an `on_unknown` action list
-    // never arrives here at all — see the ledger's ruling R4.
-    let d = tempfile::tempdir().unwrap();
-    let s = MonitorStore::open(d.path()).unwrap();
-    let id = s.create(&spec("k"), t0(), None).unwrap().id;
-    s.set_state(&id, MonitorState::ActionPending, t0()).unwrap();
-
-    let later = t0() + chrono::Duration::hours(1);
-    assert!(s.reschedule(&id, later, t0()).unwrap());
-    let row = s.get(&id).unwrap().unwrap();
-    assert_eq!(row.state, MonitorState::Sleeping);
-    assert_eq!(row.next_check_at, later);
-}
-
-#[test]
-fn reschedule_of_a_missing_monitor_reports_false() {
-    let d = tempfile::tempdir().unwrap();
-    let s = MonitorStore::open(d.path()).unwrap();
-    assert!(!s.reschedule("nope", t0(), t0()).unwrap());
 }
 
 /// Rule 6 under the deployment this file's module doc describes: the

@@ -47,8 +47,8 @@ pub struct ActionReport {
 /// `scheduler::plan_cycle`'s terminal branch — the only place that ever
 /// assigns `MonitorState::ActionPending` — is gated on
 /// `obs.outcome.is_terminal()`. Routing `on_unknown` here would be dead
-/// code; `backoff::unknown_delay` already handles the unknown case (see
-/// `actions::local::Reschedule`). The `Unknown => &[]` arm below is this
+/// code; `mur_monitor::backoff::unknown_delay` already handles the unknown
+/// case inside the scheduler itself. The `Unknown => &[]` arm below is this
 /// function's own independent defence against ever treating an unreadable
 /// source as a failure — verified by
 /// `an_unknown_outcome_produces_no_actions_at_all`, which hand-builds a
@@ -495,12 +495,15 @@ pub fn drain_actions(
         };
         if action.r#type != verb {
             // Same cycle, different list: the outcome flipped under this
-            // parked row (`reschedule_monitor` returns it to `Sleeping`,
-            // the re-poll settles `Succeeded`, `on_success` is resolved
-            // instead). Running index N now and writing the result onto
-            // THIS key would record that `verb` completed when it never
-            // ran, and would run the verb at that slot twice in one tick —
-            // once under its own key from Phase 1, once under this one.
+            // parked row, so `actions_for_outcome` now resolves the OTHER
+            // list (a `Failed` monitor re-observed as `Succeeded` while a
+            // row sat blocked — rare, since a settled monitor is not
+            // claimable, but reachable through `mur monitor retry` and
+            // through a lease recovered mid-cycle). Running index N now and
+            // writing the result onto THIS key would record that `verb`
+            // completed when it never ran, and would run the verb at that
+            // slot twice in one tick — once under its own key from Phase 1,
+            // once under this one.
             // Never recoverable either: index N in THIS cycle's list will
             // never again name `verb` (see `retire_drifted_action`).
             retire_drifted_action(
