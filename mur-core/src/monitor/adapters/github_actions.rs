@@ -296,6 +296,15 @@ impl SourceAdapter for GithubActionsAdapter {
         };
         self.fetch(&owner, &repo, run_id, token.as_deref())
     }
+
+    /// Delegates to the inherent `GithubActionsAdapter::rerun` above so the
+    /// action executor (`mur-core/src/monitor/actions/rerun.rs`) can reach
+    /// it through `AdapterRegistry` the same way `collect_logs` reaches
+    /// `observe` — by source type, without downcasting a trait object back
+    /// to a concrete adapter.
+    fn rerun(&self, reference: &str, write_credential_ref: Option<&str>) -> Result<String, String> {
+        GithubActionsAdapter::rerun(self, reference, write_credential_ref)
+    }
 }
 
 #[cfg(test)]
@@ -605,6 +614,29 @@ mod tests {
         let e = classify_rerun(500, &format!("ghp_{}", "A".repeat(36))).unwrap_err();
         assert!(e.contains("500"), "{e}");
         assert!(!e.contains("ghp_AAAA"), "a body can echo a token back: {e}");
+    }
+
+    #[test]
+    fn a_secret_straddling_the_rerun_truncation_boundary_is_fully_redacted() {
+        // The short fixture above never reaches the cut, so it cannot tell
+        // redact-then-truncate from truncate-then-redact — and only the
+        // first order is safe: a fixed-length pattern split by the cut no
+        // longer matches, so half a token survives into history. This repo
+        // shipped that backwards once. Mirrors the sibling
+        // `secret_straddling_truncation_boundary_is_fully_redacted` for
+        // `classify`; word boundaries on both sides so `ghp_...`'s anchors
+        // match once the secret is whole.
+        let prefix = "z ".repeat(70); // 140 chars, ends in a space
+        let secret = format!("ghp_{}", "A".repeat(36)); // 40 chars
+        let body = format!("{prefix}{secret} trailing text after the secret, well past the cut");
+        assert!(
+            body.len() > EVIDENCE_MAX_CHARS,
+            "fixture must be long enough to truncate"
+        );
+
+        let e = classify_rerun(500, &body).unwrap_err();
+        assert!(!e.contains("ghp_"), "{e}");
+        assert!(!e.contains(&"A".repeat(10)), "{e}");
     }
 
     #[test]
