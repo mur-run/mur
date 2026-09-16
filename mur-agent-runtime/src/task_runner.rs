@@ -1805,7 +1805,7 @@ impl TaskRunner {
     /// are replaced by the `with_*` builders after construction, so a cached
     /// copy would serve a stale policy — the one kind of staleness that
     /// silently widens what a tool may do.
-    fn guarded(&self) -> crate::tools::guarded::GuardedToolCall {
+    pub(crate) fn guarded(&self) -> crate::tools::guarded::GuardedToolCall {
         crate::tools::guarded::GuardedToolCall {
             tools: self.tools.clone(),
             tools_policy: self.tools_policy.clone(),

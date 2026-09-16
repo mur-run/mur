@@ -1112,6 +1112,18 @@ fn build_dispatcher(
         Box::new(TasksListHandler::new(runner.clone())),
     );
     d.register(
+        "tools/list",
+        Box::new(crate::protocol::methods::tools::ToolsListHandler::new(
+            runner.clone(),
+        )),
+    );
+    d.register(
+        "tools/call",
+        Box::new(crate::protocol::methods::tools::ToolsCallHandler::new(
+            runner.clone(),
+        )),
+    );
+    d.register(
         "turn/steer",
         Box::new(crate::protocol::methods::turn::TurnSteerHandler {
             runner: runner.clone(),
