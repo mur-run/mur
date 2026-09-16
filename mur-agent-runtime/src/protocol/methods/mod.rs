@@ -8,4 +8,5 @@ pub mod model_set;
 pub mod secret_set;
 pub mod skills;
 pub mod tasks;
+pub mod tools;
 pub mod turn;
