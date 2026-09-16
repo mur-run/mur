@@ -374,3 +374,51 @@ impl GuardedToolCall {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// `ToolExecutor::execute` may be called from exactly one file.
+    ///
+    /// Not style. Each call site has to carry the policy gate, the HITL
+    /// decision, the task scope and the secret mask, and every one of those
+    /// fails silently when it is missed — the output is simply unmasked, the
+    /// job simply has no owner. This is the check that was missing when
+    /// `task_runner.rs` resorted to asking in comments.
+    ///
+    /// `tools/` is exempt because a tool's own unit tests call it directly:
+    /// 76 of the crate's 77 call sites are exactly that.
+    ///
+    /// If this fails, the fix is to route the new caller through
+    /// `GuardedToolCall`, not to widen the test.
+    #[test]
+    fn execute_is_called_from_guarded_only() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let tools = src.join("tools");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read_dir") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") || path.starts_with(&tools) {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("read");
+                for (i, line) in text.lines().enumerate() {
+                    if line.contains(".execute(") {
+                        offenders.push(format!("{}:{}", path.display(), i + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "ToolExecutor::execute called outside tools/guarded.rs — route it \
+             through GuardedToolCall instead:\n{}",
+            offenders.join("\n")
+        );
+    }
+}
