@@ -411,6 +411,10 @@ pub async fn cmd_fleet_run(
         }
         None => format!("run-{}", uuid::Uuid::now_v7()),
     };
+    // Best-effort monitor registration: never aborts the run (clause 2).
+    if let Some(msg) = super::run_monitor::register_fleet_run_monitor(mur_home, name, &run_id) {
+        eprintln!("{msg}");
+    }
     // A one-shot run is unattended too: its members inherit the fleet's
     // resolved deadline (spec §3.4).
     let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;
