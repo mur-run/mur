@@ -367,6 +367,165 @@ mod redact_tests {
     }
 }
 
+/// Ask `wintrust.dll` whether `path` carries a valid Authenticode signature.
+///
+/// Returns the raw `WinVerifyTrust` status so the policy — which statuses
+/// refuse a startup — stays in [`wintrust_verdict`], a pure function that
+/// compiles and is tested on every platform. Keeping the FFI this thin is
+/// deliberate: code only a Windows CI runner can execute is code nobody reads
+/// a test failure for.
+#[cfg(target_os = "windows")]
+fn wintrust_verify(path: &std::path::Path) -> i32 {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Security::WinTrust::{
+        WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
+        WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_SAFER_FLAG, WTD_STATEACTION_CLOSE,
+        WTD_STATEACTION_VERIFY, WTD_UI_NONE, WinVerifyTrust,
+    };
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut file_info = WINTRUST_FILE_INFO {
+        cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
+        pcwszFilePath: wide.as_ptr(),
+        hFile: std::ptr::null_mut(),
+        pgKnownSubject: std::ptr::null_mut(),
+    };
+    let mut data: WINTRUST_DATA = unsafe { std::mem::zeroed() };
+    data.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
+    data.dwUIChoice = WTD_UI_NONE;
+    // No revocation check: it reaches the network, and a boot that hangs
+    // because a CRL endpoint is slow is its own outage.
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.Anonymous = WINTRUST_DATA_0 {
+        pFile: &mut file_info,
+    };
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_SAFER_FLAG;
+
+    let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    let status = unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action,
+            (&mut data as *mut WINTRUST_DATA).cast(),
+        )
+    };
+    // VERIFY allocates state that CLOSE frees; skipping it leaks per call.
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action,
+            (&mut data as *mut WINTRUST_DATA).cast(),
+        );
+    }
+    status
+}
+
+/// Which `WinVerifyTrust` statuses refuse a startup.
+///
+/// **Presence and integrity, not trust chain** — the same question the macOS
+/// branch asks. `codesign -dv` reports whether a signature is *there*; it does
+/// not demand that the chain validate on this machine. Windows now matches:
+/// no signature at all, or a signature that does not match the bytes, refuses
+/// the startup; an expired certificate or a root this machine does not trust
+/// does not.
+///
+/// That asymmetry is the point rather than an oversight. Rule 11 exists to
+/// catch a binary that was swapped, and a swapped binary fails the digest.
+/// An expired cert is not something the operator of the agent can fix — the
+/// publisher has to reissue — and this session's field report is what a
+/// startup gate on an unsatisfiable condition costs: the agent never runs
+/// again and the error names a fix that does not exist. See
+/// `docs/architecture/mcp-supply-chain.md`.
+///
+/// Defined on every platform so its policy is unit-tested everywhere, not only
+/// where it runs.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn wintrust_verdict(status: i32, path: &std::path::Path) -> Result<(), String> {
+    // HRESULTs from wintrust; `as i32` because they are negative when signed.
+    const S_OK: i32 = 0;
+    const TRUST_E_NOSIGNATURE: i32 = 0x800B_0100u32 as i32;
+    const TRUST_E_BAD_DIGEST: i32 = 0x8009_6010u32 as i32;
+    const TRUST_E_EXPLICIT_DISTRUST: i32 = 0x800B_0111u32 as i32;
+    const TRUST_E_SUBJECT_FORM_UNKNOWN: i32 = 0x800B_0003u32 as i32;
+    const CERT_E_EXPIRED: i32 = 0x800B_0101u32 as i32;
+    const CERT_E_UNTRUSTEDROOT: i32 = 0x800B_0109u32 as i32;
+
+    match status {
+        S_OK => Ok(()),
+        TRUST_E_NOSIGNATURE => Err(format!("Windows binary not signed: {}", path.display())),
+        TRUST_E_BAD_DIGEST => Err(format!(
+            "Windows binary's signature does not match its contents — the file changed after it was signed: {}",
+            path.display()
+        )),
+        TRUST_E_EXPLICIT_DISTRUST => Err(format!(
+            "Windows binary is explicitly distrusted by this machine's policy: {}",
+            path.display()
+        )),
+        // Signed, but the chain does not validate here. Not the operator's to
+        // fix, and not what rule 11 is looking for.
+        CERT_E_EXPIRED | CERT_E_UNTRUSTEDROOT => Ok(()),
+        // Not a form Authenticode knows how to check. `is_native_image` already
+        // filtered scripts out; anything still landing here is a native image
+        // this machine cannot answer for, which is not evidence of tampering.
+        TRUST_E_SUBJECT_FORM_UNKNOWN => Ok(()),
+        other => Err(format!(
+            "Windows signature check failed (0x{:08X}): {}",
+            other as u32,
+            path.display()
+        )),
+    }
+}
+
+#[cfg(test)]
+mod wintrust_tests {
+    /// The policy half of rule 11 on Windows, exercised on every platform —
+    /// the point of keeping it out of the FFI.
+    #[test]
+    fn wintrust_refuses_only_missing_or_broken_signatures() {
+        use super::wintrust_verdict;
+        let p = std::path::Path::new("C:\\srv.exe");
+
+        assert!(wintrust_verdict(0, p).is_ok(), "S_OK verifies");
+
+        let unsigned = wintrust_verdict(0x800B_0100u32 as i32, p).unwrap_err();
+        assert!(unsigned.contains("not signed"), "{unsigned}");
+
+        // The one rule 11 actually exists for: bytes changed after signing.
+        let tampered = wintrust_verdict(0x8009_6010u32 as i32, p).unwrap_err();
+        assert!(
+            tampered.contains("does not match its contents"),
+            "{tampered}"
+        );
+
+        let distrusted = wintrust_verdict(0x800B_0111u32 as i32, p).unwrap_err();
+        assert!(distrusted.contains("distrusted"), "{distrusted}");
+
+        // Signed, chain does not validate here. Not the operator's to fix, so
+        // not a startup refusal — the same question macOS's `codesign -dv`
+        // asks, and the lesson of the npx brick.
+        assert!(
+            wintrust_verdict(0x800B_0101u32 as i32, p).is_ok(),
+            "an expired certificate must not brick an agent"
+        );
+        assert!(
+            wintrust_verdict(0x800B_0109u32 as i32, p).is_ok(),
+            "an untrusted root must not brick an agent"
+        );
+        assert!(
+            wintrust_verdict(0x800B_0003u32 as i32, p).is_ok(),
+            "a form Authenticode cannot check is not evidence of tampering"
+        );
+
+        // Anything unrecognised still refuses, and names the code so the
+        // operator can look it up rather than guess.
+        let odd = wintrust_verdict(0x8009_6004u32 as i32, p).unwrap_err();
+        assert!(odd.contains("0x80096004"), "{odd}");
+    }
+}
+
 /// True when `path` is a native executable image the platform code-signing
 /// tools can actually verify: Mach-O (thin or fat) on macOS, PE on Windows.
 ///
@@ -440,15 +599,7 @@ pub fn verify_signed(path: &std::path::Path) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let out = std::process::Command::new("signtool")
-            .args(["verify", "/pa", "/q"])
-            .arg(path)
-            .output()
-            .map_err(|e| format!("signtool spawn: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("Windows binary not signed: {}", path.display()));
-        }
-        Ok(())
+        wintrust_verdict(wintrust_verify(path), path)
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     {

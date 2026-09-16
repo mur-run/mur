@@ -137,6 +137,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_Foundation",
+    # B0 rule 11 verifies signatures through WinVerifyTrust (wintrust.dll,
+    # present on every Windows install) rather than the `signtool` CLI, which
+    # ships with the SDK and is absent on a stock machine. `WINTRUST_DATA` and
+    # its union live behind the Cryptography feature, so both are required.
+    "Win32_Security_WinTrust",
+    "Win32_Security_Cryptography",
 ] }
 
 [dev-dependencies]
