@@ -406,6 +406,19 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
                 risk_str(a.risk),
                 a.state.as_str(),
             )?;
+            // The stored `result` — the reason a remedy failed, or what a
+            // `collect_logs` collected. `remediation_failed`'s notification
+            // sends the user here ("`mur monitor show <id>` for what was
+            // tried") and until now the only place this column was visible
+            // was the raw event payload behind `--history`. It is already
+            // redacted and length-capped by `store_result`, so it is safe to
+            // print as-is; its own line, because it is prose and the columns
+            // above are not.
+            if let Some(result) = a.result.as_deref().map(str::trim)
+                && !result.is_empty()
+            {
+                writeln!(out, "      {result}")?;
+            }
         }
     }
     writeln!(out, "  recent observations:")?;

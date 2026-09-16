@@ -721,6 +721,36 @@ fn show_renders_a_non_blocked_actions_verb_tier_state_and_attempts_on_one_line()
     );
 }
 
+/// M6 (whole-branch review). `show` printed verb, tier, state, attempts
+/// and (when blocked) the approve command — but never the `result`
+/// column, which is where the reason lives. `remediation_failed`'s
+/// notification says "`mur monitor show <id>` for what was tried", so the
+/// one surface the user is sent to did not carry the answer; it was
+/// reachable only through `--history`'s raw event payload.
+///
+/// `history: false` here on purpose: with `--history` on, the same text
+/// would appear in the event dump and this test would pass without `show`
+/// rendering the column at all. Both rows are asserted — a `failed` row
+/// (the reason) and a `done` row (the summary) — so an implementation that
+/// only printed reasons for failures would still be caught.
+#[test]
+fn show_renders_an_actions_recorded_result() {
+    let (d, id) = home_with_settled_actions();
+    let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
+    assert!(
+        out.contains("no executor for `rerun`"),
+        "the failed action's reason must be visible without --history: {out}"
+    );
+    assert!(
+        out.contains("sent"),
+        "a done action's summary must be rendered too: {out}"
+    );
+    assert!(
+        !out.contains("history:"),
+        "fixture sanity: this must not be passing via the history dump: {out}"
+    );
+}
+
 // Would this pass if `show` were broken and printed nothing at all? No: it
 // also asserts `recent observations:` is present, which only appears once
 // `show` has run its full, unconditional body — a blank/aborted output

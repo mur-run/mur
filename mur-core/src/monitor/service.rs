@@ -90,7 +90,15 @@ pub(crate) fn drain_with(
     let mut rep = DrainReport::default();
     for channel in registry.iter() {
         for p in store.pending_notifications(channel.name(), now, DRAIN_MAX_PER_TICK)? {
-            let n = mur_monitor::notify::render(&p.row, &p.event);
+            // §通知策略's 「執行過的動作」 field. Scoped to the row's own cycle,
+            // so a monitor that was retried does not report the previous
+            // episode's actions as this one's.
+            let actions: Vec<_> = store
+                .actions_for(&p.row.id)?
+                .into_iter()
+                .filter(|a| a.cycle_id == p.row.cycle_id)
+                .collect();
+            let n = mur_monitor::notify::render(&p.row, &p.event, &actions);
             match channel.deliver(&n) {
                 Ok(()) => {
                     store.mark_delivered(p.event_id, channel.name(), now)?;

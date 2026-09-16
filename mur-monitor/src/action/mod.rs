@@ -32,6 +32,24 @@ pub fn action_key(
     format!("{monitor_id}:{cycle_id}:{observed_terminal_version}:{action_type}:{action_index}")
 }
 
+/// Recovers `(verb, action_index)` from an `action_key` — the inverse of
+/// `action_key` above, and it lives beside it so the format has exactly one
+/// writer and one reader. Safe because `action_key`'s field constraint
+/// guarantees no field may contain `:`, so the last segment is always the
+/// index and the second-from-last always the verb.
+///
+/// The verb is not decoration. The action drain's retry path resolves the
+/// list from the monitor's CURRENT outcome, which can have flipped under a
+/// parked row, so index N may now name a different verb; writing `Done`
+/// onto the old key would record in the action ledger — the spec's evidence
+/// (§冪等與事件紀錄) — that a remedy completed when it never ran.
+pub fn verb_and_index_from_key(key: &str) -> Option<(&str, usize)> {
+    let mut segments = key.rsplit(':');
+    let index = segments.next()?.parse().ok()?;
+    let verb = segments.next()?;
+    Some((verb, index))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionState {
     /// Claimed, not yet run.

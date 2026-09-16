@@ -109,15 +109,49 @@ impl MonitorStore {
         Ok(())
     }
 
-    /// Parked awaiting a human. Bumps `attempt` and records which approval
-    /// request is outstanding. NOT a failure — `pending_actions` still
-    /// returns it, so a later tick (or a late-arriving approval) picks it
-    /// back up.
+    /// Parked awaiting a human, recording which approval request is
+    /// outstanding. NOT a failure — `pending_actions` still returns it, so a
+    /// later tick (or a late-arriving approval) picks it back up.
+    ///
+    /// `attempt` counts times this action was PARKED ON SOMETHING NEW, not
+    /// times the drain looked at it. Re-parking a row that is already
+    /// `blocked` on the same `approval_id` leaves it alone: the drain
+    /// re-gates every blocked row on every tick and the gate correctly hands
+    /// back the existing request (`hitl::gate`'s `Prior::Pending` arm), so an
+    /// unconditional `attempt + 1` reached 240 after an hour at the daemon's
+    /// 15 s cadence and `mur monitor show` reported thousands of "attempts"
+    /// for an action that was never attempted — plus one pointless `UPDATE`
+    /// per parked action per tick, indefinitely. Same principle the
+    /// remediation budget already follows: waiting for a human is not
+    /// remediating.
+    ///
+    /// The `CASE` reads the row's PRE-update `state`/`approval_id` — in
+    /// SQLite every `SET` expression sees the original row — so a first block
+    /// (state `claimed`, `approval_id` NULL) still counts, and so does being
+    /// parked on a genuinely different request.
     pub fn block_action(&self, action_key: &str, approval_id: &str) -> Result<()> {
         self.conn().execute(
-            "UPDATE monitor_actions SET state = ?1, approval_id = ?2, attempt = attempt + 1 \
+            "UPDATE monitor_actions SET state = ?1, approval_id = ?2, \
+             attempt = attempt + CASE WHEN state = ?1 AND approval_id = ?2 THEN 0 ELSE 1 END \
              WHERE action_key = ?3",
             rusqlite::params![ActionState::Blocked.as_str(), approval_id, action_key],
+        )?;
+        Ok(())
+    }
+
+    /// Record why an action could not be processed this tick, WITHOUT
+    /// settling it: `state` is untouched, so `pending_actions` returns the
+    /// row again and the next tick retries it. This is spec §錯誤處理's
+    /// 「單一單位失敗要記錄並重試，不得向上傳播」 for the one failure that is
+    /// neither the executor's nor a decision — the approval gate itself
+    /// erroring (an unreadable channel event file, a signing-key failure in
+    /// `append_as_writer`). `finish_action` is the wrong tool for it: that
+    /// one is terminal by contract, and a transient channel fault must not
+    /// permanently fail a remedy.
+    pub fn record_action_error(&self, action_key: &str, reason: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE monitor_actions SET result = ?1 WHERE action_key = ?2",
+            rusqlite::params![store_result(reason), action_key],
         )?;
         Ok(())
     }
@@ -304,6 +338,41 @@ mod tests {
         );
     }
 
+    /// spec §錯誤處理: a gate failure is recorded against the action and
+    /// retried, never propagated. The row must keep its state — a
+    /// `finish_action`-style write would settle it, so a transient channel
+    /// fault would permanently fail a remedy nobody ever attempted.
+    #[test]
+    fn recording_an_error_leaves_the_action_retryable() {
+        let (_d, s, id, cyc) = fixture();
+        let k = action_key(&id, &cyc, 1, "rerun", 0);
+        s.claim_action(&k, &id, &cyc, RiskTier::Write, t0())
+            .unwrap();
+        s.record_action_error(
+            &k,
+            "approval gate failed: token=ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .unwrap();
+        let row = &s.actions_for(&id).unwrap()[0];
+        assert_eq!(
+            row.state,
+            ActionState::Claimed,
+            "recording why must not settle the action"
+        );
+        let result = row.result.as_deref().unwrap();
+        assert!(result.contains("approval gate failed"), "{result}");
+        assert!(
+            !result.contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            "a gate error reaches history like any other result and must be \
+             redacted on the same chokepoint: {result}"
+        );
+        assert_eq!(
+            s.pending_actions(t0(), 10).unwrap().len(),
+            1,
+            "and the next tick must pick it back up"
+        );
+    }
+
     #[test]
     fn a_done_action_never_comes_back() {
         let (_d, s, id, cyc) = fixture();
@@ -313,14 +382,33 @@ mod tests {
         assert!(s.pending_actions(t0(), 10).unwrap().is_empty());
     }
 
+    /// `attempt` counts times the action was parked on something new, not
+    /// times the drain re-gated it. Both halves matter: without the second,
+    /// `attempt = attempt` (never counting) passes; without the first, the
+    /// shipped `attempt + 1` passes and `show` reports thousands of
+    /// "attempts" for a row nobody ever attempted.
     #[test]
-    fn attempt_counts_up_across_blocks() {
+    fn a_re_deferral_on_the_same_request_is_not_another_attempt() {
         let (_d, s, id, cyc) = fixture();
         let k = action_key(&id, &cyc, 1, "rerun", 0);
         s.claim_action(&k, &id, &cyc, RiskTier::Write, t0())
             .unwrap();
         s.block_action(&k, "h1").unwrap();
-        s.block_action(&k, "h1").unwrap();
+        for _ in 0..5 {
+            s.block_action(&k, "h1").unwrap();
+        }
+        assert_eq!(
+            s.actions_for(&id).unwrap()[0].attempt,
+            1,
+            "re-parking on the request already outstanding is the same wait, \
+             not a new attempt"
+        );
+        // A genuinely different request IS a new attempt.
+        s.block_action(&k, "h2").unwrap();
         assert_eq!(s.actions_for(&id).unwrap()[0].attempt, 2);
+        assert_eq!(
+            s.actions_for(&id).unwrap()[0].approval_id.as_deref(),
+            Some("h2")
+        );
     }
 }

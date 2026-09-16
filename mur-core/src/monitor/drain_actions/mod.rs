@@ -12,6 +12,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use mur_common::hitl::RiskTier;
 use mur_monitor::action::{ActionState, action_key, risk};
+// The key format's parser lives beside the format's writer
+// (`mur_monitor::action`); re-exported so `cmd::monitor::show` and this
+// module's Phase 2 keep one path to it.
+pub(crate) use mur_monitor::action::verb_and_index_from_key;
 use mur_monitor::adapter::AdapterRegistry;
 use mur_monitor::spec::Action;
 use mur_monitor::state::{MonitorState, Outcome};
@@ -59,25 +63,6 @@ fn actions_for_outcome(row: &MonitorRow) -> &[Action] {
         Outcome::Failed | Outcome::Cancelled => &row.spec.actions.on_failure,
         Outcome::Pending | Outcome::Unknown => &[],
     }
-}
-
-/// Recovers `(verb, action_index)` from an `ActionRow::action_key`
-/// (`<monitor-id>:<cycle-id>:<version>:<verb>:<index>`) for Phase 2's retry
-/// path — the row carries neither as its own column. Safe because
-/// `action_key`'s own doc guarantees no field may contain `:` (ids are
-/// UUIDs), so the last segment is always the index and the
-/// second-from-last always the verb.
-///
-/// The verb is not decoration: Phase 2 resolves the list from the monitor's
-/// CURRENT outcome, which can have flipped under a parked row, so index N
-/// may now name a different verb. Writing `Done` onto the old key would
-/// record in the action ledger — the spec's evidence (§冪等與事件紀錄) —
-/// that a remedy completed when it never ran.
-pub(crate) fn verb_and_index_from_key(key: &str) -> Option<(&str, usize)> {
-    let mut segments = key.rsplit(':');
-    let index = segments.next()?.parse().ok()?;
-    let verb = segments.next()?;
-    Some((verb, index))
 }
 
 /// Retires a Phase-2 row whose key names a verb/index the monitor's CURRENT
@@ -258,7 +243,16 @@ fn attempt_action(
         }
     }
 
-    let decision = decide(
+    // spec §錯誤處理: a failure in one unit is recorded and retried, never
+    // propagated. `decide` was the one `?` in this subsystem that did
+    // propagate, and the daemon only catches it at the TICK boundary — so a
+    // persistent fault on ONE monitor's channel (an unreadable event file, a
+    // signing-key failure in `append_as_writer`) aborted the drain at the
+    // same monitor every tick and no monitor's actions ever ran again. The
+    // row keeps its `Claimed`/`Blocked` state, so it is retried next tick
+    // like any other owed work, and the reason is on the row for
+    // `mur monitor show`.
+    let decision = match decide(
         handle,
         mur_home,
         row,
@@ -266,7 +260,19 @@ fn attempt_action(
         action_index,
         params,
         now,
-    )?;
+    ) {
+        Ok(d) => d,
+        Err(error) => {
+            tracing::warn!(
+                monitor = %row.id,
+                action = action_type,
+                %error,
+                "monitor: approval gate failed; this action is retried next tick"
+            );
+            store.record_action_error(key, &format!("approval gate failed: {error}"))?;
+            return Ok(());
+        }
+    };
 
     // The new remediation total, set ONLY by the arm that actually
     // attempted a remedy. `record_remediation_attempt` returns it so the
@@ -430,7 +436,13 @@ pub fn drain_actions(
                 continue;
             }
             budget -= 1;
-            attempt_action(
+            // Containment, same rule as the `decide` arm inside
+            // `attempt_action`: whatever went wrong belongs to THIS monitor.
+            // A `?` here would abort the whole drain mid-loop and, if the
+            // fault is persistent, would do so at the same monitor on every
+            // tick — leaving every other monitor's actions permanently
+            // unrun. The row keeps its claimed state and is retried.
+            if let Err(error) = attempt_action(
                 &store,
                 &registry,
                 handle,
@@ -442,7 +454,14 @@ pub fn drain_actions(
                 &action.params,
                 now,
                 &mut rep,
-            )?;
+            ) {
+                tracing::warn!(
+                    monitor = %row.id,
+                    action = %action.r#type,
+                    %error,
+                    "monitor: action failed to process; other monitors continue"
+                );
+            }
             attempted_this_tick.insert(key);
         }
         if let Some(fresh) = store.get(&row.id)? {
@@ -521,7 +540,8 @@ pub fn drain_actions(
             continue;
         }
         budget -= 1;
-        attempt_action(
+        // Contained per row, for the same reason as Phase 1 above.
+        if let Err(error) = attempt_action(
             &store,
             &registry,
             handle,
@@ -533,7 +553,14 @@ pub fn drain_actions(
             &action.params,
             now,
             &mut rep,
-        )?;
+        ) {
+            tracing::warn!(
+                monitor = %row.id,
+                action = %action.r#type,
+                %error,
+                "monitor: action failed to process; other monitors continue"
+            );
+        }
         if let Some(fresh) = store.get(&row.id)? {
             maybe_complete_monitor(&store, &fresh, now)?;
         }
