@@ -96,6 +96,42 @@ pub fn backend(key: &str) -> Option<&'static CliBackend> {
     REGISTRY.iter().find(|b| b.key == key)
 }
 
+/// A backend whose binary was found, plus whether MUR may drive it.
+///
+/// `usable == false` is a backend that is present and listed but must not be
+/// spawned; the caller renders it with `Activation::Disabled`'s reason. It is
+/// deliberately not filtered out — the disabled entry is what carries the
+/// explanation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendAvailability {
+    pub backend: &'static CliBackend,
+    pub path: std::path::PathBuf,
+    pub usable: bool,
+}
+
+/// Which backends the user actually has, given a binary resolver.
+///
+/// `resolve` is injected rather than calling a `which` helper directly: this
+/// crate is consumed by the Hub, the runtime and the CLI, each of which
+/// resolves binaries differently (the Hub must ask an interactive login shell,
+/// because a Finder-launched app inherits a bare PATH). Injection also makes
+/// every case below testable without touching the real PATH.
+pub fn available<F>(resolve: F) -> Vec<BackendAvailability>
+where
+    F: Fn(&str) -> Option<std::path::PathBuf>,
+{
+    REGISTRY
+        .iter()
+        .filter_map(|b| {
+            resolve(b.binary).map(|path| BackendAvailability {
+                backend: b,
+                path,
+                usable: matches!(b.activation, Activation::Enabled),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +206,50 @@ mod tests {
     fn lookup_finds_claude_and_rejects_unknown_keys() {
         assert_eq!(backend("claude"), Some(&CLAUDE));
         assert!(backend("nope").is_none());
+    }
+
+    use std::path::PathBuf;
+
+    fn found(_: &str) -> Option<PathBuf> {
+        Some(PathBuf::from("/opt/homebrew/bin/claude"))
+    }
+
+    fn missing(_: &str) -> Option<PathBuf> {
+        None
+    }
+
+    #[test]
+    fn an_absent_binary_produces_no_entry() {
+        // "Backends whose binary is absent do not appear in the UI at all."
+        assert!(available(missing).is_empty());
+    }
+
+    #[test]
+    fn a_present_binary_is_listed_with_the_path_that_was_resolved() {
+        let got = available(found);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].backend.key, "claude");
+        assert_eq!(got[0].path, PathBuf::from("/opt/homebrew/bin/claude"));
+    }
+
+    #[test]
+    fn a_present_but_unverified_backend_is_listed_and_not_usable() {
+        // The distinction this task exists for: absent is gone, unverified is
+        // shown-and-disabled. Folding the second into the first would remove
+        // the only surface that explains the unmet requirement.
+        let got = available(found);
+        assert!(!got[0].usable);
+    }
+
+    #[test]
+    fn usable_tracks_activation_and_nothing_else() {
+        // Guards against a future row being enabled by the mere fact that its
+        // binary resolved.
+        for a in available(found) {
+            assert_eq!(
+                a.usable,
+                matches!(a.backend.activation, Activation::Enabled)
+            );
+        }
     }
 }
