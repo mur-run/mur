@@ -85,14 +85,17 @@ fn actions_for_outcome(row: &MonitorRow) -> &[Action] {
 
 /// Retires a Phase-2 row whose key names a verb/index the monitor's CURRENT
 /// action list no longer agrees with (fix round 2, following on from
-/// `verb_and_index_from_key`'s doc above): the outcome flipped, or the spec
-/// was edited, out from under a `Claimed`/`Blocked` row, so the index this
-/// key recorded can never again resolve to the verb it named. Left
-/// `Claimed`/`Blocked`, that row would keep occupying one of the ten
-/// oldest-first `pending_actions` slots on every future tick forever —
-/// starving real work behind a row that structurally cannot make progress —
-/// so it is retired terminally (`Failed`) instead of skipped again.
-/// `reason` names the drift for the human reading `mur monitor show`.
+/// `verb_and_index_from_key`'s doc above): the outcome flipped out from
+/// under a `Claimed`/`Blocked` row (there is no `mur monitor edit` to have
+/// changed the spec itself), so the index this key recorded can never again
+/// resolve to the verb it named. Left `Claimed`/`Blocked`, that row would
+/// keep occupying one of the ten oldest-first `pending_actions` slots on
+/// every future tick forever — starving real work behind a row that
+/// structurally cannot make progress — so it is retired terminally
+/// (`Failed`) instead of skipped again. `reason` names the drift for the
+/// human reading `mur monitor show`, stating only what the key named and
+/// what is at that index now — it must not assert a cause it cannot know
+/// (L3, whole-branch review).
 fn retire_drifted_action(
     store: &MonitorStore,
     row: &MonitorRow,
@@ -329,9 +332,19 @@ fn attempt_action(
         store.finish_action(key, ActionState::Failed, &decision.reason)?;
         rep.failed += 1;
     } else {
-        // Rule 1: re-verify the pin immediately before executing, from the
-        // current inputs, fail-closed on drift (the executor re-verifies
-        // the hash at the execute boundary — spec).
+        // Rule 1's pin re-check. This recomputes `expected_hash` from the
+        // SAME `row`/`action_type`/`action_index`/`params` that `decide`
+        // was just called with, in the same function, so the two values are
+        // equal by construction — this branch cannot fail today, and is
+        // untested for that reason. It is a cheap tripwire against a future
+        // refactor that separates deciding from executing (e.g. re-reading
+        // `params` from the store between the two, or moving the execute
+        // call to a later tick) and forgets to re-pin when it does. The
+        // real fail-closed guarantee is `gate::scan_prior`'s hash-keyed
+        // lookup — an approval never carries over to a different action,
+        // and drift is denied — verified by
+        // `an_approval_does_not_carry_to_a_different_action` and
+        // `drift_denies_fail_closed` in `gate.rs`'s tests.
         let expected = expected_hash(row, action_type, action_index, params);
         if expected != decision.action_hash {
             store.finish_action(key, ActionState::Failed, "action changed after approval")?;
@@ -545,8 +558,8 @@ pub fn drain_actions(
                 &action_row.action_key,
                 &format!(
                     "action key named verb `{verb}` at index {index}, but the current \
-                     action list for this outcome has only {} action(s) — the spec \
-                     changed underneath this row",
+                     action list for this outcome now has only {} action(s) — this row \
+                     can never resolve against it again",
                     current_list.len()
                 ),
                 now,
@@ -573,7 +586,8 @@ pub fn drain_actions(
                 &action_row.action_key,
                 &format!(
                     "action key named verb `{verb}` at index {index}, but the current \
-                     action list now has `{}` there — the spec changed underneath this row",
+                     action list now has `{}` there — this row can never resolve \
+                     against it again",
                     action.r#type
                 ),
                 now,
