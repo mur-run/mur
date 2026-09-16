@@ -63,12 +63,23 @@ fn actions_for_outcome(row: &MonitorRow) -> &[Action] {
     }
 }
 
-/// Recovers `action_index` from an `ActionRow::action_key` for Phase 2's
-/// retry path — the row itself carries no separate index column. Safe
-/// because `action_key`'s own doc guarantees no field may contain `:`, so
-/// the key's last colon-delimited segment is always the index.
-fn action_index_from_key(key: &str) -> Option<usize> {
-    key.rsplit(':').next()?.parse().ok()
+/// Recovers `(verb, action_index)` from an `ActionRow::action_key`
+/// (`<monitor-id>:<cycle-id>:<version>:<verb>:<index>`) for Phase 2's retry
+/// path — the row carries neither as its own column. Safe because
+/// `action_key`'s own doc guarantees no field may contain `:` (ids are
+/// UUIDs), so the last segment is always the index and the
+/// second-from-last always the verb.
+///
+/// The verb is not decoration: Phase 2 resolves the list from the monitor's
+/// CURRENT outcome, which can have flipped under a parked row, so index N
+/// may now name a different verb. Writing `Done` onto the old key would
+/// record in the action ledger — the spec's evidence (§冪等與事件紀錄) —
+/// that a remedy completed when it never ran.
+fn verb_and_index_from_key(key: &str) -> Option<(&str, usize)> {
+    let mut segments = key.rsplit(':');
+    let index = segments.next()?.parse().ok()?;
+    let verb = segments.next()?;
+    Some((verb, index))
 }
 
 /// Rule 5: once every action row for the monitor's current cycle has
@@ -382,12 +393,28 @@ pub fn drain_actions(
             // Settled since this row was claimed — nothing left to retry.
             continue;
         }
-        let Some(index) = action_index_from_key(&action_row.action_key) else {
+        let Some((verb, index)) = verb_and_index_from_key(&action_row.action_key) else {
             continue;
         };
+        if action_row.cycle_id != row.cycle_id {
+            // A different episode: the monitor settled a new cycle since
+            // this row was claimed, so the list index would resolve against
+            // is not the list the row came from.
+            continue;
+        }
         let Some(action) = actions_for_outcome(&row).get(index) else {
             continue;
         };
+        if action.r#type != verb {
+            // Same cycle, different list: the outcome flipped under this
+            // parked row (`reschedule_monitor` returns it to `Sleeping`,
+            // the re-poll settles `Succeeded`, `on_success` is resolved
+            // instead). Running index N now and writing the result onto
+            // THIS key would record that `verb` completed when it never
+            // ran, and would run the verb at that slot twice in one tick —
+            // once under its own key from Phase 1, once under this one.
+            continue;
+        }
         budget -= 1;
         attempt_action(
             &store,
@@ -595,6 +622,15 @@ mod tests {
         );
         let kinds: Vec<_> = s.events(&id).unwrap().into_iter().map(|e| e.kind).collect();
         assert!(kinds.contains(&"exhausted".to_string()), "{kinds:?}");
+    }
+
+    #[test]
+    fn a_key_yields_both_its_verb_and_its_index() {
+        // Phase 2's only handle on what a parked row was FOR: the index
+        // alone resolves to whatever verb now sits at that slot.
+        let key = action_key("mon-1", "cyc-2", 7, "rerun", 3);
+        assert_eq!(verb_and_index_from_key(&key), Some(("rerun", 3)));
+        assert_eq!(verb_and_index_from_key("nonsense"), None);
     }
 
     #[test]

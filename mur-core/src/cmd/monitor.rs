@@ -518,7 +518,7 @@ fn retry(
 /// Recovers the verb out of an `ActionRow::action_key`
 /// (`<monitor-id>:<cycle-id>:<version>:<verb>:<index>`) — the row itself
 /// carries no separate verb column. Safe for the same reason
-/// `mur-core::monitor::drain_actions::action_index_from_key` gives for the
+/// `mur-core::monitor::drain_actions::verb_and_index_from_key` gives for the
 /// index: no field may contain `:`, ids are UUIDs, so the verb is always the
 /// second-from-last colon-delimited segment. Falls back to the raw key
 /// rather than panicking on a row `show` cannot fully explain.
