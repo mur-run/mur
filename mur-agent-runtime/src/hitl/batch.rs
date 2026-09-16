@@ -150,3 +150,98 @@ pub fn pending(agent: &str, step_id: String, call: &crate::llm::ToolCallResult) 
         tool_input: call.input.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(id: &str) -> PendingCall {
+        PendingCall {
+            call_id: id.into(),
+            step_id: format!("step-{id}"),
+            tool_name: "bash".into(),
+            tool_input: serde_json::json!({ "command": id }),
+            action_hash: format!("hash-{id}"),
+        }
+    }
+
+    /// Two gates on the SAME task, in flight at once, must not cross-answer.
+    ///
+    /// This is the property the MCP tool server depends on and the reason
+    /// `2026-09-16-mur-tool-mcp-server-design.md` listed re-entrancy as an
+    /// open question: an in-process turn resolves one batch at a time, but a
+    /// spawned CLI issues each `tools/call` independently, so two batches for
+    /// one task can be waiting together.
+    ///
+    /// It holds because the approvals map is keyed by a `hitl_id` minted per
+    /// pending call inside `resolve`, not by `task_id` or `step_id` — and the
+    /// lock is released before any await. The risk this guards against is a
+    /// future key that looks more readable and is shared: keying by `task_id`
+    /// would make these two gates answer each other, and nothing else in the
+    /// suite would notice.
+    #[tokio::test]
+    async fn concurrent_gates_on_one_task_do_not_cross_answer() {
+        let approvals: HitlApprovals = Default::default();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<serde_json::Value>(8);
+
+        // Answer whatever arrives: `allow` iff the tool_input said so. Each
+        // notification carries its own hitl_id, which is the whole point.
+        let responder = {
+            let approvals = approvals.clone();
+            tokio::spawn(async move {
+                let mut answered = 0;
+                while let Some(n) = rx.recv().await {
+                    let calls = n["params"]["calls"].as_array().cloned().unwrap_or_default();
+                    for c in calls {
+                        let hitl_id = c["hitl_id"].as_str().expect("hitl_id").to_string();
+                        let want_allow = c["tool_input"]["command"] == "yes";
+                        if let Some(sender) = approvals.lock().await.remove(&hitl_id) {
+                            let _ = sender.send(HitlDecision {
+                                allow: want_allow,
+                                reason: None,
+                                surface: Some("test".into()),
+                            });
+                            answered += 1;
+                        }
+                    }
+                    if answered == 2 {
+                        break;
+                    }
+                }
+                answered
+            })
+        };
+
+        // Same task_id on both — the collision case, not two unrelated tasks.
+        let g1 = BatchGate {
+            task_id: "task-1",
+            timeout: Duration::from_secs(5),
+            approvals: &approvals,
+            notifier: &tx,
+            store: None,
+        };
+        let g2 = BatchGate {
+            task_id: "task-1",
+            timeout: Duration::from_secs(5),
+            approvals: &approvals,
+            notifier: &tx,
+            store: None,
+        };
+        let (a, b) = tokio::join!(g1.resolve(vec![call("yes")]), g2.resolve(vec![call("no")]));
+
+        // Bounded: if a future change shares the key, one hitl_id never
+        // arrives and the responder would otherwise wait forever. A guard
+        // that hangs on regression is a guard that reports nothing.
+        let answered = tokio::time::timeout(Duration::from_secs(5), responder)
+            .await
+            .expect("responder did not finish — a hitl_id was never delivered")
+            .expect("responder panicked");
+        assert_eq!(answered, 2);
+        assert!(a["yes"].allow, "the allowing gate got the other's answer");
+        assert!(!b["no"].allow, "the denying gate got the other's answer");
+        assert!(
+            approvals.lock().await.is_empty(),
+            "every hitl_id should be consumed; a leak here grows unboundedly"
+        );
+    }
+}
