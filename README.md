@@ -826,6 +826,12 @@ mur monitor cancel <id>                   # stop watching (never cancels the wor
 mur monitor retry <id>                    # bring an exhausted monitor back
 ```
 
+When something notable happens — a monitor stalls, crosses its soft deadline,
+settles, goes unhealthy, or gives up — MUR says so once, in the daemon log and
+(opt-in, `notifications.desktop: true`) as a desktop notification. Routine
+polling says nothing. Each message names the monitor, its source, what is
+known, when the next check is, and the single next step.
+
 `unknown` — the API rate-limited us, the run is not found yet, the process is
 gone without an exit record — is reported as exactly that, never as `failed`.
 Deadlines (stalled 20m · soft 3h · hard 8h) count from when the work really

@@ -349,6 +349,22 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
             r.fence
         )?,
     }
+    let deliveries = store.delivery_states(id)?;
+    if !deliveries.is_empty() {
+        writeln!(out, "  notifications:")?;
+        for (event_id, channel, state, attempts) in deliveries {
+            writeln!(
+                out,
+                "    event {event_id}  {channel:<8} {}{}",
+                state.as_str(),
+                if attempts > 0 {
+                    format!(" ({attempts} attempt(s))")
+                } else {
+                    String::new()
+                }
+            )?;
+        }
+    }
     writeln!(out, "  recent observations:")?;
     for o in store.observations(id, SHOW_RECENT_OBSERVATIONS)? {
         writeln!(
