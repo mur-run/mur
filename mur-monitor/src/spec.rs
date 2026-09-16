@@ -421,6 +421,7 @@ source:
   type: github_actions
   reference: owner/repo/123
   credential_ref: keychain:mur/github-default
+  write_credential_ref: keychain:mur/github-write
 actions:
   on_failure:
     - type: collect_logs
