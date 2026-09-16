@@ -475,6 +475,19 @@ impl MonitorStore {
     /// `next_check_at`, since `apply_cycle` requires a fenced
     /// `CycleUpdate` (a full check-cycle write-back) and `reactivate` only
     /// accepts an `exhausted` row.
+    /// Move a settled monitor back to `Sleeping` for another look
+    /// (the `reschedule_monitor` action). `Ok(false)` when the monitor was
+    /// not in `ActionPending` — it was cancelled, completed or rescheduled
+    /// by someone else in the meantime.
+    ///
+    /// The `AND state = ?5` precondition is the guard, not a fence. Every
+    /// other write-back after a claim presents its fence, but there is no
+    /// fence to present here: `is_claimable` is `Active | Sleeping`, so a
+    /// monitor in `ActionPending` is never leased and its fence is frozen.
+    /// A numeric fence would be decorative. What can actually race this is
+    /// `cancel`/`set_state`, which bypass the fence too — so the
+    /// precondition names the state this transition is valid from and lets
+    /// the database refuse the rest.
     pub fn reschedule(
         &self,
         id: &str,
@@ -483,12 +496,14 @@ impl MonitorStore {
     ) -> Result<bool> {
         let n = self.conn.execute(
             "UPDATE monitors SET state = ?1, next_check_at = ?2, version = version + 1, \
-             last_checked_at = COALESCE(last_checked_at, ?3) WHERE id = ?4",
+             last_checked_at = COALESCE(last_checked_at, ?3) \
+             WHERE id = ?4 AND state = ?5",
             params![
                 MonitorState::Sleeping.as_str(),
                 ts(next_check_at),
                 ts(now),
-                id
+                id,
+                MonitorState::ActionPending.as_str()
             ],
         )?;
         Ok(n == 1)
@@ -497,6 +512,35 @@ impl MonitorStore {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn reschedule_refuses_a_monitor_that_is_not_action_pending() {
+        // The guard's own test. Without it, removing `AND state = ?5` from
+        // the UPDATE would leave every other test green: they all use a
+        // fixture that IS action-pending, so the precondition never bites.
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.create(&spec("k"), t0(), None).unwrap().id;
+
+        // `create` leaves it Active — the state a live monitor is polled in.
+        let later = t0() + chrono::Duration::hours(1);
+        assert!(
+            !s.reschedule(&id, later, t0()).unwrap(),
+            "rescheduling a monitor that was never parked for actions must refuse"
+        );
+        let row = s.get(&id).unwrap().unwrap();
+        assert_ne!(
+            row.next_check_at, later,
+            "and must not have moved the check"
+        );
+
+        // Parked for actions: now it is the transition's valid source.
+        s.set_state(&id, MonitorState::ActionPending, t0()).unwrap();
+        assert!(s.reschedule(&id, later, t0()).unwrap());
+        let row = s.get(&id).unwrap().unwrap();
+        assert_eq!(row.state, MonitorState::Sleeping);
+        assert_eq!(row.next_check_at, later);
+    }
+
     use super::*;
     use chrono::TimeZone;
 
@@ -621,18 +665,24 @@ created_by: {{ actor: user:test }}
     }
 
     #[test]
-    fn reschedule_moves_next_check_out_and_sleeps_from_any_open_state() {
+    fn reschedule_moves_the_check_out_and_sleeps_from_action_pending() {
+        // Was `..._from_any_open_state`. Rescheduling from any state is a
+        // capability nothing in this slice can reach: the only caller is the
+        // `reschedule_monitor` action, the only thing that runs actions is
+        // the drain, and the only monitors the drain sees are the ones the
+        // scheduler parked in `ActionPending` on a TERMINAL observation.
+        // `Outcome::Unknown` is not terminal, so an `on_unknown` action list
+        // never arrives here at all — see the ledger's ruling R4.
         let d = tempfile::tempdir().unwrap();
         let s = MonitorStore::open(d.path()).unwrap();
-        let a = s.create(&spec("a"), t0(), None).unwrap();
-        // Unlike `reactivate`, this must not require `exhausted` — it is
-        // the `on_unknown` remedy for a monitor still being watched.
-        assert_eq!(s.get(&a.id).unwrap().unwrap().state, MonitorState::Active);
-        let later = t0() + chrono::Duration::minutes(10);
-        assert!(s.reschedule(&a.id, later, t0()).unwrap());
-        let r = s.get(&a.id).unwrap().unwrap();
-        assert_eq!(r.state, MonitorState::Sleeping);
-        assert_eq!(r.next_check_at, later);
+        let id = s.create(&spec("k"), t0(), None).unwrap().id;
+        s.set_state(&id, MonitorState::ActionPending, t0()).unwrap();
+
+        let later = t0() + chrono::Duration::hours(1);
+        assert!(s.reschedule(&id, later, t0()).unwrap());
+        let row = s.get(&id).unwrap().unwrap();
+        assert_eq!(row.state, MonitorState::Sleeping);
+        assert_eq!(row.next_check_at, later);
     }
 
     #[test]

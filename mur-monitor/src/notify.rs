@@ -18,6 +18,13 @@ pub const NOTIFIABLE: &[&str] = &[
     "terminal",
     "monitor_unhealthy",
     "exhausted",
+    // spec §通知策略 lists 「需要 approval」 and 「自動補救失敗或達嘗試上限」
+    // as triggers. The notifications plan deferred both with "no approval
+    // exists until the actions plan; NOTIFIABLE gains the kind then" — this
+    // is that plan. Without `approval_required` a gated action parks and
+    // nobody is ever told, which is a monitor that has silently stopped.
+    "approval_required",
+    "remediation_failed",
 ];
 
 pub fn is_notifiable(kind: &str) -> bool {
@@ -68,6 +75,12 @@ fn next_step(row: &MonitorRow, kind: &str) -> String {
         ),
         "exhausted" => {
             format!("stopped and needs a human. `mur monitor retry {short}` to re-enable")
+        }
+        "approval_required" => format!(
+            "waiting for you: `mur monitor show {short}` names the action and the exact `mur channel approve` command that releases it"
+        ),
+        "remediation_failed" => {
+            format!("an automatic remedy failed. `mur monitor show {short}` for what was tried")
         }
         other => format!("`mur monitor show {short}` ({other})"),
     }

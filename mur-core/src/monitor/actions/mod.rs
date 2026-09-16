@@ -91,6 +91,13 @@ mod tests {
         let created = s
             .create(&spec_with_source("mur_run", "k1"), t0(), None)
             .unwrap();
+        // Actions only ever run for a monitor the scheduler parked in
+        // `ActionPending` — `is_claimable` is `Active | Sleeping`, so a
+        // settled monitor is never polled again and the drain is the only
+        // thing that touches it. A fixture in any other state exercises a
+        // situation production cannot produce.
+        s.set_state(&created.id, MonitorState::ActionPending, t0())
+            .unwrap();
         let row = s.get(&created.id).unwrap().unwrap();
         (d, s, row)
     }
@@ -169,7 +176,16 @@ mod tests {
             .run(&ctx, &Default::default())
             .unwrap();
         let after = s.get(&row.id).unwrap().unwrap();
-        assert!(after.next_check_at > before, "next check must move forward");
+        // `after > before` alone would pass a literal duration, which rule 3
+        // forbids. Pin it to the schedule the code must actually use: the
+        // delay has to sit inside the jitter band `unknown_delay` produces for
+        // this streak, not merely be positive.
+        let base = mur_monitor::backoff::unknown_delay(row.unknown_streak);
+        let moved = (after.next_check_at - before).to_std().unwrap();
+        assert!(
+            moved >= base / 2 && moved <= base * 2,
+            "next check moved by {moved:?}, outside the backoff band around {base:?}"
+        );
         assert_eq!(after.state, MonitorState::Sleeping);
     }
 

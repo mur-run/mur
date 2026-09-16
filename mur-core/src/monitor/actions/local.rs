@@ -91,7 +91,14 @@ impl ActionExecutor for Reschedule {
             .reschedule(&ctx.row.id, next_check_at, ctx.now)
             .map_err(|e| e.to_string())?;
         if !ok {
-            return Err(format!("monitor {} no longer exists", ctx.row.id));
+            // `reschedule` is guarded on `state = action_pending`, so a
+            // false here means the monitor left that state between the
+            // drain reading it and this write — cancelled, completed, or
+            // rescheduled by another pass. Not an error worth retrying.
+            return Err(format!(
+                "monitor {} is no longer action-pending",
+                ctx.row.id
+            ));
         }
         Ok(format!("rescheduled to {next_check_at}, state Sleeping"))
     }
