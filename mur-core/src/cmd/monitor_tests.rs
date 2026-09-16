@@ -549,6 +549,13 @@ fn show_renders_notification_delivery_state() {
     let s = MonitorStore::open(d.path()).unwrap();
     let id = s.list(&ListFilter::default()).unwrap()[0].id.clone();
     let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+    // Prime "log" before the stall happens. A channel's high-water mark is
+    // stamped on its first sight of the store, so a channel that has never
+    // run inherits no history — in production both channels are registered
+    // at daemon startup, long before any monitor stalls. Without this the
+    // stall lands at or below the mark and `pending_notifications` correctly
+    // returns nothing, leaving `ev[0]` to panic.
+    s.pending_notifications("log", t0(), 1).unwrap();
     s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
         .unwrap();
     let ev = s.pending_notifications("log", t0(), 1).unwrap();
