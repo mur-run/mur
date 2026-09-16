@@ -1,0 +1,487 @@
+//! Drain monitors the scheduler parked in `ActionPending` — the piece that
+//! makes the actions built in Tasks 1-4 actually run (spec §行動執行器).
+//!
+//! Split out of `service.rs` as pure code movement (CLAUDE.md rule 4, single
+//! source file ≤ 800 lines): the public interface stays `service::{
+//! drain_actions, ActionReport, DRAIN_MAX_ACTIONS_PER_TICK }` via the
+//! re-export in `service.rs`, so callers (the daemon) see no change.
+
+use std::path::Path;
+
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use mur_common::hitl::RiskTier;
+use mur_monitor::action::{ActionState, action_key, risk};
+use mur_monitor::adapter::AdapterRegistry;
+use mur_monitor::spec::Action;
+use mur_monitor::state::{MonitorState, Outcome};
+use mur_monitor::store::{ListFilter, MonitorRow, MonitorStore};
+
+use super::actions::gate::{decide, expected_hash};
+use super::actions::{ActionCtx, executor_for};
+
+/// Bounds one `drain_actions` call's total actions attempted — claims made
+/// fresh in Phase 1 plus retries/crash-recovery in Phase 2 — spec §行動執行器
+/// rule 6. Mirrors `DRAIN_MAX_PER_TICK`'s reasoning for notifications: a
+/// backlog after downtime spreads across ticks instead of running an
+/// unbounded number of actions in one pass.
+pub const DRAIN_MAX_ACTIONS_PER_TICK: usize = 10;
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ActionReport {
+    pub executed: usize,
+    pub blocked: usize,
+    pub failed: usize,
+    pub exhausted: usize,
+}
+
+/// Which action list a settled monitor's outcome resolves to (spec
+/// §行動執行器). `Unknown` resolves to no actions at all — never
+/// `on_failure` — because a monitor that could not read its source is not
+/// work that failed; that is the spec's central invariant, carried down to
+/// the action layer.
+///
+/// The task-5 brief's routing table names an `on_unknown` list, but
+/// `Outcome::Unknown` can never reach this function through the real
+/// pipeline: `Outcome::is_terminal()` excludes `Unknown`, and
+/// `scheduler::plan_cycle`'s terminal branch — the only place that ever
+/// assigns `MonitorState::ActionPending` — is gated on
+/// `obs.outcome.is_terminal()`. Routing `on_unknown` here would be dead
+/// code; `backoff::unknown_delay` already handles the unknown case (see
+/// `actions::local::Reschedule`). The `Unknown => &[]` arm below is this
+/// function's own independent defence against ever treating an unreadable
+/// source as a failure — verified by
+/// `an_unknown_outcome_produces_no_actions_at_all`, which hand-builds a
+/// `CycleUpdate` since the real scheduler cannot produce the combination.
+fn actions_for_outcome(row: &MonitorRow) -> &[Action] {
+    match row.outcome {
+        Outcome::Succeeded => &row.spec.actions.on_success,
+        Outcome::Failed | Outcome::Cancelled => &row.spec.actions.on_failure,
+        Outcome::Pending | Outcome::Unknown => &[],
+    }
+}
+
+/// Recovers `(verb, action_index)` from an `ActionRow::action_key`
+/// (`<monitor-id>:<cycle-id>:<version>:<verb>:<index>`) for Phase 2's retry
+/// path — the row carries neither as its own column. Safe because
+/// `action_key`'s own doc guarantees no field may contain `:` (ids are
+/// UUIDs), so the last segment is always the index and the
+/// second-from-last always the verb.
+///
+/// The verb is not decoration: Phase 2 resolves the list from the monitor's
+/// CURRENT outcome, which can have flipped under a parked row, so index N
+/// may now name a different verb. Writing `Done` onto the old key would
+/// record in the action ledger — the spec's evidence (§冪等與事件紀錄) —
+/// that a remedy completed when it never ran.
+fn verb_and_index_from_key(key: &str) -> Option<(&str, usize)> {
+    let mut segments = key.rsplit(':');
+    let index = segments.next()?.parse().ok()?;
+    let verb = segments.next()?;
+    Some((verb, index))
+}
+
+/// Rule 5: once every action row for the monitor's current cycle has
+/// settled (`Done` or `Failed` — none `Claimed` or `Blocked`), the monitor
+/// leaves `ActionPending`/`AwaitingApproval` for `Completed`.
+///
+/// Compares against the length of the RESOLVED action list, not merely the
+/// rows that happen to exist yet: a `DRAIN_MAX_ACTIONS_PER_TICK`-truncated
+/// pass can claim and finish action 0 of a multi-action list while running
+/// out of budget before claiming the rest, and completing the monitor on
+/// "the one row I have is settled" would silently skip the unclaimed tail.
+fn maybe_complete_monitor(
+    store: &MonitorStore,
+    row: &MonitorRow,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    if !matches!(
+        row.state,
+        MonitorState::ActionPending | MonitorState::AwaitingApproval
+    ) {
+        return Ok(());
+    }
+    let list = actions_for_outcome(row);
+    if list.is_empty() {
+        return Ok(());
+    }
+    let cycle_rows: Vec<_> = store
+        .actions_for(&row.id)?
+        .into_iter()
+        .filter(|a| a.cycle_id == row.cycle_id)
+        .collect();
+    if cycle_rows.len() < list.len() {
+        // The tail of the list has not even been claimed yet this episode.
+        return Ok(());
+    }
+    let settled = cycle_rows
+        .iter()
+        .all(|a| matches!(a.state, ActionState::Done | ActionState::Failed));
+    if settled {
+        store.set_state(&row.id, MonitorState::Completed, now)?;
+    }
+    Ok(())
+}
+
+/// Rule 2's stop condition: the remediation budget is spent, so the monitor
+/// needs a human (`mur monitor retry`). A plain `UPDATE`/`INSERT OR IGNORE`
+/// underneath, so calling this on an already-`Exhausted` row is harmless —
+/// both the pre-attempt defence-in-depth check and the post-attempt cap
+/// check in `attempt_action` can reach here. `dedup: true` mirrors the
+/// scheduler's own hard-deadline `exhausted` event: at most once per
+/// (monitor, cycle).
+fn exhaust(store: &MonitorStore, row: &MonitorRow, now: DateTime<Utc>) -> Result<()> {
+    store.set_state(&row.id, MonitorState::Exhausted, now)?;
+    store.append_event(
+        &row.id,
+        &row.cycle_id,
+        "exhausted",
+        serde_json::json!({ "reason": "remediation attempts exhausted" }),
+        true,
+        now,
+    )?;
+    Ok(())
+}
+
+/// Required addition beyond the brief (task-5 prompt correction): the
+/// notifier's `NOTIFIABLE` list already carries `approval_required`, added
+/// by a prior task, but nothing had ever appended one. `dedup: true` — once
+/// per (monitor, cycle) is enough; a human does not need one banner per
+/// blocked action.
+fn record_approval_required(
+    store: &MonitorStore,
+    row: &MonitorRow,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    store.append_event(
+        &row.id,
+        &row.cycle_id,
+        "approval_required",
+        serde_json::json!({}),
+        true,
+        now,
+    )?;
+    Ok(())
+}
+
+/// Same correction, other half: `remediation_failed` for a gated
+/// (above-`Read`-tier) action that passed the gate and then did not
+/// remediate — its executor returned `Err`, or this build has no executor
+/// for that verb at all. A `Read`-tier executor failure (see
+/// `a_failing_executor_does_not_fail_the_tick`) is ordinary polling noise,
+/// not a remedy gone wrong, so this is never called for those. `reason` is
+/// payload only: `insert_event` derives the dedup key from `kind`, so
+/// `dedup: true` still means one event per (monitor, cycle).
+fn record_remediation_failed(
+    store: &MonitorStore,
+    row: &MonitorRow,
+    action_type: &str,
+    reason: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    store.append_event(
+        &row.id,
+        &row.cycle_id,
+        "remediation_failed",
+        serde_json::json!({ "action": action_type, "reason": reason }),
+        true,
+        now,
+    )?;
+    Ok(())
+}
+
+/// Run (or block, or fail) one already-claimed action. Every branch ends by
+/// writing exactly one terminal-or-parked state for `key` (`finish_action`
+/// or `block_action`) except the Rule 2 pre-check, which exits before
+/// touching `key` at all — that row is left `Claimed` for a human to
+/// unblock the monitor via `mur monitor retry` before it can be reached
+/// again.
+#[allow(clippy::too_many_arguments)]
+fn attempt_action(
+    store: &MonitorStore,
+    registry: &AdapterRegistry,
+    handle: &tokio::runtime::Handle,
+    mur_home: &Path,
+    row: &MonitorRow,
+    key: &str,
+    action_type: &str,
+    action_index: usize,
+    params: &serde_json::Map<String, serde_json::Value>,
+    now: DateTime<Utc>,
+    rep: &mut ActionReport,
+) -> Result<()> {
+    let tier = risk::classify(action_type);
+    let cap = row.spec.policy.max_remediation_attempts;
+    let gated = tier > RiskTier::Read;
+
+    // Rule 2, defence-in-depth: never attempt a remediation past the
+    // budget. The running total is read from the STORE, never from `row` —
+    // `row` is the snapshot Phase 1 took from `store.list()` BEFORE the
+    // loop, so every sibling in the same list would see the count as it was
+    // before any of them incremented it, and a list longer than the cap
+    // would overshoot by its tail (spec §行動執行器 line 412: no 4th
+    // automatic remedy). Phase 2 re-`get`s per row already; this makes
+    // Phase 1 agree with it.
+    if gated {
+        let attempts = store
+            .get(&row.id)?
+            .map_or(row.remediation_attempts, |fresh| fresh.remediation_attempts);
+        if attempts >= cap {
+            exhaust(store, row, now)?;
+            rep.exhausted += 1;
+            return Ok(());
+        }
+    }
+
+    let decision = decide(
+        handle,
+        mur_home,
+        row,
+        action_type,
+        action_index,
+        params,
+        now,
+    )?;
+
+    // The new remediation total, set ONLY by the arm that actually
+    // attempted a remedy. `record_remediation_attempt` returns it so the
+    // post-check below needs no extra `get` — which is what it was written
+    // to do (`store/mod.rs`).
+    let mut attempts_after: Option<u32> = None;
+
+    if decision.deferred {
+        // The `hitl_id`, never the `action_hash`. `mur channel approve`
+        // matches strictly on the id the gate minted, so storing the hash
+        // here gives `show` nothing to print but a command the approve path
+        // rejects — a monitor parked with no reachable way to release it.
+        // `hitl_id` is always `Some` on the deferred branch; the fallback
+        // keeps a future gate change from silently writing an empty string.
+        let approval_id = decision
+            .hitl_id
+            .as_deref()
+            .unwrap_or(decision.action_hash.as_str());
+        store.block_action(key, approval_id)?;
+        rep.blocked += 1;
+        store.set_state(&row.id, MonitorState::AwaitingApproval, now)?;
+        record_approval_required(store, row, now)?;
+    } else if !decision.allow {
+        store.finish_action(key, ActionState::Failed, &decision.reason)?;
+        rep.failed += 1;
+    } else {
+        // Rule 1: re-verify the pin immediately before executing, from the
+        // current inputs, fail-closed on drift (the executor re-verifies
+        // the hash at the execute boundary — spec).
+        let expected = expected_hash(row, action_type, action_index, params);
+        if expected != decision.action_hash {
+            store.finish_action(key, ActionState::Failed, "action changed after approval")?;
+            rep.failed += 1;
+        } else {
+            // The execution boundary, and the ONLY place a remediation
+            // attempt is counted (spec §行動執行器 rule 2). A deferral does
+            // not count: parking a `HitlRequest` because no human has
+            // answered is waiting, not remediating, and counting it
+            // exhausted a gated monitor after three 15-second ticks — the
+            // exact inversion of CLAUDE.md's "unattended approvals defer,
+            // they do not time out … an approval given hours later releases
+            // the gate". Being refused does not count either (explicit
+            // denial, or the pin no longer matching): nothing was
+            // attempted, and both arms are terminal, so neither can loop.
+            if gated {
+                attempts_after = Some(store.record_remediation_attempt(&row.id)?);
+            }
+            match executor_for(action_type) {
+                None => {
+                    // `executor_for` covers exactly the three `Read`-tier
+                    // verbs, so every GATED verb — `rerun`,
+                    // `start_downstream`, `apply_known_remedy` — lands here:
+                    // deliberately out of scope for this slice (no
+                    // credential scope for an external write, no remedy
+                    // catalogue). Say so instead of pretending. Approval
+                    // followed by silence is the precise failure this
+                    // feature exists to remove, so the reason names the verb
+                    // and the notifiable `remediation_failed` event tells
+                    // the human their approval led to no remedy.
+                    let reason =
+                        format!("this build has no executor for `{action_type}`; it did not run");
+                    store.finish_action(key, ActionState::Failed, &reason)?;
+                    rep.failed += 1;
+                    if gated {
+                        record_remediation_failed(store, row, action_type, &reason, now)?;
+                    }
+                }
+                Some(exec) => {
+                    let ctx = ActionCtx {
+                        store,
+                        row,
+                        now,
+                        registry,
+                    };
+                    match exec.run(&ctx, params) {
+                        Ok(summary) => {
+                            store.finish_action(key, ActionState::Done, &summary)?;
+                            rep.executed += 1;
+                        }
+                        Err(reason) => {
+                            store.finish_action(key, ActionState::Failed, &reason)?;
+                            rep.failed += 1;
+                            if gated {
+                                record_remediation_failed(store, row, action_type, &reason, now)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(total) = attempts_after
+        && total >= cap
+        && let Some(fresh) = store.get(&row.id)?
+        && fresh.state != MonitorState::Exhausted
+    {
+        exhaust(store, &fresh, now)?;
+        rep.exhausted += 1;
+    }
+
+    Ok(())
+}
+
+/// Drain monitors the scheduler parked in `ActionPending` — the piece that
+/// makes the actions built in Tasks 1-4 actually run (spec §行動執行器).
+/// Never fails the tick and never creates a store, same rule as
+/// `drain_notifications`: an absent database means a user who has never
+/// run `mur monitor add`, and draining must not be the thing that
+/// materialises it.
+///
+/// Two phases, because `ActionPending` is not the only state with owed
+/// work:
+/// - Phase 1 walks monitors currently `ActionPending`, resolving their
+///   action list fresh and claiming indices starting at 0.
+/// - Phase 2 walks `pending_actions` (every `Claimed`/`Blocked` row, any
+///   monitor) to catch a crash between claim and finish, and to retry an
+///   `AwaitingApproval` monitor — Phase 1's `ActionPending` filter no
+///   longer sees it once it has been blocked once.
+///
+/// Bounded by `DRAIN_MAX_ACTIONS_PER_TICK` across both phases combined
+/// (Rule 6).
+pub fn drain_actions(
+    mur_home: &Path,
+    handle: &tokio::runtime::Handle,
+    now: DateTime<Utc>,
+) -> Result<ActionReport> {
+    let Some(store) = MonitorStore::open_existing(mur_home)? else {
+        return Ok(ActionReport::default());
+    };
+    let registry = super::registry(mur_home);
+    let mut rep = ActionReport::default();
+    let mut budget = DRAIN_MAX_ACTIONS_PER_TICK;
+    // Keys phase 1 has already attempted this tick. Phase 2 reads
+    // `pending_actions`, which returns every `Claimed`/`Blocked` row — and a
+    // row phase 1 just created and blocked is exactly that. Without this set
+    // a freshly gated action is attempted twice in one pass: `attempt` is
+    // bumped twice, so the retry budget burns at double rate and the report
+    // double-counts it.
+    let mut attempted_this_tick: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
+    'monitors: for row in store.list(&ListFilter {
+        state: Some(MonitorState::ActionPending),
+        include_completed: true,
+    })? {
+        let list = actions_for_outcome(&row);
+        for (index, action) in list.iter().enumerate() {
+            if budget == 0 {
+                break 'monitors;
+            }
+            let key = action_key(&row.id, &row.cycle_id, row.fence, &action.r#type, index);
+            if !store.claim_action(
+                &key,
+                &row.id,
+                &row.cycle_id,
+                risk::classify(&action.r#type),
+                now,
+            )? {
+                // Already has a row from a prior tick — Phase 2 owns it now.
+                continue;
+            }
+            budget -= 1;
+            attempt_action(
+                &store,
+                &registry,
+                handle,
+                mur_home,
+                &row,
+                &key,
+                &action.r#type,
+                index,
+                &action.params,
+                now,
+                &mut rep,
+            )?;
+            attempted_this_tick.insert(key);
+        }
+        if let Some(fresh) = store.get(&row.id)? {
+            maybe_complete_monitor(&store, &fresh, now)?;
+        }
+    }
+
+    for action_row in store.pending_actions(now, DRAIN_MAX_ACTIONS_PER_TICK)? {
+        if budget == 0 {
+            break;
+        }
+        if attempted_this_tick.contains(&action_row.action_key) {
+            // Phase 1 created and attempted this row moments ago.
+            continue;
+        }
+        let Some(row) = store.get(&action_row.monitor_id)? else {
+            continue;
+        };
+        if matches!(row.state, MonitorState::Completed | MonitorState::Exhausted) {
+            // Settled since this row was claimed — nothing left to retry.
+            continue;
+        }
+        let Some((verb, index)) = verb_and_index_from_key(&action_row.action_key) else {
+            continue;
+        };
+        if action_row.cycle_id != row.cycle_id {
+            // A different episode: the monitor settled a new cycle since
+            // this row was claimed, so the list index would resolve against
+            // is not the list the row came from.
+            continue;
+        }
+        let Some(action) = actions_for_outcome(&row).get(index) else {
+            continue;
+        };
+        if action.r#type != verb {
+            // Same cycle, different list: the outcome flipped under this
+            // parked row (`reschedule_monitor` returns it to `Sleeping`,
+            // the re-poll settles `Succeeded`, `on_success` is resolved
+            // instead). Running index N now and writing the result onto
+            // THIS key would record that `verb` completed when it never
+            // ran, and would run the verb at that slot twice in one tick —
+            // once under its own key from Phase 1, once under this one.
+            continue;
+        }
+        budget -= 1;
+        attempt_action(
+            &store,
+            &registry,
+            handle,
+            mur_home,
+            &row,
+            &action_row.action_key,
+            &action.r#type,
+            index,
+            &action.params,
+            now,
+            &mut rep,
+        )?;
+        if let Some(fresh) = store.get(&row.id)? {
+            maybe_complete_monitor(&store, &fresh, now)?;
+        }
+    }
+
+    Ok(rep)
+}
+
+#[cfg(test)]
+mod tests;
