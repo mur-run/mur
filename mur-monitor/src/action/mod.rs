@@ -9,6 +9,19 @@ pub mod risk;
 /// observation was written. Including it means a re-observed terminal (a
 /// child cycle after a remedy) claims afresh, while a daemon restart
 /// replaying the same terminal collides with the row already there.
+/// # Field constraint
+///
+/// No field may contain `:`. The format is the spec's, colon-joined, so
+/// two different tuples whose fields carry a colon can render to the same
+/// string — and because this string is the PRIMARY KEY of
+/// `monitor_actions`, a collision means two distinct actions share one
+/// claim and one of them silently never runs.
+///
+/// Nothing can reach that today: the ids are UUIDv7, the verb comes from
+/// `spec::KNOWN_ACTIONS`, and the other two fields are integers. The
+/// constraint is written down rather than encoded around because the
+/// format is spec'd verbatim (§冪等與事件紀錄); a future source type that
+/// derives an id from a reference is the thing that would break it.
 pub fn action_key(
     monitor_id: &str,
     cycle_id: &str,
@@ -87,14 +100,28 @@ mod tests {
         // A verb added to KNOWN_ACTIONS without a tier must not silently
         // become auto-executable. `classify` is total and its fallback is
         // the most restrictive tier, not the least.
+        // Without these two, pruning KNOWN_ACTIONS to a single tier would
+        // leave this test green while exercising only one branch of the
+        // if/else below — passing while proving nothing.
+        let (mut read_seen, mut gated_seen) = (0usize, 0usize);
         for a in crate::spec::KNOWN_ACTIONS {
             let t = risk::classify(a);
             if *a == "notify" || *a == "collect_logs" || *a == "reschedule_monitor" {
                 assert_eq!(t, RiskTier::Read, "{a}");
+                read_seen += 1;
             } else {
                 assert!(t > RiskTier::Read, "{a} must not be auto-executable");
+                gated_seen += 1;
             }
         }
+        assert!(
+            read_seen > 0,
+            "no Read verb exercised — this test proved nothing"
+        );
+        assert!(
+            gated_seen > 0,
+            "no gated verb exercised — this test proved nothing"
+        );
     }
 
     #[test]
