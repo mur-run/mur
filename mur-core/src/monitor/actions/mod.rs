@@ -155,6 +155,42 @@ mod tests {
         (d, s, row, reg)
     }
 
+    /// An adapter that could not read its source at all — a credential
+    /// rejection, a network fault — returning `Observation::unknown`,
+    /// which sets both `outcome: Unknown` and `adapter_error` (L6,
+    /// whole-branch review).
+    struct FailingAdapter {
+        reason: String,
+    }
+
+    impl SourceAdapter for FailingAdapter {
+        fn source_type(&self) -> SourceType {
+            SourceType::Custom
+        }
+        fn validate_reference(&self, _reference: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn observe(&self, _reference: &str, _credential_ref: Option<&str>) -> Observation {
+            Observation::unknown(self.reason.clone())
+        }
+    }
+
+    fn fixture_with_failure(
+        reason: &str,
+    ) -> (tempfile::TempDir, MonitorStore, MonitorRow, AdapterRegistry) {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let created = s
+            .create(&spec_with_source("custom", "k3"), t0(), None)
+            .unwrap();
+        let row = s.get(&created.id).unwrap().unwrap();
+        let mut reg = AdapterRegistry::new();
+        reg.register(Box::new(FailingAdapter {
+            reason: reason.to_string(),
+        }));
+        (d, s, row, reg)
+    }
+
     #[test]
     fn notify_appends_an_event_rather_than_delivering_directly() {
         let (_d, s, row) = fixture();
@@ -177,6 +213,51 @@ mod tests {
             .collect();
         assert!(kinds.contains(&"action_notify".to_string()), "{kinds:?}");
         assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn notify_redacts_secrets_in_params_before_writing_history() {
+        // L4, whole-branch review: `params` comes straight from the
+        // monitor's spec YAML, which can carry a secret pasted in by
+        // mistake. `show --history` prints this event's payload raw, so
+        // this is the one chokepoint before it reaches `monitor_events`.
+        let (_d, s, row) = fixture();
+        let reg = AdapterRegistry::default();
+        let ctx = ActionCtx {
+            store: &s,
+            row: &row,
+            now: t0(),
+            registry: &reg,
+        };
+        let mut params = Map::new();
+        params.insert("note".to_string(), Value::String("hello".to_string()));
+        params.insert(
+            "message".to_string(),
+            Value::String("token=ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string()),
+        );
+        executor_for("notify").unwrap().run(&ctx, &params).unwrap();
+        let event = s
+            .events(&row.id)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "action_notify")
+            .unwrap();
+        let payload = event.payload.to_string();
+        assert!(
+            !payload.contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            "the secret must not reach monitor_events: {payload}"
+        );
+        assert!(
+            payload.contains("[REDACTED:"),
+            "must be visibly redacted, not silently dropped: {payload}"
+        );
+        // What would still make this green if the code were wrong? A `run`
+        // that dropped `params` entirely (writing `{}`) would also hide
+        // the secret, so a non-secret field must also survive intact.
+        assert!(
+            payload.contains("hello"),
+            "must not wholesale drop params, only redact secrets within them: {payload}"
+        );
     }
 
     #[test]
@@ -214,6 +295,43 @@ mod tests {
             out.contains("[REDACTED:"),
             "the secret must be visibly redacted, not silently dropped: {out:?}"
         );
+    }
+
+    #[test]
+    fn collect_logs_fails_when_the_source_could_not_be_read() {
+        // L6, whole-branch review: a credential rejection or network fault
+        // comes back as `Observation::unknown`, which sets `adapter_error`
+        // and `outcome: Unknown`. The old code ignored both and stored the
+        // error text as if it were collected evidence, with `ActionState::
+        // Done`. That distinction — a MONITOR problem, not a work problem —
+        // must survive down here: the executor has to return `Err`, not a
+        // successful summary.
+        let (_d, s, row, reg) = fixture_with_failure(
+            "credential rejected: token=ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        let ctx = ActionCtx {
+            store: &s,
+            row: &row,
+            now: t0(),
+            registry: &reg,
+        };
+        let err = executor_for("collect_logs")
+            .unwrap()
+            .run(&ctx, &Default::default())
+            .unwrap_err();
+        assert!(
+            err.contains("could not be read"),
+            "must say the SOURCE could not be read, not report a made-up success: {err}"
+        );
+        assert!(
+            !err.contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            "the adapter's own error text must be redacted too: {err}"
+        );
+        // What would still make this green if the code were wrong? An
+        // executor that always returns `Err` regardless of the adapter's
+        // outcome would also pass this test — `collect_logs_records_
+        // evidence_and_no_secret` above is the companion positive control,
+        // proving a healthy adapter still returns `Ok` with its evidence.
     }
 
     #[test]

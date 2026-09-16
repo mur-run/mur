@@ -28,8 +28,18 @@ impl ActionExecutor for Notify {
     /// `append_event` → transition guard → queue → drain (see
     /// `mur-core/src/monitor/notify.rs`), and calling a channel from here
     /// would bypass that path's delivery-state tracking and dedup.
+    ///
+    /// `params` comes straight from the monitor's spec YAML — a user- or
+    /// integration-authored file that can contain anything, including a
+    /// secret pasted into a notify param by mistake. `append_event` does no
+    /// redaction of its own (spec §安全與隱私: secrets and un-redacted logs
+    /// must never reach history), so this is the one chokepoint before the
+    /// payload lands in `monitor_events`, which `show --history` prints
+    /// raw. Walks the whole JSON tree (`redact_value`, not `redact_secrets`
+    /// on a single string), since a param can nest objects/arrays.
     fn run(&self, ctx: &ActionCtx<'_>, params: &Map<String, Value>) -> Result<String, String> {
-        let payload = Value::Object(params.clone());
+        let mut payload = Value::Object(params.clone());
+        mur_common::redact::redact_value(&mut payload);
         ctx.store
             .append_event(
                 &ctx.row.id,
@@ -57,6 +67,16 @@ impl ActionExecutor for CollectLogs {
     /// addition to (not instead of) whatever redaction the store applies,
     /// because this string becomes the action's stored result immediately,
     /// before any store-side pass runs on it.
+    ///
+    /// spec §錯誤處理's central distinction, carried down from the monitor
+    /// layer to the action layer (L6, whole-branch review): a source the
+    /// adapter could not read is a MONITOR problem, not a work problem, and
+    /// must not be stored as a successful collection. `Observation` already
+    /// carries this signal two ways — `adapter_error` (monitor-side reason)
+    /// and `outcome == Unknown` (the same fact, for a caller that only
+    /// checks the enum) — so both are checked; either one fails the action
+    /// instead of returning `Ok` with the error text sitting in the
+    /// `evidence` field as if it were collected evidence.
     fn run(&self, ctx: &ActionCtx<'_>, _params: &Map<String, Value>) -> Result<String, String> {
         let adapter = ctx
             .registry
@@ -64,6 +84,17 @@ impl ActionExecutor for CollectLogs {
             .ok_or_else(|| format!("no adapter registered for {:?}", ctx.row.source_type))?;
         let credential_ref = ctx.row.spec.source.credential_ref.as_deref();
         let observation = adapter.observe(&ctx.row.reference, credential_ref);
+        if let Some(error) = &observation.adapter_error {
+            return Err(mur_common::redact::redact_secrets(&format!(
+                "the source could not be read: {error}"
+            ))
+            .into_owned());
+        }
+        if observation.outcome == mur_monitor::state::Outcome::Unknown {
+            return Err(
+                "the source could not be read: adapter returned an unknown outcome".to_string(),
+            );
+        }
         Ok(mur_common::redact::redact_secrets(&observation.evidence).into_owned())
     }
 }

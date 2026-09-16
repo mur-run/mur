@@ -200,6 +200,15 @@ fn record_approval_required(
 /// not a remedy gone wrong, so this is never called for those. `reason` is
 /// payload only: `insert_event` derives the dedup key from `kind`, so
 /// `dedup: true` still means one event per (monitor, cycle).
+///
+/// `reason` is redacted here (L4, whole-branch review), same chokepoint
+/// `store_result` uses for `finish_action`'s `result` column: today only a
+/// fixed, secret-free string reaches this call (`executor_for(action_type)
+/// == None`), but the moment a gated verb gets a real executor, `reason`
+/// becomes that executor's own `Err` text — untrusted the same way
+/// `CollectLogs`'s evidence is — and `append_event` does no redaction of
+/// its own. Defence in depth, not reliance on every future executor
+/// remembering to redact its own errors.
 fn record_remediation_failed(
     store: &MonitorStore,
     row: &MonitorRow,
@@ -211,7 +220,10 @@ fn record_remediation_failed(
         &row.id,
         &row.cycle_id,
         "remediation_failed",
-        serde_json::json!({ "action": action_type, "reason": reason }),
+        serde_json::json!({
+            "action": action_type,
+            "reason": mur_common::redact::redact_secrets(reason).into_owned(),
+        }),
         true,
         now,
     )?;
