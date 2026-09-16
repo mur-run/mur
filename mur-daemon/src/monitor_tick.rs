@@ -40,6 +40,16 @@ fn run_loop(mur_home: &Path) {
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "monitor tick failed"),
         }
+        match service::drain_notifications(mur_home, Utc::now()) {
+            Ok(d) if d.delivered + d.failed + d.parked > 0 => tracing::info!(
+                delivered = d.delivered,
+                failed = d.failed,
+                parked = d.parked,
+                "monitor notifications"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::error!(error = %e, "monitor notification drain failed"),
+        }
         std::thread::sleep(TICK_INTERVAL);
     }
 }

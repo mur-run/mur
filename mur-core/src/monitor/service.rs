@@ -39,6 +39,73 @@ pub fn recover(mur_home: &Path, now: DateTime<Utc>) -> Result<RecoveryReport> {
     scheduler::recover(&store, now)
 }
 
+/// Notifications drained per channel per tick. Bounded so a backlog after
+/// downtime spreads across ticks instead of firing a hundred banners at
+/// once. Per channel is the unit that matters: this caps what a user can
+/// actually be interrupted by, and the same events queued for `log` cost
+/// nobody an interruption.
+pub const DRAIN_MAX_PER_TICK: usize = 20;
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DrainReport {
+    pub delivered: usize,
+    pub failed: usize,
+    pub parked: usize,
+}
+
+/// Deliver what the tick recorded. Never creates a store (a user who has
+/// never run `mur monitor` acquires nothing) and never fails the caller: a
+/// delivery problem is recorded on the queue and retried, per spec §錯誤處理
+/// ("notification failure: 不回滾已完成 action").
+pub fn drain_notifications(mur_home: &Path, now: DateTime<Utc>) -> Result<DrainReport> {
+    let Some(store) = MonitorStore::open_existing(mur_home)? else {
+        return Ok(DrainReport::default());
+    };
+    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    let registry = super::notify::registry_from_config(&cfg.notifications);
+    drain_with(&store, &registry, now)
+}
+
+/// The drain loop itself, seamed out from `drain_notifications` so a test
+/// can inject a registry holding a channel that fails on purpose — there is
+/// no other way to reach the `Err(reason)` arm below, since
+/// `drain_notifications` always builds its registry from `config.yaml`.
+/// Keep `drain_notifications`'s signature and behavior unchanged by this
+/// split: it still opens the store and reads config; this function only
+/// runs the loop.
+pub(crate) fn drain_with(
+    store: &MonitorStore,
+    registry: &super::notify::ChannelRegistry,
+    now: DateTime<Utc>,
+) -> Result<DrainReport> {
+    let mut rep = DrainReport::default();
+    for channel in registry.iter() {
+        for p in store.pending_notifications(channel.name(), now, DRAIN_MAX_PER_TICK)? {
+            let n = mur_monitor::notify::render(&p.row, &p.event);
+            match channel.deliver(&n) {
+                Ok(()) => {
+                    store.mark_delivered(p.event_id, channel.name(), now)?;
+                    rep.delivered += 1;
+                }
+                Err(reason) => {
+                    let state = store.mark_delivery_failed(p.event_id, channel.name(), now)?;
+                    tracing::warn!(
+                        channel = channel.name(),
+                        event_id = p.event_id,
+                        %reason,
+                        "monitor notification delivery failed"
+                    );
+                    match state {
+                        mur_monitor::store::DeliveryState::Failed => rep.parked += 1,
+                        _ => rep.failed += 1,
+                    }
+                }
+            }
+        }
+    }
+    Ok(rep)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +252,180 @@ mod tests {
         // `stalled_then_recovered_are_each_one_event` already proves the
         // stalled semantics directly.
         assert!(kinds.contains(&"soft_deadline".to_string()), "{kinds:?}");
+    }
+
+    /// Same rule as `tick_once_against_a_home_with_no_store_creates_nothing`:
+    /// a user who has never run `mur monitor` acquires no database, even by
+    /// draining. Asserts on the filesystem, not only the returned report —
+    /// an empty `DrainReport` would come back either way (nothing pending
+    /// either), which would pass without the fix.
+    #[test]
+    fn a_home_with_no_store_drains_nothing_and_creates_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = mur_monitor::store::db_dir(d.path());
+        assert!(!dir.exists());
+        let r = drain_notifications(d.path(), t0()).unwrap();
+        assert_eq!(r, DrainReport::default());
+        assert!(!dir.exists(), "draining must not create the store");
+    }
+
+    #[test]
+    fn a_notifiable_event_is_delivered_once_and_not_again() {
+        let d = tempfile::tempdir().unwrap();
+        MonitorStore::open(d.path()).unwrap();
+        // Prime "log" before any notifiable event exists — this is what
+        // "the channel has been watching since before this event" looks
+        // like in production, where the daemon's log channel is registered
+        // long before a monitor stalls. Finding 1's fix stamps a channel's
+        // high-water mark at its first-ever call, so without this priming
+        // call the "created"/"stalled" events below would already be
+        // history by the time `drain_notifications` first runs, and
+        // `first.delivered` would wrongly come back 0.
+        drain_notifications(d.path(), t0()).unwrap();
+
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.create(&spec(), t0(), None).unwrap().id;
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
+            .unwrap();
+        drop(s);
+
+        let first = drain_notifications(d.path(), t0()).unwrap();
+        assert_eq!(first.delivered, 1);
+        let second = drain_notifications(d.path(), t0()).unwrap();
+        assert_eq!(
+            second.delivered, 0,
+            "a delivered notification must not repeat"
+        );
+    }
+
+    #[test]
+    fn bookkeeping_events_are_never_delivered() {
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        let id = s.create(&spec(), t0(), None).unwrap().id; // writes `created`
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(
+            &id,
+            &cyc,
+            "lease_recovered",
+            serde_json::json!({}),
+            false,
+            t0(),
+        )
+        .unwrap();
+        drop(s);
+        assert_eq!(
+            drain_notifications(d.path(), t0()).unwrap(),
+            DrainReport::default()
+        );
+    }
+
+    /// A `Channel` that always fails, for finding 2's seam: exercising the
+    /// `Err(reason)` branch of `drain_with` requires a registry
+    /// `drain_notifications` cannot build (it always reads real channels
+    /// from config), so these tests call `drain_with` directly instead.
+    struct AlwaysFails;
+    impl crate::monitor::notify::Channel for AlwaysFails {
+        fn name(&self) -> &'static str {
+            "broken"
+        }
+        fn deliver(&self, _n: &mur_monitor::notify::Notification) -> Result<(), String> {
+            Err("synthetic failure".into())
+        }
+    }
+
+    fn broken_registry() -> crate::monitor::notify::ChannelRegistry {
+        let mut r = crate::monitor::notify::ChannelRegistry::new();
+        r.register(Box::new(AlwaysFails));
+        r
+    }
+
+    /// Spec §錯誤處理's only stated behavior for notifications: a delivery
+    /// failure is recorded and retried, and never fails the tick. Before
+    /// this seam, nothing asserted `rep.failed`/`rep.parked` at all — a
+    /// production code path with zero test coverage.
+    #[test]
+    fn a_failing_channel_is_recorded_and_retried_without_failing_the_tick() {
+        let registry = broken_registry();
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        // Prime "broken" before the notifiable event exists — see the note
+        // on `a_notifiable_event_is_delivered_once_and_not_again` for why.
+        drain_with(&s, &registry, t0()).unwrap();
+
+        let id = s.create(&spec(), t0(), None).unwrap().id;
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
+            .unwrap();
+
+        // `drain_with` returning `Ok` at all is half the assertion: a
+        // panic-free `Err` from the channel must not propagate as an `Err`
+        // from the drain.
+        let rep = drain_with(&s, &registry, t0()).unwrap();
+        assert_eq!(
+            rep,
+            DrainReport {
+                delivered: 0,
+                failed: 1,
+                parked: 0,
+            },
+            "a delivery error must be counted as failed, not delivered or parked early"
+        );
+
+        // The row itself must still be there and still pending — not
+        // dropped, not marked delivered, not parked after a single miss.
+        let states = s.delivery_states(&id).unwrap();
+        let (_, _, state, attempts) = states
+            .iter()
+            .find(|(_, channel, _, _)| channel == "broken")
+            .expect("a delivery row must exist for the failed attempt");
+        assert_eq!(*state, mur_monitor::store::DeliveryState::Pending);
+        assert_eq!(*attempts, 1, "one failed attempt must be recorded");
+    }
+
+    /// The other half of spec §錯誤處理: retrying is not forever. Enough
+    /// consecutive failures must park the row (using the real
+    /// `DELIVERY_MAX_ATTEMPTS`, never a hardcoded count), and a parked row
+    /// must stop coming back as pending.
+    #[test]
+    fn enough_consecutive_failures_park_the_notification() {
+        let registry = broken_registry();
+        let d = tempfile::tempdir().unwrap();
+        let s = MonitorStore::open(d.path()).unwrap();
+        drain_with(&s, &registry, t0()).unwrap(); // prime, see note above
+
+        let id = s.create(&spec(), t0(), None).unwrap().id;
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(&id, &cyc, "stalled", serde_json::json!({}), false, t0())
+            .unwrap();
+
+        // Each call's `now` is a full day past the last — comfortably past
+        // the backoff table's longest step (`unknown_delay`'s ceiling is
+        // minutes, not hours) — so the row is always due by the next call.
+        let mut rep = DrainReport::default();
+        for i in 1..=mur_monitor::store::DELIVERY_MAX_ATTEMPTS {
+            let now = t0() + chrono::Duration::days(i64::from(i));
+            rep = drain_with(&s, &registry, now).unwrap();
+        }
+        assert_eq!(
+            rep,
+            DrainReport {
+                delivered: 0,
+                failed: 0,
+                parked: 1,
+            },
+            "the attempt that reaches DELIVERY_MAX_ATTEMPTS must be counted as parked"
+        );
+
+        // A parked row must not come back as pending, however far `now`
+        // moves — this is what "excluded from pending forever" means, as
+        // opposed to merely "not due yet".
+        let far_future = t0() + chrono::Duration::days(365);
+        assert_eq!(
+            drain_with(&s, &registry, far_future).unwrap(),
+            DrainReport::default(),
+            "a parked notification must never be retried"
+        );
     }
 }

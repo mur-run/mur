@@ -3,6 +3,7 @@
 //! records) or a network client, and what assembles the registry.
 
 pub mod adapters;
+pub mod notify;
 pub mod service;
 
 use std::path::Path;

@@ -293,6 +293,11 @@ pub struct Config {
     /// load-modify-save (that drops blocks other binaries own).
     #[serde(default)]
     pub limits: crate::limits::Limits,
+
+    /// Durable-monitor notification channels (`notifications:`). Absent
+    /// means log-only: `desktop` is opt-in.
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 }
 
 /// Rotation for `~/.mur/queue/events.jsonl`, in the shape FreeBSD's
@@ -345,6 +350,17 @@ pub struct UpdateConfig {
     /// Agent names `mur update --restart-agents` must never touch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub restart_exclude: Vec<String>,
+}
+
+/// Which notification channels the durable monitor may use. `log` is not
+/// listed: it is always on and cannot be disabled, because a notable event
+/// must leave a trace somewhere even when a user has turned everything off.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NotificationsConfig {
+    /// OS desktop notification. Opt-in: a background daemon that starts
+    /// popping banners on upgrade is a hostile default.
+    #[serde(default)]
+    pub desktop: bool,
 }
 
 /// Run-status heartbeat tuning. Both values are config, never literals at a
@@ -2823,5 +2839,23 @@ mod model_switch_config_tests {
         assert_eq!(m.cheap.as_deref(), Some("a"));
         assert_eq!(m.frontier.as_deref(), Some("f"));
         assert_eq!(m.threshold_input_tokens, Some(9));
+    }
+}
+
+#[cfg(test)]
+mod notifications_config_tests {
+    use super::*;
+
+    #[test]
+    fn notifications_default_to_log_only() {
+        let c: Config = serde_yaml::from_str("{}").unwrap();
+        assert!(!c.notifications.desktop, "desktop must be opt-in");
+    }
+
+    #[test]
+    fn an_existing_config_without_the_block_still_parses() {
+        // Every user upgrading has a config.yaml with no `notifications:` key.
+        let c: Config = serde_yaml::from_str("retrieval:\n  min_score: 0.42\n").unwrap();
+        assert!(!c.notifications.desktop);
     }
 }
