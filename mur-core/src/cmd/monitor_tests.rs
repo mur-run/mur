@@ -5,6 +5,13 @@ use mur_common::hitl::RiskTier;
 use mur_monitor::action::action_key;
 use mur_monitor::store::{ListFilter, MonitorStore};
 
+// Explicit path: this file is itself loaded through `#[path]` from
+// `monitor.rs`, and rustfmt resolves a bare `mod write_grant;` against
+// `cmd/` rather than `cmd/monitor_tests/`. Naming the file keeps rustc and
+// `cargo fmt --check` agreeing.
+#[path = "monitor_tests/write_grant.rs"]
+mod write_grant;
+
 fn t0() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 0).unwrap()
 }
