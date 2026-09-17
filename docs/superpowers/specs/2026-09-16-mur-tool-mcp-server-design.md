@@ -270,10 +270,15 @@ pending call, so two batches on one task cannot cross-answer. Asserted in
    its built-in shell cannot be removed and no verified process sandbox
    exists, so the mount question only matters once that does.
 
-   `agy` is no longer part of this question. It has no home environment
-   variable at all, only `HOME`, so there is no honest value for
-   `home_env_var` and no row can be complete — its absence from the registry
-   is a measurement, not a pending probe.
+   `agy` is in the same position, for the same reason. An earlier note here
+   said it could have no row at all because it has "no honest value for
+   `home_env_var`" — that conflated *no dedicated variable* with *no usable
+   value*. `HOME` works, measured; it is simply a blunter lever, moving
+   everything that process resolves under it rather than only its config. So
+   `agy` is registered and disabled like `codex`, and for the same blocker:
+   execution it cannot be asked to give up, and a spawn path that does not yet
+   apply MUR's sandbox. Containment does not care whether a tool is
+   "disabled".
 
 ## One slot, two audiences
 
