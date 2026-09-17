@@ -1,6 +1,6 @@
 # Official Free Orchestrator with install-time model selection — design
 
-Status: **approved**
+Status: **approved; amended after implementation review**
 Date: 2026-09-17
 
 ## Problem
@@ -105,14 +105,26 @@ an explicit selection and returns a structured outcome.
 
 `mur-common/src/agent.rs:77-84` defines `model_ref` and `fallback_chain`, with a
 non-empty per-agent chain overriding the global chain. The package leaves both
-unset; installation resolves and writes them for this machine.
+unset; installation resolves and writes them for this machine. For a
+privacy-first install, the installed profile also writes per-agent
+`routing.enabled: false` and `smart.enabled: false`, so global Smart or
+difficulty-routing settings cannot substitute a cloud model ahead of the
+privacy-selected chain.
 
 ### The registry has the ranking inputs
 
 `mur-common/src/model.rs` provides provider, model, capabilities, route tier,
 input/output prices, context window, billing mode, and catalog verification.
-`ModelEntry::billing_or_inferred()` is the canonical compatibility path for old
-registry entries. Unknown prices are unknown, never zero.
+`ModelEntry::billing_or_inferred()` is the compatibility path for old registry
+entries. The implementation must first consolidate provider defaults into
+`mur-common`: `inferred_billing_for_provider()`,
+`ModelEntry::effective_route_tier()`, and a fixed 4:1
+`ModelEntry::projected_cost()` helper become the shared authorities used by the
+planner, `pick_cheap_model`, `mur-core::route`, and export model classification.
+The current private provider tables in `mur-core/src/route/mod.rs` and
+`mur-common/src/muragent/model_class.rs` must not remain independent. Existing
+provider aliases are pinned by tests before migration. Unknown prices are
+unknown, never zero.
 
 ### Existing fallback mutation is fail-closed but not atomic
 
@@ -214,9 +226,20 @@ routing policy. The exact manifest representation is chosen during planning
 against the official package schema, but it must be signed package metadata,
 not inferred from the item name and not hidden in prompt prose.
 
-Installers that do not understand the requirements metadata must fail clearly
-rather than installing an unusable profile. This makes the minimum supported
-MUR version an explicit release concern.
+A requirements-bearing package must have `model_hint: null`. `model_hint` is a
+signed vendor/name preference consumed by the ordinary import wizard, so it
+conflicts with policy-based portable selection. The manifest validator and
+official portability scan reject the combination of `model_requirements` and a
+non-empty `model_hint`.
+
+Requirements use schema `mur-agent/3`. Existing readers accept exactly
+`mur-agent/2`, so they reject v3 with `SchemaMismatch` instead of silently
+ignoring the new field; new readers accept v2 and v3 and enforce that only v3
+may carry requirements. Catalog/index metadata also carries
+`min_mur_version`, and CLI/Hub check it before download to render an actionable
+"upgrade MUR to <version>" error rather than exposing the lower-level schema
+mismatch. The signed manifest remains the installation authority; the catalog
+field is an early UX gate only.
 
 ## Candidate eligibility
 
@@ -260,8 +283,10 @@ Order by:
 5. explicitly declared tools before legacy unknown;
 6. registry key ascending.
 
-The exact mapping of old or absent `RouteTier` values must use the existing
-routing inference rather than inventing a second provider table.
+Old or absent `RouteTier` values use the new shared
+`ModelEntry::effective_route_tier()` in `mur-common`. The existing private
+`Router::effective_tier` and provider tables are migrated to that helper, and
+export model locality consults the same provider-default authority.
 
 ### Cost first
 
@@ -275,12 +300,12 @@ Order by:
 6. registry key ascending.
 
 Within usage-billed models, compare a fixed projected request of **4,000 input
-tokens and 1,000 output tokens** using `effective_costs()`. The absolute token
-count is only a normalization; the decision is the explicit 4:1 input/output
-weight. This matches an orchestration turn's prompt-heavy shape without
-pretending that an install-time planner knows the future task. If only one side
-of a legacy price is known through `effective_costs()`, its existing fallback
-semantics apply. Tests freeze this formula.
+tokens and 1,000 output tokens** through the shared
+`ModelEntry::projected_cost(4_000, 1_000)` helper. `pick_cheap_model` uses the
+same helper and ratio so install-time cost ordering and Smart auto-pick cannot
+disagree. The helper preserves legacy single-rate and one-sided-rate behavior
+by using the known side for the missing side; no known side yields `None`, never
+zero. Tests freeze this formula.
 
 ### Privacy first
 
@@ -315,7 +340,9 @@ For an agent with requirements, installation proceeds as follows:
    re-loads the staged profile.
 8. Revalidate every selected ref against the current registry, set `model_ref`
    and the fallback chain, synchronize the legacy inline `model` block from the
-   primary entry, and atomically commit the fully configured staged agent.
+   primary entry, and, for privacy-first, set per-agent `routing.enabled: false`
+   and `smart.enabled: false`; atomically commit the fully configured staged
+   agent.
 9. Return `InstallOutcome` to the caller.
 
 There is a race between planning and profile mutation because users or another
@@ -343,6 +370,17 @@ A verified license may remain after a no-model failure. It grants no executable
 capability and avoids needlessly discarding a valid account-bound artifact.
 Temporary bundles are removed by their temporary directory.
 
+### Interaction with the ordinary model wizard
+
+The ordinary agent importer currently calls `maybe_resolve_model()` after
+installation. That wizard consumes `model_hint` and can offer to pull a local
+model or paste an API key. For a v3 requirements-bearing package, the official
+installer passes an explicit import mode that suppresses
+`maybe_resolve_model()`; the official planner is the only model-selection path.
+For v2 packages without requirements, including existing official agents, the
+ordinary wizard remains byte-for-byte behaviorally unchanged. Tests cover both
+branches.
+
 ## No-candidate behavior
 
 The installer never:
@@ -362,7 +400,14 @@ on the policy step and offers its existing model-configuration route.
 
 ## Runtime fallback boundary
 
-The runtime uses a closed allow-list for advancing the chain.
+This is a **fleet-wide runtime behavior change**, not an orchestrator-only
+switch: every Agent using `FallbackLlmClient` receives the taxonomy below. That
+scope is intentional, but it preserves the motivating #947 behavior for errors
+that are demonstrably candidate-specific. In particular, HTTP 404 and
+provider-structured model-not-found/unavailable codes still advance. Unknown
+4xx no longer advance merely because they are 4xx.
+
+The runtime uses a closed, tested allow-list for advancing the chain.
 
 ### Retry, then advance
 
@@ -373,45 +418,47 @@ The runtime uses a closed allow-list for advancing the chain.
 
 ### Advance immediately
 
-- model not found or unavailable;
-- structured context-window exceeded.
+- HTTP 404 and structured model-not-found/unavailable codes;
+- context-window exceeded, recognized by a provider-specific parser.
 
 ### Stop
 
 - authentication or authorization failure;
-- insufficient credit;
+- insufficient credit or spend limit;
 - permission denial;
 - safety-policy refusal;
-- unsupported capability not established as model-specific availability;
+- unsupported capability not explicitly classified as candidate-specific;
 - malformed request or request-builder error;
 - invalid/unparseable response;
 - any unclassified 4xx;
 - any failure after user-visible answer content has begun streaming.
 
-The existing behavior in `mur-agent-runtime/src/llm/mod.rs:270-361` advances on
-`InsufficientCredit` and every `Rejected` 4xx. That is deliberately changed.
-At minimum the typed error model gains distinctions equivalent to:
+The common `from_status` layer handles status-only classes and defaults unknown
+4xx to a typed rejection with `Stop`. Provider adapters may promote an error to
+`ModelNotFound`, `ContextExceeded`, `PermissionDenied`, or
+`SafetyPolicyRejected` only through an enumerated parser with fixture tests.
+Structured `type`/`code` fields are preferred. Where a provider exposes no
+usable code, an exact provider-owned message-pattern allow-list is permitted;
+it is not generic substring matching.
 
-```text
-ContextExceeded
-PermissionDenied
-SafetyPolicyRejected
-UnsupportedCapability
-```
+Anthropic is the required exception: prompt overflow is currently a 400
+`invalid_request_error`, while spend-limit failures can use that same type.
+Therefore its adapter may recognize only versioned, anchored prompt-too-long
+message shapes copied into tests; all other `invalid_request_error` messages
+stop. HTTP 413 is request bytes, not token context, and does not by itself mean
+`ContextExceeded`.
 
-Provider adapters classify using HTTP status plus structured provider error
-codes. They must not use loose substring matching that could turn a safety or
-permission refusal into context overflow. Unknown errors stop. This errs on the
-side of a loud, actionable failure instead of silently changing provider or
-billing source.
+The existing `committed > 0` streaming guard is preserved, not newly invented:
+once answer content has been emitted, changing candidates risks a duplicate or
+contradictory continuation and the chain stops. Exhausted-chain reporting keeps
+every attempted candidate/reason and leads with the most actionable failure.
 
-Fallback before any output is safe because the next candidate can produce the
-whole answer. Once answer content has been emitted, changing candidates risks a
-duplicate or contradictory continuation and therefore stops.
-
-When all allowed candidates fail, the runtime retains the current principle:
-report every attempted candidate and reason, while leading with the most
-actionable failure.
+Subscription adapters (`claude` and `codex`) delegate requests to the existing
+Anthropic/OpenAI HTTP clients, so HTTP gateway responses retain the same typed
+status/body mapping and can fail over under the allow-list. Only pre-request
+adapter construction and loopback configuration failures are status-less
+`Http`; those correctly stop because another model cannot repair the malformed
+entry. Tests cover both delegated HTTP mapping and setup failure.
 
 ## CLI flow
 
@@ -551,11 +598,15 @@ plan cannot support it; the workflow emits an explicit warning when absent.
 ## Dashboard consistency
 
 The server dashboard currently labels the entire Official Agents category as
-`pro`, while catalog items can be free. Before orchestrator is announced, list
+`pro` in `dashboard/src/lib/library.ts`, while catalog items can be free. Before
+orchestrator is announced, list
 and detail surfaces must render each item's own tier. Category copy may describe
 curation but must not imply that all official agents require Pro.
 
-This is a presentation correction, not a change to server entitlement checks.
+The stale user-visible registry error "Official agents, fleets and workflows
+require a Pro plan" is corrected at the same time so it does not contradict
+per-item entitlement. This is otherwise a presentation correction, not a
+change to server entitlement checks.
 The download endpoint remains authoritative: free items require authentication
 and a valid account-bound license but skip the active-subscription gate.
 
@@ -587,7 +638,12 @@ and a valid account-bound license but skip the active-subscription gate.
 - Hub and CLI receive the same plan for the same registry;
 - explicit refs are validated for existence and capability;
 - no candidate creates no agent;
-- privacy-first never inserts a cloud candidate;
+- privacy-first never inserts a cloud candidate and writes per-agent Smart and
+  difficulty-routing overrides to disabled;
+- global Smart/routing enabled in config cannot change a privacy-first Agent's
+  runtime candidates;
+- requirements-bearing installs suppress the ordinary pull/API-key wizard,
+  while v2/no-requirements installs preserve it;
 - a ref disappearing before commit fails without a partial profile rewrite;
 - primary updates both `model_ref` and the legacy inline `model` block;
 - fallback selection does not alter global model settings;
@@ -605,7 +661,12 @@ and a valid account-bound license but skip the active-subscription gate.
 - no candidate switch occurs after streamed answer content;
 - exhausted-chain output lists every candidate and reason and leads with the
   most actionable error;
-- provider-specific structured codes map to the common typed errors.
+- provider-specific structured codes map to the common typed errors;
+- Anthropic's allow-listed prompt-too-long message advances, while an
+  unrecognized `invalid_request_error` and spend-limit fixture stop;
+- existing `committed > 0` behavior is preserved;
+- `claude`/`codex` setup failures stop, while delegated HTTP gateway failures
+  retain provider mapping.
 
 ### Official publishing tests
 
@@ -617,7 +678,9 @@ and a valid account-bound license but skip the active-subscription gate.
 - same version with different bytes remains refused;
 - selected-item dispatch derives all paths and names from the catalog;
 - recover mode never overwrites an existing release;
-- orchestrator bundle contains no local model, path, identity, or secret.
+- orchestrator bundle contains no local model, path, identity, secret, or
+  `model_hint`;
+- catalog/index carries `min_mur_version`.
 
 ### Dashboard tests
 
@@ -662,10 +725,12 @@ The feature is complete when:
 3. Non-interactive CLI deterministically defaults to capability-first.
 4. The installed profile has a valid primary and bounded ordered fallback chain
    drawn only from the user's existing registry, without modifying global model
-   settings.
+   settings; privacy-first also prevents global Smart/routing from substituting
+   cloud candidates.
 5. No eligible model leaves no runnable or partially configured orchestrator.
-6. Runtime fallback occurs only for the approved availability, transient, and
-   context-capacity failures, and never after output begins.
+6. Runtime fallback occurs only for the provider-tested availability,
+   transient, and context-capacity failures, preserves known #947
+   model-not-found behavior, and never switches after output begins.
 7. Official CI builds catalog items generically and manual publish targets one
    catalog id without hard-coded researcher paths.
 8. Free/pro labels come from each catalog item on user-facing surfaces.
