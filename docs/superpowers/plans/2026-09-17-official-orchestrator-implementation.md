@@ -118,8 +118,8 @@ These requirements are copied from the approved spec and apply to every task:
   - `build_manifest_from_profile_with_requirements(profile, mur_version, Option<ModelRequirements>)`.
 - Consumes: existing `MuragentManifest`, writer, validator, DSSE canonical signing path.
 
-- [ ] **Step 1: Write failing manifest/validator tests.** Add tests proving: v2 without requirements validates; v3 with `{chat:true, tools:true}` round-trips and validates; v2 carrying requirements is rejected; v3 with no requirements is rejected; v3 requirements plus non-empty `model_hint` is rejected; an unknown schema is rejected. Add a signing test that mutating `model_requirements.tools` after signing fails validation.
-- [ ] **Step 2: Prove red.**
+- [x] **Step 1: Write failing manifest/validator tests.** Add tests proving: v2 without requirements validates; v3 with `{chat:true, tools:true}` round-trips and validates; v2 carrying requirements is rejected; v3 with no requirements is rejected; v3 requirements plus non-empty `model_hint` is rejected; an unknown schema is rejected. Add a signing test that mutating `model_requirements.tools` after signing fails validation.
+- [x] **Step 2: Prove red.**
 
 ```bash
 cargo nextest run -p mur-common -E 'test(/model_requirements/) or test(/schema_v3/)'
@@ -127,7 +127,7 @@ cargo nextest run -p mur-common -E 'test(/model_requirements/) or test(/schema_v
 
 Expected: compile failures for the missing field/type, then test failures until schema validation exists.
 
-- [ ] **Step 3: Implement the exact schema contract.** In `manifest.rs` add:
+- [x] **Step 3: Implement the exact schema contract.** In `manifest.rs` add:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,7 +143,7 @@ pub struct ModelRequirements {
 
 Add `model_requirements` with `#[serde(default, skip_serializing_if = "Option::is_none")]`. `schema_supported()` accepts v2/v3; validation enforces the biconditional `schema == "mur-agent/3"` iff `model_requirements.is_some()` and rejects v3 requirements with `model_hint`. Keep `build_manifest_from_profile()` producing v2 for every existing caller; the new builder emits v3 only when requirements are supplied. Do not put requirements in `deployment`, because old v2 readers deliberately ignore it.
 
-- [ ] **Step 4: Run focused and package tests.**
+- [x] **Step 4: Run focused and package tests.**
 
 ```bash
 cargo nextest run -p mur-common -E 'test(/muragent/)'

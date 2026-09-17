@@ -42,9 +42,21 @@ pub fn validate(archive: &MuragentArchive) -> Result<ValidationResult, MuragentE
             .map_err(MuragentError::ForbiddenMcpCommand)?;
     }
 
-    // Step 3: Schema version
-    if !manifest.is_v2() {
+    // Step 3: Schema version and model-requirements contract.
+    if !manifest.schema_supported() {
         return Err(MuragentError::SchemaMismatch(manifest.schema.clone()));
+    }
+    let schema_requires_v3 = manifest.schema == "mur-agent/3";
+    if schema_requires_v3 != manifest.requires_v3() {
+        return Err(MuragentError::ManifestParse(
+            "mur-agent/3 requires model_requirements, and model_requirements require mur-agent/3"
+                .into(),
+        ));
+    }
+    if manifest.requires_v3() && manifest.model_hint.is_some() {
+        return Err(MuragentError::ManifestParse(
+            "model_requirements and model_hint are mutually exclusive".into(),
+        ));
     }
 
     // Step 3.5: Bundle ID
