@@ -154,5 +154,7 @@ pub fn parse_proposal(raw: &str) -> Result<Proposal, ProposalError> {
     })
 }
 
+pub mod prompt;
+
 #[cfg(test)]
 mod tests;
