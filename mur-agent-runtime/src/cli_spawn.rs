@@ -17,6 +17,9 @@ pub struct SpawnRequest<'a> {
     pub socket: &'a Path,
     pub task_id: &'a str,
     pub prompt: &'a str,
+    /// Where each assistant block goes as it arrives. `None` for an
+    /// unattended turn, where nobody is reading.
+    pub deltas: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
 }
 
 /// The assistant text from a `stream-json` transcript.
@@ -27,24 +30,97 @@ pub struct SpawnRequest<'a> {
 pub fn reply_from_stream_json(lines: &str) -> String {
     let mut out = String::new();
     for line in lines.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
-            continue;
-        };
-        if v["type"] != "assistant" {
-            continue;
-        }
-        let Some(blocks) = v["message"]["content"].as_array() else {
-            continue;
-        };
-        for b in blocks {
-            if b["type"] == "text"
-                && let Some(t) = b["text"].as_str()
-            {
-                out.push_str(t);
+        for block in blocks_in(line) {
+            if !block.thinking {
+                out.push_str(&block.text);
             }
         }
     }
     out
+}
+
+/// One assistant block from the transcript.
+///
+/// `thinking` blocks are streamed so a long thinking phase is visible, but
+/// they are not part of the reply — the same split the gateway path makes.
+pub(crate) struct Block {
+    pub text: String,
+    pub thinking: bool,
+}
+
+/// The assistant blocks in a single `stream-json` line, in order.
+///
+/// The primitive both forms are built from: `reply_from_stream_json` folds it
+/// over a whole transcript, `drain_stream_json` calls it per line as the line
+/// arrives. Having one parser is the point — a second one would drift, and
+/// the drift would be a reply that differs from what the user watched.
+pub(crate) fn blocks_in(line: &str) -> Vec<Block> {
+    let mut out = Vec::new();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+        return out;
+    };
+    if v["type"] != "assistant" {
+        return out;
+    }
+    let Some(blocks) = v["message"]["content"].as_array() else {
+        return out;
+    };
+    for b in blocks {
+        // Tool traffic is excluded from both: those calls already ran through
+        // MUR's handler and were recorded there.
+        let thinking = match b["type"].as_str() {
+            Some("text") => false,
+            Some("thinking") => true,
+            _ => continue,
+        };
+        let key = if thinking { "thinking" } else { "text" };
+        if let Some(t) = b[key].as_str()
+            && !t.is_empty()
+        {
+            out.push(Block {
+                text: t.to_string(),
+                thinking,
+            });
+        }
+    }
+    out
+}
+
+/// Read `stream-json` to EOF, emitting each assistant block as it arrives and
+/// returning the reply.
+///
+/// A closed sink does NOT stop the read. The client disconnecting must not
+/// truncate what this turn is recorded as having said, and leaving stdout
+/// undrained would block the CLI on a full pipe.
+pub(crate) async fn drain_stream_json<R>(
+    reader: R,
+    mut deltas: Option<tokio::sync::mpsc::Sender<crate::llm::StreamDelta>>,
+) -> std::io::Result<String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    let mut reply = String::new();
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        for block in blocks_in(&line) {
+            if !block.thinking {
+                reply.push_str(&block.text);
+            }
+            if let Some(tx) = &deltas {
+                let d = crate::llm::StreamDelta {
+                    text: block.text,
+                    thinking: block.thinking,
+                };
+                // Full sink: wait, so a slow reader slows the turn rather
+                // than losing it. Closed sink: stop sending, keep reading.
+                if tx.send(d).await.is_err() {
+                    deltas = None;
+                }
+            }
+        }
+    }
+    Ok(reply)
 }
 
 /// The private home for this backend, or `None` to use the user's own.
@@ -106,18 +182,35 @@ pub async fn run_turn(req: SpawnRequest<'_>) -> anyhow::Result<String> {
         // would leave it waiting for input that is never coming.
     }
 
-    let out = child.wait_with_output().await?;
-    if !out.status.success() {
+    // stderr is drained on its own task: a CLI that writes more than a pipe
+    // buffer of diagnostics would otherwise block forever while we read stdout.
+    let mut stderr_buf = Vec::new();
+    let mut stderr = child.stderr.take();
+    let stderr_task = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        if let Some(e) = &mut stderr {
+            let _ = e.read_to_end(&mut stderr_buf).await;
+        }
+        stderr_buf
+    });
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+    let reply = drain_stream_json(tokio::io::BufReader::new(stdout), req.deltas).await?;
+
+    let status = child.wait().await?;
+    let stderr_bytes = stderr_task.await.unwrap_or_default();
+    if !status.success() {
         anyhow::bail!(
             "{} exited {}: {}",
             req.backend.binary,
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
+            status,
+            String::from_utf8_lossy(&stderr_bytes).trim()
         );
     }
-    Ok(reply_from_stream_json(&String::from_utf8_lossy(
-        &out.stdout,
-    )))
+    Ok(reply)
 }
 
 #[cfg(test)]
@@ -126,6 +219,7 @@ mod tests {
 
     /// A real `claude --output-format stream-json` transcript shape.
     const TRANSCRIPT: &str = r#"{"type":"system","subtype":"init","tools":[]}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__mur__bash"}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":" and goodbye"}]}}
@@ -152,5 +246,76 @@ mod tests {
     #[test]
     fn an_empty_transcript_is_an_empty_reply_not_a_panic() {
         assert_eq!(reply_from_stream_json(""), "");
+    }
+
+    async fn drain(t: &str) -> (String, Vec<(String, bool)>) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let reply = drain_stream_json(std::io::Cursor::new(t.to_string()), Some(tx))
+            .await
+            .expect("drain");
+        let mut got = Vec::new();
+        while let Ok(d) = rx.try_recv() {
+            got.push((d.text, d.thinking));
+        }
+        (reply, got)
+    }
+
+    #[tokio::test]
+    async fn each_block_is_its_own_delta_not_one_at_the_end() {
+        // The whole point of the change. One delta carrying the joined reply
+        // would pass a naive "did anything stream" check while the user still
+        // waited for the turn to finish.
+        let (reply, deltas) = drain(TRANSCRIPT).await;
+        assert_eq!(
+            deltas,
+            vec![
+                ("hmm".to_string(), true),
+                ("Hello".to_string(), false),
+                (" and goodbye".to_string(), false),
+            ]
+        );
+        assert_eq!(reply, "Hello and goodbye");
+    }
+
+    #[tokio::test]
+    async fn what_was_streamed_is_what_is_returned() {
+        // Two parsers would drift, and the drift would be a recorded reply
+        // that differs from what the user watched arrive.
+        let (reply, deltas) = drain(TRANSCRIPT).await;
+        let watched: String = deltas
+            .iter()
+            .filter(|(_, thinking)| !thinking)
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(watched, reply);
+        assert_eq!(reply, reply_from_stream_json(TRANSCRIPT));
+    }
+
+    #[tokio::test]
+    async fn thinking_is_streamed_but_is_not_the_reply() {
+        let (reply, deltas) = drain(TRANSCRIPT).await;
+        assert!(deltas.iter().any(|(_, thinking)| *thinking));
+        assert!(!reply.contains("hmm"));
+    }
+
+    #[tokio::test]
+    async fn a_closed_sink_does_not_truncate_the_reply() {
+        // A client that disconnects mid-turn must not change what the turn is
+        // recorded as having said — and leaving stdout undrained would block
+        // the CLI on a full pipe.
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        drop(rx);
+        let reply = drain_stream_json(std::io::Cursor::new(TRANSCRIPT.to_string()), Some(tx))
+            .await
+            .expect("drain survives a dead sink");
+        assert_eq!(reply, "Hello and goodbye");
+    }
+
+    #[tokio::test]
+    async fn an_unattended_turn_needs_no_sink() {
+        let reply = drain_stream_json(std::io::Cursor::new(TRANSCRIPT.to_string()), None)
+            .await
+            .expect("drain");
+        assert_eq!(reply, "Hello and goodbye");
     }
 }
