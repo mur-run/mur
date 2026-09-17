@@ -443,18 +443,18 @@ Rejected(u16, String),
   - `Stop`: `Auth`, `InsufficientCredit`, `PermissionDenied`,
     `SafetyPolicyRejected`, unknown `Rejected`, `Http`, `InvalidResponse`.
 
-- [ ] **Step 1: Freeze the #947 and streaming invariants before changing defaults.** Keep tests proving HTTP 404/model rename advances, factory failure remains in the failure list, and `committed > 0` prevents switching. Add a scope comment that the classifier is fleet-wide.
-- [ ] **Step 2: Add the complete failing matrix.** OpenAI-compatible fixtures: structured `context_length_exceeded`, model-not-found/unavailable, `insufficient_quota`, and `content_policy_violation`. Anthropic fixtures: an exact current 400 `invalid_request_error` prompt-too-long message shape, a near-miss prompt message, spend-limit `invalid_request_error`, `permission_error`, and safety refusal. Assert unknown 400/409/413/422 stop; 413 alone is not context overflow. Add `claude` and `codex` tests proving setup/loopback `Http` failures stop while delegated HTTP gateway fixtures retain Anthropic/OpenAI mapping.
-- [ ] **Step 3: Prove red.**
+- [x] **Step 1: Freeze the #947 and streaming invariants before changing defaults.** Keep tests proving HTTP 404/model rename advances, factory failure remains in the failure list, and `committed > 0` prevents switching. Add a scope comment that the classifier is fleet-wide.
+- [x] **Step 2: Add the complete failing matrix.** OpenAI-compatible fixtures: structured `context_length_exceeded`, model-not-found/unavailable, `insufficient_quota`, and `content_policy_violation`. Anthropic fixtures: an exact current 400 `invalid_request_error` prompt-too-long message shape, a near-miss prompt message, spend-limit `invalid_request_error`, `permission_error`, and safety refusal. Assert unknown 400/409/413/422 stop; 413 alone is not context overflow. Add `claude` and `codex` tests proving setup/loopback `Http` failures stop while delegated HTTP gateway fixtures retain Anthropic/OpenAI mapping.
+- [x] **Step 3: Prove red.**
 
 ```bash
 cargo nextest run -p mur-agent-runtime -E 'test(/(from_status|fallback|context|permission|safety|anthropic_error|openai_error)/)'
 ```
 
-- [ ] **Step 4: Implement provider mapping before generic status mapping.** Parse provider JSON `type`/`code` first. OpenAI-compatible mapping uses enumerated codes. Anthropic mapping may use only anchored, versioned message patterns local to `anthropic.rs` for prompt overflow because `invalid_request_error` is ambiguous; every allowed pattern has a positive and near-miss fixture. Never use a generic cross-provider substring classifier. Change generic unknown 4xx to `Rejected` + `Stop`; classify 402 credit as `Stop`; retain HTTP 404 as `ModelNotFound` + `AdvanceNow`.
-- [ ] **Step 5: Preserve existing streaming and diagnostics.** Do not redesign `committed > 0`; keep it returning immediately. `all_candidates_failed` continues listing each ref/reason and chooses the highest-actionability source using `Stop > AdvanceNow > RetryThenAdvance`.
-- [ ] **Step 6: Mutation checks.** Temporarily classify `InsufficientCredit` and unknown `Rejected` as `AdvanceNow`; confirm tests fail. Remove one Anthropic anchor; confirm its positive fixture fails. Broaden it to `contains("too long")`; confirm a near-miss/spend-limit fixture fails. Temporarily remove `committed > 0`; confirm the existing streaming test fails. Restore all.
-- [ ] **Step 7: Run runtime suite and Clippy.**
+- [x] **Step 4: Implement provider mapping before generic status mapping.** Parse provider JSON `type`/`code` first. OpenAI-compatible mapping uses enumerated codes. Anthropic mapping may use only anchored, versioned message patterns local to `anthropic.rs` for prompt overflow because `invalid_request_error` is ambiguous; every allowed pattern has a positive and near-miss fixture. Never use a generic cross-provider substring classifier. Change generic unknown 4xx to `Rejected` + `Stop`; classify 402 credit as `Stop`; retain HTTP 404 as `ModelNotFound` + `AdvanceNow`.
+- [x] **Step 5: Preserve existing streaming and diagnostics.** Do not redesign `committed > 0`; keep it returning immediately. `all_candidates_failed` continues listing each ref/reason and chooses the highest-actionability source using `Stop > AdvanceNow > RetryThenAdvance`.
+- [x] **Step 6: Mutation checks.** Temporarily classify `InsufficientCredit` and unknown `Rejected` as `AdvanceNow`; confirm tests fail. Remove one Anthropic anchor; confirm its positive fixture fails. Broaden it to `contains("too long")`; confirm a near-miss/spend-limit fixture fails. Temporarily remove `committed > 0`; confirm the existing streaming test fails. Restore all.
+- [x] **Step 7: Run runtime suite and Clippy.**
 
 ```bash
 cargo nextest run -p mur-agent-runtime -E 'test(/llm/) or test(/fallback/)'
