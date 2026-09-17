@@ -266,6 +266,7 @@ mod tests {
             attempt: 0,
             result: None,
             created_at: Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 0).unwrap(),
+            proposed_action: None,
         }
     }
 

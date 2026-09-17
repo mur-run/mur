@@ -327,6 +327,30 @@ impl MonitorStore {
                 )
                 .context("add monitor_actions.gate_errors")?;
         }
+        // The action a resolver proposed, as JSON. Needed because Phase 2
+        // resolves a parked row by looking its index up in the monitor's
+        // spec action list, and a proposed action has no index there — it
+        // would be retired as "drifted" on the next tick, which looks
+        // exactly like the feature working and then silently dying. A
+        // proposal is its own source of truth, as the spec list is for the
+        // others. NULL for every row the spec produced. Additive, so no
+        // `SCHEMA_USER_VERSION` bump; probed with `PRAGMA table_info` for
+        // the same reason as the others.
+        let has_proposed_action = self
+            .conn
+            .prepare("PRAGMA table_info(monitor_actions)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|name| name == "proposed_action");
+        if !has_proposed_action {
+            self.conn
+                .execute(
+                    "ALTER TABLE monitor_actions ADD COLUMN proposed_action TEXT",
+                    [],
+                )
+                .context("add monitor_actions.proposed_action")?;
+        }
         let has_last_attempt_at = self
             .conn
             .prepare("PRAGMA table_info(monitor_registration_outbox)")?
