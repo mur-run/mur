@@ -171,9 +171,44 @@ pub(crate) fn resolve_local_base_url(
     LOCAL_LLM_DEFAULT_BASE_URL.to_string()
 }
 
+/// A runner for the CLI-spawn track, or a misconfigured one that says why.
+///
+/// Every refusal here produces a turn the user can read. The alternative —
+/// falling back to the echo stub — looks alive and parrots, which is the
+/// failure `RunnerBackend::Misconfigured` was introduced to end.
+fn cli_track_runner(
+    backend: &'static mur_common::cli_backend::CliBackend,
+    socket_bind: &str,
+) -> TaskRunner {
+    use mur_common::cli_backend::Activation;
+    if let Activation::Disabled { reason } = backend.activation {
+        return TaskRunner::new_stub_misconfigured(format!(
+            "agent is on the `{}{}` track, which is disabled: {reason}",
+            mur_common::cli_backend::PROVIDER_PREFIX,
+            backend.key
+        ));
+    }
+    let socket = socket_bind.trim_start_matches("unix://");
+    if socket.is_empty() {
+        return TaskRunner::new_stub_misconfigured(format!(
+            "agent is on the `{}{}` track but has no unix socket configured; \
+             the spawned CLI would have no way to reach MUR's tools",
+            mur_common::cli_backend::PROVIDER_PREFIX,
+            backend.key
+        ));
+    }
+    TaskRunner::with_cli_spawn(backend).with_socket_path(std::path::PathBuf::from(socket))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_runner(
-    client: Arc<dyn LlmClient>,
+    // The runner to configure — `TaskRunner::with_llm` for the in-process
+    // track, `with_cli_spawn` for the CLI track. Taken already-built rather
+    // than as a client, because a CLI-spawn turn has no `LlmClient`: the CLI
+    // owns the loop. Factoring it this way keeps ONE `with_*` chain; a second
+    // copy is how a track ends up spawning a CLI whose tool calls arrive with
+    // no policy attached.
+    base: TaskRunner,
     base_system_prompt: Option<String>,
     skills: Arc<RuntimeSkills>,
     skills_cfg: SkillsConfig,
@@ -208,7 +243,7 @@ pub fn build_runner(
     // unattended stop or a cancel (spec D3/D8). `None` for the stub runners.
     bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,
 ) -> Arc<TaskRunner> {
-    let mut runner = TaskRunner::with_llm(client)
+    let mut runner = base
         .with_agent_name(agent_name)
         .with_system_prompt(base_system_prompt)
         .with_skills(skills)
@@ -540,9 +575,12 @@ pub async fn build_provider_runner(
             identity.clone(),
             profile.inner.identity.key_version,
         ));
-    let build = |client: Arc<dyn LlmClient>| {
-        let r = crate::supervisor_runner::build_runner(
-            client.clone(),
+    // One configuration chain, fed by either track. Split out so the CLI
+    // branch below cannot drift from the in-process one: a runner missing its
+    // tools policy would spawn a CLI whose calls arrive unpoliced.
+    let build_base = |base: TaskRunner| {
+        crate::supervisor_runner::build_runner(
+            base,
             system_prompt_with_memory.clone(),
             runtime_skills.clone(),
             skills_cfg.clone(),
@@ -564,7 +602,21 @@ pub async fn build_provider_runner(
             Some(secrets.clone()),
             Some((session_cwd.clone(), cwd_roots.clone())),
             Some(bash_jobs.clone()),
-        );
+        )
+    };
+    // The CLI track short-circuits here: a spawned CLI owns the loop, so there
+    // is no `LlmClient` to build and the routing below has nothing to route.
+    // Its tools are the same ones — they reach the CLI through the shim.
+    if let Some(backend) = mur_common::cli_backend::from_provider(&entry.provider) {
+        let r = build_base(cli_track_runner(
+            backend,
+            &profile.inner.transport.socket.bind,
+        ));
+        return Ok((r, None, Some(pool.clone()), None));
+    }
+
+    let build = |client: Arc<dyn LlmClient>| {
+        let r = build_base(TaskRunner::with_llm(client.clone()));
         (r, Some(client), Some(pool.clone()))
     };
 
@@ -981,6 +1033,48 @@ pub(crate) async fn prepare_runtime(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_disabled_backend_produces_a_turn_that_explains_itself() {
+        use crate::task_runner::RunnerBackend;
+        use mur_common::cli_backend::{Activation, CLAUDE, CliBackend};
+        static DISABLED: CliBackend = CliBackend {
+            activation: Activation::Disabled {
+                reason: "probe pending",
+            },
+            ..CLAUDE
+        };
+        let r = cli_track_runner(&DISABLED, "unix:///tmp/a.sock");
+        // The stub's message is the turn's whole reply, so asserting it is
+        // asserting what the user sees.
+        assert!(
+            matches!(r.backend_for_test(), RunnerBackend::Misconfigured(m)
+            if m.contains("disabled") && m.contains("probe pending"))
+        );
+    }
+
+    #[test]
+    fn no_socket_refuses_rather_than_spawning_blind() {
+        use crate::task_runner::RunnerBackend;
+        use mur_common::cli_backend::CLAUDE;
+        let r = cli_track_runner(&CLAUDE, "");
+        assert!(
+            matches!(r.backend_for_test(), RunnerBackend::Misconfigured(m)
+            if m.contains("no unix socket"))
+        );
+    }
+
+    #[test]
+    fn a_usable_backend_gets_the_socket_it_will_dial() {
+        use mur_common::cli_backend::CLAUDE;
+        let r = cli_track_runner(&CLAUDE, "unix:///tmp/a.sock");
+        // The `unix://` prefix must be stripped: it is a config spelling, not
+        // a filesystem path, and `UnixStream::connect` takes the latter.
+        assert_eq!(
+            r.socket_path_for_test(),
+            Some(std::path::Path::new("/tmp/a.sock"))
+        );
+    }
+
     use super::{UNRESOLVED_PROVIDER, no_model_notice};
 
     /// The reply is the whole fix: it is the only surface the user is looking
