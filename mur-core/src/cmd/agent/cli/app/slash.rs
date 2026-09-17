@@ -34,7 +34,8 @@ pub enum SlashCmd {
     Panel(Vec<String>),
     /// `/open` — what is still outstanding, observed and reported kept apart.
     Open,
-    /// `/deep-research [question|status|stop|setup]` — research fleet control.
+    /// `/deep-research [ask <question>|<question>|status|stop|setup]` — research
+    /// fleet control. Aliased as `/research`; bare text is the question.
     DeepResearch(Vec<String>),
     /// `/monitor` (or `/mon`) — list durable monitors (Task 13's `mur monitor
     /// list` rows), printed into the scrollback. Same handler as `Ctrl+T` /

@@ -176,6 +176,10 @@ const SKILL_SUBS: &[(&str, &str)] = &[
     ("remove", "uninstall a skill"),
 ];
 const DEEP_RESEARCH_SUBS: &[(&str, &str)] = &[
+    // `ask` is offered even though bare text works without it: the menu is
+    // the only place a user learns the verb exists, and a menu that lists
+    // only status/stop/setup reads as "asking is not one of the options".
+    ("ask", "research a question"),
     ("status", "show the fleet panel"),
     ("stop", "write the kill-switch"),
     ("setup", "how to run the wizard"),
