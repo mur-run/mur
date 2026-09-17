@@ -44,6 +44,7 @@ pub fn register_fleet_run_monitor(
             r#type: SourceType::MurRun,
             reference: run_id.to_string(),
             credential_ref: None,
+            write_credential_ref: None,
         },
         outcomes: Outcomes::default(),
         actions: Actions::default(),

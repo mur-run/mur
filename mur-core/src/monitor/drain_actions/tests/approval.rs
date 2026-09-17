@@ -109,9 +109,12 @@ fn a_gated_action_parks_and_keeps_waiting_without_spending_the_budget() {
 /// tick proceeds without asking again (`gate.rs` proves the gate does
 /// this; nothing proved the drain acts on it).
 ///
-/// What a released action can DO is bounded by this build: every gated
-/// verb has no executor here, so the honest terminal state is `Failed`
-/// naming the verb plus a `remediation_failed` event — never silence.
+/// What a released action can DO is bounded by the fixture: this monitor is
+/// a `mur_run`, and `rerun` only works on `github_actions`, so the honest
+/// terminal state is `Failed` naming the verb plus a `remediation_failed`
+/// event — never silence. (Until the rerun slice, the reason was "no
+/// executor" for every gated verb; `rerun` has one now, which is why this
+/// asserts on the verb rather than on that phrase.)
 /// That makes `Blocked` → `Failed`-with-that-reason the proof the gate
 /// released: a still-deferring gate leaves the row `Blocked`, spends no
 /// budget and appends no `remediation_failed`. All three are asserted,
@@ -145,9 +148,17 @@ fn an_approval_that_lands_later_releases_the_parked_action() {
         "an approved action must leave Blocked, not sit there forever"
     );
     let result = action.result.unwrap_or_default();
+    // This assertion used to read `contains("no executor")`, written when no
+    // verb both gated and had an executor. `rerun` now has one, so an
+    // approved `rerun` reaches it — and refuses here only because this
+    // fixture's monitor is a `mur_run`, which has nothing to rerun. What the
+    // test guards is unchanged: the approval released the action and the
+    // reason names the verb, rather than the action sitting Blocked forever.
     assert!(
-        result.contains("no executor") && result.contains("rerun"),
-        "the reason must name the verb this build cannot run: {result}"
+        result.contains("github_actions"),
+        "must prove the approval reached the LIVE executor, not the no-executor \
+         arm: only the executor's own refusal names the required source type, \
+         while the verb name appears in both messages: {result}"
     );
     let kinds = event_kinds(&s, &id);
     assert!(
@@ -462,8 +473,10 @@ fn an_approval_on_the_eleventh_parked_action_still_releases_it() {
     );
     let result = released.result.unwrap_or_default();
     assert!(
-        result.contains("no executor") && result.contains("rerun"),
-        "the reason must name the verb this build cannot run: {result}"
+        result.contains("github_actions"),
+        "must prove the approval reached the LIVE executor, not the no-executor \
+         arm: only the executor's own refusal names the required source type, \
+         while the verb name appears in both messages: {result}"
     );
     assert!(
         event_kinds(&s, &last_id).contains(&"remediation_failed".to_string()),
@@ -484,4 +497,211 @@ fn an_approval_on_the_eleventh_parked_action_still_releases_it() {
              a budget fix shipped: {id}"
         );
     }
+}
+
+/// The write grant the fixtures below carry. A `SecretRef`-shaped string,
+/// because the executor forwards this field verbatim to the adapter and
+/// `FakeGithubRerunThroughTheDrain` asserts on it — a bare value here would
+/// make the forwarding assertion read like a token echo.
+const TEST_WRITE_GRANT: &str = "env:MUR_TEST_GH_WRITE_GRANT";
+/// A run the fake adapter reruns successfully, and one it refuses. Keyed on
+/// the reference rather than on a flag so one registry serves both cases.
+const RERUN_OK_REFERENCE: &str = "o/r/42";
+const RERUN_REFUSED_REFERENCE: &str = "o/r/FORBIDDEN";
+
+/// Stands in for `GithubActionsAdapter` inside a REAL `drain_actions` pass.
+///
+/// This double exists because the drain's happy path for a gated action is
+/// otherwise untestable: `rerun` is the only verb that is both above `Read`
+/// tier and has an executor, and the real adapter's success path is an HTTP
+/// POST. `observe` panics — the drain must never observe, and a fixture
+/// that silently fell back to polling would make the assertions below mean
+/// something else.
+struct FakeGithubRerunThroughTheDrain;
+
+impl SourceAdapter for FakeGithubRerunThroughTheDrain {
+    fn source_type(&self) -> SourceType {
+        SourceType::GithubActions
+    }
+    fn validate_reference(&self, _reference: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn observe(&self, _reference: &str, _credential_ref: Option<&str>) -> Observation {
+        panic!("the action drain must never observe a settled monitor")
+    }
+    fn rerun(&self, reference: &str, write_credential_ref: Option<&str>) -> Result<String, String> {
+        assert_eq!(
+            write_credential_ref,
+            Some(TEST_WRITE_GRANT),
+            "the drain must forward the spec's write grant, never the read credential"
+        );
+        if reference == RERUN_REFUSED_REFERENCE {
+            Err("forbidden (403) — the credential needs actions:write to rerun jobs".to_string())
+        } else {
+            Ok("rerun requested (http 201)".to_string())
+        }
+    }
+}
+
+fn github_registry() -> AdapterRegistry {
+    let mut r = AdapterRegistry::new();
+    r.register(Box::new(FakeGithubRerunThroughTheDrain));
+    r
+}
+
+/// A settled-`Failed` `github_actions` monitor whose single `on_failure`
+/// action is `rerun`, carrying the write grant that action needs.
+/// `spec_for` cannot build this: it hardcodes the reference and has no
+/// `write_credential_ref`.
+fn settled_github_rerun(
+    reference: &str,
+    max_attempts: u32,
+) -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    let spec = MonitorSpec::from_yaml(&format!(
+        "schema_version: 1\nname: t\n\
+         source: {{ type: github_actions, reference: {reference}, \
+         write_credential_ref: {TEST_WRITE_GRANT} }}\n\
+         actions:\n  on_failure:\n    - type: rerun\n\
+         policy:\n  max_remediation_attempts: {max_attempts}\n\
+         idempotency_key: k\ncreated_by: {{ actor: user:test }}\n"
+    ))
+    .unwrap();
+    let id = {
+        let s = MonitorStore::open(&home).unwrap();
+        settle_into(&s, &spec, Outcome::Failed)
+    };
+    (d, home, id)
+}
+
+/// Park the monitor's single `rerun`, approve it, and let the next tick
+/// run it — the drive shared by the two tests below, which differ only in
+/// what the adapter does when it is finally reached.
+fn park_approve_and_run(
+    home: &std::path::Path,
+    id: &str,
+) -> (ActionReport, MonitorRow, mur_monitor::store::ActionRow) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let reg = github_registry();
+    let first = drain_actions_with(home, rt.handle(), t0(), &reg).unwrap();
+    assert_eq!(
+        (first.executed, first.blocked, first.failed),
+        (0, 1, 0),
+        "a gated action must park before anything approves it"
+    );
+    {
+        let s = store(home);
+        let row = s.get(id).unwrap().unwrap();
+        assert_eq!(
+            row.remediation_attempts, 0,
+            "waiting for a human is not remediating"
+        );
+        approve(home, &row, "rerun", 0);
+    }
+    let second = drain_actions_with(home, rt.handle(), t0(), &reg).unwrap();
+    let s = store(home);
+    let row = s.get(id).unwrap().unwrap();
+    let action = s.actions_for(id).unwrap().remove(0);
+    (second, row, action)
+}
+
+/// F1, fix round 1. The feature's happy path through the drain — approval
+/// → attempt counted → executor `Ok` → post-attempt cap check →
+/// `maybe_complete_monitor` — which nothing on this branch or on `main`
+/// exercised, because `rerun` is the first verb that is both gated and
+/// runnable.
+///
+/// `max_remediation_attempts: 1` with `on_failure: [rerun]` is the natural
+/// spelling of "try exactly one rerun". The post-attempt cap check ran on
+/// every gated arm including `Ok`, so the one attempt hit the cap, the
+/// monitor was set `Exhausted` — final, since `maybe_complete_monitor`
+/// early-returns on any other state — an `exhausted` event was appended,
+/// and because `exhausted` is in `NOTIFIABLE` the user got a desktop
+/// notification saying MUR gave up, on the one occasion it did not.
+///
+/// `Completed` alone would NOT prove the fix: an action that ends `Failed`
+/// is also "settled", so a rerun that never reached the adapter would reach
+/// `Completed` too on a build where the cap check was simply deleted.
+/// Hence all four together — `Done`, the adapter's own confirmation in the
+/// result, no `exhausted` event, and the attempt still counted — plus the
+/// negative control below, which is the same fixture and the same cap with
+/// a refusing adapter and must still exhaust.
+#[test]
+fn a_gated_remedy_that_worked_completes_the_monitor_instead_of_saying_mur_gave_up() {
+    let (_d, home, id) = settled_github_rerun(RERUN_OK_REFERENCE, 1);
+    let (rep, row, action) = park_approve_and_run(&home, &id);
+
+    assert_eq!(
+        (rep.executed, rep.exhausted),
+        (1, 0),
+        "an approved remedy that worked is executed, not given up on"
+    );
+    assert_eq!(
+        action.state,
+        ActionState::Done,
+        "the approved rerun must reach the executor and succeed"
+    );
+    let result = action.result.unwrap_or_default();
+    assert!(
+        result.contains("rerun requested") && result.contains(RERUN_OK_REFERENCE),
+        "must carry the adapter's own confirmation and name the run, so a Done \
+         written without ever calling the adapter cannot pass: {result}"
+    );
+    assert_eq!(
+        row.remediation_attempts, row.spec.policy.max_remediation_attempts,
+        "the attempt itself is still counted — the fix is about the verdict, \
+         not about the count"
+    );
+    assert_eq!(
+        row.state,
+        MonitorState::Completed,
+        "a monitor whose only remedy succeeded is Completed, never Exhausted"
+    );
+    let kinds = event_kinds(&store(&home), &id);
+    assert!(
+        !kinds.contains(&"exhausted".to_string()),
+        "no `exhausted` event may be written after a remedy that worked — it \
+         is notifiable and tells the user MUR gave up: {kinds:?}"
+    );
+    assert!(
+        !kinds.contains(&"remediation_failed".to_string()),
+        "nothing failed to remediate here: {kinds:?}"
+    );
+}
+
+/// The negative control for the test above, and the reason it cannot pass
+/// on a build that simply deleted the cap check: identical fixture,
+/// identical cap of 1, identical approval — only the adapter refuses. The
+/// budget must still be spent and the monitor must still end `Exhausted`
+/// with the event that tells a human to `mur monitor retry`.
+#[test]
+fn a_gated_remedy_that_failed_still_exhausts_the_monitor_at_the_same_cap() {
+    let (_d, home, id) = settled_github_rerun(RERUN_REFUSED_REFERENCE, 1);
+    let (rep, row, action) = park_approve_and_run(&home, &id);
+
+    assert_eq!(
+        (rep.executed, rep.failed, rep.exhausted),
+        (0, 1, 1),
+        "a remedy that did not remediate spends the budget"
+    );
+    assert_eq!(action.state, ActionState::Failed);
+    let result = action.result.unwrap_or_default();
+    assert!(
+        result.contains("actions:write"),
+        "the reason must be the adapter's own refusal, not a generic one: {result}"
+    );
+    assert_eq!(row.remediation_attempts, 1);
+    assert_eq!(
+        row.state,
+        MonitorState::Exhausted,
+        "the cap must still be enforced on the arms that failed to remediate"
+    );
+    let kinds = event_kinds(&store(&home), &id);
+    assert!(
+        kinds.contains(&"exhausted".to_string())
+            && kinds.contains(&"remediation_failed".to_string()),
+        "a human must be told both that the remedy failed and that MUR stopped \
+         trying: {kinds:?}"
+    );
 }

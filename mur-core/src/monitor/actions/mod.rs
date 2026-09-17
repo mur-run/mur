@@ -5,6 +5,7 @@
 
 pub mod gate;
 pub mod local;
+pub mod rerun;
 
 use chrono::{DateTime, Utc};
 use mur_monitor::adapter::AdapterRegistry;
@@ -31,10 +32,12 @@ pub struct ActionCtx<'a> {
 pub trait ActionExecutor: Sync {
     fn verb(&self) -> &'static str;
     /// `Ok(summary)` → `ActionState::Done` with the summary as the stored
-    /// result; `Err(reason)` → `ActionState::Failed`. Must never panic and
-    /// must never touch the network beyond what `ActionCtx::registry`'s
-    /// adapters already do for an ordinary check cycle — this slice adds
-    /// no new credential scope.
+    /// result; `Err(reason)` → `ActionState::Failed`. Must never panic.
+    /// Every network call an executor makes must go through
+    /// `ActionCtx::registry`'s adapters — `notify`/`collect_logs` reuse the
+    /// same read-only credential an ordinary check cycle already has, but
+    /// `rerun` (Task 3) is a genuine new WRITE under its own separate grant
+    /// (`Source::write_credential_ref`), never a standing capability.
     fn run(
         &self,
         ctx: &ActionCtx<'_>,
@@ -44,8 +47,9 @@ pub trait ActionExecutor: Sync {
 
 static NOTIFY: local::Notify = local::Notify;
 static COLLECT: local::CollectLogs = local::CollectLogs;
+static RERUN: rerun::Rerun = rerun::Rerun;
 
-/// `None` means "this build cannot run that verb" — including `rerun`,
+/// `None` means "this build cannot run that verb" — including
 /// `start_downstream`, `apply_known_remedy` and `reschedule_monitor`, which
 /// are real entries in `mur_monitor::spec::KNOWN_ACTIONS` but have no local
 /// executor. Paired with Task 1's `risk::classify` fallback (`Privileged`
@@ -79,6 +83,7 @@ pub fn executor_for(verb: &str) -> Option<&'static dyn ActionExecutor> {
     match verb {
         "notify" => Some(&NOTIFY),
         "collect_logs" => Some(&COLLECT),
+        "rerun" => Some(&RERUN),
         _ => None,
     }
 }
@@ -339,8 +344,10 @@ mod tests {
     fn an_unknown_verb_has_no_executor() {
         // Pairs with Task 1's Privileged fallback: an unclassified verb is
         // both gated AND unrunnable. Two independent defences, on purpose.
+        // `rerun` moved out of this test in Task 3 — it now has an executor
+        // (see `every_executor_is_registered_under_the_verb_it_reports` and
+        // `rerun::tests`).
         assert!(executor_for("apply_known_remedy").is_none());
-        assert!(executor_for("rerun").is_none());
         assert!(executor_for("nonsense").is_none());
     }
 
@@ -376,7 +383,7 @@ mod tests {
         // would pass an `executor_for` stubbed to always return `None`.
         // This one requires every runnable verb to come back `Some` and
         // self-report the same verb they were looked up by.
-        for v in ["notify", "collect_logs"] {
+        for v in ["notify", "collect_logs", "rerun"] {
             assert_eq!(executor_for(v).unwrap().verb(), v);
         }
     }

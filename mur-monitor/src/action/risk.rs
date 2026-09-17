@@ -31,3 +31,13 @@ pub fn classify(action_type: &str) -> RiskTier {
         _ => RiskTier::Privileged,
     }
 }
+
+/// Does this verb perform an external WRITE that this build can actually
+/// execute? Deliberately not `classify(v) > Read`: `start_downstream` and
+/// `apply_known_remedy` are above `Read` and have no executor, so demanding
+/// a grant for them would refuse specs that validate today for a write that
+/// cannot happen. Adding an executor for either means adding it here too —
+/// they are two questions about one table and must not drift.
+pub fn needs_write_grant(action_type: &str) -> bool {
+    matches!(action_type, "rerun")
+}
