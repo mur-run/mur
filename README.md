@@ -799,24 +799,32 @@ your screen without costing the agent a turn — the transcript it sees stays cl
 ```
 /deep-research                 # status panel
 /deep-research ask <question>  # start a run, progress streams while you keep typing
+/deep-research <question>      # `ask` is optional — any other text is the question
 /deep-research stop            # end it (outcome = stopped)
 ```
 
-Agents reach it through the built-in `fleet_run` tool rather than the CLI. With
-`wait: false` the tool returns a handle within a second instead of holding the
-call open for the length of the run:
+`/deep-research setup` is the one verb the slash form does not run: it points you
+at `mur deep-research setup` in a terminal, because the wizard asks for egress
+consent.
+
+Agents reach it through the built-in `fleet_run` tool rather than the CLI. It
+never holds the call open for the length of a run — it dispatches and answers
+with a handle, always:
 
 ```
-fleet_run {fleet: "deep-research", goal: "<question>", wait: false}
-→ run_id: 019bd4c1-…            # first line, before preflight even starts
-mur_job_status <run_id>
+fleet_run {fleet: "deep-research", goal: "<question>"}
+→ {"run_id": "fleet-deep-research-019bd4c1-…", "status": "dispatched", …}
+mur_job_status fleet-deep-research-019bd4c1-…
 → run … — state: running, liveness: alive
   progress: iteration 2 · 3✓ 0✗ 2 pending · spend $0.31/$2.00
 ```
 
-`mur_job_status` answers from the run record while the run is live and falls back
-to the progress file by `run_id`, so a preflight that failed before any run
-existed still reports `state: failed` with its error instead of nothing.
+`mur_job_status` answers from the run record, and attaches that `progress:` line
+from the fleet's progress file only when the file's own `run_id` matches the id
+you asked about — so an earlier run's progress is never reported as this one's.
+A preflight that failed before any run record existed is not a `mur_job_status`
+answer at all (it says `no run recorded`); it shows up in the bare
+`mur deep-research` panel, which reads the progress file directly.
 
 Runs report progress: each step prints `✓ s2 research dr_worker_2 $0.08 42s` as it
 completes, every iteration ends with a summary (`iteration 2 done: 3✓ 0✗ 2 pending ·
