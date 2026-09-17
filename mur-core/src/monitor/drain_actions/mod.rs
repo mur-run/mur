@@ -205,13 +205,14 @@ fn record_approval_required(
 /// `dedup: true` still means one event per (monitor, cycle).
 ///
 /// `reason` is redacted here (L4, whole-branch review), same chokepoint
-/// `store_result` uses for `finish_action`'s `result` column: today only a
-/// fixed, secret-free string reaches this call (`executor_for(action_type)
-/// == None`), but the moment a gated verb gets a real executor, `reason`
-/// becomes that executor's own `Err` text — untrusted the same way
-/// `CollectLogs`'s evidence is — and `append_event` does no redaction of
-/// its own. Defence in depth, not reliance on every future executor
-/// remembering to redact its own errors.
+/// `store_result` uses for `finish_action`'s `result` column. When this was
+/// written only a fixed, secret-free string could reach it
+/// (`executor_for(action_type) == None`); `rerun` has an executor now, so
+/// `reason` is also that executor's own `Err` text — untrusted the same way
+/// `CollectLogs`'s evidence is, and carrying whatever the GitHub adapter
+/// put in it — while `append_event` does no redaction of its own. Defence
+/// in depth, not reliance on every future executor remembering to redact
+/// its own errors.
 fn record_remediation_failed(
     store: &MonitorStore,
     row: &MonitorRow,

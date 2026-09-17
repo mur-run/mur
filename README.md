@@ -849,12 +849,14 @@ own. Anything that would change something outside MUR stops and asks first:
 <hitl-id>` line that releases it, the request is pinned to that one action,
 and approving a different action never releases it. The wait has no clock —
 a parked approval does not expire and does not count against anything.
-Remediation itself does have a limit: MUR gives up after
-`policy.max_remediation_attempts` (default 3) failed remedies and marks the
-monitor `exhausted` rather than retrying forever. Kicking off downstream work
-and applying a known remedy are recognized action types but do not execute
-yet — approving one is recorded, and MUR says plainly that this build cannot
-carry it out, rather than pretending it did.
+Remediation itself does have a limit: MUR stops after
+`policy.max_remediation_attempts` (default 3) remedies that did not fix
+anything and marks the monitor `exhausted` rather than retrying forever. A
+remedy that worked ends the monitor `completed`, whatever the count is.
+Kicking off downstream work and applying a known remedy are recognized
+action types but do not execute yet — approving one is recorded, and MUR
+says plainly that this build cannot carry it out, rather than pretending it
+did.
 
 Rerunning a failed CI job does execute — the one write action this build
 carries out — but only for a GitHub Actions monitor, and only if its spec
@@ -862,12 +864,19 @@ grants a second credential, `source.write_credential_ref`, kept separate
 from the read-only `credential_ref` used to observe the run: `mur monitor
 add` refuses a spec that asks for `rerun` without one, at creation rather
 than after someone approves it, because approving an action isn't the same
-as consenting to a standing capability. It still stops and asks first like
+as consenting to a standing capability — and if the grant is there but
+doesn't resolve on this machine, `add` says so then, instead of letting you
+discover it after approving a remedy. It still stops and asks first like
 any write-tier action, reruns only the jobs that failed rather than the
 whole run, and the new run it starts is **not** itself monitored — register
 a second monitor if you want that one watched too. A rerun MUR could not
 even dispatch is a failed remediation attempt, not a verdict on the
-original work.
+original work. Monitors created before this release are unaffected: the
+grant is checked when a monitor is added, so nothing already in the database
+is refused or upgraded after the fact — an older monitor that asks for
+`rerun` without a grant keeps running and its rerun is refused if anyone
+approves one. There is no `mur monitor edit`; cancel it and add it again
+with the grant.
 
 A `mur fleet run` registers its own monitor for you automatically. When
 registration can't complete right away, the run still proceeds — it names

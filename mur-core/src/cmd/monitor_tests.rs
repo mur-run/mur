@@ -12,6 +12,13 @@ use mur_monitor::store::{ListFilter, MonitorStore};
 #[path = "monitor_tests/write_grant.rs"]
 mod write_grant;
 
+/// A `rerun` executor refusal, copied from `actions/rerun.rs`'s own
+/// message, used as the stored `result` of the failed action in
+/// `home_with_settled_actions`. Spelled once so the fixture and the
+/// assertion cannot drift apart.
+const RERUN_REFUSED_FOR_SOURCE: &str =
+    "rerun is only supported for github_actions sources; this monitor's source is `mur_run`";
+
 fn t0() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 0).unwrap()
 }
@@ -116,7 +123,11 @@ fn home_with_settled_actions() -> (tempfile::TempDir, String) {
     s.claim_action(&failed_key, &id, &cyc, RiskTier::Write, t0())
         .unwrap();
     s.block_action(&failed_key, "hitl-irrelevant-3").unwrap();
-    s.finish_action(&failed_key, ActionState::Failed, "no executor for `rerun`")
+    // The reason a `rerun` on THIS fixture really fails now that the verb
+    // has an executor: the monitor's source is `mur_run`, which has nothing
+    // to rerun. It used to read "no executor for `rerun`" — a row production
+    // can no longer produce, so the fixture depicted an impossible monitor.
+    s.finish_action(&failed_key, ActionState::Failed, RERUN_REFUSED_FOR_SOURCE)
         .unwrap();
     (d, id)
 }
@@ -745,7 +756,7 @@ fn show_renders_an_actions_recorded_result() {
     let (d, id) = home_with_settled_actions();
     let out = go(d.path(), MonitorAction::Show { id, history: false }).unwrap();
     assert!(
-        out.contains("no executor for `rerun`"),
+        out.contains(RERUN_REFUSED_FOR_SOURCE),
         "the failed action's reason must be visible without --history: {out}"
     );
     assert!(

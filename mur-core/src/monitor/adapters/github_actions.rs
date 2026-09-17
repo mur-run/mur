@@ -584,8 +584,12 @@ mod tests {
     }
 
     #[test]
-    fn a_rerun_accepted_reports_which_run_it_restarted() {
-        // GitHub answers 201 with an empty body on success.
+    fn an_accepted_rerun_classifies_as_success() {
+        // GitHub answers 201 with an empty body on success. `classify_rerun`
+        // has no reference, so it structurally cannot name WHICH run — that
+        // is the executor's job one layer up, asserted by
+        // `a_successful_rerun_records_the_new_run_and_says_it_is_unwatched`
+        // in `actions/rerun.rs`. Named for what this checks (F7).
         let out = classify_rerun(201, "").unwrap();
         assert!(out.contains("rerun"), "{out}");
     }
