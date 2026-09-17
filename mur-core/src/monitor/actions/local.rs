@@ -43,16 +43,7 @@ impl ActionExecutor for Notify {
     fn run(&self, ctx: &ActionCtx<'_>, params: &Map<String, Value>) -> Result<String, String> {
         let mut payload = Value::Object(params.clone());
         mur_common::redact::redact_value(&mut payload);
-        ctx.store
-            .append_event(
-                &ctx.row.id,
-                &ctx.row.cycle_id,
-                "action_notify",
-                payload,
-                false,
-                ctx.now,
-            )
-            .map_err(|e| e.to_string())?;
+        ctx.events.append("action_notify", payload)?;
         Ok(format!("queued action_notify for monitor {}", ctx.row.id))
     }
 }
