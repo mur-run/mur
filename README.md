@@ -460,6 +460,15 @@ Agent** wizard offers the same catalog as a source.
   folded into the rule. Reads never have to stop the run: `--auto-reads` covers
   `read_file` and provably read-only shell commands, in the TUI and in
   `--plain` alike.
+- **Nobody watching is not permission** — a durable monitor acting on what it
+  found asks the same way. Reading its evidence runs unattended; anything that
+  would change something outside MUR parks a request pinned to that exact
+  action, and the monitor waits in `awaiting-approval` for as long as it takes
+  — approvals defer, they never time out into acting alone. `mur monitor show`
+  prints the command that releases it. A monitor's read credential is not its
+  write credential either: restarting a CI run needs a second grant the spec
+  states outright, so watching something never quietly becomes touching it.
+
 - **Credentials the model never sees** — `/secret <KEY>` in `mur agent cli`
   reads a token through a hidden prompt, stores it in the OS keychain, and
   hands it to the running agent without a restart. The model is told the name
@@ -733,7 +742,7 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (29 top-level commands)</summary>
+<summary><b>Full command tree</b> (34 top-level commands)</summary>
 
 ```
 mur
@@ -745,6 +754,7 @@ mur
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · set-loop · limits · send · jobs   (squads of agents over a shared channel)
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source)
+├── monitor      add · list · show · cancel · retry   (durable monitors for work that outlives the turn: CI runs, MUR runs, subprocesses)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
 ├── deep-research  setup · status · ask   (web research with wizard UX)
 ├── skill        install · search · show · doctor · generate · suggest · evolve · recombine ·
@@ -761,6 +771,9 @@ mur
 ├── source       external knowledge — Obsidian · Notion · Joplin
 ├── project      index · search   (semantic code search)
 ├── daemon       start · stop · restart · status · serve · sleep
+├── dashboard    terminal dashboard
+├── browser      record · replay · auth · broker · list · show · export · status   (browser work through Playwright MCP)
+├── commander    pin · status · directive   (governance: pin the operator key, issue and inspect directives)
 ├── auth         login · logout
 ├── team         shared skills (private registries)
 ├── push / fetch signal outbox / inbox ↔ server
