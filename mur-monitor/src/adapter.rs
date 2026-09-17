@@ -1,6 +1,11 @@
 //! What an adapter hands back, and the trait every source implements.
-//! Read-only by construction: nothing on `SourceAdapter` can mutate the
-//! source (spec: custom adapters "預設只讀"; actions are plan-2).
+//! `observe`/`validate_reference` are read-only by construction — nothing
+//! on those two can mutate the source (spec: custom adapters "預設只讀").
+//! `rerun` is plan-2's one opt-in exception: it defaults to refusing (so
+//! every existing adapter stays read-only with no code change) and only
+//! `GithubActionsAdapter` (`mur-core`) overrides it, gated on its own
+//! separate `write_credential_ref` grant — see
+//! `mur-core/src/monitor/actions/rerun.rs`.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -87,6 +92,22 @@ pub trait SourceAdapter: Send + Sync {
     fn validate_reference(&self, reference: &str) -> Result<(), String>;
     /// One read-only query. Must never panic and never block unbounded.
     fn observe(&self, reference: &str, credential_ref: Option<&str>) -> Observation;
+    /// Restart whatever failed. `write_credential_ref` is the monitor's
+    /// separate write grant (`Source::write_credential_ref`) — never the
+    /// read-only `credential_ref` a plain `observe` uses. The default
+    /// refuses: only an adapter that explicitly supports a write overrides
+    /// this, so adding this method could not silently make any existing
+    /// adapter (including test doubles) able to mutate its source.
+    fn rerun(
+        &self,
+        _reference: &str,
+        _write_credential_ref: Option<&str>,
+    ) -> Result<String, String> {
+        Err(format!(
+            "source type `{}` does not support rerun",
+            self.source_type().as_str()
+        ))
+    }
 }
 
 #[derive(Default)]

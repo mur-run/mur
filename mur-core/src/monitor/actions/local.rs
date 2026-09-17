@@ -1,6 +1,9 @@
-//! The action executors this build can actually run (spec §行動執行器,
-//! plan-2 Task 3): `notify` and `collect_logs`. Both are Read-risk-tier and
-//! runnable without HITL — see `mur_monitor::action::risk::classify`.
+//! The LOCAL action executors (spec §行動執行器, plan-2 Task 3): `notify`
+//! and `collect_logs`. Both are Read-risk-tier and runnable without HITL —
+//! see `mur_monitor::action::risk::classify`. They are not the whole set
+//! this build can run: `rerun` is a Write-tier executor and lives in the
+//! sibling `rerun.rs` precisely because it leaves the machine. The
+//! authoritative list is `executor_for` in this module's parent.
 //!
 //! `reschedule_monitor` used to live here as a third executor and was
 //! removed by the whole-branch review's H1: it wrote `Sleeping` onto a

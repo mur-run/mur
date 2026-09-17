@@ -4,11 +4,13 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use clap::Subcommand;
 use mur_common::hitl::RiskTier;
+use mur_common::secret::SecretRef;
 use mur_monitor::action::ActionState;
 use mur_monitor::spec::MonitorSpec;
 use mur_monitor::state::MonitorState;
@@ -128,6 +130,35 @@ fn add(
         bail!(
             "{err} — fix the credential reference before adding; a monitor that can never query is not created"
         );
+    }
+    // Rule 3 applied to the write grant (F2, whole-branch review). The read
+    // credential one field over gets a live probe; this one gets a resolve
+    // and nothing more — proving it grants *write* scope would mean
+    // performing an actual write, which nobody has approved at `add` time.
+    // Resolving catches the typo and the missing key, which is the failure
+    // that otherwise surfaces only AFTER a human approves the rerun:
+    // approving something that was never going to run is worse than a clear
+    // refusal.
+    //
+    // Warn, never bail. `resolve_to_string_blocking` answers `None` for "no
+    // such key" and for "the backend was unavailable" alike (a locked
+    // keychain, a headless box), so a refusal here would reject valid specs
+    // for something the user cannot fix at that moment. Echoing the
+    // reference is safe: `spec.validate()` above already refused anything
+    // that is not a parseable `SecretRef`, so what is printed is provably a
+    // reference and not a value.
+    if let Some(grant) = &spec.source.write_credential_ref
+        && SecretRef::from_str(grant)
+            .ok()
+            .and_then(|r| r.resolve_to_string_blocking())
+            .is_none()
+    {
+        writeln!(
+            out,
+            "warning: source.write_credential_ref `{grant}` does not resolve on this \
+             machine — an approved remedy would fail when it runs. Set the secret, or \
+             fix the reference and re-add."
+        )?;
     }
     let started = match started_at {
         Some(s) => Some(

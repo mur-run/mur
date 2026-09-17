@@ -79,7 +79,8 @@ name: wait-for-ci
 source:
   type: github_actions       # github_actions | mur_run | codex | claude_code | custom
   reference: owner/repo/run-id
-  credential_ref: github-default  # 只存引用，不存 secret
+  credential_ref: keychain:mur/github-default      # 只存引用，不存 secret（唯讀）
+  write_credential_ref: keychain:mur/github-write  # 只有需要寫入來源的 action 才需要；缺少時帶 rerun 的 spec 在建立時被拒絕
 
 outcomes:
   success: completed && conclusion == success
