@@ -640,6 +640,77 @@ pub(crate) fn drain_actions_with(
             // is not the list the row came from.
             continue;
         }
+        // A resolver-proposed row carries its own action, because the
+        // index in its key names no slot in the spec's list — resolving it
+        // below would retire it as drifted on the first tick after it was
+        // claimed. Handled before the list lookup for that reason, not as an
+        // optimisation.
+        if let Some(json) = action_row.proposed_action.as_deref() {
+            let proposed: mur_monitor::spec::Action = match serde_json::from_str(json) {
+                Ok(a) => a,
+                Err(e) => {
+                    // Unreadable proposal: retire rather than guess. The row
+                    // can never resolve — its action is the only record of
+                    // what it was for, and re-consulting the model here
+                    // would spend a second call on a cycle already budgeted
+                    // for one.
+                    retire_drifted_action(
+                        &store,
+                        &row,
+                        &action_row.action_key,
+                        &format!("stored proposal could not be read back: {e}"),
+                        now,
+                        &mut rep,
+                    )?;
+                    continue;
+                }
+            };
+            if proposed.r#type != verb {
+                // The key and the stored action disagree. Nothing writes the
+                // two separately, so this is corruption rather than drift —
+                // still not something to resolve by picking one.
+                retire_drifted_action(
+                    &store,
+                    &row,
+                    &action_row.action_key,
+                    &format!(
+                        "action key named verb `{verb}` but the stored proposal says                          `{}`",
+                        proposed.r#type
+                    ),
+                    now,
+                    &mut rep,
+                )?;
+                continue;
+            }
+            *spend -= 1;
+            if let Err(error) = attempt_action(
+                &store,
+                registry,
+                handle,
+                mur_home,
+                &row,
+                &action_row.action_key,
+                &proposed.r#type,
+                index,
+                &proposed.params,
+                now,
+                &mut rep,
+            ) {
+                tracing::warn!(
+                    monitor = %row.id,
+                    action = %verb,
+                    %error,
+                    "monitor: proposed action failed to process; other monitors continue"
+                );
+            }
+            // Mirrors the tail of the list-resolved path below: `continue`
+            // would otherwise skip it, leaving a monitor whose last action
+            // just settled sitting in `ActionPending` until the next tick.
+            if let Some(fresh) = store.get(&row.id)? {
+                maybe_complete_monitor(&store, &fresh, now)?;
+            }
+            continue;
+        }
         let current_list = actions_for_outcome(&row);
         let Some(action) = current_list.get(index) else {
             // The index this key recorded no longer exists in the current
