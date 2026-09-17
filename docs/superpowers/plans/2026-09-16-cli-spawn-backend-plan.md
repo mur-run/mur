@@ -428,7 +428,10 @@ None` to its constructor, beside the other optional fields.
                         prompt: &text_of(&spec.input),
                     })
                     .await
-                    .map_err(|e| task_error("cli_spawn_failed", &format!("{e}")))?;
+                    // `recoverable: false` — a spawn that failed to start,
+                    // or a CLI that exited non-zero, does not become healthy
+                    // by running the same turn again.
+                    .map_err(|e| task_error("cli_spawn_failed", format!("{e}"), false))?;
                     Ok((text_response(&reply), None))
                 }
 ```
@@ -457,7 +460,11 @@ Expected: compiles.
   - [ ] `grep -c ToolExecutor mur-agent-runtime/src/cli_spawn.rs` is `0`.
   - [ ] A spawn's `system init` reports MUR's tools **and nothing else**
         (`--output-format stream-json --verbose`, read the `tools` array).
-  - [ ] The user's `~/.claude` is byte-identical before and after a spawn.
+  - [ ] The user's **credentials and settings** are byte-identical before and
+        after a spawn — `~/.claude/.credentials.json` and
+        `~/.claude/settings.json`. Not all of `~/.claude`: the Q4 decision
+        accepts that a spawn writes a transcript, and measuring the whole
+        tree would fail for the thing we chose.
 
 - [ ] Update the test that pinned the old reason — it asserts
       `reason.contains("spawn path")`, which no longer holds:
@@ -496,7 +503,7 @@ cargo clippy --all --all-targets --no-deps -- -D warnings && cargo fmt --check
 - [ ] `cargo test -p mur-agent-runtime cli_spawn` — 4 passed.
 - [ ] `execute_is_called_from_guarded_only` — passes.
 - [ ] A real spawn answers, with MUR's tools and only MUR's tools mounted.
-- [ ] `~/.claude` unchanged by a spawn.
+- [ ] `~/.claude/.credentials.json` and `settings.json` unchanged by a spawn.
 - [ ] `cargo clippy --all --all-targets --no-deps -- -D warnings` — clean.
       `--all-targets` is load-bearing: without it clippy never reads test
       code, which is how #1355 passed locally and failed CI.

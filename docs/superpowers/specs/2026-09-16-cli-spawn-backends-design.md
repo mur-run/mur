@@ -167,8 +167,17 @@ from the Keychain alone and a private home costs a real re-authentication.
 
 **Write.** Each `claude` turn writes into the user's `~/.claude`: a session
 transcript at `projects/<escaped-cwd>/<uuid>.jsonl`, an entry under
-`session-env/<uuid>`, and a touch of `plugins/cache/.../.in_use`. Known and
-accepted. The transcript is keyed by the **spawn cwd**, not by MUR — measured
+`session-env/<uuid>`, a touch of `plugins/cache/.../.in_use`, a touch of
+`skills/synced/<id>/manifest.json`, and — measured after this list was first
+written, which is why it is spelled out rather than summarised — an update to
+`~/.claude.json` bumping `pluginUsage.<plugin>.usageCount` / `lastUsedAt` and
+`cachedGrowthBookFeaturesAt`.
+
+What it does **not** write is the part worth asserting: `.credentials.json`
+and `settings.json` are byte-identical across a spawn. So the line to hold is
+not "the user's home is untouched" — it demonstrably is touched — but "the
+user's credentials and settings are untouched", which is checkable and true.
+Known and accepted. The transcript is keyed by the **spawn cwd**, not by MUR — measured
 by spawning from two directories and getting two `projects/` entries named
 after each — so an agent working inside one of the user's repositories puts
 its turns into that repository's `claude --resume` history, interleaved with

@@ -89,6 +89,10 @@ pub enum RunnerBackend {
     /// message so the user sees exactly what to fix.
     Misconfigured(String),
     Llm(Arc<dyn LlmClient>),
+    /// The turn runs inside a spawned coding CLI, which owns the loop while
+    /// MUR owns the tools. Not an `LlmClient`: there is no completion call to
+    /// make here, so it cannot be one of those.
+    CliSpawn(&'static mur_common::cli_backend::CliBackend),
 }
 
 /// Cap on task-state entries retained in memory. Oldest entries are evicted
@@ -429,6 +433,7 @@ pub struct TaskRunner {
     iteration_ceiling: u32,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
+    socket_path: Option<std::path::PathBuf>,
     /// Credentials the user handed the agent. Names go into the system prompt;
     /// values are masked out of every tool result. `None` = no vault (stubs).
     secrets: Option<Arc<crate::secrets::SecretVault>>,
@@ -575,6 +580,7 @@ impl TaskRunner {
             iteration_ceiling: ITERATION_CEILING,
             tools: vec![],
             tools_policy: vec![],
+            socket_path: None,
             secrets: None,
             bash_jobs: None,
             effort: std::sync::RwLock::new(None),
@@ -664,6 +670,16 @@ impl TaskRunner {
 
     pub fn with_tools(mut self, tools: Vec<Arc<dyn crate::tools::ToolExecutor>>) -> Self {
         self.tools = tools;
+        self
+    }
+
+    /// The agent's own socket, so a spawned CLI's shim can dial back in.
+    ///
+    /// Carried rather than derived: the runner has no profile, and the bound
+    /// path is not always the canonical one — `socket_path::resolve_bind_target`
+    /// relocates a long path to /tmp and symlinks it.
+    pub fn with_socket_path(mut self, p: std::path::PathBuf) -> Self {
+        self.socket_path = Some(p);
         self
     }
 
@@ -1197,6 +1213,37 @@ impl TaskRunner {
                     Ok((echo_response(&spec.input), None))
                 }
                 RunnerBackend::Misconfigured(message) => Ok((text_response(message), None)),
+                RunnerBackend::CliSpawn(backend) => {
+                    let Some(socket) = self.socket_path.clone() else {
+                        // Fail closed and say why: without the socket the
+                        // shim cannot dial back, so the CLI would run with
+                        // no MUR tools at all — a working-looking turn with
+                        // none of the guarantees.
+                        return Ok((
+                            text_response(
+                                "cli-spawn backend has no agent socket configured; refusing to spawn",
+                            ),
+                            None,
+                        ));
+                    };
+                    let shim = std::env::current_exe()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| "mur-agent-runtime".to_string());
+                    let reply = crate::cli_spawn::run_turn(crate::cli_spawn::SpawnRequest {
+                        backend,
+                        mur_home: &mur_common::trust::mur_home(),
+                        shim_bin: &shim,
+                        socket: &socket,
+                        task_id: &id,
+                        prompt: &text_of(&spec.input),
+                    })
+                    .await
+                    // `recoverable: false` — a spawn that failed to start,
+                    // or a CLI that exited non-zero, does not become healthy
+                    // by running the same turn again.
+                    .map_err(|e| task_error("cli_spawn_failed", format!("{e}"), false))?;
+                    Ok((text_response(&reply), None))
+                }
                 RunnerBackend::Llm(client) => {
                     if self.pending_approvals.is_some() {
                         let mut system = self
