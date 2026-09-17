@@ -22,8 +22,58 @@ use mur_monitor::store::{MonitorRow, MonitorStore};
 /// (`mur_core::monitor::registry`, used by `service::tick_once`). Building
 /// it once per tick and passing it down here — rather than reconstructing
 /// it per action — mirrors that existing call shape. See task-3-report.md.
+/// The only thing an executor may write.
+///
+/// Executors used to receive `&MonitorStore`, which is every write in the
+/// crate — including the ones that return a settled monitor to a claimable
+/// state. That is exactly how the `reschedule_monitor` executor un-froze a
+/// monitor's fence and made the whole action list re-run every ~10 s,
+/// unbounded and silent, until a whole-branch review found it. The fix at
+/// the time was to delete that executor; the hazard it proved is that
+/// nothing *stopped* an executor from doing it, and a comment saying "do
+/// not" is not a mechanism.
+///
+/// Appending an event is the entire store surface the three shipped
+/// executors need. Handing over only that makes the rule structural: an
+/// executor cannot write a monitor's state because it cannot reach the
+/// method. It also removes four arguments `Notify` used to pass by hand and
+/// could have passed wrongly — the monitor, the cycle and the clock now come
+/// from the drain, which is the only place that knows them.
+pub struct EventWriter<'a> {
+    store: &'a MonitorStore,
+    row: &'a MonitorRow,
+    now: DateTime<Utc>,
+}
+
+impl<'a> EventWriter<'a> {
+    pub fn new(store: &'a MonitorStore, row: &'a MonitorRow, now: DateTime<Utc>) -> Self {
+        Self { store, row, now }
+    }
+
+    /// Append one event to this monitor's history, in its current cycle.
+    ///
+    /// `dedup: false` deliberately: the transition guards that write
+    /// deduplicated events live in the scheduler, not in an action. An
+    /// action firing twice is a claim bug, and silently swallowing the
+    /// second write would hide it.
+    pub fn append(&self, kind: &'static str, payload: serde_json::Value) -> Result<(), String> {
+        self.store
+            .append_event(
+                &self.row.id,
+                &self.row.cycle_id,
+                kind,
+                payload,
+                false,
+                self.now,
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 pub struct ActionCtx<'a> {
-    pub store: &'a MonitorStore,
+    /// Narrow by construction — see `EventWriter`. Not `&MonitorStore`.
+    pub events: EventWriter<'a>,
     pub row: &'a MonitorRow,
     pub now: DateTime<Utc>,
     pub registry: &'a AdapterRegistry,
@@ -202,7 +252,7 @@ mod tests {
         let (_d, s, row) = fixture();
         let reg = AdapterRegistry::default();
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg,
@@ -230,7 +280,7 @@ mod tests {
         let (_d, s, row) = fixture();
         let reg = AdapterRegistry::default();
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg,
@@ -274,7 +324,7 @@ mod tests {
         let (_d, s, row, reg) =
             fixture_with_evidence("token=ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA ok");
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg,
@@ -316,7 +366,7 @@ mod tests {
             "credential rejected: token=ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         );
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg,

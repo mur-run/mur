@@ -407,7 +407,7 @@ fn attempt_action(
                 }
                 Some(exec) => {
                     let ctx = ActionCtx {
-                        store,
+                        events: crate::monitor::actions::EventWriter::new(store, row, now),
                         row,
                         now,
                         registry,
