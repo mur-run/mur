@@ -513,3 +513,59 @@ fn a_key_yields_both_its_verb_and_its_index() {
     assert_eq!(verb_and_index_from_key(&key), Some(("rerun", 3)));
     assert_eq!(verb_and_index_from_key("nonsense"), None);
 }
+
+/// The settle guard only does anything when the resolver is ON, and every
+/// other test in this file runs with it OFF — so without this one, a fully
+/// green suite would prove only that a disabled feature is inert. It was
+/// written after exactly that happened: a green run that stayed green when
+/// the Phase-1 stamp was silently missing from the file.
+///
+/// Asserts both directions in one monitor: held on the tick its action
+/// failed, released on the next. The release matters as much as the hold —
+/// a consultation that could not happen (no model is configured here) must
+/// still let the monitor settle, or an unreachable resolver would strand
+/// every failed monitor on the machine.
+#[test]
+fn an_enabled_resolver_holds_a_failed_cycle_open_for_exactly_one_tick() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    std::fs::write(
+        home.join("config.yaml"),
+        "monitor_resolver:\n  enabled: true\n",
+    )
+    .unwrap();
+
+    let id = {
+        let s = MonitorStore::open(&home).unwrap();
+        settle_into(
+            &s,
+            // `reschedule_monitor` is classified but has no executor, so its
+            // action reliably ends `Failed` — the condition the guard reads.
+            &spec_for(
+                "mur_run",
+                &["reschedule_monitor"],
+                Outcome::Failed,
+                "k-resolver-hold",
+                "",
+            ),
+            Outcome::Failed,
+        )
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!(
+        store(&home).get(&id).unwrap().unwrap().state,
+        MonitorState::ActionPending,
+        "a failed cycle must wait for its consultation rather than completing \
+         in the same tick its last action failed"
+    );
+
+    drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!(
+        store(&home).get(&id).unwrap().unwrap().state,
+        MonitorState::Completed,
+        "once the cycle is stamped consulted the monitor must settle, whatever \
+         the consultation produced"
+    );
+}
