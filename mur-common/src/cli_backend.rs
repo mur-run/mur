@@ -198,6 +198,28 @@ pub fn mcp_config_json(
     })
 }
 
+/// Marks a model registry `provider` as naming the CLI-spawn track.
+///
+/// The gateway track already selects on `provider` (`claude` and `codex`
+/// dispatch to loopback clients), so the CLI track uses the same field
+/// rather than inventing a second way to say which track an agent is on.
+/// The prefix keeps the two readable side by side — `claude` is the
+/// gateway, `cli:claude` is the spawn — and cannot be confused with a
+/// vendor slug, which a `-cli` suffix would have to be parsed off a name
+/// that may itself contain dashes.
+pub const PROVIDER_PREFIX: &str = "cli:";
+
+/// The backend a registry `provider` names, if it names one.
+///
+/// Returns the row whether or not it is enabled. Activation is the caller's
+/// gate to apply and to report: a disabled backend must produce a turn that
+/// explains itself, which it cannot do if this returns `None` and the
+/// provider merely looks unknown.
+pub fn from_provider(provider: &str) -> Option<&'static CliBackend> {
+    let key = provider.strip_prefix(PROVIDER_PREFIX)?;
+    backend(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +439,40 @@ mod tests {
         // surface. A second entry here would be a second unaudited source.
         let v = mcp_config_json("bin", std::path::Path::new("/s"), "t");
         assert_eq!(v["mcpServers"].as_object().expect("obj").len(), 1);
+    }
+
+    #[test]
+    fn a_prefixed_provider_names_the_backend() {
+        assert_eq!(from_provider("cli:claude").map(|b| b.key), Some("claude"));
+    }
+
+    #[test]
+    fn the_gateway_providers_are_not_the_cli_track() {
+        // `claude` and `codex` already mean the loopback gateway. If this
+        // ever matched them, putting an agent on the gateway would silently
+        // spawn a CLI instead.
+        assert!(from_provider("claude").is_none());
+        assert!(from_provider("codex").is_none());
+        assert!(from_provider("openai").is_none());
+    }
+
+    #[test]
+    fn an_unknown_backend_is_none_even_when_prefixed() {
+        assert!(from_provider("cli:agy").is_none());
+        assert!(from_provider("cli:nope").is_none());
+    }
+
+    #[test]
+    fn a_disabled_backend_still_resolves() {
+        // The caller needs the row to report *why* it is off. Returning
+        // `None` would make a disabled backend indistinguishable from a typo.
+        let disabled = CliBackend {
+            activation: Activation::Disabled {
+                reason: "for the test",
+            },
+            ..CLAUDE
+        };
+        assert!(matches!(disabled.activation, Activation::Disabled { .. }));
+        assert!(from_provider("cli:claude").is_some());
     }
 }
