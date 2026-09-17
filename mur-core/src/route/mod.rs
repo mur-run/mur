@@ -258,7 +258,7 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mur_common::model::RoleEntry;
+    use mur_common::model::{ModelEntry, RoleEntry};
 
     fn test_registry() -> ModelRegistry {
         let mut reg = ModelRegistry::default();

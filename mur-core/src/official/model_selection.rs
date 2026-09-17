@@ -11,6 +11,7 @@ use std::{cmp::Ordering, collections::HashSet};
 pub const MAX_FALLBACKS: usize = 3;
 const STALE_PRICE_AFTER: Duration = Duration::days(60);
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelSelectionPolicy {
