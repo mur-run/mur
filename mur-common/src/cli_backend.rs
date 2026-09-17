@@ -165,6 +165,40 @@ pub fn ensure_home(
     Ok((b.home_env_var, dir))
 }
 
+/// The flags that make a spawned CLI see MUR's tools and nothing else.
+///
+/// One constant, not three arguments assembled at the call site. Measured
+/// 2026-09-16: `--tools ""` alone still left 44 tools mounted — every MCP
+/// server in the user's own config — and none of those pass MUR's handler,
+/// entitlements or HITL gate. `--strict-mcp-config` is what empties the
+/// list, so the three travel together or the isolation is not there.
+pub const ISOLATION_FLAGS: &[&str] = &["--tools", "", "--strict-mcp-config"];
+
+/// The `--mcp-config` document for one turn.
+///
+/// Names the shim, the agent socket it dials back on, and the task it
+/// belongs to. `task_id` is what binds a spawned `bash` job to an owner and
+/// routes an approval prompt, so it is an argument rather than something the
+/// shim could infer.
+pub fn mcp_config_json(
+    shim_bin: &str,
+    socket: &std::path::Path,
+    task_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "mcpServers": {
+            "mur": {
+                "command": shim_bin,
+                "args": [
+                    "mcp-shim",
+                    "--socket", socket.to_string_lossy(),
+                    "--task-id", task_id,
+                ],
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +379,41 @@ mod tests {
                 .exists()
         );
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn the_isolation_flags_stay_together() {
+        // Each of the three is load-bearing and the middle row of the table
+        // in the plan is why: dropping --strict-mcp-config re-mounts the
+        // user's own MCP servers, and the spawn still looks correct.
+        assert_eq!(ISOLATION_FLAGS, &["--tools", "", "--strict-mcp-config"]);
+    }
+
+    #[test]
+    fn the_mcp_config_names_the_shim_the_socket_and_the_task() {
+        let v = mcp_config_json(
+            "/usr/local/bin/mur_agent_x",
+            std::path::Path::new("/tmp/x/agent.sock"),
+            "t-9",
+        );
+        let s = &v["mcpServers"]["mur"];
+        assert_eq!(s["command"], "/usr/local/bin/mur_agent_x");
+        let args: Vec<String> = s["args"]
+            .as_array()
+            .expect("args")
+            .iter()
+            .map(|a| a.as_str().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(args[0], "mcp-shim");
+        assert!(args.contains(&"/tmp/x/agent.sock".to_string()));
+        assert!(args.contains(&"t-9".to_string()));
+    }
+
+    #[test]
+    fn the_config_declares_exactly_one_server() {
+        // `--strict-mcp-config` means this document is the whole tool
+        // surface. A second entry here would be a second unaudited source.
+        let v = mcp_config_json("bin", std::path::Path::new("/s"), "t");
+        assert_eq!(v["mcpServers"].as_object().expect("obj").len(), 1);
     }
 }
