@@ -298,6 +298,11 @@ pub struct Config {
     /// means log-only: `desktop` is opt-in.
     #[serde(default)]
     pub notifications: NotificationsConfig,
+
+    /// AgentResolver (`monitor_resolver:`), spec §混合處置策略 step 3.
+    /// Absent means off — see [`MonitorResolverConfig`].
+    #[serde(default)]
+    pub monitor_resolver: MonitorResolverConfig,
 }
 
 /// Rotation for `~/.mur/queue/events.jsonl`, in the shape FreeBSD's
@@ -361,6 +366,32 @@ pub struct NotificationsConfig {
     /// popping banners on upgrade is a hostile default.
     #[serde(default)]
     pub desktop: bool,
+}
+
+/// Whether the durable monitor may ask a model what to do about a terminal
+/// failure the structured rules did not settle.
+///
+/// Off by default, and not merely as a courtesy: enabling it lets a
+/// background daemon send monitor context to a model on its own schedule,
+/// with no one watching. Nobody watching is not permission, so this is a
+/// decision a user makes once, explicitly, rather than something an upgrade
+/// makes for them.
+///
+/// The bound on how often it may ask is NOT here: one proposal per
+/// observation cycle is an invariant of the design, not a knob (see
+/// `mur_core::monitor::resolver`). A tunable would let a user turn a bounded
+/// feature into an unbounded one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MonitorResolverConfig {
+    /// Opt-in. While false, nothing in the resolver path runs and no request
+    /// leaves the machine.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Which model to ask. `None` uses the same backend `mur chat` resolves,
+    /// so a user who has already configured one does not configure it twice.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Run-status heartbeat tuning. Both values are config, never literals at a
@@ -2857,5 +2888,37 @@ mod notifications_config_tests {
         // Every user upgrading has a config.yaml with no `notifications:` key.
         let c: Config = serde_yaml::from_str("retrieval:\n  min_score: 0.42\n").unwrap();
         assert!(!c.notifications.desktop);
+    }
+
+    /// The whole safety argument for the resolver rests on this one bit: an
+    /// upgrade must never start letting the daemon talk to a model. Asserted
+    /// from both an empty config and a realistic existing one, because the
+    /// failure that matters is an upgrade, not a fresh install.
+    #[test]
+    fn the_monitor_resolver_is_off_until_a_user_turns_it_on() {
+        let empty: Config = serde_yaml::from_str("{}").unwrap();
+        assert!(
+            !empty.monitor_resolver.enabled,
+            "asking a model must be opt-in"
+        );
+        assert!(empty.monitor_resolver.model.is_none());
+
+        let upgraded: Config = serde_yaml::from_str(
+            "retrieval:\n  min_score: 0.42\nnotifications:\n  desktop: true\n",
+        )
+        .unwrap();
+        assert!(
+            !upgraded.monitor_resolver.enabled,
+            "a config written before this feature existed must not enable it"
+        );
+    }
+
+    #[test]
+    fn the_monitor_resolver_reads_back_what_a_user_wrote() {
+        let c: Config =
+            serde_yaml::from_str("monitor_resolver:\n  enabled: true\n  model: claude_haiku\n")
+                .unwrap();
+        assert!(c.monitor_resolver.enabled);
+        assert_eq!(c.monitor_resolver.model.as_deref(), Some("claude_haiku"));
     }
 }
