@@ -72,9 +72,39 @@ use std::process::{Child, Command};
 /// mechanism entirely — confinement applied by an ancestor that was never
 /// sealed, or a primitive other than Seatbelt — and not a launcher.
 ///
-/// Linux is untested here and may differ: Landlock rulesets are designed to
-/// stack restrictively, so the single-threaded launcher may still be the
-/// answer there. That asymmetry has to be measured before it is relied on.
+/// **Linux does differ, and it was measured.** On a 5.15 kernel with
+/// `landlock` in `/sys/kernel/security/lsm`, a process that has already
+/// called `landlock_restrict_self` may call it again, and the second call is
+/// accepted:
+///
+/// ```text
+/// layer 1: allow writes only under /tmp/nest/a
+///     write /tmp/nest/a/one              ALLOWED
+///     write /tmp/nest/b/one              Permission denied
+/// layer 2 (nested): allow writes only under /tmp/nest/b
+///   layer 2 apply: ACCEPTED
+///     write /tmp/nest/a/two              Permission denied
+///     write /tmp/nest/b/two              Permission denied
+/// ```
+///
+/// So the single-threaded pre-fork launcher IS the answer on Linux, and the
+/// asymmetry with macOS is real: there the second apply is refused outright,
+/// here it is accepted.
+///
+/// One property of that acceptance shapes what a launcher may do. Stacking
+/// **intersects**, it does not replace: after layer 2 neither directory is
+/// writable, because each layer forbids what the other granted. A child's
+/// policy can therefore only ever be a subset of its parent's — a launcher
+/// cannot grant a child something the agent itself lacks. That is exactly
+/// what the CLI-spawn shaping wants ("tighter than the agent, not equal to
+/// it"), but it is a constraint rather than a coincidence, and a design that
+/// assumed replacement would be wrong here.
+///
+/// The probe used raw syscalls: that kernel ships no `linux/landlock.h`.
+/// Getting the access bits right mattered — the first run used `1ULL << 3`
+/// for `WRITE_FILE` (that is `READ_DIR`) and omitted `MAKE_REG`, so layer 1
+/// restricted nothing and every write was allowed. A stacking result read off
+/// that run would have measured nothing.
 ///
 /// Until then the granularity is per-agent, not per-server; the confinement
 /// itself is real.
