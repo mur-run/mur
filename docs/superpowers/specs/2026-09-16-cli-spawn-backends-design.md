@@ -249,6 +249,33 @@ any residual unmediated actions must be documented and explicitly accepted;
 labels alone are not enforcement. If these restrictions cannot be enforced or
 verified, CLI spawn remains disabled rather than falling back to weaker flags.
 
+### The sandbox is not the missing piece
+
+An earlier reading of this section — including the reason on `codex`'s
+registry row — treated it as "no such sandbox exists". One does.
+`mur-agent-runtime/src/sandbox/` is roughly 5,000 lines: a Seatbelt profile on
+macOS, Landlock and seccomp on Linux, an egress proxy, and a `SandboxPolicy`
+carrying exactly the axes this section asks for — `fs_read`, `fs_write`,
+`fs_deny`, `net_allow_ports`, `net_allow_loopback_ports`, and the spawn
+controls. `sandbox::child::spawn_sandboxed` is the entry point, and
+`protocol/mcp_client.rs` already runs every MCP server subprocess through it.
+`child.rs` documents that a macOS seatbelt sandbox is inherited across
+`fork` + `exec`, which is the inheritance requirement above.
+
+So the gap is narrower and more tractable than "build a sandbox":
+
+1. `cli_spawn.rs` does not use it — zero mentions of `sandbox` in the file.
+2. The policy has to be *shaped* for this case, and the shaping is the real
+   design work: a spawned `codex` needs its model endpoint and the MUR socket,
+   and needs the project files an agent was asked to work on, while everything
+   else stays denied.
+3. The requirement is **verified**, not merely applied. A policy that is
+   constructed and then not asserted is the "labels alone" this section
+   already refuses.
+
+Point 2 is where the difficulty actually lives. The other two are wiring.
+
+
 The agent's status and Hub panel must disclose that built-in shell execution
 is unmediated, identify the verified sandbox boundaries, and avoid claiming
 that read-only mode prevents HITL bypass. MUR's gate still protects calls

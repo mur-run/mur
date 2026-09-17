@@ -118,7 +118,7 @@ pub const CODEX: CliBackend = CliBackend {
     mcp_mount: McpMount::Persistent,
     home_env_var: "CODEX_HOME",
     activation: Activation::Disabled {
-        reason: "codex's built-in shell cannot be disabled and no verified process sandbox exists",
+        reason: "codex's built-in shell cannot be disabled and the spawn path does not yet apply MUR's sandbox to it",
     },
     capability_notes: "prompt arrives on stdin; --json emits completed items \
                        with no incremental deltas; MCP mounts persistently, so \
@@ -527,6 +527,11 @@ mod tests {
         match c.activation {
             Activation::Disabled { reason } => {
                 assert!(reason.contains("sandbox"), "{reason}");
+                // Not "no sandbox exists" — one does, in
+                // `mur-agent-runtime/src/sandbox/`. What is missing is its
+                // application to the spawn path, and the reason must say
+                // which, or it sends the next reader off to build one.
+                assert!(reason.contains("does not yet apply"), "{reason}");
                 assert!(reason.contains("shell"), "{reason}");
             }
             Activation::Enabled => panic!("codex must not be enabled without a verified sandbox"),
