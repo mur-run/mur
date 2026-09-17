@@ -316,6 +316,32 @@ support: `macos.rs` carries `unix_socket_allow_paths()`, and its comment names
 "the agent socket dialed for A2A" as exactly the case a blanket
 `(deny network-outbound)` must not catch.
 
+### The blocker the shaping runs into
+
+The table above is a *per-child* policy, and `spawn_sandboxed` cannot apply
+one today. Its own comment says so:
+
+> `cage.spawn(birdcage_cmd)` would enforce the policy above, but requires a
+> dedicated single-threaded pre-fork process. For now the cage is built to
+> document intent.
+
+It constructs the `birdcage` exceptions from the policy, drops the cage, and
+calls `cmd.spawn()`. A child is confined by **inheriting the parent's**
+sandbox — Landlock and seccomp on Linux, seatbelt across `fork`+`exec` on
+macOS — which is real confinement, but it is the agent runtime's policy, not
+a narrower one chosen for this child.
+
+That matters exactly here. Inheritance gives the spawned `codex` whatever the
+agent process itself may do, which is the "equal to the agent" outcome this
+section rejects. Narrowing is the entire design, and narrowing is the part
+that is not wired.
+
+Demonstrated rather than deduced: a test that grants one directory, denies a
+sibling, and spawns `/bin/sh` writing to both finds **the denied write
+lands**. It ships `#[ignore]`d as the acceptance test for per-child
+enforcement — it should start passing the day the pre-fork launcher does, and
+until then it is the difference between a comment and a fact.
+
 ### What still has to be proved
 
 Shaping is a claim until it is asserted. Before `codex` is enabled, each row
