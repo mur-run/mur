@@ -83,11 +83,17 @@ fn add_warns_when_the_write_grant_does_not_resolve() {
 /// resolvable with no env var and no keychain prompt.
 #[test]
 fn add_says_nothing_about_a_write_grant_that_resolves() {
-    use std::os::unix::fs::PermissionsExt;
     let d = home();
     let secret = d.path().join("gh-write.token");
     std::fs::write(&secret, "ghp_not_a_real_token\n").unwrap();
-    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // `resolve_file` refuses a group/world-readable secret — on unix only,
+    // where a default-umask file would be 0644 and this test would then be
+    // green for the wrong reason (unresolvable, like the test above).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 
     let out = add_with_grant(d.path(), &format!("file:{}", secret.display()));
     assert!(
