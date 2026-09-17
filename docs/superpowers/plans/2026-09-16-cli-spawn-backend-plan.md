@@ -10,7 +10,14 @@
 ### Global Constraints
 
 - **No second execution path.** The tripwire stays green; the CLI's tools reach MUR only through the shim and `GuardedToolCall`.
-- The user's own CLI configuration is never read or written. Every spawn uses the private home.
+- **Read:** with `CLAUDE_CONFIG_DIR` unset, the spawn uses the user's own
+  login. Deliberate — it is what removes the second login.
+- **Write:** each turn writes a session transcript to the user's
+  `~/.claude/projects/<escaped-spawn-cwd>/<uuid>.jsonl`, plus a
+  `session-env/` entry and an `.in_use` touch. Known and accepted; no flag
+  disables it (checked against `claude` 2.1.274).
+- **Isolation:** comes from `--tools "" --strict-mcp-config`, never from the
+  home. A private home is an optional override behind `claude_home()`.
 - `--tools ""`, `--strict-mcp-config` and `--mcp-config` travel together. Dropping `--strict-mcp-config` re-mounts the user's own MCP servers — measured at 44 tools on this machine — none of which pass MUR's gate.
 - Fail closed. A spawn that cannot be isolated does not run.
 
@@ -185,7 +192,7 @@ testable without spawning anything.
 //! See `docs/superpowers/specs/2026-09-16-cli-spawn-backends-design.md`.
 
 use mur_common::cli_backend::{CliBackend, ISOLATION_FLAGS, ensure_home, mcp_config_json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct SpawnRequest<'a> {
     pub backend: &'a CliBackend,
@@ -224,9 +231,32 @@ pub fn reply_from_stream_json(lines: &str) -> String {
     out
 }
 
+/// The private home for this backend, or `None` to use the user's own.
+///
+/// The single place the decision lives. `claude` returns `None` today: tool
+/// isolation comes from the flags, so a private home would buy only
+/// lifecycle uniformity across backends, and uniformity is not worth
+/// charging the user a second login for. `agy` has no home variable at all,
+/// so its answer is different and belongs here rather than in an `if` at the
+/// spawn site.
+///
+/// Changing this decision is this function plus nothing else.
+fn claude_home(
+    mur_home: &Path,
+    backend: &CliBackend,
+) -> anyhow::Result<Option<(&'static str, PathBuf)>> {
+    if backend.key == "claude" {
+        return Ok(None);
+    }
+    Ok(Some(ensure_home(mur_home, backend)?))
+}
+
 pub async fn run_turn(req: SpawnRequest<'_>) -> anyhow::Result<String> {
-    let (home_var, home) = ensure_home(req.mur_home, req.backend)?;
-    let cfg_path = home.join("mur-mcp.json");
+    let home = claude_home(req.mur_home, req.backend)?;
+    // The MCP config is ours either way; it never goes near the user's home.
+    let cfg_dir = req.mur_home.join("cli-homes").join(req.backend.key);
+    std::fs::create_dir_all(&cfg_dir)?;
+    let cfg_path = cfg_dir.join("mur-mcp.json");
     std::fs::write(
         &cfg_path,
         serde_json::to_vec_pretty(&mcp_config_json(req.shim_bin, req.socket, req.task_id))?,
@@ -238,10 +268,12 @@ pub async fn run_turn(req: SpawnRequest<'_>) -> anyhow::Result<String> {
         .args(ISOLATION_FLAGS)
         .arg("--mcp-config")
         .arg(&cfg_path)
-        // The private home, so the spawn never reads or writes the user's own
-        // CLI configuration.
-        .env(home_var, &home)
-        .stdin(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::piped());
+    // Injected only when there is one — the whole decision is `claude_home`.
+    if let Some((var, path)) = &home {
+        cmd.env(var, path);
+    }
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 

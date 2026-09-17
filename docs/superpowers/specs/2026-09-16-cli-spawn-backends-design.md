@@ -151,9 +151,48 @@ Two facts force this:
    of their own CLI**. This is precisely why `mur-model-gateway` is the sole
    token holder today.
 
-So each spawn backend gets its own home under `~/.mur/cli-homes/<backend>/`.
-MUR's MCP config is written **once into that home**. The user's own CLI
-configuration is never read or written.
+So a private home under `~/.mur/cli-homes/<backend>/` remains available, and
+for `agy` it is the only option. For `claude` it is **not the default**, and
+the three sentences below replace the one this section used to carry ("the
+user's own CLI configuration is never read or written"), which the default
+contradicts. Each is stated so it can be checked rather than believed.
+
+**Read.** With `CLAUDE_CONFIG_DIR` unset, a spawn reads the user's own login
+from `~/.claude`. Deliberate, not a gap: it is what removes the second login.
+Measured — a private `CLAUDE_CONFIG_DIR` pointed at an empty directory
+answers `Not logged in · Please run /login`, so the credential does not come
+from the Keychain alone and a private home costs a real re-authentication.
+*Checkable:* `claude_home()` returns `None`, and the spawn sets no
+`CLAUDE_CONFIG_DIR`.
+
+**Write.** Each `claude` turn writes into the user's `~/.claude`: a session
+transcript at `projects/<escaped-cwd>/<uuid>.jsonl`, an entry under
+`session-env/<uuid>`, and a touch of `plugins/cache/.../.in_use`. Known and
+accepted. The transcript is keyed by the **spawn cwd**, not by MUR — measured
+by spawning from two directories and getting two `projects/` entries named
+after each — so an agent working inside one of the user's repositories puts
+its turns into that repository's `claude --resume` history, interleaved with
+the user's own. Agents need the project's files, so the cwd is not free to
+move; this is a cost to know, not one to design around yet.
+
+The `.in_use` marker is different in kind and should not be read as history:
+it is a concurrency lock, so a user's own `claude` session running at the
+same time as a MUR turn contends on the same marker.
+
+*Checkable:* there is no flag or environment variable that disables session
+persistence. Verified against `claude` 2.1.274 by scanning every
+`CLAUDE_CODE_DISABLE_*` string in the binary and filtering for
+session/transcript/history/persist/log/project/save/write — one unrelated
+hit — and by reading `--help`. If a future version adds one, the Write
+paragraph is what changes.
+
+**Isolation.** Tool isolation does not come from the home. It comes from
+`--tools "" --strict-mcp-config --mcp-config <ours>`, which reports
+`tools: []` before MUR mounts its own — including against the user's own
+home. A private home is an optional override with exactly one entry point,
+`claude_home()`, so switching this decision is one implementation rather
+than a condition spread across the spawn path. *Checkable:* the spawn's
+`system init` lists MUR's tools and nothing else.
 
 The lever differs per backend, and `agy`'s is blunt: `CODEX_HOME` and
 `CLAUDE_CONFIG_DIR` relocate one CLI's config, but agy has no such variable,
