@@ -152,12 +152,20 @@ fn consult_failed_cycles(
         // and, if the fault is persistent, do it at the same monitor every
         // tick — except the stamp is already written, so completion still
         // proceeds. Failing to consult is never failing the monitor.
-        if let Err(error) = consult_one(store, mur_home, handle, &row, &cycle_rows, &cfg, now) {
-            tracing::warn!(
-                monitor = %row.id,
-                %error,
-                "monitor: resolver consultation failed; the monitor settles without it"
-            );
+        match consult_one(store, mur_home, handle, &row, &cycle_rows, &cfg, now) {
+            // No reopen on this path: the monitor is already `ActionPending`,
+            // held there by the settle guard.
+            Ok(Some(proposal)) => {
+                apply_proposal(store, &row, &proposal, now)?;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    monitor = %row.id,
+                    %error,
+                    "monitor: resolver consultation failed; the monitor settles without it"
+                );
+            }
         }
     }
 
@@ -203,13 +211,10 @@ fn consult_failed_cycles(
             continue;
         }
         match consult_one(store, mur_home, handle, &row, &[], &cfg, now) {
-            // A proposal exists but the monitor is `Completed`, where Phase 2
-            // skips it. Reopen so the action can run; `maybe_complete_monitor`
-            // settles it again once the action does.
-            Ok(true) => {
-                store.set_state(&row.id, MonitorState::ActionPending, now)?;
+            Ok(Some(proposal)) => {
+                apply_proposal_reopening(store, &row, &proposal, now)?;
             }
-            Ok(false) => {}
+            Ok(None) => {}
             Err(error) => {
                 tracing::warn!(
                     monitor = %row.id,
@@ -222,10 +227,11 @@ fn consult_failed_cycles(
     Ok(())
 }
 
-/// One consultation, already stamped and known to be enabled. `Ok(true)`
-/// when a proposal was claimed — the empty-list caller needs to know,
-/// because its monitor is already `Completed` and has to be reopened for the
-/// action to run at all.
+/// One consultation, already stamped and known to be enabled. Returns the
+/// proposal WITHOUT applying it: the two callers apply it differently — the
+/// empty-list one has to reopen a `Completed` monitor as well — and keeping
+/// the split here is also what gives the reopen a test seam, since this
+/// function builds its own model adapter and cannot be driven from a test.
 fn consult_one(
     store: &MonitorStore,
     mur_home: &Path,
@@ -234,7 +240,7 @@ fn consult_one(
     cycle_rows: &[mur_monitor::store::ActionRow],
     cfg: &mur_common::config::Config,
     now: DateTime<Utc>,
-) -> Result<bool> {
+) -> Result<Option<super::resolver::Proposal>> {
     use super::resolver;
 
     let attempted: Vec<String> = cycle_rows
@@ -281,10 +287,22 @@ fn consult_one(
                 true,
                 now,
             )?;
-            return Ok(false);
+            return Ok(None);
         }
     };
 
+    Ok(Some(proposal))
+}
+
+/// Claim a proposal and record it. `Ok(true)` only for the call that created
+/// the row — same `INSERT OR IGNORE` contract as every other action, so a
+/// restart does not re-run the side effect.
+fn apply_proposal(
+    store: &MonitorStore,
+    row: &MonitorRow,
+    proposal: &super::resolver::Proposal,
+    now: DateTime<Utc>,
+) -> Result<bool> {
     // Index one past the spec list, so the key cannot collide with a
     // spec-produced row. Phase 2 never resolves this index against the list
     // anyway — it sees `proposed_action` first — but the key must still be
@@ -321,6 +339,32 @@ fn consult_one(
         now,
     )?;
     Ok(true)
+}
+
+/// The empty-list path's tail: claim, then reopen the monitor so the action
+/// can actually run.
+///
+/// The monitor is `Completed` — the scheduler settles an empty-action-list
+/// terminal outright — and Phase 2 skips `Completed` rows, so without the
+/// reopen the proposal would sit claimed and unrunnable forever.
+///
+/// Reopening to `ActionPending` is safe for one reason and it is worth
+/// stating where the code does it: `is_claimable` is `Active | Sleeping`
+/// only, so this does NOT hand the monitor back to the scheduler.
+/// `reschedule_monitor` wrote `Sleeping` — which is claimable — and re-ran
+/// the whole action list on every poll. `maybe_complete_monitor` settles it
+/// again once the action finishes.
+pub(crate) fn apply_proposal_reopening(
+    store: &MonitorStore,
+    row: &MonitorRow,
+    proposal: &super::resolver::Proposal,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    let claimed = apply_proposal(store, row, proposal, now)?;
+    if claimed {
+        store.set_state(&row.id, MonitorState::ActionPending, now)?;
+    }
+    Ok(claimed)
 }
 
 /// Stamped once per (monitor, cycle) by the consultation pass — including
