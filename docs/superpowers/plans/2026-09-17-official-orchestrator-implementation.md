@@ -210,10 +210,10 @@ pub fn validate_explicit_selection(
 ) -> anyhow::Result<ModelSelectionPlan>;
 ```
 
-- [ ] **Step 1: Pin current provider inference and cost behavior with failing/characterization tests.** Cover every alias currently present in `mur-core/src/route/mod.rs` and `mur-common/src/muragent/model_class.rs`, billing inference for ollama/claude/codex/unknown, legacy one-sided costs, unknown costs, and prove `pick_cheap_model` ranks by the 4,000-input/1,000-output projection rather than output-only price.
-- [ ] **Step 2: Extract shared helpers in `mur-common/src/model.rs`.** Make `billing_or_inferred`, `pick_cheap_model`, `mur-core::route`, and `muragent::model_class` consume them; delete private `LOCAL_PROVIDERS` tables only after characterization tests pass.
-- [ ] **Step 3: Create `model_selection.rs` with table-driven failing tests** for every planner bullet in the spec: tier, context, local tie-break, billing classes, known/unknown cost, privacy exclusion, explicit missing tools, legacy empty capabilities warning, minimum context exclusion, catalog verification, stable key order, deduplication, and `MAX_FALLBACKS`.
-- [ ] **Step 4: Prove red.**
+- [x] **Step 1: Pin current provider inference and cost behavior with failing/characterization tests.** Cover every alias currently present in `mur-core/src/route/mod.rs` and `mur-common/src/muragent/model_class.rs`, billing inference for ollama/claude/codex/unknown, legacy one-sided costs, unknown costs, and prove `pick_cheap_model` ranks by the 4,000-input/1,000-output projection rather than output-only price.
+- [x] **Step 2: Extract shared helpers in `mur-common/src/model.rs`.** Make `billing_or_inferred`, `pick_cheap_model`, `mur-core::route`, and `muragent::model_class` consume them; delete private `LOCAL_PROVIDERS` tables only after characterization tests pass.
+- [x] **Step 3: Create `model_selection.rs` with table-driven failing tests** for every planner bullet in the spec: tier, context, local tie-break, billing classes, known/unknown cost, privacy exclusion, explicit missing tools, legacy empty capabilities warning, minimum context exclusion, catalog verification, stable key order, deduplication, and `MAX_FALLBACKS`.
+- [x] **Step 4: Prove red.**
 
 ```bash
 cargo nextest run -p mur-common -E 'test(/(provider_inference|projected_cost|pick_cheap_model)/)'
@@ -222,9 +222,9 @@ MUR_WEB_DIST=/tmp/mur-web-dist cargo nextest run -p mur-core -E 'test(model_sele
 
 Expected: planner tests fail because ranking is not implemented.
 
-- [ ] **Step 5: Implement one eligibility pass and one total comparator per policy.** Provider/model must be non-empty. `capabilities.is_empty()` is legacy unknown; otherwise required names must be present. A hard context minimum excludes `None` and too-small values. Cost-first orders `Local < Subscription < UsageBilled`; inside usage-billed compare `entry.projected_cost(4_000, 1_000)`, with `None` after every known value. Capability-first orders `Frontier` before `Local`, then known/larger context, then local billing. Every comparator ends with catalog verification, explicit tools, and registry key ascending. Sort once, choose the first as primary, and take at most three distinct remaining refs.
-- [ ] **Step 6: Mutation-check unknown price and shared cost drift.** Temporarily map `None` cost to `0.0`; confirm `unknown_cost_is_not_free` fails; temporarily restore output-only ranking in `pick_cheap_model` and confirm its 4:1 parity test fails; restore and rerun.
-- [ ] **Step 7: Run all focused tests and Clippy.**
+- [x] **Step 5: Implement one eligibility pass and one total comparator per policy.** Provider/model must be non-empty. `capabilities.is_empty()` is legacy unknown; otherwise required names must be present. A hard context minimum excludes `None` and too-small values. Cost-first orders `Local < Subscription < UsageBilled`; inside usage-billed compare `entry.projected_cost(4_000, 1_000)`, with `None` after every known value. Capability-first orders `Frontier` before `Local`, then known/larger context, then local billing. Every comparator ends with catalog verification, explicit tools, and registry key ascending. Sort once, choose the first as primary, and take at most three distinct remaining refs.
+- [x] **Step 6: Mutation-check unknown price and shared cost drift.** Temporarily map `None` cost to `0.0`; confirm `unknown_cost_is_not_free` fails; temporarily restore output-only ranking in `pick_cheap_model` and confirm its 4:1 parity test fails; restore and rerun.
+- [x] **Step 7: Run all focused tests and Clippy.**
 
 ```bash
 cargo nextest run -p mur-common -E 'test(/(model|model_class)/)'
@@ -232,7 +232,7 @@ MUR_WEB_DIST=/tmp/mur-web-dist cargo nextest run -p mur-core -E 'test(model_sele
 MUR_WEB_DIST=/tmp/mur-web-dist cargo clippy -p mur-common -p mur-core --all-targets -- -D warnings
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add mur-common/src/{model.rs,muragent/model_class.rs} mur-core/src/route/mod.rs mur-core/src/official/{mod.rs,model_selection.rs}
@@ -283,7 +283,7 @@ MUR_WEB_DIST=/tmp/mur-web-dist cargo nextest run -p mur-core -E 'test(official_i
 - [ ] **Step 5: Add rollback guard.** Before import, snapshot an existing same-name Agent directory into a temp directory; record whether it was absent. On any post-import error, remove a newly-created directory or restore the snapshot. Disarm the guard only after the profile save succeeds. License persistence may remain; the approved spec allows that. Existing package collision checks remain authoritative.
 - [ ] **Step 6: Re-read `models.yaml` immediately before profile commit**, validate every selected ref again, set `profile.model_ref`, `profile.fallback_chain`, and inline `profile.model` from the primary registry entry. For `PrivacyFirst`, also set per-agent routing and Smart `enabled: Some(false)` overrides; other policies preserve package overrides. Serialize once and call `cmd::agent::save_profile`, which performs temp-file + rename. Never call the printing `cmd_agent_set_fallback` path.
 - [ ] **Step 7: Run focused tests and mutation-check rollback.** Force the post-import revalidation test hook to return an unknown ref; verify both fresh and update rollback tests fail if the guard is disabled, then restore it.
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add mur-core/src/official/install.rs mur-core/src/cmd/agent/{mod.rs,install.rs}
@@ -461,7 +461,7 @@ cargo nextest run -p mur-agent-runtime -E 'test(/llm/) or test(/fallback/)'
 cargo clippy -p mur-agent-runtime --all-targets -- -D warnings
 ```
 
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 ```bash
 git add mur-agent-runtime/src/llm/{mod.rs,anthropic.rs,openai/mod.rs,fallback/mod.rs,claude.rs,codex.rs}
