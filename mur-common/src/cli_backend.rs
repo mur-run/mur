@@ -93,9 +93,41 @@ pub const CLAUDE: CliBackend = CliBackend {
                        servers; --strict-mcp-config is what empties the tool list",
 };
 
+/// `codex`, measured at 0.154.0 by running it (#1339).
+///
+/// Disabled, and for a reason no probe can close. Its shell is core — there
+/// is no flag that removes it, and `-s read-only` restricts the filesystem
+/// rather than establishing action safety — so a spawned `codex` can execute
+/// commands that never pass MUR's handler, entitlements or HITL gate. The
+/// design admits it only behind a *verified* process sandbox inherited by
+/// child processes, and no such sandbox exists yet.
+///
+/// It has a row rather than being absent because absence says nothing. A
+/// user who has `codex` installed should see it listed with this reason, not
+/// silently missing — the same lesson as the subscription rail in #1334.
+///
+/// `stream_flags` is `--json`, not `--output-format stream-json`: measured,
+/// and it carries completed items only, so a codex-backed turn cannot stream
+/// partial output even once the sandbox exists.
+pub const CODEX: CliBackend = CliBackend {
+    key: "codex",
+    binary: "codex",
+    headless_invocation: &["exec"],
+    stream_flags: &["--json"],
+    tool_disable_flags: &[],
+    mcp_mount: McpMount::Persistent,
+    home_env_var: "CODEX_HOME",
+    activation: Activation::Disabled {
+        reason: "codex's built-in shell cannot be disabled and no verified process sandbox exists",
+    },
+    capability_notes: "prompt arrives on stdin; --json emits completed items \
+                       with no incremental deltas; MCP mounts persistently, so \
+                       a per-turn config must be written into the private home",
+};
+
 /// Every backend whose record is complete. Absence is a statement: a CLI
 /// missing here has an unanswered probe, not a missing implementation.
-pub const REGISTRY: &[CliBackend] = &[CLAUDE];
+pub const REGISTRY: &[CliBackend] = &[CLAUDE, CODEX];
 
 /// Look up a backend by key.
 pub fn backend(key: &str) -> Option<&'static CliBackend> {
@@ -277,14 +309,19 @@ mod tests {
 
     #[test]
     fn unprobed_backends_are_absent_rather_than_guessed() {
+        // Both probes are answered (#1339); what differs is what the answers
+        // did. `codex`'s made a row possible — it has all five required
+        // fields — so it is registered and disabled, not absent.
+        //
+        // `agy`'s answer is what keeps it out, and structurally: it has no
+        // home environment variable at all, only `HOME`, so there is no
+        // honest value for `home_env_var` and the completeness rule above
+        // would reject the row. Absence here is the measurement, not a gap.
         assert!(
             backend("agy").is_none(),
-            "agy's home env var is open question 1"
+            "agy has no home env var — only HOME — so no row can be complete"
         );
-        assert!(
-            backend("codex").is_none(),
-            "codex's stream envelope is open question 2"
-        );
+        assert!(backend("codex").is_some(), "codex's record is complete");
     }
 
     #[test]
@@ -311,10 +348,15 @@ mod tests {
 
     #[test]
     fn a_present_binary_is_listed_with_the_path_that_was_resolved() {
+        // Every registered backend, each carrying the path the resolver gave
+        // for it. Asserted over the whole registry rather than over a count,
+        // so adding a row does not break a test about path plumbing.
         let got = available(found);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].backend.key, "claude");
-        assert_eq!(got[0].path, PathBuf::from("/opt/homebrew/bin/claude"));
+        assert_eq!(got.len(), REGISTRY.len());
+        for a in &got {
+            assert_eq!(a.path, PathBuf::from("/opt/homebrew/bin/claude"));
+        }
+        assert!(got.iter().any(|a| a.backend.key == "claude"));
     }
 
     #[test]
@@ -474,5 +516,34 @@ mod tests {
         };
         assert!(matches!(disabled.activation, Activation::Disabled { .. }));
         assert!(from_provider("cli:claude").is_some());
+    }
+
+    #[test]
+    fn codex_is_listed_and_never_usable() {
+        // The distinction the registry exists to express: present, so a user
+        // with `codex` installed sees it and its reason; not usable, because
+        // its shell cannot be disabled and no verified sandbox exists.
+        let c = backend("codex").expect("codex is registered");
+        match c.activation {
+            Activation::Disabled { reason } => {
+                assert!(reason.contains("sandbox"), "{reason}");
+                assert!(reason.contains("shell"), "{reason}");
+            }
+            Activation::Enabled => panic!("codex must not be enabled without a verified sandbox"),
+        }
+        assert!(
+            available(found)
+                .iter()
+                .any(|a| a.backend.key == "codex" && !a.usable)
+        );
+    }
+
+    #[test]
+    fn cli_codex_resolves_so_the_refusal_can_name_itself() {
+        // An agent pointed at `cli:codex` must get "disabled, and here is
+        // why" — not the unknown-provider path, which reads as a typo. This
+        // is the guard that was deferred while `from_provider` lived on an
+        // unmerged branch; it belongs beside the row it protects.
+        assert_eq!(from_provider("cli:codex").map(|b| b.key), Some("codex"));
     }
 }
