@@ -388,24 +388,24 @@ pub async fn official_install(
 
 The backend replans/revalidates on install; the preview is never an authority.
 
-- [ ] **Step 1: Add Rust DTO/command tests** proving plan and install deserialize kebab-case policy values and return identical plans for the same registry. Add React tests with mocked `invoke`: an item requiring a newer MUR shows an upgrade error and cannot preview/install; selecting a compatible item with requirements opens policy UI; choosing privacy calls `official_plan_models`; preview renders primary/fallback/warnings; confirm calls `official_install`; no-requirement items retain one-click install; no-candidate errors remain on the policy stage.
-- [ ] **Step 2: Prove red.**
+- [x] **Step 1: Add Rust DTO/command tests** proving plan and install deserialize kebab-case policy values and return identical plans for the same registry. Add React tests with mocked `invoke`: an item requiring a newer MUR shows an upgrade error and cannot preview/install; selecting a compatible item with requirements opens policy UI; choosing privacy calls `official_plan_models`; preview renders primary/fallback/warnings; confirm calls `official_install`; no-requirement items retain one-click install; no-candidate errors remain on the policy stage.
+- [x] **Step 2: Prove red.**
 
 ```bash
 MUR_WEB_DIST=/tmp/mur-web-dist cargo nextest run -p mur-hub-gui -E 'test(official)'
 cd mur-hub-gui/ui && npm test -- SpecOfficial.test.tsx
 ```
 
-- [ ] **Step 3: Implement the state machine** `select-item -> select-policy/preview -> confirm/install`. The item DTO includes optional requirements. Add localized labels/descriptions for all policies and warnings in both locale files. Never sort models in TypeScript.
-- [ ] **Step 4: Register the command and remove the temporary compatibility installer wrapper** after all callers use options.
-- [ ] **Step 5: Run tests, lint, and build.**
+- [x] **Step 3: Implement the state machine** `select-item -> select-policy/preview -> confirm/install`. The item DTO includes optional requirements. Add localized labels/descriptions for all policies and warnings in both locale files. Never sort models in TypeScript.
+- [x] **Step 4: Register the command and remove the temporary compatibility installer wrapper** after all callers use options.
+- [x] **Step 5: Run tests, lint, and build.**
 
 ```bash
 MUR_WEB_DIST=/tmp/mur-web-dist cargo nextest run -p mur-hub-gui -E 'test(official)'
 cd mur-hub-gui/ui && npm test -- SpecOfficial.test.tsx && npm run lint && npm run build
 ```
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
 ```bash
 git add mur-hub-gui/src-tauri/src/{official_catalog.rs,lib.rs} \

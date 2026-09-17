@@ -60,12 +60,6 @@ pub struct InstallOutcome {
     pub model_selection: Option<ModelSelectionPlan>,
 }
 
-/// Compatibility entry point retained until every front-end supplies options.
-#[allow(dead_code)]
-pub async fn install_item_unchanged(id: &str) -> Result<InstallOutcome> {
-    install_item(id, &OfficialInstallOptions::default()).await
-}
-
 /// Download and install `id` (`agents/<name>` or `fleets/<name>`).
 pub async fn install_item(id: &str, options: &OfficialInstallOptions) -> Result<InstallOutcome> {
     let tokens =

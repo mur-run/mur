@@ -164,18 +164,7 @@ pub(crate) async fn cmd_official_install(
 }
 
 fn ensure_client_compatible(minimum: Option<&str>) -> Result<()> {
-    let Some(minimum) = minimum else {
-        return Ok(());
-    };
-    let required = semver::Version::parse(minimum)
-        .map_err(|error| anyhow::anyhow!("invalid catalog min_mur_version '{minimum}': {error}"))?;
-    let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
-    if current < required {
-        bail!(
-            "this item requires MUR {required} or newer; upgrade MUR before installing (current {current})"
-        );
-    }
-    Ok(())
+    crate::official::client::ensure_client_compatible(minimum)
 }
 
 fn print_outcome(outcome: &InstallOutcome) {
