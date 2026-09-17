@@ -1313,6 +1313,10 @@ impl TaskRunner {
                         socket: &socket,
                         task_id: &id,
                         prompt: &text_of(&spec.input),
+                        // The same sink the gateway track writes to. A spawned
+                        // turn is watchable for the same reason and by the same
+                        // frame; murmur needs no knowledge of which track ran.
+                        deltas: sink,
                     })
                     .await
                     // `recoverable: false` — a spawn that failed to start,
