@@ -69,9 +69,16 @@ pub struct CliBackend {
 /// are the pair, and `--strict-mcp-config` is load-bearing. Verified from the
 /// `system init` event's `tools` array, which reported `[]`.
 ///
-/// Still disabled, for a different reason than the earlier draft: the probe
-/// is answered, but nothing can spawn this yet. MUR does not serve its tools
-/// over MCP, so there is no loop for the CLI to call back into.
+/// Still disabled, and the reason has moved twice as the work landed. The
+/// probe is answered; MUR does now serve its tools over MCP (`tools/list`,
+/// `tools/call`, and the shim that forwards to them). What is missing is the
+/// other half: nothing writes the per-turn `--mcp-config` and nothing runs
+/// the CLI, so this row describes a backend that could work rather than one
+/// that does.
+///
+/// Keep this sentence true. A row whose stated reason outlives the thing it
+/// described is worse than a bare `false` — it explains itself confidently
+/// and wrongly, and a user reading the panel has no way to tell.
 pub const CLAUDE: CliBackend = CliBackend {
     key: "claude",
     binary: "claude",
@@ -81,7 +88,7 @@ pub const CLAUDE: CliBackend = CliBackend {
     mcp_mount: McpMount::PerCall,
     home_env_var: "CLAUDE_CONFIG_DIR",
     activation: Activation::Disabled {
-        reason: "spawn path not implemented: MUR does not yet serve its tools over MCP",
+        reason: "no spawn path: nothing writes the per-turn --mcp-config or runs the CLI",
     },
     capability_notes: "--tools \"\" disables built-ins but NOT the user's own MCP \
                        servers; --strict-mcp-config is what empties the tool list",
@@ -177,10 +184,16 @@ mod tests {
 
     #[test]
     fn claude_is_disabled_because_nothing_can_spawn_it_yet() {
-        // The activation gate, as a test. The blocker is no longer the tool
-        // probe — that is answered — but the missing spawn path.
+        // The activation gate, as a test. The blocker has moved once already:
+        // first the tool probe, then serving tools over MCP, now the spawn
+        // itself. Matching on "spawn path" would have kept passing through
+        // that middle change while the sentence went stale, so this asserts
+        // the part that is actually specific to what is missing.
         match CLAUDE.activation {
-            Activation::Disabled { reason } => assert!(reason.contains("spawn path")),
+            Activation::Disabled { reason } => assert!(
+                reason.contains("--mcp-config") && reason.contains("runs the CLI"),
+                "the reason no longer names what is missing: {reason}"
+            ),
             Activation::Enabled => panic!("nothing can spawn a backend yet"),
         }
     }
