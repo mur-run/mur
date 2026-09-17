@@ -12,6 +12,9 @@ use mur_monitor::store::{ListFilter, MonitorStore};
 #[path = "monitor_tests/write_grant.rs"]
 mod write_grant;
 
+#[path = "monitor_tests/exhausted_hint.rs"]
+mod exhausted_hint;
+
 /// A `rerun` executor refusal, copied from `actions/rerun.rs`'s own
 /// message, used as the stored `result` of the failed action in
 /// `home_with_settled_actions`. Spelled once so the fixture and the
