@@ -125,9 +125,46 @@ pub const CODEX: CliBackend = CliBackend {
                        a per-turn config must be written into the private home",
 };
 
+/// `agy`, measured at 1.2.3 by running it (#1339, #1340).
+///
+/// Disabled for the same reason as `codex` and not a different one: it has
+/// execution it cannot be asked to give up — 57 built-in tools, enumerated by
+/// its own `init` event, including `run_command`, `write_to_file` and a full
+/// browser-control set — and the spawn path does not yet apply MUR's sandbox.
+/// Containment does not care whether a tool is "disabled"; it cares what the
+/// process can do. So this is the same blocker, not a worse one.
+///
+/// Its own `--sandbox` is not a mitigation. Probed with the approval layer
+/// removed, it still read outside the workspace, read `$HOME`, wrote outside
+/// the workspace and reached the public internet.
+///
+/// `home_env_var` is `HOME`, and that is an honest value rather than a
+/// missing one — an earlier note here called it "no honest value", conflating
+/// "no dedicated variable" with "no usable value". Setting `HOME` does
+/// relocate agy's config, measured. What it also does is relocate everything
+/// else that process resolves under `HOME`, which is a blunter instrument
+/// than `CODEX_HOME` and is the one way this row is genuinely worse than
+/// `codex`'s.
+pub const AGY: CliBackend = CliBackend {
+    key: "agy",
+    binary: "agy",
+    headless_invocation: &["-p"],
+    stream_flags: &["--output-format", "stream-json"],
+    tool_disable_flags: &[],
+    mcp_mount: McpMount::Persistent,
+    home_env_var: "HOME",
+    activation: Activation::Disabled {
+        reason: "agy's 57 built-in tools cannot be disabled and the spawn path does not yet apply MUR's sandbox to it",
+    },
+    capability_notes: "HOME is the only lever and it moves everything, not just \
+                       config; `-p` swallows a following flag as its prompt, so \
+                       use `-p=<prompt>`; MCP mounts persistently at \
+                       $HOME/.gemini/config/mcp_config.json",
+};
+
 /// Every backend whose record is complete. Absence is a statement: a CLI
 /// missing here has an unanswered probe, not a missing implementation.
-pub const REGISTRY: &[CliBackend] = &[CLAUDE, CODEX];
+pub const REGISTRY: &[CliBackend] = &[CLAUDE, CODEX, AGY];
 
 /// Look up a backend by key.
 pub fn backend(key: &str) -> Option<&'static CliBackend> {
@@ -317,11 +354,12 @@ mod tests {
         // home environment variable at all, only `HOME`, so there is no
         // honest value for `home_env_var` and the completeness rule above
         // would reject the row. Absence here is the measurement, not a gap.
-        assert!(
-            backend("agy").is_none(),
-            "agy has no home env var — only HOME — so no row can be complete"
-        );
+        // Every probed backend now has a row. Absence is reserved for a CLI
+        // nobody has measured — it is a statement about knowledge, not about
+        // safety, and both of these are disabled rather than missing.
+        assert!(backend("agy").is_some(), "agy's record is complete");
         assert!(backend("codex").is_some(), "codex's record is complete");
+        assert!(backend("nope").is_none());
     }
 
     #[test]
@@ -500,7 +538,10 @@ mod tests {
 
     #[test]
     fn an_unknown_backend_is_none_even_when_prefixed() {
-        assert!(from_provider("cli:agy").is_none());
+        // `cli:agy` resolves now that agy has a row — that is the point of
+        // giving it one. An agent pointed there gets "disabled, and here is
+        // why" instead of the unknown-provider path, which reads as a typo.
+        assert_eq!(from_provider("cli:agy").map(|b| b.key), Some("agy"));
         assert!(from_provider("cli:nope").is_none());
     }
 
@@ -550,5 +591,36 @@ mod tests {
         // is the guard that was deferred while `from_provider` lived on an
         // unmerged branch; it belongs beside the row it protects.
         assert_eq!(from_provider("cli:codex").map(|b| b.key), Some("codex"));
+    }
+
+    #[test]
+    fn agy_is_listed_and_never_usable() {
+        // Same shape as codex's guard. The reason must name the blocker, not
+        // the absence of one, or the next reader is told to solve the wrong
+        // problem — which is what "no honest value for home_env_var" did.
+        let a = backend("agy").expect("agy is registered");
+        match a.activation {
+            Activation::Disabled { reason } => {
+                assert!(reason.contains("built-in tools"), "{reason}");
+                assert!(reason.contains("does not yet apply"), "{reason}");
+            }
+            Activation::Enabled => panic!("agy must not be enabled: 57 built-ins, none disablable"),
+        }
+        assert!(
+            available(found)
+                .iter()
+                .any(|a| a.backend.key == "agy" && !a.usable)
+        );
+    }
+
+    #[test]
+    fn home_is_a_real_lever_for_agy_not_a_placeholder() {
+        // Measured (#1339): setting HOME relocates agy's config. The row says
+        // `HOME` because that works, not because nothing else would fit.
+        assert_eq!(AGY.home_env_var, "HOME");
+        let (var, dir) = ensure_home(std::path::Path::new("/tmp/mur-agy-x"), &AGY).expect("home");
+        assert_eq!(var, "HOME");
+        assert!(dir.ends_with("cli-homes/agy"));
+        std::fs::remove_dir_all("/tmp/mur-agy-x").ok();
     }
 }
