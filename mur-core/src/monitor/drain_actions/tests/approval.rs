@@ -705,3 +705,99 @@ fn a_gated_remedy_that_failed_still_exhausts_the_monitor_at_the_same_cap() {
          trying: {kinds:?}"
     );
 }
+
+/// Put a plain FILE where `ChannelService` needs a directory, so opening the
+/// channel fails for a real structural reason. No fake gate, no injected
+/// error: this is the shape of the failures `record_action_error` exists for
+/// (an unreadable channel, a signing-key failure), and it is reversible, so
+/// a test can also show the gate recovering.
+fn break_the_channel(home: &std::path::Path) {
+    let dir = home.join("index").join("channels");
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    std::fs::create_dir_all(home.join("index")).unwrap();
+    std::fs::write(&dir, b"not a directory").unwrap();
+}
+
+fn unbreak_the_channel(home: &std::path::Path) {
+    let dir = home.join("index").join("channels");
+    if dir.is_file() {
+        std::fs::remove_file(&dir).unwrap();
+    }
+}
+
+#[test]
+fn a_gate_that_keeps_failing_retires_the_action_instead_of_retrying_forever() {
+    // Before this, `record_action_error` incremented nothing: the row stayed
+    // `Claimed` and was retried every tick forever, holding one of the slots
+    // `pending_actions` returns — so a single unreadable channel quietly
+    // stopped OTHER monitors' actions too.
+    let (_d, home, id) = settled_github_rerun("o/r/1", 3);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    break_the_channel(&home);
+
+    for _ in 0..GATE_ERROR_MAX {
+        drain_actions(&home, rt.handle(), t0()).unwrap();
+    }
+
+    let s = store(&home);
+    let a = s.actions_for(&id).unwrap().into_iter().next().unwrap();
+    assert_eq!(
+        a.state,
+        ActionState::Failed,
+        "must be retired, not left Claimed forever"
+    );
+    let result = a.result.unwrap_or_default();
+    assert!(result.contains("approval gate failed"), "{result}");
+    assert!(
+        result.contains("gave up"),
+        "must say it stopped trying: {result}"
+    );
+    assert!(
+        result.contains("mur monitor retry"),
+        "must name the way back: {result}"
+    );
+
+    // An approval the user gave must not vanish in silence.
+    assert!(
+        event_kinds(&s, &id).contains(&"remediation_failed".to_string()),
+        "a retired gated action must tell the human"
+    );
+}
+
+#[test]
+fn a_gate_error_that_recovers_does_not_count_toward_retirement() {
+    // The control, and the reason the counter is named CONSECUTIVE. Without
+    // the reset, these failures would accumulate across a working gate and
+    // retire an action that is fine — the counter would be a lifetime total
+    // wearing the word "consecutive".
+    let (_d, home, id) = settled_github_rerun("o/r/1", 3);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    // Fail most of the way to the limit.
+    break_the_channel(&home);
+    for _ in 0..(GATE_ERROR_MAX - 1) {
+        drain_actions(&home, rt.handle(), t0()).unwrap();
+    }
+
+    // One tick where the gate answers. It defers (nobody has approved), but
+    // answering is what matters.
+    unbreak_the_channel(&home);
+    drain_actions(&home, rt.handle(), t0()).unwrap();
+
+    // Fail again, the same number of times. If the count had not reset this
+    // would be far past the limit.
+    break_the_channel(&home);
+    for _ in 0..(GATE_ERROR_MAX - 1) {
+        drain_actions(&home, rt.handle(), t0()).unwrap();
+    }
+
+    let s = store(&home);
+    let a = s.actions_for(&id).unwrap().into_iter().next().unwrap();
+    assert_ne!(
+        a.state,
+        ActionState::Failed,
+        "a gate that answered in between must reset the count"
+    );
+}

@@ -49,6 +49,15 @@ pub const DRAIN_MAX_ACTIONS_PER_TICK: usize = 10;
 /// ever driven pathologically large.
 pub const DRAIN_MAX_BLOCKED_PER_TICK: usize = 500;
 
+/// Consecutive ticks the approval gate may fail for one action before that
+/// action is retired. The asymmetry decides the number: retiring too early
+/// marks `Failed` something that would have recovered, which costs a user
+/// an action they asked for; retiring too late costs one of
+/// `DRAIN_MAX_ACTIONS_PER_TICK` slots. Ten ticks is ~2.5 minutes of
+/// unbroken failure — long enough to ride out a disk hiccup or a brief file
+/// lock, short enough that a genuinely broken channel stops squatting.
+pub const GATE_ERROR_MAX: u32 = 10;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ActionReport {
     pub executed: usize,
@@ -295,15 +304,49 @@ fn attempt_action(
         params,
         now,
     ) {
-        Ok(d) => d,
+        Ok(d) => {
+            // The gate answered, so any earlier failures were not
+            // consecutive. A no-op when the count is already zero — see the
+            // `!= 0` guard in `clear_action_errors` — so this costs nothing
+            // on the ordinary path.
+            store.clear_action_errors(key)?;
+            d
+        }
         Err(error) => {
-            tracing::warn!(
+            let reason = format!("approval gate failed: {error}");
+            let consecutive = store.record_action_error(key, &reason)?;
+            if consecutive < GATE_ERROR_MAX {
+                tracing::warn!(
+                    monitor = %row.id,
+                    action = action_type,
+                    %error,
+                    consecutive,
+                    "monitor: approval gate failed; this action is retried next tick"
+                );
+                return Ok(());
+            }
+            // Retried `GATE_ERROR_MAX` ticks running and the gate has not
+            // once answered. Left `Claimed` it would retry forever while
+            // holding one of the slots `pending_actions` returns, so a
+            // single unreadable channel would quietly stop other monitors'
+            // actions too. Settle it, say why, and — if it was gated — tell
+            // the human, because an approval they gave must not vanish in
+            // silence.
+            let gave_up = format!(
+                "{reason} — gave up after {consecutive} consecutive failures; \
+                 fix the channel and `mur monitor retry` to try again"
+            );
+            tracing::error!(
                 monitor = %row.id,
                 action = action_type,
-                %error,
-                "monitor: approval gate failed; this action is retried next tick"
+                consecutive,
+                "monitor: approval gate has failed every tick; retiring this action"
             );
-            store.record_action_error(key, &format!("approval gate failed: {error}"))?;
+            store.finish_action(key, ActionState::Failed, &gave_up)?;
+            rep.failed += 1;
+            if gated {
+                record_remediation_failed(store, row, action_type, &gave_up, now)?;
+            }
             return Ok(());
         }
     };

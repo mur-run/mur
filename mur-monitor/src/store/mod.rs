@@ -305,6 +305,28 @@ impl MonitorStore {
         // is a stable, documented interface, while the error text is
         // `rusqlite`'s `Display` over whatever SQLite happens to say, which
         // this crate does not control.
+        // Consecutive approval-gate failures for one action. Without a
+        // counter `record_action_error` retries forever: the row stays
+        // `Claimed`, nothing increments, and it holds one of the slots
+        // `pending_actions` hands back — so one unreadable channel can crowd
+        // out other monitors' work. Additive, so no `SCHEMA_USER_VERSION`
+        // bump; probed with `PRAGMA table_info` for the same reason as
+        // below.
+        let has_gate_errors = self
+            .conn
+            .prepare("PRAGMA table_info(monitor_actions)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|name| name == "gate_errors");
+        if !has_gate_errors {
+            self.conn
+                .execute(
+                    "ALTER TABLE monitor_actions ADD COLUMN gate_errors INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )
+                .context("add monitor_actions.gate_errors")?;
+        }
         let has_last_attempt_at = self
             .conn
             .prepare("PRAGMA table_info(monitor_registration_outbox)")?

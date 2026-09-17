@@ -148,10 +148,31 @@ impl MonitorStore {
     /// `append_as_writer`). `finish_action` is the wrong tool for it: that
     /// one is terminal by contract, and a transient channel fault must not
     /// permanently fail a remedy.
-    pub fn record_action_error(&self, action_key: &str, reason: &str) -> Result<()> {
+    /// Returns the new consecutive-failure total so the caller can decide
+    /// whether to keep retrying. Counting is the point: without it the row
+    /// stays `Claimed` and is retried every tick forever, holding one of the
+    /// slots `pending_actions` hands back.
+    pub fn record_action_error(&self, action_key: &str, reason: &str) -> Result<u32> {
         self.conn().execute(
-            "UPDATE monitor_actions SET result = ?1 WHERE action_key = ?2",
+            "UPDATE monitor_actions SET result = ?1, gate_errors = gate_errors + 1 \
+             WHERE action_key = ?2",
             rusqlite::params![store_result(reason), action_key],
+        )?;
+        let n: i64 = self.conn().query_row(
+            "SELECT gate_errors FROM monitor_actions WHERE action_key = ?1",
+            [action_key],
+            |r| r.get(0),
+        )?;
+        Ok(n as u32)
+    }
+
+    /// Clear the consecutive-failure count. Called whenever the gate
+    /// actually answers — "consecutive" is only meaningful if a success
+    /// resets it, and a gate that answers has not failed.
+    pub fn clear_action_errors(&self, action_key: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE monitor_actions SET gate_errors = 0 WHERE action_key = ?1 AND gate_errors != 0",
+            [action_key],
         )?;
         Ok(())
     }
