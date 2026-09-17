@@ -852,7 +852,9 @@ a parked approval does not expire and does not count against anything.
 Remediation itself does have a limit: MUR stops after
 `policy.max_remediation_attempts` (default 3) remedies that did not fix
 anything and marks the monitor `exhausted` rather than retrying forever. A
-remedy that worked ends the monitor `completed`, whatever the count is.
+remedy that worked is not counted against that cap — succeeding is not
+giving up — though a monitor still owing another gated action can reach the
+cap on that one.
 Kicking off downstream work and applying a known remedy are recognized
 action types but do not execute yet — approving one is recorded, and MUR
 says plainly that this build cannot carry it out, rather than pretending it
@@ -875,8 +877,8 @@ original work. Monitors created before this release are unaffected: the
 grant is checked when a monitor is added, so nothing already in the database
 is refused or upgraded after the fact — an older monitor that asks for
 `rerun` without a grant keeps running and its rerun is refused if anyone
-approves one. There is no `mur monitor edit`; cancel it and add it again
-with the grant.
+approves one. MUR has no command for editing a monitor in place; cancel it
+and add it again with the grant.
 
 A `mur fleet run` registers its own monitor for you automatically. When
 registration can't complete right away, the run still proceeds — it names
