@@ -252,17 +252,62 @@ activation gate keeps it disabled.
 
 ## Open questions
 
+*Step-event semantics are closed, and the question was aimed slightly wrong.
+They mean what they always meant: MUR ran the tool, and the event describes
+MUR's execution. A spawned turn changes who decided to call the tool, not who
+executed it, so the semantics need nothing. What the investigation actually
+found is a routing defect — see below.*
+
 *Re-entrancy is closed: the approvals map is keyed by a `hitl_id` minted per
 pending call, so two batches on one task cannot cross-answer. Asserted in
 `hitl::batch::tests::concurrent_gates_on_one_task_do_not_cross_answer`
 (#1347).*
 
-1. Whether `codex` and `agy` can even be offered this. Both mount MCP
-   *persistently*, into a config file, so a per-turn stdio command implies
-   writing that file per turn into their private home. Verified for neither.
-2. What `step/started` and `step/completed` mean when the step was initiated
-   by a model MUR is not running. The events are how a channel renders a
-   turn; a spawned turn's shape is the CLI's, not MUR's.
+1. Whether `codex` can be offered this. It mounts MCP *persistently*, into a
+   config file, so a per-turn stdio command means writing that file per turn
+   into its private home — unverified. This is downstream of the larger
+   blocker rather than beside it: `codex` is registered and disabled because
+   its built-in shell cannot be removed and no verified process sandbox
+   exists, so the mount question only matters once that does.
+
+   `agy` is no longer part of this question. It has no home environment
+   variable at all, only `HOME`, so there is no honest value for
+   `home_env_var` and no row can be complete — its absence from the registry
+   is a measurement, not a pending probe.
+
+## One slot, two audiences
+
+`client_notifiers` is keyed by task id and holds `(Sender, can_approve)`. Two
+different things read it:
+
+- `gate_response` sends `tool/approval_needed` there — *who can answer*;
+- `guarded.rs` resolves `step_notifier` from the same entry — *who is
+  watching*.
+
+For an in-process turn those are one party, the attached client, so the
+conflation never surfaced. A CLI-spawn turn is the first case where they
+differ: the shim can answer an approval, because it can ask the CLI's user
+through `elicitation/create`; it is not the audience for the turn, which is
+whoever ran `mur agent send`.
+
+The consequence is live today. `tools/call` borrows the slot for the duration
+of a call (#1378), so every `step/started` and `step/completed` a spawned
+CLI's tool produces is delivered to the shim — whose socket reader handles
+`tool/approval_needed` and id-matched responses and **drops everything else**.
+A user watching a CLI-spawn turn sees no steps at all, and the reason is not
+that MUR failed to emit them.
+
+Forwarding them out of the shim is the wrong repair. The shim is a transport;
+sending step events on to the CLI would tell it about tool calls it already
+made, and sending them back down the socket is circular. The events never
+should have been routed to the borrower.
+
+So the shape is to split the slot: keep the audience where it is, and give
+approval authority its own map that `tools/call` borrows instead. `can_approve`
+is already a bool in that tuple, which is the same distinction half-made.
+Fifteen touch points, twelve of them in `task_runner.rs` and three in
+`guarded.rs` — contained enough to do as one change, and it wants its own plan
+because it moves a hot path.
 
 ## Verification plan
 
