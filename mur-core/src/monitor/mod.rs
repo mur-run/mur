@@ -7,6 +7,7 @@ pub mod adapters;
 pub mod drain_actions;
 pub mod drain_outbox;
 pub mod notify;
+pub mod resolver;
 pub mod service;
 
 use std::path::Path;

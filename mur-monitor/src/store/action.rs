@@ -41,6 +41,10 @@ pub struct ActionRow {
     pub attempt: u32,
     pub result: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Set only on rows an AgentResolver proposed: the serialized
+    /// `mur_monitor::spec::Action` to run. `None` means the row came from
+    /// the monitor's own spec list and is resolved by index there instead.
+    pub proposed_action: Option<String>,
 }
 
 /// How much of an action's result is kept in history. Redaction runs
@@ -92,6 +96,46 @@ impl MonitorStore {
                 risk_to_sql(risk)?,
                 ActionState::Claimed.as_str(),
                 ts(now),
+            ],
+        )?;
+        Ok(n == 1)
+    }
+
+    /// Claim a resolver-proposed action, carrying the action itself.
+    ///
+    /// Same `INSERT OR IGNORE` contract as [`claim_action`]: `Ok(true)` only
+    /// for the call that created the row. The difference is
+    /// `proposed_action`, which makes the row self-describing — Phase 2
+    /// resolves spec-list rows by index, and a proposal has no index there.
+    ///
+    /// `action_json` is the serialized `spec::Action`. Stored as text rather
+    /// than as separate verb and params columns because it is handed back to
+    /// exactly one consumer, which wants the whole `Action` — and because
+    /// the verb is already in the key, so splitting it out would give two
+    /// places to disagree.
+    ///
+    /// [`claim_action`]: MonitorStore::claim_action
+    pub fn claim_proposed_action(
+        &self,
+        action_key: &str,
+        monitor_id: &str,
+        cycle_id: &str,
+        risk: RiskTier,
+        action_json: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let n = self.conn().execute(
+            "INSERT OR IGNORE INTO monitor_actions \
+             (action_key, monitor_id, cycle_id, risk, state, attempt, created_at, proposed_action) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)",
+            rusqlite::params![
+                action_key,
+                monitor_id,
+                cycle_id,
+                risk_to_sql(risk)?,
+                ActionState::Claimed.as_str(),
+                ts(now),
+                action_json,
             ],
         )?;
         Ok(n == 1)
@@ -180,7 +224,8 @@ impl MonitorStore {
     /// Everything recorded for one monitor, oldest first.
     pub fn actions_for(&self, monitor_id: &str) -> Result<Vec<ActionRow>> {
         let mut stmt = self.conn().prepare(
-            "SELECT action_key, monitor_id, cycle_id, risk, approval_id, state, attempt, result, created_at \
+            "SELECT action_key, monitor_id, cycle_id, risk, approval_id, state, attempt, result, created_at, \
+             proposed_action \
              FROM monitor_actions WHERE monitor_id = ?1 ORDER BY created_at ASC, action_key ASC",
         )?;
         let rows = stmt.query_map(rusqlite::params![monitor_id], row_to_action)?;
@@ -223,7 +268,8 @@ impl MonitorStore {
 
     fn actions_in_state(&self, state: ActionState, max: usize) -> Result<Vec<ActionRow>> {
         let mut stmt = self.conn().prepare(
-            "SELECT action_key, monitor_id, cycle_id, risk, approval_id, state, attempt, result, created_at \
+            "SELECT action_key, monitor_id, cycle_id, risk, approval_id, state, attempt, result, created_at, \
+             proposed_action \
              FROM monitor_actions WHERE state = ?1 \
              ORDER BY created_at ASC, action_key ASC LIMIT ?2",
         )?;
@@ -254,6 +300,7 @@ fn row_to_action(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<ActionRow>> {
         attempt: r.get::<_, i64>(6)? as u32,
         result: r.get(7)?,
         created_at: parse_ts(&created_at),
+        proposed_action: r.get(9)?,
     }))
 }
 
@@ -269,6 +316,81 @@ mod tests {
         let created = s.create(&spec("k"), t0(), None).unwrap();
         let cyc = s.get(&created.id).unwrap().unwrap().cycle_id;
         (d, s, created.id, cyc)
+    }
+
+    /// A proposal is its own source of truth. Phase 2 resolves spec-list
+    /// rows by index, and a proposed action has no index there — without
+    /// this column it would be retired as "drifted" on the next tick, which
+    /// looks exactly like the feature working and then silently dying.
+    #[test]
+    fn a_proposed_action_round_trips_and_a_spec_action_carries_none() {
+        let (_d, s, id, cyc) = fixture();
+
+        let from_spec = action_key(&id, &cyc, 1, "notify", 0);
+        assert!(
+            s.claim_action(&from_spec, &id, &cyc, RiskTier::Read, t0())
+                .unwrap()
+        );
+
+        let proposed = action_key(&id, &cyc, 1, "collect_logs", 7);
+        let json = r#"{"type":"collect_logs","lines":50}"#;
+        assert!(
+            s.claim_proposed_action(&proposed, &id, &cyc, RiskTier::Read, json, t0())
+                .unwrap()
+        );
+
+        let rows = s.actions_for(&id).unwrap();
+        let spec_row = rows
+            .iter()
+            .find(|r| r.action_key == from_spec)
+            .expect("spec row");
+        assert!(
+            spec_row.proposed_action.is_none(),
+            "a spec-list row must stay resolvable by index, not carry an action"
+        );
+        let prop_row = rows
+            .iter()
+            .find(|r| r.action_key == proposed)
+            .expect("proposed row");
+        assert_eq!(
+            prop_row.proposed_action.as_deref(),
+            Some(json),
+            "the proposal must survive the round trip, params included"
+        );
+    }
+
+    /// Same `INSERT OR IGNORE` contract as `claim_action`: the ordinary
+    /// restart path must not re-run the side effect.
+    #[test]
+    fn claiming_a_proposal_twice_reports_false_the_second_time() {
+        let (_d, s, id, cyc) = fixture();
+        let k = action_key(&id, &cyc, 1, "notify", 7);
+        let j = r#"{"type":"notify"}"#;
+        assert!(
+            s.claim_proposed_action(&k, &id, &cyc, RiskTier::Read, j, t0())
+                .unwrap()
+        );
+        assert!(
+            !s.claim_proposed_action(&k, &id, &cyc, RiskTier::Read, j, t0())
+                .unwrap(),
+            "a second claim must not hand the caller the side effect again"
+        );
+    }
+
+    /// The migration runs on every `open`, so it has to tolerate a database
+    /// that already has the column — the `PRAGMA table_info` probe, not a
+    /// match on SQLite's "duplicate column name" prose.
+    #[test]
+    fn reopening_a_migrated_database_is_not_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        let first = MonitorStore::open(d.path()).unwrap();
+        drop(first);
+        let second = MonitorStore::open(d.path());
+        assert!(
+            second.is_ok(),
+            "additive migration must be idempotent: {:?}",
+            second.err()
+        );
     }
 
     #[test]
