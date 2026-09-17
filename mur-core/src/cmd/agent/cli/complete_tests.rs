@@ -169,6 +169,22 @@ fn bare_deep_research_is_a_sendable_leaf() {
     assert!(subs.items.iter().any(|c| c.display == "status"));
 }
 
+/// The menu is where the verb is discovered. Bare text is also a question,
+/// but a menu offering only status/stop/setup reads as "you cannot ask here".
+#[test]
+fn deep_research_offers_ask_with_room_for_the_question() {
+    let subs = compute("/deep-research ", &[], &ctx(), &cur()).unwrap();
+    let ask = subs
+        .items
+        .iter()
+        .find(|c| c.display == "ask")
+        .expect("ask must be offered");
+    // Trailing space: accepting it leaves the caret ready for the question
+    // instead of sending an empty ask.
+    assert_eq!(ask.insert, "/deep-research ask ");
+    assert!(!ask.has_children);
+}
+
 #[test]
 fn descends_to_subcommands_after_space() {
     let s = compute("/mcp ", &[], &ctx(), &cur()).unwrap();

@@ -803,9 +803,9 @@ your screen without costing the agent a turn — the transcript it sees stays cl
 /deep-research stop            # end it (outcome = stopped)
 ```
 
-`/deep-research setup` is the one verb the slash form does not run: it points you
-at `mur deep-research setup` in a terminal, because the wizard asks for egress
-consent.
+`/research` is the same command, and `/deep-research setup` is the one verb the
+slash form does not run: it points you at `mur deep-research setup` in a
+terminal, because the wizard asks for egress consent.
 
 Agents reach it through the built-in `fleet_run` tool rather than the CLI. It
 never holds the call open for the length of a run — it dispatches and answers
