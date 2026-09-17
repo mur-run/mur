@@ -547,6 +547,31 @@ impl TaskRunner {
         Self::with_backend(RunnerBackend::Llm(client))
     }
 
+    /// A runner whose turns run inside a spawned CLI.
+    ///
+    /// Beside `with_llm` rather than derived from it: this backend has no
+    /// `LlmClient` to hold. The CLI owns the loop, so there is no completion
+    /// call for MUR to make.
+    ///
+    /// The socket is **not** optional in practice — without it the dispatch
+    /// arm refuses rather than spawning a CLI that cannot reach MUR's tools —
+    /// but it is set separately by `with_socket_path`, because the value
+    /// comes from the profile's transport config and this constructor is
+    /// called from places that have the backend before they have the socket.
+    pub fn with_cli_spawn(b: &'static mur_common::cli_backend::CliBackend) -> Self {
+        Self::with_backend(RunnerBackend::CliSpawn(b))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backend_for_test(&self) -> &RunnerBackend {
+        &self.backend
+    }
+
+    #[cfg(test)]
+    pub(crate) fn socket_path_for_test(&self) -> Option<&std::path::Path> {
+        self.socket_path.as_deref()
+    }
+
     pub fn with_backend(backend: RunnerBackend) -> Self {
         Self {
             backend,
@@ -4881,7 +4906,7 @@ mod tests {
         });
         let (notif_tx, _rx) = tokio::sync::mpsc::channel(64);
         let runner = crate::supervisor_runner::build_runner(
-            client,
+            TaskRunner::with_llm(client),
             None,
             Arc::new(RuntimeSkills::build(vec![])),
             SkillsConfig::default(),
