@@ -562,6 +562,16 @@ impl TaskRunner {
         Self::with_backend(RunnerBackend::CliSpawn(b))
     }
 
+    #[cfg(test)]
+    pub(crate) fn backend_for_test(&self) -> &RunnerBackend {
+        &self.backend
+    }
+
+    #[cfg(test)]
+    pub(crate) fn socket_path_for_test(&self) -> Option<&std::path::Path> {
+        self.socket_path.as_deref()
+    }
+
     pub fn with_backend(backend: RunnerBackend) -> Self {
         Self {
             backend,
@@ -4896,7 +4906,7 @@ mod tests {
         });
         let (notif_tx, _rx) = tokio::sync::mpsc::channel(64);
         let runner = crate::supervisor_runner::build_runner(
-            client,
+            TaskRunner::with_llm(client),
             None,
             Arc::new(RuntimeSkills::build(vec![])),
             SkillsConfig::default(),
