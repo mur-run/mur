@@ -917,6 +917,43 @@ impl TaskRunner {
             .insert(task_id.to_string(), (tx, can_approve));
     }
 
+    /// Take this task's approval sink over for the duration of one call,
+    /// handing back whatever was there so the caller can put it back.
+    ///
+    /// A CLI-spawn turn registers its client's sink under the turn's task id
+    /// and then hands that SAME id to the shim, so the shim's `tools/call`
+    /// arrives keyed on a task that already has an owner. Replacing it and
+    /// then deleting it left the spawning turn unable to reach its client,
+    /// and any later approval for that turn failing closed with a human
+    /// sitting right there. Borrowing makes the nesting explicit instead of
+    /// making the inner caller the last writer.
+    pub async fn borrow_client_notifier(
+        &self,
+        task_id: &str,
+        tx: tokio::sync::mpsc::Sender<serde_json::Value>,
+        can_approve: bool,
+    ) -> Option<ApprovalSink> {
+        self.client_notifiers
+            .lock()
+            .await
+            .insert(task_id.to_string(), (tx, can_approve))
+    }
+
+    /// Put back what `borrow_client_notifier` displaced, or clear the slot if
+    /// it was empty before. Restoring `None` by removing is the point: the
+    /// borrower must not leave its own sink behind after it has gone.
+    pub async fn restore_client_notifier(&self, task_id: &str, prior: Option<ApprovalSink>) {
+        let mut map = self.client_notifiers.lock().await;
+        match prior {
+            Some(p) => {
+                map.insert(task_id.to_string(), p);
+            }
+            None => {
+                map.remove(task_id);
+            }
+        }
+    }
+
     /// Declare that nobody can answer an approval prompt for this turn.
     ///
     /// A delegated turn (`channel/delegate`) is synchronous — a fleet router is

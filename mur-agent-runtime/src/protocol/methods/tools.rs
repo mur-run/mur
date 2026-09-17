@@ -106,11 +106,16 @@ impl MethodHandler for ToolsCallHandler {
             .get("can_approve")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        if let Some(n) = ctx.notifier.clone() {
-            self.runner
-                .register_client_notifier(&task_id, n, can_approve)
-                .await;
-        }
+        // Borrowed, not claimed: the spawning turn may already own this
+        // task's sink, and it needs it back when this call returns.
+        let prior = match ctx.notifier.clone() {
+            Some(n) => Some(
+                self.runner
+                    .borrow_client_notifier(&task_id, n, can_approve)
+                    .await,
+            ),
+            None => None,
+        };
         let guarded = self.runner.guarded();
         let (decisions, step_ids) = guarded
             .gate_response(&task_id, std::slice::from_ref(&call))
@@ -133,7 +138,9 @@ impl MethodHandler for ToolsCallHandler {
             // nothing. The code travels with it so the shim can still tell a
             // refusal from a crash instead of guessing from a message string.
             Err(e) => {
-                self.runner.unregister_client_notifier(&task_id).await;
+                if let Some(p) = prior {
+                    self.runner.restore_client_notifier(&task_id, p).await;
+                }
                 return Ok(json!({
                     "call_id": call_id,
                     "content": e.message,
@@ -143,7 +150,9 @@ impl MethodHandler for ToolsCallHandler {
             }
         };
 
-        self.runner.unregister_client_notifier(&task_id).await;
+        if let Some(p) = prior {
+            self.runner.restore_client_notifier(&task_id, p).await;
+        }
         Ok(json!({
             "call_id": entry.call_id,
             "content": entry.content,
@@ -373,5 +382,40 @@ mod tests {
         // Nobody answers, so the gate times out and denies. That the prompt
         // arrived at all is the assertion; the denial is #1351's behaviour.
         drop(call);
+    }
+
+    #[tokio::test]
+    async fn tools_call_does_not_strand_the_turn_that_spawned_it() {
+        // A CliSpawn turn registers its caller's notifier under the turn's
+        // task id, and passes that SAME id to the shim. So the shim's
+        // `tools/call` arrives keyed on a task that already has a sink —
+        // the user's. Overwriting it and then unregistering leaves the
+        // spawning turn with no way to reach its client, and any later HITL
+        // for that turn fails closed with a human sitting right there.
+        let runner = Arc::new(runner_with_probe().with_pending_approvals(Default::default()));
+        let (user_tx, mut user_rx) = tokio::sync::mpsc::channel::<Value>(8);
+        runner.register_client_notifier("t-1", user_tx, true).await;
+
+        let (shim_tx, _shim_rx) = tokio::sync::mpsc::channel::<Value>(8);
+        let ctx = RequestContext {
+            notifier: Some(shim_tx),
+        };
+        let _ = ToolsCallHandler::new(runner.clone())
+            .handle(
+                Some(json!({ "task_id": "t-1", "name": "probe_tool" })),
+                &ctx,
+            )
+            .await
+            .expect("handler");
+
+        // The turn's own sink must survive. `user_rx.recv()` returning
+        // `None` means every sender was dropped — i.e. the registration that
+        // held the turn's clone is gone.
+        drop(ctx);
+        let got = tokio::time::timeout(std::time::Duration::from_millis(500), user_rx.recv()).await;
+        assert!(
+            got.is_err(),
+            "the spawning turn's notifier was dropped by tools/call: recv returned {got:?}"
+        );
     }
 }
