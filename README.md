@@ -201,6 +201,27 @@ API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — n
 
 **Claude Subscription, the same way.** The Model Library's **Claude Subscription** provider signs in through Claude Code (`claude auth login --claudeai`), lists models from the catalog, and writes `provider: claude` entries that can only reach the loopback gateway's `/v1` route — no `secret`, and a `base_url` edit to `api.anthropic.com` is refused at startup instead of quietly switching the bill. Entries you already point at the gateway as `provider: anthropic` keep working; `mur model doctor` shows which ones could carry the explicit label.
 
+**Or skip the gateway: run the turn inside the CLI itself.** A registry entry
+with `provider: cli:claude` puts an agent's turns inside a spawned `claude`,
+which owns the loop while MUR owns the tools — they are mounted into it over
+MCP, so every call still lands in MUR's handler with its entitlements, secret
+masking and approval gate. This needs no gateway build and no second login: the
+spawn uses your existing Claude Code credential. What it costs is a session
+transcript in your own `~/.claude/projects/<cwd>/`, because a spawned CLI
+records its turns the way any other does; your credentials and settings are not
+touched. Tool isolation comes from the flags, not from where the login lives —
+`--tools "" --strict-mcp-config` leaves the model with MUR's tools and nothing
+else, verified from the CLI's own startup report rather than from what it says
+about itself.
+
+`codex` is registered and **disabled**. Its shell is built in and no flag
+removes it — `-s read-only` restricts the filesystem, which is not the same as
+establishing what an action may do — so a spawned `codex` could run commands
+that never pass MUR's gate. It stays off until a verified process sandbox
+exists, and it is listed rather than hidden so the reason is visible to anyone
+who has it installed. `agy` has no row at all: it offers no way to relocate its
+configuration and no way to disable its 57 built-in tools.
+
 #### Cloud LLM backend (opt-in)
 
 Conversation stages inherit the top-level `llm:` block by default. Each stage
