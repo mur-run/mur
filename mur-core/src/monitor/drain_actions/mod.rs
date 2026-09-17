@@ -105,6 +105,7 @@ fn consult_failed_cycles(
     now: DateTime<Utc>,
 ) -> Result<()> {
     let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+    let enabled = cfg.monitor_resolver.enabled;
 
     for row in store.list(&ListFilter {
         state: Some(MonitorState::ActionPending),
@@ -159,10 +160,72 @@ fn consult_failed_cycles(
             );
         }
     }
+
+    // The other half of step 3: "規則未涵蓋" — a terminal failure whose
+    // `on_failure` list was empty. The scheduler completes such a monitor in
+    // the same update that records the observation (`mur-monitor`'s
+    // `scheduler.rs`: an empty list means `Completed`, a non-empty one means
+    // `ActionPending`), so it never passes through the state the loop above
+    // watches and the settle guard never sees it.
+    //
+    // Reopening it to `ActionPending` is safe, and this is the whole reason
+    // it is allowed: `is_claimable` is `Active | Sleeping` only, so
+    // `ActionPending` does NOT unfreeze the fence. That is precisely what
+    // `reschedule_monitor` got wrong — it wrote `Sleeping`, which is
+    // claimable, and re-ran the entire action list on every poll.
+    //
+    // No `resolver_pending` marker here: nothing is being held open, so
+    // there is nothing for the settle guard to release. The gate is live
+    // config, and it is read before anything is written — with the resolver
+    // off this loop touches no rows at all.
+    if !enabled {
+        return Ok(());
+    }
+    for row in store.list(&ListFilter {
+        state: Some(MonitorState::Completed),
+        include_completed: true,
+    })? {
+        if !matches!(row.outcome, Outcome::Failed | Outcome::Cancelled) {
+            continue;
+        }
+        if !actions_for_outcome(&row).is_empty() {
+            // It had a rule; the loop above owns it.
+            continue;
+        }
+        if !store.append_event(
+            &row.id,
+            &row.cycle_id,
+            RESOLVER_CONSULTED_EVENT,
+            serde_json::json!({ "trigger": "empty_action_list" }),
+            true,
+            now,
+        )? {
+            continue;
+        }
+        match consult_one(store, mur_home, handle, &row, &[], &cfg, now) {
+            // A proposal exists but the monitor is `Completed`, where Phase 2
+            // skips it. Reopen so the action can run; `maybe_complete_monitor`
+            // settles it again once the action does.
+            Ok(true) => {
+                store.set_state(&row.id, MonitorState::ActionPending, now)?;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(
+                    monitor = %row.id,
+                    %error,
+                    "monitor: resolver consultation failed; the monitor stays completed"
+                );
+            }
+        }
+    }
     Ok(())
 }
 
-/// One consultation, already stamped and known to be enabled.
+/// One consultation, already stamped and known to be enabled. `Ok(true)`
+/// when a proposal was claimed — the empty-list caller needs to know,
+/// because its monitor is already `Completed` and has to be reopened for the
+/// action to run at all.
 fn consult_one(
     store: &MonitorStore,
     mur_home: &Path,
@@ -171,7 +234,7 @@ fn consult_one(
     cycle_rows: &[mur_monitor::store::ActionRow],
     cfg: &mur_common::config::Config,
     now: DateTime<Utc>,
-) -> Result<()> {
+) -> Result<bool> {
     use super::resolver;
 
     let attempted: Vec<String> = cycle_rows
@@ -218,7 +281,7 @@ fn consult_one(
                 true,
                 now,
             )?;
-            return Ok(());
+            return Ok(false);
         }
     };
 
@@ -236,7 +299,7 @@ fn consult_one(
     );
     let json = serde_json::to_string(&proposal.action)
         .map_err(|e| anyhow::anyhow!("serialize proposed action: {e}"))?;
-    if store.claim_proposed_action(
+    if !store.claim_proposed_action(
         &key,
         &row.id,
         &row.cycle_id,
@@ -244,19 +307,20 @@ fn consult_one(
         &json,
         now,
     )? {
-        store.append_event(
-            &row.id,
-            &row.cycle_id,
-            "resolver_proposed",
-            serde_json::json!({
-                "action_type": proposal.action.r#type,
-                "reason": proposal.reason,
-            }),
-            true,
-            now,
-        )?;
+        return Ok(false);
     }
-    Ok(())
+    store.append_event(
+        &row.id,
+        &row.cycle_id,
+        "resolver_proposed",
+        serde_json::json!({
+            "action_type": proposal.action.r#type,
+            "reason": proposal.reason,
+        }),
+        true,
+        now,
+    )?;
+    Ok(true)
 }
 
 /// Stamped once per (monitor, cycle) by the consultation pass — including

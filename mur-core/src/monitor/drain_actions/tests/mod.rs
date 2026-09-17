@@ -569,3 +569,85 @@ fn an_enabled_resolver_holds_a_failed_cycle_open_for_exactly_one_tick() {
          the consultation produced"
     );
 }
+
+/// The other half of step 3: a terminal failure the spec had no rule for.
+///
+/// The premise is asserted rather than assumed — `mur-monitor`'s scheduler
+/// completes an empty-action-list monitor in the same update that records the
+/// observation, so it never reaches `ActionPending` and the loop that watches
+/// that state cannot see it. That is why this candidate query exists.
+///
+/// Covered here: the query finds it, the consultation is stamped, and the
+/// stamp bounds it to once per cycle. NOT covered: the reopen to
+/// `ActionPending`, which needs a proposal and therefore a reachable model —
+/// `consult_one` builds its own adapter from `mur_home`, so there is no seam
+/// to inject a mock through. The reopen's safety argument is instead a
+/// property of `is_claimable` (`Active | Sleeping` only, so `ActionPending`
+/// does not unfreeze the fence), asserted directly below.
+#[test]
+fn an_empty_action_list_is_still_consulted_and_only_once() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    std::fs::write(
+        home.join("config.yaml"),
+        "monitor_resolver:\n  enabled: true\n",
+    )
+    .unwrap();
+
+    let id = {
+        let s = MonitorStore::open(&home).unwrap();
+        settle_into(
+            &s,
+            &MonitorSpec::from_yaml(
+                "schema_version: 1\nname: norule\nsource: { type: mur_run, reference: r9 }\n\
+                 idempotency_key: k-norule\ncreated_by: { actor: user:test }\n",
+            )
+            .unwrap(),
+            Outcome::Failed,
+        )
+    };
+
+    assert_eq!(
+        store(&home).get(&id).unwrap().unwrap().state,
+        MonitorState::Completed,
+        "premise: with no action list the scheduler completes it outright"
+    );
+
+    let consulted = |home: &std::path::Path| -> usize {
+        store(home)
+            .events(&id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "resolver_consulted")
+            .count()
+    };
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!(
+        consulted(&home),
+        1,
+        "a terminal failure with no rule must still reach the resolver"
+    );
+    assert_eq!(
+        store(&home).get(&id).unwrap().unwrap().state,
+        MonitorState::Completed,
+        "no model is reachable here, so nothing was proposed and nothing reopens"
+    );
+
+    drain_actions(&home, rt.handle(), t0()).unwrap();
+    assert_eq!(
+        consulted(&home),
+        1,
+        "one consultation per cycle — the stamp is the bound, and a monitor \
+         that stays Completed must not be re-asked on every tick forever"
+    );
+
+    // The reopen's safety argument, asserted rather than described: moving a
+    // monitor to `ActionPending` cannot hand it back to the scheduler.
+    assert!(
+        !MonitorState::ActionPending.is_claimable(),
+        "reopening to ActionPending must not unfreeze the fence — that is what \
+         reschedule_monitor got wrong by writing Sleeping"
+    );
+}
