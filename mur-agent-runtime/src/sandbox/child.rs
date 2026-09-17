@@ -38,10 +38,46 @@ use std::process::{Child, Command};
 ///
 /// **What is actually missing is per-child policy.** A child cannot be given a
 /// NARROWER cage than the agent itself, because that needs a second
-/// `sandbox_init` in the child — hence the pre-fork single-threaded launcher
-/// tracked as a follow-up, after which `cage.spawn(birdcage_cmd)` below can be
-/// activated. Until then the granularity is per-agent, not per-server; the
-/// confinement itself is real.
+/// `sandbox_init` in the child. The follow-up was recorded as "a pre-fork
+/// single-threaded launcher", after which `cage.spawn(birdcage_cmd)` below
+/// could be activated.
+///
+/// **On macOS that launcher cannot work, and the reason is the kernel's, not
+/// the runtime's.** A second `sandbox_apply` inside an already-sandboxed
+/// process is refused outright as soon as either policy restricts anything.
+/// Measured 2026-09-17, the same `sandbox-exec` shape the empirical check
+/// above uses:
+///
+/// ```text
+/// # outer permissive, inner restricts a write
+/// $ sandbox-exec -p '(version 1)(allow default)' /bin/sh -c \
+///     'sandbox-exec -p "(version 1)(allow default)(deny file-write* (subpath \"/tmp/x\"))" true'
+/// sandbox-exec: sandbox_apply: Operation not permitted
+///
+/// # outer restricts the network, inner permissive
+/// $ sandbox-exec -p '(version 1)(allow default)(deny network-outbound)' /bin/sh -c \
+///     'sandbox-exec -p "(version 1)(allow default)" true'
+/// sandbox-exec: sandbox_apply: Operation not permitted
+///
+/// # both fully permissive — the only nesting that is allowed, and it
+/// # restricts nothing, so it buys nothing
+/// $ sandbox-exec -p '(version 1)(allow default)' /bin/sh -c \
+///     'sandbox-exec -p "(version 1)(allow default)" /bin/echo ok'
+/// ok
+/// ```
+///
+/// Single-threadedness was never the macOS obstacle; nesting is. A launcher
+/// would be a fresh process, and a fresh process inside this sandbox is still
+/// refused a second apply. So per-child narrowing on macOS needs a different
+/// mechanism entirely — confinement applied by an ancestor that was never
+/// sealed, or a primitive other than Seatbelt — and not a launcher.
+///
+/// Linux is untested here and may differ: Landlock rulesets are designed to
+/// stack restrictively, so the single-threaded launcher may still be the
+/// answer there. That asymmetry has to be measured before it is relied on.
+///
+/// Until then the granularity is per-agent, not per-server; the confinement
+/// itself is real.
 ///
 /// An earlier version of this doc said macOS children were "unconfined". That
 /// was wrong, and the error escaped into `mur agent perm show`, `mur agent
