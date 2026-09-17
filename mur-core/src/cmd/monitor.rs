@@ -423,11 +423,30 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
             // command that releases it is, from the user's side, a monitor
             // that silently stopped — this line is the whole payoff of the
             // slice, not a nice-to-have.
+            //
+            // But `approve` alone is the wrong answer once the monitor is
+            // `exhausted`: the drain skips every action whose monitor has
+            // settled, so the approval lands on the channel, the command
+            // reports success, and nothing ever acts on it. Printing it by
+            // itself sends the user to a command that works and achieves
+            // nothing — the same silent stop, one step further along. Both
+            // are needed, in the order they must be run.
             let unblock = match (a.state, &a.approval_id) {
-                (ActionState::Blocked, Some(hitl_id)) => format!(
-                    "  → mur channel approve {} {hitl_id}",
-                    crate::monitor::actions::gate::channel_id_for(&a.monitor_id)
-                ),
+                (ActionState::Blocked, Some(hitl_id)) => {
+                    let approve = format!(
+                        "mur channel approve {} {hitl_id}",
+                        crate::monitor::actions::gate::channel_id_for(&a.monitor_id)
+                    );
+                    if r.state == MonitorState::Exhausted {
+                        format!(
+                            "  → {approve}, then `mur monitor retry {}` \
+                             (this monitor gave up; approving alone will not restart it)",
+                            &r.id[..r.id.len().min(ID_SHORT)]
+                        )
+                    } else {
+                        format!("  → {approve}")
+                    }
+                }
                 _ => String::new(),
             };
             writeln!(
