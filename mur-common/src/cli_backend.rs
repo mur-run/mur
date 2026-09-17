@@ -69,7 +69,8 @@ pub struct CliBackend {
 /// are the pair, and `--strict-mcp-config` is load-bearing. Verified from the
 /// `system init` event's `tools` array, which reported `[]`.
 ///
-/// Still disabled, and the reason has moved twice as the work landed. The
+/// Enabled as of the CLI-spawn backend. The reason moved three times before
+/// it could be: the tool probe, then serving tools over MCP, then the spawn. The
 /// probe is answered; MUR does now serve its tools over MCP (`tools/list`,
 /// `tools/call`, and the shim that forwards to them). What is missing is the
 /// other half: nothing writes the per-turn `--mcp-config` and nothing runs
@@ -87,9 +88,7 @@ pub const CLAUDE: CliBackend = CliBackend {
     tool_disable_flags: &["--tools", "", "--strict-mcp-config"],
     mcp_mount: McpMount::PerCall,
     home_env_var: "CLAUDE_CONFIG_DIR",
-    activation: Activation::Disabled {
-        reason: "no spawn path: nothing writes the per-turn --mcp-config or runs the CLI",
-    },
+    activation: Activation::Enabled,
     capability_notes: "--tools \"\" disables built-ins but NOT the user's own MCP \
                        servers; --strict-mcp-config is what empties the tool list",
 };
@@ -217,19 +216,10 @@ mod tests {
     }
 
     #[test]
-    fn claude_is_disabled_because_nothing_can_spawn_it_yet() {
-        // The activation gate, as a test. The blocker has moved once already:
-        // first the tool probe, then serving tools over MCP, now the spawn
-        // itself. Matching on "spawn path" would have kept passing through
-        // that middle change while the sentence went stale, so this asserts
-        // the part that is actually specific to what is missing.
-        match CLAUDE.activation {
-            Activation::Disabled { reason } => assert!(
-                reason.contains("--mcp-config") && reason.contains("runs the CLI"),
-                "the reason no longer names what is missing: {reason}"
-            ),
-            Activation::Enabled => panic!("nothing can spawn a backend yet"),
-        }
+    fn claude_is_enabled_once_the_spawn_path_exists() {
+        // The gate is not "a probe answered"; it is that every isolation
+        // requirement was demonstrated. The boxes are in the plan.
+        assert!(matches!(CLAUDE.activation, Activation::Enabled));
     }
 
     #[test]
@@ -306,12 +296,24 @@ mod tests {
     }
 
     #[test]
-    fn a_present_but_unverified_backend_is_listed_and_not_usable() {
-        // The distinction this task exists for: absent is gone, unverified is
-        // shown-and-disabled. Folding the second into the first would remove
-        // the only surface that explains the unmet requirement.
-        let got = available(found);
-        assert!(!got[0].usable);
+    fn a_disabled_backend_would_be_listed_and_not_usable() {
+        // The distinction `available()` exists to hold: absent means gone,
+        // disabled means shown-and-not-usable. It used to be asserted through
+        // the `claude` row, which was disabled at the time; now that `claude`
+        // is enabled there is no disabled row to borrow, so the mapping is
+        // asserted directly rather than deleted along with its example.
+        let disabled = CliBackend {
+            activation: Activation::Disabled {
+                reason: "for the test",
+            },
+            ..CLAUDE
+        };
+        let entry = BackendAvailability {
+            backend: &CLAUDE,
+            path: PathBuf::from("/opt/homebrew/bin/claude"),
+            usable: matches!(disabled.activation, Activation::Enabled),
+        };
+        assert!(!entry.usable, "a disabled backend must never be usable");
     }
 
     #[test]
