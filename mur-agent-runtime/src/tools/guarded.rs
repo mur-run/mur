@@ -32,6 +32,8 @@ pub struct GuardedToolCall {
     pub(crate) notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     pub(crate) client_notifiers:
         Arc<tokio::sync::Mutex<HashMap<String, crate::task_runner::ApprovalSink>>>,
+    pub(crate) approval_sinks:
+        Arc<tokio::sync::Mutex<HashMap<String, crate::task_runner::ApprovalSink>>>,
     pub(crate) agent_name: String,
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
@@ -76,7 +78,7 @@ impl GuardedToolCall {
         let mut pending = Vec::new();
         let mut out = HashMap::new();
         let mut step_ids = HashMap::new();
-        let entry = self.client_notifiers.lock().await.get(task_id).cloned();
+        let entry = self.approval_sinks.lock().await.get(task_id).cloned();
         for call in calls {
             if !known.contains(&call.tool_name)
                 || effective_tool_policy(&self.tools_policy, &call.tool_name) != ToolPolicy::Ask

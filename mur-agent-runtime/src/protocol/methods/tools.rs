@@ -111,7 +111,7 @@ impl MethodHandler for ToolsCallHandler {
         let prior = match ctx.notifier.clone() {
             Some(n) => Some(
                 self.runner
-                    .borrow_client_notifier(&task_id, n, can_approve)
+                    .borrow_approval_sink(&task_id, n, can_approve)
                     .await,
             ),
             None => None,
@@ -139,7 +139,7 @@ impl MethodHandler for ToolsCallHandler {
             // refusal from a crash instead of guessing from a message string.
             Err(e) => {
                 if let Some(p) = prior {
-                    self.runner.restore_client_notifier(&task_id, p).await;
+                    self.runner.restore_approval_sink(&task_id, p).await;
                 }
                 return Ok(json!({
                     "call_id": call_id,
@@ -151,7 +151,7 @@ impl MethodHandler for ToolsCallHandler {
         };
 
         if let Some(p) = prior {
-            self.runner.restore_client_notifier(&task_id, p).await;
+            self.runner.restore_approval_sink(&task_id, p).await;
         }
         Ok(json!({
             "call_id": entry.call_id,
@@ -416,6 +416,60 @@ mod tests {
         assert!(
             got.is_err(),
             "the spawning turn's notifier was dropped by tools/call: recv returned {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn step_events_reach_the_watcher_while_the_approver_is_borrowed() {
+        // The defect this change exists for. A CLI-spawn turn hands the shim
+        // the turn's own task id, so `tools/call` arrives on a task the
+        // user's client is already watching. Before the split, the borrow
+        // displaced that client and every step event went to the shim, which
+        // drops what it does not recognise.
+        // `Allow` is load-bearing: with no policy a tool defaults to `Ask`,
+        // and the gate answers before any step event is emitted — the test
+        // would then be measuring the HITL path, not step routing.
+        use mur_common::agent::{ToolPolicy, ToolRule};
+        let runner = Arc::new(
+            runner_with_probe()
+                .with_tools_policy(vec![ToolRule {
+                    pattern: "*".into(),
+                    policy: ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(Default::default()),
+        );
+        let (user_tx, mut user_rx) = tokio::sync::mpsc::channel::<Value>(16);
+        runner.register_client_notifier("t-1", user_tx, true).await;
+
+        let (shim_tx, _shim_rx) = tokio::sync::mpsc::channel::<Value>(16);
+        let ctx = RequestContext {
+            notifier: Some(shim_tx),
+        };
+        let _ = ToolsCallHandler::new(runner.clone())
+            .handle(
+                Some(json!({ "task_id": "t-1", "name": "probe_tool" })),
+                &ctx,
+            )
+            .await
+            .expect("handler");
+
+        // The watcher saw the tool run.
+        let mut methods = Vec::new();
+        while let Ok(Some(n)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), user_rx.recv()).await
+        {
+            if let Some(m) = n["method"].as_str() {
+                methods.push(m.to_string());
+            }
+        }
+        assert!(
+            methods.iter().any(|m| m == "step/started"),
+            "the watching client saw no step/started: {methods:?}"
+        );
+        assert!(
+            methods.iter().any(|m| m == "step/completed"),
+            "the watching client saw no step/completed: {methods:?}"
         );
     }
 }
