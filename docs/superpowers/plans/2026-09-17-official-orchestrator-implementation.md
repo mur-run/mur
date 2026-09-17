@@ -524,7 +524,7 @@ git commit -m "feat(publish): build official items from the catalog"
 - Catalog identity: `agents/orchestrator`, `agent`, `orchestrator`, `1.0.0`, `free`.
 - Signed requirements: `chat: true`, `tools: true`, no hard minimum context window.
 
-- [ ] **Step 1: Add the catalog entry exactly as approved.** Include:
+- [x] **Step 1: Add the catalog entry exactly as approved.** Include:
 
 ```yaml
   - id: agents/orchestrator
@@ -540,9 +540,9 @@ git commit -m "feat(publish): build official items from the catalog"
 ```
 
 
-- [ ] **Step 2: Create `profile.yaml`.** Use a stable UUIDv7, version `1.0.0`, no `model_ref`, empty fallback chain, no routing/Smart preference, and a syntactically valid neutral inline model placeholder only where `AgentProfile` requires it; the Task 3 installer must overwrite it before commit. Disable Unix socket transport. Grant only A2A task discovery/status/message capabilities required by the actual orchestrator tools; network/filesystem/process entitlements remain deny-by-default unless a test demonstrates a direct orchestrator need.
-- [ ] **Step 3: Create `prompt.md`.** State that it decomposes work, delegates to eligible Agents/Fleets, observes progress, reports evidence, never claims delegated work succeeded without results, never expands its own permissions through a worker, and stops for auth/permission/safety/billing failures rather than routing around them. Do not mention a model vendor or local path.
-- [ ] **Step 4: Run portability and build tests.**
+- [x] **Step 2: Create `profile.yaml`.** Use a stable UUIDv7, version `1.0.0`, no `model_ref`, empty fallback chain, no routing/Smart preference, and a syntactically valid neutral inline model placeholder only where `AgentProfile` requires it; the Task 3 installer must overwrite it before commit. Disable Unix socket transport. Grant only A2A task discovery/status/message capabilities required by the actual orchestrator tools; network/filesystem/process entitlements remain deny-by-default unless a test demonstrates a direct orchestrator need.
+- [x] **Step 3: Create `prompt.md`.** State that it decomposes work, delegates to eligible Agents/Fleets, observes progress, reports evidence, never claims delegated work succeeded without results, never expands its own permissions through a worker, and stops for auth/permission/safety/billing failures rather than routing around them. Do not mention a model vendor or local path.
+- [x] **Step 4: Run portability and build tests.**
 
 ```bash
 cargo nextest run --manifest-path tools/official-sign/Cargo.toml
@@ -555,8 +555,8 @@ ORT_STRATEGY=download cargo run --manifest-path tools/official-sign/Cargo.toml -
 
 Expected: signed v3 package and index entry with `tier: free`, requirements, and `min_mur_version`; no portability findings.
 
-- [ ] **Step 5: Inspect package contents with the real reader test**, not `tar` assumptions. Add an end-to-end assertion that profile/prompt contain no `/Users/`, `/Volumes/`, `/tmp/`, `model_ref`, `fallback_chain`, credential, Claude, OpenAI, or Ollama preference; separately assert the generated manifest has no `model_hint`.
-- [ ] **Step 6: Commit content.**
+- [x] **Step 5: Inspect package contents with the real reader test**, not `tar` assumptions. Add an end-to-end assertion that profile/prompt contain no `/Users/`, `/Volumes/`, `/tmp/`, `model_ref`, `fallback_chain`, credential, Claude, OpenAI, or Ollama preference; separately assert the generated manifest has no `model_hint`.
+- [x] **Step 6: Commit content.**
 
 ```bash
 git add catalog.yaml agents/orchestrator tools/official-sign/tests/end_to_end.rs
