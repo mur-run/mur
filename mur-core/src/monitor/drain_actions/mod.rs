@@ -307,10 +307,24 @@ fn attempt_action(
         }
     };
 
-    // The new remediation total, set ONLY by the arm that actually
-    // attempted a remedy. `record_remediation_attempt` returns it so the
-    // post-check below needs no extra `get` — which is what it was written
-    // to do (`store/mod.rs`).
+    // The new remediation total, carried to the post-attempt cap check
+    // ONLY by an arm that attempted a remedy and did not get one — the
+    // executor's `Err`, or no executor for the verb at all.
+    // `record_remediation_attempt` returns it so the post-check below needs
+    // no extra `get` — which is what it was written to do (`store/mod.rs`).
+    //
+    // A gated action that DID remediate deliberately leaves this `None`.
+    // The count is of attempts (rule 2 counts the deferral-free attempt,
+    // not the failure), but `Exhausted` is a verdict about giving up, and
+    // it is terminal: `maybe_complete_monitor` early-returns on any state
+    // that is not `ActionPending`/`AwaitingApproval`, so an `Exhausted`
+    // written here can never be corrected to `Completed`. With
+    // `max_remediation_attempts: 1` and `on_failure: [rerun]` that turned a
+    // rerun MUR successfully dispatched into an `exhausted` event and a
+    // desktop notification saying MUR gave up, pointing the user at
+    // `mur monitor retry`. Spec §混合處置策略 rule 6 is about stopping
+    // FURTHER remediation; when nothing further is owed and the last remedy
+    // worked, `Completed` is the honest terminal.
     let mut attempts_after: Option<u32> = None;
 
     if decision.deferred {
@@ -360,9 +374,11 @@ fn attempt_action(
             // the gate". Being refused does not count either (explicit
             // denial, or the pin no longer matching): nothing was
             // attempted, and both arms are terminal, so neither can loop.
-            if gated {
-                attempts_after = Some(store.record_remediation_attempt(&row.id)?);
-            }
+            let attempted = if gated {
+                Some(store.record_remediation_attempt(&row.id)?)
+            } else {
+                None
+            };
             match executor_for(action_type) {
                 None => {
                     // `executor_for` covers `notify`, `collect_logs` and
@@ -383,6 +399,7 @@ fn attempt_action(
                         format!("this build has no executor for `{action_type}`; it did not run");
                     store.finish_action(key, ActionState::Failed, &reason)?;
                     rep.failed += 1;
+                    attempts_after = attempted;
                     if gated {
                         record_remediation_failed(store, row, action_type, &reason, now)?;
                     }
@@ -396,12 +413,17 @@ fn attempt_action(
                     };
                     match exec.run(&ctx, params) {
                         Ok(summary) => {
+                            // No cap check on this arm: the remedy worked,
+                            // so the monitor falls through to
+                            // `maybe_complete_monitor` and settles
+                            // `Completed`. See `attempts_after` above.
                             store.finish_action(key, ActionState::Done, &summary)?;
                             rep.executed += 1;
                         }
                         Err(reason) => {
                             store.finish_action(key, ActionState::Failed, &reason)?;
                             rep.failed += 1;
+                            attempts_after = attempted;
                             if gated {
                                 record_remediation_failed(store, row, action_type, &reason, now)?;
                             }
@@ -450,10 +472,29 @@ pub fn drain_actions(
     handle: &tokio::runtime::Handle,
     now: DateTime<Utc>,
 ) -> Result<ActionReport> {
+    drain_actions_with(mur_home, handle, now, &super::registry(mur_home))
+}
+
+/// The body of `drain_actions`, with the adapter registry supplied rather
+/// than built from `mur_home`.
+///
+/// The seam exists for one reason: the only verb that is both gated and has
+/// an executor is `rerun`, and its executor's success path goes through
+/// `GithubActionsAdapter`, which would make a real HTTP request. Without
+/// this parameter the drain's own happy path for a gated action — approval
+/// → attempt counted → executor `Ok` → `maybe_complete_monitor` — is
+/// unreachable from a test at any price, which is how F1 (a *successful*
+/// gated remedy marking the monitor `Exhausted`) shipped unnoticed. Test
+/// code passes a double; production has exactly one caller, above.
+pub(crate) fn drain_actions_with(
+    mur_home: &Path,
+    handle: &tokio::runtime::Handle,
+    now: DateTime<Utc>,
+    registry: &AdapterRegistry,
+) -> Result<ActionReport> {
     let Some(store) = MonitorStore::open_existing(mur_home)? else {
         return Ok(ActionReport::default());
     };
-    let registry = super::registry(mur_home);
     let mut rep = ActionReport::default();
     let mut budget = DRAIN_MAX_ACTIONS_PER_TICK;
     // Keys phase 1 has already attempted this tick. Phase 2 reads
@@ -494,7 +535,7 @@ pub fn drain_actions(
             // unrun. The row keeps its claimed state and is retried.
             if let Err(error) = attempt_action(
                 &store,
-                &registry,
+                registry,
                 handle,
                 mur_home,
                 &row,
@@ -606,7 +647,7 @@ pub fn drain_actions(
         // Contained per row, for the same reason as Phase 1 above.
         if let Err(error) = attempt_action(
             &store,
-            &registry,
+            registry,
             handle,
             mur_home,
             &row,
