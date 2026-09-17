@@ -485,17 +485,17 @@ pub fn validate_profile_portability(profile_path: &Path) -> Result<()>;
 
 `CatalogEntry` gets `model_requirements: Option<ModelRequirements>` and `min_mur_version: Option<String>`; `IndexItem` carries both fields.
 
-- [ ] **Step 1: Add failing tests** for duplicate id and duplicate `(kind,name,version)`, missing source dir, profile/catalog version mismatch, missing/invalid `min_mur_version` on requirement items, absolute path, owner/user identity, `model_ref`, non-empty fallback chain, credential/secret, machine socket, and a valid portable profile. Extend end-to-end tests to build researcher v2 and orchestrator v3 from one catalog.
-- [ ] **Step 2: Prove red.**
+- [x] **Step 1: Add failing tests** for duplicate id and duplicate `(kind,name,version)`, missing source dir, profile/catalog version mismatch, missing/invalid `min_mur_version` on requirement items, absolute path, owner/user identity, `model_ref`, non-empty fallback chain, credential/secret, machine socket, and a valid portable profile. Extend end-to-end tests to build researcher v2 and orchestrator v3 from one catalog.
+- [x] **Step 2: Prove red.**
 
 ```bash
 cargo nextest run --manifest-path tools/official-sign/Cargo.toml
 ```
 
-- [ ] **Step 3: Implement structural portability validation for v3 requirement items.** Deserialize `AgentProfile`; for catalog entries carrying `model_requirements`, recursively inspect YAML values for credential/secret keys and absolute paths, and explicitly reject `model_ref`, non-empty fallback chain, owner/user fields, and enabled Unix socket binds. Preserve the existing v2 build and validation path unchanged for catalog entries without requirements, including already-published packages such as researcher 1.0.1. Separately inspect the generated v3 `MuragentManifest` and reject requirements with non-empty `model_hint`. Error messages include `file:field`, never secret values.
-- [ ] **Step 4: Make the signer derive source path** as `<kind>s/<name>` from the selected catalog entry. Add `--all` mutually exclusive with `--id`; `--all` validates and builds every entry. Pass catalog requirements into `build_manifest_from_profile_with_requirements`; verify manifest requirements equal catalog requirements, `model_hint` is absent, profile version equals catalog version, and requirement entries declare a semver `min_mur_version`. Carry both requirements and minimum version into `index.json`.
-- [ ] **Step 5: Rewrite workflow inputs and scripts.** `workflow_dispatch.inputs.item_id` is required. PR runs `official-sign --all` with the throwaway key. Publish resolves name/version/kind/source/bundle/tag from `catalog.yaml` through an `official-sign --describe ITEM --format github-output` command, not `awk`. Every later step consumes those outputs. Release creation refuses an existing tag; recover skips release upload; commit message uses selected name/version.
-- [ ] **Step 6: Run tests and locally inspect generated artifacts.**
+- [x] **Step 3: Implement structural portability validation for v3 requirement items.** Deserialize `AgentProfile`; for catalog entries carrying `model_requirements`, recursively inspect YAML values for credential/secret keys and absolute paths, and explicitly reject `model_ref`, non-empty fallback chain, owner/user fields, and enabled Unix socket binds. Preserve the existing v2 build and validation path unchanged for catalog entries without requirements, including already-published packages such as researcher 1.0.1. Separately inspect the generated v3 `MuragentManifest` and reject requirements with non-empty `model_hint`. Error messages include `file:field`, never secret values.
+- [x] **Step 4: Make the signer derive source path** as `<kind>s/<name>` from the selected catalog entry. Add `--all` mutually exclusive with `--id`; `--all` validates and builds every entry. Pass catalog requirements into `build_manifest_from_profile_with_requirements`; verify manifest requirements equal catalog requirements, `model_hint` is absent, profile version equals catalog version, and requirement entries declare a semver `min_mur_version`. Carry both requirements and minimum version into `index.json`.
+- [x] **Step 5: Rewrite workflow inputs and scripts.** `workflow_dispatch.inputs.item_id` is required. PR runs `official-sign --all` with the throwaway key. Publish resolves name/version/kind/source/bundle/tag from `catalog.yaml` through an `official-sign --describe ITEM --format github-output` command, not `awk`. Every later step consumes those outputs. Release creation refuses an existing tag; recover skips release upload; commit message uses selected name/version.
+- [x] **Step 6: Run tests and locally inspect generated artifacts.**
 
 ```bash
 cargo nextest run --manifest-path tools/official-sign/Cargo.toml
@@ -508,7 +508,7 @@ ORT_STRATEGY=download cargo run --manifest-path tools/official-sign/Cargo.toml -
 
 Expected after Task 9 content exists: both `researcher-1.0.1.muragent` and `orchestrator-1.0.0.muragent`, plus both index entries.
 
-- [ ] **Step 7: Commit infrastructure separately.**
+- [x] **Step 7: Commit infrastructure separately.**
 
 ```bash
 git add tools/official-sign .github/workflows/publish.yml README.md docs/FIRST_PUBLISH.md
