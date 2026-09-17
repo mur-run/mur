@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn factory_builds_only_secret_free_loopback_entries() {
         let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
-            reqwest::Client::builder(),
+            crate::llm::llm_client_builder(),
         )
         .unwrap();
         let ok = CodexClient::from_entry(

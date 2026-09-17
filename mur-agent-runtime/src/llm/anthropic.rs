@@ -1368,7 +1368,7 @@ mod tests {
             server.base_url(),
             "claude-opus-5".into(),
             crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
-                reqwest::Client::builder(),
+                crate::llm::llm_client_builder(),
             )
             .unwrap(),
         );

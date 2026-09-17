@@ -39,6 +39,57 @@ pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder {
         .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
 }
 
+/// Every LLM HTTP client comes from [`llm_client_builder`] — tests included.
+///
+/// `.no_proxy()` and the connect timeout live in that one function, so a
+/// client built any other way silently has neither. In production that would
+/// break the isolation guarantee documented above; in a test it did something
+/// subtler and worse. Five test clients were built bare, which made them the
+/// only clients in the crate that DID read an ambient `HTTP_PROXY` — so the
+/// three tests that set one process-wide to prove it is ignored were poisoning
+/// them, from another thread, in a way that looked like flakiness: the failing
+/// set changed between runs and every one of them passed alone.
+///
+/// Serializing those tests would have ordered the collision. Building the
+/// client production builds removes it, and makes the test exercise the real
+/// thing at the same time. This guard is here because the next bare builder
+/// would reopen it silently.
+#[test]
+fn llm_clients_are_never_built_bare() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/llm");
+    let mut bare = Vec::new();
+    let mut stack = vec![dir];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).expect("read llm dir") {
+            let path = e.expect("entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|x| x != "rs") {
+                continue;
+            }
+            let body = std::fs::read_to_string(&path).expect("read source");
+            for (i, line) in body.lines().enumerate() {
+                // The definition itself is the one permitted use.
+                let is_definition = path.file_name().is_some_and(|f| f == "mod.rs")
+                    && body
+                        .lines()
+                        .nth(i.saturating_sub(1))
+                        .is_some_and(|prev| prev.contains("fn llm_client_builder"));
+                if line.contains("reqwest::Client::builder()") && !is_definition {
+                    bare.push(format!("{}:{}", path.display(), i + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        bare.is_empty(),
+        "build LLM clients with llm_client_builder(), not bare — \
+         these inherit an ambient HTTP_PROXY and have no connect timeout: {bare:?}"
+    );
+}
+
 mod stream_activity;
 pub(crate) use stream_activity::StreamActivity;
 
