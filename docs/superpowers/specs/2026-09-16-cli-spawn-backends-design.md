@@ -275,6 +275,81 @@ So the gap is narrower and more tractable than "build a sandbox":
 
 Point 2 is where the difficulty actually lives. The other two are wiring.
 
+### Shaping it: tighter than the agent, not equal to it
+
+The obvious move is to hand the spawned CLI
+`SandboxPolicy::from_entitlements` — the agent's own grants, the same call
+`mcp_client.rs` makes for an MCP server. It is the wrong move, and the reason
+is the whole point of this section.
+
+An agent's entitlements describe what it may do **through MUR's tools**. Every
+one of those calls passes the policy gate, the HITL gate and the secret mask.
+A spawned `codex` has a second route to the same operations — its built-in
+shell — and that route passes none of them. Granting the CLI the agent's
+filesystem and network entitlements would therefore hand its shell, ungated,
+everything the agent can only reach gated. The entitlements would be
+unchanged and the guarantee behind them would be gone.
+
+So the policy is derived from the agent's, then narrowed by one rule:
+
+> **Anything the agent can only do through a gated tool, the sandbox denies
+> to the CLI.**
+
+Applied, that gives a shape worth stating concretely:
+
+| axis | grant | why |
+|---|---|---|
+| `fs_read` | the turn's working directory, plus the backend's private home | an agent asked to work on a repository must be able to read it; reading is not a gated operation for MUR's own tools either |
+| `fs_write` | the private home only | `write_file` and `edit_file` pass the gate; a shell write to the same path would not, so the shell does not get to write there at all |
+| network | denied, except the model endpoint and the agent's unix socket | the first is what makes the CLI work; the second is how its tools come back to MUR |
+| everything else | denied | including the user's own `~/.codex`, other repositories, and every credential the agent was never granted |
+
+The consequence is deliberate and should not be filed off: **inside a spawned
+`codex`, the shell can look but not touch.** Editing happens through MUR's
+tools, mounted over MCP, where the gate is. That is a real constraint on what
+`codex` can do for a user, and it is the price of admitting a CLI whose shell
+cannot be removed. A design that let the shell write would be easier to use
+and would have no story for why the HITL gate exists.
+
+The unix socket is already anticipated by the sandbox rather than needing new
+support: `macos.rs` carries `unix_socket_allow_paths()`, and its comment names
+"the agent socket dialed for A2A" as exactly the case a blanket
+`(deny network-outbound)` must not catch.
+
+### The blocker the shaping runs into
+
+The table above is a *per-child* policy, and `spawn_sandboxed` cannot apply
+one today. Its own comment says so:
+
+> `cage.spawn(birdcage_cmd)` would enforce the policy above, but requires a
+> dedicated single-threaded pre-fork process. For now the cage is built to
+> document intent.
+
+It constructs the `birdcage` exceptions from the policy, drops the cage, and
+calls `cmd.spawn()`. A child is confined by **inheriting the parent's**
+sandbox — Landlock and seccomp on Linux, seatbelt across `fork`+`exec` on
+macOS — which is real confinement, but it is the agent runtime's policy, not
+a narrower one chosen for this child.
+
+That matters exactly here. Inheritance gives the spawned `codex` whatever the
+agent process itself may do, which is the "equal to the agent" outcome this
+section rejects. Narrowing is the entire design, and narrowing is the part
+that is not wired.
+
+Demonstrated rather than deduced: a test that grants one directory, denies a
+sibling, and spawns `/bin/sh` writing to both finds **the denied write
+lands**. It ships `#[ignore]`d as the acceptance test for per-child
+enforcement — it should start passing the day the pre-fork launcher does, and
+until then it is the difference between a comment and a fact.
+
+### What still has to be proved
+
+Shaping is a claim until it is asserted. Before `codex` is enabled, each row
+of that table needs a test that attempts the denied thing from inside a
+spawned CLI and shows it refused — not a review of the profile text. The
+`--sandbox` probe in answer 6 is the cautionary case: a flag that reads like a
+boundary, measured, turned out to restrict nothing.
+
 
 The agent's status and Hub panel must disclose that built-in shell execution
 is unmediated, identify the verified sandbox boundaries, and avoid claiming
