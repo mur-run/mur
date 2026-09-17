@@ -419,6 +419,11 @@ pub struct TaskRunner {
     /// for a `y`. Without this the gate could not tell the two apart and waited
     /// the full `hitl.timeout_secs` for an answer that was never coming.
     client_notifiers: Arc<tokio::sync::Mutex<HashMap<String, ApprovalSink>>>,
+    /// Who may answer an approval for a task, as distinct from who is
+    /// watching it. Same connection for an in-process turn; different ones
+    /// for a CLI-spawn turn, where the shim can answer but the audience is
+    /// whoever ran `mur agent send`.
+    approval_sinks: Arc<tokio::sync::Mutex<HashMap<String, ApprovalSink>>>,
     /// Per-turn steering channels keyed by task id. A running agentic loop
     /// holds the receiver; `turn/steer` pushes a user interjection here and the
     /// loop picks it up at the next iteration boundary.
@@ -599,6 +604,7 @@ impl TaskRunner {
             agent_name: String::new(),
             notifier: None,
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            approval_sinks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
             limits: (Default::default(), None),
@@ -914,6 +920,12 @@ impl TaskRunner {
         self.client_notifiers
             .lock()
             .await
+            .insert(task_id.to_string(), (tx.clone(), can_approve));
+        // Both, because for an in-process turn the attached client is the
+        // audience and the approver. They only diverge for a spawned CLI.
+        self.approval_sinks
+            .lock()
+            .await
             .insert(task_id.to_string(), (tx, can_approve));
     }
 
@@ -927,13 +939,13 @@ impl TaskRunner {
     /// and any later approval for that turn failing closed with a human
     /// sitting right there. Borrowing makes the nesting explicit instead of
     /// making the inner caller the last writer.
-    pub async fn borrow_client_notifier(
+    pub async fn borrow_approval_sink(
         &self,
         task_id: &str,
         tx: tokio::sync::mpsc::Sender<serde_json::Value>,
         can_approve: bool,
     ) -> Option<ApprovalSink> {
-        self.client_notifiers
+        self.approval_sinks
             .lock()
             .await
             .insert(task_id.to_string(), (tx, can_approve))
@@ -942,8 +954,8 @@ impl TaskRunner {
     /// Put back what `borrow_client_notifier` displaced, or clear the slot if
     /// it was empty before. Restoring `None` by removing is the point: the
     /// borrower must not leave its own sink behind after it has gone.
-    pub async fn restore_client_notifier(&self, task_id: &str, prior: Option<ApprovalSink>) {
-        let mut map = self.client_notifiers.lock().await;
+    pub async fn restore_approval_sink(&self, task_id: &str, prior: Option<ApprovalSink>) {
+        let mut map = self.approval_sinks.lock().await;
         match prior {
             Some(p) => {
                 map.insert(task_id.to_string(), p);
@@ -972,7 +984,9 @@ impl TaskRunner {
         // `Err`, which is the correct fail-closed answer if a future change
         // ever routes a prompt here, and leaks nothing.
         let (tx, _) = tokio::sync::mpsc::channel(1);
-        self.client_notifiers
+        // The approval map only. Saying nobody can approve must not also say
+        // nobody is watching — those became different statements.
+        self.approval_sinks
             .lock()
             .await
             .insert(task_id.to_string(), (tx, false));
@@ -981,6 +995,7 @@ impl TaskRunner {
     /// Drop the per-turn HITL sink once the turn completes.
     pub async fn unregister_client_notifier(&self, task_id: &str) {
         self.client_notifiers.lock().await.remove(task_id);
+        self.approval_sinks.lock().await.remove(task_id);
     }
 
     /// Register a steering sender for the given task id.
@@ -1921,6 +1936,7 @@ impl TaskRunner {
             secrets: self.secrets.clone(),
             notifier: self.notifier.clone(),
             client_notifiers: self.client_notifiers.clone(),
+            approval_sinks: self.approval_sinks.clone(),
             agent_name: self.agent_name.clone(),
             decision_store: self.decision_store.clone(),
             hitl_timeout_secs: self.hitl_timeout_secs,
