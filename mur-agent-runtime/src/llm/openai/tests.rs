@@ -174,8 +174,10 @@ async fn authless_client_sends_no_credential_header() {
     let client = OpenAiClient::authless_with_http(
         server.base_url(),
         "gpt-test".into(),
-        crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(reqwest::Client::builder())
-            .unwrap(),
+        crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            crate::llm::llm_client_builder(),
+        )
+        .unwrap(),
     );
     let resp = client.generate(hello()).await.unwrap();
     assert_eq!(resp.text, "hi");

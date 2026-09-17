@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn factory_builds_only_secret_free_loopback_entries() {
         let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
-            reqwest::Client::builder(),
+            crate::llm::llm_client_builder(),
         )
         .unwrap();
         let ok =
@@ -172,7 +172,7 @@ mod tests {
             format!("{}/v1", server.base_url()),
             "claude-opus-5".into(),
             crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
-                reqwest::Client::builder(),
+                crate::llm::llm_client_builder(),
             )
             .unwrap(),
         )
