@@ -78,12 +78,12 @@ pub enum Commands {
         #[arg(long = "unset")]
         unset: Vec<String>,
     },
-    /// Sync patterns to AI tools (or run a sync subcommand)
+    /// Sync your knowledge to AI tools (or run a sync subcommand)
     Sync {
         /// Suppress output
         #[arg(long)]
         quiet: bool,
-        /// Force project-aware sync (prioritize patterns matching project tags/language)
+        /// Force project-aware sync (prioritize items matching project tags/language)
         #[arg(long)]
         project: bool,
         /// Team ID for cloud sync (env: MUR_TEAM_ID)
