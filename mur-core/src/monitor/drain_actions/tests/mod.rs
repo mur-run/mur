@@ -651,3 +651,89 @@ fn an_empty_action_list_is_still_consulted_and_only_once() {
          reschedule_monitor got wrong by writing Sleeping"
     );
 }
+
+/// The reopen path, which #1384 shipped untested because `consult_one`
+/// builds its own model adapter and cannot be driven from a test.
+///
+/// The seam is `apply_proposal_reopening`: the production function the
+/// empty-list loop calls once a model has answered. Feeding it a hand-built
+/// `Proposal` exercises the real claim, the real event, and the real state
+/// change — everything after the model, which is the part with the risk in
+/// it.
+#[test]
+fn a_proposal_reopens_a_completed_monitor_without_unfreezing_its_fence() {
+    use crate::monitor::resolver::Proposal;
+
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().to_path_buf();
+    let id = {
+        let s = MonitorStore::open(&home).unwrap();
+        settle_into(
+            &s,
+            &MonitorSpec::from_yaml(
+                "schema_version: 1\nname: norule\nsource: { type: mur_run, reference: r9 }\n\
+                 idempotency_key: k-reopen\ncreated_by: { actor: user:test }\n",
+            )
+            .unwrap(),
+            Outcome::Failed,
+        )
+    };
+
+    let s = store(&home);
+    let row = s.get(&id).unwrap().unwrap();
+    assert_eq!(
+        row.state,
+        MonitorState::Completed,
+        "premise: an empty action list settles outright"
+    );
+
+    let proposal = Proposal {
+        action: mur_monitor::spec::Action {
+            r#type: "collect_logs".into(),
+            params: serde_json::Map::new(),
+        },
+        reason: "no rule covered this failure".into(),
+    };
+
+    assert!(
+        super::apply_proposal_reopening(&s, &row, &proposal, t0()).unwrap(),
+        "the first call owns the side effect"
+    );
+
+    let after = s.get(&id).unwrap().unwrap();
+    assert_eq!(
+        after.state,
+        MonitorState::ActionPending,
+        "a Completed monitor must be reopened or Phase 2 skips the row forever"
+    );
+    assert!(
+        !after.state.is_claimable(),
+        "and the fence must stay frozen — ActionPending is not claimable, which \
+         is what reschedule_monitor got wrong by writing Sleeping"
+    );
+
+    let rows = s.actions_for(&id).unwrap();
+    let claimed = rows
+        .iter()
+        .find(|a| a.proposed_action.is_some())
+        .expect("the proposal must be claimed as an action row");
+    assert_eq!(
+        claimed.cycle_id, after.cycle_id,
+        "the reopen must not rotate the cycle"
+    );
+    assert!(
+        claimed
+            .proposed_action
+            .as_deref()
+            .unwrap()
+            .contains("collect_logs"),
+        "the row carries the action itself, since its index names no slot in \
+         the spec list"
+    );
+
+    // Restart safety: the same proposal again must not re-claim or re-reopen.
+    assert!(
+        !super::apply_proposal_reopening(&s, &row, &proposal, t0()).unwrap(),
+        "a second call must not hand the caller the side effect again"
+    );
+}
