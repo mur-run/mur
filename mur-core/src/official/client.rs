@@ -1,6 +1,6 @@
 //! HTTP client for the app.mur.run official catalog API.
 use anyhow::{Context, Result, bail};
-use mur_common::official::OfficialLicense;
+use mur_common::{muragent::manifest::ModelRequirements, official::OfficialLicense};
 use serde::Deserialize;
 
 /// Catalog item as returned by `GET /api/v1/core/catalog`. Only the fields the
@@ -15,6 +15,10 @@ pub struct CatalogItem {
     pub version: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub model_requirements: Option<ModelRequirements>,
+    #[serde(default)]
+    pub min_mur_version: Option<String>,
 }
 
 #[derive(Deserialize)]

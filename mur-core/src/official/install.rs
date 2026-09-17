@@ -61,6 +61,7 @@ pub struct InstallOutcome {
 }
 
 /// Compatibility entry point retained until every front-end supplies options.
+#[allow(dead_code)]
 pub async fn install_item_unchanged(id: &str) -> Result<InstallOutcome> {
     install_item(id, &OfficialInstallOptions::default()).await
 }
