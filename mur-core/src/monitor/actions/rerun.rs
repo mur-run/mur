@@ -74,6 +74,8 @@ impl ActionExecutor for Rerun {
 mod tests {
     use chrono::{DateTime, TimeZone, Utc};
 
+    use crate::monitor::actions::EventWriter;
+
     use mur_common::hitl::RiskTier;
     use mur_monitor::action::risk;
     use mur_monitor::adapter::{AdapterRegistry, Observation, SourceAdapter};
@@ -187,7 +189,7 @@ mod tests {
     fn a_successful_rerun_records_the_new_run_and_says_it_is_unwatched() {
         let (_d, s, row) = fixture_with_write_grant();
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg(),
@@ -216,7 +218,7 @@ mod tests {
     fn a_rerun_failure_is_an_action_failure_not_a_work_failure() {
         let (_d, s, row) = fixture_where_rerun_403s();
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg(),
@@ -235,7 +237,7 @@ mod tests {
     fn the_result_never_carries_the_token() {
         let (_d, s, row) = fixture_where_rerun_403s();
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg(),
@@ -269,7 +271,7 @@ mod tests {
         // `rerun` on a `mur_run` monitor has nothing to call.
         let (_d, s, row) = fixture_with_source(SourceType::MurRun);
         let ctx = ActionCtx {
-            store: &s,
+            events: EventWriter::new(&s, &row, t0()),
             row: &row,
             now: t0(),
             registry: &reg(),
