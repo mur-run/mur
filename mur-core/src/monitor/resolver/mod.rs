@@ -154,6 +154,53 @@ pub fn parse_proposal(raw: &str) -> Result<Proposal, ProposalError> {
     })
 }
 
+/// Why a consultation produced nothing. Both arms end the same way — an
+/// event, no action — but they are kept apart because they mean different
+/// things to an operator: one is "the model was not reachable", the other is
+/// "the model answered and the answer was unusable".
+#[derive(Debug, Clone)]
+pub enum ResolverError {
+    /// Could not reach or complete the call. Note what this is NOT: a work
+    /// failure or a monitor failure. The resolver is advisory, so a failed
+    /// consultation leaves the monitor exactly where it was — the same
+    /// reasoning that makes an unreadable source `unknown` rather than
+    /// `failed`.
+    Unreachable(String),
+    /// The model answered; [`parse_proposal`] refused it.
+    Refused(ProposalError),
+}
+
+impl std::fmt::Display for ResolverError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreachable(e) => write!(f, "resolver not reachable: {e}"),
+            Self::Refused(e) => write!(f, "resolver reply refused: {e}"),
+        }
+    }
+}
+
+/// Ask once, and accept only an answer [`parse_proposal`] approves.
+///
+/// Generic over the client rather than taking `&dyn LlmClient`, because
+/// `LlmClient::complete` returns `impl Future` and the trait is therefore
+/// not dyn-compatible. That is also what makes this testable without a
+/// network: the tests below pass a mock.
+///
+/// One call, no retry. A retry loop here would multiply both the cost and
+/// the disclosure surface of a feature whose whole budget is one proposal
+/// per cycle, and a model that answered unusably once is not obviously
+/// likelier to answer usably the second time.
+pub async fn ask<C: mur_common::llm::LlmClient>(
+    client: &C,
+    ctx: &prompt::Context,
+) -> Result<Proposal, ResolverError> {
+    let raw = client
+        .complete(&prompt::user_prompt(ctx), Some(&prompt::system_prompt()))
+        .await
+        .map_err(|e| ResolverError::Unreachable(e.to_string()))?;
+    parse_proposal(&raw).map_err(ResolverError::Refused)
+}
+
 pub mod prompt;
 
 #[cfg(test)]

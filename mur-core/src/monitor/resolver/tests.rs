@@ -137,3 +137,111 @@ fn json_buried_in_prose_is_not_dug_out() {
         ProposalError::NotJson
     );
 }
+
+/// `ask` tests. A mock client, so these exercise the real prompt builder and
+/// the real parser end to end without a network.
+mod ask_tests {
+    use super::super::*;
+    use mur_common::error::LlmError;
+    use mur_common::llm::LlmClient;
+    use std::sync::Mutex;
+
+    /// Records what it was asked, so a test can assert the call carried a
+    /// system prompt and a redacted user prompt rather than just checking
+    /// the return value.
+    struct MockLlm {
+        reply: Result<String, String>,
+        seen: Mutex<Option<(String, Option<String>)>>,
+    }
+
+    impl MockLlm {
+        fn ok(reply: &str) -> Self {
+            Self {
+                reply: Ok(reply.to_string()),
+                seen: Mutex::new(None),
+            }
+        }
+        fn err(msg: &str) -> Self {
+            Self {
+                reply: Err(msg.to_string()),
+                seen: Mutex::new(None),
+            }
+        }
+    }
+
+    impl LlmClient for MockLlm {
+        fn complete(
+            &self,
+            prompt: &str,
+            system: Option<&str>,
+        ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send {
+            *self.seen.lock().unwrap() = Some((prompt.to_string(), system.map(str::to_string)));
+            let r = self.reply.clone();
+            async move { r.map_err(LlmError::Request) }
+        }
+
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, LlmError> {
+            Ok(vec![])
+        }
+    }
+
+    fn ctx() -> prompt::Context {
+        prompt::Context {
+            source_type: "github_actions".into(),
+            outcome: "failed".into(),
+            error: Some("job `build` exited 1".into()),
+            attempted: vec!["rerun: failed".into()],
+            log_tail: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_usable_reply_becomes_a_proposal() {
+        let m = MockLlm::ok(r#"{"action_type":"collect_logs","reason":"need the failing step"}"#);
+        let p = ask(&m, &ctx()).await.expect("should propose");
+        assert_eq!(p.action.r#type, "collect_logs");
+        assert_eq!(p.reason, "need the failing step");
+    }
+
+    /// The call must carry both halves. A system prompt dropped to `None`
+    /// would leave the model with no verb list and no format, and it would
+    /// still "work" often enough to pass a test that only checked the happy
+    /// path's return value.
+    #[tokio::test]
+    async fn the_call_carries_the_system_prompt_and_the_context() {
+        let m = MockLlm::ok(r#"{"action_type":"notify","reason":"nothing to retry"}"#);
+        ask(&m, &ctx()).await.expect("should propose");
+        let (user, system) = m.seen.lock().unwrap().clone().expect("client was called");
+        let system = system.expect("a system prompt must be sent");
+        for verb in PROPOSABLE {
+            assert!(system.contains(verb), "system prompt lost {verb}");
+        }
+        assert!(user.contains("github_actions"), "context lost the source");
+        assert!(
+            user.contains("rerun: failed"),
+            "context lost what was already tried, so the model will re-propose it"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unusable_reply_is_refused_not_guessed_at() {
+        let m = MockLlm::ok(r#"{"action_type":"rm_minus_rf","reason":"clean slate"}"#);
+        match ask(&m, &ctx()).await {
+            Err(ResolverError::Refused(ProposalError::UnknownActionType(t))) => {
+                assert_eq!(t, "rm_minus_rf");
+            }
+            other => panic!("an unlisted verb must be refused, got {other:?}"),
+        }
+    }
+
+    /// A consultation that could not happen is not a work failure — the
+    /// monitor is left where it was, which is why this is its own arm.
+    #[tokio::test]
+    async fn an_unreachable_model_is_its_own_error() {
+        let m = MockLlm::err("connection refused");
+        match ask(&m, &ctx()).await {
+            Err(ResolverError::Unreachable(e)) => assert!(e.contains("connection refused")),
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+    }
+}
