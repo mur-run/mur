@@ -86,3 +86,85 @@ fn spawn_impl(mut cmd: Command, policy: &SandboxPolicy) -> io::Result<Child> {
 fn spawn_impl(mut cmd: Command, _policy: &SandboxPolicy) -> io::Result<Child> {
     cmd.spawn()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::policy::SandboxPolicy;
+    use std::path::PathBuf;
+
+    /// The sandbox actually refuses a write it was not granted.
+    ///
+    /// Every other test in this subsystem asserts the *profile text* — that
+    /// the generated SBPL says `deny`. None of them run anything. That is the
+    /// gap the CLI-spawn design names when it insists a sandbox be "verified,
+    /// not merely applied": a policy that is constructed and never exercised
+    /// is the same class of claim as `agy --sandbox`, which read like a
+    /// boundary and, measured, restricted nothing.
+    ///
+    /// So this one spawns a real process and looks at what happened on disk.
+    ///
+    /// **It fails today, which is why it is ignored.** `spawn_impl` above
+    /// builds the `birdcage` exceptions from the policy and then drops the
+    /// cage: the enforcing form needs a single-threaded pre-fork process that
+    /// does not exist yet. A child is confined by *inheriting* the parent's
+    /// sandbox, which is real, but it is the runtime's own policy rather than
+    /// a narrower one chosen per child.
+    ///
+    /// This is the acceptance test for that narrowing. It should start
+    /// passing the day the pre-fork launcher lands, and it is deliberately
+    /// left as a failing check rather than deleted or inverted — a test
+    /// asserting "the sandbox does not confine" would be read one day as a
+    /// statement of intent.
+    ///
+    /// Run it with `cargo test -p mur-agent-runtime -- --ignored`.
+    #[test]
+    #[ignore = "per-child enforcement is unwired: spawn_impl drops the cage"]
+    fn a_write_outside_the_grant_does_not_land() {
+        let tmp = std::env::temp_dir().join(format!("mur-sbx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("tmpdir");
+        let granted = tmp.join("granted");
+        let denied = tmp.join("denied");
+        std::fs::create_dir_all(&granted).expect("granted dir");
+        // BOTH directories exist. Without this the denied write fails with
+        // ENOENT whether or not a sandbox is present, and the test passes
+        // while measuring nothing — checked by spawning unsandboxed, which
+        // must make it fail.
+        std::fs::create_dir_all(&denied).expect("denied dir");
+
+        let policy = SandboxPolicy {
+            // Only the granted subdirectory is writable. `denied` is a
+            // sibling, so nothing about it is covered.
+            fs_write: vec![granted.clone()],
+            fs_read: vec![tmp.clone(), PathBuf::from("/usr"), PathBuf::from("/bin")],
+            fs_exec: vec![PathBuf::from("/bin")],
+            ..Default::default()
+        };
+
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg(format!(
+            "echo ok > {} ; echo nope > {}",
+            granted.join("f").display(),
+            denied.join("f").display()
+        ));
+        let mut child = match spawn_sandboxed(cmd, &policy) {
+            Ok(c) => c,
+            // A platform without an implementation must not silently pass.
+            Err(e) => panic!("spawn_sandboxed failed: {e}"),
+        };
+        let _ = child.wait();
+
+        assert!(
+            granted.join("f").exists(),
+            "the granted write did not land — the policy is denying everything, \
+             which would make the assertion below vacuous"
+        );
+        assert!(
+            !denied.join("f").exists(),
+            "the sandbox allowed a write it never granted: {}",
+            denied.join("f").display()
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
