@@ -922,6 +922,28 @@ is refused or upgraded after the fact — an older monitor that asks for
 approves one. MUR has no command for editing a monitor in place; cancel it
 and add it again with the grant.
 
+When the rules run out, MUR can ask a model what to do — **off by default**
+(`monitor_resolver.enabled` in `config.yaml`), because a background daemon
+that starts sending your monitor's context to a model on its own schedule,
+with nobody watching, is not something an upgrade should decide for you.
+While it is off nothing in that path runs and no request leaves the machine.
+
+Switched on, it is consulted in exactly two situations, both of them "the
+structured rules could not settle this": every remedy the spec listed for
+that failure failed, or the spec listed none at all. It gets one consultation
+per observation cycle — not per tick — and what it is shown is redacted
+through the same chokepoint everything else MUR writes passes through.
+
+What comes back is not trusted with much. It may name one of three verbs —
+`notify`, `collect_logs`, `rerun` — and a reply naming anything else is
+discarded whole rather than downgraded to something safe. It cannot state a
+risk level: the tier still comes from the fixed table keyed on the action
+type, so a model proposing `rerun` gets the same pinned approval request you
+would get from a spec that asked for one, and you approve it the same way.
+A consultation that fails or is refused is recorded and changes nothing —
+the monitor settles without advice, because failing to get advice is not the
+same as the work failing.
+
 A `mur fleet run` registers its own monitor for you automatically. When
 registration can't complete right away, the run still proceeds — it names
 the run id and says whether tracking is queued to retry or has given up,
