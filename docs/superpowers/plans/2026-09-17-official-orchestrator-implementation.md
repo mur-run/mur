@@ -151,7 +151,7 @@ cargo nextest run -p mur-common -E 'test(/muragent/)'
 
 Expected: all tests pass; existing v2 fixture tests remain green.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add mur-common/src/muragent/{manifest.rs,writer.rs,validator.rs}

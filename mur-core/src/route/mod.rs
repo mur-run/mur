@@ -8,7 +8,7 @@ pub mod heuristic;
 pub mod ledger;
 
 use anyhow::Result;
-use mur_common::model::{ModelEntry, ModelRegistry};
+use mur_common::model::ModelRegistry;
 use mur_common::route::{EscalationEvent, RouteDecision, RoutePolicy, RouteTier, TaskType};
 
 use crate::route::heuristic::DefaultHeuristic;
@@ -20,16 +20,6 @@ const DEFAULT_ESCALATION_THRESHOLD: f64 = 0.55;
 /// Reachable because the heuristic's realistic max is ≈ 0.85 (see
 /// `DefaultHeuristic`).
 const PREFER_LOCAL_THRESHOLD: f64 = 0.75;
-
-/// Providers treated as local/cheap when a model carries no explicit `tier`.
-const LOCAL_PROVIDERS: &[&str] = &[
-    "ollama",
-    "llamacpp",
-    "llama_cpp",
-    "mlx",
-    "lmstudio",
-    "local",
-];
 
 /// Enforced by `Router::new` (which rejects an empty registry); justifies the
 /// `expect` on cross-tier degradation, where at least one model always exists.
@@ -223,26 +213,13 @@ impl Router {
         self.registry.roles.get(role_name)?.route_policy.as_ref()
     }
 
-    /// Effective tier for a model: its explicit `tier`, or inferred from the
-    /// provider when unset (honors the `ModelEntry.tier` doc contract).
-    fn effective_tier(entry: &ModelEntry) -> RouteTier {
-        if let Some(tier) = entry.tier {
-            return tier;
-        }
-        if LOCAL_PROVIDERS.contains(&entry.provider.to_lowercase().as_str()) {
-            RouteTier::Local
-        } else {
-            RouteTier::Frontier
-        }
-    }
-
     /// Pick the best model in `tier` by capability count. Ties resolve
     /// deterministically by the `BTreeMap`'s key order.
     fn pick_best(&self, tier: RouteTier) -> Option<String> {
         self.registry
             .models
             .iter()
-            .filter(|(_, e)| Self::effective_tier(e) == tier)
+            .filter(|(_, e)| e.effective_route_tier() == tier)
             .max_by_key(|(_, e)| e.capabilities.len())
             .map(|(k, _)| k.clone())
     }
