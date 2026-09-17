@@ -224,15 +224,29 @@ impl GithubActionsAdapter {
              write-scoped credential"
                 .to_string()
         })?;
-        let token = SecretRef::from_str(credential_ref)
-            .ok()
-            .and_then(|r| r.resolve_to_string_blocking())
-            .ok_or_else(|| {
-                format!(
-                    "write_credential_ref `{credential_ref}` could not be resolved — \
-                     update the reference"
-                )
-            })?;
+        // Two branches, deliberately: one that may name this field's
+        // contents and one that must not (F3, whole-branch review). A value
+        // that does not parse as a `SecretRef` may be a pasted token rather
+        // than a reference, and everything returned from here reaches the
+        // action `result`, the `remediation_failed` payload,
+        // `mur monitor show` and the desktop notification.
+        // `mur_common::redact` carries `ghp_`/`ghs_` but no `github_pat_`
+        // pattern, so a fine-grained PAT would survive all three redaction
+        // layers standing behind this message. Name the field and the
+        // accepted schemes instead — the wording is spelled out rather than
+        // borrowed from `SpecError::Credential`, whose own message
+        // hardcodes the OTHER field's name.
+        let parsed = SecretRef::from_str(credential_ref).map_err(|_| {
+            "source.write_credential_ref is not a secret reference (expected env:NAME, \
+             keychain:service/account, file:PATH, or cmd:...)"
+                .to_string()
+        })?;
+        // Naming it here is safe and is the whole value of the message:
+        // parsing succeeded, so this is provably a reference, and the user
+        // needs to know WHICH one came back empty.
+        let token = parsed.resolve_to_string_blocking().ok_or_else(|| {
+            format!("write_credential_ref `{parsed}` could not be resolved — update the reference")
+        })?;
 
         let url = rerun_url(&self.api_base, &owner, &repo, run_id);
         let timeout = self.timeout;
@@ -661,6 +675,46 @@ mod tests {
             .rerun("o/r/12345", Some("env:DEFINITELY_NOT_SET"))
             .unwrap_err();
         assert!(e.contains("could not be resolved"), "{e}");
+        assert!(!e.contains("request failed"), "{e}");
+        // The counterpart to `a_malformed_grant_is_refused_without_echoing_it`
+        // below: on THIS branch the value parsed, so it is provably a
+        // reference and naming it is the whole point — "which one came back
+        // empty" is the only actionable part of the message. A fix that
+        // stopped echoing everywhere would pass that test and fail here.
+        assert!(
+            e.contains("env:DEFINITELY_NOT_SET"),
+            "a reference that parsed must be named: {e}"
+        );
+    }
+
+    /// F3, whole-branch review. The refusal used to interpolate this field's
+    /// raw value, so a user who pasted a token INTO the reference field saw
+    /// it echoed back — into the action `result`, the `remediation_failed`
+    /// payload, `mur monitor show` and the desktop notification. The
+    /// predecessor slice leaked a PAT through exactly this shape (a parse
+    /// error that embedded its input), and `mur_common::redact` has no
+    /// `github_pat_` pattern, so the three redaction layers behind this
+    /// message would not have caught a fine-grained PAT.
+    ///
+    /// Unreachable today only because `MonitorSpec::validate` refuses a
+    /// malformed grant on every production persistence path — which is
+    /// "safe by accident", the exact standing this finding objects to.
+    #[test]
+    fn a_malformed_grant_is_refused_without_echoing_it() {
+        // Shaped like a fine-grained PAT precisely because `redact_secrets`
+        // does NOT cover that prefix: if this string is in the message, it
+        // reaches the user.
+        const PASTED_TOKEN: &str = "github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789";
+        let a = adapter_pointing_at_a_closed_port();
+        let e = a.rerun("o/r/12345", Some(PASTED_TOKEN)).unwrap_err();
+        assert!(!e.contains(PASTED_TOKEN), "the value must never be echoed");
+        // An empty or unhelpful message would satisfy the line above on its
+        // own, so require the two things that make the refusal actionable:
+        // which field is wrong, and what a right one looks like.
+        assert!(
+            e.contains("write_credential_ref") && e.contains("env:NAME"),
+            "the refusal must name the field and the accepted schemes: {e}"
+        );
         assert!(!e.contains("request failed"), "{e}");
     }
 
