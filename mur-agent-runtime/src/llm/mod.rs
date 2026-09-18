@@ -714,15 +714,11 @@ mod proxy_isolation_tests {
                 let _ = s.shutdown().await;
             }
         });
-        // SAFETY: set/cleared within this test; reqwest reads proxy env at build.
-        unsafe {
-            std::env::set_var("HTTP_PROXY", "http://127.0.0.1:1");
-        }
+        // reqwest reads proxy env at build time, so this needs the real
+        // variable — see the guard's own docs for why one lock covers all.
+        let _env = mur_common::test_env::EnvGuard::set([("HTTP_PROXY", "http://127.0.0.1:1")]);
         let client = llm_client_builder().build().unwrap();
         let resp = client.get(format!("http://{addr}/")).send().await;
-        unsafe {
-            std::env::remove_var("HTTP_PROXY");
-        }
         let resp = resp.expect("no_proxy client reaches base_url despite HTTP_PROXY");
         assert_eq!(resp.status(), 200);
     }

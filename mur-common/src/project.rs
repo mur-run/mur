@@ -57,10 +57,8 @@ mod tests {
 
     #[test]
     fn active_project_id_prefers_env_override() {
-        // nextest isolates each test in its own process → env is safe to set.
-        unsafe { std::env::set_var("MUR_ACTIVE_PROJECT", "/explicit") };
+        let _env = crate::test_env::EnvGuard::set([("MUR_ACTIVE_PROJECT", "/explicit")]);
         assert_eq!(active_project_id().as_deref(), Some("/explicit"));
-        unsafe { std::env::remove_var("MUR_ACTIVE_PROJECT") };
     }
 
     #[test]

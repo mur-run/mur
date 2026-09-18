@@ -594,10 +594,7 @@ mod resolve_env_tests {
 
     #[tokio::test]
     async fn resolves_env_when_set() {
-        // SAFETY: uniquely named env var so concurrent tests don't collide.
-        unsafe {
-            std::env::set_var("MUR_TEST_RESOLVE_ENV", "shhh");
-        }
+        let _env = crate::test_env::EnvGuard::set([("MUR_TEST_RESOLVE_ENV", "shhh")]);
         let s = SecretRef::Env("MUR_TEST_RESOLVE_ENV".into());
         let v = s.resolve().await.unwrap();
         assert_eq!(v.expose_secret(), "shhh");
@@ -612,10 +609,7 @@ mod resolve_env_tests {
 
     #[tokio::test]
     async fn resolve_to_string_exposes_value_or_none() {
-        // SAFETY: uniquely named env var so concurrent tests don't collide.
-        unsafe {
-            std::env::set_var("MUR_TEST_RESOLVE_TO_STRING", "kc-abc");
-        }
+        let _env = crate::test_env::EnvGuard::set([("MUR_TEST_RESOLVE_TO_STRING", "kc-abc")]);
         let set = SecretRef::Env("MUR_TEST_RESOLVE_TO_STRING".into());
         assert_eq!(set.resolve_to_string().await.as_deref(), Some("kc-abc"));
 
@@ -719,11 +713,7 @@ mod keychain_test_fixture {
         let g = MOCK_LOCK.lock().await;
         // The mock never reaches the real OS keychain, so lift the automatic
         // test-process keychain block (`keychain_blocked`).
-        // SAFETY: env mutation serialized by MOCK_LOCK; nextest runs one test
-        // per process anyway.
-        unsafe {
-            std::env::set_var(super::ENV_KEYCHAIN_ALLOW, "1");
-        }
+        let _env = crate::test_env::EnvGuard::set([(super::ENV_KEYCHAIN_ALLOW, "1")]);
         let store: Store = Arc::new(Mutex::new(HashMap::new()));
         if let Some((svc, user, pw)) = initial {
             store
@@ -746,12 +736,8 @@ mod resolve_keychain_tests {
     #[tokio::test]
     async fn blocked_process_never_reaches_keychain() {
         let _g = super::keychain_test_fixture::env_lock().await;
-        // SAFETY: env mutation serialized on the fixture lock; nextest is
-        // process-per-test anyway.
-        unsafe {
-            std::env::remove_var(ENV_KEYCHAIN_ALLOW);
-            std::env::set_var(ENV_KEYCHAIN_DISABLED, "1");
-        }
+        let mut _env = crate::test_env::EnvGuard::unset([ENV_KEYCHAIN_ALLOW]);
+        _env.set_var(ENV_KEYCHAIN_DISABLED, "1");
         let s = SecretRef::Keychain {
             service: "mur-test".into(),
             account: "nope".into(),
@@ -763,9 +749,6 @@ mod resolve_keychain_tests {
         assert!(keychain_get("mur-test", "nope").await.unwrap().is_none());
         assert!(keychain_set("mur-test", "nope", "v").await.is_err());
         assert!(keychain_delete("mur-test", "nope").await.is_ok());
-        unsafe {
-            std::env::remove_var(ENV_KEYCHAIN_DISABLED);
-        }
     }
 
     #[tokio::test]
@@ -845,18 +828,10 @@ mod resolve_file_tests {
         use secrecy::ExposeSecret as _;
         std::fs::write(&id_path, identity.to_string().expose_secret()).unwrap();
         std::fs::set_permissions(&id_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        // SAFETY: setting an env var read by decrypt_age. Tests serialize on
-        // the same env var, so concurrent writes would race; we serialize via
-        // a Mutex-held guard.
-        unsafe {
-            std::env::set_var("MUR_AGE_IDENTITY_PATH", &id_path);
-        }
+        let _env = crate::test_env::EnvGuard::set([("MUR_AGE_IDENTITY_PATH", &id_path)]);
         let s = SecretRef::File(enc_path);
         let v = s.resolve().await.unwrap();
         assert_eq!(v.expose_secret(), "shh-from-age");
-        unsafe {
-            std::env::remove_var("MUR_AGE_IDENTITY_PATH");
-        }
     }
 }
 
@@ -889,10 +864,7 @@ mod check_tests {
 
     #[tokio::test]
     async fn check_env_present() {
-        // SAFETY: uniquely named env var so concurrent tests don't collide.
-        unsafe {
-            std::env::set_var("MUR_TEST_CHECK_ENV", "1");
-        }
+        let _env = crate::test_env::EnvGuard::set([("MUR_TEST_CHECK_ENV", "1")]);
         assert!(SecretRef::Env("MUR_TEST_CHECK_ENV".into()).check().await);
     }
 
@@ -1069,10 +1041,12 @@ mod resolve_blocking_tests {
 
     #[test]
     fn resolve_blocking_env_and_missing() {
-        unsafe { std::env::set_var("MUR_TEST_SECRET_BLOCKING", "s3cret") };
+        let mut env = crate::test_env::EnvGuard::set([("MUR_TEST_SECRET_BLOCKING", "s3cret")]);
         let r: SecretRef = "env:MUR_TEST_SECRET_BLOCKING".parse().unwrap();
         assert_eq!(r.resolve_to_string_blocking().as_deref(), Some("s3cret"));
-        unsafe { std::env::remove_var("MUR_TEST_SECRET_BLOCKING") };
+        // Load-bearing, not cleanup: the `_and_missing` half of this test is
+        // that the same ref fails once the variable is gone.
+        env.unset_var("MUR_TEST_SECRET_BLOCKING");
         assert!(r.resolve_blocking().is_err());
     }
 
@@ -1082,9 +1056,8 @@ mod resolve_blocking_tests {
     /// tests on machines whose config carries secret refs).
     #[tokio::test]
     async fn resolve_blocking_inside_current_thread_runtime_does_not_panic() {
-        unsafe { std::env::set_var("MUR_TEST_SECRET_CT_RT", "s3cret") };
+        let _env = crate::test_env::EnvGuard::set([("MUR_TEST_SECRET_CT_RT", "s3cret")]);
         let r: SecretRef = "env:MUR_TEST_SECRET_CT_RT".parse().unwrap();
         assert_eq!(r.resolve_to_string_blocking().as_deref(), Some("s3cret"));
-        unsafe { std::env::remove_var("MUR_TEST_SECRET_CT_RT") };
     }
 }
