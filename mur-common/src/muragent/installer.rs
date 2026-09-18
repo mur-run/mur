@@ -526,11 +526,9 @@ mod tests {
         // Regression: `.muragent` export must bundle the system prompt and
         // skill files so the loaded agent keeps its persona + non-dangling
         // skill registrations.
-        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        let prev = std::env::var_os("MUR_HOME");
-        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+        let _env = crate::test_env::EnvGuard::set([("MUR_HOME", &mur_home)]);
 
         let profile = AgentProfile::default_for_tests();
         let manifest = build_manifest_from_profile(&profile, "2.13.0");
@@ -549,14 +547,6 @@ mod tests {
         assert_eq!(prompt, "You are a helpful test agent.");
         let skill = fs::read_to_string(agent_dir.join("skills").join("demo.md")).unwrap();
         assert_eq!(skill, "# demo skill\nbody");
-
-        unsafe {
-            if let Some(p) = prev {
-                std::env::set_var("MUR_HOME", p);
-            } else {
-                std::env::remove_var("MUR_HOME");
-            }
-        }
     }
 
     fn make_test_package_with_identity(
@@ -577,11 +567,9 @@ mod tests {
 
     #[test]
     fn rotation_manifest_missing_still_refuses() {
-        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        let prev = std::env::var_os("MUR_HOME");
-        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+        let _env = crate::test_env::EnvGuard::set([("MUR_HOME", &mur_home)]);
 
         let old_identity = AgentIdentity::generate();
         let pkg_old = make_test_package_with_identity(&tmp, &old_identity);
@@ -607,14 +595,6 @@ mod tests {
             "expected TrustRefused, got: {:?}",
             err
         );
-
-        unsafe {
-            if let Some(p) = prev {
-                std::env::set_var("MUR_HOME", p);
-            } else {
-                std::env::remove_var("MUR_HOME");
-            }
-        }
     }
 
     #[test]
@@ -649,11 +629,9 @@ mod tests {
 
     #[test]
     fn install_then_update_preserves_data() {
-        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        let prev = std::env::var_os("MUR_HOME");
-        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+        let _env = crate::test_env::EnvGuard::set([("MUR_HOME", &mur_home)]);
 
         let pkg = make_test_package(&tmp);
         let archive = MuragentArchive::read(&pkg).unwrap();
@@ -675,13 +653,6 @@ mod tests {
         assert_eq!(preserved, b"important");
 
         // Cleanup
-        unsafe {
-            if let Some(p) = prev {
-                std::env::set_var("MUR_HOME", p);
-            } else {
-                std::env::remove_var("MUR_HOME");
-            }
-        }
     }
 
     #[test]
@@ -690,11 +661,9 @@ mod tests {
         // key) package over an existing agent must NOT delete the agent's
         // locally-minted identity keypair, or `mur agent export` afterward
         // fails with "identity files not found".
-        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        let prev = std::env::var_os("MUR_HOME");
-        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+        let _env = crate::test_env::EnvGuard::set([("MUR_HOME", &mur_home)]);
 
         let pkg = make_test_package(&tmp);
         let archive = MuragentArchive::read(&pkg).unwrap();
@@ -724,22 +693,13 @@ mod tests {
         );
 
         // Cleanup
-        unsafe {
-            if let Some(p) = prev {
-                std::env::set_var("MUR_HOME", p);
-            } else {
-                std::env::remove_var("MUR_HOME");
-            }
-        }
     }
 
     #[test]
     fn install_with_name_installs_under_override_name_and_refuses_collision() {
-        let _guard = crate::trust::test_env_lock::MUR_HOME_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        let prev = std::env::var_os("MUR_HOME");
-        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+        let _env = crate::test_env::EnvGuard::set([("MUR_HOME", &mur_home)]);
 
         let pkg = make_test_package(&tmp);
         let archive = MuragentArchive::read(&pkg).unwrap();
@@ -758,13 +718,5 @@ mod tests {
             "expected refuse-on-collision error, got: {:?}",
             err
         );
-
-        unsafe {
-            if let Some(p) = prev {
-                std::env::set_var("MUR_HOME", p);
-            } else {
-                std::env::remove_var("MUR_HOME");
-            }
-        }
     }
 }

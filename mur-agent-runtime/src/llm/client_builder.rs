@@ -562,11 +562,10 @@ mod ambient_proxy_tests {
             ..Default::default()
         };
 
-        // SAFETY: set and cleared inside this test; reqwest reads proxy env at
-        // build time, so the client must be constructed while it is set.
-        unsafe {
-            std::env::set_var("HTTP_PROXY", format!("http://{proxy_addr}"));
-        }
+        // reqwest reads proxy env at build time, so the client must be
+        // constructed while it is set — hence the real variable, under the guard.
+        let _env =
+            mur_common::test_env::EnvGuard::set([("HTTP_PROXY", format!("http://{proxy_addr}"))]);
         let client = build_bare_client(&entry, &profile, std::path::Path::new("/tmp"))
             .expect("keyless loopback entry builds");
         let _ = client
@@ -578,9 +577,6 @@ mod ambient_proxy_tests {
                 ..Default::default()
             })
             .await;
-        unsafe {
-            std::env::remove_var("HTTP_PROXY");
-        }
 
         if let Ok(Ok(line)) = tokio::time::timeout(std::time::Duration::from_secs(3), seen_rx).await
         {

@@ -75,12 +75,15 @@ async fn serve(script: Vec<Step>) -> SocketAddr {
 
 /// Bounds in seconds — one is the smallest the parser accepts, and it is long
 /// enough that a few hundred milliseconds of gap is comfortably inside it.
-fn set_bounds(first: u64, idle: u64) {
-    // SAFETY: nextest runs each test in its own process.
-    unsafe {
-        std::env::set_var("MUR_LLM_FIRST_DELTA_TIMEOUT_SECS", first.to_string());
-        std::env::set_var("MUR_LLM_IDLE_TIMEOUT_SECS", idle.to_string());
-    }
+/// Returns the guard rather than setting and walking away: the bounds must
+/// stay in force for the caller's whole test, and be restored when it ends —
+/// including when it ends by panicking.
+#[must_use]
+fn set_bounds(first: u64, idle: u64) -> mur_common::test_env::EnvGuard {
+    mur_common::test_env::EnvGuard::set([
+        ("MUR_LLM_FIRST_DELTA_TIMEOUT_SECS", first.to_string()),
+        ("MUR_LLM_IDLE_TIMEOUT_SECS", idle.to_string()),
+    ])
 }
 
 fn http() -> crate::sandbox::reqwest_guard::GuardedHttpClient {
@@ -130,7 +133,7 @@ fn ollama(addr: SocketAddr) -> super::ollama::OllamaClient {
 /// forwarded, `EndTurn` preserved, no marker.
 #[tokio::test]
 async fn ollama_a_stream_inside_the_bound_is_untouched() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send("{\"message\":{\"content\":\"one \"}}\n"),
         Step::Quiet(200),
@@ -151,7 +154,7 @@ async fn ollama_a_stream_inside_the_bound_is_untouched() {
 /// seconds of steady output, well past the old 60 s ceiling.
 #[tokio::test]
 async fn ollama_slow_but_steady_generation_is_never_cut_off() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let mut script = vec![Step::Send("{\"message\":{\"content\":\"x\"}}\n")];
     for _ in 0..20 {
         script.push(Step::Quiet(300));
@@ -174,7 +177,7 @@ async fn ollama_slow_but_steady_generation_is_never_cut_off() {
 /// (D6a), not the client's, so it must NOT appear here.
 #[tokio::test]
 async fn ollama_a_stream_that_stops_sending_yields_its_partial() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send("{\"message\":{\"content\":\"half \"}}\n"),
         Step::Send("{\"message\":{\"content\":\"an answer\"}}\n"),
@@ -197,7 +200,7 @@ async fn ollama_a_stream_that_stops_sending_yields_its_partial() {
 /// anything and `Timeout` is the right class.
 #[tokio::test]
 async fn ollama_a_stream_that_never_starts_is_a_timeout() {
-    set_bounds(1, 1);
+    let _bounds = set_bounds(1, 1);
     let addr = serve(vec![Step::Stall]).await;
     let (tx, mut rx) = sink();
     let err = ollama(addr).generate_stream(req(), tx).await.unwrap_err();
@@ -210,7 +213,7 @@ async fn ollama_a_stream_that_never_starts_is_a_timeout() {
 /// must not end up in the answer.
 #[tokio::test]
 async fn ollama_thinking_keeps_the_stream_alive_and_stays_out_of_the_answer() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send("{\"message\":{\"thinking\":\"hmm \"}}\n"),
         Step::Quiet(300),
@@ -243,7 +246,7 @@ fn openai(addr: SocketAddr) -> super::openai::OpenAiClient {
 
 #[tokio::test]
 async fn openai_a_stream_inside_the_bound_is_untouched() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send("data: {\"choices\":[{\"delta\":{\"content\":\"one \"}}]}\n\n"),
         Step::Quiet(200),
@@ -269,7 +272,7 @@ async fn openai_a_stream_inside_the_bound_is_untouched() {
 /// narration as a finished answer with the tool call thrown away.
 #[tokio::test]
 async fn openai_tool_argument_fragments_count_as_activity() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let mut script = vec![
         Step::Send("data: {\"choices\":[{\"delta\":{\"content\":\"Running it now.\"}}]}\n\n"),
         Step::Send(
@@ -315,7 +318,7 @@ async fn openai_tool_argument_fragments_count_as_activity() {
 /// marked.
 #[tokio::test]
 async fn openai_a_call_interrupted_mid_arguments_is_dropped_not_guessed() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send("data: {\"choices\":[{\"delta\":{\"content\":\"Deleting it.\"}}]}\n\n"),
         Step::Send(
@@ -340,7 +343,7 @@ async fn openai_a_call_interrupted_mid_arguments_is_dropped_not_guessed() {
 /// mistake it for a half-finished one.
 #[tokio::test]
 async fn openai_a_no_argument_call_survives_an_interruption() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send(
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\
@@ -360,7 +363,7 @@ async fn openai_a_no_argument_call_survives_an_interruption() {
 /// may retry without duplicating anything.
 #[tokio::test]
 async fn openai_nothing_assembled_is_a_timeout() {
-    set_bounds(1, 1);
+    let _bounds = set_bounds(1, 1);
     let addr = serve(vec![Step::Stall]).await;
     let (tx, mut rx) = sink();
     let err = openai(addr).generate_stream(req(), tx).await.unwrap_err();
@@ -377,7 +380,7 @@ async fn openai_nothing_assembled_is_a_timeout() {
 /// On a paused clock this test failed, which is how the collapse was found.
 #[tokio::test]
 async fn openai_the_fragment_test_is_measuring_real_gaps() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send("data: {\"choices\":[{\"delta\":{\"content\":\"Running it now.\"}}]}\n\n"),
         Step::Send(
@@ -418,7 +421,7 @@ fn anthropic(addr: SocketAddr) -> super::anthropic::AnthropicClient {
 
 #[tokio::test]
 async fn anthropic_a_stream_inside_the_bound_is_untouched() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send(
             "data: {\"type\":\"content_block_delta\",\"delta\":\
@@ -450,7 +453,7 @@ async fn anthropic_a_stream_inside_the_bound_is_untouched() {
 /// sink silence that a sink-side guard would have called death.
 #[tokio::test]
 async fn anthropic_input_json_delta_counts_as_activity() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let mut script = vec![
         Step::Send(
             "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":\
@@ -494,7 +497,7 @@ async fn anthropic_input_json_delta_counts_as_activity() {
 /// `content_block_stop`, which never arrived.
 #[tokio::test]
 async fn anthropic_a_call_interrupted_mid_arguments_never_appears() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let addr = serve(vec![
         Step::Send(
             "data: {\"type\":\"content_block_delta\",\"delta\":\
@@ -526,7 +529,7 @@ async fn anthropic_a_call_interrupted_mid_arguments_never_appears() {
 /// keeps it that way.
 #[tokio::test]
 async fn anthropic_thinking_keeps_the_stream_alive_and_stays_out_of_the_answer() {
-    set_bounds(30, 1);
+    let _bounds = set_bounds(30, 1);
     let mut script = vec![];
     for _ in 0..6 {
         script.push(Step::Send(
@@ -556,7 +559,7 @@ async fn anthropic_thinking_keeps_the_stream_alive_and_stays_out_of_the_answer()
 
 #[tokio::test]
 async fn anthropic_nothing_assembled_is_a_timeout_not_an_invalid_response() {
-    set_bounds(1, 1);
+    let _bounds = set_bounds(1, 1);
     let addr = serve(vec![Step::Stall]).await;
     let (tx, _rx) = sink();
     let err = anthropic(addr)

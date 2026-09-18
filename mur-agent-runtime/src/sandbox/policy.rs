@@ -1866,13 +1866,7 @@ mod tests {
         let cargo_path = make_fake_executable(&toolchain_bin, "cargo");
 
         let rustup_home = tmp.path().to_path_buf();
-        // SAFETY: set/cleared within this test; no other test in this
-        // process reads RUSTUP_HOME concurrently in a way that would race
-        // with this value (tests run single-threaded per-process here or
-        // isolated via nextest).
-        unsafe {
-            std::env::set_var("RUSTUP_HOME", &rustup_home);
-        }
+        let _env = mur_common::test_env::EnvGuard::set([("RUSTUP_HOME", &rustup_home)]);
 
         let mut ent = minimal_entitlements();
         ent.processes.spawn.mode = SpawnMode::Allowlist;
@@ -1880,14 +1874,6 @@ mod tests {
 
         let agent_home = tmp.path().join("agents").join("rustup-test");
         let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
-
-        // SAFETY: paired with the set_var above; always run even if an
-        // assertion below panics would be nicer, but this mirrors the
-        // existing set_var/remove_var pattern used elsewhere in this repo
-        // (see llm::tests).
-        unsafe {
-            std::env::remove_var("RUSTUP_HOME");
-        }
 
         let expected_canonical =
             std::fs::canonicalize(&cargo_path).expect("canonicalize toolchain cargo");

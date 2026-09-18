@@ -201,28 +201,25 @@ mod stream_activity_tests {
 
     #[test]
     fn env_overrides_are_honoured() {
-        // SAFETY: set and cleared within this test; nextest gives each test
-        // its own process, so no sibling sees this.
-        unsafe { std::env::set_var("MUR_LLM_IDLE_TIMEOUT_SECS", "7") };
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_LLM_IDLE_TIMEOUT_SECS", "7")]);
         assert_eq!(
             env_secs("MUR_LLM_IDLE_TIMEOUT_SECS", 120),
             std::time::Duration::from_secs(7)
         );
-        unsafe { std::env::remove_var("MUR_LLM_IDLE_TIMEOUT_SECS") };
     }
 
     /// A typo, or a zero, must not disable the bound. Zero is the dangerous
     /// one: read as "no bound" it would silently remove the protection.
     #[test]
     fn an_unusable_env_value_keeps_the_default() {
+        let mut env = mur_common::test_env::EnvGuard::hold();
         for bad in ["", "abc", "0", "-5", "12.5"] {
-            unsafe { std::env::set_var("MUR_LLM_IDLE_TIMEOUT_SECS", bad) };
+            env.set_var("MUR_LLM_IDLE_TIMEOUT_SECS", bad);
             assert_eq!(
                 env_secs("MUR_LLM_IDLE_TIMEOUT_SECS", 120),
                 std::time::Duration::from_secs(120),
                 "value {bad:?} must fall back to the default"
             );
         }
-        unsafe { std::env::remove_var("MUR_LLM_IDLE_TIMEOUT_SECS") };
     }
 }

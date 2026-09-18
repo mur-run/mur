@@ -137,7 +137,6 @@ impl RevocationsList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trust::test_env_lock::MUR_HOME_LOCK;
     use chrono::Duration;
 
     fn make_list(crl: u64, expires_offset_secs: i64) -> RevocationsList {
@@ -231,23 +230,13 @@ mod tests {
 
     #[test]
     fn cache_roundtrip() {
-        let _guard = MUR_HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        let prev_home = std::env::var_os("MUR_HOME");
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        let _env = crate::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
 
         let list = make_list(42, 3600);
         list.save_cached(tmp.path()).unwrap();
         let loaded = RevocationsList::load_cached(tmp.path()).unwrap();
         assert_eq!(loaded.crl_number, 42);
         assert_eq!(loaded.revoked.len(), 2);
-
-        unsafe {
-            if let Some(p) = prev_home {
-                std::env::set_var("MUR_HOME", p);
-            } else {
-                std::env::remove_var("MUR_HOME");
-            }
-        }
     }
 }

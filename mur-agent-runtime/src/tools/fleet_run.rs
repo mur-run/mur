@@ -479,7 +479,7 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        unsafe { std::env::set_var("MUR_BIN", &fake) };
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_BIN", &fake)]);
         let tool = FleetRunTool {
             mur_home: home.to_path_buf(),
             agent_name: "mur".into(),
@@ -491,7 +491,6 @@ mod tests {
             .execute(serde_json::json!({"fleet": "deep-research", "goal": "why is the sky blue"}))
             .await
             .unwrap();
-        unsafe { std::env::remove_var("MUR_BIN") };
         assert!(
             t0.elapsed() < std::time::Duration::from_secs(2),
             "returned in {:?}",

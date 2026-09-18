@@ -483,11 +483,12 @@ mod guarded_client_tests {
     async fn an_ambient_proxy_never_sees_the_request() {
         let (proxy, proxy_rx) = echo_listener().await;
         let (target, _t) = echo_listener().await;
-        // SAFETY: set and cleared in this test; nextest gives it its own process.
-        unsafe { std::env::set_var("HTTP_PROXY", format!("http://{proxy}")) };
+        // No seam here: reqwest reads the proxy from the real environment at
+        // build time, so proving it is honoured (or ignored) needs the real
+        // variable. The guard serializes that and restores it on unwind.
+        let _env = mur_common::test_env::EnvGuard::set([("HTTP_PROXY", format!("http://{proxy}"))]);
         let c = guarded(HostGuard::restricted(vec![]));
         let _ = c.post(&format!("http://{target}/")).map(|b| b.send());
-        unsafe { std::env::remove_var("HTTP_PROXY") };
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(300), proxy_rx)
                 .await
