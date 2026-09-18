@@ -131,6 +131,12 @@ pub struct App {
     /// Transcript viewport height (rows), captured each render so PageUp/Down
     /// move a screenful and `scroll_back` can be clamped to the real maximum.
     pub scroll_page: u16,
+    /// Transcript wrap width (columns), captured each render. A paste carries
+    /// no hint of whether its newlines were typed or painted by the pane's
+    /// wrap, so `paste::unwrap_soft_breaks` needs the width the transcript was
+    /// wrapped AT to tell one from the other. 0 until the first render, which
+    /// disables unwrapping — an unknown width must never edit a paste.
+    pub wrap_width: u16,
     /// User adjustment to the chooser band height (Ctrl+↑/↓ while the
     /// chooser is open), in rows relative to the auto-computed height.
     /// Persists for the session so a preferred size sticks between turns.
@@ -362,6 +368,7 @@ impl App {
             channel: None,
             scroll_back: 0,
             scroll_page: 0,
+            wrap_width: 0,
             chooser_grow: 0,
             spinner: 0,
             should_quit: false,

@@ -641,7 +641,12 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                     );
                 }
             } else {
-                app.input.insert_str(text);
+                // #003: a newline in a paste may be one the pane PAINTED when
+                // it wrapped this text on the way out, not one the user typed.
+                // Rejoin those against the width we last rendered at; anything
+                // ambiguous keeps its newline.
+                app.input
+                    .insert_str(paste::unwrap_soft_breaks(&text, app.wrap_width));
             }
             refresh_completion(app);
         }

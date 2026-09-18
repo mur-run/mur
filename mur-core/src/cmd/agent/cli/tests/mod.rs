@@ -5,6 +5,7 @@ mod help_coverage_tests;
 mod hitl_key_tests;
 mod monitor_shortcut_tests;
 mod notify_tests;
+mod paste_newline_tests;
 mod persist_skin_tests;
 mod pricing_book_tests;
 mod shell_menu_tests;
