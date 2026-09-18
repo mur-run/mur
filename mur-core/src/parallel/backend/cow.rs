@@ -12,9 +12,15 @@
 use anyhow::Result;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 /// Directories (relative to project root) that are worth COW-copying.
 const CACHE_DIRS: &[&str] = &["target"];
+
+/// Upper bound on the pre-track Time Machine snapshot. It is a convenience,
+/// never a correctness requirement, so it is abandoned rather than waited on.
+#[cfg(target_os = "macos")]
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// COW copy method resolved at call time.
 #[derive(Debug, PartialEq, Eq)]
@@ -96,13 +102,52 @@ fn method_label(m: &CowMethod) -> &'static str {
 /// user can restore if something goes wrong.  No entitlement required.
 /// Non-fatal: if `tmutil` is unavailable or Time Machine is off, logs and
 /// continues.
+///
+/// Bounded by [`SNAPSHOT_TIMEOUT`]: `tmutil localsnapshot` can block for a very
+/// long time when the volume is nearly full, and this runs *before* any track
+/// is created — an unbounded wait here stalls the whole `fleet run` with no
+/// output. The snapshot is a best-effort convenience, so a slow one is
+/// abandoned rather than waited on.
 #[cfg(target_os = "macos")]
 pub fn take_local_snapshot() {
-    let result = Command::new("tmutil").arg("localsnapshot").status();
-    match result {
-        Ok(s) if s.success() => eprintln!("Time Machine local snapshot created"),
-        Ok(s) => eprintln!("warn: tmutil localsnapshot exited {s} — continuing"),
-        Err(e) => eprintln!("warn: tmutil not available ({e}) — continuing"),
+    use std::time::Instant;
+
+    let mut child = match Command::new("tmutil").arg("localsnapshot").spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warn: tmutil not available ({e}) — continuing");
+            return;
+        }
+    };
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(s)) if s.success() => {
+                eprintln!("Time Machine local snapshot created");
+                return;
+            }
+            Ok(Some(s)) => {
+                eprintln!("warn: tmutil localsnapshot exited {s} — continuing");
+                return;
+            }
+            Ok(None) => {
+                if start.elapsed() >= SNAPSHOT_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    eprintln!(
+                        "warn: tmutil localsnapshot exceeded {}s (disk nearly full?) — continuing without a snapshot",
+                        SNAPSHOT_TIMEOUT.as_secs()
+                    );
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                eprintln!("warn: waiting on tmutil failed ({e}) — continuing");
+                return;
+            }
+        }
     }
 }
 

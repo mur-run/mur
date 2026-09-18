@@ -12,6 +12,17 @@ pub fn create_tracks(config: &ParallelConfig, project: &Path) -> Result<TrackSet
     // One safety snapshot before creating ANY track — was per-track inside the
     // git backend (and absent for ZFS); now once and backend-agnostic. Non-fatal.
     cow::take_local_snapshot();
+    create_tracks_in(config, project)
+}
+
+/// Same as [`create_tracks`] but WITHOUT the Time Machine safety snapshot.
+///
+/// The snapshot is a side effect on the user's machine, not on the project, so
+/// it must not fire from a test run: `cargo test` used to leave one real
+/// `com.apple.TimeMachine.*.local` snapshot on `/` per run. Tests that need
+/// real worktrees call this; only the real `fleet run` path calls
+/// [`create_tracks`] and takes the snapshot.
+pub fn create_tracks_in(config: &ParallelConfig, project: &Path) -> Result<TrackSet> {
     let backend = detect_backend(project);
     create_tracks_with(backend.as_ref(), config)
 }
@@ -212,7 +223,7 @@ mod tests {
         let td = temp_repo();
         let repo = td.path().to_path_buf();
         let cfg = make_config("create");
-        let ts = create_tracks(&cfg, &repo).unwrap();
+        let ts = create_tracks_in(&cfg, &repo).unwrap();
         assert_eq!(ts.tracks.len(), 2);
         assert!(ts.tracks[0].config.name.contains("create"));
         for t in &ts.tracks {
@@ -230,7 +241,7 @@ mod tests {
         let td = temp_repo();
         let repo = td.path().to_path_buf();
         let cfg = make_config("destroy");
-        let ts = create_tracks(&cfg, &repo).unwrap();
+        let ts = create_tracks_in(&cfg, &repo).unwrap();
         let paths: Vec<_> = ts.tracks.iter().map(|t| t.worktree_path.clone()).collect();
         destroy_tracks(&ts, &repo);
         for p in &paths {
