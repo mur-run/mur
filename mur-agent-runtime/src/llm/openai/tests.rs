@@ -217,3 +217,39 @@ fn the_self_built_client_has_no_response_clock() {
     assert!(!printed.contains("read_timeout"), "{printed}");
     assert!(!printed.contains("timeout: Some"), "{printed}");
 }
+
+#[test]
+fn openai_error_codes_map_only_enumerated_candidate_failures() {
+    use crate::llm::{Disposition, LlmError, classify};
+    let cases = [
+        (
+            "context_length_exceeded",
+            Disposition::AdvanceNow,
+            "context",
+        ),
+        ("model_not_found", Disposition::AdvanceNow, "model"),
+        ("model_unavailable", Disposition::AdvanceNow, "model"),
+        ("insufficient_quota", Disposition::Stop, "credit"),
+        ("content_policy_violation", Disposition::Stop, "safety"),
+    ];
+    for (code, disposition, kind) in cases {
+        let body = json!({"error":{"message":"fixture detail","type":"invalid_request_error","code":code}}).to_string();
+        let error = super::map_openai_error(400, &body);
+        assert_eq!(classify(&error), disposition, "{code}: {error:?}");
+        match kind {
+            "context" => assert!(matches!(error, LlmError::ContextExceeded(_))),
+            "model" => assert!(matches!(error, LlmError::ModelNotFound(_))),
+            "credit" => assert!(matches!(error, LlmError::InsufficientCredit)),
+            "safety" => assert!(matches!(error, LlmError::SafetyPolicyRejected(_))),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn openai_unknown_client_code_stops() {
+    let body = json!({"error":{"message":"nope","type":"invalid_request_error","code":"new_provider_code"}}).to_string();
+    let error = super::map_openai_error(422, &body);
+    assert!(matches!(error, LlmError::Rejected(422, _)), "{error:?}");
+    assert_eq!(crate::llm::classify(&error), crate::llm::Disposition::Stop);
+}

@@ -54,6 +54,126 @@ fn legacy_schema_rejected() {
 }
 
 #[test]
+fn model_requirements_schema_contract_is_enforced() {
+    use mur_common::muragent::manifest::{ModelRequirements, ModelTier};
+    use mur_common::muragent::writer::build_manifest_from_profile_with_requirements;
+
+    let tmp = TempDir::new().unwrap();
+    let profile = AgentProfile::default_for_tests();
+    let requirements = ModelRequirements {
+        chat: true,
+        tools: true,
+        minimum_context_window: None,
+    };
+
+    let cases = [
+        ("v3-valid", "mur-agent/3", true, false, true),
+        ("v2-with-requirements", "mur-agent/2", true, false, false),
+        (
+            "v3-without-requirements",
+            "mur-agent/3",
+            false,
+            false,
+            false,
+        ),
+        ("v3-with-model-hint", "mur-agent/3", true, true, false),
+        ("unknown-schema", "mur-agent/99", false, false, false),
+    ];
+
+    for (name, schema, has_requirements, has_hint, should_validate) in cases {
+        let out = tmp.path().join(format!("{name}.muragent"));
+        let mut manifest = build_manifest_from_profile_with_requirements(
+            &profile,
+            "2.85.0",
+            has_requirements.then(|| requirements.clone()),
+        );
+        manifest.schema = schema.into();
+        if has_hint {
+            manifest.model_hint = Some(mur_common::muragent::manifest::ModelHint {
+                provider: "ollama".into(),
+                name: "legacy".into(),
+                tier: ModelTier::Small,
+                min_ram_gb: 0,
+                local_capable: true,
+            });
+        }
+        let writer = MuragentWriter::new(
+            manifest,
+            serde_yaml_ng::to_string(&profile).unwrap(),
+            AgentIdentity::generate(),
+        );
+        writer.write(&out).unwrap();
+        let archive = MuragentArchive::read(&out).unwrap();
+        assert_eq!(
+            validator::validate(&archive).is_ok(),
+            should_validate,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn signed_model_requirements_reject_tampering() {
+    use mur_common::muragent::manifest::ModelRequirements;
+    use mur_common::muragent::writer::build_manifest_from_profile_with_requirements;
+
+    let tmp = TempDir::new().unwrap();
+    let original = tmp.path().join("signed-v3.muragent");
+    let tampered = tmp.path().join("tampered-v3.muragent");
+    let profile = AgentProfile::default_for_tests();
+    let manifest = build_manifest_from_profile_with_requirements(
+        &profile,
+        "2.85.0",
+        Some(ModelRequirements {
+            chat: true,
+            tools: true,
+            minimum_context_window: None,
+        }),
+    );
+    MuragentWriter::new(
+        manifest,
+        serde_yaml_ng::to_string(&profile).unwrap(),
+        AgentIdentity::generate(),
+    )
+    .write(&original)
+    .unwrap();
+
+    let archive = MuragentArchive::read(&original).unwrap();
+    let mut files = archive.files_as_vec();
+    let manifest = files
+        .iter_mut()
+        .find(|(path, _)| path == "manifest.yaml")
+        .unwrap();
+    let text = String::from_utf8(manifest.1.clone()).unwrap();
+    manifest.1 = text.replace("tools: true", "tools: false").into_bytes();
+    write_test_archive(&tampered, files);
+
+    let archive = MuragentArchive::read(&tampered).unwrap();
+    assert!(validator::validate(&archive).is_err());
+}
+
+fn write_test_archive(path: &std::path::Path, files: Vec<(String, Vec<u8>)>) {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::fs::File;
+    use tar::Builder;
+
+    let mut tar = Builder::new(GzEncoder::new(
+        File::create(path).unwrap(),
+        Compression::default(),
+    ));
+    for (name, bytes) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, name, bytes.as_slice())
+            .unwrap();
+    }
+    tar.into_inner().unwrap().finish().unwrap();
+}
+
+#[test]
 fn bundle_id_mismatch_rejected() {
     let tmp = TempDir::new().unwrap();
     let out = tmp.path().join("bad-bundle.muragent");

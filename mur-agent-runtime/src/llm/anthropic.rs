@@ -33,6 +33,37 @@ const DEFAULT_VERSION: &str = "2023-06-01";
 /// mid-tool_use truncation returns, now caused by thinking eating the budget.
 const DEFAULT_MAX_TOKENS: u32 = 32768;
 
+// Anthropic currently supplies no structured context-overflow code. Keep this
+// exact, versioned fixture shape local to this adapter; broad substring matching
+// would confuse spend-limit and unrelated invalid-request failures.
+const PROMPT_TOO_LONG_MESSAGE_V1: &str = "prompt is too long";
+
+pub(crate) fn map_anthropic_error(status: u16, body: &str) -> LlmError {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return LlmError::from_status(status, body.to_string()),
+    };
+    let error = &parsed["error"];
+    let error_type = error["type"].as_str().unwrap_or_default();
+    let code = error["code"].as_str().unwrap_or_default();
+    let message = error["message"].as_str().unwrap_or(body).to_string();
+
+    if status == 400
+        && error_type == "invalid_request_error"
+        && message == PROMPT_TOO_LONG_MESSAGE_V1
+    {
+        return LlmError::ContextExceeded(message);
+    }
+    match (error_type, code) {
+        ("permission_error", _) => LlmError::PermissionDenied(status, message),
+        (_, "content_policy_violation" | "safety_policy_violation") => {
+            LlmError::SafetyPolicyRejected(message)
+        }
+        ("not_found_error", _) => LlmError::ModelNotFound(message),
+        _ => LlmError::from_status(status, body.to_string()),
+    }
+}
+
 // There was a TOTAL request timeout here (60s, then 180s). It is gone: reqwest
 // applies `.timeout()` until the response body finishes, so it bounded streamed
 // responses too, and at roughly 50-80 output tokens/sec it ran out somewhere
@@ -729,7 +760,7 @@ impl LlmClient for AnthropicClient {
         let body_text = resp.text().await.map_err(|e| LlmError::from_reqwest(&e))?;
         if !status.is_success() {
             tracing::warn!(status = %status, body = %body_text, "anthropic non-2xx");
-            return Err(LlmError::from_status(status.as_u16(), body_text));
+            return Err(map_anthropic_error(status.as_u16(), &body_text));
         }
         let v: serde_json::Value = serde_json::from_str(&body_text)
             .map_err(|e| LlmError::Http(format!("parse response: {e}")))?;
@@ -802,7 +833,7 @@ impl LlmClient for AnthropicClient {
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(LlmError::from_status(status.as_u16(), body_text));
+            return Err(map_anthropic_error(status.as_u16(), &body_text));
         }
 
         // Anthropic streams SSE: `event: <type>` + `data: {json}`. Each data
@@ -1440,5 +1471,68 @@ mod tests {
             classify_oauth_key("sk-ant-oat01-abc", "https://bridge.example.com"),
             None
         );
+    }
+
+    #[test]
+    fn anthropic_error_mapping_uses_anchored_prompt_overflow_shape() {
+        use crate::llm::{Disposition, classify};
+        let exact = json!({"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}).to_string();
+        let error = super::map_anthropic_error(400, &exact);
+        assert!(matches!(error, LlmError::ContextExceeded(_)), "{error:?}");
+        assert_eq!(classify(&error), Disposition::AdvanceNow);
+
+        for message in [
+            "your prompt is too long",
+            "prompt is too long for your spend limit",
+            "prompt is too long ",
+        ] {
+            let body =
+                json!({"type":"error","error":{"type":"invalid_request_error","message":message}})
+                    .to_string();
+            let error = super::map_anthropic_error(400, &body);
+            assert!(
+                matches!(error, LlmError::Rejected(400, _)),
+                "{message}: {error:?}"
+            );
+            assert_eq!(classify(&error), Disposition::Stop);
+        }
+    }
+
+    #[test]
+    fn anthropic_permission_safety_and_size_fail_closed() {
+        use crate::llm::{Disposition, classify};
+        let fixtures = [
+            (
+                json!({"type":"error","error":{"type":"permission_error","message":"organization denied access"}}),
+                "permission",
+            ),
+            (
+                json!({"type":"error","error":{"type":"invalid_request_error","code":"safety_policy_violation","message":"request refused"}}),
+                "safety",
+            ),
+            (
+                json!({"type":"error","error":{"type":"invalid_request_error","message":"organization spend limit exceeded"}}),
+                "spend",
+            ),
+        ];
+        for (value, kind) in fixtures {
+            let error = super::map_anthropic_error(400, &value.to_string());
+            assert_eq!(classify(&error), Disposition::Stop, "{kind}: {error:?}");
+            match kind {
+                "permission" => assert!(matches!(error, LlmError::PermissionDenied(400, _))),
+                "safety" => assert!(matches!(error, LlmError::SafetyPolicyRejected(_))),
+                "spend" => assert!(matches!(error, LlmError::Rejected(400, _))),
+                _ => unreachable!(),
+            }
+        }
+        let too_large = super::map_anthropic_error(
+            413,
+            r#"{"type":"error","error":{"type":"request_too_large","message":"request exceeds 32 MB"}}"#,
+        );
+        assert!(
+            matches!(too_large, LlmError::Rejected(413, _)),
+            "{too_large:?}"
+        );
+        assert_eq!(classify(&too_large), Disposition::Stop);
     }
 }

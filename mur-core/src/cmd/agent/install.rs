@@ -18,14 +18,37 @@ use mur_common::trust;
 
 use super::resolve_mur_home;
 
-/// Installs a `.muragent` bundle. Returns `(installed_name, signer_fingerprint_hex)`
-/// so the dispatch layer can fire the best-effort trusted-recipe install hook
-/// (async; mirrors the fleet-import wiring) without making this function async
-/// itself — it has synchronous test callers.
+/// Whether the ordinary importer should run its legacy first-run model wizard.
+/// Official v3 packages carry signed requirements and are configured by the
+/// transactional official installer instead, so that path suppresses it
+/// explicitly rather than guessing from an item name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolveModelAfterInstall {
+    ExistingWizard,
+    Suppress,
+}
+
+/// Installs a `.muragent` bundle using the legacy model-resolution behavior.
 pub fn cmd_install(
     path: &Path,
     model_ref_override: Option<&str>,
     as_name: Option<&str>,
+) -> Result<(String, String)> {
+    cmd_install_with_resolution(
+        path,
+        model_ref_override,
+        as_name,
+        ResolveModelAfterInstall::ExistingWizard,
+    )
+}
+
+/// Installs a `.muragent` bundle with an explicit post-import model-resolution
+/// mode. Keeping this separate leaves every existing caller unchanged.
+pub(crate) fn cmd_install_with_resolution(
+    path: &Path,
+    model_ref_override: Option<&str>,
+    as_name: Option<&str>,
+    resolve_model: ResolveModelAfterInstall,
 ) -> Result<(String, String)> {
     let archive = MuragentArchive::read(path)
         .with_context(|| format!("read .muragent file at {}", path.display()))?;
@@ -88,7 +111,7 @@ pub fn cmd_install(
 
     if let Some(model_ref) = model_ref_override {
         apply_model_ref_override(&mur_home, installed_name, model_ref)?;
-    } else {
+    } else if resolve_model == ResolveModelAfterInstall::ExistingWizard {
         maybe_resolve_model(&mur_home, installed_name, &archive)?;
     }
     Ok((installed_name.to_string(), outcome.fingerprint_hex.clone()))

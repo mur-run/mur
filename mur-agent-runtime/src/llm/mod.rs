@@ -286,6 +286,12 @@ pub enum LlmError {
     ServerError(u16),
     #[error("insufficient credit")]
     InsufficientCredit,
+    #[error("context window exceeded: {0}")]
+    ContextExceeded(String),
+    #[error("permission denied ({0}): {1}")]
+    PermissionDenied(u16, String),
+    #[error("safety policy rejected: {0}")]
+    SafetyPolicyRejected(String),
     /// The endpoint does not serve this model id (HTTP 404). Distinct from
     /// `Http` because the two need opposite handling: a 404 is permanent for
     /// this candidate — retrying it with backoff can only waste the retry
@@ -322,32 +328,18 @@ pub enum LlmError {
 }
 
 impl LlmError {
-    /// Map a non-success HTTP status into a typed error.
-    ///
-    /// The default for an unrecognised 4xx is `Rejected` (advance), not `Http`
-    /// (stop. The set of failures that must NOT fall back is small, closed and
-    /// stable across providers — it is authentication, and nothing else. The
-    /// set that *should* fall back is open and still growing: every provider
-    /// invents its own codes for "too big", "wrong media type", "not enabled
-    /// in your region", "model not in your tier". Enumerating the open set and
-    /// defaulting the tail to stop is what let a renamed model kill turns for
-    /// months while a fallback sat unused.
-    ///
-    /// Enumerate the closed set; default to the open one.
+    /// Map a non-success HTTP status into a typed error. This status-only
+    /// layer is deliberately conservative: provider adapters promote only
+    /// tested structured codes (or Anthropic's anchored message shapes).
+    /// Unknown 4xx remain typed `Rejected` errors, but stop fleet-wide.
     pub fn from_status(status: u16, body: String) -> LlmError {
         match status {
-            // Closed set: never fall back. Presenting the same broken
-            // credential to a second provider fails identically and buries a
-            // configuration error only the operator can fix.
             401 | 403 => LlmError::Auth(status, body),
             429 => LlmError::RateLimit,
             402 => LlmError::InsufficientCredit,
             404 => LlmError::ModelNotFound(body),
             408 => LlmError::Timeout,
             500..=599 => LlmError::ServerError(status),
-            // Open set: this endpoint refused this request. Another candidate
-            // — different context window, different modality support,
-            // different region — may well accept it.
             400..=499 => LlmError::Rejected(status, body),
             _ => LlmError::Http(format!("status {status}: {body}")),
         }
@@ -392,24 +384,25 @@ pub enum Disposition {
     Stop,
 }
 
+/// Fleet-wide policy: this governs every Agent using `FallbackLlmClient`, not
+/// only the official orchestrator. Keep #947 model-rename and streaming guards.
 pub fn classify(e: &LlmError) -> Disposition {
     match e {
         LlmError::RateLimit
         | LlmError::Timeout
         | LlmError::Connect(_)
         | LlmError::ServerError(_) => Disposition::RetryThenAdvance,
-        // None of these gets better by asking the same endpoint again: an
-        // account without credit does not acquire any within three backoffs, a
-        // model id the endpoint does not serve will not appear, and a refusal
-        // aimed at this candidate's limits is not a matter of timing. All three
-        // may be fine on the next candidate.
-        LlmError::InsufficientCredit | LlmError::ModelNotFound(_) | LlmError::Rejected(..) => {
-            Disposition::AdvanceNow
-        }
-        // `Auth` is the closed set that must never fall back. `Http` here means
-        // a malformed request we built or a response we could not parse — our
-        // bug, which no other candidate will like any better.
-        LlmError::Auth(..) | LlmError::Http(_) | LlmError::InvalidResponse(_) => Disposition::Stop,
+        // These are proven candidate-specific by status or provider parser.
+        LlmError::ModelNotFound(_) | LlmError::ContextExceeded(_) => Disposition::AdvanceNow,
+        // Unknown refusals and policy/account failures are fail-closed. A
+        // provider adapter may promote only an enumerated, tested code above.
+        LlmError::InsufficientCredit
+        | LlmError::PermissionDenied(..)
+        | LlmError::SafetyPolicyRejected(_)
+        | LlmError::Rejected(..)
+        | LlmError::Auth(..)
+        | LlmError::Http(_)
+        | LlmError::InvalidResponse(_) => Disposition::Stop,
         // Already exhausted; classify as whatever the operator should act on.
         LlmError::AllCandidatesFailed { source, .. } => classify(source),
     }
@@ -581,22 +574,16 @@ mod tests {
         ));
     }
 
-    /// A failure that is permanent for THIS candidate but not for the chain.
-    /// Retrying either of these against the same endpoint cannot change the
-    /// answer — an account does not acquire credit inside three backoffs, and
-    /// a model id the endpoint does not serve will not materialise — so they
-    /// must advance without spending the retry budget.
+    /// A missing model is proven candidate-specific; exhausted account credit
+    /// is not and must not silently route to a different billing path.
     #[test]
-    fn permanent_for_this_candidate_advances_without_retrying() {
+    fn only_proven_candidate_failures_advance_without_retrying() {
         use Disposition::*;
         assert!(matches!(
             classify(&LlmError::ModelNotFound("no such model".into())),
             AdvanceNow
         ));
-        assert!(matches!(
-            classify(&LlmError::InsufficientCredit),
-            AdvanceNow
-        ));
+        assert!(matches!(classify(&LlmError::InsufficientCredit), Stop));
     }
 
     /// Auth must never fall back. Presenting the same broken credential to a
@@ -644,6 +631,34 @@ mod tests {
             assert!(matches!(e, LlmError::Auth(..)), "{status}: {e:?}");
             assert_eq!(classify(&e), Disposition::Stop, "{status}");
         }
+    }
+
+    #[test]
+    fn fleet_wide_unknown_client_errors_and_credit_stop() {
+        use Disposition::*;
+        for status in [400, 409, 413, 422] {
+            let error = LlmError::from_status(status, "provider-specific refusal".into());
+            assert!(matches!(error, LlmError::Rejected(s, _) if s == status));
+            assert_eq!(classify(&error), Stop, "status {status}");
+        }
+        assert_eq!(classify(&LlmError::InsufficientCredit), Stop);
+    }
+
+    #[test]
+    fn typed_request_failures_have_bounded_dispositions() {
+        use Disposition::*;
+        assert_eq!(
+            classify(&LlmError::ContextExceeded("too many tokens".into())),
+            AdvanceNow
+        );
+        assert_eq!(
+            classify(&LlmError::PermissionDenied(403, "denied".into())),
+            Stop
+        );
+        assert_eq!(
+            classify(&LlmError::SafetyPolicyRejected("unsafe".into())),
+            Stop
+        );
     }
 }
 

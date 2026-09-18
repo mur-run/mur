@@ -1,7 +1,7 @@
 //! Subcommand action enums (non-agent). Extracted from `main.rs` to keep the
 //! binary entry point lean. Pure clap derive types — no logic lives here.
 
-use crate::cmd::browser::BrowserEngine;
+use crate::cmd::{browser::BrowserEngine, official::OfficialModelPolicy};
 use clap::Subcommand;
 
 #[derive(Subcommand)]
@@ -1367,5 +1367,14 @@ pub enum OfficialAction {
     Install {
         /// Catalog id, e.g. agents/researcher or fleets/deep-research
         id: String,
+        /// Automatically select a compatible model chain by policy
+        #[arg(long, value_enum, conflicts_with = "model_ref")]
+        model_policy: Option<OfficialModelPolicy>,
+        /// Use this registered model as the primary
+        #[arg(long)]
+        model_ref: Option<String>,
+        /// Ordered fallback model ref; may be repeated
+        #[arg(long, requires = "model_ref")]
+        fallback: Vec<String>,
     },
 }

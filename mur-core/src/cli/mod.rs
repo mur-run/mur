@@ -550,9 +550,96 @@ mod tests {
             Cli::try_parse_from(["mur", "official", "install", "fleets/deep-research"]).unwrap();
         match cli.command {
             Commands::Official {
-                action: crate::cli::actions::OfficialAction::Install { id },
-            } => assert_eq!(id, "fleets/deep-research"),
+                action:
+                    crate::cli::actions::OfficialAction::Install {
+                        id,
+                        model_policy,
+                        model_ref,
+                        fallback,
+                    },
+            } => {
+                assert_eq!(id, "fleets/deep-research");
+                assert!(model_policy.is_none());
+                assert!(model_ref.is_none());
+                assert!(fallback.is_empty());
+            }
             _ => panic!("expected official install"),
         }
+    }
+
+    #[test]
+    fn cli_parses_official_model_selection_flags() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "mur",
+            "official",
+            "install",
+            "agents/orchestrator",
+            "--model-ref",
+            "primary",
+            "--fallback",
+            "fallback-one",
+            "--fallback",
+            "fallback-two",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Official {
+                action:
+                    crate::cli::actions::OfficialAction::Install {
+                        model_ref,
+                        fallback,
+                        ..
+                    },
+            } => {
+                assert_eq!(model_ref.as_deref(), Some("primary"));
+                assert_eq!(fallback, ["fallback-one", "fallback-two"]);
+            }
+            _ => panic!("expected official install"),
+        }
+
+        for policy in ["capability-first", "cost-first", "privacy-first"] {
+            assert!(
+                Cli::try_parse_from([
+                    "mur",
+                    "official",
+                    "install",
+                    "agents/orchestrator",
+                    "--model-policy",
+                    policy,
+                ])
+                .is_ok(),
+                "policy {policy} should parse"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_rejects_conflicting_or_orphan_model_flags() {
+        use clap::Parser;
+        assert!(
+            Cli::try_parse_from([
+                "mur",
+                "official",
+                "install",
+                "agents/orchestrator",
+                "--model-policy",
+                "cost-first",
+                "--model-ref",
+                "primary",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "mur",
+                "official",
+                "install",
+                "agents/orchestrator",
+                "--fallback",
+                "fallback-one",
+            ])
+            .is_err()
+        );
     }
 }

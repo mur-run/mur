@@ -744,6 +744,7 @@ pub fn run() {
             brain_badge::nudge_dismiss,
             official_catalog::official_list,
             official_catalog::official_logged_in,
+            official_catalog::official_plan_models,
             official_catalog::official_install,
             detail::get_agent_detail,
             detail::update_agent_detail,

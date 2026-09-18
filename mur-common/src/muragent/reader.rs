@@ -28,6 +28,91 @@ impl MuragentArchive {
         Self::read_with_limits(path, MAX_ENTRIES, MAX_FILE_BYTES, MAX_TOTAL_BYTES)
     }
 
+    /// Read and extract all files from `.muragent` bytes (in-memory gzip).
+    /// Used when fetching official packages that are not yet written to disk.
+    pub fn read_from_bytes(data: &[u8]) -> Result<Self, MuragentError> {
+        let gz = GzDecoder::new(data);
+        let mut archive = Archive::new(gz);
+        let mut files = BTreeMap::new();
+        let mut entry_count = 0usize;
+        let mut total_bytes = 0u64;
+
+        let max_entries = MAX_ENTRIES;
+        let max_file_bytes = MAX_FILE_BYTES;
+        let max_total_bytes = MAX_TOTAL_BYTES;
+
+        for entry in archive
+            .entries()
+            .map_err(|e| MuragentError::Other(format!("tar entries: {e}")))?
+        {
+            entry_count += 1;
+            if entry_count > max_entries {
+                return Err(MuragentError::Other(format!(
+                    "too many entries in .muragent (>{max_entries})"
+                )));
+            }
+            let mut entry = entry.map_err(|e| MuragentError::Other(format!("tar entry: {e}")))?;
+
+            let entry_path = entry
+                .path()
+                .map_err(|e| MuragentError::Other(format!("entry path: {e}")))?
+                .to_str()
+                .ok_or_else(|| MuragentError::Other("non-UTF-8 path in tarball".into()))?
+                .to_string();
+
+            let entry_type = entry.header().entry_type();
+            if entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link {
+                return Err(MuragentError::ExecutableContent(format!(
+                    "symlinks not allowed in .muragent: {entry_path}"
+                )));
+            }
+
+            if entry_type != tar::EntryType::Regular
+                && entry_type != tar::EntryType::Directory
+                && entry_type != tar::EntryType::GNULongName
+                && entry_type != tar::EntryType::GNULongLink
+            {
+                return Err(MuragentError::ExecutableContent(format!(
+                    "tar entry type {:?} not allowed: {entry_path}",
+                    entry_type
+                )));
+            }
+
+            if entry_type == tar::EntryType::Directory {
+                continue;
+            }
+
+            crate::muragent::jcs_canonical::validate_tarball_path(&entry_path)
+                .map_err(|e| MuragentError::Other(e.to_string()))?;
+
+            let mode = entry.header().mode().unwrap_or(0o644);
+            crate::muragent::executable_ban::check_mode_bits(mode, false)
+                .map_err(MuragentError::ExecutableContent)?;
+
+            let mut data = Vec::new();
+            entry
+                .by_ref()
+                .take(max_file_bytes + 1)
+                .read_to_end(&mut data)
+                .map_err(MuragentError::Io)?;
+            if data.len() as u64 > max_file_bytes {
+                return Err(MuragentError::Other(format!(
+                    "file exceeds {max_file_bytes} bytes in .muragent: {entry_path}"
+                )));
+            }
+            total_bytes += data.len() as u64;
+            if total_bytes > max_total_bytes {
+                return Err(MuragentError::Other(format!(
+                    "decompressed .muragent exceeds {max_total_bytes} bytes total"
+                )));
+            }
+
+            files.insert(entry_path, data);
+        }
+
+        Ok(Self { files })
+    }
+
     /// Implementation of [`read`](Self::read) with explicit resource caps, so
     /// the bomb defenses can be exercised with small limits in tests.
     fn read_with_limits(

@@ -14,6 +14,32 @@ use serde_json::json;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
+/// Translate only documented, fixture-backed OpenAI-compatible error codes.
+/// Unknown provider extensions stay `Rejected` and therefore stop fleet-wide.
+pub(crate) fn map_openai_error(status: u16, body: &str) -> LlmError {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return LlmError::from_status(status, body.to_string()),
+    };
+    let error = &parsed["error"];
+    let code = error["code"].as_str().unwrap_or_default();
+    let message = error["message"].as_str().unwrap_or(body).to_string();
+    match code {
+        "context_length_exceeded" => LlmError::ContextExceeded(message),
+        "model_not_found" | "model_unavailable" | "model_not_available" => {
+            LlmError::ModelNotFound(message)
+        }
+        "insufficient_quota" => LlmError::InsufficientCredit,
+        "content_policy_violation" | "safety_policy_violation" => {
+            LlmError::SafetyPolicyRejected(message)
+        }
+        "permission_denied" | "insufficient_permissions" => {
+            LlmError::PermissionDenied(status, message)
+        }
+        _ => LlmError::from_status(status, body.to_string()),
+    }
+}
+
 /// Service constant used by `mur agent secret set` (mirrors agent.rs).
 const MUR_AGENT_KEYCHAIN_SERVICE: &str = "mur-agent";
 
@@ -363,7 +389,7 @@ impl LlmClient for OpenAiClient {
         let status = resp.status();
         if !status.is_success() {
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(LlmError::from_status(status.as_u16(), body_text));
+            return Err(map_openai_error(status.as_u16(), &body_text));
         }
         let v: serde_json::Value = resp.json().await.map_err(|e| LlmError::from_reqwest(&e))?;
 
@@ -432,8 +458,7 @@ impl LlmClient for OpenAiClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            let truncated: String = body.chars().take(200).collect();
-            return Err(LlmError::from_status(status.as_u16(), truncated));
+            return Err(map_openai_error(status.as_u16(), &body));
         }
 
         // OpenAI streams Server-Sent Events: `data: {json}\n\n`, ending with
