@@ -207,14 +207,6 @@ const PLACEHOLDER_WORD_LIST: &[&str] = &[
 ];
 
 #[cfg(test)]
-pub(crate) mod test_env_lock {
-    use std::sync::Mutex;
-    /// Tests in this crate that set MUR_HOME must lock this mutex first —
-    /// the env var is process-global and parallel tests trampling it
-    /// produce spurious failures.
-    pub(crate) static MUR_HOME_LOCK: Mutex<()> = Mutex::new(());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,10 +236,8 @@ mod tests {
 
     #[test]
     fn trust_store_roundtrip() {
-        let _guard = test_env_lock::MUR_HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        let prev_home = std::env::var_os("MUR_HOME");
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        let _env = crate::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
 
         let mut store = TrustStore::default();
         store.upsert(TrustEntry {
@@ -271,13 +261,5 @@ mod tests {
             loaded.find_by_pubkey("aaa").unwrap().display_name_seen,
             "Coach"
         );
-
-        unsafe {
-            if let Some(p) = prev_home {
-                std::env::set_var("MUR_HOME", p);
-            } else {
-                std::env::remove_var("MUR_HOME");
-            }
-        }
     }
 }

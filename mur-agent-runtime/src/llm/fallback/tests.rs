@@ -562,8 +562,9 @@ fn background_image_turn_drops_a_cheap_model_that_cannot_see() {
     reg.models.insert("cheap".into(), mk(0.0001, &["chat"]));
     reg.models.insert("primary".into(), mk(0.01, &["chat"]));
     reg.save_to(&tmp.path().join("models.yaml")).unwrap();
-    // nextest runs one process per test, so this env write is not shared.
-    unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+    // Held for the rest of the test; restored on drop, so `cargo test`
+    // (which shares one process) is not left pointing at a dead TempDir.
+    let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
 
     let cfg = ModelSwitchConfig {
         default: Some("primary".into()),
