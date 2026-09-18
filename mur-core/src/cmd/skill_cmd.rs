@@ -1175,7 +1175,8 @@ mod remove_tests {
         .unwrap();
 
         // SAFETY: nextest runs each test in its own process.
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", tmp.path());
 
         cmd_remove("probe-skill").expect("remove must succeed inside a runtime");
         assert!(!dir.exists(), "skill dir should be gone");

@@ -222,9 +222,8 @@ mod tests {
         .unwrap();
 
         // Isolate the registry path to the temp home.
-        unsafe {
-            std::env::set_var("MUR_HOME", &mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
         let choice = ModelChoice {
             provider: "ollama".into(),
             model: "llama3.2:3b".into(),
@@ -259,9 +258,8 @@ mod tests {
             serde_yaml_ng::to_string(&p).unwrap(),
         )
         .unwrap();
-        unsafe {
-            std::env::set_var("MUR_HOME", &mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
 
         // As `mur model connect deepseek --base-url …` would leave it.
         let reg_path = ModelRegistry::default_path().unwrap();

@@ -417,7 +417,8 @@ mod tests {
 
     #[test]
     fn from_config_prefers_api_key_ref() {
-        unsafe { std::env::set_var("MUR_TEST_EMB_REF", "emb-key") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_TEST_EMB_REF", "emb-key");
         let mut cfg = mur_common::config::Config::default();
         cfg.embedding.provider = "openai".into();
         cfg.embedding.api_key_ref = Some("env:MUR_TEST_EMB_REF".into());
@@ -431,7 +432,7 @@ mod tests {
             }
             _ => panic!("expected OpenAI provider"),
         }
-        unsafe { std::env::remove_var("MUR_TEST_EMB_REF") };
+        envg.unset_var("MUR_TEST_EMB_REF");
     }
 
     /// The bug behind the unexplained `401 API key required`: a configured
@@ -444,10 +445,9 @@ mod tests {
     /// Nothing else in this crate reads that variable.
     #[test]
     fn unresolvable_key_ref_yields_hint_instead_of_silent_empty_key() {
-        unsafe {
-            std::env::set_var("OPENAI_API_KEY", "");
-            std::env::remove_var("MUR_TEST_EMB_ABSENT");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("OPENAI_API_KEY", "");
+        envg.unset_var("MUR_TEST_EMB_ABSENT");
         let mut cfg = mur_common::config::Config::default();
         cfg.embedding.provider = "omlx".into();
         cfg.embedding.api_key_ref = Some("env:MUR_TEST_EMB_ABSENT".into());
@@ -476,7 +476,8 @@ mod tests {
     /// request must go out without an `Authorization` header.
     #[test]
     fn no_key_configured_is_not_an_error() {
-        unsafe { std::env::set_var("OPENAI_API_KEY", "") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("OPENAI_API_KEY", "");
         let mut cfg = mur_common::config::Config::default();
         cfg.embedding.provider = "omlx".into();
         match EmbeddingConfig::from_config(&cfg).provider {

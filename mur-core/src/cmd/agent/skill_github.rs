@@ -516,9 +516,8 @@ mod tests {
         // no other test in this crate mutates MUR_HOME concurrently within
         // this test binary's serial execution of this file... guard with a
         // dedicated lock-free unique tempdir per test invocation regardless.
-        unsafe {
-            std::env::set_var("MUR_HOME", home.path());
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", home.path());
 
         // Agent `a1` with a valid profile.
         let agent_dir = home.path().join("agents").join("a1");
@@ -572,9 +571,7 @@ mod tests {
             "skill 'a' must not be written when a later skill collides"
         );
 
-        unsafe {
-            std::env::remove_var("MUR_HOME");
-        }
+        envg.unset_var("MUR_HOME");
     }
 
     /// Regression guard: a skill whose bundled `scripts/` trips the security
@@ -584,9 +581,8 @@ mod tests {
     #[tokio::test]
     async fn install_github_dir_flagged_scripts_are_non_blocking() {
         let home = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("MUR_HOME", home.path());
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", home.path());
 
         let agent_dir = home.path().join("agents").join("a1");
         std::fs::create_dir_all(&agent_dir).unwrap();
@@ -633,9 +629,7 @@ mod tests {
             "skill must be installed on disk despite flagged bundled script"
         );
 
-        unsafe {
-            std::env::remove_var("MUR_HOME");
-        }
+        envg.unset_var("MUR_HOME");
     }
 
     /// Regression guard: installing a skill dir from a (local-clone-backed)
@@ -644,9 +638,8 @@ mod tests {
     #[tokio::test]
     async fn install_github_dir_preserves_bundled_assets() {
         let home = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("MUR_HOME", home.path());
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", home.path());
 
         let agent_dir = home.path().join("agents").join("a1");
         std::fs::create_dir_all(&agent_dir).unwrap();
@@ -686,8 +679,6 @@ mod tests {
             "sibling file preserved by copy_bundle"
         );
 
-        unsafe {
-            std::env::remove_var("MUR_HOME");
-        }
+        envg.unset_var("MUR_HOME");
     }
 }

@@ -60,7 +60,7 @@ fn add_warns_when_the_write_grant_does_not_resolve() {
         std::env::var_os(MISSING_VAR).is_none(),
         "the fixture's premise is that this variable is unset"
     );
-    let d = home();
+    let (d, _envg) = home();
     let out = add_with_grant(d.path(), &format!("env:{MISSING_VAR}"));
     assert!(
         out.contains("write_credential_ref") && out.contains("does not resolve"),
@@ -83,7 +83,7 @@ fn add_warns_when_the_write_grant_does_not_resolve() {
 /// resolvable with no env var and no keychain prompt.
 #[test]
 fn add_says_nothing_about_a_write_grant_that_resolves() {
-    let d = home();
+    let (d, _envg) = home();
     let secret = d.path().join("gh-write.token");
     std::fs::write(&secret, "ghp_not_a_real_token\n").unwrap();
     // `resolve_file` refuses a group/world-readable secret — on unix only,

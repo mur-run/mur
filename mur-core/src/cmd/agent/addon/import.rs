@@ -564,7 +564,6 @@ mod tests {
 
     // Delegate to the shared lock defined at the addon module level so that
     // tests in import.rs and mod.rs are serialized against each other.
-    use super::super::ADDON_TEST_LOCK as ENV_LOCK;
 
     // Minimal agent profile on disk so load_profile_for_edit works.
     fn write_agent(home: &std::path::Path, name: &str) {
@@ -666,12 +665,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn import_with_symlink_bundle_is_atomic_no_orphan() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "alice");
         let plugin = home.join("sample-plugin");
         write_plugin(&plugin);
@@ -692,12 +689,10 @@ mod tests {
 
     #[test]
     fn import_installs_skill_bundle_scripts() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "alice");
         let plugin = home.join("sample-plugin");
         write_plugin(&plugin);
@@ -719,13 +714,11 @@ mod tests {
 
     #[test]
     fn import_is_fail_closed_isolated_and_pins_mcp() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         // Point the importer at this home.
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "alice");
         write_agent(home, "bob");
         let plugin = home.join("sample-plugin");
@@ -763,12 +756,10 @@ mod tests {
     fn import_finds_plugin_json_under_dot_claude_plugin() {
         // Stock Claude marketplace layout: plugin.json lives in .claude-plugin/,
         // while skills/ stay at the dir root. Import must still resolve it.
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "dana");
         let plugin = home.join("claude-layout-plugin");
         fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
@@ -815,12 +806,10 @@ mod tests {
 
     #[test]
     fn import_refuses_to_overwrite_existing_skill() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "charlie");
         let plugin = home.join("sample-plugin2");
         write_plugin(&plugin);
@@ -863,12 +852,10 @@ mod tests {
 
     #[test]
     fn import_skips_skill_that_shadows_the_global_store() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "eve");
 
         // Seed a global-store skill named "brainstorm" (~/.mur/skills/brainstorm/skill.yaml).

@@ -592,8 +592,8 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn ask_end_to_end_mock_empty_hits() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let req = AskRequest {
@@ -633,6 +633,6 @@ mod tests {
         assert!(!resp.degraded_to_mode_b);
         assert!(resp.rewritten_question.is_none());
         assert_eq!(resp.rewriter_status, session::RewriterStatus::Skipped);
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 }

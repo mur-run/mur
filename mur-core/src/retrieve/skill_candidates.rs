@@ -641,15 +641,12 @@ mod tests {
 
     #[test]
     fn active_scope_detect_reads_mur_active_team() {
-        unsafe {
-            std::env::set_var("MUR_ACTIVE_TEAM", "org-xyz");
-            std::env::remove_var("MUR_ACTIVE_FLEET");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_ACTIVE_TEAM", "org-xyz");
+        envg.unset_var("MUR_ACTIVE_FLEET");
         let scope = ActiveScope::detect();
         assert_eq!(scope.team.as_deref(), Some("org-xyz"));
-        unsafe {
-            std::env::remove_var("MUR_ACTIVE_TEAM");
-        }
+        envg.unset_var("MUR_ACTIVE_TEAM");
     }
 
     #[test]

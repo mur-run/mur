@@ -26,7 +26,17 @@ fn t0() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 0).unwrap()
 }
 
-fn home() -> tempfile::TempDir {
+/// The fixture hands back a guard with the TempDir, so using it means the
+/// environment holds still for the test's duration.
+///
+/// Every test here reads `MUR_HOME` — `go()` warns when it disagrees with the
+/// home being used, and that warning lands in the output they assert on. A
+/// lock taken only by the tests that WRITE the variable leaves these readers
+/// exposed to them, which is how `add_creates_once_and_reports_the_existing_one`
+/// came to fail on an assertion about a string it never set.
+#[must_use]
+fn home() -> (tempfile::TempDir, mur_common::test_env::EnvGuard) {
+    let _envg = mur_common::test_env::EnvGuard::hold();
     let d = tempfile::tempdir().unwrap();
     run_store::save(
         d.path(),
@@ -47,7 +57,7 @@ fn home() -> tempfile::TempDir {
         },
     )
     .unwrap();
-    d
+    (d, _envg)
 }
 
 fn spec_file(d: &Path, source: &str, reference: &str) -> PathBuf {
@@ -71,7 +81,7 @@ fn go(d: &Path, a: MonitorAction) -> Result<String> {
 /// One registered monitor, nothing else — the common starting point for
 /// `show` tests that don't care about actions/notifications.
 fn home_with_monitor() -> (tempfile::TempDir, String) {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -137,7 +147,7 @@ fn home_with_settled_actions() -> (tempfile::TempDir, String) {
 
 #[test]
 fn add_creates_once_and_reports_the_existing_one() {
-    let d = home();
+    let (d, _envg) = home();
     let f = spec_file(d.path(), "mur_run", "run-1");
     let first = go(
         d.path(),
@@ -170,7 +180,7 @@ fn add_creates_once_and_reports_the_existing_one() {
 
 #[test]
 fn add_refuses_what_can_never_be_queried() {
-    let d = home();
+    let (d, _envg) = home();
     let e = go(
         d.path(),
         MonitorAction::Add {
@@ -200,7 +210,7 @@ fn add_refuses_what_can_never_be_queried() {
 fn add_refuses_when_the_probe_reports_a_credential_failure() {
     const MISSING_VAR: &str = "MUR_TEST_MONITOR_ADD_CRED_DEFINITELY_NOT_SET_Q7Z";
     assert!(std::env::var_os(MISSING_VAR).is_none());
-    let d = home();
+    let (d, _envg) = home();
     let p = d.path().join("gha.yaml");
     std::fs::write(
             &p,
@@ -238,7 +248,7 @@ fn add_refuses_when_the_probe_reports_a_credential_failure() {
 /// legitimate, and only `credential_failure` should ever block `add`.
 #[test]
 fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
-    let d = home();
+    let (d, _envg) = home();
     let out = go(
         d.path(),
         MonitorAction::Add {
@@ -269,11 +279,10 @@ fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
 /// `add` must say so up front.
 #[test]
 fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
-    let _g = crate::conversations::ENV_LOCK.lock().unwrap();
-    let d = home();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    let (d, _envg) = home();
     let f = spec_file(d.path(), "mur_run", "run-1");
-    let prev = std::env::var("MUR_HOME").ok();
-    unsafe { std::env::set_var("MUR_HOME", d.path()) };
+    envg.set_var("MUR_HOME", d.path());
     let out = go(
         d.path(),
         MonitorAction::Add {
@@ -281,10 +290,6 @@ fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
             started_at: None,
         },
     );
-    match prev {
-        Some(p) => unsafe { std::env::set_var("MUR_HOME", p) },
-        None => unsafe { std::env::remove_var("MUR_HOME") },
-    }
     let out = out.unwrap();
     assert!(out.contains("warning: MUR_HOME"), "{out}");
     assert!(
@@ -295,7 +300,7 @@ fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
 
 #[test]
 fn list_show_cancel_retry() {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -376,7 +381,7 @@ fn list_show_cancel_retry() {
 // case (below) is special-cased.
 #[test]
 fn retry_reactivates_cleanly_when_exhausted_without_a_hard_deadline() {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -411,7 +416,7 @@ fn retry_reactivates_cleanly_when_exhausted_without_a_hard_deadline() {
 // state (state stays `exhausted`, `hard_reached` stays set).
 #[test]
 fn retry_refuses_when_the_hard_deadline_has_already_passed() {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -465,7 +470,7 @@ fn retry_refuses_when_the_hard_deadline_has_already_passed() {
 
 #[test]
 fn bad_state_filter_lists_the_valid_ones() {
-    let d = home();
+    let (d, _envg) = home();
     let e = go(
         d.path(),
         MonitorAction::List {
@@ -482,7 +487,7 @@ fn bad_state_filter_lists_the_valid_ones() {
 // `cancel` / `retry` must accept it, not just the full 36-character id.
 #[test]
 fn show_accepts_the_prefix_list_prints_and_the_full_id_and_rejects_unknown() {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -535,7 +540,7 @@ fn show_accepts_the_prefix_list_prints_and_the_full_id_and_rejects_unknown() {
 // up elsewhere.
 #[test]
 fn show_prints_the_stall_and_deadline_condition_fields() {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -560,7 +565,7 @@ fn show_prints_the_stall_and_deadline_condition_fields() {
 // length keeps the test honest about what actually collided.
 #[test]
 fn show_reports_every_candidate_on_an_ambiguous_prefix() {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -623,7 +628,7 @@ fn show_reports_every_candidate_on_an_ambiguous_prefix() {
 #[test]
 fn show_renders_notification_delivery_state() {
     // spec §錯誤處理: a delivery failure must be visible in the CLI.
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
@@ -666,7 +671,7 @@ fn show_renders_notification_delivery_state() {
 // printing an empty header.
 #[test]
 fn show_omits_notifications_section_when_there_are_none() {
-    let d = home();
+    let (d, _envg) = home();
     go(
         d.path(),
         MonitorAction::Add {
