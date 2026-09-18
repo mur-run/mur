@@ -707,13 +707,20 @@ mod keychain_test_fixture {
         MOCK_LOCK.lock().await
     }
 
+    /// Returns the lock guard AND the env guard. Both must outlive the test
+    /// body: `ENV_KEYCHAIN_ALLOW` is what lifts `keychain_blocked`, and under
+    /// nextest (`NEXTEST` is always set) the block is on by default, so a
+    /// guard dropped when this function returns leaves the mock unreachable
+    /// and every lookup fails with `KeychainNotFound`. The pre-`EnvGuard`
+    /// code set the var permanently, which is why the lifetime mattered only
+    /// once it became RAII.
     pub(super) async fn install_mock(
         initial: Option<(&str, &str, &str)>,
-    ) -> AsyncMutexGuard<'static, ()> {
+    ) -> (AsyncMutexGuard<'static, ()>, crate::test_env::EnvGuard) {
         let g = MOCK_LOCK.lock().await;
         // The mock never reaches the real OS keychain, so lift the automatic
         // test-process keychain block (`keychain_blocked`).
-        let _env = crate::test_env::EnvGuard::set([(super::ENV_KEYCHAIN_ALLOW, "1")]);
+        let env = crate::test_env::EnvGuard::set([(super::ENV_KEYCHAIN_ALLOW, "1")]);
         let store: Store = Arc::new(Mutex::new(HashMap::new()));
         if let Some((svc, user, pw)) = initial {
             store
@@ -723,7 +730,7 @@ mod keychain_test_fixture {
         }
         let builder: Box<CredentialBuilder> = Box::new(SharedMockBuilder { store });
         keyring::set_default_credential_builder(builder);
-        g
+        (g, env)
     }
 }
 
