@@ -861,7 +861,7 @@ impl TaskRunner {
             tracing::warn!(cwd = %req.display(), "turn cwd does not exist; keeping session cwd");
             return;
         };
-        if crate::tools::fs_policy::under_any(roots, &canonical) {
+        if crate::tools::fs_policy::under_any_or_worktree(roots, &canonical) {
             session.set(canonical);
         } else {
             tracing::warn!(cwd = %req.display(), "turn cwd outside entitlements; keeping session cwd");
