@@ -485,6 +485,13 @@ mod tests {
     /// (PR #661) only binds `model_ref` when the bare `--model` value is an
     /// exact registry key.
     fn seed_models_yaml(mur_home: &Path, key: &str, provider: &str, model: &str) {
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.track_var("MUR_HOME");
         use mur_common::model::{ModelEntry, ModelRegistry};
 
         let mut models = BTreeMap::new();
@@ -511,6 +518,12 @@ mod tests {
     #[test]
     fn provision_creates_restricted_workers_with_gateway() {
         let mut envg = mur_common::test_env::EnvGuard::hold();
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        envg.track_var("MUR_HOME");
         let tmp = tempfile::tempdir().unwrap();
         // Redirect the runtime-symlink dir cmd_create() also writes into,
         // so the test never touches the developer's real ~/.local/bin.
@@ -572,6 +585,12 @@ mod tests {
     #[test]
     fn provision_threads_explicit_model_alias() {
         let mut envg = mur_common::test_env::EnvGuard::hold();
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        envg.track_var("MUR_HOME");
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
@@ -586,6 +605,12 @@ mod tests {
     #[test]
     fn grant_sets_broad_audited_with_authorization() {
         let mut envg = mur_common::test_env::EnvGuard::hold();
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        envg.track_var("MUR_HOME");
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
@@ -618,7 +643,13 @@ mod tests {
         // Count validation happens before any env mutation, so no lock/tmp
         // plumbing is needed — but take the lock anyway for hygiene.
         // A reader: it needs the environment to hold still, not to change it.
-        let _envg = mur_common::test_env::EnvGuard::hold();
+        let mut _envg = mur_common::test_env::EnvGuard::hold();
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        _envg.track_var("MUR_HOME");
         let tmp = tempfile::tempdir().unwrap();
 
         let zero = provision(tmp.path(), "dr_worker", 0, DEFAULT_WORKER_MODEL, None);
@@ -643,6 +674,12 @@ mod tests {
         use mur_common::agent::{ToolPolicy, resolve_tool_policy};
 
         let mut envg = mur_common::test_env::EnvGuard::hold();
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        envg.track_var("MUR_HOME");
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
@@ -691,6 +728,12 @@ mod tests {
     #[test]
     fn provision_obscura_grants_exec_paths() {
         let mut envg = mur_common::test_env::EnvGuard::hold();
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        envg.track_var("MUR_HOME");
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
@@ -745,6 +788,12 @@ mod tests {
     #[test]
     fn provision_default_engine_grants_nothing_extra() {
         let mut envg = mur_common::test_env::EnvGuard::hold();
+        // `provision`/`grant_*` set MUR_HOME for the helpers they call and
+        // never put it back — their own `# Concurrency` note says so. Without
+        // this the value outlives the test and every later one in the process
+        // inherits it; with `--test-threads=1` it still does, because the leak
+        // is not a race.
+        envg.track_var("MUR_HOME");
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
