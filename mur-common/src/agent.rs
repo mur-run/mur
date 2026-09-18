@@ -1456,6 +1456,16 @@ pub struct HitlConfig {
     /// Bounds live in `limits:` — see `mur limits <agent>`.
     #[serde(default)]
     pub max_tokens: Option<u64>,
+    /// How far this agent carries a turn before handing back (issue #001):
+    /// `continue` / `review` / `ask`. `None` = inherit the built-in default,
+    /// which is the strictest (`ask`) — turning an agent loose is a thing you
+    /// write down, never a thing you get by leaving a key out.
+    ///
+    /// Lives here, beside `timeout_secs`, because it is human-in-the-loop
+    /// vocabulary; it does NOT live in `limits:`, which is budgets. The two
+    /// are enforced at different seams and must not be confusable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy: Option<crate::hitl::Autonomy>,
 }
 
 fn default_hitl_timeout_secs() -> u32 {
@@ -1468,6 +1478,7 @@ impl Default for HitlConfig {
             timeout_secs: default_hitl_timeout_secs(),
             max_iterations: None,
             max_tokens: None,
+            autonomy: None,
         }
     }
 }
@@ -1475,6 +1486,28 @@ impl Default for HitlConfig {
 #[cfg(test)]
 mod hitl_tests {
     use super::*;
+
+    /// #001: an agent profile that says nothing about autonomy inherits the
+    /// strict default. Absent must never read as "turn it loose".
+    #[test]
+    fn hitl_config_autonomy_absent_means_inherit_not_continue() {
+        let cfg: HitlConfig = serde_yaml::from_str("timeout_secs: 60").unwrap();
+        assert_eq!(cfg.autonomy, None);
+        assert_eq!(cfg.autonomy.unwrap_or_default(), crate::hitl::Autonomy::Ask);
+    }
+
+    #[test]
+    fn hitl_config_autonomy_parses_all_three_modes() {
+        for (yaml, want) in [
+            ("continue", crate::hitl::Autonomy::Continue),
+            ("review", crate::hitl::Autonomy::Review),
+            ("ask", crate::hitl::Autonomy::Ask),
+        ] {
+            let cfg: HitlConfig =
+                serde_yaml::from_str(&format!("timeout_secs: 60\nautonomy: {yaml}")).unwrap();
+            assert_eq!(cfg.autonomy, Some(want), "yaml={yaml}");
+        }
+    }
 
     #[test]
     fn hitl_config_default_max_iterations_is_none() {

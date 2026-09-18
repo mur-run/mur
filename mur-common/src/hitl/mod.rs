@@ -102,6 +102,91 @@ pub fn tier_may_be_granted(tier: RiskTier) -> bool {
     matches!(tier, RiskTier::Read | RiskTier::Write)
 }
 
+/// How far the agent carries a turn on its own before handing back.
+///
+/// ORTHOGONAL to `HitlMode`/`RiskTier`. Those answer "may this ACTION run?"
+/// and are enforced per tool call; this answers "is the TURN over?" and is
+/// enforced once, at the loop's termination branch. Neither may overrule the
+/// other: `Continue` never releases a risk gate, and an approved gate never
+/// extends a turn. Issue #001 is what happens when only the prompt layer
+/// carries this — the model reads "已授權工作持續推進" as a suggestion because
+/// nothing in the runtime ever re-entered the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Autonomy {
+    /// Mode 1, 持續推進 — a turn that ends with work still open is nudged back
+    /// into the loop instead of returning. Never implicit, not even for
+    /// unattended runs: handing an agent the right to keep going is written
+    /// down in a profile, because nobody is in the room to take it back.
+    Continue,
+    /// Mode 2, 需要再審核 — the agent finishes its own work but must present it
+    /// for review before anything further; the turn ends where it would anyway.
+    Review,
+    /// Mode 3, 用戶審核 — hand back at every natural stop. The strictest of the
+    /// three and the default when nothing is stated.
+    Ask,
+}
+
+impl Default for Autonomy {
+    /// The strict end, matching `Unanswered::default()`: a policy assembled
+    /// without stating a mode must never be the one that keeps going by
+    /// itself.
+    fn default() -> Self {
+        Autonomy::Ask
+    }
+}
+
+/// How many times one turn may be nudged onward. Bounded, and small: the
+/// iteration ceiling and the stuck clock are the real budgets, and a
+/// continuation that could fire endlessly would quietly convert both into a
+/// suggestion. One nudge is enough to fix #001 (the model stopped once, mid
+/// task) without inventing a second, parallel loop.
+pub const MAX_CONTINUATIONS: u32 = 1;
+
+/// Why a turn was NOT continued. Every variant is a thing the settlement card
+/// can print, because "it just stopped" is the bug being fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinueVeto {
+    /// Policy says hand back — `Review` or `Ask`.
+    Policy,
+    /// A1: the turn did not end cleanly (ceiling, loop, deadline, stuck,
+    /// truncation). Those stops already have their own graceful exit and a
+    /// nudge would fight it.
+    UnCleanStop,
+    /// A2: a risk gate blocked, denied or deferred something this turn. The
+    /// human IS the next step; nudging would spin against a closed gate.
+    GateBlocked,
+    /// The nudge budget for this turn is spent.
+    BudgetSpent,
+}
+
+/// The whole continuation decision, as one pure function so the policy is
+/// testable without a model, a gate, or a clock.
+///
+/// `clean_stop` is "the model ended the turn of its own accord". `gate_blocked`
+/// is "at least one action this turn was refused, denied or parked". Both are
+/// facts the loop already holds at the termination branch.
+pub fn should_continue(
+    autonomy: Autonomy,
+    clean_stop: bool,
+    gate_blocked: bool,
+    continuations_used: u32,
+) -> Result<(), ContinueVeto> {
+    if autonomy != Autonomy::Continue {
+        return Err(ContinueVeto::Policy);
+    }
+    if !clean_stop {
+        return Err(ContinueVeto::UnCleanStop);
+    }
+    if gate_blocked {
+        return Err(ContinueVeto::GateBlocked);
+    }
+    if continuations_used >= MAX_CONTINUATIONS {
+        return Err(ContinueVeto::BudgetSpent);
+    }
+    Ok(())
+}
+
 /// `EventKind::HitlRequest` payload: the durable, pinned approval request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitlRequest {
@@ -171,6 +256,88 @@ mod tests {
         assert!(!tier_may_be_granted(RiskTier::Spend));
         assert!(!tier_may_be_granted(RiskTier::Destructive));
         assert!(!tier_may_be_granted(RiskTier::Privileged));
+    }
+
+    /// #001 §6 A0: the safe default. An `Autonomy` nobody stated must be the
+    /// one that hands back, never the one that drives itself.
+    #[test]
+    fn autonomy_defaults_to_the_strictest_mode() {
+        assert_eq!(Autonomy::default(), Autonomy::Ask);
+    }
+
+    /// The happy path this whole feature exists for: unattended work, a clean
+    /// stop, no blocked gate, budget unspent → carry on.
+    #[test]
+    fn continue_mode_resumes_a_clean_unblocked_turn() {
+        assert_eq!(should_continue(Autonomy::Continue, true, false, 0), Ok(()));
+    }
+
+    /// The other two modes are handbacks by construction. This is the test
+    /// that keeps "持續推進" from silently becoming the behaviour of all three.
+    #[test]
+    fn review_and_ask_never_continue() {
+        for mode in [Autonomy::Review, Autonomy::Ask] {
+            assert_eq!(
+                should_continue(mode, true, false, 0),
+                Err(ContinueVeto::Policy),
+                "{mode:?} must hand back"
+            );
+        }
+    }
+
+    /// #001 §6 A1: a turn stopped by a budget (ceiling / loop / deadline /
+    /// stuck) already has a graceful exit. Nudging it would fight that exit.
+    #[test]
+    fn an_unclean_stop_is_never_continued() {
+        assert_eq!(
+            should_continue(Autonomy::Continue, false, false, 0),
+            Err(ContinueVeto::UnCleanStop)
+        );
+    }
+
+    /// #001 §6 A2 — THE SAFETY BOUNDARY. Continuation and the risk gate are
+    /// orthogonal: when a gate blocked, denied or deferred something, the
+    /// human is the next step and no autonomy setting may route around them.
+    /// If this test ever goes green with `Ok(())`, `Autonomy::Continue` has
+    /// become a privilege escalation.
+    #[test]
+    fn continuation_never_routes_around_a_blocked_gate() {
+        assert_eq!(
+            should_continue(Autonomy::Continue, true, true, 0),
+            Err(ContinueVeto::GateBlocked)
+        );
+    }
+
+    /// Bounded, and the bound is enforced here rather than by hoping the loop
+    /// converges.
+    #[test]
+    fn continuation_budget_is_spent_after_max() {
+        assert_eq!(
+            should_continue(Autonomy::Continue, true, false, MAX_CONTINUATIONS),
+            Err(ContinueVeto::BudgetSpent)
+        );
+        assert_eq!(
+            should_continue(Autonomy::Continue, true, false, MAX_CONTINUATIONS + 9),
+            Err(ContinueVeto::BudgetSpent)
+        );
+    }
+
+    /// Policy is checked before anything else, so a `Ask` run reports "policy"
+    /// rather than leaking why it would ALSO have been stopped.
+    #[test]
+    fn policy_veto_precedes_every_other_veto() {
+        assert_eq!(
+            should_continue(Autonomy::Ask, false, true, 99),
+            Err(ContinueVeto::Policy)
+        );
+    }
+
+    #[test]
+    fn autonomy_round_trips_as_kebab_case() {
+        let y = serde_yaml::to_string(&Autonomy::Continue).unwrap();
+        assert!(y.contains("continue"), "got {y}");
+        let back: Autonomy = serde_yaml::from_str("review").unwrap();
+        assert_eq!(back, Autonomy::Review);
     }
 
     #[test]

@@ -467,6 +467,10 @@ pub struct TaskRunner {
         Option<mur_common::limits::Limits>,
     ),
     iteration_ceiling: u32,
+    /// How far this agent carries a turn before handing back (issue #001).
+    /// Strict by default; only a profile that says `autonomy: continue` gets
+    /// the nudge.
+    autonomy: mur_common::hitl::Autonomy,
     tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
     socket_path: Option<std::path::PathBuf>,
@@ -640,6 +644,7 @@ impl TaskRunner {
             hitl_timeout_secs: 300,
             limits: (Default::default(), None),
             iteration_ceiling: ITERATION_CEILING,
+            autonomy: mur_common::hitl::Autonomy::default(),
             tools: vec![],
             tools_policy: vec![],
             socket_path: None,
@@ -1096,6 +1101,13 @@ impl TaskRunner {
             std::time::Instant::now(),
         )
         .map_err(|e| task_error("limits", format!("limits: {e}"), false))
+    }
+
+    /// Issue #001: the turn-continuation policy, read from the agent's
+    /// `hitl.autonomy`. Absent → `Autonomy::Ask`, the handback.
+    pub fn with_autonomy(mut self, a: mur_common::hitl::Autonomy) -> Self {
+        self.autonomy = a;
+        self
     }
 
     /// Lower the diagnostic ceiling so a scripted stub loop ends. Production
@@ -2076,6 +2088,15 @@ impl TaskRunner {
         /// not per-fingerprint: varying the arguments is exactly what defeats
         /// the doom-loop detector here.
         const WITHDRAWN_CALL_LIMIT: usize = 3;
+        /// What the runtime says when it carries a turn onward under
+        /// `Autonomy::Continue`. Deliberately an INSTRUCTION TO RE-CHECK, not
+        /// an order to invent more work: a model with genuinely nothing left
+        /// must be able to end the turn a second time, and that second
+        /// `EndTurn` settles because the budget is spent.
+        const CONTINUE_NUDGE: &str = "You have standing authorization to keep going \
+             (autonomy: continue). If work from this task remains unfinished, continue it \
+             now without asking. If everything is genuinely done, or the next step needs a \
+             decision only the user can make, say so plainly and end the turn.";
         let mut withdrawn_calls = 0usize;
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory; this turn's tool scaffolding is appended
@@ -2102,6 +2123,13 @@ impl TaskRunner {
         // once — there is no second warning because the person is the stop.
         let mut progress = crate::bounds::Progress::start(std::time::Instant::now());
         let mut stuck_warned = false;
+
+        // Issue #001 continuation state. `gate_blocked` latches for the whole
+        // turn rather than resetting per iteration: a gate that parked an
+        // action is a human owed an answer, and that debt does not expire
+        // because a later, unrelated tool call happened to succeed.
+        let mut continuations_used: u32 = 0;
+        let mut gate_blocked = false;
 
         let mut iteration: u32 = 0;
         while iteration < self.iteration_ceiling {
@@ -2335,6 +2363,53 @@ impl TaskRunner {
             });
 
             if resp.tool_calls.is_empty() || resp.stop_reason == StopReason::EndTurn {
+                // ── Issue #001: the turn-continuation seam ────────────────
+                // The ONLY place a turn ends of its own accord, and therefore
+                // the only place "已授權工作持續推進" can mean anything. Before
+                // this existed the instruction lived purely in the prompt, so
+                // a model that decided it was done was done — the runtime had
+                // no mechanism to re-enter the loop, and the user's standing
+                // authorisation read as a suggestion.
+                //
+                // A clean stop is the model's own `EndTurn`. Every other way
+                // out of this loop (ceiling, doom-loop, deadline, stuck,
+                // truncation) returns elsewhere with its own graceful exit and
+                // never reaches here, which is what keeps A1 true.
+                let clean_stop = resp.stop_reason == StopReason::EndTurn;
+                match mur_common::hitl::should_continue(
+                    self.autonomy,
+                    clean_stop,
+                    gate_blocked,
+                    continuations_used,
+                ) {
+                    Ok(()) => {
+                        continuations_used += 1;
+                        if !resp.text.is_empty() {
+                            history.push(RichMessage::Text {
+                                role: "assistant".into(),
+                                content: resp.text.clone(),
+                            });
+                        }
+                        // A user-role nudge, not a system one: it has to be
+                        // the same kind of message the standing authorisation
+                        // would have been, and it has to be visibly a request
+                        // the model may decline by finishing again.
+                        history.push(RichMessage::Text {
+                            role: "user".into(),
+                            content: CONTINUE_NUDGE.into(),
+                        });
+                        iteration += 1;
+                        continue;
+                    }
+                    Err(veto) => {
+                        tracing::debug!(
+                            autonomy = ?self.autonomy,
+                            ?veto,
+                            continuations_used,
+                            "turn handed back"
+                        );
+                    }
+                }
                 ledger.iterations = iteration;
                 ledger.stop = match resp.stop_reason {
                     StopReason::MaxTokens => crate::turn_ledger::StopKind::MaxTokens,
@@ -2418,6 +2493,11 @@ impl TaskRunner {
                 }
                 let outcome =
                     crate::turn_ledger::classify(&entry.content, entry.is_error, &entry.status);
+                // #001 A2: a refusal is a human owed an answer. Latch it so no
+                // autonomy setting can nudge the turn past a closed gate.
+                if matches!(outcome, crate::turn_ledger::Outcome::Denied(_)) {
+                    gate_blocked = true;
+                }
                 let target = crate::turn_ledger::describe_target(&call.tool_name, &call.input);
                 let excerpt =
                     if call.tool_name == "bash" && outcome == crate::turn_ledger::Outcome::Ok {
@@ -5111,6 +5191,187 @@ mod tests {
         assert!(matches!(outcome, TaskOutcome::Completed(_)));
     }
 
+    /// Build the standard TaskSpec used by the #001 continuation tests.
+    fn continuation_spec(text: &str, attended: bool) -> TaskSpec {
+        TaskSpec {
+            cwd: None,
+            input: mur_common::a2a::Message {
+                role: "user".into(),
+                parts: vec![mur_common::a2a::MessagePart::Text { text: text.into() }],
+            },
+            context_task_id: None,
+            task_id: None,
+            intent: RequestIntent::Interactive,
+            output_artifact_path: None,
+            active_fleet: None,
+            active_team: None,
+            attended,
+            deadline_secs: None,
+        }
+    }
+
+    fn continuation_runner(
+        responses: Vec<crate::llm::LlmResponse>,
+        autonomy: mur_common::hitl::Autonomy,
+    ) -> Arc<TaskRunner> {
+        use crate::llm::stub::SequenceLlm;
+        let (notif_tx, _rx) = tokio::sync::mpsc::channel(16);
+        let pa: Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))
+                .with_pending_approvals(pa)
+                .with_notifier(notif_tx)
+                .with_hitl_timeout_secs(1)
+                .with_autonomy(autonomy)
+                .with_iteration_ceiling(10),
+        )
+    }
+
+    /// ISSUE #001, the bug itself. Under `autonomy: continue` a model that
+    /// ends the turn early is nudged back into the loop exactly once, and the
+    /// reply is the SECOND turn's text. Before the seam at the termination
+    /// branch existed, "已授權工作持續推進" lived only in the prompt and this
+    /// returned "Stopping here" — the runtime had no way to re-enter.
+    #[tokio::test]
+    async fn continue_autonomy_resumes_a_turn_that_ended_early() {
+        let runner = continuation_runner(
+            vec![
+                end_turn_response("Stopping here to check with you."),
+                end_turn_response("RESUMED: finished the remaining work."),
+            ],
+            mur_common::hitl::Autonomy::Continue,
+        );
+        let outcome = runner
+            .run_sync(continuation_spec("do the thing", false))
+            .await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply.contains("RESUMED"),
+            "turn should have been carried onward; got: {reply}"
+        );
+    }
+
+    /// The bound. A model that keeps ending the turn is nudged `MAX_CONTINUATIONS`
+    /// times and then settles — the continuation must never become a second,
+    /// unbounded loop running beside the iteration ceiling.
+    #[tokio::test]
+    async fn continuation_is_bounded_and_then_settles() {
+        let runner = continuation_runner(
+            vec![
+                end_turn_response("first stop"),
+                end_turn_response("second stop"),
+                end_turn_response("third stop"),
+                end_turn_response("fourth stop"),
+            ],
+            mur_common::hitl::Autonomy::Continue,
+        );
+        let outcome = runner
+            .run_sync(continuation_spec("do the thing", false))
+            .await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply = task.messages.last().map(text_of).unwrap_or_default();
+        // One nudge = the SECOND response settles, never the third.
+        assert!(
+            reply.contains("second stop"),
+            "expected settle after exactly {} nudge(s); got: {reply}",
+            mur_common::hitl::MAX_CONTINUATIONS
+        );
+    }
+
+    /// The default must be the handback. An agent whose profile says nothing
+    /// about autonomy behaves exactly as it did before this feature existed.
+    #[tokio::test]
+    async fn default_autonomy_hands_back_unchanged() {
+        let runner = continuation_runner(
+            vec![
+                end_turn_response("Stopping here to check with you."),
+                end_turn_response("RESUMED: should never be reached."),
+            ],
+            mur_common::hitl::Autonomy::default(),
+        );
+        let outcome = runner
+            .run_sync(continuation_spec("do the thing", false))
+            .await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            reply.contains("Stopping here"),
+            "default autonomy must hand back; got: {reply}"
+        );
+        assert!(!reply.contains("RESUMED"), "default must not continue");
+    }
+
+    /// `Review` is a handback too: it changes what the agent is asked to
+    /// produce, never whether the runtime re-enters the loop.
+    #[tokio::test]
+    async fn review_autonomy_hands_back() {
+        let runner = continuation_runner(
+            vec![
+                end_turn_response("Done, please review."),
+                end_turn_response("RESUMED: should never be reached."),
+            ],
+            mur_common::hitl::Autonomy::Review,
+        );
+        let outcome = runner
+            .run_sync(continuation_spec("do the thing", false))
+            .await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let reply = task.messages.last().map(text_of).unwrap_or_default();
+        assert!(
+            !reply.contains("RESUMED"),
+            "review must not continue: {reply}"
+        );
+    }
+
+    /// #001 §6 A1 at the runtime seam: a turn stopped by the iteration ceiling
+    /// takes its graceful exit and is NOT nudged, even under `continue`. The
+    /// two mechanisms must not fight over the same turn.
+    #[tokio::test]
+    async fn continuation_does_not_fire_on_a_budget_stop() {
+        use crate::llm::stub::SequenceLlm;
+        let (notif_tx, _rx) = tokio::sync::mpsc::channel(16);
+        let pa: Arc<
+            tokio::sync::Mutex<
+                HashMap<String, tokio::sync::oneshot::Sender<crate::hitl::HitlDecision>>,
+            >,
+        > = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(SequenceLlm::new(vec![
+                tool_call_response("id-0", "echo step-0"),
+                tool_call_response("id-1", "echo step-1"),
+                tool_call_response("id-2", "echo step-2"),
+                end_turn_response("SUMMARY: ceiling reached."),
+            ])))
+            .with_pending_approvals(pa)
+            .with_notifier(notif_tx)
+            .with_hitl_timeout_secs(1)
+            .with_autonomy(mur_common::hitl::Autonomy::Continue)
+            .with_iteration_ceiling(3),
+        );
+        let outcome = runner.run_sync(continuation_spec("loop", false)).await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+        let usage = task.usage.expect("graceful exit must populate usage");
+        assert_eq!(
+            usage["stop_reason"], "iteration_ceiling",
+            "budget stop must keep its own exit, not be nudged: usage={usage}"
+        );
+    }
+
     #[tokio::test]
     async fn max_iterations_exceeded_yields_completed_with_summary() {
         use crate::llm::stub::SequenceLlm;
@@ -5295,6 +5556,7 @@ mod tests {
             Some(empty_pending_approvals()),
             Some(notif_tx),
             1,
+            mur_common::hitl::Autonomy::default(),
             vec![],
             vec![],
             (
