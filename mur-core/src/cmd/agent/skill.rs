@@ -599,7 +599,8 @@ mod add_id_tests {
         .unwrap();
 
         // SAFETY: nextest runs each test in its own process.
-        unsafe { std::env::set_var("MUR_HOME", home.path()) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", home.path());
 
         let id = cmd_skill_add("a1", src.to_str().unwrap()).expect("add should succeed");
         assert_eq!(id, "skills/real-skill-name");

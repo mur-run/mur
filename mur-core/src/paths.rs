@@ -39,18 +39,18 @@ mod tests {
     fn mur_root_honors_mur_home_env_when_no_override() {
         // Serialize via the crate-local env-mutex so this test does not race
         // against `conversations` tests that also mutate MUR_HOME.
-        let _g = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", "/tmp/via-env") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", "/tmp/via-env");
         assert_eq!(mur_root(None), PathBuf::from("/tmp/via-env"));
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
     }
 
     #[test]
     fn mur_root_falls_back_to_home_dir_when_env_empty() {
-        let _g = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", "") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", "");
         let p = mur_root(None);
         assert!(p.ends_with(".mur"), "expected .../.mur, got: {p:?}");
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
     }
 }

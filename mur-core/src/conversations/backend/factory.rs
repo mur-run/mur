@@ -200,32 +200,32 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn mock_env_var_forces_mock_backend() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_LLM_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_LLM_MOCK", "1");
         let cfg = ollama_cfg("http://localhost:11434", 5);
         let b = build(&cfg).unwrap();
         assert_eq!(b.provider_name(), "mock");
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        envg.unset_var("MUR_LLM_MOCK");
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn legacy_mur_ollama_mock_env_var_also_forces_mock() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let cfg = ollama_cfg("http://localhost:11434", 5);
         let b = build(&cfg).unwrap();
         assert_eq!(b.provider_name(), "mock");
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn ollama_provider_returns_ollama_backend_through_retry_wrapper() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
         let cfg = ollama_cfg("http://127.0.0.1:1", 1);
         let b = build(&cfg).unwrap();
         // RetryingBackend forwards provider_name() to inner.
@@ -235,11 +235,11 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn anthropic_provider_returns_anthropic_backend_when_key_present() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
         // Use a synthetic env var so the test doesn't depend on ANTHROPIC_API_KEY.
-        unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY", "synthetic-key") };
+        envg.set_var("MUR_TEST_ANTHROPIC_KEY", "synthetic-key");
         let cfg = BackendConfig {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
@@ -250,16 +250,16 @@ mod tests {
         };
         let b = build(&cfg).unwrap();
         assert_eq!(b.provider_name(), "anthropic");
-        unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY") };
+        envg.unset_var("MUR_TEST_ANTHROPIC_KEY");
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn anthropic_provider_errors_when_key_env_missing() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::remove_var("MUR_TEST_NONEXISTENT_KEY") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.unset_var("MUR_TEST_NONEXISTENT_KEY");
         let cfg = BackendConfig {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
@@ -277,10 +277,10 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn anthropic_provider_errors_when_default_env_var_unset_and_api_key_env_field_missing() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.unset_var("ANTHROPIC_API_KEY");
         let cfg = BackendConfig {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
@@ -299,10 +299,10 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn openai_provider_returns_openai_backend_when_key_present() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("MUR_TEST_OPENAI_KEY", "sk-synthetic") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("MUR_TEST_OPENAI_KEY", "sk-synthetic");
         let cfg = BackendConfig {
             provider: "openai".into(),
             model: "gpt-4o-mini".into(),
@@ -313,16 +313,16 @@ mod tests {
         };
         let b = build(&cfg).unwrap();
         assert_eq!(b.provider_name(), "openai");
-        unsafe { std::env::remove_var("MUR_TEST_OPENAI_KEY") };
+        envg.unset_var("MUR_TEST_OPENAI_KEY");
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn gemini_provider_returns_gemini_backend_when_key_present() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("MUR_TEST_GEMINI_KEY", "synthetic") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("MUR_TEST_GEMINI_KEY", "synthetic");
         let cfg = BackendConfig {
             provider: "gemini".into(),
             model: "gemini-pro-3".into(),
@@ -333,7 +333,7 @@ mod tests {
         };
         let b = build(&cfg).unwrap();
         assert_eq!(b.provider_name(), "gemini");
-        unsafe { std::env::remove_var("MUR_TEST_GEMINI_KEY") };
+        envg.unset_var("MUR_TEST_GEMINI_KEY");
     }
 
     #[tokio::test]
@@ -344,10 +344,10 @@ mod tests {
         // below (this name used to claim endpoint coverage it didn't
         // provide — `provider_name()` is the only thing observable through
         // `Arc<dyn ChatBackend>`).
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("MUR_TEST_OR_KEY", "sk-or-v1-synthetic") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("MUR_TEST_OR_KEY", "sk-or-v1-synthetic");
         let cfg = BackendConfig {
             provider: "openrouter".into(),
             model: "anthropic/claude-haiku-4-5".into(),
@@ -359,7 +359,7 @@ mod tests {
         let b = build(&cfg).unwrap();
         // openrouter alias surfaces as "openai" (it IS an OpenAI-compat backend)
         assert_eq!(b.provider_name(), "openai");
-        unsafe { std::env::remove_var("MUR_TEST_OR_KEY") };
+        envg.unset_var("MUR_TEST_OR_KEY");
     }
 
     /// Makes the four `DEFAULT_*_ENDPOINT` constants (and Ollama's, from
@@ -396,10 +396,10 @@ mod tests {
         // P4 behavior change: factory now falls back to default_key_env when
         // api_key_env is None — so LlmConfig users without explicit api_key_env
         // (the historical default for anthropic) keep working.
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "synthetic-default") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("ANTHROPIC_API_KEY", "synthetic-default");
         let cfg = BackendConfig {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
@@ -410,7 +410,7 @@ mod tests {
         };
         let b = build(&cfg).unwrap();
         assert_eq!(b.provider_name(), "anthropic");
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+        envg.unset_var("ANTHROPIC_API_KEY");
     }
 
     #[tokio::test]
@@ -418,8 +418,8 @@ mod tests {
     async fn build_for_stage_skips_telemetry_when_mock_env_set() {
         use crate::conversations::backend::ChatRequest;
 
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_LLM_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_LLM_MOCK", "1");
         let cfg = BackendConfig {
             provider: "ollama".into(),
             model: "qwen3:14b".into(),
@@ -435,8 +435,7 @@ mod tests {
         // Cheaper: confirm no telemetry file is written when we make a call.
         let tmp = tempfile::tempdir().unwrap();
         // Override HOME so any accidental write goes here, not user's real ~/.mur.
-        let prev_home = std::env::var("HOME").ok();
-        unsafe { std::env::set_var("HOME", tmp.path().to_str().unwrap()) };
+        envg.set_var("HOME", tmp.path().to_str().unwrap());
 
         let req = ChatRequest {
             model: "qwen3:14b",
@@ -456,25 +455,15 @@ mod tests {
             !telemetry_dir.exists(),
             "no telemetry directory should be created in mock mode"
         );
-
-        // Cleanup
-        unsafe {
-            if let Some(h) = prev_home {
-                std::env::set_var("HOME", h);
-            } else {
-                std::env::remove_var("HOME");
-            }
-            std::env::remove_var("MUR_LLM_MOCK");
-        }
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn build_for_stage_skips_telemetry_when_disable_env_set() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("MUR_TELEMETRY_DISABLE", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("MUR_TELEMETRY_DISABLE", "1");
         let cfg = BackendConfig {
             provider: "ollama".into(),
             model: "qwen3:14b".into(),
@@ -486,16 +475,16 @@ mod tests {
         let b = build_for_stage(&cfg, "rewriter").unwrap();
         // Confirm provider_name forwards through (whether wrapped in retry or not).
         assert_eq!(b.provider_name(), "ollama");
-        unsafe { std::env::remove_var("MUR_TELEMETRY_DISABLE") };
+        envg.unset_var("MUR_TELEMETRY_DISABLE");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[allow(clippy::await_holding_lock)]
     async fn api_key_ref_takes_precedence_over_env() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("MUR_TEST_REF_KEY", "key-from-ref") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("MUR_TEST_REF_KEY", "key-from-ref");
         let cfg = BackendConfig {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
@@ -506,7 +495,7 @@ mod tests {
         };
         // ref resolves → build succeeds even though api_key_env is unset
         assert!(build(&cfg).is_ok());
-        unsafe { std::env::remove_var("MUR_TEST_REF_KEY") };
+        envg.unset_var("MUR_TEST_REF_KEY");
         // ref no longer resolves → error mentions the ref
         let err = format!("{:#}", build(&cfg).err().unwrap());
         assert!(err.contains("MUR_TEST_REF_KEY"), "err was: {err}");
@@ -514,9 +503,9 @@ mod tests {
 
     #[test]
     fn unsupported_provider_errors() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
         let cfg = BackendConfig {
             provider: "cohere".into(),
             model: "command-r".into(),
@@ -543,10 +532,10 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I3", "k") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("MUR_TEST_ANTHROPIC_KEY_I3", "k");
 
         let server = MockServer::start().await;
 
@@ -612,7 +601,7 @@ data: {\"type\":\"message_stop\"}
         let u = final_usage.expect("usage from final chunk");
         assert_eq!(u.input_tokens, 3);
         assert_eq!(u.output_tokens, 1);
-        unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I3") };
+        envg.unset_var("MUR_TEST_ANTHROPIC_KEY_I3");
     }
 
     // ── I4 — factory composes TelemetryBackend → RetryingBackend →
@@ -626,10 +615,10 @@ data: {\"type\":\"message_stop\"}
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I4", "k") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_LLM_MOCK");
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.set_var("MUR_TEST_ANTHROPIC_KEY_I4", "k");
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -691,6 +680,6 @@ data: {\"type\":\"message_stop\"}
         assert!(rec.success);
         assert_eq!(rec.input_tokens, 3);
         assert_eq!(rec.output_tokens, 1);
-        unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I4") };
+        envg.unset_var("MUR_TEST_ANTHROPIC_KEY_I4");
     }
 }

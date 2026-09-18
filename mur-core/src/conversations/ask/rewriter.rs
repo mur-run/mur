@@ -207,9 +207,9 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn connection_failure_returns_fallback_to_raw() {
         use crate::conversations::backend::ollama::OllamaBackend;
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.unset_var("MUR_LLM_MOCK");
         let backend = OllamaBackend::new("http://127.0.0.1:1", Duration::from_millis(200));
         let turns = vec![trec(1, "first q", "first a")];
         let input = RewriteInput {

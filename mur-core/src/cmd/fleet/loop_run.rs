@@ -1368,12 +1368,13 @@ mod tests {
     fn fleet_price_per_1k_env_then_default() {
         let tmp = tempfile::tempdir().unwrap();
         // env override wins (nextest isolates per-process, so this is safe)
-        unsafe { std::env::set_var("MUR_FLEET_COST_PER_1K", "0.123") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_FLEET_COST_PER_1K", "0.123");
         let (rate, src) = fleet_price_per_1k(tmp.path());
         assert!((rate - 0.123).abs() < 1e-9);
         assert_eq!(src, GuardRate::Env);
         // no env + no models.yaml → documented default, and it says so
-        unsafe { std::env::remove_var("MUR_FLEET_COST_PER_1K") };
+        envg.unset_var("MUR_FLEET_COST_PER_1K");
         let (rate, src) = fleet_price_per_1k(tmp.path());
         assert!((rate - DEFAULT_PRICE_PER_1K).abs() < 1e-9);
         assert_eq!(src, GuardRate::Default);

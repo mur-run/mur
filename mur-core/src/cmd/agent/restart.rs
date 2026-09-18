@@ -889,9 +889,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let agent_home = tmp.path().join("agents").join("test-agent");
         std::fs::create_dir_all(&agent_home).unwrap();
-        unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", "/nonexistent/mur_agent_nope") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_AGENT_RUNTIME_BIN", "/nonexistent/mur_agent_nope");
         let err = direct_respawn("test-agent", &agent_home).unwrap_err();
-        unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") };
+        envg.unset_var("MUR_AGENT_RUNTIME_BIN");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("resolve") && msg.contains("mur_agent_nope"),
@@ -908,10 +909,11 @@ mod tests {
     fn kickstart_service_refuses_unresolvable_symlink() {
         // Redirect bin_dir to a tmp dir with a broken symlink.
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("MUR_AGENT_BIN_DIR", tmp.path()) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_AGENT_BIN_DIR", tmp.path());
         // No mur_agent_test-kick symlink → canonicalize fails → Err.
         let result = kickstart_service("test-kick");
-        unsafe { std::env::remove_var("MUR_AGENT_BIN_DIR") };
+        envg.unset_var("MUR_AGENT_BIN_DIR");
         match result {
             Err(e) => {
                 let msg = e.to_string();

@@ -445,10 +445,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let prev = std::env::var_os("PATH");
         // SAFETY: single-threaded test; PATH is restored below.
-        unsafe { std::env::set_var("PATH", "") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("PATH", "");
         let r = super::render_binaries(home.path());
         if let Some(p) = prev {
-            unsafe { std::env::set_var("PATH", p) };
+            envg.set_var("PATH", p);
         }
         assert!(r.is_empty(), "nothing installed resolves nothing: {r:?}");
         // …and the caller turns that into a note, never an Err — pinned by the
@@ -478,12 +479,6 @@ mod tests {
 
     use super::*;
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
-
-    /// Serialize tests that mutate the process-wide `MUR_HOME` /
-    /// `MUR_AGENT_BIN_DIR` env vars (established pattern, see
-    /// `cmd::agent::mcp::tests::MUR_HOME_LOCK`).
-    static MUR_HOME_LOCK: Mutex<()> = Mutex::new(());
 
     /// Seed `<mur_home>/models.yaml` with a registry alias, mirroring
     /// `cmd::agent::lifecycle::tests::seed_models_yaml` — `cmd_create`
@@ -515,14 +510,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn provision_creates_restricted_workers_with_gateway() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         // Redirect the runtime-symlink dir cmd_create() also writes into,
         // so the test never touches the developer's real ~/.local/bin.
         let bin_dir = tmp.path().join("bin");
-        unsafe {
-            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
-        }
+        envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         seed_models_yaml(
             tmp.path(),
             DEFAULT_WORKER_MODEL,
@@ -578,12 +571,10 @@ mod tests {
     #[cfg(unix)] // provision() writes a Unix runtime symlink; not runnable on Windows CI
     #[test]
     fn provision_threads_explicit_model_alias() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
-        unsafe {
-            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
-        }
+        envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         seed_models_yaml(tmp.path(), "claude_sonnet", "anthropic", "claude-sonnet-5");
 
         let names = provision(tmp.path(), "dr_worker", 1, "claude_sonnet", None).unwrap();
@@ -594,12 +585,10 @@ mod tests {
     #[cfg(unix)] // provision()/grant_egress() write Unix runtime artifacts; not runnable on Windows CI
     #[test]
     fn grant_sets_broad_audited_with_authorization() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
-        unsafe {
-            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
-        }
+        envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         seed_models_yaml(
             tmp.path(),
             DEFAULT_WORKER_MODEL,
@@ -628,7 +617,8 @@ mod tests {
     fn provision_rejects_zero_and_over_max_count() {
         // Count validation happens before any env mutation, so no lock/tmp
         // plumbing is needed — but take the lock anyway for hygiene.
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A reader: it needs the environment to hold still, not to change it.
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
 
         let zero = provision(tmp.path(), "dr_worker", 0, DEFAULT_WORKER_MODEL, None);
@@ -652,12 +642,10 @@ mod tests {
     fn provision_stamps_gateway_tool_allow_rule() {
         use mur_common::agent::{ToolPolicy, resolve_tool_policy};
 
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
-        unsafe {
-            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
-        }
+        envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         seed_models_yaml(
             tmp.path(),
             DEFAULT_WORKER_MODEL,
@@ -702,12 +690,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn provision_obscura_grants_exec_paths() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
-        unsafe {
-            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
-        }
+        envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         seed_models_yaml(
             tmp.path(),
             DEFAULT_WORKER_MODEL,
@@ -758,12 +744,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn provision_default_engine_grants_nothing_extra() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
-        unsafe {
-            std::env::set_var("MUR_AGENT_BIN_DIR", &bin_dir);
-        }
+        envg.set_var("MUR_AGENT_BIN_DIR", &bin_dir);
         seed_models_yaml(
             tmp.path(),
             DEFAULT_WORKER_MODEL,

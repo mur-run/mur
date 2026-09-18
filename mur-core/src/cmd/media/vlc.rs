@@ -227,9 +227,10 @@ mod tests {
     #[test]
     fn detect_respects_env_override() {
         // Point at a path that does not exist → None.
-        unsafe { std::env::set_var("MUR_VLC_PATH", "/no/such/vlc") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_VLC_PATH", "/no/such/vlc");
         assert_eq!(detect_vlc(), None);
-        unsafe { std::env::remove_var("MUR_VLC_PATH") };
+        envg.unset_var("MUR_VLC_PATH");
     }
 
     #[test]

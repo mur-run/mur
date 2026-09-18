@@ -5,16 +5,18 @@ use super::*;
 
 #[test]
 fn exec_flag_gates_parallel_execution() {
-    unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.unset_var(EXEC_FLAG_ENV);
     assert!(!parallel_exec_enabled(false));
-    unsafe { std::env::set_var(EXEC_FLAG_ENV, "1") };
+    envg.set_var(EXEC_FLAG_ENV, "1");
     assert!(parallel_exec_enabled(false));
-    unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
+    envg.unset_var(EXEC_FLAG_ENV);
 }
 
 #[test]
 fn force_worktree_bypasses_env_var() {
-    unsafe { std::env::remove_var(EXEC_FLAG_ENV) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.unset_var(EXEC_FLAG_ENV);
     assert!(
         parallel_exec_enabled(true),
         "an explicit force=true must enable isolation even with the env var unset"
@@ -27,7 +29,8 @@ fn delegate_fanout_is_bounded_even_without_the_parallel_flag() {
     // The regression: the cap used to apply ONLY under the experimental
     // worktree flag, so the ordinary path fanned out unbounded and six
     // members dialed one gateway at once.
-    unsafe { std::env::remove_var(FANOUT_ENV) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.unset_var(FANOUT_ENV);
     assert_eq!(delegate_fanout(6), DEFAULT_DELEGATE_FANOUT);
     assert_eq!(delegate_fanout(1), 1, "never exceeds the step count");
     assert!(delegate_fanout(0) >= 1, "never zero");
@@ -35,15 +38,16 @@ fn delegate_fanout_is_bounded_even_without_the_parallel_flag() {
 
 #[test]
 fn delegate_fanout_env_override_never_unbounds() {
-    unsafe { std::env::set_var(FANOUT_ENV, "8") };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var(FANOUT_ENV, "8");
     assert_eq!(delegate_fanout(20), 8);
     // Zero and garbage fall back to the default, not to "unbounded" —
     // unbounded is the bug this cap exists to prevent.
-    unsafe { std::env::set_var(FANOUT_ENV, "0") };
+    envg.set_var(FANOUT_ENV, "0");
     assert_eq!(delegate_fanout(20), DEFAULT_DELEGATE_FANOUT);
-    unsafe { std::env::set_var(FANOUT_ENV, "lots") };
+    envg.set_var(FANOUT_ENV, "lots");
     assert_eq!(delegate_fanout(20), DEFAULT_DELEGATE_FANOUT);
-    unsafe { std::env::remove_var(FANOUT_ENV) };
+    envg.unset_var(FANOUT_ENV);
 }
 
 #[test]

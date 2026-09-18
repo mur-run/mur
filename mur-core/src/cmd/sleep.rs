@@ -48,18 +48,14 @@ pub fn cmd_sleep_status() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use tempfile::TempDir;
 
-    /// Serialises tests that mutate the process-wide `MUR_HOME` env var.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     fn with_tmp_mur_home(f: impl FnOnce()) {
-        let _guard = ENV_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        // Held across `f()` and dropped after — so a panic inside `f` still
+        // hands `MUR_HOME` back, which the manual `remove_var` below it did not.
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
         f();
-        unsafe { std::env::remove_var("MUR_HOME") };
     }
 
     #[test]

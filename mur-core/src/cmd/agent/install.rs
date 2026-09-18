@@ -418,9 +418,8 @@ mod tests {
         .unwrap();
 
         // Pre-populate the registry so the ref resolves
-        unsafe {
-            std::env::set_var("MUR_HOME", mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home);
         let reg_path = ModelRegistry::default_path().unwrap();
         let mut reg = ModelRegistry::load_from(&reg_path).unwrap_or_default();
         reg.models.insert(
@@ -458,9 +457,8 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        unsafe {
-            std::env::set_var("MUR_HOME", &mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
 
         // Build a source .muragent bundle with a known source profile id.
         let mut source_profile = Profile::default_for_tests();
@@ -591,9 +589,8 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        unsafe {
-            std::env::set_var("MUR_HOME", &mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
 
         let mut source_profile = Profile::default_for_tests();
         source_profile.name = "plain".to_string();
@@ -630,9 +627,8 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let mur_home = tmp.path().join("mur");
-        unsafe {
-            std::env::set_var("MUR_HOME", &mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
 
         let mut source_profile = Profile::default_for_tests();
         source_profile.name = "official-agent".to_string();
