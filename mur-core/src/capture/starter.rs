@@ -612,10 +612,11 @@ pub struct ProjectInfo {
 
 #[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
 fn projects_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("projects")
+    // Honor $MUR_HOME like every other on-disk surface. Resolving straight to
+    // the real home hardcodes ~/.mur, which under the agent sandbox is not
+    // writable — the write failed with EPERM rather than landing in the
+    // caller's chosen root.
+    mur_common::trust::mur_home().join("projects")
 }
 
 #[allow(dead_code)] // pattern-pipeline remnant (cmd_context no longer generates starter patterns, v2 P1b); full removal in W3b
@@ -1096,6 +1097,14 @@ mod tests {
         let project_path = dir.path().join("myproject");
         fs::create_dir_all(&project_path).unwrap();
 
+        // Point the tracking store at a temp root. Without this the test
+        // writes into the real ~/.mur/projects — which pollutes the user's
+        // home on a good day and fails with EPERM under the sandbox.
+        // SAFETY: nextest runs each test in its own process.
+        let mur_home = tempfile::tempdir().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home.path());
+
         // Not known yet
         assert!(!is_known_project(&project_path).unwrap());
 
@@ -1108,11 +1117,14 @@ mod tests {
             patterns_generated: vec!["rust-async-runtime-tokio".to_string()],
         };
 
-        // Override projects dir for test
-        let projects = projects_dir();
-        fs::create_dir_all(&projects).ok();
         mark_project_known(&project_path, info).unwrap();
         assert!(is_known_project(&project_path).unwrap());
+
+        // And it landed under MUR_HOME, not the real home dir.
+        assert!(
+            mur_home.path().join("projects").exists(),
+            "project info should be written under $MUR_HOME"
+        );
     }
 
     #[test]
