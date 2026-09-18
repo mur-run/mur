@@ -139,6 +139,15 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<String> {
     mur_common::skill::write_to_dir(&dest_dir, &manifest)
         .map_err(|e| anyhow!("write skill to {}: {e}", dest_dir.display()))?;
 
+    // #005: a skill is a bundle, not a lone manifest. Sibling assets next to
+    // the source (`references/`, `scripts/`, `assets/`) must travel with it,
+    // exactly as the GitHub and plugin-import paths already do — otherwise a
+    // manifest that references them installs into a broken skill.
+    if let Some(src_dir) = src.parent().filter(|d| !d.as_os_str().is_empty()) {
+        super::addon::import::copy_bundle(src_dir, &dest_dir)
+            .with_context(|| format!("copy skill assets from {}", src_dir.display()))?;
+    }
+
     if report.has_blocking_findings() {
         eprintln!("⚠ {skill_name}: security findings — review before trusting");
         for line in report.human_summary() {

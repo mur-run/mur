@@ -291,3 +291,54 @@ fn skill_show_and_remove_accept_basename_and_stem() {
     let p = read_profile(mur_home.path(), "agent_x");
     assert!(p.skills.is_empty(), "skill should be removed");
 }
+
+/// #005: installing `SKILL.md` from a directory must carry that directory's
+/// sibling assets with it. The twdd-infrastructure skill instructs the agent to
+/// read `references/hosts.md`; installing only the manifest leaves every one of
+/// those refs dangling at runtime.
+#[test]
+fn skill_add_from_dir_preserves_reference_assets() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+
+    // A real-shaped source bundle: SKILL.md + references/ alongside it.
+    let src = TempDir::new().unwrap();
+    let bundle = src.path().join("twdd-infrastructure");
+    std::fs::create_dir_all(bundle.join("references")).unwrap();
+    std::fs::write(bundle.join("SKILL.md"), valid_md_skill()).unwrap();
+    std::fs::write(bundle.join("references/hosts.md"), "# hosts\n").unwrap();
+    std::fs::write(bundle.join("references/services.md"), "# services\n").unwrap();
+
+    let out = run(
+        mur_home.path(),
+        &[
+            "agent",
+            "skill",
+            "add",
+            "agent_x",
+            bundle.join("SKILL.md").to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let dest = mur_home
+        .path()
+        .join("agents")
+        .join("agent_x")
+        .join("skills")
+        .join("research");
+    assert!(dest.join("skill.yaml").is_file(), "manifest installed");
+    assert!(
+        dest.join("references/hosts.md").is_file(),
+        "references/hosts.md must be installed alongside the manifest"
+    );
+    assert!(
+        dest.join("references/services.md").is_file(),
+        "references/services.md must be installed alongside the manifest"
+    );
+}
