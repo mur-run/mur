@@ -341,23 +341,34 @@ mod mock_keyring {
         }
     }
 
-    /// Install a fresh empty mock keyring as the global default. Caller must
-    /// already hold the ENV_LOCK guard before invoking, since this mutates a
-    /// process-global. Returns nothing — drop semantics aren't needed because
-    /// the next test's call replaces the store.
-    pub fn install_empty() {
-        allow_keychain();
+    /// Install a fresh empty mock keyring as the global default.
+    ///
+    /// Returns the guard holding `MUR_KEYCHAIN_ALLOW`, which the caller must
+    /// keep alive for the rest of the test: dropping it re-blocks the
+    /// keychain, and every call through the mock then fails. `#[must_use]`
+    /// makes that a compile-time requirement rather than a comment — an
+    /// earlier version let this guard die inside the helper, which read fine
+    /// and failed only on macOS, where the flag has teeth.
+    #[must_use]
+    pub fn install_empty() -> mur_common::test_env::EnvGuard {
+        let keychain = allow_keychain();
         let store: Store = Arc::new(StdMutex::new(HashMap::new()));
         let builder: Box<CredentialBuilder> = Box::new(SharedMockBuilder { store });
         keyring::set_default_credential_builder(builder);
+        keychain
     }
 
     /// Lift mur-common's automatic test-process keychain block — these tests
     /// go through the mock builder, never the real OS keychain.
-    fn allow_keychain() {
-        // SAFETY: caller holds ENV_LOCK; nextest is process-per-test anyway.
+    ///
+    /// Hands the guard back rather than dropping it here: the flag has to
+    /// outlive this call, and a guard that restores at the end of the helper
+    /// that set it is the same bug as a helper that never set it.
+    #[must_use]
+    fn allow_keychain() -> mur_common::test_env::EnvGuard {
         let mut envg = mur_common::test_env::EnvGuard::hold();
         envg.set_var(mur_common::secret::ENV_KEYCHAIN_ALLOW, "1");
+        envg
     }
 
     /// A backend that always returns an error other than `NoEntry` (simulates
@@ -399,10 +410,14 @@ mod mock_keyring {
             CredentialPersistence::ProcessOnly
         }
     }
-    pub fn install_failing() {
-        allow_keychain();
+    /// As `install_empty`, but every call through it fails. Same guard
+    /// contract: hold the return value.
+    #[must_use]
+    pub fn install_failing() -> mur_common::test_env::EnvGuard {
+        let keychain = allow_keychain();
         let builder: Box<CredentialBuilder> = Box::new(AlwaysFailBuilder);
         keyring::set_default_credential_builder(builder);
+        keychain
     }
 }
 
@@ -414,7 +429,7 @@ async fn keychain_entry_wins_over_anthropic_api_key_env() {
     // would have their billing silently swapped to API spend whenever the
     // shell happened to carry a leftover ANTHROPIC_API_KEY.
     let mut envg = mur_common::test_env::EnvGuard::hold();
-    mock_keyring::install_empty();
+    let _keychain = mock_keyring::install_empty();
     keychain_set("mur-agent", "alice/ANTHROPIC_API_KEY", FAKE_OAUTH)
         .await
         .unwrap();
@@ -463,7 +478,7 @@ async fn no_keychain_entry_falls_through_to_anthropic_api_key_env() {
     // Backwards-compatibility: existing users without keychain setup get
     // exactly the prior behavior — env var is still honored.
     let mut envg = mur_common::test_env::EnvGuard::hold();
-    mock_keyring::install_empty();
+    let _keychain = mock_keyring::install_empty();
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
@@ -497,7 +512,7 @@ async fn keychain_backend_error_propagates_instead_of_silent_fallthrough() {
     // on a daemon cold-boot) gets billed via API instead — exactly the
     // failure mode this whole fix is designed to prevent.
     let mut envg = mur_common::test_env::EnvGuard::hold();
-    mock_keyring::install_failing();
+    let _keychain = mock_keyring::install_failing();
     envg.set_var("ANTHROPIC_API_KEY", FAKE_API_KEY);
     let result = AnthropicClient::from_agent_credentials("carol", "claude-test".into()).await;
     // SAFETY: still inside ENV_LOCK guard.
