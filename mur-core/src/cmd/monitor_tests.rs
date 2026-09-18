@@ -269,11 +269,10 @@ fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
 /// `add` must say so up front.
 #[test]
 fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
-    let _g = crate::conversations::ENV_LOCK.lock().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let d = home();
     let f = spec_file(d.path(), "mur_run", "run-1");
-    let prev = std::env::var("MUR_HOME").ok();
-    unsafe { std::env::set_var("MUR_HOME", d.path()) };
+    envg.set_var("MUR_HOME", d.path());
     let out = go(
         d.path(),
         MonitorAction::Add {
@@ -281,10 +280,6 @@ fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
             started_at: None,
         },
     );
-    match prev {
-        Some(p) => unsafe { std::env::set_var("MUR_HOME", p) },
-        None => unsafe { std::env::remove_var("MUR_HOME") },
-    }
     let out = out.unwrap();
     assert!(out.contains("warning: MUR_HOME"), "{out}");
     assert!(

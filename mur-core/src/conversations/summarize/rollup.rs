@@ -739,8 +739,8 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn rollup_week_produces_layer_3_row_and_md() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         // 2026-W16 = Apr 13..19
@@ -762,28 +762,28 @@ mod tests {
         assert_eq!(idx.count_rows_at_layer(3).await.unwrap(), 1);
         let p = crate::conversations::paths::weekly_summary_path_for("2026-W16", Some(root));
         assert!(p.exists());
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn rollup_week_skips_when_no_source_days() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let report = rollup_week("2026-W16", false, &cfg(), &llm(), Some(root))
             .await
             .unwrap();
         assert!(matches!(report.outcome, RollupOutcome::Skipped { .. }));
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn rollup_week_noop_on_second_identical_call() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         for d in 13..=19 {
@@ -812,14 +812,14 @@ mod tests {
             "expected Skipped {{ already fresh }}, got {:?}",
             r2.outcome
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn rollup_missing_respects_week_throttle() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         // Seed 21 days covering 3 full ISO weeks that are clearly in the past
@@ -843,6 +843,6 @@ mod tests {
             sweep2.week_ok >= 1,
             "second sweep should write at least 1 remaining week"
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 }

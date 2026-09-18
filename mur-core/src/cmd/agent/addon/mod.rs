@@ -283,15 +283,12 @@ fn audit_toggle(agent: &str, target: &str, enabled: bool) {
 /// Defined at the `addon` module level so both `mod.rs` and `import.rs`
 /// test blocks can reference it.  Not used outside `#[cfg(test)]`.
 #[cfg(test)]
-pub(super) static ADDON_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
 
     // Use the shared lock so import.rs and mod.rs tests never race on MUR_HOME.
-    use super::ADDON_TEST_LOCK as ENV_LOCK;
 
     fn write_agent(home: &std::path::Path, name: &str) {
         let dir = home.join("agents").join(name);
@@ -357,12 +354,10 @@ mod tests {
 
     #[test]
     fn toggle_and_remove() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "tester");
         inject_addon(home, "tester", "myplugin", &["skill-a"], &["mcp-a"]);
 
@@ -400,12 +395,10 @@ mod tests {
 
     #[test]
     fn remove_does_not_touch_non_addon_skills() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "keeper");
 
         // Write a NON-add-on skill directly into the agent's skills dir.
@@ -471,12 +464,10 @@ mod tests {
 
     #[test]
     fn list_empty() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "empty-agent");
         // Should not error on empty list.
         cmd_addon_list("empty-agent").unwrap();
@@ -484,12 +475,10 @@ mod tests {
 
     #[test]
     fn disable_all_kills_switch() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "multi");
         inject_addon(home, "multi", "plugin-a", &[], &[]);
         inject_addon(home, "multi", "plugin-b", &[], &[]);
@@ -506,12 +495,10 @@ mod tests {
 
     #[test]
     fn missing_addon_errors() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "noop");
         let err = cmd_addon_set_enabled("noop", "nonexistent", true)
             .unwrap_err()
@@ -521,12 +508,10 @@ mod tests {
 
     #[test]
     fn reimport_replaces_and_preserves_enabled() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "reimp");
 
         // A minimal plugin dir: plugin.json + one skill, so import() records
@@ -574,12 +559,10 @@ mod tests {
     /// `cmd_addon_remove` has already deleted the old copy.
     #[test]
     fn reimport_marketplace_uses_stored_plugin_selector() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "mkt");
 
         // A minimal marketplace indexing one plugin by relative path.
@@ -640,12 +623,10 @@ mod tests {
     /// unchanged) — never neither-old-nor-new.
     #[test]
     fn reimport_restores_addon_on_import_failure() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe {
-            std::env::set_var("MUR_HOME", home);
-        }
+        envg.set_var("MUR_HOME", home);
         write_agent(home, "restoreme");
 
         let plugin = home.join("myplugin2-src");

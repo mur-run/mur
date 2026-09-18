@@ -120,9 +120,9 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn generate_propagates_connection_failure() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.unset_var("MUR_LLM_MOCK");
         let b = OllamaBackend::new("http://127.0.0.1:1", Duration::from_millis(200));
         let req = ChatRequest {
             model: "qwen3:14b",
@@ -147,9 +147,9 @@ mod tests {
         // return an empty response — the silent-empty-response regression
         // that broke `mur learn extract --llm`, `mur out` workflow extraction
         // and the LLM-starters path for users with provider:ollama.
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.unset_var("MUR_LLM_MOCK");
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
@@ -193,9 +193,9 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn generate_stream_propagates_connection_failure() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.unset_var("MUR_LLM_MOCK");
         let b = OllamaBackend::new("http://127.0.0.1:1", Duration::from_millis(200));
         let req = ChatRequest {
             model: "qwen3:14b",

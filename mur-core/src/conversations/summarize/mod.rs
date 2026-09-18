@@ -525,8 +525,8 @@ mod orch_tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compact_day_happy_path_mock() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
@@ -538,14 +538,14 @@ mod orch_tests {
             Outcome::Written { .. } => {}
             other => panic!("expected Written, got {:?}", other),
         }
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compact_day_noop_when_fresh() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
@@ -560,14 +560,14 @@ mod orch_tests {
             r2.outcome,
             Outcome::Skipped { .. } | Outcome::Noop
         ));
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compact_missing_respects_throttle() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         for i in 1..=10 {
@@ -580,7 +580,7 @@ mod orch_tests {
             .await
             .unwrap();
         assert_eq!(report.day_reports.len(), 3);
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -588,8 +588,8 @@ mod orch_tests {
     async fn keywords_exclude_macro_marker_tokens() {
         // Guard: top_keywords must run on pre-macro-rewrite spans so the
         // `{{pattern: name}}` markers don't pollute the keywords list.
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
@@ -619,7 +619,7 @@ mod orch_tests {
             "expected Written/Noop, got {:?}",
             r.outcome
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -633,8 +633,8 @@ mod orch_tests {
         // computed from the rendered narrative via split_whitespace. For the mock
         // happy path, the abstractive narrative starts with "Mock narrative: ...",
         // so word_count should be >= 5 (the mock narrative length).
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 19).unwrap();
@@ -660,7 +660,7 @@ mod orch_tests {
             rendered_words,
             narrative_slice.lines().next().unwrap_or("")
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[test]
@@ -707,8 +707,8 @@ Today was a test.
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn compact_day_writes_both_narrative_and_span_rows() {
-        let _env_guard = crate::conversations::ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_str().unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
@@ -740,6 +740,6 @@ Today was a test.
         let layer2_count = idx.count_rows_at_layer(2).await.unwrap();
         assert_eq!(layer1_count, 1, "one narrative row");
         assert!(layer2_count >= 1, "at least one span row");
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 }

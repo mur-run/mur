@@ -187,10 +187,11 @@ mod tests {
 
     #[test]
     fn flag_gates_the_command() {
-        unsafe { std::env::remove_var(FLAG_ENV) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var(FLAG_ENV);
         assert!(!flag_enabled());
-        unsafe { std::env::set_var(FLAG_ENV, "1") };
+        envg.set_var(FLAG_ENV, "1");
         assert!(flag_enabled());
-        unsafe { std::env::remove_var(FLAG_ENV) };
+        envg.unset_var(FLAG_ENV);
     }
 }

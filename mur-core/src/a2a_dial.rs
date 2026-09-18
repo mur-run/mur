@@ -649,7 +649,8 @@ mod tests {
         // is a pure unit test.
         let home = tempdir().unwrap();
         std::fs::create_dir_all(home.path().join("agents/nobody")).unwrap();
-        unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", "/does/not/exist") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_AGENT_RUNTIME_BIN", "/does/not/exist");
         let err = dial_method(
             home.path(),
             "nobody",
@@ -658,7 +659,7 @@ mod tests {
             DialMode::Auto,
         )
         .unwrap_err();
-        unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") };
+        envg.unset_var("MUR_AGENT_RUNTIME_BIN");
         let msg = err.to_string();
         assert!(
             msg.contains("runtime binary not found")
@@ -753,7 +754,6 @@ mod timeout_tests {
 
     /// Serial guard: `MUR_A2A_IO_TIMEOUT_SECS` is process-global env, and
     /// `cargo test` runs tests in this file concurrently by default.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn dial_socket_times_out_instead_of_hanging_forever() {
@@ -765,7 +765,7 @@ mod timeout_tests {
             );
             return;
         }
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let sock_path = tmp.path().join("agent.sock");
         let listener = UnixListener::bind(&sock_path).unwrap();
@@ -807,9 +807,9 @@ mod timeout_tests {
         )
         .unwrap();
 
-        // SAFETY (test-only env mutation): serialized by `ENV_LOCK` above so
+        // (test-only env mutation): serialized by the EnvGuard above so
         // no other test in this process observes a torn value.
-        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "1") };
+        envg.set_var("MUR_A2A_IO_TIMEOUT_SECS", "1");
         let start = std::time::Instant::now();
         let result = dial_method(
             tmp.path(),
@@ -819,7 +819,7 @@ mod timeout_tests {
             DialMode::RequireRunning,
         );
         let elapsed = start.elapsed();
-        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        envg.unset_var("MUR_A2A_IO_TIMEOUT_SECS");
 
         let err = result.unwrap_err();
         let msg = format!("{err:#}");
@@ -876,8 +876,8 @@ mod timeout_tests {
     /// a beating one gets 90 s, and the env override beats both.
     #[test]
     fn idle_timeout_follows_the_peers_proto() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_A2A_IO_TIMEOUT_SECS");
         let p = std::path::Path::new("/nonexistent.sock");
         let legacy: LockFile = serde_json::from_value(lock_json("a", p, 1)).unwrap();
         let beating: LockFile = serde_json::from_value(lock_json("a", p, 2)).unwrap();
@@ -889,12 +889,12 @@ mod timeout_tests {
             dial_io_timeout_for(beating.proto_version),
             HEARTBEAT_DIAL_IO_TIMEOUT
         );
-        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "7") };
+        envg.set_var("MUR_A2A_IO_TIMEOUT_SECS", "7");
         assert_eq!(
             dial_io_timeout_for(beating.proto_version),
             Duration::from_secs(7)
         );
-        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        envg.unset_var("MUR_A2A_IO_TIMEOUT_SECS");
     }
 
     /// A proto-2 peer that beats every 300 ms while it "thinks" for 2 s is
@@ -905,7 +905,7 @@ mod timeout_tests {
         if !sockets_allowed("heartbeats_reset_the_idle_timeout") {
             return;
         }
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let sock_path = tmp.path().join("agent.sock");
         let listener = UnixListener::bind(&sock_path).unwrap();
@@ -924,7 +924,7 @@ mod timeout_tests {
             }
         });
         write_lock(tmp.path(), "beating", &sock_path, 2);
-        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "1") };
+        envg.set_var("MUR_A2A_IO_TIMEOUT_SECS", "1");
         let result = dial_method(
             tmp.path(),
             "beating",
@@ -932,7 +932,7 @@ mod timeout_tests {
             serde_json::json!({}),
             DialMode::RequireRunning,
         );
-        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        envg.unset_var("MUR_A2A_IO_TIMEOUT_SECS");
         let v = result.expect("heartbeats must keep the dial alive");
         assert_eq!(v["ok"], true);
         let _ = server.join();
@@ -947,7 +947,7 @@ mod timeout_tests {
         if !sockets_allowed("a_silent_beating_peer_stopped_responding") {
             return;
         }
-        let _guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let sock_path = tmp.path().join("agent.sock");
         let listener = UnixListener::bind(&sock_path).unwrap();
@@ -962,7 +962,7 @@ mod timeout_tests {
             }
         });
         write_lock(tmp.path(), "silent", &sock_path, 2);
-        unsafe { std::env::set_var("MUR_A2A_IO_TIMEOUT_SECS", "1") };
+        envg.set_var("MUR_A2A_IO_TIMEOUT_SECS", "1");
         let err = dial_method(
             tmp.path(),
             "silent",
@@ -971,7 +971,7 @@ mod timeout_tests {
             DialMode::RequireRunning,
         )
         .unwrap_err();
-        unsafe { std::env::remove_var("MUR_A2A_IO_TIMEOUT_SECS") };
+        envg.unset_var("MUR_A2A_IO_TIMEOUT_SECS");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("stopped responding")

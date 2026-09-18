@@ -398,15 +398,14 @@ pub(crate) fn mock_generate(req: &GenerateRequest<'_>) -> GenerateResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::super::ENV_LOCK;
     use super::*;
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn mock_mode_extractive_returns_valid_json() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         // Given: MUR_OLLAMA_MOCK=1, extractive prompt
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let req = GenerateRequest {
             model: "qwen3:14b",
@@ -418,14 +417,14 @@ mod tests {
         let resp = client.generate(req).await.unwrap();
         assert!(resp.response.contains("mock extractive span"));
         assert!(serde_json::from_str::<serde_json::Value>(&resp.response).is_ok());
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn mock_mode_abstractive_returns_prose() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let req = GenerateRequest {
             model: "qwen3:14b",
@@ -436,14 +435,14 @@ mod tests {
         };
         let resp = client.generate(req).await.unwrap();
         assert!(resp.response.starts_with("Mock narrative"));
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn real_call_errors_on_unreachable_endpoint() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_OLLAMA_MOCK");
         // Use a deliberately-unroutable port so we get a fast failure
         let client = OllamaClient::new("http://127.0.0.1:1", Duration::from_millis(500));
         let req = GenerateRequest {
@@ -550,14 +549,14 @@ mod tests {
 
     #[test]
     fn mock_mode_from_env_parses_both_variants() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         assert!(matches!(mock_mode(), Some(MockMode::All01)));
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "hash") };
+        envg.set_var("MUR_OLLAMA_MOCK", "hash");
         assert!(matches!(mock_mode(), Some(MockMode::Hash)));
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "bogus") };
+        envg.set_var("MUR_OLLAMA_MOCK", "bogus");
         assert!(mock_mode().is_none());
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
         assert!(mock_mode().is_none());
     }
 
@@ -585,8 +584,8 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn mock_returns_week_narrative_for_week_prompt() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let req = GenerateRequest {
             model: "qwen3:14b",
@@ -601,14 +600,14 @@ mod tests {
             "expected week-specific mock narrative; got: {}",
             resp.response
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn mock_returns_month_narrative_for_month_prompt() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let req = GenerateRequest {
             model: "qwen3:14b",
@@ -623,15 +622,15 @@ mod tests {
             "expected month-specific mock narrative; got: {}",
             resp.response
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn mock_abstractive_branch_returns_shorter_summary() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
+        envg.unset_var("MUR_ABSTRACTIVE_MOCK_FAIL");
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let body: String = "fact ".repeat(30);
         let prompt = format!("Summarize the following in ≤64 tokens.\n\n{body}");
@@ -647,15 +646,15 @@ mod tests {
         let resp = client.generate(req).await.unwrap();
         assert!(resp.response.contains("[mock summary]"));
         assert!(resp.response.len() < body.len());
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn mock_abstractive_fail_empty_returns_empty() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
-        unsafe { std::env::set_var("MUR_ABSTRACTIVE_MOCK_FAIL", "empty") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
+        envg.set_var("MUR_ABSTRACTIVE_MOCK_FAIL", "empty");
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let req = GenerateRequest {
             model: "m",
@@ -666,8 +665,8 @@ mod tests {
         };
         let resp = client.generate(req).await.unwrap();
         assert_eq!(resp.response, "");
-        unsafe { std::env::remove_var("MUR_ABSTRACTIVE_MOCK_FAIL") };
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_ABSTRACTIVE_MOCK_FAIL");
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -677,8 +676,8 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
         // Lock the env to prevent other tests' MUR_OLLAMA_MOCK from leaking
         // into ours and short-circuiting the wiremock path.
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_OLLAMA_MOCK");
         let server = MockServer::start().await;
         let body = "\
 {\"model\":\"qwen3:14b\",\"response\":\"hello\",\"done\":false}
@@ -735,8 +734,8 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn mock_returns_identity_for_standalone_question_prompt() {
-        let _env_guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let client = OllamaClient::new("http://unused", Duration::from_secs(1));
         let prompt = "Given a chat history and the latest user question \
                      which might reference context in the chat history, \
@@ -759,6 +758,6 @@ mod tests {
             "what did I ship yesterday?",
             "mock should echo the raw 'Latest question:' as the standalone form"
         );
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 }

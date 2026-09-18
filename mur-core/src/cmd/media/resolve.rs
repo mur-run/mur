@@ -93,9 +93,10 @@ mod tests {
 
     #[test]
     fn ytdlp_env_override_missing_is_none() {
-        unsafe { std::env::set_var("MUR_YTDLP_PATH", "/no/such/yt-dlp") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_YTDLP_PATH", "/no/such/yt-dlp");
         assert_eq!(detect_ytdlp(), None);
-        unsafe { std::env::remove_var("MUR_YTDLP_PATH") };
+        envg.unset_var("MUR_YTDLP_PATH");
     }
 
     #[test]

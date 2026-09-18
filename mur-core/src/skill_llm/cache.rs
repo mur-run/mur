@@ -71,10 +71,7 @@ pub(crate) fn mur_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{LazyLock, Mutex};
     use tempfile::TempDir;
-
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn key1() -> String {
         key("test-model", "hello", TokenBudget::DEFAULT)
@@ -85,9 +82,10 @@ mod tests {
     }
 
     fn with_test_home<T>(f: impl FnOnce() -> T) -> T {
-        let _lock = ENV_LOCK.lock().unwrap();
         let dir = TempDir::new().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", dir.path().as_os_str()) };
+        // This previously set `MUR_HOME` and never put it back at all, so
+        // every later test in the process inherited a deleted TempDir.
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", dir.path())]);
         f()
     }
 

@@ -218,7 +218,7 @@ mod tests {
 #[cfg(test)]
 #[test]
 fn converted_crates_never_mutate_the_environment_directly() {
-    const GUARDED: &[&str] = &["mur-common", "mur-agent-runtime"];
+    const GUARDED: &[&str] = &["mur-common", "mur-agent-runtime", "mur-core"];
     /// Mutation that happens before any thread could observe it.
     const ALLOWED: &[(&str, &str)] = &[
         (
@@ -228,6 +228,22 @@ fn converted_crates_never_mutate_the_environment_directly() {
         (
             "mur-agent-runtime/src/supervisor.rs",
             "argv0 name stash at startup, before tokio spawns",
+        ),
+        (
+            "mur-core/src/cmd/deep_research/ask.rs",
+            "run id published to the loop this single-shot CLI spawns",
+        ),
+        (
+            "mur-core/src/cmd/deep_research/provision.rs",
+            "MUR_HOME as a hidden parameter to cmd_create/cmd_mcp_add — the \
+             function's own `# Concurrency` note calls it CLI-only and NOT \
+             concurrency-safe, and carries a TODO to parameterize those \
+             helpers instead. Weaker than the others: not 'before threads \
+             exist', only 'no thread does this today'",
+        ),
+        (
+            "mur-core/src/cmd/deep_research/setup.rs",
+            "same hidden-parameter pattern as provision.rs, same TODO",
         ),
     ];
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -265,6 +281,12 @@ fn converted_crates_never_mutate_the_environment_directly() {
                 continue;
             };
             for (i, line) in body.lines().enumerate() {
+                // A comment that mentions `env::set_var` is prose, not a
+                // mutation — `monitor/adapters/github_actions.rs` explains
+                // why its variable is set and would otherwise be reported.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
                 if line.contains("env::set_var") || line.contains("env::remove_var") {
                     offenders.push(format!("{rel}:{}", i + 1));
                 }

@@ -299,16 +299,11 @@ mod tests {
             std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         std::fs::write(t.path().join("notes.txt"), "").unwrap();
-        // Process-wide env: this test owns PATH for its duration.
-        let saved = std::env::var_os("PATH");
-        unsafe { std::env::set_var("PATH", t.path()) };
+        // Process-wide env: this test owns PATH for its duration, and the
+        // guard hands it back — including if an assertion below panics.
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("PATH", t.path());
         let bins = scan_path_bins();
-        unsafe {
-            match saved {
-                Some(p) => std::env::set_var("PATH", p),
-                None => std::env::remove_var("PATH"),
-            }
-        }
         #[cfg(unix)]
         assert_eq!(bins, ["mytool"]);
         #[cfg(windows)]
