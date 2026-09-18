@@ -342,3 +342,46 @@ fn skill_add_from_dir_preserves_reference_assets() {
         "references/services.md must be installed alongside the manifest"
     );
 }
+
+/// Regression for the first cut of #005, which handed the manifest's whole
+/// parent directory to `copy_bundle`. A manifest sitting directly in MUR_HOME
+/// then made the copy recurse into the destination it was writing, and the
+/// install died with ENAMETOOLONG. Only the named asset dirs travel.
+#[test]
+fn skill_add_does_not_sweep_in_unrelated_siblings() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+
+    // The manifest's parent is MUR_HOME itself — the worst case, and the one
+    // the original fix hung on.
+    let src = mur_home.path().join("SKILL.md");
+    std::fs::write(&src, valid_md_skill()).unwrap();
+    std::fs::write(mur_home.path().join("unrelated-note.md"), "private\n").unwrap();
+
+    let out = run(
+        mur_home.path(),
+        &["agent", "skill", "add", "agent_x", src.to_str().unwrap()],
+    );
+    assert!(
+        out.status.success(),
+        "add must not choke on a manifest whose parent is MUR_HOME: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let dest = mur_home
+        .path()
+        .join("agents")
+        .join("agent_x")
+        .join("skills")
+        .join("research");
+    assert!(dest.join("skill.yaml").is_file(), "manifest installed");
+    assert!(
+        !dest.join("unrelated-note.md").exists(),
+        "a file merely sitting next to the manifest must not be installed"
+    );
+    assert!(
+        !dest.join("agents").exists(),
+        "the copy must never recurse into MUR_HOME's own tree"
+    );
+}
