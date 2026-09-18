@@ -186,9 +186,18 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     // profile.yaml under agent_home — issue #712) only stays denied if the
     // deny comes later. fs_deny overriding fs_read/fs_write is the field's
     // documented contract (see `SandboxPolicy::fs_deny`).
+    //
+    // Issue #007: `profile.yaml` is write-only-denied, so the read deny is
+    // skipped for it. The kernel must agree with the tool gate here — if SBPL
+    // still denied the read, `read_file` would allow it and the agent would
+    // get a bare EPERM with no explanation, which is the failure mode the tool
+    // gate exists to prevent.
+    let own_profile = policy.launch_chain.agent_self_home().join("profile.yaml");
     for path in &policy.fs_deny {
         let p = sbpl_escape(&path.to_string_lossy());
-        lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        if path != &own_profile {
+            lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        }
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
@@ -212,7 +221,13 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                 .join(f)
                 .to_string_lossy(),
         );
-        lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        // #007: reads are re-asserted only for `identity.key` — holding it is
+        // signing authority. `profile.yaml` is write-denied only; the agent
+        // reading its own entitlements escalates nothing (a sibling's profile
+        // was readable all along) and is how it explains its own limits.
+        if f != "profile.yaml" {
+            lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+        }
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
@@ -492,6 +507,48 @@ mod tests {
             ),
             ..Default::default()
         }
+    }
+
+    /// #007, kernel side: the SBPL profile must NOT read-deny the agent's own
+    /// `profile.yaml`, or the tool gate would allow the read and the kernel
+    /// would answer with a bare EPERM — the exact unexplainable failure the
+    /// tool gate exists to prevent. `identity.key` must still be read-denied.
+    #[test]
+    fn sbpl_read_denies_own_key_but_not_own_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_home = tmp.path().join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let mut policy = policy_with_launch_chain(&agent_home.to_string_lossy());
+        policy.fs_deny = vec![
+            agent_home.join("profile.yaml"),
+            agent_home.join("identity.key"),
+        ];
+        let sbpl = build_sbpl_profile(&policy);
+
+        let profile_p = agent_home.join("profile.yaml");
+        let key_p = agent_home.join("identity.key");
+        assert!(
+            !sbpl.contains(&format!(
+                "(deny file-read* (subpath \"{}\"))",
+                profile_p.display()
+            )),
+            "own profile.yaml must not be read-denied:\n{sbpl}"
+        );
+        // Write protection (#712) is untouched.
+        assert!(
+            sbpl.contains(&format!(
+                "(deny file-write* (subpath \"{}\"))",
+                profile_p.display()
+            )),
+            "own profile.yaml must stay write-denied:\n{sbpl}"
+        );
+        assert!(
+            sbpl.contains(&format!(
+                "(deny file-read* (subpath \"{}\"))",
+                key_p.display()
+            )),
+            "own identity.key must stay read-denied:\n{sbpl}"
+        );
     }
 
     #[test]

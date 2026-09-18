@@ -136,6 +136,14 @@ pub fn format_io_error(verb: &str, path: &Path, base: &Path, err: &std::io::Erro
 /// On Linux this gate is the enforcement point (Landlock cannot express
 /// deny-within-allow); on macOS it fronts the SBPL kernel deny with a clear
 /// error instead of a raw EPERM.
+///
+/// Issue #007: this list is consulted by the READ gate too (`deny` is one
+/// list), which made the agent's own `profile.yaml` unreadable — while the
+/// sibling profile next door stayed readable, so the rule bought no
+/// confidentiality and only cost the agent the ability to answer "what am I
+/// allowed to do?". Reads are now carved back via
+/// [`self_protected_write_only`]: `identity.key` remains read-denied through
+/// `LaunchChain::protects_read` (signing authority), `profile.yaml` does not.
 pub(crate) fn for_file_tools(
     mut fs: FilesystemEntitlement,
     agent_home: &Path,
@@ -232,6 +240,38 @@ pub(crate) fn under_any_or_worktree(roots: &[String], canonical: &Path) -> bool 
         }
         None => false,
     }
+}
+
+/// The self-protected files whose deny is WRITE-only (issue #007).
+///
+/// `for_file_tools` pushes `SELF_PROTECTED_AGENT_FILES` onto `fs.deny`, and
+/// `deny` is one list shared by both gates — so the #712 write rule silently
+/// became a read rule too. This names the subset the READ gate must skip.
+///
+/// `identity.key` is deliberately absent: it stays read-denied, but through
+/// `LaunchChain::protects_read`, which sits *before* the lists and cannot be
+/// satisfied by any entitlement. That is the right layer for "reading this is
+/// holding a credential"; the deny list is not, because a user-written grant
+/// could otherwise be argued to override it.
+fn self_protected_write_only(agent_home: &Path) -> Vec<PathBuf> {
+    vec![agent_home.join("profile.yaml")]
+}
+
+/// Deny-list membership for the READ gate: `under_any`, minus the entries that
+/// exist only to express a WRITE rule (issue #007).
+///
+/// Takes `agent_home` rather than filtering by file name so a user who
+/// explicitly wrote `deny <some other agent>/profile.yaml` keeps that deny —
+/// only THIS agent's own profile is carved back out.
+pub(crate) fn under_any_read_deny(roots: &[String], canonical: &Path, agent_home: &Path) -> bool {
+    let carved: Vec<PathBuf> = self_protected_write_only(agent_home)
+        .into_iter()
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .collect();
+    if carved.iter().any(|p| p == canonical) {
+        return false;
+    }
+    under_any(roots, canonical)
 }
 
 pub(crate) fn check_write_entitlement(
