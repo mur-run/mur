@@ -7,33 +7,7 @@
 //! exercise YAML deserialisation.
 
 use std::path::Path;
-use std::sync::{LazyLock, Mutex, MutexGuard};
 use tempfile::TempDir;
-
-/// Cargo runs integration tests in parallel threads; `MUR_HOME` is a
-/// process-global env var, so we serialise tests that mutate it.
-static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-struct MurHomeGuard {
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl MurHomeGuard {
-    fn set(path: &Path) -> Self {
-        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: process-wide mutex held across the env mutation; cleared
-        // again in `Drop`.
-        unsafe { std::env::set_var("MUR_HOME", path) };
-        MurHomeGuard { _lock: lock }
-    }
-}
-
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        // SAFETY: still holding `_lock` until our fields drop.
-        unsafe { std::env::remove_var("MUR_HOME") };
-    }
-}
 
 /// Load the shared P0a fixture and substitute `name: agent_test` →
 /// `name: <name>` so the same baseline profile can host any agent.
@@ -53,7 +27,7 @@ fn fixture_with_name(name: &str) -> String {
 async fn answers_yaml_supports_first_memory_and_display_name() {
     let tmp = TempDir::new().unwrap();
     let mur_home = tmp.path();
-    let _guard = MurHomeGuard::set(mur_home);
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home)]);
 
     // Pre-create a minimal agent home with a parseable AgentProfile.
     let agent_dir = mur_home.join("agents/test");
@@ -124,7 +98,7 @@ proactive_tier: warm_only
 async fn legacy_3step_answers_still_parse() {
     let tmp = TempDir::new().unwrap();
     let mur_home = tmp.path();
-    let _guard = MurHomeGuard::set(mur_home);
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home)]);
 
     let agent_dir = mur_home.join("agents/legacy");
     std::fs::create_dir_all(&agent_dir).unwrap();

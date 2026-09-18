@@ -53,9 +53,8 @@ content:
     // Target agent "bob" — caller of the install.
     let bob_profile_path = write_profile(home.path(), "bob");
 
-    // SAFETY: env mutation isn't thread-safe across parallel tests. This
-    // test file must be run with `--test-threads=1`.
-    unsafe { std::env::set_var("MUR_AGENT_NAME", "bob") };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_AGENT_NAME", "bob");
 
     let result = cmd_install(
         home.path(),
@@ -64,7 +63,7 @@ content:
     );
 
     // SAFETY: see comment above.
-    unsafe { std::env::remove_var("MUR_AGENT_NAME") };
+    envg.unset_var("MUR_AGENT_NAME");
     result.unwrap();
 
     // 1. Skill file exists in the shared store.

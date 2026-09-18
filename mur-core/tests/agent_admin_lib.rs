@@ -10,37 +10,7 @@
 use mur_core::agent_admin::{self, AgentAdminError};
 use std::path::Path;
 use std::process::Command;
-use std::sync::{LazyLock, Mutex, MutexGuard};
 use tempfile::TempDir;
-
-/// Each test mutates the global `MUR_HOME` env var. Cargo runs
-/// integration tests across threads, so we serialise via this
-/// process-wide mutex.
-static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-/// RAII guard: locks `ENV_LOCK`, sets `MUR_HOME`, restores (removes)
-/// it on drop — including panic unwinds. Collapses the
-/// set/remove_var pair that every test would otherwise repeat.
-struct MurHomeGuard {
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl MurHomeGuard {
-    fn set(path: &Path) -> Self {
-        let lock = ENV_LOCK.lock().unwrap();
-        // SAFETY: process-wide mutex held across the env mutation.
-        unsafe { std::env::set_var("MUR_HOME", path) };
-        MurHomeGuard { _lock: lock }
-    }
-}
-
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        // SAFETY: we still hold the lock until this guard's fields
-        // are dropped after this block.
-        unsafe { std::env::remove_var("MUR_HOME") };
-    }
-}
 
 fn mur_bin() -> &'static str {
     env!("CARGO_BIN_EXE_mur")
@@ -67,7 +37,7 @@ fn status_returns_typed_view_for_existing_agent() {
     let bin_dir = TempDir::new().unwrap();
     mur_create(mur_home.path(), bin_dir.path(), "iview");
 
-    let _guard = MurHomeGuard::set(mur_home.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home.path())]);
     let view = agent_admin::lifecycle::status("iview").expect("status returns Ok");
     assert_eq!(view.name, "iview");
     assert_eq!(view.kind, "stopped");
@@ -79,7 +49,7 @@ fn status_returns_typed_view_for_existing_agent() {
 #[test]
 fn status_returns_agent_not_found_typed_error() {
     let mur_home = TempDir::new().unwrap();
-    let _guard = MurHomeGuard::set(mur_home.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home.path())]);
 
     let err = agent_admin::lifecycle::status("ghost").expect_err("ghost agent should miss");
     match err {
@@ -97,7 +67,7 @@ fn skill_show_returns_typed_not_found_with_kind_skill() {
     let bin_dir = TempDir::new().unwrap();
     mur_create(mur_home.path(), bin_dir.path(), "skill-test");
 
-    let _guard = MurHomeGuard::set(mur_home.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home.path())]);
     let err = agent_admin::skill::show("skill-test", "no-such-skill").expect_err("missing skill");
     match err {
         AgentAdminError::NotFound { agent, kind, query } => {
@@ -115,7 +85,7 @@ fn perm_view_returns_default_entitlements_for_new_agent() {
     let bin_dir = TempDir::new().unwrap();
     mur_create(mur_home.path(), bin_dir.path(), "perm-view");
 
-    let _guard = MurHomeGuard::set(mur_home.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home.path())]);
     let entitlements = agent_admin::perm::view("perm-view").expect("perm::view returns Ok");
     let _ = entitlements.network;
 }
@@ -126,7 +96,7 @@ fn mcp_list_starts_empty_for_new_agent() {
     let bin_dir = TempDir::new().unwrap();
     mur_create(mur_home.path(), bin_dir.path(), "mcp-empty");
 
-    let _guard = MurHomeGuard::set(mur_home.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home.path())]);
     let servers = agent_admin::mcp::list("mcp-empty").expect("mcp::list returns Ok");
     assert!(
         servers.is_empty(),

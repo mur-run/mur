@@ -68,7 +68,8 @@ fn scaffold_writes_keychain_and_yaml_with_token_and_nonce() {
     // process, but other test binaries may run in parallel. MUR_HOME is read
     // inside `scaffold_telegram_bridge` via `paths::mur_root(None)` so we set
     // it for this test scope only.
-    unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", tmp.path());
 
     let kc = MockKeychain::default();
     let args = ScaffoldArgs {
@@ -94,7 +95,7 @@ fn scaffold_writes_keychain_and_yaml_with_token_and_nonce() {
     assert!(profile_path.exists(), "telegram.yaml not written");
     assert!(profile_path.ends_with("agents/tg-bridge/telegram.yaml"));
 
-    unsafe { std::env::remove_var("MUR_HOME") };
+    envg.unset_var("MUR_HOME");
 }
 
 #[test]
@@ -135,7 +136,8 @@ fn scaffold_registers_mcp_telegram_chat() {
     // `telegram_chat`. The user-agent picks this up via the standard
     // profile.mcp_servers[] surface and spawns the bridge as an MCP child.
     let tmp = TempDir::new().unwrap();
-    unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", tmp.path());
 
     let kc = MockKeychain::default();
     let args = ScaffoldArgs {
@@ -161,7 +163,7 @@ fn scaffold_registers_mcp_telegram_chat() {
         "profile.yaml missing mcp_servers section: {profile_yaml}"
     );
 
-    unsafe { std::env::remove_var("MUR_HOME") };
+    envg.unset_var("MUR_HOME");
 }
 
 #[test]

@@ -28,9 +28,8 @@ async fn embed_openai_posts_to_custom_base_url() {
     // OMLX_API_KEY in this binary's process. If you add another test to
     // this file that also mutates OMLX_API_KEY, this assumption breaks
     // and the env access becomes a real data race.
-    unsafe {
-        std::env::set_var("OMLX_API_KEY", "local");
-    }
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("OMLX_API_KEY", "local");
 
     let ec = mur_core::store::embedding::EmbeddingConfig::from_config(&cfg);
     let v = mur_core::store::embedding::embed("hello", &ec)

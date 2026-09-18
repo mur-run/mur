@@ -1429,9 +1429,10 @@ async fn ask_generate_against_wiremocked_anthropic_sse_streams_text() {
     // ENV_LOCK is internal to mur-core; skip locking in the integration
     // crate. We use a unique env-var name so this test doesn't collide
     // with other integration tests if they ever land.
-    unsafe { std::env::remove_var("MUR_LLM_MOCK") };
-    unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-    unsafe { std::env::set_var("MUR_TEST_ANTHROPIC_KEY_I5", "k") };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.unset_var("MUR_LLM_MOCK");
+    envg.unset_var("MUR_OLLAMA_MOCK");
+    envg.set_var("MUR_TEST_ANTHROPIC_KEY_I5", "k");
 
     let server = MockServer::start().await;
     let sse = "event: content_block_delta\n\
@@ -1475,5 +1476,5 @@ async fn ask_generate_against_wiremocked_anthropic_sse_streams_text() {
         text.push_str(&chunk.unwrap());
     }
     assert_eq!(text, "hello world");
-    unsafe { std::env::remove_var("MUR_TEST_ANTHROPIC_KEY_I5") };
+    envg.unset_var("MUR_TEST_ANTHROPIC_KEY_I5");
 }

@@ -7,35 +7,9 @@
 //! 2. Unsigned export omits the `signature` block in the YAML.
 
 use std::path::Path;
-use std::sync::{LazyLock, Mutex, MutexGuard};
 use tempfile::TempDir;
 
 use mur_common::identity::AgentIdentity;
-
-/// Cargo runs integration tests in parallel threads; `MUR_HOME` is a
-/// process-global env var, so we serialise tests that mutate it.
-static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-struct MurHomeGuard {
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl MurHomeGuard {
-    fn set(path: &Path) -> Self {
-        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: process-wide mutex held across the env mutation; cleared
-        // again in `Drop`.
-        unsafe { std::env::set_var("MUR_HOME", path) };
-        MurHomeGuard { _lock: lock }
-    }
-}
-
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        // SAFETY: still holding `_lock` until our fields drop.
-        unsafe { std::env::remove_var("MUR_HOME") };
-    }
-}
 
 fn fixture_profile() -> String {
     std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
@@ -58,7 +32,7 @@ fn provision_agent(tmp: &TempDir, name: &str) -> std::path::PathBuf {
 #[tokio::test]
 async fn export_signed_round_trips_through_import_list_accept() {
     let tmp = TempDir::new().unwrap();
-    let _g = MurHomeGuard::set(tmp.path());
+    let _g = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let name = "card-cli-signed";
     let agent_dir = provision_agent(&tmp, name);
 
@@ -100,7 +74,7 @@ async fn export_signed_round_trips_through_import_list_accept() {
 #[tokio::test]
 async fn export_unsigned_omits_signature_block() {
     let tmp = TempDir::new().unwrap();
-    let _g = MurHomeGuard::set(tmp.path());
+    let _g = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let name = "card-cli-unsigned";
     let _agent_dir = provision_agent(&tmp, name);
 
