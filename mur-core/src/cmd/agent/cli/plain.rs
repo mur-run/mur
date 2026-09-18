@@ -69,25 +69,41 @@ pub(super) fn run_plain(
                 // Second element is the audit attribution: only the interactive
                 // branch has a human at the keyboard, so every other branch says
                 // "auto" rather than claiming someone answered.
-                let (allow, surface) = if auto {
+                // #008: the same ceiling as the TUI (`stream_handler.rs`) and
+                // as gate A. Plain mode is where unattended runs live, so the
+                // hole was widest here: `--auto` is the default, and nothing
+                // asked what the call actually was. Above the ceiling there is
+                // no standing authority to lean on — a human at the keyboard
+                // may still answer, and a non-interactive run fails closed.
+                let tier = tool_tier::classify(tool, hitl.get("tool_input"));
+                let within_ceiling = mur_common::hitl::tier_may_be_granted(tier);
+                let (allow, surface) = if auto && within_ceiling {
                     eprintln!(
                         "[non-interactive: auto-approving tool-approval request (default; --ask to deny)]"
                     );
                     (true, "auto")
-                } else if auto_reads && bash_class::is_readonly_call(tool, hitl.get("tool_input")) {
+                } else if within_ceiling
+                    && auto_reads
+                    && bash_class::is_readonly_call(tool, hitl.get("tool_input"))
+                {
                     // Same lane as the TUI, same classifier. This mode used to
                     // ignore `--auto-reads` outright, so the identical flag
                     // behaved differently depending on how the CLI was started
                     // — and plain mode is exactly where unattended runs live.
                     eprintln!("  [auto-approved read-only {tool} (--auto-reads)]");
                     (true, "auto")
-                } else if session_allow.borrow().contains(tool) {
+                } else if within_ceiling && session_allow.borrow().contains(tool) {
                     eprintln!("  [auto-approved {tool} (session allow)]");
                     (true, "auto")
                 } else if interactive {
                     // Outer loop releases stdin lock between reads (Task 2), so
                     // we can safely acquire a fresh lock here to prompt the user.
                     let mut o = io::stdout();
+                    if !within_ceiling {
+                        // Name the tier, or the operator sees an auto session
+                        // stop for no visible reason and learns to hit [y].
+                        let _ = writeln!(o, "  [{tier:?} — above the auto ceiling, asking]");
+                    }
                     let _ = write!(o, "  tool approval: {tool} — [y]es / [a]lways / [n]o? ");
                     let _ = o.flush();
                     let mut ans = String::new();
@@ -103,6 +119,11 @@ pub(super) fn run_plain(
                         _ => false,
                     };
                     (allowed, "cli")
+                } else if !within_ceiling {
+                    eprintln!(
+                        "[non-interactive: denying {tier:?} tool call — above the auto ceiling, which no session grant raises]"
+                    );
+                    (false, "auto")
                 } else {
                     eprintln!(
                         "[non-interactive: auto-denying tool-approval request (--ask; drop it to allow)]"
