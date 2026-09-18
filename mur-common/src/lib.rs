@@ -76,6 +76,7 @@ pub mod test_env;
 pub mod trust;
 pub mod variable;
 pub mod workflow;
+pub mod worktree;
 pub mod zfs_protocol;
 
 pub use actor::{Actor, ActorSource};

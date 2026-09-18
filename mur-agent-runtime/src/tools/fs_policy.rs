@@ -196,6 +196,44 @@ pub(crate) fn under_any(roots: &[String], canonical: &Path) -> bool {
     })
 }
 
+/// Allow-side membership test: `under_any`, plus one derived hop for a path
+/// that lives in a git worktree of a granted checkout (issue #004).
+///
+/// ## Why this is a separate function, and why `deny` must never call it
+///
+/// Prefix matching cannot see that `~/work/repo-feat` and `~/work/repo` are the
+/// same project, so a user who granted the repo they work in was refused the
+/// moment the work moved into a worktree, and had to grant the same repo a
+/// second time under a different path. That is the whole of #004.
+///
+/// The derivation is one-way ALLOW-side only. Applying it to `deny` would be
+/// fail-open in the most dangerous direction: `deny ~/secrets` must keep
+/// meaning exactly `~/secrets`, and "this path's main checkout is denied"
+/// widening into "so is every worktree" is a rule the user never wrote. Deny
+/// stays literal, and because `check_write_entitlement`/`check_entitlement`
+/// evaluate `deny` FIRST and unconditionally, a denied path inside a derived
+/// worktree grant is still refused.
+///
+/// The derived root is never written back to `profile.yaml`: an entitlement
+/// the user did not type must not silently appear in the file they audit.
+/// It is recomputed from git's on-disk metadata on every call, so removing the
+/// worktree removes the access with no stale grant left behind.
+pub(crate) fn under_any_or_worktree(roots: &[String], canonical: &Path) -> bool {
+    if under_any(roots, canonical) {
+        return true;
+    }
+    // Not directly granted — ask git whether this path is a worktree of
+    // something that IS granted. Read-only, no subprocess (this gate is what
+    // decides whether spawning is permitted in the first place).
+    match mur_common::worktree::main_checkout_of(canonical) {
+        Some(main) => {
+            let main = std::fs::canonicalize(&main).unwrap_or(main);
+            under_any(roots, &main)
+        }
+        None => false,
+    }
+}
+
 pub(crate) fn check_write_entitlement(
     fs: &FilesystemEntitlement,
     canonical: &Path,
@@ -216,7 +254,9 @@ pub(crate) fn check_write_entitlement(
             canonical.display()
         )));
     }
-    if under_any(&fs.write, canonical) {
+    // `under_any_or_worktree` tries the literal grants first, then one derived
+    // hop for a worktree of a granted checkout (#004).
+    if under_any_or_worktree(&fs.write, canonical) {
         return Ok(());
     }
     Err(ToolError::Execution(format!(
@@ -481,5 +521,111 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    /// Build a real repo + linked worktree. Returns `None` when git is
+    /// unavailable so the test skips loudly rather than passing vacuously.
+    fn repo_with_worktree() -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
+        let tmp = tempfile::tempdir().ok()?;
+        let main = tmp.path().join("main");
+        std::fs::create_dir_all(&main).ok()?;
+        let git = |args: &[&str]| -> bool {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&main)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        if !git(&["init", "-q"]) {
+            return None;
+        }
+        let _ = git(&["config", "user.email", "t@example.com"]);
+        let _ = git(&["config", "user.name", "t"]);
+        std::fs::write(main.join("f.txt"), "x").ok()?;
+        let _ = git(&["add", "f.txt"]);
+        let _ = git(&["commit", "-qm", "init"]);
+        let wt = tmp.path().join("wt");
+        if !git(&["worktree", "add", "-q", wt.to_str()?, "-b", "feat"]) {
+            return None;
+        }
+        Some((tmp, main, wt))
+    }
+
+    /// Issue #004: granting the checkout must reach its worktrees. The user
+    /// reported having to authorise the same repo twice — once for the repo,
+    /// once for each worktree — because this gate is pure prefix matching and
+    /// a worktree lives outside the checkout it belongs to.
+    #[test]
+    fn a_worktree_of_a_granted_checkout_is_writable() {
+        let Some((_tmp, main, wt)) = repo_with_worktree() else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+        let fs = FilesystemEntitlement {
+            read: vec![],
+            // ONLY the main checkout is granted — exactly what the user typed.
+            write: vec![main.to_string_lossy().into_owned()],
+            deny: vec![],
+        };
+        let target = std::fs::canonicalize(&wt).unwrap().join("src/new.rs");
+        assert!(
+            check_write_entitlement(&fs, &target, &chain).is_ok(),
+            "a worktree of the granted checkout must be writable without a second grant"
+        );
+    }
+
+    /// The derivation must not become a general widening: an unrelated repo
+    /// is still refused, and so is an ordinary directory that merely sits
+    /// beside the grant.
+    #[test]
+    fn worktree_derivation_does_not_widen_to_unrelated_paths() {
+        let Some((_tmp, main, _wt)) = repo_with_worktree() else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+        let fs = FilesystemEntitlement {
+            read: vec![],
+            write: vec![main.to_string_lossy().into_owned()],
+            deny: vec![],
+        };
+        let elsewhere = tempfile::tempdir().unwrap();
+        let outside = std::fs::canonicalize(elsewhere.path())
+            .unwrap()
+            .join("nope.rs");
+        assert!(
+            check_write_entitlement(&fs, &outside, &chain).is_err(),
+            "a path outside every grant must stay refused"
+        );
+    }
+
+    /// The safety boundary of #004: `deny` is evaluated first and stays
+    /// LITERAL. A denied path inside a derived worktree grant must still be
+    /// refused — the derivation is allow-side only, so it can never reopen
+    /// something the user explicitly closed.
+    #[test]
+    fn deny_still_wins_inside_a_derived_worktree_grant() {
+        let Some((_tmp, main, wt)) = repo_with_worktree() else {
+            eprintln!("skipping: git unavailable");
+            return;
+        };
+        let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+        let wt_canon = std::fs::canonicalize(&wt).unwrap();
+        let secrets = wt_canon.join("secrets");
+        std::fs::create_dir_all(&secrets).unwrap();
+
+        let fs = FilesystemEntitlement {
+            read: vec![],
+            write: vec![main.to_string_lossy().into_owned()],
+            deny: vec![secrets.to_string_lossy().into_owned()],
+        };
+        assert!(
+            check_write_entitlement(&fs, &secrets.join("key.pem"), &chain).is_err(),
+            "deny must beat a derived worktree grant"
+        );
+        // ...while the rest of the same worktree remains writable.
+        assert!(check_write_entitlement(&fs, &wt_canon.join("ok.rs"), &chain).is_ok());
     }
 }
