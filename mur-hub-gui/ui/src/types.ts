@@ -114,6 +114,10 @@ export interface PathsView { read: PathGrantView[]; write: PathGrantView[]; deny
 export interface OutboundView {
   mode: "unrestricted" | "restricted" | "proxyonly" | "off";
   allow_hosts: string[];
+  /** Built-in web ports (80/443/8080/8443) — always open under `restricted`. */
+  base_ports: number[];
+  /** Extra ports the user granted; honored under `restricted` only. */
+  allow_ports: number[];
   model_host_always_allowed: boolean;
 }
 export interface McpNetView {

@@ -58,6 +58,14 @@ pub struct PathsView {
 pub struct OutboundView {
     pub mode: NetworkOutboundMode,
     pub allow_hosts: Vec<String>,
+    /// The built-in web ports every `restricted` agent may dial (80/443/
+    /// 8080/8443). Sent so the Hub shows the real picture rather than only
+    /// the user's additions, which on their own look like the whole list
+    /// (issue #006).
+    pub base_ports: Vec<u16>,
+    /// Extra outbound TCP ports the user granted. Honored under `restricted`
+    /// only; the Hub marks them inert under the other modes.
+    pub allow_ports: Vec<u16>,
     /// In `restricted` / `proxy_only` the configured model's own host is
     /// reachable whether or not it is listed.
     pub model_host_always_allowed: bool,
@@ -214,6 +222,8 @@ pub fn permissions_view(
         runtime_outbound: OutboundView {
             mode: out.mode,
             allow_hosts: out.allow_hosts.clone(),
+            base_ports: mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS.to_vec(),
+            allow_ports: out.allow_ports.clone(),
             model_host_always_allowed,
         },
         mcp_servers,

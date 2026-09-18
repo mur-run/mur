@@ -765,6 +765,8 @@ pub fn run() {
             perm_admin::agent_perm_set_outbound_mode,
             perm_admin::agent_perm_allow_host,
             perm_admin::agent_perm_deny_host,
+            perm_admin::agent_perm_allow_port,
+            perm_admin::agent_perm_deny_port,
             perm_admin::agent_perm_grant_path,
             perm_admin::agent_perm_remove_path,
             perm_admin::agent_perm_set_spawn_mode,

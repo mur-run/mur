@@ -22,6 +22,7 @@ pub fn restrict_for_trust(base: &Entitlements, trust: TrustLevel) -> Entitlement
             e.network.outbound = OutboundNetwork {
                 mode: NetworkOutboundMode::Off,
                 allow_hosts: vec![],
+                allow_ports: vec![],
                 protocols: vec![],
                 resolve_dns: Default::default(),
             };
@@ -58,6 +59,7 @@ mod tests {
                 outbound: OutboundNetwork {
                     mode: NetworkOutboundMode::Unrestricted,
                     allow_hosts: vec![],
+                    allow_ports: vec![],
                     protocols: vec!["tcp".into()],
                     resolve_dns: ResolveDnsConfig::default(),
                 },

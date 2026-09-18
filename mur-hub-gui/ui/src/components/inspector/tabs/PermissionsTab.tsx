@@ -4,7 +4,7 @@ import type { AgentDetail, McpNetView, PathGrantView, PermissionsView } from "..
 import { useT } from "../../../i18n";
 import { enforcementTone, outboundModeForCli, permCommands } from "./permissionsModel";
 import {
-  AddDir, AddFolder, AddHost, AddProgram, AddRule, OutboundSelect, PolicySelect, RemoveBtn, SpawnSelect,
+  AddDir, AddFolder, AddHost, AddPort, AddProgram, AddRule, OutboundSelect, PolicySelect, RemoveBtn, SpawnSelect,
   usePermWrite, type PermWrite,
 } from "./PermissionEditors";
 
@@ -180,7 +180,34 @@ function Outbound({ v, write }: { v: PermissionsView; write: PermWrite }) {
         </>
       )}
       <AddHost write={write} />
+      <Ports o={o} write={write} />
     </>
+  );
+}
+
+/**
+ * Issue #006: the outbound ports, base set and user grants together. Showing
+ * only the grants would make a two-entry list look like the agent's whole
+ * egress surface, when 80/443/8080/8443 are open underneath it.
+ */
+function Ports({ o, write }: { o: PermissionsView["runtime_outbound"]; write: PermWrite }) {
+  const { t } = useT();
+  return (
+    <div className="perm__ports">
+      <p className="field-muted perm__muted">{t("perm.ports.base", { ports: o.base_ports.join(", ") })}</p>
+      {o.allow_ports.length > 0 && (
+        <ul className="perm__list">
+          {o.allow_ports.map((p) => (
+            <li key={p} className="perm__row">
+              <code>{p}</code>
+              <span className="perm__detail">{t("perm.ports.anyHost")}</span>
+              <RemoveBtn write={write} onClick={() => void write.run("agent_perm_deny_port", { port: p })} />
+            </li>
+          ))}
+        </ul>
+      )}
+      <AddPort write={write} />
+    </div>
   );
 }
 

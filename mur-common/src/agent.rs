@@ -753,6 +753,22 @@ pub struct OutboundNetwork {
     pub mode: NetworkOutboundMode,
     #[serde(default)]
     pub allow_hosts: Vec<String>,
+    /// Extra outbound TCP ports granted on top of the built-in web set
+    /// (`RESTRICTED_GENERAL_PORTS`: 80/443/8080/8443). Issue #006: without
+    /// this, a non-web port (ssh 2222, vite 5173, ollama 11434) was
+    /// unreachable under `restricted` and the only escape was
+    /// `unrestricted`, which opens EVERY port.
+    ///
+    /// Honored under `Restricted` ONLY. `Off` stays air-gapped and
+    /// `ProxyOnly` keeps denying general TCP — a stale entry in a profile
+    /// whose mode was later tightened must never silently reopen it.
+    ///
+    /// This is a PORT grant, not a host grant: like the base set, the port
+    /// opens to host `*`, because macOS SBPL's `remote tcp` accepts only
+    /// `*` or `localhost` as the host. Bounding WHICH host is reached on
+    /// that port remains HostGuard's job via `allow_hosts`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_ports: Vec<u16>,
     #[serde(default = "default_protocols")]
     pub protocols: Vec<String>,
     #[serde(default)]
