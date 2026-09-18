@@ -451,7 +451,6 @@ mod tests {
         // without touching stdin (the y/N prompt is skipped entirely), and
         // the resulting entry must still carry a real binary_sha256 pin —
         // `force` only bypasses the *consent prompt*, never the hash.
-        let _envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
@@ -504,7 +503,6 @@ mod tests {
     /// cannot start.
     #[test]
     fn force_does_not_imply_no_probe() {
-        let _envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
         let agent_home = mur_home.join("agents").join("carol");
@@ -547,7 +545,6 @@ mod tests {
 
     #[test]
     fn add_remote_writes_url_and_bearer() {
-        let _envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
@@ -585,7 +582,6 @@ mod tests {
 
     #[test]
     fn add_remote_sets_hash_and_default_egress() {
-        let _envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 

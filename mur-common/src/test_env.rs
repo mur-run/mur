@@ -24,15 +24,23 @@
 //! the lock instead of the bug. Restoring in `Drop` is what makes the restore
 //! actually run; tolerating poison is what keeps the cascade from starting.
 
+use std::cell::Cell;
 use std::ffi::{OsStr, OsString};
 use std::sync::{Mutex, MutexGuard};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+thread_local! {
+    /// How many guards this thread holds. Only the outermost takes the lock.
+    static DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
 /// Holds the process's environment lock and restores every variable it
 /// touched when dropped — including back to *absent*.
 pub struct EnvGuard {
-    _lock: MutexGuard<'static, ()>,
+    /// `None` when this guard is nested inside another on the same thread —
+    /// the outer one already holds the lock.
+    _lock: Option<MutexGuard<'static, ()>>,
     saved: Vec<(OsString, Option<OsString>)>,
 }
 
@@ -40,11 +48,26 @@ impl EnvGuard {
     /// Take the lock without changing anything — for a test that only needs
     /// to be alone with the environment, or that will `set_var` later.
     pub fn hold() -> Self {
-        Self {
+        // Re-entrant on purpose. A test that holds a guard and calls a helper
+        // that takes its own is the natural thing to write — `with_test_home`
+        // is exactly that shape — and `std::sync::Mutex` is not re-entrant, so
+        // without this the second acquisition deadlocks the thread. It did:
+        // four `mcp_add` tests hung until CI's timeout killed them.
+        //
+        // Nesting keeps the invariant. One thread is inside the section at a
+        // time, and each guard restores its own variables when its own scope
+        // ends, which is what a reader expects from a scoped guard.
+        let lock = if DEPTH.get() == 0 {
             // Poison means some earlier test panicked while holding this. That
             // is a fact about that test, not about this one, and the values it
             // set were restored by its own `Drop` before the poison was set.
-            _lock: ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+        } else {
+            None
+        };
+        DEPTH.set(DEPTH.get() + 1);
+        Self {
+            _lock: lock,
             saved: Vec::new(),
         }
     }
@@ -89,6 +112,20 @@ impl EnvGuard {
         self
     }
 
+    /// Restore this variable when the guard drops, without changing it now.
+    ///
+    /// For a variable the test does not set but the code under test does. Some
+    /// production paths use the environment as a hidden parameter and do not
+    /// put it back — `deep_research::provision` sets `MUR_HOME` for the
+    /// helpers it calls and says so in its own `# Concurrency` note. A test
+    /// calling that leaks the value to every later test in the process, and no
+    /// lock can help: the leak is not a race. Run the suite with
+    /// `--test-threads=1` and it still happens, which is how this was found.
+    pub fn track_var<K: AsRef<OsStr>>(&mut self, key: K) -> &mut Self {
+        self.remember(key.as_ref());
+        self
+    }
+
     /// Record the value to restore — the value from BEFORE this guard, so a
     /// variable set twice still ends up where it started.
     fn remember(&mut self, key: &OsStr) {
@@ -101,6 +138,7 @@ impl EnvGuard {
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
+        DEPTH.set(DEPTH.get().saturating_sub(1));
         for (key, prior) in self.saved.drain(..) {
             // SAFETY: the lock is still held — it is dropped after this.
             unsafe {
@@ -169,6 +207,29 @@ mod tests {
             std::env::var_os(k).is_none(),
             "Drop runs on unwind; a save/restore pair does not"
         );
+    }
+
+    #[test]
+    fn a_nested_guard_does_not_deadlock_and_unwinds_inside_out() {
+        // A test holding a guard and calling a helper that takes its own is
+        // the natural shape (`with_test_home`). Against a plain `Mutex` the
+        // inner acquisition hangs the thread — four `mcp_add` tests did
+        // exactly that until CI's timeout killed them, which reads as a
+        // mysteriously slow test rather than a lock bug.
+        let k = "MUR_TEST_ENV_GUARD_NEST";
+        let mut outer = EnvGuard::set([(k, "outer")]);
+        {
+            // Reaching this line at all is most of the assertion.
+            let mut inner = EnvGuard::set([(k, "inner")]);
+            assert_eq!(std::env::var(k).as_deref(), Ok("inner"));
+            inner.set_var(k, "inner-again");
+        }
+        // The inner guard restored what IT found, so the outer value is back
+        // and the outer guard is still in charge.
+        assert_eq!(std::env::var(k).as_deref(), Ok("outer"));
+        outer.set_var(k, "outer-again");
+        drop(outer);
+        assert!(std::env::var_os(k).is_none());
     }
 
     #[test]
