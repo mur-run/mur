@@ -1,5 +1,6 @@
 //! Unit tests for the murmur TUI shell. One module per file (§4).
 
+mod auto_ceiling_tests;
 mod fallback_visibility_tests;
 mod help_coverage_tests;
 mod hitl_key_tests;

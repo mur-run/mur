@@ -54,10 +54,23 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             // that used to hit every read_file bought zero safety: an
             // approved `bash cat` could read the same files anyway, so the
             // prompt was friction that trained blind approval.
-            let read_auto = app.auto_reads
+            // #008: the session lane is STANDING, unattended authority, so it
+            // is bounded by the same ceiling as a config grant —
+            // `tier_may_be_granted`, capped at Write, which gate A already
+            // consults (`mur-core/src/hitl/gate.rs:82`). Until now gate B had
+            // no tier at all, so `/auto` (and, since #1228, the default
+            // session) answered `rm -rf`, `curl`, `sudo` and `git push
+            // --force` with nobody in the loop. The ceiling gates all three
+            // auto lanes at once; none of them can reach past it.
+            let tier = tool_tier::classify(&req.tool_name, Some(&req.tool_input));
+            let within_ceiling = mur_common::hitl::tier_may_be_granted(tier);
+            let read_auto = within_ceiling
+                && app.auto_reads
                 && bash_class::is_readonly_call(&req.tool_name, Some(&req.tool_input));
-            let auto =
-                app.auto_approve || app.session_tool_allow.contains(&req.tool_name) || read_auto;
+            let auto = within_ceiling
+                && (app.auto_approve
+                    || app.session_tool_allow.contains(&req.tool_name)
+                    || read_auto);
             if !app.focused && !auto {
                 notify_unfocused(
                     &app.agent,
