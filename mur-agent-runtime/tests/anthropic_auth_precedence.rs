@@ -14,7 +14,6 @@ use mur_agent_runtime::llm::{LlmClient, LlmRequest, RichMessage};
 use mur_common::secret::keychain_set;
 use secrecy::SecretString;
 use serde_json::json;
-use tokio::sync::Mutex;
 
 const FAKE_OAUTH: &str = "sk-ant-oat01-TEST-NOT-A-REAL-TOKEN";
 const FAKE_API_KEY: &str = "sk-ant-api03-TEST-NOT-A-REAL-KEY";
@@ -249,11 +248,9 @@ async fn registry_base_url_wins_over_env_anthropic_base_url() {
         })
         .await;
 
-    unsafe {
-        // Point env at an unreachable URL — if the client honors this, the
-        // request fails. The mock at server.base_url() should be hit instead.
-        envg.set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:1");
-    }
+    // Point env at an unreachable URL — if the client honors this, the
+    // request fails. The mock at server.base_url() should be hit instead.
+    envg.set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:1");
     let client = AnthropicClient::from_secret_string(
         &SecretString::from(FAKE_API_KEY.to_string()),
         "claude-test".into(),

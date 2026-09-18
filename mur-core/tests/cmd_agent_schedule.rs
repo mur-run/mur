@@ -8,7 +8,6 @@ use mur_core::cmd::agent_schedule::{
     cmd_schedule_remove, read_schedule,
 };
 use std::fs;
-use std::sync::Mutex;
 use tempfile::TempDir;
 
 fn setup(agent: &str) -> TempDir {

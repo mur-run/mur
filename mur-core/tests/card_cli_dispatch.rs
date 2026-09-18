@@ -6,7 +6,6 @@
 //!    `accept` flips `profile.companion.onboarding.completed_at`.
 //! 2. Unsigned export omits the `signature` block in the YAML.
 
-use std::path::Path;
 use tempfile::TempDir;
 
 use mur_common::identity::AgentIdentity;

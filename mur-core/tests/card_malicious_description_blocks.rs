@@ -18,7 +18,6 @@
 //! identically untrusted as `user_drop` text — no hook code change is
 //! needed to extend B0's protection to imported character cards.
 
-use std::path::Path;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 

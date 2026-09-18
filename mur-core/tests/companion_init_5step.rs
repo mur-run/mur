@@ -6,7 +6,6 @@
 //! to avoid building the `mur` binary across the full workspace just to
 //! exercise YAML deserialisation.
 
-use std::path::Path;
 use tempfile::TempDir;
 
 /// Load the shared P0a fixture and substitute `name: agent_test` →

@@ -8,7 +8,6 @@
 use mur_agent_runtime::supervisor::resolve_model_entry;
 use mur_common::agent::AgentProfile;
 use mur_common::model::{ModelEntry, ModelRegistry};
-use std::sync::Mutex;
 
 #[test]
 fn legacy_profile_resolves_inline() {
