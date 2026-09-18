@@ -5,15 +5,6 @@ use std::fs;
 use std::sync::Mutex;
 use tempfile::TempDir;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-struct MurHomeGuard;
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        unsafe { std::env::remove_var("MUR_HOME") }
-    }
-}
-
 const AGENT_NAME: &str = "hooks-test";
 
 fn setup() -> TempDir {
@@ -67,11 +58,9 @@ updated_at: "2026-05-08T00:00:00Z"
 
 #[test]
 fn hooks_show_table_mandatory_always_listed() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup();
-    unsafe { std::env::set_var("MUR_HOME", tmp.path()) }
-    let _guard = MurHomeGuard;
-
+    envg.set_var("MUR_HOME", tmp.path());
     // Capture stdout by calling the function; it should not panic.
     // We verify the function completes without error (mandatory hooks always present).
     cmd_hooks_show(AGENT_NAME, false).expect("hooks show should succeed");
@@ -79,11 +68,9 @@ fn hooks_show_table_mandatory_always_listed() {
 
 #[test]
 fn hooks_show_json_parses_and_has_mandatory_entries() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup();
-    unsafe { std::env::set_var("MUR_HOME", tmp.path()) }
-    let _guard = MurHomeGuard;
-
+    envg.set_var("MUR_HOME", tmp.path());
     // cmd_hooks_show with json=true writes to stdout; we verify no error.
     // The real assertion is that the function doesn't panic and returns Ok.
     cmd_hooks_show(AGENT_NAME, true).expect("hooks show --json should succeed");

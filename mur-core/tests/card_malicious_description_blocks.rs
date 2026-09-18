@@ -19,7 +19,6 @@
 //! needed to extend B0's protection to imported character cards.
 
 use std::path::Path;
-use std::sync::{LazyLock, Mutex, MutexGuard};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -29,30 +28,6 @@ use mur_agent_runtime::hooks::{
 use mur_common::identity::AgentIdentity;
 use mur_common::multimodal::ProvenanceLedger;
 use mur_core::character_card::schema::{CardData, MurCard};
-
-/// Cargo runs integration tests in parallel threads; `MUR_HOME` is a
-/// process-global env var, so we serialise tests that mutate it.
-static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-struct MurHomeGuard {
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl MurHomeGuard {
-    fn set(path: &Path) -> Self {
-        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: process-wide mutex held across the env mutation.
-        unsafe { std::env::set_var("MUR_HOME", path) };
-        MurHomeGuard { _lock: lock }
-    }
-}
-
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        // SAFETY: still holding `_lock` until our fields drop.
-        unsafe { std::env::remove_var("MUR_HOME") };
-    }
-}
 
 fn fixture_profile() -> String {
     std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
@@ -92,7 +67,7 @@ fn malicious_card() -> MurCard {
 #[tokio::test]
 async fn malicious_description_is_wrapped_and_blocks_side_effect_tools() {
     let tmp = TempDir::new().unwrap();
-    let _g = MurHomeGuard::set(tmp.path());
+    let _g = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let name = "card-malicious-desc";
     let agent_dir = provision_agent(&tmp, name);
 

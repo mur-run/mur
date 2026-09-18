@@ -4,33 +4,7 @@
 //! atomic move of inbox files into `.applied/`.
 
 use std::path::Path;
-use std::sync::{LazyLock, Mutex, MutexGuard};
 use tempfile::TempDir;
-
-/// Cargo runs integration tests in parallel threads; `MUR_HOME` is a
-/// process-global env var, so we serialise tests that mutate it.
-static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-struct MurHomeGuard {
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl MurHomeGuard {
-    fn set(path: &Path) -> Self {
-        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: process-wide mutex held across the env mutation; cleared
-        // again in `Drop`.
-        unsafe { std::env::set_var("MUR_HOME", path) };
-        MurHomeGuard { _lock: lock }
-    }
-}
-
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        // SAFETY: still holding `_lock` until our fields drop.
-        unsafe { std::env::remove_var("MUR_HOME") };
-    }
-}
 
 fn fixture_profile() -> String {
     std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
@@ -47,7 +21,7 @@ fn fixture_v3_png() -> Vec<u8> {
 #[tokio::test]
 async fn accept_writes_profile_and_relationship() {
     let tmp = TempDir::new().unwrap();
-    let _g = MurHomeGuard::set(tmp.path());
+    let _g = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let agent_dir = tmp.path().join("agents/accept-test");
     std::fs::create_dir_all(&agent_dir).unwrap();
     std::fs::write(
@@ -109,7 +83,7 @@ async fn accept_writes_profile_and_relationship() {
 #[tokio::test]
 async fn accept_unknown_id_errors() {
     let tmp = TempDir::new().unwrap();
-    let _g = MurHomeGuard::set(tmp.path());
+    let _g = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let agent_dir = tmp.path().join("agents/no-card");
     std::fs::create_dir_all(&agent_dir).unwrap();
     std::fs::write(

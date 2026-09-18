@@ -606,7 +606,6 @@ mod tests {
     fn spawn_runtime_fails_cleanly_on_invalid_target() {
         let dir = std::env::temp_dir().join(format!("mur-sidecar-dir-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let prev_bin = std::env::var_os("MUR_AGENT_RUNTIME_BIN");
         let prev_path = std::env::var_os("PATH");
         #[cfg(target_os = "windows")]
         let runtime_name = "mur-agent-runtime.exe";
@@ -618,21 +617,12 @@ mod tests {
             )
             .expect("PATH entries join back together")
         });
-        unsafe {
-            std::env::set_var("MUR_AGENT_RUNTIME_BIN", &dir);
-            if let Some(p) = &path_without_runtime {
-                std::env::set_var("PATH", p);
-            }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_AGENT_RUNTIME_BIN", &dir);
+        if let Some(p) = &path_without_runtime {
+            envg.set_var("PATH", p);
         }
         let err = spawn_runtime("attest-test", std::path::Path::new("/tmp")).unwrap_err();
-        match prev_bin {
-            Some(v) => unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", v) },
-            None => unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") },
-        }
-        match prev_path {
-            Some(v) => unsafe { std::env::set_var("PATH", v) },
-            None => unsafe { std::env::remove_var("PATH") },
-        }
         let _ = std::fs::remove_dir_all(&dir);
         assert!(
             err.contains("agent runtime not found"),

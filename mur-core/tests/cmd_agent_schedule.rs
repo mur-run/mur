@@ -11,20 +11,6 @@ use std::fs;
 use std::sync::Mutex;
 use tempfile::TempDir;
 
-/// Serialize all tests that mutate MUR_HOME to prevent cross-test interference.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-/// RAII guard that removes MUR_HOME from the environment on drop,
-/// preventing leakage to subsequent tests even if a test panics.
-struct MurHomeGuard;
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        unsafe {
-            std::env::remove_var("MUR_HOME");
-        }
-    }
-}
-
 fn setup(agent: &str) -> TempDir {
     let tmp = TempDir::new().unwrap();
     let agent_dir = tmp.path().join("agents").join(agent);
@@ -75,12 +61,9 @@ updated_at: "2026-01-01T00:00:00+00:00"
 
 #[test]
 fn add_list_remove_roundtrip() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("sched_test");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
 
     // Add two entries
     cmd_schedule_add("sched_test", "0 9 * * 1-5", "morning brief", None, None).unwrap();
@@ -117,12 +100,9 @@ fn add_list_remove_roundtrip() {
 
 #[test]
 fn remove_out_of_bounds_returns_err() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("sched_oob");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
     let result = cmd_schedule_remove("sched_oob", 0);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("index"));
@@ -130,12 +110,9 @@ fn remove_out_of_bounds_returns_err() {
 
 #[test]
 fn schedule_next_does_not_error() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("sched_next");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
     cmd_schedule_add("sched_next", "0 * * * *", "hourly ping", None, None).unwrap();
     // cmd_schedule_next prints to stdout — just verify it doesn't error.
     cmd_schedule_next("sched_next", 3).unwrap();
@@ -143,12 +120,9 @@ fn schedule_next_does_not_error() {
 
 #[test]
 fn add_invalid_cron_returns_err() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("sched_bad_cron");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
     let result = cmd_schedule_add("sched_bad_cron", "not a cron", "msg", None, None);
     assert!(result.is_err());
 }
@@ -156,11 +130,8 @@ fn add_invalid_cron_returns_err() {
 #[test]
 fn schedule_list_does_not_error() {
     let tmp = setup("sched_list");
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", tmp.path());
     cmd_schedule_add("sched_list", "0 9 * * *", "daily check", None, None).unwrap();
     cmd_schedule_list("sched_list").unwrap();
 }
@@ -172,12 +143,9 @@ fn schedule_list_does_not_error() {
 /// DTO written back over a full record erased the fields it did not know about.
 #[test]
 fn accept_carries_the_one_shot_bound_onto_the_entry() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("sched_once");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
 
     let dir = tmp
         .path()

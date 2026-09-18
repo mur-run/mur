@@ -10,8 +10,6 @@ use mur_common::agent::AgentProfile;
 use mur_common::model::{ModelEntry, ModelRegistry};
 use std::sync::Mutex;
 
-static HOME_LOCK: Mutex<()> = Mutex::new(());
-
 #[test]
 fn legacy_profile_resolves_inline() {
     // No HOME mutation — does not need the lock.
@@ -25,14 +23,12 @@ fn legacy_profile_resolves_inline() {
 
 #[test]
 fn model_ref_resolves_from_registry() {
-    let _g = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let dir = tempfile::tempdir().unwrap();
     let mur_home = dir.path().join(".mur");
     std::fs::create_dir_all(&mur_home).unwrap();
     // SAFETY: MUR_HOME mutation guarded by HOME_LOCK above.
-    unsafe {
-        std::env::set_var("MUR_HOME", &mur_home);
-    }
+    envg.set_var("MUR_HOME", &mur_home);
 
     let mut reg = ModelRegistry::default();
     reg.models.insert(
@@ -60,14 +56,12 @@ fn model_ref_resolves_from_registry() {
 
 #[test]
 fn missing_model_ref_errors_loudly() {
-    let _g = HOME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let dir = tempfile::tempdir().unwrap();
     let mur_home = dir.path().join(".mur");
     std::fs::create_dir_all(&mur_home).unwrap();
     // SAFETY: MUR_HOME mutation guarded by HOME_LOCK above.
-    unsafe {
-        std::env::set_var("MUR_HOME", &mur_home);
-    }
+    envg.set_var("MUR_HOME", &mur_home);
     // Empty registry on disk.
     ModelRegistry::default()
         .save_to(&dir.path().join(".mur/models.yaml"))
