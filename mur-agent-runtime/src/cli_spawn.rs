@@ -128,9 +128,14 @@ where
 /// The single place the decision lives. `claude` returns `None` today: tool
 /// isolation comes from the flags, so a private home would buy only
 /// lifecycle uniformity across backends, and uniformity is not worth
-/// charging the user a second login for. `agy` has no home variable at all,
-/// so its answer is different and belongs here rather than in an `if` at the
-/// spawn site.
+/// charging the user a second login for. Every other backend gets one, which
+/// is why the decision belongs here rather than in an `if` at the spawn site.
+///
+/// What a private home costs is worth stating where the decision is made: the
+/// spawned CLI authenticates inside it, so the user's existing login does NOT
+/// carry over and they sign in a second time. For `claude` that is exactly
+/// what returning `None` avoids — the spawn runs on the subscription already
+/// in `~/.claude`.
 ///
 /// Changing this decision is this function plus nothing else.
 fn claude_home(
