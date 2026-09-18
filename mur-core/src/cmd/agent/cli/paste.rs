@@ -77,7 +77,9 @@ pub fn unwrap_soft_breaks(text: &str, width: u16) -> String {
     let mut out = String::with_capacity(text.len());
     for (i, line) in lines.iter().enumerate() {
         out.push_str(line);
-        let Some(next) = lines.get(i + 1) else { continue };
+        let Some(next) = lines.get(i + 1) else {
+            continue;
+        };
 
         if soft_break(line, next, width) {
             out.push(' ');
