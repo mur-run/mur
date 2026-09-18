@@ -78,7 +78,11 @@ async fn unknown_width_leaves_the_paste_untouched() {
 
     handle_event(&mut app, Event::Paste(WRAPPED.to_string()), &tx).await;
 
-    assert_eq!(app.input_text(), WRAPPED, "paste was altered without a width");
+    assert_eq!(
+        app.input_text(),
+        WRAPPED,
+        "paste was altered without a width"
+    );
 }
 
 /// Markdown pasted from the transcript keeps its list structure — a `-` or `>`
