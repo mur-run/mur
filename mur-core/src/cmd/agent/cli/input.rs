@@ -65,9 +65,28 @@ pub(super) fn clipboard_png() -> Option<String> {
 /// edit and when Tab is pressed with the menu closed. `/` lines get the
 /// command menu, `!` lines the shell menu, anything else none.
 pub(super) fn refresh_completion(app: &mut App) {
+    refresh_completion_with(app, false);
+}
+
+/// As `refresh_completion`, but `invited` says the user explicitly asked for
+/// a menu (they pressed Tab).
+///
+/// The asymmetry is deliberate. `/` is murmur's own vocabulary — a closed set
+/// the composer is happy to offer as you type. `!` hands the line to a shell,
+/// where the last word is usually *finished*, not half-typed: `!mur agent
+/// restart mur` inside murmur's own repo prefix-matched every `mur-*` crate
+/// and popped a menu that then owned Enter, so the command ran as
+/// `!mur agent restart mur-agent-gui/` (#002). Real shells never volunteer
+/// path completion; they wait for Tab. So do we — once open, the menu keeps
+/// re-filtering as you type, and Esc closes it for good.
+pub(super) fn refresh_completion_with(app: &mut App, invited: bool) {
     let input = app.input_text();
     app.completion = if input.trim_start().starts_with('!') {
-        shell_completion(app, input.trim_start())
+        if invited || app.completion.is_some() {
+            shell_completion(app, input.trim_start())
+        } else {
+            None
+        }
     } else {
         complete::compute(&input, &app.skills, &app.menu_ctx, &app.current_values())
     };
@@ -128,7 +147,8 @@ pub(super) fn completion_accept(app: &mut App) {
     let descend = cand.has_children;
     app.set_input(&insert);
     if descend {
-        refresh_completion(app);
+        // Descending into a directory is itself the invitation.
+        refresh_completion_with(app, true);
     } else {
         app.completion = None;
     }

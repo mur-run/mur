@@ -250,6 +250,9 @@ async fn a_second_bang_command_is_refused() {
 
 /// `!` lines open the shell menu through the same refresh path as `/`,
 /// and accepting a directory keeps it open on that directory.
+///
+/// #002: the `!` menu is invite-only now, so each open here is an explicit
+/// Tab (`invited = true`) rather than a bare edit.
 #[test]
 fn bang_lines_get_the_shell_menu_and_directories_descend() {
     let t = tempfile::tempdir().unwrap();
@@ -260,7 +263,7 @@ fn bang_lines_get_the_shell_menu_and_directories_descend() {
     app.path_bins = Some(vec!["cargo".into(), "cat".into()]);
 
     app.set_input("!ca");
-    refresh_completion(&mut app);
+    refresh_completion_with(&mut app, true);
     let items: Vec<String> = app
         .completion
         .as_ref()
@@ -273,7 +276,7 @@ fn bang_lines_get_the_shell_menu_and_directories_descend() {
     assert_eq!(app.completion.as_ref().unwrap().current, None);
 
     app.set_input("!ls ");
-    refresh_completion(&mut app);
+    refresh_completion_with(&mut app, true);
     assert_eq!(app.completion.as_ref().unwrap().items[0].display, "docs/");
     completion_accept(&mut app);
     assert_eq!(app.input_text(), "!ls docs/");
