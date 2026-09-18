@@ -72,6 +72,7 @@ pub mod skill;
 pub mod snapshot_request;
 pub mod sync_types;
 pub mod telemetry;
+pub mod test_env;
 pub mod trust;
 pub mod variable;
 pub mod workflow;

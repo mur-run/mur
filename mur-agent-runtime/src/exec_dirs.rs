@@ -66,9 +66,8 @@ mod tests {
     fn mur_cli_prefers_an_explicit_override() {
         // Not a PATH lookup and not a guess: whatever MUR_BIN names is what
         // both the grant and the spawn use.
-        unsafe { std::env::set_var("MUR_BIN", "/nowhere/mur") };
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_BIN", "/nowhere/mur")]);
         assert_eq!(mur_cli(), PathBuf::from("/nowhere/mur"));
-        unsafe { std::env::remove_var("MUR_BIN") };
     }
 
     #[test]

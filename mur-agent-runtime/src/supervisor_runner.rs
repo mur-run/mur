@@ -1300,21 +1300,16 @@ updated_at: "2026-04-22T10:00:00+08:00"
         let mur_home = std::path::Path::new("/nonexistent");
 
         // Local bridge → port is granted.
-        unsafe {
-            std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:8088");
-        }
+        let mut env =
+            mur_common::test_env::EnvGuard::set([("ANTHROPIC_BASE_URL", "http://127.0.0.1:8088")]);
         assert_eq!(local_llm_port(&profile, mur_home), Some(8088));
 
         // Remote cloud endpoint → not loopback → no port granted.
-        unsafe {
-            std::env::set_var("ANTHROPIC_BASE_URL", "https://api.anthropic.com");
-        }
+        env.set_var("ANTHROPIC_BASE_URL", "https://api.anthropic.com");
         assert_eq!(local_llm_port(&profile, mur_home), None);
 
         // Unset → no port granted.
-        unsafe {
-            std::env::remove_var("ANTHROPIC_BASE_URL");
-        }
+        env.unset_var("ANTHROPIC_BASE_URL");
         assert_eq!(local_llm_port(&profile, mur_home), None);
     }
 
