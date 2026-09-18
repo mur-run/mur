@@ -29,9 +29,8 @@ fn load_muragent_materializes_agent_home() {
     // (a new key without a rotation manifest is accepted on first install).
     // SAFETY: single-threaded test startup, no other code reads MUR_HOME
     // concurrently during this test.
-    unsafe {
-        std::env::set_var("MUR_HOME", &mur_home);
-    }
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", &mur_home);
     let archive = MuragentArchive::read(&pkg).unwrap();
     let outcome = installer::install(&archive, &mur_home, "cli").unwrap();
     assert_eq!(outcome.manifest.agent.slug, "coach");

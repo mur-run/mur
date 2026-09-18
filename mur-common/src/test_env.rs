@@ -14,6 +14,16 @@
 //! it orders writers of `MUR_HOME` against each other and does nothing about
 //! the reader of `PATH` two threads over.
 //!
+//! # What wrapping the MutexGuard costs
+//!
+//! `clippy::await_holding_lock` fires on a bare `std::sync::MutexGuard` held
+//! across an `.await`; it does not see one inside a struct, so it is silent
+//! here. The hazard it warns about — a task blocking the thread its holder
+//! needs to resume on — does not arise for `#[tokio::test]`, which gives each
+//! test its own current-thread runtime on its own thread. Holding this guard
+//! across an await in production code would be a different matter, and the
+//! lint would not tell you.
+//!
 //! # Why a guard rather than a save/restore pair
 //!
 //! The pattern this replaces saved the prior value, set the variable, ran the
@@ -262,10 +272,11 @@ mod tests {
 
 /// Every environment mutation in the converted crates goes through [`EnvGuard`].
 ///
-/// A ratchet, not a clean bill of health. `mur-common` and `mur-agent-runtime`
-/// are converted and are guarded here; the rest of the workspace is not, and
-/// the counts below say by how much. Convert a crate, add it to `GUARDED`, and
-/// it can never regress. Until then this test says nothing about it.
+/// A ratchet. Every crate in `GUARDED` is converted and cannot regress; a
+/// crate absent from that list is not covered and this test says nothing
+/// about it. Both lists matter — an earlier version scanned only `src`, so it
+/// passed while 73 mutations sat under `tests/`, and "converted" was true
+/// only of the directory it happened to look at.
 ///
 /// It lives in one place rather than one copy per crate because a
 /// `#[cfg(test)]` item here is NOT compiled into a crate that depends on
@@ -279,7 +290,19 @@ mod tests {
 #[cfg(test)]
 #[test]
 fn converted_crates_never_mutate_the_environment_directly() {
-    const GUARDED: &[&str] = &["mur-common", "mur-agent-runtime", "mur-core"];
+    const GUARDED: &[&str] = &[
+        "mur-common",
+        "mur-agent-runtime",
+        "mur-core",
+        "mur-research-gateway",
+        "mur-gui-core",
+        "mur-mcp-server",
+        "mur-daemon",
+    ];
+    /// Scanned in each guarded crate. `src` alone was the gap that hid 73
+    /// sites under `tests/` from the first two passes: the ratchet passed,
+    /// and "this crate is converted" was true only of the part it looked at.
+    const DIRS: &[&str] = &["src", "tests", "benches", "examples"];
     /// Mutation that happens before any thread could observe it.
     const ALLOWED: &[(&str, &str)] = &[
         (
@@ -312,11 +335,21 @@ fn converted_crates_never_mutate_the_environment_directly() {
         .expect("crate dir has a parent")
         .to_path_buf();
     let mut offenders = Vec::new();
-    let mut stack: Vec<std::path::PathBuf> = GUARDED
-        .iter()
-        .map(|c| workspace.join(c).join("src"))
-        .collect();
-    assert_eq!(stack.len(), GUARDED.len(), "every guarded crate must exist");
+    for c in GUARDED {
+        assert!(
+            workspace.join(c).join("src").is_dir(),
+            "guarded crate {c} not found — the list is stale"
+        );
+    }
+    let mut stack: Vec<std::path::PathBuf> = Vec::new();
+    for c in GUARDED {
+        for d in DIRS {
+            let dir = workspace.join(c).join(d);
+            if dir.is_dir() {
+                stack.push(dir);
+            }
+        }
+    }
     while let Some(d) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&d) else {
             continue;

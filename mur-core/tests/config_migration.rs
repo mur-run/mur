@@ -6,25 +6,15 @@
 //! real ~/.mur/config.yaml on a Windows CI runner.
 
 use std::fs;
-use std::sync::Mutex;
 
 // `MUR_HOME` is a process-global env var. Each `#[test]` fn in this file runs
 // in its own process under `cargo nextest`, but this lock is cheap insurance
 // against a future run under plain `cargo test` (which multiplexes tests onto
 // threads within one process) — matches the pattern in
 // `mur-core/tests/cmd_hooks_show.rs`.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-struct MurHomeGuard;
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        unsafe { std::env::remove_var("MUR_HOME") }
-    }
-}
-
 #[test]
 fn load_config_migrates_legacy_fields_and_writes_back() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = tempfile::tempdir().unwrap();
     let cfg_path = tmp.path().join("config.yaml");
     fs::write(
@@ -33,8 +23,7 @@ fn load_config_migrates_legacy_fields_and_writes_back() {
     )
     .unwrap();
 
-    unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
-    let _guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
 
     let cfg = mur_core::store::config::load_config().expect("loads");
     let b = cfg
@@ -79,7 +68,7 @@ fn load_config_migrates_legacy_fields_and_writes_back() {
 /// exercised that path end-to-end through the loader before this test.
 #[test]
 fn load_config_migrates_explicit_null_backend_keys_and_stays_idempotent() {
-    let _lock = ENV_LOCK.lock().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = tempfile::tempdir().unwrap();
     let cfg_path = tmp.path().join("config.yaml");
     fs::write(
@@ -100,8 +89,7 @@ conversations:
     )
     .unwrap();
 
-    unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
-    let _guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
 
     let cfg = mur_core::store::config::load_config().expect("loads");
 

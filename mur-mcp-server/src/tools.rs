@@ -995,14 +995,6 @@ mod auto_compress_tests {
 mod job_status_tests {
     use super::*;
 
-    /// Serializes `MUR_HOME` mutation. `std::env::set_var` is unsafe in
-    /// edition 2024: two threads mutating the environment race, so each
-    /// set-call-remove pair holds this lock and is exclusive. Tokio's mutex
-    /// rather than std's: the guard is deliberately held across the dispatch
-    /// await (the env must stay set for the whole call), and a std guard is
-    /// `!Send` across await points.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     /// Invoke a tool with `MUR_HOME` pointed at `mur_home` — the same
     /// resolution path the running server uses (`resolve_mur_home`).
     /// Like `call_tool_in`, for tools whose result is a JSON object.
@@ -1011,12 +1003,8 @@ mod job_status_tests {
         name: &str,
         arguments: Value,
     ) -> Result<Value, String> {
-        let _guard = ENV_LOCK.lock().await;
-        // SAFETY: as in `call_tool_in` — the lock serialises env mutation.
-        unsafe { std::env::set_var("MUR_HOME", mur_home) };
-        let out = dispatch_tool(name, &arguments).await;
-        unsafe { std::env::remove_var("MUR_HOME") };
-        out
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home)]);
+        dispatch_tool(name, &arguments).await
     }
 
     async fn call_tool_in(
@@ -1024,12 +1012,8 @@ mod job_status_tests {
         name: &str,
         arguments: Value,
     ) -> Result<String, String> {
-        let _guard = ENV_LOCK.lock().await;
-        // SAFETY: ENV_LOCK makes this the only thread mutating the env, and
-        // the variable is removed again before the guard is dropped.
-        unsafe { std::env::set_var("MUR_HOME", mur_home) };
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", mur_home)]);
         let out = dispatch_tool(name, &arguments).await;
-        unsafe { std::env::remove_var("MUR_HOME") };
         match out? {
             Value::String(s) => Ok(s),
             other => Err(format!("expected a string tool result, got {other}")),

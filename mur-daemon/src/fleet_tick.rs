@@ -252,7 +252,8 @@ mod tests {
     fn auto_run_enabled_checks_env_var_or_config_flag() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        unsafe { std::env::remove_var("MUR_FLEET_AUTORUN") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_FLEET_AUTORUN");
 
         // neither env nor config → false
         assert!(!auto_run_enabled(home));
@@ -263,10 +264,10 @@ mod tests {
 
         // config flag false + env var set → true (env var still satisfies the gate)
         std::fs::write(home.join("config.yaml"), "fleet:\n  autorun: false\n").unwrap();
-        unsafe { std::env::set_var("MUR_FLEET_AUTORUN", "1") };
+        envg.set_var("MUR_FLEET_AUTORUN", "1");
         assert!(auto_run_enabled(home));
 
-        unsafe { std::env::remove_var("MUR_FLEET_AUTORUN") };
+        envg.unset_var("MUR_FLEET_AUTORUN");
     }
 
     #[test]
