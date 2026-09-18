@@ -7,8 +7,8 @@
 use crate::detail::{AgentDetail, get_agent_detail};
 use mur_common::agent::ToolPolicy;
 use mur_core::cmd::agent::{
-    cmd_perm_allow_host, cmd_perm_allow_read, cmd_perm_allow_spawn, cmd_perm_allow_spawn_dir,
-    cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host, cmd_perm_deny_path,
+    cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_allow_read, cmd_perm_allow_spawn, cmd_perm_allow_spawn_dir,
+    cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host, cmd_perm_deny_path, cmd_perm_deny_port,
     cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir, cmd_perm_remove_path, cmd_perm_set_mode,
     cmd_perm_set_tool,
 };
@@ -32,6 +32,21 @@ pub fn agent_perm_allow_host(name: String, host: String) -> Result<AgentDetail, 
 #[tauri::command]
 pub fn agent_perm_deny_host(name: String, host: String) -> Result<AgentDetail, String> {
     cmd_perm_deny_host(&name, &host).map_err(err)?;
+    get_agent_detail(name)
+}
+
+/// Issue #006: grant an extra outbound TCP port. Same shape as the host
+/// commands — one `cmd_perm_*` call and a re-read, so the CLI's validation
+/// (and its refusal to remove a built-in web port) is what the UI enforces.
+#[tauri::command]
+pub fn agent_perm_allow_port(name: String, port: u16) -> Result<AgentDetail, String> {
+    cmd_perm_allow_port(&name, port).map_err(err)?;
+    get_agent_detail(name)
+}
+
+#[tauri::command]
+pub fn agent_perm_deny_port(name: String, port: u16) -> Result<AgentDetail, String> {
+    cmd_perm_deny_port(&name, port).map_err(err)?;
     get_agent_detail(name)
 }
 

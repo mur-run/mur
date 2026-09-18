@@ -172,14 +172,148 @@ fn validate_host_pattern(name: &str, glob: &str) -> Result<()> {
             .is_some_and(|(_, p)| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
     if g.starts_with('[') || single_colon_port {
         let host = g.rsplit_once(':').map(|(h, _)| h).unwrap_or(g);
+        let port_hint = g.rsplit_once(':').map(|(_, p)| p).unwrap_or("<port>");
         let ports = mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS
             .map(|p| p.to_string())
             .join("/");
         bail!(
-            "'{glob}' looks like host:port, which would have NO effect — allow_hosts matches hostnames only, and in `restricted` mode the sandbox opens ports {ports} to any host regardless.\n\
-             To reach {host} on a non-web port today: `mur agent perm set-mode {name} unrestricted` (opens all ports).\n\
+            "'{glob}' looks like host:port, which would have NO effect — allow_hosts matches hostnames only.\n\
+             In `restricted` mode the sandbox opens ports {ports} to any host; a non-web port is granted separately.\n\
+             To reach {host} on port {port_hint}: `mur agent perm allow-port {name} {port_hint}` (opens that port to any host)\n\
              To allow the HOST for web traffic: `mur agent perm allow-host {name} {host}`"
         );
+    }
+    Ok(())
+}
+
+/// `mur agent perm allow-port <agent> <port>` — grant an extra outbound TCP
+/// port under `restricted` (issue #006).
+///
+/// Deliberately blunt about what it is NOT: the OS sandbox restricts by port
+/// with the host left as `*`, so this opens the port to EVERY host, not just
+/// the one the user has in mind. Saying so at grant time is the only place
+/// the user is still thinking about the decision.
+pub fn cmd_perm_allow_port(name: &str, port: u16) -> Result<()> {
+    if port == 0 {
+        bail!("port 0 is not dialable");
+    }
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let mode = profile.entitlements.network.outbound.mode;
+    if is_base_port(port) {
+        println!("port {port} is already open by default in `restricted` mode — nothing to do");
+        return Ok(());
+    }
+    add_port(&mut profile.entitlements.network.outbound.allow_ports, port);
+    save_profile(&path, &mut profile)?;
+
+    // The grant is written either way, but under a mode that ignores it the
+    // user must not walk away believing the port is open.
+    match mode {
+        NetworkOutboundMode::Restricted => {
+            println!(
+                "granted outbound TCP port {port} to '{name}'.\n\
+                 NOTE: this opens port {port} to ANY host — the OS sandbox filters by port, not by host.\n\
+                 To bound which hosts are reachable: `mur agent perm allow-host {name} <host>`"
+            );
+        }
+        NetworkOutboundMode::Unrestricted => {
+            println!(
+                "recorded port {port} for '{name}', but outbound mode is `unrestricted` — every port is already open.\n\
+                 To make this grant meaningful: `mur agent perm set-mode {name} network.outbound restricted`"
+            );
+        }
+        NetworkOutboundMode::ProxyOnly | NetworkOutboundMode::Off => {
+            println!(
+                "recorded port {port} for '{name}', but outbound mode is `{}` — general TCP stays denied and this grant has NO effect until the mode is `restricted`.",
+                match mode {
+                    NetworkOutboundMode::ProxyOnly => "proxy_only",
+                    _ => "off",
+                }
+            );
+        }
+    }
+    warn_if_running(name);
+    Ok(())
+}
+
+/// `mur agent perm deny-port <agent> <port>` — take an extra port grant back.
+pub fn cmd_perm_deny_port(name: &str, port: u16) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    if is_base_port(port) {
+        bail!(
+            "port {port} is part of the built-in web set (80/443/8080/8443) and cannot be removed individually.\n\
+             To close general egress entirely: `mur agent perm set-mode {name} network.outbound off`"
+        );
+    }
+    let removed = remove_port(&mut profile.entitlements.network.outbound.allow_ports, port);
+    save_profile(&path, &mut profile)?;
+    if !removed {
+        println!("port {port} was not granted to '{name}' — nothing to do");
+    }
+    warn_if_running(name);
+    Ok(())
+}
+
+/// Insert `port`, deduped and sorted. Sorted so the profile diff is stable
+/// across grants and two agents with the same grants produce the same file.
+fn add_port(ports: &mut Vec<u16>, port: u16) {
+    if !ports.contains(&port) {
+        ports.push(port);
+        ports.sort_unstable();
+    }
+}
+
+/// Drop `port`; reports whether it was actually there, so the caller can say
+/// "nothing to do" rather than implying a grant was revoked.
+fn remove_port(ports: &mut Vec<u16>, port: u16) -> bool {
+    let before = ports.len();
+    ports.retain(|p| *p != port);
+    ports.len() != before
+}
+
+/// Whether `port` is part of the built-in web set, which `restricted` opens
+/// unconditionally and `deny-port` therefore cannot take back.
+fn is_base_port(port: u16) -> bool {
+    mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS.contains(&port)
+}
+
+/// `mur agent perm list-ports <agent>` — every outbound TCP port, base set and
+/// user grants together, labelled by whether the current mode actually honors
+/// them.
+pub fn cmd_perm_list_ports(name: &str) -> Result<()> {
+    let (_path, profile) = load_profile_for_edit(name)?;
+    let out = &profile.entitlements.network.outbound;
+    let extra = &out.allow_ports;
+    match out.mode {
+        NetworkOutboundMode::Restricted => {
+            println!("outbound mode: restricted — these TCP ports are open (to any host):");
+            for p in mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS {
+                println!("  {p}\t(built-in)");
+            }
+            for p in extra {
+                println!("  {p}\t(granted)");
+            }
+        }
+        NetworkOutboundMode::Unrestricted => {
+            println!("outbound mode: unrestricted — ALL ports are open; port grants are moot.");
+            if !extra.is_empty() {
+                println!("recorded (inert) grants: {extra:?}");
+            }
+        }
+        NetworkOutboundMode::ProxyOnly => {
+            println!(
+                "outbound mode: proxy_only — general TCP is denied; egress only via loopback proxies."
+            );
+            if !extra.is_empty() {
+                println!("recorded (inert) grants: {extra:?}");
+            }
+        }
+        NetworkOutboundMode::Off => {
+            println!("outbound mode: off — all outbound TCP denied.");
+            if !extra.is_empty() {
+                println!("recorded (inert) grants: {extra:?}");
+            }
+        }
     }
     Ok(())
 }
@@ -515,7 +649,10 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_outbound_mode, remove_path, validate_host_pattern};
+    use super::{
+        add_port, is_base_port, parse_outbound_mode, remove_path, remove_port,
+        validate_host_pattern,
+    };
 
     #[test]
     fn patterns_the_matcher_can_match_are_accepted() {
@@ -551,7 +688,49 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("NO effect"), "{err}");
-        assert!(err.contains("set-mode data-ml unrestricted"), "{err}");
+        // Issue #006: the remedy is a port grant, NOT `unrestricted`. Before
+        // extra ports existed this text pushed users to open EVERY port to
+        // reach one; asserting on the narrow remedy is what stops that
+        // guidance from creeping back.
+        assert!(err.contains("allow-port data-ml 3306"), "{err}");
+        assert!(
+            !err.contains("unrestricted"),
+            "must no longer recommend opening all ports: {err}"
+        );
+    }
+
+    /// Issue #006: grants dedupe and stay sorted, so repeated `allow-port`
+    /// cannot emit duplicate sandbox rules or churn the profile diff.
+    #[test]
+    fn allow_port_dedupes_and_sorts() {
+        let mut ports = vec![];
+        add_port(&mut ports, 5173);
+        add_port(&mut ports, 2222);
+        add_port(&mut ports, 5173);
+        assert_eq!(ports, vec![2222, 5173]);
+    }
+
+    #[test]
+    fn deny_port_reports_whether_the_grant_existed() {
+        let mut ports = vec![2222, 5173];
+        assert!(remove_port(&mut ports, 2222));
+        assert_eq!(ports, vec![5173]);
+        assert!(
+            !remove_port(&mut ports, 2222),
+            "already gone — must not claim a revoke"
+        );
+    }
+
+    /// A built-in web port cannot be revoked individually: `restricted` opens
+    /// it unconditionally, so removing it from `allow_ports` would change
+    /// nothing while looking like it closed the port.
+    #[test]
+    fn base_ports_are_recognized_and_not_individually_revocable() {
+        for p in mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS {
+            assert!(is_base_port(p), "{p} is part of the built-in web set");
+        }
+        assert!(!is_base_port(2222));
+        assert!(!is_base_port(5173));
     }
 
     #[test]

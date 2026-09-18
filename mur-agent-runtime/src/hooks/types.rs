@@ -147,6 +147,7 @@ fn test_default_entitlements() -> Entitlements {
             outbound: OutboundNetwork {
                 mode: NetworkOutboundMode::Restricted,
                 allow_hosts: vec![],
+                allow_ports: vec![],
                 protocols: vec!["tcp".into()],
                 resolve_dns: ResolveDnsConfig::default(),
             },

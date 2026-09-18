@@ -570,6 +570,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
                 outbound: OutboundNetwork {
                     mode: NetworkOutboundMode::Off,
                     allow_hosts: vec![],
+                    allow_ports: vec![],
                     protocols: vec!["tcp".into()],
                     resolve_dns: ResolveDnsConfig::default(),
                 },

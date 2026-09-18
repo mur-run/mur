@@ -110,6 +110,7 @@ fn spawn_sandboxed_runs_true() {
             outbound: OutboundNetwork {
                 mode: NetworkOutboundMode::Unrestricted,
                 allow_hosts: vec![],
+                allow_ports: vec![],
                 protocols: vec!["tcp".to_string()],
                 resolve_dns: Default::default(),
             },
@@ -285,6 +286,7 @@ fn linux_ruleset_paths_are_absolute() {
             outbound: OutboundNetwork {
                 mode: NetworkOutboundMode::Restricted,
                 allow_hosts: vec!["api.anthropic.com".to_string()],
+                allow_ports: vec![],
                 protocols: vec!["tcp".to_string()],
                 resolve_dns: Default::default(),
             },
