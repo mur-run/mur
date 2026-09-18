@@ -35,10 +35,9 @@ async fn unresolved_key_reason_reaches_the_http_error() {
     // integration-test binary, so this test is the only writer of these vars
     // in this binary's process. `OPENAI_API_KEY` is blanked rather than
     // removed so the assertion holds whatever the ambient environment carries.
-    unsafe {
-        std::env::remove_var("MUR_TEST_EMB_HINT_ABSENT");
-        std::env::set_var("OPENAI_API_KEY", "");
-    }
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.unset_var("MUR_TEST_EMB_HINT_ABSENT");
+    envg.set_var("OPENAI_API_KEY", "");
 
     let ec = mur_core::store::embedding::EmbeddingConfig::from_config(&cfg);
     let err = mur_core::store::embedding::embed("hello", &ec)

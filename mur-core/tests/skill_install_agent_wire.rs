@@ -155,15 +155,16 @@ content:
 
     // Install. SAFETY: env mutation isn't thread-safe across parallel tests.
     // This test file must be run with `--test-threads=1`.
-    unsafe { std::env::set_var("MUR_AGENT_NAME", "bob") };
-    unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", runtime_str) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_AGENT_NAME", "bob");
+    envg.set_var("MUR_AGENT_RUNTIME_BIN", runtime_str);
     let result = cmd_install(
         home.path(),
         "https://example.com/registry",
         "agent://alice/find-prices",
     );
-    unsafe { std::env::remove_var("MUR_AGENT_NAME") };
-    unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") };
+    envg.unset_var("MUR_AGENT_NAME");
+    envg.unset_var("MUR_AGENT_RUNTIME_BIN");
     result.unwrap();
 
     // 1. Skill file is on disk with transfer_chain appended.
@@ -213,15 +214,16 @@ content:
     write_to_dir(&global_skill_dir(home.path(), "offline-skill"), &manifest).unwrap();
 
     write_profile(home.path(), "dave", None);
-    unsafe { std::env::set_var("MUR_AGENT_NAME", "dave") };
-    unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", runtime_str) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_AGENT_NAME", "dave");
+    envg.set_var("MUR_AGENT_RUNTIME_BIN", runtime_str);
     let result = cmd_install(
         home.path(),
         "https://example.com/registry",
         "agent://carol/offline-skill",
     );
-    unsafe { std::env::remove_var("MUR_AGENT_NAME") };
-    unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") };
+    envg.unset_var("MUR_AGENT_NAME");
+    envg.unset_var("MUR_AGENT_RUNTIME_BIN");
     result.unwrap();
 
     let installed = read_from_dir(&global_skill_dir(home.path(), "offline-skill")).unwrap();
@@ -241,14 +243,15 @@ fn wire_install_propagates_handler_error_for_missing_skill() {
     write_profile(home.path(), "eve", Some(&sock_path));
     let _eve = boot_runtime(home.path(), "eve", runtime_str, &sock_path);
 
-    unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", runtime_str) };
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_AGENT_RUNTIME_BIN", runtime_str);
     let err = cmd_install(
         home.path(),
         "https://example.com/registry",
         "agent://eve/no-such-skill",
     )
     .unwrap_err();
-    unsafe { std::env::remove_var("MUR_AGENT_RUNTIME_BIN") };
+    envg.unset_var("MUR_AGENT_RUNTIME_BIN");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("not found") || msg.contains("internal:"),

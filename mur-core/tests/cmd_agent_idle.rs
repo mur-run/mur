@@ -7,19 +7,7 @@ use mur_core::cmd::agent_schedule::{
     cmd_idle_add, cmd_idle_list, cmd_idle_remove, read_idle_triggers,
 };
 use std::fs;
-use std::sync::Mutex;
 use tempfile::TempDir;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-struct MurHomeGuard;
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        unsafe {
-            std::env::remove_var("MUR_HOME");
-        }
-    }
-}
 
 fn setup(agent: &str) -> TempDir {
     let tmp = TempDir::new().unwrap();
@@ -71,12 +59,9 @@ updated_at: "2026-01-01T00:00:00+00:00"
 
 #[test]
 fn idle_add_list_remove_roundtrip() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("idle_test");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
 
     cmd_idle_add("idle_test", 3600, "still there?", None, 600, true).unwrap();
     cmd_idle_add(
@@ -108,12 +93,9 @@ fn idle_add_list_remove_roundtrip() {
 
 #[test]
 fn idle_remove_oob_returns_err() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("idle_oob");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
     let result = cmd_idle_remove("idle_oob", 0);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("index"));
@@ -121,24 +103,18 @@ fn idle_remove_oob_returns_err() {
 
 #[test]
 fn idle_add_zero_after_secs_returns_err() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("idle_zero");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
     let result = cmd_idle_add("idle_zero", 0, "msg", None, 600, true);
     assert!(result.is_err());
 }
 
 #[test]
 fn idle_list_does_not_error() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let tmp = setup("idle_list");
-    unsafe {
-        std::env::set_var("MUR_HOME", tmp.path());
-    }
-    let _home_guard = MurHomeGuard;
+    envg.set_var("MUR_HOME", tmp.path());
     cmd_idle_add("idle_list", 60, "ping", None, 600, true).unwrap();
     cmd_idle_list("idle_list").unwrap();
 }

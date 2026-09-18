@@ -415,28 +415,19 @@ mod tests {
 
     use super::*;
 
-    // Process-global env — serialize with the same lock style config.rs tests use.
-    static RENDER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn render_proxy_flag_reads_http_proxy_env() {
-        let _g = RENDER_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         // SAFETY: guarded by RENDER_ENV_LOCK.
-        unsafe {
-            std::env::remove_var("HTTP_PROXY");
-            std::env::remove_var("HTTPS_PROXY");
-        }
+        envg.unset_var("HTTP_PROXY");
+        envg.unset_var("HTTPS_PROXY");
         assert_eq!(render_proxy_flag(), None);
-        unsafe {
-            std::env::set_var("HTTP_PROXY", "http://tok:@127.0.0.1:5555");
-        }
+        envg.set_var("HTTP_PROXY", "http://tok:@127.0.0.1:5555");
         assert_eq!(
             render_proxy_flag().as_deref(),
             Some("http://tok:@127.0.0.1:5555")
         );
-        unsafe {
-            std::env::remove_var("HTTP_PROXY");
-        }
+        envg.unset_var("HTTP_PROXY");
     }
 
     #[test]

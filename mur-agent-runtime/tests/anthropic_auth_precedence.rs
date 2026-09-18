@@ -14,13 +14,6 @@ use mur_agent_runtime::llm::{LlmClient, LlmRequest, RichMessage};
 use mur_common::secret::keychain_set;
 use secrecy::SecretString;
 use serde_json::json;
-use tokio::sync::Mutex;
-
-// tokio::sync::Mutex so the guard can safely span the awaits inside each test
-// (std Mutex would trigger `clippy::await_holding_lock`). Single guard per
-// test serializes both process-global env-var mutations AND the keyring
-// `set_default_credential_builder` global across parallel tests.
-static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 const FAKE_OAUTH: &str = "sk-ant-oat01-TEST-NOT-A-REAL-TOKEN";
 const FAKE_API_KEY: &str = "sk-ant-api03-TEST-NOT-A-REAL-KEY";
@@ -200,7 +193,7 @@ async fn from_env_passes_oauth_shape_key_through_unchanged() {
     // An OAuth-shape token in ANTHROPIC_API_KEY is not given special
     // treatment by the provider-neutral client — it goes out as x-api-key.
     // The bridge at ANTHROPIC_BASE_URL is what turns it into Bearer + betas.
-    let _g = ENV_LOCK.lock().await;
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
@@ -213,19 +206,14 @@ async fn from_env_passes_oauth_shape_key_through_unchanged() {
         })
         .await;
 
-    // SAFETY: env mutation guarded by ENV_LOCK above.
-    unsafe {
-        std::env::set_var("ANTHROPIC_API_KEY", FAKE_OAUTH);
-        std::env::set_var("ANTHROPIC_BASE_URL", server.base_url());
-    }
+    envg.set_var("ANTHROPIC_API_KEY", FAKE_OAUTH);
+    envg.set_var("ANTHROPIC_BASE_URL", server.base_url());
     let result = AnthropicClient::from_env("claude-test".into());
     let client = result.expect("from_env should succeed when key is set");
     client.generate(user_msg("hi")).await.unwrap();
     // SAFETY: still inside the ENV_LOCK guard.
-    unsafe {
-        std::env::remove_var("ANTHROPIC_API_KEY");
-        std::env::remove_var("ANTHROPIC_BASE_URL");
-    }
+    envg.unset_var("ANTHROPIC_API_KEY");
+    envg.unset_var("ANTHROPIC_BASE_URL");
     mock.assert_async().await;
 }
 
@@ -233,11 +221,8 @@ async fn from_env_passes_oauth_shape_key_through_unchanged() {
 async fn from_env_errors_loudly_when_anthropic_api_key_unset() {
     // The audit's "Safe" scenario: no registry, no env var, OAuth in keychain
     // → user gets a clear error rather than a silent wrong-credential request.
-    let _g = ENV_LOCK.lock().await;
-    // SAFETY: env mutation guarded by ENV_LOCK above.
-    unsafe {
-        std::env::remove_var("ANTHROPIC_API_KEY");
-    }
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.unset_var("ANTHROPIC_API_KEY");
     let err = AnthropicClient::from_env("claude-test".into())
         .err()
         .expect("from_env must error when ANTHROPIC_API_KEY is unset");
@@ -252,7 +237,7 @@ async fn registry_base_url_wins_over_env_anthropic_base_url() {
     // Precedence pin: when a SecretRef supplies `base_url`, the env var must
     // not shadow it. Otherwise a user routing through a corporate egress
     // proxy via models.yaml could be silently re-routed to api.anthropic.com.
-    let _g = ENV_LOCK.lock().await;
+    let mut envg = mur_common::test_env::EnvGuard::hold();
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
@@ -263,12 +248,9 @@ async fn registry_base_url_wins_over_env_anthropic_base_url() {
         })
         .await;
 
-    // SAFETY: env mutation guarded by ENV_LOCK above.
-    unsafe {
-        // Point env at an unreachable URL — if the client honors this, the
-        // request fails. The mock at server.base_url() should be hit instead.
-        std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:1");
-    }
+    // Point env at an unreachable URL — if the client honors this, the
+    // request fails. The mock at server.base_url() should be hit instead.
+    envg.set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:1");
     let client = AnthropicClient::from_secret_string(
         &SecretString::from(FAKE_API_KEY.to_string()),
         "claude-test".into(),
@@ -276,9 +258,7 @@ async fn registry_base_url_wins_over_env_anthropic_base_url() {
     );
     let result = client.generate(user_msg("hi")).await;
     // SAFETY: still inside the ENV_LOCK guard.
-    unsafe {
-        std::env::remove_var("ANTHROPIC_BASE_URL");
-    }
+    envg.unset_var("ANTHROPIC_BASE_URL");
     result.expect("registry base_url must take precedence over ANTHROPIC_BASE_URL");
     mock.assert_async().await;
 }
@@ -361,24 +341,34 @@ mod mock_keyring {
         }
     }
 
-    /// Install a fresh empty mock keyring as the global default. Caller must
-    /// already hold the ENV_LOCK guard before invoking, since this mutates a
-    /// process-global. Returns nothing — drop semantics aren't needed because
-    /// the next test's call replaces the store.
-    pub fn install_empty() {
-        allow_keychain();
+    /// Install a fresh empty mock keyring as the global default.
+    ///
+    /// Returns the guard holding `MUR_KEYCHAIN_ALLOW`, which the caller must
+    /// keep alive for the rest of the test: dropping it re-blocks the
+    /// keychain, and every call through the mock then fails. `#[must_use]`
+    /// makes that a compile-time requirement rather than a comment — an
+    /// earlier version let this guard die inside the helper, which read fine
+    /// and failed only on macOS, where the flag has teeth.
+    #[must_use]
+    pub fn install_empty() -> mur_common::test_env::EnvGuard {
+        let keychain = allow_keychain();
         let store: Store = Arc::new(StdMutex::new(HashMap::new()));
         let builder: Box<CredentialBuilder> = Box::new(SharedMockBuilder { store });
         keyring::set_default_credential_builder(builder);
+        keychain
     }
 
     /// Lift mur-common's automatic test-process keychain block — these tests
     /// go through the mock builder, never the real OS keychain.
-    fn allow_keychain() {
-        // SAFETY: caller holds ENV_LOCK; nextest is process-per-test anyway.
-        unsafe {
-            std::env::set_var(mur_common::secret::ENV_KEYCHAIN_ALLOW, "1");
-        }
+    ///
+    /// Hands the guard back rather than dropping it here: the flag has to
+    /// outlive this call, and a guard that restores at the end of the helper
+    /// that set it is the same bug as a helper that never set it.
+    #[must_use]
+    fn allow_keychain() -> mur_common::test_env::EnvGuard {
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var(mur_common::secret::ENV_KEYCHAIN_ALLOW, "1");
+        envg
     }
 
     /// A backend that always returns an error other than `NoEntry` (simulates
@@ -420,10 +410,14 @@ mod mock_keyring {
             CredentialPersistence::ProcessOnly
         }
     }
-    pub fn install_failing() {
-        allow_keychain();
+    /// As `install_empty`, but every call through it fails. Same guard
+    /// contract: hold the return value.
+    #[must_use]
+    pub fn install_failing() -> mur_common::test_env::EnvGuard {
+        let keychain = allow_keychain();
         let builder: Box<CredentialBuilder> = Box::new(AlwaysFailBuilder);
         keyring::set_default_credential_builder(builder);
+        keychain
     }
 }
 
@@ -434,23 +428,19 @@ async fn keychain_entry_wins_over_anthropic_api_key_env() {
     // a user with a Claude subscription stored via `mur agent secret set`
     // would have their billing silently swapped to API spend whenever the
     // shell happened to carry a leftover ANTHROPIC_API_KEY.
-    let _g = ENV_LOCK.lock().await;
-    mock_keyring::install_empty();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    let _keychain = mock_keyring::install_empty();
     keychain_set("mur-agent", "alice/ANTHROPIC_API_KEY", FAKE_OAUTH)
         .await
         .unwrap();
     // SAFETY: ENV_LOCK held; conflicting API key would normally win Claude
     // Code's official precedence. We assert mur picks the keychain instead.
-    unsafe {
-        std::env::set_var("ANTHROPIC_API_KEY", FAKE_API_KEY);
-    }
+    envg.set_var("ANTHROPIC_API_KEY", FAKE_API_KEY);
     let client = AnthropicClient::from_agent_credentials("alice", "claude-test".into())
         .await
         .expect("keychain-stored OAuth token must resolve cleanly");
     // SAFETY: still inside ENV_LOCK guard.
-    unsafe {
-        std::env::remove_var("ANTHROPIC_API_KEY");
-    }
+    envg.unset_var("ANTHROPIC_API_KEY");
 
     let server = MockServer::start_async().await;
     let mock = server
@@ -487,8 +477,8 @@ async fn keychain_entry_wins_over_anthropic_api_key_env() {
 async fn no_keychain_entry_falls_through_to_anthropic_api_key_env() {
     // Backwards-compatibility: existing users without keychain setup get
     // exactly the prior behavior — env var is still honored.
-    let _g = ENV_LOCK.lock().await;
-    mock_keyring::install_empty();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    let _keychain = mock_keyring::install_empty();
     let server = MockServer::start_async().await;
     let mock = server
         .mock_async(|when, then| {
@@ -501,19 +491,15 @@ async fn no_keychain_entry_falls_through_to_anthropic_api_key_env() {
         })
         .await;
     // SAFETY: ENV_LOCK held.
-    unsafe {
-        std::env::set_var("ANTHROPIC_API_KEY", FAKE_API_KEY);
-        std::env::set_var("ANTHROPIC_BASE_URL", server.base_url());
-    }
+    envg.set_var("ANTHROPIC_API_KEY", FAKE_API_KEY);
+    envg.set_var("ANTHROPIC_BASE_URL", server.base_url());
     let client = AnthropicClient::from_agent_credentials("bob", "claude-test".into())
         .await
         .expect("env var fallback must succeed when keychain is empty");
     let result = client.generate(user_msg("hi")).await;
     // SAFETY: still inside ENV_LOCK guard.
-    unsafe {
-        std::env::remove_var("ANTHROPIC_API_KEY");
-        std::env::remove_var("ANTHROPIC_BASE_URL");
-    }
+    envg.unset_var("ANTHROPIC_API_KEY");
+    envg.unset_var("ANTHROPIC_BASE_URL");
     result.expect("generate via env-fallback path");
     mock.assert_async().await;
 }
@@ -525,19 +511,12 @@ async fn keychain_backend_error_propagates_instead_of_silent_fallthrough() {
     // a user whose OAuth token is unreachable (e.g., login keychain locked
     // on a daemon cold-boot) gets billed via API instead — exactly the
     // failure mode this whole fix is designed to prevent.
-    let _g = ENV_LOCK.lock().await;
-    mock_keyring::install_failing();
-    // SAFETY: ENV_LOCK held. We set a valid env API key — without backend
-    // error propagation, the resolver would cheerfully use it. The assertion
-    // below confirms the resolver instead returns an error.
-    unsafe {
-        std::env::set_var("ANTHROPIC_API_KEY", FAKE_API_KEY);
-    }
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    let _keychain = mock_keyring::install_failing();
+    envg.set_var("ANTHROPIC_API_KEY", FAKE_API_KEY);
     let result = AnthropicClient::from_agent_credentials("carol", "claude-test".into()).await;
     // SAFETY: still inside ENV_LOCK guard.
-    unsafe {
-        std::env::remove_var("ANTHROPIC_API_KEY");
-    }
+    envg.unset_var("ANTHROPIC_API_KEY");
     // AnthropicClient doesn't implement Debug, so .expect_err() is unavailable;
     // pull the error out by hand instead.
     let err = match result {

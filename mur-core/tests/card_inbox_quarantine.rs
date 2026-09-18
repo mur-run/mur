@@ -1,36 +1,10 @@
-use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::path::PathBuf;
 use tempfile::TempDir;
-
-/// Cargo runs integration tests in parallel threads; `MUR_HOME` is a
-/// process-global env var, so we serialise tests that mutate it.
-static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-struct MurHomeGuard {
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl MurHomeGuard {
-    fn set(path: &Path) -> Self {
-        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: process-wide mutex held across the env mutation; cleared
-        // again in `Drop`.
-        unsafe { std::env::set_var("MUR_HOME", path) };
-        MurHomeGuard { _lock: lock }
-    }
-}
-
-impl Drop for MurHomeGuard {
-    fn drop(&mut self) {
-        // SAFETY: still holding `_lock` until our fields drop.
-        unsafe { std::env::remove_var("MUR_HOME") };
-    }
-}
 
 #[tokio::test]
 async fn import_png_lands_in_inbox_with_unsigned_trust() {
     let tmp = TempDir::new().unwrap();
-    let _guard = MurHomeGuard::set(tmp.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let agent_dir = tmp.path().join("agents/import-test");
     std::fs::create_dir_all(&agent_dir).unwrap();
     let fixture = std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
@@ -85,7 +59,7 @@ async fn import_png_lands_in_inbox_with_unsigned_trust() {
 #[tokio::test]
 async fn import_yaml_card_works() {
     let tmp = TempDir::new().unwrap();
-    let _guard = MurHomeGuard::set(tmp.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let agent_dir = tmp.path().join("agents/yaml-import");
     std::fs::create_dir_all(&agent_dir).unwrap();
     let fixture = std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
@@ -114,7 +88,7 @@ async fn import_yaml_card_works() {
 #[tokio::test]
 async fn list_returns_imported_cards() {
     let tmp = TempDir::new().unwrap();
-    let _guard = MurHomeGuard::set(tmp.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let agent_dir = tmp.path().join("agents/list-test");
     std::fs::create_dir_all(&agent_dir).unwrap();
     let fixture = std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")
@@ -148,7 +122,7 @@ async fn list_returns_imported_cards() {
 #[tokio::test]
 async fn list_empty_inbox_returns_empty_vec() {
     let tmp = TempDir::new().unwrap();
-    let _guard = MurHomeGuard::set(tmp.path());
+    let _guard = mur_common::test_env::EnvGuard::set([("MUR_HOME", tmp.path())]);
     let agent_dir = tmp.path().join("agents/empty");
     std::fs::create_dir_all(&agent_dir).unwrap();
     let fixture = std::fs::read_to_string("../mur-common/tests/fixtures/profile_p0a_minimal.yaml")

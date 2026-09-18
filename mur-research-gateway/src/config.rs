@@ -360,30 +360,18 @@ fn env_usize(name: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // `std::env::set_var`/`remove_var` are process-global; cargo runs tests in
-    // this file in parallel threads by default, so every test that mutates an
-    // env var serializes on this lock — mirrors
-    // `mur-agent-runtime/tests/model_resolution.rs::HOME_LOCK`.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn brave_key_ref_resolves_and_beats_plaintext() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::remove_var(ENV_BRAVE_KEY);
-            std::env::set_var("TEST_BRAVE_REF_KEY", "from-ref");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var(ENV_BRAVE_KEY);
+        envg.set_var("TEST_BRAVE_REF_KEY", "from-ref");
         let yaml = "research_gateway:\n  brave_api_key: \"plain\"\n  brave_api_key_ref: \"env:TEST_BRAVE_REF_KEY\"\n";
         let c = load_from_yaml(yaml, Path::new("/nonexistent"));
         assert_eq!(c.brave_api_key.as_deref(), Some("from-ref"));
 
         // Unresolvable ref falls through to plaintext instead of disabling Brave.
-        unsafe {
-            std::env::remove_var("TEST_BRAVE_REF_KEY");
-        }
+        envg.unset_var("TEST_BRAVE_REF_KEY");
         let c = load_from_yaml(yaml, Path::new("/nonexistent"));
         assert_eq!(c.brave_api_key.as_deref(), Some("plain"));
 
@@ -397,26 +385,18 @@ mod tests {
     // Brief's exact Step-1 failing test.
     #[test]
     fn config_defaults_and_env_override() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::set_var(ENV_FETCH_TIMEOUT_SECS, "45");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var(ENV_FETCH_TIMEOUT_SECS, "45");
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert_eq!(c.timeout.as_secs(), 45); // env override
         assert!(c.search_limit >= 1); // documented default present
-        unsafe {
-            std::env::remove_var(ENV_FETCH_TIMEOUT_SECS);
-        }
+        envg.unset_var(ENV_FETCH_TIMEOUT_SECS);
     }
 
     #[test]
     fn search_endpoint_precedence_default_then_yaml_then_env() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::remove_var(ENV_SEARCH_ENDPOINT);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var(ENV_SEARCH_ENDPOINT);
         let yaml = "research_gateway:\n  search_endpoint: \"https://ddg.mirror.test/html/\"\n";
 
         // 1. neither set -> the documented default
@@ -428,19 +408,15 @@ mod tests {
         assert_eq!(c.search_endpoint, "https://ddg.mirror.test/html/");
 
         // 3. env set -> env wins over YAML (same precedence as every sibling)
-        unsafe {
-            std::env::set_var(ENV_SEARCH_ENDPOINT, "https://from-env.test/html/");
-        }
+        envg.set_var(ENV_SEARCH_ENDPOINT, "https://from-env.test/html/");
         let c = load_from_yaml(yaml, Path::new("/nonexistent"));
         assert_eq!(c.search_endpoint, "https://from-env.test/html/");
-        unsafe {
-            std::env::remove_var(ENV_SEARCH_ENDPOINT);
-        }
+        envg.unset_var(ENV_SEARCH_ENDPOINT);
     }
 
     #[test]
     fn defaults_when_file_and_block_absent() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert_eq!(c.timeout.as_secs(), DEFAULT_FETCH_TIMEOUT_SECS);
         assert_eq!(c.browser_timeout.as_secs(), DEFAULT_BROWSER_TIMEOUT_SECS);
@@ -453,14 +429,14 @@ mod tests {
 
     #[test]
     fn defaults_when_yaml_has_no_research_gateway_key() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let c = load_from_yaml("some_other_key:\n  foo: bar\n", Path::new("/nonexistent"));
         assert_eq!(c.search_limit, DEFAULT_SEARCH_LIMIT);
     }
 
     #[test]
     fn yaml_block_overrides_defaults() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let yaml = "\
 research_gateway:
   search_limit: 15
@@ -477,7 +453,7 @@ research_gateway:
 
     #[test]
     fn search_limit_is_clamped_to_documented_bounds() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let yaml = "research_gateway:\n  search_limit: 999\n";
         let c = load_from_yaml(yaml, Path::new("/nonexistent"));
         assert_eq!(c.search_limit, MAX_SEARCH_LIMIT);
@@ -485,100 +461,73 @@ research_gateway:
 
     #[test]
     fn browser_timeout_env_override_is_independent_of_fetch_timeout() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::set_var(ENV_BROWSER_TIMEOUT_SECS, "90");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var(ENV_BROWSER_TIMEOUT_SECS, "90");
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert_eq!(c.browser_timeout.as_secs(), 90);
         assert_eq!(c.timeout.as_secs(), DEFAULT_FETCH_TIMEOUT_SECS); // unaffected
-        unsafe {
-            std::env::remove_var(ENV_BROWSER_TIMEOUT_SECS);
-        }
+        envg.unset_var(ENV_BROWSER_TIMEOUT_SECS);
     }
 
     #[test]
     fn deny_hosts_env_override_wins_over_yaml() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::set_var(ENV_DENY_HOSTS, "a.example, b.example");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var(ENV_DENY_HOSTS, "a.example, b.example");
         let c = load_from_yaml(
             "research_gateway:\n  deny_hosts: [\"c.example\"]\n",
             Path::new("/nonexistent"),
         );
         assert_eq!(c.deny_hosts, vec!["a.example", "b.example"]);
-        unsafe {
-            std::env::remove_var(ENV_DENY_HOSTS);
-        }
+        envg.unset_var(ENV_DENY_HOSTS);
     }
 
     #[test]
     fn empty_deny_hosts_env_does_not_wipe_yaml_blocklist() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         // An empty MUR_RESEARCH_DENY_HOSTS must be treated as ABSENT, not as
         // "clear the blocklist" — otherwise it would silently wipe the
         // YAML-configured SSRF overlay (security-relevant).
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::set_var(ENV_DENY_HOSTS, "");
-        }
+        envg.set_var(ENV_DENY_HOSTS, "");
         let c = load_from_yaml(
             "research_gateway:\n  deny_hosts: [\"blocked.example\"]\n",
             Path::new("/nonexistent"),
         );
         assert_eq!(c.deny_hosts, vec!["blocked.example"]);
-        unsafe {
-            std::env::remove_var(ENV_DENY_HOSTS);
-        }
+        envg.unset_var(ENV_DENY_HOSTS);
     }
 
     #[test]
     fn lightpanda_path_env_override_wins_and_need_not_exist() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::set_var(ENV_LIGHTPANDA_PATH, "/x/lightpanda");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var(ENV_LIGHTPANDA_PATH, "/x/lightpanda");
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert_eq!(c.browser.lightpanda_path.as_deref(), Some("/x/lightpanda"));
-        unsafe {
-            std::env::remove_var(ENV_LIGHTPANDA_PATH);
-        }
+        envg.unset_var(ENV_LIGHTPANDA_PATH);
     }
 
     #[test]
     fn lightpanda_default_path_absent_when_not_on_disk() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert_eq!(c.browser.lightpanda_path, None);
     }
 
     #[test]
     fn mur_home_dir_honors_mur_home_env() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::set_var("MUR_HOME", "/tmp/mur-research-gateway-test-home");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", "/tmp/mur-research-gateway-test-home");
         assert_eq!(
             mur_home_dir(),
             PathBuf::from("/tmp/mur-research-gateway-test-home")
         );
-        unsafe {
-            std::env::remove_var("MUR_HOME");
-        }
+        envg.unset_var("MUR_HOME");
     }
 
     #[test]
     fn max_fetch_chars_default_env_yaml_precedence() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         // Default when nothing set.
-        unsafe {
-            std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS");
-        }
+        envg.unset_var("MUR_RESEARCH_MAX_FETCH_CHARS");
         let cfg = load_from_yaml("", std::path::Path::new("/tmp"));
         assert_eq!(cfg.max_fetch_chars, DEFAULT_MAX_FETCH_CHARS);
         // YAML sets it.
@@ -588,56 +537,42 @@ research_gateway:
         );
         assert_eq!(cfg.max_fetch_chars, 1234);
         // Env overrides YAML.
-        unsafe {
-            std::env::set_var("MUR_RESEARCH_MAX_FETCH_CHARS", "42");
-        }
+        envg.set_var("MUR_RESEARCH_MAX_FETCH_CHARS", "42");
         let cfg = load_from_yaml(
             "research_gateway:\n  max_fetch_chars: 1234\n",
             std::path::Path::new("/tmp"),
         );
         assert_eq!(cfg.max_fetch_chars, 42);
-        unsafe {
-            std::env::remove_var("MUR_RESEARCH_MAX_FETCH_CHARS");
-        }
+        envg.unset_var("MUR_RESEARCH_MAX_FETCH_CHARS");
     }
 
     #[test]
     fn render_engine_defaults_agentbrowser_env_overrides_obscura() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert!(matches!(
             c.browser.render_engine,
             crate::browser::RenderEngine::AgentBrowser
         ));
-        // SAFETY: env mutation guarded by ENV_LOCK.
-        unsafe {
-            std::env::set_var(ENV_RENDER_ENGINE, "obscura");
-        }
+        envg.set_var(ENV_RENDER_ENGINE, "obscura");
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert!(matches!(
             c.browser.render_engine,
             crate::browser::RenderEngine::Obscura
         ));
-        unsafe {
-            std::env::remove_var(ENV_RENDER_ENGINE);
-        }
+        envg.unset_var(ENV_RENDER_ENGINE);
     }
 
     #[test]
     fn render_engine_env_lightpanda_resolves() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        // SAFETY: env mutation guarded by ENV_LOCK.
-        unsafe {
-            std::env::set_var(ENV_RENDER_ENGINE, "lightpanda");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var(ENV_RENDER_ENGINE, "lightpanda");
         let c = load_from_yaml("", Path::new("/nonexistent"));
         assert!(matches!(
             c.browser.render_engine,
             crate::browser::RenderEngine::Lightpanda
         ));
-        unsafe {
-            std::env::remove_var(ENV_RENDER_ENGINE);
-        }
+        envg.unset_var(ENV_RENDER_ENGINE);
     }
 
     /// Creates a fresh scratch dir under the OS temp dir for a single test,
@@ -655,7 +590,7 @@ research_gateway:
 
     #[test]
     fn auto_detect_prefers_lightpanda_when_present() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let mur_home = scratch_dir("lightpanda_only");
         let aura = mur_home.join("aura");
         std::fs::create_dir_all(&aura).expect("create aura dir");
@@ -672,7 +607,7 @@ research_gateway:
 
     #[test]
     fn auto_detect_lightpanda_wins_over_obscura() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let mur_home = scratch_dir("lightpanda_vs_obscura");
         let aura = mur_home.join("aura");
         std::fs::create_dir_all(&aura).expect("create aura dir");
@@ -691,7 +626,7 @@ research_gateway:
 
     #[test]
     fn auto_detect_picks_obscura_when_binaries_present() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let mur_home = scratch_dir("obscura_both");
         let aura = mur_home.join("aura");
         std::fs::create_dir_all(&aura).expect("create aura dir");
@@ -709,7 +644,7 @@ research_gateway:
 
     #[test]
     fn auto_detect_requires_both_obscura_binaries() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
 
         // Only the main binary present -> AgentBrowser.
         let mur_home = scratch_dir("obscura_main_only");
@@ -738,25 +673,20 @@ research_gateway:
 
     #[test]
     fn render_engine_env_override_wins_even_when_obscura_installed() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         let mur_home = scratch_dir("obscura_env_override");
         let aura = mur_home.join("aura");
         std::fs::create_dir_all(&aura).expect("create aura dir");
         std::fs::write(aura.join("obscura"), b"").expect("write obscura stub");
         std::fs::write(aura.join("obscura-worker"), b"").expect("write obscura-worker stub");
 
-        // SAFETY: env mutation guarded by ENV_LOCK above.
-        unsafe {
-            std::env::set_var(ENV_RENDER_ENGINE, "agent-browser");
-        }
+        envg.set_var(ENV_RENDER_ENGINE, "agent-browser");
         let c = load_from_yaml("", &mur_home);
         assert_eq!(
             c.browser.render_engine,
             crate::browser::RenderEngine::AgentBrowser
         );
-        unsafe {
-            std::env::remove_var(ENV_RENDER_ENGINE);
-        }
+        envg.unset_var(ENV_RENDER_ENGINE);
 
         let _ = std::fs::remove_dir_all(&mur_home);
     }
