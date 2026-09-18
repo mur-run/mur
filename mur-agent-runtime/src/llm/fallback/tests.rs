@@ -253,12 +253,10 @@ async fn a_single_stop_still_short_circuits_without_an_aggregate() {
     assert!(matches!(err, LlmError::Auth(401, _)), "{err:?}");
 }
 
-/// An unrecognised 4xx now advances rather than killing the turn: the set of
-/// reasons an endpoint can refuse one specific candidate is open and growing
-/// (payload too large, unsupported modality, region, tier), while the set that
-/// must never fall back is just auth.
+/// Unknown client refusals are not proven candidate-specific. Fleet-wide
+/// fallback must stop rather than route around billing, safety, or permission.
 #[tokio::test]
-async fn an_unrecognised_4xx_advances_to_the_next_candidate() {
+async fn an_unrecognised_4xx_stops_before_the_next_candidate() {
     let mut s = HashMap::new();
     s.insert(
         "a".into(),
@@ -266,8 +264,23 @@ async fn an_unrecognised_4xx_advances_to_the_next_candidate() {
     );
     s.insert("b".into(), vec![Ok(())]);
     let fb = FallbackLlmClient::new(vec!["a".into(), "b".into()], factory_for(s), retry0());
-    let resp = fb.generate(LlmRequest::default()).await.unwrap();
-    assert_eq!(resp.text, "b");
+    let err = fb.generate(LlmRequest::default()).await.unwrap_err();
+    assert!(matches!(err, LlmError::Rejected(413, _)), "{err:?}");
+}
+
+#[tokio::test]
+async fn factory_failure_stays_in_the_exhaustion_diagnostics() {
+    let factory: ClientFactory =
+        Box::new(|model_ref| Err(anyhow::anyhow!("cannot build {model_ref}")));
+    let fb = FallbackLlmClient::new(vec!["broken".into()], factory, retry0());
+    let err = fb.generate(LlmRequest::default()).await.unwrap_err();
+    let LlmError::AllCandidatesFailed { summary, .. } = err else {
+        panic!("expected aggregate");
+    };
+    assert!(
+        summary.contains("broken") && summary.contains("cannot build broken"),
+        "{summary}"
+    );
 }
 
 #[test]

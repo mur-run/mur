@@ -32,6 +32,9 @@ pub struct MuragentManifest {
     /// Model backend hint for the recipient's first-run resolution (§7.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_hint: Option<ModelHint>,
+    /// Signed minimum model capabilities resolved by compatible installers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_requirements: Option<ModelRequirements>,
     /// `Some("official")` for agents published from the official catalog.
     /// Tamper-evident via `predicate.manifest_sha256` in the DSSE-signed
     /// statement (the canonical JSON derived from `manifest.yaml`), so
@@ -70,6 +73,16 @@ pub enum ModelTier {
 /// Declares what kind of model the agent was authored against, so the
 /// recipient's first-run wizard can resolve a backend (no weights travel).
 /// See spec §7.1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelRequirements {
+    #[serde(default)]
+    pub chat: bool,
+    #[serde(default)]
+    pub tools: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_context_window: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelHint {
     pub provider: String,
@@ -195,6 +208,16 @@ pub struct CommanderScheduleDefaults {
 // ─── Validation helpers ───
 
 impl MuragentManifest {
+    /// Whether this manifest carries fields that require schema v3.
+    pub fn requires_v3(&self) -> bool {
+        self.model_requirements.is_some()
+    }
+
+    /// Whether this MUR build understands the declared schema.
+    pub fn schema_supported(&self) -> bool {
+        matches!(self.schema.as_str(), "mur-agent/2" | "mur-agent/3")
+    }
+
     /// Schema version must be exactly `mur-agent/2`.
     pub fn is_v2(&self) -> bool {
         self.schema == "mur-agent/2"

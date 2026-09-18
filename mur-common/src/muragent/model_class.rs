@@ -2,16 +2,9 @@
 //! (tier, RAM estimate, local-capability). Heuristic + conservative on
 //! unknown providers. See spec §7.1.
 
+use crate::model::provider_is_local;
 use crate::muragent::manifest::{ModelHint, ModelTier};
 
-const LOCAL_PROVIDERS: &[&str] = &[
-    "ollama",
-    "mlx",
-    "llamacpp",
-    "llama_cpp",
-    "localai",
-    "lmstudio",
-];
 const CLOUD_PROVIDERS: &[&str] = &[
     "anthropic",
     "openai",
@@ -38,7 +31,7 @@ pub fn classify(provider: &str, name: &str) -> ModelHint {
     let n = name.to_ascii_lowercase();
     let has = |markers: &[&str]| markers.iter().any(|m| n.contains(m));
 
-    if LOCAL_PROVIDERS.contains(&p.as_str()) {
+    if provider_is_local(&p) {
         let (tier, min_ram_gb) = if has(SMALL_MARKERS) {
             (ModelTier::Small, 8)
         } else if has(LARGE_LOCAL_MARKERS) {

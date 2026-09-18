@@ -147,4 +147,45 @@ mod tests {
         let remote = CodexClient::from_entry(&entry(Some("https://api.openai.com/v1"), None), http);
         assert!(remote.err().unwrap().to_string().contains("rejected"));
     }
+
+    #[test]
+    fn setup_failures_are_statusless_and_stop() {
+        let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            crate::llm::llm_client_builder(),
+        )
+        .unwrap();
+        let error = CodexClient::from_entry(&entry(None, None), http)
+            .err()
+            .unwrap();
+        assert!(matches!(error, LlmError::Http(_)), "{error:?}");
+        assert_eq!(crate::llm::classify(&error), crate::llm::Disposition::Stop);
+    }
+
+    #[tokio::test]
+    async fn gateway_http_errors_keep_openai_mapping() {
+        let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
+        let server = httpmock::MockServer::start_async().await;
+        let mock = server.mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/codex/v1/chat/completions");
+            then.status(400).json_body(serde_json::json!({
+                "error":{"type":"invalid_request_error","code":"model_unavailable","message":"retired"}
+            }));
+        }).await;
+        let client = CodexClient::with_http_client(
+            format!("{}/codex/v1", server.base_url()),
+            "gpt-5.6-sol".into(),
+            crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+                crate::llm::llm_client_builder(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let error = client.generate(LlmRequest::default()).await.unwrap_err();
+        assert!(matches!(error, LlmError::ModelNotFound(_)), "{error:?}");
+        assert_eq!(
+            crate::llm::classify(&error),
+            crate::llm::Disposition::AdvanceNow
+        );
+        mock.assert_async().await;
+    }
 }

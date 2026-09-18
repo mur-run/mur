@@ -6601,6 +6601,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-compress",
+ "mur-mcp-proto",
  "mur-open-items",
  "rand 0.8.6",
  "regex",
@@ -6894,6 +6895,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "mur-mcp-proto"
+version = "2.85.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

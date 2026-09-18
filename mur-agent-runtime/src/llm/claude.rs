@@ -187,4 +187,48 @@ mod tests {
         assert_eq!(client.generate(req).await.unwrap().text, "hi");
         m.assert_async().await;
     }
+
+    #[test]
+    fn setup_failures_are_statusless_and_stop() {
+        let http = crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+            crate::llm::llm_client_builder(),
+        )
+        .unwrap();
+        let error = ClaudeClient::from_entry(&entry(None, None), http)
+            .err()
+            .unwrap();
+        assert!(matches!(error, LlmError::Http(_)), "{error:?}");
+        assert_eq!(crate::llm::classify(&error), crate::llm::Disposition::Stop);
+    }
+
+    #[tokio::test]
+    async fn gateway_http_errors_keep_anthropic_mapping() {
+        let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
+        let server = httpmock::MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST).path("/v1/messages");
+                then.status(400).json_body(serde_json::json!({
+                    "type":"error",
+                    "error":{"type":"invalid_request_error","message":"prompt is too long"}
+                }));
+            })
+            .await;
+        let client = ClaudeClient::with_http_client(
+            format!("{}/v1", server.base_url()),
+            "claude-opus-5".into(),
+            crate::sandbox::reqwest_guard::GuardedHttpClient::unrestricted(
+                crate::llm::llm_client_builder(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let error = client.generate(LlmRequest::default()).await.unwrap_err();
+        assert!(matches!(error, LlmError::ContextExceeded(_)), "{error:?}");
+        assert_eq!(
+            crate::llm::classify(&error),
+            crate::llm::Disposition::AdvanceNow
+        );
+        mock.assert_async().await;
+    }
 }

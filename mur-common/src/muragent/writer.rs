@@ -257,8 +257,24 @@ pub fn build_manifest_from_profile(profile: &AgentProfile, mur_version: &str) ->
             &profile.model.provider,
             &profile.model.name,
         )),
+        model_requirements: None,
         distribution: None,
     }
+}
+
+/// Build a manifest and opt into schema v3 when model requirements are signed.
+pub fn build_manifest_from_profile_with_requirements(
+    profile: &AgentProfile,
+    mur_version: &str,
+    model_requirements: Option<crate::muragent::manifest::ModelRequirements>,
+) -> MuragentManifest {
+    let mut manifest = build_manifest_from_profile(profile, mur_version);
+    if model_requirements.is_some() {
+        manifest.schema = "mur-agent/3".into();
+        manifest.model_hint = None;
+    }
+    manifest.model_requirements = model_requirements;
+    manifest
 }
 
 #[cfg(test)]
@@ -283,6 +299,31 @@ mod tests {
 
         assert!(out.exists());
         assert!(out.metadata().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn schema_v3_model_requirements_round_trip() {
+        let profile = AgentProfile::default_for_tests();
+        let requirements = crate::muragent::manifest::ModelRequirements {
+            chat: true,
+            tools: true,
+            minimum_context_window: None,
+        };
+
+        let manifest = build_manifest_from_profile_with_requirements(
+            &profile,
+            "2.85.0",
+            Some(requirements.clone()),
+        );
+        let yaml = serde_yaml_ng::to_string(&manifest).unwrap();
+        let round_trip: crate::muragent::manifest::MuragentManifest =
+            serde_yaml_ng::from_str(&yaml).unwrap();
+
+        assert_eq!(round_trip.schema, "mur-agent/3");
+        assert_eq!(round_trip.model_requirements, Some(requirements));
+        assert!(round_trip.model_hint.is_none());
+        assert!(round_trip.requires_v3());
+        assert!(round_trip.schema_supported());
     }
 
     #[test]

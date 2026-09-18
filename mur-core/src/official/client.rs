@@ -1,6 +1,6 @@
 //! HTTP client for the app.mur.run official catalog API.
 use anyhow::{Context, Result, bail};
-use mur_common::official::OfficialLicense;
+use mur_common::{muragent::manifest::ModelRequirements, official::OfficialLicense};
 use serde::Deserialize;
 
 /// Catalog item as returned by `GET /api/v1/core/catalog`. Only the fields the
@@ -15,6 +15,10 @@ pub struct CatalogItem {
     pub version: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub model_requirements: Option<ModelRequirements>,
+    #[serde(default)]
+    pub min_mur_version: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -26,6 +30,21 @@ struct CatalogResponse {
 struct DownloadResponse {
     license: OfficialLicense,
     bundle_base64: String,
+}
+
+pub fn ensure_client_compatible(minimum: Option<&str>) -> Result<()> {
+    let Some(minimum) = minimum else {
+        return Ok(());
+    };
+    let required = semver::Version::parse(minimum)
+        .map_err(|error| anyhow::anyhow!("invalid catalog min_mur_version '{minimum}': {error}"))?;
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
+    if current < required {
+        bail!(
+            "this item requires MUR {required} or newer; upgrade MUR before installing (current {current})"
+        );
+    }
+    Ok(())
 }
 
 /// Public listing — no auth.

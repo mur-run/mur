@@ -674,7 +674,14 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Official { action } => match action {
             OfficialAction::List => cmd::official::cmd_official_list().await?,
-            OfficialAction::Install { id } => cmd::official::cmd_official_install(&id).await?,
+            OfficialAction::Install {
+                id,
+                model_policy,
+                model_ref,
+                fallback,
+            } => {
+                cmd::official::cmd_official_install(&id, model_policy, model_ref, fallback).await?
+            }
         },
         Commands::Team { action } => match action {
             TeamAction::List { team } => match team {

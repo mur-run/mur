@@ -116,6 +116,32 @@ fn vendor_label_of_url(base_url: Option<&str>) -> Option<String> {
     (!first.is_empty()).then(|| first.to_string())
 }
 
+const LOCAL_MODEL_PROVIDERS: &[&str] = &[
+    "ollama",
+    "mlx",
+    "llamacpp",
+    "llama_cpp",
+    "localai",
+    "lmstudio",
+    "local",
+];
+
+/// Whether a provider is a known in-process or on-machine model backend.
+pub fn provider_is_local(provider: &str) -> bool {
+    LOCAL_MODEL_PROVIDERS.contains(&provider.to_ascii_lowercase().as_str())
+}
+
+/// Canonical billing inference for registry entries without explicit metadata.
+pub fn inferred_billing_for_provider(provider: &str) -> BillingMode {
+    if provider_is_local(provider) {
+        BillingMode::Local
+    } else if matches!(provider.to_ascii_lowercase().as_str(), "codex" | "claude") {
+        BillingMode::Subscription
+    } else {
+        BillingMode::UsageBilled
+    }
+}
+
 impl ModelEntry {
     /// How this model is paid for, for the cost gates. An explicit `billing:`
     /// is the answer; without one the provider decides what it can:
@@ -126,14 +152,19 @@ impl ModelEntry {
     /// make; a wrong "metered" costs the user one line in `models.yaml`
     /// (`billing: local`), and the gate says so when it applies.
     pub fn billing_or_inferred(&self) -> BillingMode {
-        if let Some(b) = self.billing {
-            return b;
-        }
-        match self.provider.as_str() {
-            "ollama" => BillingMode::Local,
-            "codex" | "claude" => BillingMode::Subscription,
-            _ => BillingMode::UsageBilled,
-        }
+        self.billing
+            .unwrap_or_else(|| inferred_billing_for_provider(&self.provider))
+    }
+
+    /// Effective route tier, honoring an explicit registry tier first.
+    pub fn effective_route_tier(&self) -> RouteTier {
+        self.tier.unwrap_or_else(|| {
+            if provider_is_local(&self.provider) {
+                RouteTier::Local
+            } else {
+                RouteTier::Frontier
+            }
+        })
     }
     /// Resolve effective per-1k rates as `(input, output)`.
     ///
@@ -143,6 +174,16 @@ impl ModelEntry {
         let output = self.output_cost_per_1k.or(self.cost_per_1k_tokens);
         let input = self.input_cost_per_1k.or(self.cost_per_1k_tokens);
         (input, output)
+    }
+
+    /// Projected USD cost for a token workload. A known rate on only one side
+    /// is used for the other side; no rates remains unknown rather than free.
+    pub fn projected_cost(&self, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+        let (input, output) = self.effective_costs();
+        let fallback = input.or(output)?;
+        let input = input.unwrap_or(fallback);
+        let output = output.unwrap_or(fallback);
+        Some(input_tokens as f64 / 1_000.0 * input + output_tokens as f64 / 1_000.0 * output)
     }
 
     /// Catalog vendor names to try for this entry, most specific first.
@@ -420,13 +461,7 @@ pub fn pick_cheap_model(
         .iter()
         .filter(|(k, _)| exclude != Some(k.as_str()))
         .filter(|(_, e)| satisfies(e, reqs))
-        .filter_map(|(k, e)| {
-            // Not the deprecated field directly: `mur model add --output-cost`
-            // deliberately leaves it unset, so reading it drops every entry
-            // added with the current flags instead of ranking it.
-            let (input, output) = e.effective_costs();
-            output.or(input).map(|c| (c, k.clone()))
-        })
+        .filter_map(|(k, e)| e.projected_cost(4_000, 1_000).map(|c| (c, k.clone())))
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(_, k)| k)
 }
@@ -1163,6 +1198,85 @@ models:
     /// decided — ollama runs here, codex/claude ride a subscription — and
     /// everything else is treated as metered, because guessing "free" is the
     /// one mistake a cost gate must not make.
+    #[test]
+    fn provider_inference_and_route_tier_cover_existing_aliases() {
+        for provider in [
+            "ollama",
+            "mlx",
+            "llamacpp",
+            "llama_cpp",
+            "localai",
+            "lmstudio",
+            "local",
+        ] {
+            assert_eq!(
+                inferred_billing_for_provider(provider),
+                BillingMode::Local,
+                "{provider}"
+            );
+            let entry = ModelEntry {
+                provider: provider.into(),
+                ..Default::default()
+            };
+            assert_eq!(entry.effective_route_tier(), RouteTier::Local, "{provider}");
+        }
+        for provider in ["claude", "codex"] {
+            assert_eq!(
+                inferred_billing_for_provider(provider),
+                BillingMode::Subscription
+            );
+        }
+        assert_eq!(
+            inferred_billing_for_provider("unknown"),
+            BillingMode::UsageBilled
+        );
+    }
+
+    #[test]
+    fn projected_cost_uses_four_to_one_workload_and_legacy_rates() {
+        let split = ModelEntry {
+            input_cost_per_1k: Some(1.0),
+            output_cost_per_1k: Some(10.0),
+            ..Default::default()
+        };
+        assert_eq!(split.projected_cost(4_000, 1_000), Some(14.0));
+        let legacy = ModelEntry {
+            cost_per_1k_tokens: Some(2.0),
+            ..Default::default()
+        };
+        assert_eq!(legacy.projected_cost(4_000, 1_000), Some(10.0));
+        assert_eq!(ModelEntry::default().projected_cost(4_000, 1_000), None);
+    }
+
+    #[test]
+    fn pick_cheap_model_uses_projected_four_to_one_cost() {
+        let mut reg = ModelRegistry::default();
+        reg.models.insert(
+            "cheap_input".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                model: "a".into(),
+                input_cost_per_1k: Some(0.1),
+                output_cost_per_1k: Some(2.0),
+                ..Default::default()
+            },
+        );
+        reg.models.insert(
+            "cheap_output".into(),
+            ModelEntry {
+                provider: "openai".into(),
+                model: "b".into(),
+                input_cost_per_1k: Some(1.0),
+                output_cost_per_1k: Some(0.1),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            pick_cheap_model(&reg, None, &[]),
+            Some("cheap_input".into())
+        );
+    }
+
     #[test]
     fn billing_is_inferred_from_the_provider_when_not_declared() {
         let mut e = ModelEntry {
