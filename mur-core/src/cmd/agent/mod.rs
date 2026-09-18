@@ -344,15 +344,6 @@ pub(super) fn refuse_if_running(agent_home: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Serialises tests that set the `MUR_HOME` environment variable.
-///
-/// Lives here, not in a test module, because the tests that need it were split
-/// across `mcp.rs`, `mcp_add.rs` and `mcp_network.rs` — and a lib test binary
-/// runs them all in ONE process. Two copies of this static would be two locks
-/// guarding one environment variable, which is not a lock at all.
-#[cfg(test)]
-pub(crate) static MUR_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[cfg(test)]
 mod tests {
     use super::*;

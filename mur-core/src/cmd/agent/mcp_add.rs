@@ -395,7 +395,6 @@ pub fn cmd_mcp_add_remote(
 
 #[cfg(test)]
 mod tests {
-    use super::super::MUR_HOME_LOCK;
     use super::*;
 
     /// A declared state path must be CREATED, not just listed. The sandbox
@@ -452,7 +451,6 @@ mod tests {
         // without touching stdin (the y/N prompt is skipped entirely), and
         // the resulting entry must still carry a real binary_sha256 pin —
         // `force` only bypasses the *consent prompt*, never the hash.
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
@@ -465,9 +463,8 @@ mod tests {
         )
         .unwrap();
 
-        unsafe {
-            std::env::set_var("MUR_HOME", mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home);
 
         // `true` (the `true` binary, present on every unix box) resolves on
         // PATH, so this also exercises the hash-computation branch.
@@ -506,7 +503,6 @@ mod tests {
     /// cannot start.
     #[test]
     fn force_does_not_imply_no_probe() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
         let agent_home = mur_home.join("agents").join("carol");
@@ -517,9 +513,8 @@ mod tests {
             serde_yaml_ng::to_string(&p).unwrap(),
         )
         .unwrap();
-        unsafe {
-            std::env::set_var("MUR_HOME", mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home);
 
         // `true` resolves and hashes; it exits without speaking MCP.
         let err = cmd_mcp_add(
@@ -550,7 +545,6 @@ mod tests {
 
     #[test]
     fn add_remote_writes_url_and_bearer() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
@@ -564,9 +558,8 @@ mod tests {
         )
         .unwrap();
 
-        unsafe {
-            std::env::set_var("MUR_HOME", mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home);
 
         cmd_mcp_add_remote(
             "alice",
@@ -589,7 +582,6 @@ mod tests {
 
     #[test]
     fn add_remote_sets_hash_and_default_egress() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
 
@@ -602,9 +594,8 @@ mod tests {
         )
         .unwrap();
 
-        unsafe {
-            std::env::set_var("MUR_HOME", mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home);
 
         cmd_mcp_add_remote(
             "bob",

@@ -359,7 +359,8 @@ mod tests {
     fn smart_set_mirrors_following_stages_only() {
         let _g = ENV_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", tmp.path());
 
         let v = get_slots().unwrap();
         // Legacy behavior (pre-refactor) was `!follows_smart` here: a fresh
@@ -388,14 +389,15 @@ mod tests {
         assert_eq!(v.ask.model, "llama3:8b");
         assert_eq!(v.rollup.model, "llama3:8b");
 
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
     }
 
     #[test]
     fn rollup_accepts_registry_selection_like_ask_and_compact() {
         let _g = ENV_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", tmp.path());
 
         let mut reg = ModelRegistry::default();
         reg.models.insert(
@@ -439,7 +441,7 @@ mod tests {
         assert_eq!(ab.provider, "anthropic");
         assert_eq!(ab.model, "claude-opus-5");
 
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
     }
 
     #[test]
@@ -448,7 +450,8 @@ mod tests {
         // write_conversation_stage() rather than Rollup.
         let _g = ENV_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", tmp.path());
 
         let mut reg = ModelRegistry::default();
         reg.models.insert(
@@ -484,7 +487,7 @@ mod tests {
         assert_eq!(ab.provider, "anthropic");
         assert_eq!(ab.model, "claude-opus-5");
 
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
     }
 
     #[test]
@@ -499,7 +502,8 @@ mod tests {
         // but abstractive stages execute against the old smart (misreporting).
         let _g = ENV_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe { std::env::set_var("MUR_HOME", tmp.path()) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", tmp.path());
 
         let mut reg = ModelRegistry::default();
         reg.models.insert(
@@ -575,6 +579,6 @@ mod tests {
             "rollup.abstractive_backend should be None (cleared to follow new Smart) — N1 regression fix"
         );
 
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
     }
 }

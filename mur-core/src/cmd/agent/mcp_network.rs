@@ -176,7 +176,6 @@ pub fn cmd_mcp_set_network(
 
 #[cfg(test)]
 mod tests {
-    use super::super::MUR_HOME_LOCK;
     use super::*;
 
     #[test]
@@ -232,7 +231,7 @@ mod tests {
 
     #[test]
     fn record_broad_audited_enabled_appends_an_event() {
-        let _lock = MUR_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _envg = mur_common::test_env::EnvGuard::hold();
         let tmp = tempfile::TempDir::new().unwrap();
         let mur_home = tmp.path();
         let now = chrono::Utc::now();

@@ -208,7 +208,6 @@ fn clean_output(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversations::ENV_LOCK;
     use mur_common::{Role, Source};
 
     fn span(idx: u32, text: &str) -> ExtractiveSpan {
@@ -262,12 +261,12 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn summarize_via_chat_backend_mock_returns_prose() {
         use crate::conversations::backend::mock::MockBackend;
-        let _env_guard = ENV_LOCK.lock().unwrap();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
         // MockBackend reuses ollama::mock_generate; we don't need MUR_OLLAMA_MOCK
         // (it's a direct trait impl). Clear it to make sure we're hitting the
         // backend path, not the legacy env-var fallback.
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
-        unsafe { std::env::remove_var("MUR_LLM_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
+        envg.unset_var("MUR_LLM_MOCK");
         let backend = MockBackend::new();
         let spans = vec![span(1, "hello world"), span(2, "compression works")];
         let r = summarize(

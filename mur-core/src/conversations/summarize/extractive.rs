@@ -255,7 +255,6 @@ fn jaro_winkler(a: &str, b: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversations::ENV_LOCK;
     use chrono::TimeZone;
 
     fn mk(ts_min: u32, conv: &str, text: &str, role: Role) -> Message {
@@ -392,7 +391,9 @@ That's all."#;
     #[allow(clippy::await_holding_lock)]
     async fn mock_backend_extracts_one_span() {
         use crate::conversations::backend::mock::MockBackend;
-        let _env_guard = ENV_LOCK.lock().unwrap();
+        // A reader, not a writer: it needs the environment to hold still
+        // while the factory below consults it.
+        let _env = mur_common::test_env::EnvGuard::hold();
         // MockBackend reuses ollama::mock_generate's pattern dispatch;
         // the legacy MUR_OLLAMA_MOCK env var still selects it via factory.
         let backend = MockBackend::new();

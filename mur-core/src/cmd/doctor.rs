@@ -966,13 +966,10 @@ mod tests {
 
         // Isolate resolve_mur_home()/ModelRegistry::default_path() to the
         // temp home; empty models.yaml means "nonexistent_ref" won't resolve.
-        unsafe {
-            std::env::set_var("MUR_HOME", &mur_home);
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
         let report = agent_doctor(&mur_home, "coach").unwrap();
-        unsafe {
-            std::env::remove_var("MUR_HOME");
-        }
+        envg.unset_var("MUR_HOME");
 
         assert!(
             report.iter().any(|c| c.name == "model_ref" && !c.ok),
@@ -1012,9 +1009,10 @@ mod tests {
         )
         .unwrap();
 
-        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
         let report = agent_doctor(&mur_home, "scoped").unwrap();
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
 
         let c = report
             .iter()
@@ -1043,9 +1041,10 @@ mod tests {
         )
         .unwrap();
 
-        unsafe { std::env::set_var("MUR_HOME", &mur_home) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", &mur_home);
         let report = agent_doctor(&mur_home, "bare").unwrap();
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
 
         assert!(report.iter().all(|c| c.name != "sandbox_scope"));
     }

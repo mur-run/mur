@@ -738,7 +738,8 @@ mod tests {
         // here is the fix; `env::set_var` is `unsafe` under edition 2024,
         // matching every other env-mutating test in this crate.
         const VAR: &str = "TEST_TOKEN_SET_BY_THIS_TEST";
-        unsafe { std::env::set_var(VAR, "dummy-token-for-this-test") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var(VAR, "dummy-token-for-this-test");
 
         let a = adapter_pointing_at_a_closed_port();
         let e = a
@@ -746,7 +747,7 @@ mod tests {
             .unwrap_err();
         assert!(e.contains("request failed"), "{e}");
 
-        unsafe { std::env::remove_var(VAR) };
+        envg.unset_var(VAR);
     }
 
     #[test]

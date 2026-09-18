@@ -583,9 +583,8 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn render_terminates_on_zero_budget() {
-        use crate::conversations::ENV_LOCK;
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let hits = vec![hit_raw("a", "answer one"), hit_raw("b", "answer two")];
         let r = super::render(
             "what happened?",
@@ -606,15 +605,14 @@ mod tests {
             "stage-3 guard should leave exactly 1 hit on zero-budget"
         );
         assert!(!r.user.is_empty(), "user prompt should not be empty");
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn render_stage_1b_none_when_disabled() {
-        use crate::conversations::ENV_LOCK;
-        let _guard = ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("MUR_OLLAMA_MOCK", "1") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_OLLAMA_MOCK", "1");
         let big = (0..50)
             .map(|i| format!("Sentence number {i} with plenty of supporting body."))
             .collect::<Vec<_>>()
@@ -632,6 +630,6 @@ mod tests {
         )
         .await;
         assert!(r.stage_1b.is_none());
-        unsafe { std::env::remove_var("MUR_OLLAMA_MOCK") };
+        envg.unset_var("MUR_OLLAMA_MOCK");
     }
 }

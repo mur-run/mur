@@ -395,12 +395,13 @@ mod p2_tests {
     #[test]
     fn scheduler_path_prefers_the_installing_shells_path() {
         // SAFETY: nextest runs each test in its own process.
-        unsafe { std::env::set_var("PATH", "/opt/homebrew/bin:/usr/bin:/bin") };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("PATH", "/opt/homebrew/bin:/usr/bin:/bin");
         assert_eq!(scheduler_path(), "/opt/homebrew/bin:/usr/bin:/bin");
 
         // An empty PATH must not produce an empty PATH= in the plist/crontab —
         // that would leave the scheduled run unable to find anything at all.
-        unsafe { std::env::set_var("PATH", "") };
+        envg.set_var("PATH", "");
         assert_eq!(scheduler_path(), "/usr/bin:/bin:/usr/sbin:/sbin");
     }
 

@@ -381,14 +381,15 @@ model_ref: local
         );
         std::fs::create_dir_all(home.join("agents/pm")).unwrap();
         std::fs::write(home.join("agents/pm/profile.yaml"), yaml).unwrap();
-        unsafe { std::env::set_var("MUR_HOME", home) };
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", home);
         remove_stale_key(
             home,
             &crate::cmd::limits::Target::Agent("pm".into()),
             "hitl.max_tokens",
         )
         .unwrap();
-        unsafe { std::env::remove_var("MUR_HOME") };
+        envg.unset_var("MUR_HOME");
         let p = mur_common::agent::AgentProfile::load(home, "pm").unwrap();
         assert_eq!(p.hitl.max_tokens, None);
         assert_eq!(p.hitl.max_iterations, Some(800));

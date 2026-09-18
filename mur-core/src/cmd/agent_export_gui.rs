@@ -1314,9 +1314,8 @@ mod tests {
         // should fire before reaching the prereq_check or the agent
         // home read.
         // SAFETY: tests run serially in a single thread per default.
-        unsafe {
-            std::env::remove_var("MUR_ALLOW_UNSAFE_CLONE");
-        }
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.unset_var("MUR_ALLOW_UNSAFE_CLONE");
         let opts = ExportGuiOptions {
             agent_name: "demo".into(),
             agent_home: PathBuf::from("/nonexistent"),
