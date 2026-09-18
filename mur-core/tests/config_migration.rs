@@ -6,7 +6,6 @@
 //! real ~/.mur/config.yaml on a Windows CI runner.
 
 use std::fs;
-use std::sync::Mutex;
 
 // `MUR_HOME` is a process-global env var. Each `#[test]` fn in this file runs
 // in its own process under `cargo nextest`, but this lock is cheap insurance

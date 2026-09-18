@@ -3,7 +3,6 @@
 //! telemetry/inputs sidecar text + provenance ledger entry, and
 //! atomic move of inbox files into `.applied/`.
 
-use std::path::Path;
 use tempfile::TempDir;
 
 fn fixture_profile() -> String {

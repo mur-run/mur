@@ -2,7 +2,6 @@
 
 use mur_core::cmd::agent_hooks::cmd_hooks_show;
 use std::fs;
-use std::sync::Mutex;
 use tempfile::TempDir;
 
 const AGENT_NAME: &str = "hooks-test";

@@ -7,7 +7,6 @@ use mur_core::cmd::agent_schedule::{
     cmd_idle_add, cmd_idle_list, cmd_idle_remove, read_idle_triggers,
 };
 use std::fs;
-use std::sync::Mutex;
 use tempfile::TempDir;
 
 fn setup(agent: &str) -> TempDir {
