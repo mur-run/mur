@@ -236,6 +236,32 @@ pub(super) fn spawn_denied_hint(bin: &str, agent: &str, routes: &ExecRoutes) -> 
              (Use `bash {bin}` if it needs bash.) Nothing else about the command changes."
         );
     }
+    // `mur` is not a binary among binaries: it is the ENTIRE CLI surface,
+    // `agent perm` included. Granting it would let a prompt-injected agent
+    // widen every one of its own entitlements, so the self-grant is the one
+    // route this module must never print — and it is a DEAD END besides,
+    // because the grant only takes effect on restart and the agent cannot
+    // restart itself. Reported as issue 009: the agent printed exactly that
+    // instruction and stopped, waiting for a permission that should not be
+    // given. `federation/sync.rs` records the same conclusion from the last
+    // feature that asked for this grant.
+    //
+    // What the caller actually wants is nearly always a FILE: skills,
+    // profiles and notes all live under `~/.mur`, where reads are
+    // allow-default. So name that instead of dead-ending.
+    if name == "mur" {
+        return format!(
+            "\n\n[sandbox] `mur` is deliberately not in any agent's spawn allowlist, and this \
+             one will not be granted: the `mur` CLI includes `agent perm`, so an agent that \
+             could run it could widen its own entitlements. Do not ask the user for it.\n\
+             Read what you need instead — everything `mur ... show` prints is a file under \
+             `~/.mur`, and reads are allow-default:\n    \
+             read_file(\"~/.mur/skills/<name>/SKILL.md\")   # `mur skill show <name>`\n    \
+             read_file(\"~/.mur/agents/{agent}/profile.yaml\")   # `mur agent show {agent}`\n\
+             For something with no file behind it, delegate via fleet_run or ask the user to \
+             run the command themselves."
+        );
+    }
     let route = if routes.ready.is_empty() {
         format!("No authorized fleet can run `{name}`, so this one needs the user.")
     } else {
@@ -324,6 +350,47 @@ mod tests {
             spawn_denied_path(Some(126), stderr, cwd),
             Some(cwd.join("cmdtest").to_string_lossy().into_owned())
         );
+    }
+
+    /// Reported 2026-09-15 (issue 009): the agent hit `mur` denied, was told
+    /// by this hint to ask for `mur agent perm allow-spawn mur mur`, and
+    /// stopped dead waiting for it. That instruction must never be produced.
+    ///
+    /// `mur` is not one binary among many — it is the ENTIRE CLI surface,
+    /// including `agent perm`, so granting it lets a prompt-injected agent
+    /// widen every one of its own entitlements. The codebase already knows
+    /// this; `federation/sync.rs:102` records the last time a feature asked
+    /// for the same grant and was rewritten to avoid it:
+    ///
+    /// > The previous `mur agent snapshot pull` subprocess required `mur` on
+    /// > the spawn allowlist — the entire CLI surface — and died with EPERM
+    /// > under sandbox.
+    ///
+    /// So the self-grant is not merely risky, it is a dead end: the agent
+    /// cannot restart itself to apply it either. The hint must say so and
+    /// name the read that actually works, because the thing being asked for
+    /// here (`mur skill show <name>`) is a FILE on disk under `~/.mur`, and
+    /// reads are allow-default.
+    #[test]
+    fn spawn_denied_hint_never_asks_to_grant_mur_itself() {
+        let h = spawn_denied_hint("/usr/local/bin/mur", "mur", &ExecRoutes::default());
+        assert!(
+            !h.contains("allow-spawn"),
+            "must not offer the self-grant that widens every entitlement: {h}"
+        );
+        assert!(
+            h.contains("read_file"),
+            "must name the read that works instead of dead-ending: {h}"
+        );
+    }
+
+    /// The grant stays available for every OTHER binary: this is a targeted
+    /// refusal, not a removal of the escape hatch. Without this, "fix" could
+    /// mean deleting the branch wholesale and no one would notice.
+    #[test]
+    fn spawn_denied_hint_still_offers_the_grant_for_other_binaries() {
+        let h = spawn_denied_hint("/usr/bin/git", "solo", &ExecRoutes::default());
+        assert!(h.contains("allow-spawn solo git"), "{h}");
     }
 
     /// Still conservative: a token that names no path at all is not guessed at.
