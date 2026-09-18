@@ -556,7 +556,7 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 KeyCode::PageDown => {
                     app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
                 }
-                KeyCode::Tab => refresh_completion(app),
+                KeyCode::Tab => refresh_completion_with(app, true),
                 KeyCode::Enter if shift || alt => {
                     app.input.insert_newline();
                 }
