@@ -165,10 +165,16 @@ mod tests {
         let first = acquire_singleton(&lock).expect("first acquire should win");
         match acquire_singleton(&lock) {
             Err(AcquireError::AlreadyRunning { pid }) => {
+                #[cfg(unix)]
                 assert_eq!(
                     pid,
                     Some(std::process::id()),
-                    "loser should name the holder's pid"
+                    "platforms with advisory locks should name the holder's pid"
+                );
+                #[cfg(windows)]
+                assert_eq!(
+                    pid, None,
+                    "Windows mandatory locks prevent a competitor from reading the holder's pid"
                 );
             }
             Err(e) => panic!("expected AlreadyRunning, got {e}"),

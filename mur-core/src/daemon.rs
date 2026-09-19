@@ -83,20 +83,15 @@ mod daemon_health_tests {
     use super::*;
     use std::io::Write;
 
-    /// A pid that is reliably not a running process. Picking an arbitrary
-    /// large number (the old 9999) is a coin flip now that liveness counts:
-    /// if the machine happens to have that pid, the "stale" tests invert.
+    /// A pid reserved as an impossible test value on our supported targets.
+    /// Keep the liveness assertion so a platform with different pid semantics
+    /// fails at the precondition instead of silently inverting these tests.
     fn dead_pid() -> u32 {
-        // Spawn something trivial, reap it, reuse its pid: guaranteed to have
-        // existed and guaranteed to be gone.
-        let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "exit 0"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("spawn probe");
-        let pid = child.id();
-        let _ = child.wait();
+        let pid = i32::MAX as u32;
+        assert!(
+            !mur_common::lock_file::pid_alive(pid),
+            "dead-pid test fixture must not name a live process"
+        );
         pid
     }
 
