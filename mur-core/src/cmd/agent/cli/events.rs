@@ -556,7 +556,7 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                 KeyCode::PageDown => {
                     app.scroll_back = app.scroll_back.saturating_sub(app.scroll_page.max(1))
                 }
-                KeyCode::Tab => refresh_completion(app),
+                KeyCode::Tab => refresh_completion_with(app, true),
                 KeyCode::Enter if shift || alt => {
                     app.input.insert_newline();
                 }
@@ -641,7 +641,12 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                     );
                 }
             } else {
-                app.input.insert_str(text);
+                // #003: a newline in a paste may be one the pane PAINTED when
+                // it wrapped this text on the way out, not one the user typed.
+                // Rejoin those against the width we last rendered at; anything
+                // ambiguous keeps its newline.
+                app.input
+                    .insert_str(paste::unwrap_soft_breaks(&text, app.wrap_width));
             }
             refresh_completion(app);
         }

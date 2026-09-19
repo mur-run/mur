@@ -45,6 +45,77 @@ fn image_mime_for(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Rejoin newlines that the terminal *painted* rather than the user typing
+/// them (#003).
+///
+/// Copying a long line out of the transcript copies the pane's grid, so a line
+/// the renderer wrapped comes back with a real `\n` in it — pasting a wrapped
+/// `mur agent perm allow-read <long path>` split the path in two. The paste
+/// itself carries no flag distinguishing the two kinds of newline, so this
+/// reconstructs the renderer's decision: ratatui's `Wrap` breaks at
+/// whitespace, and it only breaks when the next word does not fit. Therefore
+/// a break is a *soft* (painted) one exactly when the line it ends was too
+/// full to admit the first word of the next line.
+///
+/// Conservative by construction — every uncertain case keeps the newline:
+///
+/// * `width == 0` (nothing rendered yet) → unchanged; an unknown width may
+///   never edit a paste.
+/// * A line that still had room for the next word was ended by the user.
+/// * A blank line, or a next line that is indented or starts a list/quote
+///   marker, is deliberate structure: pasted code and Markdown survive intact.
+///
+/// Rejoining inserts a single space, since the wrap consumed the whitespace it
+/// broke at.
+pub fn unwrap_soft_breaks(text: &str, width: u16) -> String {
+    if width == 0 || !text.contains('\n') {
+        return text.to_string();
+    }
+    let width = width as usize;
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        let Some(next) = lines.get(i + 1) else {
+            continue;
+        };
+
+        if soft_break(line, next, width) {
+            out.push(' ');
+        } else {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// True when the break between `line` and `next` was painted by the wrap.
+fn soft_break(line: &str, next: &str, width: usize) -> bool {
+    use unicode_width::UnicodeWidthStr;
+
+    // Blank lines are structure, never a wrap artifact.
+    if line.trim().is_empty() || next.trim().is_empty() {
+        return false;
+    }
+    // Leading whitespace or a block marker on the next line means the author
+    // put it there: indented code, list items, quotes.
+    if next.starts_with([' ', '\t'])
+        || matches!(
+            next.trim_start().as_bytes().first(),
+            Some(b'-' | b'*' | b'>' | b'#' | b'|' | b'+')
+        )
+    {
+        return false;
+    }
+    // The renderer only breaks when the next word will not fit. If it WOULD
+    // have fit, the user typed this newline.
+    let Some(word) = next.split_whitespace().next() else {
+        return false;
+    };
+    line.width() + 1 + word.width() > width
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
