@@ -466,6 +466,9 @@ pub(super) fn render_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let total = output.line_count(inner_width) as u16;
     let visible = inner.height;
     app.scroll_page = visible.max(1);
+    // #003: record the width the transcript was wrapped at, so a paste of text
+    // copied back out of this pane can tell a painted wrap from a typed break.
+    app.wrap_width = inner_width;
     let max_scroll = total.saturating_sub(visible);
     app.scroll_back = app.scroll_back.min(max_scroll);
     let offset = max_scroll - app.scroll_back;
