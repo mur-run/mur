@@ -580,6 +580,15 @@ pub enum FleetAction {
         #[arg(long = "unset")]
         unset: Vec<String>,
     },
+    /// Show how often pre-dispatch triage was right, from the calibration ledger
+    Triage {
+        /// Days to look back
+        #[arg(long, default_value_t = crate::cmd::fleet::triage_report::DEFAULT_DAYS)]
+        days: u32,
+        /// Emit JSON instead of the table
+        #[arg(long)]
+        json: bool,
+    },
     /// Queue a job for a fleet (async; drained by `run` or the daemon)
     Send {
         /// Fleet name
