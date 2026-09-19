@@ -2065,6 +2065,13 @@ async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_perm_deny_host(&name, &glob)?
             }
             AgentPermAction::ListHosts { name } => cmd::agent::cmd_perm_list_hosts(&name)?,
+            AgentPermAction::AllowPort { name, port } => {
+                cmd::agent::cmd_perm_allow_port(&name, port)?
+            }
+            AgentPermAction::DenyPort { name, port } => {
+                cmd::agent::cmd_perm_deny_port(&name, port)?
+            }
+            AgentPermAction::ListPorts { name } => cmd::agent::cmd_perm_list_ports(&name)?,
             AgentPermAction::ListPaths { name } => cmd::agent::cmd_perm_list_paths(&name)?,
             AgentPermAction::AllowRead { name, path } => {
                 cmd::agent::cmd_perm_allow_read(&name, &path)?

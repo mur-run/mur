@@ -821,6 +821,12 @@ pub enum AgentPermAction {
     DenyHost { name: String, glob: String },
     /// Print the outbound host allow / deny lists
     ListHosts { name: String },
+    /// Allow an extra outbound TCP port (on top of 80/443/8080/8443)
+    AllowPort { name: String, port: u16 },
+    /// Remove an extra outbound TCP port grant
+    DenyPort { name: String, port: u16 },
+    /// Print the outbound TCP ports this agent may dial
+    ListPorts { name: String },
     /// Print the filesystem grants and what the sandbox actually installed
     ListPaths { name: String },
     /// Allow filesystem read on a path

@@ -217,6 +217,39 @@ impl SandboxPolicy {
         }
         let mut fs_read = kept_reads;
 
+        // Issue #004: a `git worktree` of a granted checkout lives OUTSIDE
+        // that checkout, so no prefix grant can reach it and the user was
+        // forced to re-grant the same repo under a second path.
+        //
+        // This must happen in the kernel policy too, not only in the
+        // call-time tool gate: Landlock and SBPL are sealed once at startup
+        // and cannot be asked a question later, so every worktree has to be
+        // enumerated here. Aligning both layers is the point — a grant the
+        // kernel allows but the tool gate refuses is the exact split that
+        // sent an agent probing `/tmp` (see `for_file_tools`).
+        //
+        // Derived paths are appended to the POLICY only. They are never
+        // written back to `profile.yaml`: an entitlement the user did not
+        // type must not silently appear in the file they audit, and
+        // recomputing each start means a pruned worktree loses access with no
+        // stale grant left behind. `worktrees_of` already skips worktrees
+        // missing from disk, keeping the Issue 16 no-dead-grants rule.
+        //
+        // `fs_deny` is deliberately NOT expanded this way — see
+        // `tools::fs_policy::under_any_or_worktree`.
+        for granted in fs_read.clone() {
+            for wt in mur_common::worktree::worktrees_of(&granted) {
+                if !fs_read.contains(&wt) {
+                    tracing::debug!(
+                        worktree = %wt.display(),
+                        main = %granted.display(),
+                        "granting read to a git worktree of a granted checkout (#004)"
+                    );
+                    fs_read.push(wt);
+                }
+            }
+        }
+
         let mut fs_write: Vec<PathBuf> = ent
             .filesystem
             .write
@@ -659,9 +692,21 @@ impl SandboxPolicy {
             match ent.network.outbound.mode {
                 NetworkOutboundMode::Unrestricted => (None, None, false),
                 NetworkOutboundMode::Restricted => {
-                    let ports = Some(RESTRICTED_GENERAL_PORTS.to_vec());
+                    // Issue #006: the built-in web set plus whatever extra
+                    // ports the user explicitly declared. Deduped so a
+                    // redundant re-declaration of 443 cannot emit two SBPL
+                    // clauses / two Landlock rules. Only this arm reads
+                    // `allow_ports`: Off and ProxyOnly below ignore it, so a
+                    // stale entry in a profile whose mode was later tightened
+                    // cannot reopen general TCP.
+                    let mut ports = RESTRICTED_GENERAL_PORTS.to_vec();
+                    for p in &ent.network.outbound.allow_ports {
+                        if !ports.contains(p) {
+                            ports.push(*p);
+                        }
+                    }
                     let hosts = Some(ent.network.outbound.allow_hosts.clone());
-                    (ports, hosts, true)
+                    (Some(ports), hosts, true)
                 }
                 NetworkOutboundMode::ProxyOnly => {
                     // Deny general TCP (empty-but-present list), keep the host
@@ -677,6 +722,37 @@ impl SandboxPolicy {
                 }
                 NetworkOutboundMode::Off => (Some(vec![]), Some(vec![]), false),
             };
+
+        // Issue #004, write side. Mirrors the read-side derivation above: a
+        // worktree of a granted checkout is enumerated into the sealed policy
+        // so the kernel and the tool gate agree.
+        //
+        // Derived from the USER-DECLARED write grants only, not from the
+        // finished list. Everything appended between there and here is
+        // runtime-owned (`agent_home`, `channels/`, `index/channels/`,
+        // `open-items.jsonl`) and is not a git checkout, so scanning it would
+        // be pure cost — but more importantly, deriving off a list this
+        // function built itself is how a widening rule quietly compounds.
+        //
+        // Placed BEFORE `partition_write_grants` on purpose: a derived grant
+        // gets exactly the same launch-chain treatment as a typed one. A
+        // worktree that somehow overlapped the launch chain must be dropped
+        // fail-closed like any other grant, never smuggled in by being added
+        // after the check.
+        let declared_writes: Vec<PathBuf> =
+            ent.filesystem.write.iter().map(|s| expand(s)).collect();
+        for granted in declared_writes {
+            for wt in mur_common::worktree::worktrees_of(&granted) {
+                if !fs_write.contains(&wt) {
+                    tracing::debug!(
+                        worktree = %wt.display(),
+                        main = %granted.display(),
+                        "granting write to a git worktree of a granted checkout (#004)"
+                    );
+                    fs_write.push(wt);
+                }
+            }
+        }
 
         // Linux Landlock cannot carve a protected path out of a grant (pure
         // allow-list), so any write grant overlapping the launch chain is
@@ -958,6 +1034,7 @@ mod tests {
                 outbound: OutboundNetwork {
                     mode: NetworkOutboundMode::Restricted,
                     allow_hosts: vec!["api.anthropic.com".to_string()],
+                    allow_ports: vec![],
                     protocols: vec!["tcp".to_string()],
                     resolve_dns: Default::default(),
                 },
@@ -1368,6 +1445,80 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// Issue #006: user-declared extra egress ports must reach the sealed
+    /// policy under Restricted. Before this, `RESTRICTED_GENERAL_PORTS` was a
+    /// constant and a non-web port (ssh 2222, vite 5173) was unreachable with
+    /// no way to grant it short of `unrestricted` (which opens ALL ports).
+    #[test]
+    fn restricted_mode_includes_user_declared_allow_ports() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::Restricted;
+        ent.network.outbound.allow_ports = vec![2222, 5173];
+        let policy = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
+        let ports = policy.net_allow_ports.expect("restricted has a port list");
+        for base in RESTRICTED_GENERAL_PORTS {
+            assert!(
+                ports.contains(&base),
+                "base port {base} must remain: {ports:?}"
+            );
+        }
+        assert!(
+            ports.contains(&2222),
+            "declared 2222 must be granted: {ports:?}"
+        );
+        assert!(
+            ports.contains(&5173),
+            "declared 5173 must be granted: {ports:?}"
+        );
+    }
+
+    /// Boundary 1: `allow_ports` is a PORT grant, not a host grant — the port
+    /// opens to `*`, exactly like the base set. Declaring it must not shrink
+    /// or alter the host allowlist, which stays HostGuard's job.
+    #[test]
+    fn allow_ports_does_not_touch_host_allowlist() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::Restricted;
+        ent.network.outbound.allow_hosts = vec!["api.example.com".into()];
+        ent.network.outbound.allow_ports = vec![2222];
+        let policy = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
+        assert_eq!(
+            policy.net_allow_hosts,
+            Some(vec!["api.example.com".to_string()])
+        );
+    }
+
+    /// Fail-closed: the stricter modes must never be widened by a stale
+    /// `allow_ports` left in the profile. Off stays air-gapped, ProxyOnly
+    /// keeps denying general TCP.
+    #[test]
+    fn allow_ports_never_widens_off_or_proxy_only() {
+        for mode in [NetworkOutboundMode::Off, NetworkOutboundMode::ProxyOnly] {
+            let mut ent = minimal_entitlements();
+            ent.network.outbound.mode = mode;
+            ent.network.outbound.allow_ports = vec![2222];
+            let policy = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
+            assert_eq!(
+                policy.net_allow_ports,
+                Some(vec![]),
+                "{mode:?} must not gain a general port from allow_ports"
+            );
+        }
+    }
+
+    /// Duplicates and a redundant re-declaration of a base port must not
+    /// produce duplicate SBPL / Landlock rules.
+    #[test]
+    fn allow_ports_dedupes_against_base_set() {
+        let mut ent = minimal_entitlements();
+        ent.network.outbound.mode = NetworkOutboundMode::Restricted;
+        ent.network.outbound.allow_ports = vec![443, 2222, 2222];
+        let policy = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
+        let ports = policy.net_allow_ports.unwrap();
+        assert_eq!(ports.iter().filter(|&&p| p == 443).count(), 1);
+        assert_eq!(ports.iter().filter(|&&p| p == 2222).count(), 1);
     }
 
     #[test]
