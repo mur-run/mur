@@ -204,34 +204,67 @@ fn build_client(timeout: Duration) -> Result<reqwest::Client, FetchError> {
         .map_err(|e| FetchError::Http(e.to_string()))
 }
 
-/// Pluggable web search: `brave_key.is_some()` → Brave's first-class API;
-/// `None` → scrape DuckDuckGo's HTML endpoint (keyless, zero-config). If Brave
-/// is configured but errors (bad key, quota, transport), degrade to DDG rather
-/// than fail the search — a misconfigured key must never black out research.
+/// Pluggable web search: any configured provider key → that provider's
+/// first-class API; none configured (or all failing) → scrape DuckDuckGo's
+/// HTML endpoint (keyless, zero-config). A misconfigured key must never black
+/// out research, so a keyed provider that errors degrades to the next one and
+/// ultimately to DDG.
 mod brave;
+mod providers;
 
+/// Try each configured provider in preference order, falling back to the
+/// keyless DuckDuckGo tier when every one of them fails (or none is set).
+///
+/// A configured provider that errors must never black out research: a bad key
+/// on the FIRST provider still lets the second carry the search, and an empty
+/// list still reaches DDG. The reason the last keyed provider failed is
+/// threaded into the DDG-blocked message, so an operator who already has a key
+/// is never told to configure one.
 pub async fn search(
     query: &str,
     limit: usize,
-    brave_key: Option<&str>,
+    keys: &[(mur_common::research_provider::SearchProvider, String)],
     deny: &[String],
     timeout: Duration,
     endpoint: &str,
 ) -> Result<Vec<SearchHit>, FetchError> {
-    match brave_key {
-        Some(key) => match brave::search_brave(query, limit, key, deny, timeout).await {
-            Ok(hits) => Ok(hits),
+    use mur_common::research_provider::SearchProvider;
+
+    let mut last_failure: Option<String> = None;
+    for (provider, key) in keys {
+        let result = match provider {
+            SearchProvider::Brave => brave::search_brave(query, limit, key, deny, timeout).await,
+            SearchProvider::Tavily => {
+                providers::search_tavily(query, limit, key, deny, timeout).await
+            }
+            SearchProvider::SerpApi => {
+                providers::search_serpapi(query, limit, key, deny, timeout).await
+            }
+            SearchProvider::Firecrawl => {
+                providers::search_firecrawl(query, limit, key, deny, timeout).await
+            }
+        };
+        match result {
+            Ok(hits) => return Ok(hits),
             Err(e) => {
-                let why = fetch_err_brief(&e);
+                let why = format!("{}: {}", provider.slug(), fetch_err_brief(&e));
                 tracing::warn!(
                     target: "research_gateway",
-                    "brave search failed ({why}), falling back to DuckDuckGo"
+                    "{why} — trying the next search backend"
                 );
-                search_tier1(query, limit, deny, timeout, endpoint, Some(&why)).await
+                last_failure = Some(why);
             }
-        },
-        None => search_tier1(query, limit, deny, timeout, endpoint, None).await,
+        }
     }
+    search_tier1(
+        query,
+        limit,
+        deny,
+        timeout,
+        endpoint,
+        last_failure.as_deref(),
+    )
+    .await
 }
 
 /// Short human label for a `FetchError` used in the Brave→DDG fallback log.
@@ -315,9 +348,10 @@ fn search_blocked_error(brave_failure: Option<&str>) -> FetchError {
             "Brave was tried first and did not carry it: {why}. Operator fix: address that, \
              not the DuckDuckGo block."
         ),
-        None => "Operator fix: configure a free Brave Search API key \
-             (research_gateway.brave_api_key — or brave_api_key_ref, e.g. keychain:mur/brave — \
-             in ~/.mur/config.yaml, or MUR_RESEARCH_BRAVE_KEY) to switch search off DuckDuckGo."
+        None => "Operator fix: configure a search provider API key with \
+             `mur deep-research secret --brave` (or --tavily / --serpapi / --firecrawl) — \
+             it stores the key in the OS keychain and points \
+             research_gateway.<provider>_api_key_ref at it — to switch search off DuckDuckGo."
             .to_string(),
     };
     FetchError::Http(format!(
@@ -486,13 +520,19 @@ mod tests {
     #[test]
     fn search_blocked_error_names_workaround_and_operator_fix() {
         // Pin the actionable pointers so they can't silently rot: the worker
-        // pivot (`fetch`) and both operator config paths for the Brave key.
+        // pivot (`fetch`) and the command that actually installs a key. The
+        // old message named config keys and an env var — accurate, but MUR
+        // shipped no command that wrote either, so it told an operator to
+        // hand-edit YAML. It now names the command instead.
         let FetchError::Http(msg) = search_blocked_error(None) else {
             panic!("blocked error must be FetchError::Http");
         };
         assert!(msg.contains("fetch"));
-        assert!(msg.contains("MUR_RESEARCH_BRAVE_KEY"));
-        assert!(msg.contains("research_gateway.brave_api_key"));
+        assert!(msg.contains("mur deep-research secret"), "{msg}");
+        // Every provider must be reachable from the advice, not just Brave.
+        for p in mur_common::research_provider::SearchProvider::all() {
+            assert!(msg.contains(p.slug()), "{msg} is missing {p}");
+        }
         assert!(msg.contains("202"));
     }
 
@@ -614,21 +654,21 @@ mod tests {
     }
 
     /// The regression this whole change exists for: telling an operator who
-    /// already HAS a Brave key to configure one.
+    /// already HAS a key to configure one.
     #[test]
     fn the_blocked_message_only_advises_a_key_when_none_is_set() {
+        // The advice now names the command that installs a key rather than
+        // the config keys it writes; the BEHAVIOUR under test is unchanged —
+        // the advice appears only when no key is configured.
         let no_key = format!("{:?}", search_blocked_error(None));
-        assert!(
-            no_key.contains("configure a free Brave Search API key"),
-            "{no_key}"
-        );
+        assert!(no_key.contains("mur deep-research secret"), "{no_key}");
 
         let with_key = format!(
             "{:?}",
             search_blocked_error(Some("brave quota exhausted (next window in 394h)"))
         );
         assert!(
-            !with_key.contains("configure a free Brave Search API key"),
+            !with_key.contains("mur deep-research secret"),
             "must not advise a fix already applied: {with_key}"
         );
         assert!(with_key.contains("Brave was tried first"), "{with_key}");

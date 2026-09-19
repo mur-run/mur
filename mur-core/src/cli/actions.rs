@@ -895,6 +895,35 @@ pub enum DeepResearchAction {
     },
     /// Interactive first-time setup: model, worker count, budget, egress consent
     Setup,
+    /// Store a search-provider API key in the OS keychain and point
+    /// `~/.mur/config.yaml` at it.
+    ///
+    /// The key is read from the terminal without echo (or from stdin when
+    /// piped) and is NEVER taken as an argument — argv is visible to every
+    /// process via `ps` and lands in shell history. Only a
+    /// `keychain:mur/<provider>` reference is written to config.yaml; the
+    /// secret itself never enters the file.
+    Secret {
+        /// Use Brave Search (the default when no provider flag is given).
+        #[arg(long, group = "search_provider")]
+        brave: bool,
+        /// Use Tavily.
+        #[arg(long, group = "search_provider")]
+        tavily: bool,
+        /// Use SerpApi.
+        #[arg(long = "serpapi", group = "search_provider")]
+        serp_api: bool,
+        /// Use Firecrawl.
+        #[arg(long, group = "search_provider")]
+        firecrawl: bool,
+        /// Remove the stored key and drop its reference from config.yaml.
+        #[arg(long)]
+        clear: bool,
+        /// List which providers currently have a key configured (no key is
+        /// ever printed — only whether one is present).
+        #[arg(long)]
+        list: bool,
+    },
     /// Run a deep-research fleet's guarded loop (thin wrapper over
     /// `mur fleet run --loop` — see `cmd/fleet/loop_run.rs`). This drives
     /// only the loop's bounds (deadline / stuck / cost_usd /

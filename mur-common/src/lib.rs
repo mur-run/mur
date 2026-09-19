@@ -62,6 +62,7 @@ pub mod pipeline;
 pub mod project;
 pub mod redact;
 pub mod removable_volume;
+pub mod research_provider;
 pub mod route;
 pub mod schedule;
 pub mod schedule_claim;

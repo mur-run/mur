@@ -653,6 +653,25 @@ pub async fn run(cli: Cli) -> Result<()> {
                     cmd::deep_research::setup::cmd_setup(&mur_home)?
                 }
                 (
+                    Some(DeepResearchAction::Secret {
+                        brave,
+                        tavily,
+                        serp_api,
+                        firecrawl,
+                        clear,
+                        list,
+                    }),
+                    _,
+                ) => cmd::deep_research::secret::run(
+                    &mur_home.join("config.yaml"),
+                    brave,
+                    tavily,
+                    serp_api,
+                    firecrawl,
+                    clear,
+                    list,
+                )?,
+                (
                     Some(DeepResearchAction::Run {
                         name,
                         max_iterations,
