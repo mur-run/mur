@@ -59,7 +59,7 @@ impl TurnMemory { pub fn project(ledger: &TurnLedger, attachments: u32) -> Self;
 pub fn render_memory(turn: u32, m: &TurnMemory) -> String;
 ```
 
-- [ ] **Step 1.1 — add the field and the shared prefix helper.** In `turn_ledger.rs` replace the `Action` struct and the body of `is_evidence` as follows.
+- [x] **Step 1.1 — add the field and the shared prefix helper.** In `turn_ledger.rs` replace the `Action` struct and the body of `is_evidence` as follows.
 
 ```rust
 /// One tool call, reduced to what a reader needs.
@@ -98,14 +98,14 @@ In `is_evidence`, replace the four lines from `let command = self.target.trim();
 
 Then add `excerpt: None,` to the `act` helper in the test module (`Action { tool, target, outcome, excerpt: None }`).
 
-- [ ] **Step 1.2 — run the existing tests; they must still pass.**
+- [x] **Step 1.2 — run the existing tests; they must still pass.**
 
 ```
 cargo nextest run -p mur-agent-runtime turn_ledger
 ```
 Expected: all `turn_ledger::tests::*` pass (the `cd` prefix test in particular).
 
-- [ ] **Step 1.3 — write the excerpt tests (red).** Append inside `mod tests`:
+- [x] **Step 1.3 — write the excerpt tests (red).** Append inside `mod tests`:
 
 ```rust
     #[test]
@@ -164,14 +164,14 @@ Expected: all `turn_ledger::tests::*` pass (the `cd` prefix test in particular).
     }
 ```
 
-- [ ] **Step 1.4 — watch them fail.**
+- [x] **Step 1.4 — watch them fail.**
 
 ```
 cargo nextest run -p mur-agent-runtime excerpt_
 ```
 Expected: compile error `cannot find function excerpt_for`.
 
-- [ ] **Step 1.5 — implement `excerpt_for`.** Add above `/// How many changed files the card names` (i.e. after `classify`):
+- [x] **Step 1.5 — implement `excerpt_for`.** Add above `/// How many changed files the card names` (i.e. after `classify`):
 
 ```rust
 /// One structured line from a successful `bash` result, for memory. Three
@@ -237,14 +237,14 @@ fn gh_pr_fields(content: &str) -> Option<String> {
 }
 ```
 
-- [ ] **Step 1.6 — watch them pass.**
+- [x] **Step 1.6 — watch them pass.**
 
 ```
 cargo nextest run -p mur-agent-runtime excerpt_
 ```
 Expected: 4 passed.
 
-- [ ] **Step 1.7 — write the projection and renderer tests (red).** Append inside `mod tests`:
+- [x] **Step 1.7 — write the projection and renderer tests (red).** Append inside `mod tests`:
 
 ```rust
     #[test]
@@ -350,14 +350,14 @@ Expected: 4 passed.
     }
 ```
 
-- [ ] **Step 1.8 — watch them fail.**
+- [x] **Step 1.8 — watch them fail.**
 
 ```
 cargo nextest run -p mur-agent-runtime memory_projection render_memory
 ```
 Expected: compile errors for `TurnMemory`, `render_memory`, `MEMORY_ROWS`, `MEMORY_CLOSE`.
 
-- [ ] **Step 1.9 — implement the types and renderer.** Add after `excerpt_for`/`gh_pr_fields` (before `/// How many changed files`):
+- [x] **Step 1.9 — implement the types and renderer.** Add after `excerpt_for`/`gh_pr_fields` (before `/// How many changed files`):
 
 ```rust
 /// Tool rows kept per remembered turn; the rest is a count. A turn that made
@@ -504,7 +504,7 @@ pub fn render_memory(turn: u32, m: &TurnMemory) -> String {
 }
 ```
 
-- [ ] **Step 1.10 — watch them pass, lint, commit.**
+- [x] **Step 1.10 — watch them pass, lint, commit.**
 
 ```
 cargo nextest run -p mur-agent-runtime turn_ledger
@@ -532,7 +532,7 @@ RichMessage::TurnLedger { turn: u32, memory: crate::turn_ledger::TurnMemory }
 ```
 Every adapter renders it as a user-role text whose content is exactly `render_memory(turn, memory)`.
 
-- [ ] **Step 2.1 — add the variant.** In `llm/mod.rs`, inside `pub enum RichMessage`, after the `ImageText { … }` arm:
+- [x] **Step 2.1 — add the variant.** In `llm/mod.rs`, inside `pub enum RichMessage`, after the `ImageText { … }` arm:
 
 ```rust
     /// The runtime's record of what the preceding assistant turn did (spec
@@ -545,7 +545,7 @@ Every adapter renders it as a user-role text whose content is exactly `render_me
     },
 ```
 
-- [ ] **Step 2.2 — make it compile.** Run `cargo check -p mur-agent-runtime --all-targets`. Fix each non-exhaustive match:
+- [x] **Step 2.2 — make it compile.** Run `cargo check -p mur-agent-runtime --all-targets`. Fix each non-exhaustive match:
 
 `llm/anthropic.rs` `rich_messages_to_anthropic`, add an arm before the closing of `match m`:
 ```rust
@@ -596,7 +596,7 @@ Every adapter renders it as a user-role text whose content is exactly `render_me
 
 Expected after fixes: `cargo check -p mur-agent-runtime --all-targets` exit 0.
 
-- [ ] **Step 2.3 — write the adapter tests (red would be "compile ok, assertion fails" — they are written against the arms above, so write them and run once).**
+- [x] **Step 2.3 — write the adapter tests (red would be "compile ok, assertion fails" — they are written against the arms above, so write them and run once).**
 
 `llm/anthropic.rs`, inside `mod tests`, after `rich_messages_tool_use_and_results`:
 ```rust
@@ -675,7 +675,7 @@ fn task_summary_skips_a_turn_ledger_and_tokens_count_it() {
 }
 ```
 
-- [ ] **Step 2.4 — run, lint, commit.**
+- [x] **Step 2.4 — run, lint, commit.**
 
 ```
 cargo nextest run -p mur-agent-runtime turn_ledger_renders to_ollama_messages_renders task_summary_skips
@@ -705,7 +705,7 @@ fn ledger_of(reply: &Message) -> Option<crate::turn_ledger::TurnLedger>;
 // remember_turn now stores [user, agent, TurnLedger{turn, memory}]
 ```
 
-- [ ] **Step 3.1 — the record site fills `excerpt`.** At ≈ line 2375 replace the `ledger.record(…)` call with:
+- [x] **Step 3.1 — the record site fills `excerpt`.** At ≈ line 2375 replace the `ledger.record(…)` call with:
 
 ```rust
                 let outcome = crate::turn_ledger::classify(
@@ -732,7 +732,7 @@ fn ledger_of(reply: &Message) -> Option<crate::turn_ledger::TurnLedger>;
 ```
 (Remove the `excerpt: None,` placeholder from Task 1 Step 1.10.)
 
-- [ ] **Step 3.2 — `settle` attaches the ledger every turn.** Replace `fn settle` (≈ line 2622) with:
+- [x] **Step 3.2 — `settle` attaches the ledger every turn.** Replace `fn settle` (≈ line 2622) with:
 
 ```rust
 /// MIME of the per-turn ledger Data part on every reply. No client renders
@@ -763,7 +763,7 @@ fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
 }
 ```
 
-- [ ] **Step 3.3 — write the `remember_turn` tests (red).** In the task_runner `mod tests`, after `threads_multi_turn_chat_memory`:
+- [x] **Step 3.3 — write the `remember_turn` tests (red).** In the task_runner `mod tests`, after `threads_multi_turn_chat_memory`:
 
 ```rust
     #[tokio::test]
@@ -848,14 +848,14 @@ fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
     }
 ```
 
-- [ ] **Step 3.4 — watch them fail.**
+- [x] **Step 3.4 — watch them fail.**
 
 ```
 cargo nextest run -p mur-agent-runtime remembered_with_a_narrative_only reads_the_ledger_part malformed_ledger_part
 ```
 Expected: the first fails with `assertion left == right: 2 vs 3`; the other two fail to compile (`TURN_LEDGER_MIME` is defined by Step 3.2 — if you did 3.2 first they fail on `len 2 != 3`).
 
-- [ ] **Step 3.5 — implement.** Replace `fn remember_turn` (≈ line 688) with:
+- [x] **Step 3.5 — implement.** Replace `fn remember_turn` (≈ line 688) with:
 
 ```rust
     /// Persist this turn into multi-turn memory keyed by `key` (this turn's id),
@@ -928,9 +928,9 @@ In `fn user_message`, replace the `let image = input.parts.iter().find_map(|p| m
     let image = input.parts.iter().find_map(image_part);
 ```
 
-- [ ] **Step 3.6 — fix the two existing tests that counted pairs.** `threads_multi_turn_chat_memory`: change `Some(2)` to `Some(3)` and `assert_eq!(t2.len(), 4, …)` to `assert_eq!(t2.len(), 6, "2 prior + 2 current turns × 3 = 6");` and update the comment string. Any other test asserting a stored length (grep `store.map.get(` and `prior(Some(` in the test module) gets the same ×3/2 adjustment; `conversation_survives_a_restart` and `history_is_trimmed_by_tokens_not_turn_count` build histories by hand and are untouched here (Task 4 rewrites the second).
+- [x] **Step 3.6 — fix the two existing tests that counted pairs.** `threads_multi_turn_chat_memory`: change `Some(2)` to `Some(3)` and `assert_eq!(t2.len(), 4, …)` to `assert_eq!(t2.len(), 6, "2 prior + 2 current turns × 3 = 6");` and update the comment string. Any other test asserting a stored length (grep `store.map.get(` and `prior(Some(` in the test module) gets the same ×3/2 adjustment; `conversation_survives_a_restart` and `history_is_trimmed_by_tokens_not_turn_count` build histories by hand and are untouched here (Task 4 rewrites the second).
 
-- [ ] **Step 3.7 — run, lint, commit.**
+- [x] **Step 3.7 — run, lint, commit.**
 
 ```
 cargo nextest run -p mur-agent-runtime task_runner
@@ -952,7 +952,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Interfaces — Consumes:** Task 3's triple layout.
 **Interfaces — Produces:** `ConversationStore::remember` drops whole turns; `MAX_CONV_MESSAGES` doc updated.
 
-- [ ] **Step 4.1 — rewrite the trim test (red).** Replace `history_is_trimmed_by_tokens_not_turn_count` with:
+- [x] **Step 4.1 — rewrite the trim test (red).** Replace `history_is_trimmed_by_tokens_not_turn_count` with:
 
 ```rust
     /// #1200: the cap is a token budget, so many tiny turns are kept where two
@@ -1023,14 +1023,14 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
     }
 ```
 
-- [ ] **Step 4.2 — watch it fail.**
+- [x] **Step 4.2 — watch it fail.**
 
 ```
 cargo nextest run -p mur-agent-runtime trimmed_by_tokens_in_whole_turns newest_turn_is_never
 ```
 Expected: `history_is_trimmed_by_tokens_in_whole_turns` fails on the `big` case (`kept.len()` is 4, the pair-drain left the ledger orphaned).
 
-- [ ] **Step 4.3 — implement whole-turn trimming.** Replace `fn remember` in `impl ConversationStore` with:
+- [x] **Step 4.3 — implement whole-turn trimming.** Replace `fn remember` in `impl ConversationStore` with:
 
 ```rust
     /// Store `history` under `key`, trimming the oldest turns to the token
@@ -1090,14 +1090,14 @@ fn drop_oldest_turn(history: &mut Vec<crate::llm::RichMessage>) {
 
 Update the `MAX_CONV_MESSAGES` doc comment: replace the sentence beginning `MUST stay even:` through `(Anthropic requires that).` with `Applied in whole turns (see \`remember\`), so the history always starts on a \`user\` message (Anthropic requires that).`
 
-- [ ] **Step 4.4 — watch it pass.**
+- [x] **Step 4.4 — watch it pass.**
 
 ```
 cargo nextest run -p mur-agent-runtime trimmed_by_tokens_in_whole_turns newest_turn_is_never conversation_survives
 ```
 Expected: 3 passed.
 
-- [ ] **Step 4.5 — the incident regression lock (write, run — it passes against Task 3; it exists to stay green).** In the task_runner test module:
+- [x] **Step 4.5 — the incident regression lock (write, run — it passes against Task 3; it exists to stay green).** In the task_runner test module:
 
 ```rust
     /// 2026-09-18, channel 01a0b304: twenty-four text-only pairs of
@@ -1204,3 +1204,12 @@ Expected: the tool-using turn's file ends in `{"TurnLedger": {"turn": N, "memory
 - **Spec coverage:** §3.1 → Task 1 (types, caps); §3.2 → Task 1 (`excerpt_for`, three rows, `cd` prefix only); §3.3 → Task 2; §4.1 → Task 3 Step 3.1; §4.2 (unconditional Data part, synthesis, `image_count` shared predicate, rejected alternative not built) → Task 3; §4.3 triple → Task 3; §4.4 rendering + `task_summary` skip → Task 2; §4.5 budget + whole-turn trim + no migration (legacy case in the trim test) → Task 4; §5 (malformed part, newest turn kept) → Tasks 3/4; §6 every listed test → Tasks 1–4; §7 → Task 5.
 - **Placeholders:** none; every step shows code or an exact command with expected output.
 - **Cross-task names:** `TurnMemory::{project, empty}`, `render_memory(turn, &memory)`, `MEMORY_OPEN`/`MEMORY_CLOSE`/`MEMORY_ROWS`, `RichMessage::TurnLedger { turn, memory }`, `TURN_LEDGER_MIME`, `image_part`/`image_count`/`ledger_of`, `opens_turn`/`turn_count`/`drop_oldest_turn` — used with the same spelling in every task.
+
+---
+
+## Execution notes (2026-09-19, branch `fix/turn-ledger-memory`)
+
+- The new types, excerpt table and renderer live in `mur-agent-runtime/src/turn_memory.rs`, re-exported from `turn_ledger` (which was already past the 800-line rule). Every path named in this plan (`crate::turn_ledger::TurnMemory`, …) still resolves.
+- Tasks 1–4 were applied as one batch because a fresh worktree compiles for ~15 minutes; red-first was replaced by a negative control: with the ledger push removed, pair-trimming restored, and the YAML indentation broken, `the_turn_before_a_new_message_says_whether_it_ran_anything`, `history_is_trimmed_by_tokens_in_whole_turns` and `render_memory_lists_rows_with_quoted_strings` all failed, and all passed once restored.
+- `remember_turn_reads_the_ledger_part_and_counts_images` as written asserted the stored reply text equals `"prose"`; a `Failed` action warrants a settlement card, which `settle` appends, so the assertion is `starts_with("prose")`.
+- The sandboxed Bash tool hangs cargo's cmake build scripts (make blocks reading the jobserver FIFO); cargo was run with the sandbox off.
