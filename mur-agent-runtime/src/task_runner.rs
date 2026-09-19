@@ -2675,6 +2675,11 @@ impl TaskRunner {
 const TURN_LEDGER_MIME: &str = "application/vnd.mur.turn-ledger+json";
 
 fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
+    // The gate is evaluated here because this is the one place the reply
+    // text and the ledger meet (spec 2026-09-19-unverified-claim-card §4).
+    let mut ledger = ledger.clone();
+    ledger.claims_external_state = crate::turn_ledger::claims_external_state(&text);
+    let ledger = &ledger;
     let mut parts = vec![mur_common::a2a::MessagePart::Text {
         text: if ledger.warrants_settlement() {
             format!("{text}{}", crate::turn_ledger::render(ledger))
@@ -3620,6 +3625,38 @@ mod tests {
             }
             other => panic!("expected the previous turn's ledger, got {other:?}"),
         }
+    }
+
+    /// 2026-09-18, channel 01a0b304: the reply below came from one model call
+    /// with zero tool calls. Second line of defence — the user sees the card.
+    #[test]
+    fn a_zero_tool_report_of_external_state_carries_the_unverified_card() {
+        let reply = settle(
+            "推了一格：**#1402 已 merged**，`main` 現在是 `1e0a4d40`。剩下六個全部 rebase 到新 `main`、force-push 完成。".into(),
+            &crate::turn_ledger::TurnLedger::default(),
+        );
+        let text = text_of(&reply);
+        assert!(text.contains("─ settlement ─"), "{text}");
+        assert!(text.contains("⚠ unverified"), "{text}");
+        assert!(!text.contains("nothing ran"), "{text}");
+        let ledger = ledger_of(&reply).expect("ledger part");
+        assert!(ledger.claims_external_state);
+        assert!(ledger.unverified_claim());
+    }
+
+    /// Negative control: a pure chat turn with the same empty ledger earns
+    /// neither the card nor the flag.
+    #[test]
+    fn a_zero_tool_chat_reply_carries_no_card() {
+        let reply = settle(
+            "哈囉，今天想折騰點什麼？".into(),
+            &crate::turn_ledger::TurnLedger::default(),
+        );
+        let text = text_of(&reply);
+        assert!(!text.contains("─ settlement ─"), "{text}");
+        let ledger = ledger_of(&reply).expect("ledger part");
+        assert!(!ledger.claims_external_state);
+        assert!(!ledger.unverified_claim());
     }
 
     #[test]
