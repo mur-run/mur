@@ -24,6 +24,7 @@ fn ent_with_outbound(mode: NetworkOutboundMode, allow: Vec<String>) -> Entitleme
             outbound: OutboundNetwork {
                 mode,
                 allow_hosts: allow,
+                allow_ports: vec![],
                 protocols: vec!["tcp".to_string()],
                 resolve_dns: ResolveDnsConfig::default(),
             },

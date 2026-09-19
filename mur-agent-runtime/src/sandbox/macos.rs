@@ -627,6 +627,20 @@ mod tests {
         );
     }
 
+    /// Issue #006, kernel side: a user-declared extra port must reach the
+    /// actual SBPL profile as a general `*:port` clause. Asserting on the
+    /// policy struct alone would not prove the rule is installed.
+    #[test]
+    fn sbpl_emits_user_declared_extra_ports() {
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(vec![80, 443, 8080, 8443, 2222, 5173]);
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(sbpl.contains("(allow network-outbound (remote tcp \"*:2222\"))"));
+        assert!(sbpl.contains("(allow network-outbound (remote tcp \"*:5173\"))"));
+        // The baseline deny is still the first word on outbound.
+        assert!(sbpl.contains("(deny network-outbound)"));
+    }
+
     #[test]
     fn restricted_allows_dns_resolution() {
         // Without the mDNSResponder socket allowance the `(deny network-outbound)`

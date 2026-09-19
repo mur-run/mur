@@ -101,11 +101,11 @@ pub use mcp_network::cmd_mcp_set_network;
 pub use peers::cmd_peers;
 #[allow(unused_imports)]
 pub use perm::{
-    cmd_perm_allow_host, cmd_perm_allow_read, cmd_perm_allow_spawn, cmd_perm_allow_spawn_dir,
-    cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host, cmd_perm_deny_path,
-    cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir, cmd_perm_list_hosts, cmd_perm_list_paths,
-    cmd_perm_list_tools, cmd_perm_remove_path, cmd_perm_set_limit, cmd_perm_set_mode,
-    cmd_perm_set_tool, cmd_perm_show,
+    cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_allow_read, cmd_perm_allow_spawn,
+    cmd_perm_allow_spawn_dir, cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host,
+    cmd_perm_deny_path, cmd_perm_deny_port, cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir,
+    cmd_perm_list_hosts, cmd_perm_list_paths, cmd_perm_list_ports, cmd_perm_list_tools,
+    cmd_perm_remove_path, cmd_perm_set_limit, cmd_perm_set_mode, cmd_perm_set_tool, cmd_perm_show,
 };
 #[allow(unused_imports)]
 pub(crate) use prompt::prompt_path_for;

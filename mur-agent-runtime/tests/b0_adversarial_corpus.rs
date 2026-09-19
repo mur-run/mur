@@ -97,6 +97,7 @@ fn strict_entitlements() -> Entitlements {
             outbound: OutboundNetwork {
                 mode: NetworkOutboundMode::Restricted,
                 allow_hosts: vec!["api.anthropic.com".to_string()],
+                allow_ports: vec![],
                 protocols: vec!["tcp".to_string()],
                 resolve_dns: Default::default(),
             },

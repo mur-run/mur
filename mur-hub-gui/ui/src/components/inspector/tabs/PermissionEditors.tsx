@@ -14,7 +14,9 @@ export interface PermWrite {
   busy: boolean;
   error: string | null;
   hint: ReturnType<typeof afterWriteHint> | null;
-  run: (cmd: string, args: Record<string, string>) => Promise<void>;
+  // `string | number`: most perm args are paths or globs, but the port
+  // commands (#006) take a `u16` and Tauri rejects a quoted number.
+  run: (cmd: string, args: Record<string, string | number>) => Promise<void>;
 }
 
 export function usePermWrite(
@@ -25,7 +27,7 @@ export function usePermWrite(
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<ReturnType<typeof afterWriteHint> | null>(null);
-  async function run(cmd: string, args: Record<string, string>) {
+  async function run(cmd: string, args: Record<string, string | number>) {
     setError(null);
     setBusy(true);
     try {
@@ -110,6 +112,38 @@ export function AddHost({ write }: { write: PermWrite }) {
     <form className="perm__add" onSubmit={(e) => { e.preventDefault(); void add(); }}>
       <input className="input" value={host} placeholder={t("perm.hostPlaceholder")} onChange={(e) => setHost(e.target.value)} />
       <button type="submit" className="btn btn--sm btn--secondary" disabled={write.busy || !host.trim()}>{t("perm.addHost")}</button>
+    </form>
+  );
+}
+
+/**
+ * Issue #006: grant an extra outbound TCP port. The caption is not decoration —
+ * the OS sandbox filters by port with the host left as `*`, so this opens the
+ * port to every host, and the one moment the user is weighing the decision is
+ * the moment to say so.
+ */
+export function AddPort({ write }: { write: PermWrite }) {
+  const { t } = useT();
+  const [port, setPort] = useState("");
+  const n = Number(port);
+  const valid = /^\d+$/.test(port.trim()) && n >= 1 && n <= 65535;
+  async function add() {
+    if (!valid) return;
+    await write.run("agent_perm_allow_port", { port: n });
+    setPort("");
+  }
+  return (
+    <form className="perm__add" onSubmit={(e) => { e.preventDefault(); void add(); }}>
+      <input
+        className="input"
+        value={port}
+        inputMode="numeric"
+        placeholder={t("perm.portPlaceholder")}
+        onChange={(e) => setPort(e.target.value)}
+      />
+      <button type="submit" className="btn btn--sm btn--secondary" disabled={write.busy || !valid}>
+        {t("perm.addPort")}
+      </button>
     </form>
   );
 }
