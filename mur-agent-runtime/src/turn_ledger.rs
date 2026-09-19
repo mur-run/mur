@@ -183,7 +183,16 @@ impl StopKind {
                 "{ITERATION_CEILING_NOTE} — this is a runaway, not a setting; report it with the transcript"
             ),
             StopKind::TokenBudget => {
-                "an old token budget stopped this turn; upgrade the agent runtime".to_string()
+                // Never produced since 2.79 — reaching here means a CURRENT
+                // runtime is reading an OLD ledger, so the reader has nothing
+                // to upgrade. Say the bound is retired, and name the ones that
+                // replaced it, or this line describes a setting that no longer
+                // exists and offers no next step.
+                format!(
+                    "a token budget stopped this turn — that bound was retired in 2.79 and is \
+                     kept only to read old ledgers; the live bounds are: mur limits {agent} \
+                     (deadline / stuck / cost_usd)"
+                )
             }
             StopKind::LoopDetected => {
                 "the last tool call repeated with identical arguments — change the ask, or the tool's input"
@@ -968,6 +977,48 @@ mod tests {
         assert!(
             card.contains("⚠ stopped at deadline (17 iterations) — output may be incomplete · raise it: mur limits dev --deadline"),
             "{card}"
+        );
+    }
+
+    /// `TokenBudget` is only ever DESERIALISED — no code path produces it since
+    /// 2.79 (the variant's own doc comment says so). So a card carrying it is
+    /// being rendered by a current runtime reading an OLD ledger, and telling
+    /// that reader to "upgrade the agent runtime" sends them to fix the one
+    /// thing that is already correct. Worse, it names a bound that no longer
+    /// exists without saying what replaced it.
+    #[test]
+    fn the_retired_token_budget_remedy_does_not_send_the_user_to_upgrade() {
+        let r = StopKind::TokenBudget.remedy("dev").unwrap();
+        assert!(
+            !r.contains("upgrade"),
+            "the runtime reading this ledger is already new; the LEDGER is old: {r}"
+        );
+        assert!(
+            r.contains("2.79"),
+            "a retired bound must say when it was retired, or the reader \
+             cannot tell it apart from a live one: {r}"
+        );
+        assert!(
+            r.contains("mur limits dev"),
+            "naming a dead bound without naming the live ones leaves the \
+             reader with nothing to do: {r}"
+        );
+    }
+
+    /// Negative control for the test above. Without it, "make every remedy
+    /// mention `mur limits`" would satisfy the assertion while flattening the
+    /// live stops — whose remedies are specific and must stay that way.
+    #[test]
+    fn a_live_stop_keeps_its_own_remedy_and_not_the_retired_boilerplate() {
+        let loop_detected = StopKind::LoopDetected.remedy("dev").unwrap();
+        assert!(
+            loop_detected.contains("identical arguments") && !loop_detected.contains("2.79"),
+            "{loop_detected}"
+        );
+        let max_tokens = StopKind::MaxTokens.remedy("dev").unwrap();
+        assert!(
+            max_tokens.contains("continue from where it stopped") && !max_tokens.contains("2.79"),
+            "{max_tokens}"
         );
     }
 }
