@@ -25,6 +25,8 @@ pub fn asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
         ("macos", "aarch64") => Some("mur-aarch64-apple-darwin.tar.gz"),
         ("linux", "x86_64") => Some("mur-x86_64-unknown-linux-gnu.tar.gz"),
         ("windows", "x86_64") => Some("mur-x86_64-pc-windows-msvc.zip"),
+        ("freebsd", "x86_64") => Some("mur-x86_64-unknown-freebsd.tar.gz"),
+        ("freebsd", "aarch64") => Some("mur-aarch64-unknown-freebsd.tar.gz"),
         _ => None,
     }
 }
@@ -76,12 +78,21 @@ mod asset_tests {
             asset_name_for("windows", "x86_64"),
             Some("mur-x86_64-pc-windows-msvc.zip")
         );
+        assert_eq!(
+            asset_name_for("freebsd", "x86_64"),
+            Some("mur-x86_64-unknown-freebsd.tar.gz")
+        );
+        assert_eq!(
+            asset_name_for("freebsd", "aarch64"),
+            Some("mur-aarch64-unknown-freebsd.tar.gz")
+        );
     }
 
     #[test]
     fn returns_none_for_unsupported() {
         assert_eq!(asset_name_for("linux", "aarch64"), None);
         assert_eq!(asset_name_for("macos", "x86_64"), None);
+        assert_eq!(asset_name_for("freebsd", "riscv64"), None);
     }
 
     #[test]
