@@ -218,9 +218,16 @@ mod tests {
         let d = decide(rt.handle(), &home, &row, "rerun", 0, &empty_params(), t0()).unwrap();
         assert!(!d.allow);
         assert!(d.deferred, "unattended must defer, not wait: {}", d.reason);
+        // The bound separates "parked" from "sat out the gate's 300 s
+        // timeout"; it is not a latency budget. 5 s tripped on a loaded
+        // Windows CI runner (6.94 s, with the gate having deferred
+        // correctly) — the same noise that moved the sibling assertion in
+        // `hitl::gate` to 60 s. Set well clear of that, still an order of
+        // magnitude under the timeout it guards.
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "deferring must not wait on the gate timeout"
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "deferring must not wait on the gate timeout: {:?}",
+            started.elapsed()
         );
         // Positive evidence the gate was actually invoked, not stubbed: a
         // hardcoded `deferred: true` with no channel write would satisfy
