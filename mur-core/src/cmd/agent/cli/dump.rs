@@ -54,7 +54,18 @@ fn card_text(card: &StepCard) -> String {
         .map(|ms| format!(" · {ms}ms"))
         .unwrap_or_default();
     s.push_str(&format!("\n{} {}{}\n", card.glyph(), card.name, dur));
-    if !card.args.is_null()
+    // An edit tool's args are a file path plus two big blobs of source. Dumped
+    // as JSON they arrive as single `\n`-escaped lines — the least readable
+    // form of the thing the card exists to show. The TUI card already renders
+    // these as a diff; the dump gets the same rows, uncapped (the dump exists
+    // precisely to escape the TUI's line caps).
+    if let Some(diff_lines) = super::diff::edit_diff_text(&card.name, &card.args) {
+        for l in diff_lines {
+            s.push_str("  ");
+            s.push_str(&l);
+            s.push('\n');
+        }
+    } else if !card.args.is_null()
         && let Ok(pretty) = serde_json::to_string_pretty(&card.args)
     {
         for l in pretty.lines() {
@@ -116,6 +127,69 @@ mod tests {
         assert!(t.contains("\"command\": \"ls\"")); // full args
         assert!(t.contains("a.rs")); // full output
         assert!(t.contains("b.rs"));
+    }
+
+    #[test]
+    fn edit_card_dumps_a_diff_not_escaped_json() {
+        // `new_string` as JSON is one `\n`-escaped line; the dump must show
+        // the same +/- rows the TUI card does.
+        let mut card = StepCard::new(
+            "s1".into(),
+            "edit_file".into(),
+            serde_json::json!({
+                "path": "src/lib.rs",
+                "old_string": "let x = 1;\nlet y = 2;",
+                "new_string": "let x = 9;\nlet y = 2;",
+            }),
+        );
+        card.complete(CallOutcome::Ok, "ok".into(), false, 1, None, 2);
+        let t = transcript_to_text(&[ChatMsg::tool_for_test(card)]);
+        assert!(t.contains("- let x = 1;"), "expected removal, got:\n{t}");
+        assert!(t.contains("+ let x = 9;"), "expected addition, got:\n{t}");
+        assert!(t.contains("src/lib.rs"), "expected path header, got:\n{t}");
+        assert!(
+            !t.contains("\\n"),
+            "dump must not contain escaped newlines, got:\n{t}"
+        );
+        assert!(
+            !t.contains("\"new_string\""),
+            "raw JSON args must not survive, got:\n{t}"
+        );
+    }
+
+    #[test]
+    fn edit_card_dump_is_uncapped() {
+        // The TUI card caps diffs at 40 lines; the dump exists to escape caps,
+        // so all 60 additions must be present and no "+N more" marker.
+        let content = (0..60)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut card = StepCard::new(
+            "s1".into(),
+            "write_file".into(),
+            serde_json::json!({ "path": "big.rs", "content": content }),
+        );
+        card.complete(CallOutcome::Ok, "ok".into(), false, 1, None, 2);
+        let t = transcript_to_text(&[ChatMsg::tool_for_test(card)]);
+        assert!(t.contains("+ line 0"), "missing first line:\n{t}");
+        assert!(t.contains("+ line 59"), "missing 60th line:\n{t}");
+        assert!(
+            !t.contains("more diff line(s)"),
+            "dump must not truncate, got:\n{t}"
+        );
+    }
+
+    #[test]
+    fn non_edit_card_still_dumps_json_args() {
+        let mut card = StepCard::new(
+            "s1".into(),
+            "bash".into(),
+            serde_json::json!({"command":"ls"}),
+        );
+        card.complete(CallOutcome::Ok, "a.rs".into(), false, 1, None, 2);
+        let t = transcript_to_text(&[ChatMsg::tool_for_test(card)]);
+        assert!(t.contains("\"command\": \"ls\""), "got:\n{t}");
     }
 
     #[test]
