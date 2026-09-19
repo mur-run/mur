@@ -289,6 +289,12 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
                 }
                 result.push(json!({"role": r, "content": parts}));
             }
+            RichMessage::TurnLedger { turn, memory } => {
+                result.push(json!({
+                    "role": "user",
+                    "content": crate::turn_ledger::render_memory(*turn, memory),
+                }));
+            }
         }
     }
     result
