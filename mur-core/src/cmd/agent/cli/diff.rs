@@ -12,10 +12,24 @@ use super::theme::Theme;
 const DIFF_MAX_LINES: usize = 40;
 
 /// Tool names (case-insensitive) whose args describe a file edit.
+///
+/// Two families, and the second is the one that was missing. `edit` / `write`
+/// / `multiedit` / `str_replace*` are the spellings a Claude-CLI backend uses.
+/// `edit_file` / `write_file` are the names MUR's OWN runtime registers
+/// (`mur-agent-runtime/src/tools/{edit_file,write_file}.rs`), so a first-party
+/// edit matched nothing here and fell through to a raw JSON args dump —
+/// `new_string` printed as one escaped `\n`-laden line, which is the least
+/// readable form of the thing the card exists to show.
 fn is_edit_tool(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "edit" | "write" | "multiedit" | "str_replace" | "str_replace_editor"
+        "edit"
+            | "write"
+            | "multiedit"
+            | "str_replace"
+            | "str_replace_editor"
+            | "edit_file"
+            | "write_file"
     )
 }
 
@@ -37,6 +51,79 @@ fn push(out: &mut Vec<Line<'static>>, pushed: &mut usize, s: String, style: Styl
     *pushed += 1; // always increment — drives the accurate "+N more" count
 }
 
+/// One rendered diff row, before any styling or line cap is applied.
+///
+/// The TUI card and the Ctrl+O dump want the same *content* but disagree on
+/// everything else: the card is styled ratatui spans capped at
+/// [`DIFF_MAX_LINES`], the dump is unstyled plain text with no cap at all
+/// (that's the whole point of the dump). Computing the rows once here is what
+/// keeps the two renderers from drifting apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffPart {
+    /// The file path header.
+    Path(String),
+    /// A removed line (`-`).
+    Del(String),
+    /// An added line (`+`).
+    Add(String),
+    /// An unchanged context line.
+    Ctx(String),
+}
+
+/// Compute the diff rows for an edit-like tool call, or `None` if this isn't
+/// an edit we can render. Uncapped and unstyled — callers apply their own.
+pub fn edit_diff_parts(name: &str, args: &serde_json::Value) -> Option<Vec<DiffPart>> {
+    if !is_edit_tool(name) {
+        return None;
+    }
+    let path = str_field(args, &["file_path", "path"]).unwrap_or("");
+    let old = str_field(args, &["old_string", "old_str"]);
+    // Need at least the `new` side to render anything.
+    let new = str_field(args, &["new_string", "new_str", "content"])?;
+
+    let mut parts: Vec<DiffPart> = Vec::new();
+    if !path.is_empty() {
+        parts.push(DiffPart::Path(path.to_string()));
+    }
+
+    match old {
+        Some(old_str) => {
+            // Full diff: context lines (both), removed (Left), added (Right).
+            for hunk in diff::lines(old_str, new) {
+                parts.push(match hunk {
+                    diff::Result::Left(l) => DiffPart::Del(l.to_string()),
+                    diff::Result::Right(r) => DiffPart::Add(r.to_string()),
+                    diff::Result::Both(l, _) => DiffPart::Ctx(l.to_string()),
+                });
+            }
+        }
+        None => {
+            // No old string: just show the new content as additions.
+            for line in new.lines() {
+                parts.push(DiffPart::Add(line.to_string()));
+            }
+        }
+    }
+
+    Some(parts)
+}
+
+/// The diff rows as plain, unstyled, **uncapped** text lines — the form the
+/// Ctrl+O scrollback dump wants. `None` when this isn't an edit tool.
+pub fn edit_diff_text(name: &str, args: &serde_json::Value) -> Option<Vec<String>> {
+    Some(
+        edit_diff_parts(name, args)?
+            .into_iter()
+            .map(|p| match p {
+                DiffPart::Path(p) => format!(" {p}"),
+                DiffPart::Del(l) => format!("  - {l}"),
+                DiffPart::Add(l) => format!("  + {l}"),
+                DiffPart::Ctx(l) => format!("    {l}"),
+            })
+            .collect(),
+    )
+}
+
 /// Build bounded `-`/`+` diff lines for an edit-like tool call, or `None` if
 /// this isn't an edit we can render.
 pub fn edit_diff_lines(
@@ -44,65 +131,33 @@ pub fn edit_diff_lines(
     args: &serde_json::Value,
     theme: &'static Theme,
 ) -> Option<Vec<Line<'static>>> {
-    if !is_edit_tool(name) {
-        return None;
-    }
-    let path = str_field(args, &["file_path", "path"]).unwrap_or("");
-    let old = str_field(args, &["old_string", "old_str"]);
-    let new = str_field(args, &["new_string", "new_str", "content"]);
-    // Need at least the `new` side to render anything.
-    let new = new?;
+    let parts = edit_diff_parts(name, args)?;
 
     let mut out: Vec<Line<'static>> = Vec::new();
-    if !path.is_empty() {
-        out.push(Line::styled(
-            format!(" {path}"),
-            theme.muted.add_modifier(Modifier::BOLD),
-        ));
-    }
-
     let mut pushed = 0usize;
 
-    match old {
-        Some(old_str) => {
-            // Full diff: context lines (both), removed (Left), added (Right).
-            for hunk in diff::lines(old_str, new) {
-                match hunk {
-                    diff::Result::Left(l) => {
-                        push(
-                            &mut out,
-                            &mut pushed,
-                            format!("  - {l}"),
-                            Style::default().fg(Color::Red),
-                            false,
-                        );
-                    }
-                    diff::Result::Right(r) => {
-                        push(
-                            &mut out,
-                            &mut pushed,
-                            format!("  + {r}"),
-                            Style::default().fg(Color::Green),
-                            false,
-                        );
-                    }
-                    diff::Result::Both(l, _) => {
-                        push(&mut out, &mut pushed, format!("    {l}"), theme.muted, true);
-                    }
-                }
-            }
-        }
-        None => {
-            // No old string: just show the new content as additions.
-            for line in new.lines() {
-                push(
-                    &mut out,
-                    &mut pushed,
-                    format!("  + {line}"),
-                    Style::default().fg(Color::Green),
-                    false,
-                );
-            }
+    for part in parts {
+        match part {
+            // The path header sits above the diff and is never capped.
+            DiffPart::Path(p) => out.push(Line::styled(
+                format!(" {p}"),
+                theme.muted.add_modifier(Modifier::BOLD),
+            )),
+            DiffPart::Del(l) => push(
+                &mut out,
+                &mut pushed,
+                format!("  - {l}"),
+                Style::default().fg(Color::Red),
+                false,
+            ),
+            DiffPart::Add(l) => push(
+                &mut out,
+                &mut pushed,
+                format!("  + {l}"),
+                Style::default().fg(Color::Green),
+                false,
+            ),
+            DiffPart::Ctx(l) => push(&mut out, &mut pushed, format!("    {l}"), theme.muted, true),
         }
     }
 
@@ -145,6 +200,24 @@ mod tests {
             t.contains("+ let x = 2;"),
             "expected addition line, got:\n{t}"
         );
+    }
+
+    #[test]
+    fn murs_own_edit_tools_render_a_diff() {
+        // `edit_file` / `write_file` are the names MUR's OWN runtime registers
+        // (mur-agent-runtime/src/tools/{edit_file,write_file}.rs). The gate
+        // listed only the Claude-CLI spellings, so a first-party edit fell
+        // through to a raw JSON args dump and never showed a diff.
+        let edit = serde_json::json!({
+            "path": "src/lib.rs", "old_string": "let x = 1;", "new_string": "let x = 2;"
+        });
+        let t = text(&edit_diff_lines("edit_file", &edit, theme::resolve_skin("dark")).unwrap());
+        assert!(t.contains("- let x = 1;"), "expected removal, got:\n{t}");
+        assert!(t.contains("+ let x = 2;"), "expected addition, got:\n{t}");
+
+        let write = serde_json::json!({ "path": "out.txt", "content": "hello" });
+        let t = text(&edit_diff_lines("write_file", &write, theme::resolve_skin("dark")).unwrap());
+        assert!(t.contains("+ hello"), "expected addition, got:\n{t}");
     }
 
     #[test]
