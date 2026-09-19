@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # `edited` is not in the default set (opened/synchronize/reopened).
+    # Without it, retargeting a stacked PR onto main fires only `edited`,
+    # so CI never runs and the PR sits at BLOCKED forever — waiting does
+    # not help, because no run was ever queued.
+    types: [opened, synchronize, reopened, edited]
 
 # A new commit on a PR obsoletes the in-flight run for the old commit —
 # cancel it instead of finishing a 3-OS matrix nobody will read. push:main
