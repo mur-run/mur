@@ -205,6 +205,14 @@ pub enum RichMessage {
         data: String,
         text: String,
     },
+    /// The runtime's record of what the preceding assistant turn did (spec
+    /// 2026-09-19-turn-ledger-memory). Written by `remember_turn`, never by a
+    /// provider; rendered as a user-role text block under a fixed header so
+    /// the model reads it as testimony about itself, not as its own prose.
+    TurnLedger {
+        turn: u32,
+        memory: crate::turn_ledger::TurnMemory,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

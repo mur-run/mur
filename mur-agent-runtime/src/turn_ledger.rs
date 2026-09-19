@@ -18,6 +18,17 @@
 
 use serde::{Deserialize, Serialize};
 
+// Memory-side projection of this ledger lives in its own file (800-line
+// rule); re-exported here so callers have one path.
+pub use crate::turn_memory::{
+    MEMORY_CLOSE, MEMORY_OPEN, MEMORY_ROWS, ToolMemory, ToolMemoryStatus, TurnMemory, excerpt_for,
+    render_memory,
+};
+
+// The gate for the unverified-claim row (spec 2026-09-19-unverified-claim-card).
+// Its own file because this one is already past the 800-line rule.
+pub use crate::external_state::claims_external_state;
+
 /// Tools that change state on disk. Everything else is treated as read-only or
 /// executing; `bash` is deliberately NOT here — a shell command's outcome is
 /// evidence, whereas an edit is only an intention until something runs.
@@ -46,6 +57,23 @@ pub struct Action {
     /// it without reprinting the transcript.
     pub target: String,
     pub outcome: Outcome,
+    /// One structured line pulled from a successful `bash` result by
+    /// [`excerpt_for`] — `test result: ok. 12 passed` — or nothing. Memory
+    /// only; the settlement card never prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+}
+
+/// Strip one leading `cd <path> && ` — the one composition agents routinely
+/// prepend. Nothing else: see `is_evidence` for why deeper shell parsing is
+/// deliberately not attempted.
+pub(crate) fn after_cd_prefix(command: &str) -> &str {
+    let command = command.trim();
+    command
+        .strip_prefix("cd ")
+        .and_then(|rest| rest.split_once("&&"))
+        .map(|(_, after)| after.trim())
+        .unwrap_or(command)
 }
 
 impl Action {
@@ -82,12 +110,7 @@ impl Action {
             "npm test",
             "pytest",
         ];
-        let command = self.target.trim();
-        let command = command
-            .strip_prefix("cd ")
-            .and_then(|rest| rest.split_once("&&"))
-            .map(|(_, after)| after.trim())
-            .unwrap_or(command);
+        let command = after_cd_prefix(&self.target);
         RUNNERS.iter().any(|r| command.starts_with(r))
     }
 }
@@ -200,6 +223,16 @@ pub struct TurnLedger {
     /// ledgers written before 2.79 and on stub runners.
     #[serde(default)]
     pub agent: String,
+    /// The reply text carried external-state evidence — a SHA, a PR number,
+    /// a test tally, a diff ([`claims_external_state`]). Set by `settle`;
+    /// `unverified_claim()` is this AND no actions. Additive: absent on
+    /// ledgers written before it existed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub claims_external_state: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Default for TurnLedger {
@@ -211,6 +244,7 @@ impl Default for TurnLedger {
             input_tokens: 0,
             output_tokens: 0,
             agent: String::new(),
+            claims_external_state: false,
         }
     }
 }
@@ -261,12 +295,19 @@ impl TurnLedger {
     /// table under a one-line answer is worse than no table. It earns one when
     /// state changed, when something failed, or when the turn did not end on
     /// its own terms — the cases where the user cannot tell from the reply
-    /// alone what actually happened.
+    /// alone what actually happened. And (2026-09-19) when nothing ran yet the
+    /// reply names external state: a report with no evidence behind it.
     pub fn warrants_settlement(&self) -> bool {
         !self.changed().is_empty()
             || !self.blocked().is_empty()
             || !self.running().is_empty()
             || !self.stop.is_clean()
+            || self.unverified_claim()
+    }
+
+    /// Ran nothing, yet the reply names external state (a SHA, a PR, a tally).
+    pub fn unverified_claim(&self) -> bool {
+        self.actions.is_empty() && self.claims_external_state
     }
 }
 
@@ -330,9 +371,9 @@ fn clean_reason(why: &str) -> String {
 /// The only length limit the runtime still applies. Not a display width — it
 /// exists so one runaway error dump cannot flood the reply. The renderer owns
 /// what fits, because it is the only thing that knows the pane.
-const RUNAWAY_BACKSTOP: usize = 400;
+pub(crate) const RUNAWAY_BACKSTOP: usize = 400;
 
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
     if cleaned.chars().count() <= max {
         return cleaned;
@@ -363,6 +404,12 @@ pub fn classify(content: &str, is_error: bool, status: &crate::tools::ToolStatus
 /// How many changed files the card names before collapsing to `+N more`.
 const CHANGED_SHOWN: usize = 6;
 
+/// The verified row for a turn that ran nothing yet named external state.
+/// Same `⚠` as the "nothing ran" row, so the TUI paints it muted: a warning
+/// about missing evidence, not a failure.
+pub const UNVERIFIED_ROW: &str =
+    "  ⚠ unverified  no tool ran this turn — external state claims above were not checked\n";
+
 /// Render the settlement card.
 ///
 /// The runtime draws this, not the model. Two reasons: the model would spend
@@ -379,16 +426,20 @@ pub fn render(ledger: &TurnLedger) -> String {
 
     let verified = ledger.verified();
     if verified.is_empty() {
-        // Stated rather than omitted. An empty verified column is the single
-        // most useful line here: it is the difference between "changed nine
-        // files" and "it works", and leaving the row out lets the reader
-        // assume the latter.
-        // `⚠`, not `✔`: the TUI colours settlement rows by their lead glyph
-        // (`settlement.rs::row_style`), so a success glyph painted this row
-        // GREEN and the parenthetical lost the argument to the colour. Not
-        // `✘` either — verification was not attempted and failed, it was
-        // never run, which is a warning about the evidence, not a failure.
-        out.push_str("  ⚠ verified   nothing ran — no evidence this works\n");
+        if ledger.unverified_claim() {
+            out.push_str(UNVERIFIED_ROW);
+        } else {
+            // Stated rather than omitted. An empty verified column is the single
+            // most useful line here: it is the difference between "changed nine
+            // files" and "it works", and leaving the row out lets the reader
+            // assume the latter.
+            // `⚠`, not `✔`: the TUI colours settlement rows by their lead glyph
+            // (`settlement.rs::row_style`), so a success glyph painted this row
+            // GREEN and the parenthetical lost the argument to the colour. Not
+            // `✘` either — verification was not attempted and failed, it was
+            // never run, which is a warning about the evidence, not a failure.
+            out.push_str("  ⚠ verified   nothing ran — no evidence this works\n");
+        }
     } else {
         // One line per action: the glyph carries "verified"; a group header
         // would only push the content into a second indent level.
@@ -487,6 +538,7 @@ mod tests {
             tool: tool.into(),
             target: target.into(),
             outcome,
+            excerpt: None,
         }
     }
 
@@ -555,6 +607,63 @@ mod tests {
         ));
         assert!(l.verified().is_empty());
         assert_eq!(l.blocked().len(), 1);
+    }
+
+    #[test]
+    fn a_zero_tool_turn_that_names_external_state_warrants_settlement() {
+        let claimed = TurnLedger {
+            claims_external_state: true,
+            ..Default::default()
+        };
+        assert!(claimed.unverified_claim());
+        assert!(claimed.warrants_settlement());
+
+        // Same claim, but a tool ran: the other clauses decide, and a single
+        // successful read decides "no card" exactly as before.
+        let mut read = TurnLedger {
+            claims_external_state: true,
+            ..Default::default()
+        };
+        read.record(act("read_file", "README.md", Outcome::Ok));
+        assert!(!read.unverified_claim());
+        assert!(!read.warrants_settlement());
+
+        // No claim, nothing ran: still a pure question, still no card.
+        assert!(!TurnLedger::default().unverified_claim());
+        assert!(!TurnLedger::default().warrants_settlement());
+    }
+
+    #[test]
+    fn render_prints_the_unverified_row_for_a_zero_tool_claim() {
+        let l = TurnLedger {
+            claims_external_state: true,
+            ..Default::default()
+        };
+        let card = render(&l);
+        assert!(card.contains(UNVERIFIED_ROW.trim_end()), "{card}");
+        assert!(!card.contains("nothing ran"), "{card}");
+        assert!(card.contains("⚠ unverified"), "{card}");
+        assert!(!card.contains("✔"), "{card}");
+    }
+
+    #[test]
+    fn the_claim_flag_is_additive_on_the_wire() {
+        // A ledger written before the field existed.
+        let old =
+            r#"{"actions":[],"stop":"end_turn","iterations":0,"input_tokens":0,"output_tokens":0}"#;
+        let l: TurnLedger = serde_json::from_str(old).unwrap();
+        assert!(!l.claims_external_state);
+        // `false` is not written; `true` round-trips.
+        let s = serde_json::to_string(&TurnLedger::default()).unwrap();
+        assert!(!s.contains("claims_external_state"), "{s}");
+        let flagged = TurnLedger {
+            claims_external_state: true,
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&flagged).unwrap();
+        assert!(s.contains(r#""claims_external_state":true"#), "{s}");
+        let back: TurnLedger = serde_json::from_str(&s).unwrap();
+        assert!(back.claims_external_state);
     }
 
     #[test]

@@ -253,3 +253,31 @@ fn openai_unknown_client_code_stops() {
     assert!(matches!(error, LlmError::Rejected(422, _)), "{error:?}");
     assert_eq!(crate::llm::classify(&error), crate::llm::Disposition::Stop);
 }
+
+#[test]
+fn turn_ledger_renders_as_a_user_message() {
+    let memory = crate::turn_ledger::TurnMemory::empty(1);
+    let msgs = vec![
+        RichMessage::Text {
+            role: "agent".into(),
+            content: "done".into(),
+        },
+        RichMessage::TurnLedger {
+            turn: 9,
+            memory: memory.clone(),
+        },
+    ];
+    let out = rich_messages_to_openai(&msgs);
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[1]["role"], "user");
+    assert_eq!(
+        out[1]["content"],
+        crate::turn_ledger::render_memory(9, &memory)
+    );
+    assert!(
+        out[1]["content"]
+            .as_str()
+            .unwrap()
+            .ends_with(crate::turn_ledger::MEMORY_CLOSE)
+    );
+}
