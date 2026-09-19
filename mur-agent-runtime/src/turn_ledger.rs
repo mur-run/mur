@@ -18,6 +18,13 @@
 
 use serde::{Deserialize, Serialize};
 
+// Memory-side projection of this ledger lives in its own file (800-line
+// rule); re-exported here so callers have one path.
+pub use crate::turn_memory::{
+    MEMORY_CLOSE, MEMORY_OPEN, MEMORY_ROWS, ToolMemory, ToolMemoryStatus, TurnMemory, excerpt_for,
+    render_memory,
+};
+
 /// Tools that change state on disk. Everything else is treated as read-only or
 /// executing; `bash` is deliberately NOT here — a shell command's outcome is
 /// evidence, whereas an edit is only an intention until something runs.
@@ -46,6 +53,23 @@ pub struct Action {
     /// it without reprinting the transcript.
     pub target: String,
     pub outcome: Outcome,
+    /// One structured line pulled from a successful `bash` result by
+    /// [`excerpt_for`] — `test result: ok. 12 passed` — or nothing. Memory
+    /// only; the settlement card never prints it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+}
+
+/// Strip one leading `cd <path> && ` — the one composition agents routinely
+/// prepend. Nothing else: see `is_evidence` for why deeper shell parsing is
+/// deliberately not attempted.
+pub(crate) fn after_cd_prefix(command: &str) -> &str {
+    let command = command.trim();
+    command
+        .strip_prefix("cd ")
+        .and_then(|rest| rest.split_once("&&"))
+        .map(|(_, after)| after.trim())
+        .unwrap_or(command)
 }
 
 impl Action {
@@ -82,12 +106,7 @@ impl Action {
             "npm test",
             "pytest",
         ];
-        let command = self.target.trim();
-        let command = command
-            .strip_prefix("cd ")
-            .and_then(|rest| rest.split_once("&&"))
-            .map(|(_, after)| after.trim())
-            .unwrap_or(command);
+        let command = after_cd_prefix(&self.target);
         RUNNERS.iter().any(|r| command.starts_with(r))
     }
 }
@@ -330,9 +349,9 @@ fn clean_reason(why: &str) -> String {
 /// The only length limit the runtime still applies. Not a display width — it
 /// exists so one runaway error dump cannot flood the reply. The renderer owns
 /// what fits, because it is the only thing that knows the pane.
-const RUNAWAY_BACKSTOP: usize = 400;
+pub(crate) const RUNAWAY_BACKSTOP: usize = 400;
 
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
     if cleaned.chars().count() <= max {
         return cleaned;
@@ -487,6 +506,7 @@ mod tests {
             tool: tool.into(),
             target: target.into(),
             outcome,
+            excerpt: None,
         }
     }
 

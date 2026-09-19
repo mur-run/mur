@@ -648,6 +648,9 @@ pub fn estimate_input_tokens(req: &LlmRequest) -> u32 {
             RichMessage::ImageText { text, .. } => text.len(),
             RichMessage::ToolUse { text, .. } => text.as_deref().map_or(0, str::len),
             RichMessage::ToolResults { .. } => 0,
+            RichMessage::TurnLedger { turn, memory } => {
+                crate::turn_ledger::render_memory(*turn, memory).len()
+            }
         })
         .sum();
     (chars / 4).min(u32::MAX as usize) as u32

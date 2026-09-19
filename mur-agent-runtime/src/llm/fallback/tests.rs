@@ -900,3 +900,28 @@ async fn a_thinking_only_prefix_does_not_pin_the_chain() {
     assert_eq!(resp.text, "b");
     assert_eq!(b_calls.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn task_summary_skips_a_turn_ledger_and_tokens_count_it() {
+    use crate::llm::{LlmRequest, RichMessage};
+    let memory = crate::turn_ledger::TurnMemory::empty(0);
+    let req = LlmRequest {
+        messages: vec![
+            RichMessage::TurnLedger {
+                turn: 1,
+                memory: memory.clone(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "hello there".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    assert_eq!(task_summary(&req), "hello there");
+    let rendered = crate::turn_ledger::render_memory(1, &memory).len();
+    assert_eq!(
+        estimate_input_tokens(&req) as usize,
+        (rendered + "hello there".len()) / 4
+    );
+}
