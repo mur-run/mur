@@ -25,3 +25,4 @@ pub mod settings;
 pub mod show;
 pub mod status;
 pub mod store;
+pub mod triage_report;

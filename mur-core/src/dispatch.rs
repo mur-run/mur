@@ -410,6 +410,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                         }
                     }
                 }
+                FleetAction::Triage { days, json } => {
+                    cmd::fleet::triage_report::cmd_fleet_triage(&mur_home, days, json)?
+                }
                 FleetAction::SetLoop {
                     name,
                     trigger,

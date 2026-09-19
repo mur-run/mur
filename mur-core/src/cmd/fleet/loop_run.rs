@@ -103,6 +103,10 @@ pub struct FleetBounds {
     /// The configured cost cap, before `budget_for` decides whether the
     /// fleet can spend at all.
     pub cost_usd: Option<f64>,
+    /// The full resolution this was derived from, kept so a consumer that
+    /// needs the budget as a whole (pre-dispatch triage) sees exactly what
+    /// the guards will enforce rather than a second, drifting copy of it.
+    pub resolved: mur_common::limits::ResolvedLimits,
 }
 
 pub fn fleet_bounds(
@@ -136,6 +140,7 @@ pub fn fleet_bounds(
         deadline_source: r.deadline.source,
         stuck: r.stuck.value,
         cost_usd: r.cost_usd.value,
+        resolved: r,
     })
 }
 
@@ -253,7 +258,7 @@ pub enum GuardRate {
     Default,
 }
 
-fn fleet_price_per_1k(mur_home: &Path) -> (f64, GuardRate) {
+pub(super) fn fleet_price_per_1k(mur_home: &Path) -> (f64, GuardRate) {
     if let Ok(v) = std::env::var("MUR_FLEET_COST_PER_1K")
         && let Ok(p) = v.parse::<f64>()
         && p > 0.0
@@ -379,6 +384,38 @@ fn outcome_label(stop: LoopStop) -> &'static str {
         LoopStop::CommanderKilled => "commander-killed",
         LoopStop::QueueDrained => "queue-drained",
         LoopStop::AwaitingApproval => "awaiting-approval",
+    }
+}
+
+/// Map a loop stop to the guard vocabulary `triage_calibration` scores
+/// against, or `None` when the loop ended for a reason that is not an overrun.
+///
+/// The two vocabularies are separate on purpose — `outcome_label` is for
+/// humans reading progress.json, `GUARD_STOPS` is what the calibration counts
+/// — so the translation is explicit here rather than implied by a string that
+/// happens to match. `MaxIterations` is the case that would be silently lost:
+/// the loop calls it `max-iterations`, the runtime calls the same event
+/// `iteration_ceiling`, and an unmapped name simply reads as "no overrun".
+///
+/// `Budget` returns `None` deliberately: it is not in `GUARD_STOPS`, and
+/// `overran()` already catches a blown cap from spend-vs-cap. Naming it here
+/// too would not change the verdict, and inventing a guard name the runtime
+/// never emits would put a value in the ledger that nothing else can produce.
+pub fn calibration_stop_reason(stop: LoopStop) -> Option<&'static str> {
+    match stop {
+        LoopStop::Deadline => Some("deadline"),
+        LoopStop::Stuck => Some("stuck"),
+        LoopStop::MaxIterations => Some("iteration_ceiling"),
+        // Not overruns: the goal was met, a human intervened, or the queue
+        // emptied. Scoring these as triage misses would punish it for runs
+        // that went exactly right.
+        LoopStop::Converged
+        | LoopStop::QueueDrained
+        | LoopStop::Stopped
+        | LoopStop::CommanderKilled
+        | LoopStop::AwaitingApproval
+        // See the doc comment: spend-vs-cap already detects this.
+        | LoopStop::Budget => None,
     }
 }
 
@@ -626,6 +663,47 @@ pub async fn run_guarded(
             None
         }
     };
+
+    // ── Pre-dispatch triage ────────────────────────────────────────────────
+    // Once for the whole loop, not once per iteration: the goal does not
+    // change between iterations, so re-asking would pay the model tax N times
+    // for one answer and write N verdicts that all pair against one outcome.
+    //
+    // Off unless `triage.enabled`. In shadow mode (the default when enabled)
+    // the verdict is recorded and the loop runs anyway — that is what makes
+    // the prediction scoreable. See `executor::triage_gate`.
+    let triage_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
+        .triage
+        .clone();
+    if triage_cfg.enabled {
+        let g = crate::executor::triage_gate::gate(
+            mur_home,
+            &run_id,
+            &fleet.goal,
+            &bounds.resolved,
+            triage_cfg.enforces(),
+        )
+        .await;
+        if let Some(line) = g.console_line() {
+            println!("{line}");
+        }
+        if g.blocks() {
+            // Stop before the first iteration, so nothing has been spent and
+            // the queued job stays queued for a human to resize. The heartbeat
+            // is closed by the normal terminal path below.
+            if let Some(b) = loop_beat {
+                b.stop().await;
+            }
+            let _ = crate::run_status::store::update(mur_home, &run_id, |r| {
+                r.state = crate::run_status::State::Blocked
+            });
+            anyhow::bail!(
+                "fleet '{name}': triage held this goal back before the first iteration.\n\
+                 Split it, or set `triage.enforce: false` in ~/.mur/config.yaml to run it\n\
+                 anyway and record whether triage was right."
+            );
+        }
+    }
 
     let stop = loop {
         // Commander governance (highest priority). Fail-closed: a channel read
@@ -964,6 +1042,22 @@ pub async fn run_guarded(
     {
         tracing::warn!(run_id = %run_id, %error, "fleet loop: terminal state not recorded");
     }
+
+    // ── Close the triage loop ──────────────────────────────────────────────
+    // The loop path carries the best evidence in the codebase: a real
+    // cumulative `spent` and a stop reason the guards themselves produced.
+    // `run_id` matches the gate call above, which is what pairs the halves.
+    if triage_cfg.enabled {
+        crate::executor::triage_gate::record_outcome(
+            mur_home,
+            &run_id,
+            Some(spent),
+            start.elapsed(),
+            calibration_stop_reason(stop).map(str::to_string),
+            matches!(stop, LoopStop::Converged | LoopStop::QueueDrained),
+        );
+    }
+
     Ok((stop, iteration, spent))
 }
 
@@ -1362,6 +1456,70 @@ mod tests {
         // real cost is typically well under the 8000-tok/member projection:
         // a 1200-token iteration costs far less than the 1-member projection.
         assert!(iteration_cost_usd(1200, 0.05) < estimate_iteration_cost_usd(1, 0.05));
+    }
+
+    /// The mapping is worthless if it emits a name the calibration does not
+    /// recognise, so it is checked against the real constant rather than
+    /// against a copy of the strings.
+    #[test]
+    fn every_mapped_stop_reason_is_one_the_calibration_scores() {
+        use crate::executor::triage_calibration::GUARD_STOPS;
+        for stop in [
+            LoopStop::Converged,
+            LoopStop::MaxIterations,
+            LoopStop::Deadline,
+            LoopStop::Stuck,
+            LoopStop::Budget,
+            LoopStop::Stopped,
+            LoopStop::CommanderKilled,
+            LoopStop::QueueDrained,
+            LoopStop::AwaitingApproval,
+        ] {
+            if let Some(r) = calibration_stop_reason(stop) {
+                assert!(
+                    GUARD_STOPS.contains(&r),
+                    "{stop:?} maps to `{r}`, which GUARD_STOPS does not contain —                      the calibration would silently read it as no overrun"
+                );
+            }
+        }
+    }
+
+    /// The rename trap: the loop says `max-iterations`, the runtime says
+    /// `iteration_ceiling`. Passing the human label straight through would
+    /// lose every runaway triage was meant to predict.
+    #[test]
+    fn a_runaway_maps_to_the_runtimes_name_not_the_human_label() {
+        assert_eq!(
+            calibration_stop_reason(LoopStop::MaxIterations),
+            Some("iteration_ceiling")
+        );
+        assert_ne!(
+            calibration_stop_reason(LoopStop::MaxIterations),
+            Some(outcome_label(LoopStop::MaxIterations)),
+            "the display label must not be what gets scored"
+        );
+    }
+
+    /// A run that ended well must never be scored as an overrun — that would
+    /// blame triage for letting through work that was fine.
+    #[test]
+    fn a_clean_finish_is_not_an_overrun() {
+        for stop in [
+            LoopStop::Converged,
+            LoopStop::QueueDrained,
+            LoopStop::Stopped,
+            LoopStop::CommanderKilled,
+            LoopStop::AwaitingApproval,
+        ] {
+            assert_eq!(calibration_stop_reason(stop), None, "{stop:?}");
+        }
+    }
+
+    /// Budget is detected from spend vs cap, not from a guard name the
+    /// runtime never emits.
+    #[test]
+    fn a_budget_stop_is_left_to_the_spend_comparison() {
+        assert_eq!(calibration_stop_reason(LoopStop::Budget), None);
     }
 
     #[test]

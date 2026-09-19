@@ -303,6 +303,43 @@ pub struct Config {
     /// Absent means off — see [`MonitorResolverConfig`].
     #[serde(default)]
     pub monitor_resolver: MonitorResolverConfig,
+
+    /// Pre-dispatch triage (`triage:`). Absent means shadow mode: triage
+    /// runs and records, and never stops a dispatch.
+    #[serde(default)]
+    pub triage: TriageConfig,
+}
+
+/// Pre-dispatch triage settings (`triage:` in `~/.mur/config.yaml`).
+///
+/// Both knobs default to the passive posture, and `enforce` in particular is
+/// off for a reason that is not caution: `triage_calibration` cannot score a
+/// decision that prevented a run. Enforcing from the start produces only
+/// unfalsifiable `held_back` records, so there would never be evidence that
+/// enforcing was correct. Shadow mode records the same predictions AND lets
+/// the run happen, which is what makes `Calibration::shadow_precision`
+/// computable — turn `enforce` on once that number says triage is right often
+/// enough to be worth the refusals.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TriageConfig {
+    /// Run triage before dispatch at all. Off = not even the free prefilter
+    /// runs, and no verdicts are recorded.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Let a triage decision actually stop a dispatch. Requires `enabled`.
+    /// See the type docs before turning this on.
+    #[serde(default)]
+    pub enforce: bool,
+}
+
+impl TriageConfig {
+    /// Does triage actually bind here? `enforce` alone is inert — with
+    /// `enabled: false` nothing runs to enforce — so the two are resolved in
+    /// one place rather than at each call site, where the pair would
+    /// eventually be got wrong in one of them.
+    pub fn enforces(&self) -> bool {
+        self.enabled && self.enforce
+    }
 }
 
 /// Rotation for `~/.mur/queue/events.jsonl`, in the shape FreeBSD's
@@ -2920,5 +2957,43 @@ mod notifications_config_tests {
                 .unwrap();
         assert!(c.monitor_resolver.enabled);
         assert_eq!(c.monitor_resolver.model.as_deref(), Some("claude_haiku"));
+    }
+
+    /// Triage must be inert for everyone who never asked for it — including
+    /// every config file written before it existed.
+    #[test]
+    fn triage_is_off_and_non_binding_by_default() {
+        let c: Config = serde_yaml::from_str("retrieval:\n  min_score: 0.42\n").unwrap();
+        assert!(!c.triage.enabled, "triage must not run unasked");
+        assert!(!c.triage.enforce);
+        assert!(!c.triage.enforces());
+    }
+
+    /// The trap this guards: `enforce: true` alone looks like it turned
+    /// something on, but there is nothing running to enforce.
+    #[test]
+    fn enforce_without_enabled_binds_nothing() {
+        let c: Config = serde_yaml::from_str("triage:\n  enforce: true\n").unwrap();
+        assert!(c.triage.enforce, "the user's word is kept verbatim");
+        assert!(
+            !c.triage.enforces(),
+            "but it binds nothing while triage does not run"
+        );
+    }
+
+    #[test]
+    fn triage_binds_only_when_both_knobs_are_set() {
+        let c: Config =
+            serde_yaml::from_str("triage:\n  enabled: true\n  enforce: true\n").unwrap();
+        assert!(c.triage.enforces());
+    }
+
+    /// Enabled without enforce is shadow mode: it runs, it records, it never
+    /// stops anything.
+    #[test]
+    fn enabled_alone_is_shadow_mode() {
+        let c: Config = serde_yaml::from_str("triage:\n  enabled: true\n").unwrap();
+        assert!(c.triage.enabled);
+        assert!(!c.triage.enforces());
     }
 }

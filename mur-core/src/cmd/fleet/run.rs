@@ -418,6 +418,44 @@ pub async fn cmd_fleet_run(
     // A one-shot run is unattended too: its members inherit the fleet's
     // resolved deadline (spec §3.4).
     let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;
+
+    // ── Pre-dispatch triage ────────────────────────────────────────────────
+    // Ask whether this goal fits the budget it is about to be handed, BEFORE
+    // a concurrency slot, a deadline and real dollars are committed. Off
+    // unless `triage.enabled`; in shadow mode (the default when enabled) it
+    // records its prediction and the dispatch proceeds regardless, which is
+    // what makes the prediction scoreable at all — see `triage_gate`.
+    //
+    // `run_id` is the pairing key: the outcome recorded after the run below
+    // MUST use the same string, or the verdict shows up as unpaired.
+    let triage_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
+        .triage
+        .clone();
+    let triage_started = std::time::Instant::now();
+    if triage_cfg.enabled {
+        let g = crate::executor::triage_gate::gate(
+            mur_home,
+            &run_id,
+            &goal,
+            &bounds.resolved,
+            triage_cfg.enforces(),
+        )
+        .await;
+        if let Some(line) = g.console_line() {
+            println!("{line}");
+        }
+        if g.blocks() {
+            // Nothing has been spent: no worktree work is undone by stopping
+            // here, and the job (if any) stays queued for a human to resize
+            // rather than being marked failed for a run that never happened.
+            bail!(
+                "fleet '{name}': triage held this task back before dispatch.\n\
+                 Split it, or re-run with `triage.enforce: false` in ~/.mur/config.yaml\n\
+                 to dispatch anyway and record whether triage was right."
+            );
+        }
+    }
+
     let opts = crate::executor::dag::DagExecOptions {
         deadline_at: Some(std::time::Instant::now() + bounds.deadline),
         needs: fleet.needs.clone(),
@@ -463,7 +501,7 @@ pub async fn cmd_fleet_run(
     // channel state-change back and let it decide; `exec_result` only supplies
     // the error text and is the fallback when no StateChange was recorded.
     if let Some(job) = active_job.as_mut() {
-        job.run_id = Some(run_id);
+        job.run_id = Some(run_id.clone());
         job.finished_at = Some(chrono::Utc::now().to_rfc3339());
 
         // Authoritative: last StateChange `to` from this run's events.
@@ -520,6 +558,37 @@ pub async fn cmd_fleet_run(
         }
         super::jobs::save_job(mur_home, name, job)?;
     }
+    // ── Close the triage loop ──────────────────────────────────────────────
+    // Recorded on BOTH exit paths, and before the `?` below, because the runs
+    // that fail are precisely the ones triage was supposed to see coming.
+    // Recording only successes would score triage against the sample that
+    // makes it look best.
+    if triage_cfg.enabled {
+        let (price_per_1k, _) = super::loop_run::fleet_price_per_1k(mur_home);
+        let (spent, stop_reason, success) = match &exec_result {
+            Ok(o) => (
+                Some(super::loop_run::iteration_cost_usd(
+                    o.tokens_used,
+                    price_per_1k,
+                )),
+                // The DAG surfaces a guard stop through the step text, not a
+                // field of its own; `None` here means "no guard reported",
+                // and a cost overrun is still detected from `spent` vs cap.
+                None,
+                o.status != mur_common::pipeline::PipelineStatus::Failed,
+            ),
+            Err(_) => (None, None, false),
+        };
+        crate::executor::triage_gate::record_outcome(
+            mur_home,
+            &run_id,
+            spent,
+            triage_started.elapsed(),
+            stop_reason,
+            success,
+        );
+    }
+
     let out = exec_result?;
     if let Some(t) = out.output_text.filter(|t| !t.is_empty()) {
         println!("{t}");
