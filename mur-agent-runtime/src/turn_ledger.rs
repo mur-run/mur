@@ -264,6 +264,83 @@ impl TurnLedger {
             .collect()
     }
 
+    /// What a resumer needs, derived from the ledger rather than narrated.
+    ///
+    /// `graceful_exit` already asks the model to "summarize what you
+    /// completed … and the remaining steps", but that is prose: it is written
+    /// by the same model whose turn just hit a wall, it can round in its own
+    /// favour, and nothing checks it. The facts that actually decide whether
+    /// work can continue are all here already — which files are dirty, whether
+    /// anything was run against them, and what the last failure said. So they
+    /// are assembled, not requested.
+    ///
+    /// `None` for a clean stop: there is nothing to resume, and a handoff
+    /// printed under every turn is a handoff nobody reads.
+    ///
+    /// Ponytail: this deliberately does NOT try to say what to do next. It
+    /// reports state, because state is what the ledger knows; the next step is
+    /// a judgement, and a judgement asserted by the runtime would be the same
+    /// unchecked claim in a different voice.
+    pub fn handoff(&self) -> Option<String> {
+        if self.stop.is_clean() {
+            return None;
+        }
+        let mut out = String::from("resume from here:\n");
+
+        let changed = self.changed();
+        if changed.is_empty() {
+            out.push_str("  - nothing on disk changed this turn\n");
+        } else {
+            let mut files: Vec<&str> = Vec::new();
+            for a in &changed {
+                if !files.contains(&a.target.as_str()) {
+                    files.push(&a.target);
+                }
+            }
+            out.push_str("  - edited, not yet proven:\n");
+            for f in &files {
+                out.push_str(&format!("      {f}\n"));
+            }
+        }
+
+        let verified = self.verified();
+        if verified.is_empty() {
+            out.push_str("  - no gate run succeeded, so none of the above is verified\n");
+        } else {
+            out.push_str("  - last passing gate:\n");
+            for a in verified.iter().rev().take(1) {
+                out.push_str(&format!("      {}\n", a.target));
+            }
+        }
+
+        // The last failure is the single most load-bearing line for whoever
+        // picks this up: it is where the next turn starts.
+        if let Some(a) = self.blocked().last() {
+            let why = match &a.outcome {
+                Outcome::Denied(d) => format!("sandbox: {d}"),
+                Outcome::Failed(f) => clean_reason(f),
+                Outcome::Ok | Outcome::Running(_) => String::new(),
+            };
+            out.push_str(&format!("  - last failure: {} · {why}\n", a.target));
+        }
+
+        for a in self.running() {
+            if let Outcome::Running(job) = &a.outcome {
+                out.push_str(&format!(
+                    "  - still running, outcome unknown: {} ({job})\n",
+                    a.target
+                ));
+            }
+        }
+
+        out.push_str(&format!(
+            "  - stopped at {} after {} iterations",
+            self.stop.as_str(),
+            self.iterations
+        ));
+        Some(out)
+    }
+
     /// Does this turn warrant a settlement?
     ///
     /// A pure question, or a turn that only read files, does not: a three-row
@@ -482,6 +559,16 @@ pub fn render(ledger: &TurnLedger) -> String {
             out.push_str(&format!(" · {r}"));
         }
         out.push('\n');
+        // Directly under the "output may be incomplete" line, because that is
+        // the line that raises the question this answers: incomplete from
+        // where? Derived from the ledger, so the model's prose above cannot
+        // quietly disagree with it.
+        if let Some(h) = ledger.handoff() {
+            out.push('\n');
+            for line in h.lines() {
+                out.push_str(&format!("  {line}\n"));
+            }
+        }
     }
     out.push_str("```");
     out
@@ -894,6 +981,85 @@ mod tests {
             "naming a dead bound without naming the live ones leaves the \
              reader with nothing to do: {r}"
         );
+    }
+
+    /// A turn that hit a wall must hand back enough to RESUME it, and that
+    /// handoff has to be derived from the ledger — same reason the verified /
+    /// changed split is derived. `graceful_exit` asks the model to "summarize
+    /// … the remaining steps", which is exactly the narration this module
+    /// exists to replace: the one artefact a reader needs in order to continue
+    /// is the one nothing checks.
+    #[test]
+    fn a_wall_stop_hands_back_what_is_needed_to_resume() {
+        let mut l = TurnLedger {
+            stop: StopKind::Deadline,
+            iterations: 12,
+            agent: "dev".into(),
+            ..Default::default()
+        };
+        l.record(act("edit_file", "src/a.rs", Outcome::Ok));
+        l.record(act("write_file", "src/b.rs", Outcome::Ok));
+        l.record(act(
+            "bash",
+            "cargo test -p x",
+            Outcome::Failed("1 failed".into()),
+        ));
+
+        let h = l.handoff().expect("a deadline stop must produce a handoff");
+        // The three facts a resumer cannot reconstruct from prose: which files
+        // are dirty, what the last gate run actually said, and that nothing
+        // was proven.
+        assert!(h.contains("src/a.rs") && h.contains("src/b.rs"), "{h}");
+        assert!(h.contains("cargo test -p x"), "{h}");
+        assert!(h.contains("1 failed"), "{h}");
+        // It must not claim the work is done.
+        assert!(!h.contains("complete"), "{h}");
+    }
+
+    /// A handoff nothing renders is a handoff nobody gets. The card is the
+    /// only place the stop reason is already shown, so it is where the resume
+    /// state belongs — right under the line that says the output is partial.
+    #[test]
+    fn the_card_carries_the_handoff_on_a_wall_stop() {
+        let mut l = TurnLedger {
+            stop: StopKind::Stuck {
+                last_calls: "bash, bash, bash".into(),
+            },
+            iterations: 9,
+            agent: "dev".into(),
+            ..Default::default()
+        };
+        l.record(act("edit_file", "src/a.rs", Outcome::Ok));
+        let card = render(&l);
+        assert!(card.contains("resume from here:"), "{card}");
+        assert!(card.contains("src/a.rs"), "{card}");
+        assert!(
+            card.contains("no gate run succeeded"),
+            "the handoff must say the edits are unproven: {card}"
+        );
+        // Still fenced — the handoff is inside the code block, not loose
+        // Markdown that a renderer will reflow into one paragraph.
+        assert!(card.ends_with("```"), "{card}");
+    }
+
+    /// Negative control: a clean turn's card must stay free of resume noise.
+    #[test]
+    fn a_clean_card_carries_no_handoff() {
+        let mut l = TurnLedger::default();
+        l.record(act("edit_file", "src/a.rs", Outcome::Ok));
+        l.record(act("bash", "cargo test", Outcome::Ok));
+        let card = render(&l);
+        assert!(!card.contains("resume from here"), "{card}");
+    }
+
+    /// The negative control: a turn that ended on its own terms has nothing to
+    /// resume, and emitting a handoff there would train the reader to skip it.
+    #[test]
+    fn a_clean_stop_has_no_handoff() {
+        let mut l = TurnLedger::default();
+        l.record(act("edit_file", "src/a.rs", Outcome::Ok));
+        l.record(act("bash", "cargo test", Outcome::Ok));
+        assert!(l.handoff().is_none());
     }
 
     /// Negative control for the test above. Without it, "make every remedy
