@@ -8,6 +8,16 @@ use mur_common::AgentProfile as _AgentProfile;
 
 use super::{load_profile_for_edit, resolve_mur_home, save_profile};
 
+/// The sibling directories a lone `SKILL.md` may reference (issue #005).
+///
+/// An explicit list, not "everything next to the manifest": the source of a
+/// `mur agent skill add` is a single file whose parent directory belongs to
+/// the user, not to the skill. Copying that parent wholesale would sweep in
+/// unrelated files — and when the parent is `MUR_HOME`, into the destination
+/// being written. The GitHub/plugin paths differ because there the directory
+/// handed to `copy_bundle` IS the bundle.
+const BUNDLE_ASSET_DIRS: [&str; 3] = ["references", "scripts", "assets"];
+
 /// Resolve a user-supplied skill query against a profile's skill list.
 /// Tries exact match, then trailing path component, then trailing path component
 /// without the `.md` suffix. Returns the canonical stored id on success.
@@ -138,6 +148,29 @@ pub fn cmd_skill_add(name: &str, source: &str) -> Result<String> {
     let dest_dir = agent_home.join("skills").join(&skill_name);
     mur_common::skill::write_to_dir(&dest_dir, &manifest)
         .map_err(|e| anyhow!("write skill to {}: {e}", dest_dir.display()))?;
+
+    // #005: a skill is a bundle, not a lone manifest. Sibling assets next to
+    // the source (`references/`, `scripts/`, `assets/`) must travel with it,
+    // exactly as the GitHub and plugin-import paths already do — otherwise a
+    // manifest that references them installs into a broken skill.
+    //
+    // Only those three directories are copied, never the whole parent. The
+    // GitHub/plugin paths hand `copy_bundle` a directory that IS the bundle;
+    // here the source is a lone manifest whose parent may be anything at all
+    // — a downloads folder, or MUR_HOME itself, in which case copying the
+    // parent wholesale recurses into the destination it is writing.
+    if let Some(src_dir) = src.parent().filter(|d| !d.as_os_str().is_empty()) {
+        for asset in BUNDLE_ASSET_DIRS {
+            let from = src_dir.join(asset);
+            if !from.is_dir() {
+                continue;
+            }
+            let to = dest_dir.join(asset);
+            fs::create_dir_all(&to).with_context(|| format!("create {}", to.display()))?;
+            super::addon::import::copy_bundle(&from, &to)
+                .with_context(|| format!("copy skill assets from {}", from.display()))?;
+        }
+    }
 
     if report.has_blocking_findings() {
         eprintln!("⚠ {skill_name}: security findings — review before trusting");
