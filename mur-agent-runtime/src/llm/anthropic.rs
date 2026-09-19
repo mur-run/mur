@@ -477,6 +477,13 @@ fn rich_messages_to_anthropic(
                 }
                 push_coalesced(&mut convo, r, json!(parts));
             }
+            RichMessage::TurnLedger { turn, memory } => {
+                push_coalesced(
+                    &mut convo,
+                    "user",
+                    json!(crate::turn_ledger::render_memory(*turn, memory)),
+                );
+            }
         }
     }
 
@@ -1026,6 +1033,40 @@ mod tests {
         let result_content = result_msg["content"].as_array().unwrap();
         assert_eq!(result_content[0]["type"], "tool_result");
         assert_eq!(result_content[0]["tool_use_id"], "id1");
+    }
+
+    /// A ledger is one user text block, and it coalesces with the user
+    /// message that follows it — Anthropic 400s on consecutive user turns.
+    #[test]
+    fn turn_ledger_renders_as_user_text_coalesced_with_the_next_message() {
+        let memory = crate::turn_ledger::TurnMemory::empty(0);
+        let msgs = vec![
+            RichMessage::Text {
+                role: "user".into(),
+                content: "do it".into(),
+            },
+            RichMessage::Text {
+                role: "agent".into(),
+                content: "done".into(),
+            },
+            RichMessage::TurnLedger {
+                turn: 3,
+                memory: memory.clone(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "really?".into(),
+            },
+        ];
+        let (_, convo, _) = rich_messages_to_anthropic(&msgs);
+        assert_eq!(convo.len(), 3, "{convo:?}");
+        assert_eq!(convo[2]["role"], "user");
+        let blocks = convo[2]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        let rendered = crate::turn_ledger::render_memory(3, &memory);
+        assert_eq!(blocks[0]["text"], rendered);
+        assert!(rendered.starts_with(crate::turn_ledger::MEMORY_OPEN));
+        assert_eq!(blocks[1]["text"], "really?");
     }
 
     /// The whole point of the feature: an image on a tool result must reach

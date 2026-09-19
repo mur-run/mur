@@ -19,7 +19,11 @@ fn to_ollama_messages(messages: &[RichMessage]) -> Vec<serde_json::Value> {
             RichMessage::ImageText {
                 role, text, data, ..
             } => Some(json!({"role": role, "content": text, "images": [data]})),
-            _ => None,
+            RichMessage::TurnLedger { turn, memory } => Some(json!({
+                "role": "user",
+                "content": crate::turn_ledger::render_memory(*turn, memory),
+            })),
+            RichMessage::ToolUse { .. } | RichMessage::ToolResults { .. } => None,
         })
         .collect()
 }
@@ -346,5 +350,21 @@ mod tests {
         // sent in a shape the API would reject.
         let msgs = vec![RichMessage::ToolResults { results: vec![] }];
         assert_eq!(to_ollama_messages(&msgs).len(), 0);
+    }
+
+    #[test]
+    fn to_ollama_messages_renders_a_turn_ledger_as_user_text() {
+        let memory = crate::turn_ledger::TurnMemory::empty(0);
+        let msgs = vec![RichMessage::TurnLedger {
+            turn: 2,
+            memory: memory.clone(),
+        }];
+        let out = to_ollama_messages(&msgs);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(
+            out[0]["content"],
+            crate::turn_ledger::render_memory(2, &memory)
+        );
     }
 }
