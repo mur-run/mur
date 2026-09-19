@@ -219,6 +219,11 @@ pub fn build_runner(
     pending_approvals: Option<HitlApprovals>,
     notifier: Option<tokio::sync::mpsc::Sender<serde_json::Value>>,
     hitl_timeout_secs: u32,
+    // Issue #001: how far a turn is carried before handing back. Same HITL
+    // vocabulary as `hitl_timeout_secs`, and threaded the same way — through
+    // ONE `with_*` chain, so the CLI-spawn track cannot end up with a
+    // different continuation policy from the in-process one.
+    autonomy: mur_common::hitl::Autonomy,
     tools: Vec<std::sync::Arc<dyn crate::tools::ToolExecutor>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
     // The two `limits:` scopes this process can see (spec §3.4).
@@ -250,6 +255,7 @@ pub fn build_runner(
         .with_skills_cfg(skills_cfg)
         .with_memory_cfg(memory_cfg)
         .with_hitl_timeout_secs(hitl_timeout_secs)
+        .with_autonomy(autonomy)
         .with_tools(tools)
         .with_tools_policy(tools_policy)
         .with_effort(effort);
@@ -591,6 +597,7 @@ pub async fn build_provider_runner(
             pending_approvals.clone(),
             notifier.clone(),
             hitl_timeout_secs,
+            profile.inner.hitl.autonomy.unwrap_or_default(),
             tools.clone(),
             tools_policy.clone(),
             limits,
