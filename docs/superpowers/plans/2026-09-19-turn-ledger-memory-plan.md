@@ -1188,7 +1188,7 @@ cargo clippy --all --all-targets --no-deps -- -D warnings
 ```
 Expected: exit 0 for both. If `mur-core` needs `MUR_WEB_DIST`, set it as `build.sh` does (`MUR_WEB_DIST=$HOME/Projects/mur-web/dist`).
 
-- [ ] **Step 5.2 — live check on the concierge** (spec §7). Build and install (`./build.sh --install`), `mur agent restart mur`, then in `murmur`: one turn that runs a tool (`列出 ~/.mur/agents 有幾個目錄`) and one pure chat turn (`你好`). Then:
+- [x] **Step 5.2 — live check on the concierge** (spec §7). Build and install (`./build.sh --install`), `mur agent restart mur`, then in `murmur`: one turn that runs a tool (`列出 ~/.mur/agents 有幾個目錄`) and one pure chat turn (`你好`). Then:
 
 ```
 ls -t ~/.mur/agents/mur/conversations/*.json | head -2 | xargs -I{} sh -c 'echo {}; python3 -c "import json,sys; d=json.load(open(\"{}\")); print(json.dumps(d[-1], ensure_ascii=False)[:400])"'
@@ -1213,4 +1213,4 @@ Expected: the tool-using turn's file ends in `{"TurnLedger": {"turn": N, "memory
 - Tasks 1–4 were applied as one batch because a fresh worktree compiles for ~15 minutes; red-first was replaced by a negative control: with the ledger push removed, pair-trimming restored, and the YAML indentation broken, `the_turn_before_a_new_message_says_whether_it_ran_anything`, `history_is_trimmed_by_tokens_in_whole_turns` and `render_memory_lists_rows_with_quoted_strings` all failed, and all passed once restored.
 - `remember_turn_reads_the_ledger_part_and_counts_images` as written asserted the stored reply text equals `"prose"`; a `Failed` action warrants a settlement card, which `settle` appends, so the assertion is `starts_with("prose")`.
 - The sandboxed Bash tool hangs cargo's cmake build scripts (make blocks reading the jobserver FIFO); cargo was run with the sandbox off.
-- Task 5: workspace check + clippy clean; code PR #1412, spec/plan PR #1413. Step 5.2 (release install + concierge restart) deferred to the user — it restarts the running agent.
+- Task 5: workspace check + clippy clean; code PR #1412, spec/plan PR #1413. Step 5.2 done on the live concierge (runtime `9a8a6dc7`): the chat turn's file ends in `{"TurnLedger": {"turn": 2, "memory": {"attachments": 0, "narrative_only": true, "tools": []}}}`; a murmur turn that ran `ls -1d ~/.mur/agents/*/ | wc -l` ends in `narrative_only: false` with one `tool: bash … status: ok` row. `mur agent send` cannot approve tools (hitl_denied), so the tool turn was driven from murmur.
