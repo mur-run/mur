@@ -491,8 +491,11 @@ mod tests {
             .execute(serde_json::json!({"fleet": "deep-research", "goal": "why is the sky blue"}))
             .await
             .unwrap();
+        // The fake mur binary sleeps 5s, so a blocking dispatch cannot come
+        // back under that. 4s keeps the signal while leaving slack for a
+        // contended CI runner; 2s was measuring the runner, not the code.
         assert!(
-            t0.elapsed() < std::time::Duration::from_secs(2),
+            t0.elapsed() < std::time::Duration::from_secs(4),
             "returned in {:?}",
             t0.elapsed()
         );
