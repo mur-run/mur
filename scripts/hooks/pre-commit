@@ -1,0 +1,56 @@
+#!/bin/sh
+# Reject commits whose author email differs from the global git identity.
+#
+# A repo-local `user.email` override in .git/config silently produced 868
+# commits that GitHub could not attribute to any account, over roughly two
+# months, before anyone noticed. Fixing it cost a full-history rewrite
+# (2026-08-27: every SHA before that date changed). This hook is the five
+# lines that would have prevented it.
+#
+# Compares against the GLOBAL identity rather than a hardcoded address, so
+# there is nothing to keep in sync. A repo that genuinely needs a different
+# identity should drop this hook deliberately.
+want=$(git config --global user.email)
+got=$(git config user.email)
+
+[ -n "$want" ] || exit 0   # no global identity to compare against
+
+if [ "$got" != "$want" ]; then
+    echo "pre-commit: refusing to commit as '$got'."
+    echo "  The global git identity is '$want'."
+    echo "  A repo-local override is almost always a mistake:"
+    echo "      git config --unset user.email"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# rustfmt, matching the CI "Format" job exactly.
+#
+# `cargo fmt --all` covers the workspace only. mur-agent-gui and mur-hub-gui
+# are workspace-excluded (Cargo.toml [exclude]: Tauri shells kept out so a
+# plain `cargo build --workspace` does not drag in WebKitGTK/Cocoa/WebView2),
+# so --all silently skips them and an unformatted GUI file sails past the
+# hook and turns CI red later. #1404 died exactly this way.
+#
+# Mirrors .github/workflows/ci.yml:236-240 — keep the two in sync.
+# Only runs when the commit actually touches .rs files.
+git diff --cached --name-only --diff-filter=ACM | grep -q '\.rs$' || exit 0
+
+command -v cargo >/dev/null 2>&1 || exit 0
+
+fmt_fail=0
+cargo fmt --all -- --check || fmt_fail=1
+for manifest in mur-agent-gui/src-tauri/Cargo.toml mur-hub-gui/src-tauri/Cargo.toml; do
+    [ -f "$manifest" ] || continue
+    cargo fmt --manifest-path "$manifest" -- --check || fmt_fail=1
+done
+
+if [ "$fmt_fail" -ne 0 ]; then
+    echo "pre-commit: rustfmt found unformatted code (see the diff above)."
+    echo "  Fix everything CI checks with:"
+    echo "      cargo fmt --all"
+    echo "      cargo fmt --manifest-path mur-agent-gui/src-tauri/Cargo.toml"
+    echo "      cargo fmt --manifest-path mur-hub-gui/src-tauri/Cargo.toml"
+    echo "  Bypass deliberately with: git commit --no-verify"
+    exit 1
+fi
