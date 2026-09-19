@@ -520,7 +520,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ## Task 3 — workspace gate, live check, PR
 
-- [ ] **Step 3.1 — workspace gate.**
+- [x] **Step 3.1 — workspace gate.**
 
 ```
 MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo check --workspace --all-targets
@@ -528,14 +528,14 @@ MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo clippy --all --all-targets --no-d
 ```
 Expected: exit 0 both.
 
-- [ ] **Step 3.2 — live check.** `./build.sh --install` from the worktree, then `mur agent restart mur`. In murmur, send `把 #1402 的狀態用一句話講給我聽，不要用任何工具` and confirm a muted `⚠ unverified` row renders under the reply; then send `你好` and confirm no card. Then:
+- [x] **Step 3.2 — live check.** `./build.sh --install` from the worktree, then `mur agent restart mur`. In murmur, send `把 #1402 的狀態用一句話講給我聽，不要用任何工具` and confirm a muted `⚠ unverified` row renders under the reply; then send `你好` and confirm no card. Then:
 
 ```
 python3 -c "import json,glob,os; f=max(glob.glob(os.path.expanduser('~/.mur/agents/mur/conversations/*.json')),key=os.path.getmtime); d=json.load(open(f)); print(json.dumps(d[-2],ensure_ascii=False)[:300])"
 ```
 Expected for the first turn: the stored agent text ends with the `─ settlement ─ … ⚠ unverified …` fence.
 
-- [ ] **Step 3.3 — PR.** Base `main`, title `feat(ledger): unverified settlement row for a zero-tool turn that names external state`. Body: the spec link, the incident reply, the negative-control line, the live-check output. Ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- [x] **Step 3.3 — PR.** Base `main`, title `feat(ledger): unverified settlement row for a zero-tool turn that names external state`. Body: the spec link, the incident reply, the negative-control line, the live-check output. Ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 
 ---
 
@@ -553,3 +553,4 @@ Expected for the first turn: the stored agent text ends with the `─ settlement
 - Task 2 ran red-first as written: `no field claims_external_state`, `no method unverified_claim`, `cannot find value UNVERIFIED_ROW`, then the full crate at 1227 passed / 0 failed.
 - Negative control on the incident lock: with `|| self.unverified_claim()` replaced by `|| false`, `a_zero_tool_report_of_external_state_carries_the_unverified_card` failed at `task_runner.rs:3639` (the missing `─ settlement ─`); restored, it passes alongside `a_zero_tool_chat_reply_carries_no_card`.
 - No deviation from the plan's code. The sandboxed Bash tool still hangs cargo's cmake build scripts, so every cargo run had the sandbox off.
+- Task 3: workspace check + clippy clean; live check on runtime `1fe4cc93` — a zero-tool reply naming `#1402` rendered the `⚠ unverified` row with `claims_external_state: true`, `你好` rendered no card. Code PR #1415, spec/plan PR #1416.
