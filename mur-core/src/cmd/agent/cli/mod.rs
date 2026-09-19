@@ -45,6 +45,7 @@ mod stream_handler;
 mod suggest;
 mod term;
 mod theme;
+mod tool_tier;
 mod turn;
 mod ui;
 mod welcome;
