@@ -227,6 +227,21 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             "PATH".to_string(),
             augmented_path(std::env::var("PATH").ok().as_deref()),
         )];
+        // Issue #015: pass through HOME, NPM_CONFIG_CACHE, and other user-facing
+        // env vars that third-party tools (npm, vitest, cargo, etc.) expect.
+        // Without these, `npm` falls back to system defaults that the sandbox
+        // may not permit, and fails with EPERM on ~/.npm/_cacache.
+        for key in &[
+            "HOME",
+            "USER",
+            "NPM_CONFIG_CACHE",
+            "CARGO_HOME",
+            "PYTHONUSERBASE",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                env.push((key.to_string(), val));
+            }
+        }
         // Values leave the vault only here, straight into the child's
         // environment. The model never sees them: the pump masks every chunk
         // before it reaches the tail or the spool (D10).
@@ -587,6 +602,39 @@ mod tests {
         let result = augmented_path(None);
         let dirs: Vec<_> = std::env::split_paths(&result).collect();
         assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+    }
+
+    /// Issue #015: the child must inherit HOME and other user-facing env vars.
+    /// Without them, tools like npm fall back to system defaults that the
+    /// sandbox may not permit, and fail with EPERM on ~/.npm/_cacache.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn child_inherits_home_and_npm_env_vars() {
+        let t = make_tool();
+        // Verify that HOME is passed to the child.
+        let out = t
+            .execute(serde_json::json!({"command": "echo \"$HOME\""}))
+            .await
+            .unwrap();
+        let home_from_child = out.text.trim();
+        let home_from_parent = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(
+            home_from_child, home_from_parent,
+            "child should inherit HOME from parent"
+        );
+
+        // Verify that other npm-related vars are passed (if set in parent).
+        if let Ok(npm_cache) = std::env::var("NPM_CONFIG_CACHE") {
+            let out = t
+                .execute(serde_json::json!({"command": "echo \"$NPM_CONFIG_CACHE\""}))
+                .await
+                .unwrap();
+            let npm_from_child = out.text.trim();
+            assert_eq!(
+                npm_from_child, npm_cache,
+                "child should inherit NPM_CONFIG_CACHE"
+            );
+        }
     }
 
     #[cfg(unix)]
