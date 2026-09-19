@@ -88,8 +88,11 @@ impl ReadFileTool {
                 canonical.display()
             )));
         }
-        if crate::tools::fs_policy::under_any(&self.fs.read, canonical)
-            || crate::tools::fs_policy::under_any(&self.fs.write, canonical)
+        // `under_any_or_worktree` tries the literal grants first, then one
+        // derived hop for a worktree of a granted checkout (#004). Write
+        // implies read-back, so both lists are consulted.
+        if crate::tools::fs_policy::under_any_or_worktree(&self.fs.read, canonical)
+            || crate::tools::fs_policy::under_any_or_worktree(&self.fs.write, canonical)
         {
             return Ok(());
         }
