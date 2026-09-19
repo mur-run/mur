@@ -1180,7 +1180,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ## Task 5 — workspace gate, live check, PR
 
-- [ ] **Step 5.1 — workspace compiles with the new variant** (the variant is `pub`; `mur-core/src/cmd/agent_companion/preview.rs` constructs `RichMessage::Text` only, so no change is expected — verify):
+- [x] **Step 5.1 — workspace compiles with the new variant** (the variant is `pub`; `mur-core/src/cmd/agent_companion/preview.rs` constructs `RichMessage::Text` only, so no change is expected — verify):
 
 ```
 cargo check --workspace --all-targets
@@ -1195,7 +1195,7 @@ ls -t ~/.mur/agents/mur/conversations/*.json | head -2 | xargs -I{} sh -c 'echo 
 ```
 Expected: the tool-using turn's file ends in `{"TurnLedger": {"turn": N, "memory": {"attachments": 0, "narrative_only": false, "tools": [{"tool": "bash", …}]}}}`; the chat turn's ends in `… "narrative_only": true, "tools": []`.
 
-- [ ] **Step 5.3 — open the PR.** Base `main`, title `feat(runtime): remember each turn's tool ledger, not just its prose`. Body: link the spec, the incident (channel `01a0b304`, 2026-09-18 23:06Z), the negative-control line from Task 4, and the live-check output from Step 5.2. Ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- [x] **Step 5.3 — open the PR.** Base `main`, title `feat(runtime): remember each turn's tool ledger, not just its prose`. Body: link the spec, the incident (channel `01a0b304`, 2026-09-18 23:06Z), the negative-control line from Task 4, and the live-check output from Step 5.2. Ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 
 ---
 
@@ -1213,3 +1213,4 @@ Expected: the tool-using turn's file ends in `{"TurnLedger": {"turn": N, "memory
 - Tasks 1–4 were applied as one batch because a fresh worktree compiles for ~15 minutes; red-first was replaced by a negative control: with the ledger push removed, pair-trimming restored, and the YAML indentation broken, `the_turn_before_a_new_message_says_whether_it_ran_anything`, `history_is_trimmed_by_tokens_in_whole_turns` and `render_memory_lists_rows_with_quoted_strings` all failed, and all passed once restored.
 - `remember_turn_reads_the_ledger_part_and_counts_images` as written asserted the stored reply text equals `"prose"`; a `Failed` action warrants a settlement card, which `settle` appends, so the assertion is `starts_with("prose")`.
 - The sandboxed Bash tool hangs cargo's cmake build scripts (make blocks reading the jobserver FIFO); cargo was run with the sandbox off.
+- Task 5: workspace check + clippy clean; code PR #1412, spec/plan PR #1413. Step 5.2 (release install + concierge restart) deferred to the user — it restarts the running agent.
