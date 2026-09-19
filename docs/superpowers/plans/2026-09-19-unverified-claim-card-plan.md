@@ -43,7 +43,7 @@ pub fn claims_external_state(text: &str) -> bool;
 // re-exported as crate::turn_ledger::claims_external_state (Task 2)
 ```
 
-- [ ] **Step 1.1 — write the tests first (red).** Create `mur-agent-runtime/src/external_state.rs` with only the module doc and the test module:
+- [x] **Step 1.1 — write the tests first (red).** Create `mur-agent-runtime/src/external_state.rs` with only the module doc and the test module:
 
 ```rust
 //! Does a reply name external state — a SHA, a PR number, a test tally, a
@@ -125,14 +125,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 1.2 — declare the module and watch it fail.** In `mur-agent-runtime/src/lib.rs` add `pub mod external_state;` directly after `pub mod turn_memory;`. Run:
+- [x] **Step 1.2 — declare the module and watch it fail.** In `mur-agent-runtime/src/lib.rs` add `pub mod external_state;` directly after `pub mod turn_memory;`. Run:
 
 ```
 cargo nextest run -p mur-agent-runtime external_state
 ```
 Expected: compile error `cannot find function claims_external_state`.
 
-- [ ] **Step 1.3 — implement.** Insert between the module doc and `#[cfg(test)]`:
+- [x] **Step 1.3 — implement.** Insert between the module doc and `#[cfg(test)]`:
 
 ```rust
 use regex::Regex;
@@ -229,7 +229,7 @@ pub fn claims_external_state(text: &str) -> bool {
 }
 ```
 
-- [ ] **Step 1.4 — watch them pass, lint, commit.**
+- [x] **Step 1.4 — watch them pass, lint, commit.**
 
 ```
 cargo nextest run -p mur-agent-runtime external_state
@@ -260,7 +260,7 @@ pub const UNVERIFIED_ROW: &str =
     "  ⚠ unverified  no tool ran this turn — external state claims above were not checked\n";
 ```
 
-- [ ] **Step 2.1 — write the tests (red).** In `turn_ledger.rs` `mod tests`, after `settlement_triggers_on_change_failure_or_dirty_stop`:
+- [x] **Step 2.1 — write the tests (red).** In `turn_ledger.rs` `mod tests`, after `settlement_triggers_on_change_failure_or_dirty_stop`:
 
 ```rust
     #[test]
@@ -320,14 +320,14 @@ pub const UNVERIFIED_ROW: &str =
     }
 ```
 
-- [ ] **Step 2.2 — watch them fail.**
+- [x] **Step 2.2 — watch them fail.**
 
 ```
 cargo nextest run -p mur-agent-runtime names_external_state_warrants unverified_row claim_flag_is_additive
 ```
 Expected: compile error `no field claims_external_state`.
 
-- [ ] **Step 2.3 — implement.** Four edits in `turn_ledger.rs`.
+- [x] **Step 2.3 — implement.** Four edits in `turn_ledger.rs`.
 
 (a) After the existing `pub use crate::turn_memory::{ … };` re-export add:
 
@@ -431,7 +431,7 @@ and change the arm to:
     } else {
 ```
 
-- [ ] **Step 2.4 — `settle()` sets the flag.** In `task_runner.rs` replace the body of `fn settle`:
+- [x] **Step 2.4 — `settle()` sets the flag.** In `task_runner.rs` replace the body of `fn settle`:
 
 ```rust
 fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
@@ -462,7 +462,7 @@ fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
 }
 ```
 
-- [ ] **Step 2.5 — regression lock and negative control (write, run — green against 2.3/2.4).** In the `task_runner.rs` test module, after `the_turn_before_a_new_message_says_whether_it_ran_anything`:
+- [x] **Step 2.5 — regression lock and negative control (write, run — green against 2.3/2.4).** In the `task_runner.rs` test module, after `the_turn_before_a_new_message_says_whether_it_ran_anything`:
 
 ```rust
     /// 2026-09-18, channel 01a0b304: the reply below came from one model call
@@ -498,7 +498,7 @@ fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
     }
 ```
 
-- [ ] **Step 2.6 — run everything, lint, commit.**
+- [x] **Step 2.6 — run everything, lint, commit.**
 
 ```
 RUST_MIN_STACK=33554432 cargo nextest run -p mur-agent-runtime
@@ -544,3 +544,12 @@ Expected for the first turn: the stored agent text ends with the `─ settlement
 - **Spec coverage:** §2.1 rows and boundaries → Task 1 (each row has a positive; CJK, digits-only, over-long run, `#` rules, upper-case words, line-start markers each have a test); §2.2 clause → Task 2 (c); §2.3 → recorded in the module doc, not tested; §3 wording → `UNVERIFIED_ROW`, Task 2 (d); §4 field + `settle` → Task 2 (b), 2.4, serde test; §5 non-effects → the "tool ran" and "no claim" branches of the Task 2 test; §6 every listed test → Tasks 1–2; §7 → Task 3.
 - **Placeholders:** none.
 - **Cross-task names:** `claims_external_state`, `unverified_claim`, `UNVERIFIED_ROW`, `is_false`, `ledger_of`/`text_of` (existing, from #1412) — same spelling throughout.
+
+---
+
+## Execution notes (2026-09-19, branch `fix/unverified-claim-card`)
+
+- Task 1 ran red-first as written: `cannot find function claims_external_state` ×10, then 8/8 green.
+- Task 2 ran red-first as written: `no field claims_external_state`, `no method unverified_claim`, `cannot find value UNVERIFIED_ROW`, then the full crate at 1227 passed / 0 failed.
+- Negative control on the incident lock: with `|| self.unverified_claim()` replaced by `|| false`, `a_zero_tool_report_of_external_state_carries_the_unverified_card` failed at `task_runner.rs:3639` (the missing `─ settlement ─`); restored, it passes alongside `a_zero_tool_chat_reply_carries_no_card`.
+- No deviation from the plan's code. The sandboxed Bash tool still hangs cargo's cmake build scripts, so every cargo run had the sandbox off.
