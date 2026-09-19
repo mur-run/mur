@@ -57,6 +57,18 @@ pub struct VerdictRecord {
     pub prefilter: Vec<String>,
     pub budget_deadline_secs: Option<u64>,
     pub budget_cost_usd: Option<f64>,
+    /// Did this decision actually stop the dispatch?
+    ///
+    /// This is the field that buys back the counterfactual `held_back` throws
+    /// away. In shadow mode triage records `split`/`ask_human`/`reject` and
+    /// then dispatches anyway, so the run happens and we learn whether the
+    /// hold-back would have been right. Enforced, the run never happens and
+    /// nothing can be learned from it.
+    ///
+    /// `#[serde(default)]` = false, which is the honest reading of every line
+    /// written before this field existed: those were shadow records.
+    #[serde(default)]
+    pub enforced: bool,
 }
 
 /// What the run actually did.
@@ -101,7 +113,7 @@ fn decision_str(d: &Decision) -> &'static str {
 /// Note the `basis` split: a `Degraded` proceed is recorded as `degraded`, not
 /// as a model verdict. Scoring "the model was down so we ran it" as a correct
 /// prediction would make the miss rate look better every time the model broke.
-pub fn verdict_record(task_id: &str, o: &TriageOutcome) -> VerdictRecord {
+pub fn verdict_record(task_id: &str, o: &TriageOutcome, enforced: bool) -> VerdictRecord {
     let (basis, complexity, confidence) = match &o.basis {
         Basis::NoRuleFired => ("no_rule_fired", None, None),
         Basis::Verdict(v) => ("verdict", Some(v.complexity), Some(v.confidence)),
@@ -119,6 +131,7 @@ pub fn verdict_record(task_id: &str, o: &TriageOutcome) -> VerdictRecord {
         },
         budget_deadline_secs: o.limits.deadline.value.map(|d| d.as_secs()),
         budget_cost_usd: o.limits.cost_usd.value,
+        enforced,
     }
 }
 
@@ -156,8 +169,17 @@ pub struct Calibration {
     pub proceeded_by_default: usize,
     /// Of those defaults, how many overran. Untriaged damage.
     pub default_overran: usize,
-    /// `split` / `ask_human` / `reject`. Unfalsifiable by construction.
+    /// `split` / `ask_human` / `reject` that were ENFORCED — the dispatch was
+    /// actually stopped. Unfalsifiable by construction: the run never happened,
+    /// so nobody can say whether it would have been fine.
     pub held_back: usize,
+    /// Hold-backs recorded in shadow mode: triage said stop, the dispatch went
+    /// ahead anyway. These DO have a counterfactual, which is the entire
+    /// reason shadow mode exists.
+    pub shadow_held_back: usize,
+    /// Of those shadow hold-backs, how many actually hit a bound — triage was
+    /// right to want to stop them.
+    pub shadow_held_back_overran: usize,
     /// Verdicts with no outcome line — crashed, still running, or a lost
     /// write. Reported so a shrinking sample is visible rather than flattering.
     pub unpaired_verdicts: usize,
@@ -175,16 +197,39 @@ impl Calibration {
         Some(self.proceeded_overran as f64 / self.proceeded as f64)
     }
 
+    /// Of the hold-backs that were allowed to run anyway, the share that hit a
+    /// bound — how often triage was RIGHT to want to stop them.
+    ///
+    /// This is the only number that can ever justify enforcing. A low value
+    /// means triage is stopping work that would have been fine, and enforcing
+    /// it would cost more than it saves. `None` until shadow mode has run
+    /// something, for the same reason `miss_rate` is optional.
+    pub fn shadow_precision(&self) -> Option<f64> {
+        if self.shadow_held_back == 0 {
+            return None;
+        }
+        Some(self.shadow_held_back_overran as f64 / self.shadow_held_back as f64)
+    }
+
     /// One line for a human. Says "not enough data" rather than "0%".
     pub fn summary(&self) -> String {
+        let shadow = match self.shadow_precision() {
+            None => String::new(),
+            Some(p) => format!(
+                "; shadow hold-backs {}/{} would have overrun ({:.0}%)",
+                self.shadow_held_back_overran,
+                self.shadow_held_back,
+                p * 100.0
+            ),
+        };
         match self.miss_rate() {
             None => format!(
-                "triage calibration: no judged proceeds yet ({} held back, {} by default, {} unpaired)",
+                "triage calibration: no judged proceeds yet ({} held back, {} by default, {} unpaired){shadow}",
                 self.held_back, self.proceeded_by_default, self.unpaired_verdicts
             ),
             Some(r) => format!(
                 "triage calibration: {}/{} judged proceeds overran ({:.0}%); \
-                 {} held back (no counterfactual), {}/{} defaults overran, {} unpaired",
+                 {} held back (no counterfactual), {}/{} defaults overran, {} unpaired{shadow}",
                 self.proceeded_overran,
                 self.proceeded,
                 r * 100.0,
@@ -223,7 +268,17 @@ pub fn calibrate(events: impl IntoIterator<Item = CalibrationEvent>) -> Calibrat
         };
         c.paired += 1;
         if v.decision != "proceed" {
-            c.held_back += 1;
+            // A hold-back that was enforced has no counterfactual and stays
+            // out of every rate. A hold-back in shadow mode DOES have one:
+            // the run happened, so we can see whether it would have overrun.
+            if v.enforced {
+                c.held_back += 1;
+            } else {
+                c.shadow_held_back += 1;
+                if overran(o, v.budget_cost_usd) {
+                    c.shadow_held_back_overran += 1;
+                }
+            }
             continue;
         }
         let over = overran(o, v.budget_cost_usd);
@@ -263,9 +318,16 @@ impl CalibrationLog {
     /// but the caller must treat a failure here as non-fatal, for the same
     /// reason `triage` never returns `Err`: losing the ability to measure must
     /// not become a way to stop the fleet.
-    pub fn record_verdict(&mut self, task_id: &str, o: &TriageOutcome) -> anyhow::Result<()> {
+    pub fn record_verdict(
+        &mut self,
+        task_id: &str,
+        o: &TriageOutcome,
+        enforced: bool,
+    ) -> anyhow::Result<()> {
         self.ledger
-            .append(&CalibrationEvent::Verdict(verdict_record(task_id, o)))
+            .append(&CalibrationEvent::Verdict(verdict_record(
+                task_id, o, enforced,
+            )))
     }
 
     pub fn record_outcome(&mut self, o: OutcomeRecord) -> anyhow::Result<()> {
@@ -318,7 +380,24 @@ mod tests {
         }
     }
 
+    /// An ENFORCED verdict: triage's decision actually stopped the dispatch.
     fn v_rec(id: &str, decision: &str, basis: &str, cap: Option<f64>) -> CalibrationEvent {
+        v_rec_mode(id, decision, basis, cap, true)
+    }
+
+    /// A SHADOW verdict: triage recorded its decision and the dispatch went
+    /// ahead regardless.
+    fn v_shadow(id: &str, decision: &str, basis: &str, cap: Option<f64>) -> CalibrationEvent {
+        v_rec_mode(id, decision, basis, cap, false)
+    }
+
+    fn v_rec_mode(
+        id: &str,
+        decision: &str,
+        basis: &str,
+        cap: Option<f64>,
+        enforced: bool,
+    ) -> CalibrationEvent {
         CalibrationEvent::Verdict(VerdictRecord {
             task_id: id.into(),
             decision: decision.into(),
@@ -328,6 +407,7 @@ mod tests {
             prefilter: vec![],
             budget_deadline_secs: Some(600),
             budget_cost_usd: cap,
+            enforced,
         })
     }
 
@@ -420,6 +500,95 @@ mod tests {
         );
     }
 
+    /// Shadow mode's whole purpose: a hold-back that was allowed to run gives
+    /// back the counterfactual an enforced hold-back destroys.
+    #[test]
+    fn a_shadow_hold_back_that_overran_proves_triage_was_right() {
+        let c = calibrate([
+            v_shadow("t1", "split", "verdict", Some(1.0)),
+            o_rec("t1", Some(0.1), Some("deadline")),
+        ]);
+        assert_eq!(c.shadow_held_back, 1);
+        assert_eq!(c.shadow_held_back_overran, 1);
+        assert_eq!(c.shadow_precision(), Some(1.0));
+        assert_eq!(c.held_back, 0, "shadow is not enforced");
+    }
+
+    /// The expensive case: triage wanted to stop work that would have been
+    /// fine. Enforcing on this evidence would destroy value, so it must be
+    /// visible rather than averaged away.
+    #[test]
+    fn a_shadow_hold_back_that_ran_clean_counts_against_enforcing() {
+        let c = calibrate([
+            v_shadow("t1", "ask_human", "verdict", Some(1.0)),
+            o_rec("t1", Some(0.2), None),
+            v_shadow("t2", "split", "verdict", Some(1.0)),
+            o_rec("t2", Some(0.1), None),
+        ]);
+        assert_eq!(c.shadow_held_back, 2);
+        assert_eq!(c.shadow_held_back_overran, 0);
+        assert_eq!(
+            c.shadow_precision(),
+            Some(0.0),
+            "both would have been fine — enforcing would have cost two runs"
+        );
+    }
+
+    /// Shadow and enforced hold-backs must never be pooled: only one of them
+    /// has an observable outcome.
+    #[test]
+    fn enforced_hold_backs_never_enter_the_shadow_numbers() {
+        let c = calibrate([
+            v_rec("t1", "reject", "verdict", Some(1.0)),
+            o_rec("t1", Some(0.0), None),
+            v_shadow("t2", "reject", "verdict", Some(1.0)),
+            o_rec("t2", Some(0.1), Some("stuck")),
+        ]);
+        assert_eq!(c.held_back, 1, "enforced stays unfalsifiable");
+        assert_eq!(c.shadow_held_back, 1);
+        assert_eq!(c.shadow_held_back_overran, 1);
+    }
+
+    /// No shadow sample is not a 0% precision — the same empty-sample honesty
+    /// `miss_rate` already keeps.
+    #[test]
+    fn no_shadow_sample_is_none_not_zero_precision() {
+        let c = calibrate([
+            v_rec("t1", "split", "verdict", Some(1.0)),
+            o_rec("t1", Some(0.0), None),
+        ]);
+        assert_eq!(c.shadow_precision(), None);
+    }
+
+    /// A shadow hold-back is NOT a proceed: it must stay out of `miss_rate`,
+    /// whose denominator is judged proceeds only.
+    #[test]
+    fn a_shadow_hold_back_is_not_counted_as_a_proceed() {
+        let c = calibrate([
+            v_shadow("t1", "split", "verdict", Some(1.0)),
+            o_rec("t1", Some(0.1), Some("deadline")),
+        ]);
+        assert_eq!(c.proceeded, 0);
+        assert_eq!(c.proceeded_overran, 0);
+        assert_eq!(c.miss_rate(), None);
+    }
+
+    /// Old ledger lines predate `enforced`. They were written when triage
+    /// could not stop anything, so reading them as shadow is the truth; the
+    /// serde default must encode exactly that.
+    #[test]
+    fn a_ledger_line_without_the_field_reads_as_shadow() {
+        let line = r#"{"kind":"verdict","task_id":"t1","decision":"split","basis":"verdict","complexity":null,"confidence":null,"prefilter":[],"budget_deadline_secs":600,"budget_cost_usd":1.0}"#;
+        let e: CalibrationEvent = serde_json::from_str(line).expect("old line must still parse");
+        match e {
+            CalibrationEvent::Verdict(v) => assert!(
+                !v.enforced,
+                "a line written before triage could enforce is a shadow record"
+            ),
+            _ => panic!("expected a verdict"),
+        }
+    }
+
     /// An empty sample must not read as a perfect score.
     #[test]
     fn nothing_measured_is_none_not_zero() {
@@ -505,7 +674,7 @@ mod tests {
             prefilter: Prefilter::Consult(vec!["budget is thin"]),
             limits: limits(Some(0.50)),
         };
-        let r = verdict_record("task-7", &o);
+        let r = verdict_record("task-7", &o, false);
         assert_eq!(r.task_id, "task-7");
         assert_eq!(r.decision, "proceed");
         assert_eq!(r.basis, "verdict");
@@ -523,7 +692,7 @@ mod tests {
             prefilter: Prefilter::Consult(vec!["budget is thin"]),
             limits: limits(None),
         };
-        let r = verdict_record("t", &o);
+        let r = verdict_record("t", &o, false);
         assert_eq!(r.basis, "degraded");
         assert_eq!(r.confidence, None);
         assert_eq!(r.complexity, None);
@@ -541,7 +710,7 @@ mod tests {
             prefilter: Prefilter::Consult(vec!["spans more than one crate"]),
             limits: limits(Some(1.0)),
         };
-        log.record_verdict("t1", &o).unwrap();
+        log.record_verdict("t1", &o, false).unwrap();
         log.record_outcome(OutcomeRecord {
             task_id: "t1".into(),
             spent_usd: Some(0.3),
