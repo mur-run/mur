@@ -777,7 +777,7 @@ mur
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source)
 ├── monitor      add · list · show · cancel · retry   (durable monitors for work that outlives the turn: CI runs, MUR runs, subprocesses)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)
-├── deep-research  setup · status · ask   (web research with wizard UX)
+├── deep-research  setup · secret · status · ask   (web research with wizard UX)
 ├── skill        install · search · show · doctor · generate · suggest · evolve · recombine ·
 │                publish · audit · trust · exchange · drafts · eval …
 ├── notes        create · search · list · show
@@ -813,6 +813,41 @@ mur deep-research "question"   # preflight (start workers, re-pin gateway) + gua
 ```
 
 `provision` / `run` remain as the flag-based advanced path. Egress is only ever granted in `setup`/`provision --grant-egress` (explicit consent); the smart run never touches grants.
+
+#### Search provider keys
+
+Research search works with no key at all (it scrapes DuckDuckGo's HTML
+endpoint). A provider key is a reliability upgrade — DDG rate-limits a busy
+fleet from one IP and answers with an anti-bot challenge instead of results.
+
+```
+mur deep-research secret --brave       # Brave Search (default if no flag given)
+mur deep-research secret --tavily      # Tavily
+mur deep-research secret --serpapi     # SerpApi
+mur deep-research secret --firecrawl   # Firecrawl
+mur deep-research secret --list        # which providers have a key (never prints one)
+mur deep-research secret --tavily --clear
+```
+
+The key is read from the terminal **without echo**, or from stdin when piped
+(`echo "$KEY" | mur deep-research secret --tavily`). It is never accepted as a
+command-line argument — argv is visible to every process via `ps` and lands in
+your shell history.
+
+What gets stored where: the key goes into the **OS keychain**, and only a
+reference to it (`keychain:mur/tavily`) is written to
+`~/.mur/config.yaml` under `research_gateway.tavily_api_key_ref`. The secret
+itself never enters the file, so the config stays safe to sync, diff and paste
+into a bug report.
+
+Configure more than one and search tries them in order — Brave first, then
+Tavily, SerpApi, Firecrawl — falling through to the next on any failure, and
+finally to keyless DuckDuckGo. A bad key degrades search; it never blacks it
+out. Each provider also honours an env override
+(`MUR_RESEARCH_BRAVE_KEY`, `MUR_RESEARCH_TAVILY_KEY`, …) which wins over
+config.yaml.
+
+Restart any running research workers for a new key to take effect.
 
 Inside a murmur chat the same three verbs are a slash command, and they render on
 your screen without costing the agent a turn — the transcript it sees stays clean:

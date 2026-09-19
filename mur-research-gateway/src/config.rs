@@ -19,6 +19,7 @@
 
 use crate::browser::BrowserCfg;
 use mur_common::agent::ENV_MCP_DENY_HOSTS as ENV_DENY_HOSTS;
+use mur_common::research_provider::{PROVIDER_PREFERENCE, SearchProvider};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -97,6 +98,13 @@ pub const DEFAULT_OBSCURA_WORKER_RELATIVE_PATH: &str = "aura/obscura-worker";
 /// HTML endpoint; absent, it falls back to DDG (zero-config, keyless). Brave's
 /// free tier (2k queries/mo) covers a personal deep-research user at $0 — the
 /// key is a reliability upgrade, never a hard requirement.
+///
+/// Every provider's env var is now DERIVED from its slug
+/// (`SearchProvider::env_var`), so nothing reads this constant at runtime.
+/// It survives as the literal, pre-existing spelling that
+/// `brave_env_var_spelling_is_unchanged` pins the derivation against — if the
+/// two ever diverge, every shipped `MUR_RESEARCH_BRAVE_KEY` stops being read.
+#[cfg(test)]
 const ENV_BRAVE_KEY: &str = "MUR_RESEARCH_BRAVE_KEY";
 const ENV_FETCH_TIMEOUT_SECS: &str = "MUR_RESEARCH_TIMEOUT_SECS";
 const ENV_BROWSER_TIMEOUT_SECS: &str = "MUR_RESEARCH_BROWSER_TIMEOUT_SECS";
@@ -122,11 +130,28 @@ pub struct GatewayConfig {
     pub search_limit: usize,
     /// Max characters of `fetch` page text returned to the worker; `0` = no cap.
     pub max_fetch_chars: usize,
-    /// Brave Search API token; `Some` → `search` uses Brave, `None` → DDG.
-    pub brave_api_key: Option<String>,
+    /// Configured search-provider keys, in [`PROVIDER_PREFERENCE`] order.
+    /// Empty → `search` uses the keyless DuckDuckGo tier.
+    pub search_keys: Vec<(SearchProvider, String)>,
     /// Tier-1 search endpoint (DuckDuckGo-shaped HTML). See
     /// [`DEFAULT_SEARCH_ENDPOINT`].
     pub search_endpoint: String,
+}
+
+impl GatewayConfig {
+    /// The configured key for `provider`, if any.
+    ///
+    /// Runtime search walks `search_keys` in order rather than asking for one
+    /// provider, so only the tests call this — but they are what pin the
+    /// per-provider precedence (env > `_ref` > plaintext), which is the part
+    /// most likely to break silently.
+    #[cfg(test)]
+    pub fn key_for(&self, provider: SearchProvider) -> Option<&str> {
+        self.search_keys
+            .iter()
+            .find(|(p, _)| *p == provider)
+            .map(|(_, k)| k.as_str())
+    }
 }
 
 /// Raw `research_gateway:` YAML shape. Every field is optional/defaulted so
@@ -141,8 +166,6 @@ struct GatewayConfigYaml {
     browser_timeout_secs: Option<u64>,
     search_limit: Option<usize>,
     max_fetch_chars: Option<usize>,
-    brave_api_key: Option<String>,
-    brave_api_key_ref: Option<String>,
     agent_browser_bin: Option<String>,
     lightpanda_path: Option<String>,
     chrome_stealth_args: Option<String>,
@@ -151,33 +174,58 @@ struct GatewayConfigYaml {
     search_endpoint: Option<String>,
 }
 
-/// Resolve `research_gateway.brave_api_key_ref` — a mur-common `SecretRef`
+/// Resolve one provider's key from, in order: its env var, its
+/// `<slug>_api_key_ref` SecretRef, its legacy `<slug>_api_key` plaintext.
+///
+/// Driven by the provider's slug rather than a typed field per provider, so
+/// adding a backend to `SearchProvider` needs no change here and the write
+/// side (`mur deep-research secret`) cannot spell a key differently from the
+/// read side.
+fn resolve_provider_key(
+    provider: SearchProvider,
+    raw: Option<&serde_yaml::Value>,
+) -> Option<String> {
+    let field = |name: &str| -> Option<String> {
+        raw.and_then(|v| v.get(name))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty())
+    };
+    non_empty_env(&provider.env_var())
+        .or_else(|| resolve_key_ref(provider, field(&provider.config_key_ref()).as_deref()))
+        .or_else(|| field(&provider.config_key_plain()))
+}
+
+/// Resolve `research_gateway.<slug>_api_key_ref` — a mur-common `SecretRef`
 /// string (`keychain:mur/brave`, `env:BRAVE_KEY`, `file:...`, `cmd:...`) —
 /// to the actual key, so the secret never has to sit in config.yaml as
-/// plaintext. Precedence sits between the `MUR_RESEARCH_BRAVE_KEY` env
-/// override and the legacy plaintext `brave_api_key` field. An unparseable
-/// or unresolvable ref warns and falls through to plaintext rather than
-/// silently disabling Brave search.
-fn resolve_brave_key_ref(raw_ref: Option<&str>) -> Option<String> {
+/// plaintext. Precedence sits between the env override and the legacy
+/// plaintext field. An unparseable or unresolvable ref warns and falls
+/// through to plaintext rather than silently disabling the provider.
+fn resolve_key_ref(provider: SearchProvider, raw_ref: Option<&str>) -> Option<String> {
     let raw_ref = raw_ref.filter(|s| !s.trim().is_empty())?;
     match raw_ref.parse::<mur_common::secret::SecretRef>() {
         Ok(sref) => {
             let resolved = sref.resolve_to_string_blocking().filter(|s| !s.is_empty());
             if resolved.is_none() {
                 tracing::warn!(
+                    provider = provider.slug(),
                     r#ref = raw_ref,
-                    "brave_api_key_ref did not resolve to a secret; \
-                     falling back to plaintext brave_api_key (if any)"
+                    "{}_api_key_ref did not resolve to a secret; \
+                     falling back to plaintext {}_api_key (if any)",
+                    provider.slug(),
+                    provider.slug()
                 );
             }
             resolved
         }
         Err(e) => {
             tracing::warn!(
+                provider = provider.slug(),
                 r#ref = raw_ref,
                 error = %e,
-                "brave_api_key_ref is not a valid SecretRef; \
-                 falling back to plaintext brave_api_key (if any)"
+                "{}_api_key_ref is not a valid SecretRef; falling back to plaintext",
+                provider.slug()
             );
             None
         }
@@ -213,9 +261,11 @@ pub fn load(mur_home: &Path) -> GatewayConfig {
 /// env overrides. `mur_home` is used only to resolve the default Lightpanda
 /// path.
 pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
-    let raw: GatewayConfigYaml = serde_yaml::from_str::<serde_yaml::Value>(yaml)
+    let raw_value: Option<serde_yaml::Value> = serde_yaml::from_str::<serde_yaml::Value>(yaml)
         .ok()
-        .and_then(|v| v.get("research_gateway").cloned())
+        .and_then(|v| v.get("research_gateway").cloned());
+    let raw: GatewayConfigYaml = raw_value
+        .clone()
         .and_then(|v| serde_yaml::from_value(v).ok())
         .unwrap_or_default();
 
@@ -238,9 +288,13 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         .or(raw.max_fetch_chars)
         .unwrap_or(DEFAULT_MAX_FETCH_CHARS);
 
-    let brave_api_key = non_empty_env(ENV_BRAVE_KEY)
-        .or_else(|| resolve_brave_key_ref(raw.brave_api_key_ref.as_deref()))
-        .or_else(|| raw.brave_api_key.filter(|s| !s.is_empty()));
+    // Walk providers in preference order so `search` tries Brave first — an
+    // existing install with a Brave key must never be silently moved onto a
+    // different backend by this change.
+    let search_keys: Vec<(SearchProvider, String)> = PROVIDER_PREFERENCE
+        .iter()
+        .filter_map(|&p| resolve_provider_key(p, raw_value.as_ref()).map(|k| (p, k)))
+        .collect();
 
     let search_endpoint = non_empty_env(ENV_SEARCH_ENDPOINT)
         .or(raw.search_endpoint)
@@ -291,7 +345,7 @@ pub fn load_from_yaml(yaml: &str, mur_home: &Path) -> GatewayConfig {
         },
         search_limit,
         max_fetch_chars,
-        brave_api_key,
+        search_keys,
         search_endpoint,
     }
 }
@@ -361,6 +415,15 @@ fn env_usize(name: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
+    /// Every provider's env var, config key and keychain ref is derived from
+    /// its slug now. If that derivation ever stops reproducing the literal
+    /// `MUR_RESEARCH_BRAVE_KEY` that shipped installs already export, their
+    /// Brave key silently stops being read — so pin the two together.
+    #[test]
+    fn brave_env_var_spelling_is_unchanged() {
+        assert_eq!(SearchProvider::Brave.env_var(), ENV_BRAVE_KEY);
+    }
+
     #[test]
     fn brave_key_ref_resolves_and_beats_plaintext() {
         let mut envg = mur_common::test_env::EnvGuard::hold();
@@ -368,18 +431,90 @@ mod tests {
         envg.set_var("TEST_BRAVE_REF_KEY", "from-ref");
         let yaml = "research_gateway:\n  brave_api_key: \"plain\"\n  brave_api_key_ref: \"env:TEST_BRAVE_REF_KEY\"\n";
         let c = load_from_yaml(yaml, Path::new("/nonexistent"));
-        assert_eq!(c.brave_api_key.as_deref(), Some("from-ref"));
+        assert_eq!(c.key_for(SearchProvider::Brave), Some("from-ref"));
 
         // Unresolvable ref falls through to plaintext instead of disabling Brave.
         envg.unset_var("TEST_BRAVE_REF_KEY");
         let c = load_from_yaml(yaml, Path::new("/nonexistent"));
-        assert_eq!(c.brave_api_key.as_deref(), Some("plain"));
+        assert_eq!(c.key_for(SearchProvider::Brave), Some("plain"));
 
         // Invalid ref string also falls through.
         let yaml_bad =
             "research_gateway:\n  brave_api_key: \"plain\"\n  brave_api_key_ref: \"bogus\"\n";
         let c = load_from_yaml(yaml_bad, Path::new("/nonexistent"));
-        assert_eq!(c.brave_api_key.as_deref(), Some("plain"));
+        assert_eq!(c.key_for(SearchProvider::Brave), Some("plain"));
+    }
+
+    /// The three new providers must read their keys through exactly the same
+    /// three-step precedence Brave already had — env, then `_ref`, then
+    /// plaintext — without a typed YAML field per provider.
+    #[test]
+    fn every_provider_resolves_ref_and_plaintext() {
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        for p in SearchProvider::all() {
+            envg.unset_var(p.env_var());
+        }
+        envg.set_var("TEST_TAVILY_REF", "tavily-from-ref");
+        let yaml = "\
+research_gateway:
+  tavily_api_key_ref: \"env:TEST_TAVILY_REF\"
+  serpapi_api_key: \"serp-plain\"
+  firecrawl_api_key: \"fire-plain\"
+";
+        let c = load_from_yaml(yaml, Path::new("/nonexistent"));
+        assert_eq!(c.key_for(SearchProvider::Tavily), Some("tavily-from-ref"));
+        assert_eq!(c.key_for(SearchProvider::SerpApi), Some("serp-plain"));
+        assert_eq!(c.key_for(SearchProvider::Firecrawl), Some("fire-plain"));
+        // Unconfigured provider stays absent rather than resolving to "".
+        assert_eq!(c.key_for(SearchProvider::Brave), None);
+        envg.unset_var("TEST_TAVILY_REF");
+    }
+
+    /// Env beats both YAML forms, for a provider that never had an env var
+    /// before this change.
+    #[test]
+    fn provider_env_var_beats_yaml() {
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_RESEARCH_TAVILY_KEY", "from-env");
+        let c = load_from_yaml(
+            "research_gateway:\n  tavily_api_key: \"plain\"\n",
+            Path::new("/nonexistent"),
+        );
+        assert_eq!(c.key_for(SearchProvider::Tavily), Some("from-env"));
+        envg.unset_var("MUR_RESEARCH_TAVILY_KEY");
+    }
+
+    /// Brave must stay FIRST in the list `search` walks. An install that
+    /// already has a Brave key must not be silently moved onto a newly added
+    /// backend just because three more providers now exist.
+    #[test]
+    fn brave_is_tried_before_newer_providers() {
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        for p in SearchProvider::all() {
+            envg.unset_var(p.env_var());
+        }
+        let yaml = "\
+research_gateway:
+  firecrawl_api_key: \"fire\"
+  brave_api_key: \"brave\"
+  tavily_api_key: \"tav\"
+";
+        let c = load_from_yaml(yaml, Path::new("/nonexistent"));
+        let order: Vec<_> = c.search_keys.iter().map(|(p, _)| *p).collect();
+        assert_eq!(order.first(), Some(&SearchProvider::Brave), "{order:?}");
+        assert_eq!(order.len(), 3);
+    }
+
+    /// No keys configured at all stays the zero-config default: an empty list,
+    /// which `search` reads as "go straight to keyless DuckDuckGo".
+    #[test]
+    fn no_configured_keys_means_keyless_search() {
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        for p in SearchProvider::all() {
+            envg.unset_var(p.env_var());
+        }
+        let c = load_from_yaml("", Path::new("/nonexistent"));
+        assert!(c.search_keys.is_empty());
     }
 
     // Brief's exact Step-1 failing test.
