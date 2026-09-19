@@ -1,0 +1,21 @@
+schema = 1
+
+[[binary]]
+name = "mur"
+package = "mur-core"
+
+[[binary]]
+name = "mur-mcp-server"
+package = "mur-mcp-server"
+
+[[binary]]
+name = "murmurd"
+package = "mur-daemon"
+
+[[binary]]
+name = "mur-agent-runtime"
+package = "mur-agent-runtime"
+
+[[binary]]
+name = "mur-research-gateway"
+package = "mur-research-gateway"
