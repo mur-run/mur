@@ -7,10 +7,10 @@
 use crate::detail::{AgentDetail, get_agent_detail};
 use mur_common::agent::ToolPolicy;
 use mur_core::cmd::agent::{
-    cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_allow_read, cmd_perm_allow_spawn, cmd_perm_allow_spawn_dir,
-    cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host, cmd_perm_deny_path, cmd_perm_deny_port,
-    cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir, cmd_perm_remove_path, cmd_perm_set_mode,
-    cmd_perm_set_tool,
+    cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_allow_read, cmd_perm_allow_spawn,
+    cmd_perm_allow_spawn_dir, cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host,
+    cmd_perm_deny_path, cmd_perm_deny_port, cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir,
+    cmd_perm_remove_path, cmd_perm_set_mode, cmd_perm_set_tool,
 };
 
 fn err(e: anyhow::Error) -> String {
