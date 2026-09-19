@@ -82,7 +82,11 @@ impl ReadFileTool {
                 canonical.display()
             )));
         }
-        if crate::tools::fs_policy::under_any(&self.fs.deny, canonical) {
+        if crate::tools::fs_policy::under_any_read_deny(
+            &self.fs.deny,
+            canonical,
+            self.chain.agent_self_home(),
+        ) {
             return Err(ToolError::Execution(format!(
                 "path denied by entitlement: {}",
                 canonical.display()
@@ -463,5 +467,69 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::Execution(_)));
+    }
+
+    /// #007: the agent's own `profile.yaml` is write-denied on purpose (#712),
+    /// but that deny entry is consulted by the READ gate too — so an agent
+    /// cannot even look at its own configuration.
+    #[tokio::test]
+    async fn agent_can_read_its_own_profile() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let agent_home = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .join("agents")
+            .join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::write(agent_home.join("profile.yaml"), "name: mur\n").unwrap();
+        let fs = crate::tools::fs_policy::for_file_tools(fs_ent(&[], &[], &[]), &agent_home);
+        let tool = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(agent_home.clone()),
+            fs,
+            crate::sandbox::launch_chain::LaunchChain::for_test(
+                &agent_home,
+                &agent_home.join("bin"),
+                &agent_home,
+            ),
+        );
+        let out = tool
+            .execute(serde_json::json!({
+                "path": agent_home.join("profile.yaml").to_string_lossy()
+            }))
+            .await;
+        assert!(
+            out.is_ok(),
+            "agent must be able to read its own profile: {out:?}"
+        );
+    }
+
+    /// #007 boundary: opening the READ side must not open the key. Holding
+    /// `identity.key` is signing authority, so it stays refused by the launch
+    /// chain — before the lists, where no entitlement can reach it.
+    #[tokio::test]
+    async fn agent_still_cannot_read_its_own_identity_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let agent_home = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .join("agents")
+            .join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        std::fs::write(agent_home.join("identity.key"), "KEY").unwrap();
+        let fs = crate::tools::fs_policy::for_file_tools(
+            fs_ent(&[&agent_home.to_string_lossy()], &[], &[]),
+            &agent_home,
+        );
+        let tool = ReadFileTool::new(
+            crate::tools::fs_policy::SessionCwd::new(agent_home.clone()),
+            fs,
+            crate::sandbox::launch_chain::LaunchChain::for_test(
+                &agent_home,
+                &agent_home.join("bin"),
+                &agent_home,
+            ),
+        );
+        let err = tool
+            .check_entitlement(&agent_home.join("identity.key"))
+            .expect_err("own signing key must stay unreadable even under a read grant");
+        assert!(format!("{err:?}").contains("forge"), "error must say why");
     }
 }
