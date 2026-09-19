@@ -573,6 +573,27 @@ pub async fn build_provider_runner(
         }
     };
 
+    // MUR's signature on PRs/commits this agent publishes. Appended here, beside
+    // the memory directive, for the same reason: `config.yaml` is already loaded
+    // on this path, so one source of truth feeds the prompt. Skill bodies cannot
+    // do it — `skill::loader::load_all` reads them verbatim, with no template
+    // expansion, so a signature written into skill markdown could never track
+    // this config.
+    let system_prompt_with_memory: Option<String> = {
+        let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
+        match attribution_fragment(
+            &cfg.attribution,
+            profile.inner.entitlements.processes.spawn.mode,
+        ) {
+            None => system_prompt_with_memory,
+            Some(frag) => {
+                let mut p = system_prompt_with_memory.unwrap_or_default();
+                p.push_str(&frag);
+                Some(p)
+            }
+        }
+    };
+
     // P3: gate B's memory — settled chat-gate decisions, signed by this agent.
     let decision_store: Arc<dyn crate::hitl::store::DecisionStore> =
         Arc::new(crate::hitl::store::ChannelDecisionStore::new(
@@ -1036,6 +1057,68 @@ pub(crate) async fn prepare_runtime(
         skills_cfg,
         memory_cfg,
     ))
+}
+
+/// MUR's attribution rule for this agent's system prompt, or `None` when it
+/// would be dead weight.
+///
+/// Two gates, and the capability one is the interesting half. The signature is
+/// only ever applied by the agent shelling out to `gh`/`git`, so an agent with
+/// `processes.spawn.mode: none` cannot obey the rule no matter how it is
+/// configured — injecting it there spends context-window tokens on an
+/// instruction that is unreachable, and teaches a chat-only agent about a PR
+/// workflow it has no way to perform. Every other mode (`any`, `allowlist`,
+/// `strict`) can exec *something*, and whether `git` is among the allowlisted
+/// binaries is a runtime denial we deliberately do not try to predict here:
+/// guessing wrong in that direction silently drops the signature from an agent
+/// that would have applied it.
+fn attribution_fragment(
+    cfg: &mur_common::config::AttributionConfig,
+    spawn_mode: mur_common::agent::SpawnMode,
+) -> Option<String> {
+    if spawn_mode == mur_common::agent::SpawnMode::None {
+        return None;
+    }
+    cfg.prompt_fragment()
+}
+
+#[cfg(test)]
+mod attribution_gate_tests {
+    use super::attribution_fragment;
+    use mur_common::agent::SpawnMode;
+    use mur_common::config::AttributionConfig;
+
+    /// An agent that can exec processes can reach `git`/`gh`, so the rule is
+    /// worth its tokens.
+    #[test]
+    fn an_agent_that_can_spawn_processes_gets_the_rule() {
+        let cfg = AttributionConfig::default();
+        for mode in [SpawnMode::Any, SpawnMode::Allowlist, SpawnMode::Strict] {
+            let f = attribution_fragment(&cfg, mode);
+            assert!(
+                f.as_deref().unwrap_or_default().contains("gh pr create"),
+                "{mode:?} can exec, so it can open a PR"
+            );
+        }
+    }
+
+    /// A chat-only agent — `spawn: none` — can never run `gh` or `git`, so the
+    /// rule could only ever be dead weight in its context window.
+    #[test]
+    fn a_chat_only_agent_is_not_charged_for_a_rule_it_cannot_follow() {
+        let cfg = AttributionConfig::default();
+        assert_eq!(attribution_fragment(&cfg, SpawnMode::None), None);
+    }
+
+    /// The config's off switch still wins over a capable agent.
+    #[test]
+    fn switching_both_surfaces_off_beats_the_capability_gate() {
+        let cfg = AttributionConfig {
+            pr: Some(String::new()),
+            commit: None,
+        };
+        assert_eq!(attribution_fragment(&cfg, SpawnMode::Any), None);
+    }
 }
 
 #[cfg(test)]
