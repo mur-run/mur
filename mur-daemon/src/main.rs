@@ -17,7 +17,7 @@ mod tts_sink;
 
 use anyhow::Result;
 use chrono::Utc;
-use lock::{LockState, is_healthy, lock_path, read_lock, write_lock};
+use lock::{AcquireError, LockState, acquire_singleton, lock_path, write_lock};
 use mur_core::inject::event::{EventKind, NormalizedEvent};
 use mur_core::inject::index::{format_l0, load as load_capability_index};
 use std::time::Instant;
@@ -72,13 +72,26 @@ fn process_event(event: &NormalizedEvent) -> Result<()> {
 async fn main() -> Result<()> {
     let lock_file = lock_path();
 
-    // Bail if another healthy instance is running; steal stale lock
-    if let Some(existing) = read_lock(&lock_file)?
-        && is_healthy(&existing)
-    {
-        eprintln!("murmurd already running (pid {})", existing.pid);
-        std::process::exit(1);
-    }
+    // Exclude a second daemon with an flock, BEFORE touching anything else.
+    // The heartbeat in murmurd.lock used to be the gate; it could not hold
+    // the door shut (check-then-act, plus a live-but-starved daemon reads as
+    // dead), which is how five murmurds ended up in Activity Monitor. The
+    // guard lives until process exit — that is the point, so `_guard` and not
+    // `_`, which would drop it here and release the lock immediately.
+    let _guard = match acquire_singleton(&lock_file) {
+        Ok(g) => g,
+        Err(AcquireError::AlreadyRunning { pid }) => {
+            match pid {
+                Some(pid) => eprintln!("murmurd already running (pid {pid})"),
+                None => eprintln!("murmurd already running"),
+            }
+            std::process::exit(1);
+        }
+        Err(e @ AcquireError::Io(_)) => {
+            eprintln!("murmurd: cannot take singleton lock: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let started = Utc::now();
     let state = LockState {

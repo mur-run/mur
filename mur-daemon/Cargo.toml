@@ -14,6 +14,7 @@ mur-core = { path = "../mur-core" }
 mur-channel = { path = "../mur-channel" }
 mur-agent-runtime = { path = "../mur-agent-runtime", features = ["tts"] }
 base64 = "0.22"
+fs2 = { workspace = true }
 mdns-sd = "0.20"
 hostname = "0.4"
 tokio = { workspace = true }
