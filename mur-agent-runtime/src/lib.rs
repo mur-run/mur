@@ -52,5 +52,6 @@ pub mod telemetry_writer;
 pub mod tools;
 pub mod transport;
 pub mod turn_ledger;
+pub mod turn_memory;
 pub mod voice;
 pub mod watch_scheduler;

@@ -105,9 +105,9 @@ const MAX_CONVERSATIONS: usize = 256;
 /// Hard ceiling on stored messages per conversation, kept only so a pathological
 /// stream of empty turns cannot grow the vector without bound. The real limit is
 /// [`CONV_BUDGET_DIVISOR`] below — a turn count says nothing about how much
-/// context the turns occupy (issue #1200). MUST stay even: stored history is
-/// always user/assistant pairs, and trimming an even count keeps the first
-/// message a `user` turn (Anthropic requires that).
+/// context the turns occupy (issue #1200). Applied in whole turns (see
+/// `remember`), so the history always starts on a `user` message (Anthropic
+/// requires that).
 const MAX_CONV_MESSAGES: usize = 400;
 
 /// Characters per token, for sizing stored history against a token budget.
@@ -137,9 +137,10 @@ fn conversation_file_stem(key: &str) -> Option<&str> {
     ok.then_some(key)
 }
 
-/// Estimated token cost of a stored history. Only the text is counted: images
-/// are never stored (see [`TaskRunner::remember_turn`]) and tool scaffolding is
-/// dropped before a turn is remembered.
+/// Estimated token cost of a stored history. Text and the rendered turn
+/// ledger are counted; images are never stored (see
+/// [`TaskRunner::remember_turn`]) and raw tool scaffolding is dropped before a
+/// turn is remembered — the ledger is its compact form.
 fn estimated_tokens(history: &[crate::llm::RichMessage]) -> u64 {
     use crate::llm::RichMessage as M;
     let chars: usize = history
@@ -149,9 +150,35 @@ fn estimated_tokens(history: &[crate::llm::RichMessage]) -> u64 {
             M::ImageText { text, .. } => text.len(),
             M::ToolUse { text, .. } => text.as_ref().map_or(0, String::len),
             M::ToolResults { results } => results.iter().map(|r| r.content.len()).sum(),
+            M::TurnLedger { turn, memory } => {
+                crate::turn_ledger::render_memory(*turn, memory).len()
+            }
         })
         .sum();
     (chars / CHARS_PER_TOKEN_ESTIMATE) as u64
+}
+
+/// Does this message open a turn — a user-authored `Text`/`ImageText`?
+fn opens_turn(m: &crate::llm::RichMessage) -> bool {
+    use crate::llm::RichMessage as M;
+    matches!(m, M::Text { role, .. } | M::ImageText { role, .. } if role == "user")
+}
+
+fn turn_count(history: &[crate::llm::RichMessage]) -> usize {
+    history.iter().filter(|m| opens_turn(m)).count()
+}
+
+/// Remove the oldest turn: index 0 up to (not including) the next message
+/// that opens a turn. On a history that does not start with a user message
+/// (nothing today writes one) this still removes up to the next user turn.
+fn drop_oldest_turn(history: &mut Vec<crate::llm::RichMessage>) {
+    let end = history
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, m)| opens_turn(m))
+        .map_or(history.len(), |(i, _)| i);
+    history.drain(0..end);
 }
 
 /// Injected into every agent's system prompt so authored files land where they
@@ -328,15 +355,19 @@ impl ConversationStore {
         }
     }
 
-    /// Store `history` (user/assistant pairs) under `key`, trimming oldest turns
-    /// to the token budget and evicting the oldest conversation if over the cap.
+    /// Store `history` under `key`, trimming the oldest turns to the token
+    /// budget and evicting the oldest conversation if over the cap.
+    ///
+    /// A turn is `[user, agent, ledger?]`; trimming drops whole turns so a
+    /// ledger never outlives the text it describes and the history keeps
+    /// starting on a `user` message (Anthropic requires that). The newest
+    /// turn is always kept.
     fn remember(&mut self, key: String, mut history: Vec<crate::llm::RichMessage>) {
-        // Oldest first, in pairs so the history keeps starting on a `user` turn.
-        while history.len() > 2 && estimated_tokens(&history) > self.budget_tokens {
-            history.drain(0..2);
+        while turn_count(&history) > 1 && estimated_tokens(&history) > self.budget_tokens {
+            drop_oldest_turn(&mut history);
         }
-        if history.len() > MAX_CONV_MESSAGES {
-            history.drain(0..history.len() - MAX_CONV_MESSAGES);
+        while history.len() > MAX_CONV_MESSAGES && turn_count(&history) > 1 {
+            drop_oldest_turn(&mut history);
         }
         self.sweep_stale_files();
         self.persist(&key, &history);
@@ -683,9 +714,21 @@ impl TaskRunner {
 
     /// Persist this turn into multi-turn memory keyed by `key` (this turn's id),
     /// so the next send — whose `context.task_id` equals `key` — recalls it.
-    /// Stores text only (this turn's tool scaffolding and any pasted image stay
-    /// ephemeral). Roles `user`/`agent` map to Anthropic `user`/`assistant`.
+    ///
+    /// Stores the user text, the reply text, and a `TurnLedger` projected from
+    /// the reply's ledger Data part (spec 2026-09-19-turn-ledger-memory). A
+    /// pasted image is not stored, but its presence is (`attachments`). A reply
+    /// with no readable ledger — single-call paths, stub backends — is
+    /// remembered as `narrative_only`, because "ran nothing" is the fact the
+    /// next turn most needs. Roles `user`/`agent` map to Anthropic
+    /// `user`/`assistant`.
     fn remember_turn(&self, key: &str, ctx: Option<&str>, input: &Message, reply: &Message) {
+        let attachments = image_count(input);
+        let memory = match ledger_of(reply) {
+            Some(l) => crate::turn_ledger::TurnMemory::project(&l, attachments),
+            None => crate::turn_ledger::TurnMemory::empty(attachments),
+        };
+        let turn = u32::try_from(self.turn_counter.load(Ordering::Relaxed)).unwrap_or(u32::MAX);
         let mut store = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
         let mut h = store.prior(ctx);
         h.push(crate::llm::RichMessage::Text {
@@ -696,6 +739,7 @@ impl TaskRunner {
             role: "agent".into(),
             content: text_of(reply),
         });
+        h.push(crate::llm::RichMessage::TurnLedger { turn, memory });
         store.remember(key.to_string(), h);
     }
 
@@ -2372,14 +2416,20 @@ impl TaskRunner {
                 if withdraws(entry) {
                     disabled.insert(call.tool_name.clone());
                 }
+                let outcome =
+                    crate::turn_ledger::classify(&entry.content, entry.is_error, &entry.status);
+                let target = crate::turn_ledger::describe_target(&call.tool_name, &call.input);
+                let excerpt =
+                    if call.tool_name == "bash" && outcome == crate::turn_ledger::Outcome::Ok {
+                        crate::turn_ledger::excerpt_for(&target, &entry.content)
+                    } else {
+                        None
+                    };
                 ledger.record(crate::turn_ledger::Action {
                     tool: call.tool_name.clone(),
-                    target: crate::turn_ledger::describe_target(&call.tool_name, &call.input),
-                    outcome: crate::turn_ledger::classify(
-                        &entry.content,
-                        entry.is_error,
-                        &entry.status,
-                    ),
+                    target,
+                    outcome,
+                    excerpt,
                 });
                 let fp = (
                     call.tool_name.clone(),
@@ -2619,6 +2669,11 @@ impl TaskRunner {
 ///
 /// Turns that only answered a question get neither: a settlement under a
 /// one-line reply is noise, and noise is how a useful signal stops being read.
+/// MIME of the per-turn ledger Data part on every reply. No client renders
+/// it today (grepped 2026-09-19); `remember_turn` reads it back, and the Hub
+/// gets a free per-turn record when it wants one.
+const TURN_LEDGER_MIME: &str = "application/vnd.mur.turn-ledger+json";
+
 fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
     let mut parts = vec![mur_common::a2a::MessagePart::Text {
         text: if ledger.warrants_settlement() {
@@ -2627,11 +2682,11 @@ fn settle(text: String, ledger: &crate::turn_ledger::TurnLedger) -> Message {
             text
         },
     }];
-    if ledger.warrants_settlement()
-        && let Ok(data) = serde_json::to_value(ledger)
-    {
+    // Attached on every turn, not only when the card is shown: an empty
+    // ledger is the fact memory needs most (spec §4.2).
+    if let Ok(data) = serde_json::to_value(ledger) {
         parts.push(mur_common::a2a::MessagePart::Data {
-            mime_type: "application/vnd.mur.turn-ledger+json".into(),
+            mime_type: TURN_LEDGER_MIME.into(),
             data,
         });
     }
@@ -2892,6 +2947,38 @@ fn text_of(m: &Message) -> String {
         .unwrap_or_default()
 }
 
+/// The base64 payload of an `image/*` Data part, if that is what `p` is — the
+/// one predicate for "this input carries an image", shared by `user_message`
+/// (which renders it) and `remember_turn` (which only counts it).
+fn image_part(p: &MessagePart) -> Option<(String, String)> {
+    match p {
+        MessagePart::Data { mime_type, data } if mime_type.starts_with("image/") => data
+            .get("base64")
+            .and_then(|v| v.as_str())
+            .map(|b64| (mime_type.clone(), b64.to_string())),
+        _ => None,
+    }
+}
+
+/// How many images the user attached to `input`.
+fn image_count(input: &Message) -> u32 {
+    input
+        .parts
+        .iter()
+        .filter(|p| image_part(p).is_some())
+        .count() as u32
+}
+
+/// The turn ledger `settle` attached to `reply`, if present and readable.
+fn ledger_of(reply: &Message) -> Option<crate::turn_ledger::TurnLedger> {
+    reply.parts.iter().find_map(|p| match p {
+        MessagePart::Data { mime_type, data } if mime_type == TURN_LEDGER_MIME => {
+            serde_json::from_value(data.clone()).ok()
+        }
+        _ => None,
+    })
+}
+
 /// Build the user-turn message: image+text when `input` carries a pasted
 /// image (a screenshot from `mur agent cli`), else plain text. Images skip the
 /// B0 text hook (they're binary, not prompt-injectable). ponytail: OCR-scan
@@ -2899,13 +2986,7 @@ fn text_of(m: &Message) -> String {
 fn user_message(input: &Message) -> crate::llm::RichMessage {
     use crate::llm::RichMessage;
     let text = text_of(input);
-    let image = input.parts.iter().find_map(|p| match p {
-        MessagePart::Data { mime_type, data } if mime_type.starts_with("image/") => data
-            .get("base64")
-            .and_then(|v| v.as_str())
-            .map(|b64| (mime_type.clone(), b64.to_string())),
-        _ => None,
-    });
+    let image = input.parts.iter().find_map(image_part);
     match image {
         Some((media_type, data)) => RichMessage::ImageText {
             role: input.role.clone(),
@@ -3334,10 +3415,10 @@ mod tests {
         let _ = runner.run_sync(user_turn("second", "t2", Some("t1"))).await;
 
         let store = runner.conversations.lock().unwrap();
-        // t1 holds just its own pair; t2 accumulated the prior turn + this one.
-        assert_eq!(store.map.get("t1").map(|h| h.len()), Some(2));
+        // t1 holds just its own turn; t2 accumulated the prior turn + this one.
+        assert_eq!(store.map.get("t1").map(|h| h.len()), Some(3));
         let t2 = store.map.get("t2").expect("turn 2 remembered");
-        assert_eq!(t2.len(), 4, "2 prior + 2 current = 2 user + 2 agent");
+        assert_eq!(t2.len(), 6, "2 turns × (user, agent, ledger) = 6");
         // Turn 1's user message survives into turn 2's memory (the bug was that
         // it didn't — every turn started from an empty history).
         match &t2[0] {
@@ -3384,6 +3465,163 @@ mod tests {
     /// #1199: a restart used to drop the conversation. The store is rebuilt from
     /// scratch here — a fresh `map`, as a new process has — and must still find
     /// the turn the caller threads back to it.
+    #[tokio::test]
+    async fn a_stub_turn_is_remembered_with_a_narrative_only_ledger() {
+        use crate::llm::RichMessage;
+        let runner = TaskRunner::new_stub_echo();
+        let _ = runner.run_sync(user_turn("first", "t1", None)).await;
+        let store = runner.conversations.lock().unwrap();
+        let h = store.map.get("t1").expect("remembered");
+        assert_eq!(h.len(), 3, "user, agent, ledger: {h:?}");
+        match &h[2] {
+            RichMessage::TurnLedger { memory, .. } => {
+                assert!(memory.narrative_only);
+                assert_eq!(memory.attachments, 0);
+                assert!(memory.tools.is_empty());
+            }
+            other => panic!("expected TurnLedger, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remember_turn_reads_the_ledger_part_and_counts_images() {
+        use crate::llm::RichMessage;
+        let runner = TaskRunner::new_stub_echo();
+        let mut ledger = crate::turn_ledger::TurnLedger::default();
+        ledger.record(crate::turn_ledger::Action {
+            tool: "read_file".into(),
+            target: "/x/info.txt".into(),
+            outcome: crate::turn_ledger::Outcome::Failed("EDEADLK".into()),
+            excerpt: None,
+        });
+        let reply = settle("prose".into(), &ledger);
+        let input = Message {
+            role: "user".into(),
+            parts: vec![
+                MessagePart::Text {
+                    text: "read it".into(),
+                },
+                MessagePart::Data {
+                    mime_type: "image/png".into(),
+                    data: serde_json::json!({ "base64": "QkFTRTY0" }),
+                },
+            ],
+        };
+        runner.remember_turn("k1", None, &input, &reply);
+        let store = runner.conversations.lock().unwrap();
+        let h = store.map.get("k1").expect("remembered");
+        assert_eq!(h.len(), 3);
+        // The image itself is not stored (as before); the fact of it is.
+        assert!(
+            matches!(&h[0], RichMessage::Text { role, content } if role == "user" && content == "read it")
+        );
+        // A failed action warrants a settlement card, which `settle` appends
+        // to the text — so the stored reply starts with the prose, not equals it.
+        assert!(
+            matches!(&h[1], RichMessage::Text { role, content } if role == "agent" && content.starts_with("prose"))
+        );
+        match &h[2] {
+            RichMessage::TurnLedger { memory, .. } => {
+                assert_eq!(memory.attachments, 1);
+                assert!(!memory.narrative_only);
+                assert_eq!(memory.tools[0].error.as_deref(), Some("EDEADLK"));
+            }
+            other => panic!("expected TurnLedger, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_malformed_ledger_part_falls_back_to_narrative_only() {
+        use crate::llm::RichMessage;
+        let runner = TaskRunner::new_stub_echo();
+        let reply = Message {
+            role: "agent".into(),
+            parts: vec![
+                MessagePart::Text {
+                    text: "prose".into(),
+                },
+                MessagePart::Data {
+                    mime_type: TURN_LEDGER_MIME.into(),
+                    data: serde_json::json!({ "not": "a ledger" }),
+                },
+            ],
+        };
+        let input = Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text { text: "hi".into() }],
+        };
+        runner.remember_turn("k2", None, &input, &reply);
+        let store = runner.conversations.lock().unwrap();
+        let h = store.map.get("k2").expect("remembered");
+        assert!(matches!(&h[2], RichMessage::TurnLedger { memory, .. } if memory.narrative_only));
+    }
+
+    /// 2026-09-18, channel 01a0b304: twenty-four text-only pairs of
+    /// "short command → report claiming completion" and a reply produced by
+    /// one model call with zero tool calls. Locks the mechanism, not the
+    /// model: the next turn's message list must carry, immediately before
+    /// the new user message, the runtime's record that the previous turn ran
+    /// nothing. Whether the model then calls a tool is its business.
+    #[test]
+    fn the_turn_before_a_new_message_says_whether_it_ran_anything() {
+        use crate::llm::RichMessage;
+        let runner = TaskRunner::new_stub_echo();
+        {
+            let mut store = runner.conversations.lock().unwrap();
+            let pairs: Vec<RichMessage> = (0..24)
+                .flat_map(|i| {
+                    [
+                        RichMessage::Text {
+                            role: "user".into(),
+                            content: format!("continue {i}"),
+                        },
+                        RichMessage::Text {
+                            role: "agent".into(),
+                            content: format!("PR #{} 開好了，全綠。", 1400 + i),
+                        },
+                    ]
+                })
+                .collect();
+            store.remember("prior".into(), pairs);
+        }
+        // The fabricating turn: prose, no tools.
+        let input = Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text {
+                text: "這疊往 main 推一格".into(),
+            }],
+        };
+        let reply = settle(
+            "推了一格：#1402 已 merged。".into(),
+            &crate::turn_ledger::TurnLedger::default(),
+        );
+        runner.remember_turn("fab", Some("prior"), &input, &reply);
+
+        let next = Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text {
+                text: "真的？".into(),
+            }],
+        };
+        let seeded = runner.seed_history(Some("fab"), String::new(), &next);
+        let n = seeded.len();
+        assert!(
+            matches!(&seeded[n - 1], RichMessage::Text { role, content } if role == "user" && content == "真的？")
+        );
+        match &seeded[n - 2] {
+            RichMessage::TurnLedger { memory, .. } => {
+                assert!(
+                    memory.narrative_only,
+                    "the empty turn must be on the record"
+                );
+                assert_eq!(memory.attachments, 0);
+                let rendered = crate::turn_ledger::render_memory(0, memory);
+                assert!(rendered.contains("narrative_only: true"), "{rendered}");
+            }
+            other => panic!("expected the previous turn's ledger, got {other:?}"),
+        }
+    }
+
     #[test]
     fn conversation_survives_a_restart() {
         use crate::llm::RichMessage;
@@ -3426,44 +3664,49 @@ mod tests {
         assert!(no_disk.prior(Some("turn-1")).is_empty());
     }
 
-    /// #1200: the cap is a token budget, so twenty tiny turns are kept where two
-    /// huge ones are not — the count cap got both cases wrong.
+    /// #1200: the cap is a token budget, so many tiny turns are kept where two
+    /// huge ones are not — and (2026-09-19) trimming removes whole turns, so a
+    /// ledger never outlives the text it describes.
     #[test]
-    fn history_is_trimmed_by_tokens_not_turn_count() {
+    fn history_is_trimmed_by_tokens_in_whole_turns() {
         use crate::llm::RichMessage;
         let msg = |role: &str, n: usize| RichMessage::Text {
             role: role.into(),
             content: "x".repeat(n),
         };
-        const BUDGET: u64 = 500; // ≈ 2000 chars
+        let ledger = |turn: u32| RichMessage::TurnLedger {
+            turn,
+            memory: crate::turn_ledger::TurnMemory::empty(0),
+        };
+        const BUDGET: u64 = 900; // ≈ 3600 chars
         let mut store = ConversationStore {
             budget_tokens: BUDGET,
             ..Default::default()
         };
 
-        // 30 turns of 40 chars (10 tokens) each = 300 tokens: comfortably inside
-        // the budget, and 60 messages — well past the old 40-message cap.
-        let small: Vec<_> = (0..30)
-            .flat_map(|_| [msg("user", 20), msg("agent", 20)])
+        // 20 turns × (20 + 20 chars + a ~90-char ledger) ≈ 2600 chars: inside.
+        let small: Vec<_> = (0..20)
+            .flat_map(|i| [msg("user", 20), msg("agent", 20), ledger(i)])
             .collect();
         assert!(
             estimated_tokens(&small) <= BUDGET,
             "test setup exceeds budget"
         );
         store.remember("small".into(), small);
-        let kept = store.prior(Some("small"));
         assert_eq!(
-            kept.len(),
+            store.prior(Some("small")).len(),
             60,
-            "small turns were trimmed by count, not tokens"
+            "trimmed by count, not tokens"
         );
 
-        // Two turns that blow the budget on their own get trimmed to one pair.
+        // An oversized early turn is dropped as a unit — all three messages.
         let big = vec![
             msg("user", 4_000),
             msg("agent", 4_000),
+            ledger(1),
             msg("user", 8),
             msg("agent", 8),
+            ledger(2),
         ];
         assert!(
             estimated_tokens(&big) > BUDGET,
@@ -3471,11 +3714,52 @@ mod tests {
         );
         store.remember("big".into(), big);
         let kept = store.prior(Some("big"));
-        assert_eq!(kept.len(), 2, "oversized early turn was not dropped");
-        assert!(
-            matches!(&kept[0], RichMessage::Text { role, .. } if role == "user"),
-            "trimming must leave the history starting on a user turn"
+        assert_eq!(
+            kept.len(),
+            3,
+            "oversized early turn was not dropped whole: {kept:?}"
         );
+        assert!(matches!(&kept[0], RichMessage::Text { role, .. } if role == "user"));
+        assert!(matches!(&kept[2], RichMessage::TurnLedger { turn: 2, .. }));
+
+        // Legacy pairs (files written before ledgers) still trim by turn.
+        let legacy = vec![
+            msg("user", 4_000),
+            msg("agent", 4_000),
+            msg("user", 8),
+            msg("agent", 8),
+        ];
+        store.remember("legacy".into(), legacy);
+        let kept = store.prior(Some("legacy"));
+        assert_eq!(kept.len(), 2);
+        assert!(matches!(&kept[0], RichMessage::Text { role, .. } if role == "user"));
+    }
+
+    /// The newest turn is stored even when it alone exceeds the budget — the
+    /// alternative is remembering nothing about the turn that just happened.
+    #[test]
+    fn the_newest_turn_is_never_trimmed_away() {
+        use crate::llm::RichMessage;
+        let mut store = ConversationStore {
+            budget_tokens: 10,
+            ..Default::default()
+        };
+        let only = vec![
+            RichMessage::Text {
+                role: "user".into(),
+                content: "x".repeat(500),
+            },
+            RichMessage::Text {
+                role: "agent".into(),
+                content: "y".repeat(500),
+            },
+            RichMessage::TurnLedger {
+                turn: 1,
+                memory: crate::turn_ledger::TurnMemory::empty(0),
+            },
+        ];
+        store.remember("only".into(), only);
+        assert_eq!(store.prior(Some("only")).len(), 3);
     }
 
     /// The key arrives over the wire as `context.task_id`, so it must never
@@ -5969,7 +6253,9 @@ mod tests {
                         result_ids.insert(r.call_id.clone());
                     }
                 }
-                RichMessage::Text { .. } | RichMessage::ImageText { .. } => {}
+                RichMessage::Text { .. }
+                | RichMessage::ImageText { .. }
+                | RichMessage::TurnLedger { .. } => {}
             }
         }
         assert!(!use_ids.is_empty(), "expected at least one tool_use");
