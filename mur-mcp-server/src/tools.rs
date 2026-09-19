@@ -1078,9 +1078,14 @@ mod job_status_tests {
         )
         .await
         .unwrap();
+        // The point is that dispatch returns a handle instead of waiting for
+        // the job, not that it is fast: a contended CI runner can take seconds
+        // to do the same non-blocking work. Keep the bound loose enough that
+        // only an actual block — waiting on the ghost agent to fail, which
+        // takes far longer — can trip it.
         assert!(
-            t0.elapsed() < std::time::Duration::from_secs(2),
-            "{:?}",
+            t0.elapsed() < std::time::Duration::from_secs(15),
+            "dispatch blocked instead of returning a handle: {:?}",
             t0.elapsed()
         );
         assert_eq!(v["status"], "dispatched");
