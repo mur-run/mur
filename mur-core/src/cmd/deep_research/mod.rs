@@ -10,5 +10,6 @@ pub mod ask;
 pub mod panel;
 pub mod provision;
 pub mod run;
+pub mod secret;
 pub mod setup;
 pub mod status;
