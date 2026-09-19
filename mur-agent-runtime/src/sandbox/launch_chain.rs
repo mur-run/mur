@@ -112,6 +112,21 @@ impl LaunchChain {
                  that agent's signed channel events",
             );
         }
+        // Issue #007: the agent's OWN identity.key stays read-protected for the
+        // same reason a sibling's does — holding it is signing authority. Its
+        // own profile.yaml is deliberately NOT here: #712 is a *write* rule
+        // (self-edit + self-restart defeats the seal), and extending it to
+        // reads only ever cost the agent the ability to answer "what am I
+        // allowed to do?" while stopping no escalation — the sibling profile
+        // next door was readable the whole time.
+        if path.starts_with(&self.agent_home)
+            && path.file_name().is_some_and(|n| n == "identity.key")
+        {
+            return Some(
+                "this agent's own signing key — reading it is enough to forge \
+                 its signed channel events",
+            );
+        }
         if let Some(reason) = self.protects_credential(path) {
             return Some(reason);
         }
@@ -717,9 +732,16 @@ mod tests {
 
         assert!(c.protects_read(&agents.join("pm/identity.key")).is_some());
 
+        // #007 moved ownership of this rule here. It used to be enforced by
+        // the `fs.deny` list (`for_file_tools` + the SBPL emission), which is
+        // also what made the agent's own profile.yaml unreadable. Splitting
+        // the two meant the key rule had to live somewhere no entitlement can
+        // reach — which is this module. Same protection, correct layer.
+        assert!(c.protects_read(&agents.join("mur/identity.key")).is_some());
+
         // Negative controls: reads are otherwise untouched by this module.
         assert!(c.protects_read(&agents.join("pm/profile.yaml")).is_none());
-        assert!(c.protects_read(&agents.join("mur/identity.key")).is_none());
+        assert!(c.protects_read(&agents.join("mur/profile.yaml")).is_none());
         assert!(c.protects_read(&tmp.path().join("skills/x.yaml")).is_none());
     }
 
