@@ -671,20 +671,24 @@ impl SandboxPolicy {
         // be canonicalized is dropped rather than widened.
         for dir in &ent.processes.spawn.allowed_dirs {
             let expanded = expand(dir);
-            let Ok(canon) = std::fs::canonicalize(&expanded) else {
-                continue;
-            };
-            if !canon.is_dir() {
-                continue;
-            }
-            // A grant of `/`, `/usr`, the home directory, or a bare
-            // `/Volumes/<mount>` is not a build lane; it is every binary
-            // reachable under it. Same guard the derived prefixes use.
-            if is_guarded_prefix(&canon, &home) {
-                continue;
-            }
-            if !spawn_allowed_prefixes.contains(&canon) {
-                spawn_allowed_prefixes.push(canon);
+            let mut candidates = vec![expanded.clone()];
+            candidates.extend(mur_common::worktree::worktrees_of(&expanded));
+            for candidate in candidates {
+                let Ok(canon) = std::fs::canonicalize(&candidate) else {
+                    continue;
+                };
+                if !canon.is_dir() {
+                    continue;
+                }
+                // A grant of `/`, `/usr`, the home directory, or a bare
+                // `/Volumes/<mount>` is not a build lane; it is every binary
+                // reachable under it. Same guard the derived prefixes use.
+                if is_guarded_prefix(&canon, &home) {
+                    continue;
+                }
+                if !spawn_allowed_prefixes.contains(&canon) {
+                    spawn_allowed_prefixes.push(canon);
+                }
             }
         }
 
@@ -1856,6 +1860,95 @@ mod tests {
                 .iter()
                 .any(|p| p.ends_with("not-a-dir")),
             "a plain file is not a lane: {:?}",
+            policy.spawn_allowed_prefixes
+        );
+    }
+
+    #[test]
+    fn build_lane_grants_the_matching_path_in_linked_worktrees() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let main = tmp.path().join("main");
+        let worktree = tmp.path().join("worktree");
+
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        git(&["init", main.to_str().expect("UTF-8 main path")]);
+        git(&[
+            "-C",
+            main.to_str().expect("UTF-8 main path"),
+            "config",
+            "user.email",
+            "test@example.com",
+        ]);
+        git(&[
+            "-C",
+            main.to_str().expect("UTF-8 main path"),
+            "config",
+            "user.name",
+            "MUR Test",
+        ]);
+        std::fs::write(main.join("README.md"), "fixture").expect("write fixture");
+        git(&[
+            "-C",
+            main.to_str().expect("UTF-8 main path"),
+            "add",
+            "README.md",
+        ]);
+        git(&[
+            "-C",
+            main.to_str().expect("UTF-8 main path"),
+            "commit",
+            "-m",
+            "fixture",
+        ]);
+        git(&[
+            "-C",
+            main.to_str().expect("UTF-8 main path"),
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            worktree.to_str().expect("UTF-8 worktree path"),
+        ]);
+
+        let main_target = main.join("target");
+        let worktree_target = worktree.join("target");
+        std::fs::create_dir_all(&main_target).expect("mkdir main target");
+        std::fs::create_dir_all(&worktree_target).expect("mkdir worktree target");
+
+        let mut ent = minimal_entitlements();
+        ent.processes.spawn.mode = SpawnMode::Allowlist;
+        ent.processes.spawn.allowed_dirs = vec![main_target.to_string_lossy().to_string()];
+
+        let policy = SandboxPolicy::from_entitlements(&ent, &tmp.path().join("agent-home"));
+        let expected = std::fs::canonicalize(&worktree_target).expect("canonicalize target");
+        assert!(
+            policy.spawn_allowed_prefixes.contains(&expected),
+            "linked-worktree target must become an exec prefix: {:?}",
+            policy.spawn_allowed_prefixes
+        );
+
+        let build_script = expected
+            .join("debug")
+            .join("build")
+            .join("crate-hash")
+            .join("build-script-build");
+        assert!(
+            policy
+                .spawn_allowed_prefixes
+                .iter()
+                .any(|prefix| build_script.starts_with(prefix)),
+            "Cargo build script must fall under an allowed prefix: {:?}",
             policy.spawn_allowed_prefixes
         );
     }
