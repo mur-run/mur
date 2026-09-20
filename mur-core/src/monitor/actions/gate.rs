@@ -154,6 +154,10 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, PathBuf, MonitorRow) {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().to_path_buf();
+        // `decide` → `gate` signs its HitlRequest as the router and verifies
+        // responses against that same key; without an identity here the
+        // fixture writes events enforcement then discards.
+        crate::channel_writer::plant_writer_identity(&home);
         let s = MonitorStore::open(&home).unwrap();
         let spec = MonitorSpec::from_yaml(
             "schema_version: 1\nname: t\nsource: { type: github_actions, reference: r1 }\n\
@@ -166,11 +170,10 @@ mod tests {
     }
 
     /// Write a `HitlResponse` approving the parked request for `action_hash`,
-    /// the same shape `mur channel approve` writes and the same unsigned
-    /// `ChannelService::append` path the existing gate tests' `answer()`
-    /// helper uses (`mur-core/src/hitl/gate.rs`). Looked up by `action_hash`
-    /// (not a known `hitl_id`) because that is all a caller of `decide` ever
-    /// gets back.
+    /// the same shape — and the same SIGNED `append_as_writer` path —
+    /// `mur channel approve` writes (`cmd/channel.rs`). Looked up by
+    /// `action_hash` (not a known `hitl_id`) because that is all a caller of
+    /// `decide` ever gets back.
     fn approve_on_channel(home: &Path, channel_id: &str, action_hash: &str) {
         let svc = ChannelService::open(home).unwrap();
         let hitl_id = svc
@@ -189,8 +192,11 @@ mod tests {
             reason: "test".into(),
             surface: "cli".into(),
         };
-        svc.append(
+        crate::channel_writer::append_as_writer(
+            &svc,
+            home,
             channel_id,
+            crate::channel_writer::ROUTER_AGENT,
             ChannelActor::System,
             EventKind::HitlResponse,
             serde_json::to_value(&resp).unwrap(),

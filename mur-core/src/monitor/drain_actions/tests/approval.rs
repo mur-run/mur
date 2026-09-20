@@ -415,6 +415,7 @@ fn a_row_whose_verb_drifted_out_from_under_it_is_retired_not_skipped_forever() {
 fn an_approval_on_the_eleventh_parked_action_still_releases_it() {
     let d = tempfile::tempdir().unwrap();
     let home = d.path().to_path_buf();
+    crate::channel_writer::plant_writer_identity(&home);
     let ids: Vec<String> = {
         let s = MonitorStore::open(&home).unwrap();
         (0..11)
@@ -559,6 +560,7 @@ fn settled_github_rerun(
 ) -> (tempfile::TempDir, std::path::PathBuf, String) {
     let d = tempfile::tempdir().unwrap();
     let home = d.path().to_path_buf();
+    crate::channel_writer::plant_writer_identity(&home);
     let spec = MonitorSpec::from_yaml(&format!(
         "schema_version: 1\nname: t\n\
          source: {{ type: github_actions, reference: {reference}, \

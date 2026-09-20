@@ -134,8 +134,15 @@ fn the_headline_says_stopped_when_the_rail_reports_a_stop() {
     let svc = mur_channel::ChannelService::open(&a.home).unwrap();
     svc.create_for_fleet("dev", "mur", &["qa".to_string()])
         .unwrap();
-    svc.append(
+    // The rail verifies before it folds: an unsigned stop event is dropped
+    // under enforcement and the headline would say "finished" for the wrong
+    // reason. Sign it as the router, the way a real run does.
+    crate::channel_writer::plant_writer_identity(&a.home);
+    crate::channel_writer::append_as_writer(
+        &svc,
+        &a.home,
         "fleet-dev",
+        crate::channel_writer::ROUTER_AGENT,
         mur_common::channel::ChannelActor::System,
         mur_common::channel::EventKind::StateChange,
         serde_json::json!({"from": "working", "to": "failed",

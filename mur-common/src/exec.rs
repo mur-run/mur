@@ -145,14 +145,21 @@ pub fn is_interpreter_command(command: &str) -> bool {
 ///
 /// - If `command` is already absolute or contains a path separator, canonicalize
 ///   it (resolves symlinks).
-/// - Otherwise consult `PATH` (and try a `.exe` suffix on Windows). Returns the
-///   first match found, canonicalized.
+/// - Otherwise consult [`augmented_path_var`] (and try a `.exe` suffix on
+///   Windows). Returns the first match found, canonicalized.
+///
+/// Resolving against the AUGMENTED PATH — not the raw ambient one — is what
+/// keeps install-time and runtime agreeing. `mur agent mcp add` / addon import
+/// run under whatever PATH their parent had: a terminal has `~/.local/bin`, a
+/// Hub-spawned sidecar does not. The runtime always spawns against
+/// `augmented_path_var`, so a raw-PATH resolve here made `command: uvx`
+/// installable from a shell and "could not find `uvx` on PATH" from the Hub —
+/// the same entry, two answers. Ambient entries still keep priority, so this
+/// only ever finds MORE binaries, never a different one.
 ///
 /// Returns an error if the binary can't be located.
 pub fn resolve_command(command: &str) -> Result<PathBuf> {
-    let path_var = std::env::var_os("PATH")
-        .ok_or_else(|| anyhow::anyhow!("PATH env var unset; cannot resolve `{command}`"))?;
-    resolve_command_in(&path_var, command)
+    resolve_command_in(&augmented_path_var(), command)
 }
 
 /// [`resolve_command`] against an explicit PATH value instead of the ambient
@@ -183,7 +190,13 @@ pub fn resolve_command_in(path_var: &std::ffi::OsStr, command: &str) -> Result<P
             }
         }
     }
-    bail!("could not find `{command}` on PATH");
+    bail!(
+        "could not find `{command}` on PATH (searched: {})",
+        std::env::split_paths(path_var)
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 /// The ambient PATH plus the well-known install dirs that GUI/launchd parents
@@ -257,6 +270,49 @@ mod tests {
     #[test]
     fn errors_on_missing_binary() {
         assert!(resolve_command("definitely-not-a-real-binary-xyz123").is_err());
+    }
+
+    /// Regression: `mur agent mcp add` / addon import resolved against the RAW
+    /// ambient PATH while the runtime spawned against the augmented one, so
+    /// `command: uvx` installed fine from a terminal (whose PATH lists
+    /// `~/.local/bin`) and failed with "could not find `uvx` on PATH" under the
+    /// Hub, whose sidecar inherits the GUI's minimal PATH. Same entry, two
+    /// answers.
+    ///
+    /// The test plants a binary in a standard dir that the ambient PATH does
+    /// NOT list, then resolves under that minimal PATH — the Hub's situation
+    /// exactly. Only an augmented-PATH resolve finds it.
+    #[cfg(unix)]
+    #[test]
+    fn install_time_resolve_finds_binaries_the_ambient_path_omits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let local_bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        let tool = local_bin.join("uvx-fixture");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The Hub's PATH: /usr/bin and /bin, no ~/.local/bin. HOME is what
+        // `augmented_path_var` appends `.local/bin` to, so point it at the
+        // fixture.
+        let mut envg = crate::test_env::EnvGuard::hold();
+        envg.set_var("PATH", "/usr/bin:/bin");
+        envg.set_var("HOME", home.path());
+
+        assert!(
+            resolve_command_in(
+                &std::env::var_os("PATH").unwrap(),
+                tool.file_name().unwrap().to_str().unwrap()
+            )
+            .is_err(),
+            "fixture must be off the raw ambient PATH, or this proves nothing"
+        );
+
+        let resolved = resolve_command(tool.file_name().unwrap().to_str().unwrap())
+            .expect("install-time resolve must search ~/.local/bin like the runtime does");
+        assert_eq!(resolved, tool.canonicalize().unwrap());
     }
 
     #[cfg(unix)]
