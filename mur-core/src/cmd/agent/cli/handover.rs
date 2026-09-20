@@ -187,28 +187,50 @@ pub fn run(
 
     let status = {
         let _suspended = Suspended::begin(viewport_h)?;
-        // Inherit all three handles: this is an interactive flow.
-        let mut cmd = std::process::Command::new(prog);
-        cmd.args(args);
-        // `begin` ignores SIGINT in the parent (see its doc comment); SIG_IGN
-        // is inherited across exec, so without this the child would silently
-        // ignore Ctrl-C too. Reset to the default disposition right before
-        // exec so the child reacts to Ctrl-C normally. Unix only: Windows has
-        // no `pre_exec` — see the module doc comment.
-        #[cfg(unix)]
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::signal(libc::SIGINT, libc::SIG_DFL);
-                Ok(())
-            });
+        // The `pre` steps run inside this same suspension, so their output
+        // lands in the same transcript as the login that follows and the
+        // terminal is handed over exactly once. Their status is ignored on
+        // purpose (see `HandoverRequest::pre`): a `logout` that fails because
+        // nothing was signed in must not block the login.
+        for step in &req.pre {
+            if let Some((prog, args)) = step.split_first() {
+                let _ = spawn_child(prog, args).status();
+            }
         }
-        cmd.status().with_context(|| format!("run {prog}"))?
+        spawn_child(prog, args)
+            .status()
+            .with_context(|| format!("run {prog}"))?
         // `_suspended` drops here — raw mode is back on before we redraw,
         // and stays restored even if `status()` returned Err above.
     };
 
     reanchor(terminal, viewport_h)?;
     Ok(status)
+}
+
+/// A child configured the way every handover child must be: all three handles
+/// inherited (these are interactive flows), and — on Unix — SIGINT reset to
+/// its default disposition right before exec.
+///
+/// `Suspended::begin` ignores SIGINT in the parent (see its doc comment) and
+/// SIG_IGN survives exec, so without the `pre_exec` below the child would
+/// silently ignore Ctrl-C too. Windows has no `pre_exec`; see the module doc
+/// comment for what that costs.
+///
+/// Factored out because `run` now spawns more than one child and they must be
+/// configured identically — a `pre` step that ignored Ctrl-C would be
+/// unkillable from the keyboard.
+fn spawn_child(prog: &str, args: &[String]) -> std::process::Command {
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(args);
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    cmd
 }
 
 /// Read one line with echo off, with the terminal handed over exactly as
@@ -302,6 +324,7 @@ mod tests {
     #[test]
     fn child_argv_is_split_into_program_and_args() {
         let req = crate::cmd::agent::cli::app::HandoverRequest {
+            pre: vec![],
             argv: vec!["claude".into(), "auth".into(), "login".into()],
             label: "Anthropic".into(),
             _lock: None,
@@ -314,6 +337,7 @@ mod tests {
     #[test]
     fn empty_argv_is_rejected_rather_than_spawning_a_shell() {
         let req = crate::cmd::agent::cli::app::HandoverRequest {
+            pre: vec![],
             argv: vec![],
             label: "x".into(),
             _lock: None,

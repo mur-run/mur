@@ -643,6 +643,31 @@ pub fn acquire_login_lock(home: &Path) -> Result<LoginLock, LockDenied> {
     }
 }
 
+/// The commands rung 3 runs, in order, to get a working credential: every
+/// step but the last is a non-interactive cleanup, the last is the
+/// interactive login the user watches.
+///
+/// Anthropic gets a `claude auth logout` first. Rung 3 is only reached after
+/// rungs 1 and 2 failed, which means the CLI still *has* a credential it
+/// could not refresh — and `claude auth login` on a CLI that considers itself
+/// signed in prints "already authenticated" and exits 0 without touching the
+/// store. murmur would then report "logged in ✓" over an unchanged 401.
+///
+/// Codex deliberately gets no such step. `codex logout` signs out every Codex
+/// client on the machine (CLI and IDE extensions — see
+/// `docs/model-gateway.md:103`, which puts it behind an explicit
+/// confirmation), and `/login chatgpt` asks for no confirmation.
+pub(crate) fn login_sequence(p: Provider) -> Vec<Vec<String>> {
+    let cli = p.owner_cli().to_string();
+    match p {
+        Provider::Anthropic => vec![
+            vec![cli.clone(), "auth".into(), "logout".into()],
+            vec![cli, "auth".into(), "login".into()],
+        ],
+        Provider::Chatgpt => vec![vec![cli, "login".into()]],
+    }
+}
+
 /// Rung 3. Only reached when nothing cheaper worked.
 fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provider) {
     if !has_browser(&BrowserEnv::detect()) {
@@ -670,11 +695,14 @@ fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provide
             None
         }
     };
-    let argv = match p {
-        Provider::Anthropic => vec![p.owner_cli().into(), "auth".into(), "login".into()],
-        Provider::Chatgpt => vec![p.owner_cli().into(), "login".into()],
-    };
+    let mut steps = login_sequence(p);
+    // `login_sequence` never returns empty — both arms end with the
+    // interactive login — so the pop is infallible; `unwrap_or_default` keeps
+    // it that way without a panic if a third provider ever arrives with a
+    // shorter answer, and an empty `argv` is already refused by `split_argv`.
+    let argv = steps.pop().unwrap_or_default();
     app.pending_handover = Some(crate::cmd::agent::cli::app::HandoverRequest {
+        pre: steps,
         argv,
         label: p.label().to_string(),
         _lock: lock,

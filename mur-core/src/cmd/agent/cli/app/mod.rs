@@ -71,6 +71,12 @@ pub enum RenderMode {
 /// contents. A `tracing::debug!(?req)` should not be a compile error.
 #[derive(Debug)]
 pub struct HandoverRequest {
+    /// Non-interactive commands to run, in order, in the same suspension and
+    /// immediately before `argv`. Their exit status is deliberately ignored:
+    /// the one caller is `/login`'s `claude auth logout`, which exits non-zero
+    /// on a CLI that was already signed out — a state the login that follows
+    /// handles perfectly well. Empty for most requests.
+    pub pre: Vec<Vec<String>>,
     pub argv: Vec<String>,
     /// What to name in the before/after system messages.
     pub label: String,

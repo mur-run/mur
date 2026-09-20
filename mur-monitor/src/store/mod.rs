@@ -580,6 +580,74 @@ impl MonitorStore {
         Ok(n == 1)
     }
 
+    /// `mur monitor delete`: erase one monitor and everything hanging off
+    /// it. `cancel` only moves the row to `completed`, which is right for
+    /// "stop watching but keep the evidence" — this is the other verb, for
+    /// a row the user wants gone (a typo'd spec, a reference that never
+    /// existed), and for the `idempotency_key` it is holding.
+    ///
+    /// Returns `false` when there is no such monitor, so the caller can say
+    /// so instead of reporting a deletion that never happened.
+    ///
+    /// Deliberately refuses while a live lease exists — see the caller in
+    /// `mur-core`'s `monitor.rs` for the user-facing wording. A worker
+    /// mid-cycle holds `(id, fence)` and will `apply_cycle` against it;
+    /// deleting underneath it makes that write-back a silent no-op (the
+    /// `UPDATE ... WHERE id = ?` simply matches nothing) and the
+    /// observation it just paid a network round-trip for is lost with no
+    /// error anywhere. Expiring or releasing the lease first is cheap; a
+    /// vanished cycle is not.
+    ///
+    /// One `BEGIN IMMEDIATE` transaction for the same reason `create` uses
+    /// one: the child rows must not outlive the parent. Every child table
+    /// is keyed by `monitor_id` except `monitor_actions` and
+    /// `monitor_notifications`, which carry it as a plain column — both are
+    /// listed below by name rather than trusted to a foreign key, because
+    /// this schema declares none (and SQLite would not enforce them without
+    /// `PRAGMA foreign_keys=ON` even if it did).
+    pub fn delete(&self, id: &str, allow_leased: bool) -> Result<bool> {
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .context("begin delete transaction")?;
+        let result = (|| -> Result<bool> {
+            let exists: Option<String> = self
+                .conn
+                .query_row("SELECT id FROM monitors WHERE id = ?1", [id], |r| r.get(0))
+                .optional()?;
+            if exists.is_none() {
+                return Ok(false);
+            }
+            if !allow_leased {
+                let leased: Option<String> = self
+                    .conn
+                    .query_row(
+                        "SELECT owner FROM monitor_leases WHERE monitor_id = ?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if let Some(owner) = leased {
+                    anyhow::bail!(
+                        "monitor {id} is leased by `{owner}` — a check cycle is in flight"
+                    );
+                }
+            }
+            for sql in [
+                "DELETE FROM monitor_notifications WHERE monitor_id = ?1",
+                "DELETE FROM monitor_actions WHERE monitor_id = ?1",
+                "DELETE FROM monitor_events WHERE monitor_id = ?1",
+                "DELETE FROM monitor_observations WHERE monitor_id = ?1",
+                "DELETE FROM monitor_leases WHERE monitor_id = ?1",
+                "DELETE FROM monitor_cycles WHERE monitor_id = ?1",
+                "DELETE FROM monitors WHERE id = ?1",
+            ] {
+                self.conn.execute(sql, [id])?;
+            }
+            Ok(true)
+        })();
+        commit_or_rollback(&self.conn, result, "delete")
+    }
+
     /// Count one remediation attempt against `policy.max_remediation_attempts`
     /// (Task 5, spec §行動執行器 rule 2). The caller counts only actions above
     /// `Read` tier — this method just does the write and hands back the new
