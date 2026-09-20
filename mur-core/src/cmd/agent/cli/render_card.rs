@@ -696,7 +696,12 @@ mod tests {
         let lines = card_lines(&c, theme::resolve_skin("dark"), true, TEST_WIDTH);
         let text: String = lines
             .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("exit 101"), "expected 'exit 101' in: {text}");
@@ -713,7 +718,12 @@ mod tests {
         let lines = card_lines(&c, theme::resolve_skin("dark"), true, TEST_WIDTH);
         let text: String = lines
             .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("- old"), "expected '- old' in:\n{text}");
@@ -851,7 +861,12 @@ mod tests {
         let lines = card_lines(&c, theme::resolve_skin("dark"), true, TEST_WIDTH);
         let text: String = lines
             .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("[y]"));

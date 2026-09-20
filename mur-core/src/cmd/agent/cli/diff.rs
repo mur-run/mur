@@ -3,8 +3,8 @@
 //!
 //! Consumed by `render_card::card_lines` to show an inline diff for edit-tool cards.
 
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::style::Modifier;
+use ratatui::text::{Line, Span};
 
 use super::theme::Theme;
 
@@ -111,6 +111,12 @@ pub fn edit_diff_text(name: &str, args: &serde_json::Value) -> Option<Vec<String
 /// Build styled `-`/`+` diff lines for an edit-like tool call, or `None` if
 /// this isn't an edit we can render. The transcript viewport provides scrolling;
 /// keeping all rows here means expanded cards never silently hide a file change.
+///
+/// Rows are TWO spans, not one styled line: a coloured `▌-` / `▌+` gutter and
+/// then the code in ordinary text colour. Painting the whole row red or green
+/// (what this used to do) makes a diff read like a stack of error and success
+/// banners, and it fights every syntax colour the content already carries —
+/// the sign belongs in the gutter, the way a code review shows it.
 pub fn edit_diff_lines(
     name: &str,
     args: &serde_json::Value,
@@ -125,15 +131,20 @@ pub fn edit_diff_lines(
                 DiffPart::Path(p) => {
                     Line::styled(format!(" {p}"), theme.muted.add_modifier(Modifier::BOLD))
                 }
-                DiffPart::Del(l) => {
-                    Line::styled(format!("  - {l}"), Style::default().fg(Color::Red))
-                }
-                DiffPart::Add(l) => {
-                    Line::styled(format!("  + {l}"), Style::default().fg(Color::Green))
-                }
-                DiffPart::Ctx(l) => {
-                    Line::styled(format!("    {l}"), theme.muted.add_modifier(Modifier::DIM))
-                }
+                DiffPart::Del(l) => Line::from(vec![
+                    Span::styled("  ▌- ", theme.diff_del_mark.patch(theme.diff_del_bg)),
+                    Span::styled(l, theme.diff_del_text.patch(theme.diff_del_bg)),
+                ])
+                .style(theme.diff_del_bg),
+                DiffPart::Add(l) => Line::from(vec![
+                    Span::styled("  ▌+ ", theme.diff_add_mark.patch(theme.diff_add_bg)),
+                    Span::styled(l, theme.diff_add_text.patch(theme.diff_add_bg)),
+                ])
+                .style(theme.diff_add_bg),
+                DiffPart::Ctx(l) => Line::from(vec![
+                    Span::styled("  │ ", theme.muted.add_modifier(Modifier::DIM)),
+                    Span::styled(l, theme.muted.add_modifier(Modifier::DIM)),
+                ]),
             })
             .collect(),
     )
@@ -145,11 +156,65 @@ mod tests {
     use crate::cmd::agent::cli::theme;
 
     fn text(lines: &[ratatui::text::Line]) -> String {
+        // Join spans WITHIN a row, rows with newlines. A diff row is a
+        // coloured gutter span plus a text span, so flattening every span
+        // with `\n` would split `▌+ ` from the code it marks.
         lines
             .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The colour lives in the gutter, NOT on the code. A reviewer reads the
+    /// text of a diff; painting every changed row red or green turns an edit
+    /// into two blocks of alarm colour and overrides any styling the content
+    /// carries. Guard both halves: the mark span is coloured, the code span
+    /// is the theme's ordinary text style.
+    ///
+    /// The sign never gets painted across the code on a skin that can tint the
+    /// row instead — a red line and a green line read as banners. `ansi` is
+    /// the exception and the reason the rule is per-skin: with no background
+    /// tint available it has nowhere but the ink to put the signal.
+    #[test]
+    fn diff_rows_put_the_change_in_the_gutter_or_the_ink_never_both() {
+        for skin in ["dark", "light", "mur", "clay"] {
+            let theme = theme::resolve_skin(skin);
+            let args = serde_json::json!({
+                "file_path": "src/lib.rs", "old_string": "let x = 1;", "new_string": "let x = 2;"
+            });
+            let lines = edit_diff_lines("edit", &args, theme).unwrap();
+
+            let del = lines
+                .iter()
+                .find(|l| l.spans.first().is_some_and(|s| s.content.contains('-')))
+                .expect("a deletion row");
+            let add = lines
+                .iter()
+                .find(|l| l.spans.first().is_some_and(|s| s.content.contains('+')))
+                .expect("an addition row");
+
+            for (row, mark, ink) in [
+                (del, theme.diff_del_mark, theme.diff_del_text),
+                (add, theme.diff_add_mark, theme.diff_add_text),
+            ] {
+                assert_eq!(row.spans.len(), 2, "{skin}: row is gutter + code: {row:?}");
+                assert_eq!(
+                    row.spans[0].style.fg, mark.fg,
+                    "{skin}: gutter must carry the skin's sign colour"
+                );
+                assert_eq!(
+                    row.spans[1].style.fg, ink.fg,
+                    "{skin}: code text must use the skin's row ink: {:?}",
+                    row.spans[1]
+                );
+            }
+        }
     }
 
     #[test]
@@ -223,5 +288,68 @@ mod tests {
             !t.contains("more diff line(s)"),
             "expanded diff must not be locally truncated:\n{t}"
         );
+    }
+
+    /// Not an assertion — a human eyeball. Renders the same diff under every
+    /// skin as real ANSI so the tints can be compared side by side in a
+    /// terminal, using the production `Theme` rather than hand-copied hex.
+    ///
+    ///   cargo test -p mur-core --lib diff::tests::skin_gallery -- --ignored --nocapture
+    #[test]
+    #[ignore = "visual: prints an ANSI gallery for a human to look at"]
+    fn skin_gallery() {
+        use ratatui::style::{Color, Modifier};
+
+        fn sgr(style: ratatui::style::Style) -> String {
+            let mut out = String::from("\x1b[0m");
+            let code = |c: Color, base: u8| -> Option<String> {
+                Some(match c {
+                    Color::Rgb(r, g, b) => format!("\x1b[{};2;{r};{g};{b}m", base + 8),
+                    Color::Red => format!("\x1b[{}m", base + 1),
+                    Color::Green => format!("\x1b[{}m", base + 2),
+                    Color::Yellow => format!("\x1b[{}m", base + 3),
+                    Color::Blue => format!("\x1b[{}m", base + 4),
+                    Color::Magenta => format!("\x1b[{}m", base + 5),
+                    Color::Cyan => format!("\x1b[{}m", base + 6),
+                    Color::Gray => format!("\x1b[{}m", base + 7),
+                    Color::DarkGray => format!("\x1b[{};5;240m", base + 8),
+                    Color::White => format!("\x1b[{};5;255m", base + 8),
+                    _ => return None,
+                })
+            };
+            if let Some(fg) = style.fg.and_then(|c| code(c, 30)) {
+                out.push_str(&fg);
+            }
+            if let Some(bg) = style.bg.and_then(|c| code(c, 40)) {
+                out.push_str(&bg);
+            }
+            if style.add_modifier.contains(Modifier::DIM) {
+                out.push_str("\x1b[2m");
+            }
+            if style.add_modifier.contains(Modifier::BOLD) {
+                out.push_str("\x1b[1m");
+            }
+            out
+        }
+
+        let args = serde_json::json!({
+            "file_path": "mur-core/src/cmd/agent/cli/diff.rs",
+            "old_string": "let mark = theme.error;\nrow.paint_all(mark);",
+            "new_string": "let mark = theme.diff_del_mark;\nrow.gutter_only(mark);",
+        });
+
+        for skin in ["ansi", "light", "mur", "clay"] {
+            let theme = theme::resolve_skin(skin);
+            println!("\x1b[0m\n\x1b[1m  ── skin: {skin} ──\x1b[0m");
+            for line in edit_diff_lines("edit", &args, theme).unwrap() {
+                let mut row = String::new();
+                for span in &line.spans {
+                    row.push_str(&sgr(line.style.patch(span.style)));
+                    row.push_str(span.content.as_ref());
+                }
+                println!("{row}\x1b[0m");
+            }
+        }
+        println!("\x1b[0m");
     }
 }
