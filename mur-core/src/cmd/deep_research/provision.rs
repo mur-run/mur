@@ -739,7 +739,10 @@ mod tests {
 
         // …the built-in tools are DENIED (else a headless research turn that
         // reaches for one dead-ends on the unanswerable HITL gate and fails).
-        for tool in ["bash", "read_file", "write_file", "edit_file"] {
+        // Driven off the constant on purpose: a tool added to the deny list
+        // (e.g. `open_item`, added after a live run failed with
+        // `hitl_denied`) is covered here the moment it is added.
+        for tool in WORKER_DENIED_BUILTIN_TOOLS {
             assert_eq!(
                 resolve_tool_policy(&p.entitlements.tools, tool),
                 ToolPolicy::Deny,
