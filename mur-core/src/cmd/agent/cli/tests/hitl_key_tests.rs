@@ -31,6 +31,16 @@ async fn type_str(app: &mut App, s: &str, tx: &mpsc::Sender<StreamMsg>) {
     }
 }
 
+/// A non-character key (arrows, Enter, Esc) — the menu's live keys.
+fn code(c: KeyCode) -> Event {
+    Event::Key(KeyEvent {
+        code: c,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    })
+}
+
 fn ctrl(c: char) -> Event {
     Event::Key(KeyEvent {
         code: KeyCode::Char(c),
@@ -183,22 +193,69 @@ async fn decision_keys_are_text_once_the_composer_is_dirty() {
     assert_eq!(app.input_text(), "whynot");
 }
 
-/// Deliberate path: two presses on an empty composer grant the tool and
-/// leave no stray character behind.
+/// Deliberate path: arrow to the per-tool row, press Enter. One keystroke
+/// can never hand out a session grant — the cursor starts on `Yes`.
 #[tokio::test]
-async fn double_press_grants_the_session_allow() {
+async fn menu_grants_the_session_allow_on_enter() {
+    let (tx, _rx) = mpsc::channel(16);
+    let mut app = App::test_fixture();
+    gate(&mut app);
+    app.hitl_selected = 0;
+
+    handle_event(&mut app, code(KeyCode::Down), &tx).await;
+    assert_eq!(app.hitl_selected, 1, "row 2 is the per-tool grant");
+    assert!(app.hitl.is_some(), "moving the cursor decides nothing");
+    assert!(app.session_tool_allow.is_empty(), "no grant until Enter");
+
+    handle_event(&mut app, code(KeyCode::Enter), &tx).await;
+    assert!(app.session_tool_allow.contains("write_file"));
+    assert!(app.hitl.is_none(), "Enter resolves the gate");
+    assert_eq!(app.input_text(), "", "no stray character");
+}
+
+/// The digit shortcut takes the same path as arrow+Enter, and `4` is the
+/// deny row rather than a grant.
+#[tokio::test]
+async fn digit_shortcuts_pick_rows_directly() {
     let (tx, _rx) = mpsc::channel(16);
     let mut app = App::test_fixture();
     gate(&mut app);
 
-    handle_event(&mut app, key('a'), &tx).await;
-    assert!(app.hitl.is_some(), "first press only arms");
-    assert_eq!(app.hitl_grant_confirm, Some('a'));
+    handle_event(&mut app, key('3'), &tx).await;
+    assert!(app.auto_approve, "row 3 grants every tool");
+    assert!(app.hitl.is_none());
+    assert_eq!(app.input_text(), "", "the digit must not land as text");
 
-    handle_event(&mut app, key('a'), &tx).await;
-    assert!(app.session_tool_allow.contains("write_file"));
-    assert!(app.hitl.is_none(), "second press resolves the gate");
-    assert_eq!(app.input_text(), "", "armed char is taken back");
+    let mut app = App::test_fixture();
+    app.auto_approve = false;
+    gate(&mut app);
+    handle_event(&mut app, key('4'), &tx).await;
+    assert!(app.hitl.is_none(), "row 4 denies");
+    assert!(app.session_tool_allow.is_empty());
+    assert!(!app.auto_approve);
+}
+
+/// The menu's reason for existing: ↑/↓ and Enter cannot collide with typed
+/// text, so a denial can carry the message the operator is writing, while
+/// the digits step aside and stay ordinary characters.
+#[tokio::test]
+async fn menu_keys_stay_live_while_the_composer_has_text() {
+    let (tx, _rx) = mpsc::channel(16);
+    let mut app = App::test_fixture();
+    app.auto_approve = false;
+    gate(&mut app);
+
+    type_str(&mut app, "use 1 worker", &tx).await;
+    assert!(app.hitl.is_some(), "digits must not decide");
+    assert!(app.session_tool_allow.is_empty());
+    assert_eq!(app.input_text(), "use 1 worker", "text intact");
+
+    handle_event(&mut app, code(KeyCode::Down), &tx).await;
+    handle_event(&mut app, code(KeyCode::Down), &tx).await;
+    handle_event(&mut app, code(KeyCode::Down), &tx).await;
+    assert_eq!(app.hitl_selected, 3, "cursor still moves");
+    handle_event(&mut app, code(KeyCode::Enter), &tx).await;
+    assert!(app.hitl.is_none(), "Enter still decides");
 }
 
 /// `/auto off` used to clear only the blanket flag, so tools muted with

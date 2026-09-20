@@ -14,6 +14,7 @@ mod status;
 
 pub use band::flush_finished;
 pub(super) use hitl::hitl_scroll_step;
+pub(super) use hitl::{HITL_CHOICES, HitlChoice};
 
 use band::render_transcript;
 use chooser::{chooser_band_height, render_chooser_band};
@@ -104,7 +105,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             f,
             app.theme,
             &hitl,
-            app.hitl_grant_confirm,
+            app.hitl_selected,
             app.input_text().is_empty(),
             app.hitl_scroll,
         );
