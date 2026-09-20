@@ -97,8 +97,14 @@ pub fn card_lines(
         out.push(Line::from(row));
     }
 
-    // Collapsed cards stop after the header (plus any error / HITL rows below).
+    // Collapsed cards keep the transcript compact, but edits need a visible
+    // receipt: include their diff and let the transcript viewport scroll it.
     if !expanded {
+        if card.error.is_none()
+            && let Some(diff_lines) = super::diff::edit_diff_lines(&card.name, &card.args, theme)
+        {
+            out.extend(diff_lines);
+        }
         push_error_and_hitl(&mut out, card, theme);
         return out;
     }
@@ -699,6 +705,26 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn collapsed_edit_card_shows_a_compact_diff_preview() {
+        let c = StepCard::new(
+            "s1".into(),
+            "edit_file".into(),
+            serde_json::json!({
+                "path":"a.rs",
+                "old_string":"old line",
+                "new_string":"new line"
+            }),
+        );
+        let text = joined(&card_lines(&c, theme::resolve_skin("dark"), false, TEST_WIDTH));
+        assert!(text.contains("- old line"), "expected removal in: {text}");
+        assert!(text.contains("+ new line"), "expected addition in: {text}");
+        assert!(
+            !text.contains("\"old_string\""),
+            "raw JSON must not appear in: {text}"
+        );
     }
 
     #[test]

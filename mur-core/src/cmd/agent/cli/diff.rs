@@ -1,5 +1,5 @@
 //! Render an edit-tool's `{file_path, old_string, new_string}` args as a
-//! bounded `-`/`+`/context diff, using the `diff` crate.
+//! `-`/`+`/context diff, using the `diff` crate.
 //!
 //! Consumed by `render_card::card_lines` to show an inline diff for edit-tool cards.
 
@@ -7,9 +7,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 
 use super::theme::Theme;
-
-/// Hard cap on diff lines rendered (keeps cards short even on large edits).
-const DIFF_MAX_LINES: usize = 40;
 
 /// Tool names (case-insensitive) whose args describe a file edit.
 ///
@@ -36,19 +33,6 @@ fn is_edit_tool(name: &str) -> bool {
 fn str_field<'a>(args: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
         .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
-}
-
-/// Append one bounded diff line; no-op once `pushed` reaches `DIFF_MAX_LINES`.
-/// The counter always increments so it reflects the true total line count.
-fn push(out: &mut Vec<Line<'static>>, pushed: &mut usize, s: String, style: Style, dim: bool) {
-    if *pushed < DIFF_MAX_LINES {
-        let mut st = style;
-        if dim {
-            st = st.add_modifier(Modifier::DIM);
-        }
-        out.push(Line::styled(s, st));
-    }
-    *pushed += 1; // always increment — drives the accurate "+N more" count
 }
 
 /// One rendered diff row, before any styling or line cap is applied.
@@ -124,8 +108,9 @@ pub fn edit_diff_text(name: &str, args: &serde_json::Value) -> Option<Vec<String
     )
 }
 
-/// Build bounded `-`/`+` diff lines for an edit-like tool call, or `None` if
-/// this isn't an edit we can render.
+/// Build styled `-`/`+` diff lines for an edit-like tool call, or `None` if
+/// this isn't an edit we can render. The transcript viewport provides scrolling;
+/// keeping all rows here means expanded cards never silently hide a file change.
 pub fn edit_diff_lines(
     name: &str,
     args: &serde_json::Value,
@@ -133,43 +118,29 @@ pub fn edit_diff_lines(
 ) -> Option<Vec<Line<'static>>> {
     let parts = edit_diff_parts(name, args)?;
 
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let mut pushed = 0usize;
-
-    for part in parts {
-        match part {
-            // The path header sits above the diff and is never capped.
-            DiffPart::Path(p) => out.push(Line::styled(
-                format!(" {p}"),
-                theme.muted.add_modifier(Modifier::BOLD),
-            )),
-            DiffPart::Del(l) => push(
-                &mut out,
-                &mut pushed,
-                format!("  - {l}"),
-                Style::default().fg(Color::Red),
-                false,
-            ),
-            DiffPart::Add(l) => push(
-                &mut out,
-                &mut pushed,
-                format!("  + {l}"),
-                Style::default().fg(Color::Green),
-                false,
-            ),
-            DiffPart::Ctx(l) => push(&mut out, &mut pushed, format!("    {l}"), theme.muted, true),
-        }
-    }
-
-    // If there were more lines than the cap, append a truncation hint.
-    if pushed > DIFF_MAX_LINES {
-        out.push(Line::styled(
-            format!("  … +{} more diff line(s)", pushed - DIFF_MAX_LINES),
-            theme.muted.add_modifier(Modifier::DIM),
-        ));
-    }
-
-    Some(out)
+    Some(
+        parts
+            .into_iter()
+            .map(|part| match part {
+                DiffPart::Path(p) => Line::styled(
+                    format!(" {p}"),
+                    theme.muted.add_modifier(Modifier::BOLD),
+                ),
+                DiffPart::Del(l) => Line::styled(
+                    format!("  - {l}"),
+                    Style::default().fg(Color::Red),
+                ),
+                DiffPart::Add(l) => Line::styled(
+                    format!("  + {l}"),
+                    Style::default().fg(Color::Green),
+                ),
+                DiffPart::Ctx(l) => Line::styled(
+                    format!("    {l}"),
+                    theme.muted.add_modifier(Modifier::DIM),
+                ),
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -240,36 +211,21 @@ mod tests {
     }
 
     #[test]
-    fn truncation_marker_only_past_cap_with_correct_count() {
-        // 50 added lines (write tool, no old_string) → 40 shown + "+10 more"
+    fn long_diffs_remain_complete_for_transcript_scrolling() {
+        // The transcript viewport scrolls, so a 50-line edit must retain every
+        // row rather than hide the tail behind a local card cap.
         let content = (0..50)
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
         let args = serde_json::json!({ "file_path": "big.rs", "content": content });
         let lines = edit_diff_lines("write", &args, theme::resolve_skin("dark")).unwrap();
-        let t: String = lines
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(t.contains("+10 more"), "expected '+10 more' in:\n{t}");
-
-        // exactly 40 lines must NOT fire the marker
-        let content40 = (0..40)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let args40 = serde_json::json!({ "file_path": "exact.rs", "content": content40 });
-        let lines40 = edit_diff_lines("write", &args40, theme::resolve_skin("dark")).unwrap();
-        let t40: String = lines40
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let t = text(&lines);
+        assert!(t.contains("+ line 0"), "missing first line:\n{t}");
+        assert!(t.contains("+ line 49"), "missing final line:\n{t}");
         assert!(
-            !t40.contains("more"),
-            "must NOT show marker at exactly 40 lines, got:\n{t40}"
+            !t.contains("more diff line(s)"),
+            "expanded diff must not be locally truncated:\n{t}"
         );
     }
 }
