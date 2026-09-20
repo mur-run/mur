@@ -9,6 +9,37 @@ use super::theme::Theme;
 /// Maximum output lines shown inside a card before a "…+N more" truncation hint.
 pub const OUTPUT_MAX_LINES: usize = 20;
 
+/// Maximum changed/context rows shown on a collapsed edit card. The path header
+/// is always retained; the full unbounded patch stays one Ctrl+O away.
+const COLLAPSED_DIFF_PREVIEW_LINES: usize = 20;
+
+/// Append a bounded edit preview and a clear route to the complete patch.
+///
+/// Tool cards live in a transcript, so allowing a large write to consume the
+/// conversation makes both the agent's conclusion and the next approval hard
+/// to find. The Ctrl+O overlay is already a full-screen, natively scrollable
+/// representation and deliberately renders edit diffs without a cap.
+fn push_collapsed_diff_preview(
+    out: &mut Vec<Line<'static>>,
+    diff_lines: Vec<Line<'static>>,
+    theme: &'static Theme,
+) {
+    let path_rows = usize::from(diff_lines.first().is_some_and(|line| {
+        line.spans
+            .first()
+            .is_some_and(|span| !span.content.starts_with("  "))
+    }));
+    let shown = path_rows + COLLAPSED_DIFF_PREVIEW_LINES;
+    let hidden = diff_lines.len().saturating_sub(shown);
+    out.extend(diff_lines.into_iter().take(shown));
+    if hidden > 0 {
+        out.push(Line::styled(
+            format!(" … {hidden} more · Ctrl+O full diff"),
+            theme.muted.add_modifier(Modifier::DIM),
+        ));
+    }
+}
+
 /// Turn a `StepCard` into renderable `Line`s for the transcript.
 ///
 /// `expanded` controls verbosity. Collapsed (the default) shows a single
@@ -103,7 +134,7 @@ pub fn card_lines(
         if card.error.is_none()
             && let Some(diff_lines) = super::diff::edit_diff_lines(&card.name, &card.args, theme)
         {
-            out.extend(diff_lines);
+            push_collapsed_diff_preview(&mut out, diff_lines, theme);
         }
         push_error_and_hitl(&mut out, card, theme);
         return out;
@@ -718,12 +749,45 @@ mod tests {
                 "new_string":"new line"
             }),
         );
-        let text = joined(&card_lines(&c, theme::resolve_skin("dark"), false, TEST_WIDTH));
+        let text = joined(&card_lines(
+            &c,
+            theme::resolve_skin("dark"),
+            false,
+            TEST_WIDTH,
+        ));
         assert!(text.contains("- old line"), "expected removal in: {text}");
         assert!(text.contains("+ new line"), "expected addition in: {text}");
         assert!(
             !text.contains("\"old_string\""),
             "raw JSON must not appear in: {text}"
+        );
+    }
+
+    #[test]
+    fn long_collapsed_preview_is_bounded_with_a_full_diff_affordance() {
+        let content = (0..30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let c = StepCard::new(
+            "s1".into(),
+            "write_file".into(),
+            serde_json::json!({ "path": "big.rs", "content": content }),
+        );
+        let text = joined(&card_lines(
+            &c,
+            theme::resolve_skin("dark"),
+            false,
+            TEST_WIDTH,
+        ));
+        assert!(text.contains("+ line 0"), "first diff row missing: {text}");
+        assert!(
+            text.contains("… 10 more · Ctrl+O full diff"),
+            "missing affordance: {text}"
+        );
+        assert!(
+            !text.contains("+ line 29"),
+            "preview must be bounded: {text}"
         );
     }
 
