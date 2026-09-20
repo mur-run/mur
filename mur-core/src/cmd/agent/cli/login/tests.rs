@@ -588,3 +588,36 @@ fn a_lock_that_cannot_be_opened_is_not_reported_as_contention() {
         other => panic!("expected Unavailable, got {other:?}"),
     }
 }
+
+/// Rung 3 exists for the case where rungs 1 and 2 already failed — which
+/// means the owner CLI still holds a credential it will not refresh. Handing
+/// such a CLI a bare `claude auth login` is a no-op: it reports "already
+/// authenticated" and exits 0, so murmur prints "logged in ✓" and the next
+/// request 401s exactly as before. The logout has to run first, and it has to
+/// run *before* the login, not instead of it.
+#[test]
+fn anthropic_relogin_clears_the_stale_credential_before_logging_in() {
+    let steps = login_sequence(Provider::Anthropic);
+    assert_eq!(
+        steps,
+        vec![
+            vec!["claude".to_string(), "auth".into(), "logout".into()],
+            vec!["claude".to_string(), "auth".into(), "login".into()],
+        ],
+        "logout must precede login or the login is a no-op: {steps:?}"
+    );
+}
+
+/// `codex logout` signs out **every** Codex client on the machine — CLI and
+/// IDE extensions included — which is why `docs/model-gateway.md:103` puts it
+/// behind an explicit confirmation. `/login chatgpt` has no such confirmation,
+/// so it must not acquire one silently as a side effect of fixing Anthropic.
+#[test]
+fn chatgpt_relogin_does_not_silently_sign_out_every_codex_client() {
+    let steps = login_sequence(Provider::Chatgpt);
+    assert_eq!(
+        steps,
+        vec![vec!["codex".to_string(), "login".into()]],
+        "no unconfirmed logout for Codex: {steps:?}"
+    );
+}
