@@ -382,11 +382,13 @@ The checker recomputes the same matches and fails for either missing or stale `f
 | `mur-core/src/server/mod.rs:381` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/server/mod.rs:385` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/server/mod.rs:389` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/update/mod.rs:83` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
-| `mur-core/src/update/mod.rs:129` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
-| `mur-core/src/update/mod.rs:137` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
-| `mur-core/src/update/mod.rs:144` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
-| `mur-core/src/update/mod.rs:175` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
+| `mur-core/src/update/mod.rs:87` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
+| `mur-core/src/update/mod.rs:133` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
+| `mur-core/src/update/mod.rs:141` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
+| `mur-core/src/update/mod.rs:148` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
+| `mur-core/src/update/mod.rs:179` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
+| `mur-core/src/update/source.rs:44` | `mur` update path | `explicit-freebsd` | FreeBSD branch of install-source detection; covered by host-independent tests. | Task 3 |
+| `mur-core/src/update/source.rs:54` | `mur` update path | `explicit-freebsd` | Non-FreeBSD branch of install-source detection; covered by host-independent tests. | Task 3 |
 | `mur-core/src/update/release.rs:20` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
 | `mur-core/src/update/resign.rs:5` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
 | `mur-core/src/update/resign.rs:17` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
