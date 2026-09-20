@@ -74,6 +74,31 @@ pub(super) fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bo
     decide_hitl_with_note(app, tx, allow, false);
 }
 
+/// Act on the highlighted approval-menu row. This is the ONLY place a
+/// session-wide grant is handed out: a grant now costs a deliberate move to a
+/// labelled row plus Enter, so no single reflex keystroke can widen the
+/// blast radius past the one call in front of the operator.
+pub(super) fn commit_hitl_choice(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    let choice = super::ui::HITL_CHOICES
+        .get(app.hitl_selected)
+        .copied()
+        .unwrap_or(super::ui::HitlChoice::Once);
+    match choice {
+        super::ui::HitlChoice::Once => decide_hitl(app, tx, true),
+        super::ui::HitlChoice::Tool => {
+            if let Some(req) = &app.hitl {
+                app.session_tool_allow.insert(req.tool_name.clone());
+            }
+            decide_hitl(app, tx, true);
+        }
+        super::ui::HitlChoice::All => {
+            app.auto_approve = true;
+            decide_hitl(app, tx, true);
+        }
+        super::ui::HitlChoice::Deny => decide_hitl(app, tx, false),
+    }
+}
+
 /// Retire an approval request that has outlived the gate's timeout.
 ///
 /// The runtime denies the call on its own deadline and says nothing about it:
@@ -96,7 +121,6 @@ pub(super) fn expire_stale_hitl(app: &mut App) -> bool {
     let tool = req.tool_name.clone();
     let step = req.step_id.clone();
     app.hitl = None;
-    app.hitl_grant_confirm = None;
     // Same swallow window as a normal decision: a key pressed just as the gate
     // died must not land in the composer as text.
     app.hitl_resolved_at = Some(StdInstant::now());
@@ -130,7 +154,6 @@ pub(super) fn decide_hitl_with_note(
 ) {
     if let Some(req) = app.hitl.take() {
         app.hitl_resolved_at = Some(std::time::Instant::now());
-        app.hitl_grant_confirm = None;
         if let Some(sid) = &req.step_id {
             app.clear_card_awaiting(sid);
         }
