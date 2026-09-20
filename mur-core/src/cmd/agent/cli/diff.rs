@@ -218,7 +218,8 @@ mod tests {
     }
 
     #[test]
-    fn edit_args_produce_minus_plus_lines() {        let args = serde_json::json!({
+    fn edit_args_produce_minus_plus_lines() {
+        let args = serde_json::json!({
             "file_path": "src/lib.rs", "old_string": "let x = 1;", "new_string": "let x = 2;"
         });
         let lines = edit_diff_lines("edit", &args, theme::resolve_skin("dark")).unwrap();
