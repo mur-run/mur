@@ -403,6 +403,8 @@ impl LlmClient for OpenAiClient {
         let input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
         let output_tokens = v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text,
             input_tokens,
             output_tokens,
@@ -634,6 +636,8 @@ impl LlmClient for OpenAiClient {
             return Err(LlmError::InvalidResponse("empty streamed response".into()));
         }
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text,
             input_tokens,
             output_tokens,

@@ -394,7 +394,7 @@ fn apply_sse_event_reconstructs_tool_use_and_stop_reason() {
     assert_eq!(acc.tool_calls[0].tool_name, "bash");
     assert_eq!(acc.tool_calls[0].input, json!({"command":"echo hi"}));
     assert_eq!(acc.stop_reason, crate::llm::StopReason::ToolUse);
-    assert_eq!(acc.output_tokens, 7);
+    assert_eq!(acc.usage.output_tokens, 7);
 }
 
 #[test]
@@ -678,4 +678,162 @@ fn anthropic_permission_safety_and_size_fail_closed() {
         "{too_large:?}"
     );
     assert_eq!(classify(&too_large), Disposition::Stop);
+}
+
+// ───── prompt caching ─────
+//
+// The API never errors for a missed cache — the bill just stays high — so the
+// request shape is pinned here, and the usage sum is pinned because every
+// consumer of `input_tokens` wants the whole prompt, not the uncached remainder.
+
+fn caching_client() -> AnthropicClient {
+    AnthropicClient::new("http://x".into(), "k".into(), "claude-opus-5".into())
+}
+
+#[test]
+fn request_body_caches_system_and_last_message_block() {
+    let req = LlmRequest {
+        messages: vec![
+            RichMessage::Text {
+                role: "system".into(),
+                content: "be brief".into(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            },
+            RichMessage::ToolUse {
+                text: None,
+                calls: vec![ToolCallResult {
+                    call_id: "c1".into(),
+                    tool_name: "bash".into(),
+                    input: json!({"command": "ls"}),
+                }],
+            },
+            RichMessage::ToolResults {
+                results: vec![ToolResultEntry {
+                    call_id: "c1".into(),
+                    content: "a\nb".into(),
+                    is_error: false,
+                    status: Default::default(),
+                    images: vec![],
+                }],
+            },
+        ],
+        ..Default::default()
+    };
+    let body = caching_client().request_body(&req, false);
+
+    let ephemeral = json!({"type": "ephemeral"});
+    assert_eq!(
+        body["system"],
+        json!([{"type": "text", "text": "be brief", "cache_control": ephemeral}]),
+        "system must be the array form so it can carry a breakpoint"
+    );
+    let msgs = body["messages"].as_array().expect("messages array");
+    let last_block = msgs
+        .last()
+        .and_then(|m| m["content"].as_array())
+        .and_then(|c| c.last())
+        .expect("last message has content blocks");
+    assert_eq!(last_block["type"], "tool_result");
+    assert_eq!(last_block["cache_control"], ephemeral);
+    // Exactly the two breakpoints: none on earlier messages.
+    let marked = msgs
+        .iter()
+        .flat_map(|m| m["content"].as_array().cloned().unwrap_or_default())
+        .filter(|b| b.get("cache_control").is_some())
+        .count();
+    assert_eq!(marked, 1, "only the trailing block carries a marker");
+    assert!(body.get("stream").is_none());
+    assert_eq!(
+        caching_client().request_body(&req, true)["stream"],
+        json!(true)
+    );
+}
+
+#[test]
+fn mark_cache_breakpoint_lifts_string_content_to_a_block() {
+    let mut convo = vec![json!({"role": "user", "content": "hello"})];
+    mark_cache_breakpoint(&mut convo);
+    assert_eq!(
+        convo[0]["content"],
+        json!([{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}])
+    );
+    let mut empty: Vec<serde_json::Value> = vec![];
+    mark_cache_breakpoint(&mut empty); // no messages: nothing to mark, no panic
+}
+
+#[test]
+fn request_body_omits_empty_system_instead_of_sending_an_empty_block() {
+    let req = LlmRequest {
+        messages: vec![
+            RichMessage::Text {
+                role: "system".into(),
+                content: String::new(),
+            },
+            RichMessage::Text {
+                role: "user".into(),
+                content: "hi".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    // The API rejects an empty text block; the old string form tolerated "".
+    assert!(
+        caching_client()
+            .request_body(&req, false)
+            .get("system")
+            .is_none()
+    );
+}
+
+#[test]
+fn usage_sums_cache_splits_into_input_tokens() {
+    let mut u = Usage::default();
+    u.merge(&json!({
+        "input_tokens": 5,
+        "cache_creation_input_tokens": 100,
+        "cache_read_input_tokens": 900,
+        "output_tokens": 7
+    }));
+    let resp = u.into_response("t".into(), "m".into(), vec![], StopReason::EndTurn);
+    assert_eq!(
+        resp.input_tokens, 1005,
+        "whole prompt, not the uncached remainder"
+    );
+    assert_eq!(resp.cache_creation_input_tokens, 100);
+    assert_eq!(resp.cache_read_input_tokens, 900);
+    assert_eq!(resp.output_tokens, 7);
+
+    // A backend without a cache reports the splits as zero and the sum is
+    // just `input_tokens` — the pre-caching behaviour, unchanged.
+    let mut plain = Usage::default();
+    plain.merge(&json!({"input_tokens": 42, "output_tokens": 1}));
+    assert_eq!(
+        plain
+            .into_response("".into(), "".into(), vec![], StopReason::EndTurn)
+            .input_tokens,
+        42
+    );
+}
+
+#[test]
+fn sse_usage_survives_message_delta_without_prompt_fields() {
+    // message_start carries the prompt side; a message_delta that only
+    // carries output_tokens must not zero it.
+    let mut acc = StreamAccum::default();
+    apply_sse_event(
+        &mut acc,
+        &json!({"type": "message_start", "message": {"usage": {
+            "input_tokens": 3, "cache_read_input_tokens": 500, "output_tokens": 1
+        }}}),
+    );
+    apply_sse_event(
+        &mut acc,
+        &json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9}}),
+    );
+    assert_eq!(acc.usage.cache_read_input_tokens, 500);
+    assert_eq!(acc.usage.input_tokens, 3);
+    assert_eq!(acc.usage.output_tokens, 9);
 }

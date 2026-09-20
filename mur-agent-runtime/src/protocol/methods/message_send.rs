@@ -332,6 +332,8 @@ mod tests {
         ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             Ok(crate::llm::LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: "slow reply".into(),
                 input_tokens: 1,
                 output_tokens: 1,

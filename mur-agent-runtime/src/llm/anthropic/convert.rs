@@ -143,3 +143,19 @@ pub(super) fn rich_messages_to_anthropic(
     };
     (system, convo, None)
 }
+
+/// Put a prompt-cache breakpoint on the last content block of the last
+/// message. The API walks back from a breakpoint to the longest cached
+/// prefix, so one trailing marker per request is enough for every earlier
+/// call of the same turn to come back as a cache read; a string body becomes
+/// a one-block array because `cache_control` lives on blocks, not messages.
+pub(super) fn mark_cache_breakpoint(convo: &mut [serde_json::Value]) {
+    let Some(last) = convo.last_mut() else { return };
+    let content = &mut last["content"];
+    if let Some(s) = content.as_str().map(str::to_owned) {
+        *content = json!([{"type": "text", "text": s}]);
+    }
+    if let Some(block) = content.as_array_mut().and_then(|a| a.last_mut()) {
+        block["cache_control"] = json!({"type": "ephemeral"});
+    }
+}

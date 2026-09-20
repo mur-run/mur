@@ -71,6 +71,8 @@ impl LlmClient for StubLlm {
             None => "[stub: no scenario matched]".to_string(),
         };
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             input_tokens: (joined.len() / 4) as u64,
             output_tokens: (text.len() / 4) as u64,
             text,

@@ -3,7 +3,8 @@
 //! POST $ANTHROPIC_BASE_URL/v1/messages
 //!   x-api-key: $ANTHROPIC_API_KEY
 //!   anthropic-version: 2023-06-01
-//!   {"model": ..., "max_tokens": ..., "system": "...", "messages": [...]}
+//!   {"model": ..., "max_tokens": ..., "system": [{"type": "text", ..., "cache_control": ...}],
+//!    "messages": [...]}
 //!
 //! Subscription-OAuth tokens (sk-ant-oat*) need different auth + headers
 //! than this provider-neutral client supplies. Point `ANTHROPIC_BASE_URL`
@@ -19,7 +20,7 @@ use mur_common::llm::supported_effort;
 use serde_json::json;
 
 mod convert;
-use convert::rich_messages_to_anthropic;
+use convert::{mark_cache_breakpoint, rich_messages_to_anthropic};
 
 const DEFAULT_VERSION: &str = "2023-06-01";
 /// Output-token ceiling when a request leaves `max_tokens` unset. This is a
@@ -358,11 +359,62 @@ impl AnthropicClient {
     }
 }
 
+/// The `usage` object of a response. Every field is optional on the wire:
+/// a non-streaming body carries them all, `message_start` carries the
+/// prompt side, `message_delta` carries `output_tokens` and on newer API
+/// versions repeats the rest — so `merge` only overwrites what is present.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Usage {
+    input_tokens: u64,
+    cache_creation_input_tokens: u64,
+    cache_read_input_tokens: u64,
+    output_tokens: u64,
+}
+
+impl Usage {
+    fn merge(&mut self, u: &serde_json::Value) {
+        let take = |k: &str, slot: &mut u64| {
+            if let Some(n) = u[k].as_u64() {
+                *slot = n;
+            }
+        };
+        take("input_tokens", &mut self.input_tokens);
+        take(
+            "cache_creation_input_tokens",
+            &mut self.cache_creation_input_tokens,
+        );
+        take("cache_read_input_tokens", &mut self.cache_read_input_tokens);
+        take("output_tokens", &mut self.output_tokens);
+    }
+
+    /// `input_tokens` on the wire is only the uncached remainder; the
+    /// response reports the whole prompt (see `LlmResponse::input_tokens`).
+    fn into_response(
+        self,
+        text: String,
+        model: String,
+        tool_calls: Vec<crate::llm::ToolCallResult>,
+        stop_reason: StopReason,
+    ) -> LlmResponse {
+        LlmResponse {
+            text,
+            input_tokens: self.input_tokens
+                + self.cache_creation_input_tokens
+                + self.cache_read_input_tokens,
+            output_tokens: self.output_tokens,
+            cache_creation_input_tokens: self.cache_creation_input_tokens,
+            cache_read_input_tokens: self.cache_read_input_tokens,
+            model,
+            tool_calls,
+            stop_reason,
+        }
+    }
+}
+
 /// Accumulator for an Anthropic SSE response while it streams.
 struct StreamAccum {
     text: String,
-    input_tokens: u64,
-    output_tokens: u64,
+    usage: Usage,
     tool_calls: Vec<crate::llm::ToolCallResult>,
     stop_reason: StopReason,
     /// The in-progress tool_use block: (id, name, partial-JSON args buffer).
@@ -373,8 +425,7 @@ impl Default for StreamAccum {
     fn default() -> Self {
         Self {
             text: String::new(),
-            input_tokens: 0,
-            output_tokens: 0,
+            usage: Usage::default(),
             tool_calls: Vec::new(),
             stop_reason: StopReason::EndTurn,
             cur_tool: None,
@@ -456,9 +507,7 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
             None
         }
         Some("message_start") => {
-            acc.input_tokens = v["message"]["usage"]["input_tokens"]
-                .as_u64()
-                .unwrap_or(acc.input_tokens);
+            acc.usage.merge(&v["message"]["usage"]);
             None
         }
         Some("message_delta") => {
@@ -469,9 +518,7 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
                     _ => StopReason::EndTurn,
                 };
             }
-            acc.output_tokens = v["usage"]["output_tokens"]
-                .as_u64()
-                .unwrap_or(acc.output_tokens);
+            acc.usage.merge(&v["usage"]);
             None
         }
         _ => None,
@@ -513,14 +560,9 @@ fn finish_stream(
     } else {
         acc.stop_reason
     };
-    Ok(LlmResponse {
-        text: acc.text,
-        input_tokens: acc.input_tokens,
-        output_tokens: acc.output_tokens,
-        model,
-        tool_calls: acc.tool_calls,
-        stop_reason,
-    })
+    Ok(acc
+        .usage
+        .into_response(acc.text, model, acc.tool_calls, stop_reason))
 }
 
 fn parse_response_body(
@@ -570,22 +612,37 @@ fn parse_response_body(
     Ok((text, tool_calls, stop_reason))
 }
 
-#[async_trait]
-impl LlmClient for AnthropicClient {
-    fn model_name(&self) -> &str {
-        &self.model
-    }
-
-    async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let (system, convo, _) = rich_messages_to_anthropic(&req.messages);
-
+impl AnthropicClient {
+    /// Build the `/v1/messages` body with two prompt-cache breakpoints (the
+    /// API allows four): the system prompt — the prefix every call of a turn
+    /// shares; tools render before it and ride along — and the last content
+    /// block of the last message, so each call of an agentic loop re-reads
+    /// the whole prior conversation at the cached rate instead of paying for
+    /// it again. A turn that makes 70 calls resends its history 70 times;
+    /// cache reads are what make that affordable. Nothing here is beta: the
+    /// `2023-06-01` version header accepts `cache_control`.
+    ///
+    /// ponytail: the system prompt is one block, so a turn whose per-turn
+    /// skill injection changed misses the system block once (the messages
+    /// breakpoint behind it still hits within the turn). Splitting the
+    /// stable base from the injected layer, or moving the injection to a
+    /// mid-conversation `role: system` message, is the upgrade path when
+    /// cross-turn misses show up in `cache_creation_input_tokens`.
+    fn request_body(&self, req: &LlmRequest, stream: bool) -> serde_json::Value {
+        let (system, mut convo, _) = rich_messages_to_anthropic(&req.messages);
+        mark_cache_breakpoint(&mut convo);
         let mut body = json!({
             "model": self.model,
             "max_tokens": req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             "messages": convo,
         });
-        if let Some(s) = system {
-            body["system"] = json!(s);
+        if stream {
+            body["stream"] = json!(true);
+        }
+        if let Some(s) = system.filter(|s| !s.is_empty()) {
+            body["system"] = json!([
+                {"type": "text", "text": s, "cache_control": {"type": "ephemeral"}}
+            ]);
         }
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
@@ -596,10 +653,10 @@ impl LlmClient for AnthropicClient {
             body["output_config"] = json!({ "effort": e.as_str() });
         }
         if !req.tools.is_empty() {
-            body["tools"] = serde_json::json!(
+            body["tools"] = json!(
                 req.tools
                     .iter()
-                    .map(|t| serde_json::json!({
+                    .map(|t| json!({
                         "name": t.name,
                         "description": t.description,
                         "input_schema": t.input_schema,
@@ -607,6 +664,18 @@ impl LlmClient for AnthropicClient {
                     .collect::<Vec<_>>()
             );
         }
+        body
+    }
+}
+
+#[async_trait]
+impl LlmClient for AnthropicClient {
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
+        let body = self.request_body(&req, false);
 
         if let AnthropicAuth::ApiKey(key) = &self.auth {
             warn_if_oauth_key_misconfigured(key, &self.base_url);
@@ -636,16 +705,9 @@ impl LlmClient for AnthropicClient {
             .map_err(|e| LlmError::Http(format!("parse response: {e}")))?;
 
         let (text, tool_calls, stop_reason) = parse_response_body(&v)?;
-        let input_tokens = v["usage"]["input_tokens"].as_u64().unwrap_or(0);
-        let output_tokens = v["usage"]["output_tokens"].as_u64().unwrap_or(0);
-        Ok(LlmResponse {
-            text,
-            input_tokens,
-            output_tokens,
-            model: self.model.clone(),
-            tool_calls,
-            stop_reason,
-        })
+        let mut usage = Usage::default();
+        usage.merge(&v["usage"]);
+        Ok(usage.into_response(text, self.model.clone(), tool_calls, stop_reason))
     }
 
     async fn generate_stream(
@@ -653,36 +715,7 @@ impl LlmClient for AnthropicClient {
         req: LlmRequest,
         sink: tokio::sync::mpsc::Sender<super::StreamDelta>,
     ) -> Result<LlmResponse, LlmError> {
-        let (system, convo, _) = rich_messages_to_anthropic(&req.messages);
-        let mut body = json!({
-            "model": self.model,
-            "max_tokens": req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
-            "messages": convo,
-            "stream": true,
-        });
-        if let Some(s) = system {
-            body["system"] = json!(s);
-        }
-        if let Some(t) = req.temperature {
-            body["temperature"] = json!(t);
-        }
-        // Effort is per-call, narrowed to what this model actually accepts —
-        // an unsupported level is a 400. Absent = the API default (`high`).
-        if let Some(e) = req.effort.and_then(|e| supported_effort(&self.model, e)) {
-            body["output_config"] = json!({ "effort": e.as_str() });
-        }
-        if !req.tools.is_empty() {
-            body["tools"] = serde_json::json!(
-                req.tools
-                    .iter()
-                    .map(|t| serde_json::json!({
-                        "name": t.name,
-                        "description": t.description,
-                        "input_schema": t.input_schema,
-                    }))
-                    .collect::<Vec<_>>()
-            );
-        }
+        let body = self.request_body(&req, true);
         if let AnthropicAuth::ApiKey(key) = &self.auth {
             warn_if_oauth_key_misconfigured(key, &self.base_url);
         }
