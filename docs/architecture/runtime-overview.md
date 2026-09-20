@@ -494,3 +494,130 @@ kernel-level exec check, not in git. Either:
 
 A repo-manager profile should choose one of these deliberately; the default
 allowlist plus an SSH remote is a silent-failure combination.
+
+---
+
+# Moved from CLAUDE.md (2026-09-21)
+
+Kept verbatim so the operational file could stay cheap to load. Nothing here is
+optional reading for a task that touches the subsystem it describes.
+
+## Memory Pipeline (Four-Stage)
+
+The learning subsystem that powers agent memory:
+
+```
+capture/ → store/ → retrieve/ → inject/
+                ↕
+            evolve/
+```
+
+- **`capture/`** — Noise filter, significance scoring, feedback extraction. Ambient session capture lives in `session/ambient.rs` (hooks record every event); the harvest gate (`harvest/`) turns idle sessions into workflow proposals.
+- **`store/`** — `YamlStore` (transitional Pattern store), `LanceDbStore` (vector index, always rebuildable), `WorkflowYamlStore`. Vector store abstracted via `store::vector::VectorStore` (`LanceDbStore` now; `QdrantStore` P1.3).
+- **`retrieve/`** — `score_and_rank_generic()` over the `Retrievable` trait (skills + workflows; Pattern transitional); applies recency / effectiveness / importance / decay / length normalization
+- **`inject/`** — `hook.rs` formats skills + workflows for injection; `sync.rs` writes tool-specific configs (Claude Code hooks, Gemini CLI, etc.)
+- **`evolve/`** — Skill lifecycle (Draft→Emerging→Stable→Canonical), feedback, co-occurrence
+
+**Pattern removal (workflow-engine v2 P1a/P1b, 2026-06-11):** the legacy Pattern pipeline (emergence/fingerprint mining, pattern decay sweeps, pattern injection) is removed. `mur migrate --patterns` exports `~/.mur/patterns/` to markdown then deletes it. Skills (`category: Workflow` et al.) are the knowledge objects; `context_api::ingest`/`submit_feedback` still write transitional Patterns until the Notes migration (W3b+).
+
+Sources pipeline: `mur-core/src/sources/` adapters (Obsidian / Notion / Joplin) feed the same retrieve pipeline.
+
+### Key Data Model
+
+Skills are the primary knowledge object (`mur-common/src/skill/`): `SkillManifest` (name, description, category, content with abstract/context/procedure, triggers, tags) + `SkillStats` (lifecycle state, usage counts). `Workflow` wraps `KnowledgeBase` via `#[serde(flatten)]` and adds `steps`, `variables`, `trigger`, `schedule`.
+
+Tier half-lives: session=14d, project=90d, core=365d. Scoring floor 0.42 (config `retrieval.min_score`). Max items/query 5. Max tokens ~2000.
+
+### Data Storage (Runtime)
+
+All data at `~/.mur/`:
+
+- `skills/<name>/skill.yaml` — skills (source of truth). A running agent re-reads the tree when its fingerprint changes, so an edit, install, or removal lands on that agent's next turn with no restart and nothing to notify it — see `skills_fingerprint` in `mur-agent-runtime/src/skills/mod.rs` for why this is derived from disk rather than bumped by writers.
+- `workflows/*.yaml` — multi-step workflow definitions
+- `inbox/workflow-proposals/*.yaml` — harvest proposals pending review (`mur out`)
+- `session/recordings/<id>.jsonl` — append-only event log (ambient capture)
+- `exported-patterns/*.md` — legacy patterns exported by `mur migrate --patterns`
+- `queue/events.jsonl` — CLI hook capture log. Redacted on write (shared
+  `mur_common::redact`, the same chokepoint B0 rule 9 uses) and rotated
+  newsyslog-style: `.0` uncompressed, `.1.gz` onward, oldest dropped. Tuned by
+  `capture: {rotate_at_mb: 64, keep_generations: 5}` in `config.yaml`. Records
+  written before 2026-08-19 carry no `recorded_at`, so `mur hook stats` reports
+  their window as unknown rather than guessing.
+- `config.yaml` — user config
+
+LanceDB vector index is always rebuildable via `mur internals reindex`.
+
+## `mur agent` — full surface notes
+
+`mur agent <subcommand>` — manage murmur agents (create / list / status / send / card / dial / cli / export / doctor / prompt / mcp / skill / perm / secret / companion / rekey / schedule).
+
+- `cli <name>...` opens an interactive streaming TUI chat with a running agent (`--resume` to continue the last conversation). In-session slash commands:
+  - `/channels [N]` (list/switch channels), `/sessions`
+  - `/login [anthropic|chatgpt]` — OAuth health; repair escalates re-read → owner-CLI refresh → browser login with a terminal handover. Unrelated to `mur auth login`, which signs in to mur.run.
+  - `/effort [level] [--save]` — list the levels THIS agent's model accepts and set one for the session via the `effort/set` A2A method — no restart, because effort is a per-call parameter; `--save` also writes the profile through `mur agent effort`. The offered levels come from `mur_common::llm::effort_shape`, keyed on the raw model id resolved through the registry — never on `provider:`, which is the wire protocol.
+  - `/model [N|name]` — list registry models; dual-write like `/secret`: murmur writes `model_ref` to the profile first, then dials the `model/set` A2A method, which swaps the live client only — the sealed runtime cannot write its own profile, so `model/set` answers `persisted: false`. Single-model agents swap the client, chain/routing agents swap the primary and keep the chain; echo/misconfigured agents have no `model/set`, and the profile write alone lands with a restart hint. Note the global `models.fallback_chain` / `models.smart` settings make every agent a chain agent.
+  - `/secret <KEY> [--delete]` — hand the running agent a credential through a hidden prompt, never typed into the chat. Dual-write: the keychain plus `profile.secrets` for restarts, and the `secret/set` A2A method for the live process, because the runtime resolves secrets BEFORE the sandbox seals and a keychain write alone would not reach it until a restart. The model only ever sees `$KEY` — the value is injected into the bash tool's child environment and masked out of every tool result. See `docs/superpowers/specs/2026-09-07-murmur-secret-handoff-design.md`.
+  - Multiple names open one multiplexer pane per agent (tmux primary; zellij/WezTerm/kitty auto-detected).
+- `dial <name> <method> [json]` calls any A2A method on a running agent and prints the raw result — the escape hatch for the ten methods `send`/`card` do not cover (`memory/reload`, `tasks/list`, `turn/steer`, …). Passthrough by design: the unix socket is the trust boundary, so the agent's own handler decides what it answers, and there is no allowlist here to go stale.
+- The `murmur` symlink is the quick form: `murmur a1 a2 a3` ≡ `mur agent cli a1 a2 a3`; bare `murmur` opens the concierge.
+- `mcp` also includes `add-remote`, `login`, and `registry-add` for remote (Streamable HTTP) servers with static bearer or OAuth 2.1 auth — see the Remote MCP section above.
+
+## `mur fleet` — full surface notes
+
+`mur fleet {create|list|show|status|run|stop|start|export|import|partition-plan|merge}` — squads of agents working a shared goal over one signed channel (id `fleet-<name>`), defined in `~/.mur/fleets/<name>/fleet.yaml`.
+
+`run` fans the goal to members via the DAG executor; `status` reports the fleet's most recent run through the same record and renderer as `mur job status` (one derivation, many surfaces — see `docs/superpowers/specs/2026-08-17-job-fleet-run-status-design.md`); `run --loop` is bounded by `deadline` / `stuck` / `cost_usd`, resolved across flags → fleet.yaml `limits:` → config.yaml → built-in (1h; `mur limits <fleet>` shows what is in force and from where — iteration caps and token budgets are gone, see the 2026-09-12 execution-limits spec), and converges on `done_when: marker:<TEXT>` (own-line sentinel, not substring), `done_when: queue-empty` (stop once an iteration finds nothing queued), or router DONE/CONTINUE.
+
+- **Safety triad — do not weaken:** unattended auto-run is OFF unless `MUR_FLEET_AUTORUN=1`; auto-run requires the fleet's `limits:` to resolve (every fleet is bounded by its deadline — built-in 1h — or a `cost_usd` on a billable model; spec §5); `mur fleet stop <name>` is the kill-switch (`.stopped` sentinel, honored by loop + daemon + manual run; cleared by `start`). Every path passes `yes:false` — never blanket-approve risk-tiered steps. Commander governance (kill + budget ceiling) is fail-closed on Err.
+- `mur limits <name>` / `mur fleet limits` / `mur agent limits` — show or edit the three knobs per scope. Attended (murmur) turns have no hard stop; unattended ones stop on deadline or no progress, and the settlement names the remedy.
+- Long work returns a handle: `fleet_run` / `parallel_jobs` answer `{run_id, status: dispatched}` within a second and the caller polls `mur_job_status`; the MCP per-call timeout stays 120 s on purpose. The runtime beats `turn/heartbeat` every 30 s during a turn and the dial gives a beating peer (proto ≥ 2) 90 s idle, a legacy one 600 s.
+- `needs:` in fleet.yaml names the tools the work requires; a member missing one fails at dispatch (`cannot start: <agent> has no <tool> — mur agent perm tool-allow <agent> <tool>`), and any authorization refusal (`not authorized:`) withdraws that tool for the rest of the turn instead of being retried.
+- **Unattended approvals defer, they do not time out.** With no TTY the gate parks its `HitlRequest` and returns at once; the step is `blocked` (not failed), independent branches still run, the channel stays `input-required`, and the loop stops with `LoopStop::AwaitingApproval`. Approvals match on `action_hash` — never `hitl_id`, which is minted per call — so an approval given hours later releases the gate on the next run (7-day TTL), a denial is not re-asked, and changing the action invalidates the approval. `docs/superpowers/specs/2026-08-19-unattended-hitl-defer-design.md` has the P1–P3 plan and the list of rejected alternatives; read it before adding any auto-approval path.
+- Experimental, default OFF: `MUR_PARALLEL_EXEC=1` (per-track git worktrees), `MUR_PARALLEL_CONCURRENT=1` (`merge-concurrent` N-way line merge — converges bytes, NOT correctness).
+- Design, phase history, and the Spike-1 overlap decision: `docs/superpowers/specs/2026-06-19-mur-fleet-design.md`, `docs/superpowers/specs/2026-06-29-parallel-tracks-p3-concurrent-merge-design.md`, `docs/superpowers/validation/spike1-overlap-rate.md`.
+
+## `mur model` — full surface notes
+
+`mur model {connect|import|add|list|show|remove|migrate|prices|role|doctor}` — `~/.mur/models.yaml` provider/model registry.
+
+- `connect [vendor]` is the key-driven bulk path (CLI counterpart of the Hub Model Library): key → Keychain, then models come from the models.dev catalog for known cloud vendors and from a live `/v1/models` probe for custom or local endpoints — the split #950 established, because a vendor's registry base URL is often a chat-only proxy that 401s on `/v1/models`. Non-native vendors are written as `provider: openai` (the wire protocol) with the vendor slug retained for catalog pricing; bare `connect` probes local runtimes.
+- `import <file>` merges another machine's registry (never deletes, `--force` to overwrite) and reports which secret refs do not resolve locally.
+- `add` accepts `--input-cost`/`--output-cost` (USD per 1k tokens) and auto-fills pricing + context window from the models.dev catalog unless `--no-fetch`; `prices {refresh|show}` manages the cached catalog (`~/.mur/cache/model-prices.json`).
+- `doctor` is an offline read-only audit (dangling `model_ref`s, ids the catalog never carried, legacy `model:` blocks disagreeing with their ref, and `secret: file:` refs that are plaintext on disk — warn-only, exit code unchanged, because `file:` is the only backend on a headless Linux box and a gate for something the user cannot fix gets switched off) that never rewrites a model id — read its module doc before extending it, it records why it is NOT a deprecation check.
+- The Hub GUI **Model Library** (mur-hub-gui) connects cloud providers (key → Keychain) and auto-detects local runtimes, discovers models via `/v1/models`, and adds them as registry aliases.
+- See `docs/superpowers/specs/2026-04-29-model-registry-and-secret-refs-design.md` and `2026-06-17-mur-model-library-design.md`.
+
+## `mur monitor` — full surface notes
+
+`mur monitor {add|list|show|cancel|retry}` — durable monitors for asynchronous work (MUR runs, GitHub Actions runs, Codex/Claude Code subprocesses via a process record). SQLite at `~/.mur/monitor/monitors.db`; the daemon polls due monitors every 15 s with fenced leases and catches up missed checks after a restart.
+
+- `unknown` (query failed, not found, credential rejected, process gone with no exit record) is never reported as `failed`; stalled/soft/hard deadlines default to 20m/3h/8h and count from the work's real start.
+- AgentResolver ships but is OFF by default (`monitor_resolver.enabled`; `model` picks which, else the backend `mur chat` resolves). Consulted only where the structured rules could not settle a terminal failure — every listed remedy failed, or the outcome had no list — once per observation cycle, bounded by a `resolver_consulted` event written BEFORE the call so a crash cannot buy a second one. It may propose only `notify` / `collect_logs` / `rerun`; an unlisted `action_type` voids the whole reply rather than being downgraded, and it never states a tier — a proposed `rerun` parks the same pinned approval a spec-declared one would. Proposals are stored on the action row (`monitor_actions.proposed_action`) because Phase 2 resolves spec-list rows by index and would otherwise retire them as drifted. Off costs nothing: the enabled-at-claim-time marker (`resolver_pending`) is what the settle guard reads, so with the resolver off nothing is stamped and nothing is held. `apply_known_remedy` and `start_downstream` remain out of scope.
+- `rerun` (github_actions sources only) does execute: it forwards to `rerun-failed-jobs`, not the whole run, and needs a spec `source.write_credential_ref` — a second `SecretRef`, separate from the read-only `credential_ref`, because approving one action isn't consenting to a standing capability — so `mur monitor add` refuses a spec that asks for `rerun` without one, at creation rather than after approval, and warns (never refuses — an unresolvable ref and a locked keychain look identical) when a grant that is present does not resolve. Validation runs at `add`, so a monitor already in the database is never retroactively refused or upgraded. The run it starts is not itself monitored; register a second monitor if you want that watched too.
+- Terminal actions run under the repo's risk gate: `read`-tier verbs (`notify`, `collect_logs`) run unattended; anything above parks a pinned approval and the monitor sits in `awaiting-approval` until `mur channel approve monitor-<id> <hitl-id>` (`mur monitor show` prints the exact command) — the tier comes from a fixed table keyed on the action type, never from the action's own params or a model, and an unrecognised verb classifies `privileged` (most restrictive) with no executor. Approvals defer, they do not time out — a parked action does not count against the remediation cap.
+- Remediation stops at `policy.max_remediation_attempts` (default 3; only actions above `read` tier count) and the monitor goes `exhausted` — but only on the arms that did NOT remediate: a remedy that succeeded falls through to `Completed`, because `Exhausted` is terminal and telling a user MUR gave up right after a rerun worked is the dishonest settlement this feature exists to remove.
+- `on_unknown` action lists do not run in this build — an unknown outcome reschedules via the existing backoff but never reaches the action drain; `reschedule_monitor` is therefore named and classified but has no executor, because the only list it could reach is a terminal one, where returning a settled monitor to `sleeping` un-freezes its fence and re-runs the whole action list on every poll.
+- A `mur fleet run` registers its own monitor; registration never fails the run, and when it can't complete immediately the run says so, naming the run id (queued for retry, or unmonitored with the reason) rather than claiming it is watched. A queued registration retries with backoff and gives up after `OUTBOX_MAX_ATTEMPTS`; a give-up has no monitor row to attach an event to, so it is visible ONLY in the daemon log, not in `mur monitor list`/`show`.
+- Notable events (stalled, soft deadline, terminal, monitor unhealthy, exhausted) are delivered once each to the daemon log, and to an OS notification when `notifications.desktop: true` in `config.yaml`; routine polling stays silent, and `mur monitor show` reports each notification's delivery state.
+
+## `mur official` / `mur deep-research` — full surface notes
+
+- `mur official {list|install <id>}` — browse and install official MUR agents/fleets from the app.mur.run catalog. Install requires `mur auth login`; pro-tier items require an active subscription. Downloads carry an account-bound `OfficialLicense` (stored in `~/.mur/licenses/`); the fleet/agent import paths refuse official-marked bundles without a matching license (anti-sharing gate; expiry gates downloads only, never installed content). See `docs/superpowers/specs/2026-07-20-official-catalog-design.md`.
+- `mur deep-research {setup|""} [question]` — simplified web research UX: `setup` (one-time wizard for model, workers, budget, egress), `""` (status panel), or ask a question (preflight start + guarded run). `provision`/`run` remain as the advanced flag-based path. Egress consent is explicit: `setup`/`provision --grant-egress` only.
+
+## Unified Channel v3a–v4a
+
+- **v3a–v3d** implemented on branch `feat/unified-channel-v3b` (v3d on `feat/unified-channel-v3d`):
+  - v3a: DAG executor emits attributed `StateChange`/`ToolCall`/`ToolResult` events as `ChannelActor::System`.
+  - v3b: Deterministic `idem_key`, `run_id` per workflow run.
+  - v3c: Risk-tiered, SHA-256-pinned HITL gate (`mur-common/src/hitl/`; `mur-core/src/hitl/`). Steps with `risk: write` or higher pause before execution, write a `HitlRequest` channel event, and wait for `mur channel approve <channel_id> <hitl_id>` (or `--deny`). The executor re-verifies the hash at the execute boundary (fail-closed on drift). `append_event` is dedup-aware (idempotency key under exclusive lock). Crashed runs resume via a `ToolResult` cursor check.
+  - `CHANNEL_SCHEMA_VERSION = 2` (v2: `HitlResponse` events carry approval authority).
+  - Use `mur workflow run --channel-new <skill>` or `--channel <id>` to attach execution; `mur channel approve <channel_id> <hitl_id> [--deny] [--reason <msg>]` to act on HITL gates.
+  - v3d: Channel events are Ed25519-signed by the channel's writer (`mur_channel::sign`; `ChannelEvent.sig`/`key_version`), verified on fold. The canonical sign-input EXCLUDES `seq`/`ts`. `MUR_CHANNEL_REQUIRE_SIG` enforces verification (default off = migration-safe: legacy unsigned events tolerated). A2 peer-writes-own (specialist runtimes signing their own events) is the v3d-2 follow-on. See `mem:project_unified_channel_pr433`.
+  - v3d-2: Adds the `channel/delegate` A2A method — a delegated specialist runs its turn and **signs+writes its own** reply (`Agent{self}`) into the shared channel; the concierge dials `channel/delegate` instead of `message/send` and no longer mediates/signs the specialist's reply. Verify-on-fold is now **per-actor** (each event verified against its actor's `<mur_home>/agents/<id>` key) via `mur-core::channel_verify`.
+- **v4a** (mobile sync foundation) on branch `feat/unified-channel-v4a`:
+  - Every mobile turn (LAN + relay) is persisted into the agent's channel via `mur-core::mobile::persist_mobile_exchange`; the old `mobile-events.jsonl` mirror is retained for Hub live-tail.
+  - `ClientFrame::ChannelQuery { op, channel_id, since_seq }` / `ServerFrame::ChannelData { op, payload }` in `mur-common::mobile`: `op` = "list" returns channel summaries; `op` = "events" returns all events for a channel (from `since_seq` if given).
+  - Both daemon paths (`mobile_server.rs`, `relay_client.rs`) handle `ChannelQuery` by calling `mur-core::mobile::channel_query`.
+  - `mur-mobile-sdk`: `ChannelListItem`, `ChannelEventItem` UniFFI records; `MobileEvent::ChannelList/ChannelEvents/ChannelUpdate`; `MobileClient::list_channels()` and `fetch_channel_events(id, since_seq)`.
+  - Live-push: daemon spawns a `watch_channels` watcher; broadcasts `channel.updated` events to all connected phones via `tokio::sync::broadcast`; SDK translates to `MobileEvent::ChannelUpdate`.
