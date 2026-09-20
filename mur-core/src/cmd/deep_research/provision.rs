@@ -54,7 +54,18 @@ const WORKER_LLM_ALLOW_HOSTS: [&str; 2] = ["localhost", "127.0.0.1"];
 /// Denying them drops the tools from the advertised set entirely
 /// (`tools::registry` skips `Deny`), so the model never calls them and the
 /// turn can complete on the gateway tools alone.
-const WORKER_DENIED_BUILTIN_TOOLS: [&str; 4] = ["bash", "read_file", "write_file", "edit_file"];
+///
+/// `open_item` is here for the same reason, found the same way (root-caused
+/// live 2026-09-20: workers 2 and 3 of a deep-research run died with
+/// `delegate failed [hitl_denied]: tool call denied: `open_item` needs
+/// approval and this caller cannot give one`). It is cheap for a general
+/// agent — `supervisor_runner.rs` mounts it for everyone — but a research
+/// worker reports in text to its supervisor and has no user whose open-item
+/// list it should be writing to. Denying beats allowing (an allow leaves the
+/// worker free to keep reaching for it) and beats prompt-engineering (which
+/// only asks the model not to).
+const WORKER_DENIED_BUILTIN_TOOLS: [&str; 5] =
+    ["bash", "read_file", "write_file", "edit_file", "open_item"];
 
 /// Name of the gateway MCP server entry mounted on every worker.
 pub const GATEWAY_MCP_NAME: &str = "research-gateway";
@@ -78,6 +89,34 @@ const OBSCURA_WORKER_RELATIVE: &str = "aura/obscura-worker";
 /// engine. Any other value (or the flag omitted) leaves today's default
 /// (`agent-browser`) path byte-for-byte unchanged.
 const RENDER_ENGINE_OBSCURA: &str = "obscura";
+
+/// Set `pattern`'s policy in `rules`, replacing an existing rule with the same
+/// pattern rather than appending a duplicate.
+///
+/// Provisioning is idempotent by design (`force: true` re-runs over an existing
+/// agent), but the tool-rule seeding used to `push` unconditionally — so every
+/// re-provision grew the list another copy of the same five rules. Observed
+/// live 2026-09-20: `dr_worker_1`'s `profile.yaml` carried FIVE identical
+/// `bash: deny` / `read_file: deny` / … blocks after five provision runs, while
+/// the sibling `spawn.allowed` seeding a few lines below had a `contains`
+/// guard and stayed clean. `resolve_tool_policy` is first-match-wins so the
+/// duplicates were harmless to policy resolution — they just made the profile
+/// unreadable and grew without bound.
+fn upsert_tool_rule(
+    rules: &mut Vec<mur_common::agent::ToolRule>,
+    pattern: String,
+    policy: mur_common::agent::ToolPolicy,
+) {
+    if let Some(existing) = rules.iter_mut().find(|r| r.pattern == pattern) {
+        existing.policy = policy;
+    } else {
+        rules.push(mur_common::agent::ToolRule {
+            pattern,
+            policy,
+            risk: None,
+        });
+    }
+}
 
 /// Create `count` restricted worker agents named `<name_prefix>_1..N`, each
 /// mounting the `research-gateway` MCP server with no egress grant of its
@@ -176,27 +215,21 @@ pub(crate) fn provision_one(
     // `mcp__research-gateway__*` only. This grants no egress by itself: the
     // gateway's outbound stays Inherit/restricted until the separate
     // explicit-consent `--grant-egress` step.
-    profile
-        .entitlements
-        .tools
-        .push(mur_common::agent::ToolRule {
-            pattern: mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME),
-            policy: mur_common::agent::ToolPolicy::Allow,
-            risk: None,
-        });
+    upsert_tool_rule(
+        &mut profile.entitlements.tools,
+        mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME),
+        mur_common::agent::ToolPolicy::Allow,
+    );
     // Deny the built-in tools (see WORKER_DENIED_BUILTIN_TOOLS): left at the
     // default `Ask`, a research turn that reaches for `bash`/`write_file`/…
     // dead-ends on the unanswerable headless HITL gate and FAILS the turn.
     // Denied → not advertised → the model never calls them.
     for tool in WORKER_DENIED_BUILTIN_TOOLS {
-        profile
-            .entitlements
-            .tools
-            .push(mur_common::agent::ToolRule {
-                pattern: tool.to_string(),
-                policy: mur_common::agent::ToolPolicy::Deny,
-                risk: None,
-            });
+        upsert_tool_rule(
+            &mut profile.entitlements.tools,
+            tool.to_string(),
+            mur_common::agent::ToolPolicy::Deny,
+        );
     }
     // Opt-in obscura render engine (Task 8a): the gateway runs under
     // `spawn_sandboxed` with this profile's `SandboxPolicy`, whose exec
@@ -719,6 +752,57 @@ mod tests {
             resolve_tool_policy(&p.entitlements.tools, "mcp__github__merge_pr"),
             ToolPolicy::Ask
         );
+    }
+
+    /// Re-seeding a profile must not grow its tool-rule list.
+    ///
+    /// Regression, root-caused live 2026-09-20: the gateway/deny seeding in
+    /// `provision_one` `push`ed unconditionally while the sibling
+    /// `spawn.allowed` seeding a few lines below had a `contains` guard. Any
+    /// second pass over an already-seeded profile appended another identical
+    /// copy of all five rules — `dr_worker_1`'s `profile.yaml` carried FIVE
+    /// `bash: deny` blocks (archive v106→v110), while its never-re-seeded
+    /// siblings `dr_worker_2`/`dr_worker_3` stayed at one apiece.
+    ///
+    /// Driven through the helper rather than `provision` because `cmd_create`
+    /// refuses an existing agent ("agent {name} already exists at …"), so the
+    /// second pass can never come from a plain re-`provision`.
+    #[test]
+    fn reseeding_tool_rules_upserts_instead_of_appending() {
+        use mur_common::agent::{ToolPolicy, ToolRule, resolve_tool_policy};
+
+        let mut rules: Vec<ToolRule> = Vec::new();
+        let gateway = mur_common::mcp_naming::tool_pattern(GATEWAY_MCP_NAME);
+
+        // Two identical seeding passes, exactly as `provision_one` runs them.
+        for _ in 0..2 {
+            upsert_tool_rule(&mut rules, gateway.clone(), ToolPolicy::Allow);
+            for tool in WORKER_DENIED_BUILTIN_TOOLS {
+                upsert_tool_rule(&mut rules, tool.to_string(), ToolPolicy::Deny);
+            }
+        }
+
+        assert_eq!(
+            rules.len(),
+            1 + WORKER_DENIED_BUILTIN_TOOLS.len(),
+            "second seeding pass must upsert, not append: {rules:#?}"
+        );
+        for tool in WORKER_DENIED_BUILTIN_TOOLS {
+            assert_eq!(
+                rules.iter().filter(|r| r.pattern == tool).count(),
+                1,
+                "`{tool}` must appear exactly once after re-seeding"
+            );
+            assert_eq!(resolve_tool_policy(&rules, tool), ToolPolicy::Deny);
+        }
+
+        // An unrelated rule the user added by hand survives re-seeding, and a
+        // pattern already present is UPDATED in place rather than shadowed.
+        upsert_tool_rule(&mut rules, "open_item".to_string(), ToolPolicy::Allow);
+        upsert_tool_rule(&mut rules, "bash".to_string(), ToolPolicy::Allow);
+        assert_eq!(rules.iter().filter(|r| r.pattern == "bash").count(), 1);
+        assert_eq!(resolve_tool_policy(&rules, "bash"), ToolPolicy::Allow);
+        assert_eq!(resolve_tool_policy(&rules, "open_item"), ToolPolicy::Allow);
     }
 
     /// `--render-engine obscura` grants exec for both obscura binaries

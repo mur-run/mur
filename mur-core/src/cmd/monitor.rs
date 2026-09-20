@@ -58,6 +58,13 @@ pub enum MonitorAction {
     },
     /// Stop monitoring. Does NOT cancel the monitored work.
     Cancel { id: String },
+    /// Erase a monitor and its evidence. Does NOT cancel the monitored work.
+    Delete {
+        id: String,
+        /// Required to delete a monitor that is still being watched.
+        #[arg(long)]
+        force: bool,
+    },
     /// Bring an exhausted monitor back to active.
     Retry {
         id: String,
@@ -85,6 +92,7 @@ pub fn run_to(
         MonitorAction::List { state, all } => list(&store, state.as_deref(), all, out, now),
         MonitorAction::Show { id, history } => show(&store, &id, history, out),
         MonitorAction::Cancel { id } => cancel(&store, &id, out, now),
+        MonitorAction::Delete { id, force } => delete(&store, &id, force, out),
         MonitorAction::Retry {
             id,
             reset_remediation_budget,
@@ -517,6 +525,41 @@ fn cancel(store: &MonitorStore, id: &str, out: &mut dyn Write, now: DateTime<Utc
     writeln!(
         out,
         "monitor {id} cancelled — the monitored work itself was NOT cancelled"
+    )?;
+    Ok(())
+}
+
+/// `delete` is the destructive sibling of `cancel`, and the two are not
+/// interchangeable: `cancel` keeps the row and its evidence (the normal
+/// "stop watching" verb), `delete` erases both. Because the evidence is the
+/// whole point of this subsystem, an unfinished monitor needs `--force`;
+/// one that is already `completed` — cancelled or genuinely done — deletes
+/// without ceremony, since there is nothing still in flight to lose track
+/// of. The `--force` flag is checked on STATE, not on the lease: the lease
+/// case is the store's refusal below, and it stays a refusal even with
+/// `--force`, because a worker mid-cycle would otherwise write its
+/// observation into nothing.
+fn delete(store: &MonitorStore, id: &str, force: bool, out: &mut dyn Write) -> Result<()> {
+    let r = resolve_id(store, id)?;
+    let id = r.id.as_str();
+    if r.state != MonitorState::Completed && !force {
+        bail!(
+            "monitor {id} is still being watched (state: {}) — `mur monitor cancel {}` stops it \
+             and keeps the evidence, or re-run with --force to erase it anyway. Neither verb \
+             cancels the monitored work itself.",
+            r.state.as_str(),
+            &id[..ID_SHORT.min(id.len())],
+        );
+    }
+    if !store.delete(id, false)? {
+        // resolve_id just read this row, so a miss here means something
+        // else deleted it in between — say that, rather than claiming a
+        // deletion this call did not perform.
+        bail!("monitor {id} vanished before it could be deleted");
+    }
+    writeln!(
+        out,
+        "monitor {id} deleted — evidence erased; the monitored work itself was NOT cancelled"
     )?;
     Ok(())
 }
