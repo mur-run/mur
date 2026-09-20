@@ -122,22 +122,18 @@ pub fn edit_diff_lines(
         parts
             .into_iter()
             .map(|part| match part {
-                DiffPart::Path(p) => Line::styled(
-                    format!(" {p}"),
-                    theme.muted.add_modifier(Modifier::BOLD),
-                ),
-                DiffPart::Del(l) => Line::styled(
-                    format!("  - {l}"),
-                    Style::default().fg(Color::Red),
-                ),
-                DiffPart::Add(l) => Line::styled(
-                    format!("  + {l}"),
-                    Style::default().fg(Color::Green),
-                ),
-                DiffPart::Ctx(l) => Line::styled(
-                    format!("    {l}"),
-                    theme.muted.add_modifier(Modifier::DIM),
-                ),
+                DiffPart::Path(p) => {
+                    Line::styled(format!(" {p}"), theme.muted.add_modifier(Modifier::BOLD))
+                }
+                DiffPart::Del(l) => {
+                    Line::styled(format!("  - {l}"), Style::default().fg(Color::Red))
+                }
+                DiffPart::Add(l) => {
+                    Line::styled(format!("  + {l}"), Style::default().fg(Color::Green))
+                }
+                DiffPart::Ctx(l) => {
+                    Line::styled(format!("    {l}"), theme.muted.add_modifier(Modifier::DIM))
+                }
             })
             .collect(),
     )
