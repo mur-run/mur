@@ -233,15 +233,19 @@ mod band_growth_tests {
         for i in 1..=6 {
             app.messages
                 .push(ChatMsg::for_test(Role::User, &format!("q{i}")));
-            app.messages
-                .push(ChatMsg::for_test(Role::Agent, &format!("earlier answer {i}")));
+            app.messages.push(ChatMsg::for_test(
+                Role::Agent,
+                &format!("earlier answer {i}"),
+            ));
         }
         let long_last = (1..=15)
             .map(|i| format!("final reply line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        app.messages.push(ChatMsg::for_test(Role::User, "one more thing"));
-        app.messages.push(ChatMsg::for_test(Role::Agent, &long_last));
+        app.messages
+            .push(ChatMsg::for_test(Role::User, "one more thing"));
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, &long_last));
 
         let mut term = Terminal::with_options(
             TestBackend::new(100, 60),
