@@ -341,49 +341,32 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                             .saturating_add(ui::hitl_scroll_step(app.hitl_page))
                     }
                     KeyCode::Char('y') | KeyCode::Char('Y') if composer_empty => {
-                        app.hitl_grant_confirm = None;
                         decide_hitl(app, tx, true)
                     }
-                    // Session-wide grants are two-press: the first arms the
-                    // confirm, the second commits. One keystroke must never
-                    // hand out blanket approval.
-                    //
-                    // The arming press ALSO types its character, so someone
-                    // starting the message "add the test" keeps every letter —
-                    // arming is invisible to them and the next key disarms it.
-                    // The confirming press takes that character back out.
-                    KeyCode::Char(c @ ('a' | 'A'))
-                        if composer_empty || app.hitl_grant_confirm == Some(c) =>
-                    {
-                        if app.hitl_grant_confirm == Some(c) {
-                            app.hitl_grant_confirm = None;
-                            app.input.delete_char();
-                            if c == 'a' {
-                                if let Some(req) = &app.hitl {
-                                    app.session_tool_allow.insert(req.tool_name.clone());
-                                }
-                            } else {
-                                app.auto_approve = true;
-                            }
-                            decide_hitl(app, tx, true);
-                        } else {
-                            app.hitl_grant_confirm = Some(c);
-                            app.input.input(key);
+                    // The menu replaces the old two-press `a`/`A` dance. Arrows
+                    // and Enter cannot collide with typed text, so they stay
+                    // live even while the composer holds a message — a denial
+                    // can carry that message along. Only the digit shortcuts
+                    // step aside and type when the composer is non-empty.
+                    KeyCode::Up => {
+                        app.hitl_selected = app.hitl_selected.saturating_sub(1);
+                    }
+                    KeyCode::Down => {
+                        app.hitl_selected = (app.hitl_selected + 1).min(ui::HITL_CHOICES.len() - 1);
+                    }
+                    KeyCode::Char(c @ '1'..='4') if composer_empty => {
+                        let i = (c as usize) - ('1' as usize);
+                        if i < ui::HITL_CHOICES.len() {
+                            app.hitl_selected = i;
+                            commit_hitl_choice(app, tx);
                         }
                     }
+                    KeyCode::Enter => commit_hitl_choice(app, tx),
                     KeyCode::Char('n') | KeyCode::Char('N') if composer_empty => {
-                        app.hitl_grant_confirm = None;
                         decide_hitl(app, tx, false)
                     }
-                    KeyCode::Esc => {
-                        app.hitl_grant_confirm = None;
-                        decide_hitl(app, tx, false)
-                    }
-                    // No submit while the modal is open, but still disarm: the
-                    // modal promises "any other key cancels".
-                    KeyCode::Enter => app.hitl_grant_confirm = None,
+                    KeyCode::Esc => decide_hitl(app, tx, false),
                     _ => {
-                        app.hitl_grant_confirm = None;
                         app.input.input(key);
                     }
                 }

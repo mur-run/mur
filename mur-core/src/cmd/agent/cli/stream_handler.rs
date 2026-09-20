@@ -81,8 +81,10 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
                 app.mark_card_auto_approved(sid);
             }
             app.hitl = Some(req);
-            // A new gate always opens at the top of its own input.
+            // A new gate always opens at the top of its own input, with the
+            // narrowest answer (`Yes`, this call only) under the cursor.
             app.hitl_scroll = 0;
+            app.hitl_selected = 0;
             if auto {
                 decide_hitl_with_note(app, tx, true, true);
             }

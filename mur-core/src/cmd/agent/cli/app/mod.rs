@@ -114,12 +114,12 @@ pub struct App {
     /// operator presses `y`, that keystroke would otherwise land in the
     /// composer as text.
     pub hitl_resolved_at: Option<std::time::Instant>,
-    /// Pending second press for a session-wide grant (`a` or `A`). A single
-    /// stray keystroke must never hand a tool blanket approval, so those two
-    /// keys arm this instead of granting; a second matching press commits and
-    /// any other key disarms it. `y`/`n` stay single-press — they decide one
-    /// call, not the rest of the session.
-    pub hitl_grant_confirm: Option<char>,
+    /// Which row of the approval menu is highlighted. A single stray keystroke
+    /// must never hand a tool blanket approval, so the session-wide grants are
+    /// not bare keys at all: they are menu rows the operator must move to and
+    /// confirm with Enter. Reset to 0 (`Yes`, this call only) on every new
+    /// gate, so the row under a reflex Enter is always the narrowest one.
+    pub hitl_selected: usize,
     /// Scroll offset into the approval modal's body, in wrapped rows. Reset on
     /// every new gate so a fresh request always opens at the top; the renderer
     /// clamps it to the content and hands back what it used.
@@ -370,7 +370,7 @@ impl App {
             hitl: None,
             hitl_queue: std::collections::VecDeque::new(),
             hitl_resolved_at: None,
-            hitl_grant_confirm: None,
+            hitl_selected: 0,
             hitl_scroll: 0,
             hitl_page: 0,
             session,

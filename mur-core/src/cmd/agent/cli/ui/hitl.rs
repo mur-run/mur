@@ -11,6 +11,10 @@ pub(super) const HITL_PCT_X: u16 = 70;
 
 pub(super) const HITL_PCT_Y: u16 = 50;
 
+/// Floor on the modal's height: 2 border + 3 header + 4 body (3 rows + the
+/// residue notice) + 5 menu (4 rows + the key hint) + 1 composer notice.
+pub(super) const HITL_MIN_ROWS: u16 = 15;
+
 /// Rows one PgUp/PgDn moves the approval modal's body, used only until the
 /// modal has been drawn once and can report its real height.
 ///
@@ -64,6 +68,52 @@ pub(super) fn wrap_row(s: &str, w: usize) -> Vec<String> {
     rows
 }
 
+/// The decisions the approval modal offers, in menu order. The index IS the
+/// contract between the renderer (which numbers them) and the key handler
+/// (which acts on them), so they are declared once, here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HitlChoice {
+    /// Approve this one call.
+    Once,
+    /// Approve, and stop asking for this tool for the rest of the session.
+    Tool,
+    /// Approve, and stop asking for every tool for the rest of the session.
+    All,
+    /// Deny. Anything typed in the composer rides along as the follow-up.
+    Deny,
+}
+
+/// Menu order. `Deny` is last so the destructive-by-default answer is never
+/// the one under a reflex `Enter` (the selection starts at `Once`).
+pub(crate) const HITL_CHOICES: [HitlChoice; 4] = [
+    HitlChoice::Once,
+    HitlChoice::Tool,
+    HitlChoice::All,
+    HitlChoice::Deny,
+];
+
+impl HitlChoice {
+    /// The row label, given the tool being gated.
+    pub(crate) fn label(self, tool: &str) -> String {
+        match self {
+            Self::Once => "Yes".to_string(),
+            Self::Tool => format!("Yes, and don't ask again for `{tool}` this session"),
+            Self::All => "Yes, and don't ask again for any tool this session".to_string(),
+            Self::Deny => "No, and tell MUR what to do differently (Esc)".to_string(),
+        }
+    }
+
+    /// Colour of the row's number, matching the old key-row palette.
+    fn tint(self) -> Color {
+        match self {
+            Self::Once => Color::Green,
+            Self::Tool => Color::Yellow,
+            Self::All => Color::Magenta,
+            Self::Deny => Color::Red,
+        }
+    }
+}
+
 /// Draw the approval modal. Returns the scroll offset it actually used —
 /// `scroll` clamped to the content, so the caller's stored offset cannot run
 /// away past the end of a short input — and how many body rows it had room to
@@ -72,11 +122,20 @@ pub(super) fn render_hitl(
     f: &mut Frame,
     theme: &'static crate::cmd::agent::cli::theme::Theme,
     hitl: &crate::cmd::agent::cli::stream::HitlRequest,
-    grant_confirm: Option<char>,
+    selected: usize,
     composer_empty: bool,
     scroll: u16,
 ) -> (u16, u16) {
-    let area = centered_rect(HITL_PCT_X, HITL_PCT_Y, f.area());
+    // The menu is five rows where the old key row was one. At 50% of a short
+    // terminal that would leave the body no room at all — the residue notice
+    // and the scroll window would vanish — so the modal grows to guarantee the
+    // pinned header plus a few body rows, capped at the viewport.
+    let min_h = HITL_MIN_ROWS.min(f.area().height);
+    let mut area = centered_rect(HITL_PCT_X, HITL_PCT_Y, f.area());
+    if area.height < min_h {
+        let y = f.area().height.saturating_sub(min_h) / 2;
+        area = Rect::new(area.x, f.area().y + y, area.width, min_h);
+    }
     let input = serde_json::to_string_pretty(&hitl.tool_input).unwrap_or_default();
     // Header rows stay pinned: scrolling the body must never carry the tool
     // name off-screen, since "which tool" is half of what is being approved.
@@ -101,54 +160,34 @@ pub(super) fn render_hitl(
             body.push(Line::styled(row, Style::default().fg(Color::DarkGray)));
         }
     }
-    // When a session-wide grant is armed, the modal shows ONLY the confirm
-    // instruction: the operator is answering "do you really mean the whole
-    // session?", and re-printing the full key row there invites a reflex press.
-    let keys = if let Some(c) = grant_confirm {
-        let what = if c == 'a' {
-            format!("`{}` for this session", hitl.tool_name)
-        } else {
-            "ALL tools for this session".to_string()
-        };
-        Line::from(vec![
-            Span::styled(
-                format!("press [{c}] again"),
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(" to allow {what} — any other key cancels")),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                "[y]",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" approve    "),
-            Span::styled(
-                "[a]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" always allow this tool (session)    "),
-            Span::styled(
-                "[A]",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" allow all tools (session)    "),
-            Span::styled(
-                "[n]",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" deny / Esc"),
-        ])
-    };
+    // The decision menu. Numbered rows instead of the old y/a/A/n key row:
+    // the session-wide grants used to be two-press (arm, then confirm), which
+    // meant the modal had a hidden mode and the operator had to learn it. A
+    // menu has no mode — the row says exactly what it does, and confirming it
+    // is always Enter.
+    let sel = selected.min(HITL_CHOICES.len() - 1);
+    let mut keys: Vec<Line> = HITL_CHOICES
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let on = i == sel;
+            let num = Style::default().fg(c.tint()).add_modifier(Modifier::BOLD);
+            let text = if on {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            Line::from(vec![
+                Span::styled(if on { " ❯ " } else { "   " }, num),
+                Span::styled(format!("{}. ", i + 1), num),
+                Span::styled(c.label(&hitl.tool_name), text),
+            ])
+        })
+        .collect();
+    keys.push(Line::styled(
+        "   ↑/↓ select · Enter confirm · 1-4 pick directly · Esc deny",
+        Style::default().fg(Color::DarkGray),
+    ));
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -158,37 +197,25 @@ pub(super) fn render_hitl(
     f.render_widget(Clear, area);
     f.render_widget(block, area);
 
-    // The key row is the only part of this modal that is never optional, so it
+    // The menu is the only part of this modal that is never optional, so it
     // gets its own chunk. Previously it was the last entry in one clipped
     // Paragraph: a wrapped JSON input pushed it out of the box and left the
     // operator staring at a blocking gate with no visible way to answer it.
     //
-    // While the composer holds text the `composer_empty` guard (#893) makes
-    // y/a/A/n type instead of decide. Say so, and dim the row: advertising a
-    // live key that is inert is how an operator ends up hitting the 5-minute
-    // auto-deny wondering why nothing responds (#939).
-    let keys_inert = !composer_empty && grant_confirm.is_none();
-    let keys_text = if keys_inert {
-        let dimmed = Line::from(
-            keys.spans
-                .iter()
-                .map(|s| {
-                    Span::styled(
-                        s.content.clone(),
-                        s.style.add_modifier(Modifier::DIM).fg(Color::DarkGray),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
-        Text::from(vec![
-            dimmed,
-            Line::styled(
-                "these keys type while the composer has text — Ctrl+U clears it",
-                Style::default().fg(Color::Yellow),
-            ),
-        ])
-    } else {
+    // With a menu the composer no longer disables the decision: ↑/↓, Enter and
+    // Esc cannot collide with typed text, so they stay live and a denial can
+    // carry the message the operator is typing. Only the 1-4 shortcuts become
+    // ordinary characters, and the row says so rather than leaving the
+    // operator guessing why a digit did nothing (#939).
+    let keys_text = if composer_empty {
         Text::from(keys)
+    } else {
+        let mut rows = keys;
+        rows.push(Line::styled(
+            "   1-4 type while the composer has text — ↑/↓ and Enter still decide",
+            Style::default().fg(Color::Yellow),
+        ));
+        Text::from(rows)
     };
     let keys_h = Paragraph::new(keys_text.clone())
         .wrap(Wrap { trim: false })
@@ -280,7 +307,7 @@ mod hitl_modal_tests {
                 f,
                 &crate::cmd::agent::cli::theme::ANSI,
                 &fat_request(),
-                None,
+                0,
                 true,
                 0,
             );
@@ -288,10 +315,10 @@ mod hitl_modal_tests {
         .unwrap();
         let dump = term.backend().to_string();
         assert!(
-            dump.contains("approve"),
-            "the operator cannot answer a gate whose keys are off-screen:\n{dump}"
+            dump.contains("1. Yes"),
+            "the operator cannot answer a gate whose menu is off-screen:\n{dump}"
         );
-        assert!(dump.contains("deny"), "{dump}");
+        assert!(dump.contains("4. No"), "{dump}");
     }
 
     /// #939 §1: the command body must never be cut horizontally. A marker at
@@ -307,7 +334,7 @@ mod hitl_modal_tests {
         };
         let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
         term.draw(|f| {
-            render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, None, true, 0);
+            render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, 0, true, 0);
         })
         .unwrap();
         let dump = term.backend().to_string().replace(['\n', ' '], "");
@@ -330,7 +357,7 @@ mod hitl_modal_tests {
         let hidden_at = |h: u16| -> usize {
             let mut term = Terminal::new(TestBackend::new(100, h)).unwrap();
             term.draw(|f| {
-                render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, None, true, 0);
+                render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, 0, true, 0);
             })
             .unwrap();
             let dump = term.backend().to_string();
@@ -383,7 +410,7 @@ mod hitl_modal_tests {
                     f,
                     &crate::cmd::agent::cli::theme::ANSI,
                     &req,
-                    None,
+                    0,
                     true,
                     scroll,
                 );
@@ -401,8 +428,8 @@ mod hitl_modal_tests {
         );
     }
 
-    /// #939 §3: while the composer holds text the decision keys type instead of
-    /// deciding, so the modal must say so rather than advertising live keys.
+    /// #939 §3: while the composer holds text the digit shortcuts type instead
+    /// of deciding, so the modal must say so — and say what still works.
     #[test]
     fn a_nonempty_composer_is_announced_on_the_key_row() {
         let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
@@ -411,7 +438,7 @@ mod hitl_modal_tests {
                 f,
                 &crate::cmd::agent::cli::theme::ANSI,
                 &fat_request(),
-                None,
+                0,
                 false,
                 0,
             );
@@ -419,8 +446,12 @@ mod hitl_modal_tests {
         .unwrap();
         let dump = term.backend().to_string().replace('\n', " ");
         assert!(
-            dump.contains("Ctrl+U"),
-            "the operator gets no hint that y/a/A/n are inert:\n{dump}"
+            dump.contains("1-4 type while the composer has text"),
+            "the operator gets no hint that the digits are inert:\n{dump}"
+        );
+        assert!(
+            dump.contains("Enter still decide"),
+            "the notice must name the keys that remain live:\n{dump}"
         );
     }
 }
