@@ -307,7 +307,21 @@ pub fn flush_finished<B: Backend>(
     // empty rows for a reply the reader could not see ("↑ 7 more · PgUp" over
     // the one answer they were asked to act on). A flushed reply sits directly
     // above the band, on screen; a hidden one is gone until they page for it.
-    while end < settled && total > cap {
+    //
+    // Exception: the LAST settled message is the reply the chooser is asking
+    // about right now — that is exactly the "one answer they were asked to
+    // act on" from the comment above, and it must never be the thing that
+    // gets pushed off into native scrollback with no on-screen trace. Stop
+    // one short of it whenever there is another, older message to sacrifice
+    // instead; only flush into it when it is the sole settled message left
+    // (start == settled - 1), in which case there is nothing else to give up.
+    let protect_last = !app.streaming && settled > start;
+    let stop_at = if protect_last {
+        settled.saturating_sub(1).max(start)
+    } else {
+        settled
+    };
+    while end < stop_at && total > cap {
         total -= u32::from(rows[end - start]);
         end += 1;
     }

@@ -216,6 +216,53 @@ mod band_growth_tests {
         );
     }
 
+    /// Many short earlier turns plus a long last reply on a short screen: the
+    /// old flush walked messages oldest-first with no floor, so once every
+    /// earlier turn was flushed it kept eating into the LAST settled reply —
+    /// the one the chooser is asking the operator to act on — pushing its
+    /// tail into native scrollback with no on-screen trace and no "PgUp"
+    /// marker either (the band's own marker only tracks its own hidden rows,
+    /// not what left via `insert_before`). `flush_finished` now stops one
+    /// message short of the last settled reply whenever an earlier message
+    /// remains to sacrifice instead, so that reply is never the one that
+    /// disappears.
+    #[test]
+    fn flush_never_sacrifices_the_last_settled_reply_when_an_older_one_can_go_instead() {
+        let mut app = App::test_fixture();
+        app.render_mode = RenderMode::Inline;
+        for i in 1..=6 {
+            app.messages
+                .push(ChatMsg::for_test(Role::User, &format!("q{i}")));
+            app.messages.push(ChatMsg::for_test(
+                Role::Agent,
+                &format!("earlier answer {i}"),
+            ));
+        }
+        let long_last = (1..=15)
+            .map(|i| format!("final reply line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.messages
+            .push(ChatMsg::for_test(Role::User, "one more thing"));
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, &long_last));
+
+        let mut term = Terminal::with_options(
+            TestBackend::new(100, 60),
+            TerminalOptions {
+                viewport: Viewport::Inline(10),
+            },
+        )
+        .unwrap();
+        flush_finished(&mut term, &mut app, 10).unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+        let d = term.backend().to_string();
+        assert!(
+            d.contains("final reply line 1") || d.contains("final reply line 15"),
+            "the last settled reply was pushed off-screen instead of an earlier one:\n{d}"
+        );
+    }
+
     /// The band's top rule was one more line on a screen full of them. It
     /// only ever carried the scroll marker, which now paints on the first
     /// row by itself when — and only when — rows are hidden.
