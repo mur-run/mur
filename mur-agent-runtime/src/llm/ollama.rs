@@ -142,6 +142,8 @@ impl LlmClient for OllamaClient {
             StopReason::EndTurn
         };
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text,
             input_tokens,
             output_tokens,
@@ -270,6 +272,8 @@ impl LlmClient for OllamaClient {
             return Err(LlmError::InvalidResponse("empty streamed response".into()));
         }
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text,
             input_tokens,
             output_tokens,

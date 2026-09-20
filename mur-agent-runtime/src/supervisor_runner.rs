@@ -1205,6 +1205,8 @@ mod tests {
                 return Err(LlmError::Connect(format!("{} is down", self.name)));
             }
             Ok(LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: self.name.to_string(),
                 input_tokens: 0,
                 output_tokens: 0,

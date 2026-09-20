@@ -16,6 +16,8 @@ async fn llm_call_event_appends_jsonl_and_emits_notification() {
             model: "llama3.2".into(),
             input_tokens: 100,
             output_tokens: 50,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             latency_ms: 100,
             cost_usd: 0.0,
             provider: "ollama".into(),

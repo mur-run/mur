@@ -1863,6 +1863,8 @@ impl TaskRunner {
                             model: resp.model.clone(),
                             input_tokens: resp.input_tokens,
                             output_tokens: resp.output_tokens,
+                            cache_creation_input_tokens: resp.cache_creation_input_tokens,
+                            cache_read_input_tokens: resp.cache_read_input_tokens,
                             latency_ms,
                             cost_usd: 0.0,
                             provider: "ollama".into(),
@@ -3978,6 +3980,8 @@ mod tests {
     async fn tool_use_stop_without_calls_fails_instead_of_fabricating() {
         use crate::llm::stub::SequenceLlm;
         let responses: Vec<crate::llm::LlmResponse> = vec![crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: "The exact output of git rev-list --count HEAD is: FABRICATED-2469".into(),
             input_tokens: 5,
             output_tokens: 5,
@@ -4029,6 +4033,8 @@ mod tests {
     // Helper: build LlmResponse that signals tool_use stop with one call
     fn tool_call_response(call_id: &str, command: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -4044,6 +4050,8 @@ mod tests {
 
     fn end_turn_response(text: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: text.into(),
             input_tokens: 5,
             output_tokens: 5,
@@ -4060,6 +4068,8 @@ mod tests {
     /// execute blindly.
     fn truncated_tool_call_response(call_id: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -4081,6 +4091,8 @@ mod tests {
     /// output starts.
     fn truncated_thinking_only_response() -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -4095,6 +4107,8 @@ mod tests {
     /// case from #715 (a delegated spec cut mid-word at exactly the cap).
     fn truncated_text_response(text: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: text.into(),
             input_tokens: 5,
             output_tokens: 16384,
@@ -4168,6 +4182,8 @@ mod tests {
 
     fn fleet_run_call_response(call_id: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -4678,6 +4694,8 @@ mod tests {
         // fresh fingerprint every time, and that is how it reached 54
         // iterations against a tool that could never run again.
         let varied = |n: u32| crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -5003,6 +5021,8 @@ mod tests {
 
     fn interrupted_text_response(text: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: text.into(),
             input_tokens: 5,
             // 0 on purpose: usage arrives in the final frame, which never
@@ -5498,6 +5518,8 @@ mod tests {
         ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
             let n = self.calls.fetch_add(1, Ordering::Relaxed);
             Ok(crate::llm::LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: String::new(),
                 input_tokens: self.input_tokens_per_call,
                 output_tokens: 1,
@@ -5676,6 +5698,8 @@ mod tests {
         use crate::llm::stub::SequenceLlm;
         let mut responses: Vec<crate::llm::LlmResponse> = (0..n)
             .map(|i| crate::llm::LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: String::new(),
                 input_tokens: 5,
                 output_tokens: 5,
@@ -5827,6 +5851,8 @@ mod tests {
 
     fn bash_call(id: &str, command: &str, timeout_secs: u64) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -6081,6 +6107,8 @@ mod tests {
 
     fn build_tool_call_response(call_id: &str) -> crate::llm::LlmResponse {
         crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -6301,6 +6329,8 @@ mod tests {
         use crate::llm::stub::SequenceLlm;
         let dir = tempfile::tempdir().unwrap();
         let call = |n: u32| crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -6362,6 +6392,8 @@ mod tests {
         use crate::llm::stub::SequenceLlm;
         let dir = tempfile::tempdir().unwrap();
         let call = |n: u32| crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,
@@ -6418,6 +6450,8 @@ mod tests {
         use crate::llm::stub::SequenceLlm;
         let dir = tempfile::tempdir().unwrap();
         let call = |n: u32| crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 5,
             output_tokens: 5,

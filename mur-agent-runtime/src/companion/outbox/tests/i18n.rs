@@ -135,6 +135,8 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
                     return Err(LlmError::RateLimit);
                 }
                 return Ok(LlmResponse {
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
                     text: self.translated.clone(),
                     input_tokens: 0,
                     output_tokens: 0,
@@ -146,6 +148,8 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
             // Generation call: return a body that passes linter but triggers
             // translation (CJK ratio < 30% for zh-TW).
             Ok(LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: "Ok, 好。".into(),
                 input_tokens: 0,
                 output_tokens: 0,
@@ -268,6 +272,8 @@ async fn translate_4_failures_drops_locale_unresolved() {
             // Generation returns a body that passes the linter but triggers
             // translation (CJK ratio < 30% for zh-TW).
             Ok(LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: "Ok, 好。".into(),
                 input_tokens: 0,
                 output_tokens: 0,

@@ -56,6 +56,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // one explicitly.
 fn mk_resp(text: &str) -> LlmResponse {
     LlmResponse {
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
         text: text.to_string(),
         input_tokens: 0,
         output_tokens: 0,
