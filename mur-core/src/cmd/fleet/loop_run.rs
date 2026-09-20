@@ -86,6 +86,17 @@ pub enum LoopStop {
     /// at the same unanswered question, so the loop stops and hands the
     /// decision back to a person.
     AwaitingApproval,
+    /// The iteration's DAG came back `Failed` — every delegated step failed,
+    /// or enough of them did that the executor called the run a failure.
+    ///
+    /// Without this variant the loop read only `Skipped` (blocked) and let a
+    /// failed iteration fall through to the synthesis turn. The router would
+    /// then emit the convergence marker over an empty evidence set, the loop
+    /// broke `Converged`, and `Converged` maps to `State::Done`: on
+    /// 2026-09-20 three deep-research workers all failed to start and the run
+    /// still recorded `done`, with a synthesized report whose own text
+    /// admitted it had received no worker evidence.
+    IterationFailed,
 }
 
 /// One grammar for `--deadline`, `loop.deadline` and `limits.deadline`.
@@ -384,6 +395,7 @@ fn outcome_label(stop: LoopStop) -> &'static str {
         LoopStop::CommanderKilled => "commander-killed",
         LoopStop::QueueDrained => "queue-drained",
         LoopStop::AwaitingApproval => "awaiting-approval",
+        LoopStop::IterationFailed => "iteration-failed",
     }
 }
 
@@ -414,6 +426,10 @@ pub fn calibration_stop_reason(stop: LoopStop) -> Option<&'static str> {
         | LoopStop::Stopped
         | LoopStop::CommanderKilled
         | LoopStop::AwaitingApproval
+        // Not an overrun either: the work itself failed while every guard
+        // stayed within its bounds. Scoring it as a triage miss would blame
+        // the sizing call for a member that could not start.
+        | LoopStop::IterationFailed
         // See the doc comment: spend-vs-cap already detects this.
         | LoopStop::Budget => None,
     }
@@ -427,6 +443,9 @@ pub fn calibration_stop_reason(stop: LoopStop) -> Option<&'static str> {
 pub fn stop_remedy(stop: LoopStop, fleet: &str) -> Option<String> {
     Some(match stop {
         LoopStop::Converged | LoopStop::QueueDrained => return None,
+        LoopStop::IterationFailed => format!(
+            "every delegated step failed — read the per-step reason: mur fleet status {fleet} (each step now carries the runtime's own error, not `no output`)"
+        ),
         LoopStop::MaxIterations => format!(
             "the {LOOP_ITERATION_CEILING}-iteration safety ceiling — a runaway, not a setting; report it with the run id (mur fleet status {fleet})"
         ),
@@ -462,9 +481,11 @@ pub fn loop_terminal_state(stop: LoopStop) -> crate::run_status::State {
         LoopStop::Converged | LoopStop::QueueDrained => State::Done,
         LoopStop::AwaitingApproval => State::Blocked,
         LoopStop::Stopped | LoopStop::CommanderKilled => State::Stopped,
-        LoopStop::MaxIterations | LoopStop::Deadline | LoopStop::Stuck | LoopStop::Budget => {
-            State::Failed
-        }
+        LoopStop::MaxIterations
+        | LoopStop::Deadline
+        | LoopStop::Stuck
+        | LoopStop::Budget
+        | LoopStop::IterationFailed => State::Failed,
     }
 }
 
@@ -473,9 +494,11 @@ fn terminal_state_for(stop: LoopStop) -> &'static str {
         LoopStop::Converged | LoopStop::QueueDrained => "completed",
         LoopStop::Stopped | LoopStop::CommanderKilled => "canceled",
         LoopStop::AwaitingApproval => "input-required",
-        LoopStop::MaxIterations | LoopStop::Deadline | LoopStop::Stuck | LoopStop::Budget => {
-            "failed"
-        }
+        LoopStop::MaxIterations
+        | LoopStop::Deadline
+        | LoopStop::Stuck
+        | LoopStop::Budget
+        | LoopStop::IterationFailed => "failed",
     }
 }
 
@@ -916,6 +939,46 @@ pub async fn run_guarded(
         let out =
             crate::executor::dag::execute_dag(mur_home, &format!("fleet:{name}"), &proc, &opts)
                 .await?;
+        // A failed iteration is not a base to synthesize from. Only `Skipped`
+        // was checked here before, so `Failed` fell through to the synthesis
+        // turn below: the router, handed an empty evidence set, still emitted
+        // the convergence marker, the loop broke `Converged`, and the run
+        // recorded `done`. Observed 2026-09-20 — every deep-research member
+        // failed to start, and the synthesized report's own text admitted it
+        // had been given no worker evidence while the run claimed success.
+        //
+        // Checked BEFORE synthesis on purpose: that turn is a paid LLM call,
+        // and buying a summary of nothing is how the fabricated report got
+        // written in the first place.
+        if out.status == mur_common::pipeline::PipelineStatus::Failed {
+            iteration += 1;
+            if let Some(job) = active_job.as_mut() {
+                job.run_id = Some(opts.run_id.clone());
+                job.finished_at = Some(chrono::Utc::now().to_rfc3339());
+                job.status = JobStatus::Failed;
+                job.error = Some(
+                    out.output_text
+                        .clone()
+                        .filter(|t| !t.trim().is_empty())
+                        .unwrap_or_else(|| "iteration failed with no step output".to_string()),
+                );
+                let _ = super::jobs::save_job(mur_home, name, job);
+            }
+            // Account what the failed iteration actually burned — a failure
+            // that spent tokens must still show up against the budget.
+            spent += if out.tokens_used > 0 {
+                iteration_cost_usd(out.tokens_used, price_per_1k)
+            } else {
+                projection
+            };
+            {
+                let mut g = lock_progress(&progress);
+                g.spend_usd = spent;
+                g.save(mur_home, name);
+                println!("{}", iteration_summary_line(&g));
+            }
+            break LoopStop::IterationFailed;
+        }
         // Marker policies need an explicit router synthesis turn. Planning is
         // JSON-only, and delegated workers cannot speak for the router, so
         // without this phase no one can legitimately emit the convergence
@@ -1689,6 +1752,35 @@ mod tests {
         assert_eq!(p.outcome.as_deref(), Some("stopped"));
     }
 
+    /// C: a fleet whose every member failed must not be recorded `done`.
+    ///
+    /// Observed 2026-09-20: three deep-research workers each failed, the
+    /// iteration returned `PipelineStatus::Failed`, the loop read only
+    /// `Skipped` (blocked) and fell through to synthesis, the router emitted
+    /// the convergence marker, and `Converged` mapped to `State::Done`. The
+    /// run record said done while nothing had been researched.
+    #[test]
+    fn an_iteration_that_failed_is_not_a_converged_fleet() {
+        use crate::run_status::State;
+        assert_eq!(
+            loop_terminal_state(LoopStop::IterationFailed),
+            State::Failed,
+            "a fleet whose iteration failed must record `failed`"
+        );
+        assert_eq!(terminal_state_for(LoopStop::IterationFailed), "failed");
+        assert_eq!(outcome_label(LoopStop::IterationFailed), "iteration-failed");
+        // It is a real failure, so it owes the user a way out.
+        let remedy = stop_remedy(LoopStop::IterationFailed, "dev")
+            .expect("a failed iteration must name a remedy");
+        assert!(
+            remedy.contains("dev"),
+            "remedy must name the fleet: {remedy}"
+        );
+        // And it must not be scored against triage as an overrun — the work
+        // failed, the guards did not trip.
+        assert_eq!(calibration_stop_reason(LoopStop::IterationFailed), None);
+    }
+
     /// Every stop has a remedy except the two that mean "done". The remedy
     /// names a command that exists today; the spec's later steps rewrite it.
     #[test]
@@ -1701,6 +1793,7 @@ mod tests {
             LoopStop::Stopped,
             LoopStop::CommanderKilled,
             LoopStop::AwaitingApproval,
+            LoopStop::IterationFailed,
         ] {
             let r = stop_remedy(stop, "dev").unwrap_or_else(|| panic!("{stop:?} has no remedy"));
             assert!(
