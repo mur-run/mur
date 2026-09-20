@@ -32,3 +32,8 @@ AGENTS.md
 .cursorrules
 .windsurfrules
 /.cargo-target-*/
+
+# Scratch cargo target dirs that fleet/agent runs create beside the repo
+# root (e.g. .target-fleet-run-handle-ledger/ — a full 15M build tree).
+# Same reason as /.cargo-target-*/ above: never a tracked artifact.
+/.target-*/
