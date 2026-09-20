@@ -58,6 +58,8 @@ impl LlmClient for DynamicStubLlm {
             DynamicStubModeTag::Clean => {
                 let body = self.clean_body.lock().unwrap().clone();
                 Ok(LlmResponse {
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
                     text: body,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -81,6 +83,8 @@ impl LlmClient for DynamicStubLlm {
                     "嗨，今天有什麼想分享的嗎？".to_string()
                 };
                 Ok(LlmResponse {
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
                     text,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -304,6 +308,8 @@ impl LlmClient for MismatchAlwaysFailsTranslateLlm {
         }
         // Generation path: body passes zh-TW linter but fails heuristic.
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: "Ok, 好。".to_string(),
             input_tokens: 0,
             output_tokens: 0,

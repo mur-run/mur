@@ -319,6 +319,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let tool_call = crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 1,
             output_tokens: 1,
@@ -331,6 +333,8 @@ mod tests {
             stop_reason: crate::llm::StopReason::ToolUse,
         };
         let done = crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: "DONE".into(),
             input_tokens: 1,
             output_tokens: 1,
@@ -416,6 +420,8 @@ mod tests {
     async fn a_delegated_turn_beats_on_the_callers_connection() {
         let tmp = TempDir::new().unwrap();
         let tool_call = crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: String::new(),
             input_tokens: 1,
             output_tokens: 1,
@@ -428,6 +434,8 @@ mod tests {
             stop_reason: crate::llm::StopReason::ToolUse,
         };
         let done = crate::llm::LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: "DONE".into(),
             input_tokens: 1,
             output_tokens: 1,
@@ -497,6 +505,8 @@ mod tests {
             self.calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(crate::llm::LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: "should not run".into(),
                 input_tokens: 1,
                 output_tokens: 1,

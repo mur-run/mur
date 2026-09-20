@@ -16,6 +16,10 @@ pub const GEN_AI_RESPONSE_MODEL: &str = "gen_ai.response.model";
 pub const GEN_AI_RESPONSE_FINISH_REASONS: &str = "gen_ai.response.finish_reasons";
 pub const GEN_AI_USAGE_INPUT_TOKENS: &str = "gen_ai.usage.input_tokens";
 pub const GEN_AI_USAGE_OUTPUT_TOKENS: &str = "gen_ai.usage.output_tokens";
+// Prompt-cache split of the input side (OTel gen_ai semconv 1.37).
+pub const GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS: &str =
+    "gen_ai.usage.cache_creation.input_tokens";
+pub const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
 
 // ───── gen_ai.agent.* + conversation correlation ─────
 pub const GEN_AI_AGENT_ID: &str = "gen_ai.agent.id";

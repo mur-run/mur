@@ -68,6 +68,8 @@ mod tests {
     impl LlmClient for FixedClient {
         async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
             Ok(LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
                 text: self.name.to_string(),
                 input_tokens: 0,
                 output_tokens: 0,

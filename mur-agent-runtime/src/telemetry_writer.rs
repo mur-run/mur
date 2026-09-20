@@ -38,6 +38,10 @@ pub enum Event {
         model: String,
         input_tokens: u64,
         output_tokens: u64,
+        /// Prompt-cache split of the input side; see `LlmResponse` for why
+        /// `input_tokens` above is still the whole prompt.
+        cache_creation_input_tokens: u64,
+        cache_read_input_tokens: u64,
         latency_ms: u64,
         cost_usd: f64,
         provider: String,
@@ -142,6 +146,10 @@ pub enum Event {
         escalations: u32,
         input_tokens: u64,
         output_tokens: u64,
+        /// Prompt-cache split of the input side; see `LlmResponse` for why
+        /// `input_tokens` above is still the whole prompt.
+        cache_creation_input_tokens: u64,
+        cache_read_input_tokens: u64,
         /// First user message text, truncated (see `ROUTING_SUMMARY_MAX` in
         /// `llm::fallback`).
         task_summary: String,
@@ -271,6 +279,8 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             model,
             input_tokens,
             output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
             latency_ms,
             cost_usd,
             provider,
@@ -280,6 +290,8 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             params[GEN_AI_REQUEST_MODEL] = json!(model);
             params[GEN_AI_USAGE_INPUT_TOKENS] = json!(input_tokens);
             params[GEN_AI_USAGE_OUTPUT_TOKENS] = json!(output_tokens);
+            params[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = json!(cache_creation_input_tokens);
+            params[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = json!(cache_read_input_tokens);
             params["latency_ms"] = json!(latency_ms);
             params["cost_usd"] = json!(cost_usd);
             params["trace_id"] = json!(trace_id);
@@ -424,6 +436,8 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             escalations,
             input_tokens,
             output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
             task_summary,
         } => {
             params["agent"] = json!(agent);
@@ -438,6 +452,8 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             params["escalations"] = json!(escalations);
             params[GEN_AI_USAGE_INPUT_TOKENS] = json!(input_tokens);
             params[GEN_AI_USAGE_OUTPUT_TOKENS] = json!(output_tokens);
+            params[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = json!(cache_creation_input_tokens);
+            params[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = json!(cache_read_input_tokens);
             params["task_summary"] = json!(task_summary);
             METHOD_ROUTING
         }
@@ -594,6 +610,8 @@ mod routing_event_tests {
             escalations: 1,
             input_tokens: 10,
             output_tokens: 5,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             task_summary: "do the thing".into(),
         };
         let notif = event_to_notification(&ev, "coach", "uuid-1");

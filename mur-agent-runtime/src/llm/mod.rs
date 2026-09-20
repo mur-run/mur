@@ -259,8 +259,21 @@ pub struct LlmRequest {
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
     pub text: String,
+    /// Everything the model read for this call, cached or not. On the wire
+    /// Anthropic reports only the uncached remainder under this name and
+    /// splits the rest into the two cache fields below; the adapter sums
+    /// them, because every consumer of this number — context-fill for skill
+    /// injection, the fleet spend guard, the `context_tokens` a client sees —
+    /// wants the prompt size, and a cache hit does not make the prompt
+    /// smaller. Backends without a cache report the two splits as zero.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Prompt tokens written to the provider cache this call (billed ~1.25x).
+    pub cache_creation_input_tokens: u64,
+    /// Prompt tokens served from the provider cache this call (billed ~0.1x).
+    /// Zero on every call of a turn means caching is silently off — the API
+    /// never errors for a missed cache, the bill just stays high.
+    pub cache_read_input_tokens: u64,
     pub model: String,
     pub tool_calls: Vec<ToolCallResult>,
     pub stop_reason: StopReason,
@@ -530,6 +543,8 @@ mod tests {
     #[test]
     fn llm_response_defaults() {
         let r = LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: "hello".into(),
             input_tokens: 5,
             output_tokens: 2,

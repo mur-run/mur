@@ -193,6 +193,8 @@ impl LlmClient for DirtyThenCleanStub {
             "嗨，今天有什麼想分享的嗎？".to_string()
         };
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text,
             input_tokens: 0,
             output_tokens: 0,
