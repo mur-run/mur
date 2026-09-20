@@ -26,12 +26,16 @@ fn release_archive_matches_every_binary_the_cli_expects() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(RELEASE_MANIFEST);
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let manifest: Manifest = toml::from_str(&source)
-        .unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()));
+    let manifest: Manifest =
+        toml::from_str(&source).unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()));
 
     assert_eq!(manifest.schema, 1, "unsupported release manifest schema");
 
-    let shipped: BTreeSet<&str> = manifest.binary.iter().map(|binary| binary.name.as_str()).collect();
+    let shipped: BTreeSet<&str> = manifest
+        .binary
+        .iter()
+        .map(|binary| binary.name.as_str())
+        .collect();
     assert_eq!(
         shipped.len(),
         manifest.binary.len(),
