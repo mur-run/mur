@@ -2,37 +2,13 @@
 
 Operational guidance for Claude Code working in this repository. Detailed runtime / GUI / companion / P0a designs moved to `docs/architecture/runtime-overview.md`.
 
-## Build & Install
+## Lint
 
 ```bash
-# ── Quick install (build + install in one step) ──
-./install.sh                    # Runs build.sh --release --install
-
-# ── Build only ──
-./build.sh                      # Release build with embedded web dashboard
-./build.sh --install            # Build + install to ~/.local/bin (no sudo; MUR_INSTALL_DIR overrides)
-
-# ── Manual build (without embedded dashboard) ──
-cargo build --workspace         # Debug build
-cargo build --release           # Release build
-
-# ── Build with embedded web dashboard (what build.sh does) ──
-cd ~/Projects/mur-web && npm run build
-MUR_WEB_DIST=$HOME/Projects/mur-web/dist cargo build --release
-
-# ── Test ──
-cargo test --workspace
-cargo test -p mur-core <test_name>
-
-# ── Lint ── (CI's own invocation; --all-targets is load-bearing)
-cargo clippy --all --all-targets --no-deps -- -D warnings
-cargo fmt --check
-
-# ── Run locally ──
-cargo run -- <command>          # e.g. cargo run -- search "swift testing"
+# CI's own invocation; --all-targets is load-bearing
+cargo clippy --all --all-targets --no-deps --locked -- -D warnings
+cargo fmt --all -- --check
 ```
-
-`build.sh` requires `~/Projects/mur-web` (or `MUR_WEB_DIR`). The `mur-agent-gui` crate is workspace-EXCLUDED so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2.
 
 ## Architecture
 
