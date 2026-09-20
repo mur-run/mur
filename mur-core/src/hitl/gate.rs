@@ -650,12 +650,12 @@ mod tests {
     use mur_common::identity::AgentIdentity;
 
     /// Plant a router identity at `<home>/agents/mur/` and return it.
+    ///
+    /// Delegates to the shared fixture so there is ONE definition of "a home
+    /// whose router can sign" — a second, drifting copy is how some tests in
+    /// this file ended up signing while others silently did not.
     fn plant_router_identity(home: &Path) -> AgentIdentity {
-        let agent_home = home.join("agents").join(ROUTER_AGENT);
-        std::fs::create_dir_all(&agent_home).unwrap();
-        let id = AgentIdentity::generate();
-        id.save(&agent_home).unwrap();
-        id
+        crate::channel_writer::plant_writer_identity(home)
     }
 
     fn resp_with_hash(hitl_id: &str, hash: &str) -> HitlResponse {
@@ -795,6 +795,12 @@ mod tests {
 
     /// Answer a parked request the way `mur channel approve` does: echo the
     /// request's own `action_hash` so the pin re-verify passes.
+    /// Answer a parked request the way `mur channel approve` does — SIGNED by
+    /// the router (`append_as_writer`), not through a bare
+    /// `ChannelService::append`. Under `MUR_CHANNEL_REQUIRE_SIG=1` the gate
+    /// drops an unsigned `HitlResponse`, so an unsigned fixture here would be
+    /// answering on a path no real approval ever takes. Callers must have
+    /// planted a router identity (`plant_router_identity`) in `home`.
     fn answer(home: &Path, ch: &str, hitl_id: &str, allow: bool) {
         let svc = ChannelService::open(home).unwrap();
         let req: HitlRequest = svc
@@ -812,8 +818,11 @@ mod tests {
             reason: "test".into(),
             surface: "cli".into(),
         };
-        svc.append(
+        crate::channel_writer::append_as_writer(
+            &svc,
+            home,
             ch,
+            ROUTER_AGENT,
             ChannelActor::System,
             EventKind::HitlResponse,
             serde_json::to_value(&resp).unwrap(),
@@ -868,6 +877,7 @@ mod tests {
     #[tokio::test]
     async fn approval_from_an_earlier_run_releases_a_later_one() {
         let tmp = TempDir::new().unwrap();
+        let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
         drop(svc);
@@ -919,6 +929,7 @@ mod tests {
     #[tokio::test]
     async fn denial_persists_and_is_not_re_asked() {
         let tmp = TempDir::new().unwrap();
+        let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
         drop(svc);
@@ -967,6 +978,7 @@ mod tests {
     #[tokio::test]
     async fn repeated_defers_reuse_the_parked_request() {
         let tmp = TempDir::new().unwrap();
+        let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
         drop(svc);
@@ -1206,6 +1218,7 @@ mod tests {
     #[tokio::test]
     async fn a_human_denial_outranks_a_tier_grant() {
         let tmp = TempDir::new().unwrap();
+        let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
         drop(svc);

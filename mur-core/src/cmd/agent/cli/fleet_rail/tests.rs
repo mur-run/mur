@@ -372,6 +372,14 @@ use std::time::Instant;
 /// derive the same id from `--fleet dev`.
 fn seed_home() -> tempfile::TempDir {
     let tmp = tempfile::TempDir::new().unwrap();
+    // The rail verifies every event it folds against its actor's key
+    // (`verify_events`), resolving a non-agent actor to ROUTER_AGENT. Without
+    // an identity here the seeded events are unsigned and enforcement drops
+    // them — the rail would render an empty fleet for the wrong reason.
+    crate::channel_writer::plant_writer_identity(tmp.path());
+    // `qa` acts on this channel in its own name, so the rail resolves ITS key,
+    // not the router's.
+    crate::channel_writer::plant_identity_for(tmp.path(), "qa");
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
     svc.create_for_fleet("dev", "mur", &["qa".to_string()])
         .unwrap();
@@ -394,8 +402,13 @@ fn poll_reports_change_only_when_the_log_grows() {
 
     // A member acts → the next poll picks it up.
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    svc.append(
+    // Signed AS `qa`, because the rail verifies each event against its own
+    // actor's key — an unsigned member event is dropped under enforcement.
+    crate::channel_writer::append_as_writer(
+        &svc,
+        tmp.path(),
         "fleet-dev",
+        "qa",
         ChannelActor::Agent { id: "qa".into() },
         EventKind::StateChange,
         serde_json::json!({"to": "working"}),
@@ -422,8 +435,11 @@ fn poll_reconciles_a_running_job_against_channel_truth() {
     let tmp = seed_home();
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
     // The run drove the channel to a terminal state...
-    svc.append(
+    crate::channel_writer::append_as_writer(
+        &svc,
+        tmp.path(),
         "fleet-dev",
+        crate::channel_writer::ROUTER_AGENT,
         ChannelActor::System,
         EventKind::StateChange,
         serde_json::json!({"from": "working", "to": "completed"}),
@@ -453,8 +469,13 @@ fn poll_reconciles_a_running_job_against_channel_truth() {
 fn poll_falls_back_to_channel_summary_when_jobs_store_is_unreadable() {
     let tmp = seed_home();
     let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
-    svc.append(
+    // Signed AS `qa`, because the rail verifies each event against its own
+    // actor's key — an unsigned member event is dropped under enforcement.
+    crate::channel_writer::append_as_writer(
+        &svc,
+        tmp.path(),
         "fleet-dev",
+        "qa",
         ChannelActor::Agent { id: "qa".into() },
         EventKind::StateChange,
         serde_json::json!({"to": "working"}),
