@@ -106,7 +106,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::raw("  "));
     }
-    // `monitor(n)` — silent unless a monitor has a live condition (exhausted,
+    // `MONITOR (n)` — silent unless a monitor has a live condition (exhausted,
     // action_pending, stalled, or unhealthy). Cached on `App`, refreshed at
     // most every `footer::MONITOR_REFRESH_SECS`; never queried here.
     if let Some(label) = crate::cmd::agent::cli::footer::monitor_label(app.monitor_conditions) {
@@ -114,7 +114,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
             format!(" {label} "),
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Red)
+                .bg(Color::Rgb(255, 165, 0))
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw("  "));
@@ -474,7 +474,7 @@ mod monitor_badge_tests {
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
         let dump = term.backend().to_string();
         assert!(
-            !dump.contains("monitor("),
+            !dump.contains("MONITOR ("),
             "quiet run must show nothing: {dump}"
         );
     }
@@ -486,6 +486,6 @@ mod monitor_badge_tests {
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
         let dump = term.backend().to_string();
-        assert!(dump.contains("monitor(2)"), "expected monitor(2): {dump}");
+        assert!(dump.contains("MONITOR (2)"), "expected MONITOR (2): {dump}");
     }
 }

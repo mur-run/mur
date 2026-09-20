@@ -109,7 +109,7 @@ pub fn conditions(rows: &[MonitorRow]) -> usize {
 
 /// Footer segment, or `None` when nothing wants attention.
 pub fn monitor_label(n: usize) -> Option<String> {
-    (n > 0).then(|| format!("monitor({n})"))
+    (n > 0).then(|| format!("MONITOR ({n})"))
 }
 
 #[cfg(test)]
@@ -183,8 +183,8 @@ mod tests {
 
     #[test]
     fn monitor_label_counts_conditions() {
-        assert_eq!(monitor_label(1).as_deref(), Some("monitor(1)"));
-        assert_eq!(monitor_label(4).as_deref(), Some("monitor(4)"));
+        assert_eq!(monitor_label(1).as_deref(), Some("MONITOR (1)"));
+        assert_eq!(monitor_label(4).as_deref(), Some("MONITOR (4)"));
     }
 
     #[test]
