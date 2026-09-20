@@ -54,7 +54,18 @@ const WORKER_LLM_ALLOW_HOSTS: [&str; 2] = ["localhost", "127.0.0.1"];
 /// Denying them drops the tools from the advertised set entirely
 /// (`tools::registry` skips `Deny`), so the model never calls them and the
 /// turn can complete on the gateway tools alone.
-const WORKER_DENIED_BUILTIN_TOOLS: [&str; 4] = ["bash", "read_file", "write_file", "edit_file"];
+///
+/// `open_item` is here for the same reason, found the same way (root-caused
+/// live 2026-09-20: workers 2 and 3 of a deep-research run died with
+/// `delegate failed [hitl_denied]: tool call denied: `open_item` needs
+/// approval and this caller cannot give one`). It is cheap for a general
+/// agent — `supervisor_runner.rs` mounts it for everyone — but a research
+/// worker reports in text to its supervisor and has no user whose open-item
+/// list it should be writing to. Denying beats allowing (an allow leaves the
+/// worker free to keep reaching for it) and beats prompt-engineering (which
+/// only asks the model not to).
+const WORKER_DENIED_BUILTIN_TOOLS: [&str; 5] =
+    ["bash", "read_file", "write_file", "edit_file", "open_item"];
 
 /// Name of the gateway MCP server entry mounted on every worker.
 pub const GATEWAY_MCP_NAME: &str = "research-gateway";
