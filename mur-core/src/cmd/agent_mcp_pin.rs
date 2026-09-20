@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 ///
 /// Returns an error if the binary can't be located. Used by both
 /// install-time hashing and startup verification so a bare `command`
-/// like "mcp-weather" stays consistent across the two passes.
+/// like "mcp-weather" stays consistent across the two passes — including
+/// the PATH they are resolved against, which is the augmented one on both
+/// sides (see [`mur_common::exec::resolve_command`]).
 pub fn resolve_command(command: &str) -> Result<PathBuf> {
     // Single source of truth in mur-common so install-time pinning and the
     // runtime startup verification (B0 rules 6 & 11) resolve identically.
