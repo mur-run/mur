@@ -57,6 +57,8 @@ impl LlmClient for BannedThenCleanStub {
             "早安。今天想從哪一件小事開始？".to_string()
         };
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text,
             input_tokens: 0,
             output_tokens: 0,
@@ -79,6 +81,8 @@ struct AlwaysDirty;
 impl LlmClient for AlwaysDirty {
     async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: "amazing!! amazing!! amazing!!".into(),
             input_tokens: 0,
             output_tokens: 0,

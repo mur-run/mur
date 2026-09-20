@@ -30,6 +30,8 @@ impl LlmClient for FakeLlm {
     async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
         // Return a body that does NOT contain the sentinel.
         Ok(LlmResponse {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
             text: "Hello there.".into(),
             input_tokens: 1,
             output_tokens: 3,

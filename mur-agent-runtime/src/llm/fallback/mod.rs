@@ -461,9 +461,16 @@ impl FallbackLlmClient {
                 (Err(_), true) => "structural_fail",
                 (Err(_), false) => "error",
             };
-            let (model_ref, input_tokens, output_tokens) = match result {
-                Ok(resp) => (resp.model.clone(), resp.input_tokens, resp.output_tokens),
-                Err(_) => (meta.last_model_ref.clone(), 0, 0),
+            let (model_ref, input_tokens, output_tokens, cache_creation, cache_read) = match result
+            {
+                Ok(resp) => (
+                    resp.model.clone(),
+                    resp.input_tokens,
+                    resp.output_tokens,
+                    resp.cache_creation_input_tokens,
+                    resp.cache_read_input_tokens,
+                ),
+                Err(_) => (meta.last_model_ref.clone(), 0, 0, 0, 0),
             };
             let ev = Event::Routing {
                 agent: self.agent.clone(),
@@ -476,6 +483,8 @@ impl FallbackLlmClient {
                 escalations: meta.escalations,
                 input_tokens,
                 output_tokens,
+                cache_creation_input_tokens: cache_creation,
+                cache_read_input_tokens: cache_read,
                 task_summary: task_summary(req),
             };
             let _ = tx.try_send(ev);
