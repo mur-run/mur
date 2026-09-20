@@ -146,8 +146,14 @@ async fn async_main() -> Result<()> {
     load_dotenv();
     // Before anything else can touch stdin: a parent runtime may have handed
     // us the signing capability there, because a process sealed inside an
-    // agent's sandbox cannot read the key from disk. No-op otherwise.
-    channel_writer::ingest_signing_handoff();
+    // agent's sandbox cannot read the key from disk. No-op when no handoff was
+    // announced; a hard error when one was announced and could not be honored,
+    // which is a parent/child protocol mismatch rather than a missing key.
+    // Reported by hand because `tracing` has no subscriber yet on this line.
+    if let Err(e) = channel_writer::ingest_signing_handoff() {
+        eprintln!("mur: {e:#}");
+        std::process::exit(1);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()

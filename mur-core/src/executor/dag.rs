@@ -1179,6 +1179,10 @@ pub async fn execute_dag(
     opts: &DagExecOptions<'_>,
 ) -> Result<PipelineOutput> {
     let start = std::time::Instant::now();
+    // Snapshot before a single event is written, so the closing summary can
+    // tell the user how much of this run's history is missing. See
+    // `channel_writer::refusals_since`.
+    let refusal_mark = crate::channel_writer::refusal_count();
 
     let mut graph = build_dag(&procedure.steps)?;
 
@@ -1594,6 +1598,7 @@ pub async fn execute_dag(
                             recorded.is_some(),
                             &mut heartbeat,
                             RunOutcome::Failed,
+                            refusal_mark,
                         )
                         .await;
                         return Ok(PipelineOutput {
@@ -1648,6 +1653,7 @@ pub async fn execute_dag(
                                     recorded.is_some(),
                                     &mut heartbeat,
                                     RunOutcome::Failed,
+                                    refusal_mark,
                                 )
                                 .await;
                                 return Ok(PipelineOutput {
@@ -1718,6 +1724,7 @@ pub async fn execute_dag(
         recorded.is_some(),
         &mut heartbeat,
         outcome,
+        refusal_mark,
     )
     .await;
     Ok(PipelineOutput {
@@ -1749,7 +1756,23 @@ async fn finalize_run(
     recorded: bool,
     heartbeat: &mut Option<crate::run_status::heartbeat::Heartbeat>,
     outcome: RunOutcome,
+    refusal_mark: usize,
 ) {
+    // Before anything else, and regardless of whether this run is recorded:
+    // a run whose events were refused must say so out loud. An unrecorded
+    // run is the case where the channel is the ONLY history there is, so
+    // skipping the warning there would silence it exactly where it matters
+    // most.
+    let refused = crate::channel_writer::refusals_since(refusal_mark);
+    if refused > 0 {
+        eprintln!(
+            "\n⚠ {refused} channel write(s) refused during this run — the channel's history is INCOMPLETE.\n   Writes are refused when MUR_CHANNEL_REQUIRE_SIG is set and the signing key cannot be read.\n   Details: {}",
+            mur_home
+                .join("channels")
+                .join("write-refusals.jsonl")
+                .display()
+        );
+    }
     if !recorded {
         return;
     }

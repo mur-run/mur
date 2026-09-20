@@ -73,6 +73,11 @@ fn settled_with_policy(
 ) -> (tempfile::TempDir, std::path::PathBuf, String) {
     let d = tempfile::tempdir().unwrap();
     let home = d.path().to_path_buf();
+    // The gate signs what it writes and verifies what it reads, both as
+    // `ROUTER_AGENT`. A home without that identity writes unsigned events that
+    // enforcement then drops — so plant it here, once, for every fixture built
+    // on this helper.
+    crate::channel_writer::plant_writer_identity(&home);
     let s = MonitorStore::open(&home).unwrap();
     let id = settle_into(
         &s,
@@ -106,12 +111,16 @@ fn event_kinds(s: &MonitorStore, id: &str) -> Vec<String> {
 }
 
 /// Approve one action on the monitor's derived channel, keyed on
-/// `action_hash` exactly as `mur channel approve` is, through the same
-/// unsigned `ChannelService::append` path `gate.rs`'s
-/// `an_approval_already_on_the_channel_releases_the_gate` uses. The hash
-/// comes from `expected_hash`, so no `HitlRequest` need be parked first:
-/// `scan_prior` matches on the hash, never on a `hitl_id` — which is
-/// what makes a late (or standing) approval releasable at all.
+/// `action_hash` exactly as `mur channel approve` is — and, like it, through
+/// the SIGNED `append_as_writer` path (`cmd/channel.rs`), not a bare
+/// `ChannelService::append`. The hash comes from `expected_hash`, so no
+/// `HitlRequest` need be parked first: `scan_prior` matches on the hash,
+/// never on a `hitl_id` — which is what makes a late (or standing) approval
+/// releasable at all.
+///
+/// The signature is load-bearing, not decoration: with
+/// `MUR_CHANNEL_REQUIRE_SIG=1` the gate drops an unsigned `HitlResponse`, so
+/// an unsigned fixture would test a path no real approval ever takes.
 fn approve(home: &Path, row: &MonitorRow, verb: &str, index: usize) {
     let resp = HitlResponse {
         hitl_id: format!("hitl-test-{verb}-{index}"),
@@ -120,16 +129,18 @@ fn approve(home: &Path, row: &MonitorRow, verb: &str, index: usize) {
         reason: "test".into(),
         surface: "cli".into(),
     };
-    ChannelService::open(home)
-        .unwrap()
-        .append(
-            &channel_id_for(&row.id),
-            ChannelActor::System,
-            EventKind::HitlResponse,
-            serde_json::to_value(&resp).unwrap(),
-            None,
-        )
-        .unwrap();
+    let svc = ChannelService::open(home).unwrap();
+    crate::channel_writer::append_as_writer(
+        &svc,
+        home,
+        &channel_id_for(&row.id),
+        crate::channel_writer::ROUTER_AGENT,
+        ChannelActor::System,
+        EventKind::HitlResponse,
+        serde_json::to_value(&resp).unwrap(),
+        None,
+    )
+    .unwrap();
 }
 
 mod approval;
