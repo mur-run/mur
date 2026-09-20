@@ -107,9 +107,17 @@ pub fn conditions(rows: &[MonitorRow]) -> usize {
     rows.iter().filter(|r| has_condition(r)).count()
 }
 
-/// Footer segment, or `None` when nothing wants attention.
-pub fn monitor_label(n: usize) -> Option<String> {
-    (n > 0).then(|| format!("MONITOR ({n})"))
+/// Footer segment for registered monitors, or `None` when no monitor exists.
+pub fn monitor_label(total: usize) -> Option<String> {
+    (total > 0).then(|| format!("MONITOR ({total})"))
+}
+
+/// A compact companion segment for monitors needing attention.
+pub fn monitor_issue_label(conditions: usize) -> Option<String> {
+    (conditions > 0).then(|| {
+        let suffix = if conditions == 1 { "issue" } else { "issues" };
+        format!("· {conditions} {suffix}")
+    })
 }
 
 #[cfg(test)]
@@ -177,14 +185,25 @@ mod tests {
     }
 
     #[test]
-    fn monitor_label_is_silent_without_a_condition() {
+    fn monitor_label_is_silent_without_monitors() {
         assert_eq!(monitor_label(0), None);
     }
 
     #[test]
-    fn monitor_label_counts_conditions() {
+    fn monitor_label_counts_registered_monitors() {
         assert_eq!(monitor_label(1).as_deref(), Some("MONITOR (1)"));
         assert_eq!(monitor_label(4).as_deref(), Some("MONITOR (4)"));
+    }
+
+    #[test]
+    fn monitor_issue_label_is_silent_without_conditions() {
+        assert_eq!(monitor_issue_label(0), None);
+    }
+
+    #[test]
+    fn monitor_issue_label_pluralizes_conditions() {
+        assert_eq!(monitor_issue_label(1).as_deref(), Some("· 1 issue"));
+        assert_eq!(monitor_issue_label(2).as_deref(), Some("· 2 issues"));
     }
 
     #[test]

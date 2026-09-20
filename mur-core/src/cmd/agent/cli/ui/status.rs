@@ -106,10 +106,10 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::raw("  "));
     }
-    // `MONITOR (n)` — silent unless a monitor has a live condition (exhausted,
-    // action_pending, stalled, or unhealthy). Cached on `App`, refreshed at
-    // most every `footer::MONITOR_REFRESH_SECS`; never queried here.
-    if let Some(label) = crate::cmd::agent::cli::footer::monitor_label(app.monitor_conditions) {
+    // `MONITOR (n)` reports registered monitors, including healthy sleeping
+    // ones. Conditions are rendered separately so adding a monitor always
+    // changes the count without hiding alerts. Both counts are cached on App.
+    if let Some(label) = crate::cmd::agent::cli::footer::monitor_label(app.monitor_total) {
         spans.push(Span::styled(
             format!(" {label} "),
             Style::default()
@@ -117,6 +117,14 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
                 .bg(Color::Rgb(255, 165, 0))
                 .add_modifier(Modifier::BOLD),
         ));
+        if let Some(issue) =
+            crate::cmd::agent::cli::footer::monitor_issue_label(app.monitor_conditions)
+        {
+            spans.push(Span::styled(
+                format!(" {issue} "),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
+        }
         spans.push(Span::raw("  "));
     }
     if let Some(meta) = &app.channel {
@@ -456,9 +464,8 @@ mod status_chip_tests {
     }
 }
 
-/// Task 15: the `monitor(n)` badge is silent at `n == 0` and shows a count
-/// once `App::monitor_conditions` is non-zero — no query happens here, the
-/// count is whatever was last cached.
+/// The `MONITOR (n)` badge reflects registered monitors; a red issue suffix
+/// appears only when the separately cached condition count is non-zero.
 #[cfg(test)]
 mod monitor_badge_tests {
     use super::render_status;
@@ -467,25 +474,41 @@ mod monitor_badge_tests {
     use ratatui::backend::TestBackend;
 
     #[test]
-    fn silent_with_no_conditions() {
+    fn silent_without_registered_monitors() {
         let app = App::test_fixture();
-        assert_eq!(app.monitor_conditions, 0);
+        assert_eq!(app.monitor_total, 0);
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
         let dump = term.backend().to_string();
         assert!(
             !dump.contains("MONITOR ("),
-            "quiet run must show nothing: {dump}"
+            "no monitor must show no badge: {dump}"
         );
     }
 
     #[test]
-    fn shows_the_count_once_something_has_a_condition() {
+    fn shows_registered_count_even_without_conditions() {
         let mut app = App::test_fixture();
-        app.monitor_conditions = 2;
+        app.monitor_total = 2;
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
         let dump = term.backend().to_string();
         assert!(dump.contains("MONITOR (2)"), "expected MONITOR (2): {dump}");
+        assert!(
+            !dump.contains("issue"),
+            "healthy monitors have no issue suffix: {dump}"
+        );
+    }
+
+    #[test]
+    fn shows_conditions_as_a_separate_issue_suffix() {
+        let mut app = App::test_fixture();
+        app.monitor_total = 2;
+        app.monitor_conditions = 1;
+        let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        term.draw(|f| render_status(f, &app, f.area())).unwrap();
+        let dump = term.backend().to_string();
+        assert!(dump.contains("MONITOR (2)"), "expected total: {dump}");
+        assert!(dump.contains("1 issue"), "expected issue suffix: {dump}");
     }
 }

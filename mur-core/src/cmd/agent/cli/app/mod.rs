@@ -337,10 +337,13 @@ pub struct App {
     pub pending_secret_prompt: Option<String>,
     /// A `/secret KEY --delete` waiting to be carried out.
     pub pending_secret_delete: Option<String>,
-    /// Count of monitors with a live condition (`footer::conditions`), as of
+    /// Registered monitor count, including healthy `sleeping` monitors, as of
     /// the last refresh — never computed during render.
+    pub monitor_total: usize,
+    /// Count of registered monitors with a live condition, as of the last
+    /// refresh — never computed during render.
     pub monitor_conditions: usize,
-    /// When `monitor_conditions` was last refreshed; `None` before the first
+    /// When monitor counts were last refreshed; `None` before the first
     /// refresh, so it always runs once per session.
     pub last_monitor_refresh: Option<std::time::Instant>,
 }
@@ -437,6 +440,7 @@ impl App {
             pending_handover: None,
             pending_secret_prompt: None,
             pending_secret_delete: None,
+            monitor_total: 0,
             monitor_conditions: 0,
             last_monitor_refresh: None,
         }
