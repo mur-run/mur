@@ -2498,7 +2498,11 @@ impl TaskRunner {
                 if matches!(outcome, crate::turn_ledger::Outcome::Denied(_)) {
                     gate_blocked = true;
                 }
-                let target = crate::turn_ledger::describe_target(&call.tool_name, &call.input);
+                let target = crate::turn_ledger::describe_target_with_result(
+                    &call.tool_name,
+                    &call.input,
+                    &entry.content,
+                );
                 let excerpt =
                     if call.tool_name == "bash" && outcome == crate::turn_ledger::Outcome::Ok {
                         crate::turn_ledger::excerpt_for(&target, &entry.content)

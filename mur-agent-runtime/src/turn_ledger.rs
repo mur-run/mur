@@ -403,6 +403,16 @@ impl TurnLedger {
 /// of the whole input for tools that aren't special-cased — a settlement is
 /// unreadable if half its rows say `{"cwd":null,"timeout_secs":null,…}`.
 pub fn describe_target(tool: &str, input: &serde_json::Value) -> String {
+    describe_target_with_result(tool, input, "")
+}
+
+/// Reduce a tool call to a durable, recoverable identity.
+///
+/// Most tools are identified entirely by their input. Dispatch tools are the
+/// exception: the useful identity is allocated by the executor and only
+/// appears in the result. Keep that handle in the ledger so a later turn can
+/// poll the job even if the conversational transcript is compacted.
+pub fn describe_target_with_result(tool: &str, input: &serde_json::Value, result: &str) -> String {
     let field = match tool {
         "bash" => "command",
         "write_file" | "edit_file" | "read_file" => "path",
@@ -424,7 +434,25 @@ pub fn describe_target(tool: &str, input: &serde_json::Value) -> String {
     if raw == "{}" || raw == "null" {
         return String::new();
     }
-    truncate(raw, RUNAWAY_BACKSTOP)
+    let target = truncate(raw, RUNAWAY_BACKSTOP);
+    if tool != "fleet_run" {
+        return target;
+    }
+
+    let Ok(handle) = serde_json::from_str::<serde_json::Value>(result) else {
+        return target;
+    };
+    if handle.get("status").and_then(|v| v.as_str()) != Some("dispatched") {
+        return target;
+    }
+    let Some(run_id) = handle
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return target;
+    };
+    truncate(&format!("{target} → {run_id}"), RUNAWAY_BACKSTOP)
 }
 
 /// `mcp__server__tool` → `tool`. The server prefix is routing, not identity —
@@ -908,6 +936,38 @@ mod tests {
         // Newlines would break the row.
         let multi = serde_json::json!({"command": "a\nb"});
         assert_eq!(describe_target("bash", &multi), "a b");
+    }
+
+    #[test]
+    fn dispatched_fleet_target_keeps_its_recoverable_run_id() {
+        let input = serde_json::json!({"fleet": "deep-research", "goal": "research it"});
+        let output = serde_json::json!({
+            "run_id": "fleet-deep-research-01a0bd40",
+            "status": "dispatched"
+        })
+        .to_string();
+
+        assert_eq!(
+            describe_target_with_result("fleet_run", &input, &output),
+            "deep-research → fleet-deep-research-01a0bd40"
+        );
+    }
+
+    #[test]
+    fn fleet_target_ignores_missing_or_non_dispatched_handles() {
+        let input = serde_json::json!({"fleet": "deep-research", "goal": "research it"});
+        assert_eq!(
+            describe_target_with_result("fleet_run", &input, "not json"),
+            "deep-research"
+        );
+        assert_eq!(
+            describe_target_with_result(
+                "fleet_run",
+                &input,
+                &serde_json::json!({"run_id": "old-run", "status": "failed"}).to_string()
+            ),
+            "deep-research"
+        );
     }
 
     #[test]
