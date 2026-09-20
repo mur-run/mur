@@ -30,7 +30,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        # arm64 joins the matrix only once a machine exists for it. Hardware
+        # is the scarce part, so an unset FREEBSD_ARM64_HOST narrows the run
+        # to amd64 instead of parking a permanently red job in the matrix.
+        arch: >-
+          ${{ vars.FREEBSD_ARM64_HOST != ''
+              && fromJSON('["amd64", "arm64"]')
+              || fromJSON('["amd64"]') }}
     steps:
       - uses: actions/checkout@v6
         with:
