@@ -392,6 +392,35 @@ fn guard_stop(task: &serde_json::Value) -> Option<String> {
     })
 }
 
+/// The failure the runtime itself reported, if any.
+///
+/// A2A puts a refusal in `Task.error` (`{code, message}`) and writes NO agent
+/// message with it — a runtime that cannot start the turn has nothing to say
+/// in the specialist's voice. Reading only `messages` and `usage` therefore
+/// produced an empty verdict, and `step_failure_reason`'s empty-output
+/// fallback rendered it as `no output; exit code 1`: on 2026-09-20 three
+/// deep-research members failed with `cannot_start` and a remedy command in
+/// hand, and every surface showed that one useless sentence instead.
+///
+/// `error: null` is not an error — the field is serialized on success too.
+fn task_error(task: &serde_json::Value) -> Option<String> {
+    let err = task.get("error")?;
+    if err.is_null() {
+        return None;
+    }
+    let message = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
+    let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    Some(match (code.is_empty(), message.is_empty()) {
+        // Neither field survived the wire, but a non-null `error` still means
+        // the turn failed — say so rather than returning None and reverting
+        // to the silence this function exists to end.
+        (true, true) => "delegate failed: runtime reported an unlabelled error".to_string(),
+        (true, false) => format!("delegate failed: {message}"),
+        (false, true) => format!("delegate failed [{code}]"),
+        (false, false) => format!("delegate failed [{code}]: {message}"),
+    })
+}
+
 /// Turn a delegated `Task` into a step verdict.
 ///
 /// Success used to be `!reply.trim().is_empty()` — the ONLY test was whether
@@ -422,10 +451,26 @@ fn delegate_result(
     // specialist already wrote+signed the reply Message itself.
     let reply = extract_agent_reply(task);
     let stopped = guard_stop(task);
-    let landed = !reply.trim().is_empty() && stopped.is_none();
-    let output_text = match &stopped {
-        Some(why) => format!("[delegate stopped short: {why}]\n{reply}"),
-        None => reply,
+    // A reported error is decisive on its own: the refusal path produces no
+    // agent message at all, so requiring a non-empty reply would keep losing
+    // exactly the failures that explain themselves best.
+    let errored = task_error(task);
+    let landed = !reply.trim().is_empty() && stopped.is_none() && errored.is_none();
+    // Both prefixes can apply; the specialist's own words always come last so
+    // partial work is never truncated away by a banner.
+    let mut prefixes: Vec<String> = Vec::new();
+    if let Some(why) = &errored {
+        prefixes.push(why.clone());
+    }
+    if let Some(why) = &stopped {
+        prefixes.push(format!("[delegate stopped short: {why}]"));
+    }
+    let output_text = if prefixes.is_empty() {
+        reply
+    } else if reply.trim().is_empty() {
+        prefixes.join("\n")
+    } else {
+        format!("{}\n{reply}", prefixes.join("\n"))
     };
     StepResult {
         exit_code: if landed { 0 } else { 1 },
@@ -1892,6 +1937,80 @@ mod tests {
         // skips the ledger + on_failure. This turn ran and spent 95K tokens.
         assert!(!r.blocked);
         assert_eq!(r.tokens_used, 95_200, "spend is still accounted");
+    }
+
+    /// A runtime that refuses to start reports WHY in `Task.error.message`
+    /// and writes no agent message at all. Reading only `messages` + `usage`
+    /// left `output_text` empty, and the ledger's fallback rendered the most
+    /// useless sentence in the codebase: `no output; exit code 1`. Observed
+    /// 2026-09-20 — three deep-research workers failed `cannot_start` and the
+    /// reason was sitting in a field nothing read.
+    #[test]
+    fn a_delegate_error_reason_survives_into_the_verdict() {
+        let task = serde_json::json!({
+            "id": "t1",
+            "state": "failed",
+            "messages": [
+                {"role":"user","parts":[{"kind":"text","text":"research it"}]}
+            ],
+            "error": {
+                "code": "cannot_start",
+                "message": "cannot start: specialist has no write_file — mur agent perm tool-allow specialist write_file"
+            }
+        });
+        let r = delegate_result(&task, "research it", 1);
+        assert!(!r.success);
+        assert_eq!(r.exit_code, 1);
+        assert!(
+            r.output_text.contains("cannot_start"),
+            "the error code must reach the ledger: {:?}",
+            r.output_text
+        );
+        assert!(
+            r.output_text.contains("mur agent perm tool-allow"),
+            "the runtime's remedy must survive verbatim: {:?}",
+            r.output_text
+        );
+        // The whole point: never again `no output; exit code 1`.
+        assert_ne!(
+            step_failure_reason(&r).as_deref(),
+            Some("no output; exit code 1"),
+            "a known error must never degrade to the empty-output fallback"
+        );
+    }
+
+    /// The error must not shove aside words the specialist did manage to say,
+    /// and must not fire when the runtime reported no error at all.
+    #[test]
+    fn delegate_error_joins_the_reply_and_is_absent_when_clean() {
+        let with_both = serde_json::json!({
+            "id": "t1",
+            "state": "failed",
+            "messages": [
+                {"role":"agent","parts":[{"kind":"text","text":"got halfway"}]}
+            ],
+            "error": {"code": "tool_denied", "message": "bash is not allowed"}
+        });
+        let r = delegate_result(&with_both, "s", 1);
+        assert!(!r.success, "an error field alone means the turn failed");
+        assert!(r.output_text.contains("tool_denied"), "{}", r.output_text);
+        assert!(
+            r.output_text.contains("got halfway"),
+            "partial work must survive: {}",
+            r.output_text
+        );
+        // Null / missing error must not manufacture a failure.
+        let clean = serde_json::json!({
+            "id": "t1",
+            "state": "completed",
+            "error": serde_json::Value::Null,
+            "messages": [
+                {"role":"agent","parts":[{"kind":"text","text":"all done"}]}
+            ]
+        });
+        let ok = delegate_result(&clean, "s", 1);
+        assert!(ok.success, "a null error is not an error");
+        assert_eq!(ok.output_text, "all done");
     }
 
     /// Negative control: without a guard stop the old contract still holds, so
