@@ -20,5 +20,6 @@ fn refresh_against_a_home_with_no_monitor_store_creates_nothing() {
         !dir.exists(),
         "a refresh against a store-less home must not create the monitor directory"
     );
+    assert_eq!(app.monitor_total, 0);
     assert_eq!(app.monitor_conditions, 0);
 }

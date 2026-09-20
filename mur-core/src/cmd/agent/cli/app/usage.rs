@@ -49,6 +49,7 @@ impl App {
         let Ok(rows) = store.list(&mur_monitor::store::ListFilter::default()) else {
             return;
         };
+        self.monitor_total = rows.len();
         self.monitor_conditions = super::super::footer::conditions(&rows);
     }
 
