@@ -112,20 +112,38 @@ fn worktree_root_of(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Every linked worktree registered under the checkout at `main`, as absolute
-/// worktree ROOT paths (not their `.git` files).
+/// Every matching path in a linked worktree registered under the checkout that
+/// contains `main_path`.
+///
+/// When `main_path` is the checkout root, this returns linked worktree roots.
+/// When it is a descendant (for example `<main>/target`), the same relative
+/// path is appended to every linked worktree root (for example
+/// `<worktree>/target`). This lets every entitlement layer share one mapping
+/// rule instead of reimplementing worktree-relative paths independently.
 ///
 /// Reads `<main>/.git/worktrees/*/gitdir`, each of which contains the path of
-/// the worktree's own `.git` file; the worktree root is that file's parent.
-/// Entries whose worktree has been deleted but not pruned are skipped — a dead
-/// grant is not merely useless here, it destabilizes the whole compiled sandbox
-/// profile (see `sandbox::policy::from_entitlements`, Issue 16).
+/// the worktree's own `.git` file. Entries whose mapped path has been deleted
+/// or was never created are skipped — a dead grant is not merely useless here,
+/// it destabilizes the whole compiled sandbox profile (see
+/// `sandbox::policy::from_entitlements`, Issue 16).
 ///
-/// Returns empty for a path that is not a main checkout, has no worktrees, or
-/// cannot be read. Never errors: an undiscoverable worktree must degrade to
-/// "not granted" (fail-closed), never to a panic inside the gate.
-pub fn worktrees_of(main: &Path) -> Vec<PathBuf> {
-    let dir = main.join(".git").join("worktrees");
+/// Returns empty for a path outside a main checkout, a linked-worktree path,
+/// a checkout with no worktrees, or an unreadable registry. Never errors: an
+/// undiscoverable worktree must degrade to "not granted" (fail-closed), never
+/// to a panic inside the gate.
+pub fn worktrees_of(main_path: &Path) -> Vec<PathBuf> {
+    let Some(main_root) = worktree_root_of(main_path) else {
+        return Vec::new();
+    };
+    // A `.git` file identifies a linked worktree. Expansion is deliberately
+    // one-way from the main checkout so derived grants cannot fan out again.
+    if !main_root.join(".git").is_dir() {
+        return Vec::new();
+    }
+    let Ok(relative) = main_path.strip_prefix(&main_root) else {
+        return Vec::new();
+    };
+    let dir = main_root.join(".git").join("worktrees");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -142,10 +160,10 @@ pub fn worktrees_of(main: &Path) -> Vec<PathBuf> {
         let Some(root) = dot_git.parent() else {
             continue;
         };
-        // Fail closed on a pruned/moved worktree: granting a nonexistent path
-        // is the exact shape Issue 16 traced 30s tool-call hangs to.
-        if std::fs::metadata(root).is_ok() {
-            out.push(root.to_path_buf());
+        let mapped = root.join(relative);
+        // Fail closed on a pruned/moved worktree or missing relative path.
+        if std::fs::metadata(&mapped).is_ok() {
+            out.push(mapped);
         }
     }
     out.sort();
