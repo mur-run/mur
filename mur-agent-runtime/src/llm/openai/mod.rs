@@ -404,7 +404,7 @@ impl LlmClient for OpenAiClient {
         let output_tokens = v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
         Ok(LlmResponse {
             cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
+            cache_read_input_tokens: cached_prompt_tokens(&v["usage"]).unwrap_or(0),
             text,
             input_tokens,
             output_tokens,
@@ -476,6 +476,7 @@ impl LlmClient for OpenAiClient {
         let mut text = String::new();
         let mut input_tokens = 0u64;
         let mut output_tokens = 0u64;
+        let mut cache_read_input_tokens = 0u64;
         let mut stop_reason = StopReason::EndTurn;
         // Streamed tool calls arrive as fragments: `id` and `function.name`
         // usually land once, `function.arguments` is concatenated across any
@@ -585,6 +586,9 @@ impl LlmClient for OpenAiClient {
                 }
                 if v["usage"].is_object() {
                     input_tokens = v["usage"]["prompt_tokens"].as_u64().unwrap_or(input_tokens);
+                    if let Some(n) = cached_prompt_tokens(&v["usage"]) {
+                        cache_read_input_tokens = n;
+                    }
                     output_tokens = v["usage"]["completion_tokens"]
                         .as_u64()
                         .unwrap_or(output_tokens);
@@ -637,7 +641,7 @@ impl LlmClient for OpenAiClient {
         }
         Ok(LlmResponse {
             cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
+            cache_read_input_tokens,
             text,
             input_tokens,
             output_tokens,
@@ -646,6 +650,19 @@ impl LlmClient for OpenAiClient {
             stop_reason,
         })
     }
+}
+
+/// Prompt tokens the server answered from its own prefix cache. OpenAI-style
+/// caching is automatic — nothing is sent to ask for it — so this is purely
+/// so telemetry can show whether it is happening. `prompt_tokens` already
+/// includes these (it is the whole prompt), so nothing is summed. Two wire
+/// shapes: OpenAI's `prompt_tokens_details.cached_tokens`, and DeepSeek's
+/// `prompt_cache_hit_tokens` on the same `/chat/completions` surface. Absent
+/// on servers without a cache (local runtimes), which is `None`, not zero.
+fn cached_prompt_tokens(usage: &serde_json::Value) -> Option<u64> {
+    usage["prompt_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .or_else(|| usage["prompt_cache_hit_tokens"].as_u64())
 }
 
 #[cfg(test)]

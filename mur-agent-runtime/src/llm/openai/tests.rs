@@ -281,3 +281,24 @@ fn turn_ledger_renders_as_a_user_message() {
             .ends_with(crate::turn_ledger::MEMORY_CLOSE)
     );
 }
+
+#[test]
+fn cached_prompt_tokens_reads_openai_and_deepseek_shapes() {
+    assert_eq!(
+        cached_prompt_tokens(
+            &json!({"prompt_tokens": 1500, "prompt_tokens_details": {"cached_tokens": 1024}})
+        ),
+        Some(1024)
+    );
+    assert_eq!(
+        cached_prompt_tokens(
+            &json!({"prompt_tokens": 1500, "prompt_cache_hit_tokens": 1280, "prompt_cache_miss_tokens": 220})
+        ),
+        Some(1280)
+    );
+    // A server without a cache says nothing — that is "unknown", not zero.
+    assert_eq!(
+        cached_prompt_tokens(&json!({"prompt_tokens": 9, "completion_tokens": 1})),
+        None
+    );
+}
