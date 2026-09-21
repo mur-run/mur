@@ -475,7 +475,7 @@ mod tests {
         let fake = home.join("fake-mur");
         std::fs::write(
             &fake,
-            format!("#!/bin/sh\necho \"$@\" > {}\nsleep 5\n", argv_log.display()),
+            format!("#!/bin/sh\necho \"$@\" > {}\nsleep 30\n", argv_log.display()),
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -491,11 +491,11 @@ mod tests {
             .execute(serde_json::json!({"fleet": "deep-research", "goal": "why is the sky blue"}))
             .await
             .unwrap();
-        // The fake mur binary sleeps 5s, so a blocking dispatch cannot come
-        // back under that. 4s keeps the signal while leaving slack for a
-        // contended CI runner; 2s was measuring the runner, not the code.
+        // The fake mur binary sleeps 30s, so a blocking dispatch cannot come
+        // back under that. 10s leaves headroom for a loaded machine running
+        // the whole workspace; 4s flaked there, 2s was measuring the runner.
         assert!(
-            t0.elapsed() < std::time::Duration::from_secs(4),
+            t0.elapsed() < std::time::Duration::from_secs(10),
             "returned in {:?}",
             t0.elapsed()
         );
@@ -513,5 +513,10 @@ mod tests {
             "{argv}"
         );
         assert!(std::path::Path::new(v["log"].as_str().unwrap()).exists());
+        // The dispatch deliberately detaches the child; don't leave the fake
+        // `sleep 30` orphaned past the test. Matched on the per-test path.
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", &fake.display().to_string()])
+            .status();
     }
 }
