@@ -212,7 +212,7 @@ async fn exhaustion_reports_every_candidate_and_leads_with_the_actionable_one() 
         "a".into(),
         vec![Err(LlmError::ModelNotFound("claude-sonnet-4-6".into()))],
     );
-    s.insert("b".into(), vec![Err(LlmError::RateLimit)]); // weather — not fixable
+    s.insert("b".into(), vec![Err(LlmError::RateLimit(None))]); // weather — not fixable
     s.insert("c".into(), vec![Err(LlmError::ServerError(503))]);
     let fb = FallbackLlmClient::new(
         vec!["a".into(), "b".into(), "c".into()],

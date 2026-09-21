@@ -6,8 +6,9 @@ use rand::RngCore;
 
 use crate::companion::i18n::{EnsureLocaleOutcome, ensure_locale};
 use crate::companion::telemetry::OutboxEvent;
+use crate::llm::LlmError;
 
-use super::{Outbox, backoff_for_attempt};
+use super::{Outbox, pause_delay_for_attempt};
 
 /// Internal result of the i18n step.
 pub(super) enum I18nResult {
@@ -40,7 +41,14 @@ impl<R: RngCore + Send> Outbox<R> {
             EnsureLocaleOutcome::Translated(new_body) => I18nResult::UseBody(new_body),
             // Unreachable in proactive path (reactive=false), but treat as Original.
             EnsureLocaleOutcome::OriginalWithLog(_err) => I18nResult::UseBody(body.to_string()),
-            EnsureLocaleOutcome::QueuedRetry(_err) => {
+            EnsureLocaleOutcome::QueuedRetry(err) => {
+                // A 429 may carry the server's own `retry-after`; anything else
+                // falls back to the deterministic schedule.
+                let retry_after = match &err {
+                    LlmError::RateLimit(d) => *d,
+                    _ => None,
+                };
+
                 // append LocaleMismatchUnresolved event for this attempt.
                 let _ = self.ledger.append(&OutboxEvent::LocaleMismatchUnresolved {
                     id: id.to_string(),
@@ -48,8 +56,8 @@ impl<R: RngCore + Send> Outbox<R> {
                     at: now_utc,
                 });
 
-                if let Some(backoff) = backoff_for_attempt(attempt_index) {
-                    let resume_at = now_utc + backoff;
+                if let Some(delay) = pause_delay_for_attempt(retry_after, attempt_index) {
+                    let resume_at = now_utc + delay;
                     let _ = self.ledger.append(&OutboxEvent::MessagePaused {
                         id: id.to_string(),
                         resume_at,

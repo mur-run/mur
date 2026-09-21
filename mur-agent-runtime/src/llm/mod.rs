@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use mur_common::{AgentProfile, LlmMode};
+use std::time::Duration;
 
 pub mod anthropic;
 pub mod claude;
@@ -287,6 +288,54 @@ impl LlmResponse {
     }
 }
 
+/// Ceiling on a server-supplied `retry-after`. A fleet step's own deadline is
+/// the next thing to fire, and a caller that obediently sleeps ten minutes has
+/// simply chosen a worse failure than the one it was avoiding: past this point
+/// the honest move is to fail fast and let the fallback chain route to another
+/// candidate. Providers do send hour-long values during an outage.
+pub const RETRY_AFTER_MAX: Duration = Duration::from_secs(120);
+
+/// Parse an HTTP `retry-after` header value (RFC 9110 §10.2.3), which is
+/// either delta-seconds or an HTTP-date.
+///
+/// Returns `None` when the value is absent-in-effect — unparseable, negative,
+/// or empty — so the caller keeps its own backoff schedule rather than
+/// inventing a number. A date already in the past yields `ZERO` ("retry now"),
+/// not `None`: the server did answer, it just answered with a stale clock.
+/// The result is clamped to [`RETRY_AFTER_MAX`].
+///
+/// Deliberately *not* shared with
+/// [`crate::durable::rate_limit::parse_anthropic_429`], which reads the same
+/// header for a different question. That one decides when a suspended run
+/// resumes: it also consults `anthropic-ratelimit-*-reset`, multiplies by 6 on
+/// a 529, returns an absolute timestamp, and must not be clamped — a durable
+/// run is allowed to wait an hour. This one decides whether to sleep *inside*
+/// a live turn, where anything past [`RETRY_AFTER_MAX`] should fail over
+/// instead. Folding them together would force one of those two answers to be
+/// wrong.
+pub fn parse_retry_after(value: &str) -> Option<Duration> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    // delta-seconds: a bare non-negative integer. `u64::from_str` already
+    // rejects "-1", "5.5" and "soon".
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(Duration::from_secs(secs).min(RETRY_AFTER_MAX));
+    }
+    // HTTP-date. chrono is already a direct dependency; `httpdate` exists only
+    // transitively in the lockfile and promoting it would be a new dep for one
+    // parse. RFC 2822 covers the IMF-fixdate form servers actually send.
+    let when = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    let delta = when.signed_duration_since(chrono::Utc::now());
+    Some(
+        delta
+            .to_std()
+            .unwrap_or(Duration::ZERO)
+            .min(RETRY_AFTER_MAX),
+    )
+}
+
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LlmError {
     #[error("http: {0}")]
@@ -297,8 +346,16 @@ pub enum LlmError {
     /// models can't mask an auth/config error the server never reported.
     #[error("connect: {0}")]
     Connect(String),
-    #[error("rate limit")]
-    RateLimit,
+    /// The provider refused this request for now and may accept it later.
+    /// `Some(d)` is the server's own `retry-after`, already parsed and
+    /// clamped; `None` means it did not say and the caller falls back to its
+    /// own backoff schedule. The delay is advice about *when*, never about
+    /// *whether*: [`classify`] treats both the same.
+    #[error("{}", match .0 {
+        Some(d) => format!("rate limit (retry after {}s)", d.as_secs()),
+        None => "rate limit".to_string(),
+    })]
+    RateLimit(Option<Duration>),
     #[error("timeout")]
     Timeout,
     #[error("invalid response: {0}")]
@@ -353,10 +410,29 @@ impl LlmError {
     /// layer is deliberately conservative: provider adapters promote only
     /// tested structured codes (or Anthropic's anchored message shapes).
     /// Unknown 4xx remain typed `Rejected` errors, but stop fleet-wide.
+    ///
+    /// Prefer [`LlmError::from_status_with_headers`] where the response
+    /// headers are still in hand: a 429 mapped through here carries no
+    /// `retry-after` and the caller is left guessing.
     pub fn from_status(status: u16, body: String) -> LlmError {
+        LlmError::from_status_with_headers(status, body, &reqwest::header::HeaderMap::new())
+    }
+
+    /// [`LlmError::from_status`] with the response headers, so a 429 can carry
+    /// the server's own `retry-after`. Every other status ignores them.
+    pub fn from_status_with_headers(
+        status: u16,
+        body: String,
+        headers: &reqwest::header::HeaderMap,
+    ) -> LlmError {
         match status {
             401 | 403 => LlmError::Auth(status, body),
-            429 => LlmError::RateLimit,
+            429 => LlmError::RateLimit(
+                headers
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_retry_after),
+            ),
             402 => LlmError::InsufficientCredit,
             404 => LlmError::ModelNotFound(body),
             408 => LlmError::Timeout,
@@ -409,7 +485,7 @@ pub enum Disposition {
 /// only the official orchestrator. Keep #947 model-rename and streaming guards.
 pub fn classify(e: &LlmError) -> Disposition {
     match e {
-        LlmError::RateLimit
+        LlmError::RateLimit(_)
         | LlmError::Timeout
         | LlmError::Connect(_)
         | LlmError::ServerError(_) => Disposition::RetryThenAdvance,
@@ -503,6 +579,97 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retry_after_parses_delta_seconds() {
+        assert_eq!(parse_retry_after("5"), Some(Duration::from_secs(5)));
+        assert_eq!(parse_retry_after("  5  "), Some(Duration::from_secs(5)));
+        assert_eq!(parse_retry_after("0"), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn retry_after_parses_http_date() {
+        let future = chrono::Utc::now() + chrono::Duration::seconds(30);
+        let header = future.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        let got = parse_retry_after(&header).expect("an HTTP-date is a valid retry-after");
+        // The clock moves between formatting and parsing; 2s of slack keeps
+        // this from flaking on a loaded machine.
+        assert!(
+            got >= Duration::from_secs(28) && got <= Duration::from_secs(30),
+            "expected ~30s, got {got:?}"
+        );
+    }
+
+    /// A date already in the past means "retry now", not "never" — the server
+    /// is entitled to send a stale one and we must not turn that into a hang.
+    #[test]
+    fn retry_after_past_date_is_zero() {
+        assert_eq!(
+            parse_retry_after("Sat, 01 Feb 2020 00:00:00 GMT"),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn retry_after_garbage_is_none() {
+        assert_eq!(parse_retry_after("soon"), None);
+        assert_eq!(parse_retry_after(""), None);
+        assert_eq!(parse_retry_after("   "), None);
+        assert_eq!(parse_retry_after("-1"), None);
+        assert_eq!(parse_retry_after("5.5"), None);
+    }
+
+    #[test]
+    fn retry_after_is_clamped() {
+        assert_eq!(parse_retry_after("99999"), Some(RETRY_AFTER_MAX));
+    }
+
+    /// The delay is advice about *when* to retry, never about *whether*. A
+    /// 429 stays retry-then-advance no matter what the header said.
+    #[test]
+    fn classify_ignores_retry_after() {
+        use Disposition::*;
+        assert!(matches!(
+            classify(&LlmError::RateLimit(None)),
+            RetryThenAdvance
+        ));
+        assert!(matches!(
+            classify(&LlmError::RateLimit(Some(Duration::from_secs(60)))),
+            RetryThenAdvance
+        ));
+    }
+
+    /// The error text reaches task JSON, where a human reads it. When the
+    /// server told us how long to wait, that number belongs in the message.
+    #[test]
+    fn rate_limit_renders_the_delay_when_known() {
+        assert_eq!(LlmError::RateLimit(None).to_string(), "rate limit");
+        assert_eq!(
+            LlmError::RateLimit(Some(Duration::from_secs(42))).to_string(),
+            "rate limit (retry after 42s)"
+        );
+    }
+
+    #[test]
+    fn from_status_with_headers_reads_retry_after() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "7".parse().unwrap());
+        assert!(matches!(
+            LlmError::from_status_with_headers(429, "x".into(), &headers),
+            LlmError::RateLimit(Some(d)) if d == Duration::from_secs(7)
+        ));
+        // A header on a non-429 is not our business.
+        assert!(matches!(
+            LlmError::from_status_with_headers(503, "x".into(), &headers),
+            LlmError::ServerError(503)
+        ));
+        // No header at all is the pre-existing behaviour, byte for byte.
+        let empty = reqwest::header::HeaderMap::new();
+        assert!(matches!(
+            LlmError::from_status_with_headers(429, "x".into(), &empty),
+            LlmError::RateLimit(None)
+        ));
+    }
+
+    #[test]
     fn rich_message_text_roundtrip() {
         let m = RichMessage::Text {
             role: "user".into(),
@@ -560,7 +727,7 @@ mod tests {
     fn from_status_maps_http_codes() {
         assert!(matches!(
             LlmError::from_status(429, "x".into()),
-            LlmError::RateLimit
+            LlmError::RateLimit(None)
         ));
         assert!(matches!(
             LlmError::from_status(402, "x".into()),
@@ -585,7 +752,10 @@ mod tests {
     #[test]
     fn transient_failures_retry_then_advance() {
         use Disposition::*;
-        assert!(matches!(classify(&LlmError::RateLimit), RetryThenAdvance));
+        assert!(matches!(
+            classify(&LlmError::RateLimit(None)),
+            RetryThenAdvance
+        ));
         assert!(matches!(classify(&LlmError::Timeout), RetryThenAdvance));
         assert!(matches!(
             classify(&LlmError::ServerError(500)),

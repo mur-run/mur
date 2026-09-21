@@ -33,7 +33,7 @@ async fn stub_simulates_rate_limit_429() {
         .generate(req("FAULT_429 morning_greeting"))
         .await
         .unwrap_err();
-    assert!(matches!(err, LlmError::RateLimit));
+    assert!(matches!(err, LlmError::RateLimit(None)));
 }
 
 #[tokio::test]

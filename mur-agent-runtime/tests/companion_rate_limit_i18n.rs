@@ -54,7 +54,7 @@ impl LlmClient for DynamicStubLlm {
     async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
         let mode = *self.mode.lock().unwrap();
         match mode {
-            DynamicStubModeTag::Force429 => Err(LlmError::RateLimit),
+            DynamicStubModeTag::Force429 => Err(LlmError::RateLimit(None)),
             DynamicStubModeTag::Clean => {
                 let body = self.clean_body.lock().unwrap().clone();
                 Ok(LlmResponse {
@@ -304,7 +304,7 @@ impl LlmClient for MismatchAlwaysFailsTranslateLlm {
             .collect();
         if combined.contains("Translate the following") {
             // Translate path always fails.
-            return Err(LlmError::RateLimit);
+            return Err(LlmError::RateLimit(None));
         }
         // Generation path: body passes zh-TW linter but fails heuristic.
         Ok(LlmResponse {

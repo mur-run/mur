@@ -124,8 +124,13 @@ impl LlmClient for OllamaClient {
             .map_err(|e| LlmError::from_reqwest(&e))?;
         let status = resp.status();
         if !status.is_success() {
+            let headers = resp.headers().clone();
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(LlmError::from_status(status.as_u16(), body_text));
+            return Err(LlmError::from_status_with_headers(
+                status.as_u16(),
+                body_text,
+                &headers,
+            ));
         }
         let v: serde_json::Value = resp.json().await.map_err(|e| LlmError::from_reqwest(&e))?;
         let text = v["message"]["content"]
@@ -180,8 +185,13 @@ impl LlmClient for OllamaClient {
             .map_err(|e| LlmError::from_reqwest(&e))?;
         let status = resp.status();
         if !status.is_success() {
+            let headers = resp.headers().clone();
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(LlmError::from_status(status.as_u16(), body_text));
+            return Err(LlmError::from_status_with_headers(
+                status.as_u16(),
+                body_text,
+                &headers,
+            ));
         }
 
         // Ollama streams newline-delimited JSON objects. Read incrementally

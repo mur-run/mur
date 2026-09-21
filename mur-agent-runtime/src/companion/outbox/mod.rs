@@ -80,6 +80,30 @@ pub(super) fn backoff_for_attempt(attempt: u8) -> Option<chrono::Duration> {
         .map(|s| chrono::Duration::seconds(*s))
 }
 
+/// How long to park a 429'd send before the next attempt.
+///
+/// When the server sent a `retry-after`, we wait exactly that long — clamped
+/// to [`crate::llm::RETRY_AFTER_MAX`] so a hostile or fat-fingered upstream
+/// cannot park a message for an afternoon. A value above the clamp is used
+/// *at* the clamp, not discarded.
+///
+/// With no header, this is byte-for-byte [`backoff_for_attempt`]: the
+/// exponential schedule is untouched by this change.
+///
+/// `None` in either case means the attempts are exhausted → terminal drop.
+/// Attempt counting does not depend on the header.
+pub(super) fn pause_delay_for_attempt(
+    retry_after: Option<std::time::Duration>,
+    attempt: u8,
+) -> Option<chrono::Duration> {
+    // The attempt budget is what decides drop-or-retry, header or not.
+    let scheduled = backoff_for_attempt(attempt)?;
+    match retry_after {
+        Some(d) => chrono::Duration::from_std(d.min(crate::llm::RETRY_AFTER_MAX)).ok(),
+        None => Some(scheduled),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // PendingPause — in-memory pause state
 // ──────────────────────────────────────────────────────────────────────────────
@@ -427,10 +451,13 @@ impl<R: RngCore + Send> Outbox<R> {
                                 return outcome;
                             }
                         }
-                        GenerateResult::RateLimit => {
-                            // Still rate-limited; schedule next backoff or drop.
-                            if let Some(backoff) = backoff_for_attempt(paused.attempts) {
-                                let resume_at = now_utc + backoff;
+                        GenerateResult::RateLimit(retry_after) => {
+                            // Still rate-limited; honour the server's delay if it
+                            // sent one, else the next scheduled backoff, or drop.
+                            if let Some(delay) =
+                                pause_delay_for_attempt(retry_after, paused.attempts)
+                            {
+                                let resume_at = now_utc + delay;
                                 let _ = self.ledger.append(&OutboxEvent::MessagePaused {
                                     id: id.clone(),
                                     resume_at,
@@ -637,15 +664,13 @@ impl<R: RngCore + Send> Outbox<R> {
             .await
         {
             GenerateResult::Ok(text) => text,
-            GenerateResult::RateLimit => {
-                // TODO(M5.x or later): wire raw HeaderMap from anthropic.rs once that
-                // surfaces 429 details; for now use deterministic backoff schedule.
-                //
-                // Attempt index 0 → first pause; if later attempts exhaust backoffs,
-                // they are handled in the resume loop.
+            GenerateResult::RateLimit(retry_after) => {
+                // Attempt index 0 → first pause; if later attempts exhaust
+                // backoffs, they are handled in the resume loop.  When the 429
+                // carried `retry-after`, that delay wins over the schedule.
                 let attempt: u8 = 0;
-                if let Some(backoff) = backoff_for_attempt(attempt) {
-                    let resume_at = now_utc + backoff;
+                if let Some(delay) = pause_delay_for_attempt(retry_after, attempt) {
+                    let resume_at = now_utc + delay;
                     let _ = self.ledger.append(&OutboxEvent::MessagePaused {
                         id: id.clone(),
                         resume_at,
