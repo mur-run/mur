@@ -879,8 +879,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_actually_concurrent() {
-        // Two branches each sleep 0.5s. If sequential, total > 1s.
-        // If parallel, total should be ~0.5s (well under 1.5s).
+        // Two branches each sleep 0.5s. Sequential ≈ 1s, parallel ≈ 0.5s.
+        // Compared against a measured baseline, not an absolute bound.
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
 
@@ -898,6 +898,21 @@ mod tests {
             .unwrap();
 
         let executor = PipelineExecutor::new(store);
+
+        // Baseline: run the two branches back to back. Measured in-process
+        // rather than hard-coded so shell spawn overhead (Windows CI pays
+        // ~0.5s+ per `sh` start) is accounted for instead of tripping an
+        // absolute wall-clock bound.
+        let start = Instant::now();
+        for name in ["slow-a", "slow-b"] {
+            let out = executor
+                .execute(&PipelineExpr::Single(name.into()), None)
+                .await
+                .unwrap();
+            assert_eq!(out.status, PipelineStatus::Success);
+        }
+        let sequential = start.elapsed();
+
         let expr = PipelineExpr::Parallel(vec![
             PipelineExpr::Single("slow-a".into()),
             PipelineExpr::Single("slow-b".into()),
@@ -905,14 +920,16 @@ mod tests {
 
         let start = Instant::now();
         let output = executor.execute(&expr, None).await.unwrap();
-        let elapsed = start.elapsed();
+        let parallel = start.elapsed();
 
         assert_eq!(output.status, PipelineStatus::Success);
-        // Should complete in ~0.5s, not ~1s
+        // Parallel must beat sequential by a clear margin; with two 0.5s
+        // sleeps the ideal ratio is ~0.5, so 0.8 leaves room for CI jitter.
         assert!(
-            elapsed.as_secs_f64() < 1.5,
-            "parallel branches took too long: {:.1}s (expected <1.5s)",
-            elapsed.as_secs_f64()
+            parallel.as_secs_f64() < sequential.as_secs_f64() * 0.8,
+            "parallel branches not concurrent: parallel {:.2}s vs sequential {:.2}s",
+            parallel.as_secs_f64(),
+            sequential.as_secs_f64()
         );
     }
 

@@ -475,7 +475,10 @@ mod tests {
         let fake = home.join("fake-mur");
         std::fs::write(
             &fake,
-            format!("#!/bin/sh\necho \"$@\" > {}\nsleep 30\n", argv_log.display()),
+            format!(
+                "#!/bin/sh\necho \"$@\" > {}\nsleep 30\n",
+                argv_log.display()
+            ),
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();

@@ -612,13 +612,8 @@ mod tests {
 
         // No marker ⇒ gate skipped. Wizard suppressed so this never waits on
         // stdin when run from an interactive terminal.
-        cmd_install_with_resolution(
-            &bundle_path,
-            None,
-            None,
-            ResolveModelAfterInstall::Suppress,
-        )
-        .unwrap();
+        cmd_install_with_resolution(&bundle_path, None, None, ResolveModelAfterInstall::Suppress)
+            .unwrap();
         assert!(
             mur_home
                 .join("agents")
