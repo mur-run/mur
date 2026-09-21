@@ -213,28 +213,89 @@ pub(super) fn band_rows(
         .line_count(inner_width.max(1)) as u16
 }
 
-/// Print `lines` into the terminal's scrollback above the inline viewport.
+/// Rows one `insert_before` call may carry. `Terminal::insert_before` starts
+/// with `Buffer::empty(Rect { width, height })`, i.e. `width * height` `Cell`s
+/// allocated up front (~40 bytes each), and only THEN loops drawing it a
+/// screenful at a time — so the buffer is sized by the content, not by the
+/// screen. A single 20k-row flush on a wide pane is therefore a ~100 MB
+/// allocation in one go, and a >65535-row one truncates when `line_count`
+/// (usize) is cast to the `u16` height. Chunking bounds both: the rows still
+/// all reach scrollback, just several calls deep.
+pub(super) const EMIT_CHUNK_ROWS: u16 = 512;
+
+/// Physical rows one flush may re-print into scrollback in a single pass.
+///
+/// This is the resize budget. `rebuild_after_resize` purges the screen and
+/// rewinds `flushed_upto` to 0, so the next flush replays everything that is
+/// no longer in the band — on a long session, the entire transcript, re-wrapped
+/// at the new width. Dragging a window emits a resize per pixel step, and each
+/// one paid that cost again.
+///
+/// 20000 rows covers a deep scrollback — more than Terminal.app's 10000-line
+/// default keeps reachable — and the replay is printed through `emit`, so the
+/// ceiling bounds re-wrapping and write volume, never a single allocation.
+/// Older messages are dropped from the replay (with a counted marker), never
+/// from `app.messages` or the on-disk log.
+pub(super) const REPLAY_ROWS_MAX: u32 = 20_000;
+
+/// Wrapped row count of ONE logical line, measured exactly as `emit` renders
+/// it. Lines wrap independently under `Wrap { trim: false }`, so per-line
+/// counts sum to the paragraph's.
+fn line_rows(line: &Line<'static>, pad: u16, width: u16) -> u16 {
+    let n = Paragraph::new(Text::from(line.clone()))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().padding(Padding::horizontal(pad)))
+        .line_count(width.max(1));
+    n.clamp(1, u16::MAX as usize) as u16
+}
+
+/// Print `lines` into the terminal's scrollback above the inline viewport,
+/// in chunks of at most `EMIT_CHUNK_ROWS` physical rows.
 pub(super) fn emit<B: Backend>(
     terminal: &mut ratatui::Terminal<B>,
     lines: Vec<Line<'static>>,
     pad: u16,
     width: u16,
 ) -> std::io::Result<()> {
-    // Height must be the WRAPPED (physical) row count, not the logical line
-    // count: `insert_before` renders into a buffer exactly `height` rows tall,
-    // and `Wrap` soft-wraps any line wider than the pane into extra rows. Using
-    // `lines.len()` clips every wrapped overflow row — a long message loses its
-    // tail into the void (never reaches scrollback, so it can't be scrolled
-    // back to). `Paragraph::line_count(width)` accounts for wrap + the padding
-    // block. (Enabled by the `unstable-rendered-line-info` ratatui feature.)
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let mut chunk: Vec<Line<'static>> = Vec::new();
+    let mut rows: u16 = 0;
+    for line in lines {
+        let n = line_rows(&line, pad, width);
+        // Flush the chunk BEFORE the line that would overflow it; a single
+        // line taller than the cap still goes alone rather than being split
+        // (splitting one logical line would need re-wrapping it by hand).
+        if rows > 0 && rows.saturating_add(n) > EMIT_CHUNK_ROWS {
+            emit_chunk(terminal, std::mem::take(&mut chunk), pad, rows)?;
+            rows = 0;
+        }
+        rows = rows.saturating_add(n);
+        chunk.push(line);
+    }
+    if !chunk.is_empty() {
+        emit_chunk(terminal, chunk, pad, rows)?;
+    }
+    Ok(())
+}
+
+/// One `insert_before` call. Height must be the WRAPPED (physical) row count,
+/// not the logical line count: `insert_before` renders into a buffer exactly
+/// `height` rows tall, and `Wrap` soft-wraps any line wider than the pane into
+/// extra rows. Using `lines.len()` clips every wrapped overflow row — a long
+/// message loses its tail into the void (never reaches scrollback, so it can't
+/// be scrolled back to). (`line_count` needs the `unstable-rendered-line-info`
+/// ratatui feature.)
+fn emit_chunk<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    lines: Vec<Line<'static>>,
+    pad: u16,
+    rows: u16,
+) -> std::io::Result<()> {
     let text = Text::from(lines);
     let block = || Block::default().padding(Padding::horizontal(pad));
-    let height = (Paragraph::new(text.clone())
-        .wrap(Wrap { trim: false })
-        .block(block())
-        .line_count(width) as u16)
-        .max(1);
-    terminal.insert_before(height, |buf| {
+    terminal.insert_before(rows.max(1), |buf| {
         Paragraph::new(text)
             .wrap(Wrap { trim: false })
             .block(block())
@@ -326,8 +387,29 @@ pub fn flush_finished<B: Backend>(
         end += 1;
     }
     if end > start {
+        // Replay ceiling. A resize resets `flushed_upto` to 0 (the purge wiped
+        // scrollback), so this one call would otherwise re-emit the WHOLE
+        // transcript — on a long session that is tens of thousands of rows of
+        // re-wrapping and re-drawing per resize event, which is what turned a
+        // window drag into a freeze. Past the ceiling the oldest messages are
+        // dropped from the replay rather than re-printed: they are already
+        // gone from the screen, the reader cannot scroll to rows that were
+        // purged, and the conversation log on disk is untouched.
+        let mut first = start;
+        let mut replay: u32 = (start..end).map(|i| u32::from(rows[i - start])).sum();
+        while first < end && replay > REPLAY_ROWS_MAX {
+            replay -= u32::from(rows[first - start]);
+            first += 1;
+        }
         let mut lines: Vec<Line<'static>> = Vec::new();
-        for i in start..end {
+        if first > start {
+            lines.push(Line::from(Span::styled(
+                format!("… {} earlier messages not replayed", first - start),
+                theme.muted,
+            )));
+            lines.push(Line::default());
+        }
+        for i in first..end {
             let msg_skip = if i == start { skip } else { 0 };
             lines.extend(message_block(app, i, &app.messages[i], msg_skip, false));
         }

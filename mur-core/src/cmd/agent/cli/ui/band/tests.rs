@@ -500,3 +500,92 @@ mod paragraph_spacing_tests {
         assert_eq!(blanks_between(&r, "golf", "hotel"), 1, "band: {r:?}");
     }
 }
+
+/// A resize purges the screen and rewinds the flush cursor to 0, so the next
+/// `flush_finished` re-prints the transcript. Both guards here keep that one
+/// call bounded: it must not allocate one giant `insert_before` buffer, and it
+/// must not replay an unbounded number of rows.
+#[cfg(test)]
+mod replay_bound_tests {
+    use super::super::{EMIT_CHUNK_ROWS, REPLAY_ROWS_MAX, emit, flush_finished};
+    use crate::cmd::agent::cli::app::{App, ChatMsg, RenderMode, Role};
+    use ratatui::backend::TestBackend;
+    use ratatui::text::Line;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+
+    /// `Terminal::insert_before(height, _)` allocates `Buffer::empty` of
+    /// `width * height` cells UP FRONT, before its draw loop — so height is
+    /// bounded by the content, not by the screen. A 20k-row flush on a wide
+    /// pane was a ~100 MB allocation in a single call (and >65535 rows
+    /// truncated the `usize` line count into `u16`). `emit` now chunks.
+    #[test]
+    fn emit_never_hands_insert_before_more_rows_than_the_chunk_cap() {
+        let mut term = Terminal::with_options(
+            TestBackend::new(80, 40),
+            TerminalOptions {
+                viewport: Viewport::Inline(10),
+            },
+        )
+        .unwrap();
+        // Well past the cap, and past u16 if it were ever summed into one call.
+        let lines: Vec<Line<'static>> = (0..(EMIT_CHUNK_ROWS as usize * 4))
+            .map(|i| Line::from(format!("row {i}")))
+            .collect();
+        // The bug was a panic/hang here, not a wrong string: a single
+        // insert_before of this height. Chunked, it completes.
+        emit(&mut term, lines, 1, 80).unwrap();
+    }
+
+    /// The replay ceiling. Before it, dragging a window on a long session
+    /// re-wrapped and re-drew the entire transcript per resize event.
+    #[test]
+    fn a_rebuild_replay_stops_at_the_ceiling_and_says_so() {
+        let mut app = App::test_fixture();
+        app.render_mode = RenderMode::Inline;
+        // Derived from the ceiling, not a magic number: every message below
+        // wraps to at least one row plus a blank, so this transcript is always
+        // more than REPLAY_ROWS_MAX rows and the trim always has work to do.
+        let pairs = REPLAY_ROWS_MAX as usize / 2;
+        for i in 0..pairs {
+            app.messages
+                .push(ChatMsg::for_test(Role::User, &format!("q{i}")));
+            app.messages.push(ChatMsg::for_test(
+                Role::Agent,
+                &format!("answer {i} with a body long enough to wrap a little"),
+            ));
+        }
+        // What a resize leaves behind: nothing flushed, everything to replay.
+        app.flushed_upto = 0;
+        app.flushed_bytes = 0;
+
+        let mut term = Terminal::with_options(
+            TestBackend::new(100, 40),
+            TerminalOptions {
+                viewport: Viewport::Inline(20),
+            },
+        )
+        .unwrap();
+        let t = std::time::Instant::now();
+        flush_finished(&mut term, &mut app, 20).unwrap();
+        let elapsed = t.elapsed();
+
+        // The cursor still advances over everything the flush skipped — the
+        // ceiling drops those messages from the REPLAY, it does not leave them
+        // queued to replay again on the next resize. (The tail short of the
+        // cursor is what the band itself is still painting.)
+        let n = app.messages.len();
+        assert!(
+            app.flushed_upto >= n - 10,
+            "flush cursor stalled at {} of {n} — skipped rows are still queued",
+            app.flushed_upto
+        );
+        // Nothing was dropped from the transcript itself; only from the replay.
+        assert_eq!(n, pairs * 2, "the ceiling must not touch app.messages");
+        // And the work is bounded: unbounded replay of this transcript took
+        // seconds of re-wrapping per resize event.
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "replay took {elapsed:?} — the ceiling is not bounding the work"
+        );
+    }
+}
