@@ -119,11 +119,17 @@ The variant change is mechanical but wide: **17 occurrences of `LlmError::RateLi
 
 All six 429 sites already hold `resp` before consuming the body, so the header map is reachable — but **`anthropic/mod.rs:699` calls `resp.text().await` before the status check**, so capture `let headers = resp.headers().clone();` *above* that line or it is gone.
 
-- [ ] **RED.** Table test per adapter: a 429 response carrying `retry-after: 7` maps to `RateLimit(Some(7s))`; the same 429 without the header maps to `RateLimit(None)`. Put them beside the existing mapper tests (`openai/tests.rs`, `anthropic/tests.rs`) and in `ollama.rs`'s test module.
-- [ ] `map_openai_error` and `map_anthropic_error` take a `&HeaderMap` and pass it through every `from_status` tail — including the parse-failure early return (`openai/mod.rs:22`, `anthropic/mod.rs:48`), which is the path a bare-body 429 actually takes.
-- [ ] Update call sites: `openai/mod.rs:398,469`; `anthropic/mod.rs:702,739`; `ollama.rs:128,184`.
-- [ ] Update the mapper tests at `openai/tests.rs:237,252` and `anthropic/tests.rs:624,636,663,672` for the new argument.
-- [ ] **GREEN** + clippy + fmt.
+- [x] **RED.** Table test per adapter: a 429 response carrying `retry-after: 7` maps to `RateLimit(Some(7s))`; the same 429 without the header maps to `RateLimit(None)`. Put them beside the existing mapper tests (`openai/tests.rs`, `anthropic/tests.rs`).
+  **Correction:** `ollama.rs`'s inline `mod tests` cannot host these — it is a
+  pure-unit module with no `httpmock` and no async runtime, and the two 429
+  sites are only reachable through a live HTTP response. Ollama's two tests went
+  to `tests/llm_ollama.rs`, which already drives a `MockServer`.
+- [x] `map_openai_error` and `map_anthropic_error` take a `&HeaderMap` and pass it through every `from_status` tail — including the parse-failure early return (`openai/mod.rs:22`, `anthropic/mod.rs:48`), which is the path a bare-body 429 actually takes.
+- [x] Update call sites: `openai/mod.rs:398,469`; `anthropic/mod.rs:702,739`; `ollama.rs:128,184`.
+- [x] Update the mapper tests at `openai/tests.rs:237,252` and `anthropic/tests.rs:624,636,663,672` for the new argument.
+- [x] **GREEN** + clippy + fmt. 20 retry-after/429 tests pass; suite 1279 run,
+  1275 passed, same 4 sandbox denials as the Task 0 baseline. `cargo fmt` had to
+  be *applied*, not just checked: the hand-written test bodies tripped it.
 
 ## Task 3 — the agentic loop waits the asked-for time
 

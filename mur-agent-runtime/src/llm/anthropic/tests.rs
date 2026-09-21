@@ -621,7 +621,7 @@ fn a_real_key_and_an_unknown_remote_are_left_alone() {
 fn anthropic_error_mapping_uses_anchored_prompt_overflow_shape() {
     use crate::llm::{Disposition, classify};
     let exact = json!({"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}).to_string();
-    let error = super::map_anthropic_error(400, &exact);
+    let error = super::map_anthropic_error(400, &exact, &reqwest::header::HeaderMap::new());
     assert!(matches!(error, LlmError::ContextExceeded(_)), "{error:?}");
     assert_eq!(classify(&error), Disposition::AdvanceNow);
 
@@ -633,13 +633,83 @@ fn anthropic_error_mapping_uses_anchored_prompt_overflow_shape() {
         let body =
             json!({"type":"error","error":{"type":"invalid_request_error","message":message}})
                 .to_string();
-        let error = super::map_anthropic_error(400, &body);
+        let error = super::map_anthropic_error(400, &body, &reqwest::header::HeaderMap::new());
         assert!(
             matches!(error, LlmError::Rejected(400, _)),
             "{message}: {error:?}"
         );
         assert_eq!(classify(&error), Disposition::Stop);
     }
+}
+
+/// A 429 carries the server's own `retry-after` out of the adapter, on both
+/// body shapes: structured JSON falls through the `match` to the status tail,
+/// an unparseable body takes the early return at the top of the mapper.
+#[test]
+fn anthropic_429_carries_retry_after() {
+    use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+    let mut headers = HeaderMap::new();
+    headers.insert(RETRY_AFTER, HeaderValue::from_static("7"));
+    let structured =
+        json!({"type":"error","error":{"type":"rate_limit_error","message":"slow down"}})
+            .to_string();
+    for body in [structured.as_str(), "upstream said no"] {
+        let error = super::map_anthropic_error(429, body, &headers);
+        assert!(
+            matches!(error, LlmError::RateLimit(Some(d)) if d == std::time::Duration::from_secs(7)),
+            "{body}: {error:?}"
+        );
+        let bare = super::map_anthropic_error(429, body, &HeaderMap::new());
+        assert!(
+            matches!(bare, LlmError::RateLimit(None)),
+            "{body}: {bare:?}"
+        );
+    }
+}
+
+/// `generate` reads the body *before* it checks the status, so the header map
+/// has to be cloned off the response first or it is gone by the time the 429
+/// is mapped. This is the test that fails if that clone is dropped.
+#[tokio::test]
+async fn anthropic_429_response_surfaces_retry_after() {
+    let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
+    let server = httpmock::MockServer::start_async().await;
+    let _m = server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/v1/messages");
+            then.status(429)
+                .header("retry-after", "7")
+                .body("slow down");
+        })
+        .await;
+    let client = AnthropicClient::new(server.base_url(), "test-key".into(), "claude-opus-5".into());
+    let err = client.generate(hello()).await.unwrap_err();
+    assert!(
+        matches!(err, LlmError::RateLimit(Some(d)) if d == std::time::Duration::from_secs(7)),
+        "{err:?}"
+    );
+}
+
+/// The streaming path is a separate 429 site and gets the same treatment.
+#[tokio::test]
+async fn anthropic_streaming_429_surfaces_retry_after() {
+    let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
+    let server = httpmock::MockServer::start_async().await;
+    let _m = server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/v1/messages");
+            then.status(429)
+                .header("retry-after", "7")
+                .body("slow down");
+        })
+        .await;
+    let client = AnthropicClient::new(server.base_url(), "test-key".into(), "claude-opus-5".into());
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let err = client.generate_stream(hello(), tx).await.unwrap_err();
+    assert!(
+        matches!(err, LlmError::RateLimit(Some(d)) if d == std::time::Duration::from_secs(7)),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -660,7 +730,8 @@ fn anthropic_permission_safety_and_size_fail_closed() {
         ),
     ];
     for (value, kind) in fixtures {
-        let error = super::map_anthropic_error(400, &value.to_string());
+        let error =
+            super::map_anthropic_error(400, &value.to_string(), &reqwest::header::HeaderMap::new());
         assert_eq!(classify(&error), Disposition::Stop, "{kind}: {error:?}");
         match kind {
             "permission" => assert!(matches!(error, LlmError::PermissionDenied(400, _))),
@@ -672,6 +743,7 @@ fn anthropic_permission_safety_and_size_fail_closed() {
     let too_large = super::map_anthropic_error(
         413,
         r#"{"type":"error","error":{"type":"request_too_large","message":"request exceeds 32 MB"}}"#,
+        &reqwest::header::HeaderMap::new(),
     );
     assert!(
         matches!(too_large, LlmError::Rejected(413, _)),
