@@ -62,11 +62,28 @@ struct RuntimeGuard {
 
 impl Drop for RuntimeGuard {
     fn drop(&mut self) {
+        // Polite first: SIGTERM, then give the runtime a bounded window to
+        // drain. A runtime that ignores SIGTERM must never wedge the whole
+        // test binary on `wait()` — fall back to SIGKILL (`Child::kill`).
         #[cfg(unix)]
         unsafe {
             libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM);
         }
-        let _ = self.child.wait();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                // Timed out (or try_wait errored): escalate and reap.
+                _ => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return;
+                }
+            }
+        }
     }
 }
 
