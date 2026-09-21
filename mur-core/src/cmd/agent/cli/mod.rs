@@ -11,6 +11,7 @@ mod app;
 mod bash_class;
 mod complete;
 mod deep_research;
+mod dest;
 mod diff;
 mod dump;
 mod events;

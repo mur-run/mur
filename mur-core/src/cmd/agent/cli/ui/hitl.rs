@@ -75,7 +75,10 @@ pub(super) fn wrap_row(s: &str, w: usize) -> Vec<String> {
 pub(crate) enum HitlChoice {
     /// Approve this one call.
     Once,
-    /// Approve, and stop asking for this tool for the rest of the session.
+    /// Approve, and stop asking for the SCOPE of this call for the rest of the
+    /// session — a destination proved read-only (`ssh:user@host:ro`,
+    /// `local:ro`) when this is a classifiable `bash` command, else the tool
+    /// name.
     Tool,
     /// Approve, and stop asking for every tool for the rest of the session.
     All,
@@ -93,11 +96,13 @@ pub(crate) const HITL_CHOICES: [HitlChoice; 4] = [
 ];
 
 impl HitlChoice {
-    /// The row label, given the tool being gated.
-    pub(crate) fn label(self, tool: &str) -> String {
+    /// The row label. `grant` is what a session grant would actually cover for
+    /// the call being gated — the row prints that rather than a fixed promise,
+    /// because the fixed promise was sometimes false.
+    pub(crate) fn label(self, grant: &crate::cmd::agent::cli::dest::Grant) -> String {
         match self {
             Self::Once => "Yes".to_string(),
-            Self::Tool => format!("Yes, and don't ask again for `{tool}` this session"),
+            Self::Tool => grant.label(),
             Self::All => "Yes, and don't ask again for any tool this session".to_string(),
             Self::Deny => "No, and tell MUR what to do differently (Esc)".to_string(),
         }
@@ -166,6 +171,12 @@ pub(super) fn render_hitl(
     // menu has no mode — the row says exactly what it does, and confirming it
     // is always Enter.
     let sel = selected.min(HITL_CHOICES.len() - 1);
+    // What a grant would cover, computed once for every row that mentions it.
+    let grant = crate::cmd::agent::cli::dest::grant_for(
+        &hitl.tool_name,
+        Some(&hitl.tool_input),
+        crate::cmd::agent::cli::tool_tier::classify(&hitl.tool_name, Some(&hitl.tool_input)),
+    );
     let mut keys: Vec<Line> = HITL_CHOICES
         .iter()
         .enumerate()
@@ -180,7 +191,7 @@ pub(super) fn render_hitl(
             Line::from(vec![
                 Span::styled(if on { " ❯ " } else { "   " }, num),
                 Span::styled(format!("{}. ", i + 1), num),
-                Span::styled(c.label(&hitl.tool_name), text),
+                Span::styled(c.label(&grant), text),
             ])
         })
         .collect();
