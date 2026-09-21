@@ -67,10 +67,23 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             let read_auto = within_ceiling
                 && app.auto_reads
                 && bash_class::is_readonly_call(&req.tool_name, Some(&req.tool_input));
-            let auto = within_ceiling
-                && (app.auto_approve
-                    || app.session_tool_allow.contains(&req.tool_name)
-                    || read_auto);
+            // A destination scope is its OWN proof and so is not bounded by
+            // the tier ceiling: `tier_may_be_granted` is a check on a tier
+            // guessed from a command head, while a scope is a parsed, one-hop,
+            // read-only-at-both-ends command. Refusing to honour a grant the
+            // operator was explicitly offered — which is what the ceiling did
+            // to every `ssh … tail`, silently — is not a safety property, it
+            // is the prompt storm that trains blind approval. A scope is only
+            // ever minted for reads (`dest::classify_bash`); writes and second
+            // hops return `None` and keep asking.
+            let scoped_auto = dest::grant_for(&req.tool_name, Some(&req.tool_input), tier)
+                .key()
+                .is_some_and(|k| app.session_tool_allow.contains(&k));
+            let auto = scoped_auto
+                || (within_ceiling
+                    && (app.auto_approve
+                        || app.session_tool_allow.contains(&req.tool_name)
+                        || read_auto));
             if !app.focused && !auto {
                 notify_unfocused(
                     &app.agent,
