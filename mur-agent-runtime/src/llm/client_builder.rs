@@ -465,8 +465,8 @@ mod endpoint_named_tests {
     fn every_other_class_is_left_untouched() {
         let n = named();
         assert!(matches!(
-            n.name_endpoint(LlmError::RateLimit),
-            LlmError::RateLimit
+            n.name_endpoint(LlmError::RateLimit(None)),
+            LlmError::RateLimit(None)
         ));
         let out = n.name_endpoint(LlmError::Rejected(413, "too large".into()));
         let LlmError::Rejected(_, body) = out else {

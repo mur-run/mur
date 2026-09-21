@@ -92,8 +92,11 @@ invocation:
    until it's listed in the audit.
 4. Allow-list check: every `crate::llm::*` reference must resolve to
    the LlmClient surface (`LlmClient`, `LlmError`, `LlmMessage`,
-   `LlmRequest`, `LlmResponse`) or a recognised provider sub-module
-   (`anthropic`, `ollama`, `openai`, `stub`).
+   `LlmRequest`, `LlmResponse`), a recognised provider sub-module
+   (`anthropic`, `ollama`, `openai`, `stub`), or the policy constant
+   `RETRY_AFTER_MAX` — a 120 s `Duration` ceiling the outbox clamps a
+   server-sent `retry-after` to. It is a number, not a capability: it
+   carries no data and opens no socket.
 
 The single allowed outbound is `crate::llm::LlmClient` — the same
 model-provider call the agent already makes for any tool execution,

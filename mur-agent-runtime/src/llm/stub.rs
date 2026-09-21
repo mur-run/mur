@@ -64,7 +64,7 @@ impl LlmClient for StubLlm {
         let text = match self.pick(&joined) {
             Some(s) => {
                 if s.fault.as_deref() == Some("rate_limit") {
-                    return Err(LlmError::RateLimit);
+                    return Err(LlmError::RateLimit(None));
                 }
                 s.response.clone().unwrap_or_default()
             }

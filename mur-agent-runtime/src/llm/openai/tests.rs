@@ -234,7 +234,7 @@ fn openai_error_codes_map_only_enumerated_candidate_failures() {
     ];
     for (code, disposition, kind) in cases {
         let body = json!({"error":{"message":"fixture detail","type":"invalid_request_error","code":code}}).to_string();
-        let error = super::map_openai_error(400, &body);
+        let error = super::map_openai_error(400, &body, &reqwest::header::HeaderMap::new());
         assert_eq!(classify(&error), disposition, "{code}: {error:?}");
         match kind {
             "context" => assert!(matches!(error, LlmError::ContextExceeded(_))),
@@ -246,10 +246,58 @@ fn openai_error_codes_map_only_enumerated_candidate_failures() {
     }
 }
 
+/// A 429 carries the server's own `retry-after` out of the adapter. Both
+/// bodies matter: a structured JSON error falls through the `match` to the
+/// status tail, and an unparseable body takes the early return at the top of
+/// the mapper — which is the path a bare-text 429 from a proxy actually takes.
+#[test]
+fn openai_429_carries_retry_after() {
+    use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+    let mut headers = HeaderMap::new();
+    headers.insert(RETRY_AFTER, HeaderValue::from_static("7"));
+    let structured = json!({"error":{"message":"slow down","type":"rate_limit_error","code":"rate_limit_exceeded"}})
+        .to_string();
+    for body in [structured.as_str(), "upstream said no"] {
+        let error = super::map_openai_error(429, body, &headers);
+        assert!(
+            matches!(error, LlmError::RateLimit(Some(d)) if d == std::time::Duration::from_secs(7)),
+            "{body}: {error:?}"
+        );
+        let bare = super::map_openai_error(429, body, &HeaderMap::new());
+        assert!(
+            matches!(bare, LlmError::RateLimit(None)),
+            "{body}: {bare:?}"
+        );
+    }
+}
+
+/// End-to-end through the real adapter: the header has to survive
+/// `resp.text()` consuming the body.
+#[tokio::test]
+async fn openai_429_response_surfaces_retry_after() {
+    let _serial = crate::llm::MOCK_SERVER_LOCK.lock().await;
+    let server = httpmock::MockServer::start_async().await;
+    let _m = server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/chat/completions");
+            then.status(429)
+                .header("retry-after", "7")
+                .body("slow down");
+        })
+        .await;
+    let client = OpenAiClient::new(server.base_url(), "test-key".into(), "gpt-test".into());
+    let err = client.generate(hello()).await.unwrap_err();
+    assert!(
+        matches!(err, LlmError::RateLimit(Some(d)) if d == std::time::Duration::from_secs(7)),
+        "{err:?}"
+    );
+}
+
 #[test]
 fn openai_unknown_client_code_stops() {
     let body = json!({"error":{"message":"nope","type":"invalid_request_error","code":"new_provider_code"}}).to_string();
-    let error = super::map_openai_error(422, &body);
+    let error = super::map_openai_error(422, &body, &reqwest::header::HeaderMap::new());
     assert!(matches!(error, LlmError::Rejected(422, _)), "{error:?}");
     assert_eq!(crate::llm::classify(&error), crate::llm::Disposition::Stop);
 }

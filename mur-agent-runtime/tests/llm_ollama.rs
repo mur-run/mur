@@ -38,3 +38,62 @@ async fn ollama_generate_returns_text_and_usage() {
     assert_eq!(resp.input_tokens, 10);
     assert_eq!(resp.output_tokens, 5);
 }
+
+/// Ollama has no rate limiter of its own, but it is the adapter people point
+/// at a proxy (LiteLLM, a vLLM front door) that does. Both of its 429 sites go
+/// through `from_status`, so both must be given the headers.
+#[tokio::test]
+async fn ollama_429_surfaces_retry_after() {
+    let server = MockServer::start_async().await;
+    let _mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/api/chat");
+            then.status(429)
+                .header("retry-after", "7")
+                .body("slow down");
+        })
+        .await;
+    let client = OllamaClient::new(server.base_url(), "llama3.2".into());
+    let err = client
+        .generate(LlmRequest {
+            messages: vec![RichMessage::Text {
+                role: "user".into(),
+                content: "Hi".into(),
+            }],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, mur_agent_runtime::llm::LlmError::RateLimit(Some(d)) if d == std::time::Duration::from_secs(7)),
+        "{err:?}"
+    );
+}
+
+/// The same, with no header: the adapter must report "rate limited, no advice"
+/// rather than inventing a delay.
+#[tokio::test]
+async fn ollama_429_without_header_is_none() {
+    let server = MockServer::start_async().await;
+    let _mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/api/chat");
+            then.status(429).body("slow down");
+        })
+        .await;
+    let client = OllamaClient::new(server.base_url(), "llama3.2".into());
+    let err = client
+        .generate(LlmRequest {
+            messages: vec![RichMessage::Text {
+                role: "user".into(),
+                content: "Hi".into(),
+            }],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, mur_agent_runtime::llm::LlmError::RateLimit(None)),
+        "{err:?}"
+    );
+}

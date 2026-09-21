@@ -42,10 +42,17 @@ const DEFAULT_MAX_TOKENS: u32 = 32768;
 // would confuse spend-limit and unrelated invalid-request failures.
 const PROMPT_TOO_LONG_MESSAGE_V1: &str = "prompt is too long";
 
-pub(crate) fn map_anthropic_error(status: u16, body: &str) -> LlmError {
+/// `headers` is threaded through to every `from_status` tail — including the
+/// parse-failure early return, which is the path a bare-text 429 takes — so a
+/// rate limit keeps the server's own `retry-after`.
+pub(crate) fn map_anthropic_error(
+    status: u16,
+    body: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> LlmError {
     let parsed: serde_json::Value = match serde_json::from_str(body) {
         Ok(value) => value,
-        Err(_) => return LlmError::from_status(status, body.to_string()),
+        Err(_) => return LlmError::from_status_with_headers(status, body.to_string(), headers),
     };
     let error = &parsed["error"];
     let error_type = error["type"].as_str().unwrap_or_default();
@@ -64,7 +71,7 @@ pub(crate) fn map_anthropic_error(status: u16, body: &str) -> LlmError {
             LlmError::SafetyPolicyRejected(message)
         }
         ("not_found_error", _) => LlmError::ModelNotFound(message),
-        _ => LlmError::from_status(status, body.to_string()),
+        _ => LlmError::from_status_with_headers(status, body.to_string(), headers),
     }
 }
 
@@ -696,10 +703,14 @@ impl LlmClient for AnthropicClient {
             .map_err(|e| LlmError::from_reqwest(&e))?;
 
         let status = resp.status();
+        // The header map must be taken before `text()` consumes the response:
+        // the status check below happens after the body is already read, so a
+        // 429's `retry-after` is otherwise gone by the time it is mapped.
+        let headers = resp.headers().clone();
         let body_text = resp.text().await.map_err(|e| LlmError::from_reqwest(&e))?;
         if !status.is_success() {
             tracing::warn!(status = %status, body = %body_text, "anthropic non-2xx");
-            return Err(map_anthropic_error(status.as_u16(), &body_text));
+            return Err(map_anthropic_error(status.as_u16(), &body_text, &headers));
         }
         let v: serde_json::Value = serde_json::from_str(&body_text)
             .map_err(|e| LlmError::Http(format!("parse response: {e}")))?;
@@ -735,8 +746,9 @@ impl LlmClient for AnthropicClient {
             .map_err(|e| LlmError::from_reqwest(&e))?;
         let status = resp.status();
         if !status.is_success() {
+            let headers = resp.headers().clone();
             let body_text = resp.text().await.unwrap_or_default();
-            return Err(map_anthropic_error(status.as_u16(), &body_text));
+            return Err(map_anthropic_error(status.as_u16(), &body_text, &headers));
         }
 
         // Anthropic streams SSE: `event: <type>` + `data: {json}`. Each data

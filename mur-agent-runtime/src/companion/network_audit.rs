@@ -159,6 +159,10 @@ mod tests {
             "openai",
             "stub",
             "StubLlm",
+            // Policy constant, not a capability: the 120 s ceiling the outbox
+            // clamps a server-sent `retry-after` to before parking a 429'd send.
+            // A Duration, carries no data and opens no socket.
+            "RETRY_AFTER_MAX",
         ];
 
         let mut found_any_outbound = false;
