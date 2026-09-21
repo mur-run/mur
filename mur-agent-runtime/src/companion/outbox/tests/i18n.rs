@@ -132,7 +132,7 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
                 let mut calls = self.translate_calls.lock().unwrap();
                 *calls += 1;
                 if *calls == 1 {
-                    return Err(LlmError::RateLimit);
+                    return Err(LlmError::RateLimit(None));
                 }
                 return Ok(LlmResponse {
                     cache_creation_input_tokens: 0,
@@ -267,7 +267,7 @@ async fn translate_4_failures_drops_locale_unresolved() {
                 .collect::<Vec<_>>()
                 .join("\n");
             if joined.contains("Translate the following") {
-                return Err(LlmError::RateLimit);
+                return Err(LlmError::RateLimit(None));
             }
             // Generation returns a body that passes the linter but triggers
             // translation (CJK ratio < 30% for zh-TW).

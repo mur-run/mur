@@ -109,7 +109,7 @@ impl<R: RngCore + Send> Outbox<R> {
 
             let text = match self.llm.generate(req).await {
                 Ok(resp) => resp.text,
-                Err(LlmError::RateLimit) => return GenerateResult::RateLimit,
+                Err(LlmError::RateLimit(_)) => return GenerateResult::RateLimit,
                 Err(e) => {
                     tracing::warn!("outbox: LLM error on attempt {regen_count}: {e}");
                     // Treat other errors like a lint failure — drop after second.

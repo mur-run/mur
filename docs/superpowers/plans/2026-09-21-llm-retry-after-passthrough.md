@@ -87,19 +87,33 @@ The companion outbox has the same hole, and says so in a TODO:
 
 The variant change is mechanical but wide: **17 occurrences of `LlmError::RateLimit` across 9 files** match or construct it. Do the signature first, let the compiler drive the rest.
 
-- [ ] **RED.** New unit tests in `mur-agent-runtime/src/llm/mod.rs` tests module:
+- [x] **RED.** New unit tests in `mur-agent-runtime/src/llm/mod.rs` tests module:
   - `retry_after_parses_delta_seconds` — `"5"` → `Some(5s)`.
   - `retry_after_parses_http_date` — a date 30s in the future → `Some(~30s)` (allow ±2s slack; the clock moves).
   - `retry_after_past_date_is_zero` — a date in 2020 → `Some(ZERO)`.
   - `retry_after_garbage_is_none` — `"soon"`, `""`, `"-1"` → `None`.
   - `retry_after_is_clamped` — `"99999"` → `Some(RETRY_AFTER_MAX)`.
   - `classify_ignores_retry_after` — both `RateLimit(None)` and `RateLimit(Some(60s))` → `RetryThenAdvance`.
-- [ ] Change the variant at mod.rs:301 to `RateLimit(Option<Duration>)`. Keep the `#[error("rate limit")]` string when `None`; render `rate limit (retry after Ns)` when `Some` — the error text reaches task JSON and a human reading it deserves the number.
-- [ ] Add `pub const RETRY_AFTER_MAX: Duration = Duration::from_secs(120);` with a comment saying *why* 120 (a fleet step's own deadline is the next thing to fire; anything longer should fail fast and let the fallback chain route).
-- [ ] Add `pub fn parse_retry_after(value: &str) -> Option<Duration>` implementing §2–3.
-- [ ] Add `pub fn from_status_with_headers(status: u16, body: String, headers: &reqwest::header::HeaderMap) -> LlmError`. Keep `from_status(status, body)` as a thin wrapper passing an empty map — **`mur-agent-runtime/src/llm/ollama.rs:128,184` and both provider mappers call it and the existing tests at mod.rs:560-580 must keep compiling unchanged.**
-- [ ] Fix the fallout. Known sites: `mod.rs:359,412,563,588`; `task_runner.rs:2240`; `client_builder.rs:468-469`; `stub.rs:67`; `companion/outbox/generate.rs:112`; `companion/outbox/tests/i18n.rs:135,270`; `tests/companion_rate_limit_i18n.rs:57,307`; `tests/llm_stub.rs:36`; `llm/fallback/tests.rs:215`. Every one of these is `RateLimit` → `RateLimit(None)`; none of them should gain a value in this task.
-- [ ] **GREEN.** `cargo nextest run -p mur-agent-runtime llm::` and the full suite.
+- [x] Change the variant at mod.rs:301 to `RateLimit(Option<Duration>)`. Keep the `#[error("rate limit")]` string when `None`; render `rate limit (retry after Ns)` when `Some` — the error text reaches task JSON and a human reading it deserves the number.
+- [x] Add `pub const RETRY_AFTER_MAX: Duration = Duration::from_secs(120);` with a comment saying *why* 120 (a fleet step's own deadline is the next thing to fire; anything longer should fail fast and let the fallback chain route).
+- [x] Add `pub fn parse_retry_after(value: &str) -> Option<Duration>` implementing §2–3.
+  - **Correction (Task 1).** The plan missed a second `retry-after` reader that
+    already exists: `mur-agent-runtime/src/durable/rate_limit.rs:35`,
+    `parse_anthropic_429`, tested by `tests/durable_rate_limit.rs`. It is NOT
+    duplicated work and the two must stay separate — it answers "when does this
+    *suspended run* resume" (also reads `anthropic-ratelimit-*-reset`, ×6 on a
+    529, returns an absolute timestamp, deliberately unclamped), while
+    `parse_retry_after` answers "do we sleep inside this live turn" (clamped to
+    `RETRY_AFTER_MAX`). Each function now carries a doc comment pointing at the
+    other so the next reader does not try to merge them.
+- [x] Add `pub fn from_status_with_headers(status: u16, body: String, headers: &reqwest::header::HeaderMap) -> LlmError`. Keep `from_status(status, body)` as a thin wrapper passing an empty map — **`mur-agent-runtime/src/llm/ollama.rs:128,184` and both provider mappers call it and the existing tests at mod.rs:560-580 must keep compiling unchanged.**
+  - **Correction (Task 1).** "must keep compiling unchanged" was wrong. The
+    *callers* of `from_status` are untouched, as planned, but any test that
+    **pattern-matches** `LlmError::RateLimit` cannot survive a unit→tuple
+    variant change: `matches!(x, LlmError::RateLimit)` is a unit pattern and
+    stops compiling. Six such sites needed `(_)` or `(None)`.
+- [x] Fix the fallout. Known sites: `mod.rs:359,412,563,588`; `task_runner.rs:2240`; `client_builder.rs:468-469`; `stub.rs:67`; `companion/outbox/generate.rs:112`; `companion/outbox/tests/i18n.rs:135,270`; `tests/companion_rate_limit_i18n.rs:57,307`; `tests/llm_stub.rs:36`; `llm/fallback/tests.rs:215`. Every one of these is `RateLimit` → `RateLimit(None)`; none of them should gain a value in this task.
+- [x] **GREEN.** `cargo nextest run -p mur-agent-runtime llm::` and the full suite.
 
 ## Task 2 — providers surface the header
 

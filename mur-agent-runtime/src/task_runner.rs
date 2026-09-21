@@ -2237,7 +2237,9 @@ impl TaskRunner {
                         // Transient 429: back off exponentially and retry, up to
                         // MAX_RATE_LIMIT_RETRIES times, so a momentary burst
                         // across parallel agents doesn't kill the turn outright.
-                        Err(LlmError::RateLimit) if rate_limit_attempt < MAX_RATE_LIMIT_RETRIES => {
+                        Err(LlmError::RateLimit(_))
+                            if rate_limit_attempt < MAX_RATE_LIMIT_RETRIES =>
+                        {
                             rate_limit_attempt += 1;
                             let delay = rate_limit_backoff_delay(rate_limit_attempt);
                             tracing::warn!(
