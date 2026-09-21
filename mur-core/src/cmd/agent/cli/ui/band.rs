@@ -315,7 +315,7 @@ pub fn flush_finished<B: Backend>(
     // one short of it whenever there is another, older message to sacrifice
     // instead; only flush into it when it is the sole settled message left
     // (start == settled - 1), in which case there is nothing else to give up.
-    let protect_last = !app.streaming && settled > start;
+    let protect_last = !app.streaming && settled > start + 1;
     let stop_at = if protect_last {
         settled.saturating_sub(1).max(start)
     } else {

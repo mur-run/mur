@@ -263,6 +263,57 @@ mod band_growth_tests {
         );
     }
 
+    /// The exception the comment on `protect_last` calls out: when the last
+    /// settled reply is the *only* settled message left (`start == settled -
+    /// 1`), there is nothing older to sacrifice instead, so it must be the
+    /// one that flushes rather than sit frozen in the band, truncated behind
+    /// a chooser it can never grow past. The old `settled > start` guard
+    /// misread this exact case as "protect it" and refused to flush at all,
+    /// which is what made a single long reply vanish behind the chooser
+    /// instead of scrolling into view above it.
+    #[test]
+    fn the_sole_remaining_settled_reply_flushes_when_nothing_else_can_go() {
+        let mut app = App::test_fixture();
+        app.render_mode = RenderMode::Inline;
+        let long_last = (1..=15)
+            .map(|i| format!("only reply line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.messages
+            .push(ChatMsg::for_test(Role::User, "one thing"));
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, &long_last));
+        // Simulate the real trigger: the question already left for
+        // scrollback in an earlier flush, so the only settled message left
+        // unflushed is the reply itself (`start == settled - 1`).
+        app.flushed_upto = 1;
+        app.completion = Some(CompletionState {
+            items: vec![option("ok"), option("not yet")],
+            selected: 0,
+            spaced: true,
+            current: None,
+        });
+
+        let mut term = Terminal::with_options(
+            TestBackend::new(100, 20),
+            TerminalOptions {
+                viewport: Viewport::Inline(10),
+            },
+        )
+        .unwrap();
+        flush_finished(&mut term, &mut app, 10).unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+        let d = term.backend().to_string();
+        assert!(
+            d.contains("only reply line 1"),
+            "the sole settled reply never flushed into scrollback:\n{d}"
+        );
+        assert!(
+            !d.contains("PgUp"),
+            "reply hidden behind the chooser instead of flushed:\n{d}"
+        );
+    }
+
     /// The band's top rule was one more line on a screen full of them. It
     /// only ever carried the scroll marker, which now paints on the first
     /// row by itself when — and only when — rows are hidden.
