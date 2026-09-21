@@ -135,8 +135,8 @@ All six 429 sites already hold `resp` before consuming the body, so the header m
 
 ## Task 6 — verification and PR
 
-- [ ] `cargo fmt -p mur-agent-runtime` (and `cargo fmt --check` for the whole workspace — **if it reports a file this branch never touched, fix it anyway**; CI is fail-fast, and a pre-existing `fmt` drift cancels the macOS and Windows jobs so nothing gets verified).
-- [ ] `cargo clippy --all-targets --no-deps -- -D warnings` workspace-wide (the variant change reaches other crates' matches).
-- [ ] `cargo nextest run` full workspace; pass count must be ≥ the Task 0 baseline.
-- [ ] `gh pr create`, body covering: the false comment that started it, the six honoured sites, and the §4 no-header-no-change guarantee.
+- [x] `cargo fmt -p mur-agent-runtime` (and `cargo fmt --check` for the whole workspace — **if it reports a file this branch never touched, fix it anyway**; CI is fail-fast, and a pre-existing `fmt` drift cancels the macOS and Windows jobs so nothing gets verified).
+- [x] `cargo clippy --all-targets --no-deps -- -D warnings` workspace-wide (the variant change reaches other crates' matches).
+- [x] `cargo nextest run` full workspace; pass count must be ≥ the Task 0 baseline. — runtime 1280 passed (baseline 1268); workspace 9661 passed / 10 failed, all nested-sandbox spawn denials on this machine, same class as the baseline.
+- [x] `gh pr create`, body covering: the false comment that started it, the six honoured sites, and the §4 no-header-no-change guarantee. — mur-run/mur#1452
 - [ ] Watch CI to green on all three platforms before calling it done.
