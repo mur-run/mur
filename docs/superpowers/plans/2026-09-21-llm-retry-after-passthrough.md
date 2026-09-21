@@ -133,11 +133,11 @@ All six 429 sites already hold `resp` before consuming the body, so the header m
 
 ## Task 3 — the agentic loop waits the asked-for time
 
-- [ ] **RED.** Test `rate_limit_retry_honours_retry_after`: a stub returning `RateLimit(Some(45s))` makes the loop sleep 45s, not 2s. Use `#[tokio::test(start_paused = true)]` and assert on advanced virtual time; do not wall-clock it.
-- [ ] Test `rate_limit_retry_falls_back_to_backoff`: `RateLimit(None)` still gives 2s/4s/8s — this is the regression guard for §4.
-- [ ] At `task_runner.rs:2240`, bind the delay: `Some(d) => d.min(RETRY_AFTER_MAX)`, `None => rate_limit_backoff_delay(rate_limit_attempt)`. Leave `MAX_RATE_LIMIT_RETRIES` alone.
-- [ ] Extend the existing `tracing::warn!` with `source = "retry-after" | "backoff"` so a support log says which one fired.
-- [ ] **GREEN.**
+- [x] **RED.** Test `rate_limit_retry_honours_retry_after`: a stub returning `RateLimit(Some(45s))` makes the loop sleep 45s, not 2s. Use `#[tokio::test(start_paused = true)]` and assert on advanced virtual time; do not wall-clock it.
+- [x] Test `rate_limit_retry_falls_back_to_backoff`: `RateLimit(None)` still gives 2s/4s/8s — this is the regression guard for §4.
+- [x] At `task_runner.rs:2240`, bind the delay: `Some(d) => d.min(RETRY_AFTER_MAX)`, `None => rate_limit_backoff_delay(rate_limit_attempt)`. Leave `MAX_RATE_LIMIT_RETRIES` alone.
+- [x] Extend the existing `tracing::warn!` with `source = "retry-after" | "backoff"` so a support log says which one fired.
+- [x] **GREEN.**
 
 ## Task 4 — the companion outbox stops guessing
 

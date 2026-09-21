@@ -2234,17 +2234,25 @@ impl TaskRunner {
                             attempt += 1;
                             continue;
                         }
-                        // Transient 429: back off exponentially and retry, up to
+                        // Transient 429: wait and retry, up to
                         // MAX_RATE_LIMIT_RETRIES times, so a momentary burst
                         // across parallel agents doesn't kill the turn outright.
-                        Err(LlmError::RateLimit(_))
+                        // Prefer the server's own `retry-after` (clamped): it
+                        // knows when the permit frees up and our doubling guess
+                        // does not. Without it, fall back to the exponential
+                        // schedule unchanged.
+                        Err(LlmError::RateLimit(retry_after))
                             if rate_limit_attempt < MAX_RATE_LIMIT_RETRIES =>
                         {
                             rate_limit_attempt += 1;
-                            let delay = rate_limit_backoff_delay(rate_limit_attempt);
+                            let (delay, source) = match retry_after {
+                                Some(d) => (d.min(crate::llm::RETRY_AFTER_MAX), "retry-after"),
+                                None => (rate_limit_backoff_delay(rate_limit_attempt), "backoff"),
+                            };
                             tracing::warn!(
                                 attempt = rate_limit_attempt,
                                 delay_secs = delay.as_secs(),
+                                source,
                                 "llm rate limited (429); backing off and retrying"
                             );
                             tokio::time::sleep(delay).await;
@@ -6804,6 +6812,103 @@ mod tests {
         assert!(runner.inject_steering("nope", "x".into()).await.is_err());
         runner.unregister_steering("t1").await;
         assert!(runner.inject_steering("t1", "y".into()).await.is_err());
+    }
+
+    /// A client that fails the first `fails` calls with `LlmError::RateLimit`
+    /// carrying `retry_after`, then succeeds. Records the virtual-time instant
+    /// of every call so a test can assert on the gaps between them.
+    struct RateLimitedLlm {
+        fails: usize,
+        retry_after: Option<std::time::Duration>,
+        calls: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for RateLimitedLlm {
+        async fn generate(
+            &self,
+            _req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, LlmError> {
+            let n = {
+                let mut calls = self.calls.lock().unwrap();
+                calls.push(tokio::time::Instant::now());
+                calls.len()
+            };
+            if n <= self.fails {
+                Err(LlmError::RateLimit(self.retry_after))
+            } else {
+                Ok(end_turn_response("recovered"))
+            }
+        }
+        fn model_name(&self) -> &str {
+            "rate-limited-stub"
+        }
+    }
+
+    /// Drive one turn against `RateLimitedLlm` under paused time and return the
+    /// gaps between consecutive LLM calls — i.e. how long the loop actually
+    /// slept before each retry.
+    async fn rate_limit_retry_gaps(
+        fails: usize,
+        retry_after: Option<std::time::Duration>,
+    ) -> Vec<std::time::Duration> {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runner = Arc::new(
+            TaskRunner::with_llm(Arc::new(RateLimitedLlm {
+                fails,
+                retry_after,
+                calls: calls.clone(),
+            }))
+            .with_pending_approvals(empty_pending_approvals())
+            .with_notifier(tokio::sync::mpsc::channel(16).0),
+        );
+        let _ = runner.run_sync(loop_spec("rate limited")).await;
+        let calls = calls.lock().unwrap();
+        calls.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
+    /// §4: when the server says how long to wait, the loop waits THAT long —
+    /// not its own 2s guess. This is the whole point of the passthrough: MUR's
+    /// own gateway hands out a 5s permit window, and retrying at 2s burns an
+    /// attempt against a permit that cannot possibly be free yet.
+    #[tokio::test(start_paused = true)]
+    async fn rate_limit_retry_honours_retry_after() {
+        let gaps = rate_limit_retry_gaps(1, Some(std::time::Duration::from_secs(45))).await;
+        assert_eq!(gaps.len(), 1, "one retry: {gaps:?}");
+        assert_eq!(
+            gaps[0],
+            std::time::Duration::from_secs(45),
+            "slept the server's retry-after, not the backoff guess"
+        );
+    }
+
+    /// A retry-after past the clamp is capped: a live turn must not park for
+    /// an hour on a header. Anything longer belongs to the durable path.
+    #[tokio::test(start_paused = true)]
+    async fn rate_limit_retry_after_is_clamped() {
+        let gaps = rate_limit_retry_gaps(1, Some(std::time::Duration::from_secs(3600))).await;
+        assert_eq!(gaps.len(), 1, "one retry: {gaps:?}");
+        assert_eq!(
+            gaps[0],
+            crate::llm::RETRY_AFTER_MAX,
+            "clamped to RETRY_AFTER_MAX"
+        );
+    }
+
+    /// The regression guard for §4: with no header, the exponential schedule
+    /// is byte-for-byte what it was before this change — 2s, 4s, 8s.
+    #[tokio::test(start_paused = true)]
+    async fn rate_limit_retry_falls_back_to_backoff() {
+        let gaps = rate_limit_retry_gaps(3, None).await;
+        assert_eq!(
+            gaps,
+            vec![
+                std::time::Duration::from_secs(2),
+                std::time::Duration::from_secs(4),
+                std::time::Duration::from_secs(8),
+            ],
+            "unchanged fallback schedule"
+        );
     }
 
     #[test]
