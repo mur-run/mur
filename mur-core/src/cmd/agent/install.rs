@@ -470,7 +470,16 @@ mod tests {
         let bundle_path = tmp.path().join("aura.muragent");
         writer.write(&bundle_path).unwrap();
 
-        cmd_install(&bundle_path, None, Some("clone-x")).unwrap();
+        // Suppress the first-run model wizard: with a TTY on stdin (a developer
+        // running `cargo test` in a terminal) `ExistingWizard` would block on
+        // `read_line` while holding the EnvGuard lock.
+        cmd_install_with_resolution(
+            &bundle_path,
+            None,
+            Some("clone-x"),
+            ResolveModelAfterInstall::Suppress,
+        )
+        .unwrap();
 
         let clone_dir = mur_home.join("agents").join("clone-x");
         let profile: Profile = serde_yaml_ng::from_str(
@@ -601,7 +610,10 @@ mod tests {
         let bundle_path = tmp.path().join("plain.muragent");
         writer.write(&bundle_path).unwrap();
 
-        cmd_install(&bundle_path, None, None).unwrap();
+        // No marker ⇒ gate skipped. Wizard suppressed so this never waits on
+        // stdin when run from an interactive terminal.
+        cmd_install_with_resolution(&bundle_path, None, None, ResolveModelAfterInstall::Suppress)
+            .unwrap();
         assert!(
             mur_home
                 .join("agents")
