@@ -281,7 +281,8 @@ mod band_growth_tests {
             .join("\n");
         app.messages
             .push(ChatMsg::for_test(Role::User, "one thing"));
-        app.messages.push(ChatMsg::for_test(Role::Agent, &long_last));
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, &long_last));
         // Simulate the real trigger: the question already left for
         // scrollback in an earlier flush, so the only settled message left
         // unflushed is the reply itself (`start == settled - 1`).
@@ -307,7 +308,10 @@ mod band_growth_tests {
             d.contains("only reply line 1"),
             "the sole settled reply never flushed into scrollback:\n{d}"
         );
-        assert!(!d.contains("PgUp"), "reply hidden behind the chooser instead of flushed:\n{d}");
+        assert!(
+            !d.contains("PgUp"),
+            "reply hidden behind the chooser instead of flushed:\n{d}"
+        );
     }
 
     /// The band's top rule was one more line on a screen full of them. It
