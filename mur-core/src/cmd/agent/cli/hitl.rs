@@ -86,8 +86,25 @@ pub(super) fn commit_hitl_choice(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     match choice {
         super::ui::HitlChoice::Once => decide_hitl(app, tx, true),
         super::ui::HitlChoice::Tool => {
+            // The grant is computed by the same function that WORDED the row,
+            // so what gets stored is exactly what the operator was shown. It
+            // used to be `req.tool_name` unconditionally, which is how a
+            // picked grant could be silently worth nothing.
             if let Some(req) = &app.hitl {
-                app.session_tool_allow.insert(req.tool_name.clone());
+                let tier = super::tool_tier::classify(&req.tool_name, Some(&req.tool_input));
+                let grant = super::dest::grant_for(&req.tool_name, Some(&req.tool_input), tier);
+                match grant.key() {
+                    Some(key) => {
+                        app.session_tool_allow.insert(key.clone());
+                        app.push_system(format!("won't ask again this session for {key}"));
+                    }
+                    // Saying so is the point: an operator who is told the
+                    // grant did not take can pick `/auto` or keep answering,
+                    // instead of pressing a row that does nothing forever.
+                    None => app.push_system(
+                        "approved this call — but it can't be remembered, so the next one still asks",
+                    ),
+                }
             }
             decide_hitl(app, tx, true);
         }
