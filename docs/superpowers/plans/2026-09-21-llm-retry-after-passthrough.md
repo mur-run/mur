@@ -79,79 +79,59 @@ The companion outbox has the same hole, and says so in a TODO:
 
 ## Task 0 — branch and baseline
 
-- [x] `git worktree add .worktrees/retry-after -b fix/llm-retry-after origin/main`
-- [x] Baseline: `cargo nextest run -p mur-agent-runtime` green before touching anything. Record the pass count in the commit body.
-- [x] Commit this plan file (it is currently untracked in the main worktree).
+- [ ] `git worktree add .worktrees/retry-after -b fix/llm-retry-after origin/main`
+- [ ] Baseline: `cargo nextest run -p mur-agent-runtime` green before touching anything. Record the pass count in the commit body.
+- [ ] Commit this plan file (it is currently untracked in the main worktree).
 
 ## Task 1 — the variant carries the delay (RED first)
 
 The variant change is mechanical but wide: **17 occurrences of `LlmError::RateLimit` across 9 files** match or construct it. Do the signature first, let the compiler drive the rest.
 
-- [x] **RED.** New unit tests in `mur-agent-runtime/src/llm/mod.rs` tests module:
+- [ ] **RED.** New unit tests in `mur-agent-runtime/src/llm/mod.rs` tests module:
   - `retry_after_parses_delta_seconds` — `"5"` → `Some(5s)`.
   - `retry_after_parses_http_date` — a date 30s in the future → `Some(~30s)` (allow ±2s slack; the clock moves).
   - `retry_after_past_date_is_zero` — a date in 2020 → `Some(ZERO)`.
   - `retry_after_garbage_is_none` — `"soon"`, `""`, `"-1"` → `None`.
   - `retry_after_is_clamped` — `"99999"` → `Some(RETRY_AFTER_MAX)`.
   - `classify_ignores_retry_after` — both `RateLimit(None)` and `RateLimit(Some(60s))` → `RetryThenAdvance`.
-- [x] Change the variant at mod.rs:301 to `RateLimit(Option<Duration>)`. Keep the `#[error("rate limit")]` string when `None`; render `rate limit (retry after Ns)` when `Some` — the error text reaches task JSON and a human reading it deserves the number.
-- [x] Add `pub const RETRY_AFTER_MAX: Duration = Duration::from_secs(120);` with a comment saying *why* 120 (a fleet step's own deadline is the next thing to fire; anything longer should fail fast and let the fallback chain route).
-- [x] Add `pub fn parse_retry_after(value: &str) -> Option<Duration>` implementing §2–3.
-  - **Correction (Task 1).** The plan missed a second `retry-after` reader that
-    already exists: `mur-agent-runtime/src/durable/rate_limit.rs:35`,
-    `parse_anthropic_429`, tested by `tests/durable_rate_limit.rs`. It is NOT
-    duplicated work and the two must stay separate — it answers "when does this
-    *suspended run* resume" (also reads `anthropic-ratelimit-*-reset`, ×6 on a
-    529, returns an absolute timestamp, deliberately unclamped), while
-    `parse_retry_after` answers "do we sleep inside this live turn" (clamped to
-    `RETRY_AFTER_MAX`). Each function now carries a doc comment pointing at the
-    other so the next reader does not try to merge them.
-- [x] Add `pub fn from_status_with_headers(status: u16, body: String, headers: &reqwest::header::HeaderMap) -> LlmError`. Keep `from_status(status, body)` as a thin wrapper passing an empty map — **`mur-agent-runtime/src/llm/ollama.rs:128,184` and both provider mappers call it and the existing tests at mod.rs:560-580 must keep compiling unchanged.**
-  - **Correction (Task 1).** "must keep compiling unchanged" was wrong. The
-    *callers* of `from_status` are untouched, as planned, but any test that
-    **pattern-matches** `LlmError::RateLimit` cannot survive a unit→tuple
-    variant change: `matches!(x, LlmError::RateLimit)` is a unit pattern and
-    stops compiling. Six such sites needed `(_)` or `(None)`.
-- [x] Fix the fallout. Known sites: `mod.rs:359,412,563,588`; `task_runner.rs:2240`; `client_builder.rs:468-469`; `stub.rs:67`; `companion/outbox/generate.rs:112`; `companion/outbox/tests/i18n.rs:135,270`; `tests/companion_rate_limit_i18n.rs:57,307`; `tests/llm_stub.rs:36`; `llm/fallback/tests.rs:215`. Every one of these is `RateLimit` → `RateLimit(None)`; none of them should gain a value in this task.
-- [x] **GREEN.** `cargo nextest run -p mur-agent-runtime llm::` and the full suite.
+- [ ] Change the variant at mod.rs:301 to `RateLimit(Option<Duration>)`. Keep the `#[error("rate limit")]` string when `None`; render `rate limit (retry after Ns)` when `Some` — the error text reaches task JSON and a human reading it deserves the number.
+- [ ] Add `pub const RETRY_AFTER_MAX: Duration = Duration::from_secs(120);` with a comment saying *why* 120 (a fleet step's own deadline is the next thing to fire; anything longer should fail fast and let the fallback chain route).
+- [ ] Add `pub fn parse_retry_after(value: &str) -> Option<Duration>` implementing §2–3.
+- [ ] Add `pub fn from_status_with_headers(status: u16, body: String, headers: &reqwest::header::HeaderMap) -> LlmError`. Keep `from_status(status, body)` as a thin wrapper passing an empty map — **`mur-agent-runtime/src/llm/ollama.rs:128,184` and both provider mappers call it and the existing tests at mod.rs:560-580 must keep compiling unchanged.**
+- [ ] Fix the fallout. Known sites: `mod.rs:359,412,563,588`; `task_runner.rs:2240`; `client_builder.rs:468-469`; `stub.rs:67`; `companion/outbox/generate.rs:112`; `companion/outbox/tests/i18n.rs:135,270`; `tests/companion_rate_limit_i18n.rs:57,307`; `tests/llm_stub.rs:36`; `llm/fallback/tests.rs:215`. Every one of these is `RateLimit` → `RateLimit(None)`; none of them should gain a value in this task.
+- [ ] **GREEN.** `cargo nextest run -p mur-agent-runtime llm::` and the full suite.
 
 ## Task 2 — providers surface the header
 
 All six 429 sites already hold `resp` before consuming the body, so the header map is reachable — but **`anthropic/mod.rs:699` calls `resp.text().await` before the status check**, so capture `let headers = resp.headers().clone();` *above* that line or it is gone.
 
-- [x] **RED.** Table test per adapter: a 429 response carrying `retry-after: 7` maps to `RateLimit(Some(7s))`; the same 429 without the header maps to `RateLimit(None)`. Put them beside the existing mapper tests (`openai/tests.rs`, `anthropic/tests.rs`).
-  **Correction:** `ollama.rs`'s inline `mod tests` cannot host these — it is a
-  pure-unit module with no `httpmock` and no async runtime, and the two 429
-  sites are only reachable through a live HTTP response. Ollama's two tests went
-  to `tests/llm_ollama.rs`, which already drives a `MockServer`.
-- [x] `map_openai_error` and `map_anthropic_error` take a `&HeaderMap` and pass it through every `from_status` tail — including the parse-failure early return (`openai/mod.rs:22`, `anthropic/mod.rs:48`), which is the path a bare-body 429 actually takes.
-- [x] Update call sites: `openai/mod.rs:398,469`; `anthropic/mod.rs:702,739`; `ollama.rs:128,184`.
-- [x] Update the mapper tests at `openai/tests.rs:237,252` and `anthropic/tests.rs:624,636,663,672` for the new argument.
-- [x] **GREEN** + clippy + fmt. 20 retry-after/429 tests pass; suite 1279 run,
-  1275 passed, same 4 sandbox denials as the Task 0 baseline. `cargo fmt` had to
-  be *applied*, not just checked: the hand-written test bodies tripped it.
+- [ ] **RED.** Table test per adapter: a 429 response carrying `retry-after: 7` maps to `RateLimit(Some(7s))`; the same 429 without the header maps to `RateLimit(None)`. Put them beside the existing mapper tests (`openai/tests.rs`, `anthropic/tests.rs`) and in `ollama.rs`'s test module.
+- [ ] `map_openai_error` and `map_anthropic_error` take a `&HeaderMap` and pass it through every `from_status` tail — including the parse-failure early return (`openai/mod.rs:22`, `anthropic/mod.rs:48`), which is the path a bare-body 429 actually takes.
+- [ ] Update call sites: `openai/mod.rs:398,469`; `anthropic/mod.rs:702,739`; `ollama.rs:128,184`.
+- [ ] Update the mapper tests at `openai/tests.rs:237,252` and `anthropic/tests.rs:624,636,663,672` for the new argument.
+- [ ] **GREEN** + clippy + fmt.
 
 ## Task 3 — the agentic loop waits the asked-for time
 
-- [x] **RED.** Test `rate_limit_retry_honours_retry_after`: a stub returning `RateLimit(Some(45s))` makes the loop sleep 45s, not 2s. Use `#[tokio::test(start_paused = true)]` and assert on advanced virtual time; do not wall-clock it.
-- [x] Test `rate_limit_retry_falls_back_to_backoff`: `RateLimit(None)` still gives 2s/4s/8s — this is the regression guard for §4.
-- [x] At `task_runner.rs:2240`, bind the delay: `Some(d) => d.min(RETRY_AFTER_MAX)`, `None => rate_limit_backoff_delay(rate_limit_attempt)`. Leave `MAX_RATE_LIMIT_RETRIES` alone.
-- [x] Extend the existing `tracing::warn!` with `source = "retry-after" | "backoff"` so a support log says which one fired.
-- [x] **GREEN.**
+- [ ] **RED.** Test `rate_limit_retry_honours_retry_after`: a stub returning `RateLimit(Some(45s))` makes the loop sleep 45s, not 2s. Use `#[tokio::test(start_paused = true)]` and assert on advanced virtual time; do not wall-clock it.
+- [ ] Test `rate_limit_retry_falls_back_to_backoff`: `RateLimit(None)` still gives 2s/4s/8s — this is the regression guard for §4.
+- [ ] At `task_runner.rs:2240`, bind the delay: `Some(d) => d.min(RETRY_AFTER_MAX)`, `None => rate_limit_backoff_delay(rate_limit_attempt)`. Leave `MAX_RATE_LIMIT_RETRIES` alone.
+- [ ] Extend the existing `tracing::warn!` with `source = "retry-after" | "backoff"` so a support log says which one fired.
+- [ ] **GREEN.**
 
 ## Task 4 — the companion outbox stops guessing
 
-- [ ] **RED.** Extend the i18n outbox tests: a translate 429 carrying `retry-after: 240` pauses until `now + 240s`, not `now + 30s` (`RETRY_BACKOFF_SECS[0]`).
-- [ ] `GenerateResult::RateLimit` carries `Option<Duration>`; thread it from `generate.rs:112` to the two pause sites (`outbox/mod.rs:433` and `:648`).
-- [ ] `resume_at = now_utc + header.min(RETRY_AFTER_MAX)` when present, else `backoff_for_attempt(attempt)` exactly as today. Attempt counting and the terminal drop after four attempts are unchanged.
-- [ ] **Delete** the TODO at `outbox/mod.rs:641-642` — it is done, and a stale TODO is worse than none.
-- [ ] **GREEN.**
+- [x] **RED.** Extend the i18n outbox tests: a translate 429 carrying `retry-after: 240` pauses until `now + 240s`, not `now + 30s` (`RETRY_BACKOFF_SECS[0]`).
+- [x] `GenerateResult::RateLimit` carries `Option<Duration>`; thread it from `generate.rs:112` to the two pause sites (`outbox/mod.rs:433` and `:648`).
+- [x] `resume_at = now_utc + header.min(RETRY_AFTER_MAX)` when present, else `backoff_for_attempt(attempt)` exactly as today. Attempt counting and the terminal drop after four attempts are unchanged.
+- [x] **Delete** the TODO at `outbox/mod.rs:641-642` — it is done, and a stale TODO is worse than none.
+- [x] **GREEN.**
 
 ## Task 5 — make the gateway comment true
 
-- [ ] In `~/Projects/mur-model-gateway/src/lib.rs:672-675`, the claim is now accurate but vague. Replace "reads `retry-after`" with the specific: the runtime parses it into `LlmError::RateLimit`, clamps at 120s, and retries up to 3 times. Note the required runtime version so a future reader can tell when the claim started being true.
-- [ ] Separate PR in that repo. **Do not** bundle it with the runtime change.
-- [ ] Sanity-check `CONCURRENCY_RETRY_AFTER_SECS = 5` against the new behaviour: with the header honoured, three attempts now span ~15s rather than 14s of exponential — still inside `DEFAULT_QUEUE_TIMEOUT` (30s). No change needed; record the arithmetic in the PR body.
+- [x] In `~/Projects/mur-model-gateway/src/lib.rs:672-675`, the claim is now accurate but vague. Replace "reads `retry-after`" with the specific: the runtime parses it into `LlmError::RateLimit`, clamps at 120s, and retries up to 3 times. Note the required runtime version so a future reader can tell when the claim started being true.
+- [x] Separate PR in that repo. **Do not** bundle it with the runtime change. — **Deviation:** the comment does not exist on `origin/main`; it was introduced by the still-open PR #35 (`feat/per-provider-concurrency-cap`). A PR against `main` would have had nothing to edit, so the fix landed on that branch as `8d43980`. Still separate from the runtime change, which is the point of the rule.
+- [x] Sanity-check `CONCURRENCY_RETRY_AFTER_SECS = 5` against the new behaviour: honoured 5+5+5 = 15s vs old exponential 2+4+8 = 14s, both inside `DEFAULT_QUEUE_TIMEOUT` (30s). No change needed; arithmetic recorded in the PR #35 body as a table.
 
 ## Task 6 — verification and PR
 
