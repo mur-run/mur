@@ -80,7 +80,7 @@ pub struct WebhookState {
     /// `telemetry/inputs.jsonl` + `inputs/<sha256>.txt` under here.
     pub agent_home: std::path::PathBuf,
     /// M5.5 — per-source token-bucket rate limit. Keyed by remote
-    /// IP (or `X-Mur-Source` header when present). Defaults to
+    /// peer IP only (see [`rate_limit_key`]). Defaults to
     /// 60 requests / 60 s per source.
     pub limiter: Arc<TokenBucketLimiter>,
 }
@@ -107,9 +107,9 @@ impl WebhookState {
 /// `refill_per_sec`. A request consumes one token; if the bucket is
 /// empty, the handler returns 429.
 ///
-/// Source key precedence: `X-Mur-Source` header (sender-supplied
-/// identifier — useful when many CI runs share an egress IP) →
-/// `ConnectInfo::<SocketAddr>` peer IP → fallback `"unknown"`.
+/// Source key is the remote peer IP (`ConnectInfo::<SocketAddr>`), or
+/// `"default"` when there is no socket peer. Never a request header —
+/// see [`rate_limit_key`] for why.
 ///
 /// Buckets are kept in a process-local `Mutex<HashMap>` — fine for
 /// the single-agent listener M5.3 wires; if multi-agent listeners
