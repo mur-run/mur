@@ -15,7 +15,9 @@ use super::Outbox;
 /// Internal result of the generate+lint loop.
 pub(super) enum GenerateResult {
     Ok(String),
-    RateLimit,
+    /// Upstream returned 429. Carries the server's `retry-after`, when it sent
+    /// one, so the pause honours the asked-for delay instead of guessing.
+    RateLimit(Option<std::time::Duration>),
     LinterPersistent,
 }
 
@@ -109,7 +111,9 @@ impl<R: RngCore + Send> Outbox<R> {
 
             let text = match self.llm.generate(req).await {
                 Ok(resp) => resp.text,
-                Err(LlmError::RateLimit(_)) => return GenerateResult::RateLimit,
+                Err(LlmError::RateLimit(retry_after)) => {
+                    return GenerateResult::RateLimit(retry_after);
+                }
                 Err(e) => {
                     tracing::warn!("outbox: LLM error on attempt {regen_count}: {e}");
                     // Treat other errors like a lint failure — drop after second.

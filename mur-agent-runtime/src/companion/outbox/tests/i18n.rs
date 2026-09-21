@@ -358,6 +358,163 @@ async fn translate_4_failures_drops_locale_unresolved() {
     assert_eq!(notifier.call_count(), 0, "notifier must never be called");
 }
 
+// Retry-after Task 4a: a translate 429 that carries `retry-after: 240` must
+// pause until `now + RETRY_AFTER_MAX` (120 s clamp), NOT `now + 30 s`
+// (RETRY_BACKOFF_SECS[0]).  The header wins over the deterministic schedule.
+#[tokio::test]
+async fn translate_429_with_retry_after_honours_header_not_backoff() {
+    use crate::llm::{LlmError, LlmRequest, LlmResponse};
+
+    let tmp = TempDir::new().unwrap();
+    let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+    let clock = Arc::new(MockClock::at(base_utc));
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    let picker = Picker::with_seed(seed_bandit_state(), 99);
+    let proactive = make_proactive(true, 5, None, None);
+    let notifier = Arc::new(FakeNotifier::delivered());
+
+    struct HeaderLlm;
+
+    #[async_trait]
+    impl LlmClient for HeaderLlm {
+        async fn generate(&self, req: LlmRequest) -> Result<LlmResponse, LlmError> {
+            use crate::llm::{RichMessage, StopReason};
+            let joined: String = req
+                .messages
+                .iter()
+                .filter_map(|m| match m {
+                    RichMessage::Text { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if joined.contains("Translate the following") {
+                // Upstream asks for 240 s; the runtime clamps to 120 s.
+                return Err(LlmError::RateLimit(Some(std::time::Duration::from_secs(
+                    240,
+                ))));
+            }
+            Ok(LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                text: "Ok, 好。".into(),
+                input_tokens: 0,
+                output_tokens: 0,
+                model: "header".into(),
+                tool_calls: vec![],
+                stop_reason: StopReason::EndTurn,
+            })
+        }
+        fn model_name(&self) -> &str {
+            "header"
+        }
+    }
+
+    let llm: Arc<dyn LlmClient> = Arc::new(HeaderLlm);
+    let mut outbox = make_outbox(
+        clock.clone(),
+        ledger,
+        picker,
+        proactive,
+        llm,
+        notifier.clone(),
+    );
+
+    let now_utc = clock.now_utc();
+    let outcome = outbox.run_tick(now_utc, clock.now_local()).await;
+    assert!(
+        matches!(
+            outcome,
+            TickOutcome::Skipped {
+                reason: SkipReason::LocaleUnresolved
+            }
+        ),
+        "translate 429 should pause; got {outcome:?}"
+    );
+
+    let paused_at = outbox
+        .pending_pause
+        .values()
+        .next()
+        .expect("a pause must be parked")
+        .resume_at;
+    assert_eq!(
+        paused_at,
+        now_utc + Duration::seconds(120),
+        "retry-after 240 s must be honoured at the 120 s clamp, not the 30 s backoff"
+    );
+
+    let events = all_events(tmp.path());
+    let ledger_resume = events
+        .iter()
+        .find_map(|e| match e {
+            OutboxEvent::MessagePaused {
+                resume_at, reason, ..
+            } if reason == "locale_retry" => Some(*resume_at),
+            _ => None,
+        })
+        .expect("must have MessagePaused(locale_retry)");
+    assert_eq!(
+        ledger_resume,
+        now_utc + Duration::seconds(120),
+        "ledger resume_at must match the honoured header"
+    );
+}
+
+// Retry-after Task 4b: a generate 429 carrying `retry-after: 60` pauses until
+// `now + 60 s` — under the clamp, so the header value is used verbatim.
+#[tokio::test]
+async fn generate_429_with_retry_after_honours_header_not_backoff() {
+    use crate::llm::{LlmError, LlmRequest, LlmResponse};
+
+    let tmp = TempDir::new().unwrap();
+    let base_utc = local_as_utc(2026, 4, 29, 10, 0, 0);
+    let clock = Arc::new(MockClock::at(base_utc));
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    let picker = Picker::with_seed(seed_bandit_state(), 99);
+    let proactive = make_proactive(true, 5, None, None);
+    let notifier = Arc::new(FakeNotifier::delivered());
+
+    struct GenHeaderLlm;
+
+    #[async_trait]
+    impl LlmClient for GenHeaderLlm {
+        async fn generate(&self, _req: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::RateLimit(Some(std::time::Duration::from_secs(
+                60,
+            ))))
+        }
+        fn model_name(&self) -> &str {
+            "gen-header"
+        }
+    }
+
+    let llm: Arc<dyn LlmClient> = Arc::new(GenHeaderLlm);
+    let mut outbox = make_outbox(
+        clock.clone(),
+        ledger,
+        picker,
+        proactive,
+        llm,
+        notifier.clone(),
+    );
+
+    let now_utc = clock.now_utc();
+    let outcome = outbox.run_tick(now_utc, clock.now_local()).await;
+    let resume_at = match &outcome {
+        TickOutcome::Skipped {
+            reason: SkipReason::PausedRateLimit { resume_at },
+        } => *resume_at,
+        other => panic!("expected PausedRateLimit, got {other:?}"),
+    };
+    assert_eq!(
+        resume_at,
+        now_utc + Duration::seconds(60),
+        "retry-after 60 s must be honoured verbatim, not the 30 s backoff"
+    );
+    assert_eq!(notifier.call_count(), 0, "notifier must not be called");
+}
+
 // M5.5 Test 4: generate stub → RateLimit → ledger has MessagePaused{reason:rate_limit_429};
 //              outcome = Skipped{PausedRateLimit}; sent_today unchanged.
 #[tokio::test]
