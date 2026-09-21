@@ -14,6 +14,9 @@ use unicode_width::UnicodeWidthChar;
 const HEADING: Color = Color::Cyan;
 const CODE: Color = Color::Yellow;
 const QUOTE: Color = Color::DarkGray;
+/// Zebra-stripe background for alternating table body rows. Kept at the
+/// terminal's own dim index so it reads on both light and dark schemes.
+const STRIPE: Color = Color::Indexed(236);
 const RULE: &str = "────────────────────────";
 const INDENT: &str = "  ";
 
@@ -303,7 +306,7 @@ impl Renderer {
         }
     }
 
-    /// Emit the collected rows as a boxed table: `┌─┬─┐` borders, header row
+    /// Emit the collected rows as a boxed table: rounded `╭─┬─╮` borders, header row
     /// bold with a `├─┼─┤` rule under it, one blank line after. Columns take
     /// their natural width when the table fits; otherwise they share the
     /// pane proportionally (never below `MIN_COL`) and cells wrap inside
@@ -360,7 +363,7 @@ impl Renderer {
         };
         let border = Style::default().fg(QUOTE);
 
-        self.lines.push(rule("┌", "┬", "┐"));
+        self.lines.push(rule("╭", "┬", "╮"));
         for (ri, row) in rows.iter().enumerate() {
             let cells: Vec<Vec<Line<'static>>> = row
                 .iter()
@@ -368,6 +371,10 @@ impl Renderer {
                 .map(|(spans, w)| wrap_spans(spans, *w))
                 .collect();
             let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+            // Zebra stripes: every other body row gets a faint background so
+            // the eye can track a row across a wide table without a rule
+            // between every line. Row 0 is the header and never striped.
+            let stripe = ri > 0 && ri % 2 == 0;
             for k in 0..height {
                 let mut line: Vec<Span<'static>> = vec![Span::styled(format!("│{pad}"), border)];
                 for (ci, cell) in cells.iter().enumerate() {
@@ -379,9 +386,13 @@ impl Renderer {
                         None => (Vec::new(), 0),
                     };
                     if ri == 0 {
-                        // Header: bold, matching the heading style.
+                        // Header: bold and in the heading colour, so the
+                        // column names read as labels, not data.
                         line.extend(text.into_iter().map(|s| {
-                            Span::styled(s.content, s.style.add_modifier(Modifier::BOLD))
+                            Span::styled(
+                                s.content,
+                                s.style.fg(HEADING).add_modifier(Modifier::BOLD),
+                            )
                         }));
                     } else {
                         line.extend(text);
@@ -389,13 +400,22 @@ impl Renderer {
                     line.push(Span::raw(" ".repeat(widths[ci].saturating_sub(used))));
                 }
                 line.push(Span::styled(format!("{pad}│"), border));
+                if stripe {
+                    line = line
+                        .into_iter()
+                        .map(|s| {
+                            let style = s.style;
+                            Span::styled(s.content, style.bg(STRIPE))
+                        })
+                        .collect();
+                }
                 self.lines.push(Line::from(line));
             }
             if ri == 0 {
                 self.lines.push(rule("├", "┼", "┤"));
             }
         }
-        self.lines.push(rule("└", "┴", "┘"));
+        self.lines.push(rule("╰", "┴", "╯"));
         self.blank_line();
     }
 
@@ -577,7 +597,7 @@ mod tests {
         // Boxed: top rule, header, rule, body rows, bottom rule. The markdown
         // pipes themselves are gone.
         assert!(
-            lines[0].starts_with('┌') && lines[0].ends_with('┐'),
+            lines[0].starts_with('╭') && lines[0].ends_with('╮'),
             "lines: {lines:?}"
         );
         assert!(lines[1].contains("file:line"));
@@ -585,7 +605,7 @@ mod tests {
         assert!(lines[2].starts_with('├') && lines[2].contains('┼'));
         assert!(lines[3].contains("CONFIRMED"));
         assert!(lines[4].contains("REJECTED"));
-        assert!(lines[5].starts_with('└') && lines[5].ends_with('┘'));
+        assert!(lines[5].starts_with('╰') && lines[5].ends_with('╯'));
         // Header row cell spans are styled bold (pad/separator spans aren't).
         assert!(
             t.lines[1]
@@ -622,7 +642,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("lost {word}"));
             pos += at + word.len();
         }
-        assert!(lines.last().unwrap().starts_with('└'));
+        assert!(lines.last().unwrap().starts_with('╰'));
     }
 
     /// The squeeze comes off the widest column: short columns keep their
