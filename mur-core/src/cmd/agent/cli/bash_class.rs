@@ -46,6 +46,31 @@ const GIT_READONLY_SUBCMDS: &[&str] = &[
     "grep",
 ];
 
+/// `gh` nouns that have a genuine read-only surface (excludes `api` — an
+/// arbitrary REST call can write — and `auth`/`secret`/`variable`/`config`,
+/// which mix read and mutate verbs under the same noun).
+const GH_READONLY_NOUNS: &[&str] = &[
+    "pr",
+    "issue",
+    "repo",
+    "run",
+    "release",
+    "gist",
+    "workflow",
+    "cache",
+    "label",
+    "milestone",
+    "project",
+];
+
+/// Verbs that only read, shared by every `gh` noun above.
+const GH_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff", "checks"];
+
+/// `glab` nouns/verbs, same shape as `gh` above (excludes `api`).
+const GLAB_READONLY_NOUNS: &[&str] =
+    &["mr", "issue", "repo", "release", "label", "milestone", "ci"];
+const GLAB_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff"];
+
 /// Does the `--auto-reads` lane cover this tool call?
 ///
 /// The single definition of the lane, shared by the interactive TUI and plain
@@ -94,6 +119,21 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
         "git" => toks
             .next()
             .is_some_and(|sub| GIT_READONLY_SUBCMDS.contains(&sub)),
+        // `gh`/`glab` only for a fixed noun + read verb pair — `gh pr view`,
+        // `gh issue list`, never `gh api` (arbitrary REST, can write) or the
+        // auth/secret/config nouns that mix read and mutate under one name.
+        "gh" => {
+            let noun = toks.next();
+            let verb = toks.next();
+            noun.is_some_and(|n| GH_READONLY_NOUNS.contains(&n))
+                && verb.is_some_and(|v| GH_READONLY_VERBS.contains(&v))
+        }
+        "glab" => {
+            let noun = toks.next();
+            let verb = toks.next();
+            noun.is_some_and(|n| GLAB_READONLY_NOUNS.contains(&n))
+                && verb.is_some_and(|v| GLAB_READONLY_VERBS.contains(&v))
+        }
         other => READONLY_HEADS.contains(&other),
     }
 }
@@ -136,8 +176,32 @@ mod tests {
             "git status",
             "git log --oneline -10",
             "git diff HEAD~1",
+            "gh pr view 1441",
+            "gh pr view",
+            "gh pr list",
+            "gh pr checks 1441",
+            "gh issue list",
+            "gh run list",
+            "glab mr view",
+            "glab mr list",
         ] {
             assert!(is_readonly_bash(c), "should be read-only: {c}");
+        }
+    }
+
+    #[test]
+    fn gh_and_glab_stay_gated_outside_the_readonly_allowlist() {
+        for c in [
+            "gh api repos/x/y",       // arbitrary REST, can write
+            "gh pr merge 1441",       // mutate verb
+            "gh pr create --title x", // mutate verb
+            "gh auth login",          // auth noun not covered
+            "gh secret set X",        // secret noun not covered
+            "glab api projects",      // arbitrary REST, can write
+            "glab mr merge",          // mutate verb
+            "glab mr approve",        // mutate verb
+        ] {
+            assert!(!is_readonly_bash(c), "should prompt: {c}");
         }
     }
 
