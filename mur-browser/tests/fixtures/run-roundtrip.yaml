@@ -1,0 +1,63 @@
+name: run-roundtrip
+mode: test
+recorded_at: 2026-09-23T00:00:00Z
+steps:
+- step: 1
+  intent: 前往商品頁
+  action: goto
+  value: https://example.com/products
+  last_hit: 0
+- step: 2
+  intent: 點擊加入購物車按鈕
+  action: click
+  locators:
+  - role:button[name="Add to cart"]
+  - testid:add-to-cart
+  last_hit: 0
+- step: 3
+  intent: 在搜尋框輸入 AirPods Pro
+  action: fill
+  value: AirPods Pro
+  locators:
+  - role:textbox[name="Search"]
+  last_hit: 0
+- step: 4
+  intent: 選取尺寸下拉選項
+  action: select
+  value: "M"
+  locators:
+  - role:combobox[name="Size"]
+  last_hit: 0
+- step: 5
+  intent: 按下 Enter 送出搜尋
+  action: press
+  value: Enter
+  locators:
+  - role:textbox[name="Search"]
+  last_hit: 0
+- step: 6
+  intent: 滑過商品縮圖顯示預覽
+  action: hover
+  locators:
+  - testid:product-thumbnail
+  last_hit: 0
+- step: 7
+  intent: 確認結帳按鈕可見
+  action: assert_visible
+  locators:
+  - role:button[name="Checkout"]
+  last_hit: 0
+- step: 8
+  intent: 確認頁面標題文字
+  action: assert_text
+  value: 訂單確認
+  locators:
+  - role:heading[name="訂單確認"]
+  last_hit: 0
+- step: 9
+  intent: 確認數量欄位的值
+  action: assert_value
+  value: "2"
+  locators:
+  - testid:quantity-input
+  last_hit: 0
