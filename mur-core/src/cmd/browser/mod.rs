@@ -13,9 +13,10 @@ use mur_browser::broker::SocketClient;
 use mur_browser::broker::{Broker, KeychainStore};
 use mur_browser::{
     auth::{Handoff, ProfileMeta, save_profile},
+    export::to_spec_ts,
     paths,
     proxy::{BrokerHook, capture_storage_state, playwright_command, run_stdio},
-    recorder::{Mode, RecordHook, Run},
+    recorder::{Mode, RecordHook, Run, from_yaml},
     state::KeychainStateKeyStore,
 };
 
@@ -186,6 +187,26 @@ pub fn show(name: &str) -> Result<()> {
     mur_browser::recorder::from_yaml(&yaml)
         .map_err(|error| anyhow::anyhow!("invalid browser run {}: {error}", path.display()))?;
     print!("{yaml}");
+    Ok(())
+}
+
+/// Export a recorded run as a Playwright `.spec.ts` file.  Writes to `out`
+/// when given, otherwise prints the spec to stdout.
+pub fn export(name: &str, out: Option<&std::path::Path>) -> Result<()> {
+    paths::validate_name(name)?;
+    let path = paths::run_actions(&mur_home()?, name);
+    let yaml = fs::read_to_string(&path)
+        .map_err(|error| anyhow::anyhow!("read browser run {}: {error}", path.display()))?;
+    let run = from_yaml(&yaml)
+        .map_err(|error| anyhow::anyhow!("invalid browser run {}: {error}", path.display()))?;
+    let spec = to_spec_ts(&run)?;
+    match out {
+        Some(out) => {
+            fs::write(out, &spec)
+                .map_err(|error| anyhow::anyhow!("write {}: {error}", out.display()))?;
+        }
+        None => print!("{spec}"),
+    }
     Ok(())
 }
 
