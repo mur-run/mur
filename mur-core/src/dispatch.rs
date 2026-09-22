@@ -691,7 +691,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                     .await?
                 }
                 (None, Some(q)) => cmd::deep_research::ask::cmd_ask(&mur_home, &q, run_id).await?,
-                (None, None) => cmd::deep_research::panel::cmd_panel(&mur_home)?,
+                (Some(DeepResearchAction::Status), _) | (None, None) => {
+                    cmd::deep_research::panel::cmd_panel(&mur_home)?
+                }
             }
         }
         Commands::Official { action } => match action {

@@ -895,6 +895,10 @@ pub enum DeepResearchAction {
     },
     /// Interactive first-time setup: model, worker count, budget, egress consent
     Setup,
+    /// Show the status panel (same as bare `mur deep-research`). Without this
+    /// variant the word `status` parsed as a one-word research question and
+    /// dispatched a fleet run titled "status".
+    Status,
     /// Store a search-provider API key in the OS keychain and point
     /// `~/.mur/config.yaml` at it.
     ///

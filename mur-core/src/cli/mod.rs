@@ -488,7 +488,7 @@ see `mur skill <command> --help`.")]
         #[command(subcommand)]
         action: BrowserAction,
     },
-    /// MUR-native deep research (wizard: `setup`; status: bare; run: pass a question)
+    /// MUR-native deep research (wizard: `setup`; status: bare or `status`; run: pass a question)
     #[command(args_conflicts_with_subcommands = true)]
     DeepResearch {
         #[command(subcommand)]
@@ -612,6 +612,37 @@ mod tests {
                 "policy {policy} should parse"
             );
         }
+    }
+
+    /// `mur deep-research status` must open the status panel, never be
+    /// swallowed as a one-word research question and dispatched to the
+    /// fleet (which is what happened before the `Status` subcommand existed).
+    #[test]
+    fn cli_deep_research_status_is_a_subcommand_not_a_question() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["mur", "deep-research", "status"]).unwrap();
+        match cli.command {
+            Commands::DeepResearch {
+                action: Some(crate::cli::actions::DeepResearchAction::Status),
+                question: None,
+                ..
+            } => {}
+            Commands::DeepResearch { question, .. } => {
+                panic!("`status` was parsed as a research question: {question:?}")
+            }
+            _ => panic!("expected deep-research"),
+        }
+
+        // A real question still routes to the ask path.
+        let cli = Cli::try_parse_from(["mur", "deep-research", "how do starlings sing"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::DeepResearch {
+                action: None,
+                question: Some(ref q),
+                ..
+            } if q == "how do starlings sing"
+        ));
     }
 
     #[test]
