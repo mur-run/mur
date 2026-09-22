@@ -32,7 +32,9 @@
 | 平行 | N 個 `--isolated` process | 第一期同 A（N process）；daemon + named context 留第二期，但 CLI 介面先定好 |
 | 工程量 | 1–2 天 | **1–2 週**：一個新 crate `mur-browser`，`mur-core` 加一個 `Browser` subcommand |
 
-三個決定沿用 A：兩個入口一個引擎、`/browser-auth` 獨立、引擎 = `@playwright/mcp`。
+三個決定沿用 A：兩個入口、`/browser-auth` 獨立、第一期引擎 = `@playwright/mcp`。
+
+> **更正（2026-09-23）**：原句為「兩個入口一個引擎」，與 `2026-09-10-browser-research-merged.md` §4b 表格矛盾——`/browser-test` 用 Playwright、`/browser-automation` 用 browser-rs，是**兩個引擎**；共用的只有 `/browser-auth` 產出的 session（storageState / 真 profile），不是引擎。第一期只落地 Playwright 這一條路。locator 格式是否跨引擎相容**仍待確認**。
 
 ## 1. 架構
 
