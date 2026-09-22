@@ -64,6 +64,10 @@ fn current(&self) -> Result<Snapshot, Refusal> {
 - `Unsupported` ← 需要 c 切片的 `schema_version`：capsule 帶的版本超出本 build 能保證的範圍，
   才叫不支援。**a3 因此依賴 c，不是平行的。**
 
+> **更正（見 §5 第 2、3 項）：** `Recovering` 的輸入是 anchor 可達性（N2、C14），不是
+> `restore_disk` 後的窗口 —— 那段窗口是 `Quarantined`。`schema_version` 是固定識別字串
+> `capsule-envelope-g0-v1`，判準是「不在支援集合內」，不是「超出範圍」。
+
 ## 2. advance / publish 繞過 `current()`：有意還是無意
 
 實證，`self.current()` 的呼叫方只有三個：`readable`（:159）、`prepare`（:170）、
@@ -132,12 +136,47 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
 - 結論一律 derived，單一推導點。
 - 表格層（`state_space.rs`）只認 `Legality`；`Refusal` 一律在 `lib.rs` 的操作層產生。
 
-## 5. 待決（動工前必須答）
+## 5. 待決（動工前必須答）—— 三問皆已答
 
 1. ~~§2 的 `publish` / `restore_disk` 無閘是漏還是有意~~ —— **已結案：有意。** `pointer` 無讀取方、
    `restore_disk` 是對手模擬；探針顯示 Strict 守住、Managed 落在已宣告回滾上限內。health gate 只放讀取路徑。
-2. `Recovering` 的判準是什麼？沒有判準就不該保留這個 health 態，或該承認 G0 不模擬它。
-3. c 的 `schema_version` 形狀（單一 u64？範圍？），因為 a3 依賴它。
+
+   > **更正（見 §6、§7）：** 上段結論只對 `restore_disk` 成立。`advance` / `publish` 的無閘是漏洞，
+   > 已修；health gate 不再「只放讀取路徑」。現行共用同一判定的呼叫點恰為五個：
+   > `readable`、`prepare`、`advance`、`publish`、`restart`。`flush` 刻意不過閘（內容定址恢復，§7）。
+   > 原文保留，因為它記錄的是當時的判斷。
+
+   **這五個呼叫點就是 §1 stored vs derived 的實據：** 同一判定服務五處。存成欄位，五處各自負責
+   同步，任一處漏寫即重演 §6 的繞道；推導則一處定義、五處適用。**答案：derived，
+   `fn health(&self) -> VaultHealth` 為唯一推導點，`current()` 成為它的呼叫方。**
+
+2. **`Recovering` 的判準：後端（硬體 anchor）暫不可達或逾時。** 出處是合約本身，不是推測：
+   - N2（`specs/2026-09-22-capsule-g0-contracts.md:127`）：「逾時後 `VaultHealth = Recovering`、
+     `OperationState` 維持 `InDoubt`，回 `BackendUnavailable`。不得因逾時而推定 `Aborted`。」
+   - C14（同檔 `:189`）：「硬體暫不可達／逾時 | Recovering → BackendUnavailable | 不猜提交結果」
+
+   所以 §1:62 猜的「`restore_disk` 之後、`restart` 之前的窗口」是錯的輸入 —— 那段窗口的真相是
+   `Quarantined`（磁碟與 anchor 不符），不是「恢復中」。`Recovering` 的輸入是**anchor 可達性**，
+   與磁碟內容無關。
+
+   **Model 要加的輸入：** anchor 可達性（例如 `anchor_available: bool`，由測試注入不可達）。
+   推導順序：anchor 不可達 → `Recovering`；可達但錨點 manifest 缺失或摘要不符 → `Quarantined`；
+   否則 `Ready`。可達性要排在前面，因為不可達時根本讀不到 anchor，無從比對摘要。
+   `Recovering` 下的拒絕型別是 `BackendUnavailable`，不是 `Quarantined` —— 前者允許「稍後再試」，
+   後者不允許（`t1_quarantined_never_implies_try_again_later`）。
+
+3. **`schema_version` 的形狀：不是 u64，也不是範圍，而是固定識別字串。** 合約
+   （同檔 `:203`）：「Schema 版本固定為 `capsule-envelope-g0-v1`，不與未來 production v1 混用。」
+
+   因此 `Unsupported` 的判準是**精確比對**：capsule 帶的識別字串不在本 build 支援的集合內
+   → `Unsupported`。G0 的集合只有一個元素。不引入數值比較，因為合約明文禁止 g0 與 production
+   版本混用，「較新就相容」的推論在這裡不成立。
+
+   §1:64 的「超出本 build 能保證的**範圍**」據此更正為「不在本 build 支援的**集合**內」。
+   a3 依賴 c 的結論不變。
+
+**動工順序（依上三答）：** 先加 `health()` 並把五個呼叫點改接它（行為不變，既有測試全綠即證）；
+再加 anchor 可達性輸入與 `Recovering` 的紅燈測試；`Unsupported` 等 c 切片落地 schema 識別字串後再做。
 
 ## 6. §2 判讀結果（實證，探針已撤；已修）
 
