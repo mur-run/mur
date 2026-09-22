@@ -630,3 +630,28 @@ fn managed_unsupported_writes_without_migrating_schema() {
     let snapshot = model.anchored_snapshot().expect("still verifies");
     assert_eq!(snapshot.schema, FOREIGN_SCHEMA);
 }
+
+/// I09 / §43 on the commit path: Strict refuses advance and publish on an
+/// Unsupported vault with UnsupportedGuarantee. `prepare` is already refused,
+/// so the Prepared comes from a Managed twin under the same schema and is
+/// flushed in (flush has no health gate). Session, base and durability all
+/// line up — the health gate is the only thing standing in the way.
+#[test]
+fn strict_unsupported_refuses_advance_and_publish() {
+    let mut twin = Model::with_schema(Profile::Managed, FOREIGN_SCHEMA);
+    let prepared = twin
+        .prepare("c1", Action::Capture, "A", &[], false)
+        .expect("Managed may prepare on Unsupported");
+
+    let mut model = Model::with_schema(Profile::Strict, FOREIGN_SCHEMA);
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Err(Refusal::UnsupportedGuarantee));
+    assert_eq!(model.publish(&prepared), Err(Refusal::UnsupportedGuarantee));
+    assert_eq!(model.health(), VaultHealth::Unsupported);
+
+    // Control: the same Prepared is accepted by the twin, so the refusal
+    // above is the health gate, not a base/session/durability mismatch.
+    twin.flush(&prepared);
+    assert_eq!(twin.advance(&prepared), Ok(()));
+    assert_eq!(twin.publish(&prepared), Ok(()));
+}
