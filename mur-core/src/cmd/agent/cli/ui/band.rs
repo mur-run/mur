@@ -386,6 +386,17 @@ pub fn flush_finished<B: Backend>(
         total -= u32::from(rows[end - start]);
         end += 1;
     }
+    // Reaching `stop_at` still overflowing means every older message has gone
+    // and the protected reply is now the sole settled one left — the exception
+    // above, arrived at within this same call. It used to be reached only on
+    // the NEXT call (by then `start == settled - 1` made `protect_last` false),
+    // and the frame drawn in between is the bug: one paint of the reply the
+    // chooser is asking about, hidden behind "↑ N more · PgUp". A fixpoint
+    // reached a frame late is a fixpoint the operator sees broken.
+    if protect_last && end == stop_at && end < settled && total > cap {
+        total -= u32::from(rows[end - start]);
+        end += 1;
+    }
     if end > start {
         // Replay ceiling. A resize resets `flushed_upto` to 0 (the purge wiped
         // scrollback), so this one call would otherwise re-emit the WHOLE
