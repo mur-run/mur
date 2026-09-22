@@ -37,6 +37,8 @@ pub enum SlashCmd {
     /// `/deep-research [ask <question>|<question>|status|stop|setup]` — research
     /// fleet control. Aliased as `/research`; bare text is the question.
     DeepResearch(Vec<String>),
+    /// `/search <query> [--all] [--limit N] [--send]` — search indexed project code.
+    Search(Vec<String>),
     /// `/monitor` (or `/mon`) — list durable monitors (Task 13's `mur monitor
     /// list` rows), printed into the scrollback. Same handler as `Ctrl+T` /
     /// `Alt+M`.
@@ -122,6 +124,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),
         "panel" => SlashCmd::Panel(words.map(str::to_string).collect()),
         "deep-research" | "research" => SlashCmd::DeepResearch(words.map(str::to_string).collect()),
+        "search" => SlashCmd::Search(words.map(str::to_string).collect()),
         "monitor" | "mon" => SlashCmd::Monitor(words.map(str::to_string).collect()),
         "open" | "todo" => SlashCmd::Open,
         "exit" | "quit" | "q" => SlashCmd::Quit,
