@@ -442,3 +442,20 @@ fn strict_flush_of_other_root_does_not_lift_quarantine() {
     assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
     assert_eq!(model.readable("C"), Err(Refusal::Quarantined));
 }
+
+/// §5 answer 1: health() is the single derivation point behind current().
+#[test]
+fn health_is_derived_from_anchor_and_disk() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        let mut model = Model::new(profile);
+        capture(&mut model, "c1", "A");
+        assert_eq!(model.health(), VaultHealth::Ready, "{profile:?}");
+    }
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    model.restore_disk(&old);
+    assert_eq!(model.health(), VaultHealth::Quarantined);
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+}

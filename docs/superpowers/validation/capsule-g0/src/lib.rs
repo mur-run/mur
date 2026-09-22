@@ -5,6 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use state_space::VaultHealth;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Profile {
     Strict,
@@ -125,13 +127,39 @@ impl Model {
         }
     }
 
-    fn current(&self) -> Result<Snapshot, Refusal> {
+    /// The anchored manifest, only if it is present and digest-verified.
+    fn anchored_snapshot(&self) -> Option<&Snapshot> {
         let root = self.anchor();
-        let snapshot = self.manifests.get(&root).ok_or(Refusal::Quarantined)?;
-        if snapshot_digest(snapshot) != root {
-            return Err(Refusal::Quarantined);
+        self.manifests
+            .get(&root)
+            .filter(|snapshot| snapshot_digest(snapshot) == root)
+    }
+
+    /// §5 answer 1: health is derived, never stored. This is the single
+    /// derivation point; readable/prepare/advance/publish/restart all reach it
+    /// through current(), so no call site can drift out of sync (§6).
+    fn health(&self) -> VaultHealth {
+        match self.anchored_snapshot() {
+            Some(_) => VaultHealth::Ready,
+            None => VaultHealth::Quarantined,
         }
-        Ok(snapshot.clone())
+    }
+
+    fn current(&self) -> Result<Snapshot, Refusal> {
+        match self.health() {
+            VaultHealth::Ready => Ok(self
+                .anchored_snapshot()
+                .expect("Ready implies a verified anchored manifest")
+                .clone()),
+            VaultHealth::Quarantined => Err(Refusal::Quarantined),
+            // Not derivable yet: Recovering needs the anchor-reachability
+            // input (§5 answer 2, next step); Unsupported waits for the c
+            // slice's schema identifier (§5 answer 3). Their refusal mapping
+            // is decided with those steps, not guessed here.
+            VaultHealth::Recovering | VaultHealth::Unsupported => {
+                unreachable!("health() does not derive {:?} yet", self.health())
+            }
+        }
     }
 
     pub fn readable(&self, key: &str) -> Result<bool, Refusal> {
