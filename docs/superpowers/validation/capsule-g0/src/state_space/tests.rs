@@ -86,13 +86,65 @@ fn t1_quarantined_never_implies_try_again_later() {
 #[test]
 fn t1_unsupported_leaves_managed_reads_untouched() {
     for read in [
-        EffectiveRead::Readable,
         EffectiveRead::DependencyUnavailable,
         EffectiveRead::Denied,
         EffectiveRead::BackendUnavailable,
     ] {
         assert_eq!(t1(VaultHealth::Unsupported, read), Legality::Legal);
     }
+}
+
+/// I09 — the Readable cell of §88's Unsupported row is annotated 「Managed 讀取
+/// 不受影響」. Serving it under Strict is a silent guarantee downgrade; §43 says
+/// Strict answers `UnsupportedGuarantee` and never transitions to Managed.
+#[test]
+fn t1_unsupported_readable_is_managed_only_never_strict() {
+    assert_eq!(
+        t1(VaultHealth::Unsupported, EffectiveRead::Readable),
+        Legality::ManagedOnly
+    );
+    assert!(t1(VaultHealth::Unsupported, EffectiveRead::Readable)
+        .is_permitted_under(crate::Profile::Managed));
+    assert!(
+        !t1(VaultHealth::Unsupported, EffectiveRead::Readable)
+            .is_permitted_under(crate::Profile::Strict),
+        "Strict served a Managed-strength read on an Unsupported vault"
+    );
+}
+
+/// I09 — the profile-blind and profile-aware predicates must disagree on
+/// exactly the `ManagedOnly` cells, and nowhere else. This is what makes
+/// `is_permitted` safe for transcription checks and unsafe for explorers.
+#[test]
+fn managed_only_is_the_only_cell_where_strict_and_blind_disagree() {
+    let mut disagreements = 0;
+    for health in ALL_VAULT_HEALTH {
+        for read in ALL_EFFECTIVE_READS {
+            let cell = t1(health, read);
+            if cell.is_permitted() != cell.is_permitted_under(crate::Profile::Strict) {
+                assert_eq!(cell, Legality::ManagedOnly);
+                disagreements += 1;
+            }
+            assert_eq!(
+                cell.is_permitted(),
+                cell.is_permitted_under(crate::Profile::Managed),
+                "Managed must agree with the blind predicate at [{health:?}][{read:?}]"
+            );
+        }
+    }
+    for health in ALL_VAULT_HEALTH {
+        for column in ALL_OPERATION_COLUMNS {
+            let cell = t3(health, column);
+            if cell.is_permitted() != cell.is_permitted_under(crate::Profile::Strict) {
+                assert_eq!(cell, Legality::ManagedOnly);
+                disagreements += 1;
+            }
+        }
+    }
+    assert!(
+        disagreements > 0,
+        "no ManagedOnly cell found — the profile dimension would be vacuous"
+    );
 }
 
 #[test]

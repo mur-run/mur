@@ -87,9 +87,30 @@ pub enum Legality {
 }
 
 impl Legality {
-    /// Whether the combination may occur at all in a conforming implementation.
+    /// Whether the combination may occur in *some* conforming profile.
+    ///
+    /// This is profile-blind on purpose: it answers "is this cell reachable
+    /// anywhere in the spec", which is the right question for transcription
+    /// checks against §88/§108. It is the **wrong** question for a state-space
+    /// explorer, which walks one concrete vault and therefore one concrete
+    /// profile — `ManagedOnly` is permitted here but forbidden under Strict.
+    /// Explorers must use [`Legality::is_permitted_under`].
     pub const fn is_permitted(self) -> bool {
         !matches!(self, Self::Forbidden)
+    }
+
+    /// Whether the combination may occur under a *given* profile (I09).
+    ///
+    /// `ManagedOnly` collapses to forbidden under Strict: §43 states that
+    /// Strict answers unsupported with `UnsupportedGuarantee` and that there is
+    /// no Strict → Managed recovery transition. A Strict vault that reached a
+    /// `ManagedOnly` cell has silently downgraded its guarantee.
+    pub const fn is_permitted_under(self, profile: crate::Profile) -> bool {
+        match self {
+            Self::Forbidden => false,
+            Self::ManagedOnly => matches!(profile, crate::Profile::Managed),
+            _ => true,
+        }
     }
 }
 
@@ -142,7 +163,7 @@ pub const CARTESIAN_PRODUCT_SIZE: usize =
 /// authorization. Necessary condition only.
 pub const fn t1(health: VaultHealth, read: EffectiveRead) -> Legality {
     use EffectiveRead as E;
-    use Legality::{Forbidden, Legal};
+    use Legality::{Forbidden, Legal, ManagedOnly};
     use VaultHealth as V;
 
     match (health, read) {
@@ -166,8 +187,16 @@ pub const fn t1(health: VaultHealth, read: EffectiveRead) -> Legality {
         (V::Quarantined, E::VaultQuarantined) => Legal,
         (V::Quarantined, _) => Forbidden,
 
-        // Unsupported: Managed reads are unaffected.
+        // Unsupported (§88): the Readable cell is annotated 「Managed 讀取不受
+        // 影響」 — the guarantee that survives is Managed's, not Strict's. A
+        // Strict vault serving plaintext here is exactly the silent downgrade
+        // I09 forbids; §43 says Strict answers `UnsupportedGuarantee` instead,
+        // and there is no Strict → Managed recovery transition. The remaining
+        // cells are profile-independent: Denied is what a caller demanding the
+        // Strict guarantee gets, and BackendUnavailable carries no guarantee
+        // claim at all.
         (V::Unsupported, E::VaultQuarantined) => Forbidden,
+        (V::Unsupported, E::Readable) => ManagedOnly,
         (V::Unsupported, _) => Legal,
     }
 }

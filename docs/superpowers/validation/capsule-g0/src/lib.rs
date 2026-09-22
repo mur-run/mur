@@ -84,6 +84,9 @@ pub enum Refusal {
     Quarantined,
     SourceUnavailable,
     Unavailable,
+    /// §43 — Strict answers an unsupported guarantee with this rather than
+    /// silently serving the Managed-strength answer (I09).
+    UnsupportedGuarantee,
 }
 
 #[derive(Clone, Debug)]

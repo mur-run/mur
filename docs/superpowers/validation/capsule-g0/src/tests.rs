@@ -267,3 +267,91 @@ fn destroyed_key_identity_cannot_be_reused() {
         Err(Refusal::KeyIdentityReused)
     );
 }
+
+/// I09-b1 — a live key identity cannot be re-bound by a different operation.
+#[test]
+fn capture_onto_existing_key_is_key_identity_reused() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        let mut model = Model::new(profile);
+        capture(&mut model, "first", "A");
+        assert_eq!(
+            model.prepare("second", Action::Capture, "A", &[], false),
+            Err(Refusal::KeyIdentityReused),
+            "{profile:?}"
+        );
+    }
+}
+
+/// I10(a) — with committed objects intact, recovery converges to the same
+/// root: the committed one if the anchor moved, the prior one if it did not.
+#[test]
+fn recovery_converges_to_identical_root_on_each_side_of_anchor() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        for cut in 0..4 {
+            let mut model = Model::new(profile);
+            capture(&mut model, "create-a", "A");
+            let before = model.anchor();
+            let prepared = model
+                .prepare("erase-a", Action::Erase, "A", &[], false)
+                .expect("erase should prepare");
+            if cut >= 1 {
+                model.flush(&prepared);
+            }
+            if cut >= 2 {
+                model.advance(&prepared).expect("advance should commit");
+            }
+            if cut == 3 {
+                model.publish(&prepared).expect("publish should succeed");
+            }
+            model.restart().expect("restart should recover");
+            let expected = if cut >= 2 { prepared.root } else { before };
+            assert_eq!(model.anchor(), expected, "{profile:?} cut={cut}");
+            assert_eq!(model.pointer, expected, "{profile:?} cut={cut}");
+            assert_eq!(model.current().map(|s| snapshot_digest(&s)), Ok(expected));
+        }
+    }
+}
+
+/// Disk swapped under an in-flight preparation (no restart in between).
+/// Strict: every step refuses — this is a safety property.
+#[test]
+fn strict_refuses_inflight_preparation_after_disk_rollback() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("b", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    model.restore_disk(&old);
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Err(Refusal::CommitConflict));
+    assert_eq!(model.publish(&prepared), Err(Refusal::NotCommitted));
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+}
+
+/// Same scenario under Managed: it proceeds, and the outcome is exactly the
+/// declared rollback limit — the erased key is back. Records a boundary,
+/// proves nothing about safety.
+#[test]
+fn managed_inflight_preparation_after_disk_rollback_stays_within_declared_limit() {
+    let mut model = Model::new(Profile::Managed);
+    capture(&mut model, "a", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("b", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    model.restore_disk(&old);
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Ok(()));
+    assert_eq!(model.publish(&prepared), Ok(()));
+    model.restart().expect("restart");
+    assert_eq!(model.anchor(), prepared.root);
+    assert_eq!(model.readable("A"), Ok(true));
+    assert_eq!(model.readable("B"), Ok(true));
+}
