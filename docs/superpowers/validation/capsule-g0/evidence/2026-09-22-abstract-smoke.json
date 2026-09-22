@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "requested_suite": "abstract-smoke",
+  "evidence_level": "abstract_smoke",
+  "environment": {"os": "macos", "arch": "aarch64"},
+  "tests_run": 15,
+  "failures": 0,
+  "smoke_passed": true,
+  "gates": {
+    "G0-SM": "incomplete",
+    "G0-CRASH": "not_run",
+    "G0-LINEAR": "not_run",
+    "G0-HW": "not_run",
+    "G0-CRYPTO": "not_run",
+    "G0-MEM": "not_run",
+    "G0-EXPOSURE": "not_run",
+    "G0-MATERIALIZE": "not_run",
+    "G0-DISCOVERY": "not_run",
+    "G0-METADATA": "not_run",
+    "G0-TIMING": "not_run",
+    "G0-ISOLATION": "not_run",
+    "G0-CANARY": "not_run",
+    "G0-CONFORMANCE": "not_run",
+    "G0-PERF": "not_run"
+  },
+  "g0_status": "incomplete",
+  "strict_supported": false,
+  "g1_authorized": false,
+  "g2_authorized": false,
+  "limits": [
+    "Atomic nonrollback anchor is assumed, not implemented.",
+    "No real storage, cryptography, OS isolation or MUR code is tested.",
+    "Selected traces only; not exhaustive bounded model checking.",
+    "The all suite fails closed until every required gate is implemented."
+  ]
+}
