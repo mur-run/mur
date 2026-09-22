@@ -12,7 +12,7 @@
 
 | Review ID | 缺口核對結果 | 本文件契約 | 驗收 ID | 目前結論 |
 |---|---|---|---|---|
-| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3 | G0-SM、G0-CRASH、G0-HW | 抽象子集可執行；硬體未驗證 |
+| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3、§2.4 | G0-SM、G0-CRASH、G0-HW | 交互表與 InDoubt 嵌套規則已補（§2.4，草案）；轉移覆蓋與硬體未驗證 |
 | B2 | 原 §6.1 未指定 envelope／閉包／記憶體 | §4 | G0-CRYPTO、G0-MEM | 候選格式待密碼學評審 |
 | B3 | 原 token 未定義簽發與失效 | §5 | G0-EXPOSURE | 契約與向量已指定，尚未執行 |
 | B4 | 原發現步驟隱含目錄與水位洩漏 | §7 | G0-DISCOVERY | 明示可見性與接受的洩漏 |
@@ -72,6 +72,56 @@ Manifest = {epoch, parent_root, slots, policy_revision, births, terminals,
 | I10 | 已提交物件完整且後端可用時，恢復收斂到相同 root；後端不可用有界回錯，不永久卡住。 |
 
 G0 抽象操作的恢復最多走 3 個邏輯步驟：讀 anchor、驗證對應 manifest、修復 pointer／回終態。真實 I/O 不以步數冒充時間界線；原型每次後端呼叫 deadline 5 秒、恢復嘗試整體 30 秒，逾時回 BackendUnavailable。數值是 G0 測試參數，不是正式產品 SLO。
+
+### 2.4 四狀態空間的交互合法性（B1，草案）
+
+§2.1 平行列出四個狀態空間但未定義組合合法性。完整笛卡兒積為 4×4×8×4 = 512 格，逐格列舉不可審查；下列改以「成對合法性 ＋ 一條合成規則」表達，成對表為必要條件，合成規則為 `Readable` 的充分條件。四個空間的作用域不同：`VaultHealth` 為全域，`SlotState` 為每 slot，`EffectiveRead` 為每次讀取嘗試，`OperationState` 為每個 operation ID。
+
+**T1：VaultHealth × EffectiveRead**（已通過 discover 授權的讀取）
+
+| VaultHealth | Readable | DependencyUnavailable | Denied | BackendUnavailable |
+|---|---|---|---|---|
+| Ready | 合法 | 合法 | 合法 | 合法 |
+| Recovering | **禁止**（I01：狀態不可確認不得發布新明文） | **禁止**（判定祖先失效需已確認的 manifest） | 合法 | 合法（Recovering 期間的唯一非授權性答案） |
+| Quarantined | **禁止** | **禁止** | 合法（見 B1-Q1） | **禁止**（不得暗示「稍後會好」） |
+| Unsupported | 合法（Managed 讀取不受影響） | 合法 | 合法（要求 Strict 保證者） | 合法 |
+
+**T2：SlotState × EffectiveRead**（前提 VaultHealth = Ready 且授權通過）
+
+| SlotState | Readable | DependencyUnavailable | Denied | BackendUnavailable |
+|---|---|---|---|---|
+| Absent | **禁止** | **禁止** | 合法 | **禁止** |
+| Live | 合法 | 合法（§2.1：任一必要祖先失效） | 合法 | 合法（guard unwrap 不可達） |
+| DestroyedStrict | **禁止**（I04） | **禁止**（自身終態優先於祖先狀態，不得以祖先原因掩蓋） | 合法 | **禁止** |
+| ErasedManaged | **禁止** | **禁止** | 合法 | **禁止** |
+
+**T3：VaultHealth × OperationState**
+
+| VaultHealth | 可新建 Accepted／Prepared | DurablePrepared／Anchored | Published／Replied | Aborted | InDoubt |
+|---|---|---|---|---|---|
+| Ready | 合法 | 合法 | 合法 | 合法 | 合法（暫態） |
+| Recovering | **禁止** | 僅既有者續存 | 僅進入 Recovering 前已 Anchored 者 | 合法 | 合法（InDoubt 的正常居所） |
+| Quarantined | **禁止** | 僅為歷史記錄 | 僅為歷史記錄 | 合法 | 合法但**凍結**，見 N5 |
+| Unsupported | 僅 Managed | 僅 Managed | 僅 Managed | 合法 | 合法 |
+
+**合成規則 R-READ。** `EffectiveRead = Readable` 當且僅當同時滿足：`VaultHealth = Ready` ∧ 該 slot `SlotState = Live` ∧ 所有必要祖先 slot 皆 `Live` ∧ 授權 grant 有效 ∧ `H.manifest_root` 的 manifest 完整且 commitment 相符（§2.2）。五項缺一即非 `Readable`，且回報順序固定為：授權（§2.1 末項）→ VaultHealth → 自身 SlotState → 祖先 → 後端可用性。固定順序是為了讓錯誤碼不洩漏更高敏感度的資訊。
+
+**B1-Q1（待裁決）。** `EffectiveRead` 沒有表達「vault 已 Quarantined」的值，T1 只能回 `Denied`，這使「你沒有權限」與「此 vault 已不安全」共用同一個外部可見結果，與 §2.1 末項的授權分層意圖相衝。兩條出路：於 `EffectiveRead` 增設 `VaultQuarantined`，或明文記載此合併為蓄意設計並說明其不洩漏理由。此項不阻塞 B2。
+
+#### 2.4.1 InDoubt 的嵌套恢復規則
+
+R2 指出「判定 InDoubt 所需的 `read_anchor` 自身 InDoubt」的嵌套情形未處理。**型別層已排除無限嵌套**：§3.1 的簽章為 `read_anchor() -> Anchor | BackendUnavailable`，不含 `InDoubt`；只有 `advance_epoch` 會回 `InDoubt`。恢復程序讀的是不會再 InDoubt 的那一支，因此這是一個有界迴圈，不是遞迴。餘下需要明文的是它的邊界與終態：
+
+| ID | 規則 |
+|---|---|
+| N1 | 恢復只呼叫 `read_anchor`；其回傳域不含 `InDoubt`，故不產生第二層待決。未確認一律顯現為 `BackendUnavailable`。 |
+| N2 | 單次呼叫 deadline 5 秒、整體恢復 30 秒（§2.3）。逾時後 `VaultHealth = Recovering`、`OperationState` 維持 `InDoubt`，回 `BackendUnavailable`。不得因逾時而推定 `Aborted`。 |
+| N3 | `InDoubt` 必須與 `operation_id`、`expected_anchor`、候選 `manifest_root` 一同持久化。重啟後若無此三元組即無法區分已提交與未提交，I07 的冪等回應將不可實現。 |
+| N4 | 每次恢復嘗試皆為唯讀且冪等，不產生第二次副作用（§3.2）。重試次數在時間上不設上限，但每次嘗試有界；此為迴圈的活性條件，與 I10 的有界回錯一致。 |
+| N5 | `Quarantined` **凍結** `InDoubt`，不解決它。未知 root 或 `vault_birth` 不匹配時進入 `Quarantined`，該 operation 既非 `Published` 亦非 `Aborted`。將其回報為 `Aborted` 會在它實際已提交時同時違反 I02 與 I07。對呼叫端的正確回答是「不可確認」，並保留三元組待後端恢復。 |
+| N6 | `InDoubt` 不是 key 狀態（§2.1）。其存在不改變任何 `SlotState`；T2 依自身 `SlotState` 判定，不因有未決 operation 而讓 `DestroyedStrict` 回到可讀。 |
+
+上述 N1–N6 與 T1–T3 為 G0-SM 的 oracle 來源：負向模型必須在違反任一格時失敗。B1 的軟體部分需在 `validation/capsule-g0` 補上對應轉移後才可關閉。
 
 ## 3. 硬體／Authority 的候選提交與恢復協定
 
