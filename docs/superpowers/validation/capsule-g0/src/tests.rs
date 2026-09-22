@@ -397,7 +397,10 @@ fn strict_publish_refuses_while_quarantined() {
 
     assert_eq!(model.publish(&prepared), Err(Refusal::Quarantined));
     assert_eq!(model.pointer, pointer_after_swap);
-    assert_ne!(model.pointer, prepared.root, "pointer must not name a missing manifest");
+    assert_ne!(
+        model.pointer, prepared.root,
+        "pointer must not name a missing manifest"
+    );
 }
 
 /// §7 / N5 caveat: flush does not move the anchor, and current() digest-verifies
@@ -417,7 +420,11 @@ fn strict_flush_of_anchored_manifest_recovers_quarantine() {
     assert_eq!(model.readable("B"), Err(Refusal::Quarantined));
 
     model.flush(&prepared);
-    assert_eq!(model.anchor(), prepared.root, "flush must not move the anchor");
+    assert_eq!(
+        model.anchor(),
+        prepared.root,
+        "flush must not move the anchor"
+    );
     assert_eq!(model.readable("B"), Ok(true));
 }
 
@@ -527,7 +534,11 @@ fn strict_flush_while_unreachable_writes_but_does_not_decide_health() {
     model.set_anchor_reachable(false);
 
     model.flush(&prepared);
-    assert_eq!(model.anchor(), prepared.root, "flush must not move the anchor");
+    assert_eq!(
+        model.anchor(),
+        prepared.root,
+        "flush must not move the anchor"
+    );
     assert_eq!(model.health(), VaultHealth::Recovering);
     assert_eq!(model.readable("B"), Err(Refusal::BackendUnavailable));
 
@@ -551,4 +562,71 @@ fn envelope_schema_is_fixed_identifier_bound_into_digest() {
         other.schema = "capsule-envelope-prod-v1".to_owned();
         assert_ne!(snapshot_digest(&other), snapshot_digest(snapshot));
     }
+}
+
+const FOREIGN_SCHEMA: &str = "capsule-envelope-prod-v1";
+
+/// §5 answer 3 + state_space (Unsupported, Readable) => ManagedOnly: a
+/// verified manifest under a schema outside SUPPORTED_SCHEMAS is Unsupported
+/// in both profiles — not Ready, and not Quarantined (nothing was tampered).
+#[test]
+fn foreign_schema_is_unsupported_not_quarantined() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        let model = Model::with_schema(profile, FOREIGN_SCHEMA);
+        assert_eq!(model.health(), VaultHealth::Unsupported, "{profile:?}");
+    }
+}
+
+/// I09 / §43: Strict never silently degrades — reading an Unsupported vault
+/// answers UnsupportedGuarantee, and so does starting a write.
+#[test]
+fn strict_unsupported_refuses_with_unsupported_guarantee() {
+    let model = Model::with_schema(Profile::Strict, FOREIGN_SCHEMA);
+    assert_eq!(model.readable("A"), Err(Refusal::UnsupportedGuarantee));
+    assert_eq!(
+        model
+            .prepare("c1", Action::Capture, "A", &[], false)
+            .map(|_| ()),
+        Err(Refusal::UnsupportedGuarantee)
+    );
+}
+
+/// §88 「Managed 讀取不受影響」: the Managed read path survives Unsupported.
+#[test]
+fn managed_unsupported_still_reads() {
+    let model = Model::with_schema(Profile::Managed, FOREIGN_SCHEMA);
+    assert_eq!(model.health(), VaultHealth::Unsupported);
+    assert_eq!(model.readable("A"), Ok(false));
+}
+
+/// Derivation order: reachable → verified → supported. An unverified
+/// manifest's schema field cannot be trusted, so a foreign-schema vault whose
+/// disk no longer matches the anchor is Quarantined; unreachable beats both.
+#[test]
+fn strict_schema_check_runs_only_after_digest_and_reachability() {
+    let mut model = Model::with_schema(Profile::Strict, FOREIGN_SCHEMA);
+    // A disk from a supported-schema vault lacks the anchored (foreign)
+    // manifest, so nothing under the anchor verifies.
+    model.restore_disk(&Model::new(Profile::Strict).export_disk());
+    assert_eq!(model.health(), VaultHealth::Quarantined);
+    model.set_anchor_reachable(false);
+    assert_eq!(model.health(), VaultHealth::Recovering);
+}
+
+/// state_space (Unsupported, commit) => ManagedOnly: Managed may still write
+/// to an Unsupported vault. The write carries the vault's schema forward —
+/// it never silently migrates it — so health stays Unsupported afterwards.
+#[test]
+fn managed_unsupported_writes_without_migrating_schema() {
+    let mut model = Model::with_schema(Profile::Managed, FOREIGN_SCHEMA);
+    let prepared = model
+        .prepare("c1", Action::Capture, "A", &[], false)
+        .expect("Managed prepares on Unsupported");
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Ok(()));
+    assert_eq!(model.publish(&prepared), Ok(()));
+    assert_eq!(model.readable("A"), Ok(true));
+    assert_eq!(model.health(), VaultHealth::Unsupported);
+    let snapshot = model.anchored_snapshot().expect("still verifies");
+    assert_eq!(snapshot.schema, FOREIGN_SCHEMA);
 }

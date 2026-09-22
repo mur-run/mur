@@ -122,8 +122,16 @@ pub struct Model {
 impl Model {
     #[must_use]
     pub fn new(profile: Profile) -> Self {
+        Self::with_schema(profile, ENVELOPE_SCHEMA)
+    }
+
+    /// Test hook (§5 answer 3): a vault whose manifests were written by a
+    /// build under `schema`. `health()` derives `Unsupported` when `schema`
+    /// is outside `SUPPORTED_SCHEMAS`.
+    #[must_use]
+    pub fn with_schema(profile: Profile, schema: &str) -> Self {
         let initial = Snapshot {
-            schema: ENVELOPE_SCHEMA.to_owned(),
+            schema: schema.to_owned(),
             epoch: 0,
             slots: BTreeMap::new(),
             receipts: BTreeMap::new(),
@@ -166,28 +174,36 @@ impl Model {
         if !self.anchor_reachable {
             return VaultHealth::Recovering;
         }
+        // Schema is read only from a verified manifest: an unverified
+        // manifest's schema field cannot be trusted (Quarantined wins).
         match self.anchored_snapshot() {
-            Some(_) => VaultHealth::Ready,
             None => VaultHealth::Quarantined,
+            Some(s) if SUPPORTED_SCHEMAS.contains(&s.schema.as_str()) => VaultHealth::Ready,
+            Some(_) => VaultHealth::Unsupported,
         }
     }
 
     fn current(&self) -> Result<Snapshot, Refusal> {
         match self.health() {
-            VaultHealth::Ready => Ok(self
-                .anchored_snapshot()
-                .expect("Ready implies a verified anchored manifest")
-                .clone()),
+            VaultHealth::Ready => Ok(self.verified_snapshot()),
             VaultHealth::Quarantined => Err(Refusal::Quarantined),
             // N2 / C14: backend gone is "cannot confirm", never Aborted.
             // Prepared ops are left untouched and stay in doubt.
             VaultHealth::Recovering => Err(Refusal::BackendUnavailable),
-            // Not derivable yet: waits for the c slice's schema identifier
-            // (§5 answer 3). Its refusal mapping is decided then.
-            VaultHealth::Unsupported => {
-                unreachable!("health() does not derive {:?} yet", self.health())
-            }
+            // §5 answer 3 / I09 / §43: Strict never silently degrades.
+            // Managed keeps reading and writing (state_space ManagedOnly);
+            // writes carry the snapshot's schema forward, never migrate it.
+            VaultHealth::Unsupported => match self.profile {
+                Profile::Strict => Err(Refusal::UnsupportedGuarantee),
+                Profile::Managed => Ok(self.verified_snapshot()),
+            },
         }
+    }
+
+    fn verified_snapshot(&self) -> Snapshot {
+        self.anchored_snapshot()
+            .expect("Ready/Unsupported imply a verified anchored manifest")
+            .clone()
     }
 
     pub fn readable(&self, key: &str) -> Result<bool, Refusal> {
