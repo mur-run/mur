@@ -206,3 +206,15 @@ All other parameters (body_digest, content addressing, closure verification) are
 | Hash truncation | NIST SP 800-107 | Truncation impacts collision resistance; for SHA-256, full 256 bits → 2^128 collision cost |
 
 ---
+
+## MUR 裁決（2026-09-22，本檔落地後補記）
+
+評審者受「僅網路研究、不得讀本地檔案」約束，故部分發現是由第一原理推得，而非對照契約正文。逐點核對後的處置如下。
+
+| 發現 | 處置 | 依據 |
+|---|---|---|
+| CRITICAL — epoch rewrap 下 HKDF `(salt, info)` 重用 | **採納並已修訂** | §3.1 要求 epoch advance 重包所有存活 slot guard，但 `capsule_salt`／`Header0`／`slot_guard` 都不重新產生，兩次 rewrap 會導出相同子金鑰。§4.1 兩條 HKDF info 已各自加入 `epoch`；解鎖端本就從 manifest 取得，不需新增儲存或改動 wire 結構 |
+| #2、#4 | **不列為缺口** | 契約正文已有答案，評審者因不得讀本地檔而重推。非評審者之誤，屬送審條件所致 |
+| #1、#3、#5、#6 | **待裁決** | 尚未處置 |
+
+送審方法的修正：後續密碼學評審應附契約唯讀快照，或明列「契約已答、不需重答」的條目，否則會重複出現「評審花時間猜、我方花時間駁」的循環。

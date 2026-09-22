@@ -12,8 +12,8 @@
 
 | Review ID | 缺口核對結果 | 本文件契約 | 驗收 ID | 目前結論 |
 |---|---|---|---|---|
-| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3、§2.4 | G0-SM、G0-CRASH、G0-HW | 交互表與 InDoubt 嵌套規則已定（§2.4），B1-Q1 已裁決增設 `VaultQuarantined`；`validation/capsule-g0/src/state_space.rs` 已覆蓋 T1–T3／R-READ／N1–N6 與 6 個負向控制（47 tests pass）；G0-SM 全 bounds 探索與硬體仍未驗證 |
-| B2 | 原 §6.1 未指定 envelope／閉包／記憶體 | §4 | G0-CRYPTO、G0-MEM | §4 結構與 AAD 拓撲已凍結、參數開放；密碼學評審已送出，待回 |
+| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3、§2.4 | G0-SM、G0-CRASH、G0-HW | 交互表與 InDoubt 嵌套規則已定（§2.4），B1-Q1 已裁決增設 `VaultQuarantined`；`validation/capsule-g0/src/state_space.rs` 已覆蓋 T1–T3／R-READ／N1–N6 與 6 個負向控制（47 tests pass，evidence level `abstract_smoke`）；G0-SM 仍為 `incomplete`，全 bounds 探索與硬體未驗證，B1 未關閉 |
+| B2 | 原 §6.1 未指定 envelope／閉包／記憶體 | §4 | G0-CRYPTO、G0-MEM | §4 結構與 AAD 拓撲已凍結、參數開放；評審已回，CRITICAL（epoch rewrap 下 HKDF `(salt, info)` 重用）已由 §4.1 綁入 `epoch` 修正；#2、#4 經核對契約已有答案、不列缺口；#1、#3、#5、#6 待裁決 |
 | B3 | 原 token 未定義簽發與失效 | §5 | G0-EXPOSURE | 契約與向量已指定，尚未執行 |
 | B4 | 原發現步驟隱含目錄與水位洩漏 | §7 | G0-DISCOVERY | 明示可見性與接受的洩漏 |
 | B5 | 原批准未定義可兌現 View | §6 | G0-MATERIALIZE | 以 broker-owned View 解決 process 所有權歧義 |
@@ -212,10 +212,11 @@ Capsule = {header: Header0, body_nonce, body_ciphertext,
 - `key_id`、`slot_guard`、`payload_DEK`、`capsule_salt` 各為獨立 CSPRNG 256-bit 值；DEK 只加密這顆 payload，slot_guard 只保護它的最後一層 DEK envelope。
 - 候選 primitives：AES-256-GCM（96-bit nonce、128-bit tag）、HKDF-SHA-256、SHA-256。每個新 payload DEK 只加密一次；包裝子金鑰按 vault／child／source／layer／purpose 域分離。重試重用已產生密文，不在相同子金鑰下重新產生另一份內容。
 - Body AAD 為 `encode(["capsule/body/g0/v1", Header0])`。先產生包含 tag 的 body_ciphertext，再算 `body_digest = SHA256(encode([body_nonce, body_ciphertext]))`；避免 body AAD 含自身密文 digest 的循環。
-- source layer key 為 `HKDF(source_DEK, salt=capsule_salt, info=encode(["capsule/source-wrap/g0/v1", Header0, source_key_id, layer_index]), L=32)`。
-- 各層 AAD 為 `encode(["capsule/wrap/g0/v1", Header0, body_digest, layer_index, source_key_id_or_guard])`；最外層 guard key 為 `HKDF(slot_guard, salt=capsule_salt, info=encode(["capsule/guard-wrap/g0/v1", Header0]), L=32)`；guard 的 layer_index 等於來源數量，source_key_id_or_guard 為文字 `"guard"`，與 bytes 型來源 key_id 分離。
+- source layer key 為 `HKDF(source_DEK, salt=capsule_salt, info=encode(["capsule/source-wrap/g0/v1", Header0, source_key_id, layer_index, epoch]), L=32)`。
+- 各層 AAD 為 `encode(["capsule/wrap/g0/v1", Header0, body_digest, layer_index, source_key_id_or_guard])`；最外層 guard key 為 `HKDF(slot_guard, salt=capsule_salt, info=encode(["capsule/guard-wrap/g0/v1", Header0, epoch]), L=32)`；guard 的 layer_index 等於來源數量，source_key_id_or_guard 為文字 `"guard"`，與 bytes 型來源 key_id 分離。
 - 直接來源按 key_id 的 unsigned bytes 升冪排列、拒絕重複。來源層 layer_index 從 0 起。第一層加密 payload_DEK，後續層加密前一層完整的 `encode([nonce, ciphertext])`，最後包 guard 層；解鎖逆序。wire 的 envelope_layers **只含最外 guard 層**，內層僅在上一層解密後可見，禁止同時暴露可繞過 guard 的平行內層副本。移除／重排／更換來源、nonce、body 或跨 capsule 移植都必須失敗。
 - Ciphertext content address 為 `SHA256(encode(Capsule))`，不把它自身放回 Header0。
+- **Epoch 綁定（B2-CRITICAL 裁決）。** 兩條 HKDF info 都含 `epoch`，因為 §3.1 的 epoch advance 要求重新包裝所有存活 slot guard，而 `capsule_salt`、`Header0` 與 `slot_guard` 在 rewrap 中都不重新產生。少了 `epoch`，同一顆 capsule 每次 rewrap 都會以相同 `(key, salt, info)` 導出相同包裝子金鑰，「新 epoch 即新 wrapping domain」的宣稱便不成立。解鎖端本就從 manifest 取得 `epoch`，不需新增儲存或改動 wire 結構；此修訂只動本節「凍結範圍界定」明示開放的 HKDF info 字串內容，不破壞凍結。
 
 這是供審核的候選結構；最終 integer field ID 表、二進位測試向量與 parser 尚待 G0-CRYPTO 交付，不是引用標準就自動安全。密碼學 reviewer 必須評估組合、nonce 策略、chosen-ciphertext、domain separation、context binding、快取與備份旁路，簽核報告及 vectors 後才可凍結格式。[CBOR](https://www.rfc-editor.org/rfc/rfc8949)、[HKDF](https://www.rfc-editor.org/rfc/rfc5869)、[GCM](https://csrc.nist.gov/pubs/sp/800/38/d/final)
 
@@ -396,3 +397,5 @@ MemoryProposalV2 = {
 所有保留不變項映射到 G0 conformance：不可變 capsule／完整提交（I02/I03）、來源追蹤（I05/I08）、三態 declaration（E13/E14）、禁止自動 materialize（M14）、L2 無 undo／escrow（I04）、無未授權發現（§7）、無永久反向 materialization lookup（sink inventory）、遷移 unknown 不猜成功（protocol fixture）。遷移本身不在 G0 實作範圍，fixture 不能當作遷移實作通過。
 
 G0 最終 report 必須同時列出 `abstract、software_prototype、cryptographic_review、physical_backend、adapter_contract` 的結果與未測範圍。失敗、未執行、未具備設備不能被合併為通過。G0-SM／HW／CRYPTO 未完成之前，R4–R10 機制及 G1 仍未批准。
+
+**Evidence 檔自述的 provenance。** `validation/capsule-g0` 早期版本的 `tests_run`／`failures`／`smoke_passed` 是寫死常數（`tests_run` 停在 15，實際已跑 47），已改為解析 libtest 的 `test result:` 行、由執行量測產生。該筆誤報方向為低報而非高報，其餘常數一律指向「未授權／未達成」，因此不影響既有結論；記於此是因為 evidence 檔的更正必須留痕，不能靜默修掉。
