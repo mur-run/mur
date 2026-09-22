@@ -86,6 +86,10 @@ pub enum Refusal {
     Quarantined,
     SourceUnavailable,
     Unavailable,
+    /// N2 / C14 — the anchor backend is temporarily unreachable
+    /// (`VaultHealth::Recovering`). Unlike `Quarantined`, this means
+    /// "try again later"; it never presumes `Aborted`.
+    BackendUnavailable,
     /// §43 — Strict answers an unsupported guarantee with this rather than
     /// silently serving the Managed-strength answer (I09).
     UnsupportedGuarantee,
@@ -99,6 +103,9 @@ pub struct Model {
     disk_root: Root,
     pointer: Root,
     session: u64,
+    /// §5 answer 2: whether the hardware anchor answers. Injected by tests;
+    /// independent of disk contents.
+    anchor_reachable: bool,
 }
 
 impl Model {
@@ -117,6 +124,7 @@ impl Model {
             disk_root: root,
             pointer: root,
             session: 0,
+            anchor_reachable: true,
         }
     }
 
@@ -138,7 +146,14 @@ impl Model {
     /// §5 answer 1: health is derived, never stored. This is the single
     /// derivation point; readable/prepare/advance/publish/restart all reach it
     /// through current(), so no call site can drift out of sync (§6).
+    ///
+    /// Order (§5 answer 2): reachability first. An unreachable anchor means
+    /// we cannot know what it commits to, so a disk mismatch cannot be
+    /// judged yet — that is Recovering (in-doubt, N2), not Quarantined.
     fn health(&self) -> VaultHealth {
+        if !self.anchor_reachable {
+            return VaultHealth::Recovering;
+        }
         match self.anchored_snapshot() {
             Some(_) => VaultHealth::Ready,
             None => VaultHealth::Quarantined,
@@ -152,11 +167,12 @@ impl Model {
                 .expect("Ready implies a verified anchored manifest")
                 .clone()),
             VaultHealth::Quarantined => Err(Refusal::Quarantined),
-            // Not derivable yet: Recovering needs the anchor-reachability
-            // input (§5 answer 2, next step); Unsupported waits for the c
-            // slice's schema identifier (§5 answer 3). Their refusal mapping
-            // is decided with those steps, not guessed here.
-            VaultHealth::Recovering | VaultHealth::Unsupported => {
+            // N2 / C14: backend gone is "cannot confirm", never Aborted.
+            // Prepared ops are left untouched and stay in doubt.
+            VaultHealth::Recovering => Err(Refusal::BackendUnavailable),
+            // Not derivable yet: waits for the c slice's schema identifier
+            // (§5 answer 3). Its refusal mapping is decided then.
+            VaultHealth::Unsupported => {
                 unreachable!("health() does not derive {:?} yet", self.health())
             }
         }
@@ -330,6 +346,12 @@ impl Model {
             pointer: self.pointer,
             disk_root: self.disk_root,
         }
+    }
+
+    /// Test hook (§5 answer 2): simulate the hardware anchor going away or
+    /// coming back. Read by `health()` before the digest check.
+    pub fn set_anchor_reachable(&mut self, reachable: bool) {
+        self.anchor_reachable = reachable;
     }
 
     pub fn restore_disk(&mut self, image: &DiskImage) {

@@ -459,3 +459,79 @@ fn health_is_derived_from_anchor_and_disk() {
     assert_eq!(model.health(), VaultHealth::Quarantined);
     assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
 }
+
+/// §5 answer 2 / C14: an unreachable anchor is Recovering and answers
+/// BackendUnavailable, not Quarantined; reachability returning restores Ready.
+#[test]
+fn strict_unreachable_anchor_is_recovering() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    model.set_anchor_reachable(false);
+    assert_eq!(model.health(), VaultHealth::Recovering);
+    assert_eq!(model.readable("A"), Err(Refusal::BackendUnavailable));
+    model.set_anchor_reachable(true);
+    assert_eq!(model.health(), VaultHealth::Ready);
+    assert_eq!(model.readable("A"), Ok(true));
+}
+
+/// N2: a timeout keeps the operation InDoubt — advance is refused with
+/// BackendUnavailable, and the same prepared op may still advance once the
+/// anchor answers again (it was never presumed Aborted).
+#[test]
+fn strict_recovering_keeps_prepared_op_in_doubt() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare while reachable");
+    model.flush(&prepared);
+    model.set_anchor_reachable(false);
+    assert_eq!(model.advance(&prepared), Err(Refusal::BackendUnavailable));
+    assert_eq!(model.readable("B"), Err(Refusal::BackendUnavailable));
+    model.set_anchor_reachable(true);
+    assert_eq!(model.advance(&prepared), Ok(()));
+    assert_eq!(model.publish(&prepared), Ok(()));
+    assert_eq!(model.readable("B"), Ok(true));
+}
+
+/// §5 answer 2 ordering: reachability is judged before the digest check —
+/// with the anchor unreachable there is nothing to compare the disk against,
+/// so a swapped disk still reads as Recovering, not Quarantined.
+#[test]
+fn strict_unreachable_takes_precedence_over_disk_mismatch() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    model.restore_disk(&old);
+    model.set_anchor_reachable(false);
+    assert_eq!(model.health(), VaultHealth::Recovering);
+    model.set_anchor_reachable(true);
+    assert_eq!(model.health(), VaultHealth::Quarantined);
+}
+
+/// §7 × §5 answer 2: flush has no health gate, so it still writes while the
+/// anchor is unreachable — but writing cannot decide health. Recovering holds
+/// until the anchor answers; only then is the (now repaired) disk judged.
+#[test]
+fn strict_flush_while_unreachable_writes_but_does_not_decide_health() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model.flush(&prepared);
+    model.advance(&prepared).expect("advance");
+    model.restore_disk(&old);
+    model.set_anchor_reachable(false);
+
+    model.flush(&prepared);
+    assert_eq!(model.anchor(), prepared.root, "flush must not move the anchor");
+    assert_eq!(model.health(), VaultHealth::Recovering);
+    assert_eq!(model.readable("B"), Err(Refusal::BackendUnavailable));
+
+    model.set_anchor_reachable(true);
+    assert_eq!(model.health(), VaultHealth::Ready);
+    assert_eq!(model.readable("B"), Ok(true));
+}
