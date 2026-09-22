@@ -56,7 +56,10 @@ fn t1_recovering_publishes_no_new_plaintext_and_judges_no_ancestor() {
     );
     // Judging an ancestor dead requires a confirmed manifest.
     assert_eq!(
-        t1(VaultHealth::Recovering, EffectiveRead::DependencyUnavailable),
+        t1(
+            VaultHealth::Recovering,
+            EffectiveRead::DependencyUnavailable
+        ),
         Legality::Forbidden
     );
     assert_eq!(
@@ -196,7 +199,10 @@ fn t3_quarantined_freezes_in_doubt_rather_than_resolving_it() {
         "Recovering is InDoubt's normal home"
     );
     assert_eq!(
-        t3(VaultHealth::Quarantined, OperationColumn::PublishedOrReplied),
+        t3(
+            VaultHealth::Quarantined,
+            OperationColumn::PublishedOrReplied
+        ),
         Legality::HistoricalOnly
     );
     assert_eq!(
@@ -496,7 +502,8 @@ fn n6_pending_operation_never_changes_a_slot_state() {
 }
 
 #[test]
-fn recovery_decides_published_or_aborted_when_the_anchor_answers() {    let rec = record();
+fn recovery_decides_published_or_aborted_when_the_anchor_answers() {
+    let rec = record();
     let published = recover_in_doubt(&rec, &[AnchorRead::Anchor(7)], true);
     assert_eq!(published.operation, OperationState::Published);
 

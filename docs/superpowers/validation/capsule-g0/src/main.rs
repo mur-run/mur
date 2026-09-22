@@ -27,6 +27,34 @@ fn usage() -> ! {
     std::process::exit(64);
 }
 
+/// Count the tests libtest actually ran, by summing every `test result:` line.
+///
+/// The report must not state a test count that nobody measured: a hard-coded
+/// number silently drifts every time a gate adds cases, and a report that
+/// misstates its own size is not evidence.
+fn count_tests_run(output: &str) -> Option<usize> {
+    let mut total = None;
+    for line in output.lines() {
+        let Some(rest) = line.trim().strip_prefix("test result:") else {
+            continue;
+        };
+        let Some(passed) = rest.split_whitespace().nth(1) else {
+            continue;
+        };
+        let Ok(passed) = passed.parse::<usize>() else {
+            continue;
+        };
+        let failed = rest
+            .split_whitespace()
+            .skip_while(|word| *word != "passed;")
+            .nth(1)
+            .and_then(|word| word.parse::<usize>().ok())
+            .unwrap_or(0);
+        total = Some(total.unwrap_or(0) + passed + failed);
+    }
+    total
+}
+
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let mut suite = None;
@@ -45,12 +73,26 @@ fn main() -> ExitCode {
     let report = report.unwrap_or_else(|| usage());
 
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-    let smoke_passed = Command::new("cargo")
+    let smoke = Command::new("cargo")
         .args(["test", "--manifest-path"])
         .arg(manifest)
         .args(["--lib", "--quiet"])
-        .status()
-        .is_ok_and(|status| status.success());
+        .output();
+    let (smoke_passed, tests_run) = match &smoke {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            print!("{text}");
+            (output.status.success(), count_tests_run(&text))
+        }
+        Err(error) => {
+            eprintln!("cannot run the library suite: {error}");
+            (false, None)
+        }
+    };
+    // A report that cannot measure its own suite must say so, not guess.
+    let tests_run = tests_run
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "null".to_owned());
 
     let gates = GATES
         .iter()
@@ -71,7 +113,7 @@ fn main() -> ExitCode {
             "  \"requested_suite\": \"{}\",\n",
             "  \"evidence_level\": \"abstract_smoke\",\n",
             "  \"environment\": {{\"os\": \"{}\", \"arch\": \"{}\"}},\n",
-            "  \"tests_run\": 15,\n",
+            "  \"tests_run\": {},\n",
             "  \"failures\": {},\n",
             "  \"smoke_passed\": {},\n",
             "  \"gates\": {{\n{}\n  }},\n",
@@ -90,6 +132,7 @@ fn main() -> ExitCode {
         suite,
         env::consts::OS,
         env::consts::ARCH,
+        tests_run,
         usize::from(!smoke_passed),
         smoke_passed,
         gates
@@ -111,5 +154,33 @@ fn main() -> ExitCode {
         ExitCode::from(2)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_tests_run;
+
+    #[test]
+    fn counts_every_libtest_result_line() {
+        let output = concat!(
+            "running 47 tests\n",
+            "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        );
+        assert_eq!(count_tests_run(output), Some(47));
+    }
+
+    #[test]
+    fn sums_multiple_suites_and_counts_failures() {
+        let output = concat!(
+            "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n",
+            "test result: FAILED. 30 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        );
+        assert_eq!(count_tests_run(output), Some(47));
+    }
+
+    #[test]
+    fn absent_result_line_yields_no_count_rather_than_zero() {
+        assert_eq!(count_tests_run("error: could not compile\n"), None);
     }
 }

@@ -273,11 +273,7 @@ impl ReadAttempt {
     /// Transitive required ancestors, cycle-safe.
     fn required_ancestors(&self) -> Vec<String> {
         let mut seen = BTreeSet::new();
-        let mut stack: Vec<String> = self
-            .ancestors
-            .get(&self.slot)
-            .cloned()
-            .unwrap_or_default();
+        let mut stack: Vec<String> = self.ancestors.get(&self.slot).cloned().unwrap_or_default();
         let mut out = Vec::new();
         while let Some(next) = stack.pop() {
             if !seen.insert(next.clone()) {
