@@ -182,7 +182,11 @@ pub fn run(names: &[String], resume: bool, auto: bool) -> Result<()> {
 /// and extension. The stem check mirrors `cli::murmur::is_murmur_invocation`,
 /// duplicated here because that module lives in the binary crate only and this
 /// pane-planning code compiles as part of the library crate.
-fn canonical_mur_exe(exe: PathBuf) -> PathBuf {
+///
+/// Shared with sibling slash commands that respawn the binary with a
+/// top-level subcommand (e.g. `/deep-research` → `<exe> deep-research …`),
+/// which hit the same double-dispatch under the `murmur` alias.
+pub(super) fn canonical_mur_exe(exe: PathBuf) -> PathBuf {
     let is_murmur = exe
         .file_stem()
         .is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case("murmur"));
