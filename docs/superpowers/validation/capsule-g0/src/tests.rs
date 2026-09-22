@@ -327,8 +327,10 @@ fn strict_refuses_inflight_preparation_after_disk_rollback() {
         .expect("erase");
     model.restore_disk(&old);
     model.flush(&prepared);
-    assert_eq!(model.advance(&prepared), Err(Refusal::CommitConflict));
-    assert_eq!(model.publish(&prepared), Err(Refusal::NotCommitted));
+    // Quarantined, not CommitConflict/NotCommitted: those imply "retry",
+    // which t1_quarantined_never_implies_try_again_later forbids (§6).
+    assert_eq!(model.advance(&prepared), Err(Refusal::Quarantined));
+    assert_eq!(model.publish(&prepared), Err(Refusal::Quarantined));
     assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
 }
 
@@ -354,4 +356,46 @@ fn managed_inflight_preparation_after_disk_rollback_stays_within_declared_limit(
     assert_eq!(model.anchor(), prepared.root);
     assert_eq!(model.readable("A"), Ok(true));
     assert_eq!(model.readable("B"), Ok(true));
+}
+
+/// §6 regression: in Strict the hardware anchor does not roll back with the
+/// disk, so a root-equality check alone let a pre-swap prepared op advance
+/// and silently lift quarantine (violates state_space.rs:250, N5, I10).
+#[test]
+fn strict_advance_refuses_while_quarantined() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    let prepared = model
+        .prepare("c3", Action::Capture, "C", &[], false)
+        .expect("prepare before swap");
+    model.restore_disk(&old);
+    assert_eq!(model.current().map(|_| ()), Err(Refusal::Quarantined));
+
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Err(Refusal::Quarantined));
+    assert_eq!(model.current().map(|_| ()), Err(Refusal::Quarantined));
+    assert_eq!(model.readable("C"), Err(Refusal::Quarantined));
+}
+
+/// §6 regression: publish must not move the pointer onto a root whose
+/// manifest is gone from disk (violates I02).
+#[test]
+fn strict_publish_refuses_while_quarantined() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model.flush(&prepared);
+    model.advance(&prepared).expect("advance before swap");
+    model.restore_disk(&old);
+    let pointer_after_swap = model.pointer;
+    assert_eq!(model.current().map(|_| ()), Err(Refusal::Quarantined));
+
+    assert_eq!(model.publish(&prepared), Err(Refusal::Quarantined));
+    assert_eq!(model.pointer, pointer_after_swap);
+    assert_ne!(model.pointer, prepared.root, "pointer must not name a missing manifest");
 }

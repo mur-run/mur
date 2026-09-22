@@ -251,6 +251,9 @@ impl Model {
     }
 
     pub fn advance(&mut self, prepared: &Prepared) -> Result<(), Refusal> {
+        // Health gate first: in Strict the anchor survives a disk rollback, so
+        // root equality alone would let a write lift quarantine (§6, N5, I10).
+        self.current()?;
         if prepared.session != self.session {
             return Err(Refusal::ExpiredPreparation);
         }
@@ -272,6 +275,8 @@ impl Model {
     }
 
     pub fn publish(&mut self, prepared: &Prepared) -> Result<(), Refusal> {
+        // Never point readers at a root whose manifest is gone (§6, I02).
+        self.current()?;
         if self.anchor() != prepared.root {
             return Err(Refusal::NotCommitted);
         }

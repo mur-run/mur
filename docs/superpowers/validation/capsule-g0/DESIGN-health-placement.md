@@ -138,7 +138,7 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
 2. `Recovering` 的判準是什麼？沒有判準就不該保留這個 health 態，或該承認 G0 不模擬它。
 3. c 的 `schema_version` 形狀（單一 u64？範圍？），因為 a3 依賴它。
 
-## 6. §2 判讀結果（實證，探針已撤）
+## 6. §2 判讀結果（實證，探針已撤；已修）
 
 判定：**`advance` / `publish` 是漏洞，不是刻意設計。`restore_disk` 是刻意的故障注入工具，不算漏洞。**
 
@@ -153,4 +153,9 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
 - publish：只比對 `anchor() == prepared.root`，所以把 pointer 發佈到一個不存在的 manifest。這條違反 I02（receipt 對應的線性化點不可解釋）。
 - restore_disk / export_disk / flush：呼叫方全在 `src/tests.rs`，它們是在模擬磁碟這一側，不是產品操作。「它們不經過 current()」是對的。
 
-修法方向（未動工，要等 health 的擺法定稿）：advance 與 publish 開頭都呼叫同一個 health 推導 —— `current()?` 或它的後繼函式。這樣「health 是推導出來的」就多了一個理由：兩個呼叫點必須與 readable/prepare 共用同一個判定。
+狀態：**修正已套用**（與本段更新在同一個 commit；commit 不能寫入自己的 hash，請以 `git log -- DESIGN-health-placement.md` 查）。
+
+- `advance` 與 `publish` 開頭都先 `self.current()?`，不等 health 的擺法定稿；定稿後只需換成後繼函式，行為不變。
+- 回歸測試（修正前兩條都是 `left: Ok(())`，紅燈已驗證）：`strict_advance_refuses_while_quarantined`、`strict_publish_refuses_while_quarantined`。
+- 舊測試更正：`strict_refuses_inflight_preparation_after_disk_rollback` 原本斷言 `CommitConflict` / `NotCommitted`，現在改成 `Quarantined`。舊的斷言本身就錯了：那兩種拒絕都暗示「可以重試」，違反 `t1_quarantined_never_implies_try_again_later`。這不是為了讓測試通過而放寬。
+- 對 §5 第一問的意義：`current()` 現在同時服務 readable、prepare、advance、publish 四個呼叫點，一處定義全處適用。這是「推導」派的實例，不只是抽象論據。
