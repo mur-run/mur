@@ -40,8 +40,19 @@ struct ReceiptRecord {
     epoch: u64,
 }
 
+/// Contract §203: the envelope schema is a fixed identifier, never a number,
+/// and must not be mixed with a future production v1.
+pub const ENVELOPE_SCHEMA: &str = "capsule-envelope-g0-v1";
+
+/// §5 answer 3: the schemas this build can guarantee. Membership is exact
+/// string equality — no ordering, no ranges. G0 supports exactly one.
+pub const SUPPORTED_SCHEMAS: &[&str] = &[ENVELOPE_SCHEMA];
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Snapshot {
+    /// Envelope schema the manifest was written under. Carried as data
+    /// because a manifest on disk may come from another build.
+    schema: String,
     epoch: u64,
     slots: BTreeMap<String, Slot>,
     receipts: BTreeMap<String, ReceiptRecord>,
@@ -112,6 +123,7 @@ impl Model {
     #[must_use]
     pub fn new(profile: Profile) -> Self {
         let initial = Snapshot {
+            schema: ENVELOPE_SCHEMA.to_owned(),
             epoch: 0,
             slots: BTreeMap::new(),
             receipts: BTreeMap::new(),
@@ -389,6 +401,9 @@ fn request_digest(action: Action, target: &str, sources: &[&str], approved: bool
 
 fn snapshot_digest(snapshot: &Snapshot) -> Root {
     let mut hash = Fnv1a::new();
+    // Bound into the digest: swapping the schema under a verified root must
+    // look like any other tampering.
+    hash.write_str(&snapshot.schema);
     hash.write_u64(snapshot.epoch);
     for (name, slot) in &snapshot.slots {
         hash.write_str(name);

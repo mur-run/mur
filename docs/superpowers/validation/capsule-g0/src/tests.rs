@@ -535,3 +535,20 @@ fn strict_flush_while_unreachable_writes_but_does_not_decide_health() {
     assert_eq!(model.health(), VaultHealth::Ready);
     assert_eq!(model.readable("B"), Ok(true));
 }
+
+/// c slice (contract §203, §5 answer 3): the envelope schema is the fixed
+/// identifier, the supported set is exactly that one, and it is bound into
+/// the manifest digest.
+#[test]
+fn envelope_schema_is_fixed_identifier_bound_into_digest() {
+    assert_eq!(ENVELOPE_SCHEMA, "capsule-envelope-g0-v1");
+    assert_eq!(SUPPORTED_SCHEMAS, &["capsule-envelope-g0-v1"]);
+    for profile in [Profile::Strict, Profile::Managed] {
+        let model = Model::new(profile);
+        let snapshot = model.anchored_snapshot().expect("fresh vault verifies");
+        assert_eq!(snapshot.schema, ENVELOPE_SCHEMA);
+        let mut other = snapshot.clone();
+        other.schema = "capsule-envelope-prod-v1".to_owned();
+        assert_ne!(snapshot_digest(&other), snapshot_digest(snapshot));
+    }
+}
