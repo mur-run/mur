@@ -245,6 +245,10 @@ impl Model {
         })
     }
 
+    // No health gate, deliberately: flush never moves the anchor, and current()
+    // digest-verifies whatever sits at the anchor root. Rewriting the anchored
+    // manifest is content-addressed recovery (I10, N5 caveat); any other root
+    // leaves quarantine in place (DESIGN-health-placement.md §7).
     pub fn flush(&mut self, prepared: &Prepared) {
         self.manifests
             .insert(prepared.root, prepared.snapshot.clone());

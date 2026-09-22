@@ -399,3 +399,46 @@ fn strict_publish_refuses_while_quarantined() {
     assert_eq!(model.pointer, pointer_after_swap);
     assert_ne!(model.pointer, prepared.root, "pointer must not name a missing manifest");
 }
+
+/// §7 / N5 caveat: flush does not move the anchor, and current() digest-verifies
+/// the anchored manifest, so writing that exact manifest back is
+/// content-addressed recovery (I10), not a quarantine bypass.
+#[test]
+fn strict_flush_of_anchored_manifest_recovers_quarantine() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model.flush(&prepared);
+    model.advance(&prepared).expect("advance");
+    model.restore_disk(&old);
+    assert_eq!(model.readable("B"), Err(Refusal::Quarantined));
+
+    model.flush(&prepared);
+    assert_eq!(model.anchor(), prepared.root, "flush must not move the anchor");
+    assert_eq!(model.readable("B"), Ok(true));
+}
+
+/// §7 / N5 caveat, other half: flushing a manifest for any root other than
+/// the anchored one must leave quarantine in place.
+#[test]
+fn strict_flush_of_other_root_does_not_lift_quarantine() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    let anchored = model.anchor();
+    let other = model
+        .prepare("c3", Action::Capture, "C", &[], false)
+        .expect("prepare");
+    model.restore_disk(&old);
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+
+    model.flush(&other);
+    assert_ne!(other.root, anchored);
+    assert_eq!(model.anchor(), anchored);
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+    assert_eq!(model.readable("C"), Err(Refusal::Quarantined));
+}

@@ -68,6 +68,7 @@ fn current(&self) -> Result<Snapshot, Refusal> {
 
 實證，`self.current()` 的呼叫方只有三個：`readable`（:159）、`prepare`（:170）、
 `restart`（:284）。`flush` / `advance` / `publish` / `export_disk` / `restore_disk` 都不呼叫。
+（以上是撰寫當時的狀態。§6 修正後 `advance` / `publish` 已先呼叫 `current()`；`flush` 刻意不呼叫，理由見 §7。）
 
 逐個判讀：
 
@@ -151,7 +152,8 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
 
 - advance：`anchor() == prepared.base` 只比對 root，不檢查 manifest 在不在。硬體 anchor 沒被回滾，所以比對通過。違反表格 t3 `(Quarantined, CanCreateAccepted) => Forbidden` 與 N5（Quarantined 凍結，不解決）。也違反 I10：這不是收斂，是被覆寫。
 - publish：只比對 `anchor() == prepared.root`，所以把 pointer 發佈到一個不存在的 manifest。這條違反 I02（receipt 對應的線性化點不可解釋）。
-- restore_disk / export_disk / flush：呼叫方全在 `src/tests.rs`，它們是在模擬磁碟這一側，不是產品操作。「它們不經過 current()」是對的。
+- restore_disk / export_disk：呼叫方全在 `src/tests.rs`，它們是在模擬磁碟這一側，不是產品操作。「它們不經過 current()」是對的。
+- flush：**更正**——原本把它和上面兩個歸成磁碟模擬器是錯的。flush 是提交流程的一步（prepare → flush → advance → publish）。它不經過 current() 是刻意的，但理由不同，見 §7。
 
 狀態：**修正已套用**（與本段更新在同一個 commit；commit 不能寫入自己的 hash，請以 `git log -- DESIGN-health-placement.md` 查）。
 
@@ -159,3 +161,16 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
 - 回歸測試（修正前兩條都是 `left: Ok(())`，紅燈已驗證）：`strict_advance_refuses_while_quarantined`、`strict_publish_refuses_while_quarantined`。
 - 舊測試更正：`strict_refuses_inflight_preparation_after_disk_rollback` 原本斷言 `CommitConflict` / `NotCommitted`，現在改成 `Quarantined`。舊的斷言本身就錯了：那兩種拒絕都暗示「可以重試」，違反 `t1_quarantined_never_implies_try_again_later`。這不是為了讓測試通過而放寬。
 - 對 §5 第一問的意義：`current()` 現在同時服務 readable、prepare、advance、publish 四個呼叫點，一處定義全處適用。這是「推導」派的實例，不只是抽象論據。
+
+## 7. flush 在 Quarantined 下：內容定址恢復，不是繞道
+
+探針（已撤）：Strict，advance 到 `p.root` 後用 `restore_disk(old)` 讓該 manifest 消失，`readable("B") == Err(Quarantined)`；再 `flush(&p)`，得到 `readable(B) = Ok(true)`。
+
+判定：**合法恢復**，flush 不加健康檢查。
+
+- 與 advance 不同類：advance 把 anchor 移到**新** root，是覆寫 quarantine；flush 不動 anchor，只寫回 anchor 早已承諾的那份內容。
+- `current()` 驗 `snapshot_digest(snapshot) != root`（`src/lib.rs:131`）。寫回的內容 digest 不符，照樣是 `Quarantined`；只有 digest 恰等於 anchor root 才恢復。這就是 I10 允許的「收斂回同一個 root」。
+- N5 已補但書（`specs/2026-09-22-capsule-g0-contracts.md` N5 列）：恢復的是證據，不是裁決；寫回其他 root 不解除 quarantine。
+- 邊界由兩條測試鎖住：`strict_flush_of_anchored_manifest_recovers_quarantine`（合法恢復）、`strict_flush_of_other_root_does_not_lift_quarantine`（但書的另一半）。
+
+對 §5 第一問：共用同一判定的呼叫點確定是五個——readable、prepare、advance、publish、restart。flush 刻意不在其中，它的安全性來自 digest 驗證，而不是健康閘門。
