@@ -375,5 +375,8 @@ impl Fnv1a {
     }
 }
 
+/// Contracts §2.4 (B1): the four state spaces and their interaction legality.
+pub mod state_space;
+
 #[cfg(test)]
 mod tests;

@@ -12,7 +12,7 @@
 
 | Review ID | 缺口核對結果 | 本文件契約 | 驗收 ID | 目前結論 |
 |---|---|---|---|---|
-| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3、§2.4 | G0-SM、G0-CRASH、G0-HW | 交互表與 InDoubt 嵌套規則已定（§2.4），B1-Q1 已裁決增設 `VaultQuarantined`；`validation/capsule-g0` 的轉移覆蓋與硬體仍未驗證 |
+| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3、§2.4 | G0-SM、G0-CRASH、G0-HW | 交互表與 InDoubt 嵌套規則已定（§2.4），B1-Q1 已裁決增設 `VaultQuarantined`；`validation/capsule-g0/src/state_space.rs` 已覆蓋 T1–T3／R-READ／N1–N6 與 6 個負向控制（47 tests pass）；G0-SM 全 bounds 探索與硬體仍未驗證 |
 | B2 | 原 §6.1 未指定 envelope／閉包／記憶體 | §4 | G0-CRYPTO、G0-MEM | §4 結構與 AAD 拓撲已凍結、參數開放；密碼學評審已送出，待回 |
 | B3 | 原 token 未定義簽發與失效 | §5 | G0-EXPOSURE | 契約與向量已指定，尚未執行 |
 | B4 | 原發現步驟隱含目錄與水位洩漏 | §7 | G0-DISCOVERY | 明示可見性與接受的洩漏 |
@@ -130,7 +130,7 @@ R2 指出「判定 InDoubt 所需的 `read_anchor` 自身 InDoubt」的嵌套情
 | N5 | `Quarantined` **凍結** `InDoubt`，不解決它。未知 root 或 `vault_birth` 不匹配時進入 `Quarantined`，該 operation 既非 `Published` 亦非 `Aborted`。將其回報為 `Aborted` 會在它實際已提交時同時違反 I02 與 I07。對呼叫端的正確回答是「不可確認」，並保留三元組待後端恢復。 |
 | N6 | `InDoubt` 不是 key 狀態（§2.1）。其存在不改變任何 `SlotState`；T2 依自身 `SlotState` 判定，不因有未決 operation 而讓 `DestroyedStrict` 回到可讀。 |
 
-上述 N1–N6 與 T1–T3 為 G0-SM 的 oracle 來源：負向模型必須在違反任一格時失敗。B1 的軟體部分需在 `validation/capsule-g0` 補上對應轉移後才可關閉。
+上述 N1–N6 與 T1–T3 為 G0-SM 的 oracle 來源：負向模型必須在違反任一格時失敗。B1 的軟體部分已在 `validation/capsule-g0/src/state_space.rs` 補上對應轉移：T1／T2／T3 逐格轉錄、R-READ 實作其固定回報順序、N1–N6 各有對應測試，另有 6 個負向控制（授權順序倒置、Quarantined 偽裝成 `BackendUnavailable`、祖先原因掩蓋 `DestroyedStrict`、逾時推定 `Aborted`、Quarantined 解決 `InDoubt`，以及一個掃過所有可達輸入的全禁止格檢查）。`cargo test` 47 passed／0 failed、`cargo clippy --all-targets` 無警告。此為抽象模型層的關閉；G0-SM 要求的全 bounds 探索（最多 4 capsules、3 併發請求、每 history 12 transitions）尚未實作，故 G0-SM 仍為 `incomplete`。
 
 ## 3. 硬體／Authority 的候選提交與恢復協定
 
