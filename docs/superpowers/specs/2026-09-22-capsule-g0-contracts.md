@@ -12,8 +12,8 @@
 
 | Review ID | 缺口核對結果 | 本文件契約 | 驗收 ID | 目前結論 |
 |---|---|---|---|---|
-| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3、§2.4 | G0-SM、G0-CRASH、G0-HW | 交互表與 InDoubt 嵌套規則已補（§2.4，草案）；轉移覆蓋與硬體未驗證 |
-| B2 | 原 §6.1 未指定 envelope／閉包／記憶體 | §4 | G0-CRYPTO、G0-MEM | 候選格式待密碼學評審 |
+| B1 | 原 §6.3 沒有完整狀態轉移 | §2、§3、§2.4 | G0-SM、G0-CRASH、G0-HW | 交互表與 InDoubt 嵌套規則已定（§2.4），B1-Q1 已裁決增設 `VaultQuarantined`；`validation/capsule-g0` 的轉移覆蓋與硬體仍未驗證 |
+| B2 | 原 §6.1 未指定 envelope／閉包／記憶體 | §4 | G0-CRYPTO、G0-MEM | §4 結構與 AAD 拓撲已凍結、參數開放；密碼學評審已送出，待回 |
 | B3 | 原 token 未定義簽發與失效 | §5 | G0-EXPOSURE | 契約與向量已指定，尚未執行 |
 | B4 | 原發現步驟隱含目錄與水位洩漏 | §7 | G0-DISCOVERY | 明示可見性與接受的洩漏 |
 | B5 | 原批准未定義可兌現 View | §6 | G0-MATERIALIZE | 以 broker-owned View 解決 process 所有權歧義 |
@@ -30,6 +30,7 @@ R1、R5、R6 及 R7–R10 的「方向合理」不等於全部機制批准；R4 
 ```text
 SlotState       = Absent | Live | DestroyedStrict | ErasedManaged
 EffectiveRead   = Readable | DependencyUnavailable | Denied | BackendUnavailable
+                | VaultQuarantined
 OperationState  = Accepted | Prepared | DurablePrepared | Anchored | Published
                 | Replied | Aborted | InDoubt
 VaultHealth     = Ready | Recovering | Quarantined | Unsupported
@@ -73,18 +74,18 @@ Manifest = {epoch, parent_root, slots, policy_revision, births, terminals,
 
 G0 抽象操作的恢復最多走 3 個邏輯步驟：讀 anchor、驗證對應 manifest、修復 pointer／回終態。真實 I/O 不以步數冒充時間界線；原型每次後端呼叫 deadline 5 秒、恢復嘗試整體 30 秒，逾時回 BackendUnavailable。數值是 G0 測試參數，不是正式產品 SLO。
 
-### 2.4 四狀態空間的交互合法性（B1，草案）
+### 2.4 四狀態空間的交互合法性（B1）
 
 §2.1 平行列出四個狀態空間但未定義組合合法性。完整笛卡兒積為 4×4×8×4 = 512 格，逐格列舉不可審查；下列改以「成對合法性 ＋ 一條合成規則」表達，成對表為必要條件，合成規則為 `Readable` 的充分條件。四個空間的作用域不同：`VaultHealth` 為全域，`SlotState` 為每 slot，`EffectiveRead` 為每次讀取嘗試，`OperationState` 為每個 operation ID。
 
 **T1：VaultHealth × EffectiveRead**（已通過 discover 授權的讀取）
 
-| VaultHealth | Readable | DependencyUnavailable | Denied | BackendUnavailable |
-|---|---|---|---|---|
-| Ready | 合法 | 合法 | 合法 | 合法 |
-| Recovering | **禁止**（I01：狀態不可確認不得發布新明文） | **禁止**（判定祖先失效需已確認的 manifest） | 合法 | 合法（Recovering 期間的唯一非授權性答案） |
-| Quarantined | **禁止** | **禁止** | 合法（見 B1-Q1） | **禁止**（不得暗示「稍後會好」） |
-| Unsupported | 合法（Managed 讀取不受影響） | 合法 | 合法（要求 Strict 保證者） | 合法 |
+| VaultHealth | Readable | DependencyUnavailable | Denied | BackendUnavailable | VaultQuarantined |
+|---|---|---|---|---|---|
+| Ready | 合法 | 合法 | 合法 | 合法 | **禁止** |
+| Recovering | **禁止**（I01：狀態不可確認不得發布新明文） | **禁止**（判定祖先失效需已確認的 manifest） | 合法 | 合法（Recovering 期間的唯一非授權性答案） | **禁止**（Recovering 尚可恢復，不得宣告不可信） |
+| Quarantined | **禁止** | **禁止** | 合法（授權先於 VaultHealth，未通過 grant 者仍只見 `Denied`） | **禁止**（不得暗示「稍後會好」） | 合法（Quarantined 期間的唯一非授權性答案，見 B1-Q1 裁決） |
+| Unsupported | 合法（Managed 讀取不受影響） | 合法 | 合法（要求 Strict 保證者） | 合法 | **禁止** |
 
 **T2：SlotState × EffectiveRead**（前提 VaultHealth = Ready 且授權通過）
 
@@ -95,6 +96,8 @@ G0 抽象操作的恢復最多走 3 個邏輯步驟：讀 anchor、驗證對應 
 | DestroyedStrict | **禁止**（I04） | **禁止**（自身終態優先於祖先狀態，不得以祖先原因掩蓋） | 合法 | **禁止** |
 | ErasedManaged | **禁止** | **禁止** | 合法 | **禁止** |
 
+T2 省略 `VaultQuarantined` 欄：其前提為 `VaultHealth = Ready`，而 T1 在該列已將 `VaultQuarantined` 全面禁止，故每格皆為禁止，無資訊量。
+
 **T3：VaultHealth × OperationState**
 
 | VaultHealth | 可新建 Accepted／Prepared | DurablePrepared／Anchored | Published／Replied | Aborted | InDoubt |
@@ -104,9 +107,15 @@ G0 抽象操作的恢復最多走 3 個邏輯步驟：讀 anchor、驗證對應 
 | Quarantined | **禁止** | 僅為歷史記錄 | 僅為歷史記錄 | 合法 | 合法但**凍結**，見 N5 |
 | Unsupported | 僅 Managed | 僅 Managed | 僅 Managed | 合法 | 合法 |
 
-**合成規則 R-READ。** `EffectiveRead = Readable` 當且僅當同時滿足：`VaultHealth = Ready` ∧ 該 slot `SlotState = Live` ∧ 所有必要祖先 slot 皆 `Live` ∧ 授權 grant 有效 ∧ `H.manifest_root` 的 manifest 完整且 commitment 相符（§2.2）。五項缺一即非 `Readable`，且回報順序固定為：授權（§2.1 末項）→ VaultHealth → 自身 SlotState → 祖先 → 後端可用性。固定順序是為了讓錯誤碼不洩漏更高敏感度的資訊。
+**合成規則 R-READ。** `EffectiveRead = Readable` 當且僅當同時滿足：`VaultHealth = Ready` ∧ 該 slot `SlotState = Live` ∧ 所有必要祖先 slot 皆 `Live` ∧ 授權 grant 有效 ∧ `H.manifest_root` 的 manifest 完整且 commitment 相符（§2.2）。五項缺一即非 `Readable`，且回報順序固定為：授權（§2.1 末項）→ VaultHealth（`Quarantined` 回 `VaultQuarantined` 並停止後續判定）→ 自身 SlotState → 祖先 → 後端可用性。固定順序是為了讓錯誤碼不洩漏更高敏感度的資訊。
 
-**B1-Q1（待裁決）。** `EffectiveRead` 沒有表達「vault 已 Quarantined」的值，T1 只能回 `Denied`，這使「你沒有權限」與「此 vault 已不安全」共用同一個外部可見結果，與 §2.1 末項的授權分層意圖相衝。兩條出路：於 `EffectiveRead` 增設 `VaultQuarantined`，或明文記載此合併為蓄意設計並說明其不洩漏理由。此項不阻塞 B2。
+**B1-Q1（已裁決：增設 `VaultQuarantined`）。** 原議題為 `EffectiveRead` 無值可表達「vault 已 Quarantined」，T1 只能回 `Denied`，使「你沒有權限」與「此 vault 已不安全」共用同一外部可見結果。裁決增設 `VaultQuarantined`，理由有三：
+
+1. **重試語義不同。** `BackendUnavailable` 的契約允許呼叫方退避重試；`Quarantined` 表示狀態不可信、重試不會改變、需人工介入。兩者合併會讓呼叫方無限重試一個不會好的東西。
+2. **回報順序否則失效。** R-READ 的固定順序為「授權 → VaultHealth → 自身 SlotState → 祖先 → 後端可用性」。若 `VaultHealth = Quarantined` 時回 `BackendUnavailable`，等於在 VaultHealth 階段回一個屬於後端階段的值，順序即失去意義。增設後，第二階段明確回 `VaultQuarantined` 並停止後續判定，順序自洽。
+3. **與既有分項一致。** `EffectiveRead` 本身已把失敗理由分成 `DependencyUnavailable`／`Denied`／`BackendUnavailable` 三種不同處置，`Quarantined` 沒有理由是唯一被壓平進他人語義的一項。
+
+**不構成新洩漏。** §2.1 末項要求所有拒絕先遵守 discover 授權，故 `VaultQuarantined` 只在已通過 grant 的 session 中返回；未授權 caller 仍只見 `Denied`，攻擊面不變。
 
 #### 2.4.1 InDoubt 的嵌套恢復規則
 
