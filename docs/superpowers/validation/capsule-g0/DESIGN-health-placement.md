@@ -137,3 +137,20 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
    `restore_disk` 是對手模擬；探針顯示 Strict 守住、Managed 落在已宣告回滾上限內。health gate 只放讀取路徑。
 2. `Recovering` 的判準是什麼？沒有判準就不該保留這個 health 態，或該承認 G0 不模擬它。
 3. c 的 `schema_version` 形狀（單一 u64？範圍？），因為 a3 依賴它。
+
+## 6. §2 判讀結果（實證，探針已撤）
+
+判定：**`advance` / `publish` 是漏洞，不是刻意設計。`restore_disk` 是刻意的故障注入工具，不算漏洞。**
+
+探針：Strict、在 `restore_disk(old)` 之後，先斷言 `current() == Err(Quarantined)`，再往下操作：
+
+| 探針 | 結果 |
+|---|---|
+| advance：換盤造成 quarantine 後，flush + advance 一個換盤前就 prepare 好的操作 | `advance -> Ok(())`，接著 `current() -> Ok` —— quarantine 被**一筆寫入蓋掉並解除** |
+| publish：advance 之後、publish 之前換盤 | `publish -> Ok(())`；`pointer` 指向的 root 在磁碟上沒有 manifest |
+
+- advance：`anchor() == prepared.base` 只比對 root，不檢查 manifest 在不在。硬體 anchor 沒被回滾，所以比對通過。違反表格 t3 `(Quarantined, CanCreateAccepted) => Forbidden` 與 N5（Quarantined 凍結，不解決）。也違反 I10：這不是收斂，是被覆寫。
+- publish：只比對 `anchor() == prepared.root`，所以把 pointer 發佈到一個不存在的 manifest。這條違反 I02（receipt 對應的線性化點不可解釋）。
+- restore_disk / export_disk / flush：呼叫方全在 `src/tests.rs`，它們是在模擬磁碟這一側，不是產品操作。「它們不經過 current()」是對的。
+
+修法方向（未動工，要等 health 的擺法定稿）：advance 與 publish 開頭都呼叫同一個 health 推導 —— `current()?` 或它的後繼函式。這樣「health 是推導出來的」就多了一個理由：兩個呼叫點必須與 readable/prepare 共用同一個判定。
