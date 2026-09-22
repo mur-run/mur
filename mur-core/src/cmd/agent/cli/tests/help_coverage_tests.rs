@@ -39,6 +39,7 @@ fn help_name(cmd: &SlashCmd) -> Option<&'static str> {
         SlashCmd::Panel(_) => Some("panel"),
         SlashCmd::Open => Some("open"),
         SlashCmd::DeepResearch(_) => Some("deep-research"),
+        SlashCmd::Search(_) => Some("search"),
         SlashCmd::Monitor(_) => Some("monitor"),
         SlashCmd::Model(_) => Some("model"),
         SlashCmd::Effort { .. } => Some("effort"),

@@ -101,6 +101,14 @@ fn parses_panel() {
 }
 
 #[test]
+fn parses_search() {
+    assert_eq!(
+        parse_slash("/search birds --send"),
+        Some(SlashCmd::Search(vec!["birds".into(), "--send".into()]))
+    );
+}
+
+#[test]
 fn parses_deep_research() {
     assert_eq!(
         parse_slash("/deep-research"),
