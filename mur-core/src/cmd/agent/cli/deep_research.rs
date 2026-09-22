@@ -77,8 +77,12 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
         DeepResearchAction::Setup => unreachable!("handled above"),
     };
 
+    // `current_exe()` reports the `murmur` alias path when the chat was
+    // launched that way, and `murmur deep-research <q>` expands to
+    // `mur agent cli deep-research <q>` → "unknown agent(s): deep-research".
+    // Normalize to the sibling `mur` binary so the subcommand dispatches.
     let executable = match std::env::current_exe() {
-        Ok(path) => path,
+        Ok(path) => super::multiplex::canonical_mur_exe(path),
         Err(error) => {
             app.push_system(format!("could not locate mur executable: {error}"));
             return;
