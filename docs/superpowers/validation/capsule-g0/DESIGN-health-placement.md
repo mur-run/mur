@@ -1,6 +1,6 @@
 # 設計：VaultHealth 在 Model 裡的擺法（I09-a3 / b2 / c 共用）
 
-狀態：**§5 已落地**（`6fe7fa46` → `b06e6bc4`，見 §5 末「落地紀錄」）；以下為當時的設計原文。
+狀態：**§5 已落地**（`bf83403a` → `4709f789`，見 §5 末「落地紀錄」）；以下為當時的設計原文。
 原狀態：**設計中，未動工。** 三個切片（a3 `UnsupportedGuarantee` 建構點、b2 identity 輪替、
 c schema 版本）都卡在同一件事：契約談的維度，`Model` 沒有表示。先把擺法定下來再寫任何一條。
 
@@ -183,12 +183,12 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
 
 | 步驟 | commit | 內容 |
 |---|---|---|
-| 1. `health()` | `6fe7fa46` | `current()` 拆成 `anchored_snapshot()` / `health()` / `current()`；行為不變，既有測試全綠 |
-| 2. `Recovering` | `6f60b553` | `anchor_reachable: bool`（非上文的 `anchor_available`）+ `set_anchor_reachable()`；新變體 `Refusal::BackendUnavailable`（不沿用表示 slot 不存在的 `Unavailable`） |
-| c 切片 | `818123e5` | `ENVELOPE_SCHEMA = "capsule-envelope-g0-v1"`、`SUPPORTED_SCHEMAS`、`Model::with_schema()` |
-| 3. `Unsupported` | `cd524e44` | Strict → `UnsupportedGuarantee`；Managed 照讀照寫、不遷移 schema（`state_space` 的 `ManagedOnly`） |
-| 補測 | `ea2ad69c` | Strict 在 `Unsupported` 下 `advance` / `publish` 也被拒 |
-| 報告輸出 | `b06e6bc4` | `main.rs` 的 envelope 改輸出 `"schema_version": "capsule-envelope-g0-v1"`（讀 `ENVELOPE_SCHEMA`），不再是數字 `1`；抽出 `render_report()` 以便測試 |
+| 1. `health()` | `bf83403a` | `current()` 拆成 `anchored_snapshot()` / `health()` / `current()`；行為不變，既有測試全綠 |
+| 2. `Recovering` | `447643f0` | `anchor_reachable: bool`（非上文的 `anchor_available`）+ `set_anchor_reachable()`；新變體 `Refusal::BackendUnavailable`（不沿用表示 slot 不存在的 `Unavailable`） |
+| c 切片 | `b63a5b45` | `ENVELOPE_SCHEMA = "capsule-envelope-g0-v1"`、`SUPPORTED_SCHEMAS`、`Model::with_schema()` |
+| 3. `Unsupported` | `e871ecee` | Strict → `UnsupportedGuarantee`；Managed 照讀照寫、不遷移 schema（`state_space` 的 `ManagedOnly`） |
+| 補測 | `3e3e5dd9` | Strict 在 `Unsupported` 下 `advance` / `publish` 也被拒 |
+| 報告輸出 | `4709f789` | `main.rs` 的 envelope 改輸出 `"schema_version": "capsule-envelope-g0-v1"`（讀 `ENVELOPE_SCHEMA`），不再是數字 `1`；抽出 `render_report()` 以便測試 |
 
 `health()` 的最終推導順序：anchor 不可達 → `Recovering`；錨點 manifest 缺失或摘要不符 →
 `Quarantined`；schema 不在 `SUPPORTED_SCHEMAS` → `Unsupported`；否則 `Ready`。schema 只從
@@ -205,7 +205,7 @@ health gate 的擺法因此確定為：**只加在讀取路徑（`current()`）�
 未經紅燈的兩條：`strict_flush_while_unreachable_…` 與 `strict_unsupported_refuses_advance_and_publish`
 寫成時實作已有該行為，是回歸釘，不是驅動測試。
 
-**已收尾（`b06e6bc4`）：** 原本 `src/main.rs:112` 輸出的 envelope 是 `"schema_version": 1`（數字），
+**已收尾（`4709f789`）：** 原本 `src/main.rs:112` 輸出的 envelope 是 `"schema_version": 1`（數字），
 與合約 `:203` 及本節答 3 不符 —— c 切片只把識別字串帶進 `Model`，輸出端未對齊。現在報告與 `Model`
 讀同一個 `ENVELOPE_SCHEMA` 常數。**相容性注意：** `schema_version` 從整數變成字串；本 crate 內沒有讀取端，
 repo 其他地方未全面搜查。
