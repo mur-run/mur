@@ -589,3 +589,102 @@ mod replay_bound_tests {
         );
     }
 }
+
+/// Reported: the chooser open under a long final reply, and the reply's head
+/// hidden behind "↑ 5 more · PgUp". The cause was not the marker or the band
+/// height — it was `flush_finished` needing TWO calls to converge, because
+/// `protect_last` deferred the last settled message to the next call. The
+/// frame drawn in between is what the operator photographed.
+#[cfg(test)]
+mod chooser_overflow_tests {
+    use super::super::flush_finished;
+    use crate::cmd::agent::cli::app::{App, ChatMsg, RenderMode, Role};
+    use crate::cmd::agent::cli::complete::{Candidate, CompletionState};
+    use crate::cmd::agent::cli::ui::render;
+    use ratatui::backend::TestBackend;
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+
+    fn option(display: &str) -> Candidate {
+        Candidate {
+            display: display.into(),
+            insert: display.into(),
+            desc: String::new(),
+            has_children: false,
+        }
+    }
+
+    /// Many short earlier turns, one long final reply, a chooser, a short
+    /// viewport: every older message must go AND the protected reply must
+    /// spill too, all within the single call the frame is drawn after.
+    fn app_from_the_report() -> App {
+        let mut app = App::test_fixture();
+        app.render_mode = RenderMode::Inline;
+        for i in 1..=6 {
+            app.messages
+                .push(ChatMsg::for_test(Role::User, &format!("q{i}")));
+            app.messages.push(ChatMsg::for_test(
+                Role::Agent,
+                &format!("earlier answer {i}"),
+            ));
+        }
+        let long_last = (1..=15)
+            .map(|i| format!("final reply line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.messages
+            .push(ChatMsg::for_test(Role::User, "one more thing"));
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, &long_last));
+        app.completion = Some(CompletionState {
+            items: vec![option("A"), option("B"), option("C")],
+            selected: 0,
+            spaced: true,
+            current: None,
+        });
+        app
+    }
+
+    /// ONE call, then the draw — exactly the order `events.rs` uses. A second
+    /// call would have passed all along; that gap was the bug.
+    #[test]
+    fn a_single_flush_leaves_no_rows_hidden_behind_the_chooser() {
+        let mut app = app_from_the_report();
+        let mut term = Terminal::with_options(
+            TestBackend::new(100, 60),
+            TerminalOptions {
+                viewport: Viewport::Inline(10),
+            },
+        )
+        .unwrap();
+        flush_finished(&mut term, &mut app, 10).unwrap();
+        term.draw(|f| render(f, &mut app)).unwrap();
+        let d = term.backend().to_string();
+        assert!(!d.contains("PgUp"), "rows hidden behind the chooser:\n{d}");
+    }
+
+    /// The protected reply may only be sacrificed once nothing older is left:
+    /// the extra step must not fire while an earlier message could still go.
+    #[test]
+    fn the_extra_step_does_not_fire_while_an_older_message_remains() {
+        let mut app = App::test_fixture();
+        app.render_mode = RenderMode::Inline;
+        app.messages.push(ChatMsg::for_test(Role::User, "q"));
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, "earlier answer"));
+        app.messages.push(ChatMsg::for_test(Role::User, "one more"));
+        app.messages
+            .push(ChatMsg::for_test(Role::Agent, "the reply in question"));
+        let mut term = Terminal::with_options(
+            TestBackend::new(100, 60),
+            TerminalOptions {
+                viewport: Viewport::Inline(20),
+            },
+        )
+        .unwrap();
+        flush_finished(&mut term, &mut app, 20).unwrap();
+        assert!(
+            app.flushed_upto < app.messages.len(),
+            "the last settled reply was flushed although it all fits"
+        );
+    }
+}
