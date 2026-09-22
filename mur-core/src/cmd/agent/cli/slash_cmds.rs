@@ -407,6 +407,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             );
         }
         SlashCmd::DeepResearch(args) => deep_research::handle(app, &args, tx).await,
+        SlashCmd::Search(args) => search::handle(app, &args, tx).await,
         SlashCmd::Monitor(args) => monitor::handle(app, &args, tx).await,
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }
