@@ -618,6 +618,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             BrowserAction::Show { name } => cmd::browser::show(&name)?,
             BrowserAction::Export { name, out } => cmd::browser::export(&name, out.as_deref())?,
             BrowserAction::Status => cmd::browser::status()?,
+            BrowserAction::Prune {
+                keep,
+                older_than,
+                dry_run,
+            } => cmd::browser::prune(keep, older_than, dry_run)?,
         },
         Commands::DeepResearch {
             action,

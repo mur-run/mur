@@ -11,6 +11,8 @@ use mur_browser::auth::write_meta;
 use mur_browser::broker::SocketClient;
 #[cfg(unix)]
 use mur_browser::broker::{Broker, KeychainStore};
+#[cfg(test)]
+use mur_browser::recorder::to_yaml;
 use mur_browser::{
     auth::{Handoff, ProfileMeta, save_profile},
     export::to_spec_ts,
@@ -210,6 +212,70 @@ pub fn export(name: &str, out: Option<&std::path::Path>) -> Result<()> {
     Ok(())
 }
 
+/// Delete old recorded runs under `~/.mur/browser/runs/`, keeping the `keep`
+/// most recently recorded ones (and, if `older_than` is set, only deleting
+/// runs older than that many days beyond the `keep` cutoff).
+///
+/// Conservative by design: a run directory whose `actions.yaml` is missing or
+/// fails to parse is always kept, never deleted. `dry_run` prints the
+/// would-delete list without touching disk.
+pub fn prune(keep: usize, older_than: Option<u32>, dry_run: bool) -> Result<()> {
+    let home = mur_home()?;
+    let runs_root = runs_dir()?;
+    if !runs_root.exists() {
+        return Ok(());
+    }
+
+    let mut parsed = Vec::new();
+    let mut unparsed = Vec::new();
+    for name in directory_names(runs_root.clone())? {
+        let actions_path = paths::run_actions(&home, &name);
+        match fs::read_to_string(&actions_path)
+            .ok()
+            .and_then(|yaml| from_yaml(&yaml).ok())
+        {
+            Some(run) => parsed.push((name, run.recorded_at)),
+            None => unparsed.push(name),
+        }
+    }
+    for name in &unparsed {
+        println!("keeping {name} (unparsable actions.yaml)");
+    }
+
+    // Newest first so the first `keep` entries are the ones to retain.
+    parsed.sort_by_key(|(_, recorded_at)| std::cmp::Reverse(*recorded_at));
+
+    let cutoff =
+        older_than.map(|days| chrono::Utc::now() - chrono::Duration::days(i64::from(days)));
+
+    let to_delete: Vec<&str> = parsed
+        .iter()
+        .skip(keep)
+        .filter(|(_, recorded_at)| cutoff.is_none_or(|cutoff| *recorded_at < cutoff))
+        .map(|(name, _)| name.as_str())
+        .collect();
+
+    if to_delete.is_empty() {
+        return Ok(());
+    }
+
+    if dry_run {
+        println!("would delete:");
+        for name in &to_delete {
+            println!("  {name}");
+        }
+        return Ok(());
+    }
+
+    for name in &to_delete {
+        let dir = paths::run_dir(&home, name);
+        fs::remove_dir_all(&dir)
+            .map_err(|error| anyhow::anyhow!("remove browser run {}: {error}", dir.display()))?;
+        println!("deleted {name}");
+    }
+    Ok(())
+}
+
 /// Show the locally persisted recording/profile inventory.  No browser is
 /// launched, so this remains safe to call from diagnostics and scripts.
 pub fn status() -> Result<()> {
@@ -333,6 +399,90 @@ fn directory_names_ignore_files_invalid_names_and_missing_directories() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Write a minimal parseable run under `runs/<name>/actions.yaml`, with a
+/// `recorded_at` `offset_minutes` before now — bigger offset is older.
+#[cfg(test)]
+fn write_test_run(mur_home: &std::path::Path, name: &str, offset_minutes: i64) {
+    let run = Run {
+        name: name.to_string(),
+        mode: Mode::Test,
+        profile: None,
+        recorded_at: chrono::Utc::now() - chrono::Duration::minutes(offset_minutes),
+        steps: Vec::new(),
+    };
+    let path = paths::run_actions(mur_home, name);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, to_yaml(&run).unwrap()).unwrap();
+}
+
+#[test]
+fn prune_keeps_newest_n_and_deletes_the_rest() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", temp.path());
+    for i in 0..10 {
+        // Larger `i` -> further back in the past -> run-0 is newest.
+        write_test_run(temp.path(), &format!("run-{i}"), i);
+    }
+    prune(3, None, false).unwrap();
+    let mut remaining = directory_names(runs_dir().unwrap()).unwrap();
+    remaining.sort();
+    assert_eq!(remaining, vec!["run-0", "run-1", "run-2"]);
+}
+
+#[test]
+fn prune_dry_run_deletes_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", temp.path());
+    for i in 0..10 {
+        write_test_run(temp.path(), &format!("run-{i}"), i);
+    }
+    prune(3, None, true).unwrap();
+    let remaining = directory_names(runs_dir().unwrap()).unwrap();
+    assert_eq!(remaining.len(), 10, "dry_run must not delete anything");
+}
+
+#[test]
+fn prune_keeps_unparsable_run_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", temp.path());
+    for i in 0..5 {
+        write_test_run(temp.path(), &format!("run-{i}"), i);
+    }
+    // A run directory whose actions.yaml is corrupt/missing must always survive.
+    let bad_dir = paths::run_dir(temp.path(), "run-corrupt");
+    fs::create_dir_all(&bad_dir).unwrap();
+    fs::write(bad_dir.join("actions.yaml"), "not: [valid yaml for a Run").unwrap();
+
+    prune(1, None, false).unwrap();
+
+    let remaining = directory_names(runs_dir().unwrap()).unwrap();
+    assert!(
+        remaining.contains(&"run-corrupt".to_string()),
+        "unparsable run must be kept, got {remaining:?}"
+    );
+}
+
+#[test]
+fn prune_older_than_only_deletes_beyond_the_day_cutoff() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", temp.path());
+    // run-recent: 1 hour old. run-old: 40 days old.
+    write_test_run(temp.path(), "run-recent", 60);
+    write_test_run(temp.path(), "run-old", 40 * 24 * 60);
+
+    // keep = 0 so both are candidates; older_than = 30 days should only
+    // catch run-old.
+    prune(0, Some(30), false).unwrap();
+
+    let mut remaining = directory_names(runs_dir().unwrap()).unwrap();
+    remaining.sort();
+    assert_eq!(remaining, vec!["run-recent"]);
 }
 
 #[cfg(target_os = "macos")]
