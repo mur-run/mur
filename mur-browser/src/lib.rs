@@ -19,6 +19,7 @@
 pub mod auth;
 pub mod broker;
 pub mod export;
+pub mod guard;
 pub mod locator;
 pub mod paths;
 pub mod proxy;

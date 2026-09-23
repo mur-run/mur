@@ -30,17 +30,23 @@ pub struct ProfileMeta {
     pub last_auth: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub earliest_cookie_expires: Option<DateTime<Utc>>,
+    /// Domains this profile may navigate to (see [`crate::guard`]). Empty
+    /// means unrestricted, which is also what pre-allowlist meta files load as.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_domains: Vec<String>,
 }
 
 /// Persist a verified Playwright storage-state document and its non-secret
 /// profile metadata. Metadata is only published after state encryption
 /// succeeds, and the handoff reaches `Done` only after both files exist.
+#[allow(clippy::too_many_arguments)] // flat args mirror the handoff steps; see Task 2.5
 pub fn save_profile(
     handoff: &mut Handoff,
     state_path: &Path,
     meta_path: &Path,
     storage_state: &[u8],
     url: &str,
+    allow_domains: &[String],
     now: DateTime<Utc>,
     store: &impl StateKeyStore,
 ) -> Result<ProfileMeta> {
@@ -49,6 +55,7 @@ pub fn save_profile(
         url: url.to_owned(),
         last_auth: now,
         earliest_cookie_expires: earliest_cookie_expiry(storage_state)?,
+        allow_domains: allow_domains.to_vec(),
     };
     write_meta(meta_path, &meta)?;
     handoff.saved()?;
@@ -293,6 +300,7 @@ mod tests {
             &meta_path,
             state,
             "https://example.test/login",
+            &["example.test".to_owned()],
             now,
             &store,
         )
@@ -307,6 +315,31 @@ mod tests {
         let on_disk = std::fs::read_to_string(meta_path).unwrap();
         assert!(on_disk.contains("https://example.test/login"));
         assert!(!on_disk.contains("cookies"));
+        assert_eq!(meta.allow_domains, vec!["example.test".to_owned()]);
+        assert!(on_disk.contains("allow_domains"), "{on_disk}");
+    }
+
+    #[test]
+    fn meta_without_allow_domains_still_loads() {
+        // Shape written by profiles created before the allowlist existed.
+        let legacy = "url: https://example.test/login\n\
+                      last_auth: 2023-11-14T22:13:20Z\n\
+                      earliest_cookie_expires: 2023-11-16T02:00:00Z\n";
+        let meta: ProfileMeta = serde_yaml::from_str(legacy).unwrap();
+        assert!(meta.allow_domains.is_empty());
+        assert_eq!(meta.url, "https://example.test/login");
+    }
+
+    #[test]
+    fn empty_allow_domains_is_not_written() {
+        let meta = ProfileMeta {
+            url: "https://example.test/".into(),
+            last_auth: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            earliest_cookie_expires: None,
+            allow_domains: Vec::new(),
+        };
+        let yaml = serde_yaml::to_string(&meta).unwrap();
+        assert!(!yaml.contains("allow_domains"), "{yaml}");
     }
 
     #[derive(Default)]

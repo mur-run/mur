@@ -364,6 +364,46 @@ fn profile_statuses_marks_incomplete_profiles_without_reading_state() {
 }
 
 #[test]
+fn allow_domains_default_to_login_host() {
+    let login = url::Url::parse("https://Login.Example.com./sso?x=1").unwrap();
+    assert_eq!(
+        resolve_allow_domains(&login, &[]).unwrap(),
+        vec!["login.example.com".to_owned()]
+    );
+}
+
+#[test]
+fn allow_domains_normalise_and_dedupe_explicit_values() {
+    let login = url::Url::parse("https://login.example.com/").unwrap();
+    let given = vec![
+        "Example.com".to_owned(),
+        "example.com.".to_owned(),
+        "cdn.example.net".to_owned(),
+    ];
+    assert_eq!(
+        resolve_allow_domains(&login, &given).unwrap(),
+        vec!["example.com".to_owned(), "cdn.example.net".to_owned()]
+    );
+}
+
+#[test]
+fn allow_domains_reject_non_bare_hosts() {
+    let login = url::Url::parse("https://example.com/").unwrap();
+    for bad in [
+        "https://example.com",
+        "example.com/path",
+        "example.com:443",
+        "*.example.com",
+        ".example.com",
+        "a..b",
+        "",
+    ] {
+        let err = resolve_allow_domains(&login, &[bad.to_owned()]);
+        assert!(err.is_err(), "{bad:?} should be rejected");
+    }
+}
+
+#[test]
 fn profile_statuses_reports_cookie_expiry_from_metadata() {
     let temp = tempfile::tempdir().unwrap();
     let profile = paths::profile_dir(temp.path(), "example");
@@ -375,6 +415,7 @@ fn profile_statuses_reports_cookie_expiry_from_metadata() {
             url: "https://example.test/login".into(),
             last_auth: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             earliest_cookie_expires: chrono::DateTime::from_timestamp(1_700_100_000, 0),
+            allow_domains: Vec::new(),
         },
     )
     .unwrap();
@@ -654,6 +695,7 @@ pub async fn auth(
     url: &str,
     reauth: bool,
     requested_browser: Option<BrowserEngine>,
+    allow_domain: &[String],
 ) -> Result<()> {
     let browser = select_browser(requested_browser)?;
     paths::validate_name(site)?;
@@ -662,6 +704,7 @@ pub async fn auth(
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         bail!("--url must be an absolute http(s) URL");
     }
+    let allow_domains = resolve_allow_domains(&parsed, allow_domain)?;
     let home = mur_home()?;
     let state = paths::profile_state(&home, site);
     if state.exists() && !reauth {
@@ -683,11 +726,44 @@ pub async fn auth(
         &paths::profile_meta(&home, site),
         &storage_state,
         url,
+        &allow_domains,
         chrono::Utc::now(),
         &KeychainStateKeyStore,
     )?;
     println!("saved encrypted browser profile {site:?}");
     Ok(())
+}
+
+/// Allowlist to store with a profile: the explicit `--allow-domain` values,
+/// or the login URL's host when none were given. Entries must be bare hosts
+/// (no scheme, port, path, or wildcard) so `guard` matching stays unambiguous.
+fn resolve_allow_domains(login: &url::Url, given: &[String]) -> Result<Vec<String>> {
+    if given.is_empty() {
+        let host = login
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("--url must be an absolute http(s) URL"))?;
+        return Ok(vec![host.trim_end_matches('.').to_ascii_lowercase()]);
+    }
+    let mut out: Vec<String> = Vec::with_capacity(given.len());
+    for raw in given {
+        let domain = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+        let bare = !domain.is_empty()
+            && domain
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+            && !domain.starts_with('.')
+            && !domain.contains("..");
+        if !bare {
+            bail!(
+                "invalid --allow-domain {raw:?}: use a bare host like example.com \
+                 (subdomains are included automatically)"
+            );
+        }
+        if !out.contains(&domain) {
+            out.push(domain);
+        }
+    }
+    Ok(out)
 }
 
 /// Keep Phase 1's advertised CLI truthful until each later slice lands.
