@@ -76,7 +76,14 @@ pub async fn record(
         RecordHook::with_actions_path(run_state, paths::run_actions(&mur_home, run)),
         Arc::new(SocketClient::new(&socket, token)),
     );
+    tracing::info!(
+        run,
+        mode,
+        actions = %paths::run_actions(&mur_home, run).display(),
+        "browser record started"
+    );
     let result = run_stdio(playwright_command(&args), hook).await;
+    tracing::info!(run, ok = result.is_ok(), "browser record finished");
     // The child has ended; kill the broker and unlink its private endpoint
     // even when Playwright exited with an error.
     broker_task.abort();
