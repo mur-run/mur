@@ -1,9 +1,9 @@
 # `/browser-*` Skill 層實作計畫
 
 > Date: 2026-09-23
-> Spec source: `~/.mur/artifacts/mur/browser-research-20260910/SPEC-phase1.md`
-> ⚠️ 該路徑**未納入版控**（`git ls-files artifacts` → 0 筆）。Task 9 負責搬進
-> `docs/superpowers/specs/` 後，此處與 `mur-browser/src/lib.rs:17` 一併改指新路徑。
+> Spec source: `docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`
+> （Task 9 已完成：原檔 `~/.mur/artifacts/mur/browser-research-20260910/SPEC-phase1.md`
+> 未受版控，已移入 repo，`mur-browser/src/lib.rs:17` 同步改指新路徑。）
 > 執行技能：`mur-executing-plans`（單人循序）；Task 6/7 可用 `mur-delegate-dev` 併行
 
 ---
@@ -328,25 +328,25 @@ Playwright trace 單次動輒數十 MB，目前只有產出沒有清理。
 
 ### Steps
 
-- [ ] 9.1 `mkdir -p docs/superpowers/specs` 已存在；
+- [x] 9.1 `mkdir -p docs/superpowers/specs` 已存在；
       `git mv` 不適用（跨 repo），改用 `cp` 將 `SPEC-phase1.md`、`MERGED.md`
       複製為 `docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`
       與 `2026-09-10-browser-research-merged.md`
-- [ ] 9.2 `SPEC-phase1-A-superseded.md` 與 `deep/`、`slice*.md` **不搬**
+- [x] 9.2 `SPEC-phase1-A-superseded.md` 與 `deep/`、`slice*.md` **不搬**
       —— 那些是研究過程，留在 artifacts 合理
-- [ ] 9.3 更新 `mur-browser/src/lib.rs:17` 的 `Design source:` 指向新的 repo 內路徑
-- [ ] 9.4 在新 spec 抬頭下方加 changelog 區塊：原抬頭「待核准，未寫任何程式碼」
+- [x] 9.3 更新 `mur-browser/src/lib.rs:17` 的 `Design source:` 指向新的 repo 內路徑
+- [x] 9.4 在新 spec 抬頭下方加 changelog 區塊：原抬頭「待核准，未寫任何程式碼」
       改為實際狀態，逐列標註 §1.1 四項交付物與對應 commit
       （前三項 `2955eca2`，第四項 skill 層 → 本 plan Task 1/6/7）
-- [ ] 9.5 修正新 merged 文件的「兩個入口、一個引擎」（原 `MERGED.md:67`）為
+- [x] 9.5 修正新 merged 文件的「兩個入口、一個引擎」（原 `MERGED.md:67`）為
       「兩個入口、一份共用 session」—— §4 表格裡 test 用 Playwright、
       automation 用 browser-rs，本來就是兩個引擎，原句會讓人誤以為 locator 跨引擎相容
-- [ ] 9.6 在 §4 表格下方補一行，明文說明 locator 格式是否跨引擎通用；
+- [x] 9.6 在 §4 表格下方補一行，明文說明 locator 格式是否跨引擎通用；
       若不通用，禁止兩邊共用錄製產物
-- [ ] 9.7 在舊 artifacts 的 `SPEC-phase1.md` 抬頭插一行
+- [x] 9.7 在舊 artifacts 的 `SPEC-phase1.md` 抬頭插一行
       「**已移入版控：`docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`，
       此檔不再維護**」，避免下次又有人讀到舊的
-- [ ] 9.8 `cargo test -p mur-browser`（doc comment 改動需確認 doctest 未壞），commit
+- [x] 9.8 `cargo test -p mur-browser`（doc comment 改動需確認 doctest 未壞），commit
 
 ---
 
