@@ -663,6 +663,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 (Some(DeepResearchAction::Setup), _) => {
                     cmd::deep_research::setup::cmd_setup(&mur_home)?
                 }
+                (Some(DeepResearchAction::Doctor { render }), _) => {
+                    let mut exec = cmd::deep_research::browser::system_render_exec;
+                    cmd::deep_research::browser::doctor(
+                        &mur_home,
+                        &mut std::io::stdout(),
+                        &mut cmd::deep_research::browser::system_runner,
+                        render.then_some(&mut exec as cmd::deep_research::browser::RenderExec<'_>),
+                    )?
+                }
                 (
                     Some(DeepResearchAction::Secret {
                         brave,

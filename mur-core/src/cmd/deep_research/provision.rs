@@ -82,8 +82,8 @@ const MAX_WORKER_COUNT: usize = 64;
 /// obscura render-engine binaries, relative to `mur_home` — must match
 /// `mur-research-gateway`'s `DEFAULT_OBSCURA_RELATIVE_PATH` (`aura/obscura`).
 /// Both the engine and its sibling worker must be exec-granted (spike Q1 Layer-2).
-const OBSCURA_RELATIVE: &str = "aura/obscura";
-const OBSCURA_WORKER_RELATIVE: &str = "aura/obscura-worker";
+pub(super) const OBSCURA_RELATIVE: &str = "aura/obscura";
+pub(super) const OBSCURA_WORKER_RELATIVE: &str = "aura/obscura-worker";
 
 /// Value of `--render-engine` that opts a worker into the obscura render
 /// engine. Any other value (or the flag omitted) leaves today's default
@@ -316,7 +316,7 @@ pub fn grant_render_browser(mur_home: &Path, worker: &str) -> Result<()> {
 /// Where the gateway keeps its bundled lightpanda, relative to `~/.mur`.
 /// Mirrors `mur-research-gateway`'s `DEFAULT_LIGHTPANDA_RELATIVE_PATH`; the two
 /// must agree or the grant names a binary the gateway never runs.
-const LIGHTPANDA_RELATIVE: &str = "aura/lightpanda";
+pub(super) const LIGHTPANDA_RELATIVE: &str = "aura/lightpanda";
 
 /// Every render binary the gateway might spawn, absolute, for the exec
 /// allowlist.
@@ -331,7 +331,7 @@ const LIGHTPANDA_RELATIVE: &str = "aura/lightpanda";
 /// A custom `research_gateway.lightpanda_path` is NOT covered: provisioning
 /// cannot see a run-time override. The denial message names the binary, so an
 /// operator can grant that one by hand.
-fn render_binaries(mur_home: &Path) -> Vec<String> {
+pub(super) fn render_binaries(mur_home: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let lp = mur_home.join(LIGHTPANDA_RELATIVE);
     if lp.is_file() {

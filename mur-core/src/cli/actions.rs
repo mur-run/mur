@@ -927,6 +927,15 @@ pub enum DeepResearchAction {
     },
     /// Interactive first-time setup: model, worker count, budget, egress consent
     Setup,
+    /// Check the render browser: report what is installed, version-check it,
+    /// and print the install commands if nothing is found. Read-only — never
+    /// installs; exits non-zero when no render browser runs.
+    Doctor {
+        /// Also render a local JS-only page with the engine the gateway would
+        /// pick (loopback only; up to 30s on a cold browser)
+        #[arg(long)]
+        render: bool,
+    },
     /// Show the status panel (same as bare `mur deep-research`). Without this
     /// variant the word `status` parsed as a one-word research question and
     /// dispatched a fleet run titled "status".
