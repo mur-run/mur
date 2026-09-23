@@ -2133,6 +2133,11 @@ impl TaskRunner {
         let mut continuations_used: u32 = 0;
         let mut gate_blocked = false;
 
+        // Text the user has already been shown this turn, one entry per model
+        // call. Only streaming turns show intermediate text; a non-streaming
+        // caller sees nothing until the reply, so there is nothing to keep.
+        let mut shown: Vec<String> = Vec::new();
+
         let mut iteration: u32 = 0;
         while iteration < self.iteration_ceiling {
             let tool_defs: Vec<_> = self
@@ -2258,12 +2263,37 @@ impl TaskRunner {
                             tokio::time::sleep(delay).await;
                             continue;
                         }
+                        // Text already on the user's screen settles the turn
+                        // as a truncation instead of a failure. A failed turn
+                        // is not remembered and does not thread the next one,
+                        // so the user would be answering a reply the agent
+                        // has no record of (turn 243, "照 A 修").
+                        Err(e) if !shown.is_empty() => {
+                            self.last_turn_truncated.store(true, Ordering::Relaxed);
+                            tracing::warn!(
+                                task_id,
+                                error = %e,
+                                kept_chars = shown.iter().map(String::len).sum::<usize>(),
+                                "llm call failed after text was shown; kept it as the reply"
+                            );
+                            ledger.iterations = iteration;
+                            ledger.stop = crate::turn_ledger::StopKind::LlmFailedAfterOutput {
+                                error: e.to_string(),
+                            };
+                            let mut text = shown.join("\n\n");
+                            text.push_str(crate::llm::LLM_FAILED_TRUNCATION_MARKER);
+                            return Ok((settle(text, &ledger), None));
+                        }
                         Err(e) => {
                             return Err(task_error("llm_error", format!("{e}"), true));
                         }
                     }
                 }
             };
+
+            if streaming && !resp.text.is_empty() {
+                shown.push(resp.text.clone());
+            }
 
             self.cumulative_input_tokens
                 .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
@@ -5186,6 +5216,156 @@ mod tests {
         assert!(
             reply_text.contains("RECOVERED"),
             "expected the recovery turn's reply, got: {reply_text}"
+        );
+    }
+
+    /// First call: streams visible text AND calls a tool (the shape of a reply
+    /// that ends with `suggest_replies`), so the loop goes back to the model.
+    /// Every later call: `empty streamed response` — outlasting the one retry.
+    struct TextThenEmptyStreamLlm {
+        calls: std::sync::atomic::AtomicUsize,
+        first_text: String,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for TextThenEmptyStreamLlm {
+        async fn generate(
+            &self,
+            _req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) > 0 {
+                return Err(crate::llm::LlmError::InvalidResponse(
+                    "empty streamed response".into(),
+                ));
+            }
+            Ok(crate::llm::LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                text: self.first_text.clone(),
+                input_tokens: 5,
+                output_tokens: 5,
+                model: "test".into(),
+                tool_calls: vec![crate::llm::ToolCallResult {
+                    call_id: "s1".into(),
+                    tool_name: "suggest_replies".into(),
+                    input: serde_json::json!({"replies": ["照 A 做"]}),
+                }],
+                stop_reason: crate::llm::StopReason::ToolUse,
+            })
+        }
+        fn model_name(&self) -> &str {
+            "text-then-empty-stream"
+        }
+    }
+
+    /// Regression (turn 243, "照 A 修"): the A/B/C table was streamed to the
+    /// user, then the follow-up LLM call hit two empty streams and the turn
+    /// failed. Only successful turns were remembered, and the CLI threads the
+    /// next turn only on a reply, so the next turn had never heard of option
+    /// A. Text the user has already seen must settle the turn — as a
+    /// truncation, the same way a stream that went quiet does (#1287) — so
+    /// memory, the reply, and context threading all carry it.
+    #[tokio::test]
+    async fn streamed_text_survives_a_later_llm_failure_in_the_same_turn() {
+        const TABLE: &str = "| A | 先寫 regression test |\n| B | 直接修 |\n| C | 先不動 |";
+        let runner = TaskRunner::with_llm(Arc::new(TextThenEmptyStreamLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            first_text: TABLE.into(),
+        }))
+        .with_pending_approvals(empty_pending_approvals())
+        .with_notifier(tokio::sync::mpsc::channel(16).0)
+        .with_hitl_timeout_secs(1)
+        .with_iteration_ceiling(50);
+        let (sink, mut seen) = tokio::sync::mpsc::channel(64);
+
+        let outcome = runner
+            .run_sync_streaming(user_turn("列出選項", "t-table", None), sink, None)
+            .await;
+
+        let mut streamed = String::new();
+        while let Ok(d) = seen.try_recv() {
+            streamed.push_str(&d.text);
+        }
+        assert!(streamed.contains(TABLE), "table must have reached the user");
+
+        // The turn settles on what the user saw, marked as cut short.
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("seen text must settle the turn, got {outcome:?}");
+        };
+        let reply = task.messages.last().expect("reply");
+        let reply_text = text_of(reply);
+        assert!(
+            reply_text.contains(TABLE),
+            "reply must carry the table: {reply_text}"
+        );
+        assert!(
+            reply_text.contains(crate::llm::LLM_FAILED_TRUNCATION_MARKER),
+            "reply must say it was cut short: {reply_text}"
+        );
+        let usage = task.usage.expect("usage is always populated");
+        assert_eq!(usage["truncated"], true, "usage={usage:?}");
+        // The ledger tells the truth: not end_turn, and the error survives.
+        let ledger = ledger_of(reply).expect("ledger part");
+        let crate::turn_ledger::StopKind::LlmFailedAfterOutput { error } = &ledger.stop else {
+            panic!("stop must record the failure, got {:?}", ledger.stop);
+        };
+        assert!(error.contains("empty streamed response"), "error: {error}");
+
+        // The symptom: the next turn, threaded on this turn's id, recalls
+        // what the user saw.
+        let prior = runner.conversations.lock().unwrap().prior(Some("t-table"));
+        let recalled = prior.iter().any(|m| {
+            matches!(m, crate::llm::RichMessage::Text { role, content }
+                if role == "agent" && content.contains("| A |"))
+        });
+        assert!(
+            recalled,
+            "streamed-then-failed turn left no trace in memory: {prior:?}"
+        );
+    }
+
+    /// Counterpart: a failure before the user saw anything is still a plain
+    /// failure — nothing to keep, nothing to remember.
+    #[tokio::test]
+    async fn llm_failure_before_any_output_still_fails_and_forgets() {
+        struct AlwaysEmpty;
+        #[async_trait::async_trait]
+        impl crate::llm::LlmClient for AlwaysEmpty {
+            async fn generate(
+                &self,
+                _req: crate::llm::LlmRequest,
+            ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+                Err(crate::llm::LlmError::InvalidResponse(
+                    "empty streamed response".into(),
+                ))
+            }
+            fn model_name(&self) -> &str {
+                "always-empty"
+            }
+        }
+        let runner = TaskRunner::with_llm(Arc::new(AlwaysEmpty))
+            .with_pending_approvals(empty_pending_approvals())
+            .with_notifier(tokio::sync::mpsc::channel(16).0)
+            .with_hitl_timeout_secs(1)
+            .with_iteration_ceiling(50);
+        let (sink, _seen) = tokio::sync::mpsc::channel(64);
+
+        let outcome = runner
+            .run_sync_streaming(user_turn("hi", "t-nothing", None), sink, None)
+            .await;
+
+        assert!(
+            matches!(outcome, TaskOutcome::Failed(_)),
+            "no visible output → Failed, got {outcome:?}"
+        );
+        let prior = runner
+            .conversations
+            .lock()
+            .unwrap()
+            .prior(Some("t-nothing"));
+        assert!(
+            prior.is_empty(),
+            "failed turn must not be remembered: {prior:?}"
         );
     }
 

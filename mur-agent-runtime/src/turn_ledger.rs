@@ -135,6 +135,14 @@ pub enum StopKind {
     /// unknown. Recorded separately because labelling it `end_turn` would put
     /// a falsehood in a durable audit record (#1287).
     StreamInterrupted,
+    /// A model call failed after the user had already been shown text this
+    /// turn. The shown text was kept as the reply rather than failing the
+    /// turn — failing it discarded something the user had read, so the next
+    /// turn could not recall it. `error` is the call's error, kept because
+    /// the ledger is an audit record and "end_turn" would be a falsehood.
+    LlmFailedAfterOutput {
+        error: String,
+    },
     /// The unattended deadline passed (spec §3.2).
     Deadline,
     /// No progress for the stuck window; the last three tool calls (§3.5).
@@ -167,6 +175,7 @@ impl StopKind {
             StopKind::LoopDetected => "loop detected",
             StopKind::MaxTokens => "max_tokens",
             StopKind::StreamInterrupted => "stream interrupted",
+            StopKind::LlmFailedAfterOutput { .. } => "model call failed",
             StopKind::Deadline => "deadline",
             StopKind::Stuck { .. } => "stuck",
             StopKind::ToolWithdrawn => "tool withdrawn",
@@ -206,6 +215,9 @@ impl StopKind {
                  local model, raise MUR_LLM_IDLE_TIMEOUT_SECS for that agent"
                     .to_string()
             }
+            StopKind::LlmFailedAfterOutput { error } => format!(
+                "the model call failed after the text above was shown ({error}) — ask it to continue"
+            ),
             StopKind::Deadline => format!(
                 "raise it: mur limits {agent} --deadline <1h>  (or --deadline on the fleet that launched it)"
             ),
