@@ -59,7 +59,7 @@ if bins.is_empty() {
 | D3 | 先把要做的事**完整印出來**（npm 兩條命令 + Lightpanda 的 URL、sha256 前 12 碼、目的地），字面 `yes` 才執行；其他輸入 = 跳過。**只問一次**，涵蓋兩者 | 跟 egress、browser grant 同一套同意規則；npm -g 會寫全域，所以一定要先問 |
 | D4 | **不寫** `research_gateway.render_engine` | 預設已經是 `AgentBrowser`；寫 config 反而會蓋掉之後的預設變更 |
 | D5 | 安裝被拒或失敗**不讓 setup 失敗** | 沒有 render 時 plain fetch 仍然能用 |
-| D6 | 新增唯讀的 `mur deep-research doctor` | 只回報、smoke test、印安裝命令；永遠不安裝 |
+| D6 | 新增唯讀的 `mur deep-research doctor`；`--render` 多跑一次真的 render | 只回報、smoke test、印安裝命令；永遠不安裝 |
 
 ## 3. setup 流程（Q5 = `yes` 之後）
 
@@ -72,25 +72,80 @@ if bins.is_empty() {
    - agent-browser 的兩條 npm 命令之間：第一步失敗就不跑第二步。
    - 裝完仍找不到 `agent-browser` → 提示檢查 npm prefix。
    - 只裝得到 Lightpanda、沒有 agent-browser → 提示：預設 engine 是 `AgentBrowser`，光有 Lightpanda 不會被用到，除非手動選 `--render-engine lightpanda`。
-3. **smoke test**：對找到的每個 binary 跑版本檢查（`agent-browser --version`；`lightpanda` 吃 subcommand 不吃 flag，用 `smoke_argv` 區分）。
+3. **smoke test（L1 + L2）**：由 setup 自己跑（使用者的 terminal，不在 worker sandbox 裡），分級見 §3.1。結果只回報，**不讓 setup 失敗**（D5）。
 4. **grant**：照現有流程 `grant_render_browser`，涵蓋實際存在的 binary。
 
 Q5 不是 `yes` → 跟現在完全一樣。
 
+### 3.1 smoke test 分級
+
+| 等級 | 做什麼 | 網路 | 誰跑 |
+|---|---|---|---|
+| L1 | 版本檢查：`agent-browser --version`；`lightpanda` 吃 subcommand 不吃 flag（`smoke_argv` 區分） | 無 | setup、`doctor`（預設） |
+| L2 | 真的 render 一個要跑 JS 才有內容的本機頁面，每個 tier 各一次 | 只有 loopback（`127.0.0.1`） | setup、`doctor --render` |
+| L3 | render 外部真實網站 | 對外 egress | **不做**（§5） |
+
+**L2 的頁面**：mur 在 `127.0.0.1:0` 起一個只回一頁的 HTTP server（std `TcpListener`、一個 thread、回完就關），內容：
+
+```html
+<div id="o"></div><script>document.getElementById('o').textContent='MUR-RENDER-'+(6*7)</script>
+```
+
+通過條件：輸出含 `MUR-RENDER-42`。這個字串不在原始碼裡，只有 JS 真的跑過才會出現，所以「抓到 HTML 但沒執行 JS」會判失敗。
+不用 `file://` / `data:`：不確定 Lightpanda 支不支援；loopback HTTP 讓兩個 engine 走同一條路。
+
+**L2 的 argv** 對齊 gateway 的 `build_fetch_argv`（`mur-research-gateway/src/browser.rs:63`）：
+
+| tier | argv |
+|---|---|
+| Lightpanda | `--engine lightpanda --executable-path ~/.mur/aura/lightpanda --args "" --session <id> open <url> snapshot` |
+| Chrome | `--engine chrome --session <id> open <url> snapshot`（loopback 頁面，不帶 stealth args） |
+
+- `--args ""` 一定要是空字串。gateway 的註解：「MANDATORY: stealth args must never reach lightpanda — it errors out on them」。
+- `mur-core/Cargo.toml` 沒有依賴 `mur-research-gateway`，所以 argv 在 `browser.rs` 另寫一份，用測試釘住上面的規則（見 §7-4）。
+- session 用 `mur-smoke-<pid>-<tier>`；跑完 best-effort `close` 掉，失敗忽略（指令名實作時用 `agent-browser --help` 確認）。
+- 每個 tier 限時 30 秒（Chrome 第一次冷啟動比較慢），超時算失敗。
+- 沒有 Lightpanda → 只跑 Chrome tier，加印 D2b 的安裝提示。
+- L1 失敗的 binary 不跑 L2。
+
+**結果怎麼印**：
+
+```
+Render browser smoke test:
+  ✓ agent-browser 0.x.y              L1
+  ✓ lightpanda 0.3.4                 L1
+  ✓ render via Lightpanda  (0.8s)    L2
+  ✗ render via Chrome                L2 — <stderr 最後 3 行>
+```
+
+| 結果 | setup 的反應 |
+|---|---|
+| 所有 tier 都過 | ✓，繼續 |
+| 部分 tier 失敗 | ⚠ 印失敗的 tier 和 stderr 尾巴，建議之後跑 `mur deep-research doctor --render` |
+| 全部失敗 | ✗ 同上，並提醒 plain fetch 仍然能用；setup 照樣完成 |
+| spawn 得到 `PermissionDenied` | 印「被 sandbox 擋住，請在一般 terminal 跑」，**不**當成瀏覽器壞掉 |
+
 ## 4. `mur deep-research doctor`（唯讀）
 
-加在 `DeepResearchAction`（`mur-core/src/cli/actions.rs`）。
+加在 `DeepResearchAction`（`mur-core/src/cli/actions.rs`），形狀是 `Doctor { #[arg(long)] render: bool }`。
+
+| 命令 | 跑什麼 | 大約多久 |
+|---|---|---|
+| `mur deep-research doctor` | 檢查 + L1 | 1 秒內 |
+| `mur deep-research doctor --render` | 檢查 + L1 + L2 | 幾秒；Chrome 冷啟動最久 30 秒 |
 
 - 找不到任何 render browser → 印安裝命令與「或在 setup 回答 yes」，exit 非 0。
 - 有 agent-browser 但沒有 `~/.mur/aura/lightpanda` → **warning**（exit 0）：render 會直接走 Chrome，印 Lightpanda 的安裝方式。
-- 找到但 smoke test 全失敗 → exit 非 0。
-- 不下載、不寫檔、不改 config。
+- L1 全失敗 → exit 非 0。
+- `--render`：至少一個 tier 的 L2 通過 → exit 0（失敗的 tier 印 warning）；全部 tier 都沒通過 → exit 非 0。
+- 不下載、不寫檔、不改 config。L2 只連 loopback，不對外連線。
 
 ## 5. 不做的事
 
 - 不安裝 obscura、不寫 `render_engine`（obscura 仍可用 `--render-engine obscura` / config 手動選）。
 - 不處理 browser automation（Playwright Chromium、browser-rs）。
 - 不回滾：安裝成功但 smoke test 失敗時保留現狀。
+- 不做 L3（render 外部網站）：結果會受網路、對方網站、anti-bot 影響，失敗時分不出是誰的問題；而且 setup 當下 worker 的 egress 還沒授權。
 
 ## 6. 測試（對應 worktree 裡 `browser.rs` 的單元測試）
 
@@ -107,11 +162,22 @@ Q5 不是 `yes` → 跟現在完全一樣。
 | npm 第一步失敗 | Lightpanda 照裝 |
 | 平台沒有 recipe | 印「此平台沒有 Lightpanda」，只裝 agent-browser |
 | doctor：有 agent-browser、沒 Lightpanda | warning、exit 0 |
+| L2 argv：Lightpanda tier | `--args` 後面緊接空字串；有 `--executable-path`；沒有 stealth args |
+| L2 argv：Chrome tier | `--engine chrome`；沒有 `--executable-path` |
+| L2 判定 | 輸出含 `MUR-RENDER-42` → 過；只含原始 HTML（`6*7`）→ 不過 |
+| L2 部分失敗 | setup 印 ⚠、不失敗；`doctor --render` exit 0 |
+| L2 全部失敗 | setup 不失敗；`doctor --render` exit 非 0 |
+| L1 失敗的 binary | 不跑 L2 |
+| spawn 回 `PermissionDenied` | 印 sandbox 提示，不歸類成瀏覽器壞掉 |
+| `doctor`（沒有 `--render`） | runner 沒收到任何 `open` 指令 |
+| loopback server | 測試直接打 `127.0.0.1` 拿到固定頁面（不需要瀏覽器，CI 可跑） |
 
-npm runner 和 Lightpanda downloader 都可注入，測試不碰 npm 也不連網路（`installer::verify_and_place` 本身可以直接吃 bytes）。
+npm runner、Lightpanda downloader、render runner 都可注入，測試不碰 npm、不開瀏覽器，也不連外網（`installer::verify_and_place` 本身可以直接吃 bytes）。
+真的開瀏覽器跑 L2 只在手動驗收做，不放進 CI。
 
 ## 7. 待決定
 
 1. ~~Lightpanda 要不要一起裝~~ → 已決定：要，見 D2b。**worktree 裡的 `browser.rs` 目前還沒有這一段，實作要補。**
-2. **smoke test 的深度**：目前只跑版本檢查，沒有真的 render 一個 JS 頁面。
-3. **sandbox**：在 agent sandbox 裡直接執行 `agent-browser --version` 會得到 `Operation not permitted`，smoke test 要由 setup 本身（非 sandbox）或已授權的 worker 跑。
+2. ~~smoke test 的深度~~ → 已決定：setup 跑 L1 + L2；`doctor` 預設 L1，`--render` 加 L2，見 §3.1、§4。**worktree 裡的 `Doctor` 目前是沒有欄位的 unit variant，實作要加 `--render`。**
+3. ~~sandbox~~ → 已處理：smoke test 由 setup / doctor 在使用者的 terminal 跑，不在 worker sandbox；遇到 `PermissionDenied` 另外提示（§3.1）。
+4. **L2 argv 與 gateway 會分家**：`mur-core` 沒有依賴 `mur-research-gateway`，L2 的 argv 是複製的。之後如果 gateway 改了 `build_fetch_argv`，這邊要跟著改；可以考慮把 argv builder 搬到 `mur-common`，這份 spec 不做。
