@@ -139,10 +139,11 @@ pub fn run_wizard(
     // render client-side (many government dataset portals) come back as an
     // empty JS shell — a real quality ceiling, but not a reason to grant
     // execution silently.
+    let render_browser = super::browser::render_browser_name(&mur_common::deps::current_platform());
     writeln!(
         output,
         "\nRender browser: some pages return only a JS shell to a plain fetch.\n\
-         Rendering them means the gateway EXECUTES `agent-browser` inside the\n\
+         Rendering them means the gateway EXECUTES `{render_browser}` inside the\n\
          worker's sandbox. Skipping this leaves plain fetch working; those pages\n\
          are simply reported as unrenderable."
     )?;
@@ -267,11 +268,32 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
         });
     loop_cfg.budget_usd = a.budget_usd;
     fleet.loop_cfg = Some(loop_cfg);
+    // With browser consent, declare Lightpanda so `mur fleet doctor` /
+    // `install-deps deep-research` know about it. Re-running setup adds it to
+    // fleets created before this existed; declining never adds it.
+    if a.browser {
+        super::browser::declare_lightpanda(&mut fleet, &mur_common::deps::current_platform());
+    }
     crate::cmd::fleet::store::save_fleet(mur_home, &fleet)?;
 
     // Render browser: same consent discipline as egress — literal "yes" only,
     // applied to every target worker, never revoked here.
     if a.browser {
+        // Check before granting: a `yes` on a machine with no browser used to
+        // end in "Setup complete" with no rendered fetch at all. This offers
+        // the install (commands shown, literal `yes` to run) and smoke-tests
+        // what it finds; the grant below then covers whatever is present.
+        // Reuse the wizard's `input`: `Stdin`'s lock is not reentrant, and
+        // `input` still holds it — locking stdin again here deadlocked.
+        super::browser::ensure_render_browser(
+            mur_home,
+            &super::browser::install_plan(&mur_common::deps::current_platform()),
+            &mut input,
+            &mut std::io::stdout(),
+            &mut super::browser::system_runner,
+            &mut super::browser::system_fetcher,
+            &mut super::browser::system_render_exec,
+        )?;
         for name in &target_names {
             super::provision::grant_render_browser(mur_home, name)?;
         }
@@ -353,6 +375,23 @@ mod tests {
         assert!(b.browser, "browser consent is independent of egress");
     }
 
+    /// The consent prompt must name the browser that will actually run, not a
+    /// hard-coded one.
+    #[test]
+    fn browser_prompt_names_the_planned_engine() {
+        let choices = vec!["claude_haiku".to_string()];
+        let mut input = Cursor::new(b"\n\n\nno\nno\n".to_vec());
+        let mut out = Vec::new();
+        run_wizard(&mut input, &mut out, &choices).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let expected =
+            super::super::browser::render_browser_name(&mur_common::deps::current_platform());
+        assert!(
+            out.contains(&format!("EXECUTES `{expected}`")),
+            "prompt should name {expected}: {out}"
+        );
+    }
+
     #[test]
     fn model_picked_by_number() {
         let a = answers("2\n\n\nno\nno\n", &["claude_haiku", "claude_opus"]).unwrap();
@@ -371,5 +410,22 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(err.contains("nonexistent_model"));
+    }
+
+    /// `Stdin::lock` is not reentrant: `cmd_setup` takes it once for the
+    /// wizard, and a second `stdin.lock()` further down (the render-browser
+    /// install prompt) hung setup forever right after the browser `yes`.
+    /// A real lock can't be exercised in a unit test without hanging it, so
+    /// guard the source: exactly one `.lock()` on stdin in `cmd_setup`.
+    #[test]
+    fn cmd_setup_locks_stdin_exactly_once() {
+        let src = include_str!("setup.rs");
+        let body = src
+            .split("pub fn cmd_setup(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n#[cfg(test)]").next())
+            .expect("cmd_setup body");
+        let locks = body.matches("stdin.lock()").count();
+        assert_eq!(locks, 1, "cmd_setup must lock stdin once and reuse `input`");
     }
 }

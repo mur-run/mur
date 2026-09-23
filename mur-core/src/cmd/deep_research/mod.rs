@@ -7,6 +7,7 @@
 //! egress grant is a separate, explicit-consent step (Task 8).
 
 pub mod ask;
+pub mod browser;
 pub mod panel;
 pub mod provision;
 pub mod run;
