@@ -14,10 +14,11 @@
 //!
 //! Nothing in here touches Playwright directly — every browser action goes
 //! over MCP, so the crate has no Node or Chromium dependency at build time.
-//! Design source: `~/.mur/artifacts/mur/browser-research-20260910/SPEC-phase1.md`.
+//! Design source: `docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`.
 
 pub mod auth;
 pub mod broker;
+pub mod export;
 pub mod locator;
 pub mod paths;
 pub mod proxy;

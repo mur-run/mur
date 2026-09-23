@@ -816,8 +816,13 @@ pub enum BrowserAction {
     List,
     /// Show one recorded run (implemented in a later slice).
     Show { name: String },
-    /// Export a recorded run (implemented in a later slice).
-    Export { name: String },
+    /// Export a recorded run as a Playwright `.spec.ts` file.
+    Export {
+        name: String,
+        /// Write the spec to this path instead of stdout.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
     /// Show browser subsystem status (implemented in a later slice).
     Status,
 }

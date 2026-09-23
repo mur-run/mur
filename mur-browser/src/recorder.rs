@@ -45,6 +45,79 @@ impl Action {
             Action::AssertVisible | Action::AssertText | Action::AssertValue
         )
     }
+
+    /// The Playwright MCP tool name replay must send for this action.
+    ///
+    /// This is the **reverse** of `RecordHook::action_for`'s match: where
+    /// several tool names record as the same `Action` (`browser_type` /
+    /// `browser_fill` both become `Fill`), `tool_name` picks the one
+    /// `action_for` lists first, so `tool_name(a).pipe(action_for) == a`
+    /// round-trips (see `tests::tool_name_round_trips_through_action_for`).
+    pub fn tool_name(self) -> &'static str {
+        match self {
+            Action::Goto => "browser_navigate",
+            Action::Click => "browser_click",
+            Action::Fill => "browser_type",
+            Action::Select => "browser_select_option",
+            Action::Press => "browser_press_key",
+            Action::Hover => "browser_hover",
+            Action::AssertVisible => "browser_verify_element_visible",
+            Action::AssertText => "browser_verify_text_visible",
+            Action::AssertValue => "browser_verify_value",
+        }
+    }
+}
+
+/// The `arguments` key that carries a step's `value`, keyed by [`Action`].
+///
+/// Single source of truth for both directions: `RecordHook::value_for` reads
+/// it out of a live MCP request, [`call_for`] writes it back in for replay.
+/// `None` means this action has no scalar value argument (`Click`, `Hover`,
+/// `AssertVisible`).
+fn value_key(action: Action) -> Option<&'static str> {
+    match action {
+        Action::Goto => Some("url"),
+        Action::Fill => Some("text"),
+        Action::Select => Some("values"),
+        Action::Press => Some("key"),
+        Action::AssertText | Action::AssertValue => Some("text"),
+        Action::Click | Action::Hover | Action::AssertVisible => None,
+    }
+}
+
+/// Reverse of recording: turn a saved [`Step`] into the MCP `tools/call`
+/// `(name, arguments)` pair replay sends downstream.
+///
+/// `arguments` carries the step's `value` under [`value_key`] (when the
+/// action has one) and, for any action where [`Action::needs_locator`] is
+/// true, an `element` key holding the step's best-priority locator string.
+/// Replay resolves that locator against a fresh snapshot itself — this
+/// function never touches [`Step::ref_at_record`], which is diagnostic-only.
+///
+/// Errors if a locator-needing step has no locators (a `Step` that passed
+/// [`validate`] should always have at least one, so this indicates the
+/// caller built the `Step` by hand rather than through recording).
+pub fn call_for(step: &Step) -> anyhow::Result<(String, Value)> {
+    let mut args = serde_json::Map::new();
+
+    if let Some(value) = &step.value
+        && let Some(key) = value_key(step.action)
+    {
+        args.insert(key.to_string(), Value::String(value.clone()));
+    }
+
+    if step.action.needs_locator() {
+        let locator = step.locators.first().ok_or_else(|| {
+            anyhow::anyhow!(
+                "step {} ({:?}) needs a locator but has none",
+                step.step,
+                step.action
+            )
+        })?;
+        args.insert("element".to_string(), Value::String(locator.clone()));
+    }
+
+    Ok((step.action.tool_name().to_string(), Value::Object(args)))
 }
 
 /// One line of `actions.yaml`.
@@ -255,16 +328,11 @@ impl RecordHook {
     }
 
     fn value_for(action: Action, args: Option<&Value>) -> Option<String> {
-        let args = args?;
-        let key = match action {
-            Action::Goto => "url",
-            Action::Fill => "text",
-            Action::Select => "values",
-            Action::Press => "key",
-            Action::AssertText | Action::AssertValue => "text",
-            _ => return None,
-        };
-        args.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+        let key = value_key(action)?;
+        args?
+            .get(key)
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
     }
 
     fn locator_for(&self, req: &Request) -> Vec<String> {
@@ -455,6 +523,93 @@ mod tests {
             healed: false,
             last_hit: 0,
             ref_at_record: Some("@e21".into()),
+        }
+    }
+
+    /// All 9 `Action` variants, for tests that must cover every one.
+    const ALL_ACTIONS: [Action; 9] = [
+        Action::Goto,
+        Action::Click,
+        Action::Fill,
+        Action::Select,
+        Action::Press,
+        Action::Hover,
+        Action::AssertVisible,
+        Action::AssertText,
+        Action::AssertValue,
+    ];
+
+    fn tools_call(name: &str, args: Value) -> Request {
+        serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": args},
+        }))
+        .unwrap()
+    }
+
+    /// 0.1 — `tool_name()` must round-trip through `action_for`'s lookup: for
+    /// every `Action`, wrapping its `tool_name()` in a `tools/call` request
+    /// and feeding it back through `action_for` must yield the same
+    /// `Action`. Where several tool names map to one `Action` (`Fill`),
+    /// `tool_name()` is only required to hit the one `action_for` picks
+    /// first — it does not need to be exhaustive over the whole fan-in.
+    #[test]
+    fn tool_name_round_trips_through_action_for() {
+        for action in ALL_ACTIONS {
+            let req = tools_call(action.tool_name(), serde_json::json!({}));
+            assert_eq!(
+                RecordHook::action_for(&req),
+                Some(action),
+                "tool_name({action:?}) = {:?} did not round-trip back through action_for",
+                action.tool_name(),
+            );
+        }
+    }
+
+    /// 0.2 — `call_for`'s `arguments` must carry the step's value under the
+    /// exact key `value_for` reads it back out of, for every action that has
+    /// one (`Goto→url`, `Fill→text`, `Press→key`, asserts→text).
+    #[test]
+    fn call_for_uses_value_for_key_names() {
+        let cases = [
+            (Action::Goto, "url"),
+            (Action::Fill, "text"),
+            (Action::Press, "key"),
+            (Action::AssertText, "text"),
+            (Action::AssertValue, "text"),
+        ];
+        for (action, key) in cases {
+            let s = step(action, &["role:button"]);
+            let (_, args) = call_for(&s).unwrap();
+            assert_eq!(
+                args.get(key).and_then(Value::as_str),
+                s.value.as_deref(),
+                "call_for({action:?}) missing/mismatched {key:?} key: {args}"
+            );
+        }
+    }
+
+    /// 0.3 — locator-needing steps must carry a locator (`ref` or `element`)
+    /// in `call_for`'s arguments; `Goto` must carry neither.
+    #[test]
+    fn call_for_carries_locator_only_when_needed() {
+        for action in ALL_ACTIONS {
+            let locators: &[&str] = if action.needs_locator() {
+                &["role:button[name=\"Go\"]"]
+            } else {
+                &[]
+            };
+            let s = step(action, locators);
+            let (_, args) = call_for(&s).unwrap();
+            let has_locator = args.get("ref").is_some() || args.get("element").is_some();
+            assert_eq!(
+                has_locator,
+                action.needs_locator(),
+                "call_for({action:?}) locator presence {has_locator} != needs_locator() {}: {args}",
+                action.needs_locator(),
+            );
         }
     }
 
