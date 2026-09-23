@@ -2248,8 +2248,11 @@ impl TaskRunner {
                                 && !shown.is_empty()
                                 && msg.contains("empty streamed response") =>
                         {
-                            tracing::debug!(
+                            tracing::warn!(
                                 task_id,
+                                iteration,
+                                attempt,
+                                error = %msg,
                                 "empty reply after suggest_replies; ending the turn on the shown text"
                             );
                             ledger.iterations = iteration;
@@ -2259,6 +2262,14 @@ impl TaskRunner {
                         Err(LlmError::InvalidResponse(ref msg))
                             if attempt == 0 && msg.contains("empty streamed response") =>
                         {
+                            tracing::warn!(
+                                task_id,
+                                iteration,
+                                after_suggest_only,
+                                shown_chars = shown.iter().map(String::len).sum::<usize>(),
+                                error = %msg,
+                                "empty streamed response; retrying once"
+                            );
                             attempt += 1;
                             continue;
                         }
