@@ -616,7 +616,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             BrowserAction::Broker => cmd::browser::broker().await?,
             BrowserAction::List => cmd::browser::list()?,
             BrowserAction::Show { name } => cmd::browser::show(&name)?,
-            BrowserAction::Export { .. } => cmd::browser::not_yet("export")?,
+            BrowserAction::Export { name, out } => cmd::browser::export(&name, out.as_deref())?,
             BrowserAction::Status => cmd::browser::status()?,
         },
         Commands::DeepResearch {
