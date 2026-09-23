@@ -1418,6 +1418,7 @@ mod tests {
         parts.iter().map(|s| s.to_string()).collect()
     }
 
+    #[cfg(unix)]
     #[test]
     fn system_render_exec_captures_exit_stdout_and_stderr() {
         let run = system_render_exec(
@@ -1427,6 +1428,7 @@ mod tests {
         assert_eq!(run, exited(false, "out\n", "err\n"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn system_render_exec_kills_a_render_that_overruns_its_budget() {
         let started = Instant::now();
