@@ -1,0 +1,78 @@
+name: FreeBSD feasibility spike
+
+# Secret-free native FreeBSD 15.1 probe (plan Task 4).
+#
+# Transport note — read before "simplifying" this into `runs-on: freebsd`:
+# GitHub publishes no FreeBSD build of actions/runner, so a FreeBSD host
+# cannot run Node-based actions (checkout, upload-artifact). The job below
+# therefore runs on ubuntu-latest and pushes only plain commands to the
+# FreeBSD host over SSH via scripts/freebsd-remote.sh. Node stays on Linux.
+#
+# The probe touches no release credential: it needs FREEBSD_SSH_KEY only to
+# reach the host, never a GitHub token with write scope.
+
+on:
+  push:
+    branches: ["ci/freebsd-spike-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: freebsd-feasibility-spike-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    # Skipped rather than failed when the host secrets are absent, so forks
+    # and secret-less reruns do not show a red tick for a missing machine.
+    if: vars.FREEBSD_RUNNER_ONLINE == 'true'
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        # arm64 joins the matrix only once a machine exists for it. Hardware
+        # is the scarce part, so an unset FREEBSD_ARM64_HOST narrows the run
+        # to amd64 instead of parking a permanently red job in the matrix.
+        arch: >-
+          ${{ vars.FREEBSD_ARM64_HOST != ''
+              && fromJSON('["amd64", "arm64"]')
+              || fromJSON('["amd64"]') }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # git archive in freebsd-remote.sh ships HEAD, which must be the
+          # real commit — not the merge commit a shallow PR checkout fakes.
+          fetch-depth: 0
+
+      - name: Configure SSH access to the FreeBSD host
+        env:
+          SSH_KEY: ${{ secrets.FREEBSD_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.FREEBSD_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/freebsd
+          chmod 600 ~/.ssh/freebsd
+          # StrictHostKeyChecking=yes in freebsd-remote.sh needs this to be
+          # a real pinned key; an empty known_hosts fails closed, which is
+          # the intent.
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run the feasibility probe
+        env:
+          FREEBSD_HOST: ${{ matrix.arch == 'amd64' && vars.FREEBSD_AMD64_HOST || vars.FREEBSD_ARM64_HOST }}
+          FREEBSD_SSH_KEY: /home/runner/.ssh/freebsd
+          FREEBSD_FETCH: freebsd-spike-report.txt
+        run: |
+          sh scripts/freebsd-remote.sh \
+            "env EXPECTED_ARCH=${{ matrix.arch }} REPORT=freebsd-spike-report.txt sh scripts/freebsd-spike.sh"
+
+      - name: Upload probe report
+        # `always()`: a failed probe is exactly the run whose report matters.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freebsd-spike-report-${{ matrix.arch }}
+          path: freebsd-spike-report.txt
+          if-no-files-found: error

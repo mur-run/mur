@@ -394,6 +394,14 @@ jobs:
       - name: Run quick e2e smoke
         run: bash scripts/e2e/p1-export-gui.sh
 
+  freebsd-platform-audit:
+    name: FreeBSD platform audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify every platform-specific Rust line is classified
+        run: python3 scripts/check-freebsd-audit.py
+
   required-reason-apis:
     name: Required Reason API gate
     # Always run — 5s, runs against any source change so safe to keep.
@@ -411,7 +419,7 @@ jobs:
   ci-pass:
     name: CI pass
     if: always()
-    needs: [changes, test, clippy, fmt, gui, hub_gui, e2e_quick, required-reason-apis]
+    needs: [changes, test, clippy, fmt, gui, hub_gui, e2e_quick, freebsd-platform-audit, required-reason-apis]
     runs-on: ubuntu-latest
     steps:
       # `skipped` is fine (paths-filter excluded the job); failure/cancelled

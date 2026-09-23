@@ -44,6 +44,10 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         resign::post_upgrade(opts.restart_agents, None)?;
         return Ok(());
     }
+    if src == source::InstallSource::Pkg {
+        println!("Installed via FreeBSD pkg. Run: pkg upgrade mur");
+        return Ok(());
+    }
     if let Some(hint) = src.upgrade_hint() {
         println!("{hint}");
         return Ok(());
