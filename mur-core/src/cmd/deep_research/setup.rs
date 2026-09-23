@@ -283,8 +283,8 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
         // end in "Setup complete" with no rendered fetch at all. This offers
         // the install (commands shown, literal `yes` to run) and smoke-tests
         // what it finds; the grant below then covers whatever is present.
-        let stdin = std::io::stdin();
-        let mut input = stdin.lock();
+        // Reuse the wizard's `input`: `Stdin`'s lock is not reentrant, and
+        // `input` still holds it — locking stdin again here deadlocked.
         super::browser::ensure_render_browser(
             mur_home,
             &super::browser::install_plan(&mur_common::deps::current_platform()),
@@ -410,5 +410,22 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(err.contains("nonexistent_model"));
+    }
+
+    /// `Stdin::lock` is not reentrant: `cmd_setup` takes it once for the
+    /// wizard, and a second `stdin.lock()` further down (the render-browser
+    /// install prompt) hung setup forever right after the browser `yes`.
+    /// A real lock can't be exercised in a unit test without hanging it, so
+    /// guard the source: exactly one `.lock()` on stdin in `cmd_setup`.
+    #[test]
+    fn cmd_setup_locks_stdin_exactly_once() {
+        let src = include_str!("setup.rs");
+        let body = src
+            .split("pub fn cmd_setup(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n#[cfg(test)]").next())
+            .expect("cmd_setup body");
+        let locks = body.matches("stdin.lock()").count();
+        assert_eq!(locks, 1, "cmd_setup must lock stdin once and reuse `input`");
     }
 }
