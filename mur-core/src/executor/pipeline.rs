@@ -879,58 +879,61 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_actually_concurrent() {
-        // Two branches each sleep 0.5s. Sequential ≈ 1s, parallel ≈ 0.5s.
-        // Compared against a measured baseline, not an absolute bound.
+        // Rendezvous, not a stopwatch: each branch drops its own marker file,
+        // then waits for the *other* branch's marker. Both can only finish if
+        // they are alive at the same time; run back to back, the first branch
+        // waits for a marker that never appears and exits 1.
+        //
+        // A wall-clock comparison (the previous version) flaked on Windows
+        // CI: `sh` spawn overhead there dwarfs any sleep we can afford, e.g.
+        // "parallel 1.24s vs sequential 1.39s" against a 0.8 ratio bound.
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
+        let sync = TempDir::new().unwrap();
+        // Forward slashes so Git-for-Windows `sh` reads the path verbatim.
+        let dir = sync.path().display().to_string().replace('\\', "/");
+
+        // 50 polls × 0.2s ≥ 10s of patience (more in practice: every pass
+        // also pays a `sleep` spawn). Only exhausted when the branches are
+        // NOT concurrent, so it costs nothing on the passing path, and stays
+        // well inside nextest's 60s slow-timeout on the failing one.
+        let rendezvous = |me: &str, peer: &str| {
+            format!(
+                "touch '{dir}/{me}' || exit 1; i=0; \
+                 while [ ! -e '{dir}/{peer}' ]; do \
+                 i=$((i+1)); [ \"$i\" -ge 50 ] && exit 1; sleep 0.2; \
+                 done; echo {me}-done"
+            )
+        };
 
         store
             .save(&make_workflow(
-                "slow-a",
-                vec![shell_step(1, "Slow A", "sleep 0.5 && echo a-done")],
+                "meet-a",
+                vec![shell_step(1, "Meet A", &rendezvous("a", "b"))],
             ))
             .unwrap();
         store
             .save(&make_workflow(
-                "slow-b",
-                vec![shell_step(1, "Slow B", "sleep 0.5 && echo b-done")],
+                "meet-b",
+                vec![shell_step(1, "Meet B", &rendezvous("b", "a"))],
             ))
             .unwrap();
 
         let executor = PipelineExecutor::new(store);
-
-        // Baseline: run the two branches back to back. Measured in-process
-        // rather than hard-coded so shell spawn overhead (Windows CI pays
-        // ~0.5s+ per `sh` start) is accounted for instead of tripping an
-        // absolute wall-clock bound.
-        let start = Instant::now();
-        for name in ["slow-a", "slow-b"] {
-            let out = executor
-                .execute(&PipelineExpr::Single(name.into()), None)
-                .await
-                .unwrap();
-            assert_eq!(out.status, PipelineStatus::Success);
-        }
-        let sequential = start.elapsed();
-
         let expr = PipelineExpr::Parallel(vec![
-            PipelineExpr::Single("slow-a".into()),
-            PipelineExpr::Single("slow-b".into()),
+            PipelineExpr::Single("meet-a".into()),
+            PipelineExpr::Single("meet-b".into()),
         ]);
 
-        let start = Instant::now();
         let output = executor.execute(&expr, None).await.unwrap();
-        let parallel = start.elapsed();
-
-        assert_eq!(output.status, PipelineStatus::Success);
-        // Parallel must beat sequential by a clear margin; with two 0.5s
-        // sleeps the ideal ratio is ~0.5, so 0.8 leaves room for CI jitter.
-        assert!(
-            parallel.as_secs_f64() < sequential.as_secs_f64() * 0.8,
-            "parallel branches not concurrent: parallel {:.2}s vs sequential {:.2}s",
-            parallel.as_secs_f64(),
-            sequential.as_secs_f64()
+        let text = output.output_text.clone().unwrap_or_default();
+        assert_eq!(
+            output.status,
+            PipelineStatus::Success,
+            "parallel branches never overlapped (one gave up waiting for the other): {text}"
         );
+        assert!(text.contains("a-done"), "expected a-done in: {text}");
+        assert!(text.contains("b-done"), "expected b-done in: {text}");
     }
 
     #[tokio::test]
