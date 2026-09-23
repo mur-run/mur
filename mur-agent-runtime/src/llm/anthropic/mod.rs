@@ -426,6 +426,25 @@ struct StreamAccum {
     stop_reason: StopReason,
     /// The in-progress tool_use block: (id, name, partial-JSON args buffer).
     cur_tool: Option<(String, String, String)>,
+    /// Evidence for an empty response, so the error can say WHY it was
+    /// empty: a model that chose `end_turn` with nothing to say reads very
+    /// differently from a stream cut short or an in-band `error` event.
+    diag: StreamDiag,
+}
+
+/// What the stream looked like, kept only to explain an empty result.
+#[derive(Default)]
+struct StreamDiag {
+    /// `stop_reason` exactly as sent; `refusal` and friends collapse to
+    /// `EndTurn` in `StreamAccum::stop_reason`.
+    raw_stop_reason: Option<String>,
+    /// The terminal `message_stop` event arrived.
+    message_stop: bool,
+    /// `content_block_start` events seen, of any type.
+    blocks: usize,
+    thinking_chars: usize,
+    /// An in-band `{"type":"error"}` event: `<type>: <message>`.
+    error: Option<String>,
 }
 
 impl Default for StreamAccum {
@@ -436,6 +455,7 @@ impl Default for StreamAccum {
             tool_calls: Vec::new(),
             stop_reason: StopReason::EndTurn,
             cur_tool: None,
+            diag: StreamDiag::default(),
         }
     }
 }
@@ -447,6 +467,7 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
     use super::{StopReason, StreamDelta, ToolCallResult};
     match v["type"].as_str() {
         Some("content_block_start") => {
+            acc.diag.blocks += 1;
             let cb = &v["content_block"];
             if cb["type"].as_str() == Some("tool_use") {
                 acc.cur_tool = Some((
@@ -478,6 +499,7 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
                     if t.is_empty() {
                         return None;
                     }
+                    acc.diag.thinking_chars += t.chars().count();
                     Some(StreamDelta {
                         text: t.to_string(),
                         thinking: true,
@@ -519,6 +541,7 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
         }
         Some("message_delta") => {
             if let Some(sr) = v["delta"]["stop_reason"].as_str() {
+                acc.diag.raw_stop_reason = Some(sr.to_string());
                 acc.stop_reason = match sr {
                     "tool_use" => StopReason::ToolUse,
                     "max_tokens" => StopReason::MaxTokens,
@@ -528,8 +551,41 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
             acc.usage.merge(&v["usage"]);
             None
         }
+        Some("message_stop") => {
+            acc.diag.message_stop = true;
+            None
+        }
+        Some("error") => {
+            let e = &v["error"];
+            acc.diag.error = Some(format!(
+                "{}: {}",
+                e["type"].as_str().unwrap_or("unknown"),
+                e["message"].as_str().unwrap_or("")
+            ));
+            None
+        }
         _ => None,
     }
+}
+
+/// `empty streamed response (…)` with the evidence of why. The prefix is
+/// load-bearing: task_runner matches on it to decide retries.
+fn empty_stream_error(acc: &StreamAccum) -> String {
+    let d = &acc.diag;
+    let mut msg = format!(
+        "empty streamed response (stop_reason={}, message_stop={}, output_tokens={}, blocks={}, thinking_chars={}",
+        d.raw_stop_reason.as_deref().unwrap_or("none"),
+        d.message_stop,
+        acc.usage.output_tokens,
+        d.blocks,
+        d.thinking_chars,
+    );
+    if let Some(e) = &d.error {
+        msg.push_str(", error=");
+        msg.push_str(e);
+    }
+    msg.push(')');
+    msg
 }
 
 /// Turn a fully-drained `StreamAccum` into the final result. A tool-only
@@ -556,11 +612,18 @@ fn finish_stream(
         // An interruption with nothing assembled is a timeout, not a malformed
         // response: `classify` makes `Timeout` RetryThenAdvance and
         // `InvalidResponse` Stop, and nothing reached the sink to duplicate.
-        return Err(if interrupted {
-            LlmError::Timeout
-        } else {
-            LlmError::InvalidResponse("empty streamed response".into())
-        });
+        if interrupted {
+            tracing::warn!(
+                blocks = acc.diag.blocks,
+                "anthropic stream went idle before any content; reporting a timeout"
+            );
+            return Err(LlmError::Timeout);
+        }
+        let msg = empty_stream_error(&acc);
+        // Warn, not debug: this is the line that tells a silent `end_turn`
+        // from a failed stream, and the default filter drops debug.
+        tracing::warn!(model = %model, "{msg}");
+        return Err(LlmError::InvalidResponse(msg));
     }
     let stop_reason = if interrupted {
         StopReason::Interrupted

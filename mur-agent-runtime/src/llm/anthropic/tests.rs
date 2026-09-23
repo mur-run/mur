@@ -909,3 +909,79 @@ fn sse_usage_survives_message_delta_without_prompt_fields() {
     assert_eq!(acc.usage.input_tokens, 3);
     assert_eq!(acc.usage.output_tokens, 9);
 }
+
+// ── Why was the stream empty? (open item after #1472) ──────────────────────
+// A bare "empty streamed response" cannot tell a model that ended its turn
+// on purpose from a stream that failed. These pin the evidence the error
+// and the warn log must carry so real provider logs can settle it.
+
+fn feed(acc: &mut StreamAccum, events: &[serde_json::Value]) {
+    for e in events {
+        apply_sse_event(acc, e);
+    }
+}
+
+fn empty_message(acc: StreamAccum) -> String {
+    match finish_stream(acc, "claude-x".into(), false).unwrap_err() {
+        LlmError::InvalidResponse(m) => m,
+        other => panic!("expected InvalidResponse, got {other:?}"),
+    }
+}
+
+#[test]
+fn empty_stream_names_a_deliberate_silent_end_turn() {
+    let mut acc = StreamAccum::default();
+    feed(
+        &mut acc,
+        &[
+            json!({"type":"message_start","message":{"usage":{"input_tokens":900,"output_tokens":1}}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}),
+            json!({"type":"message_stop"}),
+        ],
+    );
+    let msg = empty_message(acc);
+    // task_runner matches on this substring; it must survive.
+    assert!(msg.contains("empty streamed response"), "{msg}");
+    assert!(msg.contains("stop_reason=end_turn"), "{msg}");
+    assert!(msg.contains("message_stop=true"), "{msg}");
+    assert!(msg.contains("output_tokens=2"), "{msg}");
+    assert!(msg.contains("blocks=0"), "{msg}");
+    assert!(!msg.contains("error="), "{msg}");
+}
+
+#[test]
+fn empty_stream_names_an_in_band_error_event() {
+    let mut acc = StreamAccum::default();
+    feed(
+        &mut acc,
+        &[
+            json!({"type":"message_start","message":{"usage":{"input_tokens":900,"output_tokens":1}}}),
+            json!({"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}),
+        ],
+    );
+    let msg = empty_message(acc);
+    assert!(msg.contains("empty streamed response"), "{msg}");
+    assert!(msg.contains("error=overloaded_error: Overloaded"), "{msg}");
+    assert!(msg.contains("message_stop=false"), "{msg}");
+    assert!(msg.contains("stop_reason=none"), "{msg}");
+}
+
+#[test]
+fn empty_stream_keeps_the_raw_stop_reason_and_thinking() {
+    // `refusal` maps to EndTurn internally; the raw value is the evidence.
+    let mut acc = StreamAccum::default();
+    feed(
+        &mut acc,
+        &[
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm…"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":7}}),
+            json!({"type":"message_stop"}),
+        ],
+    );
+    let msg = empty_message(acc);
+    assert!(msg.contains("stop_reason=refusal"), "{msg}");
+    assert!(msg.contains("thinking_chars=4"), "{msg}");
+    assert!(msg.contains("blocks=1"), "{msg}");
+}
