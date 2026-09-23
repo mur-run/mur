@@ -102,19 +102,19 @@ The checker recomputes the same matches and fails for either missing or stale `f
 | `mur-agent-runtime/src/sandbox/mod.rs:85` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
 | `mur-agent-runtime/src/sandbox/mod.rs:90` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
 | `mur-agent-runtime/src/sandbox/policy.rs:2` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:769` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:916` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:926` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:980` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:989` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:1000` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:1013` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:1611` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:1622` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:1755` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:1772` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:1947` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
-| `mur-agent-runtime/src/sandbox/policy.rs:2008` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:773` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:920` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:930` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:984` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:993` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:1004` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:1017` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:1615` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:1626` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:1759` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:1776` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:2040` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
+| `mur-agent-runtime/src/sandbox/policy.rs:2101` | `mur-agent-runtime` sandbox path | `explicit-freebsd` | Use the existing non-Linux/macOS/Windows fallback; native CI must compile and test it. | Task 6 |
 | `mur-agent-runtime/src/tools/bash.rs:29` | `mur-agent-runtime` runtime path | `portable` | No source change identified; native workspace tests verify the generic Unix path. | Task 6 |
 | `mur-agent-runtime/src/transport/unix_socket.rs:137` | `mur-agent-runtime` runtime path | `portable` | No source change identified; native workspace tests verify the generic Unix path. | Task 6 |
 | `mur-agent-runtime/src/transport/unix_socket.rs:163` | `mur-agent-runtime` runtime path | `portable` | No source change identified; native workspace tests verify the generic Unix path. | Task 6 |
@@ -137,8 +137,8 @@ The checker recomputes the same matches and fails for either missing or stale `f
 | `mur-common/src/binary_attestation.rs:34` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
 | `mur-common/src/deps/detect.rs:48` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
 | `mur-common/src/deps/mod.rs:65` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
-| `mur-common/src/exec.rs:176` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
-| `mur-common/src/exec.rs:189` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
+| `mur-common/src/exec.rs:183` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
+| `mur-common/src/exec.rs:202` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
 | `mur-common/src/local_llm.rs:4` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
 | `mur-common/src/schedule.rs:23` | shared by release binaries | `portable` | No source change identified; platform APIs or generic Unix behavior already cover FreeBSD. | Task 6 |
 | `mur-core/src/agent_wizard/apply.rs:57` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
@@ -280,12 +280,12 @@ The checker recomputes the same matches and fails for either missing or stale `f
 | `mur-core/src/cmd/agent_export_gui.rs:871` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/agent_export_gui.rs:911` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/agent_export_gui.rs:1036` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/browser/mod.rs:317` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/browser/mod.rs:367` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/browser/mod.rs:395` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/browser/mod.rs:411` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/browser/mod.rs:423` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/browser/mod.rs:338` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/browser/mod.rs:388` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/browser/mod.rs:416` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/browser/mod.rs:432` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/browser/mod.rs:444` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/browser/mod.rs:453` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/deep_research/ask.rs:55` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/doctor.rs:260` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/doctor.rs:275` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
@@ -401,7 +401,7 @@ The checker recomputes the same matches and fails for either missing or stale `f
 | `mur-core/src/update/resign.rs:179` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
 | `mur-core/src/update/resign.rs:255` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
 | `mur-core/src/update/resign.rs:305` | `mur` update path | `explicit-freebsd` | Add or verify FreeBSD asset/pkg behavior with host-independent tests. | Task 3 |
-| `mur-core/tests/agent_card_ephemeral.rs:25` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
+| `mur-core/tests/agent_card_ephemeral.rs:46` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-core/tests/agent_install_service.rs:1` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-core/tests/agent_install_service.rs:44` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-core/tests/agent_install_service.rs:53` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
