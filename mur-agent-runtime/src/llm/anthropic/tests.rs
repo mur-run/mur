@@ -1111,3 +1111,74 @@ fn history_opening_on_a_blank_user_turn_still_opens_on_user() {
     assert_eq!(convo[0]["content"], BLANK_USER_TURN);
     assert_eq!(convo.len(), 3);
 }
+
+// ── Characterization: where a pinned first user message lands ────────────────
+// These pin *existing* adapter behaviour the project-instructions design
+// depends on (spec §3.2 / §7.4 of
+// docs/superpowers/specs/2026-09-23-project-instructions-pinned-message-design.md).
+// They pass without any code change, by design.
+
+fn pinned_text(role: &str, content: &str) -> RichMessage {
+    RichMessage::Text {
+        role: role.into(),
+        content: content.into(),
+    }
+}
+
+const PINNED: &str = "<project_instructions>\nbe terse\n</project_instructions>";
+
+#[test]
+fn pinned_block_merges_into_current_message_when_no_prior_turns() {
+    let msgs = vec![
+        pinned_text("system", "sys"),
+        pinned_text("user", PINNED),
+        pinned_text("user", "current"),
+    ];
+    let (_sys, convo, _) = rich_messages_to_anthropic(&msgs);
+    assert_eq!(convo.len(), 1, "{convo:?}");
+    assert_eq!(convo[0]["role"], "user");
+    let content = convo[0]["content"].as_array().expect("content array");
+    assert!(
+        content[0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("<project_instructions")
+    );
+    assert_eq!(content[1]["text"], "current");
+}
+
+#[test]
+fn pinned_block_merges_into_first_prior_user_message_not_current() {
+    let msgs = vec![
+        pinned_text("system", "sys"),
+        pinned_text("user", PINNED),
+        pinned_text("user", "u1"),
+        pinned_text("agent", "a1"),
+        pinned_text("user", "current"),
+    ];
+    let (_sys, convo, _) = rich_messages_to_anthropic(&msgs);
+    assert_eq!(convo.len(), 3, "{convo:?}");
+    let first = convo[0]["content"].as_array().expect("content array");
+    assert!(
+        first[0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("<project_instructions")
+    );
+    assert_eq!(first[1]["text"], "u1");
+    // The current message is untouched: still a bare string, alone.
+    assert_eq!(convo[2]["role"], "user");
+    assert_eq!(convo[2]["content"], "current");
+}
+
+#[test]
+fn pinned_block_is_not_in_system_text() {
+    let msgs = vec![
+        pinned_text("system", "sys"),
+        pinned_text("user", PINNED),
+        pinned_text("user", "current"),
+    ];
+    let (sys, _convo, _) = rich_messages_to_anthropic(&msgs);
+    let sys = sys.expect("system text");
+    assert!(!sys.contains("<project_instructions"), "{sys}");
+}

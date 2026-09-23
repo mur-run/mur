@@ -410,4 +410,33 @@ mod tests {
             crate::turn_ledger::render_memory(2, &memory)
         );
     }
+
+    /// Characterization (spec §7.4): pins existing behaviour the
+    /// project-instructions design depends on; passes without code change.
+    #[test]
+    fn to_ollama_messages_keeps_pinned_block_at_index_1() {
+        let t = |role: &str, content: &str| RichMessage::Text {
+            role: role.into(),
+            content: content.into(),
+        };
+        let msgs = vec![
+            t("system", "sys"),
+            t(
+                "user",
+                "<project_instructions>\nbe terse\n</project_instructions>",
+            ),
+            t("user", "u1"),
+            t("agent", "a1"),
+            t("user", "current"),
+        ];
+        let out = to_ollama_messages(&msgs);
+        assert_eq!(out[1]["role"], "user");
+        assert!(
+            out[1]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("<project_instructions")
+        );
+        assert_eq!(out[2]["content"], "u1");
+    }
 }
