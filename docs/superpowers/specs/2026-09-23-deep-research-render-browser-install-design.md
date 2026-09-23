@@ -1,8 +1,37 @@
-# deep-research setup：安裝 render browser（obscura）與 doctor
+# deep-research setup：安裝 render browser（agent-browser + Lightpanda）與 doctor
 
 - 日期：2026-09-23
-- 狀態：設計已同意，尚未實作
-- 範圍：只有 `mur deep-research`。`mur browser record/replay`（npx + Playwright Chromium）是另一個子專案，不在這份 spec 裡。
+- 狀態：設計已同意，實作進行中（`feat/deep-research-browser-install` worktree，尚未 commit）
+- 範圍：只有 `mur deep-research` 的 render fetch。
+  - browser automation（`mur browser record/replay`、browser-rs 接線）是另一條路線，不在這份 spec 裡。
+  - obscura 維持選配（opt-in），不在這份 spec 裡安裝，也不改預設。
+
+## 0. 脈絡：為什麼是 agent-browser，不是 obscura
+
+照 `docs/superpowers/` 裡的計畫檔時間順序：
+
+| 日期 | 檔案 | 對 render engine 的決定 |
+|---|---|---|
+| 2026-07-09 | `specs/2026-07-09-mur-native-deep-research-design.md` | 研究用 render tier = `agent-browser`：tier 2 `--engine lightpanda`，tier 3 `--engine chrome`（anti-bot / screenshot） |
+| 2026-07-10 | `plans/2026-07-10-spike-obscura-render-tier.md` | spike：obscura 能否取代 Lightpanda tier（Q1、Q2 通過） |
+| 2026-07-10 | `plans/2026-07-10-obscura-render-tier-implementation.md` | obscura 加成 config 可選的 engine；「Default stays `AgentBrowser`; obscura is opt-in via config/env until Q3-full validates it, then a gated task flips the default.」 |
+| 2026-07-13 | `plans/2026-07-13-deep-research-ux-simplification.md` | 加入 `setup` wizard |
+| 2026-09-09 | `specs/2026-09-10-deep-research-slash-design.md` | `--render-engine agent-browser\|obscura`，兩者並存 |
+| 2026-09-10 | `specs/2026-09-10-browser-research-merged.md` | agent-browser / Lightpanda = 已裝、已 allowlist 的「輕量層」；Playwright = 完整層 |
+| 2026-09-10 | `specs/2026-09-10-browser-phase1-spec.md` | browser-rs / Obscura 接線延後 |
+
+Q3-full 沒有翻轉預設。現在的程式碼仍然是 agent-browser 預設：
+
+`mur-research-gateway/src/browser.rs:20-22`
+
+```rust
+pub enum RenderEngine {
+    /// `agent-browser` (Lightpanda tier-2 / Chrome tier-3) — current default.
+    #[default]
+```
+
+所以研究用的 render 路線是 **agent-browser，預設掛 Lightpanda 當 engine；Lightpanda 被擋時才退到 Chrome**。
+這份 spec 的前一版（改用 obscura + 寫 `render_engine: obscura`）會悄悄翻掉這個預設，已撤回。
 
 ## 1. 問題
 
@@ -19,79 +48,61 @@ if bins.is_empty() {
 ```
 
 使用者回答 yes、看到 `Setup complete`，但 worker 其實沒有 render 能力，要等遇到只有 JS 的頁面才發現。
-另外，就算 obscura 已經在 `~/.mur/aura/`，gateway 也要 `research_gateway.render_engine: obscura` 才會用它；目前只有 `mur deep-research provision --render-engine obscura` 會印 NOTE 請使用者自己去改（`provision.rs:453`）。
 
 ## 2. 決定
 
 | # | 決定 | 理由 |
 |---|---|---|
-| D1 | 擴充現有 `setup` wizard，不新增 install 命令（做法 A） | 同意和安裝放在同一個地方，不用多學一個命令 |
-| D2 | 安裝 **obscura**，走現有 deps installer（`mur-core/src/cmd/deps/installer.rs` 的 `install()`） | registry 已有 curated recipe（`mur-common/src/deps/registry_manifest.yaml`，v0.1.9，4 個平台，含 sha256），重用 sha256 驗證與 `safe_join`，只寫進 `~/.mur/aura/`，不寫全域 |
-| D3 | Q5 回答 `yes` 就代表同意安裝，不再多問一題 | wizard 已經有明確的同意時刻（字面 `yes`） |
-| D4 | Q5 同意後直接寫 `research_gateway.render_engine: obscura`，不再問 | 同 D3 |
-| D5 | config 裡 `render_engine` **已有值就不覆蓋**，只印出目前的值 | 保留使用者手動設定 |
-| D6 | 新增唯讀的 `mur deep-research doctor` | 不改任何東西，只回報狀態 |
+| D1 | 擴充現有 `setup` wizard，不新增 install 命令 | 同意和安裝放在同一個地方 |
+| D2 | 安裝 **agent-browser**：`npm i -g agent-browser@latest`，再 `agent-browser install`（拉 Chrome for Testing 當 fallback） | 跟 §0 的研究路線一致；`agent-browser install` 不跑的話 npm 套件自己不能 render |
+| D3 | 先把要跑的命令**完整印出來**，字面 `yes` 才執行；其他輸入 = 跳過 | 跟 egress、browser grant 同一套同意規則；npm -g 會寫全域，所以一定要先問 |
+| D4 | **不寫** `research_gateway.render_engine` | 預設已經是 `AgentBrowser`；寫 config 反而會蓋掉之後的預設變更 |
+| D5 | 安裝被拒或失敗**不讓 setup 失敗** | 沒有 render 時 plain fetch 仍然能用 |
+| D6 | 新增唯讀的 `mur deep-research doctor` | 只回報、smoke test、印安裝命令；永遠不安裝 |
 
 ## 3. setup 流程（Q5 = `yes` 之後）
 
-在 `setup.rs` 的 `cmd_setup` 裡、`grant_render_browser` 迴圈**之前**插入：
+在 `setup.rs` 的 `cmd_setup` 裡、`grant_render_browser` 迴圈**之前**呼叫 `browser::ensure_render_browser`：
 
-1. **檢查**：`~/.mur/aura/obscura` 與 `~/.mur/aura/obscura-worker` 是否都存在（路徑同 `provision.rs:85-86` 的 `OBSCURA_RELATIVE` / `OBSCURA_WORKER_RELATIVE`）。
-2. **缺了就安裝**：
-   - 以 `mur_common::deps::registry::recipe("obscura", <platform>)` 取 recipe。
-   - 先印出要做的事（URL、sha256 前 12 碼、會寫入的兩個路徑），再呼叫 `deps::installer::install(&recipe, mur_home)`。
-   - 目前平台沒有 recipe → 印 `note: no obscura build for <platform>; rendered fetch stays off`，**跳過 4–5**，setup 繼續（跟現在缺瀏覽器時一樣不算失敗）。
-   - 下載或 sha256 驗證失敗 → 印錯誤與可以手動重試的命令，setup 繼續，不寫 config。
-3. **grant**：照現有流程呼叫 `grant_render_browser`，它會把 obscura 的絕對路徑加進 exec 權限。
-4. **寫 config**（D4、D5）：
-   - `render_engine` 不存在 → 寫入 `obscura`，印 `render engine: obscura (written to ~/.mur/config.yaml)`。
-   - 已有值（不管是不是 obscura）→ 不動，印 `render engine: <值> (kept; already set in config)`。
-   - 寫法重用 `secret.rs` 的 `upsert_gateway_key` + `write_config_atomically`（`secret.rs:94`、`secret.rs:165`），保留 `research_gateway:` 裡的其他設定；已有測試 `existing_gateway_settings_are_preserved` 覆蓋這個行為。
-5. **smoke test**：用 `~/.mur/aura/obscura` 抓一個本地 fixture 頁面（`data:` URL 或暫時起一個 127.0.0.1 server），頁面內容只由 JS 產生；輸出含那段文字才算通過。
-   - 通過 → `render smoke test: ok`
-   - 失敗 → `render smoke test: FAILED — <原因>`，**不回滾**安裝或 config，並建議跑 `mur deep-research doctor`。
+1. **檢查**：`provision::render_binaries`（`~/.mur/aura/lightpanda` 與 PATH 上的 `agent-browser`）。
+2. **缺了就提議安裝**：印出 D2 兩條命令，問 `Type 'yes' to run these now (anything else = skip)`。
+   - 非 `yes` → `skipped — plain fetch still works; run \`mur deep-research doctor\` later.`
+   - 任一步失敗 → 印出失敗的命令，停止後續步驟，setup 繼續。
+   - 裝完仍找不到 `agent-browser` → 提示檢查 npm prefix。
+3. **smoke test**：對找到的每個 binary 跑版本檢查（`agent-browser --version`；`lightpanda` 吃 subcommand 不吃 flag，用 `smoke_argv` 區分）。
+4. **grant**：照現有流程 `grant_render_browser`，涵蓋實際存在的 binary。
 
-Q5 的說明文字要改：目前寫的是 `EXECUTES \`agent-browser\``（`setup.rs:144-147`），要改成提到 obscura，並說明回答 `yes` 會下載約 N MB 到 `~/.mur/aura/`。
-
-Q5 不是 `yes` → 跟現在完全一樣，不安裝、不寫 config。
+Q5 不是 `yes` → 跟現在完全一樣。
 
 ## 4. `mur deep-research doctor`（唯讀）
 
-加在 `DeepResearchAction`（`mur-core/src/cli/actions.rs:878`）。只讀、不寫、不下載。
+加在 `DeepResearchAction`（`mur-core/src/cli/actions.rs`）。
 
-| 檢查 | ok | 不 ok 時的提示 |
-|---|---|---|
-| obscura 兩個 binary 存在且可執行 | 印路徑 | `run: mur deep-research setup` |
-| `render_engine` 設定值 | 印值 | 未設 → 提示 setup；設成 `obscura` 但 binary 不在 → 標成錯誤 |
-| 每個 worker 有沒有 render exec 權限 | 列出已授權的 worker | 列出缺的 worker |
-| 每個 worker 有沒有 egress | 同上 | 同上 |
-| smoke test（加 `--smoke` 才跑） | `ok` | 失敗原因 |
-
-有任何錯誤時 exit code 1，方便寫進 script。
+- 找不到任何 render browser → 印安裝命令與「或在 setup 回答 yes」，exit 非 0。
+- 找到但 smoke test 全失敗 → exit 非 0。
+- 不下載、不寫檔、不改 config。
 
 ## 5. 不做的事
 
-- 不支援 `agent-browser` 的安裝（要 npm -g，會寫全域）。已裝的 `agent-browser` 仍照現有邏輯被 grant。
-- 不覆蓋使用者已設定的 `render_engine`。
-- 不回滾：安裝成功但 smoke test 失敗時，保留檔案與 config。
-- 不處理 `mur browser record/replay` 的 Playwright Chromium。
+- 不安裝 obscura、不寫 `render_engine`（obscura 仍可用 `--render-engine obscura` / config 手動選）。
+- 不處理 browser automation（Playwright Chromium、browser-rs）。
+- 不回滾：安裝成功但 smoke test 失敗時保留現狀。
 
-## 6. 測試
+## 6. 測試（對應 worktree 裡 `browser.rs` 的單元測試）
 
 | 測試 | 驗證什麼 |
 |---|---|
-| Q5 非 `yes` | 不呼叫 installer、config 不變 |
-| Q5 `yes`、binary 已存在 | 不下載，直接 grant + 寫 config |
-| Q5 `yes`、config 已有 `render_engine: lightpanda` | 值保留，輸出含 `kept` |
-| Q5 `yes`、config 沒有 `render_engine` | 寫入 `obscura`，其他 `research_gateway` 鍵不變 |
-| 平台無 recipe | 印 note、不寫 config、setup 成功 |
-| sha256 不符 | 沒有檔案寫入（沿用 `verify_and_place` 的 fail-closed）、不寫 config |
-| doctor 在 binary 缺少時 | exit 1、不寫任何檔案 |
+| 缺瀏覽器、使用者拒絕 | 印出兩條命令，runner 一次都沒被呼叫 |
+| 字面 `yes` | 依序執行兩條命令 |
+| 第一步失敗 | 停止、不是 error |
+| 已有 lightpanda | 不安裝，只 smoke test，而且用 subcommand 不用 flag |
+| doctor 在缺瀏覽器時 | 回 error、印安裝命令、不執行任何安裝 |
+| `smoke_argv` | agent-browser 用 `--version` |
 
-installer 的下載要能注入（trait 或傳入 bytes），測試不打網路。
+runner 可注入，測試不碰 npm 也不連網路。
 
-## 7. 本機現況（寫 spec 時查到的）
+## 7. 待決定
 
-- `~/.mur/aura/` 已有 `obscura`、`obscura-worker`、`lightpanda`。
-- `~/.mur/config.yaml` 沒有 `render_engine`。
-- 這台機器在 sandbox 裡直接執行 `~/.mur/aura/obscura --version` 會得到 `Operation not permitted`，smoke test 要在已授權的 worker sandbox 裡跑，或由 setup 本身（非 sandbox）執行。
+1. **Lightpanda 要不要一起裝**：`mur-common/src/deps/registry_manifest.yaml` 已有 `lightpanda` 的 curated recipe，可以走 deps installer 裝進 `~/.mur/aura/`（有 sha256、不寫全域）。目前的實作只裝 agent-browser + Chrome for Testing，沒有 Lightpanda 時會直接用 Chrome，跟「Lightpanda 優先」的路線不完全一致。
+2. **smoke test 的深度**：目前只跑版本檢查，沒有真的 render 一個 JS 頁面。
+3. **sandbox**：在 agent sandbox 裡直接執行 `agent-browser --version` 會得到 `Operation not permitted`，smoke test 要由 setup 本身（非 sandbox）或已授權的 worker 跑。
