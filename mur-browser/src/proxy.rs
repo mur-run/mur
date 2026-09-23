@@ -712,11 +712,19 @@ where
         })
     };
 
-    // Whichever side hangs up first ends the session.
-    tokio::select! {
-        _ = r_agent => {}
-        _ = r_server => {}
-    }
+    // Whichever side hangs up first ends the session. Abort the other reader:
+    // it owns a `Downstream` clone (the last sender to the server writer) and a
+    // `to_agent` sender, so leaving it running keeps `w_server` waiting for its
+    // channel to close, the server's stdin open, and the server alive — a
+    // deadlock whenever the agent hangs up first.
+    let (mut r_agent, mut r_server) = (r_agent, r_server);
+    let other = tokio::select! {
+        _ = &mut r_agent => r_server,
+        _ = &mut r_server => r_agent,
+    };
+    // The finished handle must not be polled again; only the other one.
+    other.abort();
+    let _ = other.await;
     drop(down);
     drop(to_agent_tx);
     let _ = w_server.await;
@@ -907,6 +915,35 @@ mod tests {
             !args.iter().any(|arg| arg == "--headed"),
             "@playwright/mcp is headed by default; --headed is not a supported option"
         );
+    }
+
+    /// The agent hanging up (stdin EOF) must end the session even while the
+    /// downstream server stays alive and silent, like a real Playwright MCP.
+    #[tokio::test]
+    async fn agent_eof_ends_session_while_server_stays_up() {
+        let (agent_w, agent_in) = duplex(64 * 1024);
+        let (agent_out, _agent_r) = duplex(64 * 1024);
+        let (server_in, srv_r) = duplex(64 * 1024);
+        let (srv_w, server_out) = duplex(64 * 1024);
+        // The server only exits once its stdin closes.
+        tokio::spawn(fake_server(srv_r, srv_w));
+        let session = tokio::spawn(run_io(agent_in, agent_out, server_in, server_out, PassHook));
+        drop(agent_w);
+        tokio::time::timeout(std::time::Duration::from_secs(2), session)
+            .await
+            .expect("run_io did not return after the agent closed stdin")
+            .unwrap()
+            .unwrap();
+    }
+
+    struct PassHook;
+    impl Hook for PassHook {
+        async fn on_request(&mut self, req: Request, _down: &Downstream) -> Decision {
+            Decision::Forward(req)
+        }
+        async fn on_response(&mut self, _req: &Request, resp: Value, _down: &Downstream) -> Value {
+            resp
+        }
     }
 
     #[tokio::test]
