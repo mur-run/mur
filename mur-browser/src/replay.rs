@@ -195,6 +195,18 @@ async fn run_step<C: ToolCaller + Send>(step: &Step, caller: &mut C) -> Result<O
                 let parsed = Locator::parse(raw).ok()?;
                 locator::resolve(&parsed, &nodes).map(|r| (raw.clone(), r))
             })
+            // Real Playwright snapshots never carry data-testid, so a testid
+            // cannot hit above. Only when nothing verifiable hit, hand the
+            // first testid to Playwright as a selector; 0.0.82 resolves
+            // non-ref `target`s itself and errors if nothing matches.
+            .or_else(|| {
+                step.locators
+                    .iter()
+                    .find_map(|raw| match Locator::parse(raw) {
+                        Ok(Locator::TestId(id)) => Some((raw.clone(), testid_selector(&id))),
+                        _ => None,
+                    })
+            })
             .with_context(|| {
                 format!(
                     "no locator matched the page: [{}]",
@@ -218,6 +230,12 @@ async fn run_step<C: ToolCaller + Send>(step: &Step, caller: &mut C) -> Result<O
     let response = caller.call_tool(&tool, args).await?;
     ensure_ok(&tool, &response)?;
     Ok(hit)
+}
+
+/// CSS attribute selector for a `data-testid`, quoted and escaped.
+fn testid_selector(id: &str) -> String {
+    let escaped = id.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("[data-testid=\"{escaped}\"]")
 }
 
 /// MCP tool failures arrive as successful results with `isError: true`.
@@ -487,17 +505,57 @@ steps:
     }
 
     #[tokio::test]
+    async fn testid_missing_from_snapshot_falls_back_to_css_selector() {
+        // Real Playwright snapshots never expose data-testid, so a
+        // testid-only step must be sent as a selector for Playwright to find.
+        let yaml = THREE.replace(
+            "['testid:gone', 'role:button[name=\"Sign in\"]']",
+            "['testid:product-thumbnail']",
+        );
+        let mut fake = Fake::default();
+        let report = replay_with(&run(&yaml), &[], &mut fake).await.unwrap();
+        assert_eq!(report.steps[1].status, StepStatus::Passed, "{report:?}");
+        assert_eq!(
+            report.steps[1].locator_used.as_deref(),
+            Some("testid:product-thumbnail")
+        );
+        let click = fake
+            .calls
+            .iter()
+            .find(|(n, _)| n == "browser_click")
+            .unwrap();
+        assert_eq!(click.1["target"], "[data-testid=\"product-thumbnail\"]");
+    }
+
+    #[tokio::test]
+    async fn snapshot_hit_beats_testid_selector_fallback() {
+        // testid:gone is listed first but only the role hits the snapshot;
+        // the verified ref wins over an unverified selector.
+        let mut fake = Fake::default();
+        let report = replay_with(&run(THREE), &[], &mut fake).await.unwrap();
+        assert_eq!(
+            report.steps[1].locator_used.as_deref(),
+            Some("role:button[name=\"Sign in\"]")
+        );
+    }
+
+    #[test]
+    fn testid_selector_escapes_quotes_and_backslashes() {
+        assert_eq!(testid_selector(r#"a"b\c"#), r#"[data-testid="a\"b\\c"]"#);
+    }
+
+    #[tokio::test]
     async fn locator_miss_fails_with_candidates_listed() {
         let yaml = THREE.replace(
-            "role:button[name=\"Sign in\"]",
-            "role:button[name=\"Log in\"]",
+            "['testid:gone', 'role:button[name=\"Sign in\"]']",
+            "['text:gone', 'role:button[name=\"Log in\"]']",
         );
         let mut fake = Fake::default();
         let report = replay_with(&run(&yaml), &[], &mut fake).await.unwrap();
         assert_eq!(report.steps[1].status, StepStatus::Failed);
         let msg = report.steps[1].message.clone().unwrap();
         assert!(
-            msg.contains("no locator matched") && msg.contains("testid:gone"),
+            msg.contains("no locator matched") && msg.contains("text:gone"),
             "{msg}"
         );
     }
