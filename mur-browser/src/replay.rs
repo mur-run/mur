@@ -167,6 +167,14 @@ pub async fn replay_with<C: ToolCaller + Send>(
                 }
             }
         };
+        tracing::debug!(
+            step = outcome.step,
+            action = ?step.action,
+            status = ?outcome.status,
+            locator = outcome.locator_used.as_deref().unwrap_or(""),
+            message = outcome.message.as_deref().unwrap_or(""),
+            "replayed step"
+        );
         outcomes.push(outcome);
     }
     Ok(ReplayReport::new(run, outcomes))

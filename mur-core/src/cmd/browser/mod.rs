@@ -802,6 +802,14 @@ pub async fn replay(name: &str, profile: Option<&str>, heal: bool, dry_run: bool
         None => Vec::new(),
     };
 
+    tracing::info!(
+        run = name,
+        mode = ?run.mode,
+        profile = profile.as_deref().unwrap_or(""),
+        steps = run.steps.len(),
+        dry_run,
+        "browser replay started"
+    );
     let report = if dry_run {
         mur_browser::replay::dry_run(&run, &allow)?
     } else {
@@ -824,6 +832,14 @@ pub async fn replay(name: &str, profile: Option<&str>, heal: bool, dry_run: bool
         }
     };
 
+    tracing::info!(
+        run = name,
+        total = report.total,
+        passed = report.passed,
+        failed = report.failed,
+        healed = report.healed,
+        "browser replay finished"
+    );
     if !dry_run {
         let out = paths::run_report(&home, name);
         fs::write(&out, serde_yaml::to_string(&report)?)
