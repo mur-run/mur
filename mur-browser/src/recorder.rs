@@ -347,10 +347,12 @@ impl RecordHook {
 
     fn value_for(action: Action, args: Option<&Value>) -> Option<String> {
         let key = value_key(action)?;
-        args?
-            .get(key)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
+        // `browser_select_option` sends `values: ["M"]`; keep the first entry.
+        match args?.get(key)? {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(items) => items.first().and_then(Value::as_str).map(ToOwned::to_owned),
+            _ => None,
+        }
     }
 
     fn locator_for(&self, req: &Request) -> Vec<String> {
@@ -359,7 +361,11 @@ impl RecordHook {
         };
         // Prefer candidates derived from the current a11y snapshot. A recorded
         // ref is diagnostic-only; it is resolved here while it is still valid.
-        if let Some(reference) = args.get("ref").and_then(Value::as_str) {
+        if let Some(reference) = args
+            .get("ref")
+            .or_else(|| args.get("target"))
+            .and_then(Value::as_str)
+        {
             let candidates = candidates_for_ref(reference, &self.snapshot);
             if !candidates.is_empty() {
                 return candidates;
@@ -455,7 +461,7 @@ impl RecordHook {
             healed: false,
             last_hit: 0,
             ref_at_record: args
-                .and_then(|a| a.get("ref"))
+                .and_then(|a| a.get("ref").or_else(|| a.get("target")))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
         };
@@ -522,6 +528,10 @@ impl Hook for RecordHook {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         {
+            tracing::warn!(
+                tool = req.tool_name().unwrap_or(""),
+                "action failed downstream; step not recorded"
+            );
             return resp;
         }
         self.cache_snapshot_response(req, &resp);
@@ -757,6 +767,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn locator_for_accepts_target_as_ref() {
+        let mut hook = RecordHook::new(Run {
+            name: "target".into(),
+            mode: Mode::Automation,
+            profile: None,
+            recorded_at: chrono::Utc::now(),
+            steps: vec![],
+        });
+        hook.snapshot = crate::locator::parse_snapshot("- button \"Add to cart\" [ref=e5]");
+        let req = tools_call(
+            "browser_click",
+            serde_json::json!({"element": "Add to cart", "target": "e5"}),
+        );
+        assert_eq!(
+            hook.locator_for(&req)[0],
+            "role:button[name=\"Add to cart\"]"
+        );
+    }
+    #[test]
+    fn value_for_select_keeps_first_array_entry() {
+        let args = serde_json::json!({"target": "e4", "values": ["M"]});
+        assert_eq!(
+            RecordHook::value_for(Action::Select, Some(&args)),
+            Some("M".to_string())
+        );
+    }
     #[test]
     fn reject_when_no_locator() {
         let s = step(Action::Click, &[]);
