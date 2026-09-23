@@ -272,6 +272,19 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
     // Render browser: same consent discipline as egress — literal "yes" only,
     // applied to every target worker, never revoked here.
     if a.browser {
+        // Check before granting: a `yes` on a machine with no browser used to
+        // end in "Setup complete" with no rendered fetch at all. This offers
+        // the install (commands shown, literal `yes` to run) and smoke-tests
+        // what it finds; the grant below then covers whatever is present.
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        super::browser::ensure_render_browser(
+            mur_home,
+            &mut input,
+            &mut std::io::stdout(),
+            &mut super::browser::system_runner,
+            &mut super::browser::system_render_exec,
+        )?;
         for name in &target_names {
             super::provision::grant_render_browser(mur_home, name)?;
         }
