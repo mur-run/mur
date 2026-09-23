@@ -111,18 +111,18 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 0.1 先寫測試：對 9 個 `Action` 變體逐一呼叫 `tool_name()`，
+- [x] 0.1 先寫測試：對 9 個 `Action` 變體逐一呼叫 `tool_name()`，
       再餵回 `Recorder::action_for` 的同名查表，必須還原成同一個 `Action`
       （`browser_type`/`browser_fill` 這類多對一，正向取第一個即可）
-- [ ] 0.2 補測試：`call_for` 對 `Goto` 產出的 `arguments` 必須含 `url` 鍵，
+- [x] 0.2 補測試：`call_for` 對 `Goto` 產出的 `arguments` 必須含 `url` 鍵，
       對 `Fill` 含 `text`，對 `Press` 含 `key` —— 鍵名直接對照 `value_for`
-- [ ] 0.3 補測試：`Action::needs_locator()` 為真的步驟，`call_for` 必須帶
+- [x] 0.3 補測試：`Action::needs_locator()` 為真的步驟，`call_for` 必須帶
       `ref` 或 `element`；`Goto` 則不得帶
-- [ ] 0.4 `cargo test -p mur-browser roundtrip` → 失敗
-- [ ] 0.5 實作 `tool_name` 與 `call_for`，讓測試轉綠
-- [ ] 0.6 寫 `tests/fixtures/run-roundtrip.yaml`，9 個變體各一步，
+- [x] 0.4 `cargo test -p mur-browser roundtrip` → 失敗
+- [x] 0.5 實作 `tool_name` 與 `call_for`，讓測試轉綠
+- [x] 0.6 寫 `tests/fixtures/run-roundtrip.yaml`，9 個變體各一步，
       `mode: test`、`recorded_at` 用固定時戳（避免測試不穩定）
-- [ ] 0.7 `cargo test -p mur-browser && cargo clippy --all-targets -- -D warnings`，commit
+- [x] 0.7 `cargo test -p mur-browser && cargo clippy --all-targets -- -D warnings`，commit
 
 **這個 Task 擋住 4、5、6、7。** 完成前不要派工那四個。
 
@@ -139,13 +139,13 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 1.1 讀 `mur-core/src/cli/actions.rs:797-812` 確認 `Auth` 的四個參數與 `BrowserEngine` 值域，抄進 skill 的指令表
-- [ ] 1.2 建立 `/tmp/browser-auth/SKILL.md`，frontmatter 比照 `~/.mur/skills/mur-brainstorm/SKILL.md`：`name: browser-auth`、`category: workflow`、`visibility: on_demand`、`provenance: human`、triggers 含 keyword `browser (login|auth)|登入|瀏覽器驗證` 與 `manual`
-- [ ] 1.3 內文明訂**三條不可違反的規則**：(a) agent 絕不代打帳號密碼，一律 handoff 給人；(b) 非互動情境下若 profile 不存在就直接報錯，不得自行開登入流程；(c) 呼叫時必須帶 `--browser`，避免 `select_browser` 進入互動詢問
-- [ ] 1.4 內文加「何時該 reauth」判準：`mur browser status` 顯示 `(incomplete)` / `(metadata missing)`，或 `earliest_cookie_expires` 已過
-- [ ] 1.5 `mur skill install /tmp/browser-auth`，預期輸出含 skill 名稱
-- [ ] 1.6 驗證：`ls ~/.mur/skills/browser-auth/SKILL.md` 存在
-- [ ] 1.7 commit plan 進度（skill 裝在 `~/.mur`，repo 端只有此 plan 的勾選變更；
+- [x] 1.1 讀 `mur-core/src/cli/actions.rs:797-812` 確認 `Auth` 的四個參數與 `BrowserEngine` 值域，抄進 skill 的指令表
+- [x] 1.2 建立 `/tmp/browser-auth/SKILL.md`，frontmatter 比照 `~/.mur/skills/mur-brainstorm/SKILL.md`：`name: browser-auth`、`category: workflow`、`visibility: on_demand`、`provenance: human`、triggers 含 keyword `browser (login|auth)|登入|瀏覽器驗證` 與 `manual`
+- [x] 1.3 內文明訂**三條不可違反的規則**：(a) agent 絕不代打帳號密碼，一律 handoff 給人；(b) 非互動情境下若 profile 不存在就直接報錯，不得自行開登入流程；(c) 呼叫時必須帶 `--browser`，避免 `select_browser` 進入互動詢問
+- [x] 1.4 內文加「何時該 reauth」判準：`mur browser status` 顯示 `(incomplete)` / `(metadata missing)`，或 `earliest_cookie_expires` 已過
+- [x] 1.5 `mur skill install /tmp/browser-auth`，預期輸出含 skill 名稱
+- [x] 1.6 驗證：`mur skill info browser-auth` 讀得到、`mur skill validate ~/.mur/skills/browser-auth/skill.yaml` 回 `ok`（安裝產物是 canonical `skill.yaml`；`SKILL.md` 只是 `mur skill fmt` 的另一種表示，並非必要檔。原驗收條件寫錯，已更正）
+- [x] 1.7 commit plan 進度（skill 裝在 `~/.mur`，repo 端只有此 plan 的勾選變更；
       若無其他檔案變動則跳過 commit，不要製造空 commit）
 
 ---
@@ -188,16 +188,16 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 3.1 讀 `mur-browser/src/recorder.rs:52-98` 抄下 `Step` 全部欄位與 `Action` 的完整 variant 列表，逐一決定對應的 Playwright 呼叫
-- [ ] 3.2 新建 `mur-browser/src/export.rs`，先寫測試：一個含 `goto` + `fill` + assert 的 `Run`，輸出須含 `import { test, expect } from '@playwright/test';`、`test('<run.name>', async ({ page }) => {`、以及 `await page.goto(`
-- [ ] 3.3 補測試：`value` 為 `{{secret:acme/PASSWORD}}` 的 step，輸出**不得**含該佔位符原文，須轉成 `process.env.ACME_PASSWORD` 形式；且輸出絕不含明文密碼
-- [ ] 3.4 補測試：`mode: automation` 的 Run 呼叫 `to_spec_ts` 回 `Err`（automation 沒有斷言，不該產 spec）
-- [ ] 3.5 `cargo test -p mur-browser export` → 失敗
-- [ ] 3.6 實作 `to_spec_ts`：`locators` 取第一順位候選；每個 step 前輸出 `// <intent>` 註解；TS 字串一律跳脫單引號與反斜線
-- [ ] 3.7 `cargo test -p mur-browser export` → 全綠
-- [ ] 3.8 `cmd/browser/mod.rs` 加 `pub fn export(name: &str, out: Option<&Path>) -> Result<()>`：`validate_name` → 讀 `run_actions` → `from_yaml` → `to_spec_ts` → 寫檔或印出
-- [ ] 3.9 `actions.rs` 的 `Export` 加 `#[arg(long)] out: Option<PathBuf>`，doc comment 去掉 later slice 字樣；`dispatch.rs:619` 換成真 handler
-- [ ] 3.10 `cargo test && cargo clippy --all-targets -- -D warnings` → 全綠，commit
+- [x] 3.1 讀 `mur-browser/src/recorder.rs:52-98` 抄下 `Step` 全部欄位與 `Action` 的完整 variant 列表，逐一決定對應的 Playwright 呼叫
+- [x] 3.2 新建 `mur-browser/src/export.rs`，先寫測試：一個含 `goto` + `fill` + assert 的 `Run`，輸出須含 `import { test, expect } from '@playwright/test';`、`test('<run.name>', async ({ page }) => {`、以及 `await page.goto(`
+- [x] 3.3 補測試：`value` 為 `{{secret:acme/PASSWORD}}` 的 step，輸出**不得**含該佔位符原文，須轉成 `process.env.ACME_PASSWORD` 形式；且輸出絕不含明文密碼
+- [x] 3.4 補測試：`mode: automation` 的 Run 呼叫 `to_spec_ts` 回 `Err`（automation 沒有斷言，不該產 spec）
+- [x] 3.5 `cargo test -p mur-browser export` → 失敗
+- [x] 3.6 實作 `to_spec_ts`：`locators` 取第一順位候選；每個 step 前輸出 `// <intent>` 註解；TS 字串一律跳脫單引號與反斜線
+- [x] 3.7 `cargo test -p mur-browser export` → 全綠
+- [x] 3.8 `cmd/browser/mod.rs` 加 `pub fn export(name: &str, out: Option<&Path>) -> Result<()>`：`validate_name` → 讀 `run_actions` → `from_yaml` → `to_spec_ts` → 寫檔或印出
+- [x] 3.9 `actions.rs` 的 `Export` 加 `#[arg(long)] out: Option<PathBuf>`，doc comment 去掉 later slice 字樣；`dispatch.rs:619` 換成真 handler
+- [x] 3.10 `cargo test && cargo clippy --all-targets -- -D warnings` → 全綠，commit
 
 ---
 
