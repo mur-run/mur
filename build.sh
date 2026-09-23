@@ -83,9 +83,14 @@ if $INSTALL; then
   # sudo with `|| true`, so every install silently shipped an ad-hoc signature —
   # the exact thing MUR_CODESIGN_IDENTITY exists to prevent. A Mach-O signature
   # is embedded in the file, so the `cp` below preserves it.
+  #
+  # The actual codesign invocation lives in scripts/codesign.sh (stable
+  # --identifier, hardened runtime for real identities) so dev builds and
+  # installs sign identically. Called per-binary to keep per-file failure
+  # reporting.
   sign() {
     [ -f "$1" ] || return 0
-    if ! codesign --force -s "$CODESIGN_IDENTITY" "$1"; then
+    if ! MUR_CODESIGN_IDENTITY="$CODESIGN_IDENTITY" bash "$SCRIPT_DIR/scripts/codesign.sh" "$1"; then
       echo "⚠ codesign FAILED for $1 (identity: $CODESIGN_IDENTITY)"
       SIGN_FAILED=true
     fi
