@@ -350,6 +350,23 @@ where
     }
 }
 
+/// Launch arguments for the headless Playwright MCP server used by replay.
+fn live_args(storage_state: Option<&std::path::Path>) -> Vec<String> {
+    // @playwright/mcp defaults to branded Google Chrome, which is often not
+    // installed; the bundled Chromium is what `npx playwright install` provides.
+    let mut args = vec![
+        "--headless".to_owned(),
+        "--isolated".to_owned(),
+        "--browser=chromium".to_owned(),
+        // browser_verify_* (assert steps) are opt-in in @playwright/mcp.
+        "--caps=testing".to_owned(),
+    ];
+    if let Some(path) = storage_state {
+        args.push(format!("--storage-state={}", path.display()));
+    }
+    args
+}
+
 /// Spawn a headless, isolated Playwright MCP server and replay `run` on it.
 /// `storage_state` is a decrypted profile state file the caller owns and
 /// deletes afterwards.
@@ -359,16 +376,7 @@ pub async fn replay_live(
     storage_state: Option<&std::path::Path>,
 ) -> Result<ReplayReport> {
     check_navigation(run, allow)?;
-    // @playwright/mcp defaults to branded Google Chrome, which is often not
-    // installed; the bundled Chromium is what `npx playwright install` provides.
-    let mut args = vec![
-        "--headless".to_owned(),
-        "--isolated".to_owned(),
-        "--browser=chromium".to_owned(),
-    ];
-    if let Some(path) = storage_state {
-        args.push(format!("--storage-state={}", path.display()));
-    }
+    let args = live_args(storage_state);
     let mut child = crate::proxy::playwright_command(&args)
         .spawn()
         .context("spawn Playwright MCP server (is `npx` on PATH and in the spawn allowlist?)")?;
@@ -385,6 +393,16 @@ pub async fn replay_live(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn live_args_enable_testing_caps_for_assert_steps() {
+        // browser_verify_* tools are opt-in via --caps=testing in @playwright/mcp.
+        let args = live_args(None);
+        assert!(args.contains(&"--caps=testing".to_owned()), "{args:?}");
+        assert!(args.contains(&"--browser=chromium".to_owned()));
+        let with_state = live_args(Some(std::path::Path::new("/tmp/s.json")));
+        assert!(with_state.contains(&"--storage-state=/tmp/s.json".to_owned()));
+    }
     use super::*;
     use crate::recorder::from_yaml;
 
