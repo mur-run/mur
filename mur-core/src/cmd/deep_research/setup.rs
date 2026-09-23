@@ -139,10 +139,11 @@ pub fn run_wizard(
     // render client-side (many government dataset portals) come back as an
     // empty JS shell — a real quality ceiling, but not a reason to grant
     // execution silently.
+    let render_browser = super::browser::render_browser_name(&mur_common::deps::current_platform());
     writeln!(
         output,
         "\nRender browser: some pages return only a JS shell to a plain fetch.\n\
-         Rendering them means the gateway EXECUTES `agent-browser` inside the\n\
+         Rendering them means the gateway EXECUTES `{render_browser}` inside the\n\
          worker's sandbox. Skipping this leaves plain fetch working; those pages\n\
          are simply reported as unrenderable."
     )?;
@@ -372,6 +373,23 @@ mod tests {
         let b = answers("\n\n\nno\nyes\n", &["claude_haiku"]).unwrap();
         assert!(!b.egress, "egress declined");
         assert!(b.browser, "browser consent is independent of egress");
+    }
+
+    /// The consent prompt must name the browser that will actually run, not a
+    /// hard-coded one.
+    #[test]
+    fn browser_prompt_names_the_planned_engine() {
+        let choices = vec!["claude_haiku".to_string()];
+        let mut input = Cursor::new(b"\n\n\nno\nno\n".to_vec());
+        let mut out = Vec::new();
+        run_wizard(&mut input, &mut out, &choices).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let expected =
+            super::super::browser::render_browser_name(&mur_common::deps::current_platform());
+        assert!(
+            out.contains(&format!("EXECUTES `{expected}`")),
+            "prompt should name {expected}: {out}"
+        );
     }
 
     #[test]

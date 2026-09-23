@@ -79,6 +79,17 @@ pub fn install_plan(platform: &str) -> InstallPlan {
     }
 }
 
+/// The browser setup's consent prompt names: the one `install_plan` would put
+/// in place for `platform`, which is also the one the gateway then
+/// auto-detects first. Lightpanda where a curated recipe exists, agent-browser
+/// (the npm fallback) elsewhere.
+pub fn render_browser_name(platform: &str) -> &'static str {
+    match install_plan(platform) {
+        InstallPlan::Lightpanda(_) => "lightpanda",
+        InstallPlan::AgentBrowser => "agent-browser",
+    }
+}
+
 /// Declare native Lightpanda in the fleet's `requires_programs`, so
 /// `mur fleet doctor/install-deps deep-research` see it and can install it
 /// from the curated recipe. Only on platforms that have a recipe — elsewhere
@@ -1077,6 +1088,13 @@ mod tests {
                 file: "aura/lightpanda".into()
             }
         );
+    }
+
+    #[test]
+    fn render_browser_name_follows_the_install_plan() {
+        assert_eq!(render_browser_name("aarch64-macos"), "lightpanda");
+        assert_eq!(render_browser_name("x86_64-linux"), "lightpanda");
+        assert_eq!(render_browser_name("x86_64-windows"), "agent-browser");
     }
 
     #[test]
