@@ -79,6 +79,33 @@ pub fn install_plan(platform: &str) -> InstallPlan {
     }
 }
 
+/// Declare native Lightpanda in the fleet's `requires_programs`, so
+/// `mur fleet doctor/install-deps deep-research` see it and can install it
+/// from the curated recipe. Only on platforms that have a recipe — elsewhere
+/// the declaration would be an uninstallable, permanently "missing" dep.
+/// Idempotent: returns false when nothing was added.
+pub fn declare_lightpanda(fleet: &mut mur_common::fleet::Fleet, platform: &str) -> bool {
+    if mur_common::deps::registry::recipe("lightpanda", platform).is_none()
+        || fleet
+            .requires_programs
+            .iter()
+            .any(|d| d.name == "lightpanda")
+    {
+        return false;
+    }
+    fleet.requires_programs.push(mur_common::deps::ProgramDep {
+        name: "lightpanda".into(),
+        detect: mur_common::deps::DetectMethod::File {
+            file: "aura/lightpanda".into(),
+        },
+        reason: "render browser for JS-only pages (deep-research gateway)".into(),
+        hint: Some("mur deep-research setup".into()),
+        registry: Some("lightpanda".into()),
+        recipe: None,
+    });
+    true
+}
+
 /// Download + verify + place one curated recipe under `mur_home`. Injected so
 /// tests never touch the network.
 pub type Fetcher<'a> = &'a mut dyn FnMut(&CuratedRecipe, &Path) -> Result<Vec<PathBuf>>;
@@ -610,8 +637,7 @@ fn run_install_plan(
                 writeln!(
                     output,
                     "  ✗ Lightpanda download failed: {e:#}\n    \
-                     nothing was installed; retry with `mur fleet install-deps {} --program lightpanda`.",
-                    super::status::DEFAULT_FLEET_NAME
+                     nothing was installed; re-run `mur deep-research setup` and answer 'yes' to the browser question."
                 )?;
                 Ok(false)
             }
@@ -708,18 +734,17 @@ pub fn doctor(
         match plan {
             InstallPlan::Lightpanda(_) => writeln!(
                 output,
-                "  install with: mur fleet install-deps {} --program lightpanda",
-                super::status::DEFAULT_FLEET_NAME
+                "  install with: mur deep-research setup (answer 'yes' to the browser question)"
             )?,
             InstallPlan::AgentBrowser => {
                 writeln!(output, "  install with:")?;
                 print_install_plan(output, plan)?;
+                writeln!(
+                    output,
+                    "  or answer 'yes' to the browser question in `mur deep-research setup`."
+                )?;
             }
         }
-        writeln!(
-            output,
-            "  or answer 'yes' to the browser question in `mur deep-research setup`."
-        )?;
         bail!("no render browser installed");
     }
     let passed = smoke(output, &bins, run)?;
@@ -1016,24 +1041,49 @@ mod tests {
         assert_eq!(ran, 0, "no npm, no smoke test after a failed download");
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("sha256 mismatch"), "{out}");
-        assert!(
-            out.contains("install-deps deep-research --program lightpanda"),
-            "{out}"
-        );
+        assert!(out.contains("re-run `mur deep-research setup`"), "{out}");
     }
 
     #[test]
-    fn doctor_points_at_install_deps_when_lightpanda_is_available() {
+    fn doctor_points_at_setup_when_lightpanda_is_available() {
         let (home, _g) = bare_home();
         let mut run = |_: &[&str]| -> Result<bool> { panic!("doctor is read-only") };
         let mut out = Vec::new();
         assert!(doctor(home.path(), &lightpanda_plan(), &mut out, &mut run, None).is_err());
         let out = String::from_utf8(out).unwrap();
         assert!(
-            out.contains("mur fleet install-deps deep-research --program lightpanda"),
+            out.contains("install with: mur deep-research setup"),
             "{out}"
         );
         assert!(!out.contains("npm"), "{out}");
+    }
+
+    fn empty_fleet() -> mur_common::fleet::Fleet {
+        serde_yaml::from_str("name: deep-research\nchannel_id: fleet-deep-research\n").unwrap()
+    }
+
+    #[test]
+    fn declare_lightpanda_adds_a_curated_file_dep_once() {
+        let mut f = empty_fleet();
+        assert!(declare_lightpanda(&mut f, "aarch64-macos"));
+        assert!(!declare_lightpanda(&mut f, "aarch64-macos"), "idempotent");
+        assert_eq!(f.requires_programs.len(), 1);
+        let d = &f.requires_programs[0];
+        assert_eq!(d.registry.as_deref(), Some("lightpanda"));
+        assert!(mur_common::deps::registry::is_curated("lightpanda"));
+        assert_eq!(
+            d.detect,
+            mur_common::deps::DetectMethod::File {
+                file: "aura/lightpanda".into()
+            }
+        );
+    }
+
+    #[test]
+    fn declare_lightpanda_skips_platforms_without_a_recipe() {
+        let mut f = empty_fleet();
+        assert!(!declare_lightpanda(&mut f, "x86_64-windows"));
+        assert!(f.requires_programs.is_empty());
     }
 
     /// Mirrors the gateway's `auto_detect_render_engine`
