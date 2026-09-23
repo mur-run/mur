@@ -76,5 +76,36 @@ pub async fn cmd_reindex_vec(home: &Path, filter: Option<&str>, prune: bool) -> 
     }
 
     println!("Done: {indexed} indexed, {failed} failed");
+    summarize(indexed, failed)
+}
+
+/// Turn the run tally into the command's result: any failure is an error so
+/// scripts see a non-zero exit instead of a silent "0 indexed, N failed".
+fn summarize(indexed: u64, failed: u64) -> Result<()> {
+    if failed > 0 {
+        anyhow::bail!("{failed} of {} skill(s) failed to index", indexed + failed);
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize;
+
+    #[test]
+    fn all_ok_is_success() {
+        assert!(summarize(66, 0).is_ok());
+    }
+
+    #[test]
+    fn nothing_to_index_is_success() {
+        assert!(summarize(0, 0).is_ok());
+    }
+
+    #[test]
+    fn any_failure_is_error() {
+        let err = summarize(0, 66).unwrap_err().to_string();
+        assert!(err.contains("66 of 66"), "{err}");
+        assert!(summarize(65, 1).is_err());
+    }
 }

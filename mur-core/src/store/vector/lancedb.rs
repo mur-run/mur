@@ -330,7 +330,32 @@ impl VectorStore for LanceDbStore {
         if chunks.is_empty() {
             return Ok(());
         }
+        // Validate dimensions BEFORE touching the table. The upsert is
+        // delete-then-add; if the add fails on a dimension mismatch after the
+        // delete succeeded, the rows are silently lost.
+        let want = self.dimensions as usize;
+        if let Some(bad) = chunks.iter().find(|c| c.embedding.len() != want) {
+            anyhow::bail!(
+                "embedding for chunk '{}' has {} dimensions, store expects {}",
+                bad.chunk_id,
+                bad.embedding.len(),
+                want
+            );
+        }
         self.ensure_sources_table().await?;
+        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+        let existing = table.schema().await?;
+        if let Ok(field) = existing.field_with_name("vector")
+            && let DataType::FixedSizeList(_, n) = field.data_type()
+            && *n != self.dimensions
+        {
+            anyhow::bail!(
+                "sources table has {n}-dimensional vectors but the configured embedding \
+                 dimension is {}; move the table aside and run `mur skill reindex-vec` \
+                 to rebuild it",
+                self.dimensions
+            );
+        }
 
         // Delete any existing rows with these chunk_ids (idempotent upsert).
         let ids: Vec<String> = chunks
@@ -338,7 +363,6 @@ impl VectorStore for LanceDbStore {
             .map(|c| format!("'{}'", c.chunk_id.replace('\'', "''")))
             .collect();
         let predicate = format!("chunk_id IN ({})", ids.join(","));
-        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
         let _ = table.delete(&predicate).await;
 
         // Build column arrays.
@@ -869,6 +893,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(other, 0);
+    }
+
+    fn dim_chunk(id: &str, dim: usize) -> super::EmbeddedChunk {
+        super::EmbeddedChunk {
+            chunk_id: id.into(),
+            source_id: "skill".into(),
+            external_id: id.into(),
+            ordinal: 0,
+            text: "t".into(),
+            heading_path: vec![],
+            char_range: (0, 1),
+            updated_at: chrono::Utc::now(),
+            embedding: vec![0.5_f32; dim],
+        }
+    }
+
+    #[tokio::test]
+    async fn sources_upsert_rejects_wrong_embedding_len_without_deleting() {
+        let tmp = TempDir::new().unwrap();
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        <LanceDbStore as super::VectorStore>::upsert(&store, &[dim_chunk("c1", TEST_DIM as usize)])
+            .await
+            .unwrap();
+
+        let err = <LanceDbStore as super::VectorStore>::upsert(
+            &store,
+            &[dim_chunk("c1", TEST_DIM as usize * 2)],
+        )
+        .await;
+        assert!(err.is_err(), "mismatched embedding must be rejected");
+        let c = <LanceDbStore as super::VectorStore>::count(&store, None)
+            .await
+            .unwrap();
+        assert_eq!(c, 1, "existing row must survive a rejected upsert");
+    }
+
+    #[tokio::test]
+    async fn sources_upsert_rejects_table_dim_mismatch_without_deleting() {
+        let tmp = TempDir::new().unwrap();
+        // Table created at 2x dims (e.g. an old 2560-dim index)...
+        let old = LanceDbStore::open(tmp.path(), TEST_DIM * 2).await.unwrap();
+        <LanceDbStore as super::VectorStore>::upsert(
+            &old,
+            &[dim_chunk("c1", TEST_DIM as usize * 2)],
+        )
+        .await
+        .unwrap();
+        drop(old);
+
+        // ...then config changes to TEST_DIM (e.g. 1024).
+        let store = LanceDbStore::open(tmp.path(), TEST_DIM).await.unwrap();
+        let err = <LanceDbStore as super::VectorStore>::upsert(
+            &store,
+            &[dim_chunk("c1", TEST_DIM as usize)],
+        )
+        .await
+        .expect_err("dimension mismatch with table must be rejected");
+        assert!(
+            err.to_string().contains("reindex-vec"),
+            "error should say how to fix: {err}"
+        );
+
+        let reopened = LanceDbStore::open(tmp.path(), TEST_DIM * 2).await.unwrap();
+        let c = <LanceDbStore as super::VectorStore>::count(&reopened, None)
+            .await
+            .unwrap();
+        assert_eq!(c, 1, "existing row must survive a rejected upsert");
     }
 
     #[tokio::test]
