@@ -370,22 +370,95 @@ pub fn playwright_command(extra_args: &[String]) -> Command {
     cmd
 }
 
+/// Relay a blocking reader (our stdin) into an `AsyncRead` from a detached OS
+/// thread. `tokio::io::stdin()` reads on the blocking pool, and a read parked
+/// there cannot be cancelled, so runtime shutdown waits for the agent's next
+/// line: when the server died first (npx failing, Playwright crashing), `mur
+/// browser record` stayed alive and the agent waited forever for a reply. A
+/// detached thread is simply abandoned at process exit.
+fn detached_reader<R: std::io::Read + Send + 'static>(
+    mut r: R,
+) -> impl AsyncRead + Unpin + Send + 'static {
+    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    std::thread::Builder::new()
+        .name("mur-proxy-stdin".into())
+        .spawn(move || {
+            let mut buf = vec![0u8; 8192];
+            loop {
+                match r.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+        .expect("spawn stdin reader thread");
+    ChannelReader {
+        rx,
+        chunk: Vec::new(),
+        pos: 0,
+    }
+}
+
+struct ChannelReader {
+    rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    chunk: Vec<u8>,
+    pos: usize,
+}
+
+impl AsyncRead for ChannelReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        out: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        use std::task::Poll;
+        while self.pos >= self.chunk.len() {
+            match self.rx.poll_recv(cx) {
+                Poll::Ready(Some(c)) => {
+                    self.chunk = c;
+                    self.pos = 0;
+                }
+                Poll::Ready(None) => return Poll::Ready(Ok(())), // EOF
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        let n = out.remaining().min(self.chunk.len() - self.pos);
+        let pos = self.pos;
+        out.put_slice(&self.chunk[pos..pos + n]);
+        self.pos += n;
+        Poll::Ready(Ok(()))
+    }
+}
+
 /// Spawn the server and relay between our stdin/stdout and it.
 /// Returns when the agent closes stdin or the server exits.
 pub async fn run_stdio<H: Hook>(mut cmd: Command, hook: H) -> Result<()> {
     let mut child: Child = cmd
         .spawn()
         .context("spawn downstream MCP server (is `npx` on PATH and in the spawn allowlist?)")?;
+    tracing::info!(pid = child.id(), "downstream MCP server started");
     let child_in = child.stdin.take().context("child stdin")?;
     let child_out = child.stdout.take().context("child stdout")?;
     let result = run_io(
-        tokio::io::stdin(),
+        detached_reader(std::io::stdin()),
         tokio::io::stdout(),
         child_in,
         child_out,
         hook,
     )
     .await;
+    // Already exited means the server hung up first; say how, since its
+    // stderr is the only other clue and callers often discard it.
+    match child.try_wait() {
+        Ok(Some(status)) => tracing::warn!(%status, "downstream MCP server exited"),
+        _ => tracing::debug!("stopping downstream MCP server"),
+    }
     let _ = child.kill().await;
     result
 }
@@ -712,11 +785,20 @@ where
         })
     };
 
-    // Whichever side hangs up first ends the session.
-    tokio::select! {
-        _ = r_agent => {}
-        _ = r_server => {}
-    }
+    // Whichever side hangs up first ends the session. Abort the other reader:
+    // it owns a `Downstream` clone (the last sender to the server writer) and a
+    // `to_agent` sender, so leaving it running keeps `w_server` waiting for its
+    // channel to close, the server's stdin open, and the server alive — a
+    // deadlock whenever the agent hangs up first.
+    let (mut r_agent, mut r_server) = (r_agent, r_server);
+    let (other, reason) = tokio::select! {
+        _ = &mut r_agent => (r_server, "agent closed stdin"),
+        _ = &mut r_server => (r_agent, "server closed stdout"),
+    };
+    tracing::info!(reason, "session ended");
+    // The finished handle must not be polled again; only the other one.
+    other.abort();
+    let _ = other.await;
     drop(down);
     drop(to_agent_tx);
     let _ = w_server.await;
@@ -907,6 +989,79 @@ mod tests {
             !args.iter().any(|arg| arg == "--headed"),
             "@playwright/mcp is headed by default; --headed is not a supported option"
         );
+    }
+
+    /// The agent hanging up (stdin EOF) must end the session even while the
+    /// downstream server stays alive and silent, like a real Playwright MCP.
+    #[tokio::test]
+    async fn agent_eof_ends_session_while_server_stays_up() {
+        let (agent_w, agent_in) = duplex(64 * 1024);
+        let (agent_out, _agent_r) = duplex(64 * 1024);
+        let (server_in, srv_r) = duplex(64 * 1024);
+        let (srv_w, server_out) = duplex(64 * 1024);
+        // The server only exits once its stdin closes.
+        tokio::spawn(fake_server(srv_r, srv_w));
+        let session = tokio::spawn(run_io(agent_in, agent_out, server_in, server_out, PassHook));
+        drop(agent_w);
+        tokio::time::timeout(std::time::Duration::from_secs(2), session)
+            .await
+            .expect("run_io did not return after the agent closed stdin")
+            .unwrap()
+            .unwrap();
+    }
+
+    /// When the server dies first, `run_io` returns while the agent's stdin is
+    /// still open. A read blocked on stdin must not keep the runtime from
+    /// shutting down, or `mur browser record` outlives its own server.
+    #[cfg(unix)]
+    #[test]
+    fn blocked_agent_read_does_not_hold_runtime_shutdown() {
+        let (_agent_keeps_open, read_end) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                use tokio::io::AsyncReadExt;
+                let mut r = detached_reader(read_end);
+                let mut buf = [0u8; 1];
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_millis(100), r.read(&mut buf))
+                        .await;
+            });
+            drop(rt);
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("runtime shutdown blocked on a pending stdin read");
+    }
+
+    #[tokio::test]
+    async fn detached_reader_relays_bytes_then_eof() {
+        use tokio::io::AsyncReadExt;
+        let mut r = detached_reader(std::io::Cursor::new(b"{\"a\":1}\n".to_vec()));
+        let mut got = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            r.read_to_string(&mut got),
+        )
+        .await
+        .expect("no EOF after the source ended")
+        .unwrap();
+        assert_eq!(got, "{\"a\":1}\n");
+    }
+
+    struct PassHook;
+    impl Hook for PassHook {
+        async fn on_request(&mut self, req: Request, _down: &Downstream) -> Decision {
+            Decision::Forward(req)
+        }
+        async fn on_response(&mut self, _req: &Request, resp: Value, _down: &Downstream) -> Value {
+            resp
+        }
     }
 
     #[tokio::test]

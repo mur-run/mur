@@ -37,3 +37,6 @@ AGENTS.md
 # root (e.g. .target-fleet-run-handle-ledger/ — a full 15M build tree).
 # Same reason as /.cargo-target-*/ above: never a tracked artifact.
 /.target-*/
+
+# Playwright MCP snapshots/console logs written into the cwd
+.playwright-mcp/

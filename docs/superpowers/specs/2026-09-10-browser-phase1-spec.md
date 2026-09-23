@@ -10,6 +10,7 @@
 |---|---|
 | 2026-09-10 | 初版，狀態「待核准，未寫任何程式碼」。原檔位置 `~/.mur/artifacts/mur/browser-research-20260910/SPEC-phase1.md`（未受版控）。 |
 | 2026-09-23 | 移入版控（`docs/superpowers/specs/`），原「待核准，未寫任何程式碼」抬頭**已過期**：引擎層在 commit `2955eca2`（`feat(browser): add Playwright auth and recording (#1244)`，2026-09-11）落地；skill 層延後至 `docs/superpowers/plans/2026-09-23-browser-skill-layer-plan.md` Task 1/6/7。`mur-browser/src/lib.rs` 的 `Design source:` 改指本檔。 |
+| 2026-09-23 | 實跑 replay 後補：§3.2 新增 `assert_visible` 需 `role:` locator 的拒收規則；新增 §3.5（`@playwright/mcp@0.0.82` 實測約束）與 §3.6（record / replay 的 tracing）；§6 步驟 2 註明 testid 後備。§3.5 補 `target` 鍵與陣列值兩項約束，§3.6 補 record 丟棄 step 的 warn。對應 commit `f5ba890c` `321fa03c` `a272aa5c` `71c638ed` `5efa0ffb` `313a1c1f` `9b5fbba0`。 |
 
 ### §1.1 四項交付物實際狀態（2026-09-23 查證）
 
@@ -86,7 +87,7 @@ mur browser status                                    （daemon/context 狀態�
 |---|---|
 | `browser_navigate` | 落盤 `goto`，不需 locator |
 | `browser_click` / `browser_type` / `browser_select_option` / `browser_press_key` / `browser_hover` / `browser_drag` | **轉發前**：對 `ref` 呼叫 `browser_generate_locator`；**轉發後**：組 step，驗 schema，落盤 |
-| `browser_verify_element_visible` / `_text_visible` / `_value` / `_list_visible` | 落盤 `assert_*`（automation 模式下仍允許，但 replay 只記 log 不 fail） |
+| `browser_verify_element_visible` / `_text_visible` / `_value` / `_list_visible` | 落盤 `assert_*`（automation 模式下仍允許，但 replay 只記 log 不 fail）。`_element_visible` 必須錄得 `role:` locator，見 §3.2 拒收規則 |
 | `browser_snapshot` | 不落盤；解析回應，快取 `@ref → {role, name, text}`，供 locator 候選鏈與 `intent` 預設值 |
 | `browser_storage_state` / `browser_set_storage_state` | **拒絕**（`error: use mur browser auth`）——防 agent 把 session 寫到別處 |
 | `browser_start_recording` / `_stop_recording` | **拒絕**——Playwright 內建錄製會把 fill 的值（含密碼）寫進程式碼 |
@@ -110,6 +111,7 @@ mur browser status                                    （daemon/context 狀態�
 
 **拒收規則（寫進 `recorder.rs` 的驗證，附單元測試）**：
 - `locators` 為空 → 拒收，proxy 回 agent `error: step has no stable locator; call browser_snapshot then retry`
+- `assert_visible` 沒有任何 `role:` locator → 拒收（`Reject::NoRoleLocator`），提示 agent 以 snapshot 的 role 與 accessibleName 呼叫 `browser_verify_element_visible`。理由見 §3.5
 - 任一 locator 含 `nth-child`、`nth-of-type`、`>` 鏈超過 3 層、或 class 名符合 `/^(css-|sc-|_|[a-z]{1,2}\d{3,})/` → 剔除；剔除後為空 → 拒收
 - `intent` 缺或 < 4 字 → 用 snapshot 快取的 `{role} "{name}"` 自動填，並標 `intent_auto: true`（report 會列，但不擋）
 - `value` 命中 broker 佔位符以外的高熵字串（長度 ≥ 12 且含大小寫數字）且 action 為 `fill` 在 `type=password` 欄位 → **拒收**，提示走 `{{secret:…}}`
@@ -134,6 +136,33 @@ mur browser status                                    （daemon/context 狀態�
   runs/<name>/hits.jsonl             # replay 每步命中第幾個 locator
   broker.sock                        # 0600，record 啟動時建立、結束刪除
 ```
+
+### 3.5 與 `@playwright/mcp@0.0.82` 的實測約束（2026-09-23 補）
+
+版本釘在 `mur-browser/src/lib.rs:33` 的 `PLAYWRIGHT_MCP_PKG`。以下各點都是實跑 replay 後才發現的，對應 commit 已標註：
+
+| 約束 | 處理 | commit |
+|---|---|---|
+| `browser_verify_*` 預設不存在，需 `--caps=testing` | replay 啟動 MCP server 時一律帶上 | `f5ba890c` |
+| 三個 verify 工具的參數 schema 各不相同：`_element_visible` 吃 `{ role, accessibleName }`、`_text_visible` 吃 `{ text }`、`_value` 吃 `{ type, element, target, value }` | replay 依工具分別組參數；`assert_value` 的鍵名定為 `value` | `321fa03c` |
+| `_element_visible` 不接受 `ref`，只能用 role + name 定位 | 錄製時強制要有 `role:` locator，否則拒收 | `a272aa5c` |
+| snapshot 永遠不含 `data-testid` | snapshot 沒命中任何 locator 時，改送 `[data-testid="…"]` 讓 server 自行解析；snapshot 命中仍優先 | `71c638ed` |
+| click / type / select 的元素 ref 放在 `target` 鍵，不是 `ref` | recorder 的 `locator_for` / `ref_at_record` 在沒有 `ref` 時改讀 `target` | `9b5fbba0` |
+| `browser_select_option` 的值是陣列（`values: ["M"]`） | `value_for` 接受陣列，取第一個元素 | `9b5fbba0` |
+
+### 3.6 可觀測性
+
+`record` 與 `replay` 都輸出 tracing（`RUST_LOG=mur_browser=debug,mur=info`，stderr）：
+
+| 指令 | 層級 | 事件 |
+|---|---|---|
+| record | info | `browser record started` / `browser record finished`（含 `ok`） |
+| record | debug | 每個錄下的 step：`recorded step` |
+| record | warn | 下游工具回傳錯誤、step 未落盤：`action failed downstream; step not recorded`（含 `tool`）。之前是無聲丟棄（`9b5fbba0`） |
+| replay | info | `browser replay started`（run、mode、profile、steps、dry_run）/ `browser replay finished`（total、passed、failed、healed） |
+| replay | debug | 每個 step：`replayed step`（status、實際使用的 locator、message） |
+
+導向檔案時輸出含 ANSI 色碼，需要 grep 時加 `NO_COLOR=1`。
 
 ## 4. `mur browser auth <site>`（設計 3：handoff / takeover）
 
@@ -173,6 +202,7 @@ Saving ──▶ Done（寫 meta.yaml；回報「session 已存，最早 cookie 
 
 1. 解密 state → 啟 Playwright MCP（`--isolated --headless --storage-state=…`）→ proxy 自己當 MCP client。
 2. 逐 step：`goto` 直接送；其他先 `browser_snapshot`，用 `locator.rs` 把 `locators[]` 依序對 snapshot 解析成 `@ref`（**L1/L2 在 Rust 內完成，零 LLM**），第一個命中者送對應 tool；`hits.jsonl` 記 `{step, hit}`。
+   - 例外（2026-09-23，`71c638ed`）：snapshot 不含 `data-testid`，所以全部 miss 時若有 `testid:` 候選，先把第一個以 `[data-testid="…"]` 直接交給 server 解析，server 也找不到才算 miss。見 §3.5。
 3. 全部 miss → 若無 `--heal`：fail，report 列出 step + intent。若 `--heal`：把 `intent` + 當前 snapshot 交給 browser-worker agent（透過 `mur agent run browser-worker --prompt …`，走既有 A2A），agent 只回一個 `@ref`；proxy 對它 `browser_generate_locator` → **prepend** 到 `locators[]`、`healed: true`、寫回 `actions.yaml`；繼續。
 4. 自癒後**下一步的 assert（或下一個有 locator 的 step）必須命中**，否則回滾該 healed locator 並 fail——防癒錯。
 5. 結果：綠 / 黃（有 `healed`，僅 `mode: test`）/ 紅。`--json` 輸出給 workflow 與 MURMUR。
