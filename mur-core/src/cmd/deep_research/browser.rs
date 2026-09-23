@@ -884,7 +884,16 @@ mod tests {
             Ok(true)
         };
         let mut out = Vec::new();
-        assert!(doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, None).is_err());
+        assert!(
+            doctor(
+                home.path(),
+                &InstallPlan::AgentBrowser,
+                &mut out,
+                &mut run,
+                None
+            )
+            .is_err()
+        );
         assert_eq!(calls, 0, "doctor is read-only");
         assert!(
             String::from_utf8(out)
@@ -943,7 +952,10 @@ mod tests {
         assert!(out.contains("https://example.invalid/lightpanda"), "{out}");
         assert!(out.contains(&"ab".repeat(8)), "sha256 prefix shown: {out}");
         assert!(out.contains("~/.mur/aura/lightpanda"), "{out}");
-        assert!(!out.contains("npm"), "no npm on the lightpanda route: {out}");
+        assert!(
+            !out.contains("npm"),
+            "no npm on the lightpanda route: {out}"
+        );
         assert_eq!(fetched, 0);
     }
 
@@ -1004,7 +1016,10 @@ mod tests {
         assert_eq!(ran, 0, "no npm, no smoke test after a failed download");
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("sha256 mismatch"), "{out}");
-        assert!(out.contains("install-deps deep-research --program lightpanda"), "{out}");
+        assert!(
+            out.contains("install-deps deep-research --program lightpanda"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -1558,13 +1573,27 @@ mod tests {
         let mut run = |_: &[&str]| Ok(true);
 
         let mut out = Vec::new();
-        doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, None).unwrap();
+        doctor(
+            home.path(),
+            &InstallPlan::AgentBrowser,
+            &mut out,
+            &mut run,
+            None,
+        )
+        .unwrap();
         assert!(String::from_utf8(out).unwrap().contains("add --render"));
 
         let mut calls = Vec::new();
         let mut exec = rendering_exec(&mut calls);
         let mut out = Vec::new();
-        doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, Some(&mut exec)).unwrap();
+        doctor(
+            home.path(),
+            &InstallPlan::AgentBrowser,
+            &mut out,
+            &mut run,
+            Some(&mut exec),
+        )
+        .unwrap();
         drop(exec);
         assert_eq!(calls.len(), 1);
         assert!(String::from_utf8(out).unwrap().contains("✓ rendered"));
@@ -1576,7 +1605,16 @@ mod tests {
         let mut run = |_: &[&str]| Ok(true);
         let mut exec = |_: &[String], _: Duration| RenderRun::Denied;
         let mut out = Vec::new();
-        assert!(doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, Some(&mut exec)).is_ok());
+        assert!(
+            doctor(
+                home.path(),
+                &InstallPlan::AgentBrowser,
+                &mut out,
+                &mut run,
+                Some(&mut exec)
+            )
+            .is_ok()
+        );
         assert!(String::from_utf8(out).unwrap().contains("sandbox"));
     }
 }
