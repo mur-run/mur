@@ -212,8 +212,11 @@ pub const RENDER_PAGE: &str = "<div id=\"o\"></div><script>document.getElementBy
 
 /// L2 verdict. A browser that fetched the HTML but never executed JS returns
 /// the raw source (`6*7`), which does not contain the marker, so it fails.
+///
+/// Backslashes are dropped before matching: Lightpanda's `--dump markdown`
+/// escapes `-`, printing the rendered marker as `MUR\-RENDER\-42`.
 pub fn render_passed(output: &str) -> bool {
-    output.contains(RENDER_MARKER)
+    output.replace('\\', "").contains(RENDER_MARKER)
 }
 
 /// How long the loopback server waits for a browser to show up at all. The
@@ -1192,7 +1195,10 @@ mod tests {
 
     #[test]
     fn render_passed_accepts_output_with_the_js_computed_marker() {
-        // Lightpanda `--dump markdown` shape.
+        // Lightpanda `--dump markdown` shape: it escapes `-` (observed on
+        // 1.0.0-nightly.7813).
+        assert!(render_passed("MUR\\-RENDER\\-42\n"));
+        // Unescaped (`--dump html`, other versions).
         assert!(render_passed("MUR-RENDER-42\n"));
         // agent-browser `snapshot` shape.
         assert!(render_passed("- document:\n  - generic: MUR-RENDER-42\n"));
