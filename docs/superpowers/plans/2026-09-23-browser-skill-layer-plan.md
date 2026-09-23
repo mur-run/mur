@@ -164,14 +164,14 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 2.1 新建 `mur-browser/src/guard.rs`，先寫測試：空 allowlist 全放行；`["example.com"]` 放行 `https://example.com/a` 與 `https://app.example.com/b`，拒絕 `https://evil.com` 與 `https://notexample.com`；拒絕非 http/https scheme
-- [ ] 2.2 `cargo test -p mur-browser guard` → 預期編譯失敗（module 未掛）
-- [ ] 2.3 `lib.rs` 加 `pub mod guard;`，實作 `is_allowed`：解析 host，比對「完全相等或以 `.` + allow 項結尾」，避免 `notexample.com` 誤中
-- [ ] 2.4 `cargo test -p mur-browser guard` → 全綠
-- [ ] 2.5 `auth.rs` 的 `ProfileMeta` 加 `#[serde(default)] pub allow_domains: Vec<String>`，`save_profile` 增加同名參數並寫入
-- [ ] 2.6 補測試：舊的不含該欄位的 meta YAML 仍可反序列化成功（向後相容）
-- [ ] 2.7 `actions.rs` 的 `Auth` 加 `#[arg(long = "allow-domain")] allow_domain: Vec<String>`；dispatch 與 `cmd::browser::auth` 一路傳下去；未指定時預設填入 `--url` 的 host
-- [ ] 2.8 `cargo test -p mur-browser && cargo test -p mur-core browser` → 全綠，commit
+- [x] 2.1 新建 `mur-browser/src/guard.rs`，先寫測試：空 allowlist 全放行；`["example.com"]` 放行 `https://example.com/a` 與 `https://app.example.com/b`，拒絕 `https://evil.com` 與 `https://notexample.com`；拒絕非 http/https scheme
+- [x] 2.2 `cargo test -p mur-browser guard` → 預期編譯失敗（module 未掛）
+- [x] 2.3 `lib.rs` 加 `pub mod guard;`，實作 `is_allowed`：解析 host，比對「完全相等或以 `.` + allow 項結尾」，避免 `notexample.com` 誤中
+- [x] 2.4 `cargo test -p mur-browser guard` → 全綠
+- [x] 2.5 `auth.rs` 的 `ProfileMeta` 加 `#[serde(default)] pub allow_domains: Vec<String>`，`save_profile` 增加同名參數並寫入
+- [x] 2.6 補測試：舊的不含該欄位的 meta YAML 仍可反序列化成功（向後相容）
+- [x] 2.7 `actions.rs` 的 `Auth` 加 `#[arg(long = "allow-domain")] allow_domain: Vec<String>`；dispatch 與 `cmd::browser::auth` 一路傳下去；未指定時預設填入 `--url` 的 host
+- [x] 2.8 `cargo test -p mur-browser && cargo test -p mur-core browser` → 全綠，commit
 
 ---
 
