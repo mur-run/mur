@@ -301,11 +301,11 @@ Playwright trace 單次動輒數十 MB，目前只有產出沒有清理。
 
 ### Steps
 
-- [ ] 8.1 `cmd/browser/mod.rs` 加 `pub fn prune(keep: usize, older_than: Option<u32>, dry_run: bool) -> Result<()>`
-- [ ] 8.2 先寫測試（用 tempdir）：10 個 run、`keep = 3` → 刪 7 留最新 3；`dry_run` 時一個都不刪但印出將刪清單
-- [ ] 8.3 實作：依 `recorded_at` 排序；`--keep` 預設 10；無法解析的 run 目錄一律保留不刪（保守）
-- [ ] 8.4 `actions.rs` 加 `Prune` variant、`dispatch.rs` 接線
-- [ ] 8.5 `cargo test && cargo clippy --all-targets -- -D warnings`，commit
+- [x] 8.1 `cmd/browser/mod.rs` 加 `pub fn prune(keep: usize, older_than: Option<u32>, dry_run: bool) -> Result<()>`
+- [x] 8.2 先寫測試（用 tempdir）：10 個 run、`keep = 3` → 刪 7 留最新 3；`dry_run` 時一個都不刪但印出將刪清單
+- [x] 8.3 實作：依 `recorded_at` 排序；`--keep` 預設 10；無法解析的 run 目錄一律保留不刪（保守）
+- [x] 8.4 `actions.rs` 加 `Prune` variant、`dispatch.rs` 接線
+- [x] 8.5 `cargo test && cargo clippy --all-targets -- -D warnings`，commit
 
 ---
 

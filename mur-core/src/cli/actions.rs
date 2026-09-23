@@ -825,6 +825,18 @@ pub enum BrowserAction {
     },
     /// Show browser subsystem status (implemented in a later slice).
     Status,
+    /// Delete old recorded runs, keeping the most recently recorded ones.
+    Prune {
+        /// Number of most recent runs to keep.
+        #[arg(long, default_value_t = 10)]
+        keep: usize,
+        /// Only delete runs older than this many days (beyond `--keep`).
+        #[arg(long)]
+        older_than: Option<u32>,
+        /// Print what would be deleted without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
