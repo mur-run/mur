@@ -75,6 +75,11 @@ REAL_ID="Mur Test (${MUR_TEST_SIGNING_OU:-${MUR_TEST_TEAM_ID:-TESTTEAMID123}})"
 if ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "\"$REAL_ID\""; then
   echo "skip: real identity: '$REAL_ID' not in keychain (run: bash scripts/test-signing-identity.sh)"
 elif [ -x "$SCRIPT" ]; then
+  # The throwaway keychain may have auto-locked since setup; a locked keychain
+  # makes codesign prompt for a password (or fail headless). Its password is
+  # the fixed "mur" from test-signing-identity.sh.
+  TEST_KC="${TMPDIR:-/tmp}/mur-attest-keychain/test.keychain"
+  [ -f "$TEST_KC" ] && security unlock-keychain -p mur "$TEST_KC" 2>/dev/null || true
   BIN="$WORK/real/mur-agent-runtime"
   mkdir -p "$WORK/real"; cp /usr/bin/true "$BIN"
   MUR_CODESIGN_IDENTITY="$REAL_ID" "$SCRIPT" "$BIN" >/dev/null 2>&1 || true
@@ -85,6 +90,27 @@ elif [ -x "$SCRIPT" ]; then
     pass "real identity: hardened runtime flag set"
   else
     fail "real identity: expected hardened runtime flag, got: $(grep '^CodeDirectory' <<<"$info")"
+  fi
+fi
+
+# --- test: a missing identity falls back to ad-hoc, still with a stable id ----
+# A typo'd or absent MUR_CODESIGN_IDENTITY must not leave the binary with
+# whatever signature it had before (cargo's hash-suffixed linker signature):
+# codesign.sh falls back to ad-hoc with the stable identifier, and still exits
+# non-zero so build.sh reports the failure and prints its AD-HOC warning.
+BIN="$WORK/fallback/mur-agent-runtime"
+mkdir -p "$WORK/fallback"; cp /usr/bin/true "$BIN"
+if [ -x "$SCRIPT" ]; then
+  rc=0
+  MUR_CODESIGN_IDENTITY="Mur Nonexistent Identity (NOPE000000)" \
+    "$SCRIPT" "$BIN" >/dev/null 2>&1 || rc=$?
+  got="$(identifier_of "$BIN")"
+  if [ "$rc" -eq 0 ]; then
+    fail "fallback: expected non-zero exit for a missing identity, got 0"
+  elif [ "$got" != "mur-agent-runtime" ]; then
+    fail "fallback: expected ad-hoc identifier 'mur-agent-runtime', got '$got'"
+  else
+    pass "fallback: missing identity -> ad-hoc, stable identifier, exit $rc"
   fi
 fi
 

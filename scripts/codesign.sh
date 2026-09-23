@@ -23,7 +23,21 @@ if [ "$IDENTITY" != "-" ]; then
   OPTS=(--options runtime)
 fi
 
+# If the real identity is missing or unusable, codesign fails before touching
+# the file, leaving cargo's hash-suffixed linker signature in place. Fall back
+# to ad-hoc with the stable identifier instead, but still exit non-zero so the
+# caller (build.sh) reports the failure and warns about the ad-hoc signature.
+RC=0
 for f in "$@"; do
   [ -f "$f" ] || continue
-  codesign --force -s "$IDENTITY" ${OPTS[@]+"${OPTS[@]}"} --identifier "$(basename "$f")" "$f"
+  id="$(basename "$f")"
+  if codesign --force -s "$IDENTITY" ${OPTS[@]+"${OPTS[@]}"} --identifier "$id" "$f"; then
+    continue
+  fi
+  RC=1
+  if [ "$IDENTITY" != "-" ]; then
+    echo "codesign.sh: '$IDENTITY' failed for $f; falling back to ad-hoc" >&2
+    codesign --force -s - --identifier "$id" "$f" || true
+  fi
 done
+exit "$RC"

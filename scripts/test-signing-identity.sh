@@ -46,9 +46,16 @@ if [ -n "$PRIOR_KC" ]; then
 fi
 # Keep the temp keychain in the search list so codesign finds the identity
 # mid-run, even when it is not the default.
-security list-keychains -d user -s "$KC" $(security list-keychains -d user 2>/dev/null | tr -d '"' | tr '\n' ' ') 2>/dev/null || true
+# Drop earlier copies of $KC first: every run used to prepend it again, so the
+# search list (and find-identity) filled up with duplicates.
+OTHER_KCS=$(security list-keychains -d user 2>/dev/null | tr -d '"' | sed 's/^[[:space:]]*//' \
+  | grep -v '/mur-attest-keychain/test\.keychain$' | tr '\n' ' ' || true)
+security list-keychains -d user -s "$KC" $OTHER_KCS 2>/dev/null || true
 security default-keychain -s "$KC"
 security unlock-keychain -p "$PASS" "$KC"
+# No auto-lock (no timeout, no lock on sleep). Otherwise it locks during a
+# long build and codesign pops a password prompt (the password is "mur").
+security set-keychain-settings "$KC"
 if security find-identity -v -p codesigning "$KC" | grep -q "Mur Test ($OU)"; then
   echo "test-signing-identity: identity '$CN' ready in $KC"
   echo "MUR_TEST_SIGNING_OU=$OU" >> "${GITHUB_ENV:-/dev/null}"
