@@ -2141,6 +2141,10 @@ impl TaskRunner {
         // tool is a no-op, so the model has usually said all it will; an empty
         // answer to its tool result is the model ending the turn, not a blip.
         let mut after_suggest_only = false;
+        // Text streamed before a `suggest_replies`-only call. No step card
+        // freezes it on screen, so the CLI still holds it in the same bubble
+        // the final reply replaces; the reply must carry it or it is erased.
+        let mut carried: Vec<String> = Vec::new();
 
         let mut iteration: u32 = 0;
         while iteration < self.iteration_ceiling {
@@ -2480,7 +2484,14 @@ impl TaskRunner {
                     StopReason::Interrupted => crate::turn_ledger::StopKind::StreamInterrupted,
                     _ => crate::turn_ledger::StopKind::EndTurn,
                 };
-                return Ok((settle(resp.text, &ledger), None));
+                let reply = if carried.is_empty() {
+                    resp.text
+                } else {
+                    carried.push(resp.text);
+                    carried.retain(|t| !t.is_empty());
+                    carried.join("\n\n")
+                };
+                return Ok((settle(reply, &ledger), None));
             }
 
             // P3: gate the whole response first — one notification, N decisions.
@@ -2668,6 +2679,12 @@ impl TaskRunner {
                     .tool_calls
                     .iter()
                     .all(|c| crate::tools::suggest::suggest_replies_allowed(&c.tool_name));
+            if !after_suggest_only {
+                // A real tool drew a card; the text above it is frozen there.
+                carried.clear();
+            } else if !resp.text.is_empty() {
+                carried.push(resp.text.clone());
+            }
             progress.observe(&progress_calls, std::time::Instant::now());
             iteration += 1;
         }
@@ -5408,6 +5425,108 @@ mod tests {
             2,
             "one call for the table, one that came back silent"
         );
+    }
+
+    /// First call: the answer AND a tool call. Second call: one closing line,
+    /// no tools. The shape of turn 274, where the model offered replies and
+    /// then asked "下一步你想怎麼做？" instead of going silent.
+    struct AnswerThenFollowUpLlm {
+        calls: std::sync::atomic::AtomicUsize,
+        tool: &'static str,
+    }
+
+    const ANSWER: &str = "| D2b | 用 deps installer 裝 Lightpanda |\n\n`provision.rs:324-326` 的註解寫著：\n\n```rust\n// prefer aura/lightpanda\n```";
+    const FOLLOW_UP: &str = "下一步你想怎麼做？";
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for AnswerThenFollowUpLlm {
+        async fn generate(
+            &self,
+            _req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            let first = self.calls.fetch_add(1, Ordering::Relaxed) == 0;
+            Ok(crate::llm::LlmResponse {
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                text: if first { ANSWER } else { FOLLOW_UP }.into(),
+                input_tokens: 5,
+                output_tokens: 5,
+                model: "test".into(),
+                tool_calls: if first {
+                    vec![crate::llm::ToolCallResult {
+                        call_id: "s1".into(),
+                        tool_name: self.tool.into(),
+                        input: serde_json::json!({"replies": ["照 A 做"], "path": "x"}),
+                    }]
+                } else {
+                    Vec::new()
+                },
+                stop_reason: if first {
+                    crate::llm::StopReason::ToolUse
+                } else {
+                    crate::llm::StopReason::EndTurn
+                },
+            })
+        }
+        fn model_name(&self) -> &str {
+            "answer-then-follow-up"
+        }
+    }
+
+    async fn reply_of_answer_then_follow_up(tool: &'static str) -> String {
+        let runner = TaskRunner::with_llm(Arc::new(AnswerThenFollowUpLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            tool,
+        }))
+        .with_pending_approvals(empty_pending_approvals())
+        .with_notifier(tokio::sync::mpsc::channel(16).0)
+        .with_hitl_timeout_secs(1)
+        .with_iteration_ceiling(50);
+        let (sink, _seen) = tokio::sync::mpsc::channel(64);
+        let outcome = runner
+            .run_sync_streaming(
+                user_turn("Lightpanda 也一起裝", "t-follow", None),
+                sink,
+                None,
+            )
+            .await;
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("turn must complete, got {outcome:?}");
+        };
+        text_of(task.messages.last().expect("reply"))
+    }
+
+    /// Regression (turn 274): the answer streamed, `suggest_replies` ran, and
+    /// the model added one closing line. The reply was that line alone. The
+    /// CLI puts the reply in place of the streaming text, and
+    /// `suggest_replies` draws no step card, so nothing on screen marked a
+    /// boundary between the two calls. The part of the answer still in the
+    /// band vanished the moment the chooser opened, and only the closing line
+    /// reached the channel log and memory. `suggest_replies` is a no-op: the
+    /// text before it is part of the reply.
+    #[tokio::test]
+    async fn text_before_suggest_replies_stays_in_the_reply() {
+        let reply = reply_of_answer_then_follow_up("suggest_replies").await;
+        assert!(
+            reply.starts_with(ANSWER),
+            "the answer before suggest_replies was dropped: {reply}"
+        );
+        assert!(
+            reply.contains(FOLLOW_UP),
+            "the closing line is part of the reply too: {reply}"
+        );
+    }
+
+    /// Counterpart: a real tool draws a card, and the card freezes the text
+    /// above it on screen. The reply is only what came after it, as before.
+    #[tokio::test]
+    async fn text_before_a_real_tool_stays_out_of_the_reply() {
+        let reply = reply_of_answer_then_follow_up("read_file").await;
+        assert!(
+            !reply.contains("Lightpanda"),
+            "text above a step card belongs to the frozen segment: {reply}"
+        );
+        assert!(reply.starts_with(FOLLOW_UP), "{reply}");
     }
 
     /// Counterpart: a failure before the user saw anything is still a plain
