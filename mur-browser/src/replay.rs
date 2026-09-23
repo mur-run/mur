@@ -5,7 +5,8 @@
 //! step it either navigates (`goto`, after [`guard::check`]) or takes a
 //! `browser_snapshot`, resolves the step's `locators[]` in priority order
 //! against it via [`crate::locator`], and sends the step's tool with the
-//! resolved `ref`. Self-healing (L3, `--heal`) is Task 5 and lives elsewhere.
+//! resolved ref as `target` (the @playwright/mcp 0.0.82 argument name).
+//! Self-healing (L3, `--heal`) is Task 5 and lives elsewhere.
 //!
 //! The transport is behind [`ToolCaller`] so the step loop is tested without
 //! spawning `npx`; [`StdioCaller`] is the production line-JSON-RPC client.
@@ -201,7 +202,9 @@ async fn run_step<C: ToolCaller + Send>(step: &Step, caller: &mut C) -> Result<O
                 )
             })?;
         if let Some(obj) = args.as_object_mut() {
-            obj.insert("ref".into(), Value::String(reference));
+            // @playwright/mcp 0.0.82 names the element argument `target`
+            // (a snapshot ref like `e7` or a selector); `ref` is rejected.
+            obj.insert("target".into(), Value::String(reference));
         }
         hit = Some(locator);
     }
@@ -454,7 +457,8 @@ steps:
             .iter()
             .find(|(n, _)| n == "browser_click")
             .unwrap();
-        assert_eq!(click.1["ref"], "e7");
+        assert_eq!(click.1["target"], "e7");
+        assert!(click.1.get("ref").is_none());
         let nav = &fake.calls[0];
         assert_eq!(nav.0, "browser_navigate");
         assert_eq!(nav.1["url"], "https://app.example.com/login");

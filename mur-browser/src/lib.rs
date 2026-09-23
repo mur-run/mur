@@ -27,8 +27,10 @@ pub mod recorder;
 pub mod replay;
 pub mod state;
 
-/// npm package spawned as the downstream MCP server.
-pub const PLAYWRIGHT_MCP_PKG: &str = "@playwright/mcp@latest";
+/// npm package spawned as the downstream MCP server. Pinned: each release
+/// requires a specific browser build, and 0.0.82 renamed the element
+/// argument from `ref` to `target`, so `@latest` breaks replay silently.
+pub const PLAYWRIGHT_MCP_PKG: &str = "@playwright/mcp@0.0.82";
 
 /// Name the agent sees for this server (`mur agent mcp add <agent> browser …`).
 pub const SERVER_NAME: &str = "browser";
