@@ -792,8 +792,19 @@ pub enum BrowserAction {
         #[arg(last = true, allow_hyphen_values = true)]
         extra: Vec<String>,
     },
-    /// Replay a recorded browser run (implemented in a later slice).
-    Replay { name: String },
+    /// Replay a recorded browser run headlessly.
+    Replay {
+        name: String,
+        /// Site profile to replay under (defaults to the one recorded with the run).
+        #[arg(long)]
+        profile: Option<String>,
+        /// Self-heal missed locators (not implemented yet).
+        #[arg(long)]
+        heal: bool,
+        /// Check the run against the profile allowlist without launching a browser.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Authenticate a named browser profile (handoff implementation follows).
     Auth {
         /// Profile name; used as a path component under browser/profiles.
