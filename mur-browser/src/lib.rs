@@ -24,6 +24,7 @@ pub mod locator;
 pub mod paths;
 pub mod proxy;
 pub mod recorder;
+pub mod replay;
 pub mod state;
 
 /// npm package spawned as the downstream MCP server.

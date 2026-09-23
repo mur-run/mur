@@ -214,15 +214,15 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 4.1 新建 `mur-browser/src/replay.rs`，先寫測試：`--dry-run` 對一個 3 步的 Run 回傳 `total: 3`、`passed: 0`、全部 `Skipped`，且**不 spawn 任何子行程**
-- [ ] 4.2 補測試：Run 內某步的 `goto` URL 不在 profile 的 `allow_domains` 內時，回 `Err` 且錯誤訊息含該 host
-- [ ] 4.3 `cargo test -p mur-browser replay` → 失敗
-- [ ] 4.4 實作 dry-run 路徑：解析 Run、對每個 `goto` 呼叫 `guard::check`、產出全 `Skipped` 的報告
-- [ ] 4.5 實作實跑路徑：比照 `cmd/browser/mod.rs:57-82` 的 record 流程起 broker + `run_stdio`，逐步送 tool call，逐步收結果填 `StepOutcome`
-- [ ] 4.6 `cargo test -p mur-browser replay` → 全綠
-- [ ] 4.7 `cmd/browser/mod.rs` 加 `pub async fn replay(...)`；報告以 YAML 寫入 `paths::run_report(&home, name)` 並印出摘要行
-- [ ] 4.8 `actions.rs` 的 `Replay` 補三個參數，`dispatch.rs:609` 換真 handler
-- [ ] 4.9 `cargo test && cargo clippy --all-targets -- -D warnings`，commit
+- [x] 4.1 新建 `mur-browser/src/replay.rs`，先寫測試：`--dry-run` 對一個 3 步的 Run 回傳 `total: 3`、`passed: 0`、全部 `Skipped`，且**不 spawn 任何子行程**
+- [x] 4.2 補測試：Run 內某步的 `goto` URL 不在 profile 的 `allow_domains` 內時，回 `Err` 且錯誤訊息含該 host
+- [x] 4.3 `cargo test -p mur-browser replay` → 失敗
+- [x] 4.4 實作 dry-run 路徑：解析 Run、對每個 `goto` 呼叫 `guard::check`、產出全 `Skipped` 的報告
+- [x] 4.5 實作實跑路徑：比照 `cmd/browser/mod.rs:57-82` 的 record 流程起 broker + `run_stdio`，逐步送 tool call，逐步收結果填 `StepOutcome`
+- [x] 4.6 `cargo test -p mur-browser replay` → 全綠
+- [x] 4.7 `cmd/browser/mod.rs` 加 `pub async fn replay(...)`；報告以 YAML 寫入 `paths::run_report(&home, name)` 並印出摘要行
+- [x] 4.8 `actions.rs` 的 `Replay` 補三個參數，`dispatch.rs:609` 換真 handler
+- [x] 4.9 `cargo test && cargo clippy --all-targets -- -D warnings`，commit
 
 ---
 
