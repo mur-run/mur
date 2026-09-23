@@ -338,7 +338,13 @@ pub async fn replay_live(
     storage_state: Option<&std::path::Path>,
 ) -> Result<ReplayReport> {
     check_navigation(run, allow)?;
-    let mut args = vec!["--headless".to_owned(), "--isolated".to_owned()];
+    // @playwright/mcp defaults to branded Google Chrome, which is often not
+    // installed; the bundled Chromium is what `npx playwright install` provides.
+    let mut args = vec![
+        "--headless".to_owned(),
+        "--isolated".to_owned(),
+        "--browser=chromium".to_owned(),
+    ];
     if let Some(path) = storage_state {
         args.push(format!("--storage-state={}", path.display()));
     }
