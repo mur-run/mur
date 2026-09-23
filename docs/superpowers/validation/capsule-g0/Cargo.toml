@@ -1,0 +1,25 @@
+[package]
+name = "capsule-g0-validation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "capsule-g0"
+path = "src/main.rs"
+
+# Keep this validation crate independent from the MUR workspace.
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+correctness = "deny"
+suspicious = "warn"
+style = "warn"
+complexity = "warn"
+perf = "warn"

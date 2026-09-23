@@ -1,0 +1,657 @@
+use super::*;
+
+fn capture(model: &mut Model, id: &str, key: &str) {
+    model
+        .commit(id, Action::Capture, key, &[], false)
+        .expect("capture should commit");
+}
+
+#[test]
+fn erase_recovery_on_each_side_of_commit_anchor() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        for cut in 0..4 {
+            let mut model = Model::new(profile);
+            capture(&mut model, "create-a", "A");
+            let prepared = model
+                .prepare("erase-a", Action::Erase, "A", &[], false)
+                .expect("erase should prepare");
+            if cut >= 1 {
+                model.flush(&prepared);
+            }
+            if cut >= 2 {
+                model.advance(&prepared).expect("advance should commit");
+            }
+            if cut == 3 {
+                model.publish(&prepared).expect("publish should succeed");
+            }
+            model.restart().expect("restart should recover");
+            assert_eq!(model.readable("A"), Ok(cut < 2));
+        }
+    }
+}
+
+#[test]
+fn old_disk_image_cannot_roll_back_strict_anchor() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    let old = model.export_disk();
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase should commit");
+    model.restore_disk(&old);
+    assert_eq!(model.restart(), Err(Refusal::Quarantined));
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+}
+
+#[test]
+fn source_erasure_blocks_transitive_derivations() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    model
+        .commit("b", Action::Derive, "B", &["A"], false)
+        .expect("B");
+    model
+        .commit("c", Action::Derive, "C", &["B"], false)
+        .expect("C");
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    assert_eq!(model.readable("B"), Ok(false));
+    assert_eq!(model.readable("C"), Ok(false));
+    assert_eq!(
+        model.commit("d", Action::Derive, "D", &["C"], false),
+        Err(Refusal::SourceUnavailable)
+    );
+}
+
+#[test]
+fn independent_save_requires_approval_and_live_sources_at_commit() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    assert_eq!(
+        model.prepare("d", Action::Materialize, "D", &["A"], false),
+        Err(Refusal::ApprovalRequired)
+    );
+    let prepared = model
+        .prepare("d", Action::Materialize, "D", &["A"], true)
+        .expect("prepare");
+    model.flush(&prepared);
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    assert_eq!(model.advance(&prepared), Err(Refusal::CommitConflict));
+    assert_eq!(
+        model.prepare("d", Action::Materialize, "D", &["A"], true),
+        Err(Refusal::SourceUnavailable)
+    );
+}
+
+#[test]
+fn lost_reply_retry_returns_original_receipt_without_resurrection() {
+    let mut model = Model::new(Profile::Strict);
+    let receipt = model
+        .commit("a", Action::Capture, "A", &[], false)
+        .expect("capture");
+    assert_eq!(
+        model.commit("a", Action::Capture, "A", &[], false),
+        Ok(receipt)
+    );
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    assert!(model.commit("a", Action::Capture, "A", &[], false).is_ok());
+    assert_eq!(model.readable("A"), Ok(false));
+    assert_eq!(
+        model.commit("a", Action::Capture, "DIFFERENT", &[], false),
+        Err(Refusal::IdempotencyConflict)
+    );
+}
+
+#[test]
+fn restart_cannot_redeem_uncommitted_preparation() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    let prepared = model
+        .prepare("d", Action::Materialize, "D", &["A"], true)
+        .expect("prepare");
+    model.flush(&prepared);
+    model.restart().expect("restart");
+    assert_eq!(model.advance(&prepared), Err(Refusal::ExpiredPreparation));
+    assert_eq!(model.readable("D"), Ok(false));
+}
+
+#[test]
+fn managed_old_image_demonstrates_declared_rollback_limit() {
+    let mut model = Model::new(Profile::Managed);
+    capture(&mut model, "a", "A");
+    let old = model.export_disk();
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    model.restore_disk(&old);
+    model.restart().expect("managed image should restore");
+    assert_eq!(model.readable("A"), Ok(true));
+}
+
+#[test]
+fn stale_pointer_does_not_override_strict_anchor() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    let old_pointer = model.export_disk().pointer;
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    let mut image = model.export_disk();
+    image.pointer = old_pointer;
+    model.restore_disk(&image);
+    model.restart().expect("restart");
+    assert_eq!(model.readable("A"), Ok(false));
+}
+
+#[test]
+fn unflushed_snapshot_cannot_advance_anchor() {
+    let mut model = Model::new(Profile::Strict);
+    let prepared = model
+        .prepare("a", Action::Capture, "A", &[], false)
+        .expect("prepare");
+    assert_eq!(model.advance(&prepared), Err(Refusal::NotDurable));
+    assert_eq!(model.readable("A"), Ok(false));
+}
+
+#[test]
+fn approved_save_before_erasure_survives() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    model
+        .commit("d", Action::Materialize, "D", &["A"], true)
+        .expect("materialize");
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    assert_eq!(model.readable("D"), Ok(true));
+}
+
+#[test]
+fn negative_control_detects_rollbackable_strict_anchor() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    let old = model.export_disk();
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    model.restore_disk(&old);
+    model.hardware_root = old.pointer;
+    model
+        .restart()
+        .expect("deliberately broken anchor restores");
+    assert_eq!(
+        model.readable("A"),
+        Ok(true),
+        "negative control must expose resurrection"
+    );
+}
+
+#[test]
+fn corrupt_committed_manifest_is_quarantined() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    let mut image = model.export_disk();
+    image
+        .manifests
+        .get_mut(&image.pointer)
+        .expect("manifest")
+        .epoch = 999;
+    model.restore_disk(&image);
+    assert_eq!(model.restart(), Err(Refusal::Quarantined));
+}
+
+#[test]
+fn new_capture_visibility_at_every_crash_cut() {
+    for cut in 0..4 {
+        let mut model = Model::new(Profile::Strict);
+        let prepared = model
+            .prepare("a", Action::Capture, "A", &[], false)
+            .expect("prepare");
+        if cut >= 1 {
+            model.flush(&prepared);
+        }
+        if cut >= 2 {
+            model.advance(&prepared).expect("advance");
+        }
+        if cut == 3 {
+            model.publish(&prepared).expect("publish");
+        }
+        model.restart().expect("restart");
+        assert_eq!(model.readable("A"), Ok(cut >= 2));
+    }
+}
+
+#[test]
+fn both_derive_erase_serializations_have_no_post_erase_read() {
+    for derive_first in [true, false] {
+        let mut model = Model::new(Profile::Strict);
+        capture(&mut model, "a", "A");
+        let derive = model
+            .prepare("b", Action::Derive, "B", &["A"], false)
+            .expect("derive");
+        let erase = model
+            .prepare("erase", Action::Erase, "A", &[], false)
+            .expect("erase");
+        model.flush(&derive);
+        model.flush(&erase);
+        let (winner, loser) = if derive_first {
+            (&derive, &erase)
+        } else {
+            (&erase, &derive)
+        };
+        model.advance(winner).expect("winner");
+        assert_eq!(model.advance(loser), Err(Refusal::CommitConflict));
+        if derive_first {
+            model
+                .commit("erase", Action::Erase, "A", &[], false)
+                .expect("erase retry");
+        }
+        assert_eq!(model.readable("B"), Ok(false));
+    }
+}
+
+#[test]
+fn destroyed_key_identity_cannot_be_reused() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    assert_eq!(
+        model.commit("new-a", Action::Capture, "A", &[], false),
+        Err(Refusal::KeyIdentityReused)
+    );
+}
+
+/// I09-b1 — a live key identity cannot be re-bound by a different operation.
+#[test]
+fn capture_onto_existing_key_is_key_identity_reused() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        let mut model = Model::new(profile);
+        capture(&mut model, "first", "A");
+        assert_eq!(
+            model.prepare("second", Action::Capture, "A", &[], false),
+            Err(Refusal::KeyIdentityReused),
+            "{profile:?}"
+        );
+    }
+}
+
+/// I10(a) — with committed objects intact, recovery converges to the same
+/// root: the committed one if the anchor moved, the prior one if it did not.
+#[test]
+fn recovery_converges_to_identical_root_on_each_side_of_anchor() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        for cut in 0..4 {
+            let mut model = Model::new(profile);
+            capture(&mut model, "create-a", "A");
+            let before = model.anchor();
+            let prepared = model
+                .prepare("erase-a", Action::Erase, "A", &[], false)
+                .expect("erase should prepare");
+            if cut >= 1 {
+                model.flush(&prepared);
+            }
+            if cut >= 2 {
+                model.advance(&prepared).expect("advance should commit");
+            }
+            if cut == 3 {
+                model.publish(&prepared).expect("publish should succeed");
+            }
+            model.restart().expect("restart should recover");
+            let expected = if cut >= 2 { prepared.root } else { before };
+            assert_eq!(model.anchor(), expected, "{profile:?} cut={cut}");
+            assert_eq!(model.pointer, expected, "{profile:?} cut={cut}");
+            assert_eq!(model.current().map(|s| snapshot_digest(&s)), Ok(expected));
+        }
+    }
+}
+
+/// Disk swapped under an in-flight preparation (no restart in between).
+/// Strict: every step refuses — this is a safety property.
+#[test]
+fn strict_refuses_inflight_preparation_after_disk_rollback() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "a", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("b", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    model.restore_disk(&old);
+    model.flush(&prepared);
+    // Quarantined, not CommitConflict/NotCommitted: those imply "retry",
+    // which t1_quarantined_never_implies_try_again_later forbids (§6).
+    assert_eq!(model.advance(&prepared), Err(Refusal::Quarantined));
+    assert_eq!(model.publish(&prepared), Err(Refusal::Quarantined));
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+}
+
+/// Same scenario under Managed: it proceeds, and the outcome is exactly the
+/// declared rollback limit — the erased key is back. Records a boundary,
+/// proves nothing about safety.
+#[test]
+fn managed_inflight_preparation_after_disk_rollback_stays_within_declared_limit() {
+    let mut model = Model::new(Profile::Managed);
+    capture(&mut model, "a", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("b", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model
+        .commit("erase", Action::Erase, "A", &[], false)
+        .expect("erase");
+    model.restore_disk(&old);
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Ok(()));
+    assert_eq!(model.publish(&prepared), Ok(()));
+    model.restart().expect("restart");
+    assert_eq!(model.anchor(), prepared.root);
+    assert_eq!(model.readable("A"), Ok(true));
+    assert_eq!(model.readable("B"), Ok(true));
+}
+
+/// §6 regression: in Strict the hardware anchor does not roll back with the
+/// disk, so a root-equality check alone let a pre-swap prepared op advance
+/// and silently lift quarantine (violates state_space.rs:250, N5, I10).
+#[test]
+fn strict_advance_refuses_while_quarantined() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    let prepared = model
+        .prepare("c3", Action::Capture, "C", &[], false)
+        .expect("prepare before swap");
+    model.restore_disk(&old);
+    assert_eq!(model.current().map(|_| ()), Err(Refusal::Quarantined));
+
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Err(Refusal::Quarantined));
+    assert_eq!(model.current().map(|_| ()), Err(Refusal::Quarantined));
+    assert_eq!(model.readable("C"), Err(Refusal::Quarantined));
+}
+
+/// §6 regression: publish must not move the pointer onto a root whose
+/// manifest is gone from disk (violates I02).
+#[test]
+fn strict_publish_refuses_while_quarantined() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model.flush(&prepared);
+    model.advance(&prepared).expect("advance before swap");
+    model.restore_disk(&old);
+    let pointer_after_swap = model.pointer;
+    assert_eq!(model.current().map(|_| ()), Err(Refusal::Quarantined));
+
+    assert_eq!(model.publish(&prepared), Err(Refusal::Quarantined));
+    assert_eq!(model.pointer, pointer_after_swap);
+    assert_ne!(
+        model.pointer, prepared.root,
+        "pointer must not name a missing manifest"
+    );
+}
+
+/// §7 / N5 caveat: flush does not move the anchor, and current() digest-verifies
+/// the anchored manifest, so writing that exact manifest back is
+/// content-addressed recovery (I10), not a quarantine bypass.
+#[test]
+fn strict_flush_of_anchored_manifest_recovers_quarantine() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model.flush(&prepared);
+    model.advance(&prepared).expect("advance");
+    model.restore_disk(&old);
+    assert_eq!(model.readable("B"), Err(Refusal::Quarantined));
+
+    model.flush(&prepared);
+    assert_eq!(
+        model.anchor(),
+        prepared.root,
+        "flush must not move the anchor"
+    );
+    assert_eq!(model.readable("B"), Ok(true));
+}
+
+/// §7 / N5 caveat, other half: flushing a manifest for any root other than
+/// the anchored one must leave quarantine in place.
+#[test]
+fn strict_flush_of_other_root_does_not_lift_quarantine() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    let anchored = model.anchor();
+    let other = model
+        .prepare("c3", Action::Capture, "C", &[], false)
+        .expect("prepare");
+    model.restore_disk(&old);
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+
+    model.flush(&other);
+    assert_ne!(other.root, anchored);
+    assert_eq!(model.anchor(), anchored);
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+    assert_eq!(model.readable("C"), Err(Refusal::Quarantined));
+}
+
+/// §5 answer 1: health() is the single derivation point behind current().
+#[test]
+fn health_is_derived_from_anchor_and_disk() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        let mut model = Model::new(profile);
+        capture(&mut model, "c1", "A");
+        assert_eq!(model.health(), VaultHealth::Ready, "{profile:?}");
+    }
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    model.restore_disk(&old);
+    assert_eq!(model.health(), VaultHealth::Quarantined);
+    assert_eq!(model.readable("A"), Err(Refusal::Quarantined));
+}
+
+/// §5 answer 2 / C14: an unreachable anchor is Recovering and answers
+/// BackendUnavailable, not Quarantined; reachability returning restores Ready.
+#[test]
+fn strict_unreachable_anchor_is_recovering() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    model.set_anchor_reachable(false);
+    assert_eq!(model.health(), VaultHealth::Recovering);
+    assert_eq!(model.readable("A"), Err(Refusal::BackendUnavailable));
+    model.set_anchor_reachable(true);
+    assert_eq!(model.health(), VaultHealth::Ready);
+    assert_eq!(model.readable("A"), Ok(true));
+}
+
+/// N2: a timeout keeps the operation InDoubt — advance is refused with
+/// BackendUnavailable, and the same prepared op may still advance once the
+/// anchor answers again (it was never presumed Aborted).
+#[test]
+fn strict_recovering_keeps_prepared_op_in_doubt() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare while reachable");
+    model.flush(&prepared);
+    model.set_anchor_reachable(false);
+    assert_eq!(model.advance(&prepared), Err(Refusal::BackendUnavailable));
+    assert_eq!(model.readable("B"), Err(Refusal::BackendUnavailable));
+    model.set_anchor_reachable(true);
+    assert_eq!(model.advance(&prepared), Ok(()));
+    assert_eq!(model.publish(&prepared), Ok(()));
+    assert_eq!(model.readable("B"), Ok(true));
+}
+
+/// §5 answer 2 ordering: reachability is judged before the digest check —
+/// with the anchor unreachable there is nothing to compare the disk against,
+/// so a swapped disk still reads as Recovering, not Quarantined.
+#[test]
+fn strict_unreachable_takes_precedence_over_disk_mismatch() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    capture(&mut model, "c2", "B");
+    model.restore_disk(&old);
+    model.set_anchor_reachable(false);
+    assert_eq!(model.health(), VaultHealth::Recovering);
+    model.set_anchor_reachable(true);
+    assert_eq!(model.health(), VaultHealth::Quarantined);
+}
+
+/// §7 × §5 answer 2: flush has no health gate, so it still writes while the
+/// anchor is unreachable — but writing cannot decide health. Recovering holds
+/// until the anchor answers; only then is the (now repaired) disk judged.
+#[test]
+fn strict_flush_while_unreachable_writes_but_does_not_decide_health() {
+    let mut model = Model::new(Profile::Strict);
+    capture(&mut model, "c1", "A");
+    let old = model.export_disk();
+    let prepared = model
+        .prepare("c2", Action::Capture, "B", &[], false)
+        .expect("prepare");
+    model.flush(&prepared);
+    model.advance(&prepared).expect("advance");
+    model.restore_disk(&old);
+    model.set_anchor_reachable(false);
+
+    model.flush(&prepared);
+    assert_eq!(
+        model.anchor(),
+        prepared.root,
+        "flush must not move the anchor"
+    );
+    assert_eq!(model.health(), VaultHealth::Recovering);
+    assert_eq!(model.readable("B"), Err(Refusal::BackendUnavailable));
+
+    model.set_anchor_reachable(true);
+    assert_eq!(model.health(), VaultHealth::Ready);
+    assert_eq!(model.readable("B"), Ok(true));
+}
+
+/// c slice (contract §203, §5 answer 3): the envelope schema is the fixed
+/// identifier, the supported set is exactly that one, and it is bound into
+/// the manifest digest.
+#[test]
+fn envelope_schema_is_fixed_identifier_bound_into_digest() {
+    assert_eq!(ENVELOPE_SCHEMA, "capsule-envelope-g0-v1");
+    assert_eq!(SUPPORTED_SCHEMAS, &["capsule-envelope-g0-v1"]);
+    for profile in [Profile::Strict, Profile::Managed] {
+        let model = Model::new(profile);
+        let snapshot = model.anchored_snapshot().expect("fresh vault verifies");
+        assert_eq!(snapshot.schema, ENVELOPE_SCHEMA);
+        let mut other = snapshot.clone();
+        other.schema = "capsule-envelope-prod-v1".to_owned();
+        assert_ne!(snapshot_digest(&other), snapshot_digest(snapshot));
+    }
+}
+
+const FOREIGN_SCHEMA: &str = "capsule-envelope-prod-v1";
+
+/// §5 answer 3 + state_space (Unsupported, Readable) => ManagedOnly: a
+/// verified manifest under a schema outside SUPPORTED_SCHEMAS is Unsupported
+/// in both profiles — not Ready, and not Quarantined (nothing was tampered).
+#[test]
+fn foreign_schema_is_unsupported_not_quarantined() {
+    for profile in [Profile::Strict, Profile::Managed] {
+        let model = Model::with_schema(profile, FOREIGN_SCHEMA);
+        assert_eq!(model.health(), VaultHealth::Unsupported, "{profile:?}");
+    }
+}
+
+/// I09 / §43: Strict never silently degrades — reading an Unsupported vault
+/// answers UnsupportedGuarantee, and so does starting a write.
+#[test]
+fn strict_unsupported_refuses_with_unsupported_guarantee() {
+    let model = Model::with_schema(Profile::Strict, FOREIGN_SCHEMA);
+    assert_eq!(model.readable("A"), Err(Refusal::UnsupportedGuarantee));
+    assert_eq!(
+        model
+            .prepare("c1", Action::Capture, "A", &[], false)
+            .map(|_| ()),
+        Err(Refusal::UnsupportedGuarantee)
+    );
+}
+
+/// §88 「Managed 讀取不受影響」: the Managed read path survives Unsupported.
+#[test]
+fn managed_unsupported_still_reads() {
+    let model = Model::with_schema(Profile::Managed, FOREIGN_SCHEMA);
+    assert_eq!(model.health(), VaultHealth::Unsupported);
+    assert_eq!(model.readable("A"), Ok(false));
+}
+
+/// Derivation order: reachable → verified → supported. An unverified
+/// manifest's schema field cannot be trusted, so a foreign-schema vault whose
+/// disk no longer matches the anchor is Quarantined; unreachable beats both.
+#[test]
+fn strict_schema_check_runs_only_after_digest_and_reachability() {
+    let mut model = Model::with_schema(Profile::Strict, FOREIGN_SCHEMA);
+    // A disk from a supported-schema vault lacks the anchored (foreign)
+    // manifest, so nothing under the anchor verifies.
+    model.restore_disk(&Model::new(Profile::Strict).export_disk());
+    assert_eq!(model.health(), VaultHealth::Quarantined);
+    model.set_anchor_reachable(false);
+    assert_eq!(model.health(), VaultHealth::Recovering);
+}
+
+/// state_space (Unsupported, commit) => ManagedOnly: Managed may still write
+/// to an Unsupported vault. The write carries the vault's schema forward —
+/// it never silently migrates it — so health stays Unsupported afterwards.
+#[test]
+fn managed_unsupported_writes_without_migrating_schema() {
+    let mut model = Model::with_schema(Profile::Managed, FOREIGN_SCHEMA);
+    let prepared = model
+        .prepare("c1", Action::Capture, "A", &[], false)
+        .expect("Managed prepares on Unsupported");
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Ok(()));
+    assert_eq!(model.publish(&prepared), Ok(()));
+    assert_eq!(model.readable("A"), Ok(true));
+    assert_eq!(model.health(), VaultHealth::Unsupported);
+    let snapshot = model.anchored_snapshot().expect("still verifies");
+    assert_eq!(snapshot.schema, FOREIGN_SCHEMA);
+}
+
+/// I09 / §43 on the commit path: Strict refuses advance and publish on an
+/// Unsupported vault with UnsupportedGuarantee. `prepare` is already refused,
+/// so the Prepared comes from a Managed twin under the same schema and is
+/// flushed in (flush has no health gate). Session, base and durability all
+/// line up — the health gate is the only thing standing in the way.
+#[test]
+fn strict_unsupported_refuses_advance_and_publish() {
+    let mut twin = Model::with_schema(Profile::Managed, FOREIGN_SCHEMA);
+    let prepared = twin
+        .prepare("c1", Action::Capture, "A", &[], false)
+        .expect("Managed may prepare on Unsupported");
+
+    let mut model = Model::with_schema(Profile::Strict, FOREIGN_SCHEMA);
+    model.flush(&prepared);
+    assert_eq!(model.advance(&prepared), Err(Refusal::UnsupportedGuarantee));
+    assert_eq!(model.publish(&prepared), Err(Refusal::UnsupportedGuarantee));
+    assert_eq!(model.health(), VaultHealth::Unsupported);
+
+    // Control: the same Prepared is accepted by the twin, so the refusal
+    // above is the health gate, not a base/session/durability mismatch.
+    twin.flush(&prepared);
+    assert_eq!(twin.advance(&prepared), Ok(()));
+    assert_eq!(twin.publish(&prepared), Ok(()));
+}
