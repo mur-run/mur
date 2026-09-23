@@ -12,7 +12,7 @@
 
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -20,6 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use mur_common::deps::registry::CuratedRecipe;
 
 use super::provision::{
     LIGHTPANDA_RELATIVE, OBSCURA_RELATIVE, OBSCURA_WORKER_RELATIVE, render_binaries,
@@ -49,13 +50,56 @@ pub fn auto_detect_engine(mur_home: &Path) -> RenderEngine {
     RenderEngine::AgentBrowser
 }
 
-/// What gets installed, in order. `agent-browser install` pulls the
+/// The npm fallback (spec D2b), in order — used only on a platform with no
+/// curated Lightpanda recipe. `agent-browser install` pulls the
 /// Chrome-for-Testing build the chrome engine falls back to; without it the
 /// npm package alone cannot render.
 pub const INSTALL_STEPS: &[&[&str]] = &[
     &["npm", "i", "-g", "agent-browser@latest"],
     &["agent-browser", "install"],
 ];
+
+/// What setup offers to install when no render browser is present.
+///
+/// Native Lightpanda first (spec D2), from the same curated, sha256-pinned
+/// recipe `mur fleet install-deps` uses — it is what the gateway auto-detects
+/// first, and the one that actually rendered under the sandbox. npm
+/// agent-browser only where no Lightpanda build exists for the platform.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InstallPlan {
+    Lightpanda(CuratedRecipe),
+    AgentBrowser,
+}
+
+/// Pick the plan for `platform` (`mur_common::deps::current_platform()`).
+pub fn install_plan(platform: &str) -> InstallPlan {
+    match mur_common::deps::registry::recipe("lightpanda", platform) {
+        Some(r) => InstallPlan::Lightpanda(r),
+        None => InstallPlan::AgentBrowser,
+    }
+}
+
+/// Download + verify + place one curated recipe under `mur_home`. Injected so
+/// tests never touch the network.
+pub type Fetcher<'a> = &'a mut dyn FnMut(&CuratedRecipe, &Path) -> Result<Vec<PathBuf>>;
+
+/// Real fetcher: the deps installer (sha256 checked before anything is
+/// written). Setup is synchronous and may be called from inside the CLI's
+/// runtime, so — like `agent/mcp_add.rs` — the download runs on its own thread
+/// with its own current-thread runtime instead of borrowing the caller's.
+pub fn system_fetcher(recipe: &CuratedRecipe, mur_home: &Path) -> Result<Vec<PathBuf>> {
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| anyhow::anyhow!("build download runtime: {e}"))?
+                .block_on(crate::cmd::deps::installer::install(recipe, mur_home))
+        })
+        .join()
+        .map_err(|_| anyhow::anyhow!("download thread panicked"))?
+    })
+}
 
 /// Run one command; `Ok(true)` when it exited 0. Injected so tests never touch
 /// npm or the network.
@@ -523,33 +567,92 @@ fn report_l2(output: &mut dyn Write, engine: RenderEngine, outcome: &L2Outcome) 
     Ok(())
 }
 
-fn print_install_steps(output: &mut dyn Write) -> Result<()> {
-    for step in INSTALL_STEPS {
-        writeln!(output, "    {}", step.join(" "))?;
+/// Everything the install would do, printed before any consent (spec D3):
+/// URL, sha256 prefix and destination for Lightpanda; the npm commands for the
+/// fallback.
+fn print_install_plan(output: &mut dyn Write, plan: &InstallPlan) -> Result<()> {
+    match plan {
+        InstallPlan::Lightpanda(r) => {
+            writeln!(output, "    download  {}", r.url)?;
+            writeln!(
+                output,
+                "    sha256    {}… (checked before anything is written)",
+                &r.sha256[..r.sha256.len().min(16)]
+            )?;
+            writeln!(output, "    install   ~/.mur/{LIGHTPANDA_RELATIVE}")?;
+        }
+        InstallPlan::AgentBrowser => {
+            writeln!(
+                output,
+                "    (no native Lightpanda build for this platform — using agent-browser)"
+            )?;
+            for step in INSTALL_STEPS {
+                writeln!(output, "    {}", step.join(" "))?;
+            }
+        }
     }
     Ok(())
 }
 
+/// Run the plan after consent. `Ok(false)` = failed; the reason is already
+/// printed. A failed Lightpanda download never falls through to npm (D3).
+fn run_install_plan(
+    output: &mut dyn Write,
+    mur_home: &Path,
+    plan: &InstallPlan,
+    run: Runner<'_>,
+    fetch: Fetcher<'_>,
+) -> Result<bool> {
+    match plan {
+        InstallPlan::Lightpanda(r) => match fetch(r, mur_home) {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                writeln!(
+                    output,
+                    "  ✗ Lightpanda download failed: {e:#}\n    \
+                     nothing was installed; retry with `mur fleet install-deps {} --program lightpanda`.",
+                    super::status::DEFAULT_FLEET_NAME
+                )?;
+                Ok(false)
+            }
+        },
+        InstallPlan::AgentBrowser => {
+            for step in INSTALL_STEPS {
+                let ok = run(step).unwrap_or_else(|e| {
+                    let _ = writeln!(output, "  ✗ {e}");
+                    false
+                });
+                if !ok {
+                    writeln!(output, "  ✗ `{}` failed.", step.join(" "))?;
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+    }
+}
+
 /// Wizard hook, called only after the user said `yes` to the browser grant.
 ///
-/// Found → L1 + L2. Missing → print the install commands, ask for a literal
-/// `yes`, run them, re-check, L1 + L2. Always `Ok`: the caller goes on to
-/// `grant_render_browser`, which grants whatever is present now.
+/// Found → L1 + L2. Missing → print the `plan` (Lightpanda, or npm only where
+/// there is no Lightpanda build), ask once for a literal `yes`, run it,
+/// re-check, L1 + L2. Always `Ok`: the caller goes on to
+/// `grant_render_browser`, which grants whatever is present now. Never writes
+/// `render_engine` (D4), so the gateway's auto-detect still applies.
 pub fn ensure_render_browser(
     mur_home: &Path,
+    plan: &InstallPlan,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
     run: Runner<'_>,
+    fetch: Fetcher<'_>,
     exec: RenderExec<'_>,
 ) -> Result<()> {
     let mut bins = render_binaries(mur_home);
     if bins.is_empty() {
-        writeln!(output, "\nNo render browser found. Installing one runs:")?;
-        print_install_steps(output)?;
-        write!(
-            output,
-            "Type 'yes' to run these now (anything else = skip): "
-        )?;
+        writeln!(output, "\nNo render browser found. Installing one does:")?;
+        print_install_plan(output, plan)?;
+        write!(output, "Type 'yes' to do this now (anything else = skip): ")?;
         output.flush()?;
         let mut line = String::new();
         input.read_line(&mut line)?;
@@ -560,26 +663,21 @@ pub fn ensure_render_browser(
             )?;
             return Ok(());
         }
-        for step in INSTALL_STEPS {
-            let ok = run(step).unwrap_or_else(|e| {
-                let _ = writeln!(output, "  ✗ {e}");
-                false
-            });
-            if !ok {
-                writeln!(
-                    output,
-                    "  ✗ `{}` failed — continuing without a render browser.",
-                    step.join(" ")
-                )?;
-                return Ok(());
-            }
+        if !run_install_plan(output, mur_home, plan, run, fetch)? {
+            writeln!(output, "  continuing without a render browser.")?;
+            return Ok(());
         }
         bins = render_binaries(mur_home);
         if bins.is_empty() {
-            writeln!(
-                output,
-                "  ✗ installed, but `agent-browser` is still not on PATH — check your npm prefix."
-            )?;
+            let why = match plan {
+                InstallPlan::Lightpanda(_) => {
+                    format!("~/.mur/{LIGHTPANDA_RELATIVE} is still missing")
+                }
+                InstallPlan::AgentBrowser => {
+                    "`agent-browser` is still not on PATH — check your npm prefix".to_string()
+                }
+            };
+            writeln!(output, "  ✗ installed, but {why}.")?;
             return Ok(());
         }
     }
@@ -595,6 +693,7 @@ pub fn ensure_render_browser(
 /// browser runs, so scripts can gate on it; an L2 ⚠ alone does not error.
 pub fn doctor(
     mur_home: &Path,
+    plan: &InstallPlan,
     output: &mut dyn Write,
     run: Runner<'_>,
     render: Option<RenderExec<'_>>,
@@ -606,8 +705,17 @@ pub fn doctor(
             output,
             "  ✗ none found (checked ~/.mur/aura/lightpanda and agent-browser on PATH)"
         )?;
-        writeln!(output, "  install with:")?;
-        print_install_steps(output)?;
+        match plan {
+            InstallPlan::Lightpanda(_) => writeln!(
+                output,
+                "  install with: mur fleet install-deps {} --program lightpanda",
+                super::status::DEFAULT_FLEET_NAME
+            )?,
+            InstallPlan::AgentBrowser => {
+                writeln!(output, "  install with:")?;
+                print_install_plan(output, plan)?;
+            }
+        }
         writeln!(
             output,
             "  or answer 'yes' to the browser question in `mur deep-research setup`."
@@ -638,6 +746,11 @@ mod tests {
         RenderRun::SpawnFailed("no browser in tests".into())
     }
 
+    /// Download stand-in for tests that must never reach the network.
+    fn no_fetch(_: &CuratedRecipe, _: &Path) -> Result<Vec<PathBuf>> {
+        panic!("no download expected in this test")
+    }
+
     /// Empty PATH + empty home: nothing is installed, deterministically.
     fn bare_home() -> (tempfile::TempDir, mur_common::test_env::EnvGuard) {
         let home = tempfile::tempdir().unwrap();
@@ -657,9 +770,11 @@ mod tests {
         let mut out = Vec::new();
         ensure_render_browser(
             home.path(),
+            &InstallPlan::AgentBrowser,
             &mut Cursor::new(b"y\n".to_vec()),
             &mut out,
             &mut run,
+            &mut no_fetch,
             &mut no_render,
         )
         .unwrap();
@@ -686,9 +801,11 @@ mod tests {
         let mut out = Vec::new();
         ensure_render_browser(
             home.path(),
+            &InstallPlan::AgentBrowser,
             &mut Cursor::new(b"yes\n".to_vec()),
             &mut out,
             &mut run,
+            &mut no_fetch,
             &mut no_render,
         )
         .unwrap();
@@ -716,9 +833,11 @@ mod tests {
         let mut out = Vec::new();
         let r = ensure_render_browser(
             home.path(),
+            &InstallPlan::AgentBrowser,
             &mut Cursor::new(b"yes\n".to_vec()),
             &mut out,
             &mut run,
+            &mut no_fetch,
             &mut no_render,
         );
         assert!(r.is_ok(), "setup must not fail over a browser install");
@@ -740,9 +859,11 @@ mod tests {
         // No input at all: a found browser must never prompt.
         ensure_render_browser(
             home.path(),
+            &InstallPlan::AgentBrowser,
             &mut Cursor::new(Vec::new()),
             &mut out,
             &mut run,
+            &mut no_fetch,
             &mut no_render,
         )
         .unwrap();
@@ -763,13 +884,141 @@ mod tests {
             Ok(true)
         };
         let mut out = Vec::new();
-        assert!(doctor(home.path(), &mut out, &mut run, None).is_err());
+        assert!(doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, None).is_err());
         assert_eq!(calls, 0, "doctor is read-only");
         assert!(
             String::from_utf8(out)
                 .unwrap()
                 .contains("npm i -g agent-browser@latest")
         );
+    }
+
+    fn lightpanda_plan() -> InstallPlan {
+        InstallPlan::Lightpanda(CuratedRecipe {
+            description: "lightpanda".into(),
+            url: "https://example.invalid/lightpanda".into(),
+            sha256: "ab".repeat(32),
+            install_to: Some(LIGHTPANDA_RELATIVE.into()),
+            executable: true,
+            archive: None,
+        })
+    }
+
+    /// D2: a platform with a curated recipe gets native Lightpanda;
+    /// one without gets the npm fallback (D2b).
+    #[test]
+    fn install_plan_prefers_the_curated_lightpanda_recipe() {
+        match install_plan("aarch64-macos") {
+            InstallPlan::Lightpanda(r) => {
+                assert_eq!(r.install_to.as_deref(), Some(LIGHTPANDA_RELATIVE));
+            }
+            other => panic!("expected lightpanda, got {other:?}"),
+        }
+        assert_eq!(install_plan("sparc-solaris"), InstallPlan::AgentBrowser);
+    }
+
+    /// D3: URL, sha256 prefix and destination are shown before consent, and
+    /// anything but a literal `yes` downloads nothing.
+    #[test]
+    fn lightpanda_plan_is_printed_first_and_needs_a_literal_yes() {
+        let (home, _g) = bare_home();
+        let mut fetched = 0;
+        let mut fetch = |_: &CuratedRecipe, _: &Path| {
+            fetched += 1;
+            Ok(vec![])
+        };
+        let mut run = |_: &[&str]| -> Result<bool> { panic!("npm must not run") };
+        let mut out = Vec::new();
+        ensure_render_browser(
+            home.path(),
+            &lightpanda_plan(),
+            &mut Cursor::new(b"y\n".to_vec()),
+            &mut out,
+            &mut run,
+            &mut fetch,
+            &mut no_render,
+        )
+        .unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("https://example.invalid/lightpanda"), "{out}");
+        assert!(out.contains(&"ab".repeat(8)), "sha256 prefix shown: {out}");
+        assert!(out.contains("~/.mur/aura/lightpanda"), "{out}");
+        assert!(!out.contains("npm"), "no npm on the lightpanda route: {out}");
+        assert_eq!(fetched, 0);
+    }
+
+    /// `yes` → the deps installer places lightpanda, and the result is then
+    /// smoke-tested like any found browser.
+    #[test]
+    fn literal_yes_installs_lightpanda_then_smoke_tests_it() {
+        let (home, _g) = bare_home();
+        let mut fetch = |r: &CuratedRecipe, h: &Path| {
+            let dst = h.join(r.install_to.as_ref().unwrap());
+            std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+            std::fs::write(&dst, b"x").unwrap();
+            Ok(vec![dst])
+        };
+        let mut calls: Vec<String> = Vec::new();
+        let mut run = |a: &[&str]| {
+            calls.push(a.join(" "));
+            Ok(true)
+        };
+        let mut out = Vec::new();
+        ensure_render_browser(
+            home.path(),
+            &lightpanda_plan(),
+            &mut Cursor::new(b"yes\n".to_vec()),
+            &mut out,
+            &mut run,
+            &mut fetch,
+            &mut no_render,
+        )
+        .unwrap();
+        assert!(home.path().join(LIGHTPANDA_RELATIVE).exists());
+        assert_eq!(calls.len(), 1, "only the L1 version check: {calls:?}");
+        assert!(calls[0].ends_with("version"), "{calls:?}");
+    }
+
+    /// D3: a failed download says so and does NOT fall through to npm.
+    #[test]
+    fn a_failed_lightpanda_download_never_falls_back_to_npm() {
+        let (home, _g) = bare_home();
+        let mut fetch =
+            |_: &CuratedRecipe, _: &Path| -> Result<Vec<PathBuf>> { bail!("sha256 mismatch") };
+        let mut ran = 0;
+        let mut run = |_: &[&str]| {
+            ran += 1;
+            Ok(true)
+        };
+        let mut out = Vec::new();
+        let r = ensure_render_browser(
+            home.path(),
+            &lightpanda_plan(),
+            &mut Cursor::new(b"yes\n".to_vec()),
+            &mut out,
+            &mut run,
+            &mut fetch,
+            &mut no_render,
+        );
+        assert!(r.is_ok(), "setup must not fail over a browser install");
+        assert_eq!(ran, 0, "no npm, no smoke test after a failed download");
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("sha256 mismatch"), "{out}");
+        assert!(out.contains("install-deps deep-research --program lightpanda"), "{out}");
+    }
+
+    #[test]
+    fn doctor_points_at_install_deps_when_lightpanda_is_available() {
+        let (home, _g) = bare_home();
+        let mut run = |_: &[&str]| -> Result<bool> { panic!("doctor is read-only") };
+        let mut out = Vec::new();
+        assert!(doctor(home.path(), &lightpanda_plan(), &mut out, &mut run, None).is_err());
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            out.contains("mur fleet install-deps deep-research --program lightpanda"),
+            "{out}"
+        );
+        assert!(!out.contains("npm"), "{out}");
     }
 
     /// Mirrors the gateway's `auto_detect_render_engine`
@@ -1231,9 +1480,11 @@ mod tests {
         let mut out = Vec::new();
         ensure_render_browser(
             home.path(),
+            &InstallPlan::AgentBrowser,
             &mut Cursor::new(Vec::new()),
             &mut out,
             &mut run,
+            &mut no_fetch,
             &mut exec,
         )
         .unwrap();
@@ -1257,9 +1508,11 @@ mod tests {
         let mut out = Vec::new();
         ensure_render_browser(
             home.path(),
+            &InstallPlan::AgentBrowser,
             &mut Cursor::new(Vec::new()),
             &mut out,
             &mut run,
+            &mut no_fetch,
             &mut exec,
         )
         .unwrap();
@@ -1286,9 +1539,11 @@ mod tests {
         let mut out = Vec::new();
         let r = ensure_render_browser(
             home.path(),
+            &InstallPlan::AgentBrowser,
             &mut Cursor::new(Vec::new()),
             &mut out,
             &mut run,
+            &mut no_fetch,
             &mut exec,
         );
         assert!(r.is_ok(), "spec D5: a failed smoke test never fails setup");
@@ -1303,13 +1558,13 @@ mod tests {
         let mut run = |_: &[&str]| Ok(true);
 
         let mut out = Vec::new();
-        doctor(home.path(), &mut out, &mut run, None).unwrap();
+        doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, None).unwrap();
         assert!(String::from_utf8(out).unwrap().contains("add --render"));
 
         let mut calls = Vec::new();
         let mut exec = rendering_exec(&mut calls);
         let mut out = Vec::new();
-        doctor(home.path(), &mut out, &mut run, Some(&mut exec)).unwrap();
+        doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, Some(&mut exec)).unwrap();
         drop(exec);
         assert_eq!(calls.len(), 1);
         assert!(String::from_utf8(out).unwrap().contains("✓ rendered"));
@@ -1321,7 +1576,7 @@ mod tests {
         let mut run = |_: &[&str]| Ok(true);
         let mut exec = |_: &[String], _: Duration| RenderRun::Denied;
         let mut out = Vec::new();
-        assert!(doctor(home.path(), &mut out, &mut run, Some(&mut exec)).is_ok());
+        assert!(doctor(home.path(), &InstallPlan::AgentBrowser, &mut out, &mut run, Some(&mut exec)).is_ok());
         assert!(String::from_utf8(out).unwrap().contains("sandbox"));
     }
 }
