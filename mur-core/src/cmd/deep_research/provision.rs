@@ -358,6 +358,31 @@ fn canonical_string(p: &Path) -> String {
         .into_owned()
 }
 
+/// Native Lightpanda phones home here; the CONNECT goes through the audited
+/// egress proxy, so deny it for a clean egress
+/// (`docs/design/deep-research/README.md:97`, spec #1471 §7.1).
+pub const LIGHTPANDA_TELEMETRY_HOST: &str = "telemetry.lightpanda.io";
+
+/// Hosts every deep-research egress grant denies, whatever the caller passed.
+pub const ALWAYS_DENIED_HOSTS: &[&str] = &[LIGHTPANDA_TELEMETRY_HOST];
+
+/// `deny_hosts` plus [`ALWAYS_DENIED_HOSTS`], caller order first, no duplicates.
+/// Applied on every grant — not only when Lightpanda is installed — because
+/// the grant outlives setup and Lightpanda can be installed later.
+pub fn egress_deny_list(deny_hosts: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for h in deny_hosts
+        .iter()
+        .map(String::as_str)
+        .chain(ALWAYS_DENIED_HOSTS.iter().copied())
+    {
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(h)) {
+            out.push(h.to_string());
+        }
+    }
+    out
+}
+
 pub fn grant_egress(mur_home: &Path, worker: &str, deny_hosts: &[String], yes: bool) -> Result<()> {
     unsafe {
         std::env::set_var("MUR_HOME", mur_home);
@@ -366,7 +391,7 @@ pub fn grant_egress(mur_home: &Path, worker: &str, deny_hosts: &[String], yes: b
         worker,
         GATEWAY_MCP_NAME,
         vec![],
-        deny_hosts.to_vec(),
+        egress_deny_list(deny_hosts),
         false,
         true,
         yes,
@@ -669,6 +694,27 @@ mod tests {
         ));
         assert!(net.authorization.is_some());
         assert!(net.deny_hosts.contains(&"evil.example".to_string()));
+        assert!(
+            net.deny_hosts
+                .contains(&LIGHTPANDA_TELEMETRY_HOST.to_string()),
+            "every grant denies Lightpanda telemetry: {:?}",
+            net.deny_hosts
+        );
+    }
+
+    #[test]
+    fn egress_deny_list_always_adds_lightpanda_telemetry() {
+        // setup passes an empty list — that is the case §7.1 was about.
+        assert_eq!(egress_deny_list(&[]), vec![LIGHTPANDA_TELEMETRY_HOST]);
+        assert_eq!(
+            egress_deny_list(&["evil.example".into()]),
+            vec!["evil.example", LIGHTPANDA_TELEMETRY_HOST]
+        );
+        // A user who already passed it (any case) does not get it twice.
+        assert_eq!(
+            egress_deny_list(&["Telemetry.Lightpanda.io".into()]),
+            vec!["Telemetry.Lightpanda.io"]
+        );
     }
 
     #[test]
