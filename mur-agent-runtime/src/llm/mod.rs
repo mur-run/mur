@@ -167,6 +167,13 @@ pub const MAX_TOKENS_TRUNCATION_MARKER: &str = "\n\n[output truncated: max_token
 /// history all read this text.
 pub const STREAM_IDLE_TRUNCATION_MARKER: &str = "\n\n[output truncated: the model stopped sending]";
 
+/// Visible marker appended when a later model call in the turn failed after
+/// the user had already been shown text. The shown text is kept as the reply
+/// (so memory and context threading carry it) and this says it was cut short.
+/// Same rule as [`MAX_TOKENS_TRUNCATION_MARKER`] (#715).
+pub const LLM_FAILED_TRUNCATION_MARKER: &str =
+    "\n\n[output truncated: the model call failed after this was shown]";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolResultEntry {
     pub call_id: String,
