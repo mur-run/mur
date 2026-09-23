@@ -606,7 +606,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                 trace,
                 extra,
             } => cmd::browser::record(&run, profile.as_deref(), &mode, trace, &extra).await?,
-            BrowserAction::Replay { .. } => cmd::browser::not_yet("replay")?,
+            BrowserAction::Replay {
+                name,
+                profile,
+                heal,
+                dry_run,
+            } => cmd::browser::replay(&name, profile.as_deref(), heal, dry_run).await?,
             BrowserAction::Auth {
                 site,
                 url,

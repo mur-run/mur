@@ -80,7 +80,9 @@ fn value_key(action: Action) -> Option<&'static str> {
         Action::Fill => Some("text"),
         Action::Select => Some("values"),
         Action::Press => Some("key"),
-        Action::AssertText | Action::AssertValue => Some("text"),
+        Action::AssertText => Some("text"),
+        // @playwright/mcp 0.0.82 `browser_verify_value` takes `value`.
+        Action::AssertValue => Some("value"),
         Action::Click | Action::Hover | Action::AssertVisible => None,
     }
 }
@@ -186,6 +188,10 @@ impl std::str::FromStr for Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reject {
     NoLocator,
+    /// `assert_visible` without a `role:` locator. @playwright/mcp 0.0.82's
+    /// `browser_verify_element_visible` takes `{ role, accessibleName }`, so
+    /// replay cannot verify a step that only has testid/label/text locators.
+    NoRoleLocator,
     IntentTooShort,
     RawSecret,
 }
@@ -216,6 +222,18 @@ pub fn validate(mut step: Step, in_password_field: bool) -> Result<Step, Reject>
         step.locators.retain(|l| crate::locator::is_stable(l));
         if step.locators.is_empty() {
             return Err(Reject::NoLocator);
+        }
+        // Replay sends `{ role, accessibleName }` for this action, which only a
+        // role locator can supply.
+        if step.action == Action::AssertVisible
+            && !step.locators.iter().any(|l| {
+                matches!(
+                    crate::locator::Locator::parse(l),
+                    Ok(crate::locator::Locator::Role { .. })
+                )
+            })
+        {
+            return Err(Reject::NoRoleLocator);
         }
     }
     if step.intent.chars().count() < 4 {
@@ -329,10 +347,12 @@ impl RecordHook {
 
     fn value_for(action: Action, args: Option<&Value>) -> Option<String> {
         let key = value_key(action)?;
-        args?
-            .get(key)
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
+        // `browser_select_option` sends `values: ["M"]`; keep the first entry.
+        match args?.get(key)? {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(items) => items.first().and_then(Value::as_str).map(ToOwned::to_owned),
+            _ => None,
+        }
     }
 
     fn locator_for(&self, req: &Request) -> Vec<String> {
@@ -341,11 +361,46 @@ impl RecordHook {
         };
         // Prefer candidates derived from the current a11y snapshot. A recorded
         // ref is diagnostic-only; it is resolved here while it is still valid.
-        if let Some(reference) = args.get("ref").and_then(Value::as_str) {
+        if let Some(reference) = args
+            .get("ref")
+            .or_else(|| args.get("target"))
+            .and_then(Value::as_str)
+        {
             let candidates = candidates_for_ref(reference, &self.snapshot);
             if !candidates.is_empty() {
                 return candidates;
             }
+        }
+        // `browser_verify_element_visible` (0.0.82) addresses the element by
+        // `{ role, accessibleName }` instead of a ref. Reuse the snapshot
+        // node's full candidate list when it matches, so testid/text
+        // fallbacks survive; otherwise the role locator alone.
+        if let Some(role) = args
+            .get("role")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
+            let name = args
+                .get("accessibleName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if let Some(node) = self
+                .snapshot
+                .iter()
+                .find(|n| n.role == role && n.name == name)
+            {
+                let candidates = candidates_for_ref(&node.reference, &self.snapshot);
+                if !candidates.is_empty() {
+                    return candidates;
+                }
+            }
+            let locator = crate::locator::Locator::Role {
+                role: role.to_owned(),
+                name: (!name.is_empty()).then(|| name.to_owned()),
+            };
+            return vec![locator.to_string_canonical()];
         }
         // A human-readable MCP element description is a conservative fallback
         // when no snapshot has been observed yet.
@@ -406,7 +461,7 @@ impl RecordHook {
             healed: false,
             last_hit: 0,
             ref_at_record: args
-                .and_then(|a| a.get("ref"))
+                .and_then(|a| a.get("ref").or_else(|| a.get("target")))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
         };
@@ -414,10 +469,21 @@ impl RecordHook {
         // current slice refuses raw `@ref` calls until a stable locator was
         // supplied. Slice 3 replaces this with generated candidates.
         step = validate(step, false)?;
+        let (number, action, locator) = (
+            step.step,
+            step.action,
+            step.locators.first().cloned().unwrap_or_default(),
+        );
         self.run.steps.push(step);
         // Persistence errors are represented as an invalid action response;
-        // losing the recording silently would be worse.
-        self.persist().map_err(|_| Reject::NoLocator)
+        // losing the recording silently would be worse. The response can only
+        // say "no locator", so the real I/O error goes to the log.
+        if let Err(error) = self.persist() {
+            tracing::error!(step = number, error = %error, path = ?self.actions_path, "persist actions.yaml failed");
+            return Err(Reject::NoLocator);
+        }
+        tracing::info!(step = number, action = ?action, locator = %locator, "recorded step");
+        Ok(())
     }
 }
 
@@ -462,6 +528,10 @@ impl Hook for RecordHook {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         {
+            tracing::warn!(
+                tool = req.tool_name().unwrap_or(""),
+                "action failed downstream; step not recorded"
+            );
             return resp;
         }
         self.cache_snapshot_response(req, &resp);
@@ -469,6 +539,11 @@ impl Hook for RecordHook {
             return resp;
         }
         if let Err(error) = self.record_success(req) {
+            tracing::warn!(
+                tool = req.tool_name().unwrap_or(""),
+                reason = %error,
+                "step rejected"
+            );
             let id = resp.get("id").cloned().unwrap_or(Value::Null);
             return serde_json::json!({
                 "jsonrpc": "2.0",
@@ -496,6 +571,9 @@ impl std::fmt::Display for Reject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Reject::NoLocator => "step has no stable locator; call browser_snapshot then retry",
+            Reject::NoRoleLocator => {
+                "assert_visible needs a role locator: call browser_verify_element_visible with the element's role and accessibleName from browser_snapshot"
+            }
             Reject::IntentTooShort => {
                 "intent too short (need ≥ 4 chars): call mur_intent before the action"
             }
@@ -578,7 +656,7 @@ mod tests {
             (Action::Fill, "text"),
             (Action::Press, "key"),
             (Action::AssertText, "text"),
-            (Action::AssertValue, "text"),
+            (Action::AssertValue, "value"),
         ];
         for (action, key) in cases {
             let s = step(action, &["role:button"]);
@@ -613,6 +691,109 @@ mod tests {
         }
     }
 
+    #[test]
+    fn assert_visible_rejects_without_role_locator() {
+        let s = step(Action::AssertVisible, &["testid:checkout", "text:Checkout"]);
+        assert_eq!(validate(s, false).unwrap_err(), Reject::NoRoleLocator);
+    }
+
+    #[test]
+    fn assert_visible_keeps_role_and_fallbacks() {
+        let s = step(
+            Action::AssertVisible,
+            &["role:button[name=\"Checkout\"]", "testid:checkout"],
+        );
+        let s = validate(s, false).unwrap();
+        assert_eq!(
+            s.locators,
+            vec!["role:button[name=\"Checkout\"]", "testid:checkout"]
+        );
+    }
+
+    #[test]
+    fn other_actions_still_accept_testid_only() {
+        for action in [Action::Click, Action::Hover, Action::AssertValue] {
+            let s = step(action, &["testid:quantity-input"]);
+            assert!(validate(s, false).is_ok(), "{action:?}");
+        }
+    }
+
+    /// 0.0.82 `browser_verify_element_visible` carries `{ role, accessibleName }`
+    /// and no `ref`, so the role locator has to come from those arguments.
+    #[test]
+    fn locator_for_verify_visible_uses_role_and_accessible_name() {
+        let hook = RecordHook::new(Run {
+            name: "assert".into(),
+            mode: Mode::Test,
+            profile: None,
+            recorded_at: chrono::Utc::now(),
+            steps: vec![],
+        });
+        let req = tools_call(
+            "browser_verify_element_visible",
+            serde_json::json!({"role": "button", "accessibleName": "Checkout"}),
+        );
+        assert_eq!(
+            hook.locator_for(&req),
+            vec!["role:button[name=\"Checkout\"]"]
+        );
+        let unnamed = tools_call(
+            "browser_verify_element_visible",
+            serde_json::json!({"role": "banner", "accessibleName": ""}),
+        );
+        assert_eq!(hook.locator_for(&unnamed), vec!["role:banner"]);
+    }
+
+    #[test]
+    fn locator_for_verify_visible_keeps_snapshot_fallbacks() {
+        let mut hook = RecordHook::new(Run {
+            name: "assert".into(),
+            mode: Mode::Test,
+            profile: None,
+            recorded_at: chrono::Utc::now(),
+            steps: vec![],
+        });
+        hook.snapshot =
+            crate::locator::parse_snapshot("- button \"Checkout\" [ref=e9] [data-testid=checkout]");
+        let req = tools_call(
+            "browser_verify_element_visible",
+            serde_json::json!({"role": "button", "accessibleName": "Checkout"}),
+        );
+        let locators = hook.locator_for(&req);
+        assert_eq!(locators[0], "role:button[name=\"Checkout\"]");
+        assert!(
+            locators.contains(&"testid:checkout".to_string()),
+            "{locators:?}"
+        );
+    }
+
+    #[test]
+    fn locator_for_accepts_target_as_ref() {
+        let mut hook = RecordHook::new(Run {
+            name: "target".into(),
+            mode: Mode::Automation,
+            profile: None,
+            recorded_at: chrono::Utc::now(),
+            steps: vec![],
+        });
+        hook.snapshot = crate::locator::parse_snapshot("- button \"Add to cart\" [ref=e5]");
+        let req = tools_call(
+            "browser_click",
+            serde_json::json!({"element": "Add to cart", "target": "e5"}),
+        );
+        assert_eq!(
+            hook.locator_for(&req)[0],
+            "role:button[name=\"Add to cart\"]"
+        );
+    }
+    #[test]
+    fn value_for_select_keeps_first_array_entry() {
+        let args = serde_json::json!({"target": "e4", "values": ["M"]});
+        assert_eq!(
+            RecordHook::value_for(Action::Select, Some(&args)),
+            Some("M".to_string())
+        );
+    }
     #[test]
     fn reject_when_no_locator() {
         let s = step(Action::Click, &[]);
@@ -773,6 +954,126 @@ mod tests {
         assert_eq!(response["result"]["isError"], true);
         assert!(!actions.exists(), "failed MCP calls must not be recorded");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Captures `tracing` output for one test; `#[tokio::test]` is
+    /// current-thread, so a thread-local default covers spawned tasks too.
+    #[derive(Clone, Default)]
+    struct LogBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for LogBuf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl LogBuf {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+        }
+    }
+
+    /// `mur browser record` must leave a trail: which steps were written,
+    /// which were rejected and why, and how the session ended. Before this,
+    /// `RUST_LOG=mur_browser=debug` produced a 0-byte log for a whole run.
+    #[tokio::test]
+    async fn record_session_emits_tracing_for_steps_rejects_and_shutdown() {
+        use crate::proxy::run_io;
+        use serde_json::json;
+        use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, duplex};
+
+        let logs = LogBuf::default();
+        let sink = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter("mur_browser=debug")
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        async fn server(mut input: impl AsyncRead + Unpin, mut output: impl AsyncWrite + Unpin) {
+            let mut lines = BufReader::new(&mut input).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let response = json!({
+                    "jsonrpc": "2.0",
+                    "id": request["id"].clone(),
+                    "result": {"content": [{"type": "text", "text": "ok"}]}
+                });
+                let _ = output.write_all(format!("{response}\n").as_bytes()).await;
+                let _ = output.flush().await;
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let actions = dir.path().join("actions.yaml");
+        let hook = RecordHook::with_actions_path(
+            Run {
+                name: "traced".into(),
+                mode: Mode::Test,
+                profile: None,
+                recorded_at: chrono::Utc::now(),
+                steps: vec![],
+            },
+            actions,
+        );
+        let (mut agent_write, agent_input) = duplex(16 * 1024);
+        let (agent_output, mut agent_read) = duplex(16 * 1024);
+        let (server_input, server_read) = duplex(16 * 1024);
+        let (server_write, server_output) = duplex(16 * 1024);
+        tokio::spawn(server(server_read, server_write));
+        let session = tokio::spawn(run_io(
+            agent_input,
+            agent_output,
+            server_input,
+            server_output,
+            hook,
+        ));
+
+        let mut lines = BufReader::new(&mut agent_read).lines();
+        // Recorded: navigation needs no locator.
+        agent_write.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_navigate\",\"arguments\":{\"url\":\"https://example.test\"}}}\n").await.unwrap();
+        lines.next_line().await.unwrap().unwrap();
+        // Rejected: a bare @ref click (no element text, no snapshot) has no stable locator.
+        agent_write.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_click\",\"arguments\":{\"ref\":\"e9\"}}}\n").await.unwrap();
+        let rejected: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert!(
+            rejected.get("error").is_some(),
+            "click must be rejected: {rejected}"
+        );
+        drop(agent_write);
+        tokio::time::timeout(std::time::Duration::from_secs(2), session)
+            .await
+            .expect("session did not end")
+            .unwrap()
+            .unwrap();
+
+        let text = logs.text();
+        assert!(
+            text.contains("recorded step"),
+            "missing recorded-step event:\n{text}"
+        );
+        assert!(
+            text.contains("action=goto") || text.contains("action=Goto"),
+            "{text}"
+        );
+        assert!(
+            text.contains("step rejected"),
+            "missing reject event:\n{text}"
+        );
+        assert!(
+            text.contains("stable locator"),
+            "reject reason not logged:\n{text}"
+        );
+        assert!(text.contains("tool=\"browser_click\""), "{text}");
+        assert!(
+            text.contains("session ended"),
+            "missing shutdown event:\n{text}"
+        );
+        assert!(text.contains("agent closed stdin"), "{text}");
     }
 
     #[tokio::test]
