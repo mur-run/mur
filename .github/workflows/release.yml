@@ -52,14 +52,6 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
-      # The shipped binary set, declared ONCE. The sign loop, the tarball and
-      # the Windows zip below all read this — they used to carry three separate
-      # copies of the list, and every copy drifted at least once: #1027 signed
-      # one of four, and mur-research-gateway was packaged by none of them
-      # while `update::SIBLING_BINARIES` already listed it.
-      # The Homebrew formula is deliberately NOT a fourth copy: it installs
-      # whatever the tarball contains (`bin.install Dir["*"]`).
-      BINARIES: mur mur-mcp-server murmurd mur-agent-runtime mur-research-gateway
     strategy:
       fail-fast: false
       matrix:
@@ -173,13 +165,12 @@ jobs:
       # app. A background agent cannot re-prompt, so the secret silently
       # resolves to nothing (#866).
       #
-      # Signs $BINARIES, the same list the `tar czf` below ships — shipping a
-      # binary that is not signed is the bug this fixes.
+      # Sign the canonical manifest set; packaging below reads the same source.
       - name: Sign macOS binaries
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
           set -euo pipefail
-          for b in $BINARIES; do
+          python3 scripts/release-manifest.py paths | tr ' ' '\n' | while IFS= read -r b; do
             p="target/aarch64-apple-darwin/release/$b"
             codesign --force --options runtime --timestamp \
               --sign "Developer ID Application: $APPLE_TEAM_NAME ($APPLE_TEAM_ID)" \
@@ -207,24 +198,20 @@ jobs:
           # it as an MCP server by name (`GATEWAY_MCP_COMMAND`) with no fallback
           # if the binary is missing. It was never packaged here, so only
           # `build.sh --install` ever produced it.
-          # Unquoted on purpose: $BINARIES is a space-separated list to split.
+          # The helper is called before changing directory so its repository-
+          # relative manifest lookup remains independent of the shell cwd.
+          binaries="$(python3 scripts/release-manifest.py paths)"
+          cd target/${{ matrix.target }}/release
           # shellcheck disable=SC2086
-          tar czf ../../../${{ matrix.name }}.tar.gz $BINARIES
+          tar czf ../../../${{ matrix.name }}.tar.gz $binaries
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Deliberately plain: quote $env:BINARIES into a string before
-          # .Split (`$env:X.Split(...)` is ambiguous to the variable-path
-          # parser) and concatenate rather than interpolate. A `*.exe` glob
-          # would be shorter but would also sweep up stub_gateway.exe and
-          # every other workspace binary.
-          $paths = @()
-          foreach ($b in "$env:BINARIES".Split(' ')) {
-            $paths += "target/${{ matrix.target }}/release/" + $b + ".exe"
-          }
+          $paths = @(python scripts/release-manifest.py paths --windows).Trim().Split(' ')
+          $paths = @($paths | ForEach-Object { "target/${{ matrix.target }}/release/" + $_ })
           Compress-Archive -Path $paths -DestinationPath ${{ matrix.name }}.zip
 
       - name: Upload artifact
@@ -639,6 +626,8 @@ jobs:
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+
       - name: Get version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -652,6 +641,13 @@ jobs:
           URL="https://github.com/mur-run/mur/releases/download/${GITHUB_REF_NAME}/mur-aarch64-apple-darwin.tar.gz"
           SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Homebrew archive contents
+        run: |
+          curl -sSL "https://github.com/mur-run/mur/releases/download/${GITHUB_REF_NAME}/mur-aarch64-apple-darwin.tar.gz" -o mur.tar.gz
+          tar -tzf mur.tar.gz | sed 's#^\./##' | sort > actual.txt
+          python3 scripts/release-manifest.py names | tr ' ' '\n' | sort > expected.txt
+          diff -u expected.txt actual.txt
 
       - name: Update formula
         uses: actions/checkout@v6
@@ -679,10 +675,8 @@ jobs:
             end
 
             def install
-              # Whatever the tarball ships — the `build` job's $BINARIES and
-              # nothing else is in it. Naming them here made the formula a
-              # second copy of that list, and it drifted: mur-research-gateway
-              # was added to the tarball while brew kept discarding it.
+              # The preceding workflow step verifies this archive against the
+              # canonical manifest before updating the formula.
               bin.install Dir["*"]
               bin.install_symlink "mur" => "murmur"
             end
