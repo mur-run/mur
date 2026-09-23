@@ -127,12 +127,7 @@ impl ProjectInstructions {
     /// [`Self::render`] over an already-discovered set — the seam for files
     /// that vanish between discovery and read.
     pub(crate) fn render_found(&self, found: &Found, cap_bytes: usize) -> Option<Rendered> {
-        let rel = |p: &Path| {
-            p.strip_prefix(&found.root)
-                .unwrap_or(p)
-                .to_string_lossy()
-                .into_owned()
-        };
+        let rel = |p: &Path| rel_path(&found.root, p);
         let mut not_loaded: Vec<(String, &'static str)> = Vec::new();
         for p in &found.shadowed {
             // A loser the agent could not read is not named either.
@@ -246,6 +241,18 @@ pub(super) fn escape_body(body: &str) -> String {
     }
     out.push_str(&body[last..]);
     out
+}
+
+/// `p` relative to `root`, always `/`-separated so the model sees one path
+/// shape on every OS (spec §3.4). A path outside `root` falls back to itself.
+fn rel_path(root: &Path, p: &Path) -> String {
+    let Ok(r) = p.strip_prefix(root) else {
+        return p.to_string_lossy().into_owned();
+    };
+    r.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Quote-safe attribute value: a path with `"` or `<` cannot break the tag.

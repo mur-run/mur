@@ -408,3 +408,11 @@ fn no_error_display_text_ever_reaches_the_block() {
         assert!(!block.contains(word), "{word}:\n{block}");
     }
 }
+
+#[test]
+fn rel_path_is_slash_separated_on_every_os() {
+    let root = Path::new("root");
+    let nested: PathBuf = ["root", "crates", "x", "AGENTS.md"].iter().collect();
+    assert_eq!(rel_path(root, &nested), "crates/x/AGENTS.md");
+    assert_eq!(rel_path(root, &root.join("AGENTS.md")), "AGENTS.md");
+}
