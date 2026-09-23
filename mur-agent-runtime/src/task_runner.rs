@@ -2137,6 +2137,10 @@ impl TaskRunner {
         // call. Only streaming turns show intermediate text; a non-streaming
         // caller sees nothing until the reply, so there is nothing to keep.
         let mut shown: Vec<String> = Vec::new();
+        // The previous model call's only tools were `suggest_replies`. That
+        // tool is a no-op, so the model has usually said all it will; an empty
+        // answer to its tool result is the model ending the turn, not a blip.
+        let mut after_suggest_only = false;
 
         let mut iteration: u32 = 0;
         while iteration < self.iteration_ceiling {
@@ -2233,6 +2237,21 @@ impl TaskRunner {
                     };
                     match result {
                         Ok(r) => break r,
+                        // Checked before the blip retry: asking the same
+                        // question again only gets the same silence (turn 243).
+                        Err(LlmError::InvalidResponse(ref msg))
+                            if after_suggest_only
+                                && !shown.is_empty()
+                                && msg.contains("empty streamed response") =>
+                        {
+                            tracing::debug!(
+                                task_id,
+                                "empty reply after suggest_replies; ending the turn on the shown text"
+                            );
+                            ledger.iterations = iteration;
+                            ledger.stop = crate::turn_ledger::StopKind::EndTurn;
+                            return Ok((settle(shown.join("\n\n"), &ledger), None));
+                        }
                         Err(LlmError::InvalidResponse(ref msg))
                             if attempt == 0 && msg.contains("empty streamed response") =>
                         {
@@ -2644,6 +2663,11 @@ impl TaskRunner {
                     });
                 }
             }
+            after_suggest_only = !resp.tool_calls.is_empty()
+                && resp
+                    .tool_calls
+                    .iter()
+                    .all(|c| crate::tools::suggest::suggest_replies_allowed(&c.tool_name));
             progress.observe(&progress_calls, std::time::Instant::now());
             iteration += 1;
         }
@@ -5225,6 +5249,9 @@ mod tests {
     struct TextThenEmptyStreamLlm {
         calls: std::sync::atomic::AtomicUsize,
         first_text: String,
+        /// Tool the first reply calls. `suggest_replies` exercises the
+        /// silence-ends-the-turn rule; anything else is a real failure.
+        tool: &'static str,
     }
 
     #[async_trait::async_trait]
@@ -5247,7 +5274,7 @@ mod tests {
                 model: "test".into(),
                 tool_calls: vec![crate::llm::ToolCallResult {
                     call_id: "s1".into(),
-                    tool_name: "suggest_replies".into(),
+                    tool_name: self.tool.into(),
                     input: serde_json::json!({"replies": ["照 A 做"]}),
                 }],
                 stop_reason: crate::llm::StopReason::ToolUse,
@@ -5271,6 +5298,7 @@ mod tests {
         let runner = TaskRunner::with_llm(Arc::new(TextThenEmptyStreamLlm {
             calls: std::sync::atomic::AtomicUsize::new(0),
             first_text: TABLE.into(),
+            tool: "read_file",
         }))
         .with_pending_approvals(empty_pending_approvals())
         .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -5321,6 +5349,64 @@ mod tests {
         assert!(
             recalled,
             "streamed-then-failed turn left no trace in memory: {prior:?}"
+        );
+    }
+
+    /// Root cause of the turn-243 "two empty streams": after `suggest_replies`
+    /// (a no-op) the model has nothing left to say and ends with no text. The
+    /// provider reports that as `empty streamed response`, the one retry asks
+    /// the same question and gets the same silence, and the turn looked failed.
+    /// Silence right after offering replies is the model ending its turn, so
+    /// it settles cleanly: the shown text is the reply, with no truncation
+    /// marker, and the ledger says `end_turn`.
+    #[tokio::test]
+    async fn silence_after_suggest_replies_ends_the_turn_cleanly() {
+        const TABLE: &str = "| A | 先寫 regression test |\n| B | 直接修 |";
+        let llm = Arc::new(TextThenEmptyStreamLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            first_text: TABLE.into(),
+            tool: "suggest_replies",
+        });
+        let runner = TaskRunner::with_llm(llm.clone())
+            .with_pending_approvals(empty_pending_approvals())
+            .with_notifier(tokio::sync::mpsc::channel(16).0)
+            .with_hitl_timeout_secs(1)
+            .with_iteration_ceiling(50);
+        let (sink, _seen) = tokio::sync::mpsc::channel(64);
+
+        let outcome = runner
+            .run_sync_streaming(user_turn("列出選項", "t-silence", None), sink, None)
+            .await;
+
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("silence after suggest_replies must complete, got {outcome:?}");
+        };
+        let reply = task.messages.last().expect("reply");
+        let reply_text = text_of(reply);
+        assert!(
+            reply_text.starts_with(TABLE),
+            "reply is what was shown: {reply_text}"
+        );
+        assert!(
+            !reply_text.contains(crate::llm::LLM_FAILED_TRUNCATION_MARKER),
+            "silence is not a failure: {reply_text}"
+        );
+        let usage = task.usage.expect("usage is always populated");
+        assert_ne!(
+            usage["truncated"], true,
+            "not a truncation: usage={usage:?}"
+        );
+        let ledger = ledger_of(reply).expect("ledger part");
+        assert!(
+            matches!(ledger.stop, crate::turn_ledger::StopKind::EndTurn),
+            "stop must be end_turn, got {:?}",
+            ledger.stop
+        );
+        // Silence is an answer, not a blip: no retry of the same question.
+        assert_eq!(
+            llm.calls.load(Ordering::Relaxed),
+            2,
+            "one call for the table, one that came back silent"
         );
     }
 
