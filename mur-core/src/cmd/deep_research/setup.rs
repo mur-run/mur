@@ -267,6 +267,12 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
         });
     loop_cfg.budget_usd = a.budget_usd;
     fleet.loop_cfg = Some(loop_cfg);
+    // With browser consent, declare Lightpanda so `mur fleet doctor` /
+    // `install-deps deep-research` know about it. Re-running setup adds it to
+    // fleets created before this existed; declining never adds it.
+    if a.browser {
+        super::browser::declare_lightpanda(&mut fleet, &mur_common::deps::current_platform());
+    }
     crate::cmd::fleet::store::save_fleet(mur_home, &fleet)?;
 
     // Render browser: same consent discipline as egress — literal "yes" only,
