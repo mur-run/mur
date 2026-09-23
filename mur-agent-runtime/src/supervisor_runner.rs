@@ -247,6 +247,9 @@ pub fn build_runner(
     // Shared with the bash tool: lets the loop end a task's jobs on an
     // unattended stop or a cancel (spec D3/D8). `None` for the stub runners.
     bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,
+    // The session cwd's AGENTS.md/CLAUDE.md, gated like `read_file`. Only the
+    // in-process track reads the system prompt; a spawned CLI reads its own.
+    project_instructions: Option<crate::project_instructions::ProjectInstructions>,
 ) -> Arc<TaskRunner> {
     let mut runner = base
         .with_agent_name(agent_name)
@@ -283,6 +286,9 @@ pub fn build_runner(
     }
     if let Some((cwd, roots)) = session_cwd {
         runner = runner.with_session_cwd(cwd, roots);
+    }
+    if let Some(p) = project_instructions {
+        runner = runner.with_project_instructions(p);
     }
     Arc::new(runner)
 }
@@ -431,9 +437,17 @@ pub async fn build_provider_runner(
             launch_chain.clone(),
         ));
     let write_file_def = write_file_exec.def();
-    let edit_file_exec: Arc<dyn crate::tools::ToolExecutor> = Arc::new(
-        crate::tools::edit_file::EditFileTool::new(session_cwd.clone(), tool_fs, launch_chain),
-    );
+    let edit_file_exec: Arc<dyn crate::tools::ToolExecutor> =
+        Arc::new(crate::tools::edit_file::EditFileTool::new(
+            session_cwd.clone(),
+            tool_fs.clone(),
+            launch_chain.clone(),
+        ));
+    // The project's AGENTS.md/CLAUDE.md reach the prompt through the file
+    // tools' own entitlement and launch chain — never a wider view than
+    // `read_file` would give the model.
+    let project_instructions =
+        crate::project_instructions::ProjectInstructions::new(tool_fs, launch_chain);
     // Where a turn's `context.cwd` may move the session cwd: anything the
     // profile lets the agent read or write, plus its own home (the initial
     // value). Same `~` expansion as the tool gate, via `under_any`.
@@ -630,6 +644,7 @@ pub async fn build_provider_runner(
             Some(secrets.clone()),
             Some((session_cwd.clone(), cwd_roots.clone())),
             Some(bash_jobs.clone()),
+            Some(project_instructions.clone()),
         )
     };
     // The CLI track short-circuits here: a spawned CLI owns the loop, so there

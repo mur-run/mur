@@ -500,6 +500,10 @@ pub struct TaskRunner {
     /// caller-supplied `TaskSpec.cwd` may move it to. `None` for runners built
     /// without tools (stubs, most tests): no cwd line in the prompt.
     session_cwd: Option<(crate::tools::fs_policy::SessionCwd, Vec<String>)>,
+    /// Reads the working project's `AGENTS.md` / `CLAUDE.md` into the prompt,
+    /// through the same entitlement gate as `read_file`. `None` (stubs, tests)
+    /// or no `session_cwd` means no block.
+    project_instructions: Option<crate::project_instructions::ProjectInstructions>,
     /// Set by `begin_drain()` during graceful shutdown. When true, `run_sync_inner`
     /// rejects new turns immediately with a transient failure so in-flight work
     /// can finish before transports are torn down.
@@ -653,6 +657,7 @@ impl TaskRunner {
             effort: std::sync::RwLock::new(None),
             conversations: Mutex::new(ConversationStore::default()),
             session_cwd: None,
+            project_instructions: None,
             draining: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -894,6 +899,17 @@ impl TaskRunner {
         self
     }
 
+    /// Load the session cwd's project instruction files into every turn's
+    /// system prompt (see [`crate::project_instructions`]). Inert without
+    /// [`Self::with_session_cwd`]: no working directory, no project.
+    pub fn with_project_instructions(
+        mut self,
+        p: crate::project_instructions::ProjectInstructions,
+    ) -> Self {
+        self.project_instructions = Some(p);
+        self
+    }
+
     /// Move the session cwd to the turn's `cwd` when one was supplied and it is
     /// entitled; otherwise leave it where it is. Absent means "a client with
     /// no notion of cwd" (Hub, `mur agent send`), and resetting on their behalf
@@ -1130,7 +1146,17 @@ impl TaskRunner {
             base.push_str(&frag);
         }
         if let Some((cwd, _)) = &self.session_cwd {
-            base.push_str(&WORKING_DIR_RULE.replace("{path}", &cwd.current().to_string_lossy()));
+            let dir = cwd.current();
+            base.push_str(&WORKING_DIR_RULE.replace("{path}", &dir.to_string_lossy()));
+            // Right after the path it describes, and before skills: the repo's
+            // own rules are the context the skill layer is chosen against.
+            if let Some(block) = self
+                .project_instructions
+                .as_ref()
+                .and_then(|p| p.render(&dir))
+            {
+                base.push_str(&block);
+            }
         }
         let Some(skills) = &self.skills else {
             return (base, vec![]);
@@ -6009,6 +6035,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let mut spec = loop_spec("loop");
         spec.attended = false;
@@ -7441,6 +7468,34 @@ mod tests {
             project,
             "absent cwd leaves the session cwd alone"
         );
+    }
+
+    #[test]
+    fn project_agents_md_follows_the_working_directory_in_the_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "PROJECT-RULE: run cargo fmt").unwrap();
+        let grant = root.to_string_lossy().into_owned();
+        let gate = crate::project_instructions::ProjectInstructions::new(
+            mur_common::agent::FilesystemEntitlement {
+                read: vec![grant.clone()],
+                ..Default::default()
+            },
+            crate::sandbox::launch_chain::LaunchChain::inert(),
+        );
+        let runner = TaskRunner::new_stub_echo()
+            .with_system_prompt(Some("BASE".into()))
+            .with_session_cwd(
+                crate::tools::fs_policy::SessionCwd::new(root.clone()),
+                vec![grant],
+            )
+            .with_project_instructions(gate);
+        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        let wd = sys.find("## Working directory").expect("cwd line");
+        let pi = sys.find("## Project instructions").expect("project block");
+        assert!(wd < pi, "the block follows the path it describes:\n{sys}");
+        assert!(sys.contains("PROJECT-RULE: run cargo fmt"), "{sys}");
     }
 
     #[test]

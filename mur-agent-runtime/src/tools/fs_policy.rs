@@ -1,6 +1,6 @@
-//! Shared call-time filesystem-entitlement gate for the mutating file tools
-//! (issue #591 PR2). `deny` always wins; writes require a `write` grant.
-//! read_file keeps its own equivalent check — dedup is a follow-up.
+//! Shared call-time filesystem-entitlement gates (issue #591 PR2). `deny`
+//! always wins; writes require a `write` grant, reads a `read` or `write`
+//! grant. `read_file` and the project-instruction loader share the read gate.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -301,6 +301,42 @@ pub(crate) fn check_write_entitlement(
     }
     Err(ToolError::Execution(format!(
         "path not write-entitled: {} (grant it via `mur agent perm allow-write`)",
+        canonical.display()
+    )))
+}
+
+/// Read-side twin of [`check_write_entitlement`], and the one gate for every
+/// read of a user path the runtime makes on the model's behalf: `read_file`,
+/// and the loader that puts a project's `AGENTS.md` into the system prompt.
+/// One function so the two can never disagree about what is readable.
+///
+/// Order matches the write gate: the launch chain first (no entitlement can
+/// satisfy it — another agent's signing key is enough to forge its events),
+/// then `deny`, then the grants. Write implies read-back, so both lists count.
+pub(crate) fn check_read_entitlement(
+    fs: &FilesystemEntitlement,
+    canonical: &Path,
+    chain: &crate::sandbox::launch_chain::LaunchChain,
+) -> Result<(), ToolError> {
+    if let Some(reason) = chain.protects_read(canonical) {
+        return Err(ToolError::Execution(format!(
+            "path is part of MUR's launch chain and can never be read: {} ({reason})",
+            canonical.display()
+        )));
+    }
+    if under_any_read_deny(&fs.deny, canonical, chain.agent_self_home()) {
+        return Err(ToolError::Execution(format!(
+            "path denied by entitlement: {}",
+            canonical.display()
+        )));
+    }
+    // `under_any_or_worktree` tries the literal grants first, then one derived
+    // hop for a worktree of a granted checkout (#004).
+    if under_any_or_worktree(&fs.read, canonical) || under_any_or_worktree(&fs.write, canonical) {
+        return Ok(());
+    }
+    Err(ToolError::Execution(format!(
+        "path not entitled: {} (grant it via `mur agent perm allow-read`)",
         canonical.display()
     )))
 }
