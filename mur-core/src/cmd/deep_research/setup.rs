@@ -280,9 +280,11 @@ pub fn cmd_setup(mur_home: &Path) -> Result<()> {
         let mut input = stdin.lock();
         super::browser::ensure_render_browser(
             mur_home,
+            &super::browser::install_plan(&mur_common::deps::current_platform()),
             &mut input,
             &mut std::io::stdout(),
             &mut super::browser::system_runner,
+            &mut super::browser::system_fetcher,
             &mut super::browser::system_render_exec,
         )?;
         for name in &target_names {

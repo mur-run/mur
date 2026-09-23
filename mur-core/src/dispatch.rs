@@ -667,6 +667,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                     let mut exec = cmd::deep_research::browser::system_render_exec;
                     cmd::deep_research::browser::doctor(
                         &mur_home,
+                        &cmd::deep_research::browser::install_plan(
+                            &mur_common::deps::current_platform(),
+                        ),
                         &mut std::io::stdout(),
                         &mut cmd::deep_research::browser::system_runner,
                         render.then_some(&mut exec as cmd::deep_research::browser::RenderExec<'_>),
