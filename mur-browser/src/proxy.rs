@@ -442,6 +442,7 @@ pub async fn run_stdio<H: Hook>(mut cmd: Command, hook: H) -> Result<()> {
     let mut child: Child = cmd
         .spawn()
         .context("spawn downstream MCP server (is `npx` on PATH and in the spawn allowlist?)")?;
+    tracing::info!(pid = child.id(), "downstream MCP server started");
     let child_in = child.stdin.take().context("child stdin")?;
     let child_out = child.stdout.take().context("child stdout")?;
     let result = run_io(
@@ -452,6 +453,12 @@ pub async fn run_stdio<H: Hook>(mut cmd: Command, hook: H) -> Result<()> {
         hook,
     )
     .await;
+    // Already exited means the server hung up first; say how, since its
+    // stderr is the only other clue and callers often discard it.
+    match child.try_wait() {
+        Ok(Some(status)) => tracing::warn!(%status, "downstream MCP server exited"),
+        _ => tracing::debug!("stopping downstream MCP server"),
+    }
     let _ = child.kill().await;
     result
 }
@@ -784,10 +791,11 @@ where
     // channel to close, the server's stdin open, and the server alive — a
     // deadlock whenever the agent hangs up first.
     let (mut r_agent, mut r_server) = (r_agent, r_server);
-    let other = tokio::select! {
-        _ = &mut r_agent => r_server,
-        _ = &mut r_server => r_agent,
+    let (other, reason) = tokio::select! {
+        _ = &mut r_agent => (r_server, "agent closed stdin"),
+        _ = &mut r_server => (r_agent, "server closed stdout"),
     };
+    tracing::info!(reason, "session ended");
     // The finished handle must not be polled again; only the other one.
     other.abort();
     let _ = other.await;
