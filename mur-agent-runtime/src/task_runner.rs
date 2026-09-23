@@ -1150,12 +1150,16 @@ impl TaskRunner {
             base.push_str(&WORKING_DIR_RULE.replace("{path}", &dir.to_string_lossy()));
             // Right after the path it describes, and before skills: the repo's
             // own rules are the context the skill layer is chosen against.
-            if let Some(block) = self
-                .project_instructions
-                .as_ref()
-                .and_then(|p| p.render(&dir))
-            {
-                base.push_str(&block);
+            // TEMPORARY (T4 bridge): T5 moves the block into a pinned first
+            // user message and derives the cap from the history budget.
+            if let Some(block) = self.project_instructions.as_ref().and_then(|p| {
+                p.render(
+                    &dir,
+                    crate::project_instructions::MAX_PROJECT_INSTRUCTIONS_BYTES,
+                )
+            }) {
+                base.push_str("\n\n");
+                base.push_str(&block.text);
             }
         }
         let Some(skills) = &self.skills else {
@@ -7493,7 +7497,7 @@ mod tests {
             .with_project_instructions(gate);
         let (sys, _) = runner.assemble_system_prompt("hello", None, None);
         let wd = sys.find("## Working directory").expect("cwd line");
-        let pi = sys.find("## Project instructions").expect("project block");
+        let pi = sys.find("<project_instructions").expect("project block");
         assert!(wd < pi, "the block follows the path it describes:\n{sys}");
         assert!(sys.contains("PROJECT-RULE: run cargo fmt"), "{sys}");
     }
