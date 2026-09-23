@@ -188,6 +188,10 @@ impl std::str::FromStr for Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reject {
     NoLocator,
+    /// `assert_visible` without a `role:` locator. @playwright/mcp 0.0.82's
+    /// `browser_verify_element_visible` takes `{ role, accessibleName }`, so
+    /// replay cannot verify a step that only has testid/label/text locators.
+    NoRoleLocator,
     IntentTooShort,
     RawSecret,
 }
@@ -218,6 +222,18 @@ pub fn validate(mut step: Step, in_password_field: bool) -> Result<Step, Reject>
         step.locators.retain(|l| crate::locator::is_stable(l));
         if step.locators.is_empty() {
             return Err(Reject::NoLocator);
+        }
+        // Replay sends `{ role, accessibleName }` for this action, which only a
+        // role locator can supply.
+        if step.action == Action::AssertVisible
+            && !step.locators.iter().any(|l| {
+                matches!(
+                    crate::locator::Locator::parse(l),
+                    Ok(crate::locator::Locator::Role { .. })
+                )
+            })
+        {
+            return Err(Reject::NoRoleLocator);
         }
     }
     if step.intent.chars().count() < 4 {
@@ -348,6 +364,37 @@ impl RecordHook {
             if !candidates.is_empty() {
                 return candidates;
             }
+        }
+        // `browser_verify_element_visible` (0.0.82) addresses the element by
+        // `{ role, accessibleName }` instead of a ref. Reuse the snapshot
+        // node's full candidate list when it matches, so testid/text
+        // fallbacks survive; otherwise the role locator alone.
+        if let Some(role) = args
+            .get("role")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
+            let name = args
+                .get("accessibleName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if let Some(node) = self
+                .snapshot
+                .iter()
+                .find(|n| n.role == role && n.name == name)
+            {
+                let candidates = candidates_for_ref(&node.reference, &self.snapshot);
+                if !candidates.is_empty() {
+                    return candidates;
+                }
+            }
+            let locator = crate::locator::Locator::Role {
+                role: role.to_owned(),
+                name: (!name.is_empty()).then(|| name.to_owned()),
+            };
+            return vec![locator.to_string_canonical()];
         }
         // A human-readable MCP element description is a conservative fallback
         // when no snapshot has been observed yet.
@@ -498,6 +545,9 @@ impl std::fmt::Display for Reject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Reject::NoLocator => "step has no stable locator; call browser_snapshot then retry",
+            Reject::NoRoleLocator => {
+                "assert_visible needs a role locator: call browser_verify_element_visible with the element's role and accessibleName from browser_snapshot"
+            }
             Reject::IntentTooShort => {
                 "intent too short (need ≥ 4 chars): call mur_intent before the action"
             }
@@ -613,6 +663,82 @@ mod tests {
                 action.needs_locator(),
             );
         }
+    }
+
+    #[test]
+    fn assert_visible_rejects_without_role_locator() {
+        let s = step(Action::AssertVisible, &["testid:checkout", "text:Checkout"]);
+        assert_eq!(validate(s, false).unwrap_err(), Reject::NoRoleLocator);
+    }
+
+    #[test]
+    fn assert_visible_keeps_role_and_fallbacks() {
+        let s = step(
+            Action::AssertVisible,
+            &["role:button[name=\"Checkout\"]", "testid:checkout"],
+        );
+        let s = validate(s, false).unwrap();
+        assert_eq!(
+            s.locators,
+            vec!["role:button[name=\"Checkout\"]", "testid:checkout"]
+        );
+    }
+
+    #[test]
+    fn other_actions_still_accept_testid_only() {
+        for action in [Action::Click, Action::Hover, Action::AssertValue] {
+            let s = step(action, &["testid:quantity-input"]);
+            assert!(validate(s, false).is_ok(), "{action:?}");
+        }
+    }
+
+    /// 0.0.82 `browser_verify_element_visible` carries `{ role, accessibleName }`
+    /// and no `ref`, so the role locator has to come from those arguments.
+    #[test]
+    fn locator_for_verify_visible_uses_role_and_accessible_name() {
+        let hook = RecordHook::new(Run {
+            name: "assert".into(),
+            mode: Mode::Test,
+            profile: None,
+            recorded_at: chrono::Utc::now(),
+            steps: vec![],
+        });
+        let req = tools_call(
+            "browser_verify_element_visible",
+            serde_json::json!({"role": "button", "accessibleName": "Checkout"}),
+        );
+        assert_eq!(
+            hook.locator_for(&req),
+            vec!["role:button[name=\"Checkout\"]"]
+        );
+        let unnamed = tools_call(
+            "browser_verify_element_visible",
+            serde_json::json!({"role": "banner", "accessibleName": ""}),
+        );
+        assert_eq!(hook.locator_for(&unnamed), vec!["role:banner"]);
+    }
+
+    #[test]
+    fn locator_for_verify_visible_keeps_snapshot_fallbacks() {
+        let mut hook = RecordHook::new(Run {
+            name: "assert".into(),
+            mode: Mode::Test,
+            profile: None,
+            recorded_at: chrono::Utc::now(),
+            steps: vec![],
+        });
+        hook.snapshot =
+            crate::locator::parse_snapshot("- button \"Checkout\" [ref=e9] [data-testid=checkout]");
+        let req = tools_call(
+            "browser_verify_element_visible",
+            serde_json::json!({"role": "button", "accessibleName": "Checkout"}),
+        );
+        let locators = hook.locator_for(&req);
+        assert_eq!(locators[0], "role:button[name=\"Checkout\"]");
+        assert!(
+            locators.contains(&"testid:checkout".to_string()),
+            "{locators:?}"
+        );
     }
 
     #[test]
