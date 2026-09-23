@@ -55,7 +55,8 @@ if bins.is_empty() {
 |---|---|---|
 | D1 | 擴充現有 `setup` wizard，不新增 install 命令 | 同意和安裝放在同一個地方 |
 | D2 | 安裝 **agent-browser**：`npm i -g agent-browser@latest`，再 `agent-browser install`（拉 Chrome for Testing 當 fallback） | 跟 §0 的研究路線一致；`agent-browser install` 不跑的話 npm 套件自己不能 render |
-| D3 | 先把要跑的命令**完整印出來**，字面 `yes` 才執行；其他輸入 = 跳過 | 跟 egress、browser grant 同一套同意規則；npm -g 會寫全域，所以一定要先問 |
+| D2b | 安裝 **Lightpanda**：走 deps installer，用 `registry_manifest.yaml` 的 `lightpanda` curated recipe（0.3.4，4 個平台都有 sha256），放到 `~/.mur/aura/lightpanda` | 「Lightpanda 優先、Chrome 備用」要成立，就得有 Lightpanda；gateway 只要這個檔案存在就優先用它（`provision.rs:324-326`）；有 sha256、不寫全域 |
+| D3 | 先把要做的事**完整印出來**（npm 兩條命令 + Lightpanda 的 URL、sha256 前 12 碼、目的地），字面 `yes` 才執行；其他輸入 = 跳過。**只問一次**，涵蓋兩者 | 跟 egress、browser grant 同一套同意規則；npm -g 會寫全域，所以一定要先問 |
 | D4 | **不寫** `research_gateway.render_engine` | 預設已經是 `AgentBrowser`；寫 config 反而會蓋掉之後的預設變更 |
 | D5 | 安裝被拒或失敗**不讓 setup 失敗** | 沒有 render 時 plain fetch 仍然能用 |
 | D6 | 新增唯讀的 `mur deep-research doctor` | 只回報、smoke test、印安裝命令；永遠不安裝 |
@@ -64,11 +65,13 @@ if bins.is_empty() {
 
 在 `setup.rs` 的 `cmd_setup` 裡、`grant_render_browser` 迴圈**之前**呼叫 `browser::ensure_render_browser`：
 
-1. **檢查**：`provision::render_binaries`（`~/.mur/aura/lightpanda` 與 PATH 上的 `agent-browser`）。
-2. **缺了就提議安裝**：印出 D2 兩條命令，問 `Type 'yes' to run these now (anything else = skip)`。
+1. **檢查**：`provision::render_binaries`（`~/.mur/aura/lightpanda` 與 PATH 上的 `agent-browser`），兩個**分開**判斷缺不缺。
+2. **缺了就提議安裝**：只列出缺的那幾項（D2 / D2b），問一次 `Type 'yes' to install these now (anything else = skip)`。
    - 非 `yes` → `skipped — plain fetch still works; run \`mur deep-research doctor\` later.`
-   - 任一步失敗 → 印出失敗的命令，停止後續步驟，setup 繼續。
+   - 兩條路線**互相獨立**：Lightpanda 下載失敗、sha256 不符、或平台不在 recipe 裡 → 印原因、跳過 Lightpanda，agent-browser 照裝（之後直接走 Chrome）；npm 失敗 → 照樣裝 Lightpanda。
+   - agent-browser 的兩條 npm 命令之間：第一步失敗就不跑第二步。
    - 裝完仍找不到 `agent-browser` → 提示檢查 npm prefix。
+   - 只裝得到 Lightpanda、沒有 agent-browser → 提示：預設 engine 是 `AgentBrowser`，光有 Lightpanda 不會被用到，除非手動選 `--render-engine lightpanda`。
 3. **smoke test**：對找到的每個 binary 跑版本檢查（`agent-browser --version`；`lightpanda` 吃 subcommand 不吃 flag，用 `smoke_argv` 區分）。
 4. **grant**：照現有流程 `grant_render_browser`，涵蓋實際存在的 binary。
 
@@ -79,6 +82,7 @@ Q5 不是 `yes` → 跟現在完全一樣。
 加在 `DeepResearchAction`（`mur-core/src/cli/actions.rs`）。
 
 - 找不到任何 render browser → 印安裝命令與「或在 setup 回答 yes」，exit 非 0。
+- 有 agent-browser 但沒有 `~/.mur/aura/lightpanda` → **warning**（exit 0）：render 會直接走 Chrome，印 Lightpanda 的安裝方式。
 - 找到但 smoke test 全失敗 → exit 非 0。
 - 不下載、不寫檔、不改 config。
 
@@ -98,11 +102,16 @@ Q5 不是 `yes` → 跟現在完全一樣。
 | 已有 lightpanda | 不安裝，只 smoke test，而且用 subcommand 不用 flag |
 | doctor 在缺瀏覽器時 | 回 error、印安裝命令、不執行任何安裝 |
 | `smoke_argv` | agent-browser 用 `--version` |
+| 兩個都缺、`yes` | Lightpanda 走注入的 downloader、驗 sha256 後放到 `aura/lightpanda`；npm runner 依序兩條 |
+| Lightpanda sha256 不符 | 不留下檔案、agent-browser 照裝、setup 不失敗 |
+| npm 第一步失敗 | Lightpanda 照裝 |
+| 平台沒有 recipe | 印「此平台沒有 Lightpanda」，只裝 agent-browser |
+| doctor：有 agent-browser、沒 Lightpanda | warning、exit 0 |
 
-runner 可注入，測試不碰 npm 也不連網路。
+npm runner 和 Lightpanda downloader 都可注入，測試不碰 npm 也不連網路（`installer::verify_and_place` 本身可以直接吃 bytes）。
 
 ## 7. 待決定
 
-1. **Lightpanda 要不要一起裝**：`mur-common/src/deps/registry_manifest.yaml` 已有 `lightpanda` 的 curated recipe，可以走 deps installer 裝進 `~/.mur/aura/`（有 sha256、不寫全域）。目前的實作只裝 agent-browser + Chrome for Testing，沒有 Lightpanda 時會直接用 Chrome，跟「Lightpanda 優先」的路線不完全一致。
+1. ~~Lightpanda 要不要一起裝~~ → 已決定：要，見 D2b。**worktree 裡的 `browser.rs` 目前還沒有這一段，實作要補。**
 2. **smoke test 的深度**：目前只跑版本檢查，沒有真的 render 一個 JS 頁面。
 3. **sandbox**：在 agent sandbox 裡直接執行 `agent-browser --version` 會得到 `Operation not permitted`，smoke test 要由 setup 本身（非 sandbox）或已授權的 worker 跑。
