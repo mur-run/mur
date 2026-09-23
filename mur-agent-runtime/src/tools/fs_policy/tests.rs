@@ -359,3 +359,154 @@ fn deny_still_wins_inside_a_derived_worktree_grant() {
     // ...while the rest of the same worktree remains writable.
     assert!(check_write_entitlement(&fs, &wt_canon.join("ok.rs"), &chain).is_ok());
 }
+
+// ── T2: typed ReadRefusal ───────────────────────────────────────────────────
+
+/// A canonical tempdir holding a fake MUR home, with the launch chain rooted
+/// at `agents/mur`. Canonical because the gate compares canonicalized paths
+/// (macOS `/var` → `/private/var`).
+fn refusal_fixture() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    crate::sandbox::launch_chain::LaunchChain,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = std::fs::canonicalize(tmp.path()).unwrap();
+    for d in ["agents/mur", "proj/secret", "proj/open", "other", "wr"] {
+        std::fs::create_dir_all(home.join(d)).unwrap();
+    }
+    let chain = crate::sandbox::launch_chain::LaunchChain::for_test(
+        &home.join("agents/mur"),
+        &home.join("bin"),
+        &home.join("home"),
+    );
+    (tmp, home, chain)
+}
+
+fn root(p: &Path) -> String {
+    p.to_string_lossy().into_owned()
+}
+
+#[test]
+fn read_refusal_launch_chain_wins_over_deny_and_grant() {
+    let (_tmp, home, chain) = refusal_fixture();
+    let key = home.join("agents/mur/identity.key");
+    let fs = FilesystemEntitlement {
+        read: vec![root(&home)],
+        write: vec![root(&home)],
+        deny: vec![root(&home.join("agents"))],
+    };
+    assert_eq!(
+        check_read_refusal(&fs, &key, &chain),
+        Err(ReadRefusal::LaunchChain)
+    );
+}
+
+#[test]
+fn read_refusal_deny_list_wins_over_grant() {
+    let (_tmp, home, chain) = refusal_fixture();
+    let fs = FilesystemEntitlement {
+        read: vec![root(&home.join("proj"))],
+        deny: vec![root(&home.join("proj/secret"))],
+        ..Default::default()
+    };
+    assert_eq!(
+        check_read_refusal(&fs, &home.join("proj/secret/AGENTS.md"), &chain),
+        Err(ReadRefusal::DenyList)
+    );
+    // Negative control: the same grant still reads a sibling.
+    assert_eq!(
+        check_read_refusal(&fs, &home.join("proj/open/AGENTS.md"), &chain),
+        Ok(())
+    );
+}
+
+#[test]
+fn read_refusal_no_grant_when_outside_every_root() {
+    let (_tmp, home, chain) = refusal_fixture();
+    let fs = FilesystemEntitlement {
+        read: vec![root(&home.join("proj"))],
+        write: vec![root(&home.join("wr"))],
+        ..Default::default()
+    };
+    assert_eq!(
+        check_read_refusal(&fs, &home.join("other/AGENTS.md"), &chain),
+        Err(ReadRefusal::NoGrant)
+    );
+}
+
+#[test]
+fn read_refusal_ok_under_read_or_write_grant() {
+    let (_tmp, home, chain) = refusal_fixture();
+    let fs = FilesystemEntitlement {
+        read: vec![root(&home.join("proj"))],
+        write: vec![root(&home.join("wr"))],
+        ..Default::default()
+    };
+    assert_eq!(
+        check_read_refusal(&fs, &home.join("proj/open/AGENTS.md"), &chain),
+        Ok(())
+    );
+    assert_eq!(
+        check_read_refusal(&fs, &home.join("wr/CLAUDE.md"), &chain),
+        Ok(()),
+        "write implies read-back"
+    );
+}
+
+/// The string gate is now a presentation of the typed one. Expected values are
+/// copied from the baseline `69938cd9:fs_policy.rs:322-340`, not from the new
+/// code, so a drift in either direction fails here.
+#[test]
+fn check_read_entitlement_strings_are_unchanged() {
+    let (_tmp, home, chain) = refusal_fixture();
+    let fs = FilesystemEntitlement {
+        read: vec![root(&home.join("proj")), root(&home.join("agents"))],
+        deny: vec![root(&home.join("proj/secret"))],
+        ..Default::default()
+    };
+    let msg = |p: &Path| match check_read_entitlement(&fs, p, &chain) {
+        Err(ToolError::Execution(s)) => s,
+        other => panic!(
+            "expected Execution error for {}, got {other:?}",
+            p.display()
+        ),
+    };
+
+    let key = home.join("agents/mur/identity.key");
+    assert_eq!(
+        msg(&key),
+        format!(
+            "path is part of MUR's launch chain and can never be read: {} ({})",
+            key.display(),
+            "this agent's own signing key — reading it is enough to forge \
+             its signed channel events"
+        )
+    );
+
+    let denied = home.join("proj/secret/AGENTS.md");
+    assert_eq!(
+        msg(&denied),
+        format!("path denied by entitlement: {}", denied.display())
+    );
+
+    let outside = home.join("other/AGENTS.md");
+    assert_eq!(
+        msg(&outside),
+        format!(
+            "path not entitled: {} (grant it via `mur agent perm allow-read`)",
+            outside.display()
+        )
+    );
+
+    assert!(check_read_entitlement(&fs, &home.join("proj/open/AGENTS.md"), &chain).is_ok());
+}
+
+/// Spec §5.1: the refusal carries no path and no error text — the only thing
+/// the instructions block can ever learn from it is which of three reasons.
+#[test]
+fn read_refusal_is_a_bare_token() {
+    fn assert_copy<T: Copy + Eq + std::fmt::Debug>() {}
+    assert_copy::<ReadRefusal>();
+    assert_eq!(std::mem::size_of::<ReadRefusal>(), 1);
+}

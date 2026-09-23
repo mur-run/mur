@@ -305,10 +305,59 @@ pub(crate) fn check_write_entitlement(
     )))
 }
 
+/// Why a read was refused — a bare token, never a path or error text.
+///
+/// The project-instructions block renders refusals into the prompt, and must
+/// not leak a path through an error string (spec §5.1), so this carries no
+/// data and has no `Display`. The human-facing strings live in
+/// [`check_read_entitlement`], which is a presentation of the same decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadRefusal {
+    /// Part of MUR's launch chain; no entitlement can grant it.
+    LaunchChain,
+    /// Under an explicit `deny` root.
+    DenyList,
+    /// Outside every `read` and `write` root.
+    NoGrant,
+}
+
+/// The one read decision: `Err` carries the refusal and, for the launch
+/// chain, the reason the chain gave (used only by the string presentation).
+fn decide_read(
+    fs: &FilesystemEntitlement,
+    canonical: &Path,
+    chain: &crate::sandbox::launch_chain::LaunchChain,
+) -> Result<(), (ReadRefusal, &'static str)> {
+    if let Some(reason) = chain.protects_read(canonical) {
+        return Err((ReadRefusal::LaunchChain, reason));
+    }
+    if under_any_read_deny(&fs.deny, canonical, chain.agent_self_home()) {
+        return Err((ReadRefusal::DenyList, ""));
+    }
+    // `under_any_or_worktree` tries the literal grants first, then one derived
+    // hop for a worktree of a granted checkout (#004).
+    if under_any_or_worktree(&fs.read, canonical) || under_any_or_worktree(&fs.write, canonical) {
+        return Ok(());
+    }
+    Err((ReadRefusal::NoGrant, ""))
+}
+
+/// Typed read gate: the same decision as [`check_read_entitlement`], for
+/// callers that must not see error text (the project-instructions loader).
+pub(crate) fn check_read_refusal(
+    fs: &FilesystemEntitlement,
+    canonical: &Path,
+    chain: &crate::sandbox::launch_chain::LaunchChain,
+) -> Result<(), ReadRefusal> {
+    decide_read(fs, canonical, chain).map_err(|(r, _)| r)
+}
+
 /// Read-side twin of [`check_write_entitlement`], and the one gate for every
 /// read of a user path the runtime makes on the model's behalf: `read_file`,
-/// and the loader that puts a project's `AGENTS.md` into the system prompt.
-/// One function so the two can never disagree about what is readable.
+/// and the loader for a project's `AGENTS.md` / `CLAUDE.md`. Both go through
+/// [`decide_read`] — this function and [`check_read_refusal`] are two
+/// presentations of one decision, so they can never disagree about what is
+/// readable.
 ///
 /// Order matches the write gate: the launch chain first (no entitlement can
 /// satisfy it — another agent's signing key is enough to forge its events),
@@ -318,27 +367,18 @@ pub(crate) fn check_read_entitlement(
     canonical: &Path,
     chain: &crate::sandbox::launch_chain::LaunchChain,
 ) -> Result<(), ToolError> {
-    if let Some(reason) = chain.protects_read(canonical) {
-        return Err(ToolError::Execution(format!(
-            "path is part of MUR's launch chain and can never be read: {} ({reason})",
-            canonical.display()
-        )));
-    }
-    if under_any_read_deny(&fs.deny, canonical, chain.agent_self_home()) {
-        return Err(ToolError::Execution(format!(
-            "path denied by entitlement: {}",
-            canonical.display()
-        )));
-    }
-    // `under_any_or_worktree` tries the literal grants first, then one derived
-    // hop for a worktree of a granted checkout (#004).
-    if under_any_or_worktree(&fs.read, canonical) || under_any_or_worktree(&fs.write, canonical) {
-        return Ok(());
-    }
-    Err(ToolError::Execution(format!(
-        "path not entitled: {} (grant it via `mur agent perm allow-read`)",
-        canonical.display()
-    )))
+    decide_read(fs, canonical, chain).map_err(|(refusal, reason)| {
+        let path = canonical.display();
+        ToolError::Execution(match refusal {
+            ReadRefusal::LaunchChain => format!(
+                "path is part of MUR's launch chain and can never be read: {path} ({reason})"
+            ),
+            ReadRefusal::DenyList => format!("path denied by entitlement: {path}"),
+            ReadRefusal::NoGrant => {
+                format!("path not entitled: {path} (grant it via `mur agent perm allow-read`)")
+            }
+        })
+    })
 }
 
 #[cfg(test)]
