@@ -54,13 +54,15 @@ fn call_for_round_trips_every_step_tool_name() {
 
         // Value key names are pinned to the same contract recorder.rs's
         // value_for reads: Goto→url, Fill→text, Select→values, Press→key,
-        // AssertText/AssertValue→text.
+        // AssertText→text, AssertValue→value.
         let expected_key = match step.action {
             Action::Goto => Some("url"),
             Action::Fill => Some("text"),
             Action::Select => Some("values"),
             Action::Press => Some("key"),
-            Action::AssertText | Action::AssertValue => Some("text"),
+            Action::AssertText => Some("text"),
+            // @playwright/mcp 0.0.82 browser_verify_value takes `value`.
+            Action::AssertValue => Some("value"),
             Action::Click | Action::Hover | Action::AssertVisible => None,
         };
         match expected_key {

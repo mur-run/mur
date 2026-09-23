@@ -80,7 +80,9 @@ fn value_key(action: Action) -> Option<&'static str> {
         Action::Fill => Some("text"),
         Action::Select => Some("values"),
         Action::Press => Some("key"),
-        Action::AssertText | Action::AssertValue => Some("text"),
+        Action::AssertText => Some("text"),
+        // @playwright/mcp 0.0.82 `browser_verify_value` takes `value`.
+        Action::AssertValue => Some("value"),
         Action::Click | Action::Hover | Action::AssertVisible => None,
     }
 }
@@ -578,7 +580,7 @@ mod tests {
             (Action::Fill, "text"),
             (Action::Press, "key"),
             (Action::AssertText, "text"),
-            (Action::AssertValue, "text"),
+            (Action::AssertValue, "value"),
         ];
         for (action, key) in cases {
             let s = step(action, &["role:button"]);

@@ -213,11 +213,9 @@ async fn run_step<C: ToolCaller + Send>(step: &Step, caller: &mut C) -> Result<O
                     step.locators.join(", ")
                 )
             })?;
-        if let Some(obj) = args.as_object_mut() {
-            // @playwright/mcp 0.0.82 names the element argument `target`
-            // (a snapshot ref like `e7` or a selector); `ref` is rejected.
-            obj.insert("target".into(), Value::String(reference));
-        }
+        // The snapshot node behind the ref; `None` for a testid selector.
+        let node = nodes.iter().find(|n| n.reference == reference);
+        args = assert_args(step, args, node, reference)?;
         hit = Some(locator);
     }
     // `browser_select_option` takes an array; `call_for` stores the scalar.
@@ -230,6 +228,59 @@ async fn run_step<C: ToolCaller + Send>(step: &Step, caller: &mut C) -> Result<O
     let response = caller.call_tool(&tool, args).await?;
     ensure_ok(&tool, &response)?;
     Ok(hit)
+}
+
+/// Shape the final `arguments` for @playwright/mcp 0.0.82. Non-assert
+/// actions get the resolved `target`; each `browser_verify_*` tool has its
+/// own schema, so asserts are rebuilt from scratch.
+fn assert_args(
+    step: &Step,
+    args: Value,
+    node: Option<&locator::SnapshotNode>,
+    reference: String,
+) -> Result<Value> {
+    let value = args.get("value").or_else(|| args.get("text")).cloned();
+    Ok(match step.action {
+        // { role, accessibleName } — Playwright runs getByRole itself.
+        Action::AssertVisible => {
+            let node = node.with_context(|| {
+                "assert_visible needs a role locator that is in the snapshot; \
+                 a testid selector has no role/accessible name to verify"
+            })?;
+            json!({"role": node.role, "accessibleName": node.name})
+        }
+        // { text } — the locator only gated that the text is on the page.
+        Action::AssertText => json!({"text": value}),
+        // { type, element, target, value }
+        Action::AssertValue => json!({
+            "type": verify_value_type(node.map(|n| n.role.as_str())),
+            "element": step.intent,
+            "target": reference,
+            "value": value,
+        }),
+        _ => {
+            let mut args = args;
+            if let Some(obj) = args.as_object_mut() {
+                // 0.0.82 names the element argument `target` (a snapshot ref
+                // like `e7` or a selector); `ref` is rejected.
+                obj.insert("target".into(), Value::String(reference));
+            }
+            args
+        }
+    })
+}
+
+/// Map a snapshot role onto `browser_verify_value`'s `type` enum
+/// (`textbox|checkbox|radio|combobox|slider`). Anything else — including an
+/// unknown role from a testid selector — is read via `inputValue`, i.e. textbox.
+fn verify_value_type(role: Option<&str>) -> &'static str {
+    match role {
+        Some("checkbox") => "checkbox",
+        Some("radio") => "radio",
+        Some("combobox") => "combobox",
+        Some("slider") => "slider",
+        _ => "textbox",
+    }
 }
 
 /// CSS attribute selector for a `data-testid`, quoted and escaped.
@@ -611,6 +662,116 @@ steps:
             .find(|(n, _)| n == "browser_select_option")
             .unwrap();
         assert_eq!(select.1["values"], json!(["M"]));
+    }
+
+    /// Replay a one-step run and return the report plus the args of `tool`.
+    async fn one_step(
+        action: &str,
+        value: Option<&str>,
+        locators: &str,
+        tool: &str,
+    ) -> (ReplayReport, Option<Value>) {
+        let value = value
+            .map(|v| format!("  value: \"{v}\"\n"))
+            .unwrap_or_default();
+        let yaml = format!(
+            "name: s\nmode: test\nrecorded_at: 2026-09-23T00:00:00Z\nsteps:\n- step: 1\n  intent: 確認這一步\n  action: {action}\n{value}  locators: {locators}\n"
+        );
+        let mut fake = Fake::default();
+        let report = replay_with(&run(&yaml), &[], &mut fake).await.unwrap();
+        let args = fake
+            .calls
+            .into_iter()
+            .find(|(n, _)| n == tool)
+            .map(|(_, a)| a);
+        (report, args)
+    }
+
+    #[tokio::test]
+    async fn assert_visible_sends_role_and_accessible_name() {
+        // 0.0.82 schema: { role, accessibleName } — nothing else.
+        let (report, args) = one_step(
+            "assert_visible",
+            None,
+            "['role:button[name=\"Sign in\"]']",
+            "browser_verify_element_visible",
+        )
+        .await;
+        assert_eq!(report.passed, 1, "{report:?}");
+        assert_eq!(
+            args.unwrap(),
+            json!({"role": "button", "accessibleName": "Sign in"})
+        );
+    }
+
+    #[tokio::test]
+    async fn assert_visible_without_snapshot_node_fails_clearly() {
+        // A testid selector carries no role/name, so verify_element_visible
+        // cannot be called; say so instead of sending a malformed call.
+        let (report, args) = one_step(
+            "assert_visible",
+            None,
+            "['testid:product-thumbnail']",
+            "browser_verify_element_visible",
+        )
+        .await;
+        assert_eq!(report.steps[0].status, StepStatus::Failed);
+        assert!(args.is_none());
+        let msg = report.steps[0].message.clone().unwrap();
+        assert!(msg.contains("role"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn assert_text_sends_only_text() {
+        let (report, args) = one_step(
+            "assert_text",
+            Some("Welcome"),
+            "['text:Welcome']",
+            "browser_verify_text_visible",
+        )
+        .await;
+        assert_eq!(report.passed, 1, "{report:?}");
+        assert_eq!(args.unwrap(), json!({"text": "Welcome"}));
+    }
+
+    #[tokio::test]
+    async fn assert_value_sends_type_element_target_value() {
+        // Live step 9: testid-only locator falls back to a selector, and
+        // with no snapshot node the type defaults to textbox.
+        let (report, args) = one_step(
+            "assert_value",
+            Some("2"),
+            "['testid:quantity-input']",
+            "browser_verify_value",
+        )
+        .await;
+        assert_eq!(report.passed, 1, "{report:?}");
+        assert_eq!(
+            args.unwrap(),
+            json!({
+                "type": "textbox",
+                "element": "確認這一步",
+                "target": "[data-testid=\"quantity-input\"]",
+                "value": "2",
+            })
+        );
+    }
+
+    #[test]
+    fn verify_value_type_maps_snapshot_roles_into_schema_enum() {
+        for (role, want) in [
+            ("textbox", "textbox"),
+            ("searchbox", "textbox"),
+            ("spinbutton", "textbox"),
+            ("checkbox", "checkbox"),
+            ("radio", "radio"),
+            ("combobox", "combobox"),
+            ("slider", "slider"),
+            ("button", "textbox"),
+        ] {
+            assert_eq!(verify_value_type(Some(role)), want, "{role}");
+        }
+        assert_eq!(verify_value_type(None), "textbox");
     }
 
     #[tokio::test]
