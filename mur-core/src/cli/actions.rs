@@ -809,6 +809,10 @@ pub enum BrowserAction {
         /// more than one is available.
         #[arg(long, value_enum)]
         browser: Option<BrowserEngine>,
+        /// Domain this profile may navigate to (repeatable). Subdomains are
+        /// included. Defaults to the host of `--url`.
+        #[arg(long = "allow-domain", value_name = "DOMAIN")]
+        allow_domain: Vec<String>,
     },
     /// Run the secret broker (implemented in a later slice).
     Broker,

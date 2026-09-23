@@ -1,9 +1,9 @@
 # `/browser-*` Skill 層實作計畫
 
 > Date: 2026-09-23
-> Spec source: `~/.mur/artifacts/mur/browser-research-20260910/SPEC-phase1.md`
-> ⚠️ 該路徑**未納入版控**（`git ls-files artifacts` → 0 筆）。Task 9 負責搬進
-> `docs/superpowers/specs/` 後，此處與 `mur-browser/src/lib.rs:17` 一併改指新路徑。
+> Spec source: `docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`
+> （Task 9 已完成：原檔 `~/.mur/artifacts/mur/browser-research-20260910/SPEC-phase1.md`
+> 未受版控，已移入 repo，`mur-browser/src/lib.rs:17` 同步改指新路徑。）
 > 執行技能：`mur-executing-plans`（單人循序）；Task 6/7 可用 `mur-delegate-dev` 併行
 
 ---
@@ -111,18 +111,18 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 0.1 先寫測試：對 9 個 `Action` 變體逐一呼叫 `tool_name()`，
+- [x] 0.1 先寫測試：對 9 個 `Action` 變體逐一呼叫 `tool_name()`，
       再餵回 `Recorder::action_for` 的同名查表，必須還原成同一個 `Action`
       （`browser_type`/`browser_fill` 這類多對一，正向取第一個即可）
-- [ ] 0.2 補測試：`call_for` 對 `Goto` 產出的 `arguments` 必須含 `url` 鍵，
+- [x] 0.2 補測試：`call_for` 對 `Goto` 產出的 `arguments` 必須含 `url` 鍵，
       對 `Fill` 含 `text`，對 `Press` 含 `key` —— 鍵名直接對照 `value_for`
-- [ ] 0.3 補測試：`Action::needs_locator()` 為真的步驟，`call_for` 必須帶
+- [x] 0.3 補測試：`Action::needs_locator()` 為真的步驟，`call_for` 必須帶
       `ref` 或 `element`；`Goto` 則不得帶
-- [ ] 0.4 `cargo test -p mur-browser roundtrip` → 失敗
-- [ ] 0.5 實作 `tool_name` 與 `call_for`，讓測試轉綠
-- [ ] 0.6 寫 `tests/fixtures/run-roundtrip.yaml`，9 個變體各一步，
+- [x] 0.4 `cargo test -p mur-browser roundtrip` → 失敗
+- [x] 0.5 實作 `tool_name` 與 `call_for`，讓測試轉綠
+- [x] 0.6 寫 `tests/fixtures/run-roundtrip.yaml`，9 個變體各一步，
       `mode: test`、`recorded_at` 用固定時戳（避免測試不穩定）
-- [ ] 0.7 `cargo test -p mur-browser && cargo clippy --all-targets -- -D warnings`，commit
+- [x] 0.7 `cargo test -p mur-browser && cargo clippy --all-targets -- -D warnings`，commit
 
 **這個 Task 擋住 4、5、6、7。** 完成前不要派工那四個。
 
@@ -139,13 +139,13 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 1.1 讀 `mur-core/src/cli/actions.rs:797-812` 確認 `Auth` 的四個參數與 `BrowserEngine` 值域，抄進 skill 的指令表
-- [ ] 1.2 建立 `/tmp/browser-auth/SKILL.md`，frontmatter 比照 `~/.mur/skills/mur-brainstorm/SKILL.md`：`name: browser-auth`、`category: workflow`、`visibility: on_demand`、`provenance: human`、triggers 含 keyword `browser (login|auth)|登入|瀏覽器驗證` 與 `manual`
-- [ ] 1.3 內文明訂**三條不可違反的規則**：(a) agent 絕不代打帳號密碼，一律 handoff 給人；(b) 非互動情境下若 profile 不存在就直接報錯，不得自行開登入流程；(c) 呼叫時必須帶 `--browser`，避免 `select_browser` 進入互動詢問
-- [ ] 1.4 內文加「何時該 reauth」判準：`mur browser status` 顯示 `(incomplete)` / `(metadata missing)`，或 `earliest_cookie_expires` 已過
-- [ ] 1.5 `mur skill install /tmp/browser-auth`，預期輸出含 skill 名稱
-- [ ] 1.6 驗證：`ls ~/.mur/skills/browser-auth/SKILL.md` 存在
-- [ ] 1.7 commit plan 進度（skill 裝在 `~/.mur`，repo 端只有此 plan 的勾選變更；
+- [x] 1.1 讀 `mur-core/src/cli/actions.rs:797-812` 確認 `Auth` 的四個參數與 `BrowserEngine` 值域，抄進 skill 的指令表
+- [x] 1.2 建立 `/tmp/browser-auth/SKILL.md`，frontmatter 比照 `~/.mur/skills/mur-brainstorm/SKILL.md`：`name: browser-auth`、`category: workflow`、`visibility: on_demand`、`provenance: human`、triggers 含 keyword `browser (login|auth)|登入|瀏覽器驗證` 與 `manual`
+- [x] 1.3 內文明訂**三條不可違反的規則**：(a) agent 絕不代打帳號密碼，一律 handoff 給人；(b) 非互動情境下若 profile 不存在就直接報錯，不得自行開登入流程；(c) 呼叫時必須帶 `--browser`，避免 `select_browser` 進入互動詢問
+- [x] 1.4 內文加「何時該 reauth」判準：`mur browser status` 顯示 `(incomplete)` / `(metadata missing)`，或 `earliest_cookie_expires` 已過
+- [x] 1.5 `mur skill install /tmp/browser-auth`，預期輸出含 skill 名稱
+- [x] 1.6 驗證：`mur skill info browser-auth` 讀得到、`mur skill validate ~/.mur/skills/browser-auth/skill.yaml` 回 `ok`（安裝產物是 canonical `skill.yaml`；`SKILL.md` 只是 `mur skill fmt` 的另一種表示，並非必要檔。原驗收條件寫錯，已更正）
+- [x] 1.7 commit plan 進度（skill 裝在 `~/.mur`，repo 端只有此 plan 的勾選變更；
       若無其他檔案變動則跳過 commit，不要製造空 commit）
 
 ---
@@ -164,14 +164,14 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 2.1 新建 `mur-browser/src/guard.rs`，先寫測試：空 allowlist 全放行；`["example.com"]` 放行 `https://example.com/a` 與 `https://app.example.com/b`，拒絕 `https://evil.com` 與 `https://notexample.com`；拒絕非 http/https scheme
-- [ ] 2.2 `cargo test -p mur-browser guard` → 預期編譯失敗（module 未掛）
-- [ ] 2.3 `lib.rs` 加 `pub mod guard;`，實作 `is_allowed`：解析 host，比對「完全相等或以 `.` + allow 項結尾」，避免 `notexample.com` 誤中
-- [ ] 2.4 `cargo test -p mur-browser guard` → 全綠
-- [ ] 2.5 `auth.rs` 的 `ProfileMeta` 加 `#[serde(default)] pub allow_domains: Vec<String>`，`save_profile` 增加同名參數並寫入
-- [ ] 2.6 補測試：舊的不含該欄位的 meta YAML 仍可反序列化成功（向後相容）
-- [ ] 2.7 `actions.rs` 的 `Auth` 加 `#[arg(long = "allow-domain")] allow_domain: Vec<String>`；dispatch 與 `cmd::browser::auth` 一路傳下去；未指定時預設填入 `--url` 的 host
-- [ ] 2.8 `cargo test -p mur-browser && cargo test -p mur-core browser` → 全綠，commit
+- [x] 2.1 新建 `mur-browser/src/guard.rs`，先寫測試：空 allowlist 全放行；`["example.com"]` 放行 `https://example.com/a` 與 `https://app.example.com/b`，拒絕 `https://evil.com` 與 `https://notexample.com`；拒絕非 http/https scheme
+- [x] 2.2 `cargo test -p mur-browser guard` → 預期編譯失敗（module 未掛）
+- [x] 2.3 `lib.rs` 加 `pub mod guard;`，實作 `is_allowed`：解析 host，比對「完全相等或以 `.` + allow 項結尾」，避免 `notexample.com` 誤中
+- [x] 2.4 `cargo test -p mur-browser guard` → 全綠
+- [x] 2.5 `auth.rs` 的 `ProfileMeta` 加 `#[serde(default)] pub allow_domains: Vec<String>`，`save_profile` 增加同名參數並寫入
+- [x] 2.6 補測試：舊的不含該欄位的 meta YAML 仍可反序列化成功（向後相容）
+- [x] 2.7 `actions.rs` 的 `Auth` 加 `#[arg(long = "allow-domain")] allow_domain: Vec<String>`；dispatch 與 `cmd::browser::auth` 一路傳下去；未指定時預設填入 `--url` 的 host
+- [x] 2.8 `cargo test -p mur-browser && cargo test -p mur-core browser` → 全綠，commit
 
 ---
 
@@ -188,16 +188,16 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 3.1 讀 `mur-browser/src/recorder.rs:52-98` 抄下 `Step` 全部欄位與 `Action` 的完整 variant 列表，逐一決定對應的 Playwright 呼叫
-- [ ] 3.2 新建 `mur-browser/src/export.rs`，先寫測試：一個含 `goto` + `fill` + assert 的 `Run`，輸出須含 `import { test, expect } from '@playwright/test';`、`test('<run.name>', async ({ page }) => {`、以及 `await page.goto(`
-- [ ] 3.3 補測試：`value` 為 `{{secret:acme/PASSWORD}}` 的 step，輸出**不得**含該佔位符原文，須轉成 `process.env.ACME_PASSWORD` 形式；且輸出絕不含明文密碼
-- [ ] 3.4 補測試：`mode: automation` 的 Run 呼叫 `to_spec_ts` 回 `Err`（automation 沒有斷言，不該產 spec）
-- [ ] 3.5 `cargo test -p mur-browser export` → 失敗
-- [ ] 3.6 實作 `to_spec_ts`：`locators` 取第一順位候選；每個 step 前輸出 `// <intent>` 註解；TS 字串一律跳脫單引號與反斜線
-- [ ] 3.7 `cargo test -p mur-browser export` → 全綠
-- [ ] 3.8 `cmd/browser/mod.rs` 加 `pub fn export(name: &str, out: Option<&Path>) -> Result<()>`：`validate_name` → 讀 `run_actions` → `from_yaml` → `to_spec_ts` → 寫檔或印出
-- [ ] 3.9 `actions.rs` 的 `Export` 加 `#[arg(long)] out: Option<PathBuf>`，doc comment 去掉 later slice 字樣；`dispatch.rs:619` 換成真 handler
-- [ ] 3.10 `cargo test && cargo clippy --all-targets -- -D warnings` → 全綠，commit
+- [x] 3.1 讀 `mur-browser/src/recorder.rs:52-98` 抄下 `Step` 全部欄位與 `Action` 的完整 variant 列表，逐一決定對應的 Playwright 呼叫
+- [x] 3.2 新建 `mur-browser/src/export.rs`，先寫測試：一個含 `goto` + `fill` + assert 的 `Run`，輸出須含 `import { test, expect } from '@playwright/test';`、`test('<run.name>', async ({ page }) => {`、以及 `await page.goto(`
+- [x] 3.3 補測試：`value` 為 `{{secret:acme/PASSWORD}}` 的 step，輸出**不得**含該佔位符原文，須轉成 `process.env.ACME_PASSWORD` 形式；且輸出絕不含明文密碼
+- [x] 3.4 補測試：`mode: automation` 的 Run 呼叫 `to_spec_ts` 回 `Err`（automation 沒有斷言，不該產 spec）
+- [x] 3.5 `cargo test -p mur-browser export` → 失敗
+- [x] 3.6 實作 `to_spec_ts`：`locators` 取第一順位候選；每個 step 前輸出 `// <intent>` 註解；TS 字串一律跳脫單引號與反斜線
+- [x] 3.7 `cargo test -p mur-browser export` → 全綠
+- [x] 3.8 `cmd/browser/mod.rs` 加 `pub fn export(name: &str, out: Option<&Path>) -> Result<()>`：`validate_name` → 讀 `run_actions` → `from_yaml` → `to_spec_ts` → 寫檔或印出
+- [x] 3.9 `actions.rs` 的 `Export` 加 `#[arg(long)] out: Option<PathBuf>`，doc comment 去掉 later slice 字樣；`dispatch.rs:619` 換成真 handler
+- [x] 3.10 `cargo test && cargo clippy --all-targets -- -D warnings` → 全綠，commit
 
 ---
 
@@ -328,25 +328,25 @@ Playwright trace 單次動輒數十 MB，目前只有產出沒有清理。
 
 ### Steps
 
-- [ ] 9.1 `mkdir -p docs/superpowers/specs` 已存在；
+- [x] 9.1 `mkdir -p docs/superpowers/specs` 已存在；
       `git mv` 不適用（跨 repo），改用 `cp` 將 `SPEC-phase1.md`、`MERGED.md`
       複製為 `docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`
       與 `2026-09-10-browser-research-merged.md`
-- [ ] 9.2 `SPEC-phase1-A-superseded.md` 與 `deep/`、`slice*.md` **不搬**
+- [x] 9.2 `SPEC-phase1-A-superseded.md` 與 `deep/`、`slice*.md` **不搬**
       —— 那些是研究過程，留在 artifacts 合理
-- [ ] 9.3 更新 `mur-browser/src/lib.rs:17` 的 `Design source:` 指向新的 repo 內路徑
-- [ ] 9.4 在新 spec 抬頭下方加 changelog 區塊：原抬頭「待核准，未寫任何程式碼」
+- [x] 9.3 更新 `mur-browser/src/lib.rs:17` 的 `Design source:` 指向新的 repo 內路徑
+- [x] 9.4 在新 spec 抬頭下方加 changelog 區塊：原抬頭「待核准，未寫任何程式碼」
       改為實際狀態，逐列標註 §1.1 四項交付物與對應 commit
       （前三項 `2955eca2`，第四項 skill 層 → 本 plan Task 1/6/7）
-- [ ] 9.5 修正新 merged 文件的「兩個入口、一個引擎」（原 `MERGED.md:67`）為
+- [x] 9.5 修正新 merged 文件的「兩個入口、一個引擎」（原 `MERGED.md:67`）為
       「兩個入口、一份共用 session」—— §4 表格裡 test 用 Playwright、
       automation 用 browser-rs，本來就是兩個引擎，原句會讓人誤以為 locator 跨引擎相容
-- [ ] 9.6 在 §4 表格下方補一行，明文說明 locator 格式是否跨引擎通用；
+- [x] 9.6 在 §4 表格下方補一行，明文說明 locator 格式是否跨引擎通用；
       若不通用，禁止兩邊共用錄製產物
-- [ ] 9.7 在舊 artifacts 的 `SPEC-phase1.md` 抬頭插一行
+- [x] 9.7 在舊 artifacts 的 `SPEC-phase1.md` 抬頭插一行
       「**已移入版控：`docs/superpowers/specs/2026-09-10-browser-phase1-spec.md`，
       此檔不再維護**」，避免下次又有人讀到舊的
-- [ ] 9.8 `cargo test -p mur-browser`（doc comment 改動需確認 doctest 未壞），commit
+- [x] 9.8 `cargo test -p mur-browser`（doc comment 改動需確認 doctest 未壞），commit
 
 ---
 
