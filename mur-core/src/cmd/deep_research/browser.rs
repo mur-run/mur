@@ -1521,6 +1521,56 @@ mod tests {
         assert_eq!(run, RenderRun::Denied);
     }
 
+    /// `%SystemRoot%\System32\<exe>`: absolute, so the test cannot pick up
+    /// a same-named binary from the runner's PATH.
+    #[cfg(windows)]
+    fn system32(exe: &str) -> String {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        format!(r"{root}\System32\{exe}")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_render_exec_captures_exit_stdout_and_stderr_on_windows() {
+        let run = system_render_exec(
+            &owned(&[
+                &system32("cmd.exe"),
+                "/C",
+                "echo out& 1>&2 echo err& exit /b 3",
+            ]),
+            Duration::from_secs(10),
+        );
+        let (success, stdout, stderr) = match run {
+            RenderRun::Exited {
+                success,
+                stdout,
+                stderr,
+            } => (success, stdout, stderr),
+            other => panic!("expected the child to exit: {other:?}"),
+        };
+        assert!(!success, "exit /b 3 must not count as success");
+        assert_eq!(stdout.trim_end(), "out", "{stdout:?}");
+        assert_eq!(stderr.trim_end(), "err", "{stderr:?}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_render_exec_kills_a_render_that_overruns_its_budget_on_windows() {
+        // `ping -n 11` runs ~10s (one echo per second). It is a direct child
+        // (no cmd.exe wrapper), so `Child::kill` terminates the process we time.
+        let started = Instant::now();
+        let run = system_render_exec(
+            &owned(&[&system32("PING.EXE"), "-n", "11", "127.0.0.1"]),
+            Duration::from_millis(200),
+        );
+        assert_eq!(run, RenderRun::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn system_render_exec_reports_a_missing_binary_as_a_spawn_failure() {
         let run = system_render_exec(
