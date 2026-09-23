@@ -191,7 +191,6 @@ fn drop_oldest_turn(history: &mut Vec<crate::llm::RichMessage>) {
 /// Byte cap for the pinned project-instructions block: half the history
 /// budget, never above the module's hard ceiling. The block comes out of the
 /// history budget, so history + block stays within the quarter share (§5.3).
-#[cfg_attr(not(test), allow(dead_code))] // T6 wires this into both call sites.
 fn pinned_cap_bytes(budget_tokens: u64) -> usize {
     let half = usize::try_from(budget_tokens)
         .unwrap_or(usize::MAX)
@@ -209,7 +208,6 @@ fn trim_room(budget_tokens: u64, pinned_len: usize) -> u64 {
 /// Send-time trim (§5.4): drop the oldest turns of a *copy* of the stored
 /// history until it fits beside the pinned block. The newest turn is always
 /// kept, the same guard `remember` uses. The block is never a candidate.
-#[cfg_attr(not(test), allow(dead_code))] // T6 wires this into both call sites.
 fn trim_for_send(
     mut prior: Vec<crate::llm::RichMessage>,
     budget_tokens: u64,
@@ -225,7 +223,7 @@ fn trim_for_send(
 /// Build one turn's LLM message list: `[system?, pinned?, prior…, current]`.
 /// `pinned` is a separate argument, never part of `prior`, so nothing that
 /// trims or stores history can touch it (spec §4.2). `prior` arrives already
-/// fetched (and, from T6 on, trimmed) by the caller. With no system prompt, no
+/// fetched and trimmed by the caller. With no system prompt, no
 /// block and no prior this is just `[user]`.
 fn seed_history(
     system: String,
@@ -785,6 +783,29 @@ impl TaskRunner {
             .prior(ctx)
     }
 
+    /// This turn's pinned `<project_instructions>` block and the stored prior,
+    /// trimmed so both fit the history budget (spec §5.3–5.4). Rendered once
+    /// per turn by the caller, before any tool-loop step, so a file edited
+    /// mid-turn does not change what later steps see (§3.1). The block is
+    /// returned separately and is never stored.
+    fn pinned_and_prior(
+        &self,
+        ctx: Option<&str>,
+    ) -> (Option<String>, Vec<crate::llm::RichMessage>) {
+        let (budget_tokens, prior) = {
+            let store = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
+            (store.budget_tokens, store.prior(ctx))
+        };
+        let pinned = match (&self.project_instructions, &self.session_cwd) {
+            (Some(p), Some((cwd, _))) => p
+                .render(&cwd.current(), pinned_cap_bytes(budget_tokens))
+                .map(|r| r.text),
+            _ => None,
+        };
+        let pinned_len = pinned.as_ref().map_or(0, String::len);
+        (pinned, trim_for_send(prior, budget_tokens, pinned_len))
+    }
+
     /// Persist this turn into multi-turn memory keyed by `key` (this turn's id),
     /// so the next send — whose `context.task_id` equals `key` — recalls it.
     ///
@@ -1211,20 +1232,10 @@ impl TaskRunner {
         if let Some((cwd, _)) = &self.session_cwd {
             let dir = cwd.current();
             base.push_str(&WORKING_DIR_RULE.replace("{path}", &dir.to_string_lossy()));
+            // Names the pinned block right after the path it describes. The
+            // file contents themselves travel as the first user message
+            // ([`TaskRunner::pinned_and_prior`]), never in the system prompt.
             base.push_str(PROJECT_INSTRUCTIONS_RULE);
-            // Right after the path it describes, and before skills: the repo's
-            // own rules are the context the skill layer is chosen against.
-            // TEMPORARY (T4 bridge) — T6: replace with the pinned block
-            // (seed_history's `pinned`) capped by `pinned_cap_bytes`.
-            if let Some(block) = self.project_instructions.as_ref().and_then(|p| {
-                p.render(
-                    &dir,
-                    crate::project_instructions::MAX_PROJECT_INSTRUCTIONS_BYTES,
-                )
-            }) {
-                base.push_str("\n\n");
-                base.push_str(&block.text);
-            }
         }
         let Some(skills) = &self.skills else {
             return (base, vec![]);
@@ -1868,8 +1879,8 @@ impl TaskRunner {
 
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory (was: system + this message only).
-        // T6: render the pinned block and trim `prior` (trim_for_send) here.
-        let messages = seed_history(system, None, self.stored_prior(context_task_id), input);
+        let (pinned, prior) = self.pinned_and_prior(context_task_id);
+        let messages = seed_history(system, pinned, prior, input);
         let req = LlmRequest {
             messages,
             temperature: None,
@@ -2198,13 +2209,10 @@ impl TaskRunner {
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory; this turn's tool scaffolding is appended
         // below and stays ephemeral (never persisted into chat memory).
-        // T6: render the pinned block and trim `prior` (trim_for_send) here.
-        let mut history: Vec<RichMessage> = seed_history(
-            system_prompt,
-            None,
-            self.stored_prior(context_task_id),
-            input,
-        );
+        // The pinned block is rendered here, once, before the loop: every
+        // step resends this same list, so it rides at index 1 throughout.
+        let (pinned, prior) = self.pinned_and_prior(context_task_id);
+        let mut history: Vec<RichMessage> = seed_history(system_prompt, pinned, prior, input);
 
         // Rolling window of recent tool-call fingerprints for doom-loop
         // detection: (tool_name, hash(canonical args), hash(result content)).
@@ -7717,12 +7725,193 @@ mod tests {
         assert!(!sys.contains("## Project instructions"), "{sys}");
     }
 
-    /// File contents leave the system prompt once T6 removes the T4 bridge.
+    /// File contents travel in the pinned user message, not the system prompt.
     #[test]
-    #[ignore = "T6: the T4 bridge still renders file contents into the system prompt"]
     fn system_prompt_carries_no_project_file_contents() {
         let sys = prompt_with_project_agents_md();
         assert!(!sys.contains("PROJECT-RULE: run cargo fmt"), "{sys}");
+    }
+
+    // ── T6: the pinned block end to end (spec §3.1, §4.2, §7.3, §7.6) ──
+
+    /// Records every request's message list as sent, typed (not `Debug`).
+    struct PinnedRecordingLlm {
+        responses: Vec<crate::llm::LlmResponse>,
+        index: std::sync::atomic::AtomicUsize,
+        seen: std::sync::Mutex<Vec<Vec<crate::llm::RichMessage>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::llm::LlmClient for PinnedRecordingLlm {
+        async fn generate(
+            &self,
+            req: crate::llm::LlmRequest,
+        ) -> Result<crate::llm::LlmResponse, crate::llm::LlmError> {
+            self.seen.lock().unwrap().push(req.messages);
+            let idx = self.index.fetch_add(1, Ordering::Relaxed);
+            Ok(self.responses[idx % self.responses.len()].clone())
+        }
+        fn model_name(&self) -> &str {
+            "pinned-recording-stub"
+        }
+    }
+
+    /// `build` tool that overwrites `AGENTS.md` with `B` when it runs — the
+    /// seam for "a file edited mid-turn does not change later steps" (§3.1).
+    struct RewriteAgentsMdTool {
+        path: std::path::PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::tools::ToolExecutor for RewriteAgentsMdTool {
+        fn name(&self) -> &str {
+            "build"
+        }
+        fn def(&self) -> crate::llm::ToolDef {
+            crate::llm::ToolDef {
+                name: "build".into(),
+                description: "test tool that rewrites AGENTS.md".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: serde_json::Value,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            std::fs::write(&self.path, "RULE-B").unwrap();
+            Ok("rewrote".to_string().into())
+        }
+    }
+
+    /// A repo root with `AGENTS.md` = `RULE-A`, a runner whose session cwd and
+    /// read grant point at it, and the recorder it talks to.
+    fn pinned_runner(
+        responses: Vec<crate::llm::LlmResponse>,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Arc<PinnedRecordingLlm>,
+        Arc<TaskRunner>,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let agents = root.join("AGENTS.md");
+        std::fs::write(&agents, "RULE-A").unwrap();
+        let grant = root.to_string_lossy().into_owned();
+        let gate = crate::project_instructions::ProjectInstructions::new(
+            mur_common::agent::FilesystemEntitlement {
+                read: vec![grant.clone()],
+                ..Default::default()
+            },
+            crate::sandbox::launch_chain::LaunchChain::inert(),
+        );
+        let llm = Arc::new(PinnedRecordingLlm {
+            responses,
+            index: std::sync::atomic::AtomicUsize::new(0),
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let runner = Arc::new(
+            TaskRunner::with_llm(llm.clone())
+                .with_system_prompt(Some("BASE".into()))
+                .with_session_cwd(
+                    crate::tools::fs_policy::SessionCwd::new(root.clone()),
+                    vec![grant],
+                )
+                .with_project_instructions(gate)
+                .with_tools(vec![Arc::new(RewriteAgentsMdTool { path: agents })])
+                .with_tools_policy(vec![mur_common::agent::ToolRule {
+                    pattern: "build".into(),
+                    policy: mur_common::agent::ToolPolicy::Allow,
+                    risk: None,
+                }])
+                .with_pending_approvals(empty_pending_approvals())
+                .with_notifier(tokio::sync::mpsc::channel(16).0)
+                .with_hitl_timeout_secs(1),
+        );
+        (tmp, root, llm, runner)
+    }
+
+    fn is_pinned_block(m: &crate::llm::RichMessage) -> bool {
+        matches!(m, crate::llm::RichMessage::Text { role, content }
+            if role == "user" && content.starts_with("<project_instructions"))
+    }
+
+    /// Any non-system message carrying the block. The system prompt's rule
+    /// paragraph names `<project_instructions>` by design, so it is excluded.
+    fn mentions_block(m: &crate::llm::RichMessage) -> bool {
+        let system = matches!(m, crate::llm::RichMessage::Text { role, .. } if role == "system");
+        !system && format!("{m:?}").contains("<project_instructions")
+    }
+
+    #[tokio::test]
+    async fn pinned_block_is_never_stored_in_conversation_memory() {
+        let (_tmp, _root, llm, runner) = pinned_runner(vec![
+            build_tool_call_response("m-0"),
+            end_turn_response("done"),
+        ]);
+        let mut spec = loop_spec("first");
+        spec.context_task_id = Some("ctx-0".into());
+        let TaskOutcome::Completed(task) = runner.run_sync(spec).await else {
+            panic!("expected Completed");
+        };
+        // Guard that the block was really sent, so the assertion below means something.
+        assert!(llm.seen.lock().unwrap()[0].iter().any(is_pinned_block));
+        let stored = runner.stored_prior(Some(&task.id));
+        assert!(!stored.is_empty(), "the turn itself is remembered");
+        assert!(
+            !stored.iter().any(mentions_block),
+            "pinned block leaked into memory: {stored:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_tool_loop_step_sends_exactly_one_pinned_block_at_index_1() {
+        let (_tmp, _root, llm, runner) = pinned_runner(vec![
+            build_tool_call_response("s-0"),
+            build_tool_call_response("s-1"),
+            end_turn_response("done"),
+        ]);
+        let TaskOutcome::Completed(_) = runner.run_sync(loop_spec("go")).await else {
+            panic!("expected Completed");
+        };
+        let seen = llm.seen.lock().unwrap();
+        assert!(seen.len() >= 3, "three steps, got {}", seen.len());
+        for (step, msgs) in seen.iter().enumerate() {
+            let hits: Vec<usize> = msgs
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| mentions_block(m))
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(hits, vec![1], "step {step}: {msgs:?}");
+            assert!(is_pinned_block(&msgs[1]), "step {step}: {msgs:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn render_is_called_once_per_turn_not_per_step() {
+        let (_tmp, root, llm, runner) = pinned_runner(vec![
+            build_tool_call_response("r-0"),
+            end_turn_response("done"),
+        ]);
+        let TaskOutcome::Completed(_) = runner.run_sync(loop_spec("go")).await else {
+            panic!("expected Completed");
+        };
+        assert_eq!(
+            std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+            "RULE-B"
+        );
+        let seen = llm.seen.lock().unwrap();
+        assert!(seen.len() >= 2, "two steps, got {}", seen.len());
+        for (step, msgs) in seen.iter().enumerate() {
+            let block = format!("{:?}", msgs[1]);
+            assert!(block.contains("RULE-A"), "step {step}: {block}");
+            assert!(
+                !block.contains("RULE-B"),
+                "step {step} re-rendered: {block}"
+            );
+        }
     }
 
     #[test]
