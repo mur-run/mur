@@ -345,6 +345,15 @@ group, so `cargo`/test binaries/pipeline stages die with the shell).
 Before this, a build or test suite that ran past its timeout was killed
 mid-way and reported as a failure with no way to recover the work.
 
+An agent reads the project's own instruction files. In every directory from
+the repo root down to the working directory, the first of `AGENTS.md`,
+`AGENT.md` or `CLAUDE.md` is loaded, root first, so a deeper file reads as the
+more specific rule. They reach the model as project context in the first user
+message, not as operator rules. They cannot widen permissions: a file the
+agent could not `read_file` itself is left out. The total is capped at 32 KiB
+or half the conversation-history budget, whichever is smaller, and anything
+cut is named rather than silently dropped.
+
 ### 🧠 Learn — and forget — like a teammate
 
 ```mermaid

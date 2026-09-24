@@ -73,37 +73,9 @@ impl ReadFileTool {
     /// canonicalization. `deny` always wins; a read is allowed when the path
     /// falls under any `read` OR `write` grant (write implies read-back).
     fn check_entitlement(&self, canonical: &Path) -> Result<(), ToolError> {
-        // Before the lists, and unconditionally: reading another agent's
-        // signing key is enough to forge its signed events, and no entitlement
-        // may authorise that.
-        if let Some(reason) = self.chain.protects_read(canonical) {
-            return Err(ToolError::Execution(format!(
-                "path is part of MUR's launch chain and can never be read: {} ({reason})",
-                canonical.display()
-            )));
-        }
-        if crate::tools::fs_policy::under_any_read_deny(
-            &self.fs.deny,
-            canonical,
-            self.chain.agent_self_home(),
-        ) {
-            return Err(ToolError::Execution(format!(
-                "path denied by entitlement: {}",
-                canonical.display()
-            )));
-        }
-        // `under_any_or_worktree` tries the literal grants first, then one
-        // derived hop for a worktree of a granted checkout (#004). Write
-        // implies read-back, so both lists are consulted.
-        if crate::tools::fs_policy::under_any_or_worktree(&self.fs.read, canonical)
-            || crate::tools::fs_policy::under_any_or_worktree(&self.fs.write, canonical)
-        {
-            return Ok(());
-        }
-        Err(ToolError::Execution(format!(
-            "path not entitled: {} (grant it via `mur agent perm allow-read`)",
-            canonical.display()
-        )))
+        // Shared with the project-instruction loader, so what the model can
+        // be shown and what it can read for itself are one rule.
+        crate::tools::fs_policy::check_read_entitlement(&self.fs, canonical, &self.chain)
     }
 }
 
