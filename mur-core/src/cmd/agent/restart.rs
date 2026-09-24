@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::fs::OpenOptions;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -256,7 +256,7 @@ fn report_unexamined(agents_dir: &Path) {
     // Same tri-state as the restart path: a unit we cannot stat is not
     // evidence the agent was stopped on purpose.
     let (stopped, should_be_running) = unexamined(agents_dir, &|n| {
-        has_service_or_assume(n, service_unit_path(n).as_deref())
+        super::service::installed_service(n).is_some()
     });
     if !stopped.is_empty() {
         println!(
@@ -332,7 +332,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
     // Whether a launchd/systemd service unit is installed for this agent —
     // computed before signalling so we know, once the old pid is dead,
     // whether to expect an automatic respawn or do it ourselves.
-    let has_service = has_service_or_assume(name, service_unit_path(name).as_deref());
+    let has_service = super::service::installed_service(name).is_some();
 
     // Load stop_timeout_secs from the agent's profile (mirrors cmd_stop).
     // The SIGKILL fallback must wait at least this long so the runtime's
@@ -588,62 +588,6 @@ pub(super) fn kickstart_service(_name: &str) -> Result<bool> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────
-
-/// Whether a service-unit file exists at `path`. Pure and OS-agnostic —
-/// callers build the path with [`service_unit_path`], which is the only
-/// cfg-gated piece.
-///
-/// `Err` means "could not tell" (EPERM under a sandbox, a vanished parent,
-/// …) and is deliberately NOT folded into `false`: `Path::exists()` did
-/// exactly that, and a supervised agent got a direct respawn racing
-/// launchd's KeepAlive for the same lock.
-fn service_unit_exists(path: &Path) -> std::io::Result<bool> {
-    path.try_exists()
-}
-
-/// Resolve "is this agent service-managed?" for the restart path.
-///
-/// An unknown answer is treated as `true`: the confirm loop then waits for
-/// the service manager, kicks it if nothing respawns, and only falls back to
-/// a direct respawn when the kick itself fails — whereas guessing `false`
-/// spawns a second runtime next to one launchd is already restarting.
-fn has_service_or_assume(name: &str, path: Option<&Path>) -> bool {
-    let Some(path) = path else {
-        return false;
-    };
-    match service_unit_exists(path) {
-        Ok(found) => found,
-        Err(e) => {
-            eprintln!(
-                "warning: agent '{name}': cannot check service unit {} ({e}); assuming it is installed",
-                path.display()
-            );
-            true
-        }
-    }
-}
-
-/// Build the expected service-unit path for `name`, mirroring the exact
-/// paths `cmd_install_service` writes in `service.rs`:
-///   - macOS: `~/Library/LaunchAgents/run.mur.agent.<name>.plist`
-///   - Linux: `$XDG_CONFIG_HOME/systemd/user/mur-agent-<name>.service`
-///
-/// Returns `None` when the home/config dir can't be resolved, or on
-/// unsupported platforms (mirrors `install-service`'s platform gate).
-#[cfg(target_os = "macos")]
-fn service_unit_path(name: &str) -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join(format!("Library/LaunchAgents/run.mur.agent.{name}.plist")))
-}
-
-#[cfg(target_os = "linux")]
-fn service_unit_path(name: &str) -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join(format!("systemd/user/mur-agent-{name}.service")))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn service_unit_path(_name: &str) -> Option<PathBuf> {
-    None
-}
 
 fn read_lock(path: &Path) -> std::io::Result<Option<LockFile>> {
     mur_common::lock_file::read(path)
