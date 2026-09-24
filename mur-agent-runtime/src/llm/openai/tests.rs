@@ -381,3 +381,33 @@ fn replayed_blank_text_never_reaches_the_wire() {
     assert_eq!(out[0]["content"], crate::llm::BLANK_USER_TURN);
     assert_eq!(out[1]["content"], "continue");
 }
+
+// Characterization (spec §7.4): pins existing behaviour the project-instructions
+// design depends on; passes without any code change, by design.
+// Codex delegates to `OpenAiClient` (`codex.rs:28,39`), so this test covers Codex.
+#[test]
+fn pinned_block_is_standalone_user_at_index_1_before_prior_turns() {
+    let t = |role: &str, content: &str| RichMessage::Text {
+        role: role.into(),
+        content: content.into(),
+    };
+    let msgs = vec![
+        t("system", "sys"),
+        t(
+            "user",
+            "<project_instructions>\nbe terse\n</project_instructions>",
+        ),
+        t("user", "u1"),
+        t("agent", "a1"),
+        t("user", "current"),
+    ];
+    let out = rich_messages_to_openai(&msgs);
+    assert_eq!(out[1]["role"], "user");
+    assert!(
+        out[1]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("<project_instructions")
+    );
+    assert_eq!(out[2]["content"], "u1");
+}
