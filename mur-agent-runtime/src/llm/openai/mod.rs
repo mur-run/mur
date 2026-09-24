@@ -232,6 +232,16 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
                 } else {
                     role.as_str()
                 };
+                if content.trim().is_empty() && r != "system" {
+                    // An image-only paste is remembered as an empty user text
+                    // (the image is not stored). Never replay empty content:
+                    // a blank user turn keeps its slot with the shared marker,
+                    // a blank assistant turn carries nothing and is dropped.
+                    if r != "assistant" {
+                        result.push(json!({"role": r, "content": crate::llm::BLANK_USER_TURN}));
+                    }
+                    continue;
+                }
                 result.push(json!({"role": r, "content": content}));
             }
             RichMessage::ToolUse { text, calls } => {
@@ -248,7 +258,7 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
                     .collect();
                 let mut msg = json!({"role": "assistant", "tool_calls": tool_calls});
                 if let Some(t) = text
-                    && !t.is_empty()
+                    && !t.trim().is_empty()
                 {
                     msg["content"] = json!(t);
                 }
@@ -292,7 +302,7 @@ fn rich_messages_to_openai(msgs: &[RichMessage]) -> Vec<serde_json::Value> {
                     "type": "image_url",
                     "image_url": { "url": format!("data:{media_type};base64,{data}") },
                 })];
-                if !text.is_empty() {
+                if !text.trim().is_empty() {
                     parts.push(json!({"type": "text", "text": text}));
                 }
                 result.push(json!({"role": r, "content": parts}));

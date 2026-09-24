@@ -350,3 +350,34 @@ fn cached_prompt_tokens_reads_openai_and_deepseek_shapes() {
         None
     );
 }
+
+/// An image-only paste is remembered as an empty user text; replaying it must
+/// never put an empty `content` on the wire. A blank user turn becomes the
+/// shared marker; a blank assistant turn is dropped.
+#[test]
+fn replayed_blank_text_never_reaches_the_wire() {
+    let msgs = vec![
+        RichMessage::Text {
+            role: "user".into(),
+            content: "".into(),
+        },
+        RichMessage::Text {
+            role: "agent".into(),
+            content: "   ".into(),
+        },
+        RichMessage::Text {
+            role: "user".into(),
+            content: "continue".into(),
+        },
+    ];
+    let out = rich_messages_to_openai(&msgs);
+    for m in &out {
+        if let Some(c) = m["content"].as_str() {
+            assert!(!c.trim().is_empty(), "empty string content: {m}");
+        }
+    }
+    assert_eq!(out.len(), 2, "blank assistant turn is dropped: {out:?}");
+    assert_eq!(out[0]["role"], "user");
+    assert_eq!(out[0]["content"], crate::llm::BLANK_USER_TURN);
+    assert_eq!(out[1]["content"], "continue");
+}

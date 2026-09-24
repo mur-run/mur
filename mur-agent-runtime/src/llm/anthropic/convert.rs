@@ -4,6 +4,8 @@ use serde_json::json;
 
 use crate::llm::RichMessage;
 
+pub(super) use crate::llm::BLANK_USER_TURN;
+
 /// Convert `RichMessage` list to Anthropic wire format.
 /// Returns `(system_text, conversation_messages, agent_text_for_stream)`.
 /// Agent_text is the last assistant text for streaming (unused in non-streaming).
@@ -40,6 +42,17 @@ pub(super) fn rich_messages_to_anthropic(
             RichMessage::Text { role, content } => {
                 if role == "system" {
                     system_chunks.push(content.clone());
+                } else if content.trim().is_empty() {
+                    // An image-only paste is remembered as an empty user text
+                    // (the image itself is not stored). Anthropic 400s on an
+                    // empty text block, which wedges every later turn of the
+                    // channel. A blank user turn keeps its slot with a marker
+                    // (history must still open on `user`); a blank assistant
+                    // turn carries nothing and is dropped.
+                    if role != "agent" && role != "assistant" {
+                        push_coalesced(&mut convo, role.as_str(), json!(BLANK_USER_TURN));
+                    }
+                    continue;
                 } else {
                     let r = if role == "agent" {
                         "assistant"
@@ -52,7 +65,7 @@ pub(super) fn rich_messages_to_anthropic(
             RichMessage::ToolUse { text, calls } => {
                 let mut parts: Vec<serde_json::Value> = Vec::new();
                 if let Some(t) = text
-                    && !t.is_empty()
+                    && !t.trim().is_empty()
                 {
                     parts.push(json!({"type": "text", "text": t}));
                 }
@@ -121,7 +134,7 @@ pub(super) fn rich_messages_to_anthropic(
                     "type": "image",
                     "source": {"type": "base64", "media_type": media_type, "data": data},
                 })];
-                if !text.is_empty() {
+                if !text.trim().is_empty() {
                     parts.push(json!({"type": "text", "text": text}));
                 }
                 push_coalesced(&mut convo, r, json!(parts));

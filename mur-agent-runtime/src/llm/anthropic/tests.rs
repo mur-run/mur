@@ -12,6 +12,7 @@ fn the_self_built_client_has_no_response_clock() {
     assert!(!printed.contains("timeout: Some"), "{printed}");
 }
 
+use super::convert::BLANK_USER_TURN;
 use super::*;
 use crate::llm::{RichMessage, ToolCallResult, ToolResultEntry};
 use serde_json::json;
@@ -1023,4 +1024,90 @@ fn empty_stream_omits_block_types_when_there_were_none() {
     let msg = empty_message(acc);
     assert!(!msg.contains("block_types="), "{msg}");
     assert!(!msg.contains("other_deltas="), "{msg}");
+}
+
+/// An image-only paste is remembered as an empty user text; replaying it
+/// (alone, or coalesced with the turn ledger) must never put an empty text
+/// block on the wire — Anthropic 400s with "text content blocks must be
+/// non-empty" and the whole channel is wedged from then on.
+#[test]
+fn replayed_empty_user_text_never_reaches_the_wire() {
+    let msgs = vec![
+        RichMessage::Text {
+            role: "user".into(),
+            content: "first".into(),
+        },
+        RichMessage::Text {
+            role: "agent".into(),
+            content: "ok".into(),
+        },
+        RichMessage::Text {
+            role: "user".into(),
+            content: String::new(),
+        },
+        RichMessage::Text {
+            role: "agent".into(),
+            content: "saw it".into(),
+        },
+        RichMessage::Text {
+            role: "user".into(),
+            content: "   ".into(),
+        },
+        RichMessage::Text {
+            role: "user".into(),
+            content: "continue".into(),
+        },
+    ];
+    let (_, convo, _) = rich_messages_to_anthropic(&msgs);
+    for m in &convo {
+        match &m["content"] {
+            serde_json::Value::String(s) => {
+                assert!(!s.trim().is_empty(), "empty string content: {m}")
+            }
+            serde_json::Value::Array(a) => {
+                assert!(!a.is_empty(), "empty content array: {m}");
+                for b in a {
+                    if b["type"] == "text" {
+                        assert!(
+                            !b["text"].as_str().unwrap_or("").trim().is_empty(),
+                            "empty text block: {m}"
+                        );
+                    }
+                }
+            }
+            other => panic!("unexpected content {other}"),
+        }
+    }
+    // Roles still alternate and the real text survives.
+    let roles: Vec<_> = convo
+        .iter()
+        .map(|m| m["role"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(roles, ["user", "assistant", "user", "assistant", "user"]);
+}
+
+#[test]
+fn history_opening_on_a_blank_user_turn_still_opens_on_user() {
+    let msgs = vec![
+        RichMessage::Text {
+            role: "user".into(),
+            content: String::new(),
+        },
+        RichMessage::Text {
+            role: "agent".into(),
+            content: "saw it".into(),
+        },
+        RichMessage::Text {
+            role: "agent".into(),
+            content: "".into(),
+        },
+        RichMessage::Text {
+            role: "user".into(),
+            content: "continue".into(),
+        },
+    ];
+    let (_, convo, _) = rich_messages_to_anthropic(&msgs);
+    assert_eq!(convo[0]["role"], "user");
+    assert_eq!(convo[0]["content"], BLANK_USER_TURN);
+    assert_eq!(convo.len(), 3);
 }
