@@ -526,6 +526,20 @@ mod tests {
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The fake mur lives under $TMPDIR. An exec sandbox (e.g. the MUR
+        // agent runtime) refuses to exec anything there, which would fail
+        // this test for a reason unrelated to fleet_run. Probe with a no-op
+        // script in the same directory and skip only when exec itself is denied.
+        let probe = home.join("exec-probe");
+        std::fs::write(&probe, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !std::process::Command::new(&probe)
+            .status()
+            .is_ok_and(|s| s.success())
+        {
+            eprintln!("skipping: this sandbox cannot exec under $TMPDIR");
+            return;
+        }
         let _env = mur_common::test_env::EnvGuard::set([("MUR_BIN", &fake)]);
         let tool = FleetRunTool {
             mur_home: home.to_path_buf(),
