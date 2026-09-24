@@ -15,6 +15,15 @@ fn to_ollama_messages(messages: &[RichMessage]) -> Vec<serde_json::Value> {
     messages
         .iter()
         .filter_map(|m| match m {
+            // An image-only paste is remembered as an empty user text (the
+            // image is not stored): a blank user turn keeps its slot with the
+            // shared marker, a blank assistant turn is dropped.
+            RichMessage::Text { role, content }
+                if content.trim().is_empty() && role != "system" =>
+            {
+                (role != "agent" && role != "assistant")
+                    .then(|| json!({"role": role, "content": super::BLANK_USER_TURN}))
+            }
             RichMessage::Text { role, content } => Some(json!({"role": role, "content": content})),
             RichMessage::ImageText {
                 role, text, data, ..
@@ -356,6 +365,26 @@ mod tests {
         assert_eq!(out[0]["role"], "user");
         assert_eq!(out[0]["content"], "what is this?");
         assert_eq!(out[0]["images"], json!(["QkFTRTY0"]));
+    }
+
+    #[test]
+    fn to_ollama_messages_never_replays_blank_text() {
+        // An image-only paste is remembered as an empty user text. A blank
+        // user turn becomes the shared marker; a blank assistant is dropped.
+        let msgs = vec![
+            RichMessage::Text {
+                role: "user".into(),
+                content: "".into(),
+            },
+            RichMessage::Text {
+                role: "agent".into(),
+                content: " \n".into(),
+            },
+        ];
+        let out = to_ollama_messages(&msgs);
+        assert_eq!(out.len(), 1, "blank assistant turn is dropped: {out:?}");
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"], crate::llm::BLANK_USER_TURN);
     }
 
     #[test]

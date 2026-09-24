@@ -4,9 +4,7 @@ use serde_json::json;
 
 use crate::llm::RichMessage;
 
-/// Stand-in for a user turn whose text was empty (an image-only paste; the
-/// image is not kept in history). Never an empty text block — the API 400s.
-pub(super) const BLANK_USER_TURN: &str = "(no text \u{2014} an image was attached)";
+pub(super) use crate::llm::BLANK_USER_TURN;
 
 /// Convert `RichMessage` list to Anthropic wire format.
 /// Returns `(system_text, conversation_messages, agent_text_for_stream)`.
