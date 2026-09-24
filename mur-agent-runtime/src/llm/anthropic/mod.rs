@@ -442,6 +442,11 @@ struct StreamDiag {
     message_stop: bool,
     /// `content_block_start` events seen, of any type.
     blocks: usize,
+    /// `content_block.type` of each block, in order (`?` if missing), so an
+    /// empty reply with `blocks>0` says what the tokens went into.
+    block_types: Vec<String>,
+    /// Distinct `delta.type`s that no arm handles and were dropped.
+    other_deltas: Vec<String>,
     thinking_chars: usize,
     /// An in-band `{"type":"error"}` event: `<type>: <message>`.
     error: Option<String>,
@@ -469,6 +474,9 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
         Some("content_block_start") => {
             acc.diag.blocks += 1;
             let cb = &v["content_block"];
+            acc.diag
+                .block_types
+                .push(cb["type"].as_str().unwrap_or("?").to_string());
             if cb["type"].as_str() == Some("tool_use") {
                 acc.cur_tool = Some((
                     cb["id"].as_str().unwrap_or("").to_string(),
@@ -517,7 +525,13 @@ fn apply_sse_event(acc: &mut StreamAccum, v: &serde_json::Value) -> Option<super
                     }
                     None
                 }
-                _ => None,
+                other => {
+                    let t = other.unwrap_or("?");
+                    if !acc.diag.other_deltas.iter().any(|x| x == t) {
+                        acc.diag.other_deltas.push(t.to_string());
+                    }
+                    None
+                }
             }
         }
         Some("content_block_stop") => {
@@ -580,6 +594,14 @@ fn empty_stream_error(acc: &StreamAccum) -> String {
         d.blocks,
         d.thinking_chars,
     );
+    if !d.block_types.is_empty() {
+        msg.push_str(", block_types=");
+        msg.push_str(&d.block_types.join(","));
+    }
+    if !d.other_deltas.is_empty() {
+        msg.push_str(", other_deltas=");
+        msg.push_str(&d.other_deltas.join(","));
+    }
     if let Some(e) = &d.error {
         msg.push_str(", error=");
         msg.push_str(e);
