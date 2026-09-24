@@ -46,7 +46,10 @@ pub async fn replay(name: &str, profile: Option<&str>, heal: bool, dry_run: bool
         "browser replay started"
     );
     // `--heal` still bails above until write-back lands (plan Task 5.7).
-    let opts = mur_browser::replay::ReplayOptions { heal };
+    let opts = mur_browser::replay::ReplayOptions {
+        heal,
+        ..Default::default()
+    };
     let report = if dry_run {
         mur_browser::replay::dry_run(&run, &allow)?
     } else {
@@ -90,8 +93,12 @@ pub async fn replay(name: &str, profile: Option<&str>, heal: bool, dry_run: bool
         return Ok(());
     }
     println!("{}", report.summary());
+    // The report above is already on disk, so a red run keeps its evidence.
     if report.failed > 0 {
         bail!("replay {name:?} failed");
+    }
+    if let Some(over) = &report.budget_exceeded {
+        bail!("replay {name:?}: {over}");
     }
     Ok(())
 }

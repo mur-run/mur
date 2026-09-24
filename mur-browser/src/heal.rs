@@ -2,7 +2,7 @@
 //!
 //! Design: `docs/superpowers/specs/2026-09-24-browser-replay-heal-design.md`.
 //! This module holds the heal budget (D4) and the offline node matcher (D1);
-//! verification and write-back land in later steps of plan Task 5.
+//! verification lives in `replay`, write-back in the `mur-core` CLI.
 
 use std::collections::BTreeSet;
 
@@ -38,6 +38,40 @@ pub fn allowed_heals(total: u32, max_ratio: f32) -> u32 {
 /// Whether `healed` element steps exceed the budget for `total` at `max_ratio`.
 pub fn budget_exceeded(healed: u32, total: u32, max_ratio: f32) -> bool {
     healed > allowed_heals(total, max_ratio)
+}
+
+/// A `mode: test` run healed more element steps than its budget allows (D4).
+/// The run's verdict is red and nothing is written back.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BudgetExceeded {
+    /// Heals that were not rolled back.
+    pub healed: u32,
+    /// Element steps in the run (the budget's denominator).
+    pub total: u32,
+    pub allowed: u32,
+    pub max_ratio: f32,
+}
+
+impl BudgetExceeded {
+    /// `Some` when `healed` goes over the budget for `total` at `max_ratio`.
+    pub fn check(healed: u32, total: u32, max_ratio: f32) -> Option<Self> {
+        budget_exceeded(healed, total, max_ratio).then(|| Self {
+            healed,
+            total,
+            allowed: allowed_heals(total, max_ratio),
+            max_ratio,
+        })
+    }
+}
+
+impl std::fmt::Display for BudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "heal rate too high: {} of {} element steps healed (allowed {} at --max-heal-ratio {}); the recording is stale — re-record it",
+            self.healed, self.total, self.allowed, self.max_ratio
+        )
+    }
 }
 
 /// An "element step" (spec 名詞): it resolves a locator and hands the ref to

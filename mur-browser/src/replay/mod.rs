@@ -15,7 +15,7 @@
 
 use crate::{
     guard,
-    heal::{self, HealEvent, HealStatus},
+    heal::{self, BudgetExceeded, HealEvent, HealStatus},
     locator::{self, Locator},
     recorder::{Action, Mode, Run, Step, call_for},
 };
@@ -62,6 +62,10 @@ pub struct ReplayReport {
     /// Every heal attempted this run, with its D3 status.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub heals: Vec<HealEvent>,
+    /// Set when a `mode: test` run healed past its budget (D4): red, and
+    /// the CLI exits non-zero after writing this report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_exceeded: Option<BudgetExceeded>,
 }
 
 impl ReplayReport {
@@ -75,12 +79,13 @@ impl ReplayReport {
             healed: count(StepStatus::Healed),
             steps,
             heals,
+            budget_exceeded: None,
         }
     }
 
     /// Green / yellow / red, per spec §6.5.
     pub fn verdict(&self) -> &'static str {
-        if self.failed > 0 {
+        if self.failed > 0 || self.budget_exceeded.is_some() {
             "red"
         } else if self.healed > 0 {
             "yellow"
@@ -134,10 +139,26 @@ pub fn dry_run(run: &Run, allow: &[String]) -> Result<ReplayReport> {
 }
 
 /// Knobs for [`replay_with`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct ReplayOptions {
     /// Try an offline heal when every locator of an element step misses.
     pub heal: bool,
+    /// Heal budget as a share of element steps; enforced in `mode: test` only.
+    pub max_heal_ratio: f32,
+}
+
+impl ReplayOptions {
+    /// Heal off, default budget.
+    pub const DEFAULT: Self = Self {
+        heal: false,
+        max_heal_ratio: heal::DEFAULT_HEAL_RATIO,
+    };
+}
+
+impl Default for ReplayOptions {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 /// Sends one MCP `tools/call` and returns the JSON-RPC `result` object.
@@ -157,6 +178,10 @@ pub trait ToolCaller {
 /// it; a failure, a second heal, or any failure in between rolls it back,
 /// marks the healed step `Failed`, and stops the run. Still `Pending` at the
 /// end → `Unverified`.
+///
+/// In `mode: test`, heals that were not rolled back are held to
+/// `opts.max_heal_ratio` of the element steps; going over still returns
+/// `Ok`, with [`ReplayReport::budget_exceeded`] set (D4).
 pub async fn replay_with<C: ToolCaller + Send>(
     run: &Run,
     allow: &[String],
@@ -263,7 +288,36 @@ pub async fn replay_with<C: ToolCaller + Send>(
         heals[h].status = HealStatus::Unverified;
         log_heal(&heals[h]);
     }
-    Ok(ReplayReport::new(run, outcomes, heals))
+    let mut report = ReplayReport::new(run, outcomes, heals);
+    if run.mode == Mode::Test {
+        report.budget_exceeded = check_budget(run, &report.heals, opts.max_heal_ratio);
+    }
+    Ok(report)
+}
+
+/// D4: denominator is element steps; rolled-back heals already failed their
+/// step, so they do not count against the budget.
+fn check_budget(run: &Run, heals: &[HealEvent], max_ratio: f32) -> Option<BudgetExceeded> {
+    let total = run
+        .steps
+        .iter()
+        .filter(|s| heal::is_element_step(s.action))
+        .count() as u32;
+    let healed = heals
+        .iter()
+        .filter(|h| h.status != HealStatus::RolledBack)
+        .count() as u32;
+    let over = BudgetExceeded::check(healed, total, max_ratio);
+    if let Some(b) = &over {
+        tracing::info!(
+            healed = b.healed,
+            total = b.total,
+            allowed = b.allowed,
+            max_ratio = b.max_ratio,
+            "heal budget exceeded"
+        );
+    }
+    over
 }
 
 /// Undo a pending heal: the event is `RolledBack` and its step `Failed`.

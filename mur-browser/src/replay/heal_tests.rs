@@ -44,14 +44,21 @@ impl ToolCaller for Page {
 
 const SUBMIT_INTENT: &str = "點擊送出按鈕";
 
-const HEAL: ReplayOptions = ReplayOptions { heal: true };
+const HEAL: ReplayOptions = ReplayOptions {
+    heal: true,
+    ..ReplayOptions::DEFAULT
+};
 
 /// The order page after a copy change: 送出 → 送出訂單, 取消 → 取消訂單.
 const ORDER_PAGE: &str = "- button \"送出訂單\" [ref=e2]\n- button \"取消訂單\" [ref=e3]\n- button \"返回\" [ref=e4]\n- heading \"訂單\" [ref=e5]";
 
 fn steps(body: &str) -> Run {
+    steps_in("test", body)
+}
+
+fn steps_in(mode: &str, body: &str) -> Run {
     from_yaml(&format!(
-        "name: order\nmode: test\nrecorded_at: 2026-09-24T00:00:00Z\nsteps:\n{body}"
+        "name: order\nmode: {mode}\nrecorded_at: 2026-09-24T00:00:00Z\nsteps:\n{body}"
     ))
     .unwrap()
 }
@@ -233,4 +240,92 @@ async fn assert_text_is_never_healed() {
     let report = replay(&run, &mut page).await;
     assert_eq!(statuses(&report), [StepStatus::Failed]);
     assert!(report.heals.is_empty());
+}
+
+/// Two verified heals over four element steps: allowed max(1, ⌊4 × 0.2⌋) = 1.
+fn two_heals_in_four() -> String {
+    format!(
+        "{}{}{}{}",
+        click(1, SUBMIT_INTENT, r#"'role:button[name="送出"]'"#),
+        click(2, "點擊返回", r#"'role:button[name="返回"]'"#),
+        click(3, "點擊取消按鈕", r#"'role:button[name="取消"]'"#),
+        click(4, "點擊返回", r#"'role:button[name="返回"]'"#),
+    )
+}
+
+#[tokio::test]
+async fn test_mode_over_budget_is_red_but_still_ok() {
+    let run = steps(&two_heals_in_four());
+    let mut page = Page::new(ORDER_PAGE);
+    let report = replay(&run, &mut page).await;
+
+    assert_eq!(report.failed, 0);
+    assert!(
+        report
+            .heals
+            .iter()
+            .all(|h| h.status == HealStatus::Verified),
+        "{:?}",
+        report.heals
+    );
+    let over = report.budget_exceeded.expect("over budget");
+    assert_eq!((over.healed, over.total, over.allowed), (2, 4, 1));
+    assert_eq!(report.verdict(), "red");
+    assert!(report.summary().starts_with("red "), "{}", report.summary());
+    assert_eq!(
+        over.to_string(),
+        "heal rate too high: 2 of 4 element steps healed (allowed 1 at --max-heal-ratio 0.2); the recording is stale — re-record it"
+    );
+}
+
+#[tokio::test]
+async fn automation_mode_ignores_the_budget() {
+    let run = steps_in("automation", &two_heals_in_four());
+    let mut page = Page::new(ORDER_PAGE);
+    let report = replay(&run, &mut page).await;
+    assert_eq!(report.heals.len(), 2);
+    assert!(report.budget_exceeded.is_none());
+    assert_eq!(report.verdict(), "yellow");
+}
+
+#[tokio::test]
+async fn test_mode_within_raised_ratio_is_yellow() {
+    let run = steps(&two_heals_in_four());
+    let mut page = Page::new(ORDER_PAGE);
+    let opts = ReplayOptions {
+        max_heal_ratio: 0.5,
+        ..HEAL
+    };
+    let report = replay_with(&run, &[], opts, &mut page).await.unwrap();
+    assert!(report.budget_exceeded.is_none());
+    assert_eq!(report.verdict(), "yellow");
+}
+
+#[tokio::test]
+async fn rolled_back_heals_do_not_count_against_the_budget() {
+    // Step 1 heals, step 2 needs a heal too → both rolled back, run stops.
+    let run = steps(&format!(
+        "{}{}",
+        click(1, SUBMIT_INTENT, r#"'role:button[name="送出"]'"#),
+        click(2, "點擊取消按鈕", r#"'role:button[name="取消"]'"#),
+    ));
+    let mut page = Page::new(ORDER_PAGE);
+    let report = replay(&run, &mut page).await;
+    assert!(report.failed > 0);
+    assert!(report.budget_exceeded.is_none());
+}
+
+#[tokio::test]
+async fn assert_text_steps_are_not_in_the_budget_denominator() {
+    // 4 element steps + 6 asserts: counting all 10 steps would allow 2 heals.
+    let asserts: String = (5..=10)
+        .map(|n| {
+            format!("- step: {n}\n  intent: 確認標題\n  action: assert_text\n  value: 訂單\n  locators: ['text:訂單']\n")
+        })
+        .collect();
+    let run = steps(&format!("{}{asserts}", two_heals_in_four()));
+    let mut page = Page::new(ORDER_PAGE);
+    let report = replay(&run, &mut page).await;
+    let over = report.budget_exceeded.expect("over budget");
+    assert_eq!((over.total, over.allowed), (4, 1));
 }
