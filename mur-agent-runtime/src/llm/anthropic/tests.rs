@@ -985,3 +985,42 @@ fn empty_stream_keeps_the_raw_stop_reason_and_thinking() {
     assert!(msg.contains("thinking_chars=4"), "{msg}");
     assert!(msg.contains("blocks=1"), "{msg}");
 }
+
+#[test]
+fn empty_stream_names_block_types_and_unhandled_deltas() {
+    // A block that carries no text or thinking still costs output tokens;
+    // the message must say what kind of block it was (blocks=1 mystery).
+    let mut acc = StreamAccum::default();
+    feed(
+        &mut acc,
+        &[
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"xyz"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"def"}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":23}}),
+            json!({"type":"message_stop"}),
+        ],
+    );
+    let msg = empty_message(acc);
+    assert!(msg.starts_with("empty streamed response ("), "{msg}");
+    assert!(msg.contains("blocks=1"), "{msg}");
+    assert!(msg.contains("block_types=redacted_thinking"), "{msg}");
+    // Repeated delta types are listed once.
+    assert!(msg.contains("other_deltas=signature_delta)"), "{msg}");
+}
+
+#[test]
+fn empty_stream_omits_block_types_when_there_were_none() {
+    let mut acc = StreamAccum::default();
+    feed(
+        &mut acc,
+        &[
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}),
+            json!({"type":"message_stop"}),
+        ],
+    );
+    let msg = empty_message(acc);
+    assert!(!msg.contains("block_types="), "{msg}");
+    assert!(!msg.contains("other_deltas="), "{msg}");
+}
