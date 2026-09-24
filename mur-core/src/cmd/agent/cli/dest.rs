@@ -607,13 +607,29 @@ pub(super) fn grant_for(
             return Grant::Scoped(scope);
         }
         if !mur_common::hitl::tier_may_be_granted(tier) {
-            return Grant::Refused("this command writes or leaves the machine");
+            return Grant::Refused(refusal_reason(tier));
         }
     }
     if mur_common::hitl::tier_may_be_granted(tier) {
         return Grant::Tool(tool_name.to_string());
     }
     Grant::Refused("this tier always asks")
+}
+
+/// Why a tier above the ceiling cannot be remembered, in words that name
+/// that tier. It used to be one sentence for all four — "this command writes
+/// or leaves the machine" — which told the operator a `sudo` could leak data
+/// and a `git push` could delete it, and so told them nothing.
+fn refusal_reason(tier: mur_common::hitl::RiskTier) -> &'static str {
+    use mur_common::hitl::RiskTier;
+    match tier {
+        RiskTier::NetworkEgress => "this command sends data off this machine",
+        RiskTier::Destructive => "this command can delete or overwrite data",
+        RiskTier::Privileged => "this command runs with elevated privileges",
+        RiskTier::Spend => "this command can spend money",
+        // Unreachable behind `tier_may_be_granted`, but a wording must exist.
+        RiskTier::Read | RiskTier::Write => "this tier always asks",
+    }
 }
 
 #[cfg(test)]
@@ -693,6 +709,15 @@ mod tests {
                     "should have been covered by the first answer: {cmd}"
                 );
             }
+        }
+
+        /// The refusal names the tier it refused, not a catch-all.
+        #[test]
+        fn a_refusal_names_its_own_tier() {
+            let why = |cmd: &str, t| grant_for("bash", Some(&bash(cmd)), t).label();
+            assert!(why("git push", RiskTier::NetworkEgress).contains("sends data off"));
+            assert!(why("rm -rf x", RiskTier::Destructive).contains("delete or overwrite"));
+            assert!(why("sudo ls", RiskTier::Privileged).contains("elevated"));
         }
 
         /// A tool with no command still falls back to the old tool-name grant,
