@@ -80,6 +80,7 @@ fn one_of_each() -> Vec<SlashCmd> {
         SlashCmd::Panel(vec![]),
         SlashCmd::Open,
         SlashCmd::DeepResearch(vec![]),
+        SlashCmd::Search(vec![]),
         SlashCmd::Monitor(vec![]),
         SlashCmd::Model(None),
         SlashCmd::Effort {
