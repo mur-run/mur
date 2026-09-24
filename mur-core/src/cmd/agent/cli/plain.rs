@@ -95,6 +95,14 @@ pub(super) fn run_plain(
                 } else if within_ceiling && session_allow.borrow().contains(tool) {
                     eprintln!("  [auto-approved {tool} (session allow)]");
                     (true, "auto")
+                } else if let Some(k) = dest::grant_for(tool, hitl.get("tool_input"), tier)
+                    .key()
+                    .filter(|k| session_allow.borrow().contains(k))
+                {
+                    // Same key the TUI row stores: a scope the operator
+                    // granted with [a], never a tier (`dest::grant_for`).
+                    eprintln!("  [auto-approved {tool} (session grant: {k})]");
+                    (true, "auto")
                 } else if interactive {
                     // Outer loop releases stdin lock between reads (Task 2), so
                     // we can safely acquire a fresh lock here to prompt the user.
@@ -112,7 +120,22 @@ pub(super) fn run_plain(
                         // [a] now means what it says. It used to approve just
                         // this one call while the prompt promised "always".
                         Some('a' | 'A') => {
-                            session_allow.borrow_mut().insert(tool.to_string());
+                            // Store what the grant actually covers (a scope, or
+                            // the tool name within the ceiling). Storing the
+                            // bare tool name above the ceiling was a promise
+                            // the lookup could never keep.
+                            match dest::grant_for(tool, hitl.get("tool_input"), tier).key() {
+                                Some(k) => {
+                                    let _ = writeln!(o, "  [won't ask again this session for {k}]");
+                                    session_allow.borrow_mut().insert(k);
+                                }
+                                None => {
+                                    let _ = writeln!(
+                                        o,
+                                        "  [approved once — this call can't be remembered]"
+                                    );
+                                }
+                            }
                             true
                         }
                         Some('y' | 'Y') => true,
