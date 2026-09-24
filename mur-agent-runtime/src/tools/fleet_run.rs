@@ -551,9 +551,21 @@ mod tests {
         let run_id = v["run_id"].as_str().unwrap().to_string();
         assert!(run_id.starts_with("fleet-deep-research-"), "{run_id}");
         assert!(v["follow"].as_str().unwrap().contains("mur_job_status"));
-        // the child is still alive and was told the id
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        let argv = std::fs::read_to_string(&argv_log).unwrap();
+        // the child is still alive and was told the id. Poll instead of a
+        // fixed sleep: under load `sh` may not have reached `echo` yet
+        // (NotFound), or `>` has truncated the file but not written it. The
+        // line is complete once it ends in the newline `echo` appends.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let argv = loop {
+            match std::fs::read_to_string(&argv_log) {
+                Ok(s) if s.ends_with('\n') => break s,
+                other => assert!(
+                    std::time::Instant::now() < deadline,
+                    "child never wrote its argv within 10s: {other:?}"
+                ),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        };
         assert!(argv.contains(&format!("--run-id {run_id}")), "{argv}");
         assert!(
             argv.starts_with("deep-research why is the sky blue"),
