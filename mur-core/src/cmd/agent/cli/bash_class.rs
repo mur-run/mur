@@ -46,6 +46,36 @@ const GIT_READONLY_SUBCMDS: &[&str] = &[
     "grep",
 ];
 
+/// Flags under which `git branch` only LISTS. Any positional argument makes it
+/// create a branch (`git branch x`), and `-d/-D/-m/-M/-c/-C/-f/-u` rename,
+/// delete, copy or retarget — all absent. `--list` is here but its pattern
+/// operand is not: a positional still fails the check, which costs one prompt
+/// for `git branch --list 'feat*'` and buys a parser that never has to know
+/// which flags take values.
+const GIT_BRANCH_LIST_FLAGS: &[&str] = &[
+    "--show-current",
+    "-a",
+    "--all",
+    "-r",
+    "--remotes",
+    "-v",
+    "-vv",
+    "--verbose",
+    "--list",
+    "--no-color",
+];
+
+/// Flags under which `git remote` only prints the configured remotes. Bare
+/// `git remote` lists names. `show`/`update`/`prune` are subcommands, not
+/// flags, so they fail the check — `show` and `update` contact the remote,
+/// `prune` deletes refs.
+const GIT_REMOTE_LIST_FLAGS: &[&str] = &["-v", "--verbose"];
+
+/// Is every remaining token one of `allowed`? No positional operands at all.
+fn only_flags<'a>(mut rest: impl Iterator<Item = &'a str>, allowed: &[&str]) -> bool {
+    rest.all(|t| allowed.contains(&t))
+}
+
 /// `gh` nouns that have a genuine read-only surface (excludes `api` — an
 /// arbitrary REST call can write — and `auth`/`secret`/`variable`/`config`,
 /// which mix read and mutate verbs under the same noun).
@@ -64,7 +94,39 @@ const GH_READONLY_NOUNS: &[&str] = &[
 ];
 
 /// Verbs that only read, shared by every `gh` noun above.
-const GH_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff", "checks"];
+const GH_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff", "checks", "watch"];
+
+/// `gh api` flags that turn a GET into a write. `-f/-F/--field/--raw-field`
+/// switch the default method to POST; `--input` sends a body; `-X/--method`
+/// names one outright. Matched as a prefix so `-XPOST`, `--method=PATCH` and
+/// `-fbody=x` are caught without a flag parser.
+const GH_API_WRITE_FLAGS: &[&str] = &[
+    "-X",
+    "--method",
+    "-f",
+    "-F",
+    "--field",
+    "--raw-field",
+    "--input",
+];
+
+/// Is this `gh api …` tail a plain GET? Fail-safe: any write flag, and the
+/// `graphql` endpoint (a mutation is a query string away), both prompt.
+fn gh_api_is_get<'a>(rest: impl Iterator<Item = &'a str>) -> bool {
+    let mut saw_endpoint = false;
+    for t in rest {
+        if GH_API_WRITE_FLAGS.iter().any(|f| t.starts_with(f)) {
+            return false;
+        }
+        if !t.starts_with('-') && !saw_endpoint {
+            if t == "graphql" {
+                return false;
+            }
+            saw_endpoint = true;
+        }
+    }
+    saw_endpoint
+}
 
 /// `glab` nouns/verbs, same shape as `gh` above (excludes `api`).
 const GLAB_READONLY_NOUNS: &[&str] =
@@ -115,15 +177,23 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
             ];
             !FIND_WRITE.iter().any(|w| cmd.contains(w))
         }
-        // `git` only for a fixed read-only subcommand set.
-        "git" => toks
-            .next()
-            .is_some_and(|sub| GIT_READONLY_SUBCMDS.contains(&sub)),
+        // `git` only for a fixed read-only subcommand set, plus the two
+        // subcommands whose read and write modes share a name (`branch`,
+        // `remote`) — those only when EVERY argument is a known listing flag.
+        "git" => match toks.next() {
+            Some("branch") => only_flags(toks, GIT_BRANCH_LIST_FLAGS),
+            Some("remote") => only_flags(toks, GIT_REMOTE_LIST_FLAGS),
+            Some(sub) => GIT_READONLY_SUBCMDS.contains(&sub),
+            None => false,
+        },
         // `gh`/`glab` only for a fixed noun + read verb pair — `gh pr view`,
         // `gh issue list`, never `gh api` (arbitrary REST, can write) or the
         // auth/secret/config nouns that mix read and mutate under one name.
         "gh" => {
             let noun = toks.next();
+            if noun == Some("api") {
+                return gh_api_is_get(toks);
+            }
             let verb = toks.next();
             noun.is_some_and(|n| GH_READONLY_NOUNS.contains(&n))
                 && verb.is_some_and(|v| GH_READONLY_VERBS.contains(&v))
@@ -176,12 +246,23 @@ mod tests {
             "git status",
             "git log --oneline -10",
             "git diff HEAD~1",
+            "git branch",
+            "git branch --show-current",
+            "git branch -a -vv",
+            "git remote",
+            "git remote -v",
             "gh pr view 1441",
             "gh pr view",
             "gh pr list",
             "gh pr checks 1441",
             "gh issue list",
             "gh run list",
+            "gh run view 123 --log",
+            "gh run watch 123",
+            "gh pr checks 1441 --watch",
+            "gh pr view 1441 --comments",
+            "gh api repos/mur-run/mur/pulls/1441/comments",
+            "gh api -H Accept:application/json repos/x/y --paginate",
             "glab mr view",
             "glab mr list",
         ] {
@@ -192,7 +273,15 @@ mod tests {
     #[test]
     fn gh_and_glab_stay_gated_outside_the_readonly_allowlist() {
         for c in [
-            "gh api repos/x/y",       // arbitrary REST, can write
+            "gh api -X POST repos/x/y/issues", // explicit method
+            "gh api -XDELETE repos/x/y/git/refs/heads/z",
+            "gh api --method=PATCH repos/x/y",
+            "gh api repos/x/y/issues -f title=x", // -f => POST
+            "gh api repos/x/y/issues -F title=x",
+            "gh api repos/x/y/issues --raw-field title=x",
+            "gh api repos/x/y/issues --input body.json",
+            "gh api graphql",         // a mutation is one query away
+            "gh api",                 // no endpoint
             "gh pr merge 1441",       // mutate verb
             "gh pr create --title x", // mutate verb
             "gh auth login",          // auth noun not covered
@@ -218,7 +307,18 @@ mod tests {
             "cargo build", // executes build scripts
             "git push",
             "git commit -m x",
-            "git branch -D main", // git write subcommand
+            "git branch -D main",             // git write subcommand
+            "git branch new-feature",         // positional => creates a branch
+            "git branch -m old new",          // rename
+            "git branch -d gone",             // delete
+            "git branch -u origin/main",      // retargets upstream
+            "git branch --list feat",         // operand: fail safe, one prompt
+            "git remote add x https://e.com", // mutates config
+            "git remote remove origin",
+            "git remote set-url origin x",
+            "git remote show origin",  // contacts the remote
+            "git remote update",       // fetches
+            "git remote prune origin", // deletes refs
             "git checkout main",
             "find . -delete",       // find mutate
             "find . -exec rm {} +", // find execute

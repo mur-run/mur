@@ -162,3 +162,42 @@ fn an_unclassifiable_command_lands_at_write_not_above() {
         RiskTier::Write
     );
 }
+
+/// Replay of the tmux probe (PR #1482 session): the exact commands murmur's
+/// agent issued. Read-only chains must pass the default auto session without
+/// a prompt; anything that leaves the machine must still stop and ask.
+#[tokio::test]
+async fn tmux_probe_replay_readonly_chains_do_not_prompt() {
+    for cmd in [
+        "cd ~/Projects/mur && pwd -P && git status -sb | head -5 && git branch --show-current && git remote -v | head -2",
+        "cd ~/Projects/mur && gh pr list --limit 10",
+        "cd ~/Projects/mur && gh pr view 1482",
+        "cd ~/Projects/mur && gh pr checks 1482",
+        "cd ~/Projects/mur && gh pr diff 1482",
+        "cd ~/Projects/mur && gh pr view 1482 --comments",
+        "gh api repos/mur-run/mur/pulls/1482/comments",
+        "gh run watch 123",
+    ] {
+        assert!(
+            !gate_survives_auto("bash", bash(cmd)),
+            "read-only chain still prompts: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn tmux_probe_replay_egress_still_prompts() {
+    for cmd in [
+        "cd ~/Projects/mur && git push -u origin test/hitl-probe",
+        "cd ~/Projects/mur && gh pr create --draft --base main --title x --body y",
+        "cd ~/Projects/mur && gh pr view 1482 && gh pr merge 1482",
+        "gh api -XDELETE repos/mur-run/mur/git/refs/heads/x",
+        "gh api graphql -f query=q",
+        "git status && git push",
+    ] {
+        assert!(
+            gate_survives_auto("bash", bash(cmd)),
+            "egress auto-approved: {cmd}"
+        );
+    }
+}

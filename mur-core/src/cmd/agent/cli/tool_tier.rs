@@ -41,7 +41,7 @@
 use mur_common::hitl::RiskTier;
 use serde_json::Value;
 
-use super::bash_class;
+use super::{bash_class, dest};
 
 /// Heads that take a credential or change who you are.
 const PRIVILEGED_HEADS: &[&str] = &[
@@ -143,6 +143,22 @@ pub fn classify(tool_name: &str, tool_input: Option<&Value>) -> RiskTier {
     // Read is delegated, never guessed: `bash_class` fails safe on
     // metacharacters and its head list carries an audit note.
     if bash_class::is_readonly_call(tool_name, tool_input) {
+        return RiskTier::Read;
+    }
+    // A CHAIN of reads is still a read. `bash_class` refuses every operator,
+    // so `cd repo && git status -sb | head -5` used to fall through to the
+    // head deny-list below, where `git remote` or `gh` anywhere in the line
+    // lifted the whole thing to `NetworkEgress` — a prompt, with a "can't
+    // remember this" row, for a command that reads. `dest::classify_bash` is
+    // the parser that already splits on those operators and proves EVERY
+    // segment through the same audited list; a `Local` scope is that proof.
+    // A remote scope stays where the ssh head puts it — a hop is not local.
+    if tool_name == "bash"
+        && let Some(cmd) = tool_input
+            .and_then(|v| v.get("command"))
+            .and_then(Value::as_str)
+        && dest::classify_bash(cmd).is_some_and(|s| s.dest == dest::Destination::Local)
+    {
         return RiskTier::Read;
     }
     match tool_name {
@@ -283,6 +299,45 @@ mod tests {
         assert_eq!(classify("bash", Some(&bash("git status"))), RiskTier::Read);
         // `cat a > b` writes; bash_class refuses it, so it must not be Read.
         assert_ne!(classify("bash", Some(&bash("cat a > b"))), RiskTier::Read);
+    }
+
+    /// The chain from the report. Every segment reads; `git remote -v` and
+    /// `gh pr view` used to lift it to `NetworkEgress` by head alone.
+    #[test]
+    fn a_chain_of_reads_is_read() {
+        for cmd in [
+            "cd ~/Projects/mur && pwd -P && git status -sb | head -5 && git branch --show-current && git remote -v | head -2",
+            "cd ~/Projects/mur && echo \"=== pr list ===\" && gh pr list --limit 10; echo \"=== pr view ===\" && gh pr view 1482",
+            "gh pr checks 1482 || true",
+        ] {
+            assert_eq!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::Read,
+                "cmd: {cmd}"
+            );
+        }
+    }
+
+    /// The chain lane must not launder a write, an egress, or a remote hop.
+    #[test]
+    fn a_chain_with_one_non_read_is_not_read() {
+        for (cmd, at_least) in [
+            (
+                "git status && git push origin main",
+                RiskTier::NetworkEgress,
+            ),
+            ("gh pr view 1 && gh pr merge 1", RiskTier::NetworkEgress),
+            (
+                "git remote -v && git remote update",
+                RiskTier::NetworkEgress,
+            ),
+            ("ls && rm -rf /tmp/x", RiskTier::Destructive),
+            ("git status > out.txt", RiskTier::Write),
+            ("ssh host 'tail -n 5 log'", RiskTier::NetworkEgress),
+        ] {
+            let t = classify("bash", Some(&bash(cmd)));
+            assert!(t >= at_least && t != RiskTier::Read, "cmd: {cmd} -> {t:?}");
+        }
     }
 
     /// Dispatch tools are Spend by name, with or without arguments, and an
