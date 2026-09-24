@@ -244,7 +244,7 @@ fn help_text() -> String {
         "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> · /forget <name|last>",
         "  research  /deep-research [question|status|stop|setup]  run the research fleet (/research)",
-        "  search    /search <query> [--all] [--limit N] [--send]  search indexed project code",
+        "  search    /search <query> [--all] [--limit N] [--lines N] [--send] · /search --expand <id>[,<id>] (full content for a hit)",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
         "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",
         "keys        Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+O transcript · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll",
