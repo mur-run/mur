@@ -43,8 +43,28 @@ pub(super) fn installed_service(name: &str) -> Option<PathBuf> {
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let path = service_file_in(&base, name);
-        path.exists().then_some(path)
+        probe_service(name, service_file_in(&base, name))
+    }
+}
+
+/// Decide whether the descriptor at `path` counts as installed.
+///
+/// A stat that errors (EPERM under a sandbox, …) is "could not tell", and it
+/// is answered as installed, NOT folded into absent the way `Path::exists()`
+/// did: absent made `stop` skip the bootout, so launchd's KeepAlive brought
+/// the agent straight back. Booting out a job that is not loaded is harmless
+/// (`stop_service` ignores the status), and `remove_service` still reports
+/// nothing removed when the delete itself fails.
+fn probe_service(name: &str, path: PathBuf) -> Option<PathBuf> {
+    match path.try_exists() {
+        Ok(found) => found.then_some(path),
+        Err(e) => {
+            eprintln!(
+                "warning: agent '{name}': cannot check service unit {} ({e}); assuming it is installed",
+                path.display()
+            );
+            Some(path)
+        }
     }
 }
 
@@ -421,5 +441,38 @@ mod tests {
     fn no_installed_service_is_not_an_error() {
         assert!(!stop_service("definitely-not-an-agent-abc123"));
         assert!(remove_service("definitely-not-an-agent-abc123").is_none());
+    }
+
+    #[test]
+    fn probe_reflects_disk_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.mur.agent.kelp.plist");
+        assert!(probe_service("kelp", path.clone()).is_none());
+        fs::write(&path, "x").unwrap();
+        assert_eq!(probe_service("kelp", path.clone()), Some(path));
+    }
+
+    /// An unreadable parent must not read as "no service": that skipped the
+    /// bootout and let KeepAlive respawn the agent `stop` had just killed.
+    #[test]
+    #[cfg(unix)]
+    fn unreadable_service_dir_is_assumed_installed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("LaunchAgents");
+        fs::create_dir(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let path = locked.join("run.mur.agent.kelp.plist");
+
+        let probe = path.try_exists();
+        let got = probe_service("kelp", path.clone());
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        if probe.is_err() {
+            assert_eq!(got, Some(path));
+        } else {
+            // Running as root: permissions do not bind, nothing to assert.
+            eprintln!("skipped: stat succeeded despite 0o000 (root?)");
+        }
     }
 }

@@ -253,8 +253,10 @@ pub fn cmd_restart(names: &[String], all: bool, stale: bool, dry_run: bool) -> R
 /// is an agent with a service descriptor, which is supposed to be running and
 /// isn't.
 fn report_unexamined(agents_dir: &Path) {
+    // Same tri-state as the restart path: a unit we cannot stat is not
+    // evidence the agent was stopped on purpose.
     let (stopped, should_be_running) = unexamined(agents_dir, &|n| {
-        super::service::installed_service(n).is_some()
+        has_service_or_assume(n, service_unit_path(n).as_deref())
     });
     if !stopped.is_empty() {
         println!(
@@ -330,9 +332,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
     // Whether a launchd/systemd service unit is installed for this agent —
     // computed before signalling so we know, once the old pid is dead,
     // whether to expect an automatic respawn or do it ourselves.
-    let has_service = service_unit_path(name)
-        .map(|p| service_unit_exists(&p))
-        .unwrap_or(false);
+    let has_service = has_service_or_assume(name, service_unit_path(name).as_deref());
 
     // Load stop_timeout_secs from the agent's profile (mirrors cmd_stop).
     // The SIGKILL fallback must wait at least this long so the runtime's
@@ -592,8 +592,35 @@ pub(super) fn kickstart_service(_name: &str) -> Result<bool> {
 /// Whether a service-unit file exists at `path`. Pure and OS-agnostic —
 /// callers build the path with [`service_unit_path`], which is the only
 /// cfg-gated piece.
-fn service_unit_exists(path: &Path) -> bool {
-    path.exists()
+///
+/// `Err` means "could not tell" (EPERM under a sandbox, a vanished parent,
+/// …) and is deliberately NOT folded into `false`: `Path::exists()` did
+/// exactly that, and a supervised agent got a direct respawn racing
+/// launchd's KeepAlive for the same lock.
+fn service_unit_exists(path: &Path) -> std::io::Result<bool> {
+    path.try_exists()
+}
+
+/// Resolve "is this agent service-managed?" for the restart path.
+///
+/// An unknown answer is treated as `true`: the confirm loop then waits for
+/// the service manager, kicks it if nothing respawns, and only falls back to
+/// a direct respawn when the kick itself fails — whereas guessing `false`
+/// spawns a second runtime next to one launchd is already restarting.
+fn has_service_or_assume(name: &str, path: Option<&Path>) -> bool {
+    let Some(path) = path else {
+        return false;
+    };
+    match service_unit_exists(path) {
+        Ok(found) => found,
+        Err(e) => {
+            eprintln!(
+                "warning: agent '{name}': cannot check service unit {} ({e}); assuming it is installed",
+                path.display()
+            );
+            true
+        }
+    }
 }
 
 /// Build the expected service-unit path for `name`, mirroring the exact
@@ -854,12 +881,43 @@ mod tests {
     fn service_unit_exists_reflects_disk_state() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("run.mur.agent.test.plist");
-        assert!(!service_unit_exists(&path), "must be false before creation");
+        assert!(
+            !service_unit_exists(&path).unwrap(),
+            "must be false before creation"
+        );
         fs::write(&path, b"unit").unwrap();
         assert!(
-            service_unit_exists(&path),
+            service_unit_exists(&path).unwrap(),
             "must be true once the file exists"
         );
+    }
+
+    /// A unit path we cannot stat must surface as `Err`, and the restart
+    /// path must then assume a service rather than direct-respawn beside it.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_service_dir_is_unknown_and_assumed_installed() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("LaunchAgents");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("run.mur.agent.test.plist");
+        fs::write(&path, b"unit").unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+        let probe = service_unit_exists(&path);
+        let assumed = has_service_or_assume("test", Some(&path));
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        // root ignores mode bits; nothing to prove there.
+        if probe.as_ref().is_ok_and(|found| *found) {
+            return;
+        }
+        assert!(probe.is_err(), "EACCES must not read as absent: {probe:?}");
+        assert!(assumed, "unknown must be treated as service-managed");
+    }
+
+    #[test]
+    fn no_resolvable_unit_path_means_no_service() {
+        assert!(!has_service_or_assume("test", None));
     }
 
     /// Fix 1: SIGKILL-fallback wait must be derived from stop_timeout_secs so
