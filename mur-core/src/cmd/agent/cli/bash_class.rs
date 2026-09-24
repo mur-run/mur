@@ -46,6 +46,36 @@ const GIT_READONLY_SUBCMDS: &[&str] = &[
     "grep",
 ];
 
+/// Flags under which `git branch` only LISTS. Any positional argument makes it
+/// create a branch (`git branch x`), and `-d/-D/-m/-M/-c/-C/-f/-u` rename,
+/// delete, copy or retarget — all absent. `--list` is here but its pattern
+/// operand is not: a positional still fails the check, which costs one prompt
+/// for `git branch --list 'feat*'` and buys a parser that never has to know
+/// which flags take values.
+const GIT_BRANCH_LIST_FLAGS: &[&str] = &[
+    "--show-current",
+    "-a",
+    "--all",
+    "-r",
+    "--remotes",
+    "-v",
+    "-vv",
+    "--verbose",
+    "--list",
+    "--no-color",
+];
+
+/// Flags under which `git remote` only prints the configured remotes. Bare
+/// `git remote` lists names. `show`/`update`/`prune` are subcommands, not
+/// flags, so they fail the check — `show` and `update` contact the remote,
+/// `prune` deletes refs.
+const GIT_REMOTE_LIST_FLAGS: &[&str] = &["-v", "--verbose"];
+
+/// Is every remaining token one of `allowed`? No positional operands at all.
+fn only_flags<'a>(mut rest: impl Iterator<Item = &'a str>, allowed: &[&str]) -> bool {
+    rest.all(|t| allowed.contains(&t))
+}
+
 /// `gh` nouns that have a genuine read-only surface (excludes `api` — an
 /// arbitrary REST call can write — and `auth`/`secret`/`variable`/`config`,
 /// which mix read and mutate verbs under the same noun).
@@ -115,10 +145,15 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
             ];
             !FIND_WRITE.iter().any(|w| cmd.contains(w))
         }
-        // `git` only for a fixed read-only subcommand set.
-        "git" => toks
-            .next()
-            .is_some_and(|sub| GIT_READONLY_SUBCMDS.contains(&sub)),
+        // `git` only for a fixed read-only subcommand set, plus the two
+        // subcommands whose read and write modes share a name (`branch`,
+        // `remote`) — those only when EVERY argument is a known listing flag.
+        "git" => match toks.next() {
+            Some("branch") => only_flags(toks, GIT_BRANCH_LIST_FLAGS),
+            Some("remote") => only_flags(toks, GIT_REMOTE_LIST_FLAGS),
+            Some(sub) => GIT_READONLY_SUBCMDS.contains(&sub),
+            None => false,
+        },
         // `gh`/`glab` only for a fixed noun + read verb pair — `gh pr view`,
         // `gh issue list`, never `gh api` (arbitrary REST, can write) or the
         // auth/secret/config nouns that mix read and mutate under one name.
@@ -176,6 +211,11 @@ mod tests {
             "git status",
             "git log --oneline -10",
             "git diff HEAD~1",
+            "git branch",
+            "git branch --show-current",
+            "git branch -a -vv",
+            "git remote",
+            "git remote -v",
             "gh pr view 1441",
             "gh pr view",
             "gh pr list",
@@ -218,7 +258,18 @@ mod tests {
             "cargo build", // executes build scripts
             "git push",
             "git commit -m x",
-            "git branch -D main", // git write subcommand
+            "git branch -D main",             // git write subcommand
+            "git branch new-feature",         // positional => creates a branch
+            "git branch -m old new",          // rename
+            "git branch -d gone",             // delete
+            "git branch -u origin/main",      // retargets upstream
+            "git branch --list feat",         // operand: fail safe, one prompt
+            "git remote add x https://e.com", // mutates config
+            "git remote remove origin",
+            "git remote set-url origin x",
+            "git remote show origin",  // contacts the remote
+            "git remote update",       // fetches
+            "git remote prune origin", // deletes refs
             "git checkout main",
             "find . -delete",       // find mutate
             "find . -exec rm {} +", // find execute
