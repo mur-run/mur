@@ -54,7 +54,7 @@ dir, command runner) so tests never exec anything real.
 | Check | Pass | Fail output |
 |---|---|---|
 | `npx` resolvable on **the unmodified `PATH`** | `✓ npx at <path>` | `✗ npx not found on PATH` + `install Node.js (it ships npx): https://nodejs.org` |
-| `node --version`, `npx --version` exit 0 (only if npx found) | `✓ node runs`, `✓ npx runs` | ``✗ `node --version` failed`` |
+| `node --version`, `npx --version` exit 0 (only if npx found) | `✓ node runs (v22.22.0)`, `✓ npx runs (10.9.2)` — stdout captured, first non-blank line shown; parens omitted if empty | ``✗ `node --version` failed`` |
 | A **completed** Chromium build in the Playwright browsers dir | `✓ <build> in <dir>` + note that `--live` confirms the revision | `✗ no completed Chromium build in <dir>` + `install with: npx -y @playwright/mcp@0.0.82 install-browser chromium` |
 
 Decisions:
@@ -127,7 +127,8 @@ Without `--live` the command ends with
 Unit (`cmd/browser/doctor.rs`):
 
 - missing npx → fails, points at nodejs.org, runs nothing
-- healthy → passes, runs exactly `node --version`, `npx --version`
+- healthy → passes, runs exactly `node --version`, `npx --version`, and shows each version on its ✓ line
+- `version_line` → first non-blank line, trimmed; a silent success still passes without parens
 - failing `node` → fails with the probe named
 - interrupted download → fails, prints the pinned install hint
 - revisions sort numerically; `ffmpeg-*` ignored

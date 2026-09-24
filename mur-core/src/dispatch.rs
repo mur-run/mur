@@ -637,7 +637,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     // the augmented one — a pass must mean replay finds it.
                     &std::env::var_os("PATH").unwrap_or_default(),
                     browsers.as_deref(),
-                    &mut cmd::deep_research::browser::system_runner,
+                    &mut cmd::browser::doctor::system_probe,
                 )?;
                 if live {
                     cmd::browser::doctor::live_check(&mut out).await?;

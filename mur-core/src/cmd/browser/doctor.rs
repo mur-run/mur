@@ -23,7 +23,36 @@ use anyhow::{Context, Result, bail};
 use mur_browser::replay::{StdioCaller, ToolCaller};
 use serde_json::{Value, json};
 
-use crate::cmd::deep_research::browser::{Runner, render_passed, serve_render_page};
+use crate::cmd::deep_research::browser::{render_passed, serve_render_page};
+
+/// Runs a version probe. `Ok(Some(stdout))` = exit 0, `Ok(None)` = non-zero.
+/// Stdout is captured so the version lands on the ✓ line instead of loose
+/// between the checks.
+pub type Probe<'a> = &'a mut dyn FnMut(&[&str]) -> Result<Option<String>>;
+
+/// Real probe: captures stdout, leaves stderr on the terminal.
+pub fn system_probe(argv: &[&str]) -> Result<Option<String>> {
+    let (prog, args) = argv.split_first().expect("argv is never empty");
+    let out = std::process::Command::new(prog)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| anyhow::anyhow!("could not start `{prog}`: {e}"))?;
+    Ok(out
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
+}
+
+/// First non-blank line of a `--version` output, trimmed.
+pub fn version_line(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_owned)
+}
 
 /// Browser-install command for the pinned MCP package. `install-browser` is
 /// the package's own alias for `playwright install` against the
@@ -98,7 +127,7 @@ pub fn doctor(
     output: &mut dyn Write,
     path_var: &OsStr,
     browsers: Option<&Path>,
-    run: Runner<'_>,
+    run: Probe<'_>,
 ) -> Result<()> {
     let mut problems = 0;
 
@@ -112,8 +141,11 @@ pub fn doctor(
             writeln!(output, "  ✓ npx at {}", npx.display())?;
             for tool in ["node", "npx"] {
                 match run(&[tool, "--version"]) {
-                    Ok(true) => writeln!(output, "  ✓ {tool} runs")?,
-                    Ok(false) | Err(_) => {
+                    Ok(Some(stdout)) => match version_line(stdout.as_bytes()) {
+                        Some(v) => writeln!(output, "  ✓ {tool} runs ({v})")?,
+                        None => writeln!(output, "  ✓ {tool} runs")?,
+                    },
+                    Ok(None) | Err(_) => {
                         problems += 1;
                         writeln!(output, "  ✗ `{tool} --version` failed")?;
                     }
@@ -283,7 +315,7 @@ mod tests {
         let mut calls = Vec::new();
         let mut run = |argv: &[&str]| {
             calls.push(argv.join(" "));
-            Ok(ok)
+            Ok(ok.then(|| format!("{}-ver\n", argv[0])))
         };
         let result = doctor(&mut out, path_var, browsers, &mut run);
         (result, String::from_utf8(out).unwrap(), calls)
@@ -312,6 +344,37 @@ mod tests {
         assert!(out.contains("✓ chromium_headless_shell-1246"), "{out}");
         assert!(!out.contains('✗'), "{out}");
         assert_eq!(calls, ["node --version", "npx --version"]);
+        // The version sits on the ✓ line, not loose between the checks.
+        assert!(out.contains("  ✓ node runs (node-ver)\n"), "{out}");
+        assert!(out.contains("  ✓ npx runs (npx-ver)\n"), "{out}");
+    }
+
+    #[test]
+    fn version_line_is_first_non_blank_line_trimmed() {
+        assert_eq!(
+            version_line(b"\n  v22.22.0  \nextra\n"),
+            Some("v22.22.0".into())
+        );
+        assert_eq!(version_line(b"10.9.2\r\n"), Some("10.9.2".into()));
+        assert_eq!(version_line(b"  \n\n"), None);
+    }
+
+    #[test]
+    fn a_silent_but_successful_probe_still_passes_without_parens() {
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        complete(browsers.path(), "chromium_headless_shell-1246");
+        let mut out = Vec::new();
+        let mut run = |_: &[&str]| Ok(Some(String::new()));
+        doctor(
+            &mut out,
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &mut run,
+        )
+        .unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("  ✓ node runs\n"), "{out}");
     }
 
     #[test]
