@@ -122,6 +122,15 @@ impl Session {
         };
         // Same payload shape as `append_message`, but SIGNED by the session's
         // agent (the channel writer) when an identity exists (v3d).
+        // An image-only send has no caption, and the image itself is not kept
+        // in history. Never save that as an empty user text: it is replayed on
+        // every later turn and an empty text block 400s the provider, wedging
+        // the channel. Save the same marker the converters use instead.
+        let text = if role == "user" && text.trim().is_empty() {
+            mur_agent_runtime::llm::BLANK_USER_TURN
+        } else {
+            text
+        };
         let mut payload = serde_json::json!({ "text": text });
         if let Some(t) = task_id {
             payload["task_id"] = serde_json::Value::String(t.to_string());
@@ -248,6 +257,39 @@ pub fn latest(home: &Path, agent: &str) -> Result<Option<SessionInfo>> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// An image-only send has no caption. It must never be saved as an empty
+    /// user text: that event is replayed as history on every later turn, and an
+    /// empty text block makes the provider 400 and wedges the channel.
+    #[test]
+    fn image_only_user_turn_is_never_saved_blank() {
+        let tmp = TempDir::new().unwrap();
+        let mut s = Session::create(tmp.path(), "qa").unwrap();
+        s.append("user", "", None, &[]).unwrap();
+        s.append("user", "  \n ", None, &[]).unwrap();
+        s.append("user", "caption", None, &[]).unwrap();
+        let id = s.channel_id().unwrap().to_string();
+        let texts: Vec<String> = ChannelService::open(tmp.path())
+            .unwrap()
+            .load_events(&id)
+            .unwrap()
+            .iter()
+            .filter_map(|e| {
+                e.payload
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                mur_agent_runtime::llm::BLANK_USER_TURN.to_string(),
+                mur_agent_runtime::llm::BLANK_USER_TURN.to_string(),
+                "caption".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn current_is_none_until_first_append_then_some() {
