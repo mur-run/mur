@@ -55,6 +55,10 @@ pub(super) fn installed_service(name: &str) -> Option<PathBuf> {
 /// the agent straight back. Booting out a job that is not loaded is harmless
 /// (`stop_service` ignores the status), and `remove_service` still reports
 /// nothing removed when the delete itself fails.
+///
+/// `restart` relies on the same answer: absent there meant a direct respawn
+/// racing launchd's KeepAlive for the same lock, while installed only makes
+/// the confirm loop wait for (and, if needed, kick) the service manager.
 fn probe_service(name: &str, path: PathBuf) -> Option<PathBuf> {
     match path.try_exists() {
         Ok(found) => found.then_some(path),
