@@ -2248,10 +2248,12 @@ impl TaskRunner {
                                 && !shown.is_empty()
                                 && msg.contains("empty streamed response") =>
                         {
-                            tracing::warn!(
+                            // Expected: the model deliberately ends its turn after
+                            // suggest_replies (stop_reason=end_turn). The provider
+                            // already warns with the stream details, so debug here.
+                            tracing::debug!(
                                 task_id,
                                 iteration,
-                                attempt,
                                 error = %msg,
                                 "empty reply after suggest_replies; ending the turn on the shown text"
                             );
