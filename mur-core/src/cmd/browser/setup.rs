@@ -16,7 +16,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use super::doctor::{Chromium, Probe, install_argv, install_hint, installed_builds, l1_check};
+use super::doctor::{Chromium, Probe, install_argv, install_hint, l1_check, usable_build};
 
 /// Runs the install argv. `Ok(true)` = exit 0.
 pub type Installer<'a> = &'a mut dyn FnMut(&[String]) -> Result<bool>;
@@ -70,7 +70,11 @@ pub fn prepare(
     writeln!(output, "    into      {}", dir.display())?;
     writeln!(
         output,
-        "    (downloads the Chromium revision this pinned package launches)"
+        "    download  ~96 MiB (headless shell + ffmpeg, the revision this pinned package wants)"
+    )?;
+    writeln!(
+        output,
+        "    note      npx may print a WARNING box about `npm install`; it does not apply here"
     )?;
     if !crate::cmd::consent::literal_yes(input, output)? {
         writeln!(output, "  skipped — nothing was downloaded.")?;
@@ -89,12 +93,8 @@ pub fn prepare(
         }
     }
 
-    let found = installed_builds(dir, "chromium_headless_shell")
-        .into_iter()
-        .chain(installed_builds(dir, "chromium"))
-        .next();
-    match found {
-        Some((_, name)) => {
+    match usable_build(dir) {
+        Some(name) => {
             writeln!(output, "  ✓ {name} in {}", dir.display())?;
             Ok(())
         }
@@ -120,9 +120,18 @@ mod tests {
         bin
     }
 
+    /// A completed build; a headless shell also gets its binary, since
+    /// only a launchable shell counts.
     fn complete(dir: &Path, name: &str) {
         std::fs::create_dir_all(dir.join(name)).unwrap();
         std::fs::write(dir.join(name).join("INSTALLATION_COMPLETE"), "").unwrap();
+        if name.starts_with("chromium_headless_shell-") {
+            let exe = dir
+                .join(name)
+                .join("chrome-headless-shell-mac-arm64/chrome-headless-shell");
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            std::fs::write(exe, "").unwrap();
+        }
     }
 
     struct Run {
@@ -295,6 +304,23 @@ mod tests {
             "{}",
             r.out
         );
+    }
+
+    #[test]
+    fn plan_states_download_size_and_npx_warning() {
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        let r = run(
+            true,
+            "no\n",
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &never,
+        );
+        let prompt = r.out.find("Type 'yes'").expect("prompted");
+        let size = r.out.find("~96 MiB").expect("size printed");
+        let warn = r.out.find("WARNING box").expect("npx warning explained");
+        assert!(size < prompt && warn < prompt, "{}", r.out);
     }
 
     #[test]

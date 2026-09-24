@@ -14,9 +14,9 @@
 //!   shows the script's output. This is the only level that proves the
 //!   pinned package and its exact Chromium revision work together.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -56,13 +56,16 @@ pub fn version_line(stdout: &[u8]) -> Option<String> {
 
 /// Browser-install command for the pinned MCP package. `install-browser` is
 /// the package's own alias for `playwright install` against the
-/// playwright-core it bundles, so it fetches the exact revision it launches.
+/// playwright-core it bundles, so it fetches the exact revision it wants.
+/// `--only-shell` skips full Chrome for Testing (~180 MiB): headless launches
+/// run the shell via `--executable-path` (see `mur_browser::chromium`).
 pub fn install_argv() -> Vec<String> {
     [
         "npx",
         "-y",
         mur_browser::PLAYWRIGHT_MCP_PKG,
         "install-browser",
+        "--only-shell",
         "chromium",
     ]
     .map(str::to_owned)
@@ -78,59 +81,20 @@ pub fn install_hint() -> String {
 /// Headless launch flags, identical to replay's so `--live` tests the path
 /// replay actually takes (bundled Chromium, not branded Chrome).
 fn live_args() -> Vec<String> {
-    ["--headless", "--isolated", "--browser=chromium"]
+    let mut args: Vec<String> = ["--headless", "--isolated", "--browser=chromium"]
         .map(str::to_owned)
-        .to_vec()
+        .to_vec();
+    args.extend(mur_browser::chromium::headless_exe_args(
+        mur_browser::chromium::system_browsers_dir().as_deref(),
+    ));
+    args
 }
 
 /// A cold `npx -y` may download the package and start Chromium for the
 /// first time; allow for that, but never hang forever.
 const LIVE_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Where Playwright keeps its browsers. `PLAYWRIGHT_BROWSERS_PATH=0` means
-/// "inside node_modules", which this check cannot see — returns `None`.
-pub fn browsers_dir(
-    env: &dyn Fn(&str) -> Option<OsString>,
-    home: Option<&Path>,
-) -> Option<PathBuf> {
-    if let Some(custom) = env("PLAYWRIGHT_BROWSERS_PATH").filter(|v| !v.is_empty()) {
-        return (custom != "0").then(|| PathBuf::from(custom));
-    }
-    if cfg!(target_os = "macos") {
-        return home.map(|h| h.join("Library/Caches/ms-playwright"));
-    }
-    if cfg!(windows) {
-        return env("LOCALAPPDATA").map(|d| PathBuf::from(d).join("ms-playwright"));
-    }
-    env("XDG_CACHE_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| home.map(|h| h.join(".cache")))
-        .map(|d| d.join("ms-playwright"))
-}
-
-/// Completed builds with the given prefix (`chromium`, `chromium_headless_shell`),
-/// newest revision first. A folder without `INSTALLATION_COMPLETE` is an
-/// interrupted download and does not count.
-pub fn installed_builds(dir: &Path, prefix: &str) -> Vec<(u32, String)> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let lead = format!("{prefix}-");
-    let mut builds: Vec<(u32, String)> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name().into_string().ok()?;
-            let rev = name.strip_prefix(&lead)?.parse::<u32>().ok()?;
-            e.path()
-                .join("INSTALLATION_COMPLETE")
-                .is_file()
-                .then_some((rev, name))
-        })
-        .collect();
-    builds.sort_by_key(|b| std::cmp::Reverse(b.0));
-    builds
-}
+pub use mur_browser::chromium::{browsers_dir, installed_builds};
 
 /// What the L1 check found for Chromium.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,31 +190,27 @@ pub fn l1_check(
             output,
             "  ? PLAYWRIGHT_BROWSERS_PATH=0 keeps browsers inside node_modules; not checked (use --live)"
         )?,
-        Some(dir) => {
-            let shells = installed_builds(dir, "chromium_headless_shell");
-            let full = installed_builds(dir, "chromium");
-            match shells.first().or(full.first()) {
-                Some((_, name)) => {
-                    chromium = Chromium::Found(name.clone());
-                    writeln!(output, "  ✓ {name} in {}", dir.display())?;
-                    writeln!(
-                        output,
-                        "  (newest build found; --live confirms it is the one the pinned package wants)"
-                    )?;
-                }
-                None => {
-                    problems += 1;
-                    chromium = Chromium::Missing;
-                    writeln!(
-                        output,
-                        "  ✗ no completed Chromium build in {}",
-                        dir.display()
-                    )?;
-                    writeln!(output, "  install with: {}", install_hint())?;
-                    writeln!(output, "  or run: mur browser setup")?;
-                }
+        Some(dir) => match usable_build(dir) {
+            Some(name) => {
+                chromium = Chromium::Found(name.clone());
+                writeln!(output, "  ✓ {name} in {}", dir.display())?;
+                writeln!(
+                    output,
+                    "  (newest build found; --live confirms it is the one the pinned package wants)"
+                )?;
             }
-        }
+            None => {
+                problems += 1;
+                chromium = Chromium::Missing;
+                writeln!(
+                    output,
+                    "  ✗ no completed Chromium build in {}",
+                    dir.display()
+                )?;
+                writeln!(output, "  install with: {}", install_hint())?;
+                writeln!(output, "  or run: mur browser setup")?;
+            }
+        },
     }
 
     Ok(L1Report {
@@ -258,6 +218,24 @@ pub fn l1_check(
         chromium,
         problems,
     })
+}
+
+/// The build headless replay will launch: the newest headless shell with its
+/// binary present (passed via `--executable-path`), else full Chromium (the
+/// package default). A shell folder whose binary cannot be found does not
+/// count — replay would silently fall back and fail on a missing Chromium.
+pub fn usable_build(dir: &Path) -> Option<String> {
+    if let Some(exe) = mur_browser::chromium::headless_shell_exe(dir) {
+        return exe
+            .strip_prefix(dir)
+            .ok()
+            .and_then(|rel| rel.components().next())
+            .map(|c| c.as_os_str().to_string_lossy().into_owned());
+    }
+    installed_builds(dir, mur_browser::chromium::FULL_PREFIX)
+        .into_iter()
+        .next()
+        .map(|(_, name)| name)
 }
 
 /// Concatenate the `text` parts of an MCP tool result.
@@ -354,10 +332,21 @@ pub async fn live_check(output: &mut dyn Write) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
 
+    /// A completed build; a headless shell also gets its binary, since
+    /// only a launchable shell counts.
     fn complete(dir: &Path, name: &str) {
         std::fs::create_dir_all(dir.join(name)).unwrap();
         std::fs::write(dir.join(name).join("INSTALLATION_COMPLETE"), "").unwrap();
+        if name.starts_with("chromium_headless_shell-") {
+            let exe = dir
+                .join(name)
+                .join("chrome-headless-shell-mac-arm64/chrome-headless-shell");
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            std::fs::write(exe, "").unwrap();
+        }
     }
 
     /// A PATH holding a placeholder `npx` file; the runner stands in for exec.
@@ -471,6 +460,7 @@ mod tests {
                 "-y",
                 mur_browser::PLAYWRIGHT_MCP_PKG,
                 "install-browser",
+                "--only-shell",
                 "chromium"
             ]
         );
@@ -522,6 +512,41 @@ mod tests {
 
         let (r, _) = report(bin.path().as_os_str(), Some(browsers.path()), false);
         assert!(!r.npx_ok, "npx that cannot run cannot install either");
+    }
+
+    #[test]
+    fn shell_folder_without_binary_is_not_ready() {
+        // The bug this guards: a shell-only cache passed L1, then replay
+        // launched full Chrome for Testing and failed at navigate.
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        let shell = browsers.path().join("chromium_headless_shell-1246");
+        std::fs::create_dir_all(&shell).unwrap();
+        std::fs::write(shell.join("INSTALLATION_COMPLETE"), "").unwrap();
+        let (result, out, _) = run_doctor(bin.path().as_os_str(), Some(browsers.path()), true);
+        assert!(result.is_err(), "{out}");
+        assert!(out.contains("✗ no completed Chromium build"), "{out}");
+    }
+
+    #[test]
+    fn usable_build_prefers_launchable_shell_then_full() {
+        let browsers = tempfile::tempdir().unwrap();
+        complete(browsers.path(), "chromium-1246");
+        assert_eq!(
+            usable_build(browsers.path()).as_deref(),
+            Some("chromium-1246")
+        );
+        complete(browsers.path(), "chromium_headless_shell-1246");
+        assert_eq!(
+            usable_build(browsers.path()).as_deref(),
+            Some("chromium_headless_shell-1246")
+        );
+    }
+
+    #[test]
+    fn install_is_shell_only() {
+        assert!(install_argv().contains(&"--only-shell".to_owned()));
+        assert_eq!(install_argv().last().map(String::as_str), Some("chromium"));
     }
 
     #[test]
