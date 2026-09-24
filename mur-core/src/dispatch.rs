@@ -645,6 +645,29 @@ pub async fn run(cli: Cli) -> Result<()> {
                     println!("  (install check only — add --live to launch a headless browser)");
                 }
             }
+            BrowserAction::Setup => {
+                use std::io::IsTerminal;
+                let home = dirs::home_dir();
+                let browsers = cmd::browser::doctor::browsers_dir(
+                    &|k: &str| std::env::var_os(k),
+                    home.as_deref(),
+                );
+                let stdin = std::io::stdin();
+                let mut out = std::io::stdout();
+                cmd::browser::setup::prepare(
+                    stdin.is_terminal(),
+                    &mut stdin.lock(),
+                    &mut out,
+                    // Same PATH as doctor and replay: the install must use
+                    // the `npx` replay will spawn.
+                    &std::env::var_os("PATH").unwrap_or_default(),
+                    browsers.as_deref(),
+                    &mut cmd::browser::doctor::system_probe,
+                    &mut cmd::browser::setup::system_installer,
+                )?;
+                cmd::browser::doctor::live_check(&mut out).await?;
+                println!("mur browser is ready.");
+            }
             BrowserAction::Prune {
                 keep,
                 older_than,

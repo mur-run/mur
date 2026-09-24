@@ -284,6 +284,7 @@ The checker recomputes the same matches and fails for either missing or stale ro
 | `mur-core/src/cmd/browser/doctor.rs` | `if cfg!(windows) {` | `mur` CLI path | `portable` | No source change identified; FreeBSD falls through to the generic Unix `XDG_CACHE_HOME`/`~/.cache/ms-playwright` default, matching Linux. | Task 6 |
 | `mur-core/src/cmd/browser/doctor.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-core/src/cmd/browser/doctor.rs` | `let name = if cfg!(windows) { "npx.exe" } else { "npx" };` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
+| `mur-core/src/cmd/browser/setup.rs` | `let name = if cfg!(windows) { "npx.exe" } else { "npx" };` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-core/src/cmd/browser/mod.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/browser/mod.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/browser/mod.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |

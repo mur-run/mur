@@ -57,11 +57,22 @@ pub fn version_line(stdout: &[u8]) -> Option<String> {
 /// Browser-install command for the pinned MCP package. `install-browser` is
 /// the package's own alias for `playwright install` against the
 /// playwright-core it bundles, so it fetches the exact revision it launches.
+pub fn install_argv() -> Vec<String> {
+    [
+        "npx",
+        "-y",
+        mur_browser::PLAYWRIGHT_MCP_PKG,
+        "install-browser",
+        "chromium",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// The printed form of [`install_argv`]. `mur browser setup` runs the argv,
+/// so what doctor tells you to type and what setup executes cannot drift.
 pub fn install_hint() -> String {
-    format!(
-        "npx -y {} install-browser chromium",
-        mur_browser::PLAYWRIGHT_MCP_PKG
-    )
+    install_argv().join(" ")
 }
 
 /// Headless launch flags, identical to replay's so `--live` tests the path
@@ -121,15 +132,60 @@ pub fn installed_builds(dir: &Path, prefix: &str) -> Vec<(u32, String)> {
     builds
 }
 
+/// What the L1 check found for Chromium.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Chromium {
+    /// A completed build, by folder name (newest headless shell first).
+    Found(String),
+    /// The browsers dir is known and holds no completed build.
+    Missing,
+    /// `PLAYWRIGHT_BROWSERS_PATH=0`: browsers live somewhere this cannot see.
+    Unknown,
+}
+
+/// L1 result, so `mur browser setup` can branch without parsing text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct L1Report {
+    /// `npx` resolved on PATH and both `node` and `npx` ran.
+    pub npx_ok: bool,
+    pub chromium: Chromium,
+    /// Doctor's problem count (a failing `node` and `npx` count once each).
+    problems: usize,
+}
+
+impl L1Report {
+    /// Doctor's pass/fail: `Unknown` is not a problem (the live test decides).
+    pub fn ready(&self) -> bool {
+        self.problems == 0
+    }
+}
+
 /// L1 check. `path_var` is the PATH `npx` would be spawned with; `run`
-/// executes version probes. Never installs anything.
+/// executes version probes. Never installs anything; bails if not ready.
 pub fn doctor(
     output: &mut dyn Write,
     path_var: &OsStr,
     browsers: Option<&Path>,
     run: Probe<'_>,
 ) -> Result<()> {
+    let report = l1_check(output, path_var, browsers, run)?;
+    if !report.ready() {
+        let problems = report.problems;
+        bail!("mur browser is not ready ({problems} problem(s) above)");
+    }
+    Ok(())
+}
+
+/// The L1 checks and their output, without the verdict. Errors only on I/O.
+pub fn l1_check(
+    output: &mut dyn Write,
+    path_var: &OsStr,
+    browsers: Option<&Path>,
+    run: Probe<'_>,
+) -> Result<L1Report> {
     let mut problems = 0;
+    let mut npx_ok = false;
+    let mut chromium = Chromium::Unknown;
 
     writeln!(
         output,
@@ -139,6 +195,7 @@ pub fn doctor(
     match mur_common::exec::resolve_command_in(path_var, "npx") {
         Ok(npx) => {
             writeln!(output, "  ✓ npx at {}", npx.display())?;
+            npx_ok = true;
             for tool in ["node", "npx"] {
                 match run(&[tool, "--version"]) {
                     Ok(Some(stdout)) => match version_line(stdout.as_bytes()) {
@@ -147,6 +204,7 @@ pub fn doctor(
                     },
                     Ok(None) | Err(_) => {
                         problems += 1;
+                        npx_ok = false;
                         writeln!(output, "  ✗ `{tool} --version` failed")?;
                     }
                 }
@@ -173,6 +231,7 @@ pub fn doctor(
             let full = installed_builds(dir, "chromium");
             match shells.first().or(full.first()) {
                 Some((_, name)) => {
+                    chromium = Chromium::Found(name.clone());
                     writeln!(output, "  ✓ {name} in {}", dir.display())?;
                     writeln!(
                         output,
@@ -181,21 +240,24 @@ pub fn doctor(
                 }
                 None => {
                     problems += 1;
+                    chromium = Chromium::Missing;
                     writeln!(
                         output,
                         "  ✗ no completed Chromium build in {}",
                         dir.display()
                     )?;
                     writeln!(output, "  install with: {}", install_hint())?;
+                    writeln!(output, "  or run: mur browser setup")?;
                 }
             }
         }
     }
 
-    if problems > 0 {
-        bail!("mur browser is not ready ({problems} problem(s) above)");
-    }
-    Ok(())
+    Ok(L1Report {
+        npx_ok,
+        chromium,
+        problems,
+    })
 }
 
 /// Concatenate the `text` parts of an MCP tool result.
@@ -397,6 +459,69 @@ mod tests {
         assert!(out.contains("✗ no completed Chromium build"), "{out}");
         assert!(out.contains(&install_hint()), "{out}");
         assert!(install_hint().contains(mur_browser::PLAYWRIGHT_MCP_PKG));
+    }
+
+    #[test]
+    fn hint_is_the_exact_argv_setup_runs() {
+        assert_eq!(install_hint(), install_argv().join(" "));
+        assert_eq!(
+            install_argv(),
+            [
+                "npx",
+                "-y",
+                mur_browser::PLAYWRIGHT_MCP_PKG,
+                "install-browser",
+                "chromium"
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_chromium_points_at_setup() {
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        let (_, out, _) = run_doctor(bin.path().as_os_str(), Some(browsers.path()), true);
+        let hint = format!(
+            "  install with: {}\n  or run: mur browser setup\n",
+            install_hint()
+        );
+        assert!(out.contains(&hint), "{out}");
+    }
+
+    fn report(path_var: &OsStr, browsers: Option<&Path>, ok: bool) -> (L1Report, String) {
+        let mut out = Vec::new();
+        let mut run = |argv: &[&str]| Ok(ok.then(|| format!("{}-ver\n", argv[0])));
+        let r = l1_check(&mut out, path_var, browsers, &mut run).unwrap();
+        (r, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn l1_report_says_what_setup_can_act_on() {
+        let bin = path_with_npx();
+        let empty = tempfile::tempdir().unwrap();
+        let browsers = tempfile::tempdir().unwrap();
+
+        let (r, _) = report(bin.path().as_os_str(), Some(browsers.path()), true);
+        assert_eq!(r.chromium, Chromium::Missing);
+        assert!(r.npx_ok && !r.ready());
+
+        let (r, _) = report(bin.path().as_os_str(), None, true);
+        assert_eq!(r.chromium, Chromium::Unknown);
+        assert!(r.ready(), "unknown dir is not a problem, same as doctor");
+
+        complete(browsers.path(), "chromium_headless_shell-1246");
+        let (r, _) = report(bin.path().as_os_str(), Some(browsers.path()), true);
+        assert_eq!(
+            r.chromium,
+            Chromium::Found("chromium_headless_shell-1246".into())
+        );
+        assert!(r.ready());
+
+        let (r, out) = report(empty.path().as_os_str(), Some(browsers.path()), true);
+        assert!(!r.npx_ok && !r.ready(), "{out}");
+
+        let (r, _) = report(bin.path().as_os_str(), Some(browsers.path()), false);
+        assert!(!r.npx_ok, "npx that cannot run cannot install either");
     }
 
     #[test]
