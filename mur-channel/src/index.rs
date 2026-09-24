@@ -387,7 +387,16 @@ impl ChannelIndex {
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(n.map(|n| n.max(0) as u64))
+        Ok(match n {
+            None => None,
+            // NOT NULL UNIQUE, only ever written as MAX+1 — a negative value
+            // is corruption. Clamping it would produce 0, which already means
+            // "not numbered yet", so the caller could not tell the two apart.
+            Some(n) if n < 0 => {
+                anyhow::bail!("channel {ch_id} has a corrupt ordinal in the index: {n}")
+            }
+            Some(n) => Some(n as u64),
+        })
     }
 
     /// Newest-first channel list (the Hub left-rail / CLI "my work" inbox).
@@ -416,6 +425,17 @@ impl ChannelIndex {
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        // `ordinal` is NOT NULL UNIQUE and only ever written as MAX+1. A
+        // negative one is corruption, and every caller narrows this field to
+        // `u64` — so it must not escape the index as a plausible-looking
+        // number.
+        if let Some(bad) = rows.iter().find(|r| r.ordinal < 0) {
+            anyhow::bail!(
+                "channel {} has a corrupt ordinal in the index: {}",
+                bad.id,
+                bad.ordinal
+            );
+        }
         Ok(rows)
     }
 
@@ -1005,6 +1025,56 @@ mod tests {
         assert_eq!(ordinal_of(&idx, "zebra"), 1, "oldest channel is #1");
         assert_eq!(ordinal_of(&idx, "mango"), 2);
         assert_eq!(ordinal_of(&idx, "apple"), 3);
+    }
+
+    #[test]
+    fn list_refuses_a_row_whose_ordinal_is_negative() {
+        // Same corruption signal as `ordinal_of`, on the path the CLI listing
+        // actually uses. Callers convert this field to `u64`; if the listing
+        // hands back a clamped 0 they render it as "unnumbered" and the
+        // corruption is never seen by anyone.
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        idx.upsert(&ch("a", ChannelState::Working)).unwrap();
+        idx.conn_for_test()
+            .execute(
+                "UPDATE channel_ordinals SET ordinal = -7 WHERE id = 'a'",
+                [],
+            )
+            .unwrap();
+
+        let err = idx
+            .list(50)
+            .expect_err("a negative ordinal must surface as an error");
+        assert!(
+            err.to_string().contains("-7"),
+            "the error must name the bad value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_negative_ordinal_is_reported_not_clamped_to_zero() {
+        // `ordinal` is NOT NULL UNIQUE and only ever written as MAX+1, so a
+        // negative value means the DB is corrupt. Clamping it to 0 would hand
+        // back the same value that legitimately means "not numbered yet",
+        // laundering a corruption signal into a valid-looking answer.
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        idx.upsert(&ch("a", ChannelState::Working)).unwrap();
+        idx.conn_for_test()
+            .execute(
+                "UPDATE channel_ordinals SET ordinal = -3 WHERE id = 'a'",
+                [],
+            )
+            .unwrap();
+
+        let err = idx
+            .ordinal_of("a")
+            .expect_err("a negative ordinal must surface as an error");
+        assert!(
+            err.to_string().contains("-3"),
+            "the error must name the bad value, got: {err}"
+        );
     }
 
     #[test]
