@@ -94,7 +94,39 @@ const GH_READONLY_NOUNS: &[&str] = &[
 ];
 
 /// Verbs that only read, shared by every `gh` noun above.
-const GH_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff", "checks"];
+const GH_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff", "checks", "watch"];
+
+/// `gh api` flags that turn a GET into a write. `-f/-F/--field/--raw-field`
+/// switch the default method to POST; `--input` sends a body; `-X/--method`
+/// names one outright. Matched as a prefix so `-XPOST`, `--method=PATCH` and
+/// `-fbody=x` are caught without a flag parser.
+const GH_API_WRITE_FLAGS: &[&str] = &[
+    "-X",
+    "--method",
+    "-f",
+    "-F",
+    "--field",
+    "--raw-field",
+    "--input",
+];
+
+/// Is this `gh api …` tail a plain GET? Fail-safe: any write flag, and the
+/// `graphql` endpoint (a mutation is a query string away), both prompt.
+fn gh_api_is_get<'a>(rest: impl Iterator<Item = &'a str>) -> bool {
+    let mut saw_endpoint = false;
+    for t in rest {
+        if GH_API_WRITE_FLAGS.iter().any(|f| t.starts_with(f)) {
+            return false;
+        }
+        if !t.starts_with('-') && !saw_endpoint {
+            if t == "graphql" {
+                return false;
+            }
+            saw_endpoint = true;
+        }
+    }
+    saw_endpoint
+}
 
 /// `glab` nouns/verbs, same shape as `gh` above (excludes `api`).
 const GLAB_READONLY_NOUNS: &[&str] =
@@ -159,6 +191,9 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
         // auth/secret/config nouns that mix read and mutate under one name.
         "gh" => {
             let noun = toks.next();
+            if noun == Some("api") {
+                return gh_api_is_get(toks);
+            }
             let verb = toks.next();
             noun.is_some_and(|n| GH_READONLY_NOUNS.contains(&n))
                 && verb.is_some_and(|v| GH_READONLY_VERBS.contains(&v))
@@ -222,6 +257,12 @@ mod tests {
             "gh pr checks 1441",
             "gh issue list",
             "gh run list",
+            "gh run view 123 --log",
+            "gh run watch 123",
+            "gh pr checks 1441 --watch",
+            "gh pr view 1441 --comments",
+            "gh api repos/mur-run/mur/pulls/1441/comments",
+            "gh api -H Accept:application/json repos/x/y --paginate",
             "glab mr view",
             "glab mr list",
         ] {
@@ -232,7 +273,15 @@ mod tests {
     #[test]
     fn gh_and_glab_stay_gated_outside_the_readonly_allowlist() {
         for c in [
-            "gh api repos/x/y",       // arbitrary REST, can write
+            "gh api -X POST repos/x/y/issues", // explicit method
+            "gh api -XDELETE repos/x/y/git/refs/heads/z",
+            "gh api --method=PATCH repos/x/y",
+            "gh api repos/x/y/issues -f title=x", // -f => POST
+            "gh api repos/x/y/issues -F title=x",
+            "gh api repos/x/y/issues --raw-field title=x",
+            "gh api repos/x/y/issues --input body.json",
+            "gh api graphql",         // a mutation is one query away
+            "gh api",                 // no endpoint
             "gh pr merge 1441",       // mutate verb
             "gh pr create --title x", // mutate verb
             "gh auth login",          // auth noun not covered
