@@ -45,6 +45,8 @@ pub async fn replay(name: &str, profile: Option<&str>, heal: bool, dry_run: bool
         dry_run,
         "browser replay started"
     );
+    // `--heal` still bails above until write-back lands (plan Task 5.7).
+    let opts = mur_browser::replay::ReplayOptions { heal };
     let report = if dry_run {
         mur_browser::replay::dry_run(&run, &allow)?
     } else {
@@ -61,9 +63,9 @@ pub async fn replay(name: &str, profile: Option<&str>, heal: bool, dry_run: bool
                     .tempfile()?;
                 std::io::Write::write_all(&mut file, &state)?;
                 drop(state);
-                mur_browser::replay::replay_live(&run, &allow, Some(file.path())).await?
+                mur_browser::replay::replay_live(&run, &allow, opts, Some(file.path())).await?
             }
-            None => mur_browser::replay::replay_live(&run, &allow, None).await?,
+            None => mur_browser::replay::replay_live(&run, &allow, opts, None).await?,
         }
     };
 

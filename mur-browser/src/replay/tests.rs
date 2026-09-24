@@ -78,7 +78,13 @@ fn off_allowlist_goto_is_rejected_naming_the_host() {
 #[tokio::test]
 async fn blocked_goto_makes_no_calls_at_all() {
     let mut fake = Fake::default();
-    let err = replay_with(&run(THREE), &["other.test".into()], &mut fake).await;
+    let err = replay_with(
+        &run(THREE),
+        &["other.test".into()],
+        ReplayOptions::default(),
+        &mut fake,
+    )
+    .await;
     assert!(err.is_err());
     assert!(fake.calls.is_empty(), "{:?}", fake.calls);
 }
@@ -86,9 +92,14 @@ async fn blocked_goto_makes_no_calls_at_all() {
 #[tokio::test]
 async fn resolves_locators_in_order_and_sends_ref() {
     let mut fake = Fake::default();
-    let report = replay_with(&run(THREE), &["example.com".into()], &mut fake)
-        .await
-        .unwrap();
+    let report = replay_with(
+        &run(THREE),
+        &["example.com".into()],
+        ReplayOptions::default(),
+        &mut fake,
+    )
+    .await
+    .unwrap();
     assert_eq!((report.passed, report.failed), (3, 0), "{report:?}");
     // testid:gone misses, role:… hits.
     assert_eq!(
@@ -113,7 +124,9 @@ async fn test_mode_stops_at_first_failure() {
         fail_tool: Some("browser_click"),
         ..Fake::default()
     };
-    let report = replay_with(&run(THREE), &[], &mut fake).await.unwrap();
+    let report = replay_with(&run(THREE), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
     let statuses: Vec<_> = report.steps.iter().map(|s| s.status).collect();
     assert_eq!(
         statuses,
@@ -138,7 +151,9 @@ async fn testid_missing_from_snapshot_falls_back_to_css_selector() {
         "['testid:product-thumbnail']",
     );
     let mut fake = Fake::default();
-    let report = replay_with(&run(&yaml), &[], &mut fake).await.unwrap();
+    let report = replay_with(&run(&yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
     assert_eq!(report.steps[1].status, StepStatus::Passed, "{report:?}");
     assert_eq!(
         report.steps[1].locator_used.as_deref(),
@@ -157,7 +172,9 @@ async fn snapshot_hit_beats_testid_selector_fallback() {
     // testid:gone is listed first but only the role hits the snapshot;
     // the verified ref wins over an unverified selector.
     let mut fake = Fake::default();
-    let report = replay_with(&run(THREE), &[], &mut fake).await.unwrap();
+    let report = replay_with(&run(THREE), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
     assert_eq!(
         report.steps[1].locator_used.as_deref(),
         Some("role:button[name=\"Sign in\"]")
@@ -176,7 +193,9 @@ async fn locator_miss_fails_with_candidates_listed() {
         "['text:gone', 'role:button[name=\"Log in\"]']",
     );
     let mut fake = Fake::default();
-    let report = replay_with(&run(&yaml), &[], &mut fake).await.unwrap();
+    let report = replay_with(&run(&yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
     assert_eq!(report.steps[1].status, StepStatus::Failed);
     let msg = report.steps[1].message.clone().unwrap();
     assert!(
@@ -192,7 +211,9 @@ async fn automation_mode_does_not_fail_on_assert() {
         fail_tool: Some("browser_verify_text_visible"),
         ..Fake::default()
     };
-    let report = replay_with(&run(&yaml), &[], &mut fake).await.unwrap();
+    let report = replay_with(&run(&yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
     assert_eq!(report.failed, 0, "{report:?}");
     assert_eq!(report.steps[2].status, StepStatus::Skipped);
 }
@@ -211,7 +232,9 @@ steps:
   locators: ['role:button[name="Sign in"]']
 "#;
     let mut fake = Fake::default();
-    replay_with(&run(yaml), &[], &mut fake).await.unwrap();
+    replay_with(&run(yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
     let select = fake
         .calls
         .iter()
@@ -234,7 +257,9 @@ async fn one_step(
         "name: s\nmode: test\nrecorded_at: 2026-09-23T00:00:00Z\nsteps:\n- step: 1\n  intent: 確認這一步\n  action: {action}\n{value}  locators: {locators}\n"
     );
     let mut fake = Fake::default();
-    let report = replay_with(&run(&yaml), &[], &mut fake).await.unwrap();
+    let report = replay_with(&run(&yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
     let args = fake
         .calls
         .into_iter()
