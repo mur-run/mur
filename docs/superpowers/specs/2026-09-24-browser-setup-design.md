@@ -43,8 +43,10 @@ research rather than writing a new prompt (see [Consent](#consent)).
 - **No Node.js / npx install.** If `npx` is missing, setup stops with the
   same nodejs.org hint doctor prints. Installing a language runtime is out
   of MUR's lane.
-- **No `--yes` in v1** (see [Open questions](#open-questions)). Scripts and
-  agents run the printed `npx … install-browser chromium` directly.
+- **No `--yes` in v1** (decided 2026-09-24). Nothing downloads without a
+  human typing `yes`, with no exception. Scripts and agents run the printed
+  `npx … install-browser chromium` directly. `mur fleet install-deps --yes`
+  is not followed as precedent here.
 - No branded Chrome / Firefox / Edge. Replay runs `--browser=chromium`
   headless (`mur-browser/src/replay.rs:417-419`); that is the only build
   setup installs.
@@ -204,9 +206,5 @@ exit 0; re-run → no prompt, exit 0.
 
 ## Open questions
 
-1. **`--yes` for scripts?** `mur fleet install-deps --yes` exists as
-   precedent. Leaving it out keeps "nothing downloads without a human
-   typing `yes`" absolute; the printed `npx` command already serves
-   scripts. Recommendation: leave out of v1.
-2. **Offer setup from `mur browser replay` when it fails to spawn?**
+1. **Offer setup from `mur browser replay` when it fails to spawn?**
    Out of scope here; worth a follow-up once setup exists.
