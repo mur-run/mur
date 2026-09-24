@@ -18,6 +18,7 @@
 
 pub mod auth;
 pub mod broker;
+pub mod chromium;
 pub mod export;
 pub mod guard;
 pub mod locator;
