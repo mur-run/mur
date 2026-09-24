@@ -175,6 +175,14 @@ const SKILL_SUBS: &[(&str, &str)] = &[
     ("add", "install a skill"),
     ("remove", "uninstall a skill"),
 ];
+/// `/search` takes free text, so the menu can only teach the flags — the
+/// query itself is typed, not completed.
+const SEARCH_FLAGS: &[(&str, &str)] = &[
+    ("--all", "search every indexed project"),
+    ("--limit", "cap the number of hits"),
+    ("--send", "send the results to the agent"),
+];
+
 const DEEP_RESEARCH_SUBS: &[(&str, &str)] = &[
     // `ask` is offered even though bare text works without it: the menu is
     // the only place a user learns the verb exists, and a menu that lists
@@ -245,6 +253,11 @@ const COMMANDS: &[(&str, &str, Args)] = &[
         "secret",
         "hand the agent a credential (hidden input)",
         Args::Secret,
+    ),
+    (
+        "search",
+        "search indexed project code",
+        Args::Fixed(SEARCH_FLAGS),
     ),
     ("sessions", "list past sessions", Args::None),
     ("skill", "manage agent skills", Args::Fixed(SKILL_SUBS)),
