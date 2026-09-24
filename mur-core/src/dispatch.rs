@@ -624,6 +624,27 @@ pub async fn run(cli: Cli) -> Result<()> {
             BrowserAction::Show { name } => cmd::browser::show(&name)?,
             BrowserAction::Export { name, out } => cmd::browser::export(&name, out.as_deref())?,
             BrowserAction::Status => cmd::browser::status()?,
+            BrowserAction::Doctor { live } => {
+                let home = dirs::home_dir();
+                let browsers = cmd::browser::doctor::browsers_dir(
+                    &|k: &str| std::env::var_os(k),
+                    home.as_deref(),
+                );
+                let mut out = std::io::stdout();
+                cmd::browser::doctor::doctor(
+                    &mut out,
+                    // The PATH `playwright_command` spawns `npx` with, not
+                    // the augmented one — a pass must mean replay finds it.
+                    &std::env::var_os("PATH").unwrap_or_default(),
+                    browsers.as_deref(),
+                    &mut cmd::deep_research::browser::system_runner,
+                )?;
+                if live {
+                    cmd::browser::doctor::live_check(&mut out).await?;
+                } else {
+                    println!("  (install check only — add --live to launch a headless browser)");
+                }
+            }
             BrowserAction::Prune {
                 keep,
                 older_than,

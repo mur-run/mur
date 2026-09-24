@@ -614,6 +614,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cli_browser_doctor_parses_with_and_without_live() {
+        use crate::cli::actions::BrowserAction;
+        use clap::Parser;
+        for (argv, want) in [
+            (&["mur", "browser", "doctor"][..], false),
+            (&["mur", "browser", "doctor", "--live"][..], true),
+        ] {
+            match Cli::try_parse_from(argv).unwrap().command {
+                Commands::Browser {
+                    action: BrowserAction::Doctor { live },
+                } => assert_eq!(live, want, "{argv:?}"),
+                _ => panic!("expected browser doctor for {argv:?}"),
+            }
+        }
+    }
+
     /// `mur deep-research status` must open the status panel, never be
     /// swallowed as a one-word research question and dispatched to the
     /// fleet (which is what happened before the `Status` subcommand existed).

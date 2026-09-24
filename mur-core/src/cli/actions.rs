@@ -798,14 +798,14 @@ pub enum BrowserAction {
         /// Site profile to replay under (defaults to the one recorded with the run).
         #[arg(long)]
         profile: Option<String>,
-        /// Self-heal missed locators (not implemented yet).
+        /// Self-heal missed locators (not implemented yet; the flag errors).
         #[arg(long)]
         heal: bool,
         /// Check the run against the profile allowlist without launching a browser.
         #[arg(long)]
         dry_run: bool,
     },
-    /// Authenticate a named browser profile (handoff implementation follows).
+    /// Log in once in a headed browser and save the session as an encrypted profile.
     Auth {
         /// Profile name; used as a path component under browser/profiles.
         site: String,
@@ -825,11 +825,11 @@ pub enum BrowserAction {
         #[arg(long = "allow-domain", value_name = "DOMAIN")]
         allow_domain: Vec<String>,
     },
-    /// Run the secret broker (implemented in a later slice).
+    /// Run the secret broker (needs MUR_BROWSER_BROKER_TOKEN; `record` starts its own).
     Broker,
-    /// List recorded runs (implemented in a later slice).
+    /// List recorded runs.
     List,
-    /// Show one recorded run (implemented in a later slice).
+    /// Show one recorded run.
     Show { name: String },
     /// Export a recorded run as a Playwright `.spec.ts` file.
     Export {
@@ -838,8 +838,17 @@ pub enum BrowserAction {
         #[arg(long)]
         out: Option<std::path::PathBuf>,
     },
-    /// Show browser subsystem status (implemented in a later slice).
+    /// List saved profiles and recorded runs (does not check the toolchain; see `doctor`).
     Status,
+    /// Check that record/replay can run: npx and node work, and a Playwright
+    /// Chromium is installed. Read-only — prints the install command for
+    /// anything missing and exits non-zero.
+    Doctor {
+        /// Also launch the pinned @playwright/mcp headless and render a local
+        /// JS-only page (loopback only; may download the package on first run).
+        #[arg(long)]
+        live: bool,
+    },
     /// Delete old recorded runs, keeping the most recently recorded ones.
     Prune {
         /// Number of most recent runs to keep.
