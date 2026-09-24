@@ -412,7 +412,7 @@ where
 /// Launch arguments for the headless Playwright MCP server used by replay.
 fn live_args(storage_state: Option<&std::path::Path>) -> Vec<String> {
     // @playwright/mcp defaults to branded Google Chrome, which is often not
-    // installed; the bundled Chromium is what `npx playwright install` provides.
+    // installed; `--browser=chromium` selects Playwright's own build.
     let mut args = vec![
         "--headless".to_owned(),
         "--isolated".to_owned(),
@@ -423,6 +423,11 @@ fn live_args(storage_state: Option<&std::path::Path>) -> Vec<String> {
     if let Some(path) = storage_state {
         args.push(format!("--storage-state={}", path.display()));
     }
+    // The package launches full Chrome for Testing even headless; point it
+    // at the headless shell `mur browser setup` installs, when present.
+    args.extend(crate::chromium::headless_exe_args(
+        crate::chromium::system_browsers_dir().as_deref(),
+    ));
     args
 }
 
