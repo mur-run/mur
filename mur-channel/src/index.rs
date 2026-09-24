@@ -482,7 +482,9 @@ impl ChannelIndex {
                 .filter_map(|id| store.load_manifest(&id).ok())
                 .collect();
             manifests.sort_by(|a, b| {
-                a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id))
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
             });
             for ch in manifests {
                 let id = ch.id.clone();
