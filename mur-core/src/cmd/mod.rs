@@ -26,6 +26,7 @@ pub mod capability;
 pub mod channel;
 pub mod commander;
 pub mod compress;
+pub mod consent;
 pub mod context;
 pub(crate) mod conversations_cmd;
 pub mod conversations_cost_report;

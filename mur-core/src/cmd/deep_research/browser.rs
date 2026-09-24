@@ -692,11 +692,7 @@ pub fn ensure_render_browser(
     if bins.is_empty() {
         writeln!(output, "\nNo render browser found. Installing one does:")?;
         print_install_plan(output, plan)?;
-        write!(output, "Type 'yes' to do this now (anything else = skip): ")?;
-        output.flush()?;
-        let mut line = String::new();
-        input.read_line(&mut line)?;
-        if line.trim() != "yes" {
+        if !crate::cmd::consent::literal_yes(input, output)? {
             writeln!(
                 output,
                 "  skipped — plain fetch still works; run `mur deep-research doctor` later."
