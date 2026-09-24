@@ -249,13 +249,9 @@ cost_usd) and by `mur fleet stop`."
         } else {
             cmd.stdin(std::process::Stdio::null());
         }
-        let mut child = cmd.spawn().map_err(|e| {
-            ToolError::Execution(format!(
-                "failed to spawn `{}`: {e} — if the runtime sandbox denied the spawn, \
-                 restart the agent so the fleet_run carve-ins apply",
-                mur_bin.display()
-            ))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| ToolError::Execution(spawn_error_message(&mur_bin, &e)))?;
         if let Some(h) = handoff
             && let Some(mut stdin) = child.stdin.take()
         {
@@ -291,8 +287,56 @@ cost_usd) and by `mur fleet stop`."
     }
 }
 
+/// Explain a failed spawn without sending the reader down a wrong path.
+///
+/// Only a permission denial can be the sandbox, and the usual cause is the
+/// binary living outside every exec lane (e.g. under `$TMPDIR`) — which no
+/// restart fixes. A restart only helps when `fleet_run.agents` changed after
+/// this agent started, so it is offered on that condition alone.
+pub(crate) fn spawn_error_message(bin: &std::path::Path, e: &std::io::Error) -> String {
+    let base = format!("failed to spawn `{}`: {e}", bin.display());
+    if e.kind() != std::io::ErrorKind::PermissionDenied {
+        return base;
+    }
+    format!(
+        "{base} — the runtime sandbox refused to exec this path; check that it \
+         is inside an exec lane (binaries under $TMPDIR or /tmp never are). \
+         Restarting the agent helps only if `fleet_run.agents` in config.yaml \
+         changed after it started"
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    /// The old hint told every spawn failure to "restart the agent so the
+    /// carve-ins apply". When the binary sat in `$TMPDIR` (outside any exec
+    /// lane) a restart changed nothing, and an open item was filed on that
+    /// wrong lead. A denial must name the path/lane cause; a restart is only
+    /// offered conditionally.
+    #[test]
+    fn permission_denied_spawn_names_the_exec_lane_not_a_bare_restart() {
+        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let msg = super::spawn_error_message(std::path::Path::new("/tmp/x/fake-mur"), &e);
+        assert!(msg.contains("/tmp/x/fake-mur"), "{msg}");
+        assert!(msg.contains("exec lane"), "{msg}");
+        assert!(
+            !msg.contains("restart the agent so the fleet_run carve-ins apply"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("fleet_run.agents"),
+            "restart must be conditional: {msg}"
+        );
+    }
+
+    #[test]
+    fn non_permission_spawn_errors_do_not_blame_the_sandbox() {
+        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let msg = super::spawn_error_message(std::path::Path::new("mur"), &e);
+        assert!(!msg.contains("sandbox"), "{msg}");
+        assert!(!msg.contains("restart"), "{msg}");
+    }
+
     use super::*;
 
     fn write_config(home: &std::path::Path, yaml: &str) {
