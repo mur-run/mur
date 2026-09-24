@@ -177,7 +177,13 @@ mod tests {
     fn non_tty_bails_with_both_commands_and_runs_nothing() {
         let bin = path_with_npx();
         let browsers = tempfile::tempdir().unwrap();
-        let r = run(false, "yes\n", bin.path().as_os_str(), Some(browsers.path()), &never);
+        let r = run(
+            false,
+            "yes\n",
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &never,
+        );
         let err = format!("{:#}", r.result.unwrap_err());
         assert!(err.contains("`setup` is interactive"), "{err}");
         assert!(err.contains(&install_hint()), "{err}");
@@ -190,7 +196,13 @@ mod tests {
     fn missing_npx_stops_without_asking() {
         let empty = tempfile::tempdir().unwrap();
         let browsers = tempfile::tempdir().unwrap();
-        let r = run(true, "yes\n", empty.path().as_os_str(), Some(browsers.path()), &never);
+        let r = run(
+            true,
+            "yes\n",
+            empty.path().as_os_str(),
+            Some(browsers.path()),
+            &never,
+        );
         assert!(r.result.is_err());
         assert!(r.out.contains("nodejs.org"), "{}", r.out);
         assert!(!r.out.contains("Type 'yes'"), "{}", r.out);
@@ -201,7 +213,13 @@ mod tests {
         let bin = path_with_npx();
         let browsers = tempfile::tempdir().unwrap();
         complete(browsers.path(), "chromium_headless_shell-1246");
-        let r = run(true, "", bin.path().as_os_str(), Some(browsers.path()), &never);
+        let r = run(
+            true,
+            "",
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &never,
+        );
         r.result.unwrap();
         assert!(!r.out.contains("Type 'yes'"), "{}", r.out);
     }
@@ -241,7 +259,13 @@ mod tests {
         let bin = path_with_npx();
         for answer in ["y\n", "Y\n", "\n", ""] {
             let browsers = tempfile::tempdir().unwrap();
-            let r = run(true, answer, bin.path().as_os_str(), Some(browsers.path()), &never);
+            let r = run(
+                true,
+                answer,
+                bin.path().as_os_str(),
+                Some(browsers.path()),
+                &never,
+            );
             assert!(r.result.is_err(), "{answer:?} must exit 1");
             assert!(r.out.contains("skipped"), "{answer:?}: {}", r.out);
         }
@@ -251,7 +275,13 @@ mod tests {
     fn plan_is_printed_before_the_prompt() {
         let bin = path_with_npx();
         let browsers = tempfile::tempdir().unwrap();
-        let r = run(true, "no\n", bin.path().as_os_str(), Some(browsers.path()), &never);
+        let r = run(
+            true,
+            "no\n",
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &never,
+        );
         let prompt = r.out.find("Type 'yes'").expect("prompted");
         let cmd = r.out.find(&install_hint()).expect("full argv printed");
         let dir = r
@@ -271,9 +301,13 @@ mod tests {
     fn failing_installer_fails_setup() {
         let bin = path_with_npx();
         let browsers = tempfile::tempdir().unwrap();
-        let r = run(true, "yes\n", bin.path().as_os_str(), Some(browsers.path()), &|| {
-            Ok(false)
-        });
+        let r = run(
+            true,
+            "yes\n",
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &|| Ok(false),
+        );
         assert!(r.result.is_err());
         assert!(r.out.contains("✗ install command failed"), "{}", r.out);
     }
@@ -282,9 +316,13 @@ mod tests {
     fn installer_ok_but_no_build_names_the_dir() {
         let bin = path_with_npx();
         let browsers = tempfile::tempdir().unwrap();
-        let r = run(true, "yes\n", bin.path().as_os_str(), Some(browsers.path()), &|| {
-            Ok(true)
-        });
+        let r = run(
+            true,
+            "yes\n",
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &|| Ok(true),
+        );
         assert!(r.result.is_err());
         assert!(
             r.out.contains(&format!(

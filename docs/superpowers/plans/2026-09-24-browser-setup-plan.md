@@ -98,9 +98,9 @@ rescan `installed_builds` (headless shell, then full) → none: `  ✗ still no 
 
 ## Task 4 — CLI + dispatch
 
-- [ ] RED: `mur browser setup` parses to `BrowserAction::Setup`.
-- [ ] GREEN: variant with doc comment; dispatch: `prepare(stdin.is_terminal(), &mut stdin.lock(), ...)?; live_check(&mut out).await?; println!("mur browser is ready.");`
-- [ ] Commit.
+- [x] RED: `mur browser setup` parses to `BrowserAction::Setup`.
+- [x] GREEN: variant with doc comment; dispatch: `prepare(stdin.is_terminal(), &mut stdin.lock(), ...)?; live_check(&mut out).await?; println!("mur browser is ready.");`
+- [x] Commit.
 
 ## Task 5 — verify & ship
 

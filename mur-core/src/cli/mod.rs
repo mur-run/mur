@@ -631,6 +631,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cli_browser_setup_parses_and_has_no_yes_flag() {
+        use crate::cli::actions::BrowserAction;
+        use clap::Parser;
+        assert!(matches!(
+            Cli::try_parse_from(["mur", "browser", "setup"])
+                .unwrap()
+                .command,
+            Commands::Browser {
+                action: BrowserAction::Setup
+            }
+        ));
+        // Spec: nothing downloads without a human typing `yes`.
+        assert!(Cli::try_parse_from(["mur", "browser", "setup", "--yes"]).is_err());
+    }
+
     /// `mur deep-research status` must open the status panel, never be
     /// swallowed as a one-word research question and dispatched to the
     /// fleet (which is what happened before the `Status` subcommand existed).

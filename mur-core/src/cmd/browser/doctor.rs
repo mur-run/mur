@@ -481,7 +481,10 @@ mod tests {
         let bin = path_with_npx();
         let browsers = tempfile::tempdir().unwrap();
         let (_, out, _) = run_doctor(bin.path().as_os_str(), Some(browsers.path()), true);
-        let hint = format!("  install with: {}\n  or run: mur browser setup\n", install_hint());
+        let hint = format!(
+            "  install with: {}\n  or run: mur browser setup\n",
+            install_hint()
+        );
         assert!(out.contains(&hint), "{out}");
     }
 
