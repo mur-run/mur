@@ -71,9 +71,9 @@ pub fn doctor(...) -> Result<()>  // = l1_check, then bail if !ready (same messa
 ```
 `npx_ok` = npx resolved AND `node`/`npx --version` both passed (setup cannot install otherwise).
 
-- [ ] RED: `install_hint() == install_argv().join(" ")`; missing-Chromium output contains `  or run: mur browser setup`; `l1_check` report cases (Found / Missing / Unknown, npx_ok false on missing npx and on failing node).
-- [ ] GREEN; existing 11+ doctor tests unchanged.
-- [ ] Commit.
+- [x] RED: `install_hint() == install_argv().join(" ")`; missing-Chromium output contains `  or run: mur browser setup`; `l1_check` report cases (Found / Missing / Unknown, npx_ok false on missing npx and on failing node).
+- [x] GREEN; existing 11+ doctor tests unchanged.
+- [x] Commit.
 
 ## Task 3 — `setup::prepare`
 
