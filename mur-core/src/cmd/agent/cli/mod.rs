@@ -94,7 +94,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
 
 use self::app::{
-    App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, Role, SlashCmd,
+    App, ChannelRef, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, Role, SlashCmd,
     arm_input_debounce, esc_action, overlay_key_action, parse_slash, take_due_input,
 };
 use self::persist::Session;
@@ -238,7 +238,7 @@ fn help_text() -> String {
     );
     [
         "commands",
-        "  chat      /clear (new conversation) · /sessions · /channels [N] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
+        "  chat      /clear (new conversation) · /sessions · /channels [N|id-prefix] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
         "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T / Alt+M)",
         settings.as_str(),
         "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
