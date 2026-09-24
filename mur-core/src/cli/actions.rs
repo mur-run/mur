@@ -850,8 +850,9 @@ pub enum BrowserAction {
         live: bool,
     },
     /// Install the Chromium replay needs, then prove it renders. Prints the
-    /// exact `npx … install-browser chromium` command and runs it only if you
-    /// type `yes`. Interactive only; exits non-zero unless the live test passes.
+    /// exact `npx … install-browser --only-shell chromium` command and runs it
+    /// only if you type `yes`. Interactive only; exits non-zero unless the live
+    /// test passes.
     Setup,
     /// Delete old recorded runs, keeping the most recently recorded ones.
     Prune {
