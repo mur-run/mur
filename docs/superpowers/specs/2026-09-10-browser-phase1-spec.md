@@ -11,6 +11,7 @@
 | 2026-09-10 | 初版，狀態「待核准，未寫任何程式碼」。原檔位置 `~/.mur/artifacts/mur/browser-research-20260910/SPEC-phase1.md`（未受版控）。 |
 | 2026-09-23 | 移入版控（`docs/superpowers/specs/`），原「待核准，未寫任何程式碼」抬頭**已過期**：引擎層在 commit `2955eca2`（`feat(browser): add Playwright auth and recording (#1244)`，2026-09-11）落地；skill 層延後至 `docs/superpowers/plans/2026-09-23-browser-skill-layer-plan.md` Task 1/6/7。`mur-browser/src/lib.rs` 的 `Design source:` 改指本檔。 |
 | 2026-09-23 | 實跑 replay 後補：§3.2 新增 `assert_visible` 需 `role:` locator 的拒收規則；新增 §3.5（`@playwright/mcp@0.0.82` 實測約束）與 §3.6（record / replay 的 tracing）；§6 步驟 2 註明 testid 後備。§3.5 補 `target` 鍵與陣列值兩項約束，§3.6 補 record 丟棄 step 的 warn。對應 commit `f5ba890c` `321fa03c` `a272aa5c` `71c638ed` `5efa0ffb` `313a1c1f` `9b5fbba0`。 |
+| 2026-09-24 | §6 步驟 3–4 的 L3（agent）自癒改由 `2026-09-24-browser-replay-heal-design.md` 取代：Rust 離線比對、下一個元素步驟驗證後才寫回、預算以元素步驟為分母。L3 列為非目標。 |
 
 ### §1.1 四項交付物實際狀態（2026-09-23 查證）
 
@@ -203,7 +204,7 @@ Saving ──▶ Done（寫 meta.yaml；回報「session 已存，最早 cookie 
 1. 解密 state → 啟 Playwright MCP（`--isolated --headless --storage-state=…`）→ proxy 自己當 MCP client。
 2. 逐 step：`goto` 直接送；其他先 `browser_snapshot`，用 `locator.rs` 把 `locators[]` 依序對 snapshot 解析成 `@ref`（**L1/L2 在 Rust 內完成，零 LLM**），第一個命中者送對應 tool；`hits.jsonl` 記 `{step, hit}`。
    - 例外（2026-09-23，`71c638ed`）：snapshot 不含 `data-testid`，所以全部 miss 時若有 `testid:` 候選，先把第一個以 `[data-testid="…"]` 直接交給 server 解析，server 也找不到才算 miss。見 §3.5。
-3. 全部 miss → 若無 `--heal`：fail，report 列出 step + intent。若 `--heal`：把 `intent` + 當前 snapshot 交給 browser-worker agent（透過 `mur agent run browser-worker --prompt …`，走既有 A2A），agent 只回一個 `@ref`；proxy 對它 `browser_generate_locator` → **prepend** 到 `locators[]`、`healed: true`、寫回 `actions.yaml`；繼續。
+3. （**已被 `2026-09-24-browser-replay-heal-design.md` 取代**，下文保留作歷史）全部 miss → 若無 `--heal`：fail，report 列出 step + intent。若 `--heal`：把 `intent` + 當前 snapshot 交給 browser-worker agent（透過 `mur agent run browser-worker --prompt …`，走既有 A2A），agent 只回一個 `@ref`；proxy 對它 `browser_generate_locator` → **prepend** 到 `locators[]`、`healed: true`、寫回 `actions.yaml`；繼續。
 4. 自癒後**下一步的 assert（或下一個有 locator 的 step）必須命中**，否則回滾該 healed locator 並 fail——防癒錯。
 5. 結果：綠 / 黃（有 `healed`，僅 `mode: test`）/ 紅。`--json` 輸出給 workflow 與 MURMUR。
 6. `--parallel N`（第一期）：N 個 `replay` process、各自解密一份 state 到各自 tmp；`mur browser` daemon 與 named context 留第二期，旗標先保留。

@@ -228,30 +228,33 @@ fixture 就是 round-trip 測試本身。
 
 ## Task 5 — 自癒與 heal 預算
 
-`Step.healed` 欄位（`recorder.rs:69`）目前沒有任何程式會設它。自癒若無上限，測試會一路綠燈卻早已什麼都沒在測。
+設計：`docs/superpowers/specs/2026-09-24-browser-replay-heal-design.md`（2026-09-24 改寫本節：原 5.4「依序試其餘候選」是 `run_step` 既有行為，不算自癒）。
 
 ### Interfaces
 
-**Consumes:** `replay::{StepOutcome, StepStatus}`、`locator::is_stable`
+**Consumes:** `replay::{StepOutcome, StepStatus}`、`locator::{SnapshotNode, Locator, candidates_for_ref}`
 **Produces:**
-- `pub struct mur_browser::heal::HealEvent { pub step: u32, pub from: String, pub to: String, pub reason: String }`
+- `pub enum mur_browser::heal::HealStatus { Pending, Verified, Unverified, RolledBack }`
+- `pub struct mur_browser::heal::HealEvent { pub step: u32, pub from: Vec<String>, pub to: Vec<String>, pub node: String, pub score: f32, pub reason: String, pub status: HealStatus }`
+- `pub fn mur_browser::heal::find_replacement(step: &Step, nodes: &[SnapshotNode]) -> Result<(String, f32), String>`（回選中的 ref 與分數；拒絕時回原因）
+- `pub fn mur_browser::heal::allowed_heals(total: u32, max_ratio: f32) -> u32`
 - `pub fn mur_browser::heal::budget_exceeded(healed: u32, total: u32, max_ratio: f32) -> bool`
-- `pub const mur_browser::heal::DEFAULT_HEAL_RATIO: f32 = 0.2;`
+- `pub const DEFAULT_HEAL_RATIO: f32 = 0.2; HEAL_MIN_SCORE; HEAL_MIN_MARGIN`
 - `ReplayReport.heals: Vec<HealEvent>`
-- CLI `mur browser replay ... [--max-heal-ratio <f32>]`（預設 `DEFAULT_HEAL_RATIO`）
+- CLI `mur browser replay ... [--heal] [--max-heal-ratio <0.0..=1.0>]`
 
 ### Steps
 
-- [ ] 5.1 新建 `mur-browser/src/heal.rs`，先寫測試：`budget_exceeded(2, 10, 0.2)` 為 `false`（剛好 20%）、`budget_exceeded(3, 10, 0.2)` 為 `true`、`total == 0` 回 `false`
-- [ ] 5.2 補測試：heal 發生時 `HealEvent` 必須同時記下 `from`、`to`、`reason`，缺一不可
+- [ ] 5.0 **前置 PR（純搬移）**：`replay.rs`（823 行）拆出 `replay/tests.rs`、`replay/stdio.rs`；`cmd/browser/mod.rs`（879 行）的 `replay` 移到 `cmd/browser/replay.rs`。行為不變，測試全綠後 commit
+- [ ] 5.1 新建 `heal.rs`，先寫預算測試：`(2,10,0.2)` false、`(3,10,0.2)` true、`(1,3,0.2)` false、`(2,3,0.2)` true、`total == 0` false
+- [ ] 5.2 比對單元測試（直接呼叫比對函式）：testid 改名 → 採用；「送出」→「送出訂單」→ 採用；同 role 兩節點分數相近 → 拒絕；無 role locator → 拒絕；role 不同 → 拒絕；新 locator 不含 `@ref`、去重、前插
 - [ ] 5.3 `cargo test -p mur-browser heal` → 失敗
-- [ ] 5.4 實作，並在 `replay` 的 `--heal` 路徑：首選 locator 失敗 → 依序試 `locators` 其餘候選 → 成功則標 `StepStatus::Healed`、推入 `HealEvent`、把新 locator 前插回 `actions.yaml` 並設 `healed: true`
-- [ ] 5.5 `replay` 結束時：`mode: test` 且 `budget_exceeded(healed, total, max_ratio)`
-      為真 → 整體回 `Err`，訊息說明「自癒率過高，錄製已失效，請重錄」，
-      並印出實際比率與當前門檻（讓使用者知道該調哪個旗標）
-- [ ] 5.6 `actions.rs` 的 `Replay` 加 `--max-heal-ratio: Option<f32>`，
-      `None` 時取 `DEFAULT_HEAL_RATIO`；補測試：傳 `0.5` 時 3/10 不再失敗
-- [ ] 5.7 `cargo test -p mur-browser` → 全綠，commit
+- [ ] 5.4 實作 `heal.rs`（詞彙切分含 CJK bigram、Jaccard、門檻＋領先差距），用 fixture 校準兩個常數並回填 spec
+- [ ] 5.5a `run_step` 錯誤分類：解析階段全部 miss 且無 testid 候選 → `StepError::LocateMiss`；testid 後備送出後的任何錯誤、動作錯誤 → `StepError::Action`。補測試：testid 後備回錯與動作回錯都 `Failed` 且不 heal，動作只呼叫一次
+- [ ] 5.5 `replay_with` 接 heal：只在元素步驟（非 `assert_text`）回 `LocateMiss` 時觸發；下一個元素步驟直接命中 → `Verified`，失敗或也要 heal、或中間 `assert_text` 失敗 → 回滾並把 heal 步驟標 `Failed`；結束仍 `Pending` → `Unverified`。補 spec「測試」節的五個 replay 案例
+- [ ] 5.6 預算：分母為元素步驟數，只在 `Mode::Test` 檢查；超過 → 仍回 `Ok(report)`，`report.budget_exceeded = Some(BudgetExceeded { healed, allowed, max_ratio })`；CLI 先寫報告 yaml 再回非零，訊息含實際次數、允許次數、`--max-heal-ratio`。`verdict()` 在超預算時回 `red`。補測試：automation 不受限；test 超預算時報告已寫入、`actions.yaml` 不變；`failed == 0 && budget_exceeded.is_some()` → `red`
+- [ ] 5.7 `mur-core`：`actions.rs` 的 `Replay` 加 `--max-heal-ratio`（clap 限 0–1）、拿掉 `--heal` 的 bail；只在無 `Failed` 且未超預算時，把 `Verified` 的 heal 以 temp + rename 寫回 `actions.yaml`，rename 成功後才填 `report.written_back`（寫回錯誤先接住，報告照寫再回非零）。補寫回測試，含「有 `Verified` 但超預算 → `written_back == 0`」
+- [ ] 5.8 `cargo test -p mur-browser -p mur-core` + clippy `--all-targets -D warnings` → 全綠，commit
 
 ---
 
@@ -266,7 +269,7 @@ fixture 就是 round-trip 測試本身。
 
 - [ ] 6.1 建立 `/tmp/browser-test/SKILL.md`，frontmatter `name: browser-test`，triggers keyword `browser test|e2e|端對端|網頁測試`
 - [ ] 6.2 內文固定工作流：`mur browser status` 檢查 profile → 缺則轉 browser-auth → `mur browser record --run <name> --mode test --trace --profile <site>` → `mur browser replay <name> --heal` → `mur browser export <name> --out <path>`
-- [ ] 6.3 內文明訂：**mode 一律 `test`**；trace 預設開；自癒被拒（Task 5.5）時不得重試，直接回報需重錄
+- [ ] 6.3 內文明訂：**mode 一律 `test`**；trace 預設開；自癒被拒（Task 5.5 回滾或 5.6 超預算）時不得重試，直接回報需重錄
 - [ ] 6.4 加「絕不」清單：不得改 `actions.yaml` 的 assert、不得為了讓測試變綠而刪步驟
 - [ ] 6.5 `mur skill install /tmp/browser-test`，`ls ~/.mur/skills/browser-test/SKILL.md` 驗證
 
@@ -354,13 +357,13 @@ Playwright trace 單次動輒數十 MB，目前只有產出沒有清理。
 
 **Spec 覆蓋：** §1.1 四項交付物 → 前三項已由 `2955eca2` 完成（Task 9 負責如實記錄），第四項 skill 層 → Task 1/6/7。§4 的三指令分工 → Task 1/6/7 各一。
 
-**先前 review 的八點意見落點：** broker（已存在，撤回）、引擎措辭矛盾 → 9.2、自癒無煞車 → Task 5、parallel 與 storageState → 7.3、留存清理 → Task 8、list/show（已存在，撤回）、爆炸半徑 → Task 2 + 7.5、文件說謊 → Task 9。
+**先前 review 的八點意見落點：** broker（已存在，撤回）、引擎措辭矛盾 → 9.2、自癒無煞車 → Task 5（5.5 驗證回滾＋5.6 預算）、parallel 與 storageState → 7.3、留存清理 → Task 8、list/show（已存在，撤回）、爆炸半徑 → Task 2 + 7.5、文件說謊 → Task 9。
 
 **跨 Task 型別一致性：** `ReplayReport` 在 Task 4 定義、Task 5 追加 `heals` 欄位，兩處名稱一致；`guard::check` 在 Task 2 定義、Task 4.2 消費；`to_spec_ts` 在 Task 3 定義、Task 6.2 經 CLI 消費；`Action::tool_name` / `call_for` 在 Task 0 定義、Task 4.5 消費。
 
 **跨 Task 語意一致性（不只名稱）：** `Run.mode`（`recorder.rs:84`，值域 `Test` / `Automation`）是貫穿全案的分岔點，三處行為必須一致 ——
 - Task 3 的 `to_spec_ts` 只對 `Mode::Test` 有意義；遇到 `Mode::Automation` 應回 `Err` 而非產出無斷言的空殼 spec
-- Task 5.5 的 heal 預算只在 `Mode::Test` 生效（automation 無斷言，自癒率高不代表失效）
+- Task 5.6 的 heal 預算只在 `Mode::Test` 生效（automation 無斷言，自癒率高不代表失效）
 - Task 7.3 的 automation 平行路徑不得接受 `Mode::Test` 的 Run（斷言在平行環境下會互相干擾）
 
 施工者請在各自 Task 補一個 mode 不符的測試，不要只靠型別檢查。
