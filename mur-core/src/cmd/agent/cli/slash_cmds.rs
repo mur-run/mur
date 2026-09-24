@@ -3,6 +3,68 @@
 
 use super::*;
 
+/// Why a `/channels <target>` lookup found nothing usable.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ResolveErr {
+    NotFound,
+    /// An id prefix matched more than one channel; carries the short ids.
+    Ambiguous(Vec<String>),
+    /// An id prefix so short it would match almost anything.
+    TooShort,
+}
+
+/// Shortest id prefix we will act on. Below this a typo silently lands you in
+/// someone else's conversation, so we ask for more characters instead.
+const MIN_ID_PREFIX: usize = 4;
+
+/// Resolve what the user typed after `/channels` against the recent list.
+pub(super) fn resolve<'a>(
+    recent: &'a [persist::SessionInfo],
+    target: &ChannelRef,
+) -> Result<&'a persist::SessionInfo, ResolveErr> {
+    match target {
+        ChannelRef::Ordinal(n) => recent
+            .iter()
+            .find(|s| s.ordinal == *n)
+            .ok_or(ResolveErr::NotFound),
+        ChannelRef::IdPrefix(p) => {
+            if p.len() < MIN_ID_PREFIX {
+                return Err(ResolveErr::TooShort);
+            }
+            let hits: Vec<&persist::SessionInfo> = recent
+                .iter()
+                .filter(|s| s.id.to_ascii_lowercase().starts_with(p))
+                .collect();
+            match hits.len() {
+                0 => Err(ResolveErr::NotFound),
+                1 => Ok(hits[0]),
+                _ => Err(ResolveErr::Ambiguous(
+                    hits.iter()
+                        .map(|s| s.id[..s.id.len().min(8)].to_string())
+                        .collect(),
+                )),
+            }
+        }
+    }
+}
+
+/// One-line rendering of a failed lookup, for the system pane.
+pub(super) fn resolve_msg(target: &ChannelRef, err: &ResolveErr) -> String {
+    let what = match target {
+        ChannelRef::Ordinal(n) => format!("channel {n}"),
+        ChannelRef::IdPrefix(p) => format!("channel id starting {p}"),
+    };
+    match err {
+        ResolveErr::NotFound => format!("no {what} — /channels to list"),
+        ResolveErr::TooShort => {
+            format!("{what} is too short — give at least {MIN_ID_PREFIX} characters")
+        }
+        ResolveErr::Ambiguous(ids) => {
+            format!("{what} matches {} — try a longer prefix", ids.join(", "))
+        }
+    }
+}
+
 pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>) {
     match cmd {
         SlashCmd::Help => app.push_system(help_text()),
@@ -37,7 +99,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             Ok(_) => app.push_system("no saved conversations yet"),
             Err(e) => app.push_system(format!("could not list sessions: {e}")),
         },
-        SlashCmd::Channels { n, follow } => {
+        SlashCmd::Channels { target, follow } => {
             // `--follow` never touches the current conversation: it tails
             // ANOTHER channel while this pane keeps chatting, so an in-flight
             // turn must not be cancelled for it.
@@ -49,7 +111,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         return;
                     }
                 };
-                match n {
+                match target {
                     None => {
                         match app.follow.take() {
                             Some(f) => app.push_system(format!("stopped following {}", f.tag())),
@@ -59,8 +121,8 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         }
                         return;
                     }
-                    Some(n) => match recent.get(n.wrapping_sub(1)) {
-                        Some(s) => {
+                    Some(t) => match resolve(&recent, &t) {
+                        Ok(s) => {
                             let id = s.id.clone();
                             match app.start_follow(&id, StdInstant::now()) {
                                 Ok(()) => app.push_system(format!(
@@ -70,7 +132,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                                 Err(e) => app.push_system(format!("could not follow: {e:#}")),
                             }
                         }
-                        None => app.push_system(format!("no channel {n}")),
+                        Err(e) => app.push_system(resolve_msg(&t, &e)),
                     },
                 }
                 return;
@@ -89,9 +151,9 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                     return;
                 }
             };
-            match n {
-                Some(n) => match recent.get(n.wrapping_sub(1)) {
-                    Some(s) => {
+            match target {
+                Some(t) => match resolve(&recent, &t) {
+                    Ok(s) => {
                         let id = s.id.clone();
                         stop_shell(app, false);
                         match app.switch_channel(&id) {
@@ -106,19 +168,20 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                             Err(e) => app.push_system(format!("could not switch channel: {e}")),
                         }
                     }
-                    None => app.push_system(format!("no channel {n}")),
+                    Err(e) => app.push_system(resolve_msg(&t, &e)),
                 },
                 None => {
                     if recent.is_empty() {
                         app.push_system("no channels yet");
                     } else {
                         let mut out = String::from(
-                            "channels (/channels N to switch · N --follow to tail):\n",
+                            "channels (/channels N or id-prefix to switch · add --follow to tail):\n",
                         );
-                        for (i, s) in recent.iter().enumerate() {
+                        for s in recent.iter() {
                             out.push_str(&format!(
-                                "  {} · {} turns · {}\n",
-                                i + 1,
+                                "  {} · {} · {} turns · {}\n",
+                                s.ordinal,
+                                &s.id[..s.id.len().min(8)],
                                 s.turns,
                                 s.preview
                             ));
@@ -442,4 +505,75 @@ pub(super) fn retry_send(app: &mut App, mut params: Value, tx: &mpsc::Sender<Str
         task_id,
         tx.clone(),
     );
+}
+
+/// `/channels <target>` resolution: an ordinal names exactly one channel for
+/// life, and an id prefix must be unambiguous before we act on it.
+#[cfg(test)]
+mod resolve_tests {
+    use super::{ChannelRef, ResolveErr, resolve};
+    use crate::cmd::agent::cli::persist::SessionInfo;
+
+    fn si(id: &str, ordinal: u64) -> SessionInfo {
+        SessionInfo {
+            id: id.into(),
+            preview: String::new(),
+            turns: 1,
+            ordinal,
+        }
+    }
+
+    fn recent() -> Vec<SessionInfo> {
+        // Newest-first, so list position and ordinal deliberately disagree.
+        vec![
+            si("01a0d420beef", 7),
+            si("01a0d999cafe", 2),
+            si("0bbb1111", 5),
+        ]
+    }
+
+    #[test]
+    fn an_ordinal_matches_the_number_not_the_list_position() {
+        let r = recent();
+        assert_eq!(resolve(&r, &ChannelRef::Ordinal(2)).unwrap().id, r[1].id);
+        assert_eq!(resolve(&r, &ChannelRef::Ordinal(7)).unwrap().id, r[0].id);
+    }
+
+    #[test]
+    fn an_unknown_ordinal_is_not_found() {
+        assert!(matches!(
+            resolve(&recent(), &ChannelRef::Ordinal(99)),
+            Err(ResolveErr::NotFound)
+        ));
+    }
+
+    #[test]
+    fn an_id_prefix_resolves_when_it_is_unique() {
+        assert_eq!(
+            resolve(&recent(), &ChannelRef::IdPrefix("01a0d420".into()))
+                .unwrap()
+                .ordinal,
+            7
+        );
+    }
+
+    /// Switching to the wrong conversation is silent and confusing, so a
+    /// prefix shared by two channels refuses rather than picking one.
+    #[test]
+    fn a_shared_id_prefix_is_ambiguous_and_names_the_candidates() {
+        match resolve(&recent(), &ChannelRef::IdPrefix("01a0d".into())) {
+            Err(ResolveErr::Ambiguous(ids)) => {
+                assert_eq!(ids, vec!["01a0d420".to_string(), "01a0d999".to_string()]);
+            }
+            other => panic!("expected ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_too_short_id_prefix_is_refused_before_matching() {
+        assert!(matches!(
+            resolve(&recent(), &ChannelRef::IdPrefix("01".into())),
+            Err(ResolveErr::TooShort)
+        ));
+    }
 }

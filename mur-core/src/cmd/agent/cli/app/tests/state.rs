@@ -380,27 +380,49 @@ fn parse_slash_secret() {
 
 #[test]
 fn parse_slash_channels() {
-    let plain = |n| Some(SlashCmd::Channels { n, follow: false });
+    let plain = |target| {
+        Some(SlashCmd::Channels {
+            target,
+            follow: false,
+        })
+    };
+    let ord = |n| Some(ChannelRef::Ordinal(n));
+    let id = |s: &str| Some(ChannelRef::IdPrefix(s.to_string()));
     assert_eq!(parse_slash("/channels"), plain(None));
-    assert_eq!(parse_slash("/channels 2"), plain(Some(2)));
+    assert_eq!(parse_slash("/channels 2"), plain(ord(2)));
     assert_eq!(parse_slash("/chan"), plain(None));
-    assert_eq!(parse_slash("/channels x"), plain(None));
-    // The flag is order-independent, and `-f` is the short form. No N with
-    // `--follow` means "stop following".
+    // A hex-looking word is a channel-id prefix — this is the form you can
+    // copy straight out of the Hub or the listing.
+    assert_eq!(parse_slash("/channels 01a0d420"), plain(id("01a0d420")));
+    assert_eq!(parse_slash("/channels 01A0D420"), plain(id("01a0d420")));
+    // Bare digits are always an ordinal, so `#` is the escape hatch for the
+    // all-numeric id prefix.
+    assert_eq!(parse_slash("/channels #12345678"), plain(id("12345678")));
+    // Not a number and not hex: nothing to resolve.
+    assert_eq!(parse_slash("/channels zzz"), plain(None));
+    // The flag is order-independent, and `-f` is the short form. No target
+    // with `--follow` means "stop following".
     for line in ["/channels 2 --follow", "/channels --follow 2", "/chan -f 2"] {
         assert_eq!(
             parse_slash(line),
             Some(SlashCmd::Channels {
-                n: Some(2),
+                target: ord(2),
                 follow: true
             }),
             "{line}"
         );
     }
     assert_eq!(
+        parse_slash("/channels 01a0d420 --follow"),
+        Some(SlashCmd::Channels {
+            target: id("01a0d420"),
+            follow: true
+        })
+    );
+    assert_eq!(
         parse_slash("/channels --follow"),
         Some(SlashCmd::Channels {
-            n: None,
+            target: None,
             follow: true
         })
     );
