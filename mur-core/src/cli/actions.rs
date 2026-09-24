@@ -351,7 +351,7 @@ pub enum OpenAction {
     },
     /// Mark a reported item resolved (observed items clear themselves)
     Done {
-        /// Item id from `mur open`
+        /// Item id shown by `mur open`, or the item's exact title
         id: String,
     },
     /// Stop showing a source. Exact `origin` match — `fleet` never matches

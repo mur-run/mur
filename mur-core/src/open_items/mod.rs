@@ -151,7 +151,12 @@ pub fn render(items: &[OpenItem], muted: &[String], stale: usize) -> String {
                 ));
                 last = Some(it.source);
             }
-            s.push_str(&format!("  {} [{}]\n", it.title, it.origin));
+            // The id is what `mur open done` takes; without it on screen people
+            // pass the title, which is how items silently failed to close.
+            match &it.id {
+                Some(id) => s.push_str(&format!("  {} [{}] {id}\n", it.title, it.origin)),
+                None => s.push_str(&format!("  {} [{}]\n", it.title, it.origin)),
+            }
             if let Some(next) = &it.next {
                 s.push_str(&format!("      → {next}\n"));
             }
@@ -230,6 +235,7 @@ mod tests {
 
     fn item(source: ItemSource, title: &str, at: DateTime<Utc>) -> OpenItem {
         OpenItem {
+            id: None,
             title: title.into(),
             next: None,
             source,
@@ -360,10 +366,12 @@ mod tests {
     fn partition_hides_muted_origins_and_names_them() {
         let items = vec![
             OpenItem {
+                id: None,
                 origin: "inbox".into(),
                 ..item(ItemSource::Observed, "a", Utc::now())
             },
             OpenItem {
+                id: None,
                 origin: "fleet:x".into(),
                 ..item(ItemSource::Observed, "b", Utc::now())
             },
@@ -379,6 +387,7 @@ mod tests {
     #[test]
     fn mute_matching_is_exact_not_prefix() {
         let items = vec![OpenItem {
+            id: None,
             origin: "fleet:acme".into(),
             ..item(ItemSource::Observed, "a", Utc::now())
         }];
@@ -392,6 +401,7 @@ mod tests {
     #[test]
     fn a_mute_that_matched_nothing_is_not_reported() {
         let items = vec![OpenItem {
+            id: None,
             origin: "inbox".into(),
             ..item(ItemSource::Observed, "a", Utc::now())
         }];
@@ -404,6 +414,7 @@ mod tests {
     #[test]
     fn fingerprint_over_visible_ignores_muted_churn() {
         let mk = |n: usize| OpenItem {
+            id: None,
             title: format!("{n} proposals"),
             origin: "inbox".into(),
             ..item(ItemSource::Observed, "x", Utc::now())

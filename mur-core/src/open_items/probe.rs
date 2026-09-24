@@ -231,6 +231,7 @@ mod tests {
 
     fn item(title: &str, next: Option<&str>) -> OpenItem {
         OpenItem {
+            id: None,
             title: title.into(),
             next: next.map(str::to_string),
             source: mur_open_items::ItemSource::Reported,
