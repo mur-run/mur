@@ -6634,7 +6634,7 @@ dependencies = [
 
 [[package]]
 name = "mur-browser"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "age",
  "anyhow",
@@ -6646,12 +6646,13 @@ dependencies = [
  "serde_yaml",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 
 [[package]]
 name = "mur-channel"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6670,7 +6671,7 @@ dependencies = [
 
 [[package]]
 name = "mur-common"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "age",
  "anyhow",
@@ -6720,7 +6721,7 @@ dependencies = [
 
 [[package]]
 name = "mur-compress"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -6746,7 +6747,7 @@ dependencies = [
 
 [[package]]
 name = "mur-core"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -6838,7 +6839,7 @@ dependencies = [
 
 [[package]]
 name = "mur-gui-core"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6899,7 +6900,7 @@ dependencies = [
 
 [[package]]
 name = "mur-mcp-proto"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6908,7 +6909,7 @@ dependencies = [
 
 [[package]]
 name = "mur-monitor"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6924,7 +6925,7 @@ dependencies = [
 
 [[package]]
 name = "mur-open-items"
-version = "2.89.0"
+version = "2.90.0"
 dependencies = [
  "anyhow",
  "chrono",
