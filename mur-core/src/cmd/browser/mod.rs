@@ -1,5 +1,7 @@
 //! `mur browser` command handlers. Heavy implementation lives in `mur-browser`.
 
+pub mod doctor;
+
 use std::{fs, path::PathBuf};
 #[cfg(unix)]
 use std::{os::unix::fs::FileTypeExt, sync::Arc, time::Duration};
