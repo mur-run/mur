@@ -66,7 +66,7 @@ fn one_of_each() -> Vec<SlashCmd> {
         SlashCmd::Card,
         SlashCmd::Sessions,
         SlashCmd::Channels {
-            n: None,
+            target: None,
             follow: false,
         },
         SlashCmd::Auto(None),

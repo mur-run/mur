@@ -128,13 +128,23 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw("  "));
     }
     if let Some(meta) = &app.channel {
-        // Id only. The chip used to append `meta.state`, a persisted channel
-        // lifecycle word refreshed at just two points, next to the live turn
-        // state a few columns to its right — so the bar routinely read
+        // Ordinal first, then the id. The ordinal is what you type
+        // (`/channels 2`); the short id is what matches the Hub and the
+        // listing, so both are on the chip. `0` means the channel predates the
+        // ordinals table and has not been backfilled — show the id alone.
+        //
+        // The chip used to append `meta.state`, a persisted channel lifecycle
+        // word refreshed at just two points, next to the live turn state a few
+        // columns to its right — so the bar routinely read
         // `⏵ 019ff831:working   ready`. Two sources for one fact; the live one
         // wins and the stale one is gone (#940).
         let short: String = meta.id.chars().take(8).collect();
-        spans.push(Span::styled(format!(" ⏵ {short} "), theme.accent));
+        let chip = if meta.ordinal > 0 {
+            format!(" ⏵ {} · {short} ", meta.ordinal)
+        } else {
+            format!(" ⏵ {short} ")
+        };
+        spans.push(Span::styled(chip, theme.accent));
         spans.push(Span::raw("  "));
     }
     spans.push(Span::styled(msg, style));
@@ -450,6 +460,7 @@ mod status_chip_tests {
         let mut app = App::test_fixture();
         app.channel = Some(ChannelMeta {
             id: "019ff831dead".into(),
+            ordinal: 2,
         });
         let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
         term.draw(|f| render_status(f, &app, f.area())).unwrap();
@@ -461,6 +472,39 @@ mod status_chip_tests {
             !dump.contains("019ff831:"),
             "the chip must not append a second state word: {dump}"
         );
+    }
+
+    /// The ordinal is the thing you type at `/channels`, so it rides on the
+    /// chip next to the id rather than living only in the listing.
+    #[test]
+    fn the_chip_shows_the_ordinal_beside_the_id() {
+        let mut app = App::test_fixture();
+        app.channel = Some(ChannelMeta {
+            id: "019ff831dead".into(),
+            ordinal: 7,
+        });
+        let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        term.draw(|f| render_status(f, &app, f.area())).unwrap();
+        let dump = term.backend().to_string();
+
+        assert!(dump.contains("7 · 019ff831"), "chip shows both: {dump}");
+    }
+
+    /// A channel indexed before ordinals existed and not yet backfilled has
+    /// ordinal 0 — a chip reading `⏵ 0 · …` would be a number you cannot type.
+    #[test]
+    fn an_unnumbered_channel_shows_the_id_alone() {
+        let mut app = App::test_fixture();
+        app.channel = Some(ChannelMeta {
+            id: "019ff831dead".into(),
+            ordinal: 0,
+        });
+        let mut term = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        term.draw(|f| render_status(f, &app, f.area())).unwrap();
+        let dump = term.backend().to_string();
+
+        assert!(dump.contains("⏵ 019ff831"), "id only: {dump}");
+        assert!(!dump.contains("0 · 019ff831"), "no zero ordinal: {dump}");
     }
 }
 

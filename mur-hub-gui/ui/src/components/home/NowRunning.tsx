@@ -1,6 +1,6 @@
 import type { AgentEntry, AgentRuntimeStatus } from "../../types";
 import type { ChannelSummary } from "../../work/types";
-import { relativeTime, stateBadge } from "../../work/format";
+import { ordinalLabel, relativeTime, shortId, stateBadge } from "../../work/format";
 import { isActivityChannel, isRunningChannel } from "./useChannels";
 import { PetFace } from "../PetFace";
 import { avatarPreset, familyOf } from "../../utils";
@@ -85,8 +85,9 @@ export function NowRunning({
           {runningChannels.map((ch) => (
             <li key={ch.id}>
               <button className="home-run-row" onClick={() => onOpen(ch)}>
+                <span className="home-run-row__num">{ordinalLabel(ch.ordinal)}</span>
                 <span className="home-run-row__title">
-                  {ch.title || ch.id.slice(0, 8)}
+                  {ch.title || shortId(ch.id)}
                 </span>
                 <span className={`work-badge work-badge--${stateBadge(ch.state)}`}>
                   {ch.state}

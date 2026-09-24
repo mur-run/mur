@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { AgentEntry, AgentRuntimeStatus, RuntimeState } from "../../types";
 import { ChatTab } from "../ChatTab";
 import { ChatChannelRail } from "./ChatChannelRail";
+import { useChatRailWidth } from "./useChatRailWidth";
 import { TaskPill } from "./TaskPill";
 import { useT } from "../../i18n";
 
@@ -25,6 +26,7 @@ export function AgentChatWindow() {
   const [displayName, setDisplayName] = useState(agentName);
   const [status, setStatus] = useState<"running" | "failed" | "idle">("idle");
   const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+  const rail = useChatRailWidth();
 
   const expandToFull = () =>
     void getCurrentWindow().setSize(new LogicalSize(780, 660)).catch(() => {});
@@ -102,6 +104,16 @@ export function AgentChatWindow() {
           agentName={agentName}
           activeId={activeChannelId}
           onSelect={setActiveChannelId}
+          width={rail.width}
+        />
+        {/* Drag to resize the rail; double-click restores the default width. */}
+        <div
+          className={`cw-rail-handle${rail.dragging ? " cw-rail-handle--dragging" : ""}`}
+          onPointerDown={rail.onHandleDown}
+          onDoubleClick={rail.onHandleDoubleClick}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("chat.resizeRail")}
         />
 
         <div className="cw-main">

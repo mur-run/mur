@@ -166,6 +166,16 @@
   white-space: nowrap;
 }
 
+/* The channel's stable display number — the handle `/channels <n>` takes.
+   Tabular figures so the numbers line up down the column. */
+.home-run-row__num,
+.home-recent-row__num {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
 .home-recent-row__sub {
   flex: 1;
   color: var(--text-secondary);
