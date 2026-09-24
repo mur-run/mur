@@ -186,7 +186,6 @@ jobs:
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          cd target/${{ matrix.target }}/release
           # Ship mur-agent-runtime too: brew installs it as a sibling of `mur`, so
           # resolve_runtime_target finds the sibling and `brew upgrade` keeps the
           # runtime in sync. Without it, brew CLI users have no runtime and running
