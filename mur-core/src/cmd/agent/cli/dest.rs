@@ -153,14 +153,14 @@ const AWK_WRITE_MARKERS: &[&str] = &["system(", ">", "close(", "|&", "ENVIRON["]
 /// is what distinguishes `ssh host 'cd /x && tail f'` (one remote payload)
 /// from `ssh host cd /x && tail f` (a local `tail` after the hop).
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Word {
-    text: String,
-    quoted: bool,
+pub(super) struct Word {
+    pub text: String,
+    pub quoted: bool,
 }
 
 /// What a tokenizer pass produced: words and the operators between them.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Token {
+pub(super) enum Token {
     Word(Word),
     /// A separator that ends one simple command: `;` `&&` `||` `|` or newline.
     Sep,
@@ -283,7 +283,7 @@ fn split_at_tag(s: &str, tag: &str) -> Option<(String, String)> {
 /// model: command substitution, any redirection, a background `&`, or a
 /// subshell. Each of those is a place where bytes or control go somewhere the
 /// segment list does not describe.
-fn tokenize(line: &str) -> Option<Vec<Token>> {
+pub(super) fn tokenize(line: &str) -> Option<Vec<Token>> {
     let mut out: Vec<Token> = Vec::new();
     let mut cur = String::new();
     let mut cur_quoted = false;
@@ -371,7 +371,7 @@ fn tokenize(line: &str) -> Option<Vec<Token>> {
 }
 
 /// Group tokens into simple commands, dropping empty runs (`a ;; b`).
-fn segments(tokens: Vec<Token>) -> Vec<Vec<Word>> {
+pub(super) fn segments(tokens: Vec<Token>) -> Vec<Vec<Word>> {
     let mut out: Vec<Vec<Word>> = Vec::new();
     let mut cur: Vec<Word> = Vec::new();
     for t in tokens {
@@ -397,7 +397,7 @@ const SSH_FLAGS_WITH_VALUE: &[&str] = &[
 ];
 
 /// Is this one simple command a read, ignoring where it runs?
-fn segment_is_readonly(seg: &[Word]) -> bool {
+pub(super) fn segment_is_readonly(seg: &[Word]) -> bool {
     let Some(head) = seg.first() else {
         return false;
     };
@@ -558,6 +558,9 @@ fn heredoc_for(word: &str, docs: &[Heredoc]) -> Option<Option<String>> {
 pub(super) enum Grant {
     /// Grantable, keyed on a destination proved read-only.
     Scoped(Scope),
+    /// Grantable, keyed on an egress action and its resolved destination
+    /// (`egress::classify`). Session-only: a human answered for this call.
+    Egress(super::egress::EgressScope),
     /// Grantable, keyed on the tool name — the pre-existing behaviour, still
     /// bounded by `tier_may_be_granted`.
     Tool(String),
@@ -571,6 +574,7 @@ impl Grant {
     pub fn key(&self) -> Option<String> {
         match self {
             Self::Scoped(s) => Some(s.key()),
+            Self::Egress(s) => Some(s.key()),
             Self::Tool(t) => Some(t.clone()),
             Self::Refused(_) => None,
         }
@@ -580,6 +584,7 @@ impl Grant {
     pub fn label(&self) -> String {
         match self {
             Self::Scoped(s) => s.label(),
+            Self::Egress(s) => s.label(),
             Self::Tool(t) => format!("Yes, and don't ask again for `{t}` this session"),
             Self::Refused(why) => format!("Yes (can't skip future asks — {why})"),
         }
@@ -605,6 +610,12 @@ pub(super) fn grant_for(
     {
         if let Some(scope) = classify_bash(cmd) {
             return Grant::Scoped(scope);
+        }
+        // An egress scope is a SESSION answer only. It is not a tier grant:
+        // `tier_may_be_granted` is untouched, so no config line, fleet grant
+        // or `/auto` session reaches it — only a human's "don't ask again".
+        if let Some(scope) = super::egress::classify(cmd) {
+            return Grant::Egress(scope);
         }
         if !mur_common::hitl::tier_may_be_granted(tier) {
             return Grant::Refused(refusal_reason(tier));

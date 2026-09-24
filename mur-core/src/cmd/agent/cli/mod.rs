@@ -14,6 +14,7 @@ mod deep_research;
 mod dest;
 mod diff;
 mod dump;
+mod egress;
 mod events;
 mod fleet_rail;
 mod follow;

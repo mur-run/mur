@@ -201,3 +201,77 @@ fn tmux_probe_replay_egress_still_prompts() {
         );
     }
 }
+
+/// D1: once the operator answers "don't ask again" on a feature-branch push,
+/// the same push scope stops asking for the session — through the real gate,
+/// with the key the menu row stores (`dest::grant_for`). Protected branches,
+/// `--force`, merges and a repointed remote still stop.
+#[tokio::test]
+async fn a_session_egress_grant_covers_only_its_own_scope() {
+    let t = tempfile::tempdir().unwrap();
+    let r = git2::Repository::init(t.path()).unwrap();
+    r.remote("origin", "git@github.com:mur-run/mur.git")
+        .unwrap();
+    let at = |c: &str| format!("cd '{}' && {c}", t.path().display());
+
+    let mut app = App::test_fixture();
+    let push = bash(&at("git push -u origin fix/x"));
+    assert!(
+        open_gate(&mut app, "bash", push.clone()),
+        "first push must ask"
+    );
+
+    let tier = tool_tier::classify("bash", Some(&push));
+    let key = dest::grant_for("bash", Some(&push), tier)
+        .key()
+        .expect("grantable");
+    app.hitl = None;
+    app.session_tool_allow.insert(key);
+
+    for cmd in [
+        "git push -u origin fix/x",
+        "git push origin fix/other-branch",
+    ] {
+        app.hitl = None;
+        assert!(
+            !open_gate(&mut app, "bash", bash(&at(cmd))),
+            "granted scope still asked: {cmd}"
+        );
+    }
+    for cmd in [
+        "git push origin main",
+        "git push --force origin fix/x",
+        "gh pr merge 1486",
+        "gh pr create --fill", // a different scope, needs its own answer
+    ] {
+        app.hitl = None;
+        assert!(
+            open_gate(&mut app, "bash", bash(&at(cmd))),
+            "outside the granted scope, must ask: {cmd}"
+        );
+    }
+    r.remote_set_url("origin", "https://evil.example/x/y.git")
+        .unwrap();
+    app.hitl = None;
+    assert!(
+        open_gate(&mut app, "bash", bash(&at("git push origin fix/x"))),
+        "a repointed origin must ask again"
+    );
+}
+
+/// The design rule in `mur-common/src/hitl/mod.rs` is unchanged: `/auto`
+/// with no human answer still stops on a push. Only a session grant opens it.
+#[test]
+fn auto_mode_alone_still_stops_on_a_push() {
+    let t = tempfile::tempdir().unwrap();
+    let r = git2::Repository::init(t.path()).unwrap();
+    r.remote("origin", "git@github.com:mur-run/mur.git")
+        .unwrap();
+    let mut app = App::test_fixture();
+    app.auto_approve = true;
+    let cmd = format!("cd '{}' && git push origin fix/x", t.path().display());
+    assert!(open_gate(&mut app, "bash", bash(&cmd)));
+    assert!(!mur_common::hitl::tier_may_be_granted(
+        RiskTier::NetworkEgress
+    ));
+}
