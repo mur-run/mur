@@ -20,6 +20,7 @@ pub fn collect(mur_home: &Path) -> Vec<OpenItem> {
 
 fn observed(title: String, next: Option<String>, origin: String) -> OpenItem {
     OpenItem {
+        id: None,
         title,
         next,
         source: ItemSource::Observed,

@@ -87,6 +87,11 @@ impl Ord for ItemSource {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OpenItem {
+    /// What `mur open done` takes. `None` for observed items — they clear
+    /// themselves when the state behind them changes, so there is nothing to
+    /// resolve by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// One line, imperative where possible.
     pub title: String,
     /// The command or place that resolves it, when there is an obvious one.
@@ -175,17 +180,64 @@ pub fn report(mur_home: &Path, agent: &str, title: &str, next: Option<&str>) -> 
     Ok(id)
 }
 
-/// Mark a reported item resolved. Unknown ids are accepted: the log is a
-/// record of claims, and "I finished something you never saw me start" is a
-/// coherent claim, not an error worth failing a turn over.
-pub fn resolve(mur_home: &Path, id: &str) -> Result<()> {
-    append(
-        mur_home,
-        &Record::Resolve {
-            id: id.to_string(),
-            at: Utc::now(),
-        },
-    )
+/// What a resolve actually hit, so callers stop claiming success blindly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// Closed this open item.
+    Closed { id: String, title: String },
+    /// Nothing open matched. The record is still written — the log syncs with
+    /// `merge=union`, so the item may simply not have arrived from the other
+    /// machine yet — but the caller must say so instead of "Resolved".
+    Unmatched,
+}
+
+/// Mark a reported item resolved, by id **or by title**.
+///
+/// `key` is tried as an id first, then as a title under the same
+/// normalisation `item_id` uses (trim + lowercase). A title match writes the
+/// item's real id: before this, a title went into the log verbatim as the id,
+/// matched nothing, and the item never closed while the CLI said it had.
+///
+/// Unknown keys are still recorded: "I finished something you never saw me
+/// start" is a coherent claim across synced machines. A title shared by
+/// several agents' items is refused rather than guessed.
+pub fn resolve(mur_home: &Path, key: &str) -> Result<Resolution> {
+    let live = open(mur_home);
+    let by_id = live.iter().find(|i| i.id.as_deref() == Some(key));
+    let hit = match by_id {
+        Some(item) => Some(item),
+        None => {
+            let want = key.trim().to_lowercase();
+            let by_title: Vec<&OpenItem> = live
+                .iter()
+                .filter(|i| i.title.trim().to_lowercase() == want)
+                .collect();
+            if by_title.len() > 1 {
+                let ids: Vec<&str> = by_title.iter().filter_map(|i| i.id.as_deref()).collect();
+                anyhow::bail!(
+                    "{} open items share that title; resolve one by id: {}",
+                    by_title.len(),
+                    ids.join(", ")
+                );
+            }
+            by_title.first().copied()
+        }
+    };
+    let (id, outcome) = match hit {
+        Some(item) => {
+            let id = item.id.clone().unwrap_or_else(|| key.to_string());
+            (
+                id.clone(),
+                Resolution::Closed {
+                    id,
+                    title: item.title.clone(),
+                },
+            )
+        }
+        None => (key.to_string(), Resolution::Unmatched),
+    };
+    append(mur_home, &Record::Resolve { id, at: Utc::now() })?;
+    Ok(outcome)
 }
 
 fn append(mur_home: &Path, rec: &Record) -> Result<()> {
@@ -244,6 +296,7 @@ pub fn open(mur_home: &Path) -> Vec<OpenItem> {
                 at,
             } => {
                 let item = OpenItem {
+                    id: Some(id.clone()),
                     title,
                     next,
                     source: ItemSource::Reported,
@@ -275,6 +328,7 @@ fn item_id(agent: &str, title: &str) -> String {
 mod tests {
     fn aged(source: ItemSource, days: i64) -> OpenItem {
         OpenItem {
+            id: None,
             title: "t".into(),
             next: None,
             source,
@@ -403,6 +457,71 @@ mod tests {
         // Both records survive on disk — the log is append-only.
         let body = std::fs::read_to_string(log_path(h.path())).unwrap();
         assert_eq!(body.lines().count(), 2);
+    }
+
+    /// `mur open` never showed an id, so people passed the title — which was
+    /// written verbatim as the resolve id, matched nothing, and the CLI still
+    /// printed "Resolved". The item stayed open forever.
+    #[test]
+    fn resolving_by_title_closes_the_item() {
+        let h = home();
+        report(h.path(), "mur", "Update PR #1475 description", None).unwrap();
+        resolve(h.path(), "  update pr #1475 DESCRIPTION ").unwrap();
+        assert!(open(h.path()).is_empty(), "{:?}", open(h.path()));
+    }
+
+    /// Resolving by title must record the real id, not the title — otherwise
+    /// the closure only works on this machine's fold by accident.
+    #[test]
+    fn a_title_resolve_writes_the_real_id_and_reports_it() {
+        let h = home();
+        let id = report(h.path(), "mur", "ship it", None).unwrap();
+        let got = resolve(h.path(), "Ship It").unwrap();
+        assert_eq!(
+            got,
+            Resolution::Closed {
+                id: id.clone(),
+                title: "ship it".into()
+            }
+        );
+        let body = std::fs::read_to_string(log_path(h.path())).unwrap();
+        assert!(
+            body.lines()
+                .last()
+                .unwrap()
+                .contains(&format!("\"id\":\"{id}\"")),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_is_recorded_but_reported_unmatched() {
+        let h = home();
+        report(h.path(), "mur", "real", None).unwrap();
+        assert_eq!(resolve(h.path(), "nope").unwrap(), Resolution::Unmatched);
+        assert_eq!(open(h.path()).len(), 1);
+        let body = std::fs::read_to_string(log_path(h.path())).unwrap();
+        assert_eq!(
+            body.lines().count(),
+            2,
+            "sync-safety: the claim is still logged"
+        );
+    }
+
+    #[test]
+    fn a_title_shared_across_agents_is_refused_not_guessed() {
+        let h = home();
+        report(h.path(), "a", "ship it", None).unwrap();
+        report(h.path(), "b", "ship it", None).unwrap();
+        assert!(resolve(h.path(), "ship it").is_err());
+        assert_eq!(open(h.path()).len(), 2);
+    }
+
+    #[test]
+    fn listed_items_carry_the_id_done_takes() {
+        let h = home();
+        let id = report(h.path(), "mur", "x", None).unwrap();
+        assert_eq!(open(h.path())[0].id.as_deref(), Some(id.as_str()));
     }
 
     /// A truncated write must cost one item, not the whole panel.

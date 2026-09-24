@@ -1205,8 +1205,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                     println!("Recorded (reported by {agent}): {id}");
                 }
                 Some(OpenAction::Done { id }) => {
-                    crate::open_items::reported::resolve(&home, &id)?;
-                    println!("Resolved {id}");
+                    use crate::open_items::reported::Resolution;
+                    match crate::open_items::reported::resolve(&home, &id)? {
+                        Resolution::Closed { id, title } => println!("Resolved {id} — {title}"),
+                        Resolution::Unmatched => {
+                            // Still logged: the item may be on another machine
+                            // and not synced yet. But it closed nothing here.
+                            eprintln!(
+                                "No open item matches '{id}' (by id or title); recorded anyway in case it syncs in later. Ids are shown by `mur open`."
+                            );
+                            std::process::exit(1);
+                        }
+                    }
                 }
                 Some(OpenAction::Mute { origin }) => {
                     let mut cfg = mur_common::config::Config::load_or_default(&cfg_path);
