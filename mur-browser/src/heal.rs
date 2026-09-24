@@ -8,8 +8,10 @@ use std::collections::BTreeSet;
 
 use unicode_normalization::UnicodeNormalization;
 
+use serde::{Deserialize, Serialize};
+
 use crate::locator::{Locator, SnapshotNode, candidates_for_ref};
-use crate::recorder::Step;
+use crate::recorder::{Action, Step};
 
 /// Default share of element steps allowed to heal in `mode: test`.
 pub const DEFAULT_HEAL_RATIO: f32 = 0.2;
@@ -36,6 +38,46 @@ pub fn allowed_heals(total: u32, max_ratio: f32) -> u32 {
 /// Whether `healed` element steps exceed the budget for `total` at `max_ratio`.
 pub fn budget_exceeded(healed: u32, total: u32, max_ratio: f32) -> bool {
     healed > allowed_heals(total, max_ratio)
+}
+
+/// An "element step" (spec 名詞): it resolves a locator and hands the ref to
+/// Playwright. `assert_text` resolves one too but only sends `{text}`, so it
+/// is never healed, never verifies a heal, and is not in the budget's
+/// denominator.
+pub fn is_element_step(action: Action) -> bool {
+    action.needs_locator() && action != Action::AssertText
+}
+
+/// Lifecycle of one heal (D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealStatus {
+    /// Healed; waiting for the next element step to hit directly.
+    Pending,
+    /// The next element step hit directly. Eligible for write-back.
+    Verified,
+    /// No later element step could confirm it. Passes, never written back.
+    Unverified,
+    /// A later step failed (or needed a heal too); the healed step is `Failed`.
+    RolledBack,
+}
+
+/// One heal, as recorded in the replay report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HealEvent {
+    pub step: u32,
+    /// The step's `locators[]` before the heal.
+    pub from: Vec<String>,
+    /// Every locator `candidates_for_ref` produced for the chosen node, in
+    /// priority order. Write-back merges it via [`prepend_locators`], which
+    /// dedupes; the CLI has no snapshot to rebuild this from later.
+    pub to: Vec<String>,
+    /// `role "name"` of the chosen node, for humans.
+    pub node: String,
+    pub score: f32,
+    /// Why a heal was needed (which candidates missed).
+    pub reason: String,
+    pub status: HealStatus,
 }
 
 /// Minimum similarity for a heal candidate (D2). Provisional; calibrated
