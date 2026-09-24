@@ -63,11 +63,20 @@ heal 只處理「找不到元素」，不處理「找到了但動作失敗」。
 
 | 常數 | 初值 | 說明 |
 |---|---|---|
-| `HEAL_MIN_SCORE` | `0.3` | 起始值，要用測試 fixture 校準 |
-| `HEAL_MIN_MARGIN` | `0.15` | 同上 |
+| `HEAL_MIN_SCORE` | `0.3` | 已校準，維持初值（見下） |
+| `HEAL_MIN_MARGIN` | `0.15` | 已校準，維持初值（見下） |
 | `DEFAULT_HEAL_RATIO` | `0.2` | 沿用計畫 |
 
-兩個比對常數**暫定**：初值會在實作時拿 fixture（testid 改名、文字小修、同 role 多節點）調整，調整結果回填本表。
+兩個比對常數已用 fixture 校準（plan Task 5.4），維持初值。每條線索（舊 name / text / label、intent）各自算 Jaccard，取最高分，避免較長的 intent 拉低短名稱的分數。
+
+| fixture | 預期 | 最高分 | 第二名 | 結果 |
+|---|---|---|---|---|
+| testid 改名：「Place order」→「Place your order」 | 採用 | 0.667 | 0.000 | 採用 |
+| 中文小修：「送出」→「送出訂單」 | 採用 | 0.333 | 0.000 | 採用 |
+| 同 role 相近：「Save」→「Save draft」/「Save changes」 | 拒絕 | 0.500 | 0.500 | 拒絕（差距 0） |
+| 不相關的單一節點：「Download invoice」→「Help」 | 拒絕 | 0.000 | — | 拒絕（低於門檻） |
+
+中文小修只比門檻高 0.033，是目前最接近的案例，所以 `HEAL_MIN_SCORE` 不宜再調高。`heal_calibration_scores_are_pinned` 會固定這些分數，只要切詞或計分改變，就得回來重新檢查這兩個常數。
 
 ## D3 — 驗證與回滾
 
