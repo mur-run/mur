@@ -93,8 +93,8 @@ Missing → plan (`Installing Chromium for replay does:` / `    run       <hint>
 `literal_yes`, false → `  skipped — nothing was downloaded.` + bail; install Err/false → `  ✗ install command failed` + bail;
 rescan `installed_builds` (headless shell, then full) → none: `  ✗ still no completed Chromium build in <dir>` + bail; else `  ✓ <name> in <dir>` + Ok.
 
-- [ ] RED/GREEN one case at a time, the 9 non-live cases from the spec.
-- [ ] Commit.
+- [x] RED/GREEN one case at a time, the 9 non-live cases from the spec.
+- [x] Commit.
 
 ## Task 4 — CLI + dispatch
 
