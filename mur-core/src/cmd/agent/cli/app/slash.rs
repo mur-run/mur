@@ -1,6 +1,31 @@
 //! Slash-command parsing, moved out of `app/mod.rs` for CLAUDE.md §4's 800-line rule.
 //! Pure movement: every item below is verbatim.
 
+/// How the user named a channel on a `/channels` line.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ChannelRef {
+    /// The stable number from the listing (`/channels 2`).
+    Ordinal(u64),
+    /// A channel-id prefix (`/channels 01a0d420`, or `#12345678` to force id
+    /// matching when the prefix is all digits).
+    IdPrefix(String),
+}
+
+/// Read one `/channels` argument as an ordinal or an id prefix. Bare digits
+/// are an ordinal — ordinals are short and typed constantly, so they win the
+/// ambiguity; `#` escapes to the id for the rare all-numeric prefix.
+pub fn parse_channel_ref(arg: &str) -> Option<ChannelRef> {
+    if let Some(id) = arg.strip_prefix('#') {
+        return (!id.is_empty()).then(|| ChannelRef::IdPrefix(id.to_ascii_lowercase()));
+    }
+    if let Ok(n) = arg.parse::<u64>() {
+        return Some(ChannelRef::Ordinal(n));
+    }
+    arg.chars()
+        .all(|c| c.is_ascii_hexdigit())
+        .then(|| ChannelRef::IdPrefix(arg.to_ascii_lowercase()))
+}
+
 /// A parsed slash command.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SlashCmd {
@@ -8,10 +33,15 @@ pub enum SlashCmd {
     Clear,
     Card,
     Sessions,
-    /// `/channels [N] [--follow]` — list channels, switch to channel N, or
-    /// live-tail channel N (`--follow` with no N stops following).
+    /// `/channels [N|<id-prefix>] [--follow]` — list channels, switch to one,
+    /// or live-tail it (`--follow` with no target stops following).
+    ///
+    /// Two ways to name a channel: the stable ordinal shown in the listing
+    /// (`/channels 2`) or a channel-id prefix (`/channels 01a0d420`). Bare
+    /// digits are always read as an ordinal; a `#` prefix forces id matching
+    /// for the rare all-numeric id (`/channels #12345678`).
     Channels {
-        n: Option<usize>,
+        target: Option<ChannelRef>,
         follow: bool,
     },
     /// `/auto [on|off]` — toggle (None) or set session-wide auto-approval.
@@ -80,7 +110,10 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "channels" | "chan" => {
             let args: Vec<&str> = words.collect();
             SlashCmd::Channels {
-                n: args.iter().find_map(|s| s.parse::<usize>().ok()),
+                target: args
+                    .iter()
+                    .find(|s| !s.starts_with('-'))
+                    .and_then(|s| parse_channel_ref(s)),
                 follow: args.iter().any(|s| *s == "--follow" || *s == "-f"),
             }
         }

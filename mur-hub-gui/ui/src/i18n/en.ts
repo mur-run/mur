@@ -151,6 +151,7 @@ export const en = {
   "chat.send": "Send",
   "chat.stop": "Stop",
   "chat.expand": "Expand",
+  "chat.resizeRail": "Drag to resize the channel list",
   "chat.stopped": "stopped",
   "chat.route.smart": "Smart (background)",
   "chat.route.fallback": "Fallback",

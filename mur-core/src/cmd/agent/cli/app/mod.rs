@@ -652,7 +652,7 @@ pub(super) use keys::{
     ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, esc_action, overlay_key_action,
 };
 pub(super) use msg::{ChatMsg, Role, Severity};
-pub(super) use slash::{SlashCmd, parse_slash};
+pub(super) use slash::{ChannelRef, SlashCmd, parse_slash};
 
 #[cfg(test)]
 mod tests;
