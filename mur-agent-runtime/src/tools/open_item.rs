@@ -92,7 +92,7 @@ Pass `resolve` with an id from a previous call to clear one."
                     },
                     "resolve": {
                         "type": "string",
-                        "description": "Id of an item to mark resolved instead of adding one"
+                        "description": "Id (or exact title) of an item to mark resolved instead of adding one"
                     }
                 }
             }),
@@ -101,9 +101,17 @@ Pass `resolve` with an id from a previous call to clear one."
 
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         if let Some(id) = input.get("resolve").and_then(|v| v.as_str()) {
-            mur_open_items::resolve(&self.mur_home, id)
+            let got = mur_open_items::resolve(&self.mur_home, id)
                 .map_err(|e| ToolError::Execution(format!("resolve open item: {e:#}")))?;
-            return Ok(format!("Resolved open item {id}.").into());
+            return Ok(match got {
+                mur_open_items::Resolution::Closed { id, title } => {
+                    format!("Resolved open item {id} ({title}).")
+                }
+                mur_open_items::Resolution::Unmatched => format!(
+                    "No open item matches '{id}' by id or title — nothing closed. The claim was logged in case the item syncs in from another machine; do not tell the user it is resolved."
+                ),
+            }
+            .into());
         }
 
         let title = input
