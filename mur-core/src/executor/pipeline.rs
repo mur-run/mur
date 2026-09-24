@@ -1086,19 +1086,41 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_duration_is_wall_clock() {
+        // No absolute bound: the previous `< 1000ms` check flaked on Windows
+        // CI (1543ms) because every `sh` spawn there is slow, even though the
+        // branches did overlap.
+        //
+        // Instead: each branch meets the other (same rendezvous as
+        // `test_parallel_actually_concurrent`), then both sleep 0.3s while
+        // alive together. For two intervals, sum = union + overlap, so a
+        // summed duration is at least 300ms *longer* than the real wall
+        // clock, however slow the spawns are. A wall-clock duration can
+        // never exceed what we measure around `execute`.
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
+        let sync = TempDir::new().unwrap();
+        // Forward slashes so Git-for-Windows `sh` reads the path verbatim.
+        let dir = sync.path().display().to_string().replace('\\', "/");
+
+        let rendezvous_then_sleep = |me: &str, peer: &str| {
+            format!(
+                "touch '{dir}/{me}' || exit 1; i=0; \
+                 while [ ! -e '{dir}/{peer}' ]; do \
+                 i=$((i+1)); [ \"$i\" -ge 50 ] && exit 1; sleep 0.2; \
+                 done; sleep 0.3; echo {me}-done"
+            )
+        };
 
         store
             .save(&make_workflow(
                 "dur-a",
-                vec![shell_step(1, "A", "sleep 0.3 && echo a")],
+                vec![shell_step(1, "A", &rendezvous_then_sleep("a", "b"))],
             ))
             .unwrap();
         store
             .save(&make_workflow(
                 "dur-b",
-                vec![shell_step(1, "B", "sleep 0.3 && echo b")],
+                vec![shell_step(1, "B", &rendezvous_then_sleep("b", "a"))],
             ))
             .unwrap();
 
@@ -1108,11 +1130,25 @@ mod tests {
             PipelineExpr::Single("dur-b".into()),
         ]);
 
+        let started = Instant::now();
         let output = executor.execute(&expr, None).await.unwrap();
-        // Wall clock should be ~300ms, not ~600ms (sum)
+        let observed_ms = started.elapsed().as_millis() as u64;
+
+        let text = output.output_text.clone().unwrap_or_default();
+        assert_eq!(
+            output.status,
+            PipelineStatus::Success,
+            "parallel branches never overlapped (one gave up waiting for the other): {text}"
+        );
         assert!(
-            output.duration_ms < 1000,
-            "duration should be wall clock (~300ms), got {}ms",
+            output.duration_ms <= observed_ms,
+            "duration should be wall clock (<= {observed_ms}ms observed around execute), \
+             got {}ms — looks like branch durations were summed",
+            output.duration_ms
+        );
+        assert!(
+            output.duration_ms >= 300,
+            "duration should cover the 0.3s both branches spent together, got {}ms",
             output.duration_ms
         );
     }
