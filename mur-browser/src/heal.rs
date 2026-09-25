@@ -11,7 +11,7 @@ use unicode_normalization::UnicodeNormalization;
 use serde::{Deserialize, Serialize};
 
 use crate::locator::{Locator, SnapshotNode, candidates_for_ref};
-use crate::recorder::{Action, Step};
+use crate::recorder::{Action, Run, Step};
 
 /// Default share of element steps allowed to heal in `mode: test`.
 pub const DEFAULT_HEAL_RATIO: f32 = 0.2;
@@ -237,6 +237,30 @@ pub fn prepend_locators(from: &[String], to: &[String]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Apply every `Verified` heal to `run` (D3 write-back): prepend its `to`
+/// candidates, mark the step `healed`, and point `last_hit` at the new first
+/// locator. Returns how many steps changed. Other statuses are never applied.
+///
+/// Pure: the caller decides whether the run may be written (no `Failed`, not
+/// over budget) and persists it.
+pub fn apply_verified(run: &mut Run, heals: &[HealEvent]) -> u32 {
+    let mut applied = 0;
+    for event in heals.iter().filter(|h| h.status == HealStatus::Verified) {
+        let Some(step) = run.steps.iter_mut().find(|s| s.step == event.step) else {
+            tracing::warn!(
+                step = event.step,
+                "verified heal names a step not in the run; skipped"
+            );
+            continue;
+        };
+        step.locators = prepend_locators(&step.locators, &event.to);
+        step.healed = true;
+        step.last_hit = 0;
+        applied += 1;
+    }
+    applied
 }
 
 /// `role "name"` for messages; falls back to visible text, then bare role.
