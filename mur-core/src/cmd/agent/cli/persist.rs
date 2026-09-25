@@ -248,7 +248,10 @@ pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<Session
             id: row.id,
             preview,
             turns: evs.len(),
-            ordinal: row.ordinal.max(0) as u64,
+            // No clamp: `ChannelIndex::list` rejects a negative ordinal before
+            // it gets here, so this cast cannot silently produce 0 (which
+            // already means "not numbered yet").
+            ordinal: row.ordinal as u64,
         });
         if out.len() >= limit {
             break;

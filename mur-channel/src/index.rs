@@ -180,13 +180,35 @@ impl ChannelIndex {
         // Backfill for DBs that predate the table. Idempotent: `OR IGNORE`
         // plus the PRIMARY KEY means already-numbered ids are skipped, and
         // the ordering gives existing channels the numbers a user expects.
-        self.conn.execute(
+        //
+        // Inside `BEGIN IMMEDIATE` because the CLI and the Hub are expected
+        // to open a cold DB concurrently. `(SELECT MAX(ordinal))` reads the
+        // base once per statement, so two interleaved backfills can both
+        // compute the same base; `OR IGNORE` then makes the loser's rows
+        // vanish rather than collide, leaving channels unnumbered until some
+        // later open happens to retry. Taking the write lock up front
+        // serialises the read-then-insert so the second run sees the first
+        // run's numbers.
+        self.conn
+            .execute_batch("BEGIN IMMEDIATE")
+            .context("begin ordinal backfill")?;
+        let backfill = self.conn.execute(
             "INSERT OR IGNORE INTO channel_ordinals (id, ordinal)
              SELECT id, (SELECT IFNULL(MAX(ordinal), 0) FROM channel_ordinals)
                          + ROW_NUMBER() OVER (ORDER BY created_at ASC, rowid ASC)
              FROM channels WHERE id NOT IN (SELECT id FROM channel_ordinals)",
             [],
-        )?;
+        );
+        match backfill {
+            Ok(_) => self
+                .conn
+                .execute_batch("COMMIT")
+                .context("commit ordinal backfill")?,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(e).context("backfill channel ordinals");
+            }
+        }
         self.conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_channels_purpose ON channels(purpose, updated_at DESC);",
         )?;
@@ -365,7 +387,16 @@ impl ChannelIndex {
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(n.map(|n| n.max(0) as u64))
+        Ok(match n {
+            None => None,
+            // NOT NULL UNIQUE, only ever written as MAX+1 — a negative value
+            // is corruption. Clamping it would produce 0, which already means
+            // "not numbered yet", so the caller could not tell the two apart.
+            Some(n) if n < 0 => {
+                anyhow::bail!("channel {ch_id} has a corrupt ordinal in the index: {n}")
+            }
+            Some(n) => Some(n as u64),
+        })
     }
 
     /// Newest-first channel list (the Hub left-rail / CLI "my work" inbox).
@@ -394,6 +425,17 @@ impl ChannelIndex {
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        // `ordinal` is NOT NULL UNIQUE and only ever written as MAX+1. A
+        // negative one is corruption, and every caller narrows this field to
+        // `u64` — so it must not escape the index as a plausible-looking
+        // number.
+        if let Some(bad) = rows.iter().find(|r| r.ordinal < 0) {
+            anyhow::bail!(
+                "channel {} has a corrupt ordinal in the index: {}",
+                bad.id,
+                bad.ordinal
+            );
+        }
         Ok(rows)
     }
 
@@ -448,10 +490,24 @@ impl ChannelIndex {
                 .execute_batch("DELETE FROM channels; DELETE FROM channel_fts;")?;
 
             let mut n = 0;
-            for id in store.list_ids()? {
-                let Ok(ch) = store.load_manifest(&id) else {
-                    continue;
-                };
+            // Sorted by creation time, not `list_ids()`'s `read_dir` order:
+            // when the index file itself is lost, `channel_ordinals` is empty
+            // too and this loop hands out every number from scratch. Directory
+            // order is the filesystem's business, so without this the numbers
+            // a user memorised come back shuffled. `id` breaks ties so the
+            // result is deterministic for manifests written in the same tick.
+            let mut manifests: Vec<Channel> = store
+                .list_ids()?
+                .into_iter()
+                .filter_map(|id| store.load_manifest(&id).ok())
+                .collect();
+            manifests.sort_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            for ch in manifests {
+                let id = ch.id.clone();
                 self.upsert(&ch)?;
                 for ev in store.load_events(&id).unwrap_or_default() {
                     self.record_event(&id, &ev)?;
@@ -945,6 +1001,79 @@ mod tests {
         assert_eq!(
             after, before,
             "rebuild_from wipes `channels`; the numbers live elsewhere and must survive it"
+        );
+    }
+
+    #[test]
+    fn a_rebuild_from_an_empty_index_numbers_by_creation_time_not_directory_order() {
+        // The disaster case the other rebuild test does not cover: the whole
+        // index file is gone, so `channel_ordinals` is empty too and every
+        // number is handed out fresh. `list_ids` is `read_dir` order, which is
+        // the filesystem's business, not creation order — without an explicit
+        // sort the numbers come out shuffled.
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        // Created oldest-first: z, m, a. Named so that *any* name-based or
+        // inode-based ordering disagrees with the answer we want.
+        for (id, mins) in [("zebra", 30_i64), ("mango", 20), ("apple", 10)] {
+            let mut c = ch(id, ChannelState::Working);
+            c.created_at = Utc::now() - chrono::Duration::minutes(mins);
+            store.create(&c).unwrap();
+        }
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        idx.rebuild_from(&store).unwrap();
+        assert_eq!(ordinal_of(&idx, "zebra"), 1, "oldest channel is #1");
+        assert_eq!(ordinal_of(&idx, "mango"), 2);
+        assert_eq!(ordinal_of(&idx, "apple"), 3);
+    }
+
+    #[test]
+    fn list_refuses_a_row_whose_ordinal_is_negative() {
+        // Same corruption signal as `ordinal_of`, on the path the CLI listing
+        // actually uses. Callers convert this field to `u64`; if the listing
+        // hands back a clamped 0 they render it as "unnumbered" and the
+        // corruption is never seen by anyone.
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        idx.upsert(&ch("a", ChannelState::Working)).unwrap();
+        idx.conn_for_test()
+            .execute(
+                "UPDATE channel_ordinals SET ordinal = -7 WHERE id = 'a'",
+                [],
+            )
+            .unwrap();
+
+        let err = idx
+            .list(50)
+            .expect_err("a negative ordinal must surface as an error");
+        assert!(
+            err.to_string().contains("-7"),
+            "the error must name the bad value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_negative_ordinal_is_reported_not_clamped_to_zero() {
+        // `ordinal` is NOT NULL UNIQUE and only ever written as MAX+1, so a
+        // negative value means the DB is corrupt. Clamping it to 0 would hand
+        // back the same value that legitimately means "not numbered yet",
+        // laundering a corruption signal into a valid-looking answer.
+        let tmp = TempDir::new().unwrap();
+        let idx = ChannelIndex::open(tmp.path()).unwrap();
+        idx.upsert(&ch("a", ChannelState::Working)).unwrap();
+        idx.conn_for_test()
+            .execute(
+                "UPDATE channel_ordinals SET ordinal = -3 WHERE id = 'a'",
+                [],
+            )
+            .unwrap();
+
+        let err = idx
+            .ordinal_of("a")
+            .expect_err("a negative ordinal must surface as an error");
+        assert!(
+            err.to_string().contains("-3"),
+            "the error must name the bad value, got: {err}"
         );
     }
 

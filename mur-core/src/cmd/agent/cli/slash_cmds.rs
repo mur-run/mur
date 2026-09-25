@@ -17,15 +17,43 @@ pub(super) enum ResolveErr {
 /// someone else's conversation, so we ask for more characters instead.
 const MIN_ID_PREFIX: usize = 4;
 
+/// First ordinal ever handed out. `0` is therefore free to mean "this row has
+/// no number yet" — the value a channel carries when it predates the ordinals
+/// table and has not been backfilled.
+const FIRST_ORDINAL: u64 = 1;
+
+/// What the listing shows in the number column for an unnumbered channel.
+/// Not `0`: that reads as a handle the user can type, and it is not one.
+const NO_ORDINAL: &str = "-";
+
+/// One row of the `/channels` listing.
+fn channel_line(s: &persist::SessionInfo) -> String {
+    let n = if s.ordinal >= FIRST_ORDINAL {
+        s.ordinal.to_string()
+    } else {
+        NO_ORDINAL.to_string()
+    };
+    format!(
+        "  {} · {} · {} turns · {}\n",
+        n,
+        &s.id[..s.id.len().min(8)],
+        s.turns,
+        s.preview
+    )
+}
+
 /// Resolve what the user typed after `/channels` against the recent list.
 pub(super) fn resolve<'a>(
     recent: &'a [persist::SessionInfo],
     target: &ChannelRef,
 ) -> Result<&'a persist::SessionInfo, ResolveErr> {
     match target {
+        // The `>= FIRST_ORDINAL` guard is load-bearing, not a sanity check:
+        // an unbackfilled row's `ordinal` is 0, so without it `/channels 0`
+        // matches the first such row in the list.
         ChannelRef::Ordinal(n) => recent
             .iter()
-            .find(|s| s.ordinal == *n)
+            .find(|s| *n >= FIRST_ORDINAL && s.ordinal == *n)
             .ok_or(ResolveErr::NotFound),
         ChannelRef::IdPrefix(p) => {
             if p.len() < MIN_ID_PREFIX {
@@ -178,13 +206,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                             "channels (/channels N or id-prefix to switch · add --follow to tail):\n",
                         );
                         for s in recent.iter() {
-                            out.push_str(&format!(
-                                "  {} · {} · {} turns · {}\n",
-                                s.ordinal,
-                                &s.id[..s.id.len().min(8)],
-                                s.turns,
-                                s.preview
-                            ));
+                            out.push_str(&channel_line(s));
                         }
                         app.push_system(out.trim_end().to_string());
                     }
@@ -575,5 +597,34 @@ mod resolve_tests {
             resolve(&recent(), &ChannelRef::IdPrefix("01".into())),
             Err(ResolveErr::TooShort)
         ));
+    }
+
+    /// Ordinals start at 1. `0` is the "not numbered yet" marker carried by a
+    /// row that predates the ordinals table and has not been backfilled — so
+    /// a bare `0` must never resolve, or `/channels 0` silently switches to
+    /// whichever unbackfilled channel happens to be listed first.
+    #[test]
+    fn ordinal_zero_never_resolves_even_when_a_row_is_unnumbered() {
+        let r = vec![
+            si("01a0d420beef", 0),
+            si("01a0d999cafe", 0),
+            si("0bbb1111", 5),
+        ];
+        assert!(matches!(
+            resolve(&r, &ChannelRef::Ordinal(0)),
+            Err(ResolveErr::NotFound)
+        ));
+    }
+
+    /// The listing is where the user reads the number back, so an unnumbered
+    /// row must not print `0` there: it looks like a handle they can type.
+    #[test]
+    fn the_listing_blanks_the_number_for_an_unnumbered_channel() {
+        assert!(super::channel_line(&si("01a0d420beef", 7)).starts_with("  7 · "));
+        let unnumbered = super::channel_line(&si("01a0d420beef", 0));
+        assert!(
+            unnumbered.starts_with("  - · "),
+            "unnumbered rows show a placeholder, not 0: {unnumbered}"
+        );
     }
 }
