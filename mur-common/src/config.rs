@@ -771,6 +771,16 @@ pub struct CliConfig {
     /// Default visual skin for `mur agent cli`. Overridable with --skin.
     /// Valid values: "ansi" (default; "dark" is an alias), "light", "mur".
     pub skin: Option<String>,
+
+    /// True once the one-time "permanent instructions" notice has been shown
+    /// (memories P1 §10).
+    ///
+    /// The notice is informational and must appear at most once — repeating a
+    /// feature announcement every session reads as a warning about something
+    /// wrong. Absent (false) in existing configs, which is correct: a user who
+    /// has never seen it should.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seen_permanent_instructions_notice: bool,
 }
 
 /// Configuration for the mobile relay (P4).

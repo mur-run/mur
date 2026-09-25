@@ -61,8 +61,28 @@ pub enum SlashCmd {
     Mcp(Vec<String>),
     /// `/skill [list|add|remove] …` — manage the agent's skills.
     Skill(Vec<String>),
-    /// `/remember [--kind rule|fact] <text>` — save an agent-local memory note.
+    /// `/remember [--kind rule|fact] <text>` — save an agent-local memory note
+    /// as **remembered information** (BestEffort): used when relevant.
     Remember(Vec<String>),
+    /// `/instruct [--kind rule|fact] <text>` — save an agent-local memory as a
+    /// **permanent instruction** (Required): added to the context every turn.
+    ///
+    /// Deliberately a separate command from `/remember` rather than a flag on
+    /// it (plan §11): the contract level is always the user's explicit choice,
+    /// so the system never has to guess whether text is a standing order.
+    Instruct(Vec<String>),
+    /// `/instruct-edit <name> <text>` — rewrite a permanent instruction.
+    ///
+    /// The only write that may deliberately overflow the budget, via an
+    /// explicit "Save anyway" confirmation (plan §7).
+    InstructEdit(Vec<String>),
+    /// `/pin <name>` — make remembered information permanent. Rejected when it
+    /// would not fit; the memory then stays BestEffort.
+    Pin(Option<String>),
+    /// `/unpin <name>` — make a permanent instruction remembered information
+    /// ("Remember only when relevant"). Always confirmed: it drops an
+    /// injection guarantee the user deliberately asked for.
+    Unpin(Option<String>),
     /// `/memories` — list every note this agent can see, labeled by scope.
     Memories,
     /// `/forget <name|last>` — demote an agent-local note to Destroyed.
@@ -167,6 +187,10 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "mcp" => SlashCmd::Mcp(words.map(str::to_string).collect()),
         "skill" | "skills" => SlashCmd::Skill(words.map(str::to_string).collect()),
         "remember" => SlashCmd::Remember(words.map(str::to_string).collect()),
+        "instruct" => SlashCmd::Instruct(words.map(str::to_string).collect()),
+        "instruct-edit" => SlashCmd::InstructEdit(words.map(str::to_string).collect()),
+        "pin" => SlashCmd::Pin(words.next().map(str::to_string)),
+        "unpin" => SlashCmd::Unpin(words.next().map(str::to_string)),
         "memories" | "mem" => SlashCmd::Memories,
         "forget" => SlashCmd::Forget(words.next().map(str::to_string)),
         "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),

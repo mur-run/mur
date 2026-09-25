@@ -39,6 +39,14 @@ pub(super) fn run_plain(
         if text.is_empty() {
             continue;
         }
+        // Same Required-budget gate as the TUI (plan §9). The runtime injects
+        // Required unconditionally, so a non-TTY send would otherwise be the
+        // one path that silently overruns the reservation.
+        if let Some(overlay) = memory_cmds::required_budget_block(home, agent) {
+            let _ = writeln!(out2.borrow_mut(), "{overlay}");
+            let _ = out2.borrow_mut().flush();
+            continue;
+        }
         let task_id = uuid::Uuid::now_v7().to_string();
         let params = build_params(&text, &task_id, context.as_deref(), None, cwd.as_deref());
         let streamed = Cell::new(false);

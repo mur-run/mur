@@ -44,6 +44,15 @@ pub enum NotesAction {
         /// Remove this agent's own memory rather than a global note.
         #[arg(long)]
         agent: Option<String>,
+
+        /// Confirm removing a permanent instruction.
+        ///
+        /// Deleting one requires explicit confirmation (memories P1 §7). A
+        /// terminal command cannot show a dialog, so the flag IS the
+        /// confirmation: without it the command explains and refuses rather
+        /// than silently skipping a gate the UI enforces.
+        #[arg(long)]
+        yes: bool,
     },
 
     /// List notes, optionally filtered by maturity.

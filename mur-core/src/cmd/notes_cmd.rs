@@ -248,12 +248,23 @@ pub fn parse_maturity(s: &str) -> Result<LifecycleState> {
 /// `unrecognized subcommand`. Agent-local memories route to the same demotion
 /// `/forget` performs, so a memory removed from the CLI and one removed from a
 /// chat pane end in the same state rather than two.
-pub fn cmd_remove(name: &str, agent: Option<&str>) -> Result<()> {
+pub fn cmd_remove(name: &str, agent: Option<&str>, yes: bool) -> Result<()> {
     let home = resolve_mur_home()?;
     match agent {
         Some(a) => {
-            let msg = crate::cmd::agent::cli::memory_cmds::forget(&home, a, Some(name))?;
-            println!("{msg}");
+            use crate::cmd::agent::cli::memory_cmds::{MemoryOutcome, apply_pending, forget};
+            match forget(&home, a, Some(name))? {
+                MemoryOutcome::Done(msg) => println!("{msg}"),
+                // A permanent instruction. `--yes` is the confirmation a
+                // terminal can carry; without it, explain and change nothing.
+                MemoryOutcome::Confirm { prompt, pending } => {
+                    if yes {
+                        println!("{}", apply_pending(&home, a, &pending)?);
+                    } else {
+                        println!("{prompt}\n\nRe-run with --yes to confirm.");
+                    }
+                }
+            }
         }
         None => {
             let dir = global_skill_dir(&home, name);

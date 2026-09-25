@@ -1197,8 +1197,8 @@ pub async fn run(cli: Cli) -> Result<()> {
             crate::cli::notes::NotesAction::Search { query, limit } => {
                 cmd::notes_cmd::cmd_search(&query, limit)?
             }
-            crate::cli::notes::NotesAction::Remove { name, agent } => {
-                cmd::notes_cmd::cmd_remove(&name, agent.as_deref())?
+            crate::cli::notes::NotesAction::Remove { name, agent, yes } => {
+                cmd::notes_cmd::cmd_remove(&name, agent.as_deref(), yes)?
             }
             crate::cli::notes::NotesAction::List {
                 maturity,

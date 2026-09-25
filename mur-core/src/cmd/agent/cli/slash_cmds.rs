@@ -474,13 +474,38 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             }
             Err(e) => app.push_system(format!("remember failed: {e}")),
         },
+        SlashCmd::Instruct(args) => match memory_cmds::instruct(&app.home, &app.agent, &args) {
+            Ok(msg) => {
+                let note = push_memory_reload(&app.home, &app.agent).await;
+                app.push_system(format!("{msg}{note}"));
+            }
+            // An over-budget add is refused here, and nothing was written —
+            // the error text carries the numbers and how to make room.
+            Err(e) => app.push_system(format!("instruct failed: {e}")),
+        },
+        SlashCmd::InstructEdit(args) => {
+            match memory_cmds::instruct_edit(&app.home, &app.agent, &args) {
+                Ok(outcome) => settle_memory_outcome(app, outcome, "instruct-edit").await,
+                Err(e) => app.push_system(format!("instruct-edit failed: {e}")),
+            }
+        }
+        SlashCmd::Pin(target) => match memory_cmds::pin(&app.home, &app.agent, target.as_deref()) {
+            Ok(msg) => {
+                let note = push_memory_reload(&app.home, &app.agent).await;
+                app.push_system(format!("{msg}{note}"));
+            }
+            Err(e) => app.push_system(format!("pin failed: {e}")),
+        },
+        SlashCmd::Unpin(target) => {
+            match memory_cmds::unpin(&app.home, &app.agent, target.as_deref()) {
+                Ok(outcome) => settle_memory_outcome(app, outcome, "unpin").await,
+                Err(e) => app.push_system(format!("unpin failed: {e}")),
+            }
+        }
         SlashCmd::Memories => app.push_system(memory_cmds::memories(&app.home, &app.agent)),
         SlashCmd::Forget(target) => {
             match memory_cmds::forget(&app.home, &app.agent, target.as_deref()) {
-                Ok(msg) => {
-                    let note = push_memory_reload(&app.home, &app.agent).await;
-                    app.push_system(format!("{msg}{note}"));
-                }
+                Ok(outcome) => settle_memory_outcome(app, outcome, "forget").await,
                 Err(e) => app.push_system(format!("forget failed: {e}")),
             }
         }
@@ -563,8 +588,53 @@ pub(super) fn retry_send(app: &mut App, mut params: Value, tx: &mpsc::Sender<Str
     );
 }
 
-/// `/channels <target>` resolution: an ordinal names exactly one channel for
-/// life, and an id prefix must be unambiguous before we act on it.
+/// Show a memory command's result, asking first when it wants confirmation.
+///
+/// One settle point for `/forget`, `/unpin`, and `/instruct-edit` (plan §7 and
+/// §9): each may either be finished already or be owed an explicit yes/no, and
+/// routing all three through here keeps "did we ask?" from being decided three
+/// times. `Done` also pushes the memory-reload dial, since the set on disk
+/// changed; `Confirm` deliberately does not — nothing has been written yet.
+async fn settle_memory_outcome(app: &mut App, outcome: memory_cmds::MemoryOutcome, label: &str) {
+    match outcome {
+        memory_cmds::MemoryOutcome::Done(msg) => {
+            let note = push_memory_reload(&app.home, &app.agent).await;
+            app.push_system(format!("{msg}{note}"));
+        }
+        memory_cmds::MemoryOutcome::Confirm { prompt, pending } => {
+            // The answer arrives as the next submitted line. Anything that is
+            // not an explicit yes cancels: a permanent instruction the user
+            // deliberately asked for must not fall to a reflex Enter.
+            app.pending_memory_confirm = Some(pending);
+            app.push_system(format!(
+                "{prompt}\n\n[{label}] type `yes` to confirm — anything else cancels."
+            ));
+        }
+    }
+}
+
+/// Resolve a pending memory confirmation with the user's typed answer.
+///
+/// Only an explicit `yes`/`y` proceeds — everything else cancels and says so,
+/// because the silent outcome of a misunderstood prompt must be the
+/// non-destructive one. A no-op when nothing is pending.
+pub(super) async fn resolve_memory_confirm(app: &mut App, line: &str) {
+    let Some(pending) = app.pending_memory_confirm.take() else {
+        return;
+    };
+    let answer = line.trim().to_lowercase();
+    if answer == "yes" || answer == "y" {
+        match memory_cmds::apply_pending(&app.home, &app.agent, &pending) {
+            Ok(msg) => {
+                let note = push_memory_reload(&app.home, &app.agent).await;
+                app.push_system(format!("{msg}{note}"));
+            }
+            Err(e) => app.push_system(format!("failed: {e}")),
+        }
+    } else {
+        app.push_system(format!("cancelled — '{}' is unchanged.", pending.name));
+    }
+}
 #[cfg(test)]
 mod resolve_tests {
     use super::{ChannelRef, ResolveErr, resolve};
