@@ -198,7 +198,8 @@ mod tests {
     }
 
     #[test]
-    fn image_mime_covers_common_formats() {        assert_eq!(image_mime_for(Path::new("a.JPG")), Some("image/jpeg"));
+    fn image_mime_covers_common_formats() {
+        assert_eq!(image_mime_for(Path::new("a.JPG")), Some("image/jpeg"));
         assert_eq!(image_mime_for(Path::new("shot.jpeg")), Some("image/jpeg"));
         assert_eq!(image_mime_for(Path::new("x.gif")), Some("image/gif"));
         assert_eq!(image_mime_for(Path::new("x.webp")), Some("image/webp"));
