@@ -1,6 +1,6 @@
 # browser skill: three triggers collapse into one hub + reference bundle
 
-**Status:** Approved in conversation 2026-09-25. Not yet implemented.
+**Status:** Implemented (D1-D6 shipped, `feat/browser-5.1`, merged to `main`).
 **Scope:** `mur-browser/` (new, source of truth) · `mur-core/src/cmd/sync_cmd.rs`
 (`ensure_mur_skill`, bundle-write step) · `mur-core/src/cmd/agent/cli/app/slash.rs`
 (new `SlashCmd::Browser`) · `mur-core/src/cmd/agent/cli/slash_cmds.rs` (dispatch arm)
