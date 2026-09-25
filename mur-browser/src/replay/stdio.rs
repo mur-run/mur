@@ -1,7 +1,7 @@
 //! Production transport: line-delimited JSON-RPC over a spawned
 //! Playwright MCP server's stdio, plus the `replay_live` entry point.
 
-use super::{ReplayReport, ToolCaller, check_navigation, replay_with};
+use super::{ReplayOptions, ReplayReport, ToolCaller, check_navigation, replay_with};
 use crate::recorder::Run;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -120,6 +120,7 @@ pub(super) fn live_args(storage_state: Option<&std::path::Path>) -> Vec<String> 
 pub async fn replay_live(
     run: &Run,
     allow: &[String],
+    opts: ReplayOptions,
     storage_state: Option<&std::path::Path>,
 ) -> Result<ReplayReport> {
     check_navigation(run, allow)?;
@@ -131,7 +132,7 @@ pub async fn replay_live(
     let stdout = child.stdout.take().context("child stdout")?;
     let result = async {
         let mut caller = StdioCaller::connect(stdin, stdout).await?;
-        replay_with(run, allow, &mut caller).await
+        replay_with(run, allow, opts, &mut caller).await
     }
     .await;
     let _ = child.kill().await;

@@ -9,6 +9,7 @@
 mod access;
 mod app;
 mod bash_class;
+mod browser_cmd;
 mod call_summary;
 mod complete;
 mod deep_research;
@@ -248,7 +249,7 @@ fn help_text() -> String {
         "  chat      /clear (new conversation) · /sessions · /channels [N|id-prefix] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
         "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T / Alt+M)",
         settings.as_str(),
-        "  agent     /mcp · /skill · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
+        "  agent     /mcp · /skill · /browser [--add|auth|testing|automation] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> · /forget <name|last>",
         "  research  /deep-research [question|status|stop|setup]  run the research fleet (/research)",
         "  search    /search <query> [--all] [--limit N] [--lines N] [--send] · /search --expand <id>[,<id>] (full content for a hit)",

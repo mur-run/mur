@@ -71,6 +71,12 @@ pub enum SlashCmd {
     Skin(Option<String>),
     /// `/panel [tab] [target]` — open/drive the MUR Hub companion window.
     Panel(Vec<String>),
+    /// `/browser [--add|auth|testing|automation]` — browser skill hub.
+    /// `--add` attaches the skill to this agent (D6, reuses `/skill add`'s
+    /// own `cmd_skill_add` path unmodified). A mode argument, once attached,
+    /// is sent to the model directly as a turn — there is no `Unknown`
+    /// fallthrough to `matched_skill` once this is a typed variant (D5).
+    Browser(Vec<String>),
     /// `/open` — what is still outstanding, observed and reported kept apart.
     Open,
     /// `/deep-research [ask <question>|<question>|status|stop|setup]` — research
@@ -165,6 +171,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "forget" => SlashCmd::Forget(words.next().map(str::to_string)),
         "skin" | "theme" => SlashCmd::Skin(words.next().map(str::to_string)),
         "panel" => SlashCmd::Panel(words.map(str::to_string).collect()),
+        "browser" => SlashCmd::Browser(words.map(str::to_string).collect()),
         "deep-research" | "research" => SlashCmd::DeepResearch(words.map(str::to_string).collect()),
         "search" => SlashCmd::Search(words.map(str::to_string).collect()),
         "monitor" | "mon" => SlashCmd::Monitor(words.map(str::to_string).collect()),

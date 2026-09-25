@@ -798,9 +798,16 @@ pub enum BrowserAction {
         /// Site profile to replay under (defaults to the one recorded with the run).
         #[arg(long)]
         profile: Option<String>,
-        /// Self-heal missed locators (not implemented yet; the flag errors).
+        /// Self-heal steps whose locators all miss; verified heals are written back.
         #[arg(long)]
         heal: bool,
+        /// Share of element steps allowed to heal in `mode: test` (0.0–1.0).
+        #[arg(
+            long,
+            default_value_t = mur_browser::heal::DEFAULT_HEAL_RATIO,
+            value_parser = crate::cmd::browser::parse_heal_ratio
+        )]
+        max_heal_ratio: f32,
         /// Check the run against the profile allowlist without launching a browser.
         #[arg(long)]
         dry_run: bool,

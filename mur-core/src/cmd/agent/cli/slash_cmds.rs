@@ -513,6 +513,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             }
         },
         SlashCmd::Panel(args) => panel::handle_panel_command(app, &args),
+        SlashCmd::Browser(args) => browser_cmd::handle(app, args, tx).await,
         SlashCmd::Open => {
             let items = crate::open_items::collect(&app.home);
             let (visible, muted) = crate::open_items::partition(items, &app.muted_origins());

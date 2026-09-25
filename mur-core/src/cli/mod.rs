@@ -632,6 +632,33 @@ mod tests {
     }
 
     #[test]
+    fn cli_browser_replay_max_heal_ratio_is_bounded_and_defaults() {
+        use crate::cli::actions::BrowserAction;
+        use clap::Parser;
+        let parse = |extra: &[&str]| {
+            let mut argv = vec!["mur", "browser", "replay", "checkout"];
+            argv.extend_from_slice(extra);
+            Cli::try_parse_from(argv)
+        };
+        for bad in ["1.5", "-0.1", "NaN", "abc"] {
+            assert!(parse(&["--max-heal-ratio", bad]).is_err(), "{bad}");
+        }
+        for (extra, want) in [
+            (&[][..], mur_browser::heal::DEFAULT_HEAL_RATIO),
+            (&["--max-heal-ratio", "0.5"][..], 0.5),
+            (&["--max-heal-ratio", "0"][..], 0.0),
+            (&["--max-heal-ratio", "1"][..], 1.0),
+        ] {
+            match parse(extra).unwrap().command {
+                Commands::Browser {
+                    action: BrowserAction::Replay { max_heal_ratio, .. },
+                } => assert_eq!(max_heal_ratio, want, "{extra:?}"),
+                _ => panic!("expected browser replay for {extra:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn cli_browser_setup_parses_and_has_no_yes_flag() {
         use crate::cli::actions::BrowserAction;
         use clap::Parser;
