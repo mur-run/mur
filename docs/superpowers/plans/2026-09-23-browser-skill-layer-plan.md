@@ -245,16 +245,16 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 5.0 **前置 PR（純搬移）**：`replay.rs`（823 行）拆出 `replay/tests.rs`、`replay/stdio.rs`；`cmd/browser/mod.rs`（879 行）的 `replay` 移到 `cmd/browser/replay.rs`。行為不變，測試全綠後 commit
-- [ ] 5.1 新建 `heal.rs`，先寫預算測試：`(2,10,0.2)` false、`(3,10,0.2)` true、`(1,3,0.2)` false、`(2,3,0.2)` true、`total == 0` false
-- [ ] 5.2 比對單元測試（直接呼叫比對函式）：testid 改名 → 採用；「送出」→「送出訂單」→ 採用；同 role 兩節點分數相近 → 拒絕；無 role locator → 拒絕；role 不同 → 拒絕；新 locator 不含 `@ref`、去重、前插
-- [ ] 5.3 `cargo test -p mur-browser heal` → 失敗
-- [ ] 5.4 實作 `heal.rs`（詞彙切分含 CJK bigram、Jaccard、門檻＋領先差距），用 fixture 校準兩個常數並回填 spec
-- [ ] 5.5a `run_step` 錯誤分類：解析階段全部 miss 且無 testid 候選 → `StepError::LocateMiss`；testid 後備送出後的任何錯誤、動作錯誤 → `StepError::Action`。補測試：testid 後備回錯與動作回錯都 `Failed` 且不 heal，動作只呼叫一次
-- [ ] 5.5 `replay_with` 接 heal：只在元素步驟（非 `assert_text`）回 `LocateMiss` 時觸發；下一個元素步驟直接命中 → `Verified`，失敗或也要 heal、或中間 `assert_text` 失敗 → 回滾並把 heal 步驟標 `Failed`；結束仍 `Pending` → `Unverified`。補 spec「測試」節的五個 replay 案例
-- [ ] 5.6 預算：分母為元素步驟數，只在 `Mode::Test` 檢查；超過 → 仍回 `Ok(report)`，`report.budget_exceeded = Some(BudgetExceeded { healed, allowed, max_ratio })`；CLI 先寫報告 yaml 再回非零，訊息含實際次數、允許次數、`--max-heal-ratio`。`verdict()` 在超預算時回 `red`。補測試：automation 不受限；test 超預算時報告已寫入、`actions.yaml` 不變；`failed == 0 && budget_exceeded.is_some()` → `red`
-- [ ] 5.7 `mur-core`：`actions.rs` 的 `Replay` 加 `--max-heal-ratio`（clap 限 0–1）、拿掉 `--heal` 的 bail；只在無 `Failed` 且未超預算時，把 `Verified` 的 heal 以 temp + rename 寫回 `actions.yaml`，rename 成功後才填 `report.written_back`（寫回錯誤先接住，報告照寫再回非零）。補寫回測試，含「有 `Verified` 但超預算 → `written_back == 0`」
-- [ ] 5.8 `cargo test -p mur-browser -p mur-core` + clippy `--all-targets -D warnings` → 全綠，commit
+- [x] 5.0 **前置 PR（純搬移）**：`replay.rs`（823 行）拆出 `replay/tests.rs`、`replay/stdio.rs`；`cmd/browser/mod.rs`（879 行）的 `replay` 移到 `cmd/browser/replay.rs`。行為不變，測試全綠後 commit
+- [x] 5.1 新建 `heal.rs`，先寫預算測試：`(2,10,0.2)` false、`(3,10,0.2)` true、`(1,3,0.2)` false、`(2,3,0.2)` true、`total == 0` false
+- [x] 5.2 比對單元測試（直接呼叫比對函式）：testid 改名 → 採用；「送出」→「送出訂單」→ 採用；同 role 兩節點分數相近 → 拒絕；無 role locator → 拒絕；role 不同 → 拒絕；新 locator 不含 `@ref`、去重、前插
+- [x] 5.3 `cargo test -p mur-browser heal` → 失敗
+- [x] 5.4 實作 `heal.rs`（詞彙切分含 CJK bigram、Jaccard、門檻＋領先差距），用 fixture 校準兩個常數並回填 spec
+- [x] 5.5a `run_step` 錯誤分類：解析階段全部 miss 且無 testid 候選 → `StepError::LocateMiss`；testid 後備送出後的任何錯誤、動作錯誤 → `StepError::Action`。補測試：testid 後備回錯與動作回錯都 `Failed` 且不 heal，動作只呼叫一次
+- [x] 5.5 `replay_with` 接 heal：只在元素步驟（非 `assert_text`）回 `LocateMiss` 時觸發；下一個元素步驟直接命中 → `Verified`，失敗或也要 heal、或中間 `assert_text` 失敗 → 回滾並把 heal 步驟標 `Failed`；結束仍 `Pending` → `Unverified`。補 spec「測試」節的五個 replay 案例
+- [x] 5.6 預算：分母為元素步驟數，只在 `Mode::Test` 檢查；超過 → 仍回 `Ok(report)`，`report.budget_exceeded = Some(BudgetExceeded { healed, allowed, max_ratio })`；CLI 先寫報告 yaml 再回非零，訊息含實際次數、允許次數、`--max-heal-ratio`。`verdict()` 在超預算時回 `red`。補測試：automation 不受限；test 超預算時報告已寫入、`actions.yaml` 不變；`failed == 0 && budget_exceeded.is_some()` → `red`
+- [x] 5.7 `mur-core`：`actions.rs` 的 `Replay` 加 `--max-heal-ratio`（clap 限 0–1）、拿掉 `--heal` 的 bail；只在無 `Failed` 且未超預算時，把 `Verified` 的 heal 以 temp + rename 寫回 `actions.yaml`，rename 成功後才填 `report.written_back`（寫回錯誤先接住，報告照寫再回非零）。補寫回測試，含「有 `Verified` 但超預算 → `written_back == 0`」
+- [x] 5.8 `cargo test -p mur-browser -p mur-core` + clippy `--all-targets -D warnings` → 全綠，commit
 
 ---
 
