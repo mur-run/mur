@@ -69,6 +69,73 @@ pub fn note_kind(manifest: &crate::skill::SkillManifest) -> Option<NoteKind> {
     }
 }
 
+/// The injection guarantee a `Category::Note` skill carries.
+///
+/// Required means the note is injected every turn — a guarantee about
+/// PRESENCE in the prompt, not about model compliance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectionPolicy {
+    /// Permanent instruction: injected every turn, never ranked or truncated.
+    Required,
+    /// Remembered information: competes for the remaining budget.
+    BestEffort,
+}
+
+/// Injection policy of a note manifest: `Category::Note` + a `required` tag →
+/// `Required`; any other note is `BestEffort`. Non-note skills have none.
+///
+/// Tag-derived on purpose, mirroring [`note_kind`]: policy lives in
+/// `manifest.tags`, so existing notes on disk already read as `BestEffort` and
+/// no data migration is needed. Orthogonal to [`NoteKind`] — a rule or a fact
+/// may be either policy. This is the SINGLE reader; never match the tag
+/// inline at call sites.
+pub fn injection_policy(manifest: &crate::skill::SkillManifest) -> Option<InjectionPolicy> {
+    if manifest.category != crate::skill::Category::Note {
+        return None;
+    }
+    if manifest.tags.iter().any(|t| t == REQUIRED_TAG) {
+        Some(InjectionPolicy::Required)
+    } else {
+        Some(InjectionPolicy::BestEffort)
+    }
+}
+
+/// The tag that marks a note as a permanent instruction.
+///
+/// Private on purpose: [`injection_policy`] is the single reader and
+/// [`set_injection_policy`] the single writer, so no call site ever matches
+/// this string inline.
+const REQUIRED_TAG: &str = "required";
+
+/// Set a note's injection policy, in place.
+///
+/// The single WRITER of the policy tag, paired with [`injection_policy`] as
+/// the single reader. It exists because `NoteSpec` deliberately has no policy
+/// field: Required must come only from an explicit user action at one of the
+/// two `/memories` creation entries (plan invariant 3), so the note builders
+/// shared by the runtime, the `remember` tool, and `mur notes create` cannot
+/// express it at all. Promotion and demotion are the same operation with a
+/// different argument.
+///
+/// No-op for a non-note manifest: injection policy is a note concept, and
+/// silently tagging a `Category::Skill` would invent a guarantee the injector
+/// does not honour.
+pub fn set_injection_policy(manifest: &mut crate::skill::SkillManifest, policy: InjectionPolicy) {
+    if manifest.category != crate::skill::Category::Note {
+        return;
+    }
+    let tagged = manifest.tags.iter().any(|t| t == REQUIRED_TAG);
+    match policy {
+        // Idempotent: promoting twice must not leave two `required` tags, or
+        // a later demotion would only remove one and the note would stay
+        // Required while the UI said otherwise.
+        InjectionPolicy::Required if !tagged => manifest.tags.push(REQUIRED_TAG.into()),
+        InjectionPolicy::Required => {}
+        // Demotion strips EVERY copy, for the same reason.
+        InjectionPolicy::BestEffort => manifest.tags.retain(|t| t != REQUIRED_TAG),
+    }
+}
+
 /// Decay half-life multiplier for `manifest` under thresholds `t` — notes get
 /// per-kind curves; everything else (and a missing manifest) is 1.0.
 pub fn half_life_factor_for(
@@ -627,6 +694,83 @@ mod note_kind_tests {
         assert_eq!(note_kind(&manifest("note", "[rule]")), Some(NoteKind::Rule));
         assert_eq!(note_kind(&manifest("note", "[]")), Some(NoteKind::Fact));
         assert_eq!(note_kind(&manifest("context", "[rule]")), None);
+    }
+
+    #[test]
+    fn injection_policy_required_tag_best_effort_default_and_none() {
+        // An explicit `required` tag is the ONLY way a note becomes Required
+        // (invariant 3: never by migration, classifier, or score).
+        assert_eq!(
+            injection_policy(&manifest("note", "[required]")),
+            Some(InjectionPolicy::Required)
+        );
+        // A plain note — and every pre-existing note on disk — reads as
+        // BestEffort, which is what makes §10's migration a no-op.
+        assert_eq!(
+            injection_policy(&manifest("note", "[]")),
+            Some(InjectionPolicy::BestEffort)
+        );
+        // Policy is orthogonal to kind: a rule can be a permanent instruction.
+        assert_eq!(
+            injection_policy(&manifest("note", "[rule, required]")),
+            Some(InjectionPolicy::Required)
+        );
+        // Non-note skills have no injection policy at all.
+        assert_eq!(injection_policy(&manifest("context", "[required]")), None);
+    }
+
+    /// The writer must round-trip through the reader, and must be idempotent
+    /// in both directions.
+    ///
+    /// Double-promotion leaving two `required` tags is the specific bug this
+    /// pins: a later demotion that stripped only one copy would leave the note
+    /// injected every turn while `/memories` listed it as BestEffort — a
+    /// silent, invisible permanent instruction.
+    #[test]
+    fn set_injection_policy_round_trips_and_is_idempotent() {
+        let mut m = manifest("note", "[rule]");
+        assert_eq!(injection_policy(&m), Some(InjectionPolicy::BestEffort));
+
+        set_injection_policy(&mut m, InjectionPolicy::Required);
+        assert_eq!(injection_policy(&m), Some(InjectionPolicy::Required));
+        // Kind survives a policy change — the two are orthogonal.
+        assert_eq!(note_kind(&m), Some(NoteKind::Rule));
+
+        set_injection_policy(&mut m, InjectionPolicy::Required);
+        assert_eq!(
+            m.tags.iter().filter(|t| *t == "required").count(),
+            1,
+            "promoting twice must not duplicate the tag: {:?}",
+            m.tags
+        );
+
+        set_injection_policy(&mut m, InjectionPolicy::BestEffort);
+        assert_eq!(injection_policy(&m), Some(InjectionPolicy::BestEffort));
+        assert_eq!(note_kind(&m), Some(NoteKind::Rule));
+        set_injection_policy(&mut m, InjectionPolicy::BestEffort);
+        assert_eq!(injection_policy(&m), Some(InjectionPolicy::BestEffort));
+    }
+
+    /// Even a hand-corrupted manifest carrying duplicate tags must demote
+    /// cleanly — `retain` strips every copy, so recovery is always possible.
+    #[test]
+    fn demotion_strips_duplicate_required_tags() {
+        let mut m = manifest("note", "[required, rule, required]");
+        set_injection_policy(&mut m, InjectionPolicy::BestEffort);
+        assert_eq!(injection_policy(&m), Some(InjectionPolicy::BestEffort));
+    }
+
+    /// A non-note manifest must not be given a policy it cannot honour.
+    #[test]
+    fn set_injection_policy_ignores_non_notes() {
+        let mut m = manifest("context", "[]");
+        set_injection_policy(&mut m, InjectionPolicy::Required);
+        assert!(
+            !m.tags.iter().any(|t| t == "required"),
+            "a non-note must not be tagged Required: {:?}",
+            m.tags
+        );
+        assert_eq!(injection_policy(&m), None);
     }
 
     #[test]
