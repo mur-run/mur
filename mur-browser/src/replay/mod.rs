@@ -245,16 +245,14 @@ pub async fn replay_with<C: ToolCaller + Send>(
                     message: None,
                 };
                 if let Some(mut event) = hit.heal {
-                    outcome.message = Some(format!(
-                        "healed onto {} (score {:.2})",
-                        event.node, event.score
-                    ));
+                    outcome.message = Some(heal_note(&event));
                     if stopped {
                         event.status = HealStatus::RolledBack;
                         outcome.status = StepStatus::Failed;
                         outcome.message = Some(format!(
-                            "{} — healed onto {}, but the previous heal was rolled back",
-                            step.intent, event.node
+                            "{} — {}, but the previous heal was rolled back",
+                            step.intent,
+                            heal_note(&event)
                         ));
                     } else {
                         pending = Some((outcomes.len(), heals.len()));
@@ -345,13 +343,17 @@ fn roll_back(
 ) {
     let event = &mut heals[h];
     event.status = HealStatus::RolledBack;
+    let note = heal_note(event);
     let outcome = &mut outcomes[o];
     outcome.status = StepStatus::Failed;
-    outcome.message = Some(format!(
-        "healed onto {} (score {:.2}), rolled back: {why}",
-        event.node, event.score
-    ));
+    outcome.message = Some(format!("{note}, rolled back: {why}"));
     log_heal(event);
+}
+
+/// The "healed onto {node} (score {score})" phrasing shared by every heal
+/// outcome message, so `Verified`/`RolledBack` variants never drift apart.
+fn heal_note(event: &HealEvent) -> String {
+    format!("healed onto {} (score {:.2})", event.node, event.score)
 }
 
 fn log_heal(event: &HealEvent) {
