@@ -224,11 +224,29 @@ pub(super) fn decide_hitl_with_note(
                     app.mark_card_auto_approved(sid);
                 }
             }
+            // The receipt names the COMMAND, not the tool category. `approved
+            // \`bash\`` was unreviewable after the fact — the scrollback could
+            // not tell two approvals of the same tool apart, and neither could
+            // the operator.
             (true, false) => {
                 app.saw_hitl_this_turn = true;
-                app.push_success(format!("approved `{}`", req.tool_name))
+                let s = super::call_summary::approval_summary(
+                    &req.tool_name,
+                    &req.tool_input,
+                    app.width,
+                    super::call_summary::ApprovalFrame::Transcript,
+                );
+                app.push_success(format!("approved {s}"))
             }
-            (false, _) => app.push_warn(format!("denied `{}`", req.tool_name)),
+            (false, _) => {
+                let s = super::call_summary::approval_summary(
+                    &req.tool_name,
+                    &req.tool_input,
+                    app.width,
+                    super::call_summary::ApprovalFrame::Transcript,
+                );
+                app.push_warn(format!("denied {s}"))
+            }
         }
     }
 }
