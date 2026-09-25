@@ -4,7 +4,7 @@ pub mod doctor;
 mod replay;
 pub mod setup;
 
-pub use replay::replay;
+pub use replay::{parse_heal_ratio, replay};
 
 use std::{fs, path::PathBuf};
 #[cfg(unix)]

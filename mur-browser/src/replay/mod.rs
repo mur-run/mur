@@ -66,6 +66,10 @@ pub struct ReplayReport {
     /// the CLI exits non-zero after writing this report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_exceeded: Option<BudgetExceeded>,
+    /// Steps whose heal was written back to `actions.yaml`. Always 0 from
+    /// this crate: only the CLI fills it, after the rename succeeds.
+    #[serde(default)]
+    pub written_back: u32,
 }
 
 impl ReplayReport {
@@ -80,6 +84,7 @@ impl ReplayReport {
             steps,
             heals,
             budget_exceeded: None,
+            written_back: 0,
         }
     }
 
@@ -94,9 +99,9 @@ impl ReplayReport {
         }
     }
 
-    /// One-line summary for the CLI.
+    /// Summary for the CLI: one line, plus a heal breakdown when any healed.
     pub fn summary(&self) -> String {
-        format!(
+        let mut out = format!(
             "{} {}: {}/{} passed, {} failed, {} healed",
             self.verdict(),
             self.run,
@@ -104,7 +109,18 @@ impl ReplayReport {
             self.total,
             self.failed,
             self.healed
-        )
+        );
+        if !self.heals.is_empty() {
+            let count = |s: HealStatus| self.heals.iter().filter(|h| h.status == s).count();
+            out.push_str(&format!(
+                "\nhealed {} ({} verified, {} unverified, written back {})",
+                self.healed,
+                count(HealStatus::Verified),
+                count(HealStatus::Unverified),
+                self.written_back
+            ));
+        }
+        out
     }
 }
 
