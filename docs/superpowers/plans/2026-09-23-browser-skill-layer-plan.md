@@ -284,12 +284,12 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 7.1 建立 `/tmp/browser-automation/SKILL.md`，`name: browser-automation`，triggers keyword `browser automat|自動化|重複操作`
-- [ ] 7.2 內文工作流：profile 檢查 → `mur browser record --run <name> --mode automation --profile <site>` → **必先 `mur browser replay <name> --dry-run`** 給人看 action plan → 確認後才實跑
-- [ ] 7.3 內文明訂平行規則：storageState 唯讀載入、每個 worker 獨立 browser context、執行期 cookie 變動一律不回寫
-- [ ] 7.4 內文明訂：automation **沒有斷言**，失敗即重試（上限 2 次）後回報，不得自行判斷「應該算成功」
-- [ ] 7.5 加「絕不」清單：不得執行不可逆動作（付款、刪除、送出）除非使用者在本次對話明示；越界 domain 由 Task 2 的 guard 擋下，skill 不得試圖繞過
-- [ ] 7.6 `mur skill install /tmp/browser-automation` 並驗證
+- [x] 7.1 建立 `/tmp/browser-automation/SKILL.md`，`name: browser-automation`，triggers keyword `browser automat|自動化|重複操作`
+- [x] 7.2 內文工作流：profile 檢查 → `mur browser record --run <name> --mode automation --profile <site>` → **必先 `mur browser replay <name> --dry-run`** 給人看 action plan → 確認後才實跑
+- [x] 7.3 內文明訂平行規則：storageState 唯讀載入、每個 worker 獨立 browser context、執行期 cookie 變動一律不回寫
+- [x] 7.4 內文明訂：automation **沒有斷言**，失敗即重試（上限 2 次）後回報，不得自行判斷「應該算成功」
+- [x] 7.5 加「絕不」清單：不得執行不可逆動作（付款、刪除、送出）除非使用者在本次對話明示；越界 domain 由 Task 2 的 guard 擋下，skill 不得試圖繞過
+- [x] 7.6 `mur skill install /tmp/browser-automation` 並驗證
 
 ---
 
