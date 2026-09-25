@@ -93,7 +93,7 @@ impl App {
             self.fleet = Some(super::super::fleet_rail::FleetRail::start_auto(fleet));
         }
         if let Some(rail) = self.fleet.as_mut() {
-            rail.set_run_in_flight(true);
+            rail.set_run_in_flight(&self.home, true);
         }
         let channel_id = format!("fleet-{fleet}");
         let on_own_pane = self.channel.as_ref().is_some_and(|c| c.id == channel_id);
@@ -141,7 +141,7 @@ impl App {
         let mut retire = false;
         let mut stop_word: Option<String> = None;
         if let Some(rail) = self.fleet.as_mut() {
-            rail.set_run_in_flight(false);
+            rail.set_run_in_flight(&home, false);
             // A view up to POLL_INTERVAL stale would freeze the wrong states
             // into history. `set_run_in_flight` already busted the poll gate.
             rail.poll(&home, std::time::Instant::now());
