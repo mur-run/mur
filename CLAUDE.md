@@ -75,14 +75,15 @@ After a user-facing change, update all three: **`README.md`**, the **docs site**
 
 ## Mandatory Rules
 
-1. **No hardcoded values.** Use constants, config, or env vars. Research best practice if unsure.
-2. **Ask, don't guess.** If requirements / paths / API contracts / behavior are ambiguous, ask. In auto mode, make low-risk assumptions and flag them.
-3. **SSH connection.** Use Desktop Commander to ssh, not Bash/SSH.
-4. **Single source file ≤ 800 lines.** When approaching the limit, split into submodules following the same structural pattern as siblings. Pure code movement first; behavior changes in a separate PR.
-5. **Read narrowly.** Prefer LSP queries (goToDefinition, findReferences) and `grep`/`Grep` over reading whole large files. When you must read a file, target the relevant range with `offset`/`limit`.
-6. **CLAUDE.md is operational, not a changelog.** Historical milestone descriptions, completed phase notes, and detailed design walkthroughs belong in `docs/architecture/` or `docs/superpowers/specs/`. Keep this file lean so every session starts cheap.
-7. **Brand name is uppercase "MUR".** Everywhere a user can see it — GUI strings, `display_name`, docs, marketing copy, companion/voice text, notifications. The ONLY exceptions are the CLI binary/command (`mur`), code identifiers, file paths, internal `name`/directory slugs, and the `~/.mur` home. Use `display_name` for the uppercase label; keep internal `name` lowercase so it matches the on-disk directory (the runtime spoof check is exact-match).
-8. **Agent name lookup is case-insensitive (CLI).** `mur agent send mur` and `... Mur` must both resolve, via `a2a_dial::canonicalize_agent_name`; downstream uses the exact canonical name so the spoof check passes.
+1. **Design skills for every MUR install, not just this machine.** No local paths, no this-user's home directory, no this-repo-only assumptions baked into a skill's logic or examples — a skill installed on someone else's machine must work unmodified. Generalize before writing.
+2. **No hardcoded values.** Use constants, config, or env vars. Research best practice if unsure.
+3. **Ask, don't guess.** If requirements / paths / API contracts / behavior are ambiguous, ask. In auto mode, make low-risk assumptions and flag them.
+4. **SSH connection.** Use Desktop Commander to ssh, not Bash/SSH.
+5. **Single source file ≤ 800 lines.** When approaching the limit, split into submodules following the same structural pattern as siblings. Pure code movement first; behavior changes in a separate PR.
+6. **Read narrowly.** Prefer LSP queries (goToDefinition, findReferences) and `grep`/`Grep` over reading whole large files. When you must read a file, target the relevant range with `offset`/`limit`.
+7. **CLAUDE.md is operational, not a changelog.** Historical milestone descriptions, completed phase notes, and detailed design walkthroughs belong in `docs/architecture/` or `docs/superpowers/specs/`. Keep this file lean so every session starts cheap.
+8. **Brand name is uppercase "MUR".** Everywhere a user can see it — GUI strings, `display_name`, docs, marketing copy, companion/voice text, notifications. The ONLY exceptions are the CLI binary/command (`mur`), code identifiers, file paths, internal `name`/directory slugs, and the `~/.mur` home. Use `display_name` for the uppercase label; keep internal `name` lowercase so it matches the on-disk directory (the runtime spoof check is exact-match).
+9. **Agent name lookup is case-insensitive (CLI).** `mur agent send mur` and `... Mur` must both resolve, via `a2a_dial::canonicalize_agent_name`; downstream uses the exact canonical name so the spoof check passes.
 
 ## Token Saving
 
