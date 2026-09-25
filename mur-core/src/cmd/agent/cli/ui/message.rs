@@ -37,6 +37,45 @@ pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
 /// (spec decision 4). Kept as a function because `message_block` attributes
 /// the gap to the message it precedes, and that is what keeps the measured
 /// band and the painted band the same rows.
+/// Verbs that introduce an approval receipt, whose next token is a tool badge.
+const APPROVAL_VERBS: [&str; 2] = ["approved ", "denied "];
+
+/// Separator `approval_summary` puts between the tool badge and the command.
+const BADGE_SEP: &str = " · ";
+
+/// Lead-in of the trailing intent note `approval_summary` may append. Shared
+/// with `call_summary`, which writes it.
+use crate::cmd::agent::cli::call_summary::INTENT_LEAD;
+
+/// Split `approved bash · git push …  (publish branch)` into verb / badge /
+/// command / intent so the badge and the intent can be dimmed independently of
+/// the command. `None` for any other system note, which keeps ordinary text a
+/// single span.
+fn split_approval_receipt(line: &str) -> Option<(String, String, String, String)> {
+    let verb = APPROVAL_VERBS.iter().find(|v| line.starts_with(**v))?;
+    let rest = &line[verb.len()..];
+    let sep = rest.find(BADGE_SEP)?;
+    // A badge is one bare tool name; a space inside means this is prose that
+    // merely happens to start with the verb.
+    let badge = &rest[..sep];
+    if badge.is_empty() || badge.contains(' ') {
+        return None;
+    }
+    let tail = &rest[sep..];
+    // The intent is the LAST parenthetical on the row, and only when it closes
+    // the row — a `(` inside the command itself must stay part of the command.
+    let (cmd, intent) = match tail.rfind(INTENT_LEAD) {
+        Some(i) if tail.ends_with(')') => (&tail[..i], &tail[i..]),
+        _ => (tail, ""),
+    };
+    Some((
+        (*verb).to_string(),
+        badge.to_string(),
+        cmd.to_string(),
+        intent.to_string(),
+    ))
+}
+
 pub(super) fn gap_row(
     _theme: &'static crate::cmd::agent::cli::theme::Theme,
     _prev: Option<&crate::cmd::agent::cli::app::ChatMsg>,
@@ -171,6 +210,21 @@ pub(super) fn push_message(
                 let mut style = style;
                 if bold {
                     style = style.add_modifier(Modifier::BOLD);
+                }
+                // An approval receipt gets its tool badge and its trailing
+                // intent dimmed so the COMMAND is the brightest thing on the
+                // row — it is what was actually approved, and the intent is
+                // model-written prose that may not match it.
+                if i == 0
+                    && let Some((verb, badge, cmd, intent)) = split_approval_receipt(l)
+                {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{prefix}{verb}"), style),
+                        Span::styled(badge, style.add_modifier(Modifier::DIM)),
+                        Span::styled(cmd, style),
+                        Span::styled(intent, style.add_modifier(Modifier::DIM)),
+                    ]));
+                    continue;
                 }
                 lines.push(Line::styled(format!("{prefix}{l}"), style));
             }
@@ -413,5 +467,122 @@ mod shell_footer_tests {
             "{done:?}"
         );
         assert!(done.iter().any(|l| l.contains("$ cargo test")), "{done:?}");
+    }
+}
+
+#[cfg(test)]
+mod approval_badge_tests {
+    use super::push_message;
+    use crate::cmd::agent::cli::app::{ChatMsg, Role, Severity};
+    use crate::cmd::agent::cli::theme::ANSI;
+    use ratatui::style::Modifier;
+
+    /// An approval receipt is three parts, not one flat string: the verb, a
+    /// DIM tool badge, and the command carrying the severity colour. The
+    /// command is the approval target, so it must not be the dimmest thing on
+    /// the row.
+    #[test]
+    fn an_approval_receipt_dims_the_badge_not_the_command() {
+        let mut m = ChatMsg::for_test(Role::System, "approved bash · git push -u origin feat/x");
+        m.severity = Severity::Success;
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, &ANSI, false, 80);
+        let row = lines.first().expect("one row");
+        assert!(row.spans.len() >= 3, "badge must be its own span: {row:?}");
+        let badge = row
+            .spans
+            .iter()
+            .find(|s| s.content.contains("bash"))
+            .expect("badge span");
+        assert!(
+            badge.style.add_modifier.contains(Modifier::DIM),
+            "badge must be dim: {badge:?}"
+        );
+        let cmd = row
+            .spans
+            .iter()
+            .find(|s| s.content.contains("git push"))
+            .expect("command span");
+        assert!(
+            !cmd.style.add_modifier.contains(Modifier::DIM),
+            "command must not be dim: {cmd:?}"
+        );
+        // Still reads as one sentence when the styling is stripped.
+        let flat: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            flat.contains("approved bash · git push -u origin feat/x"),
+            "{flat}"
+        );
+    }
+
+    /// A plain system note is untouched — no badge hunting in ordinary text.
+    #[test]
+    fn an_ordinary_note_is_still_one_span() {
+        let mut m = ChatMsg::for_test(Role::System, "reconnected to agent");
+        m.severity = Severity::Info;
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, &ANSI, false, 80);
+        assert_eq!(lines.first().expect("row").spans.len(), 1);
+    }
+
+    /// Four ranks on one row: verb, DIM badge, bright command, DIM intent. The
+    /// intent is model-written and may not match what ran, so it must never be
+    /// the brightest thing an operator reads back.
+    #[test]
+    fn a_receipt_dims_the_trailing_intent_too() {
+        let mut m = ChatMsg::for_test(
+            Role::System,
+            "approved bash · git push -u origin feat/x  (publish the branch)",
+        );
+        m.severity = Severity::Success;
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, &ANSI, false, 120);
+        let row = lines.first().expect("one row");
+        let intent = row
+            .spans
+            .iter()
+            .find(|s| s.content.contains("publish the branch"))
+            .expect("intent span");
+        assert!(
+            intent.style.add_modifier.contains(Modifier::DIM),
+            "intent must be dim: {intent:?}"
+        );
+        let cmd = row
+            .spans
+            .iter()
+            .find(|s| s.content.contains("git push"))
+            .expect("command span");
+        assert!(
+            !cmd.style.add_modifier.contains(Modifier::DIM),
+            "command must stay bright: {cmd:?}"
+        );
+        assert!(
+            !cmd.content.contains("publish"),
+            "intent must not ride inside the command span: {cmd:?}"
+        );
+    }
+
+    /// A parenthesis inside the command is part of the command, not an intent
+    /// note. Splitting on the wrong paren would dim real shell syntax and make
+    /// the receipt lie about what ran.
+    #[test]
+    fn a_paren_inside_the_command_is_not_treated_as_intent() {
+        let mut m = ChatMsg::for_test(
+            Role::System,
+            "approved bash · awk '{print $1}' f && (cd x && ls)",
+        );
+        m.severity = Severity::Success;
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, &ANSI, false, 120);
+        let row = lines.first().expect("one row");
+        let cmd = row
+            .spans
+            .iter()
+            .find(|s| s.content.contains("awk"))
+            .expect("command span");
+        assert!(
+            cmd.content.contains("(cd x && ls)"),
+            "the shell subshell must stay in the command: {cmd:?}"
+        );
     }
 }

@@ -23,6 +23,8 @@ export interface ChannelSummary {
   agents: string[];
   turns: number;
   preview: string;
+  /** Stable per-machine display number (`#2`). Local view state, never synced. */
+  ordinal: number;
 }
 
 export interface ChannelEvent {

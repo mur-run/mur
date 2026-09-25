@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ChannelSummary } from "../../work/types";
-import { relativeTime } from "../../work/format";
+import { ordinalLabel, relativeTime, shortId } from "../../work/format";
 
 interface Props {
   agentName: string;
   activeId: string | null;
   onSelect: (id: string) => void;
+  /** Current rail width in px (user-draggable); omit for the CSS default. */
+  width?: number;
 }
 
 function agentChannels(channels: ChannelSummary[], agentName: string): ChannelSummary[] {
@@ -33,7 +35,7 @@ function shortName(id: string): string {
   return parts.length > 1 ? parts.slice(1).join("-") : "main";
 }
 
-export function ChatChannelRail({ agentName, activeId, onSelect }: Props) {
+export function ChatChannelRail({ agentName, activeId, onSelect, width }: Props) {
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
 
   async function load() {
@@ -56,15 +58,17 @@ export function ChatChannelRail({ agentName, activeId, onSelect }: Props) {
 
   function renderChannel(c: ChannelSummary) {
     const isActive = c.id === highlighted;
+    const num = ordinalLabel(c.ordinal);
     return (
       <button
         key={c.id}
         className={`cw-rail__channel${isActive ? " cw-rail__channel--active" : ""}`}
         onClick={() => onSelect(c.id)}
-        title={c.title || c.id}
+        title={`${num ? `${num} · ` : ""}${shortId(c.id)} — ${c.title || c.id}`}
       >
-        <span className="cw-rail__ch-hash">#</span>
+        <span className="cw-rail__ch-hash">{num || "#"}</span>
         <span className="cw-rail__ch-name">{channelLabel(c)}</span>
+        <span className="cw-rail__ch-id">{shortId(c.id)}</span>
         <span className="cw-rail__ch-time">{relativeTime(c.updated_at, now)}</span>
         {c.turns > 0 && !isActive && (
           <span className="cw-rail__ch-badge">{c.turns > 99 ? "99+" : c.turns}</span>
@@ -75,7 +79,7 @@ export function ChatChannelRail({ agentName, activeId, onSelect }: Props) {
 
   if (channels.length === 0) {
     return (
-      <div className="cw-rail">
+      <div className="cw-rail" style={width ? { width } : undefined}>
         <div className="cw-rail__group-label">Channels</div>
         <div className="cw-rail__empty">
           <span className="cw-rail__empty-icon" />
@@ -86,7 +90,7 @@ export function ChatChannelRail({ agentName, activeId, onSelect }: Props) {
   }
 
   return (
-    <nav className="cw-rail">
+    <nav className="cw-rail" style={width ? { width } : undefined}>
       {agentChs.length > 0 && (
         <div className="cw-rail__section">
           <div className="cw-rail__group-label">Channels</div>

@@ -112,7 +112,21 @@ pub(super) fn run_plain(
                         // stop for no visible reason and learns to hit [y].
                         let _ = writeln!(o, "  [{tier:?} — above the auto ceiling, asking]");
                     }
-                    let _ = write!(o, "  tool approval: {tool} — [y]es / [a]lways / [n]o? ");
+                    // Same summary the TUI modal shows: the command is the
+                    // approval target, and a prompt naming only the tool is one
+                    // an operator cannot review — in plain mode least of all,
+                    // since there is no card above it to read instead.
+                    let width = crossterm::terminal::size()
+                        .map(|(w, _)| w)
+                        .unwrap_or(super::call_summary::ASSUMED_WIDTH);
+                    let summary = super::call_summary::approval_summary(
+                        tool,
+                        hitl.get("tool_input").unwrap_or(&serde_json::Value::Null),
+                        width,
+                        super::call_summary::ApprovalFrame::Transcript,
+                    );
+                    let _ = writeln!(o, "  tool approval: {summary}");
+                    let _ = write!(o, "  [y]es / [a]lways / [n]o? ");
                     let _ = o.flush();
                     let mut ans = String::new();
                     let _ = io::stdin().lock().read_line(&mut ans);

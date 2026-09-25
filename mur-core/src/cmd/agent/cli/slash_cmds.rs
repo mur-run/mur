@@ -3,6 +3,96 @@
 
 use super::*;
 
+/// Why a `/channels <target>` lookup found nothing usable.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ResolveErr {
+    NotFound,
+    /// An id prefix matched more than one channel; carries the short ids.
+    Ambiguous(Vec<String>),
+    /// An id prefix so short it would match almost anything.
+    TooShort,
+}
+
+/// Shortest id prefix we will act on. Below this a typo silently lands you in
+/// someone else's conversation, so we ask for more characters instead.
+const MIN_ID_PREFIX: usize = 4;
+
+/// First ordinal ever handed out. `0` is therefore free to mean "this row has
+/// no number yet" — the value a channel carries when it predates the ordinals
+/// table and has not been backfilled.
+const FIRST_ORDINAL: u64 = 1;
+
+/// What the listing shows in the number column for an unnumbered channel.
+/// Not `0`: that reads as a handle the user can type, and it is not one.
+const NO_ORDINAL: &str = "-";
+
+/// One row of the `/channels` listing.
+fn channel_line(s: &persist::SessionInfo) -> String {
+    let n = if s.ordinal >= FIRST_ORDINAL {
+        s.ordinal.to_string()
+    } else {
+        NO_ORDINAL.to_string()
+    };
+    format!(
+        "  {} · {} · {} turns · {}\n",
+        n,
+        &s.id[..s.id.len().min(8)],
+        s.turns,
+        s.preview
+    )
+}
+
+/// Resolve what the user typed after `/channels` against the recent list.
+pub(super) fn resolve<'a>(
+    recent: &'a [persist::SessionInfo],
+    target: &ChannelRef,
+) -> Result<&'a persist::SessionInfo, ResolveErr> {
+    match target {
+        // The `>= FIRST_ORDINAL` guard is load-bearing, not a sanity check:
+        // an unbackfilled row's `ordinal` is 0, so without it `/channels 0`
+        // matches the first such row in the list.
+        ChannelRef::Ordinal(n) => recent
+            .iter()
+            .find(|s| *n >= FIRST_ORDINAL && s.ordinal == *n)
+            .ok_or(ResolveErr::NotFound),
+        ChannelRef::IdPrefix(p) => {
+            if p.len() < MIN_ID_PREFIX {
+                return Err(ResolveErr::TooShort);
+            }
+            let hits: Vec<&persist::SessionInfo> = recent
+                .iter()
+                .filter(|s| s.id.to_ascii_lowercase().starts_with(p))
+                .collect();
+            match hits.len() {
+                0 => Err(ResolveErr::NotFound),
+                1 => Ok(hits[0]),
+                _ => Err(ResolveErr::Ambiguous(
+                    hits.iter()
+                        .map(|s| s.id[..s.id.len().min(8)].to_string())
+                        .collect(),
+                )),
+            }
+        }
+    }
+}
+
+/// One-line rendering of a failed lookup, for the system pane.
+pub(super) fn resolve_msg(target: &ChannelRef, err: &ResolveErr) -> String {
+    let what = match target {
+        ChannelRef::Ordinal(n) => format!("channel {n}"),
+        ChannelRef::IdPrefix(p) => format!("channel id starting {p}"),
+    };
+    match err {
+        ResolveErr::NotFound => format!("no {what} — /channels to list"),
+        ResolveErr::TooShort => {
+            format!("{what} is too short — give at least {MIN_ID_PREFIX} characters")
+        }
+        ResolveErr::Ambiguous(ids) => {
+            format!("{what} matches {} — try a longer prefix", ids.join(", "))
+        }
+    }
+}
+
 pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender<StreamMsg>) {
     match cmd {
         SlashCmd::Help => app.push_system(help_text()),
@@ -37,7 +127,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             Ok(_) => app.push_system("no saved conversations yet"),
             Err(e) => app.push_system(format!("could not list sessions: {e}")),
         },
-        SlashCmd::Channels { n, follow } => {
+        SlashCmd::Channels { target, follow } => {
             // `--follow` never touches the current conversation: it tails
             // ANOTHER channel while this pane keeps chatting, so an in-flight
             // turn must not be cancelled for it.
@@ -49,7 +139,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         return;
                     }
                 };
-                match n {
+                match target {
                     None => {
                         match app.follow.take() {
                             Some(f) => app.push_system(format!("stopped following {}", f.tag())),
@@ -59,8 +149,8 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         }
                         return;
                     }
-                    Some(n) => match recent.get(n.wrapping_sub(1)) {
-                        Some(s) => {
+                    Some(t) => match resolve(&recent, &t) {
+                        Ok(s) => {
                             let id = s.id.clone();
                             match app.start_follow(&id, StdInstant::now()) {
                                 Ok(()) => app.push_system(format!(
@@ -70,7 +160,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                                 Err(e) => app.push_system(format!("could not follow: {e:#}")),
                             }
                         }
-                        None => app.push_system(format!("no channel {n}")),
+                        Err(e) => app.push_system(resolve_msg(&t, &e)),
                     },
                 }
                 return;
@@ -89,9 +179,9 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                     return;
                 }
             };
-            match n {
-                Some(n) => match recent.get(n.wrapping_sub(1)) {
-                    Some(s) => {
+            match target {
+                Some(t) => match resolve(&recent, &t) {
+                    Ok(s) => {
                         let id = s.id.clone();
                         stop_shell(app, false);
                         match app.switch_channel(&id) {
@@ -106,22 +196,17 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                             Err(e) => app.push_system(format!("could not switch channel: {e}")),
                         }
                     }
-                    None => app.push_system(format!("no channel {n}")),
+                    Err(e) => app.push_system(resolve_msg(&t, &e)),
                 },
                 None => {
                     if recent.is_empty() {
                         app.push_system("no channels yet");
                     } else {
                         let mut out = String::from(
-                            "channels (/channels N to switch · N --follow to tail):\n",
+                            "channels (/channels N or id-prefix to switch · add --follow to tail):\n",
                         );
-                        for (i, s) in recent.iter().enumerate() {
-                            out.push_str(&format!(
-                                "  {} · {} turns · {}\n",
-                                i + 1,
-                                s.turns,
-                                s.preview
-                            ));
+                        for s in recent.iter() {
+                            out.push_str(&channel_line(s));
                         }
                         app.push_system(out.trim_end().to_string());
                     }
@@ -443,4 +528,104 @@ pub(super) fn retry_send(app: &mut App, mut params: Value, tx: &mpsc::Sender<Str
         task_id,
         tx.clone(),
     );
+}
+
+/// `/channels <target>` resolution: an ordinal names exactly one channel for
+/// life, and an id prefix must be unambiguous before we act on it.
+#[cfg(test)]
+mod resolve_tests {
+    use super::{ChannelRef, ResolveErr, resolve};
+    use crate::cmd::agent::cli::persist::SessionInfo;
+
+    fn si(id: &str, ordinal: u64) -> SessionInfo {
+        SessionInfo {
+            id: id.into(),
+            preview: String::new(),
+            turns: 1,
+            ordinal,
+        }
+    }
+
+    fn recent() -> Vec<SessionInfo> {
+        // Newest-first, so list position and ordinal deliberately disagree.
+        vec![
+            si("01a0d420beef", 7),
+            si("01a0d999cafe", 2),
+            si("0bbb1111", 5),
+        ]
+    }
+
+    #[test]
+    fn an_ordinal_matches_the_number_not_the_list_position() {
+        let r = recent();
+        assert_eq!(resolve(&r, &ChannelRef::Ordinal(2)).unwrap().id, r[1].id);
+        assert_eq!(resolve(&r, &ChannelRef::Ordinal(7)).unwrap().id, r[0].id);
+    }
+
+    #[test]
+    fn an_unknown_ordinal_is_not_found() {
+        assert!(matches!(
+            resolve(&recent(), &ChannelRef::Ordinal(99)),
+            Err(ResolveErr::NotFound)
+        ));
+    }
+
+    #[test]
+    fn an_id_prefix_resolves_when_it_is_unique() {
+        assert_eq!(
+            resolve(&recent(), &ChannelRef::IdPrefix("01a0d420".into()))
+                .unwrap()
+                .ordinal,
+            7
+        );
+    }
+
+    /// Switching to the wrong conversation is silent and confusing, so a
+    /// prefix shared by two channels refuses rather than picking one.
+    #[test]
+    fn a_shared_id_prefix_is_ambiguous_and_names_the_candidates() {
+        match resolve(&recent(), &ChannelRef::IdPrefix("01a0d".into())) {
+            Err(ResolveErr::Ambiguous(ids)) => {
+                assert_eq!(ids, vec!["01a0d420".to_string(), "01a0d999".to_string()]);
+            }
+            other => panic!("expected ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_too_short_id_prefix_is_refused_before_matching() {
+        assert!(matches!(
+            resolve(&recent(), &ChannelRef::IdPrefix("01".into())),
+            Err(ResolveErr::TooShort)
+        ));
+    }
+
+    /// Ordinals start at 1. `0` is the "not numbered yet" marker carried by a
+    /// row that predates the ordinals table and has not been backfilled — so
+    /// a bare `0` must never resolve, or `/channels 0` silently switches to
+    /// whichever unbackfilled channel happens to be listed first.
+    #[test]
+    fn ordinal_zero_never_resolves_even_when_a_row_is_unnumbered() {
+        let r = vec![
+            si("01a0d420beef", 0),
+            si("01a0d999cafe", 0),
+            si("0bbb1111", 5),
+        ];
+        assert!(matches!(
+            resolve(&r, &ChannelRef::Ordinal(0)),
+            Err(ResolveErr::NotFound)
+        ));
+    }
+
+    /// The listing is where the user reads the number back, so an unnumbered
+    /// row must not print `0` there: it looks like a handle they can type.
+    #[test]
+    fn the_listing_blanks_the_number_for_an_unnumbered_channel() {
+        assert!(super::channel_line(&si("01a0d420beef", 7)).starts_with("  7 · "));
+        let unnumbered = super::channel_line(&si("01a0d420beef", 0));
+        assert!(
+            unnumbered.starts_with("  - · "),
+            "unnumbered rows show a placeholder, not 0: {unnumbered}"
+        );
+    }
 }

@@ -150,10 +150,25 @@ pub(super) fn render_hitl(
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::default(),
-        Line::from(vec![
-            Span::styled("tool: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(hitl.tool_name.clone(), Style::default().fg(Color::Yellow)),
-        ]),
+        // `tool: bash` was a category, not an identifier: it named the lane
+        // the call came down and said nothing about what would run, so the
+        // modal could only ever be rubber-stamped. The badge stays dim and the
+        // command carries the colour, because the command is the thing being
+        // approved; a model-written intent trails it, dim, as context only.
+        {
+            let summary = crate::cmd::agent::cli::call_summary::approval_summary(
+                &hitl.tool_name,
+                &hitl.tool_input,
+                area.width.saturating_sub(2),
+                crate::cmd::agent::cli::call_summary::ApprovalFrame::Modal,
+            );
+            let (cmd, intent) = crate::cmd::agent::cli::call_summary::split_intent(&summary);
+            Line::from(vec![
+                Span::styled("tool: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(cmd.to_string(), Style::default().fg(Color::Yellow)),
+                Span::styled(intent.to_string(), Style::default().fg(Color::DarkGray)),
+            ])
+        },
     ];
     let row_w = area.width.saturating_sub(2) as usize;
     // Wrap every line and keep every line (#939). This modal exists so a human
@@ -427,7 +442,17 @@ mod hitl_modal_tests {
                 );
             })
             .unwrap();
-            term.backend().to_string()
+            // The pinned `tool:` summary elides head-and-tail, so the command's
+            // last token is on screen at every offset by design. This test is
+            // about the SCROLLABLE body, so the summary row is excluded —
+            // otherwise it would assert the tail is hidden from a row whose
+            // whole job is to show it.
+            term.backend()
+                .to_string()
+                .lines()
+                .filter(|l| !l.contains("tool: "))
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         assert!(
             !draw(0).contains("step39"),

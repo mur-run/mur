@@ -10,6 +10,7 @@ mod access;
 mod app;
 mod bash_class;
 mod browser_cmd;
+mod call_summary;
 mod complete;
 mod deep_research;
 mod dest;
@@ -95,7 +96,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
 
 use self::app::{
-    App, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, Role, SlashCmd,
+    App, ChannelRef, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, Role, SlashCmd,
     arm_input_debounce, esc_action, overlay_key_action, parse_slash, take_due_input,
 };
 use self::persist::Session;
@@ -239,13 +240,13 @@ fn help_text() -> String {
     );
     [
         "commands",
-        "  chat      /clear (new conversation) · /sessions · /channels [N] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
+        "  chat      /clear (new conversation) · /sessions · /channels [N|id-prefix] (list/switch) · /channels N --follow (live-tail; bare --follow stops)",
         "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T / Alt+M)",
         settings.as_str(),
         "  agent     /mcp · /skill · /browser [--add|auth|testing|automation] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> · /forget <name|last>",
         "  research  /deep-research [question|status|stop|setup]  run the research fleet (/research)",
-        "  search    /search <query> [--all] [--limit N] [--send]  search indexed project code",
+        "  search    /search <query> [--all] [--limit N] [--lines N] [--send] · /search --expand <id>[,<id>] (full content for a hit)",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
         "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",
         "keys        Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+O transcript · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll",

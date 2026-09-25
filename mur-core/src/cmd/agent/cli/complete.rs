@@ -186,6 +186,8 @@ const BROWSER_MODES: &[(&str, &str)] = &[
 const SEARCH_FLAGS: &[(&str, &str)] = &[
     ("--all", "search every indexed project"),
     ("--limit", "cap the number of hits"),
+    ("--lines", "preview lines per hit (default 3)"),
+    ("--expand", "show full content for hit ids, e.g. 3,7"),
     ("--send", "send the results to the agent"),
 ];
 
