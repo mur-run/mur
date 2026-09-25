@@ -7,13 +7,25 @@ export const RAIL_MIN_WIDTH = 160;
 export const RAIL_MAX_WIDTH = 420;
 /** Width before the user has ever dragged, and what a double-click restores. */
 export const RAIL_DEFAULT_WIDTH = 200;
+/** Narrowest the message column may get before the conversation is unreadable.
+ *  `.cw-main` is `min-width: 0`, so nothing in CSS pushes back — the rail would
+ *  silently eat the whole window. The clamp enforces this instead. */
+export const MIN_CHAT_WIDTH = 200;
 /** localStorage key. One width shared by every agent chat window: the rail is
  *  the same furniture in each, so per-agent widths would surprise. */
 export const RAIL_WIDTH_KEY = "mur.chat.railWidth";
 
-export function clampRailWidth(px: number): number {
+/** Clamp a rail width to its bounds, and — when a viewport width is given —
+ *  to whatever is left after the chat column keeps `MIN_CHAT_WIDTH`. A window
+ *  too narrow for both floors gives the rail floor the win, matching what CSS
+ *  enforces. An unusable viewport (0, NaN) is ignored, not obeyed. */
+export function clampRailWidth(px: number, viewportWidth?: number): number {
   if (!Number.isFinite(px)) return RAIL_DEFAULT_WIDTH;
-  return Math.min(RAIL_MAX_WIDTH, Math.max(RAIL_MIN_WIDTH, Math.round(px)));
+  const ceiling =
+    viewportWidth !== undefined && Number.isFinite(viewportWidth) && viewportWidth > 0
+      ? Math.min(RAIL_MAX_WIDTH, viewportWidth - MIN_CHAT_WIDTH)
+      : RAIL_MAX_WIDTH;
+  return Math.max(RAIL_MIN_WIDTH, Math.min(ceiling, Math.round(px)));
 }
 
 /** Minimal slice of `Storage` the hook needs, so tests can pass a fake. */
@@ -86,7 +98,12 @@ export function useChatRailWidth(): ChatRailWidth {
     el.setPointerCapture(e.pointerId);
 
     const move = (ev: PointerEvent) => {
-      setWidth(clampRailWidth(startRef.current.w + (ev.clientX - startRef.current.x)));
+      setWidth(
+        clampRailWidth(
+          startRef.current.w + (ev.clientX - startRef.current.x),
+          typeof window === "undefined" ? undefined : window.innerWidth,
+        ),
+      );
     };
     const up = (ev: PointerEvent) => {
       el.releasePointerCapture?.(ev.pointerId);
