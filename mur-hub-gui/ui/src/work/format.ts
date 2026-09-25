@@ -65,3 +65,19 @@ const STATE_BADGE_MAP: Record<string, string> = {
 export function stateBadge(state: string): string {
   return STATE_BADGE_MAP[state] ?? "unknown";
 }
+
+/** Characters of a channel uuid shown as its typeable handle. Must match the
+ *  CLI's footer chip and `/channels <prefix>` resolver (8). */
+export const SHORT_ID_LEN = 8;
+
+/** The id prefix a human can type into `/channels` to reach this channel. */
+export function shortId(id: string): string {
+  return id.slice(0, SHORT_ID_LEN);
+}
+
+/** The display number for a channel, `#2`. Ordinals start at 1; anything
+ *  lower means the row predates the index backfill, so show nothing rather
+ *  than a number that would not work when typed. */
+export function ordinalLabel(ordinal: number): string {
+  return ordinal >= 1 ? `#${ordinal}` : "";
+}

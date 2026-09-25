@@ -4,6 +4,9 @@ import {
   eventKindLabel,
   actorName,
   relativeTime,
+  ordinalLabel,
+  shortId,
+  SHORT_ID_LEN,
 } from "./format";
 import type { ChannelActor } from "./types";
 
@@ -63,5 +66,23 @@ describe("relativeTime", () => {
   });
   it("shows days", () => {
     expect(relativeTime("2026-06-13T12:00:00Z", now)).toBe("2d ago");
+  });
+});
+
+describe("channel handles", () => {
+  const UUID = "019ed0af-5e38-7912-b554-dc335a8fc2db";
+
+  it("shortens an id to the same prefix the CLI accepts", () => {
+    expect(shortId(UUID)).toBe("019ed0af");
+    expect(shortId(UUID)).toHaveLength(SHORT_ID_LEN);
+  });
+
+  it("labels an ordinal with a hash", () => {
+    expect(ordinalLabel(2)).toBe("#2");
+  });
+
+  it("shows nothing for an unassigned ordinal rather than a number that would not work", () => {
+    expect(ordinalLabel(0)).toBe("");
+    expect(ordinalLabel(-1)).toBe("");
   });
 });

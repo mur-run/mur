@@ -31,6 +31,10 @@ pub struct TurnRecord {
 #[derive(Debug, Clone)]
 pub struct ChannelMeta {
     pub id: String,
+    /// Stable per-channel number, handed out in creation order and never
+    /// reused. `0` means "not numbered yet" — an index row older than the
+    /// ordinals table that has not been backfilled.
+    pub ordinal: u64,
 }
 
 /// Listing entry; `id` is the channel id (was the session file stem).
@@ -39,6 +43,8 @@ pub struct SessionInfo {
     pub id: String,
     pub preview: String,
     pub turns: usize,
+    /// Stable per-channel number; see `ChannelMeta::ordinal`.
+    pub ordinal: u64,
 }
 
 /// A live conversation handle. The backing channel is created lazily on the
@@ -87,7 +93,8 @@ impl Session {
     /// Returns `None` until the first `append` creates the channel.
     pub fn current(&self) -> Option<ChannelMeta> {
         let id = self.channel_id.clone()?;
-        Some(ChannelMeta { id })
+        let ordinal = self.svc.index().ordinal_of(&id).ok().flatten().unwrap_or(0);
+        Some(ChannelMeta { id, ordinal })
     }
 
     /// Append one turn, creating the channel on first write. `role` ∈
@@ -241,6 +248,10 @@ pub fn list_recent(home: &Path, agent: &str, limit: usize) -> Result<Vec<Session
             id: row.id,
             preview,
             turns: evs.len(),
+            // No clamp: `ChannelIndex::list` rejects a negative ordinal before
+            // it gets here, so this cast cannot silently produce 0 (which
+            // already means "not numbered yet").
+            ordinal: row.ordinal as u64,
         });
         if out.len() >= limit {
             break;

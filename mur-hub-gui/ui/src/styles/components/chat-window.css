@@ -138,8 +138,11 @@
 
 /* ── Channel rail ── */
 .cw-rail {
+  /* Width is the CSS default; a user drag overrides it with an inline style
+     (useChatRailWidth). min/max mirror the hook's clamp — keep them in sync. */
   width: 200px;
   min-width: 160px;
+  max-width: 420px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -198,6 +201,34 @@
   font-size: 13px;
   opacity: 0.5;
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The 8-char id prefix: the other handle that reaches this channel. Dim and
+   last so it never competes with the title, but always present to be copied. */
+.cw-rail__ch-id {
+  font-size: 10px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-tertiary);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+/* Drag handle between the rail and the chat column. Wider hit area than the
+   1px seam it sits on, which is why it is a sibling rather than a border. */
+.cw-rail-handle {
+  width: 5px;
+  margin-left: -3px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms ease;
+  touch-action: none;
+}
+
+.cw-rail-handle:hover,
+.cw-rail-handle--dragging {
+  background: var(--color-brand-soft);
 }
 
 .cw-rail__ch-name {

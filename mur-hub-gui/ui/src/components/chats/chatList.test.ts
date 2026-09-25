@@ -13,7 +13,7 @@ import { chatFacets, chatRows, FACET_NEEDS_YOU, FACET_UNREAD } from "./chatList"
 function channel(id: string, over: Partial<ChannelSummary> = {}): ChannelSummary {
   return {
     id, title: id, state: "idle", goal: "", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-06T10:00:00Z",
-    participants: [], agents: [id], turns: 3, preview: `last from ${id}`, ...over,
+    participants: [], agents: [id], turns: 3, preview: `last from ${id}`, ordinal: 1, ...over,
   };
 }
 

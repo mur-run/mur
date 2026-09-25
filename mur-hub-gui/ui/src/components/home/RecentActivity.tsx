@@ -1,5 +1,5 @@
 import type { ChannelSummary } from "../../work/types";
-import { relativeTime, stateBadge } from "../../work/format";
+import { ordinalLabel, relativeTime, shortId, stateBadge } from "../../work/format";
 import { isActivityChannel } from "./useChannels";
 import { useT } from "../../i18n";
 
@@ -35,8 +35,9 @@ export function RecentActivity({ channels, nowMs, onOpen }: Props) {
         {rows.map((ch) => (
           <li key={ch.id}>
             <button className="home-recent-row" onClick={() => onOpen(ch)}>
+              <span className="home-recent-row__num">{ordinalLabel(ch.ordinal)}</span>
               <span className="home-recent-row__title">
-                {ch.title || ch.id.slice(0, 8)}
+                {ch.title || shortId(ch.id)}
               </span>
               <span className="home-recent-row__sub">
                 {ch.goal.trim() || ch.preview || ch.agents.join(", ")}

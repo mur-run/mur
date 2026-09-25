@@ -42,6 +42,9 @@ pub struct ChannelSummary {
     pub turns: usize,
     /// First human message, truncated — the rail's subtitle.
     pub preview: String,
+    /// Stable per-machine display number from the channel index (`#2`). Local
+    /// view state, never synced — see `ChannelRow::ordinal`.
+    pub ordinal: i64,
 }
 
 /// Serialize a `ChannelState`/role/actor enum to its kebab/lowercase string.
@@ -65,8 +68,9 @@ fn participant_of(actor: &ChannelActor, role_str: String) -> WorkParticipant {
     }
 }
 
-/// Pure: build a rail summary from a manifest + its events. No I/O.
-pub fn summary_of(ch: &Channel, events: &[ChannelEvent]) -> ChannelSummary {
+/// Pure: build a rail summary from a manifest + its events. No I/O. `ordinal`
+/// comes from the channel index row, which is the only place it is assigned.
+pub fn summary_of(ch: &Channel, events: &[ChannelEvent], ordinal: i64) -> ChannelSummary {
     let participants: Vec<WorkParticipant> = ch
         .participants
         .iter()
@@ -96,6 +100,7 @@ pub fn summary_of(ch: &Channel, events: &[ChannelEvent]) -> ChannelSummary {
         agents,
         turns: events.len(),
         preview,
+        ordinal,
     }
 }
 
@@ -117,7 +122,7 @@ pub fn list_channels(home: &Path) -> anyhow::Result<Vec<ChannelSummary>> {
         let Ok(manifest) = svc.store().load_manifest(&row.id) else {
             continue;
         };
-        out.push(summary_of(&manifest, &events));
+        out.push(summary_of(&manifest, &events, row.ordinal));
     }
     Ok(out)
 }
@@ -166,8 +171,9 @@ mod tests {
         let manifest = svc.store().load_manifest(&ch.id).unwrap();
         let events = svc.load_events(&ch.id).unwrap();
 
-        let s = summary_of(&manifest, &events);
+        let s = summary_of(&manifest, &events, 7);
         assert_eq!(s.id, ch.id);
+        assert_eq!(s.ordinal, 7, "ordinal is passed through, not recomputed");
         assert_eq!(s.agents, vec!["qa".to_string()]);
         assert_eq!(s.preview, "find the bug");
         assert_eq!(s.turns, 1);
@@ -196,6 +202,7 @@ mod tests {
         assert_eq!(rows.len(), 1, "empty channels are hidden from the rail");
         assert_eq!(rows[0].id, a.id);
         assert_eq!(rows[0].agents, vec!["qa".to_string()]);
+        assert_eq!(rows[0].ordinal, 1, "the first channel created is #1");
 
         // events_for + manifest_for hit the same channel.
         let evs = events_for(tmp.path(), &a.id).unwrap();

@@ -352,6 +352,10 @@ pub struct App {
     /// When monitor counts were last refreshed; `None` before the first
     /// refresh, so it always runs once per session.
     pub last_monitor_refresh: Option<std::time::Instant>,
+    /// Result set of the most recent `/search`, so `/search --expand <id>` can
+    /// show a full chunk without re-running the query. Replaced by each new
+    /// search; never consulted for anything but expansion.
+    pub search_snapshot: Option<super::search::SearchSnapshot>,
 }
 
 impl App {
@@ -449,6 +453,7 @@ impl App {
             monitor_total: 0,
             monitor_conditions: 0,
             last_monitor_refresh: None,
+            search_snapshot: None,
         }
     }
 
@@ -652,7 +657,7 @@ pub(super) use keys::{
     ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, esc_action, overlay_key_action,
 };
 pub(super) use msg::{ChatMsg, Role, Severity};
-pub(super) use slash::{SlashCmd, parse_slash};
+pub(super) use slash::{ChannelRef, SlashCmd, parse_slash};
 
 #[cfg(test)]
 mod tests;

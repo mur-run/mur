@@ -153,6 +153,7 @@ export const zhTW: Table = {
   "chat.send": "送出",
   "chat.stop": "停止",
   "chat.expand": "放大",
+  "chat.resizeRail": "拖曳調整頻道列寬度",
   "chat.stopped": "已停止",
   "chat.route.smart": "Smart(背景)",
   "chat.route.fallback": "備援",
