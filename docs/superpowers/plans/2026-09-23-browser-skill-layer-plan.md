@@ -267,11 +267,11 @@ fixture 就是 round-trip 測試本身。
 
 ### Steps
 
-- [ ] 6.1 建立 `/tmp/browser-test/SKILL.md`，frontmatter `name: browser-test`，triggers keyword `browser test|e2e|端對端|網頁測試`
-- [ ] 6.2 內文固定工作流：`mur browser status` 檢查 profile → 缺則轉 browser-auth → `mur browser record --run <name> --mode test --trace --profile <site>` → `mur browser replay <name> --heal` → `mur browser export <name> --out <path>`
-- [ ] 6.3 內文明訂：**mode 一律 `test`**；trace 預設開；自癒被拒（Task 5.5 回滾或 5.6 超預算）時不得重試，直接回報需重錄
-- [ ] 6.4 加「絕不」清單：不得改 `actions.yaml` 的 assert、不得為了讓測試變綠而刪步驟
-- [ ] 6.5 `mur skill install /tmp/browser-test`，`ls ~/.mur/skills/browser-test/SKILL.md` 驗證
+- [x] 6.1 建立 `/tmp/browser-test/SKILL.md`，frontmatter `name: browser-test`，triggers keyword `browser test|e2e|端對端|網頁測試`
+- [x] 6.2 內文固定工作流：`mur browser status` 檢查 profile → 缺則轉 browser-auth → `mur browser record --run <name> --mode test --trace --profile <site>` → `mur browser replay <name> --heal` → `mur browser export <name> --out <path>`
+- [x] 6.3 內文明訂：**mode 一律 `test`**；trace 預設開；自癒被拒（Task 5.5 回滾或 5.6 超預算）時不得重試，直接回報需重錄
+- [x] 6.4 加「絕不」清單：不得改 `actions.yaml` 的 assert、不得為了讓測試變綠而刪步驟
+- [x] 6.5 `mur skill install /tmp/browser-test`，`ls ~/.mur/skills/browser-test/SKILL.md` 驗證
 
 ---
 
