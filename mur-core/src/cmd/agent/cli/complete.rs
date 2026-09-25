@@ -242,6 +242,16 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     ("forget", "drop an agent-local memory", Args::Note),
     ("help", "show the command cheatsheet", Args::None),
     (
+        "instruct",
+        "add a permanent instruction (every turn)",
+        Args::None,
+    ),
+    (
+        "instruct-edit",
+        "rewrite a permanent instruction",
+        Args::Note,
+    ),
+    (
         "login",
         "OAuth health / re-authenticate",
         Args::Fixed(LOGIN_PROVIDERS),
@@ -260,6 +270,7 @@ const COMMANDS: &[(&str, &str, Args)] = &[
         "companion window (MUR Hub)",
         Args::Fixed(PANEL_TABS),
     ),
+    ("pin", "make a memory a permanent instruction", Args::Note),
     ("quit", "exit the chat", Args::None),
     ("remember", "save an agent-local memory", Args::None),
     (
@@ -275,6 +286,11 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     ("sessions", "list past sessions", Args::None),
     ("skill", "manage agent skills", Args::Fixed(SKILL_SUBS)),
     ("skin", "switch theme", Args::Fixed(SKIN_CHOICES)),
+    (
+        "unpin",
+        "make an instruction remembered-when-relevant",
+        Args::Note,
+    ),
     ("verbose", "expand tool cards", Args::Fixed(ON_OFF)),
 ];
 

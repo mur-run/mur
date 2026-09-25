@@ -250,6 +250,64 @@ mod tests {
         assert!(!edited.verify(&t.identity.verifying_key_bytes()));
     }
 
+    /// T9 — plan invariant 12.3: "Required is created only by explicit user
+    /// action (Add instruction / Make permanent) — never by migration,
+    /// classifier, score, or the LLM."
+    ///
+    /// `remember` is the model's only write path into memory, so it is the
+    /// third writer that has to be closed: if the tool schema ever advertises
+    /// an injection-policy key, the model can mint Required memories on its
+    /// own and the invariant is dead. This asserts on the schema the model
+    /// actually sees (`def().input_schema`), not on a copy, and it rejects
+    /// the key anywhere in the JSON — a nested or renamed-but-aliased
+    /// placement would be just as exploitable as a top-level property.
+    #[test]
+    fn schema_never_exposes_injection_policy_to_the_model() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let schema = tool(tmp.path()).def().input_schema;
+
+        // Every key the model may send, and the advertised required set.
+        let props = schema["properties"]
+            .as_object()
+            .expect("schema must declare properties");
+        let mut allowed: Vec<&str> = props.keys().map(String::as_str).collect();
+        allowed.sort_unstable();
+        assert_eq!(
+            allowed,
+            ["content", "description", "kind", "name"],
+            "remember must expose exactly the P0 memory fields; a new key here \
+             is a new way for the model to steer injection"
+        );
+
+        // `kind` selects decay tier (rule/fact) and must not be widened into
+        // a policy selector by smuggling Required into its enum.
+        let kinds = schema["properties"]["kind"]["enum"]
+            .as_array()
+            .expect("kind must stay an enum");
+        assert_eq!(
+            kinds,
+            &vec![serde_json::json!("rule"), serde_json::json!("fact")],
+            "kind is a decay tier, not an injection policy"
+        );
+
+        // Belt and braces: the banned vocabulary must not appear anywhere in
+        // the serialized schema, including descriptions the model reads.
+        let blob = schema.to_string().to_lowercase();
+        for banned in [
+            "injection_policy",
+            "injectionpolicy",
+            "besteffort",
+            "best_effort",
+            "permanent instruction",
+        ] {
+            assert!(
+                !blob.contains(banned),
+                "remember schema leaks `{banned}` to the model; only explicit \
+                 user action may create Required (plan invariant 12.3)"
+            );
+        }
+    }
+
     fn input(name: &str, kind: &str) -> serde_json::Value {
         serde_json::json!({
             "name": name,

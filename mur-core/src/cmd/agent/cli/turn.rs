@@ -12,6 +12,16 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     }
     app.history_record(&trimmed);
 
+    // A pending memory confirmation owns the next line: it is an answer, not a
+    // message for the model, and not a slash command. Checked before slash
+    // parsing so a typed `yes` cannot be read as anything else.
+    if app.pending_memory_confirm.is_some() {
+        app.clear_input();
+        resolve_memory_confirm(app, &trimmed).await;
+        app.menu_ctx = complete::MenuContext::load(&app.home, &app.agent);
+        return;
+    }
+
     if let Some(cmd) = parse_slash(&trimmed) {
         // Skills are surfaced in the completion menu as slash commands
         // (`/brainstorming`) but are not built-ins, so parse_slash reports them
@@ -104,6 +114,24 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         }
         return;
     }
+    // Required-memory budget gate (plan §9). If the permanent instructions do
+    // not fit their fixed reservation, the turn is BLOCKED: either every
+    // Required memory is injected or none is, so there is no honest way to
+    // send this message. The composer is deliberately left untouched — the
+    // model was never called, and the user presses Enter again after making
+    // room. No automatic retry, and no escape hatch in P1.
+    //
+    // Checked before `over_budget()` so the two refusals cannot both fire.
+    {
+        let listed = memory_cmds::list_memories(&app.home, &app.agent);
+        let usage =
+            mur_compress::memory_ux::usage_summary(&memory_cmds::rendered_required(&listed));
+        if let Some(overlay) = mur_compress::memory_block::blocked_send_overlay_if_blocked(&usage) {
+            app.push_system(overlay);
+            return;
+        }
+    }
+
     // Session budget cap: refuse a NEW turn once estimated spend hits the cap.
     // (An in-flight turn is handled by the streaming branch above; this only
     // gates starting a fresh one.) Fails open when the model has no pricing, so

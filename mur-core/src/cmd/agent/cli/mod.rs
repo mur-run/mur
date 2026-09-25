@@ -250,7 +250,8 @@ fn help_text() -> String {
         "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T / Alt+M)",
         settings.as_str(),
         "  agent     /mcp · /skill · /browser [--add|auth|testing|automation] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
-        "  memory    /remember <text> · /forget <name|last>",
+        "  memory    /remember <text> (when relevant) · /instruct <text> (every turn) · /memories · /forget <name|last>",
+        "            /pin <name> · /unpin <name> · /instruct-edit <name> <text>",
         "  research  /deep-research [question|status|stop|setup]  run the research fleet (/research)",
         "  search    /search <query> [--all] [--limit N] [--lines N] [--send] · /search --expand <id>[,<id>] (full content for a hit)",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
@@ -441,6 +442,32 @@ fn persist_skin(home: &std::path::Path, name: &str) -> anyhow::Result<()> {
     let mut cfg = Config::load_or_default(&path);
     cfg.cli.skin = Some(name.to_string());
     crate::store::config::save_config_at(&path, &cfg)
+}
+
+impl App {
+    /// Whether the one-time permanent-instructions notice has already been
+    /// shown (memories P1 §10).
+    ///
+    /// Read from `~/.mur/config.yaml` rather than session state: "one time"
+    /// means once per user, not once per conversation.
+    pub fn migration_notice_seen(&self) -> bool {
+        mur_common::config::Config::load_or_default(&self.home.join("config.yaml"))
+            .cli
+            .seen_permanent_instructions_notice
+    }
+
+    /// Record that the notice has been shown.
+    ///
+    /// A failed write is deliberately ignored: the worst case is that an
+    /// informational notice appears once more, which is far better than
+    /// refusing to start a session over it.
+    pub fn mark_migration_notice_seen(&self) {
+        use mur_common::config::Config;
+        let path = self.home.join("config.yaml");
+        let mut cfg = Config::load_or_default(&path);
+        cfg.cli.seen_permanent_instructions_notice = true;
+        let _ = crate::store::config::save_config_at(&path, &cfg);
+    }
 }
 
 // ── Non-TTY plain mode ────────────────────────────────────────────────────────
