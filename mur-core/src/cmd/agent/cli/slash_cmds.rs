@@ -595,11 +595,7 @@ pub(super) fn retry_send(app: &mut App, mut params: Value, tx: &mpsc::Sender<Str
 /// routing all three through here keeps "did we ask?" from being decided three
 /// times. `Done` also pushes the memory-reload dial, since the set on disk
 /// changed; `Confirm` deliberately does not — nothing has been written yet.
-async fn settle_memory_outcome(
-    app: &mut App,
-    outcome: memory_cmds::MemoryOutcome,
-    label: &str,
-) {
+async fn settle_memory_outcome(app: &mut App, outcome: memory_cmds::MemoryOutcome, label: &str) {
     match outcome {
         memory_cmds::MemoryOutcome::Done(msg) => {
             let note = push_memory_reload(&app.home, &app.agent).await;

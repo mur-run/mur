@@ -67,15 +67,11 @@ pub fn blocked_send_overlay(usage: &RequiredUsageSummary) -> String {
     ));
     // The action, not a recommendation: /memories lists each instruction with
     // its size and offers edit / remember-only-when-relevant / delete.
-    out.push_str(
-        "/memories — manage permanent instructions (each one is listed with its size).\n",
-    );
+    out.push_str("/memories — manage permanent instructions (each one is listed with its size).\n");
     // Why there is no "send anyway": every permanent instruction is injected
     // or none is (invariant 2). A partial send would silently drop one of the
     // instructions the user explicitly asked to be present every turn.
-    out.push_str(
-        "Every permanent instruction is added, or none is — so there is no partial send.",
-    );
+    out.push_str("Every permanent instruction is added, or none is — so there is no partial send.");
     out
 }
 

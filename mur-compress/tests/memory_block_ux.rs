@@ -10,7 +10,7 @@
 //! them, never what they say.
 
 use mur_compress::memory_block::{blocked_send_overlay, migration_notice};
-use mur_compress::memory_budget::{RenderedRequiredMemory, REQUIRED_BUDGET_TOKENS};
+use mur_compress::memory_budget::{REQUIRED_BUDGET_TOKENS, RenderedRequiredMemory};
 use mur_compress::memory_ux::usage_summary;
 
 /// Exactly `tokens` tokens under the canonical counter ("abc " = 1 token).
@@ -67,7 +67,12 @@ fn overlay_gives_a_reduction_target_and_names_no_victim() {
         "overlay must state how much to cut:\n{text}"
     );
     // The per-item sizes are offered by the manage screen, not chosen here.
-    for suspect in ["you should delete", "recommend", "least important", "drop note-"] {
+    for suspect in [
+        "you should delete",
+        "recommend",
+        "least important",
+        "drop note-",
+    ] {
         assert!(
             !text.to_lowercase().contains(suspect),
             "overlay must not judge importance ({suspect:?}):\n{text}"
