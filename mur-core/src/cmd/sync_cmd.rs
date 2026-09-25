@@ -1527,15 +1527,38 @@ fn symlink_skill_dir(target: &std::path::Path, link: &std::path::Path) -> Result
 
     #[cfg(not(unix))]
     {
-        // Fallback: copy the directory contents
-        std::fs::create_dir_all(link)?;
-        for entry in std::fs::read_dir(target)? {
-            let entry = entry?;
-            let dest = link.join(entry.file_name());
-            std::fs::copy(entry.path(), dest)?;
-        }
+        // Fallback: copy the directory contents. Must recurse — `browser`
+        // (D3) was the first skill to carry a subdirectory (`references/`)
+        // here, and `std::fs::copy` only copies files: handed a directory
+        // entry it fails with "Access is denied" (os error 5) on Windows,
+        // which is exactly what shipped in #1509's CI before this fix.
+        copy_dir_recursive(target, link)?;
     }
 
+    Ok(())
+}
+
+/// Recursive directory copy for platforms without symlinks (Windows). Not a
+/// generic utility: mirrors exactly what a symlink would expose — every file
+/// and subdirectory under `src`, nothing filtered.
+///
+/// Compiled on every platform (not `cfg(not(unix))`-gated) so its own test
+/// runs in the macOS/Linux CI legs too, not only on the Windows leg that is
+/// its only real caller — that asymmetry is exactly how the bug it fixes
+/// shipped unnoticed until Windows CI hit it.
+#[allow(dead_code)] // unix builds compile this but never call it (symlink branch above)
+fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
     Ok(())
 }
 
@@ -1827,6 +1850,34 @@ mod sync_status_tests {
 
 #[cfg(test)]
 mod sync_skill_tests {
+
+    /// Regression for #1509's Windows CI break: `symlink_skill_dir`'s
+    /// non-unix fallback called `std::fs::copy` on every directory entry
+    /// without checking whether it was a subdirectory, which `browser` (D3,
+    /// the first skill with a `references/` subdir) turned into "Access is
+    /// denied" (os error 5) on Windows. Runs on every platform — the bug
+    /// shipped unnoticed specifically because nothing exercised this
+    /// function outside the Windows-only leg it's gated for.
+    #[test]
+    fn copy_dir_recursive_copies_nested_subdirectories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        std::fs::create_dir_all(src.join("references")).unwrap();
+        std::fs::write(src.join("skill.yaml"), "top-level").unwrap();
+        std::fs::write(src.join("references").join("auth.md"), "nested").unwrap();
+
+        super::copy_dir_recursive(&src, &dest).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dest.join("skill.yaml")).unwrap(),
+            "top-level"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("references").join("auth.md")).unwrap(),
+            "nested"
+        );
+    }
 
     #[test]
     fn installs_project_search_skill() {
