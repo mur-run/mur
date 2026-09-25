@@ -542,6 +542,7 @@ pub fn forget(home: &Path, agent: &str, target: Option<&str>) -> Result<MemoryOu
 /// Confirmation is modeled as data rather than a blocking prompt so the
 /// decision logic stays pure and testable: the command decides *whether* a
 /// confirmation is owed, the UI decides how to ask.
+#[derive(Debug)]
 pub enum MemoryOutcome {
     /// Completed; show this message.
     Done(String),
