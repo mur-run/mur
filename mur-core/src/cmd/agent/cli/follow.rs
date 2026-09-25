@@ -107,7 +107,7 @@ impl Follow {
 
     /// Short display tag for transcript lines.
     pub fn tag(&self) -> &str {
-        &self.channel_id[..self.channel_id.len().min(8)]
+        super::slash_cmds::short_id(&self.channel_id)
     }
 
     /// Lines for events that landed since the last poll, oldest-first. Empty

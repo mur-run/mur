@@ -26,6 +26,17 @@ const FIRST_ORDINAL: u64 = 1;
 /// Not `0`: that reads as a handle the user can type, and it is not one.
 const NO_ORDINAL: &str = "-";
 
+/// Characters of a channel id shown as its typeable handle. Must stay in step
+/// with the Hub's `SHORT_ID_LEN` (`mur-hub-gui/ui/src/work/format.ts`) — the
+/// two surfaces show the same channel and a user copies the handle between
+/// them.
+const SHORT_ID_LEN: usize = 8;
+
+/// The id prefix a human can read back and type at `/channels`.
+pub(super) fn short_id(id: &str) -> &str {
+    &id[..id.len().min(SHORT_ID_LEN)]
+}
+
 /// One row of the `/channels` listing.
 fn channel_line(s: &persist::SessionInfo) -> String {
     let n = if s.ordinal >= FIRST_ORDINAL {
@@ -36,7 +47,7 @@ fn channel_line(s: &persist::SessionInfo) -> String {
     format!(
         "  {} · {} · {} turns · {}\n",
         n,
-        &s.id[..s.id.len().min(8)],
+        short_id(&s.id),
         s.turns,
         s.preview
     )
@@ -67,12 +78,14 @@ pub(super) fn resolve<'a>(
                 0 => Err(ResolveErr::NotFound),
                 1 => Ok(hits[0]),
                 _ => Err(ResolveErr::Ambiguous(
-                    hits.iter()
-                        .map(|s| s.id[..s.id.len().min(8)].to_string())
-                        .collect(),
+                    hits.iter().map(|s| short_id(&s.id).to_string()).collect(),
                 )),
             }
         }
+        // Never matches anything; exists so the user is told the word was
+        // unusable instead of being shown the plain listing, which reads as
+        // if the command had worked.
+        ChannelRef::Malformed(_) => Err(ResolveErr::NotFound),
     }
 }
 
@@ -81,6 +94,9 @@ pub(super) fn resolve_msg(target: &ChannelRef, err: &ResolveErr) -> String {
     let what = match target {
         ChannelRef::Ordinal(n) => format!("channel {n}"),
         ChannelRef::IdPrefix(p) => format!("channel id starting {p}"),
+        ChannelRef::Malformed(w) => {
+            return format!("`{w}` is not a channel number or id — /channels to list");
+        }
     };
     match err {
         ResolveErr::NotFound => format!("no {what} — /channels to list"),
@@ -117,7 +133,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                 for s in list {
                     out.push_str(&format!(
                         "  {} · {} turns · {}\n",
-                        &s.id[..s.id.len().min(8)],
+                        short_id(&s.id),
                         s.turns,
                         s.preview
                     ));
@@ -132,13 +148,6 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             // ANOTHER channel while this pane keeps chatting, so an in-flight
             // turn must not be cancelled for it.
             if follow {
-                let recent = match persist::list_recent(&app.home, &app.agent, RECENT_LIMIT) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        app.push_system(format!("could not list channels: {e}"));
-                        return;
-                    }
-                };
                 match target {
                     None => {
                         match app.follow.take() {
@@ -149,19 +158,32 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         }
                         return;
                     }
-                    Some(t) => match resolve(&recent, &t) {
-                        Ok(s) => {
-                            let id = s.id.clone();
-                            match app.start_follow(&id, StdInstant::now()) {
-                                Ok(()) => app.push_system(format!(
-                                    "following {} — new events appear here; /channels --follow to stop",
-                                    &id[..id.len().min(8)]
-                                )),
-                                Err(e) => app.push_system(format!("could not follow: {e:#}")),
+                    Some(t) => {
+                        // Lookup window, not the listing window: a number stays
+                        // typeable after it has scrolled off the listing.
+                        let recent =
+                            match persist::list_recent(&app.home, &app.agent, CHANNEL_LOOKUP_LIMIT)
+                            {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    app.push_system(format!("could not list channels: {e}"));
+                                    return;
+                                }
+                            };
+                        match resolve(&recent, &t) {
+                            Ok(s) => {
+                                let id = s.id.clone();
+                                match app.start_follow(&id, StdInstant::now()) {
+                                    Ok(()) => app.push_system(format!(
+                                        "following {} — new events appear here; /channels --follow to stop",
+                                        short_id(&id)
+                                    )),
+                                    Err(e) => app.push_system(format!("could not follow: {e:#}")),
+                                }
                             }
+                            Err(e) => app.push_system(resolve_msg(&t, &e)),
                         }
-                        Err(e) => app.push_system(resolve_msg(&t, &e)),
-                    },
+                    }
                 }
                 return;
             }
@@ -172,33 +194,44 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                 }
                 app.finish_partial();
             }
-            let recent = match persist::list_recent(&app.home, &app.agent, RECENT_LIMIT) {
-                Ok(r) => r,
-                Err(e) => {
-                    app.push_system(format!("could not list channels: {e}"));
-                    return;
-                }
-            };
             match target {
-                Some(t) => match resolve(&recent, &t) {
-                    Ok(s) => {
-                        let id = s.id.clone();
-                        stop_shell(app, false);
-                        match app.switch_channel(&id) {
-                            Ok(()) => app.push_system(format!(
-                                "switched to channel {} ({} turns)",
-                                &id[..id.len().min(8)],
-                                app.messages
-                                    .iter()
-                                    .filter(|m| matches!(m.role, Role::User | Role::Agent))
-                                    .count()
-                            )),
-                            Err(e) => app.push_system(format!("could not switch channel: {e}")),
+                Some(t) => {
+                    // Lookup window, not the listing window; see the constant.
+                    let recent =
+                        match persist::list_recent(&app.home, &app.agent, CHANNEL_LOOKUP_LIMIT) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                app.push_system(format!("could not list channels: {e}"));
+                                return;
+                            }
+                        };
+                    match resolve(&recent, &t) {
+                        Ok(s) => {
+                            let id = s.id.clone();
+                            stop_shell(app, false);
+                            match app.switch_channel(&id) {
+                                Ok(()) => app.push_system(format!(
+                                    "switched to channel {} ({} turns)",
+                                    short_id(&id),
+                                    app.messages
+                                        .iter()
+                                        .filter(|m| matches!(m.role, Role::User | Role::Agent))
+                                        .count()
+                                )),
+                                Err(e) => app.push_system(format!("could not switch channel: {e}")),
+                            }
                         }
+                        Err(e) => app.push_system(resolve_msg(&t, &e)),
                     }
-                    Err(e) => app.push_system(resolve_msg(&t, &e)),
-                },
+                }
                 None => {
+                    let recent = match persist::list_recent(&app.home, &app.agent, RECENT_LIMIT) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            app.push_system(format!("could not list channels: {e}"));
+                            return;
+                        }
+                    };
                     if recent.is_empty() {
                         app.push_system("no channels yet");
                     } else {
@@ -625,6 +658,52 @@ mod resolve_tests {
         assert!(
             unnumbered.starts_with("  - · "),
             "unnumbered rows show a placeholder, not 0: {unnumbered}"
+        );
+    }
+    /// A word that parsed as neither number nor id must say so. Falling back
+    /// to the listing would look like the command had worked.
+    #[test]
+    fn a_malformed_target_names_the_word_it_could_not_read() {
+        let t = ChannelRef::Malformed("zzz".into());
+        let err = resolve(&recent(), &t).unwrap_err();
+        assert!(matches!(err, ResolveErr::NotFound));
+        let msg = super::resolve_msg(&t, &err);
+        assert!(msg.contains("zzz"), "must quote what the user typed: {msg}");
+    }
+}
+
+/// The lookup window is wider than the listing window. A number is promised to
+/// stay typeable "across sessions"; it must not quietly stop working because
+/// ten newer conversations pushed it off the listing.
+#[cfg(test)]
+mod lookup_window_tests {
+    use super::{CHANNEL_LOOKUP_LIMIT, ChannelRef, RECENT_LIMIT, resolve};
+    use crate::cmd::agent::cli::persist::{self, Session};
+    use tempfile::TempDir;
+
+    #[test]
+    fn a_channel_pushed_off_the_listing_is_still_reachable_by_its_number() {
+        let tmp = TempDir::new().unwrap();
+        // The oldest channel is #1 and will be far off the end of a
+        // newest-first listing of RECENT_LIMIT rows.
+        for i in 0..(RECENT_LIMIT + 5) {
+            let mut s = Session::create(tmp.path(), "qa").unwrap();
+            s.append("user", &format!("conversation {i}"), None, &[])
+                .unwrap();
+        }
+        let listed = persist::list_recent(tmp.path(), "qa", RECENT_LIMIT).unwrap();
+        assert_eq!(listed.len(), RECENT_LIMIT, "sanity: the listing is capped");
+        assert!(
+            resolve(&listed, &ChannelRef::Ordinal(1)).is_err(),
+            "sanity: #1 is off the listing, which is why the wider window exists"
+        );
+
+        let window = persist::list_recent(tmp.path(), "qa", CHANNEL_LOOKUP_LIMIT).unwrap();
+        assert_eq!(
+            resolve(&window, &ChannelRef::Ordinal(1))
+                .expect("#1 must still resolve")
+                .ordinal,
+            1
         );
     }
 }

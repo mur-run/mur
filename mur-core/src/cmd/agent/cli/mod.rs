@@ -183,8 +183,14 @@ fn load_pricing(home: &std::path::Path, agent: &str) -> (footer::Pricing, Pricin
     (current, book)
 }
 
-/// How many recent conversations `/sessions` lists.
+/// How many recent conversations `/sessions` and the `/channels` listing show.
 const RECENT_LIMIT: usize = 10;
+/// How deep a `/channels <n|prefix>` lookup searches. Wider than the listing on
+/// purpose: an ordinal is promised to stay typeable for the life of the
+/// channel, so it must keep resolving after newer conversations have pushed it
+/// off the ten-row listing. Bounded rather than unlimited because each row
+/// costs a manifest read plus an event load.
+const CHANNEL_LOOKUP_LIMIT: usize = 200;
 /// Mouse wheel scrolls one line per event (trackpads fire 10-20 events/sec, so
 /// per-line granularity stays smooth); PageUp/PageDown move a full screenful.
 const MOUSE_SCROLL_STEP: u16 = 1;
