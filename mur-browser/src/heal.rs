@@ -114,11 +114,13 @@ pub struct HealEvent {
     pub status: HealStatus,
 }
 
-/// Minimum similarity for a heal candidate (D2). Provisional; calibrated
-/// against the fixtures below in plan Task 5.4 and written back to the spec.
+/// Minimum similarity for a heal candidate (D2). Calibrated against the
+/// fixture table in the spec (`docs/superpowers/specs/2026-09-24-browser-replay-heal-design.md`);
+/// treat as pinned, not a starting guess.
 pub const HEAL_MIN_SCORE: f32 = 0.3;
 
-/// Minimum lead of the best candidate over the runner-up (D2). Provisional.
+/// Minimum lead of the best candidate over the runner-up (D2). Calibrated
+/// alongside `HEAL_MIN_SCORE`; see the same fixture table.
 pub const HEAL_MIN_MARGIN: f32 = 0.15;
 
 /// One scored snapshot node, for adoption or for the rejection message.
