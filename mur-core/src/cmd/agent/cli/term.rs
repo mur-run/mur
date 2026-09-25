@@ -304,6 +304,40 @@ pub(super) fn anchor_row(rows: u16, viewport_h: u16, cursor_row: Option<u16>) ->
     }
 }
 
+/// What a failed paint (`draw` / `flush_finished`) means for the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DrawFault {
+    /// Transient: the cursor-position query lost its race with the
+    /// `EventStream`. Rebuild the viewport and keep going.
+    Recover,
+    /// The terminal is actually gone. Unwind.
+    Fatal,
+}
+
+/// crossterm's cursor-position timeout text (0.28, `cursor/sys/unix.rs`). It
+/// arrives as a plain `io::Error`, with no kind or code to match on, so the
+/// message is the only discriminator available.
+const CURSOR_TIMEOUT_MSG: &str = "cursor position could not be read";
+
+/// Classify a paint error. A resize landing between our own size check and
+/// ratatui's `autoresize` makes `draw` issue a cursor query while the async
+/// `EventStream` still owns stdin; the reply is swallowed, crossterm times
+/// out, and the error must NOT take the session down — that is the resize
+/// crash. Everything else still does.
+pub(super) fn classify_paint_error(err: &anyhow::Error) -> DrawFault {
+    for cause in err.chain() {
+        if cause.to_string().contains(CURSOR_TIMEOUT_MSG) {
+            return DrawFault::Recover;
+        }
+        if let Some(io_err) = cause.downcast_ref::<io::Error>()
+            && io_err.kind() == io::ErrorKind::TimedOut
+        {
+            return DrawFault::Recover;
+        }
+    }
+    DrawFault::Fatal
+}
+
 pub(super) fn viewport_h_for(rows: u16) -> u16 {
     rows.saturating_sub(1).clamp(5, INLINE_VIEWPORT_HEIGHT)
 }

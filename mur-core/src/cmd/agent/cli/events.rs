@@ -3,6 +3,37 @@
 
 use super::*;
 
+/// Paint the band and the frame, tolerating the resize race.
+///
+/// A size change landing between the loop's own ioctl check and ratatui's
+/// `autoresize` makes the paint issue a cursor-position query while the
+/// `EventStream` still owns stdin; crossterm never sees the reply and times
+/// out. That is recoverable — the caller rebuilds the viewport — so it must
+/// not propagate. Anything else still ends the session.
+///
+/// `Ok(false)` means "paint skipped, rebuild before the next one".
+fn paint(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut App,
+    viewport_h: u16,
+) -> Result<bool> {
+    if let Err(e) = ui::flush_finished(terminal, app, viewport_h) {
+        let e = anyhow::Error::new(e).context("flush band");
+        return match classify_paint_error(&e) {
+            DrawFault::Recover => Ok(false),
+            DrawFault::Fatal => Err(e),
+        };
+    }
+    if let Err(e) = terminal.draw(|f| ui::render(f, app)) {
+        let e = anyhow::Error::new(e).context("draw frame");
+        return match classify_paint_error(&e) {
+            DrawFault::Recover => Ok(false),
+            DrawFault::Fatal => Err(e),
+        };
+    }
+    Ok(true)
+}
+
 pub(super) async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -16,6 +47,9 @@ pub(super) async fn event_loop(
     // `viewport_h_for`). Tracks the height the live terminal actually has
     // (run() creates the terminal with this same value).
     let mut viewport_h = viewport_h_for(last_size.height);
+    // Set when a paint lost the cursor-query race with a resize: the next
+    // pass must rebuild the viewport even if the ioctl size looks unchanged.
+    let mut force_rebuild = false;
 
     loop {
         // Terminal size changed (font zoom, window resize): ratatui's
@@ -26,7 +60,8 @@ pub(super) async fn event_loop(
         // anchor instead, so `autoresize` never fires.
         if app.render_mode == RenderMode::Inline {
             let size = terminal.backend().size()?;
-            if size != last_size {
+            if size != last_size || force_rebuild {
+                force_rebuild = false;
                 // Rebuilding queries the cursor position by reading the
                 // terminal's stdin response — drop the EventStream first so
                 // that read doesn't hang (see the viewport comment in `run`).
@@ -118,8 +153,7 @@ pub(super) async fn event_loop(
             }
             // Paint the "handing over" line before we suspend — otherwise it
             // only appears after the child exits, alongside the result.
-            ui::flush_finished(terminal, app, viewport_h)?;
-            terminal.draw(|f| ui::render(f, app))?;
+            force_rebuild |= !paint(terminal, app, viewport_h)?;
             let outcome = handover::run(terminal, viewport_h, &req);
             events = EventStream::new();
             match outcome {
@@ -145,8 +179,7 @@ pub(super) async fn event_loop(
             if want_h != viewport_h && handover::reanchor(terminal, want_h).is_ok() {
                 viewport_h = want_h;
             }
-            ui::flush_finished(terminal, app, viewport_h)?;
-            terminal.draw(|f| ui::render(f, app))?;
+            force_rebuild |= !paint(terminal, app, viewport_h)?;
             let read = handover::read_hidden(
                 terminal,
                 viewport_h,
@@ -168,8 +201,6 @@ pub(super) async fn event_loop(
         // draw, so the band always paints a screenful of the newest content
         // and the composer stays glued to the screen bottom. No-op in
         // Fullscreen mode and while the band still fits.
-        ui::flush_finished(terminal, app, viewport_h)?;
-
         // Keep the terminal surface in sync with the render mode BEFORE the
         // draw: an overlay open/close this iteration may have toggled
         // `render_mode`, and the draw below must land on the matching
@@ -188,7 +219,12 @@ pub(super) async fn event_loop(
             terminal.clear()?;
             app.needs_full_redraw = false;
         }
-        terminal.draw(|f| ui::render(f, app))?;
+        if !paint(terminal, app, viewport_h)? {
+            // Lost the cursor-query race with a resize: rebuild at the top of
+            // the next pass instead of dying on it.
+            force_rebuild = true;
+            app.needs_full_redraw = true;
+        }
         if app.should_quit {
             return Ok(());
         }
