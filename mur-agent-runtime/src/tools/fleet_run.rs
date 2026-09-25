@@ -96,7 +96,9 @@ impl ToolExecutor for FleetRunTool {
             name: FLEET_RUN.into(),
             description: "Dispatch a MUR fleet (agent squad) and return a handle at once: \
 {run_id, status: dispatched}. Poll mur_job_status <run_id> (or mur fleet status <fleet>) \
-for progress; the result lands in the fleet's channel, not in this reply. For the \
+for progress; the result lands in the fleet's channel, not in this reply. `mur fleet jobs \
+<fleet> --since <run_id>` scopes the job list to just this dispatch — without --since, \
+counts include every job already in the fleet's queue, not only this run's. For the \
 deep-research fleet pass the research question as `goal`. Only fleets allowlisted in the \
 user's config can be run; the run is bounded by the fleet's limits (deadline / stuck / \
 cost_usd) and by `mur fleet stop`."

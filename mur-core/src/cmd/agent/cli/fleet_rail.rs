@@ -1,5 +1,6 @@
 //! `--fleet` status rail: folds a fleet's shared channel into per-member state.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
 
@@ -229,7 +230,21 @@ pub fn fold_stop(events: &[ChannelEvent]) -> Option<StopNotice> {
 /// delegated `fleet_run` step is currently executing: goal-mode runs never
 /// touch the job store, so without it an in-flight run reads as "not run yet"
 /// (empty store) or as already finished (stale terminal jobs).
-pub fn jobs_line(fleet: &str, jobs: &[Job], run_in_flight: bool) -> String {
+///
+/// `baseline` is the job ids that already existed the moment THIS dispatch
+/// started (see `FleetRail::set_run_in_flight`) — without it, two `fleet_run`
+/// calls fired back to back both read the same pre-existing `K ✖ failed` off
+/// the queue and a caller reasonably concludes their new job failed when it
+/// did not (#1508). `None` when this rail has never attached to a live
+/// dispatch (e.g. armed only via `mur fleet status`/`--fleet` before anything
+/// ran): there is no "since" boundary yet, so the count stays plain cumulative
+/// rather than claiming a split it cannot back up.
+pub fn jobs_line(
+    fleet: &str,
+    jobs: &[Job],
+    run_in_flight: bool,
+    baseline: Option<&HashSet<String>>,
+) -> String {
     if jobs.is_empty() {
         if run_in_flight {
             return format!("fleet · {fleet}   ⏵ run in progress");
@@ -242,16 +257,39 @@ pub fn jobs_line(fleet: &str, jobs: &[Job], run_in_flight: bool) -> String {
         .iter()
         .filter(|j| j.status == JobStatus::Running)
         .count();
-    let failed = jobs
-        .iter()
-        .filter(|j| matches!(j.status, JobStatus::Failed | JobStatus::Canceled))
-        .count();
+    let is_failed = |j: &Job| matches!(j.status, JobStatus::Failed | JobStatus::Canceled);
     let mut line = format!("fleet · {fleet}   job {terminal}/{total}");
     if running > 0 {
         line.push_str(&format!(" · {running} ⏵ running"));
     }
-    if failed > 0 {
-        line.push_str(&format!(" · {failed} ✖ failed"));
+    match baseline {
+        Some(base) => {
+            let new_failed = jobs
+                .iter()
+                .filter(|j| is_failed(j) && !base.contains(&j.id))
+                .count();
+            let old_failed = jobs
+                .iter()
+                .filter(|j| is_failed(j) && base.contains(&j.id))
+                .count();
+            // "this run" first — that is the number the caller who just
+            // dispatched actually needs; the pre-existing count is
+            // labeled so it can never be mistaken for it.
+            if new_failed > 0 {
+                line.push_str(&format!(" · {new_failed} ✖ failed (this run)"));
+            }
+            if old_failed > 0 {
+                line.push_str(&format!(
+                    " · {old_failed} ✖ failed (queue, before this run)"
+                ));
+            }
+        }
+        None => {
+            let failed = jobs.iter().filter(|j| is_failed(j)).count();
+            if failed > 0 {
+                line.push_str(&format!(" · {failed} ✖ failed"));
+            }
+        }
     }
     if run_in_flight && running == 0 {
         line.push_str(" · ⏵ run in progress");
@@ -332,6 +370,14 @@ pub struct FleetRail {
     /// A delegated `fleet_run` step is currently executing in this pane
     /// (armed on `StepStarted`, cleared on `StepCompleted`).
     run_in_flight: bool,
+    /// Job ids that already existed the moment the CURRENT delegated
+    /// dispatch was armed (see `arm_baseline`). `jobs_line` uses this to
+    /// split "failed because of the run just fired" from "was already
+    /// failed in the queue" (#1508) — without it, two `fleet_run` calls back
+    /// to back both report the same pre-existing failure count and a caller
+    /// reasonably concludes their new job failed when it did not. `None`
+    /// until the first delegated run arms this rail.
+    baseline: Option<HashSet<String>>,
     /// True when the rail was auto-armed by a delegated `fleet_run` step
     /// rather than by the user's `--fleet`. An auto-armed rail belongs to one
     /// run and is dropped when that run ends; a `--fleet` rail is a band the
@@ -349,6 +395,7 @@ impl FleetRail {
             last_len: u64::MAX, // force the first poll to do real work
             last_jobs_gate: (0, None),
             run_in_flight: false,
+            baseline: None,
             auto: false,
             view: RailView::default(),
             next_poll: Instant::now(),
@@ -375,10 +422,22 @@ impl FleetRail {
 
     /// Flip the in-flight flag (see the field doc). Busts the poll gate so the
     /// collapsed line reflects the flip even when nothing on disk moved.
-    pub fn set_run_in_flight(&mut self, v: bool) {
+    ///
+    /// Flipping ON also snapshots the current job ids as `baseline` (#1508):
+    /// this must happen BEFORE the dispatched run's own job can land in the
+    /// store, so the snapshot has to be taken here, at arm time, rather than
+    /// lazily on the next `poll`. Flipping OFF leaves `baseline` alone — it
+    /// is cleared only when a fresh dispatch arms the rail again, so the
+    /// split still holds while the rail settles after the run ends.
+    pub fn set_run_in_flight(&mut self, home: &Path, v: bool) {
         if self.run_in_flight != v {
             self.run_in_flight = v;
             self.last_len = u64::MAX;
+            if v {
+                let existing =
+                    crate::cmd::fleet::jobs::list_jobs_raw(home, &self.fleet).unwrap_or_default();
+                self.baseline = Some(existing.into_iter().map(|j| j.id).collect());
+            }
         }
     }
 
@@ -445,7 +504,12 @@ impl FleetRail {
                         j.status = s;
                     }
                 }
-                jobs_line(&self.fleet, &jobs, self.run_in_flight)
+                jobs_line(
+                    &self.fleet,
+                    &jobs,
+                    self.run_in_flight,
+                    self.baseline.as_ref(),
+                )
             }
             Err(_) => {
                 // A corrupt job file must not read as "not run yet" (`jobs_line`

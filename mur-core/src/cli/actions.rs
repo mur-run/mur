@@ -603,6 +603,12 @@ pub enum FleetAction {
         /// Include terminal (done/failed/canceled) jobs
         #[arg(long)]
         all: bool,
+        /// Scope to one dispatch's jobs, by run id (or a prefix of one —
+        /// matches every `--loop` iteration of that run too). Without this,
+        /// counts mix the run just dispatched with everything already queued
+        /// (see `mur fleet status`'s doc comment / issue #1508).
+        #[arg(long)]
+        since: Option<String>,
     },
     /// Cancel a queued job so no run picks it up
     Cancel {
