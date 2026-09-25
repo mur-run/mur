@@ -1200,7 +1200,21 @@ fn dev_skill_shadowed_by_user(dir: &std::path::Path, name: &str) -> bool {
 /// Writes canonical copies to ~/.mur/skills/ and symlinks from tool dirs.
 /// Returns true if any skill was written.
 pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Path) -> Result<bool> {
+    // `mur-browser/SKILL.md` (repo root, versioned like source — see
+    // docs/superpowers/specs/2026-09-25-browser-skill-hub-design.md D1/D2) is
+    // authored as markdown with Anthropic frontmatter, not canonical YAML like
+    // every other entry below. `skill.yaml` is only ever read through
+    // `parse_canonical` (mur_common::skill::loader), which rejects frontmatter
+    // outright, so it has to be converted once here before it can join the
+    // table that writes straight to `skill.yaml`.
+    let browser_manifest =
+        mur_common::skill::parse_markdown(include_str!("../../../mur-browser/SKILL.md"))
+            .context("parse mur-browser/SKILL.md")?;
+    let browser_yaml = mur_common::skill::serialize_canonical(&browser_manifest)
+        .context("serialize mur-browser manifest to canonical YAML")?;
+
     let skills: &[(&str, &str)] = &[
+        ("browser", browser_yaml.as_str()),
         ("mur-context", include_str!("../skills/mur_context.yaml")),
         ("mur-in", include_str!("../skills/mur_in.yaml")),
         ("mur-out", include_str!("../skills/mur_out.yaml")),
@@ -1426,6 +1440,39 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
         std::fs::write(dir.join("SKILL.md"), md)?;
     }
 
+    // Bundle assets (D3): skills whose SKILL.md references files under
+    // `references/` need those files shipped alongside the manifest, not
+    // just the manifest itself — `ensure_mur_skill` never had this capability
+    // before `browser`. Runs after the manifest loop and before
+    // `symlink_skill_dir` below, so the existing whole-directory symlink into
+    // each tool dir (`.claude`/`.augment`/`.agents`) picks up `references/`
+    // for free, with no change to that step.
+    let bundle_assets: &[(&str, &str, &str)] = &[
+        (
+            "browser",
+            "auth.md",
+            include_str!("../../../mur-browser/references/auth.md"),
+        ),
+        (
+            "browser",
+            "testing.md",
+            include_str!("../../../mur-browser/references/testing.md"),
+        ),
+        (
+            "browser",
+            "automation.md",
+            include_str!("../../../mur-browser/references/automation.md"),
+        ),
+    ];
+    for (skill_name, file_name, content) in bundle_assets {
+        if shadowed.contains(skill_name) {
+            continue;
+        }
+        let refs_dir = mur_skills_dir.join(skill_name).join("references");
+        std::fs::create_dir_all(&refs_dir)?;
+        std::fs::write(refs_dir.join(file_name), content)?;
+    }
+
     // Tool dirs to symlink into
     let tool_dirs: &[&str] = &[".claude", ".augment", ".agents"];
 
@@ -1480,15 +1527,38 @@ fn symlink_skill_dir(target: &std::path::Path, link: &std::path::Path) -> Result
 
     #[cfg(not(unix))]
     {
-        // Fallback: copy the directory contents
-        std::fs::create_dir_all(link)?;
-        for entry in std::fs::read_dir(target)? {
-            let entry = entry?;
-            let dest = link.join(entry.file_name());
-            std::fs::copy(entry.path(), dest)?;
-        }
+        // Fallback: copy the directory contents. Must recurse — `browser`
+        // (D3) was the first skill to carry a subdirectory (`references/`)
+        // here, and `std::fs::copy` only copies files: handed a directory
+        // entry it fails with "Access is denied" (os error 5) on Windows,
+        // which is exactly what shipped in #1509's CI before this fix.
+        copy_dir_recursive(target, link)?;
     }
 
+    Ok(())
+}
+
+/// Recursive directory copy for platforms without symlinks (Windows). Not a
+/// generic utility: mirrors exactly what a symlink would expose — every file
+/// and subdirectory under `src`, nothing filtered.
+///
+/// Compiled on every platform (not `cfg(not(unix))`-gated) so its own test
+/// runs in the macOS/Linux CI legs too, not only on the Windows leg that is
+/// its only real caller — that asymmetry is exactly how the bug it fixes
+/// shipped unnoticed until Windows CI hit it.
+#[allow(dead_code)] // unix builds compile this but never call it (symlink branch above)
+fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
     Ok(())
 }
 
@@ -1781,6 +1851,34 @@ mod sync_status_tests {
 #[cfg(test)]
 mod sync_skill_tests {
 
+    /// Regression for #1509's Windows CI break: `symlink_skill_dir`'s
+    /// non-unix fallback called `std::fs::copy` on every directory entry
+    /// without checking whether it was a subdirectory, which `browser` (D3,
+    /// the first skill with a `references/` subdir) turned into "Access is
+    /// denied" (os error 5) on Windows. Runs on every platform — the bug
+    /// shipped unnoticed specifically because nothing exercised this
+    /// function outside the Windows-only leg it's gated for.
+    #[test]
+    fn copy_dir_recursive_copies_nested_subdirectories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        std::fs::create_dir_all(src.join("references")).unwrap();
+        std::fs::write(src.join("skill.yaml"), "top-level").unwrap();
+        std::fs::write(src.join("references").join("auth.md"), "nested").unwrap();
+
+        super::copy_dir_recursive(&src, &dest).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dest.join("skill.yaml")).unwrap(),
+            "top-level"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("references").join("auth.md")).unwrap(),
+            "nested"
+        );
+    }
+
     #[test]
     fn installs_project_search_skill() {
         let home = std::env::temp_dir().join(format!(
@@ -1862,6 +1960,35 @@ mod sync_skill_tests {
         let raw = std::fs::read_to_string(&path).unwrap();
         let m = mur_common::skill::parse_canonical(&raw).unwrap();
         assert_eq!(m.name, "mur-native-tools");
+    }
+
+    #[test]
+    fn ensure_mur_skill_ships_browser_hub_and_its_reference_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+
+        super::ensure_mur_skill(&home, &root).unwrap();
+
+        // The concrete regression D2 exists to prevent: `mur-browser/SKILL.md`
+        // is authored with Anthropic frontmatter, but `skill.yaml` is read
+        // only through `parse_canonical` — writing the raw markdown there
+        // would ship a manifest the loader cannot load.
+        let skill_yaml = root.join("skills/browser/skill.yaml");
+        assert!(skill_yaml.exists(), "browser skill.yaml must be written");
+        let raw = std::fs::read_to_string(&skill_yaml).unwrap();
+        let m = mur_common::skill::parse_canonical(&raw)
+            .unwrap_or_else(|e| panic!("browser skill.yaml must parse canonically: {e}\n{raw}"));
+        assert_eq!(m.name, "browser");
+
+        // D3: reference bundle rides alongside the manifest, not just the
+        // manifest itself.
+        for file in ["auth.md", "testing.md", "automation.md"] {
+            let p = root.join("skills/browser/references").join(file);
+            assert!(p.exists(), "browser references/{file} must be written");
+        }
     }
 }
 

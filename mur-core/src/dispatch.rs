@@ -610,8 +610,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                 name,
                 profile,
                 heal,
+                max_heal_ratio,
                 dry_run,
-            } => cmd::browser::replay(&name, profile.as_deref(), heal, dry_run).await?,
+            } => {
+                cmd::browser::replay(&name, profile.as_deref(), heal, max_heal_ratio, dry_run)
+                    .await?
+            }
             BrowserAction::Auth {
                 site,
                 url,
