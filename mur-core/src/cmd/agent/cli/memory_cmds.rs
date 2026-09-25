@@ -771,12 +771,7 @@ fn require_agent_local(m: &ListedMemory) -> Result<()> {
 }
 
 /// Rewrite a note's policy tag in place, preserving everything else.
-fn set_policy_on_disk(
-    home: &Path,
-    agent: &str,
-    name: &str,
-    policy: InjectionPolicy,
-) -> Result<()> {
+fn set_policy_on_disk(home: &Path, agent: &str, name: &str, policy: InjectionPolicy) -> Result<()> {
     let dir = agent_skill_dir(home, agent).join(name);
     let path = dir.join("skill.yaml");
     let mut manifest: mur_common::skill::SkillManifest =
@@ -1056,7 +1051,9 @@ mod tests {
         );
         // The meter reports the budget, not a guess.
         assert!(
-            out.contains(&thousands(mur_compress::memory_budget::REQUIRED_BUDGET_TOKENS)),
+            out.contains(&thousands(
+                mur_compress::memory_budget::REQUIRED_BUDGET_TOKENS
+            )),
             "the usage meter must show the fixed budget:\n{out}"
         );
     }
@@ -1070,14 +1067,13 @@ mod tests {
         instruct(h, "a", &["use".into(), "tabs".into()]).unwrap();
         let name = list_memories(h, "a")[0].name.clone();
 
-        let msg = match instruct_edit(h, "a", &[name.clone(), "use".into(), "spaces".into()])
-            .unwrap()
-        {
-            MemoryOutcome::Done(m) => m,
-            MemoryOutcome::Confirm { .. } => {
-                panic!("a small edit is within budget and must not need confirmation")
-            }
-        };
+        let msg =
+            match instruct_edit(h, "a", &[name.clone(), "use".into(), "spaces".into()]).unwrap() {
+                MemoryOutcome::Done(m) => m,
+                MemoryOutcome::Confirm { .. } => {
+                    panic!("a small edit is within budget and must not need confirmation")
+                }
+            };
         assert!(msg.contains("updated"), "{msg}");
 
         let after = list_memories(h, "a");
