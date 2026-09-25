@@ -97,6 +97,21 @@ pub fn rendered_required(
         .collect()
 }
 
+/// The Required-budget send gate, shared by every path that can start a turn.
+///
+/// Returns the blocked-send overlay when the permanent instructions do not fit
+/// their fixed reservation, `None` otherwise. Plan invariant 2 is "every
+/// Required memory is injected or none is", and the injector honours that by
+/// injecting Required unconditionally — so the *only* place that can uphold the
+/// budget is the send path. It therefore cannot live in the TUI alone: `--plain`
+/// and `mur agent send` reach the same runtime and would otherwise sail past a
+/// reservation the interactive user is blocked on.
+pub fn required_budget_block(home: &Path, agent: &str) -> Option<String> {
+    let listed = list_memories(home, agent);
+    let usage = mur_compress::memory_ux::usage_summary(&rendered_required(&listed));
+    mur_compress::memory_block::blocked_send_overlay_if_blocked(&usage)
+}
+
 /// `1234` → `1,234`. The plan writes budget figures as `4,320 / 3,500`, and a
 /// four-digit token count is much easier to misread without the separator.
 pub fn thousands(n: usize) -> String {
@@ -643,8 +658,9 @@ pub fn pin(home: &Path, agent: &str, target: Option<&str>) -> Result<String> {
     let current = rendered_required(&listed);
     let delta = canonical_memory_counter().count(&m.rendered) as isize;
     let projection = RequiredBudgetProjection::from_rendered(&current, delta);
+    let decision = projection.decide(WriteOperation::Promote);
 
-    if projection.decide(WriteOperation::Promote) == WriteDecision::Reject {
+    if decision == WriteDecision::Reject {
         bail!(
             "permanent instructions are full: this would need {} of {} tokens.\n\
              '{name}' is unchanged and stays remembered information. Free about ~{} tokens \
@@ -660,7 +676,7 @@ pub fn pin(home: &Path, agent: &str, target: Option<&str>) -> Result<String> {
         "📌 '{name}' is now a permanent instruction — added to the AI's context every turn \
          (presence, not compliance). /unpin {name} to undo."
     );
-    if projection.decide(WriteOperation::Promote) == WriteDecision::AllowWithWarning {
+    if decision == WriteDecision::AllowWithWarning {
         msg.push_str(&format!(
             "\n⚠ using {} of {} tokens — close to full.",
             thousands(projection.projected_tokens),
