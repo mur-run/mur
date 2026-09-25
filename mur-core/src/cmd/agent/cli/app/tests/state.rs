@@ -398,8 +398,12 @@ fn parse_slash_channels() {
     // Bare digits are always an ordinal, so `#` is the escape hatch for the
     // all-numeric id prefix.
     assert_eq!(parse_slash("/channels #12345678"), plain(id("12345678")));
-    // Not a number and not hex: nothing to resolve.
-    assert_eq!(parse_slash("/channels zzz"), plain(None));
+    // Not a number and not hex: kept as Malformed so the handler can say so.
+    // Dropping it here made `/channels zzz` fall back to the plain listing.
+    assert_eq!(
+        parse_slash("/channels zzz"),
+        plain(Some(ChannelRef::Malformed("zzz".into())))
+    );
     // The flag is order-independent, and `-f` is the short form. No target
     // with `--follow` means "stop following".
     for line in ["/channels 2 --follow", "/channels --follow 2", "/chan -f 2"] {
@@ -426,6 +430,9 @@ fn parse_slash_channels() {
             follow: true
         })
     );
+    // A word that is neither a number nor a hex prefix must be carried through
+    // as a target, not dropped: dropping it silently degrades `/channels zzz`
+    // into "list everything", which looks like the command worked.
 }
 
 #[test]
