@@ -9,21 +9,30 @@ pub enum ChannelRef {
     /// A channel-id prefix (`/channels 01a0d420`, or `#12345678` to force id
     /// matching when the prefix is all digits).
     IdPrefix(String),
+    /// A word that is neither. Kept rather than discarded so the user gets
+    /// "no channel zzz" instead of a silent fall back to the plain listing,
+    /// which reads as if the command worked.
+    Malformed(String),
 }
 
 /// Read one `/channels` argument as an ordinal or an id prefix. Bare digits
 /// are an ordinal — ordinals are short and typed constantly, so they win the
 /// ambiguity; `#` escapes to the id for the rare all-numeric prefix.
-pub fn parse_channel_ref(arg: &str) -> Option<ChannelRef> {
+pub fn parse_channel_ref(arg: &str) -> ChannelRef {
     if let Some(id) = arg.strip_prefix('#') {
-        return (!id.is_empty()).then(|| ChannelRef::IdPrefix(id.to_ascii_lowercase()));
+        return if id.is_empty() {
+            ChannelRef::Malformed(arg.to_string())
+        } else {
+            ChannelRef::IdPrefix(id.to_ascii_lowercase())
+        };
     }
     if let Ok(n) = arg.parse::<u64>() {
-        return Some(ChannelRef::Ordinal(n));
+        return ChannelRef::Ordinal(n);
     }
-    arg.chars()
-        .all(|c| c.is_ascii_hexdigit())
-        .then(|| ChannelRef::IdPrefix(arg.to_ascii_lowercase()))
+    if arg.chars().all(|c| c.is_ascii_hexdigit()) && !arg.is_empty() {
+        return ChannelRef::IdPrefix(arg.to_ascii_lowercase());
+    }
+    ChannelRef::Malformed(arg.to_string())
 }
 
 /// A parsed slash command.
@@ -113,7 +122,7 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
                 target: args
                     .iter()
                     .find(|s| !s.starts_with('-'))
-                    .and_then(|s| parse_channel_ref(s)),
+                    .map(|s| parse_channel_ref(s)),
                 follow: args.iter().any(|s| *s == "--follow" || *s == "-f"),
             }
         }
