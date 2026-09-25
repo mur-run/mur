@@ -432,8 +432,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                 FleetAction::Send { name, job } => {
                     cmd::fleet::jobs::cmd_fleet_send(&mur_home, &name, &job)?
                 }
-                FleetAction::Jobs { name, all } => {
-                    cmd::fleet::jobs::cmd_fleet_jobs(&mur_home, &name, all)?
+                FleetAction::Jobs { name, all, since } => {
+                    cmd::fleet::jobs::cmd_fleet_jobs(&mur_home, &name, all, since.as_deref())?
                 }
                 FleetAction::Cancel { name, id, yes } => {
                     cmd::fleet::jobs::cmd_fleet_cancel(&mur_home, &name, &id, yes)?

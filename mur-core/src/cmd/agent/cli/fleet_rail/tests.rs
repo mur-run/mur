@@ -344,8 +344,10 @@ fn jobs_line_counts_terminal_over_total() {
         job("4", JobStatus::Queued),
         job("5", JobStatus::Queued),
     ];
-    // 2 of 5 have reached a terminal state; one of those failed.
-    let line = jobs_line("develop", &jobs, false);
+    // 2 of 5 have reached a terminal state; one of those failed. No baseline
+    // (mimics `mur fleet status`/`--fleet` armed before any dispatch): plain
+    // cumulative wording, unlabeled.
+    let line = jobs_line("develop", &jobs, false, None);
     assert!(line.contains("fleet · develop"), "got: {line}");
     assert!(line.contains("job 2/5"), "got: {line}");
     assert!(line.contains("1 ⏵ running"), "got: {line}");
@@ -354,15 +356,54 @@ fn jobs_line_counts_terminal_over_total() {
 
 #[test]
 fn jobs_line_says_not_run_yet_when_there_are_none() {
-    let line = jobs_line("develop", &[], false);
+    let line = jobs_line("develop", &[], false, None);
     assert!(line.contains("not run yet"), "got: {line}");
     assert!(line.contains("mur fleet run develop"), "got: {line}");
 }
 
 #[test]
 fn jobs_line_omits_the_failed_clause_when_nothing_failed() {
-    let line = jobs_line("develop", &[job("1", JobStatus::Done)], false);
+    let line = jobs_line("develop", &[job("1", JobStatus::Done)], false, None);
     assert!(!line.contains("failed"), "got: {line}");
+}
+
+/// #1508: a baseline splits a pre-existing queue failure from one that
+/// appeared after this dispatch armed the rail, and labels both so neither
+/// reads as the other.
+#[test]
+fn jobs_line_splits_failures_against_a_baseline() {
+    use std::collections::HashSet;
+    let jobs = vec![
+        job("old-failed", JobStatus::Failed), // existed before this dispatch
+        job("new-failed", JobStatus::Failed), // appeared after
+        job("new-done", JobStatus::Done),
+    ];
+    let baseline: HashSet<String> = ["old-failed".to_string()].into_iter().collect();
+    let line = jobs_line("develop", &jobs, false, Some(&baseline));
+    assert!(
+        line.contains("1 ✖ failed (this run)"),
+        "must call out the failure that is actually new: {line}"
+    );
+    assert!(
+        line.contains("1 ✖ failed (queue, before this run)"),
+        "must label the pre-existing failure so it is never read as belonging to this run: {line}"
+    );
+}
+
+/// With a baseline but nothing new failed, the pre-existing failure must not
+/// be silently dropped either — a caller polling right after dispatch still
+/// needs to see the queue has old failures, just clearly not theirs.
+#[test]
+fn jobs_line_baseline_keeps_old_failures_labeled_when_nothing_new_failed() {
+    use std::collections::HashSet;
+    let jobs = vec![job("old-failed", JobStatus::Failed)];
+    let baseline: HashSet<String> = ["old-failed".to_string()].into_iter().collect();
+    let line = jobs_line("develop", &jobs, false, Some(&baseline));
+    assert!(!line.contains("(this run)"), "got: {line}");
+    assert!(
+        line.contains("1 ✖ failed (queue, before this run)"),
+        "got: {line}"
+    );
 }
 
 use std::time::Instant;
@@ -602,11 +643,11 @@ fn member_message_never_clears_a_hitl_block() {
 fn jobs_line_flags_an_in_flight_goal_run() {
     // Goal-mode runs never touch the job store: an empty store must read as
     // in-progress, not "not run yet"…
-    let line = jobs_line("develop", &[], true);
+    let line = jobs_line("develop", &[], true, None);
     assert!(line.contains("run in progress"), "got: {line}");
     assert!(!line.contains("not run yet"), "got: {line}");
     // …and stale terminal jobs must not read as "all finished".
-    let line = jobs_line("develop", &[job("1", JobStatus::Done)], true);
+    let line = jobs_line("develop", &[job("1", JobStatus::Done)], true, None);
     assert!(line.contains("run in progress"), "got: {line}");
 }
 

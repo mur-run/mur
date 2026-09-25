@@ -285,20 +285,41 @@ fn short(id: &str) -> &str {
 }
 
 /// Which jobs `mur fleet jobs` shows: all when `all`, else only non-terminal
-/// (queued/running). Pure so the filter is testable without capturing stdout.
-fn visible_jobs(jobs: &[Job], all: bool) -> Vec<&Job> {
+/// (queued/running); further narrowed to one dispatch when `since` is set.
+/// Pure so the filter is testable without capturing stdout.
+///
+/// Match is by PREFIX, not equality: a `--loop` run stamps each iteration's
+/// job with `<run-id>-<iteration>` (`loop_run.rs`'s `opts.run_id`), so a
+/// caller passing the handle `fleet_run` returned (the bare run id) must
+/// still find every iteration it drove, not just an iteration-0 that happens
+/// to equal it exactly.
+fn visible_jobs<'a>(jobs: &'a [Job], all: bool, since: Option<&str>) -> Vec<&'a Job> {
     jobs.iter()
         .filter(|j| all || !j.status.is_terminal())
+        .filter(|j| match since {
+            None => true,
+            Some(run_id) => j.run_id.as_deref().is_some_and(|r| r.starts_with(run_id)),
+        })
         .collect()
 }
 
-/// `mur fleet jobs <name> [--all]` — list jobs and their status.
-pub fn cmd_fleet_jobs(mur_home: &Path, fleet: &str, all: bool) -> Result<()> {
+/// `mur fleet jobs <name> [--all] [--since <run-id>]` — list jobs and their
+/// status. `--since` scopes the listing to jobs driven by one dispatch's run
+/// id (issue #1508: without it, a failure/success count from an unrelated
+/// earlier dispatch is indistinguishable from the run the caller just fired).
+pub fn cmd_fleet_jobs(mur_home: &Path, fleet: &str, all: bool, since: Option<&str>) -> Result<()> {
     let _ = store::load_fleet(mur_home, fleet)?;
     let jobs = list_jobs(mur_home, fleet)?;
-    let shown = visible_jobs(&jobs, all);
+    let shown = visible_jobs(&jobs, all, since);
     if shown.is_empty() {
-        println!("No jobs. Queue one: mur fleet send {fleet} \"<job>\"");
+        match since {
+            Some(run_id) if !jobs.is_empty() => {
+                println!(
+                    "No jobs match run `{run_id}` — try `mur fleet jobs {fleet} --all` to see the full queue."
+                );
+            }
+            _ => println!("No jobs. Queue one: mur fleet send {fleet} \"<job>\""),
+        }
         return Ok(());
     }
     for j in shown {
@@ -341,11 +362,54 @@ mod tests {
             mk(JobStatus::Failed),
         ];
         // default (all=false): only non-terminal jobs are shown
-        let shown = visible_jobs(&jobs, false);
+        let shown = visible_jobs(&jobs, false, None);
         assert_eq!(shown.len(), 2);
         assert!(shown.iter().all(|j| !j.status.is_terminal()));
         // --all: every job, including terminal
-        assert_eq!(visible_jobs(&jobs, true).len(), 4);
+        assert_eq!(visible_jobs(&jobs, true, None).len(), 4);
+    }
+
+    /// #1508: `--since <run-id>` must isolate one dispatch's jobs from the
+    /// rest of the queue, matching every `--loop` iteration (`<run>-<n>`) by
+    /// prefix rather than requiring an exact run id.
+    #[test]
+    fn visible_jobs_since_filters_by_run_id_prefix() {
+        let mk = |run_id: Option<&str>, status| Job {
+            id: "x".into(),
+            text: "t".into(),
+            source: "cli".into(),
+            status,
+            created_at: "now".into(),
+            started_at: None,
+            finished_at: None,
+            run_id: run_id.map(str::to_string),
+            result: None,
+            error: None,
+        };
+        let jobs = vec![
+            mk(Some("fleet-dev-old"), JobStatus::Failed), // unrelated earlier dispatch
+            mk(Some("fleet-dev-new"), JobStatus::Done),
+            mk(Some("fleet-dev-new-1"), JobStatus::Failed), // --loop iteration of the new run
+            mk(None, JobStatus::Queued),                    // not yet dispatched
+        ];
+        let since = visible_jobs(&jobs, true, Some("fleet-dev-new"));
+        assert_eq!(
+            since.len(),
+            2,
+            "must include the run and its iterations only"
+        );
+        assert!(
+            since
+                .iter()
+                .all(|j| j.run_id.as_deref().unwrap().starts_with("fleet-dev-new"))
+        );
+        // The old dispatch's failure must not leak into a `--since` scoped view.
+        assert!(
+            !since
+                .iter()
+                .any(|j| j.status == JobStatus::Failed
+                    && j.run_id.as_deref() == Some("fleet-dev-old"))
+        );
     }
 
     #[test]
@@ -398,7 +462,7 @@ mod tests {
         assert_eq!(jobs[0].text, "do it");
         assert_eq!(jobs[0].source, "cli");
         // jobs view runs without panicking on existing fleet
-        cmd_fleet_jobs(home, "dev", true).unwrap();
+        cmd_fleet_jobs(home, "dev", true, None).unwrap();
     }
 
     #[test]
