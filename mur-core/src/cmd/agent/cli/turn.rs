@@ -122,14 +122,9 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     // room. No automatic retry, and no escape hatch in P1.
     //
     // Checked before `over_budget()` so the two refusals cannot both fire.
-    {
-        let listed = memory_cmds::list_memories(&app.home, &app.agent);
-        let usage =
-            mur_compress::memory_ux::usage_summary(&memory_cmds::rendered_required(&listed));
-        if let Some(overlay) = mur_compress::memory_block::blocked_send_overlay_if_blocked(&usage) {
-            app.push_system(overlay);
-            return;
-        }
+    if let Some(overlay) = memory_cmds::required_budget_block(&app.home, &app.agent) {
+        app.push_system(overlay);
+        return;
     }
 
     // Session budget cap: refuse a NEW turn once estimated spend hits the cap.
