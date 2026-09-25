@@ -175,6 +175,12 @@ const SKILL_SUBS: &[(&str, &str)] = &[
     ("add", "install a skill"),
     ("remove", "uninstall a skill"),
 ];
+const BROWSER_MODES: &[(&str, &str)] = &[
+    ("--add", "attach the browser skill to this agent"),
+    ("auth", "log in once, keep an encrypted profile"),
+    ("testing", "record/replay an end-to-end test"),
+    ("automation", "run a repeatable browser task"),
+];
 /// `/search` takes free text, so the menu can only teach the flags — the
 /// query itself is typed, not completed.
 const SEARCH_FLAGS: &[(&str, &str)] = &[
@@ -213,6 +219,11 @@ const CHANNELS_ARGS: &[(&str, &str)] = &[("--follow", "live-tail another channel
 /// `every_command_is_parsed_documented_and_offered` in `mod.rs` enforces it.
 const COMMANDS: &[(&str, &str, Args)] = &[
     ("auto", "session-wide auto-approval", Args::Fixed(ON_OFF)),
+    (
+        "browser",
+        "browser skill hub — auth, testing, automation",
+        Args::Fixed(BROWSER_MODES),
+    ),
     ("card", "show this agent's card", Args::None),
     (
         "channels",
