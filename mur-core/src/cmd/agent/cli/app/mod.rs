@@ -343,6 +343,16 @@ pub struct App {
     pub pending_secret_prompt: Option<String>,
     /// A `/secret KEY --delete` waiting to be carried out.
     pub pending_secret_delete: Option<String>,
+    /// A destructive memory operation waiting for a typed yes/no.
+    ///
+    /// Delete and demote of a **permanent instruction**, and an edit that
+    /// deliberately overflows the budget, all require explicit confirmation
+    /// (plan §7). Held as data rather than driven from the key handler so the
+    /// decision logic stays in `memory_cmds` and testable: `submit` consumes
+    /// the next typed line as the answer, and anything that is not an explicit
+    /// yes cancels — a reflex Enter must never destroy an instruction the user
+    /// deliberately asked to keep.
+    pub pending_memory_confirm: Option<super::memory_cmds::PendingMemoryOp>,
     /// Registered monitor count, including healthy `sleeping` monitors, as of
     /// the last refresh — never computed during render.
     pub monitor_total: usize,
@@ -450,6 +460,7 @@ impl App {
             pending_handover: None,
             pending_secret_prompt: None,
             pending_secret_delete: None,
+            pending_memory_confirm: None,
             monitor_total: 0,
             monitor_conditions: 0,
             last_monitor_refresh: None,

@@ -135,6 +135,18 @@ pub(super) async fn run_tui(
     if app.welcome_applies() {
         let _ = welcome::print_banner(&mut io::stdout(), &app.welcome_banner());
     }
+    // One-time "permanent instructions" notice (memories P1 §10). Generic,
+    // non-blocking, and shown at most once: it announces the feature, promises
+    // that nothing was changed, and recommends no specific memory. Pushed into
+    // the transcript rather than printed, so it scrolls with the conversation
+    // instead of sitting above the viewport forever.
+    //
+    // The flag is written immediately, before the user can possibly act on it:
+    // a crash later in the session must not queue the same announcement again.
+    if !app.migration_notice_seen() {
+        app.push_system(mur_compress::memory_block::migration_notice());
+        app.mark_migration_notice_seen();
+    }
     // Anchor the viewport at the BOTTOM of the screen, like `purge_and_reanchor`
     // does: `with_options` anchors wherever the cursor happens to be, which on a
     // tall window pins the composer a fifth of the way down with dead space

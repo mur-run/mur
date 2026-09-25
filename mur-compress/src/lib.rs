@@ -7,6 +7,9 @@ pub mod ccr;
 pub mod compressors;
 pub mod config;
 pub mod detect;
+pub mod memory_block;
+pub mod memory_budget;
+pub mod memory_ux;
 pub mod skeleton;
 pub mod stats;
 pub mod tokenizer;
@@ -21,6 +24,15 @@ pub use bm25::bm25_rank;
 pub use ccr::{CcrStore, CompressedEntry};
 pub use config::CompressConfig;
 pub use detect::detect_content_type;
+pub use memory_block::{blocked_send_overlay, blocked_send_overlay_if_blocked, migration_notice};
+pub use memory_budget::{
+    MAX_REQUIRED_MEMORY_CHARS, REQUIRED_BUDGET_TOKENS, REQUIRED_MEMORY_COUNT_WARNING,
+    RenderedRequiredMemory, RequiredBudgetCheck, RequiredBudgetProjection, RequiredMemoryUsage,
+    WriteDecision, WriteOperation, canonical_memory_counter, check_required_budget,
+    exceeds_per_memory_char_limit, project_required_budget, render_for_injection,
+    required_count_warning,
+};
+pub use memory_ux::{RequiredUsageSummary, usage_summary};
 pub use stats::{StatsSnapshot, StatsTracker};
 pub use tokenizer::{TokenCounter, default_counter};
 pub use types::{
