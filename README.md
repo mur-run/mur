@@ -293,6 +293,13 @@ mur sync                                      # write learned patterns into each
 mur notes search "how we handle auth errors"  # query your accumulated memory
 ```
 
+`mur sync` only writes instruction files that already exist in the repo
+(`AGENTS.md`, `.cursorrules`, `.windsurfrules`), and only skills that belong
+there: skills scoped to another project or a fleet are left out, and so is any
+skill with zero relevance to the project, however often it's used elsewhere. If
+nothing qualifies, the file is left untouched. `--project` widens the match from
+the repo name to its tags and language.
+
 ### Dev-discipline skills (built-in)
 
 MUR ships a curated engineering-discipline pack — internalized from the
