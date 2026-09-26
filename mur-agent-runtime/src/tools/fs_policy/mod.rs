@@ -9,35 +9,117 @@ use mur_common::agent::FilesystemEntitlement;
 
 use crate::tools::ToolError;
 
-/// Session-wide current working directory shared by the `bash` tool and the
-/// file tools (`read_file`/`write_file`/`edit_file`), so a relative path
-/// resolves against the same base no matter which tool the agent reached for.
+/// Per-conversation working directory shared by the `bash` tool and the file
+/// tools (`read_file`/`write_file`/`edit_file`), so a relative path resolves
+/// against the same base no matter which tool the agent reached for.
 ///
 /// Dogfood bug: `bash pwd` showed one directory while `read_file rel/path`
 /// resolved against `agent_home`, because the two tools never shared a base.
 /// The `bash` tool updates this only when it is given an explicit `cwd`
 /// argument; a `cd` *inside* a spawned subprocess cannot be observed by the
 /// parent and is deliberately NOT tracked (that's called out in both tools'
-/// descriptions). Readers take a cheap snapshot (`current()`), never holding
-/// the lock across an `.await`.
+/// descriptions).
+///
+/// Keyed by turn, not held once per agent. Dogfood bug #2: one value per
+/// process meant two murmur sessions on one agent took turns overwriting it,
+/// so a session in `gateway/` silently started working in `mur/` the moment
+/// another session spoke. Each turn gets its own slot
+/// ([`Self::begin_turn`]), inherited from the turn it continues; a tool call
+/// finds its slot through the `CURRENT_TASK_ID` scope every execute site
+/// already sets — in-process and CLI-shim alike.
 #[derive(Clone)]
-pub struct SessionCwd(Arc<RwLock<PathBuf>>);
+pub struct SessionCwd {
+    /// Where a conversation with no directory of its own starts.
+    home: Arc<PathBuf>,
+    turns: Arc<RwLock<TurnCwds>>,
+}
+
+/// Turn slots kept before the oldest is dropped. Well above the runner's
+/// conversation cap, so the latest turn of every live conversation survives;
+/// a conversation older than that falls back to the home, exactly as it does
+/// after a restart.
+const MAX_TURN_CWDS: usize = 1_024;
+
+#[derive(Default)]
+struct TurnCwds {
+    by_turn: std::collections::HashMap<String, PathBuf>,
+    /// Insertion order, for eviction past [`MAX_TURN_CWDS`].
+    order: std::collections::VecDeque<String>,
+    /// A tool called outside any turn (direct tool tests, tooling): kept apart
+    /// so it can never leak into a conversation.
+    unscoped: Option<PathBuf>,
+}
 
 impl SessionCwd {
-    /// Create a session cwd seeded with the agent home (the historical base).
-    pub fn new(initial: PathBuf) -> Self {
-        Self(Arc::new(RwLock::new(initial)))
+    /// Create the cwd table; `home` (the agent home) is every new
+    /// conversation's starting directory.
+    pub fn new(home: PathBuf) -> Self {
+        Self {
+            home: Arc::new(home),
+            turns: Arc::default(),
+        }
     }
 
-    /// Snapshot the current base. Clones the `PathBuf` and releases the read
-    /// lock immediately, so callers never hold a guard across `.await`.
+    /// Open turn `id`'s slot: the caller's entitled `requested` directory,
+    /// else the directory of the turn it continues (`parent`), else the home.
+    /// Never another conversation's.
+    pub fn begin_turn(&self, id: &str, parent: Option<&str>, requested: Option<PathBuf>) {
+        let dir = requested
+            .or_else(|| parent.and_then(|p| self.lookup(p)))
+            .unwrap_or_else(|| self.home.as_ref().clone());
+        self.insert(id, dir);
+    }
+
+    /// Turn `id`'s directory, or the home when it has none.
+    pub fn for_turn(&self, id: &str) -> PathBuf {
+        self.lookup(id)
+            .unwrap_or_else(|| self.home.as_ref().clone())
+    }
+
+    /// The calling tool's directory. Clones and releases the lock at once, so
+    /// callers never hold a guard across `.await`.
     pub fn current(&self) -> PathBuf {
-        self.0.read().expect("session cwd lock poisoned").clone()
+        match crate::tools::bash_jobs::current_task_id() {
+            Some(id) => self.for_turn(&id),
+            None => self
+                .read()
+                .unscoped
+                .clone()
+                .unwrap_or_else(|| self.home.as_ref().clone()),
+        }
     }
 
-    /// Update the session base (called by `bash` when given explicit `cwd`).
+    /// Move the calling tool's directory (`bash` with an explicit `cwd`).
+    /// Only this conversation moves; later turns of it inherit the change.
     pub fn set(&self, dir: PathBuf) {
-        *self.0.write().expect("session cwd lock poisoned") = dir;
+        match crate::tools::bash_jobs::current_task_id() {
+            Some(id) => self.insert(&id, dir),
+            None => self.write().unscoped = Some(dir),
+        }
+    }
+
+    fn lookup(&self, id: &str) -> Option<PathBuf> {
+        self.read().by_turn.get(id).cloned()
+    }
+
+    fn insert(&self, id: &str, dir: PathBuf) {
+        let mut t = self.write();
+        if t.by_turn.insert(id.to_string(), dir).is_none() {
+            t.order.push_back(id.to_string());
+        }
+        while t.order.len() > MAX_TURN_CWDS {
+            if let Some(old) = t.order.pop_front() {
+                t.by_turn.remove(&old);
+            }
+        }
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, TurnCwds> {
+        self.turns.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, TurnCwds> {
+        self.turns.write().unwrap_or_else(|e| e.into_inner())
     }
 }
 
