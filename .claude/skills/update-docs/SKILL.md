@@ -44,7 +44,7 @@ Row 4 is not on every change's checklist, but it is on every change that renames
 Today that means one file, `mur-daily-jobs-cookbook.html`. List both trees before assuming that's still true: `git ls-files dashboard/public/tutorials` (mur-server) and `git ls-files docs/tutorials` (mur).
 
 - **Static HTML, not the docs pipeline.** `dashboard/public/tutorials/<file>.html` is served verbatim by Next.js at `/tutorials/<file>.html`. There's no `SLUG_TO_FILE` entry and no `getDocBySlug`, and it isn't Markdown. It gets linked from the sidebar via its `.html` href in the **Resources** group of `coreNavigation.tsx`.
-- **Two copies, no sync script.** `docs/tutorials/` in `mur` is the source. The daily-jobs skills plan treats it as ground truth for bundled-skill command lines. `dashboard/public/tutorials/` in `mur-server` is what's served. Edit both in the same pass. Afterwards, `cmp` them. They should be byte-identical, and anything else is drift that needs to be named in the PR. They have drifted before, when a server-only edit left the source behind (see Known debt).
+- **Two copies, no sync script.** `docs/tutorials/` in `mur` is the source. The daily-jobs skills plan treats it as ground truth for bundled-skill command lines. `dashboard/public/tutorials/` in `mur-server` is what's served. Edit both in the same pass. Afterwards, `cmp` them. They should be byte-identical, and anything else is drift that needs to be named in the PR. They have drifted before, when a server-only edit left the source behind: mur-server#43 added the "Queue-fed fleets" bullet to the served copy only, synced back in mur#1522.
 - **Five languages per prose line.** Every prose element is a set of sibling `<span class="en|tw|cn|ja|ko">…</span>`, and CSS on `body.<lang>` hides the other four. A prose change is five changes. Code blocks (`<pre>`) are shared, so the same string appears once there and five times in prose. Before you commit, check that the per-language counts still match:
   ```bash
   F=dashboard/public/tutorials/mur-daily-jobs-cookbook.html
@@ -52,7 +52,6 @@ Today that means one file, `mur-daily-jobs-cookbook.html`. List both trees befor
   ```
 - **Sweep a renamed path or command with a count, not a skim.** Run `grep -oF '<old string>' <file> | wc -l` on both copies, before and after. Only move what actually moved. For example, when fleet run state left `~/.mur/fleets/<name>/`, the `jobs/` and `cherry-result/` paths moved, but `fleet.yaml`, `.stopped` and `.last_run` stayed. Check each mention against the source (`grep` the `join("…")` call), not against the PR title.
 - **Bundled skills point here.** `mur-core/src/skills/*.yaml` link the cookbook as their `Full tutorial:`, and their command lines are meant to match it. When a command or path changes, run `git grep -n '<old string>' -- 'mur-core/src/skills/'` as well.
-- **Known debt:** the `mur` copy is missing the "Queue-fed fleets" (`done_when: queue-empty`) bullet that mur-server#43 added only to the served copy, so `cmp` currently fails on those lines. Sync it back before you rely on `cmp`.
 
 ## Publish flow & gotchas
 
