@@ -19,6 +19,6 @@ content:
     Disjoint hunks auto-merge order-independently; overlaps are REPORTED, never
     silently merged; --promote refuses on unresolved overlaps, runs cargo check
     in the destination and reverts on failure; results staged in
-    ~/.mur/fleets/<name>/cherry-result/.
+    ~/.mur/fleet-state/<name>/cherry-result/.
 
     Ground truth: mur <cmd> --help · Full tutorial: https://app.mur.run/tutorials/mur-daily-jobs-cookbook.html

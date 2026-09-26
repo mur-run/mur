@@ -221,10 +221,10 @@ async fn ask_inner(mur_home: &Path, question: &str, run_id: &str) -> Result<()> 
         }
     }
 
-    // The question becomes the fleet goal; the existing run loop reads it.
-    let mut fleet = crate::cmd::fleet::store::load_fleet(mur_home, DEFAULT_FLEET_NAME)?;
-    fleet.goal = question.to_string();
-    crate::cmd::fleet::store::save_fleet(mur_home, &fleet)?;
+    // The question is THIS run's goal, handed to the loop — never written
+    // back to fleet.yaml. A run that rewrites its own fleet definition cannot
+    // run from an agent (`fleet_run`), whose sandbox leaves `fleets/`
+    // read-only, and two questions would race on the one file.
 
     // Baseline seq so only THIS run's events are considered for the report.
     let svc = mur_channel::ChannelService::open(mur_home)?;
@@ -245,6 +245,7 @@ async fn ask_inner(mur_home: &Path, question: &str, run_id: &str) -> Result<()> 
         None,
         None,
         Some(run_id.to_string()),
+        Some(question.to_string()),
     )
     .await?;
 

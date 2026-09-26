@@ -54,7 +54,7 @@ content:
     Workers mount the `research-gateway` MCP server and have no egress of
     their own; the per-server egress grant remains a separate human consent.
     Read progress through the returned handle with `mur_job_status`, or at
-    `~/.mur/fleets/deep-research/.run_progress.json`; unfinished records older
+    `~/.mur/fleet-state/deep-research/.run_progress.json`; unfinished records older
     than 600 seconds are stale.
 tags: [mur, deep-research, fleet, builtin]
 triggers:

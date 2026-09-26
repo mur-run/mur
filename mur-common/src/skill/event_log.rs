@@ -94,7 +94,8 @@ pub fn event_log_path(mur_home: &Path, skill_name: &str) -> PathBuf {
     // `mur skill list` then flagged as invalid and told the user to
     // `mur skill remove` — i.e. to delete the fleet's own run history.
     if let Some(fleet) = skill_name.strip_prefix("fleet:") {
-        return mur_home.join("fleets").join(fleet).join("events.jsonl");
+        // Run state, so `fleet-state/`, not `fleets/` (the definition).
+        return crate::paths::fleet_state_dir(mur_home, fleet).join("events.jsonl");
     }
     // Same for an ephemeral fan-out (`parallel_jobs`): a run, not a skill.
     // Not `runs/` — that store is keyed by run_id (`runs/<run_id>/run.json`),
@@ -286,7 +287,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(tmp.path().join("fleets/builder/events.jsonl").exists());
+        assert!(tmp.path().join("fleet-state/builder/events.jsonl").exists());
         // The regression: a manifest-less dir here is what `mur skill list`
         // told the user to `mur skill remove`.
         assert!(!tmp.path().join("skills/fleet:builder").exists());

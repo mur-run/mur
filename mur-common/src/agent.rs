@@ -821,14 +821,22 @@ fn default_dns_mode() -> String {
 /// Dirs under `<mur_home>` where MUR objects are authored.
 ///
 /// The seeded concierge gets read+write on these; without them the one agent a
-/// fresh host has can describe a skill, workflow or fleet but cannot create
-/// one, and every answer ends in "run this command yourself".
+/// fresh host has can describe a skill or workflow but cannot create one, and
+/// every answer ends in "run this command yourself".
 ///
 /// Deliberately excludes `agents/`: `self_protected()` only covers an agent's
 /// OWN `profile.yaml` + `identity.key`, so write access there would let an
 /// agent author a sibling with unrestricted entitlements and start it, and
 /// read access would expose every other agent's Ed25519 signing key.
-pub const AUTHORING_DIRS: [&str; 4] = ["skills", "workflows", "fleets", "artifacts"];
+///
+/// Deliberately excludes [`crate::paths::FLEETS`] for the same reason one
+/// level up: `fleet.yaml` names a fleet's members, limits and HITL
+/// pre-approvals, and `.stopped` is the operator's kill-switch. An agent that
+/// can write there can widen what a `fleet_run` it triggers is allowed to do,
+/// or clear the stop on it. Fleets are created with `mur fleet create`; the
+/// runtime already reads `fleets/` on its own (sandbox policy), so dropping
+/// the grant costs the concierge nothing it needs to *use* a fleet.
+pub const AUTHORING_DIRS: [&str; 3] = ["skills", "workflows", "artifacts"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilesystemEntitlement {

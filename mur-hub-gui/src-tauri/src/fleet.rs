@@ -380,6 +380,7 @@ pub async fn fleet_run_loop(name: String, app: tauri::AppHandle) -> Result<(), S
                 None,
                 None,
                 None,
+                None,
             ))
             .is_ok();
         let _ = app.emit(

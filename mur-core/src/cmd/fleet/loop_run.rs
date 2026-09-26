@@ -505,6 +505,13 @@ fn terminal_state_for(stop: LoopStop) -> &'static str {
 /// Inner guarded loop: runs iterations until a stop reason fires. Returns
 /// `(stop, iterations_completed, spent_usd)`. Extracted so tests can call it
 /// directly and inspect the `LoopStop` without going through the print layer.
+///
+/// `goal_override` is this run's goal in place of `fleet.yaml`'s standing one.
+/// It replaces the goal on the in-memory copy only, so every reader below —
+/// the progress record, triage, the iteration fallback, the router's done
+/// check — sees the same text, and `fleet.yaml` is never written. A run writes
+/// run state, never the fleet's definition: an agent-triggered run cannot
+/// write `fleets/` at all.
 pub async fn run_guarded(
     mur_home: &Path,
     name: &str,
@@ -512,8 +519,12 @@ pub async fn run_guarded(
     deadline: Option<String>,
     budget_usd: Option<f64>,
     run_id: Option<String>,
+    goal_override: Option<String>,
 ) -> Result<(LoopStop, u32, f64)> {
-    let fleet = store::load_fleet(mur_home, name)?;
+    let mut fleet = store::load_fleet(mur_home, name)?;
+    if let Some(goal) = goal_override {
+        fleet.goal = goal;
+    }
     if fleet.members.is_empty() {
         anyhow::bail!("fleet '{name}' has no members");
     }
@@ -1167,9 +1178,18 @@ pub async fn cmd_fleet_run_loop(
     deadline: Option<String>,
     budget_usd: Option<f64>,
     run_id: Option<String>,
+    goal_override: Option<String>,
 ) -> Result<()> {
-    let (stop, iteration, spent) =
-        run_guarded(mur_home, name, max_iterations, deadline, budget_usd, run_id).await?;
+    let (stop, iteration, spent) = run_guarded(
+        mur_home,
+        name,
+        max_iterations,
+        deadline,
+        budget_usd,
+        run_id,
+        goal_override,
+    )
+    .await?;
     // Read back what the run recorded rather than recomputing billing: the
     // figure and its "was this actually charged" label must come from the
     // same place, or this line can contradict the panel again.
@@ -1706,7 +1726,7 @@ mod tests {
 
     /// Test seam: run one guarded iteration and return the stop reason.
     async fn run_loop_for_test(home: &Path) -> LoopStop {
-        run_guarded(home, "dev", Some(1), None, None, None)
+        run_guarded(home, "dev", Some(1), None, None, None, None)
             .await
             .map(|(stop, _, _)| stop)
             .unwrap_or(LoopStop::MaxIterations)
@@ -2381,9 +2401,17 @@ mod tests {
             .unwrap()
             .create_for_fleet("dev", "mur", &["pm".into()])
             .unwrap();
-        let (stop, _, _) = run_guarded(home, "dev", None, None, None, Some("fleet-dev-abc".into()))
-            .await
-            .unwrap();
+        let (stop, _, _) = run_guarded(
+            home,
+            "dev",
+            None,
+            None,
+            None,
+            Some("fleet-dev-abc".into()),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(stop, LoopStop::QueueDrained);
         let rec = crate::run_status::store::load(home, "fleet-dev-abc")
             .unwrap()
@@ -2395,11 +2423,51 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(status.state, crate::run_status::State::Done);
-        let e = run_guarded(home, "dev", None, None, None, Some("bad id!".into()))
+        let e = run_guarded(home, "dev", None, None, None, Some("bad id!".into()), None)
             .await
             .unwrap_err()
             .to_string();
         assert!(e.contains("invalid --run-id"), "{e}");
+    }
+
+    /// A per-run goal reaches the run without touching `fleet.yaml`: the
+    /// progress record carries it, and the fleet's standing goal is unchanged
+    /// on disk. `mur deep-research "<q>"` rewrote fleet.yaml here, which an
+    /// agent-triggered run cannot do (its sandbox leaves `fleets/` read-only).
+    #[tokio::test]
+    async fn a_goal_override_is_this_runs_goal_and_leaves_fleet_yaml_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let mut f = bounds_fixture("dev");
+        f.loop_cfg = Some(mur_common::fleet::FleetLoop {
+            trigger: "manual".into(),
+            max_iterations: 0,
+            budget_usd: 0.0,
+            deadline: String::new(),
+            done_when: "queue-empty".into(),
+        });
+        crate::cmd::fleet::store::save_fleet(home, &f).unwrap();
+        let before = std::fs::read(crate::cmd::fleet::store::fleet_path(home, "dev")).unwrap();
+        mur_channel::ChannelService::open(home)
+            .unwrap()
+            .create_for_fleet("dev", "mur", &["pm".into()])
+            .unwrap();
+        let (stop, _, _) = run_guarded(
+            home,
+            "dev",
+            None,
+            None,
+            None,
+            None,
+            Some("what changed in 2.91?".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stop, LoopStop::QueueDrained);
+        let (progress, _) = super::super::progress::load(home, "dev").expect("progress");
+        assert_eq!(progress.question, "what changed in 2.91?");
+        let after = std::fs::read(crate::cmd::fleet::store::fleet_path(home, "dev")).unwrap();
+        assert_eq!(before, after, "a run must not rewrite fleet.yaml");
     }
 
     #[test]

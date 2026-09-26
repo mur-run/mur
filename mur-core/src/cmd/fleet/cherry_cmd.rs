@@ -29,7 +29,7 @@ pub fn cmd_fleet_cherry(
         .as_ref()
         .context("fleet has no parallel config")?;
 
-    let fleet_dir = mur_home.join("fleets").join(fleet_name);
+    let fleet_dir = super::store::state_dir(mur_home, fleet_name);
     let tracks = TrackSet::load(&fleet_dir)
         .context("no tracks.json — run `mur fleet run` then `mur fleet judge` first")?;
     let state_db = ParallelStateDb::open(&fleet_dir.join("parallel_state"))?;
@@ -274,10 +274,7 @@ pub(super) fn project_root_from_worktree(worktree: &Path) -> Option<PathBuf> {
 }
 
 fn cherry_result_dir(mur_home: &Path, fleet_name: &str) -> PathBuf {
-    mur_home
-        .join("fleets")
-        .join(fleet_name)
-        .join("cherry-result")
+    super::store::state_dir(mur_home, fleet_name).join("cherry-result")
 }
 
 #[cfg(test)]
@@ -289,7 +286,7 @@ mod tests {
         let mur_home = PathBuf::from("/home/user/.mur");
         let fleet_name = "my-fleet";
         let expected = mur_home
-            .join("fleets")
+            .join("fleet-state")
             .join(fleet_name)
             .join("cherry-result");
         assert_eq!(cherry_result_dir(&mur_home, fleet_name), expected);
