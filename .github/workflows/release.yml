@@ -491,9 +491,17 @@ jobs:
       - name: Install cargo-binstall
         if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
         uses: cargo-bins/cargo-binstall@v1.21.1
+      # --locked: the source-build fallback must use tauri-cli's own shipped
+      # Cargo.lock. Without it cargo resolves the newest semver-compatible
+      # deps, and a same-day tauri-bundler release broke the v2.91.1 build
+      # (E0063 missing field `bundle_vc_runtime`).
+      # GITHUB_TOKEN: binstall probes the GitHub API for prebuilts; anonymous
+      # probes get 403-rate-limited on shared runners and stall ~120s each.
       - name: Install tauri CLI
         if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
-        run: cargo binstall -y tauri-cli --version "${{ env.TAURI_CLI_VERSION }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo binstall -y --locked tauri-cli --version "${{ env.TAURI_CLI_VERSION }}"
 
       - name: Import Apple signing certs
         uses: apple-actions/import-codesign-certs@v2
