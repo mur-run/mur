@@ -72,4 +72,13 @@ mod tests {
         assert!(RUN_STATE_DIRS.contains(&FLEET_STATE));
         assert_ne!(FLEET_STATE, RUNS);
     }
+
+    #[test]
+    fn fleet_definitions_are_not_an_authoring_grant() {
+        // Same boundary, the other writer: the seeded concierge gets write on
+        // every AUTHORING_DIRS entry, so `fleets/` there hands it the fleet's
+        // members, limits, HITL pre-approvals and `.stopped` kill-switch.
+        assert!(!crate::agent::AUTHORING_DIRS.contains(&FLEETS));
+        assert!(!crate::agent::AUTHORING_DIRS.contains(&FLEET_STATE));
+    }
 }
