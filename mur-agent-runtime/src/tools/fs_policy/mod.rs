@@ -211,10 +211,12 @@ pub fn format_io_error(verb: &str, path: &Path, base: &Path, err: &std::io::Erro
 /// hand a prompt-injected agent a way to forge channel events and corrupt the
 /// channels read-model. `open_item` does not route through this gate at all.
 ///
-/// Issue #712: the agent's own `profile.yaml` and `identity.key` are appended
-/// to the deny list, so the gate refuses them even under a grant covering the
-/// whole agent dir — including the one added just above. `deny` is checked
-/// before `write` in [`check_write_entitlement`], so the carve-out wins.
+/// Issue #712: the agent's own `SELF_PROTECTED_AGENT_FILES` (profile,
+/// signing key, and the public key material peers verify it against) are
+/// appended to the deny list, so the gate refuses them even under a grant
+/// covering the whole agent dir — including the one added just above. `deny`
+/// is checked before `write` in [`check_write_entitlement`], so the carve-out
+/// wins.
 /// On Linux this gate is the enforcement point (Landlock cannot express
 /// deny-within-allow); on macOS it fronts the SBPL kernel deny with a clear
 /// error instead of a raw EPERM.
@@ -328,7 +330,8 @@ pub(crate) fn under_any_or_worktree(roots: &[String], canonical: &Path) -> bool 
 ///
 /// `for_file_tools` pushes `SELF_PROTECTED_AGENT_FILES` onto `fs.deny`, and
 /// `deny` is one list shared by both gates — so the #712 write rule silently
-/// became a read rule too. This names the subset the READ gate must skip.
+/// became a read rule too. This names the subset the READ gate must skip, from
+/// the same constant the SBPL emitter reads.
 ///
 /// `identity.key` is deliberately absent: it stays read-denied, but through
 /// `LaunchChain::protects_read`, which sits *before* the lists and cannot be
@@ -336,7 +339,10 @@ pub(crate) fn under_any_or_worktree(roots: &[String], canonical: &Path) -> bool 
 /// holding a credential"; the deny list is not, because a user-written grant
 /// could otherwise be argued to override it.
 fn self_protected_write_only(agent_home: &Path) -> Vec<PathBuf> {
-    vec![agent_home.join("profile.yaml")]
+    crate::sandbox::policy::SELF_PROTECTED_WRITE_ONLY
+        .iter()
+        .map(|f| agent_home.join(f))
+        .collect()
 }
 
 /// Deny-list membership for the READ gate: `under_any`, minus the entries that

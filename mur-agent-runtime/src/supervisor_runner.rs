@@ -420,8 +420,8 @@ pub async fn build_provider_runner(
     );
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> = bash.clone();
     let bash_def = bash_exec.def();
-    // Issue #712: the file tools must never touch the agent's own
-    // profile.yaml / identity.key, whatever the profile grants.
+    // Issue #712: the file tools must never write the agent's own
+    // SELF_PROTECTED_AGENT_FILES, whatever the profile grants.
     let tool_fs = crate::tools::fs_policy::for_file_tools(
         profile.inner.entitlements.filesystem.clone(),
         agent_home,
