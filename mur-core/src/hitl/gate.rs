@@ -151,11 +151,6 @@ pub async fn gate(
             // the grant was written — but deliberately NOT before the scan's
             // `Settled` arm, so a human's explicit denial still outranks it.
             let granted = policy.grants(req.tier);
-            // Resolve signature-enforcement ONCE here (not deep in the poll
-            // loop) so `wait_for_response` is pure w.r.t. config and tests never
-            // race on a process-global env var. Only explicit truthy values
-            // enable enforcement: `=0` / `=false` must NOT turn it on.
-            let require_sig = crate::channel_verify::require_sig_from_env();
 
             // What does this channel already say about THIS EXACT action?
             // Keyed on `action_hash`, never on `hitl_id`: the id is minted
@@ -163,7 +158,7 @@ pub async fn gate(
             // answer a human gave to the previous run — the defect that made
             // late approval impossible and piled up duplicate requests, one
             // per loop iteration, all asking the same question.
-            match scan_prior(mur_home, channel_id, &hash, require_sig)? {
+            match scan_prior(mur_home, channel_id, &hash)? {
                 // Settled (approved or denied) and still inside the TTL:
                 // release the gate now. This is what lets an overnight
                 // approval be picked up by the next run, and what stops a
@@ -279,8 +274,7 @@ pub async fn gate(
                     hitl_id: None,
                 }
             } else {
-                wait_for_response(mur_home, channel_id, &hitl_id, &hash, require_sig, timeout)
-                    .await?
+                wait_for_response(mur_home, channel_id, &hitl_id, &hash, timeout).await?
             };
 
             {
@@ -317,11 +311,12 @@ enum Prior {
 /// the action's input changes the hash, so no approval is ever replayed
 /// against bytes a human did not see.
 ///
-/// Responses are verified per-actor (v3d-2) before they count; an unverifiable
-/// response is ignored exactly as the wait loop ignores it. A response outside
+/// Only router-signed responses count (`authority::is_router_authority`),
+/// exactly as in the wait loop, and only a router-signed request is reported
+/// as pending. A response outside
 /// the TTL leaves the action `None` (ask again), not `Pending` — its request is
 /// answered, just too long ago to act on.
-fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str, require_sig: bool) -> Result<Prior> {
+fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
     let svc = ChannelService::open(mur_home)?;
     let events = svc.load_events(channel_id)?;
     drop(svc);
@@ -337,7 +332,8 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str, require_sig: bool) 
                 let Ok(r) = serde_json::from_value::<HitlResponse>(e.payload.clone()) else {
                     continue;
                 };
-                if !crate::channel_verify::verify_event(mur_home, channel_id, e, require_sig) {
+                // Only the router answers for the human — see `authority`.
+                if !super::authority::is_router_authority(mur_home, channel_id, e) {
                     continue;
                 }
                 // Answered — even if it later fails the TTL check, so the
@@ -364,7 +360,7 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str, require_sig: bool) 
                     continue;
                 };
                 if q.action_hash == hash
-                    && crate::channel_verify::verify_event(mur_home, channel_id, e, require_sig)
+                    && super::authority::is_router_authority(mur_home, channel_id, e)
                 {
                     pending_id = Some(q.hitl_id);
                 }
@@ -390,23 +386,19 @@ async fn wait_for_response(
     channel_id: &str,
     hitl_id: &str,
     expected_hash: &str,
-    require: bool,
     timeout: Duration,
 ) -> Result<GateDecision> {
-    // `require` (resolved once by the caller from `MUR_CHANNEL_REQUIRE_SIG`):
-    // when true, an unsigned (or absent-pubkey) HitlResponse is NOT trusted
-    // (fail-closed). When false, an unsigned response is still accepted so
-    // pre-v3d channels keep working (migration-safe). This fn reads no global
-    // config itself, so it is race-free under multi-threaded `cargo test`.
+    // No `MUR_CHANNEL_REQUIRE_SIG` input, on purpose: an approval must be
+    // router-signed whatever that variable says. Its default-off tolerance of
+    // unsigned events is migration safety for ordinary history, and applied
+    // here it let any agent approve its own gated action.
     let start = Instant::now();
     loop {
-        // Open, read, drop — then await the sleep. Verify each candidate per
-        // its OWN actor's key (v3d-2): `crate::channel_verify::verify_event`
-        // resolves the signing pubkey from the event's actor (Agent{id} → that
-        // agent's home; System/Human → the router), so a delegated specialist's
-        // self-signed reply verifies against ITS key — not a single writer's.
-        // A forged/unsigned-when-required HitlResponse fails verification, is
-        // filtered out, and can never release the gate — the loop keeps waiting.
+        // Open, read, drop — then await the sleep. A response releases the
+        // gate only if the router signed it as the human or the system (see
+        // `authority::is_router_authority`). An agent's own correctly-signed
+        // reply is a verified statement by that agent, not an approval; it is
+        // filtered out and the loop keeps waiting.
         let found = {
             let svc = ChannelService::open(mur_home)?;
             let evs = svc.load_events(channel_id)?;
@@ -416,11 +408,12 @@ async fn wait_for_response(
                 {
                     return false;
                 }
-                if !crate::channel_verify::verify_event(mur_home, channel_id, e, require) {
+                if !super::authority::is_router_authority(mur_home, channel_id, e) {
                     tracing::warn!(
                         channel_id,
                         hitl_id,
-                        "HitlResponse failed per-actor signature verification — ignoring"
+                        actor = ?e.actor,
+                        "HitlResponse is not signed by MUR's router as the human — ignoring"
                     );
                     return false;
                 }
@@ -622,8 +615,13 @@ mod tests {
             reason: "".into(),
             surface: "cli".into(),
         };
-        svc.append(
+        // Router-signed, so it reaches the hash check: an unsigned one would
+        // be ignored and the test would time out instead of drifting.
+        let router = plant_router_identity(tmp.path());
+        svc.append_signed(
             &ch.id,
+            &router,
+            0,
             ChannelActor::System,
             EventKind::HitlResponse,
             serde_json::to_value(&resp).unwrap(),
@@ -637,7 +635,6 @@ mod tests {
             &ch.id,
             "h-x",
             "EXPECTED",
-            false,
             std::time::Duration::from_secs(1),
         )
         .await
@@ -692,7 +689,6 @@ mod tests {
             &ch.id,
             "h-ok",
             "EXPECTED",
-            false,
             std::time::Duration::from_secs(1),
         )
         .await
@@ -731,7 +727,6 @@ mod tests {
             &ch.id,
             "h-forge",
             "EXPECTED",
-            false,
             std::time::Duration::from_millis(900),
         )
         .await
@@ -743,12 +738,12 @@ mod tests {
         assert!(d.reason.contains("timeout"), "ignored → waits → times out");
     }
 
-    /// With signature enforcement on (`require = true`), an UNSIGNED response is
-    /// ignored (fail-closed) even though `allow:true` — it cannot release the
-    /// gate. Passing `require` as a parameter keeps this test free of any
-    /// process-global env mutation, so it never races sibling tests.
+    /// An UNSIGNED response never releases the gate, whatever
+    /// `MUR_CHANNEL_REQUIRE_SIG` says — it is off by default, and a sandboxed
+    /// `mur channel approve` (which cannot read the router key) writes exactly
+    /// this. The gate no longer reads that variable, so nothing here sets it.
     #[tokio::test]
-    async fn unsigned_when_required_does_not_release() {
+    async fn unsigned_response_does_not_release() {
         let tmp = TempDir::new().unwrap();
         let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
@@ -756,7 +751,7 @@ mod tests {
         let resp = resp_with_hash("h-unsigned", "EXPECTED");
         svc.append(
             &ch.id,
-            ChannelActor::System,
+            ChannelActor::local_human(),
             EventKind::HitlResponse,
             serde_json::to_value(&resp).unwrap(),
             None,
@@ -768,15 +763,79 @@ mod tests {
             &ch.id,
             "h-unsigned",
             "EXPECTED",
-            true,
             std::time::Duration::from_millis(900),
         )
         .await
         .unwrap();
+        assert!(!d.allow, "an unsigned response must never release the gate");
+        assert!(d.reason.contains("timeout"), "ignored → waits → times out");
+    }
+
+    /// The self-approval, end to end. The agent whose action is gated reads
+    /// the parked request, echoes its `action_hash`, and signs the answer
+    /// with its OWN key — a signature `verify_event` accepts. The gate must
+    /// stay parked: a verified signature is not an authorization.
+    #[tokio::test]
+    async fn an_agent_cannot_approve_its_own_gated_action() {
+        let tmp = TempDir::new().unwrap();
+        let _router = plant_router_identity(tmp.path());
+        let qa = crate::channel_writer::plant_identity_for(tmp.path(), "qa");
+        let ch = ChannelService::open(tmp.path())
+            .unwrap()
+            .create_for_workflow("g")
+            .unwrap();
+        let policy = GatePolicy {
+            yes: false,
+            unanswered: Unanswered::Defer,
+            auto_approve_tiers: vec![],
+        };
+        let mut r = req(RiskTier::Destructive);
+        r.agent_id = "qa".into();
+        let parked = gate(tmp.path(), &ch.id, &r, &policy, None, Some("run-1"))
+            .await
+            .unwrap();
+        let hitl_id = parked.hitl_id.clone().expect("parked");
+
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let self_approval = svc
+            .append_signed(
+                &ch.id,
+                &qa,
+                0,
+                ChannelActor::Agent { id: "qa".into() },
+                EventKind::HitlResponse,
+                serde_json::to_value(resp_with_hash(&hitl_id, &parked.action_hash)).unwrap(),
+                None,
+            )
+            .unwrap();
+        // And the same thing unsigned, claiming to be the human.
+        svc.append(
+            &ch.id,
+            ChannelActor::local_human(),
+            EventKind::HitlResponse,
+            serde_json::to_value(resp_with_hash(&hitl_id, &parked.action_hash)).unwrap(),
+            None,
+        )
+        .unwrap();
+        drop(svc);
         assert!(
-            !d.allow,
-            "unsigned response must not release when signatures are required"
+            crate::channel_verify::verify_event(tmp.path(), &ch.id, &self_approval, false),
+            "precondition: the agent's signature verifies"
         );
+
+        let d = gate(tmp.path(), &ch.id, &r, &policy, None, Some("run-2"))
+            .await
+            .unwrap();
+        assert!(!d.allow, "the agent approved itself: {d:?}");
+        assert!(d.deferred, "the request stays parked for the human");
+        assert_eq!(d.hitl_id.as_deref(), Some(hitl_id.as_str()));
+
+        // The human's answer, through the real command, still releases it.
+        crate::cmd::channel::approve_in(tmp.path(), &ch.id, &hitl_id, false, None).unwrap();
+        let d = gate(tmp.path(), &ch.id, &r, &policy, None, Some("run-3"))
+            .await
+            .unwrap();
+        assert!(d.allow, "the router-signed human answer releases: {d:?}");
     }
 
     // ── Defer / durable-approval behaviour (unattended HITL, P0) ────────────
@@ -1013,6 +1072,9 @@ mod tests {
     #[tokio::test]
     async fn an_approval_does_not_carry_to_a_different_action() {
         let tmp = TempDir::new().unwrap();
+        // Router-signed approvals, or the one below would not count at all
+        // and this test would pass without testing anything.
+        let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
         drop(svc);
@@ -1063,6 +1125,9 @@ mod tests {
     #[tokio::test]
     async fn deny_mode_outranks_an_existing_approval() {
         let tmp = TempDir::new().unwrap();
+        // Router-signed approvals, or the one below would not count at all
+        // and this test would pass without testing anything.
+        let _router = plant_router_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
         drop(svc);

@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::hitl::{HitlRequest, HitlResponse, RiskTier};
@@ -122,13 +122,11 @@ pub(crate) fn approve_in(
     // command for each. Predicate inside the iterator, so the search
     // continues past a non-match.
     let evs = svc.load_events(channel_id)?;
-    let request: HitlRequest = evs
-        .iter()
-        .rev()
-        .filter(|e| e.kind == EventKind::HitlRequest)
-        .filter_map(|e| serde_json::from_value::<HitlRequest>(e.payload.clone()).ok())
-        .find(|r| r.hitl_id == hitl_id)
-        .with_context(|| format!("no pending HitlRequest {hitl_id} in channel {channel_id}"))?;
+    // Only a request MUR's router asked is answered: the response echoes its
+    // `action_hash`, so answering an agent-written one would approve whatever
+    // bytes that agent hashed behind a harmless-looking summary.
+    let request: HitlRequest =
+        crate::hitl::authority::request_to_answer(home, channel_id, &evs, hitl_id)?;
 
     let resp = HitlResponse {
         hitl_id: request.hitl_id,
@@ -399,16 +397,28 @@ mod approve_tests {
             timeout_ms: 60_000,
             summary: "rerun".into(),
         };
-        ChannelService::open(home)
-            .unwrap()
-            .append(
-                channel_id,
-                ChannelActor::System,
-                EventKind::HitlRequest,
-                serde_json::to_value(&req).unwrap(),
-                None,
-            )
-            .unwrap();
+        // Parked the way the gate parks: signed by the router. `approve` only
+        // answers a request the router asked. Planted once per home — a
+        // second key would orphan every request signed with the first.
+        if !home
+            .join("agents")
+            .join(ROUTER_AGENT)
+            .join("identity.pub")
+            .exists()
+        {
+            crate::channel_writer::plant_writer_identity(home);
+        }
+        crate::channel_writer::append_as_writer(
+            &ChannelService::open(home).unwrap(),
+            home,
+            channel_id,
+            ROUTER_AGENT,
+            ChannelActor::System,
+            EventKind::HitlRequest,
+            serde_json::to_value(&req).unwrap(),
+            None,
+        )
+        .unwrap();
     }
 
     fn responses(home: &std::path::Path, channel_id: &str) -> Vec<HitlResponse> {
@@ -492,6 +502,40 @@ mod approve_tests {
             responses(tmp.path(), channel).is_empty(),
             "a refused approve must write nothing"
         );
+    }
+
+    /// A request MUR did not ask — written unsigned by an agent — is not
+    /// answered: the human would be approving whatever bytes that agent
+    /// hashed, behind a summary that agent also chose.
+    #[test]
+    fn a_request_the_router_did_not_sign_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let channel = "monitor-m1";
+        crate::channel_writer::plant_writer_identity(tmp.path());
+        let forged = HitlRequest {
+            hitl_id: "hitl-forged".into(),
+            action_hash: "hash-of-something-else".into(),
+            tier: RiskTier::Destructive,
+            tool_name: "bash".into(),
+            tool_input: serde_json::json!({}),
+            step_or_call_id: "s0".into(),
+            agent_id: "qa".into(),
+            timeout_ms: 60_000,
+            summary: "echo hi".into(),
+        };
+        ChannelService::open(tmp.path())
+            .unwrap()
+            .append(
+                channel,
+                ChannelActor::System,
+                EventKind::HitlRequest,
+                serde_json::to_value(&forged).unwrap(),
+                None,
+            )
+            .unwrap();
+        let err = approve_in(tmp.path(), channel, "hitl-forged", false, None).unwrap_err();
+        assert!(err.to_string().contains("not signed"), "{err}");
+        assert!(responses(tmp.path(), channel).is_empty());
     }
 }
 
