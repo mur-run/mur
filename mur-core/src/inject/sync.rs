@@ -10,6 +10,31 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::hook::InjectedItem;
+use crate::retrieve::skill_candidates::{ActiveScope, LoadedSkill};
+use mur_common::skill::stats::LifecycleState;
+
+/// Pick the skills `mur sync` writes into the current repo's AI-tool file.
+///
+/// Stricter than injection because the output is committed to someone's repo:
+/// the same scope gate as `recommend`/`hook` (fleet/project/team skills only
+/// where their selector matches), plus a non-zero keyword relevance — the
+/// non-relevance weights alone clear the score floor, which let a
+/// well-used skill from an unrelated project into this repo's file.
+pub fn select_sync_skills(
+    mut candidates: Vec<LoadedSkill>,
+    query: &str,
+    scope: &ActiveScope,
+    max: usize,
+) -> Vec<InjectedItem> {
+    crate::retrieve::skill_candidates::filter_by_scope(&mut candidates, scope);
+    crate::retrieve::scoring::score_and_rank_generic(query, candidates)
+        .into_iter()
+        .filter(|s| s.relevance > 0.0)
+        .filter(|s| s.item.stats.lifecycle_state != LifecycleState::Archived)
+        .take(max)
+        .map(|s| s.item.to_injected_item())
+        .collect()
+}
 
 /// Sync target configuration.
 #[derive(Debug, Clone)]
@@ -160,6 +185,101 @@ pub fn write_sync_file(path: &Path, content: &str, format: &SyncFormat) -> Resul
 mod tests {
     use super::*;
     use crate::inject::hook::{InjectedItem, KindGroup};
+
+    /// A skill loaded through the real manifest parser, with stats that max
+    /// out every non-relevance scoring term (just used, always succeeded).
+    fn well_used_skill(yaml: &str) -> LoadedSkill {
+        let manifest = mur_common::skill::parse_canonical(yaml).expect("fixture parses");
+        let now = chrono::Utc::now();
+        let mut stats = mur_common::skill::stats::SkillStats::new(&manifest.name, "1.0.0", "", now);
+        stats.usage_count = 10;
+        stats.success_count = 10;
+        stats.last_success_at = Some(now);
+        stats.first_successful_use_at = Some(now);
+        LoadedSkill { manifest, stats }
+    }
+
+    fn skill_yaml(name: &str, desc: &str, tags: &str, scope_lines: &str) -> String {
+        format!(
+            "name: {name}\nversion: 1.0.0\npublisher: human:test\n\
+             description: {desc}\ncategory: context\npriority: critical\n\
+             tags: [{tags}]\n{scope_lines}content:\n  abstract: {desc}\n"
+        )
+    }
+
+    fn names(items: &[InjectedItem]) -> Vec<&str> {
+        items.iter().map(|i| i.name.as_str()).collect()
+    }
+
+    /// Repro for the www-new AGENTS.md leak: sync must apply the same scope
+    /// gate injection does, so a fleet skill or another repo's project skill
+    /// never lands in this repo's file — even when it matches the query.
+    #[test]
+    fn sync_excludes_skills_scoped_to_another_fleet_or_project() {
+        let here = "/work/laravel-shop";
+        let candidates = vec![
+            well_used_skill(&skill_yaml(
+                "laravel-migrations",
+                "Run artisan migrate for laravel",
+                "laravel",
+                "",
+            )),
+            well_used_skill(&skill_yaml(
+                "laravel-fleet-router",
+                "Route laravel research questions",
+                "laravel",
+                "scope: fleet\nfleet: deep-research\n",
+            )),
+            well_used_skill(&skill_yaml(
+                "laravel-other-repo",
+                "Laravel notes from another repo",
+                "laravel",
+                "scope: project\nproject: /work/other-repo\n",
+            )),
+            well_used_skill(&skill_yaml(
+                "laravel-this-repo",
+                "Laravel notes for this repo",
+                "laravel",
+                &format!("scope: project\nproject: {here}\n"),
+            )),
+        ];
+        let scope = ActiveScope {
+            fleet: None,
+            project: Some(here.into()),
+            team: None,
+        };
+
+        let picked = select_sync_skills(candidates, "laravel", &scope, 20);
+        let mut got = names(&picked);
+        got.sort_unstable();
+
+        assert_eq!(got, vec!["laravel-migrations", "laravel-this-repo"]);
+    }
+
+    /// A skill sharing no keyword with the project can still clear the
+    /// score floor on stats alone (the non-relevance weights sum to 0.55,
+    /// above the 0.42 floor). Sync writes into a repo file, so it must not.
+    #[test]
+    fn sync_excludes_skills_with_zero_relevance_to_the_project() {
+        let candidates = vec![
+            well_used_skill(&skill_yaml(
+                "laravel-migrations",
+                "Run artisan migrate for laravel",
+                "laravel",
+                "",
+            )),
+            well_used_skill(&skill_yaml(
+                "go-fly-deploy",
+                "Deployed to Fly.io",
+                "golang",
+                "",
+            )),
+        ];
+
+        let picked = select_sync_skills(candidates, "laravel", &ActiveScope::default(), 20);
+
+        assert_eq!(names(&picked), vec!["laravel-migrations"]);
+    }
 
     fn make_item(desc: &str) -> InjectedItem {
         InjectedItem {
