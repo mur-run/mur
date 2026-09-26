@@ -372,6 +372,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                             deadline,
                             budget_usd,
                             run_id,
+                            None,
                         )
                         .await?
                     } else {
@@ -757,6 +758,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                         max_iterations,
                         deadline,
                         budget_usd,
+                        None,
                         None,
                     )
                     .await?
