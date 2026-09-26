@@ -1,21 +1,35 @@
 //! Per-actor verify-on-fold (v3d-2): each event is verified against ITS actor's
 //! pubkey (`<mur_home>/agents/<id>`), not a single channel writer.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mur_common::channel::{ChannelActor, ChannelEvent};
 
-/// Resolve the pubkey that should have signed `actor`'s events. Agent{id} →
-/// that agent's home; System/Human → the router ("mur") which writes them.
+/// The directory holding the key that should have signed `actor`'s events.
+/// Agent{id} → that agent's home; System/Human → the router ("mur") which
+/// writes them.
+///
+/// `None` when the id is not a valid agent name. The id comes from the event
+/// itself, and every agent can write `channels/`, so an unchecked join is a
+/// traversal primitive: `Agent{id: "../channels/<dir>"}` would point
+/// verification at a key the writer planted next to its own event.
+pub(crate) fn actor_key_dir(mur_home: &Path, actor: &ChannelActor) -> Option<PathBuf> {
+    let agent = match actor {
+        ChannelActor::Agent { id } => id.as_str(),
+        _ => crate::channel_writer::ROUTER_AGENT,
+    };
+    mur_common::validate_agent_name(agent).ok()?;
+    Some(mur_home.join("agents").join(agent))
+}
+
+/// Resolve the pubkey that should have signed `actor`'s events. `None` when
+/// the key cannot be read, or when the actor id is not a valid agent name
+/// (see [`actor_key_dir`]).
 pub fn actor_pubkey(
     mur_home: &Path,
     actor: &ChannelActor,
     key_version: Option<u32>,
 ) -> Option<[u8; 32]> {
-    let agent = match actor {
-        ChannelActor::Agent { id } => id.as_str(),
-        _ => crate::channel_writer::ROUTER_AGENT,
-    };
-    mur_channel::sign::resolve_writer_pubkey(&mur_home.join("agents").join(agent), key_version)
+    mur_channel::sign::resolve_writer_pubkey(&actor_key_dir(mur_home, actor)?, key_version)
 }
 
 /// True if `ev` verifies against its actor's key (present sig must verify;
@@ -131,6 +145,81 @@ mod tests {
         assert!(
             !verify_event(tmp.path(), &ch.id, &ev, true),
             "unsigned + enforcement on = rejected"
+        );
+    }
+
+    /// An actor id is data the event's writer chose, and every agent can
+    /// write `channels/`. A traversal id must not reach a key planted there:
+    /// the event is signed, so an unresolvable key fails closed — even with
+    /// enforcement off, which is the default.
+    #[test]
+    fn a_traversal_actor_id_cannot_point_at_a_planted_key() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_agent("qa").unwrap();
+        // The attacker's key, planted inside the world-writable channel store.
+        let planted = tmp.path().join("channels").join("planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        let attacker = AgentIdentity::generate();
+        attacker.save(&planted).unwrap();
+        // A real home always has `agents/`; `agents/..` only resolves if it does.
+        std::fs::create_dir_all(tmp.path().join("agents")).unwrap();
+        let actor = ChannelActor::Agent {
+            id: "../channels/planted".into(),
+        };
+        // Precondition: without the check, this join WOULD resolve the key.
+        assert!(
+            mur_channel::sign::resolve_writer_pubkey(
+                &tmp.path().join("agents").join("../channels/planted"),
+                None
+            )
+            .is_some(),
+            "precondition: the raw join reaches the planted key"
+        );
+        svc.append_signed(
+            &ch.id,
+            &attacker,
+            0,
+            actor.clone(),
+            EventKind::HitlResponse,
+            serde_json::json!({"hitl_id":"h1","action_hash":"x","allow":true}),
+            None,
+        )
+        .unwrap();
+        let ev = svc.load_events(&ch.id).unwrap().pop().unwrap();
+        assert!(ev.sig.is_some(), "precondition: the event is signed");
+
+        assert_eq!(actor_key_dir(tmp.path(), &actor), None);
+        assert_eq!(actor_pubkey(tmp.path(), &actor, None), None);
+        assert!(
+            !verify_event(tmp.path(), &ch.id, &ev, false),
+            "a traversal actor id must not verify, even with enforcement off"
+        );
+    }
+
+    /// The check rejects what `mur agent create` rejects, and nothing it
+    /// accepts — a real agent's events must keep verifying.
+    #[test]
+    fn actor_key_dir_accepts_exactly_valid_agent_names() {
+        let home = Path::new("/h");
+        for bad in ["", "..", "../x", "a/b", "a\\b", "-flag", "x/../y", "a b"] {
+            let actor = ChannelActor::Agent { id: bad.into() };
+            assert_eq!(actor_key_dir(home, &actor), None, "{bad:?} must be refused");
+        }
+        for good in ["qa", "mur", "agent-1", "support_bot"] {
+            let actor = ChannelActor::Agent { id: good.into() };
+            assert_eq!(
+                actor_key_dir(home, &actor),
+                Some(home.join("agents").join(good))
+            );
+        }
+        // System and Human resolve to the router, which is always valid.
+        assert_eq!(
+            actor_key_dir(home, &ChannelActor::System),
+            Some(
+                home.join("agents")
+                    .join(crate::channel_writer::ROUTER_AGENT)
+            )
         );
     }
 
