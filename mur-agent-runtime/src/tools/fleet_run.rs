@@ -4,9 +4,10 @@
 //! — `mur deep-research "<q>"` / `mur fleet run <name> --loop` — WITHOUT
 //! holding filesystem write grants on `~/.mur`. The spawned `mur` child
 //! inherits this process's kernel sandbox; the narrow carve-ins it needs
-//! (`fleets/`, `commander/`, `conversations/` + spawn of the `mur` binary)
-//! are added at seal time by `SandboxPolicy::from_entitlements`, gated on the
-//! same config allowlist checked here.
+//! (`fleet-state/<name>/` for each allowlisted fleet, `commander/`,
+//! `conversations/`, `runs/` + spawn of the `mur` binary) are added at seal
+//! time by `SandboxPolicy::from_entitlements`, gated on the same config
+//! allowlist checked here. `fleets/` — the definitions — stays read-only.
 //!
 //! Deny-by-default, out-of-model: the gate lives in `~/.mur/config.yaml`
 //! (`fleet_run.agents` / `fleet_run.fleets`), which no agent has write access
@@ -34,10 +35,8 @@ const PROGRESS_STALE_AFTER_SECS: u64 = 600;
 /// Return the active run id when this fleet's single progress slot still
 /// describes a fresh, unfinished run. Corrupt or old files are inert.
 fn live_run_id(mur_home: &std::path::Path, fleet: &str) -> Option<String> {
-    let path = mur_home
-        .join("fleets")
-        .join(fleet)
-        .join(".run_progress.json");
+    let path = mur_common::paths::fleet_state_dir(mur_home, fleet)
+        .join(mur_common::paths::FLEET_PROGRESS_FILE);
     let body = std::fs::read(&path).ok()?;
     let progress: serde_json::Value = serde_json::from_slice(&body).ok()?;
     if !progress.get("finished_at")?.is_null() {
@@ -158,7 +157,11 @@ cost_usd) and by `mur fleet stop`."
 
         // Read the fleet to refuse a self-delegating one below; the bounds
         // themselves are the loop's business (`mur limits <fleet>`).
-        let fleet_yaml = self.mur_home.join("fleets").join(&fleet).join("fleet.yaml");
+        let fleet_yaml = self
+            .mur_home
+            .join(mur_common::paths::FLEETS)
+            .join(&fleet)
+            .join("fleet.yaml");
         let doc = std::fs::read_to_string(&fleet_yaml).map_err(|e| {
             ToolError::Execution(format!("fleet '{fleet}' not found ({e}): {fleet_yaml:?}"))
         })?;
@@ -466,10 +469,10 @@ mod tests {
     #[test]
     fn live_progress_record_exposes_its_run_id() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("fleets").join("deep-research");
+        let dir = mur_common::paths::fleet_state_dir(tmp.path(), "deep-research");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            dir.join(".run_progress.json"),
+            dir.join(mur_common::paths::FLEET_PROGRESS_FILE),
             r#"{"run_id":"run-live","finished_at":null}"#,
         )
         .unwrap();
@@ -487,7 +490,9 @@ mod tests {
             "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
         );
         write_fleet(tmp.path(), "deep-research", 0.0);
-        let progress = tmp.path().join("fleets/deep-research/.run_progress.json");
+        let dir = mur_common::paths::fleet_state_dir(tmp.path(), "deep-research");
+        std::fs::create_dir_all(&dir).unwrap();
+        let progress = dir.join(mur_common::paths::FLEET_PROGRESS_FILE);
         std::fs::write(progress, r#"{"run_id":"run-live","finished_at":null}"#).unwrap();
         let tool = FleetRunTool {
             mur_home: tmp.path().to_path_buf(),

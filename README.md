@@ -897,7 +897,7 @@ Runs report progress: each step prints `✓ s2 research dr_worker_2 $0.08 42s` a
 completes, every iteration ends with a summary (`iteration 2 done: 3✓ 0✗ 2 pending ·
 spend $0.31/$2.00 · model claude_haiku`), and the bare `mur deep-research` panel shows
 the in-flight run (per-phase counts, running steps, spend vs budget) or the last run's
-outcome. Progress lives in `~/.mur/fleets/deep-research/.run_progress.json` (best-effort;
+outcome. Progress lives in `~/.mur/fleet-state/deep-research/.run_progress.json` (best-effort;
 never affects the run).
 
 ### Durable monitors

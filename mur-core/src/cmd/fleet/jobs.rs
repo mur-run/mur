@@ -1,4 +1,4 @@
-//! Fleet job queue — small YAML records under `~/.mur/fleets/<name>/jobs/`.
+//! Fleet job queue — small YAML records under `~/.mur/fleet-state/<name>/jobs/`.
 //! A job is a unit of work handed to a fleet by command; it becomes the goal
 //! for one run. FIFO ordering is the UUIDv7 filename sort (no index file).
 
@@ -16,7 +16,7 @@ use super::store;
 const RUNNING_GRACE_SECS: i64 = 6 * 60 * 60; // 6h
 
 pub(crate) fn jobs_dir(mur_home: &Path, fleet: &str) -> PathBuf {
-    store::fleet_dir(mur_home, fleet).join("jobs")
+    store::state_dir(mur_home, fleet).join("jobs")
 }
 
 fn job_path(mur_home: &Path, fleet: &str, id: &str) -> PathBuf {

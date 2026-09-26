@@ -334,6 +334,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Fleet { action } => {
             let mur_home = crate::paths::mur_root(None);
+            cmd::fleet::state_migrate::migrate_all(&mur_home);
             match action {
                 FleetAction::Create {
                     name,
@@ -372,6 +373,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                             deadline,
                             budget_usd,
                             run_id,
+                            None,
                         )
                         .await?
                     } else {
@@ -684,6 +686,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             run_id,
         } => {
             let mur_home = crate::paths::mur_root(None);
+            cmd::fleet::state_migrate::migrate_all(&mur_home);
             match (action, question) {
                 (
                     Some(DeepResearchAction::Provision {
@@ -757,6 +760,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                         max_iterations,
                         deadline,
                         budget_usd,
+                        None,
                         None,
                     )
                     .await?

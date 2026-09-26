@@ -27,7 +27,14 @@ pub fn cmd_fleet_delete(mur_home: &Path, name: &str, yes: bool) -> Result<()> {
     let svc = mur_channel::ChannelService::open(mur_home)?;
     svc.delete_channel(&fleet.channel_id)?;
 
-    // Remove the fleet directory tree (manifest, jobs/, sentinels).
+    // Remove the fleet's run state (jobs/, progress, event log, tracks) and
+    // then its definition (fleet.yaml, sentinels) — definition last, so a
+    // failure part-way leaves a fleet that still lists and can be deleted
+    // again rather than orphaned state nothing points at.
+    let state = store::state_dir(mur_home, name);
+    if state.exists() {
+        std::fs::remove_dir_all(&state)?;
+    }
     let dir = store::fleet_dir(mur_home, name);
     if dir.exists() {
         std::fs::remove_dir_all(&dir)?;
@@ -70,6 +77,8 @@ mod tests {
         create::cmd_fleet_create(home, "dev", vec!["pm".into()], None, Some("g".into()), None)
             .unwrap();
         assert!(store::fleet_path(home, "dev").exists());
+        super::super::jobs::enqueue_job(home, "dev", "leftover", "cli").unwrap();
+        assert!(store::state_dir(home, "dev").exists());
         let svc = mur_channel::ChannelService::open(home).unwrap();
         assert!(svc.store().load_manifest("fleet-dev").is_ok());
 
@@ -78,6 +87,10 @@ mod tests {
         assert!(
             !store::fleet_dir(home, "dev").exists(),
             "fleet dir must be gone"
+        );
+        assert!(
+            !store::state_dir(home, "dev").exists(),
+            "fleet run state must be gone with it"
         );
         let svc = mur_channel::ChannelService::open(home).unwrap();
         assert!(

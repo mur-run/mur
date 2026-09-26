@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// File name under `~/.mur/fleets/<name>/`. Kept after the run as the
+/// File name under `~/.mur/fleet-state/<name>/`. Kept after the run as the
 /// last-run record; overwritten by the next run.
-pub const PROGRESS_FILE: &str = ".run_progress.json";
+pub const PROGRESS_FILE: &str = mur_common::paths::FLEET_PROGRESS_FILE;
 /// An in-flight file whose mtime is older than this is labeled stale
 /// (loop probably crashed).
 pub const STALE_AFTER_SECS: u64 = 600;
@@ -152,7 +152,7 @@ impl RunProgress {
 }
 
 pub fn progress_path(mur_home: &Path, fleet: &str) -> PathBuf {
-    mur_home.join("fleets").join(fleet).join(PROGRESS_FILE)
+    mur_common::paths::fleet_state_dir(mur_home, fleet).join(PROGRESS_FILE)
 }
 
 /// None on missing/corrupt file (a corrupt progress file is not an error

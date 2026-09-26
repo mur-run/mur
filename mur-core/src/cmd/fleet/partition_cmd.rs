@@ -13,7 +13,7 @@ use crate::parallel::partition::{
 use crate::parallel::semantic::{SupportedLanguage, extract_units};
 use crate::parallel::track::TrackSet;
 
-use super::store::{fleet_dir, load_fleet};
+use super::store::{load_fleet, state_dir};
 
 /// Resolve the repo root from the current working directory via git.
 fn cwd_git_root() -> Result<PathBuf> {
@@ -77,7 +77,7 @@ pub fn cmd_fleet_merge(
         .context("fleet parallel.mode is not 'partition' or partition.target_file is missing")?;
 
     let rel = PathBuf::from(&partition.target_file);
-    let fleet_dir = fleet_dir(mur_home, fleet_name);
+    let fleet_dir = state_dir(mur_home, fleet_name);
     let tracks =
         TrackSet::load(&fleet_dir).context("load track worktrees — run 'mur fleet run' first")?;
 

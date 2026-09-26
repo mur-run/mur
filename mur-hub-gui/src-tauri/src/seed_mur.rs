@@ -301,6 +301,11 @@ pub fn seed_mur_if_missing(template_dir: &Path, mur_home: &Path) -> std::io::Res
     for d in AUTHORING_DIRS {
         std::fs::create_dir_all(mur_home.join(d))?;
     }
+    // Not an authoring grant (the concierge must not write fleet definitions),
+    // but the runtime's own read of `fleets/` is existence-checked at seal time
+    // too. Created here so the first `mur fleet create` is visible to a Linux
+    // (Landlock) concierge without a restart.
+    std::fs::create_dir_all(mur_home.join(mur_common::paths::FLEETS))?;
 
     let staging = agents.join(".mur.seeding");
     let dst = agents.join("mur");
@@ -511,6 +516,24 @@ mod tests {
                 "write grant {bad} escapes"
             );
         }
+        // `fleets/` write lets this agent rewrite the members, limits and HITL
+        // pre-approvals of fleets it can trigger, or delete their `.stopped`.
+        assert!(
+            !writes.contains(&"~/.mur/fleets".to_string()),
+            "write grant ~/.mur/fleets lets the concierge govern its own fleets"
+        );
+    }
+
+    #[test]
+    fn seeds_fleets_dir_for_the_runtimes_own_read() {
+        let home = TempDir::new().unwrap();
+        let tpl = TempDir::new().unwrap();
+        make_template(tpl.path());
+        assert!(seed_mur_if_missing(tpl.path(), home.path()).unwrap());
+        assert!(
+            home.path().join(mur_common::paths::FLEETS).is_dir(),
+            "the runtime's fleets/ read is existence-checked at seal time"
+        );
     }
 
     fn make_dir_skill_template(dir: &Path) {

@@ -105,6 +105,10 @@ async fn main() -> Result<()> {
     // §4.2.7 — startup store health checks (best-effort)
     let mur_dir = mur_core::store::yaml::default_mur_dir();
     store_health::run(&mur_dir);
+    // Fleet run state moved out of `fleets/<name>/` into `fleet-state/`.
+    // The daemon runs outside every agent sandbox, so this is the pass that
+    // reliably finishes a move a sandboxed `fleet_run` child could not.
+    mur_core::cmd::fleet::state_migrate::migrate_all(&mur_dir);
 
     // E5 — start HTTP signal server (best-effort; failure is non-fatal)
     match signal_server::ensure_token() {

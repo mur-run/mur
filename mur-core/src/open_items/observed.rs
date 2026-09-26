@@ -65,7 +65,9 @@ fn fleet_work(mur_home: &Path) -> Vec<OpenItem> {
     for e in entries.flatten().filter(|e| e.path().is_dir()) {
         let name = e.file_name().to_string_lossy().to_string();
         let stopped = e.path().join(".stopped").exists();
-        let (queued, running) = count_jobs(&e.path().join("jobs"));
+        // Definition + kill-switch live in `fleets/`, the queue in run state.
+        let (queued, running) =
+            count_jobs(&mur_common::paths::fleet_state_dir(mur_home, &name).join("jobs"));
 
         if queued + running > 0 {
             let mut title = format!("fleet '{name}': ");
@@ -182,10 +184,12 @@ mod tests {
     fn stopped_fleet_with_queued_work_says_it_will_not_drain() {
         let h = home();
         let f = h.path().join("fleets").join("acme");
-        std::fs::create_dir_all(f.join("jobs")).unwrap();
+        let s = mur_common::paths::fleet_state_dir(h.path(), "acme");
+        std::fs::create_dir_all(&f).unwrap();
+        std::fs::create_dir_all(s.join("jobs")).unwrap();
         std::fs::write(f.join(".stopped"), "").unwrap();
         std::fs::write(
-            f.join("jobs").join("j1.yaml"),
+            s.join("jobs").join("j1.yaml"),
             serde_yaml_ng::to_string(&job("j1", JobStatus::Queued)).unwrap(),
         )
         .unwrap();
@@ -203,9 +207,11 @@ mod tests {
     fn finished_jobs_are_not_open() {
         let h = home();
         let f = h.path().join("fleets").join("done");
-        std::fs::create_dir_all(f.join("jobs")).unwrap();
+        let s = mur_common::paths::fleet_state_dir(h.path(), "done");
+        std::fs::create_dir_all(&f).unwrap();
+        std::fs::create_dir_all(s.join("jobs")).unwrap();
         std::fs::write(
-            f.join("jobs").join("j1.yaml"),
+            s.join("jobs").join("j1.yaml"),
             serde_yaml_ng::to_string(&job("j1", JobStatus::Done)).unwrap(),
         )
         .unwrap();
