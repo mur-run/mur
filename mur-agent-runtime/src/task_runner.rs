@@ -790,15 +790,16 @@ impl TaskRunner {
     /// returned separately and is never stored.
     fn pinned_and_prior(
         &self,
+        turn: &str,
         ctx: Option<&str>,
     ) -> (Option<String>, Vec<crate::llm::RichMessage>) {
         let (budget_tokens, prior) = {
             let store = self.conversations.lock().unwrap_or_else(|e| e.into_inner());
             (store.budget_tokens, store.prior(ctx))
         };
-        let pinned = match (&self.project_instructions, &self.session_cwd) {
-            (Some(p), Some((cwd, _))) => p
-                .render(&cwd.current(), pinned_cap_bytes(budget_tokens))
+        let pinned = match (&self.project_instructions, self.working_dir(Some(turn))) {
+            (Some(p), Some(dir)) => p
+                .render(&dir, pinned_cap_bytes(budget_tokens))
                 .map(|r| r.text),
             _ => None,
         };
@@ -994,27 +995,36 @@ impl TaskRunner {
         self
     }
 
-    /// Move the session cwd to the turn's `cwd` when one was supplied and it is
-    /// entitled; otherwise leave it where it is. Absent means "a client with
-    /// no notion of cwd" (Hub, `mur agent send`), and resetting on their behalf
-    /// would yank the directory out from under a concurrent murmur session.
-    ///
-    /// ponytail: the session cwd is per-agent, not per-conversation, so two
-    /// clients in different directories on one agent still race — store it in
-    /// `ConversationStore` keyed by `context_task_id` if that becomes real.
-    fn adopt_cwd(&self, requested: Option<&std::path::Path>) {
-        let (Some((session, roots)), Some(req)) = (&self.session_cwd, requested) else {
+    /// Open this turn's cwd slot: the caller's `cwd` when one was supplied and
+    /// it is entitled, else the directory of the turn it continues
+    /// (`context_task_id`), else the agent home. Absent means "a client with
+    /// no notion of cwd" (Hub, `mur agent send`) — it keeps its conversation's
+    /// directory and never inherits another conversation's.
+    fn adopt_cwd(&self, turn: &str, parent: Option<&str>, requested: Option<&std::path::Path>) {
+        let Some((session, roots)) = &self.session_cwd else {
             return;
         };
-        let Ok(canonical) = std::fs::canonicalize(req) else {
-            tracing::warn!(cwd = %req.display(), "turn cwd does not exist; keeping session cwd");
-            return;
-        };
-        if crate::tools::fs_policy::under_any_or_worktree(roots, &canonical) {
-            session.set(canonical);
-        } else {
-            tracing::warn!(cwd = %req.display(), "turn cwd outside entitlements; keeping session cwd");
-        }
+        let entitled = requested.and_then(|req| match std::fs::canonicalize(req) {
+            Ok(c) if crate::tools::fs_policy::under_any_or_worktree(roots, &c) => Some(c),
+            Ok(_) => {
+                tracing::warn!(cwd = %req.display(), "turn cwd outside entitlements; keeping conversation cwd");
+                None
+            }
+            Err(_) => {
+                tracing::warn!(cwd = %req.display(), "turn cwd does not exist; keeping conversation cwd");
+                None
+            }
+        });
+        session.begin_turn(turn, parent, entitled);
+    }
+
+    /// Turn `turn`'s working directory (`None` outside a turn: the home).
+    fn working_dir(&self, turn: Option<&str>) -> Option<std::path::PathBuf> {
+        let (cwd, _) = self.session_cwd.as_ref()?;
+        Some(match turn {
+            Some(t) => cwd.for_turn(t),
+            None => cwd.current(),
+        })
     }
 
     /// P3: where settled chat-gate decisions are looked up and recorded.
@@ -1220,6 +1230,7 @@ impl TaskRunner {
 
     fn assemble_system_prompt(
         &self,
+        turn: Option<&str>,
         user_prompt: &str,
         active_fleet: Option<&str>,
         active_team: Option<&str>,
@@ -1229,8 +1240,7 @@ impl TaskRunner {
         if let Some(frag) = self.secrets.as_ref().and_then(|v| v.prompt_fragment()) {
             base.push_str(&frag);
         }
-        if let Some((cwd, _)) = &self.session_cwd {
-            let dir = cwd.current();
+        if let Some(dir) = self.working_dir(turn) {
             base.push_str(&WORKING_DIR_RULE.replace("{path}", &dir.to_string_lossy()));
             // Names the pinned block right after the path it describes. The
             // file contents themselves travel as the first user message
@@ -1442,7 +1452,7 @@ impl TaskRunner {
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
         let output_artifact_path = spec.output_artifact_path.clone();
-        self.adopt_cwd(spec.cwd.as_deref());
+        self.adopt_cwd(&id, spec.context_task_id.as_deref(), spec.cwd.as_deref());
         let generation = async {
             match &self.backend {
                 RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
@@ -1490,6 +1500,7 @@ impl TaskRunner {
                     if self.pending_approvals.is_some() {
                         let mut system = self
                             .prepare_system_prompt(
+                                &id,
                                 &spec.input,
                                 spec.active_fleet.as_deref(),
                                 spec.active_team.as_deref(),
@@ -1839,7 +1850,8 @@ impl TaskRunner {
     ) -> Result<Message, TaskError> {
         let prompt = text_of(input);
 
-        let (mut system, fired) = self.assemble_system_prompt(&prompt, active_fleet, active_team);
+        let (mut system, fired) =
+            self.assemble_system_prompt(Some(task_id), &prompt, active_fleet, active_team);
         if let Some(path) = output_artifact_path {
             let rule = ARTIFACT_RULE.replace("{path}", &path.to_string_lossy());
             system.push_str(&rule);
@@ -1879,7 +1891,7 @@ impl TaskRunner {
 
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory (was: system + this message only).
-        let (pinned, prior) = self.pinned_and_prior(context_task_id);
+        let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id);
         let messages = seed_history(system, pinned, prior, input);
         let req = LlmRequest {
             messages,
@@ -2048,12 +2060,14 @@ impl TaskRunner {
 
     async fn prepare_system_prompt(
         &self,
+        turn: &str,
         input: &Message,
         active_fleet: Option<&str>,
         active_team: Option<&str>,
     ) -> Result<String, TaskError> {
         let prompt = text_of(input);
-        let (system, _fired) = self.assemble_system_prompt(&prompt, active_fleet, active_team);
+        let (system, _fired) =
+            self.assemble_system_prompt(Some(turn), &prompt, active_fleet, active_team);
         if let (Some(chain), Some(ctx), Some(cancel)) =
             (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
         {
@@ -2211,7 +2225,7 @@ impl TaskRunner {
         // below and stays ephemeral (never persisted into chat memory).
         // The pinned block is rendered here, once, before the loop: every
         // step resends this same list, so it rides at index 1 throughout.
-        let (pinned, prior) = self.pinned_and_prior(context_task_id);
+        let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id);
         let mut history: Vec<RichMessage> = seed_history(system_prompt, pinned, prior, input);
 
         // Rolling window of recent tool-call fingerprints for doom-loop
@@ -7615,7 +7629,7 @@ mod tests {
             .with_system_prompt(Some("BASE PROMPT".into()))
             .with_skills(Arc::new(RuntimeSkills::build(vec![note])));
 
-        let (sys, _fired) = runner.assemble_system_prompt("hello", None, None);
+        let (sys, _fired) = runner.assemble_system_prompt(None, "hello", None, None);
         assert!(
             sys.contains("ALWAYS-REPLY-IN-ZH-TW"),
             "the saved memory must reach the model's system prompt; got:\n{sys}"
@@ -7632,22 +7646,30 @@ mod tests {
     async fn working_directory_reaches_the_system_prompt_every_turn() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
+        // The project differs from the home, so the path can only reach the
+        // prompt through this conversation's cwd, never the home fallback.
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
         let cwd = crate::tools::fs_policy::SessionCwd::new(root.clone());
         let runner = TaskRunner::new_stub_echo()
             .with_system_prompt(Some("BASE".into()))
             .with_session_cwd(cwd, vec![root.to_string_lossy().into_owned()]);
-        // Far more turns than any history cap, all in one conversation.
+        // Far more turns than any history cap, all in one conversation; only
+        // the first names the directory.
         let mut ctx: Option<String> = None;
         for i in 0..60 {
             let id = format!("t{i}");
             let mut spec = user_turn("hi", &id, ctx.as_deref());
-            spec.cwd = Some(root.clone());
+            spec.cwd = (i == 0).then(|| project.clone());
             let _ = runner.run_sync(spec).await;
             ctx = Some(id);
         }
-        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        let (sys, _) = runner.assemble_system_prompt(ctx.as_deref(), "hello", None, None);
         assert!(sys.contains("## Working directory"), "{sys}");
-        assert!(sys.contains(&root.to_string_lossy().into_owned()), "{sys}");
+        assert!(
+            sys.contains(&project.to_string_lossy().into_owned()),
+            "{sys}"
+        );
         assert!(
             !sys.contains("never write them into the current working directory"),
             "the old wording that steered project files into ~/.mur is gone"
@@ -7666,25 +7688,68 @@ mod tests {
         let runner = TaskRunner::new_stub_echo()
             .with_session_cwd(cwd.clone(), vec![project.to_string_lossy().into_owned()]);
 
+        // One conversation: t1 → t2 → t3.
         let mut spec = user_turn("hi", "t1", None);
         spec.cwd = Some(project.clone());
         let _ = runner.run_sync(spec).await;
-        assert_eq!(cwd.current(), project, "entitled cwd is adopted");
+        assert_eq!(cwd.for_turn("t1"), project, "entitled cwd is adopted");
 
-        let mut spec = user_turn("hi", "t2", None);
+        let mut spec = user_turn("hi", "t2", Some("t1"));
         spec.cwd = Some(outside);
         let _ = runner.run_sync(spec).await;
         assert_eq!(
-            cwd.current(),
+            cwd.for_turn("t2"),
             project,
-            "unentitled cwd is refused, session cwd kept"
+            "unentitled cwd is refused, conversation cwd kept"
         );
 
-        let _ = runner.run_sync(user_turn("hi", "t3", None)).await;
+        let _ = runner.run_sync(user_turn("hi", "t3", Some("t2"))).await;
         assert_eq!(
-            cwd.current(),
+            cwd.for_turn("t3"),
             project,
-            "absent cwd leaves the session cwd alone"
+            "absent cwd leaves the conversation cwd alone"
+        );
+    }
+
+    /// Dogfood bug: two murmur sessions on one agent shared ONE cwd, so the
+    /// session that spoke last dragged every other session's tools into its
+    /// directory ("my gateway session was suddenly working in mur/").
+    #[tokio::test]
+    async fn each_session_keeps_its_own_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let gateway = root.join("gateway");
+        let mur = root.join("mur");
+        std::fs::create_dir_all(&gateway).unwrap();
+        std::fs::create_dir_all(&mur).unwrap();
+        let cwd = crate::tools::fs_policy::SessionCwd::new(root.clone());
+        let runner = TaskRunner::new_stub_echo()
+            .with_session_cwd(cwd.clone(), vec![root.to_string_lossy().into_owned()]);
+        let turn = |id: &str, ctx: Option<&str>, dir: Option<&std::path::Path>| {
+            let mut spec = user_turn("hi", id, ctx);
+            spec.cwd = dir.map(std::path::Path::to_path_buf);
+            spec
+        };
+        // What a tool call inside turn `id` resolves relative paths against.
+        let seen_by = |id: &str| {
+            let cwd = cwd.clone();
+            crate::tools::bash_jobs::CURRENT_TASK_ID
+                .scope(id.to_string(), async move { cwd.current() })
+        };
+
+        let _ = runner.run_sync(turn("a1", None, Some(&gateway))).await;
+        let _ = runner.run_sync(turn("b1", None, Some(&mur))).await;
+        // Session A carries on without restating its cwd (Hub, `mur agent send`).
+        let _ = runner.run_sync(turn("a2", Some("a1"), None)).await;
+        // A brand-new session that never named a directory.
+        let _ = runner.run_sync(turn("c1", None, None)).await;
+
+        assert_eq!(seen_by("a2").await, gateway, "session A kept its own cwd");
+        assert_eq!(seen_by("b1").await, mur, "session B kept its own cwd");
+        assert_eq!(
+            seen_by("c1").await,
+            root,
+            "a new session starts at the agent home, not the last speaker's cwd"
         );
     }
 
@@ -7708,7 +7773,7 @@ mod tests {
                 vec![grant],
             )
             .with_project_instructions(gate);
-        runner.assemble_system_prompt("hello", None, None).0
+        runner.assemble_system_prompt(None, "hello", None, None).0
     }
 
     /// The system prompt names the pinned block right after the path it
@@ -7917,7 +7982,7 @@ mod tests {
     #[test]
     fn no_session_cwd_means_no_project_instructions_rule() {
         let runner = TaskRunner::new_stub_echo().with_system_prompt(Some("BASE".into()));
-        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        let (sys, _) = runner.assemble_system_prompt(None, "hello", None, None);
         assert!(!sys.contains("<project_instructions>"), "{sys}");
         assert!(!sys.contains("Precedence, highest first:"), "{sys}");
     }
@@ -7925,7 +7990,7 @@ mod tests {
     #[test]
     fn no_session_cwd_means_no_working_directory_line() {
         let runner = TaskRunner::new_stub_echo().with_system_prompt(Some("BASE".into()));
-        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        let (sys, _) = runner.assemble_system_prompt(None, "hello", None, None);
         assert!(!sys.contains("## Working directory"));
     }
 
@@ -7938,7 +8003,7 @@ mod tests {
         let runner = TaskRunner::new_stub_echo()
             .with_system_prompt(Some("BASE PROMPT".into()))
             .with_secrets(vault);
-        let (sys, _) = runner.assemble_system_prompt("hello", None, None);
+        let (sys, _) = runner.assemble_system_prompt(None, "hello", None, None);
         assert!(sys.contains("$GITEA_TOKEN"), "{sys}");
         assert!(!sys.contains("d8b04a3c"), "{sys}");
     }
@@ -7964,7 +8029,7 @@ mod tests {
     #[test]
     fn assemble_system_prompt_appends_output_locations_rule() {
         let runner = TaskRunner::new_stub_echo().with_system_prompt(Some("BASE PROMPT".into()));
-        let (sys, _fired) = runner.assemble_system_prompt("hello", None, None);
+        let (sys, _fired) = runner.assemble_system_prompt(None, "hello", None, None);
         assert!(
             sys.starts_with("BASE PROMPT"),
             "keeps the agent's own prompt first"

@@ -510,3 +510,54 @@ fn read_refusal_is_a_bare_token() {
     assert_copy::<ReadRefusal>();
     assert_eq!(std::mem::size_of::<ReadRefusal>(), 1);
 }
+
+/// A tool's `bash cwd=` move stays inside its own conversation: the next turn
+/// of that conversation inherits it, a different conversation never sees it.
+#[tokio::test]
+async fn session_cwd_moves_are_per_conversation() {
+    use crate::tools::bash_jobs::CURRENT_TASK_ID;
+    let home = PathBuf::from("/home");
+    let cwd = SessionCwd::new(home.clone());
+    cwd.begin_turn("a1", None, Some(PathBuf::from("/gateway")));
+    cwd.begin_turn("b1", None, Some(PathBuf::from("/mur")));
+
+    // Inside turn a1, a tool moves A's directory.
+    let c = cwd.clone();
+    CURRENT_TASK_ID
+        .scope(
+            "a1".into(),
+            async move { c.set(PathBuf::from("/gateway/sub")) },
+        )
+        .await;
+    cwd.begin_turn("a2", Some("a1"), None);
+
+    assert_eq!(
+        cwd.for_turn("a2"),
+        PathBuf::from("/gateway/sub"),
+        "A inherits its own move"
+    );
+    assert_eq!(
+        cwd.for_turn("b1"),
+        PathBuf::from("/mur"),
+        "B never sees A's move"
+    );
+    // Outside any turn: neither conversation's directory.
+    assert_eq!(cwd.current(), home);
+    // A turn the table has forgotten (evicted, or a pre-restart id).
+    cwd.begin_turn("z", Some("never-seen"), None);
+    assert_eq!(cwd.for_turn("z"), home);
+}
+
+/// Old turns are dropped past the cap, so a long-lived agent's table is bounded.
+#[test]
+fn session_cwd_table_is_bounded() {
+    let cwd = SessionCwd::new(PathBuf::from("/home"));
+    for i in 0..=MAX_TURN_CWDS {
+        cwd.begin_turn(&format!("t{i}"), None, Some(PathBuf::from("/p")));
+    }
+    assert_eq!(cwd.for_turn("t0"), PathBuf::from("/home"), "oldest evicted");
+    assert_eq!(
+        cwd.for_turn(&format!("t{MAX_TURN_CWDS}")),
+        PathBuf::from("/p")
+    );
+}
