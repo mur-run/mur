@@ -36,7 +36,7 @@ content:
 
     Gotchas: every member must already be running — check with
     `mur agent status`; queued jobs persist as
-    `~/.mur/fleets/<name>/jobs/<uuidv7>.yaml` and drain FIFO via `run` or
+    `~/.mur/fleet-state/<name>/jobs/<uuidv7>.yaml` and drain FIFO via `run` or
     the daemon.
 
     ## Router planning

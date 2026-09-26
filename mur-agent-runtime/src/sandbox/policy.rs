@@ -413,11 +413,10 @@ impl SandboxPolicy {
         ) && crate::tools::fleet_run::agent_enabled(mur_home, agent_name)
         {
             fleet_run_enabled = true;
-            for dir in mur_common::paths::RUN_STATE_DIRS {
-                let d = mur_home.join(dir);
-                if !fs_write.contains(&d) {
-                    let _ = std::fs::create_dir_all(&d);
-                    fs_write.push(d);
+            for dir in fleet_run_write_dirs(mur_home) {
+                if !fs_write.contains(&dir) {
+                    let _ = std::fs::create_dir_all(&dir);
+                    fs_write.push(dir);
                 }
             }
             for p in [mur_home.join("models.yaml"), mur_home.join("cache")] {
@@ -1000,6 +999,39 @@ fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
     }
 }
 
+/// Directories the `fleet_run` child must be able to write, under `mur_home`.
+///
+/// Every [`mur_common::paths::RUN_STATE_DIRS`] entry whole, EXCEPT
+/// `fleet-state/`, which is carved per fleet: only `fleet-state/<name>/` for
+/// each name in `fleet_run.fleets`. A whole-tree grant would let the agent's
+/// own bash tool queue a job for ANY fleet — including a cron fleet the
+/// operator never allowlisted, which the daemon then runs unattended. Names
+/// that fail `valid_fleet_name` are skipped rather than joined, so a
+/// hand-edited `../x` in config.yaml cannot become a write grant outside it.
+///
+/// `fleets/` (definitions, `.stopped`) is never here: a run that can rewrite
+/// its fleet's members, limits or HITL pre-approvals, or clear its own
+/// kill-switch, is a run that governs itself.
+fn fleet_run_write_dirs(mur_home: &Path) -> Vec<PathBuf> {
+    let allowed = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
+        .fleet_run
+        .fleets;
+    let mut out = Vec::new();
+    for dir in mur_common::paths::RUN_STATE_DIRS {
+        if dir == mur_common::paths::FLEET_STATE {
+            out.extend(
+                allowed
+                    .iter()
+                    .filter(|f| mur_common::fleet::valid_fleet_name(f))
+                    .map(|f| mur_common::paths::fleet_state_dir(mur_home, f)),
+            );
+        } else {
+            out.push(mur_home.join(dir));
+        }
+    }
+    out
+}
+
 fn system_read_paths() -> Vec<PathBuf> {
     // `mut` is only used inside the #[cfg(target_os = "macos")] block below;
     // allow the lint rather than restructure the initialization.
@@ -1279,26 +1311,60 @@ mod tests {
         let agent_home = mur_home.join("agents").join("mur");
         std::fs::create_dir_all(&agent_home).unwrap();
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
-        assert!(!policy.fs_write.contains(&mur_home.join("fleets")));
+        let dr_state = mur_common::paths::fleet_state_dir(mur_home, "deep-research");
+        assert!(!policy.fs_write.contains(&dr_state));
+        assert!(!policy.fs_write.contains(&mur_home.join("runs")));
 
-        // Allowlisted in config.yaml → every run-state dir is carved in.
+        // Allowlisted in config.yaml → every run-state dir is carved in, and
+        // `fleet-state/` only for the fleets the operator named.
         std::fs::write(
             mur_home.join("config.yaml"),
-            "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
+            "fleet_run:\n  agents: [mur]\n  fleets: [deep-research, ../escape]\n",
         )
         .unwrap();
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
         for dir in mur_common::paths::RUN_STATE_DIRS {
+            if dir == mur_common::paths::FLEET_STATE {
+                continue;
+            }
             assert!(
                 policy.fs_write.contains(&mur_home.join(dir)),
                 "{dir} should be carved in for an allowlisted agent"
             );
         }
+        assert!(policy.fs_write.contains(&dr_state), "{:?}", policy.fs_write);
+        // Not the whole tree: an agent must not queue work for a fleet it was
+        // never allowed to run (a cron fleet would then run it unattended).
+        assert!(
+            !policy
+                .fs_write
+                .contains(&mur_home.join(mur_common::paths::FLEET_STATE))
+        );
+        // A traversal name in config.yaml never becomes a grant.
+        assert!(
+            policy
+                .fs_write
+                .iter()
+                .all(|p| !p.to_string_lossy().contains("escape")),
+            "{:?}",
+            policy.fs_write
+        );
+        // The definitions are never writable from a run: members, limits,
+        // HITL pre-approvals and the `.stopped` kill-switch all live there.
+        assert!(
+            policy
+                .fs_write
+                .iter()
+                .all(|p| !p.starts_with(mur_home.join(mur_common::paths::FLEETS))),
+            "{:?}",
+            policy.fs_write
+        );
+
         // A different (non-allowlisted) agent stays denied.
         let other_home = mur_home.join("agents").join("dr_worker_1");
         std::fs::create_dir_all(&other_home).unwrap();
         let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &other_home);
-        assert!(!policy.fs_write.contains(&mur_home.join("fleets")));
+        assert!(!policy.fs_write.contains(&dr_state));
     }
 
     #[test]

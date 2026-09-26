@@ -15,6 +15,13 @@ pub fn fleet_dir(mur_home: &Path, name: &str) -> PathBuf {
     fleets_dir(mur_home).join(name)
 }
 
+/// Where a fleet's RUNS write: job queue, progress record, event log,
+/// parallel-track state. Separate from [`fleet_dir`], which is the fleet's
+/// definition — see `mur_common::paths::FLEET_STATE` for why.
+pub fn state_dir(mur_home: &Path, name: &str) -> PathBuf {
+    mur_common::paths::fleet_state_dir(mur_home, name)
+}
+
 /// Path to `fleet.yaml` for a single fleet.
 pub fn fleet_path(mur_home: &Path, name: &str) -> PathBuf {
     fleet_dir(mur_home, name).join("fleet.yaml")

@@ -23,6 +23,7 @@ pub mod run;
 pub mod run_monitor;
 pub mod settings;
 pub mod show;
+pub mod state_migrate;
 pub mod status;
 pub mod store;
 pub mod triage_report;

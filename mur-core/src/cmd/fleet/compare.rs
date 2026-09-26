@@ -21,7 +21,7 @@ pub fn cmd_fleet_compare(
         .as_ref()
         .context("fleet has no parallel config")?;
 
-    let fleet_dir = mur_home.join("fleets").join(fleet_name);
+    let fleet_dir = super::store::state_dir(mur_home, fleet_name);
     let tracks = TrackSet::load(&fleet_dir)
         .context("no tracks.json — run `mur fleet run` then `mur fleet judge` first")?;
     let state_db = ParallelStateDb::open(&fleet_dir.join("parallel_state"))?;

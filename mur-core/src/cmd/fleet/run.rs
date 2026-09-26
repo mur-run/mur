@@ -354,7 +354,7 @@ pub async fn cmd_fleet_run(
     let (proc, parallel_run) = if exec_parallel {
         let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
         let repo_root = discover_repo_root()?;
-        let fleet_dir = mur_home.join("fleets").join(name);
+        let fleet_dir = super::store::state_dir(mur_home, name);
         // Clean slate: tear down any leftover worktrees from a prior run of THIS fleet.
         if let Ok(prev) = TrackSet::load(&fleet_dir) {
             worktree::destroy_tracks(&prev, &repo_root);
