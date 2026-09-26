@@ -1027,6 +1027,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
     } else {
         project_name.clone()
     };
+    let active_scope = crate::retrieve::skill_candidates::ActiveScope::detect();
 
     for target in &targets {
         let target_path = cwd.join(&target.file);
@@ -1036,17 +1037,12 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
             continue;
         }
 
-        let scored =
-            crate::retrieve::scoring::score_and_rank_generic(&sync_query, candidates.clone());
-
-        let top: Vec<crate::inject::hook::InjectedItem> = scored
-            .into_iter()
-            .filter(|s| {
-                s.item.stats.lifecycle_state != mur_common::skill::stats::LifecycleState::Archived
-            })
-            .take(target.max_patterns)
-            .map(|s| s.item.to_injected_item())
-            .collect();
+        let top = inject::sync::select_sync_skills(
+            candidates.clone(),
+            &sync_query,
+            &active_scope,
+            target.max_patterns,
+        );
 
         if top.is_empty() {
             continue;
