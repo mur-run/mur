@@ -539,6 +539,8 @@ pub struct TaskRunner {
     /// loop picks it up at the next iteration boundary.
     steering: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
     hitl_timeout_secs: u32,
+    /// B1 sandbox enforcing? `false` refuses every `Ask` tool (D2 / D2b).
+    sandbox_enforcing: bool,
     /// The two scopes this process can see — `config.yaml limits:` and the
     /// agent's own `profile.yaml limits:` — resolved per turn in `bounds_for`.
     limits: (
@@ -725,6 +727,9 @@ impl TaskRunner {
             approval_sinks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
+            // Fail closed: an unset sandbox state refuses every `Ask` tool.
+            // Production sets it from the B1 seal (`build_runner`).
+            sandbox_enforcing: false,
             limits: (Default::default(), None),
             iteration_ceiling: ITERATION_CEILING,
             autonomy: mur_common::hitl::Autonomy::default(),
@@ -1186,6 +1191,12 @@ impl TaskRunner {
 
     pub fn with_hitl_timeout_secs(mut self, secs: u32) -> Self {
         self.hitl_timeout_secs = secs;
+        self
+    }
+
+    /// Whether the B1 sandbox is enforcing for this process (D2 / D2b).
+    pub fn with_sandbox_enforcing(mut self, enforcing: bool) -> Self {
+        self.sandbox_enforcing = enforcing;
         self
     }
 
@@ -2123,6 +2134,7 @@ impl TaskRunner {
             decision_store: self.decision_store.clone(),
             hitl_timeout_secs: self.hitl_timeout_secs,
             pending_approvals: self.pending_approvals.clone(),
+            sandbox_enforcing: self.sandbox_enforcing,
         }
     }
 
@@ -4627,6 +4639,7 @@ mod tests {
                 })])
                 .with_tools_policy(vec![]) // default Ask
                 .with_pending_approvals(pa.clone())
+                .with_sandbox_enforcing(true)
                 .with_notifier(tokio::sync::mpsc::channel(16).0)
                 .with_hitl_timeout_secs(5)
                 .with_iteration_ceiling(5),
@@ -4687,6 +4700,7 @@ mod tests {
                 })])
                 .with_tools_policy(vec![])
                 .with_pending_approvals(pa.clone())
+                .with_sandbox_enforcing(true)
                 .with_notifier(ntx)
                 .with_hitl_timeout_secs(5)
                 .with_iteration_ceiling(5),
@@ -4770,6 +4784,7 @@ mod tests {
                     })])
                     .with_tools_policy(vec![])
                     .with_pending_approvals(empty_pending_approvals())
+                    .with_sandbox_enforcing(true)
                     .with_notifier(ntx)
                     .with_decision_store(Arc::new(Fixed(settled)))
                     .with_hitl_timeout_secs(1)
@@ -6268,6 +6283,7 @@ mod tests {
             None,
             None,
             None,
+            true,
         );
         let mut spec = loop_spec("loop");
         spec.attended = false;
@@ -6892,6 +6908,7 @@ mod tests {
                     risk: None,
                 }])
                 .with_pending_approvals(approvals)
+                .with_sandbox_enforcing(true)
                 .with_notifier(tx)
                 .with_hitl_timeout_secs(5)
                 .with_iteration_ceiling(5),
@@ -8056,6 +8073,7 @@ mod tests {
         let calls = Arc::new(AtomicU64::new(0));
         let runner = Arc::new(
             TaskRunner::new_stub_echo()
+                .with_sandbox_enforcing(true)
                 .with_tools(vec![Arc::new(CountingBashTool {
                     calls: calls.clone(),
                     ..Default::default()
@@ -8096,6 +8114,9 @@ mod tests {
             .unwrap_or_default();
         assert!(!why.contains("tool-allow"), "different path: {why}");
     }
+
+    /// Lives in `task_runner/tests/` so this file stops growing.
+    mod sandbox_gate;
 }
 
 #[cfg(test)]

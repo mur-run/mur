@@ -492,6 +492,13 @@ Agent** wizard offers the same catalog as a source.
   folded into the rule. Reads never have to stop the run: `--auto-reads` covers
   `read_file` and provably read-only shell commands, in the TUI and in
   `--plain` alike.
+- **No approvals without a sealed sandbox** — an agent running advisory-only
+  (`fail_closed_on_sandbox_error: false` and the kernel seal failed) could read
+  its own signing key, so any approval it holds could be forged. Tools that
+  need approval are refused outright on that boot instead of asked, including
+  ones you approved earlier. The refusal points at
+  `mur agent perm list-paths <agent>`, whose header shows the seal state.
+  Tools set to `allow` still run.
 - **Nobody watching is not permission** — a durable monitor acting on what it
   found asks the same way. Reading its evidence runs unattended; anything that
   would change something outside MUR parks a request pinned to that exact

@@ -250,6 +250,9 @@ pub fn build_runner(
     // The session cwd's AGENTS.md/CLAUDE.md, gated like `read_file`. Only the
     // in-process track reads the system prompt; a spawned CLI reads its own.
     project_instructions: Option<crate::project_instructions::ProjectInstructions>,
+    // Is the B1 sandbox enforcing on this boot? `false` refuses every `Ask`
+    // tool (D2 / D2b). No default on purpose: every caller must say.
+    sandbox_enforcing: bool,
 ) -> Arc<TaskRunner> {
     let mut runner = base
         .with_agent_name(agent_name)
@@ -268,7 +271,9 @@ pub fn build_runner(
     if let Some(j) = bash_jobs {
         runner = runner.with_bash_jobs(j);
     }
-    runner = runner.with_limits(limits.0, limits.1);
+    runner = runner
+        .with_limits(limits.0, limits.1)
+        .with_sandbox_enforcing(sandbox_enforcing);
     if let (Some(chain), Some(ctx), Some(cancel)) = (hook_chain, hook_ctx, hook_cancel) {
         runner = runner.with_hook_chain(chain, ctx, cancel);
     }
@@ -336,6 +341,8 @@ pub async fn build_provider_runner(
     // children and masked out of every tool result. Loaded pre-seal by the
     // caller, because a keychain is unreachable once the sandbox closes.
     secrets: Arc<crate::secrets::SecretVault>,
+    // B1 seal state for this boot, from the supervisor's `sandbox_record`.
+    sandbox_enforcing: bool,
 ) -> anyhow::Result<(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
@@ -645,6 +652,7 @@ pub async fn build_provider_runner(
             Some((session_cwd.clone(), cwd_roots.clone())),
             Some(bash_jobs.clone()),
             Some(project_instructions.clone()),
+            sandbox_enforcing,
         )
     };
     // The CLI track short-circuits here: a spawned CLI owns the loop, so there
