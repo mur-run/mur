@@ -1,5 +1,7 @@
 use super::*;
 
+const TEST_AGENT: &str = "test-agent";
+
 /// R5: the sandbox force-grants `agent_home` ("runtime cannot function
 /// without it" — `sandbox::policy::from_entitlements`), but the file tools
 /// were handed the RAW profile entitlement, so `write_file` refused a path
@@ -26,14 +28,20 @@ fn the_agents_own_artifacts_dir_is_writable_by_the_file_tools() {
     let fs = for_file_tools(FilesystemEntitlement::default(), &agent_home);
 
     check_write_entitlement(
+        TEST_AGENT,
         &fs,
         &mur_home.join("artifacts/rustsmith/task4/check.rs"),
         &chain,
     )
     .expect("the path the system prompt names must be writable");
 
-    check_write_entitlement(&fs, &mur_home.join("artifacts/pm/report.md"), &chain)
-        .expect_err("a sibling agent's artifacts must not be writable");
+    check_write_entitlement(
+        TEST_AGENT,
+        &fs,
+        &mur_home.join("artifacts/pm/report.md"),
+        &chain,
+    )
+    .expect_err("a sibling agent's artifacts must not be writable");
 }
 
 #[test]
@@ -47,17 +55,22 @@ fn agent_home_is_writable_by_the_file_tools() {
     // Grants nothing — exactly the profile rustsmith had for its own home.
     let fs = for_file_tools(FilesystemEntitlement::default(), &agent_home);
 
-    check_write_entitlement(&fs, &agent_home.join("task4_check.rs"), &chain)
+    check_write_entitlement(TEST_AGENT, &fs, &agent_home.join("task4_check.rs"), &chain)
         .expect("an agent must be able to write inside its own home");
 
     // Negative controls: the carve-outs still hold, so the line above is a
     // scoped grant and not a blanket allow.
-    check_write_entitlement(&fs, &agent_home.join("profile.yaml"), &chain)
+    check_write_entitlement(TEST_AGENT, &fs, &agent_home.join("profile.yaml"), &chain)
         .expect_err("the agent's own profile stays denied (#712)");
-    check_write_entitlement(&fs, &home.join("agents/pm/notes.md"), &chain)
+    check_write_entitlement(TEST_AGENT, &fs, &home.join("agents/pm/notes.md"), &chain)
         .expect_err("a sibling agent's home is not granted");
-    check_write_entitlement(&fs, &home.join("channels/x/events.jsonl"), &chain)
-        .expect_err("runtime-owned channel store must NOT be model-writable");
+    check_write_entitlement(
+        TEST_AGENT,
+        &fs,
+        &home.join("channels/x/events.jsonl"),
+        &chain,
+    )
+    .expect_err("runtime-owned channel store must NOT be model-writable");
 }
 
 #[test]
@@ -80,7 +93,7 @@ fn launch_chain_beats_an_explicit_write_grant() {
         ..Default::default()
     };
 
-    let err = check_write_entitlement(&fs, &agents.join("pm/profile.yaml"), &chain)
+    let err = check_write_entitlement(TEST_AGENT, &fs, &agents.join("pm/profile.yaml"), &chain)
         .expect_err("a sibling profile must be refused even under a grant covering it");
     let msg = format!("{err:?}");
     assert!(
@@ -90,7 +103,7 @@ fn launch_chain_beats_an_explicit_write_grant() {
 
     // Negative control: the same grant still works for a path outside the
     // set, so the refusal above is the launch chain and not a broken check.
-    check_write_entitlement(&fs, &home.join("skills/x.yaml"), &chain)
+    check_write_entitlement(TEST_AGENT, &fs, &home.join("skills/x.yaml"), &chain)
         .expect("unprotected path under the same grant must still be allowed");
 }
 
@@ -108,12 +121,18 @@ fn tilde_grant_is_expanded_like_the_sandbox() {
         ..Default::default()
     };
 
-    check_write_entitlement(&fs, &home.join("mur-tilde-grant-probe/photo.jpg"), &chain)
-        .expect("a ~ grant must cover the path it expands to");
+    check_write_entitlement(
+        TEST_AGENT,
+        &fs,
+        &home.join("mur-tilde-grant-probe/photo.jpg"),
+        &chain,
+    )
+    .expect("a ~ grant must cover the path it expands to");
 
     // Negative control: expansion must not widen the grant to everything,
     // or the assertion above would pass on a helper that always says yes.
     check_write_entitlement(
+        TEST_AGENT,
         &fs,
         Path::new("/tmp/mur-tilde-grant-probe/photo.jpg"),
         &chain,
@@ -140,13 +159,23 @@ fn tilde_deny_is_expanded_too() {
         ..Default::default()
     };
 
-    check_write_entitlement(&fs, &home.join("mur-deny-probe/keys/id_ed25519"), &chain)
-        .expect_err("a ~ deny entry must outrank a ~ grant covering it");
+    check_write_entitlement(
+        TEST_AGENT,
+        &fs,
+        &home.join("mur-deny-probe/keys/id_ed25519"),
+        &chain,
+    )
+    .expect_err("a ~ deny entry must outrank a ~ grant covering it");
 
     // Negative control: the surrounding grant still works, so the refusal
     // above is the deny entry and not a grant that never matched.
-    check_write_entitlement(&fs, &home.join("mur-deny-probe/notes.md"), &chain)
-        .expect("the write grant itself must still hold");
+    check_write_entitlement(
+        TEST_AGENT,
+        &fs,
+        &home.join("mur-deny-probe/notes.md"),
+        &chain,
+    )
+    .expect("the write grant itself must still hold");
 }
 
 fn eperm() -> std::io::Error {
@@ -235,6 +264,7 @@ fn self_protected_denies_own_profile_despite_write_grant() {
     for f in ["profile.yaml", "identity.key"] {
         assert!(
             check_write_entitlement(
+                TEST_AGENT,
                 &fs,
                 &canonical_home.join(f),
                 &crate::sandbox::launch_chain::LaunchChain::inert(),
@@ -246,6 +276,7 @@ fn self_protected_denies_own_profile_despite_write_grant() {
     // The rest of the agent dir stays writable (running.lock etc.).
     assert!(
         check_write_entitlement(
+            TEST_AGENT,
             &fs,
             &canonical_home.join("running.lock"),
             &crate::sandbox::launch_chain::LaunchChain::inert(),
@@ -302,7 +333,7 @@ fn a_worktree_of_a_granted_checkout_is_writable() {
     };
     let target = std::fs::canonicalize(&wt).unwrap().join("src/new.rs");
     assert!(
-        check_write_entitlement(&fs, &target, &chain).is_ok(),
+        check_write_entitlement(TEST_AGENT, &fs, &target, &chain).is_ok(),
         "a worktree of the granted checkout must be writable without a second grant"
     );
 }
@@ -327,7 +358,7 @@ fn worktree_derivation_does_not_widen_to_unrelated_paths() {
         .unwrap()
         .join("nope.rs");
     assert!(
-        check_write_entitlement(&fs, &outside, &chain).is_err(),
+        check_write_entitlement(TEST_AGENT, &fs, &outside, &chain).is_err(),
         "a path outside every grant must stay refused"
     );
 }
@@ -353,11 +384,11 @@ fn deny_still_wins_inside_a_derived_worktree_grant() {
         deny: vec![secrets.to_string_lossy().into_owned()],
     };
     assert!(
-        check_write_entitlement(&fs, &secrets.join("key.pem"), &chain).is_err(),
+        check_write_entitlement(TEST_AGENT, &fs, &secrets.join("key.pem"), &chain).is_err(),
         "deny must beat a derived worktree grant"
     );
     // ...while the rest of the same worktree remains writable.
-    assert!(check_write_entitlement(&fs, &wt_canon.join("ok.rs"), &chain).is_ok());
+    assert!(check_write_entitlement(TEST_AGENT, &fs, &wt_canon.join("ok.rs"), &chain).is_ok());
 }
 
 // ── T2: typed ReadRefusal ───────────────────────────────────────────────────

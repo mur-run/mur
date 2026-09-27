@@ -357,6 +357,7 @@ pub(crate) fn under_any_read_deny(roots: &[String], canonical: &Path, agent_home
 }
 
 pub(crate) fn check_write_entitlement(
+    agent: &str,
     fs: &FilesystemEntitlement,
     canonical: &Path,
     chain: &crate::sandbox::launch_chain::LaunchChain,
@@ -381,9 +382,12 @@ pub(crate) fn check_write_entitlement(
     if under_any_or_worktree(&fs.write, canonical) {
         return Ok(());
     }
+    // Name the agent and the path: a bare `mur agent perm allow-write` is
+    // missing both required arguments and cannot be run as printed.
     Err(ToolError::Execution(format!(
-        "path not write-entitled: {} (grant it via `mur agent perm allow-write`)",
-        canonical.display()
+        "path not write-entitled: {} (grant it via `{}`)",
+        canonical.display(),
+        super::denial::allow_write_commands(canonical, agent, " && ")
     )))
 }
 

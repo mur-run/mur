@@ -12,6 +12,8 @@ pub struct EditFileTool {
     pub fs: FilesystemEntitlement,
     /// MUR's own launch chain. Checked before `fs`; no grant can satisfy it.
     pub chain: crate::sandbox::launch_chain::LaunchChain,
+    /// This agent's canonical name, so a refusal prints a runnable grant.
+    pub agent: String,
 }
 
 impl EditFileTool {
@@ -19,11 +21,13 @@ impl EditFileTool {
         session_cwd: SessionCwd,
         fs: FilesystemEntitlement,
         chain: crate::sandbox::launch_chain::LaunchChain,
+        agent: String,
     ) -> Self {
         Self {
             session_cwd,
             fs,
             chain,
+            agent,
         }
     }
 
@@ -35,6 +39,7 @@ impl EditFileTool {
             session_cwd,
             fs,
             crate::sandbox::launch_chain::LaunchChain::inert(),
+            "test-agent".into(),
         )
     }
 }
@@ -85,7 +90,7 @@ impl ToolExecutor for EditFileTool {
                 "edit", &joined, &base, &e,
             ))
         })?;
-        check_write_entitlement(&self.fs, &canonical, &self.chain)?;
+        check_write_entitlement(&self.agent, &self.fs, &canonical, &self.chain)?;
 
         let text = std::fs::read_to_string(&canonical).map_err(|e| {
             ToolError::Execution(crate::tools::fs_policy::format_io_error(
