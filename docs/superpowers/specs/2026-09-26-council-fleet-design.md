@@ -1,7 +1,9 @@
 # Council fleet — senior advisory panel (design)
 
 Status: approved design, v1 not yet built
-Research: `~/.mur/artifacts/mur/2026-09-25-consultant-panel-research/` (3 reports + 3 cross-verifications)
+Research: 3 deep-research reports + 3 cross-verifications, kept as local run
+artifacts on the author's machine (not committed). This spec is self-contained;
+the code citations below are the evidence it relies on.
 
 ## Goal
 
@@ -129,8 +131,9 @@ process. Verified on `origin/main` (951c64f6 and later):
 - `mur-agent-runtime/src/transport/unix_socket.rs:130` —
   `let _ = peer; // passed to auth / communication_policy via request context in Task 22`
   (peer credentials dropped).
-- `mur-agent-runtime/src/tools/fs_policy/mod.rs:257` — `profile.yaml` in the
-  write-protected list.
+- `mur-agent-runtime/src/sandbox/policy.rs:23` — `profile.yaml` in
+  `SELF_PROTECTED_AGENT_FILES`, the write-protected list (applied to the file
+  tools at `tools/fs_policy/mod.rs:257`).
 
 Known wrong answers the pack must be able to rule out: B1, and a
 `read_scope` request parameter.
