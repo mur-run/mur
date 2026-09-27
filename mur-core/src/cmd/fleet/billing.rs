@@ -80,6 +80,7 @@ mod tests {
             members: members.iter().map(|m| m.to_string()).collect(),
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: lc,

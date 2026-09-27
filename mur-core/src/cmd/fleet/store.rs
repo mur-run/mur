@@ -69,6 +69,11 @@ pub fn load_fleet(mur_home: &Path, name: &str) -> Result<Fleet> {
         .map(|h| h.validate())
         .transpose()
         .map_err(anyhow::Error::msg)?;
+    // Same stance for a hand-written procedure: an unknown member or a
+    // `parallel:` that would silently override it fails at load, loudly.
+    fleet
+        .validate_procedure()
+        .map_err(|e| anyhow::anyhow!("fleet '{name}': {e}"))?;
     Ok(fleet)
 }
 
@@ -112,6 +117,7 @@ mod tests {
             router: None,
             members: vec![],
             channel_id: "fleet-evil".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
@@ -145,6 +151,7 @@ mod tests {
             router: None,
             members: vec!["pm".into()],
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             team_id: None,
             rules: vec![],
             skills: vec![],

@@ -90,6 +90,7 @@ mod tests {
             members: vec!["research_worker_1".into(), "research_worker_2".into()],
             team_id: None,
             channel_id: "fleet-dr-test".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: Some(mur_common::fleet::FleetLoop {

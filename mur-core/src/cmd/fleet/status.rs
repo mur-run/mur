@@ -117,6 +117,7 @@ mod tests {
             team_id: None,
             members: vec![],
             channel_id: channel_id.to_string(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,

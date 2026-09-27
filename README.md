@@ -559,6 +559,11 @@ Agent** wizard offers the same catalog as a source.
   same resolution the runtime does and reports it, and `mur agent start` waits
   for the runtime to claim it is up instead of reporting success the instant the
   process forks.
+- **Fixed step graphs for fleets** — add a `procedure:` to `fleet.yaml` (each
+  step names an `id`, a `member`, a `task` and optional `depends_on`) and the
+  fleet runs exactly that graph instead of asking the router to plan. A typo'd
+  member, a missing dependency or a cycle is rejected when the fleet loads or
+  runs — never quietly turned into a broadcast to everyone.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a

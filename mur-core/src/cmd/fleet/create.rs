@@ -48,6 +48,7 @@ pub fn cmd_fleet_create(
         team_id: None,
         members,
         channel_id: ch.id.clone(),
+        procedure: vec![],
         rules: vec![],
         skills: vec![],
         loop_cfg: None,
