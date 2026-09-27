@@ -15,20 +15,30 @@ use tokio::sync::mpsc;
 #[derive(Clone, Default)]
 pub struct RequestContext {
     pub notifier: Option<mpsc::Sender<Value>>,
+    /// Who is on the other end of this connection, and whether it has
+    /// redeemed a shim ticket. `None` for transports that cannot say.
+    pub conn: Option<std::sync::Arc<crate::hitl::shim_ticket::Connection>>,
 }
 
 impl RequestContext {
     /// A context with no per-connection notifier (single-client / non-streaming
     /// transports).
     pub fn none() -> Self {
-        Self { notifier: None }
+        Self::default()
     }
 
     /// A context routing notifications to one connection's sink.
     pub fn with_notifier(notifier: mpsc::Sender<Value>) -> Self {
         Self {
             notifier: Some(notifier),
+            conn: None,
         }
+    }
+
+    /// Attach this connection's identity (unix socket transport).
+    pub fn with_conn(mut self, conn: crate::hitl::shim_ticket::Connection) -> Self {
+        self.conn = Some(std::sync::Arc::new(conn));
+        self
     }
 }
 

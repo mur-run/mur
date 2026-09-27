@@ -4,6 +4,7 @@
 
 pub mod authority;
 pub mod batch;
+pub mod shim_ticket;
 pub mod store;
 
 /// Decision returned by the Hub (or any HITL responder) for a pending approval.

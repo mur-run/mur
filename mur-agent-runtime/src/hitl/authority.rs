@@ -66,11 +66,27 @@ impl ApprovalAuthority {
 
     /// Decide whether an answer may release the gate.
     pub fn check(&self, allow: bool, presented: Option<&str>) -> Result<(), Refusal> {
+        self.check_from(allow, presented, false)
+    }
+
+    /// `check`, where `trusted_shim` says the request came over a connection
+    /// that redeemed this turn's shim ticket for the approval's own task
+    /// (`hitl::shim_ticket`). That replaces the token, never the seal: with
+    /// the sandbox advisory nothing on this boot is trusted.
+    pub fn check_from(
+        &self,
+        allow: bool,
+        presented: Option<&str>,
+        trusted_shim: bool,
+    ) -> Result<(), Refusal> {
         if !allow {
             return Ok(());
         }
         if !self.sandbox_enforcing {
             return Err(Refusal::SandboxNotEnforcing);
+        }
+        if trusted_shim {
+            return Ok(());
         }
         let expected = self.token.as_deref().ok_or(Refusal::NoToken)?;
         let presented = presented.ok_or(Refusal::BadToken)?;
@@ -133,5 +149,23 @@ mod tests {
     fn debug_never_prints_the_token() {
         let s = format!("{:?}", ApprovalAuthority::new(Some(T.into()), true));
         assert!(!s.contains(T), "{s}");
+    }
+
+    #[test]
+    fn a_trusted_shim_replaces_the_token_but_not_the_seal() {
+        let sealed = ApprovalAuthority::new(Some(T.into()), true);
+        assert_eq!(sealed.check_from(true, None, true), Ok(()));
+        assert_eq!(sealed.check_from(true, None, false), Err(Refusal::BadToken));
+        let advisory = ApprovalAuthority::new(Some(T.into()), false);
+        assert_eq!(
+            advisory.check_from(true, None, true),
+            Err(Refusal::SandboxNotEnforcing)
+        );
+        let tokenless = ApprovalAuthority::new(None, true);
+        assert_eq!(
+            tokenless.check_from(true, None, true),
+            Ok(()),
+            "a missing home token must not strand the CLI track"
+        );
     }
 }

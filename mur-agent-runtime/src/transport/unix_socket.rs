@@ -93,7 +93,9 @@ pub async fn serve_unix(
                     let _ = w.flush().await;
                 }
             });
-            let ctx = RequestContext::with_notifier(conn_notif_tx);
+            let ctx = RequestContext::with_notifier(conn_notif_tx).with_conn(
+                crate::hitl::shim_ticket::Connection::new(peer.map(|p| p.pid)),
+            );
 
             let codec = LinesCodec::new_with_max_length(MAX_LINE_BYTES);
             let mut framed = FramedRead::new(read, codec);
@@ -127,7 +129,6 @@ pub async fn serve_unix(
                 }
                 let _ = w.flush().await;
             }
-            let _ = peer; // passed to auth / communication_policy via request context in Task 22
             notif_task.abort();
             req_notif_task.abort();
         });
@@ -177,14 +178,26 @@ fn peer_info(stream: &tokio::net::UnixStream) -> Option<PeerInfo> {
             &mut len,
         )
     };
-    if rc == 0 {
-        Some(PeerInfo {
-            pid: 0,
-            uid: cred.cr_uid,
-        })
-    } else {
-        None
+    if rc != 0 {
+        return None;
     }
+    // The pid is a separate option on macOS. 0 when unavailable, which every
+    // consumer reads as "unknown" — never as a real process.
+    let mut pid: libc::pid_t = 0;
+    let mut plen = mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    let prc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            &mut pid as *mut _ as *mut _,
+            &mut plen,
+        )
+    };
+    Some(PeerInfo {
+        pid: if prc == 0 { pid as u32 } else { 0 },
+        uid: cred.cr_uid,
+    })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

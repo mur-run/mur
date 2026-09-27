@@ -47,6 +47,12 @@ struct Rig {
 /// The real socket + handler + gate, with one dangerous call pending and its
 /// prompt already read off the socket by the caller.
 async fn rig() -> Rig {
+    rig_with(Default::default()).await
+}
+
+/// `rig`, sharing `trust` between `shim/hello`, `tool/hitl_respond` and the
+/// gate — the wiring `build_dispatcher` does through the runner.
+async fn rig_with(trust: crate::hitl::shim_ticket::ShimTrust) -> Rig {
     let tmp = tempfile::TempDir::new().unwrap();
     let sock = tmp.path().join("agent.sock");
 
@@ -59,6 +65,13 @@ async fn rig() -> Rig {
         Box::new(HitlRespondHandler {
             pending_approvals: approvals.clone(),
             authority: ApprovalAuthority::new(Some(TOKEN.into()), true),
+            shim_trust: trust.clone(),
+        }),
+    );
+    d.register(
+        "shim/hello",
+        Box::new(crate::protocol::methods::shim::ShimHelloHandler {
+            trust: trust.clone(),
         }),
     );
     let d = Arc::new(d);
@@ -82,6 +95,7 @@ async fn rig() -> Rig {
     // GuardedToolCall does when no per-task sink is routed.
     let gate_approvals = approvals.clone();
     let gate_notifier = notif_tx.clone();
+    let gate_trust = trust.clone();
     let gate = tokio::spawn(async move {
         let gate = BatchGate {
             task_id: "t-self-approve",
@@ -89,6 +103,7 @@ async fn rig() -> Rig {
             approvals: &gate_approvals,
             notifier: &gate_notifier,
             store: None,
+            shim_trust: Some(&gate_trust),
         };
         gate.resolve(vec![PendingCall {
             call_id: "c1".into(),
@@ -127,8 +142,12 @@ async fn rig() -> Rig {
 impl Rig {
     /// Send one `tool/hitl_respond` and return its JSON-RPC response.
     async fn respond(&mut self, id: u64, params: Value) -> Value {
+        self.call(id, "tool/hitl_respond", params).await
+    }
+
+    async fn call(&mut self, id: u64, method: &str, params: Value) -> Value {
         let req = json!({
-            "jsonrpc": "2.0", "id": id, "method": "tool/hitl_respond", "params": params,
+            "jsonrpc": "2.0", "id": id, "method": method, "params": params,
         });
         self.write
             .write_all(format!("{req}\n").as_bytes())
@@ -144,7 +163,7 @@ impl Rig {
             Value::Null
         })
         .await
-        .expect("no response to tool/hitl_respond")
+        .expect("no response from the agent")
     }
 }
 
@@ -199,4 +218,104 @@ async fn anyone_may_deny_without_a_token() {
     assert!(resp["error"].is_null(), "{resp}");
     let decisions = r.gate.await.unwrap();
     assert!(!decisions.get("c1").expect("no decision").allow);
+}
+
+const TASK: &str = "t-self-approve";
+
+/// The test process is the socket peer. Binding its PARENT as "the CLI"
+/// makes this connection a real descendant — `LOCAL_PEERPID` /
+/// `SO_PEERCRED` and the process-tree walk are the production ones.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn parent_pid() -> u32 {
+    std::os::unix::process::parent_id()
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn the_turns_own_shim_may_allow_without_the_home_token() {
+    let trust = crate::hitl::shim_ticket::ShimTrust::default();
+    let t = trust.issue(TASK);
+    t.bind_cli_pid(parent_pid());
+    let mut r = rig_with(trust).await;
+    let id = r.hitl_id.clone();
+
+    let hello = r
+        .call(
+            1,
+            "shim/hello",
+            json!({ "task_id": TASK, "ticket": t.ticket }),
+        )
+        .await;
+    assert!(hello["error"].is_null(), "{hello}");
+    let resp = r
+        .respond(2, json!({ "hitl_id": id, "allow": true, "surface": "cli" }))
+        .await;
+    assert!(resp["error"].is_null(), "{resp}");
+    assert!(r.gate.await.unwrap()["c1"].allow);
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn a_leaked_ticket_from_outside_the_cli_lineage_approves_nothing() {
+    // Bound to our own pid: we are not a STRICT descendant of ourselves,
+    // exactly the position of an agent `bash` job (child of the runtime,
+    // sibling of the CLI) that read the MCP config.
+    let trust = crate::hitl::shim_ticket::ShimTrust::default();
+    let t = trust.issue(TASK);
+    t.bind_cli_pid(std::process::id());
+    let mut r = rig_with(trust).await;
+    let id = r.hitl_id.clone();
+
+    let hello = r
+        .call(
+            1,
+            "shim/hello",
+            json!({ "task_id": TASK, "ticket": t.ticket }),
+        )
+        .await;
+    assert_eq!(hello["error"]["code"], -32013, "{hello}");
+    let resp = r
+        .respond(2, json!({ "hitl_id": id, "allow": true, "surface": "cli" }))
+        .await;
+    assert_eq!(resp["error"]["code"], -32013, "{resp}");
+    assert!(!r.gate.is_finished(), "a leaked ticket settled the gate");
+
+    // Still answerable by the human.
+    let resp = r
+        .respond(
+            3,
+            json!({ "hitl_id": id, "allow": true, "surface": "hub", "approval_token": TOKEN }),
+        )
+        .await;
+    assert!(resp["error"].is_null(), "{resp}");
+    assert!(r.gate.await.unwrap()["c1"].allow);
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn a_trusted_shim_cannot_allow_another_tasks_approval() {
+    let trust = crate::hitl::shim_ticket::ShimTrust::default();
+    let other = trust.issue("some-other-task");
+    other.bind_cli_pid(parent_pid());
+    let mine = trust.issue(TASK);
+    mine.bind_cli_pid(parent_pid());
+    let mut r = rig_with(trust).await;
+    let id = r.hitl_id.clone();
+
+    let hello = r
+        .call(
+            1,
+            "shim/hello",
+            json!({ "task_id": "some-other-task", "ticket": other.ticket }),
+        )
+        .await;
+    assert!(hello["error"].is_null(), "{hello}");
+    let resp = r
+        .respond(2, json!({ "hitl_id": id, "allow": true, "surface": "cli" }))
+        .await;
+    assert_eq!(resp["error"]["code"], -32013, "{resp}");
+    assert!(
+        !r.gate.is_finished(),
+        "cross-task shim approval settled the gate"
+    );
 }

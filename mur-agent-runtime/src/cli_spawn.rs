@@ -16,6 +16,8 @@ pub struct SpawnRequest<'a> {
     pub shim_bin: &'a str,
     pub socket: &'a Path,
     pub task_id: &'a str,
+    /// This turn's one-time shim ticket; revoked when the caller drops it.
+    pub ticket: Option<&'a crate::hitl::shim_ticket::Issued>,
     pub prompt: &'a str,
     /// Where each assistant block goes as it arrives. `None` for an
     /// unattended turn, where nobody is reading.
@@ -156,7 +158,12 @@ pub async fn run_turn(req: SpawnRequest<'_>) -> anyhow::Result<String> {
     let cfg_path = cfg_dir.join("mur-mcp.json");
     std::fs::write(
         &cfg_path,
-        serde_json::to_vec_pretty(&mcp_config_json(req.shim_bin, req.socket, req.task_id))?,
+        serde_json::to_vec_pretty(&mcp_config_json(
+            req.shim_bin,
+            req.socket,
+            req.task_id,
+            req.ticket.map(|t| t.ticket.as_str()).unwrap_or_default(),
+        ))?,
     )?;
 
     let mut cmd = tokio::process::Command::new(req.backend.binary);
@@ -175,6 +182,10 @@ pub async fn run_turn(req: SpawnRequest<'_>) -> anyhow::Result<String> {
         .stderr(std::process::Stdio::piped());
 
     let mut child = cmd.spawn()?;
+    // The lineage anchor: only this pid's descendants may redeem the ticket.
+    if let (Some(t), Some(pid)) = (req.ticket, child.id()) {
+        t.bind_cli_pid(pid);
+    }
     {
         use tokio::io::AsyncWriteExt;
         let mut stdin = child

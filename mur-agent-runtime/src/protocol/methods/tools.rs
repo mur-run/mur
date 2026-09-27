@@ -361,7 +361,10 @@ mod tests {
                 .with_sandbox_enforcing(true),
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(8);
-        let ctx = RequestContext { notifier: Some(tx) };
+        let ctx = RequestContext {
+            notifier: Some(tx),
+            ..Default::default()
+        };
         let h = ToolsCallHandler::new(runner);
         let call = tokio::spawn(async move {
             h.handle(
@@ -400,6 +403,7 @@ mod tests {
         let (shim_tx, _shim_rx) = tokio::sync::mpsc::channel::<Value>(8);
         let ctx = RequestContext {
             notifier: Some(shim_tx),
+            ..Default::default()
         };
         let _ = ToolsCallHandler::new(runner.clone())
             .handle(
@@ -446,6 +450,7 @@ mod tests {
         let (shim_tx, _shim_rx) = tokio::sync::mpsc::channel::<Value>(16);
         let ctx = RequestContext {
             notifier: Some(shim_tx),
+            ..Default::default()
         };
         let _ = ToolsCallHandler::new(runner.clone())
             .handle(

@@ -1008,6 +1008,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 struct HitlRespondHandler {
     pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>>,
     authority: crate::hitl::authority::ApprovalAuthority,
+    shim_trust: crate::hitl::shim_ticket::ShimTrust,
 }
 
 #[async_trait::async_trait]
@@ -1015,7 +1016,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
     async fn handle(
         &self,
         params: Option<serde_json::Value>,
-        _ctx: &crate::protocol::a2a_server::RequestContext,
+        ctx: &crate::protocol::a2a_server::RequestContext,
     ) -> Result<serde_json::Value, crate::protocol::a2a_server::HandlerError> {
         let p = params.ok_or_else(|| {
             crate::protocol::a2a_server::HandlerError::InvalidParams("missing params".into())
@@ -1033,10 +1034,12 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
         let surface = p["surface"].as_str().map(str::to_string);
         // Checked BEFORE the pending entry is taken: a refused allow must not
         // consume the gate, or a spawned tool could burn the human's answer.
+        let trusted_shim = self.shim_trust.authorizes(ctx.conn.as_deref(), &hitl_id);
         self.authority
-            .check(
+            .check_from(
                 allow,
                 p[mur_common::hitl::approval_token::PARAM].as_str(),
+                trusted_shim,
             )
             .map_err(|r| {
                 tracing::warn!(hitl_id = %hitl_id, refusal = ?r, "refused an unauthenticated HITL allow");
@@ -1184,6 +1187,13 @@ fn build_dispatcher(
         Box::new(HitlRespondHandler {
             pending_approvals: pending_approvals.clone(),
             authority: approval_authority,
+            shim_trust: runner.shim_trust(),
+        }),
+    );
+    d.register(
+        "shim/hello",
+        Box::new(crate::protocol::methods::shim::ShimHelloHandler {
+            trust: runner.shim_trust(),
         }),
     );
     d.register(
@@ -1579,6 +1589,7 @@ mod hitl_tests {
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
             authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let result = handler
             .handle(
@@ -1603,6 +1614,7 @@ mod hitl_tests {
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
             authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let err = handler
             .handle(
@@ -1627,6 +1639,7 @@ mod hitl_tests {
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
             authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let result = handler
             .handle(
@@ -1648,6 +1661,7 @@ mod hitl_tests {
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
             authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let result = handler
             .handle(
