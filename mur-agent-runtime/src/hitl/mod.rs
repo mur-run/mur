@@ -2,6 +2,7 @@
 //! oneshot plumbing between the runner and `tool/hitl_respond`; `store` is the
 //! memory of settled decisions; `batch` asks once per LLM response.
 
+pub mod authority;
 pub mod batch;
 pub mod store;
 

@@ -54,6 +54,11 @@ pub enum HandlerError {
     CommunicationDenied(String),
     #[error("approval expired: {0}")]
     ApprovalExpired(String),
+    /// An `allow` that could not be shown to come from a human surface. Its
+    /// own code so a sender can tell "you may not approve this" apart from
+    /// "this approval window closed".
+    #[error("approval refused: {0}")]
+    ApprovalRefused(String),
 }
 
 impl HandlerError {
@@ -69,6 +74,7 @@ impl HandlerError {
             Self::UnsupportedCapability(_) => -32010,
             Self::CommunicationDenied(_) => -32011,
             Self::ApprovalExpired(_) => -32012,
+            Self::ApprovalRefused(_) => -32013,
         }
     }
 }

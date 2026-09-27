@@ -14,6 +14,12 @@ pub fn agent_hitl_respond(
     if let Some(r) = reason {
         payload["reason"] = json!(r);
     }
+    // The runtime honours an allow only with the home's approval token. An
+    // unreadable token is not fatal: the allow goes out bare and the runtime's
+    // refusal, which names the cause, is what the Hub shows.
+    if let Err(e) = mur_common::hitl::approval_token::attach(&mut payload, &home) {
+        tracing::warn!(error = %e, "could not read the HITL approval token");
+    }
     dial_method(
         &home,
         &name,
