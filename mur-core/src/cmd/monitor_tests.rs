@@ -263,6 +263,7 @@ fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
         MonitorAction::List {
             state: None,
             all: false,
+            json: false,
         },
     )
     .unwrap();
@@ -317,6 +318,7 @@ fn list_show_cancel_retry() {
         MonitorAction::List {
             state: None,
             all: false,
+            json: false,
         },
     )
     .unwrap();
@@ -352,7 +354,8 @@ fn list_show_cancel_retry() {
             d.path(),
             MonitorAction::List {
                 state: None,
-                all: false
+                all: false,
+                json: false,
             }
         )
         .unwrap()
@@ -476,10 +479,63 @@ fn bad_state_filter_lists_the_valid_ones() {
         MonitorAction::List {
             state: Some("bogus".into()),
             all: false,
+            json: false,
         },
     )
     .unwrap_err();
     assert!(e.to_string().contains("awaiting_approval"), "{e:#}");
+}
+
+/// The table truncates ids to 13 chars, which is useless in a pipe: the
+/// whole point of `--json` is that `... | jq -r '.[].id' | xargs mur
+/// monitor cancel` works, so it must emit parseable JSON carrying *full*
+/// ids, and `[]` rather than the human "no monitors" line when empty.
+#[test]
+fn list_json_emits_full_ids_and_an_empty_array() {
+    let (d, _envg) = home();
+    let empty = go(
+        d.path(),
+        MonitorAction::List {
+            state: None,
+            all: false,
+            json: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&empty).unwrap(),
+        serde_json::json!([])
+    );
+
+    go(
+        d.path(),
+        MonitorAction::Add {
+            file: spec_file(d.path(), "mur_run", "run-1"),
+            started_at: None,
+        },
+    )
+    .unwrap();
+    let id = MonitorStore::open(d.path())
+        .unwrap()
+        .list(&ListFilter::default())
+        .unwrap()[0]
+        .id
+        .clone();
+
+    let out = go(
+        d.path(),
+        MonitorAction::List {
+            state: None,
+            all: false,
+            json: true,
+        },
+    )
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 1, "{out}");
+    assert_eq!(v[0]["id"].as_str().unwrap(), id, "must be the full id");
+    assert_eq!(v[0]["state"].as_str().unwrap(), "active", "{out}");
+    assert!(v[0]["hard_deadline_at"].is_string(), "{out}");
 }
 
 // `list` truncates ids to `ID_SHORT` for the table, so that truncated
