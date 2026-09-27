@@ -2010,8 +2010,9 @@ impl TaskRunner {
     /// warn loudly, flag the turn for `Task.usage` (`"truncated": true`), and
     /// append the visible truncation marker so every downstream consumer —
     /// user, delegating agent, channel history — can see the cut instead of a
-    /// silent mid-word seam (#715). The effective ceiling is the provider
-    /// default (requests leave `max_tokens` unset), so the warning reports the
+    /// silent mid-word seam (#715). The effective ceiling is the model's
+    /// `models.yaml` `max_tokens:` when set, else the provider default
+    /// (requests leave `max_tokens` unset), so the warning reports the
     /// actual `output_tokens`, which equals the cap at truncation.
     fn mark_max_tokens_truncation(&self, task_id: &str, resp: &mut crate::llm::LlmResponse) {
         self.last_turn_truncated.store(true, Ordering::Relaxed);

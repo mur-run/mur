@@ -58,6 +58,9 @@ pub(crate) fn build_client_from_entry(
     mur_home: &Path,
 ) -> anyhow::Result<Arc<dyn LlmClient>> {
     let client = build_bare_client(entry, profile, mur_home)?;
+    // Here, not in `build_bare_client`: fallback candidates are built through
+    // this function too, so each one carries its own model's ceiling.
+    let client = crate::llm::max_tokens::with_default_max_tokens(client, entry.max_tokens);
     Ok(Arc::new(EndpointNamed {
         inner: client,
         context: endpoint_context(entry),
