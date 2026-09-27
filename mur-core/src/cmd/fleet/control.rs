@@ -56,6 +56,7 @@ mod tests {
                 router: None,
                 members: vec!["pm".into()],
                 channel_id: "fleet-dev".into(),
+                procedure: vec![],
                 team_id: None,
                 rules: vec![],
                 skills: vec![],

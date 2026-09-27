@@ -58,6 +58,82 @@ pub struct Fleet {
     /// after burning its budget. Empty = no preflight.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needs: Vec<String>,
+    /// A fixed step graph for every run of this fleet. Empty → the router
+    /// plans each run (and falls back to broadcast). Non-empty → the router
+    /// is never asked, and an invalid graph fails the run loudly instead of
+    /// falling back: a hand-written plan that silently degrades to a
+    /// broadcast is the failure this field exists to prevent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub procedure: Vec<FleetStep>,
+}
+
+/// Upper bound on a static `procedure:` — same ceiling the router plan has.
+pub const FLEET_PROCEDURE_MAX_STEPS: usize = 32;
+
+/// One step of a static fleet `procedure:`. Same shape a router plan uses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FleetStep {
+    /// Unique within the procedure. Also the only label downstream steps see
+    /// on this step's output, so keep it neutral when anonymity matters.
+    pub id: String,
+    /// Must be one of the fleet's `members`.
+    pub member: String,
+    /// Appended to the run goal for this step. Empty → the goal alone.
+    #[serde(default)]
+    pub task: String,
+    /// Upstream step ids. Their outputs are threaded in, in THIS order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+impl Fleet {
+    /// Structural checks on `procedure:` (members, ids, deps, size, and the
+    /// `parallel:` exclusion). Cycle detection lives with the executor's DAG
+    /// validator in `mur-core`, which the run path applies on top of this.
+    pub fn validate_procedure(&self) -> Result<(), String> {
+        if self.procedure.is_empty() {
+            return Ok(());
+        }
+        if self.parallel.is_some() {
+            return Err(
+                "fleet sets both `procedure:` and `parallel:` — pick one. `parallel:` would win \
+                 and the procedure would be silently ignored."
+                    .into(),
+            );
+        }
+        if self.procedure.len() > FLEET_PROCEDURE_MAX_STEPS {
+            return Err(format!(
+                "procedure has {} steps; the limit is {FLEET_PROCEDURE_MAX_STEPS}",
+                self.procedure.len()
+            ));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for s in &self.procedure {
+            if s.id.trim().is_empty() {
+                return Err(format!("procedure step for `{}` has an empty id", s.member));
+            }
+            if !ids.insert(s.id.as_str()) {
+                return Err(format!("procedure step id `{}` appears twice", s.id));
+            }
+            if !self.members.iter().any(|m| m == &s.member) {
+                return Err(format!(
+                    "procedure step `{}` names `{}`, which is not a fleet member ({})",
+                    s.id,
+                    s.member,
+                    self.members.join(", ")
+                ));
+            }
+        }
+        for s in &self.procedure {
+            if let Some(d) = s.depends_on.iter().find(|d| !ids.contains(d.as_str())) {
+                return Err(format!(
+                    "procedure step `{}` depends on `{d}`, which is not a step id",
+                    s.id
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Per-fleet approval policy. A floor, never a grant: every field here can only
@@ -381,6 +457,7 @@ mod tests {
             team_id: None,
             members: vec!["pm".into(), "qa".into()],
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
@@ -488,6 +565,7 @@ mod limits_tests {
             team_id: None,
             members: vec![],
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg,
@@ -549,5 +627,70 @@ mod limits_tests {
             back.needs,
             vec!["write_file".to_string(), "bash".to_string()]
         );
+    }
+
+    fn proc_fleet(extra: &str) -> Fleet {
+        serde_yaml::from_str(&format!(
+            "name: council\nchannel_id: fleet-council\nmembers: [a, b]\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn procedure_absent_is_empty_and_not_serialized() {
+        let f = proc_fleet("");
+        assert!(f.procedure.is_empty());
+        assert!(f.validate_procedure().is_ok());
+        assert!(!serde_yaml::to_string(&f).unwrap().contains("procedure"));
+    }
+
+    #[test]
+    fn procedure_parses_and_keeps_dep_order() {
+        let f = proc_fleet(
+            "procedure:\n  - {id: p1, member: a, task: one}\n  - {id: p2, member: b}\n  - {id: r, member: a, task: rev, depends_on: [p2, p1]}\n",
+        );
+        assert_eq!(f.procedure.len(), 3);
+        assert_eq!(f.procedure[1].task, "");
+        assert_eq!(f.procedure[2].depends_on, vec!["p2", "p1"]);
+        assert!(f.validate_procedure().is_ok());
+    }
+
+    #[test]
+    fn procedure_rejects_unknown_member() {
+        let f = proc_fleet("procedure:\n  - {id: p1, member: ghost}\n");
+        let err = f.validate_procedure().unwrap_err();
+        assert!(err.contains("ghost"), "{err}");
+    }
+
+    #[test]
+    fn procedure_rejects_duplicate_and_empty_ids() {
+        let f = proc_fleet("procedure:\n  - {id: p1, member: a}\n  - {id: p1, member: b}\n");
+        assert!(f.validate_procedure().unwrap_err().contains("p1"));
+        let f = proc_fleet("procedure:\n  - {id: '  ', member: a}\n");
+        assert!(f.validate_procedure().is_err());
+    }
+
+    #[test]
+    fn procedure_rejects_missing_dep() {
+        let f = proc_fleet("procedure:\n  - {id: p1, member: a, depends_on: [nope]}\n");
+        let err = f.validate_procedure().unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn procedure_rejects_oversize() {
+        let steps: String = (0..=FLEET_PROCEDURE_MAX_STEPS)
+            .map(|i| format!("  - {{id: s{i}, member: a}}\n"))
+            .collect();
+        let f = proc_fleet(&format!("procedure:\n{steps}"));
+        assert!(f.validate_procedure().is_err());
+    }
+
+    #[test]
+    fn procedure_and_parallel_are_exclusive() {
+        let mut f = proc_fleet("procedure:\n  - {id: p1, member: a}\n");
+        f.parallel = Some(serde_yaml::from_str("judge:\n  model: m\ntracks: []\n").unwrap());
+        let err = f.validate_procedure().unwrap_err();
+        assert!(err.contains("parallel"), "{err}");
     }
 }

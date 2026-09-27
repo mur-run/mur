@@ -237,6 +237,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
