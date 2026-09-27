@@ -81,6 +81,18 @@ pub struct ModelEntry {
     /// Model context window size in tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// Output-token ceiling sent on every request to this model that does not
+    /// set its own.
+    ///
+    /// On models with extended thinking this budget covers thinking AND the
+    /// visible reply together, so a high `effort` can spend all of it before
+    /// any text is produced. `None` leaves the provider client's own default
+    /// in place (the Anthropic client's built-in constant; nothing at all for
+    /// OpenAI-protocol clients, which then get the server's default). A
+    /// request that names its own `max_tokens` keeps it — this is a default,
+    /// not a clamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
     /// When the rates above were recorded.
     ///
     /// Vendors move prices; a rate written months ago is a guess wearing the
@@ -794,6 +806,28 @@ models:
         assert_eq!(e.input_cost_per_1k, Some(0.005));
         assert_eq!(e.output_cost_per_1k, Some(0.025));
         assert_eq!(e.context_window, Some(200_000));
+    }
+
+    #[test]
+    fn max_tokens_parses_and_is_omitted_when_unset() {
+        let yaml = r#"
+schema_version: 1
+models:
+  opus:
+    provider: claude
+    model: claude-opus-5-5
+    max_tokens: 128000
+  plain:
+    provider: anthropic
+    model: claude-opus-5-5
+"#;
+        let r: ModelRegistry = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(r.models["opus"].max_tokens, Some(128_000));
+        assert_eq!(r.models["plain"].max_tokens, None);
+        // Unset stays out of the file, so saving an untouched registry does
+        // not grow a `max_tokens: null` line on every entry.
+        let out = serde_yaml_ng::to_string(&r.models["plain"]).unwrap();
+        assert!(!out.contains("max_tokens"), "{out}");
     }
 
     #[test]

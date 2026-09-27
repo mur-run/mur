@@ -189,6 +189,18 @@ exactly which refs still need a key on the new machine.
 
 Providers rename and retire model ids constantly. The registry key is the stable name your agents point at, so a rename is **one edit to `models.yaml`** and every agent using that key follows — no per-agent migration. `mur model doctor` reports where that indirection has come apart; it is read-only and never rewrites a model id for you, because which model an agent runs is a cost and behaviour decision that shouldn't change silently.
 
+**Output ceiling per model.** An entry can carry `max_tokens:` — the output-token ceiling sent on every request to that model that does not set its own:
+
+```yaml
+models:
+  claude_opus:
+    provider: claude
+    model: claude-opus-5-5
+    max_tokens: 128000   # thinking + reply share this budget
+```
+
+Unset, Anthropic-protocol models get the runtime's built-in 32768 and OpenAI-protocol models send no ceiling at all (the server's default applies). Raise it when a thinking model at high `effort` hits `[output truncated: max_tokens reached]` — that budget covers thinking *and* the visible reply, so it can run out before any text appears. A higher ceiling also raises the most one call can cost, so check the agent's `cost_usd` limit (`mur limits <agent>`) alongside it.
+
 API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — never written to config in plaintext. The **MUR Hub** desktop app has a **Model Library** that connects cloud providers (key saved to the macOS Keychain), auto-detects local runtimes (Ollama / MLX / LM Studio), discovers their models via `/v1/models`, and adds them to the registry — no YAML editing required.
 
 **Dial reasoning up or down, per agent.** Every provider spells this differently — OpenAI takes a level name, Anthropic its own scale, DeepSeek V4 low/high/max with no middle step, Qwen and GLM only an on/off switch, and Mistral's Magistral models reject the parameter outright. MUR keeps one scale and one table that knows which levels each model really takes, so `mur agent effort <name> high` means the same thing everywhere and a level a model cannot use is degraded instead of erroring. Set it per agent from the CLI, for one conversation with `/effort`, or in the MUR Hub's **Behavior** tab.

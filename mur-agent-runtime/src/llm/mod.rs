@@ -15,6 +15,7 @@ pub(crate) mod client_builder;
 pub mod codex;
 pub mod fallback;
 pub mod loopback;
+mod max_tokens;
 pub mod ollama;
 pub mod openai;
 pub mod stub;

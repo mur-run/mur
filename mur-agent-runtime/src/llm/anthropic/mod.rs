@@ -35,6 +35,9 @@ const DEFAULT_VERSION: &str = "2023-06-01";
 /// means "adaptive thinking, on" from Opus 5 onward — and `max_tokens` caps
 /// thinking AND response text together. Without the extra room the same
 /// mid-tool_use truncation returns, now caused by thinking eating the budget.
+///
+/// Only the fallback: a model's `max_tokens:` in `models.yaml` is filled into
+/// the request before it gets here (`llm::max_tokens`), and wins.
 const DEFAULT_MAX_TOKENS: u32 = 32768;
 
 // Anthropic currently supplies no structured context-overflow code. Keep this
