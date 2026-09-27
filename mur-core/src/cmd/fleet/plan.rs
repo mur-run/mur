@@ -130,6 +130,48 @@ pub fn parse_router_plan(text: &str, members: &[String], goal: &str) -> Option<P
     })
 }
 
+/// The fleet's hand-written `procedure:` as an executable [`Procedure`], or
+/// `Ok(None)` when the fleet has none (the router plans, as before).
+///
+/// Unlike [`parse_router_plan`] this **never falls back to broadcast**: an
+/// invalid static procedure is an authoring error, and silently turning it
+/// into "everyone gets the whole goal" is exactly the failure it exists to
+/// prevent. Each step's intent carries the full `goal` (including any routing
+/// note) plus the step's own task, labelled by step id only.
+pub fn static_procedure(fleet: &Fleet, goal: &str) -> anyhow::Result<Option<Procedure>> {
+    if fleet.procedure.is_empty() {
+        return Ok(None);
+    }
+    fleet
+        .validate_procedure()
+        .map_err(|e| anyhow::anyhow!("fleet '{}': {e}", fleet.name))?;
+    let steps: Vec<ProcedureStep> = fleet
+        .procedure
+        .iter()
+        .map(|st| {
+            let task = if st.task.trim().is_empty() {
+                st.member.clone()
+            } else {
+                st.task.clone()
+            };
+            ProcedureStep {
+                description: format!("{}: {task}", st.id),
+                intent: Some(format!("{goal}\n\n[Step {}]: {task}", st.id)),
+                delegate_to: Some(st.member.clone()),
+                id: Some(st.id.clone()),
+                depends_on: st.depends_on.clone(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    crate::executor::dag::validate_steps(&steps)
+        .map_err(|e| anyhow::anyhow!("fleet '{}': invalid procedure: {e}", fleet.name))?;
+    Ok(Some(Procedure {
+        variables: vec![],
+        steps,
+    }))
+}
+
 /// Ask the router agent to produce a plan; `None` on any failure (caller falls
 /// back to broadcast). Requires the router agent to be running.
 ///
@@ -258,6 +300,59 @@ fn build_plan_prompt(mur_home: &Path, fleet: &Fleet, events: &[ChannelEvent]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn proc_fleet(procedure: &str) -> Fleet {
+        serde_yaml::from_str(&format!(
+            "name: council\nchannel_id: fleet-council\nmembers: [pm, qa]\n{procedure}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn static_procedure_absent_defers_to_router() {
+        assert!(static_procedure(&proc_fleet(""), "g").unwrap().is_none());
+    }
+
+    #[test]
+    fn static_procedure_builds_steps_in_order_with_full_goal() {
+        let f = proc_fleet(
+            "procedure:\n  - {id: a, member: pm, task: draft}\n  - {id: b, member: qa, depends_on: [a]}\n  - {id: c, member: pm, task: vote, depends_on: [b, a]}\n",
+        );
+        let p = static_procedure(&f, "FULL GOAL").unwrap().unwrap();
+        let ids: Vec<_> = p.steps.iter().map(|s| s.id.clone().unwrap()).collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+        assert_eq!(p.steps[0].delegate_to.as_deref(), Some("pm"));
+        let intent = p.steps[0].intent.as_deref().unwrap();
+        assert!(intent.starts_with("FULL GOAL"), "{intent}");
+        assert!(intent.ends_with("[Step a]: draft"), "{intent}");
+        // Empty task falls back to the member name, as the router path does.
+        assert!(
+            p.steps[1]
+                .intent
+                .as_deref()
+                .unwrap()
+                .ends_with("[Step b]: qa")
+        );
+        // Declared dependency order survives (thread_dep_outputs walks it).
+        assert_eq!(p.steps[2].depends_on, ["b", "a"]);
+        // No role names leak into the label other steps see.
+        assert!(!intent.contains("pm]"));
+    }
+
+    #[test]
+    fn static_procedure_invalid_is_an_error_not_a_fallback() {
+        let f = proc_fleet("procedure:\n  - {id: a, member: ghost}\n");
+        let err = static_procedure(&f, "g").unwrap_err().to_string();
+        assert!(err.contains("ghost") && err.contains("council"), "{err}");
+    }
+
+    #[test]
+    fn static_procedure_rejects_cycle() {
+        let f = proc_fleet(
+            "procedure:\n  - {id: a, member: pm, depends_on: [b]}\n  - {id: b, member: qa, depends_on: [a]}\n",
+        );
+        assert!(static_procedure(&f, "g").is_err());
+    }
 
     fn members() -> Vec<String> {
         vec!["pm".into(), "qa".into()]

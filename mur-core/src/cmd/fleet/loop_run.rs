@@ -837,11 +837,17 @@ pub async fn run_guarded(
             goal: iter_goal.clone(),
             ..fleet.clone()
         };
-        let proc = super::plan::plan_via_router(mur_home, &planning_fleet, &iter_goal, &pre_events)
-            .unwrap_or_else(|| {
-                build_fleet_procedure(&iter_goal, &fleet.members, fleet.parallel.as_ref())
-                    .expect("members validated by caller guard")
-            });
+        // Static `procedure:` first (never falls back); else router, else broadcast.
+        let proc = match super::plan::static_procedure(&planning_fleet, &iter_goal)? {
+            Some(p) => p,
+            None => {
+                super::plan::plan_via_router(mur_home, &planning_fleet, &iter_goal, &pre_events)
+                    .unwrap_or_else(|| {
+                        build_fleet_procedure(&iter_goal, &fleet.members, fleet.parallel.as_ref())
+                            .expect("members validated by caller guard")
+                    })
+            }
+        };
         // Record this iteration's planned steps as Pending (makes "N pending"
         // real) — replacing the prior iteration's so counts reflect the run now.
         {
@@ -1744,6 +1750,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
@@ -1887,6 +1894,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
@@ -1995,6 +2003,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
@@ -2046,6 +2055,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,
@@ -2124,6 +2134,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: Some(mur_common::fleet::FleetLoop {
@@ -2162,6 +2173,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: Some(mur_common::fleet::FleetLoop {
@@ -2211,6 +2223,7 @@ mod tests {
             members: vec!["pm".into()],
             team_id: None,
             channel_id: "fleet-dev".into(),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: Some(mur_common::fleet::FleetLoop {
@@ -2251,6 +2264,7 @@ mod tests {
             team_id: None,
             members: vec!["pm".into()],
             channel_id: format!("fleet-{name}"),
+            procedure: vec![],
             rules: vec![],
             skills: vec![],
             loop_cfg: None,

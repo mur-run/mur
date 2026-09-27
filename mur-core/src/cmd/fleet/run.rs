@@ -392,12 +392,16 @@ pub async fn cmd_fleet_run(
             goal: routed_goal.clone(),
             ..planning_fleet.clone()
         };
-        // Router plans which members do what (with deps); falls back to broadcast-to-all.
-        let p = super::plan::plan_via_router(mur_home, &routed_fleet, &routed_goal, &events)
-            .unwrap_or_else(|| {
-                build_fleet_procedure(&routed_goal, &fleet.members, fleet.parallel.as_ref())
-                    .expect("members validated by caller guard")
-            });
+        // A hand-written `procedure:` wins and never falls back; otherwise the
+        // router plans which members do what, falling back to broadcast-to-all.
+        let p = match super::plan::static_procedure(&routed_fleet, &routed_goal)? {
+            Some(p) => p,
+            None => super::plan::plan_via_router(mur_home, &routed_fleet, &routed_goal, &events)
+                .unwrap_or_else(|| {
+                    build_fleet_procedure(&routed_goal, &fleet.members, fleet.parallel.as_ref())
+                        .expect("members validated by caller guard")
+                }),
+        };
         (p, None)
     };
     let run_id = match run_id {
