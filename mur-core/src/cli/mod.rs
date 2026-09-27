@@ -83,7 +83,7 @@ pub enum Commands {
         /// Suppress output
         #[arg(long)]
         quiet: bool,
-        /// Force project-aware sync (prioritize items matching project tags/language)
+        /// Force project-aware sync (match on directory name, detected language, and git remote repo name)
         #[arg(long)]
         project: bool,
         /// Team ID for cloud sync (env: MUR_TEAM_ID)
