@@ -187,6 +187,10 @@ jobs:
           # derive parsing (each test runs on its own thread). 16 MB is safe on
           # every OS; Linux/macOS already default higher.
           RUST_MIN_STACK: "16777216"
+          # sandbox_e2e: a runner that cannot seal (sandbox_init / Landlock
+          # unavailable) must fail, not skip — a skip there is a green that
+          # proved nothing. The gated tests are #[cfg(unix)], so Windows ignores it.
+          MUR_TEST_REQUIRE_SANDBOX: "1"
 
   clippy:
     name: Clippy

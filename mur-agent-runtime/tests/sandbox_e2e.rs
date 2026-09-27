@@ -176,9 +176,9 @@ fn sandbox_write_deny_subprocess_main() {
     let agent_home = std::path::PathBuf::from("/tmp/b1_test_deny_home");
     std::fs::create_dir_all(&agent_home).unwrap();
 
-    if sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]).is_err() {
-        // Sandbox apply failed (e.g., no kernel support) — treat as pass.
-        std::process::exit(0);
+    match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
+        Ok(s) if s.enforcing => {}
+        other => skip_or_fail_unenforced(&other),
     }
 
     // Try writing OUTSIDE agent_home — should be denied by Landlock/SBPL.
@@ -236,17 +236,15 @@ fn sandbox_write_allow_subprocess_main() {
     let runtime_dir = std::path::PathBuf::from("/tmp/b1_test_allow_runtime");
     std::fs::create_dir_all(&runtime_dir).unwrap();
 
-    if sandbox::apply(
+    match sandbox::apply(
         &profile.entitlements,
         &agent_home,
         &[],
         &[],
         std::slice::from_ref(&runtime_dir),
-    )
-    .is_err()
-    {
-        // Sandbox apply failed (e.g., no kernel support) — treat as pass.
-        std::process::exit(0);
+    ) {
+        Ok(s) if s.enforcing => {}
+        other => skip_or_fail_unenforced(&other),
     }
 
     // Mimic save_watch (temp write + rename) and snapshot prune (unlink) inside the
@@ -319,4 +317,110 @@ fn linux_ruleset_paths_are_absolute() {
     for p in &policy.fs_write {
         assert!(p.is_absolute(), "fs_write path must be absolute: {p:?}");
     }
+}
+
+/// Kernel-level proof that a sealed agent cannot read a token in the
+/// credential store (`<mur_home>/secrets/`). The profile-string test
+/// `the_credential_store_is_denied_read_and_write` (macos.rs) only checks the
+/// emitted SBPL; this one actually attempts the read after `sandbox::apply`.
+///
+/// A control file (`<mur_home>/config.yaml`, force-granted read on Linux and
+/// allow-default on macOS) must stay readable — otherwise a Landlock run where
+/// nothing at all is readable would pass for the wrong reason.
+///
+/// The fake `mur_home` lives in a tempdir: `LaunchChain` derives it from
+/// `agent_home` (`<mur_home>/agents/<name>`), so no real `~/.mur` is touched.
+#[test]
+#[cfg(unix)]
+fn sandbox_denies_reading_credential_store_token() {
+    let root = tempfile::tempdir().unwrap();
+    // SBPL matches resolved paths; macOS tempdirs sit behind /var -> /private/var.
+    let mur_home = root.path().canonicalize().unwrap().join("mur");
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(&exe)
+        .env("MUR_TEST_SANDBOX_CRED_READ", &mur_home)
+        .env_remove("MUR_AGENT_SKIP_SANDBOX")
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "sealed agent must get PermissionDenied reading secrets/ and still read config.yaml"
+    );
+}
+
+/// Subprocess entry point for `sandbox_denies_reading_credential_store_token`.
+#[cfg(unix)]
+#[ctor::ctor]
+fn sandbox_cred_read_subprocess_main() {
+    let Some(mur_home) = std::env::var_os("MUR_TEST_SANDBOX_CRED_READ") else {
+        return;
+    };
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::AgentProfile;
+    use std::io::ErrorKind;
+    use std::path::PathBuf;
+
+    const TOKEN_BODY: &[u8] = b"hitl-test-token";
+    let mur_home = PathBuf::from(mur_home);
+    let agent_home = mur_home.join("agents").join("tester");
+    let secrets = mur_home.join("secrets");
+    let token = secrets.join("hitl.token");
+    let control = mur_home.join("config.yaml");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    std::fs::create_dir_all(&secrets).unwrap();
+    std::fs::write(&token, TOKEN_BODY).unwrap();
+    // Must exist before sealing: read grants are existence-checked (Issue 16).
+    std::fs::write(&control, b"{}\n").unwrap();
+
+    let profile = AgentProfile::default_for_tests();
+    match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
+        Ok(s) if s.enforcing => {}
+        other => skip_or_fail_unenforced(&other),
+    }
+
+    if let Err(e) = std::fs::read(&control) {
+        eprintln!("ERROR: control read of config.yaml failed ({e}); test proves nothing");
+        std::process::exit(2);
+    }
+    match std::fs::read(&token) {
+        Err(e) if e.kind() == ErrorKind::PermissionDenied => std::process::exit(0),
+        Err(e) => {
+            eprintln!("ERROR: token read failed, but not with PermissionDenied: {e}");
+            std::process::exit(3);
+        }
+        Ok(body) => {
+            eprintln!(
+                "ERROR: sandboxed read of secrets/hitl.token SUCCEEDED ({} bytes, match={})",
+                body.len(),
+                body == TOKEN_BODY
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Env var that turns "sandbox not enforcing" from a skip into a failure. CI sets
+/// it on runners whose kernel must seal (Linux Landlock, macOS SBPL) so a runner
+/// that silently can't sandbox shows red instead of a green that proved nothing.
+#[cfg(unix)]
+const REQUIRE_SANDBOX_ENV: &str = "MUR_TEST_REQUIRE_SANDBOX";
+
+/// Exit code a subprocess uses when the sandbox was required but did not seal.
+/// Distinct from the tests' own 1/2/3 so the failure names its cause.
+#[cfg(unix)]
+const EXIT_SANDBOX_REQUIRED: i32 = 4;
+
+/// Called by a subprocess whose `sandbox::apply` failed or reported
+/// `enforcing: false`. Skips (exit 0) by default; fails when
+/// `MUR_TEST_REQUIRE_SANDBOX=1`. Only the literal `1` counts, so CI can pass an
+/// empty value on platforms where it should stay a skip.
+#[cfg(unix)]
+fn skip_or_fail_unenforced(why: &dyn std::fmt::Debug) -> ! {
+    if std::env::var_os(REQUIRE_SANDBOX_ENV).is_some_and(|v| v == "1") {
+        eprintln!("FAIL: {REQUIRE_SANDBOX_ENV}=1 but sandbox not enforcing: {why:?}");
+        std::process::exit(EXIT_SANDBOX_REQUIRED);
+    }
+    eprintln!("SKIP: sandbox not enforcing: {why:?}");
+    std::process::exit(0);
 }
