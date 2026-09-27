@@ -442,6 +442,7 @@ pub async fn build_provider_runner(
             session_cwd.clone(),
             tool_fs.clone(),
             launch_chain.clone(),
+            profile.inner.name.clone(),
         ));
     let write_file_def = write_file_exec.def();
     let edit_file_exec: Arc<dyn crate::tools::ToolExecutor> =
@@ -449,6 +450,7 @@ pub async fn build_provider_runner(
             session_cwd.clone(),
             tool_fs.clone(),
             launch_chain.clone(),
+            profile.inner.name.clone(),
         ));
     // The project's AGENTS.md/CLAUDE.md reach the prompt through the file
     // tools' own entitlement and launch chain — never a wider view than
