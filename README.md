@@ -940,7 +940,15 @@ mur monitor list --json                   # same, full ids, for jq / xargs
 mur monitor show <id> --history           # evidence + append-only history
 mur monitor cancel <id>                   # stop watching (never cancels the work)
 mur monitor retry <id>                    # bring an exhausted monitor back
+mur monitor delete <id>                   # erase one monitor and its evidence
+mur monitor prune --older-than 7d         # erase finished monitors idle that long
 ```
+
+Nothing is erased automatically — old evidence is exactly what you come back
+for, so `prune` is a verb you run, not a reaper that runs behind you. It only
+takes monitors that have *stopped*: `completed` by default, `exhausted` with
+`--include-exhausted`, never one still being watched no matter how old. Pair it
+with `--dry-run` first to see the list.
 
 When something notable happens — a monitor stalls, crosses its soft deadline,
 settles, goes unhealthy, or gives up — MUR says so once, in the daemon log and

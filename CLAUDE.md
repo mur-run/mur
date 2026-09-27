@@ -50,7 +50,7 @@ changing any of these.
 - `mur fleet {create|list|show|status|run|stop|start|export|import|partition-plan|merge}` — squads over one signed channel. **Safety triad, do not weaken:** unattended autorun OFF unless `MUR_FLEET_AUTORUN=1`; autorun requires resolvable `limits:`; `mur fleet stop` is the kill-switch. Unattended HITL **defers, never times out**, matched on `action_hash`.
 - `mur limits <name>` / `mur fleet limits` / `mur agent limits` — the three execution knobs per scope (deadline / stuck / cost_usd). Iteration caps and token budgets are gone.
 - `mur model {connect|import|add|list|show|remove|migrate|prices|role|doctor}` — `~/.mur/models.yaml` registry. `doctor` is offline, read-only, warn-only, and never rewrites a model id.
-- `mur monitor {add|list|show|cancel|retry}` — durable monitors for async work. `unknown` is never reported as `failed`; above-`read`-tier actions park a pinned approval.
+- `mur monitor {add|list|show|cancel|delete|prune|retry}` — durable monitors for async work. `unknown` is never reported as `failed`; above-`read`-tier actions park a pinned approval. There is no automatic GC: `prune --older-than` only takes stopped monitors (`completed`, plus `exhausted` opt-in), never one still being watched.
 - `mur official {list|install <id>}` — official catalog; installs carry an account-bound license.
 - `mur deep-research {setup|""} [question]` — web research. Egress consent is explicit (`--grant-egress`).
 
