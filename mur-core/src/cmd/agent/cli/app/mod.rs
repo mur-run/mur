@@ -21,17 +21,60 @@ use super::welcome::{MascotMode, resolve_mascot_mode};
 /// Spinner frames shown while the agent is generating.
 pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Compact composer-border hint. Shift+Enter doesn't need an OS-specific
-/// label (the key is "Shift" everywhere); the Alt/Option fallback chord only
-/// shows up in the full hint below, where there's room to spell it out.
+/// Compact composer-border hint when the kitty keyboard protocol is active.
+/// Shift+Enter doesn't need an OS-specific label (the key is "Shift"
+/// everywhere); the Alt/Option fallback chord only shows up in the full hint
+/// below, where there's room to spell it out.
 const ENTER_HINT_COMPACT: &str = " message — Enter · Shift+Enter · /help ";
 
-/// Full composer-border hint. macOS calls the modifier "Option" even though
-/// it's still crossterm's `ALT` — every other OS calls it "Alt".
+/// Full composer-border hint when the kitty keyboard protocol is active.
+/// macOS calls the modifier "Option" even though it's still crossterm's
+/// `ALT` — every other OS calls it "Alt".
 #[cfg(target_os = "macos")]
-pub(super) const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Option+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Option+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
 #[cfg(not(target_os = "macos"))]
-pub(super) const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Alt+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+const ENTER_HINT_FULL: &str = " message — Enter to send · Shift+Enter newline (Alt+Enter also works) · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+
+/// Hints for a terminal without the kitty protocol (e.g. macOS Terminal.app):
+/// there Shift+Enter is indistinguishable from Enter and sends the message,
+/// so the hint must not teach it. Alt/Option+Enter works everywhere.
+#[cfg(target_os = "macos")]
+const ENTER_HINT_COMPACT_FALLBACK: &str = " message — Enter · Option+Enter · /help ";
+#[cfg(not(target_os = "macos"))]
+const ENTER_HINT_COMPACT_FALLBACK: &str = " message — Enter · Alt+Enter · /help ";
+#[cfg(target_os = "macos")]
+const ENTER_HINT_FULL_FALLBACK: &str = " message — Enter to send · Option+Enter newline · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+#[cfg(not(target_os = "macos"))]
+const ENTER_HINT_FULL_FALLBACK: &str = " message — Enter to send · Alt+Enter newline · Ctrl+V image · Ctrl+O transcript · /help · Ctrl+D quit";
+
+/// One-time startup notice for a terminal without the kitty protocol.
+#[cfg(target_os = "macos")]
+const NEWLINE_FALLBACK_NOTICE: &str =
+    "This terminal doesn't support Shift+Enter for newlines — use Option+Enter instead.";
+#[cfg(not(target_os = "macos"))]
+const NEWLINE_FALLBACK_NOTICE: &str =
+    "This terminal doesn't support Shift+Enter for newlines — use Alt+Enter instead.";
+
+/// Composer hint for a given protocol state. Pure (no global read) so tests
+/// can cover both states without racing on `keyboard_enhancement_active`.
+pub(super) fn enter_hint_for(active: bool, full: bool) -> &'static str {
+    match (active, full) {
+        (true, true) => ENTER_HINT_FULL,
+        (true, false) => ENTER_HINT_COMPACT,
+        (false, true) => ENTER_HINT_FULL_FALLBACK,
+        (false, false) => ENTER_HINT_COMPACT_FALLBACK,
+    }
+}
+
+/// Composer hint for the terminal this session is actually running in.
+fn enter_hint(full: bool) -> &'static str {
+    enter_hint_for(super::keyboard_enhancement_active(), full)
+}
+
+/// Startup notice for a given protocol state — `None` when Shift+Enter works.
+pub(super) fn newline_fallback_notice(active: bool) -> Option<&'static str> {
+    (!active).then_some(NEWLINE_FALLBACK_NOTICE)
+}
 
 /// Assumed terminal width until the event loop reports the real one.
 const DEFAULT_WIDTH: u16 = 80;
@@ -563,10 +606,11 @@ impl App {
         // to the title.
         let budget = usize::from(self.width)
             .saturating_sub(usize::from(theme.inner_padding) * 2 + BORDER_CORNERS);
-        let hint = if theme.compact_input || ENTER_HINT_FULL.chars().count() > budget {
-            ENTER_HINT_COMPACT
+        let full = enter_hint(true);
+        let hint = if theme.compact_input || full.chars().count() > budget {
+            enter_hint(false)
         } else {
-            ENTER_HINT_FULL
+            full
         };
         let is_shell = self.input_text().trim_start().starts_with('!');
         let block = if is_shell {
@@ -609,7 +653,7 @@ fn new_input() -> TextArea<'static> {
         Block::default()
             .borders(Borders::TOP)
             .padding(Padding::new(0, 0, 0, COMPOSER_PAD_BELOW))
-            .title(ENTER_HINT_COMPACT),
+            .title(enter_hint(false)),
     );
     ta.set_cursor_line_style(Style::default());
     ta.set_placeholder_text("Type a message…");

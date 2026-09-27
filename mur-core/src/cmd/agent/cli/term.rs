@@ -88,6 +88,12 @@ pub(super) async fn run_tui(
     let _guard = TerminalGuard::enter()?;
 
     let mut app = build_app(&home, &agent, resume, active_theme)?;
+    // After `TerminalGuard::enter()`, so the protocol flag is settled. Only
+    // here, once per launch — `handover.rs` rebuilds nothing through this
+    // path, so returning from `$EDITOR` doesn't repeat it.
+    if let Some(notice) = app::newline_fallback_notice(keyboard_enhancement_active()) {
+        app.push_system(notice);
+    }
     if let Some(f) = fleet.as_deref() {
         app.fleet = Some(fleet_rail::FleetRail::start(f));
     }
