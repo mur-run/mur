@@ -38,6 +38,36 @@ pub struct GuardedToolCall {
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
     pub(crate) pending_approvals: Option<HitlApprovals>,
+    /// B1 sandbox enforcing on this boot. `false` refuses every `Ask` tool
+    /// before the gate asks — see `refuse_unsandboxed`.
+    pub(crate) sandbox_enforcing: bool,
+}
+
+/// D2 / D2b: with the B1 sandbox not enforcing, the agent can read its own
+/// `identity.key` and sign an allow `verify_one` accepts — a fresh one or a
+/// remembered one. No allow can be trusted, so asking could only end in a
+/// refusal: after the human clicks allow, or at the HITL timeout. Refuse
+/// before asking. Deliberately NOT recorded in the decision store: a
+/// remembered deny would outlive this boot's sandbox state.
+///
+/// Points at `list-paths`, not "restart": its header names the mode the seal
+/// ended in (`advisory-only`, `macos-sbpl-failed`, …), and a seal that failed
+/// for a platform reason (no Landlock, `sandbox_init` refused) fails again on
+/// every restart.
+fn refuse_unsandboxed(agent_name: &str, tool_name: &str) -> crate::hitl::HitlDecision {
+    let agent = if agent_name.is_empty() {
+        "<agent>"
+    } else {
+        agent_name
+    };
+    crate::hitl::HitlDecision {
+        allow: false,
+        reason: Some(format!(
+            "`{tool_name}` needs approval, and approvals are off because this agent's \
+             sandbox is not enforcing — see `mur agent perm list-paths {agent}`"
+        )),
+        surface: None,
+    }
 }
 
 impl GuardedToolCall {
@@ -83,6 +113,13 @@ impl GuardedToolCall {
             if !known.contains(&call.tool_name)
                 || effective_tool_policy(&self.tools_policy, &call.tool_name) != ToolPolicy::Ask
             {
+                continue;
+            }
+            if !self.sandbox_enforcing {
+                out.insert(
+                    call.call_id.clone(),
+                    refuse_unsandboxed(&self.agent_name, &call.tool_name),
+                );
                 continue;
             }
             if let Some(d) =
