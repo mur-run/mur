@@ -95,10 +95,10 @@ pub(super) fn run_plain(
                     && bash_class::is_readonly_call(tool, hitl.get("tool_input"))
                 {
                     // Same lane as the TUI, same classifier. This mode used to
-                    // ignore `--auto-reads` outright, so the identical flag
+                    // ignore the flag outright, so the identical flag
                     // behaved differently depending on how the CLI was started
                     // — and plain mode is exactly where unattended runs live.
-                    eprintln!("  [auto-approved read-only {tool} (--auto-reads)]");
+                    eprintln!("  [auto-approved read-only {tool} (read lane)]");
                     (true, "auto")
                 } else if within_ceiling && session_allow.borrow().contains(tool) {
                     eprintln!("  [auto-approved {tool} (session allow)]");

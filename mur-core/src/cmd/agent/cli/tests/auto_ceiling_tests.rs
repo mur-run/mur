@@ -137,7 +137,7 @@ fn a_per_tool_session_grant_is_bounded_by_the_same_ceiling() {
     );
 }
 
-/// The read lane (`--auto-reads`) is capped at `Read` by construction, but it
+/// The read lane is capped at `Read` by construction, but it
 /// is a third way into the same auto branch, so it gets the same assertion.
 #[test]
 fn the_read_lane_cannot_carry_a_non_read_call() {
