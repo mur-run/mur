@@ -11,6 +11,8 @@ pub struct WriteFileTool {
     pub fs: FilesystemEntitlement,
     /// MUR's own launch chain. Checked before `fs`; no grant can satisfy it.
     pub chain: crate::sandbox::launch_chain::LaunchChain,
+    /// This agent's canonical name, so a refusal prints a runnable grant.
+    pub agent: String,
 }
 
 impl WriteFileTool {
@@ -18,11 +20,13 @@ impl WriteFileTool {
         session_cwd: SessionCwd,
         fs: FilesystemEntitlement,
         chain: crate::sandbox::launch_chain::LaunchChain,
+        agent: String,
     ) -> Self {
         Self {
             session_cwd,
             fs,
             chain,
+            agent,
         }
     }
     /// Test-only: construct with an inert launch chain. Production must go
@@ -33,6 +37,7 @@ impl WriteFileTool {
             session_cwd,
             fs,
             crate::sandbox::launch_chain::LaunchChain::inert(),
+            "test-agent".into(),
         )
     }
 }
@@ -82,7 +87,7 @@ impl ToolExecutor for WriteFileTool {
             .file_name()
             .ok_or_else(|| ToolError::InvalidInput("path has no file name".into()))?;
         let target = canonical_parent.join(file_name);
-        check_write_entitlement(&self.fs, &target, &self.chain)?;
+        check_write_entitlement(&self.agent, &self.fs, &target, &self.chain)?;
         std::fs::write(&target, content).map_err(|e| {
             ToolError::Execution(crate::tools::fs_policy::format_io_error(
                 "write", &target, &base, &e,
@@ -149,6 +154,14 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not write-entitled"));
+        // The CLI is `allow-write <NAME> <PATH>`; the refusal must be runnable
+        // as printed, not a bare `mur agent perm allow-write`.
+        let dir = std::fs::canonicalize(td.path()).unwrap();
+        let want = format!(
+            "mur agent perm allow-write test-agent {} && mur agent restart test-agent",
+            dir.display()
+        );
+        assert!(err.to_string().contains(&want), "{err}");
         let denied = WriteFileTool::new_for_test(
             SessionCwd::new(td.path().into()),
             fs_ent(&[root], &[root]),

@@ -93,6 +93,21 @@ pub(super) fn classify_write_denial(
     (edited > sealed).then_some(WriteDenial::NeedsRestart)
 }
 
+/// The copy-pasteable grant + restart pair for a write the agent was refused.
+///
+/// One builder for every surface (bash's kernel denial, the file tools'
+/// entitlement check) so the `allow-write <NAME> <PATH>` shape cannot drift
+/// between them again. `mur agent perm allow-write` refuses a path that does
+/// not exist, and the denied path usually does not (that is why it was being
+/// created), so name the nearest ancestor that does.
+pub(crate) fn allow_write_commands(path: &Path, agent: &str, sep: &str) -> String {
+    let target = path.ancestors().find(|a| a.exists()).unwrap_or(path);
+    format!(
+        "mur agent perm allow-write {agent} {}{sep}mur agent restart {agent}",
+        target.display()
+    )
+}
+
 /// State a fact and name the command that acts on it — never assert the cause.
 ///
 /// "This path is not under a write grant" is checkable. "That is why the
@@ -100,22 +115,11 @@ pub(super) fn classify_write_denial(
 pub(super) fn write_denied_hint(path: &Path, agent: &str, d: &WriteDenial) -> String {
     let p = path.display();
     match d {
-        WriteDenial::NotGranted => {
-            // `mur agent perm allow-write` refuses a path that does not exist,
-            // and the denied path usually does not (that is why it was being
-            // created), so name the nearest ancestor that does.
-            let target = path
-                .ancestors()
-                .find(|a| a.exists())
-                .unwrap_or(path)
-                .display()
-                .to_string();
-            format!(
-                "\n\n[sandbox] {p} is not under any write grant for agent '{agent}'.\n\
-                 To grant it:\n    mur agent perm allow-write {target}\n    \
-                 mur agent restart {agent}"
-            )
-        }
+        WriteDenial::NotGranted => format!(
+            "\n\n[sandbox] {p} is not under any write grant for agent '{agent}'.\n\
+             To grant it:\n    {}",
+            allow_write_commands(path, agent, "\n    ")
+        ),
         WriteDenial::GrantDiscarded { grant } => format!(
             "\n\n[sandbox] agent '{agent}' has a write grant for {} that covers {p}, but that \
              path does not exist, so the sandbox discarded the grant when it sealed. Create it \
@@ -636,12 +640,23 @@ mod tests {
         let missing = td.path().join("a/b/c.lock");
         let h = write_denied_hint(&missing, "mur", &WriteDenial::NotGranted);
         assert!(
-            h.contains(&format!("allow-write {}", td.path().display())),
+            h.contains(&format!("allow-write mur {}", td.path().display())),
             "{h}"
         );
         assert!(
             !h.contains("c.lock\n"),
             "must not suggest granting the missing file: {h}"
         );
+    }
+
+    /// The CLI is `allow-write <NAME> <PATH>`. A hint without the agent name
+    /// makes clap read the path as `<NAME>` and fail on the missing `<PATH>`,
+    /// so running the hint verbatim granted nothing (observed 2026-09-28).
+    #[test]
+    fn write_hint_command_names_the_agent_before_the_path() {
+        let td = tempfile::tempdir().unwrap();
+        let h = write_denied_hint(&td.path().join("x"), "scout", &WriteDenial::NotGranted);
+        let want = format!("mur agent perm allow-write scout {}", td.path().display());
+        assert!(h.contains(&want), "expected `{want}` in: {h}");
     }
 }
