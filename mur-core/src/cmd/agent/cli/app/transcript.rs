@@ -315,7 +315,7 @@ impl App {
     }
 
     /// Mark the card with this `step_id` as auto-approved — by the read lane
-    /// (`--auto-reads`) or by a session allow (`[a]`). Call BEFORE moving `req`
+    /// or by a session allow (`[a]`). Call BEFORE moving `req`
     /// into `app.hitl`.
     pub fn mark_card_auto_approved(&mut self, step_id: &str) {
         if let Some(card) = self

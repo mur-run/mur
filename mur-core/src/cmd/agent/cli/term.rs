@@ -124,8 +124,14 @@ pub(super) async fn run_tui(
         ));
     }
     app.auto_reads = auto_reads;
-    if auto_reads {
-        app.push_system("auto-reads is ON — read-only bash commands (cat/ls/grep/git status/…) are auto-approved; writes and ambiguous commands still prompt");
+    // The lane is the default, so silence means "on" — only the opt-out is
+    // worth a line, and only when the session asks at all (under the default
+    // auto-approve every tool is answered anyway, so the notice would be a
+    // lie about what changed).
+    if !auto_reads && !auto {
+        app.push_system(
+            "auto-reads is OFF (--no-auto-reads) — read-only commands (cat/ls/grep/git status/…) will stop and wait too",
+        );
     }
 
     // Fixed height for the terminal's current size — see `viewport_h_for` for

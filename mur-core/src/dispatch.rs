@@ -1839,14 +1839,23 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             skin,
             plain,
             budget_usd,
-            auto_reads,
+            auto_reads: _,
+            no_auto_reads,
             fleet,
         } => {
             // Auto-approve is the default; `--ask` is the only way to start
             // ask-first. `--auto` is accepted for old scripts and means what
-            // the default already means.
+            // the default already means — and so does `--auto-reads`, whose
+            // lane is now on unless `--no-auto-reads` turns it off.
             cmd::agent::cmd_cli(
-                &names, resume, !ask, skin, plain, budget_usd, auto_reads, fleet,
+                &names,
+                resume,
+                !ask,
+                skin,
+                plain,
+                budget_usd,
+                !no_auto_reads,
+                fleet,
             )
             .await?
         }

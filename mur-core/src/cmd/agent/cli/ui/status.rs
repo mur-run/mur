@@ -62,7 +62,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     // paths now show a badge, not just the global `auto_approve`:
     //   - `auto_approve`               → ` AUTO `   (every tool, session)
     //   - `session_tool_allow` (N>0)   → ` AUTO:N ` (N tools muted via [a])
-    //   - `auto_reads`                 → ` READS `  (read_file auto-approved)
+    //   - `auto_reads`                 → ` READS `  (read lane; `--ask` only)
     // Pure display; no behaviour change. Fixes the "AUTO badge vanished in a
     // new session" illusion where `[a]`-muted tools left no visible trace.
     if app.auto_approve {
@@ -96,7 +96,11 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ));
         spans.push(Span::raw("  "));
     }
-    if app.auto_reads {
+    // The read lane is ON by default now, so a badge on every session would be
+    // pure wallpaper. It earns its place only in an `--ask` session, where it
+    // is the one thing still answering for the operator — and its absence
+    // there is the real signal (`--no-auto-reads`: everything stops).
+    if app.auto_reads && !app.auto_approve {
         spans.push(Span::styled(
             " READS ",
             Style::default()

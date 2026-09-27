@@ -182,7 +182,7 @@ pub(super) fn decide_hitl_with_note(
         let retry = app.last_sent.clone();
         let t = tx.clone();
         // A keypress is the only branch a human actually answered; `auto` covers
-        // /auto, --auto-reads and session grants, which the audit trail must not
+        // /auto, the read lane and session grants, which the audit trail must not
         // report as a person sitting there.
         let surface = if auto { "auto" } else { "cli" };
         tokio::spawn(async move {

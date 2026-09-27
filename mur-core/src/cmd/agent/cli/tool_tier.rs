@@ -23,8 +23,8 @@
 //! - **The fallback is `Write`, not `Read`.** An unknown head still counts as
 //!   mutating, which keeps it inside the ceiling and auto-answered. Falling
 //!   back to `Privileged` would make the #1228 default ask on every unfamiliar
-//!   build command and train blind approval — the exact failure the
-//!   `--auto-reads` comment in `stream_handler.rs` describes.
+//!   build command and train blind approval — the exact failure the read-lane
+//!   comment in `stream_handler.rs` describes.
 //! - **`Read` is never guessed.** It is delegated to `bash_class`, which
 //!   already fails safe on shell metacharacters and has an audited head list
 //!   with a "do NOT re-add without a full audit" note on it.

@@ -47,7 +47,7 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             }
             // Session auto-approval: `/auto`/`--auto` covers every tool; the
             // modal's [a] key covers a single tool name.
-            // Read lane: `--auto-reads` auto-approves read-only tools.
+            // Read lane: auto-approves read-only tools (`--no-auto-reads` off).
             // `read_file` is read-only by construction (a dedicated read
             // tool, sandbox-enforced); bash needs a provably read-only
             // command. Reads never ask, mirroring Claude Code — the gate

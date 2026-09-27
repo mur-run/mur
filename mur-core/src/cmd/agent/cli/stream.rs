@@ -309,7 +309,7 @@ pub fn spawn_stream(
 ///
 /// `surface` is the audit attribution recorded on the signed `HitlResponse`
 /// (`mur_common::hitl::HitlResponse`): `"cli"` when a human answered the gate,
-/// `"auto"` when the session answered it for them (`--auto`, `--auto-reads`, a
+/// `"auto"` when the session answered it for them (`--auto`, the read lane, a
 /// session-wide grant). Sending `"cli"` for a machine decision would claim a
 /// human was there, which is the class of lie spec §4.4 exists to prevent.
 ///
