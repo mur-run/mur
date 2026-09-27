@@ -256,7 +256,7 @@ fn help_text() -> String {
         "  search    /search <query> [--all] [--limit N] [--lines N] [--send] · /search --expand <id>[,<id>] (full content for a hit)",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
         "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",
-        "keys        Enter send · Shift+Enter newline · Ctrl+V image · Ctrl+O transcript · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll",
+        "keys        Enter send · Shift+Enter or Option/Alt+Enter newline · Ctrl+V image · Ctrl+O transcript · Ctrl+C cancel/clear · Ctrl+D quit · PageUp/PageDown scroll",
         "menus       ↑↓ move · Tab accept · Esc close",
     ]
     .join("\n")

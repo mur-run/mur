@@ -118,10 +118,24 @@ fn help_matches_the_composer_hint_and_the_skin_list() {
     let help = help_text();
     for key in ["Enter", "Shift+Enter", "Ctrl+V", "Ctrl+O", "Ctrl+D"] {
         assert!(
-            super::super::app::ENTER_HINT_FULL.contains(key) && help.contains(key),
+            super::super::app::enter_hint_for(true, true).contains(key) && help.contains(key),
             "{key} must appear in both the composer hint and /help"
         );
     }
+    // Without the kitty protocol the hint teaches the Alt/Option chord, so
+    // `/help` has to name it too — `Option/Alt+Enter` covers both platforms.
+    #[cfg(target_os = "macos")]
+    let fallback = "Option+Enter";
+    #[cfg(not(target_os = "macos"))]
+    let fallback = "Alt+Enter";
+    assert!(
+        super::super::app::enter_hint_for(false, true).contains(fallback),
+        "unsupported-terminal hint must name {fallback}"
+    );
+    assert!(
+        help.contains("Alt+Enter"),
+        "/help must name the fallback chord"
+    );
     for skin in super::super::theme::SKIN_NAMES.split(", ") {
         assert!(help.contains(skin), "/help does not list skin {skin}");
     }
