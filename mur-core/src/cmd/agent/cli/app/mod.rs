@@ -322,9 +322,10 @@ pub struct App {
     /// Optional per-session cost ceiling in USD (`--budget-usd`). `None` = no
     /// limit. Task 2 gates new turns when `session_cost() >= budget_usd`.
     pub budget_usd: Option<f64>,
-    /// Auto-approve read-only bash commands for this session (`--auto-reads`).
-    /// Opt-in, off by default. The classifier is conservative (fail-safe false
-    /// on anything uncertain). Every auto-approval is tagged on the step card.
+    /// Auto-approve read-only bash commands for this session. ON by default
+    /// (`--no-auto-reads` opts out). The classifier is conservative (fail-safe
+    /// false on anything uncertain). Every auto-approval is tagged on the step
+    /// card.
     pub auto_reads: bool,
     /// When true, tool-call step cards render fully (args + result) instead of
     /// the default one-line collapsed summary. Toggled with `/verbose`.

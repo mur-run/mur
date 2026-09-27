@@ -280,9 +280,9 @@ pub async fn cmd_cli(
                 "note: --budget-usd is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
             );
         }
-        if auto_reads {
+        if !auto_reads {
             eprintln!(
-                "note: --auto-reads is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
+                "note: --no-auto-reads is only enforced in the single-agent TUI; it is ignored when opening multiple agents."
             );
         }
         if fleet.is_some() {

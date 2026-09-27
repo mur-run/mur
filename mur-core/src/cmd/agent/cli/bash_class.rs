@@ -1,6 +1,7 @@
 //! Conservative read-only classification of a `bash` tool command, for the
-//! cli's `--auto-reads` lane. Fail-safe: anything not provably read-only
-//! returns `false` (→ a normal HITL prompt). Never auto-approve a write.
+//! cli's read lane (on by default; `--no-auto-reads` opts out). Fail-safe:
+//! anything not provably read-only returns `false` (→ a normal HITL prompt).
+//! Never auto-approve a write.
 
 /// Shell metacharacters that can chain, redirect, expand, substitute, or
 /// background — any of them means "more than one simple command", so we refuse
@@ -133,10 +134,10 @@ const GLAB_READONLY_NOUNS: &[&str] =
     &["mr", "issue", "repo", "release", "label", "milestone", "ci"];
 const GLAB_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff"];
 
-/// Does the `--auto-reads` lane cover this tool call?
+/// Does the read lane cover this tool call?
 ///
 /// The single definition of the lane, shared by the interactive TUI and plain
-/// mode — they used to disagree, with plain mode ignoring `--auto-reads`
+/// mode — they used to disagree, with plain mode ignoring the flag
 /// entirely, so the same flag meant different things depending on how you
 /// started the CLI.
 ///

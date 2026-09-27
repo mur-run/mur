@@ -207,10 +207,15 @@ pub enum AgentAction {
         #[arg(long = "budget-usd")]
         budget_usd: Option<f64>,
         /// Auto-approve read-only bash commands (cat/ls/grep/git status/…).
-        /// Writes and ambiguous commands still prompt. Opt-in; classifier is
-        /// conservative (fail-safe: anything uncertain still asks).
-        #[arg(long = "auto-reads")]
+        /// This is the default; the flag stays so existing scripts keep
+        /// working.
+        #[arg(long = "auto-reads", conflicts_with = "no_auto_reads")]
         auto_reads: bool,
+        /// Prompt for read-only commands too — the old default. Only
+        /// observable under `--ask`, where it is the difference between a
+        /// session that stops on `git status` and one that does not.
+        #[arg(long = "no-auto-reads")]
+        no_auto_reads: bool,
         /// Watch a fleet's shared channel in a status band: job progress at
         /// rest, expanding when a member is blocked. Names the fleet, not the
         /// channel — `--fleet develop` watches `fleet-develop`.
@@ -1264,6 +1269,7 @@ mod tests {
             plain: _,
             budget_usd: _,
             auto_reads: _,
+            no_auto_reads: _,
             fleet: _,
         } = parse_cli_action(&["mur", "agent", "cli", "a1", "a2", "a3", "--auto"])
         else {
@@ -1286,6 +1292,52 @@ mod tests {
     #[test]
     fn agent_cli_requires_at_least_one_name() {
         assert!(Cli::try_parse_from(["mur", "agent", "cli"]).is_err());
+    }
+
+    /// The read lane is on unless the operator opts out, and `--auto-reads`
+    /// survives as a no-op so old scripts and muscle memory keep parsing.
+    /// Pinned at the flag layer because the default lives in `dispatch`'s
+    /// `!no_auto_reads`, where nothing else would catch an inversion.
+    #[test]
+    fn auto_reads_is_the_default_and_the_opt_out_parses() {
+        let AgentAction::Cli { no_auto_reads, .. } =
+            parse_cli_action(&["mur", "agent", "cli", "mur"])
+        else {
+            panic!("expected Cli variant");
+        };
+        assert!(!no_auto_reads, "the read lane must default to ON");
+
+        let AgentAction::Cli { no_auto_reads, .. } =
+            parse_cli_action(&["mur", "agent", "cli", "mur", "--no-auto-reads"])
+        else {
+            panic!("expected Cli variant");
+        };
+        assert!(no_auto_reads);
+
+        // Legacy flag: still accepted, now redundant.
+        let AgentAction::Cli {
+            auto_reads,
+            no_auto_reads,
+            ..
+        } = parse_cli_action(&["mur", "agent", "cli", "mur", "--auto-reads"])
+        else {
+            panic!("expected Cli variant");
+        };
+        assert!(auto_reads);
+        assert!(!no_auto_reads);
+
+        // Asking for both at once is a contradiction, not a precedence puzzle.
+        assert!(
+            Cli::try_parse_from([
+                "mur",
+                "agent",
+                "cli",
+                "mur",
+                "--auto-reads",
+                "--no-auto-reads"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

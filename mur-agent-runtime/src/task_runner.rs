@@ -3042,7 +3042,12 @@ fn rate_limit_backoff_delay(attempt: u8) -> std::time::Duration {
 /// matters: `name`, `content` and `kind` stay in the fingerprint, so what
 /// defines that action is intact — and three calls that agree on all of those
 /// AND return identical results are a loop whatever the narration says.
-const NARRATION_FIELDS: [&str; 1] = ["description"];
+///
+/// The list itself lives in `mur_common::hitl::pin` because the HITL pin
+/// strips the same fields for the same reason (a re-worded `description` must
+/// not mint a new pin and re-ask a settled approval). One list, or the two
+/// drift apart.
+use mur_common::hitl::pin::NARRATION_FIELDS;
 
 /// Hash the part of a tool's input that determines what it DOES.
 ///
