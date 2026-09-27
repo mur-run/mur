@@ -844,3 +844,147 @@ fn show_omits_the_actions_section_when_there_are_none() {
     assert!(!out.contains("actions:"), "{out}");
     assert!(out.contains("recent observations:"), "{out}");
 }
+
+/// `go` pins the clock to `t0`; prune is the one verb whose whole behaviour
+/// is a function of elapsed time, so it needs the clock moved forward.
+fn go_at(d: &Path, a: MonitorAction, now: DateTime<Utc>) -> Result<String> {
+    let mut out = Vec::new();
+    run_to(d, a, &mut out, now)?;
+    Ok(String::from_utf8(out).unwrap())
+}
+
+fn prune(older_than: &str, include_exhausted: bool, dry_run: bool) -> MonitorAction {
+    MonitorAction::Prune {
+        older_than: older_than.into(),
+        include_exhausted,
+        dry_run,
+    }
+}
+
+/// One monitor, cancelled at `t0` — i.e. `completed`, the only state prune
+/// touches by default.
+fn home_with_finished_monitor() -> (tempfile::TempDir, String) {
+    let (d, id) = home_with_monitor();
+    go(d.path(), MonitorAction::Cancel { id: id.clone() }).unwrap();
+    (d, id)
+}
+
+// Would this pass if prune deleted nothing? No — it asserts the store is
+// empty afterwards, not merely that the output mentions a count.
+#[test]
+fn prune_erases_a_finished_monitor_past_the_cutoff() {
+    let (d, _id) = home_with_finished_monitor();
+    let out = go_at(
+        d.path(),
+        prune("7d", false, false),
+        t0() + chrono::Duration::days(10),
+    )
+    .unwrap();
+    assert!(out.contains("pruned 1 monitor(s)"), "{out}");
+    let s = MonitorStore::open(d.path()).unwrap();
+    let left = s
+        .list(&ListFilter {
+            state: None,
+            include_completed: true,
+        })
+        .unwrap();
+    assert!(left.is_empty(), "row must be gone, found {}", left.len());
+}
+
+#[test]
+fn prune_keeps_a_finished_monitor_younger_than_the_cutoff() {
+    let (d, _id) = home_with_finished_monitor();
+    let out = go_at(
+        d.path(),
+        prune("7d", false, false),
+        t0() + chrono::Duration::days(3),
+    )
+    .unwrap();
+    assert!(out.contains("nothing to prune"), "{out}");
+    let s = MonitorStore::open(d.path()).unwrap();
+    assert_eq!(
+        s.list(&ListFilter {
+            state: None,
+            include_completed: true
+        })
+        .unwrap()
+        .len(),
+        1
+    );
+}
+
+/// The safety property: age alone is never enough. An ancient monitor that
+/// is still being watched must survive, because "old" is not "over".
+#[test]
+fn prune_never_touches_a_monitor_that_is_still_being_watched() {
+    let (d, _id) = home_with_monitor();
+    let out = go_at(
+        d.path(),
+        prune("1d", true, false),
+        t0() + chrono::Duration::days(365),
+    )
+    .unwrap();
+    assert!(out.contains("nothing to prune"), "{out}");
+    let s = MonitorStore::open(d.path()).unwrap();
+    assert_eq!(s.list(&ListFilter::default()).unwrap().len(), 1);
+}
+
+// Would this pass if --dry-run secretly deleted? No: it re-reads the store.
+#[test]
+fn prune_dry_run_lists_without_erasing() {
+    let (d, _id) = home_with_finished_monitor();
+    let out = go_at(
+        d.path(),
+        prune("7d", false, true),
+        t0() + chrono::Duration::days(10),
+    )
+    .unwrap();
+    assert!(out.contains("dry run"), "{out}");
+    assert!(out.contains("1 monitor(s) match"), "{out}");
+    let s = MonitorStore::open(d.path()).unwrap();
+    assert_eq!(
+        s.list(&ListFilter {
+            state: None,
+            include_completed: true
+        })
+        .unwrap()
+        .len(),
+        1,
+        "dry run must not delete"
+    );
+}
+
+#[test]
+fn prune_rejects_an_unparseable_duration() {
+    let (d, _id) = home_with_finished_monitor();
+    let e = go_at(d.path(), prune("last tuesday", false, false), t0())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("unrecognised duration"), "{e}");
+}
+
+/// `exhausted` is opt-in: those are parked for a human, so the default
+/// sweep must leave them and `--include-exhausted` must take them.
+#[test]
+fn prune_takes_exhausted_only_when_asked() {
+    let (d, id) = home_with_monitor();
+    let s = MonitorStore::open(d.path()).unwrap();
+    s.set_state(&id, MonitorState::Exhausted, t0()).unwrap();
+    drop(s);
+    let late = t0() + chrono::Duration::days(10);
+
+    let out = go_at(d.path(), prune("7d", false, false), late).unwrap();
+    assert!(out.contains("nothing to prune"), "default must skip: {out}");
+
+    let out = go_at(d.path(), prune("7d", true, false), late).unwrap();
+    assert!(out.contains("pruned 1 monitor(s)"), "{out}");
+    let s = MonitorStore::open(d.path()).unwrap();
+    assert!(
+        s.list(&ListFilter {
+            state: None,
+            include_completed: true
+        })
+        .unwrap()
+        .is_empty()
+    );
+}

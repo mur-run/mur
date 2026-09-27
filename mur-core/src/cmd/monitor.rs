@@ -16,6 +16,10 @@ use mur_monitor::spec::MonitorSpec;
 use mur_monitor::state::MonitorState;
 use mur_monitor::store::{ListFilter, MonitorRow, MonitorStore};
 
+#[path = "monitor/prune.rs"]
+mod prune_mod;
+use prune_mod::prune;
+
 /// Observations shown by `show` without `--history`.
 const SHOW_RECENT_OBSERVATIONS: usize = 5;
 /// Characters of the id `list`/`show` display and `resolve_id` accepts as a
@@ -68,6 +72,18 @@ pub enum MonitorAction {
         #[arg(long)]
         force: bool,
     },
+    /// Erase finished monitors older than a cutoff. Does NOT cancel any work.
+    Prune {
+        /// Age cutoff for the last activity, e.g. `7d`, `36h`, `90m`. Required.
+        #[arg(long, value_name = "DURATION")]
+        older_than: String,
+        /// Also prune `exhausted` monitors (parked for a human by default).
+        #[arg(long)]
+        include_exhausted: bool,
+        /// Print what would be erased and erase nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Bring an exhausted monitor back to active.
     Retry {
         id: String,
@@ -98,6 +114,11 @@ pub fn run_to(
         MonitorAction::Show { id, history } => show(&store, &id, history, out),
         MonitorAction::Cancel { id } => cancel(&store, &id, out, now),
         MonitorAction::Delete { id, force } => delete(&store, &id, force, out),
+        MonitorAction::Prune {
+            older_than,
+            include_exhausted,
+            dry_run,
+        } => prune(&store, &older_than, include_exhausted, dry_run, out, now),
         MonitorAction::Retry {
             id,
             reset_remediation_budget,
