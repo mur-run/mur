@@ -65,9 +65,50 @@ pub fn note_manifest(spec: &NoteSpec<'_>) -> SkillManifest {
     }
 }
 
+/// Narrow a note to one project: `scope: Project` plus the project id that
+/// `scope_visible` matches against (the repo root, per
+/// [`crate::project::active_project_id`]). Both fields must move together —
+/// `Project` scope with no `project` is invisible everywhere — so no caller
+/// sets them by hand.
+pub fn scoped_to_project(mut manifest: SkillManifest, project_id: &str) -> SkillManifest {
+    manifest.scope = crate::skill::manifest::SkillScope::Project;
+    manifest.project = Some(project_id.to_string());
+    manifest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_to_project_sets_scope_and_matches_only_that_project() {
+        let m = scoped_to_project(
+            note_manifest(&NoteSpec {
+                name: "repo-note",
+                description: "d",
+                body: "b",
+                kind: NoteKind::Fact,
+                publisher: "agent:w1",
+            }),
+            "/repos/alpha",
+        );
+        crate::skill::validate(&m).expect("project-scoped note must validate");
+        assert_eq!(m.scope, crate::skill::manifest::SkillScope::Project);
+
+        let visible = |active| {
+            crate::skill::manifest::scope_visible(
+                m.scope,
+                m.fleet.as_deref(),
+                m.project.as_deref(),
+                m.team.as_deref(),
+                None,
+                Some(active),
+                None,
+            )
+        };
+        assert!(visible("/repos/alpha"));
+        assert!(!visible("/repos/beta"));
+    }
 
     #[test]
     fn note_manifest_validates_and_roundtrips_kind() {
