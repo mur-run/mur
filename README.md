@@ -396,8 +396,11 @@ you so, in one line, with `/forget` as the undo (`/memories` lists everything
 it knows). Notes come in two kinds with matched decay: `rule` (behavioral
 guidance, fast half-life) and `fact` (environment truth, slow half-life). A
 reserved injection slot keeps fresh notes from being permanently outbid by
-mature skills. Say it again and the note is updated in place rather than
-colliding — and one you had forgotten comes back. Ask an agent what it knows and
+mature skills. A memory that only makes sense in one codebase is saved
+project-scoped, stamped with that repo's root, and injects only when the agent
+is working there — the agent chooses user or project, but the repo itself is
+resolved locally, never from the model. Say it again and the note is updated in
+place rather than colliding — and one you had forgotten comes back. Ask an agent what it knows and
 it answers from its own `recall`, reading the very set its prompt was built from;
 `mur notes list --agent <name>` shows you the same thing. Off switch / confirm-first:
 `memory.capture` in `~/.mur/config.yaml`.
@@ -914,6 +917,7 @@ gives a real answer, across daemon restarts:
 ```
 mur monitor add --file wait-for-ci.yaml   # validates, probes once, registers
 mur monitor list                          # what still needs attention
+mur monitor list --json                   # same, full ids, for jq / xargs
 mur monitor show <id> --history           # evidence + append-only history
 mur monitor cancel <id>                   # stop watching (never cancels the work)
 mur monitor retry <id>                    # bring an exhausted monitor back

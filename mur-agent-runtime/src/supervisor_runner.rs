@@ -551,6 +551,7 @@ pub async fn build_provider_runner(
                     agent_name: profile.inner.name.clone(),
                     identity: identity.clone(),
                     skills: runtime_skills.clone(),
+                    active_project: mur_common::project::active_project_id,
                 }),
             );
             // Registered with `remember`, under the same capture gate: an agent
