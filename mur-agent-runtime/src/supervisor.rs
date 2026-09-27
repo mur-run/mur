@@ -597,6 +597,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             Some(writer.sender()),
             identity.clone(),
             secrets.clone(),
+            // `Some` on every path that reaches here; `None` would mean no
+            // seal was attempted, which must not count as sealed.
+            sandbox_record.as_ref().is_some_and(|r| r.enforcing),
         )
         .await?;
     let dispatcher = Arc::new(build_dispatcher(

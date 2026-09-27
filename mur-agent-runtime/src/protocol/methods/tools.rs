@@ -357,7 +357,8 @@ mod tests {
                     policy: ToolPolicy::Ask,
                     risk: None,
                 }])
-                .with_pending_approvals(Default::default()),
+                .with_pending_approvals(Default::default())
+                .with_sandbox_enforcing(true),
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(8);
         let ctx = RequestContext { notifier: Some(tx) };
