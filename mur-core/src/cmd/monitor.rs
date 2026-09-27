@@ -48,6 +48,9 @@ pub enum MonitorAction {
         state: Option<String>,
         #[arg(long)]
         all: bool,
+        /// Machine-readable output: one JSON array of monitor objects on stdout.
+        #[arg(long)]
+        json: bool,
     },
     /// One monitor in detail: spec, lease, recent evidence.
     Show {
@@ -89,7 +92,9 @@ pub fn run_to(
         MonitorAction::Add { file, started_at } => {
             add(mur_home, &store, &file, started_at.as_deref(), out, now)
         }
-        MonitorAction::List { state, all } => list(&store, state.as_deref(), all, out, now),
+        MonitorAction::List { state, all, json } => {
+            list(&store, state.as_deref(), all, json, out, now)
+        }
         MonitorAction::Show { id, history } => show(&store, &id, history, out),
         MonitorAction::Cancel { id } => cancel(&store, &id, out, now),
         MonitorAction::Delete { id, force } => delete(&store, &id, force, out),
@@ -237,6 +242,7 @@ fn list(
     store: &MonitorStore,
     state: Option<&str>,
     all: bool,
+    json: bool,
     out: &mut dyn Write,
     now: DateTime<Utc>,
 ) -> Result<()> {
@@ -251,7 +257,44 @@ fn list(
         state,
         include_completed: all,
     })?;
+    if json {
+        return render_list_json(&rows, out);
+    }
     render_list(&rows, out, now)
+}
+
+/// The `--json` shape: a deliberately hand-written subset rather than a
+/// `Serialize` derive on `MonitorRow`, so the internal bookkeeping columns
+/// (fence, version, cycle_id, lease plumbing) stay free to change without
+/// breaking a script. Full ids — the table's 13-char prefix is for eyes,
+/// not for pipes. Always an array, `[]` when empty, one line per run so
+/// `jq` and `xargs` both behave.
+fn render_list_json(rows: &[MonitorRow], out: &mut dyn Write) -> Result<()> {
+    let items: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "state": r.state.as_str(),
+                "outcome": r.outcome.as_str(),
+                "source_type": r.source_type,
+                "reference": r.reference,
+                "created_at": r.created_at.to_rfc3339(),
+                "work_started_at": r.work_started_at.to_rfc3339(),
+                "last_progress_at": r.last_progress_at.to_rfc3339(),
+                "last_checked_at": r.last_checked_at.map(|t| t.to_rfc3339()),
+                "next_check_at": r.next_check_at.to_rfc3339(),
+                "hard_deadline_at": hard_deadline_at(r).to_rfc3339(),
+                "stalled_since": r.stalled_since.map(|t| t.to_rfc3339()),
+                "pending_attempts": r.pending_attempts,
+                "unknown_streak": r.unknown_streak,
+                "remediation_attempts": r.remediation_attempts,
+            })
+        })
+        .collect();
+    writeln!(out, "{}", serde_json::to_string_pretty(&items)?)?;
+    Ok(())
 }
 
 /// The `mur monitor list` row rendering, factored out so the murmur TUI's
