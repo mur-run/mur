@@ -61,6 +61,11 @@ pub struct CliBackend {
 
 /// `claude`, measured at 2.1.273 by running it, not only by reading `--help`.
 ///
+/// `stream_flags` carries `--verbose`: since at least 2.1.281, `-p` with
+/// `--output-format stream-json` and no `--verbose` exits 1 before any event
+/// ("--output-format=stream-json requires --verbose"). Re-measured at 2.1.283;
+/// the flag adds no events the stream parser does not already skip.
+///
 /// `tool_disable_flags` is `--tools ""`, not `--disallowedTools`: the latter
 /// is a named deny list, and denying `Bash` merely sent the model to `Glob`.
 ///
@@ -84,7 +89,7 @@ pub const CLAUDE: CliBackend = CliBackend {
     key: "claude",
     binary: "claude",
     headless_invocation: &["-p"],
-    stream_flags: &["--output-format", "stream-json"],
+    stream_flags: &["--output-format", "stream-json", "--verbose"],
     tool_disable_flags: &["--tools", "", "--strict-mcp-config"],
     mcp_mount: McpMount::PerCall,
     home_env_var: "CLAUDE_CONFIG_DIR",
@@ -306,7 +311,10 @@ mod tests {
     fn claude_row_matches_the_measured_capabilities() {
         assert_eq!(CLAUDE.binary, "claude");
         assert_eq!(CLAUDE.headless_invocation, &["-p"]);
-        assert_eq!(CLAUDE.stream_flags, &["--output-format", "stream-json"]);
+        assert_eq!(
+            CLAUDE.stream_flags,
+            &["--output-format", "stream-json", "--verbose"]
+        );
         assert_eq!(
             CLAUDE.tool_disable_flags,
             &["--tools", "", "--strict-mcp-config"]
