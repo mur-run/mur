@@ -110,6 +110,7 @@ The grant is inert either way; removing it is cosmetic and left to the user.
 - **Code that runs later under the human's authority.** A write grant on `~` or a project directory still allows edits to `.zshrc`, git hooks, `Makefile`, or CI config. Launch-chain protection does not address this and must not be described as if it does. The mitigations are the overbroad-root refusal in §4 and documentation — not a larger blocklist.
 - **Reads on macOS.** The SBPL baseline is `(allow default)` with a deny-all only for writes (`macos.rs:161-165`; a full `(deny default)` would break dyld). Read protection on macOS is the tool gate alone. Linux Landlock does enforce reads.
 - **Agent creation.** Blocked by this spec, restored by Spec 2.
+- **Supervisor-driven respawn.** launchd `KeepAlive` / systemd `Restart=on-failure` re-exec whatever binary the unit points at, without going through MUR. This spec stops an agent from writing the unit or the binary; it does nothing about a binary replaced from outside MUR. Binary attestation (`2026-08-12-binary-attestation-design.md`) checks MUR-triggered spawns only and states the same limit.
 
 ## Testing
 
