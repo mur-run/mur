@@ -8160,6 +8160,9 @@ mod tests {
 
     /// Lives in `task_runner/tests/` so this file stops growing.
     mod sandbox_gate;
+
+    /// D2b probe: forged remembered allow, real store + key.
+    mod d2b_attack_path;
 }
 
 #[cfg(test)]
