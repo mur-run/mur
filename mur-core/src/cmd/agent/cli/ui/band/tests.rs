@@ -565,9 +565,7 @@ mod replay_bound_tests {
             },
         )
         .unwrap();
-        let t = std::time::Instant::now();
         flush_finished(&mut term, &mut app, 20).unwrap();
-        let elapsed = t.elapsed();
 
         // The cursor still advances over everything the flush skipped — the
         // ceiling drops those messages from the REPLAY, it does not leave them
@@ -581,11 +579,25 @@ mod replay_bound_tests {
         );
         // Nothing was dropped from the transcript itself; only from the replay.
         assert_eq!(n, pairs * 2, "the ceiling must not touch app.messages");
-        // And the work is bounded: unbounded replay of this transcript took
-        // seconds of re-wrapping per resize event.
+        // And the work is bounded — measured in rows actually printed, not
+        // wall-clock time. A timing gate read the machine's load as much as
+        // the code (4–7s against a 5s gate on the same commit); the row count
+        // is what the ceiling promises, and it is deterministic. Everything
+        // `emit` prints lands in the backend's scrollback (which holds up to
+        // u16::MAX rows — well above both the ceiling and this transcript's
+        // unbounded replay), so its height is the replay size.
+        let sb = term.backend().scrollback();
+        let replayed = u32::from(sb.area.height);
+        // +2: the "… N earlier messages not replayed" marker and its blank.
         assert!(
-            elapsed < std::time::Duration::from_secs(5),
-            "replay took {elapsed:?} — the ceiling is not bounding the work"
+            replayed <= REPLAY_ROWS_MAX + 2,
+            "replayed {replayed} rows — the ceiling ({REPLAY_ROWS_MAX}) is not bounding the work"
+        );
+        // And the trim happened visibly, not silently.
+        let text: String = sb.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("earlier messages not replayed"),
+            "the replay was trimmed without the counted marker"
         );
     }
 }
