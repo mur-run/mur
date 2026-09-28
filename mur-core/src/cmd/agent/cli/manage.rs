@@ -8,13 +8,33 @@
 
 use anyhow::{Result, bail};
 use mur_common::agent::McpServerEntry;
+use mur_common::proposal::Proposal;
 
 use crate::cmd::agent::{load_profile_for_edit, save_profile};
 
-/// Reminder appended after any profile mutation: the supervisor only reads
-/// the profile at startup.
-pub const RESTART_HINT: &str =
-    "profile updated — restart the agent to apply (mur agent stop <name>, then start it again)";
+/// Line appended after any profile mutation: the supervisor only reads the
+/// profile at startup. The restart itself is offered as a chip ([`applied`]),
+/// not spelled out as a command to retype.
+pub const RESTART_HINT: &str = "profile updated — restart the agent to apply";
+
+/// Chip label for the restart a profile mutation needs.
+pub const RESTART_LABEL: &str = "apply the profile change";
+
+/// A manage command's result: text to show, plus a proposal for the chip.
+pub type Managed = (String, Option<Proposal>);
+
+/// `text` + the restart hint line, with the restart offered as a chip.
+fn applied(text: String) -> Managed {
+    (
+        format!("{text}\n{RESTART_HINT}"),
+        Some(Proposal::restart(RESTART_LABEL)),
+    )
+}
+
+/// A read-only or usage result: no restart needed.
+fn plain(text: impl Into<String>) -> Managed {
+    (text.into(), None)
+}
 
 pub fn mcp_list(agent: &str) -> Result<String> {
     let (_path, profile) = load_profile_for_edit(agent)?;
@@ -41,7 +61,7 @@ pub fn mcp_list(agent: &str) -> Result<String> {
 
 /// Non-interactive port of `cmd_mcp_add` (force semantics): best-effort
 /// binary pin, spawn-allowlist sync, warnings folded into the returned text.
-pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> Result<String> {
+pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> Result<Managed> {
     let (path, mut profile) = load_profile_for_edit(agent)?;
     if profile.mcp_servers.iter().any(|s| s.name == server_id) {
         bail!("MCP server '{server_id}' already exists on '{agent}'");
@@ -129,13 +149,12 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
     for n in notes {
         out.push_str(&format!("\n  {n}"));
     }
-    out.push_str(&format!("\n{RESTART_HINT}"));
-    Ok(out)
+    Ok(applied(out))
 }
 
-pub fn mcp_remove(agent: &str, server_id: &str) -> Result<String> {
+pub fn mcp_remove(agent: &str, server_id: &str) -> Result<Managed> {
     crate::cmd::agent::mcp::cmd_mcp_remove(agent, server_id)?;
-    Ok(format!("removed MCP server '{server_id}'\n{RESTART_HINT}"))
+    Ok(applied(format!("removed MCP server '{server_id}'")))
 }
 
 pub fn skill_list(agent: &str) -> Result<String> {
@@ -150,14 +169,14 @@ pub fn skill_list(agent: &str) -> Result<String> {
     Ok(out.trim_end().to_string())
 }
 
-pub fn skill_add(agent: &str, source: &str) -> Result<String> {
+pub fn skill_add(agent: &str, source: &str) -> Result<Managed> {
     crate::cmd::agent::skill::cmd_skill_add(agent, source)?;
-    Ok(format!("installed skill from '{source}'\n{RESTART_HINT}"))
+    Ok(applied(format!("installed skill from '{source}'")))
 }
 
-pub fn skill_remove(agent: &str, query: &str) -> Result<String> {
+pub fn skill_remove(agent: &str, query: &str) -> Result<Managed> {
     crate::cmd::agent::skill::cmd_skill_remove(agent, query)?;
-    Ok(format!("removed skill '{query}'\n{RESTART_HINT}"))
+    Ok(applied(format!("removed skill '{query}'")))
 }
 
 /// Usage strings shown for bad arguments.
@@ -166,21 +185,45 @@ pub const MCP_USAGE: &str =
 pub const SKILL_USAGE: &str = "usage: /skill [list] · /skill add <path> (validates + installs a .yaml/.md skill into skills/<name>/skill.yaml) · /skill remove <name>";
 
 /// Dispatch a parsed `/mcp` invocation.
-pub fn run_mcp(agent: &str, args: &[String]) -> Result<String> {
+pub fn run_mcp(agent: &str, args: &[String]) -> Result<Managed> {
     match args.first().map(String::as_str) {
-        None | Some("list") => mcp_list(agent),
+        None | Some("list") => mcp_list(agent).map(plain),
         Some("add") if args.len() >= 3 => mcp_add(agent, &args[1], &args[2], &args[3..]),
         Some("remove") | Some("rm") if args.len() == 2 => mcp_remove(agent, &args[1]),
-        _ => Ok(MCP_USAGE.into()),
+        _ => Ok(plain(MCP_USAGE)),
     }
 }
 
 /// Dispatch a parsed `/skill` invocation.
-pub fn run_skill(agent: &str, args: &[String]) -> Result<String> {
+pub fn run_skill(agent: &str, args: &[String]) -> Result<Managed> {
     match args.first().map(String::as_str) {
-        None | Some("list") => skill_list(agent),
+        None | Some("list") => skill_list(agent).map(plain),
         Some("add") | Some("install") if args.len() == 2 => skill_add(agent, &args[1]),
         Some("remove") | Some("rm") if args.len() == 2 => skill_remove(agent, &args[1]),
-        _ => Ok(SKILL_USAGE.into()),
+        _ => Ok(plain(SKILL_USAGE)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// §4 latent bug: the hint used to carry a literal `<name>` and teach the
+    /// old stop/start dance. It must now pass the same vet an agent's
+    /// proposal does, and hand the restart over as a chip.
+    #[test]
+    fn restart_hint_is_vettable_and_offers_a_restart_chip() {
+        assert!(!RESTART_HINT.contains('<'), "{RESTART_HINT}");
+        let args = serde_json::json!({ "label": RESTART_LABEL, "kind": "restart" });
+        assert!(mur_common::proposal::vet(&args).is_ok());
+        let (text, chip) = applied("removed skill 'x'".into());
+        assert!(text.ends_with(RESTART_HINT), "{text}");
+        assert!(chip.is_some_and(|p| p.is_executable()));
+    }
+
+    #[test]
+    fn read_only_results_offer_no_chip() {
+        assert!(plain(MCP_USAGE).1.is_none());
+        assert!(run_mcp("a", &["bogus".into()]).unwrap().1.is_none());
     }
 }

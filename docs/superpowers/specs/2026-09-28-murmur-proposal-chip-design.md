@@ -1,7 +1,7 @@
 # murmur proposal chip — agent-proposed commands and actions (design)
 
 **Date:** 2026-09-28
-**Status:** Design approved (Q1–Q7 settled), not yet built
+**Status:** Design approved (Q1–Q7 settled); PR 2 built (see "As built")
 **Scope:** `mur agent cli` (murmur) TUI. Lets an agent *propose* a command or a
 native action; the user decides with one key. First native action: `/restart`.
 Builds on the `suggest_replies` tool
@@ -40,7 +40,7 @@ thing being run. Insert-only proposals can *never* be sent by a single key.
 ```text
 Proposal { label, kind }
 kind = Insert(Shell(cmd) | Slash(cmd))        // insert_only
-     | Action(Restart { agent })              // executable
+     | Action(Restart)                        // executable, always the proposing agent
 ```
 
 Vetting is a pure function run when the tool call arrives; a rejected proposal
@@ -51,6 +51,14 @@ returns a tool error to the agent and never reaches the UI. Reject:
 - secret-shaped strings
 - an `action` outside the allowlist, or an action whose target is not the
   current agent
+
+**As built (PR 2):** the agent proposes via a dedicated `propose` tool
+(`{label, kind: shell|slash|restart, command?}`), separate from the no-op
+`suggest_replies`. `Proposal` and `vet()` live in `mur_common::proposal` so the
+runtime (tool executor → `ToolError::InvalidInput` on rejection) and murmur
+(renders only what passes) run the same pure function. `restart` takes no
+target at all — a proposal aimed at another agent cannot be expressed, which is
+stricter than rejecting one.
 
 ## §2 Key dispatch
 

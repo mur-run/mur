@@ -353,6 +353,11 @@ pub struct App {
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
     /// The single suggestion currently shown as ghost placeholder text, if any.
     pub suggestion_ghost: Option<String>,
+    /// The agent's current `propose` chip (see `cli/proposal.rs`). Its own
+    /// field, not part of `completion`: the overlay's Enter sends a leaf.
+    pub proposal: Option<mur_common::proposal::Proposal>,
+    /// A chip-triggered `/restart` is running; turn submission is locked.
+    pub restart_in_flight: bool,
     /// Set when the visible transcript no longer matches the conversation
     /// (/clear, /channels switch): the event loop wipes screen + scrollback
     /// and re-anchors a fresh viewport before the next draw.
@@ -491,6 +496,8 @@ impl App {
             path_bins: None,
             pending_suggestions: Vec::new(),
             suggestion_ghost: None,
+            proposal: None,
+            restart_in_flight: false,
             wants_screen_wipe: false,
             follow: None,
             sent_history: Vec::new(),

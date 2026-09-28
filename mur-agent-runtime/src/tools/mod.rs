@@ -9,6 +9,7 @@ pub mod guarded;
 pub mod mcp;
 pub mod naming;
 pub mod open_item;
+pub(crate) mod propose;
 pub mod read_file;
 pub mod recall;
 pub mod registry;

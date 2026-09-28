@@ -60,6 +60,7 @@ pub mod pattern;
 pub mod permissions;
 pub mod pipeline;
 pub mod project;
+pub mod proposal;
 pub mod redact;
 pub mod removable_volume;
 pub mod research_provider;
