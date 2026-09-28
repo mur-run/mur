@@ -49,7 +49,7 @@ The files that must be unwritable are exactly the inputs to the *next* trust dec
 
 Four layers. They are not redundant: each catches a case the others structurally cannot.
 
-### 1. Tool gate — `mur-agent-runtime/src/tools/fs_policy.rs`
+### 1. Tool gate — `mur-agent-runtime/src/tools/fs_policy/mod.rs`
 
 Add `is_protected_launch_chain(canonical, mur_home, bin_dir, self_name) -> bool`, checked in `check_write_entitlement` **before** the existing `fs.deny` / `fs.write` list comparison, and unconditionally — no entitlement can satisfy it.
 
@@ -57,7 +57,7 @@ This must be a **predicate, not a path list**. `self_protected()` appends concre
 
 This layer is also the only one that produces a legible error. The kernel returns a bare `EPERM`, which reads identically to "not granted", "granted but dropped", and "structurally forbidden".
 
-### 2. macOS kernel — `sandbox/macos.rs`
+### 2. macOS kernel — `mur-agent-runtime/src/sandbox/macos.rs`
 
 `build_sbpl_profile` currently emits all allows, then all denies. Extend to a third tier, since SBPL is last-match-wins:
 
@@ -75,7 +75,7 @@ This layer is also the only one that produces a legible error. The kernel return
 
 Denying `file-write*` on a target covers unlink and rename-over, so delete-and-replace is closed.
 
-### 3. Linux kernel — `sandbox/linux.rs`
+### 3. Linux kernel — `mur-agent-runtime/src/sandbox/linux.rs`
 
 **Landlock cannot express deny-within-allow.** `apply_linux` builds `path_beneath_rules(policy.fs_write, …)`, a pure allow-list; there is no deny rule to add. The carve-out in §2 is not expressible.
 
@@ -87,9 +87,9 @@ This is a real behavioural difference between platforms and must be documented a
 
 `allow-write` refuses a path that intersects the protected set, naming which rule it hit. `allow-read` refuses a path that covers any `identity.key`, for the reason given above. Nothing reaches the profile.
 
-Wire in the existing `is_overbroad_root` (`cmd/agent/cli/access.rs:46`), currently used only by the cwd-consent flow, so `/`, `$HOME`, and any path shallower than two normal components are refused here too. A write grant on `$HOME` is equivalent to no sandbox and should be as hard to obtain as it is to reason about.
+Wire in the existing `is_overbroad_root` (`mur-core/src/cmd/agent/cli/access.rs`), currently used only by the cwd-consent flow, so `/`, `$HOME`, and any path shallower than two normal components are refused here too. A write grant on `$HOME` is equivalent to no sandbox and should be as hard to obtain as it is to reason about.
 
-`policy.rs:700 is_guarded_prefix` already encodes the same judgement for spawn prefixes. Three mechanisms expressing one idea should converge on one shared helper rather than drift.
+`is_guarded_prefix` (`mur-agent-runtime/src/sandbox/policy.rs`) already encodes the same judgement for spawn prefixes. Three mechanisms expressing one idea should converge on one shared helper rather than drift.
 
 ## Migration
 
