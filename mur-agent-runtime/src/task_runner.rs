@@ -158,6 +158,16 @@ fn estimated_tokens(history: &[crate::llm::RichMessage]) -> u64 {
     (chars / CHARS_PER_TOKEN_ESTIMATE) as u64
 }
 
+/// Fraction of the model's context window used by the most recent LLM call —
+/// the input to the adaptive injection cutoff. Before the first call
+/// `last_call_input_tokens` is 0, so the first turn is never cut.
+fn context_fill_ratio(last_call_input_tokens: u64, model_max_context_tokens: u64) -> f64 {
+    if model_max_context_tokens == 0 {
+        return 0.0;
+    }
+    (last_call_input_tokens as f64 / model_max_context_tokens as f64).clamp(0.0, 1.0)
+}
+
 /// Does this message open a turn — a user-authored `Text`/`ImageText`?
 ///
 /// The pinned `<project_instructions>` message is a user `Text` too, so this
@@ -1291,18 +1301,17 @@ impl TaskRunner {
         };
 
         let ctx_fill = {
-            let cumulative = self.cumulative_input_tokens.load(Ordering::Relaxed);
+            // `last_input_tokens`, not `cumulative_input_tokens`: the lifetime
+            // total only grows, so it would trip the cutoff on every turn of a
+            // long session.
+            let last_call = self.last_input_tokens.load(Ordering::Relaxed);
             let max = self
                 .skills_cfg
                 .adaptive
                 .as_ref()
                 .map(|a| a.model_max_context_tokens)
                 .unwrap_or(200_000);
-            if max == 0 {
-                0.0
-            } else {
-                (cumulative as f64 / max as f64).clamp(0.0, 1.0)
-            }
+            context_fill_ratio(last_call, max)
         };
         // Scope filter: project from the member's cwd repo root (shared detection
         // with the CLI hook); fleet from the turn's `fleet-<name>` channel id,
@@ -3462,6 +3471,20 @@ fn text_response(text: &str) -> Message {
 mod tests {
     use super::*;
     use mur_common::a2a::MessagePart;
+
+    #[test]
+    fn ctx_fill_measures_one_call_not_runner_lifetime() {
+        // A long session: 1M tokens sent over its life, but the latest call
+        // carried only 20k. Fill must reflect the 20k, or the adaptive cutoff
+        // fires forever once the lifetime total passes the threshold.
+        let fill = context_fill_ratio(20_000, 200_000);
+        assert!((fill - 0.1).abs() < 1e-9, "fill = {fill}");
+        // First turn: no call yet → empty context, never a cutoff.
+        assert_eq!(context_fill_ratio(0, 200_000), 0.0);
+        // Degenerate config and overflow both stay in [0, 1].
+        assert_eq!(context_fill_ratio(5_000, 0), 0.0);
+        assert_eq!(context_fill_ratio(900_000, 200_000), 1.0);
+    }
 
     /// Stub hook: replaces any tool output longer than 10 chars with
     /// "OFFLOADED" (stands in for CompressHook's size-gated offload). Proves

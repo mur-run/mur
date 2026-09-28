@@ -17,6 +17,13 @@ use mur_common::skill::loader::LoadedSkill;
 use mur_common::skill::types::{Category, HostId, Priority};
 use std::collections::HashSet;
 
+/// Heading of the Required-memory block. Pinned instructions outrank the
+/// persona's defaults; saying so in the prompt is what lets the model resolve
+/// a conflict (e.g. persona "mirror the user's language" vs a pinned
+/// "always reply in zh-TW") in the user's favour.
+pub(crate) const REQUIRED_HEADER: &str = "Permanent instructions (pinned by the user; \
+     these OVERRIDE any conflicting default in your persona or style rules)";
+
 fn priority_val(p: &Priority) -> u8 {
     match p {
         Priority::Low => 0,
@@ -48,16 +55,15 @@ pub fn inject_layer2(
     active_project: Option<&str>,
     active_team: Option<&str>,
 ) -> InjectionResult {
-    // Adaptive cutoff: skip entirely when remaining context is too small.
-    if let Some(ad) = &cfg.adaptive {
-        let remaining = 1.0 - context_fill_ratio;
-        if remaining < ad.min_remaining_context_ratio {
-            return InjectionResult {
-                budget_skipped: true,
-                ..Default::default()
-            };
-        }
-    }
+    // Adaptive cutoff: when remaining context is too small, shed skills and
+    // BestEffort memories — but NEVER Required ones. This used to be an early
+    // `return`, placed before the Required split, so a long-lived runner
+    // (whose `cumulative_input_tokens` never resets) silently lost every
+    // permanent instruction once it crossed the threshold (plan invariant 2).
+    let budget_skipped = cfg
+        .adaptive
+        .as_ref()
+        .is_some_and(|ad| 1.0 - context_fill_ratio < ad.min_remaining_context_ratio);
 
     // Host + scope + not-on-demand. Split below into memories (always-on) and
     // trigger-gated skills.
@@ -119,6 +125,11 @@ pub fn inject_layer2(
     notes.sort_by(|a, b| a.name.cmp(&b.name));
     let mut mem_dropped = notes.len().saturating_sub(mem.max_in_prompt);
     notes.truncate(mem.max_in_prompt);
+    if budget_skipped {
+        // Disclosed below as "N more not shown" — no silent caps.
+        mem_dropped += notes.len();
+        notes.clear();
+    }
 
     // Filter: must have at least one `SessionStart` trigger.
     let mut candidates: Vec<&LoadedSkill> = visible
@@ -149,6 +160,9 @@ pub fn inject_layer2(
     });
 
     candidates.truncate(cfg.max_skills_in_prompt);
+    if budget_skipped {
+        candidates.clear();
+    }
 
     // Adaptive token budget (char-based proxy).
     let budget = cfg
@@ -187,10 +201,11 @@ pub fn inject_layer2(
     //
     // Required is a FIXED reservation: it is spent before BestEffort, so
     // BestEffort yields to Required and never the reverse (plan §5).
+    let mut req_lines = Vec::new();
     for s in &required {
         let line = note_body(s);
         mem_spent += line.len() + 1;
-        mem_lines.push(line);
+        req_lines.push(line);
         names.push(s.name.clone());
     }
 
@@ -228,8 +243,11 @@ pub fn inject_layer2(
         lines.push(line);
         names.push(s.name.clone());
     }
-    if lines.is_empty() && mem_lines.is_empty() {
-        return InjectionResult::default();
+    if lines.is_empty() && mem_lines.is_empty() && req_lines.is_empty() {
+        return InjectionResult {
+            budget_skipped,
+            ..Default::default()
+        };
     }
     let mut system_addendum = String::new();
     if !lines.is_empty() {
@@ -249,10 +267,19 @@ pub fn inject_layer2(
             mem_lines.join("\n")
         ));
     }
+    // Required gets its own block, after everything else: the user pinned
+    // these, so they must outrank persona/style defaults (e.g. "mirror the
+    // user's language") rather than read as one more remembered fact.
+    if !req_lines.is_empty() {
+        system_addendum.push_str(&format!(
+            "\n--- {REQUIRED_HEADER} ---\n{}\n---\n",
+            req_lines.join("\n")
+        ));
+    }
     InjectionResult {
         system_addendum,
         injected_names: names,
-        budget_skipped: false,
+        budget_skipped,
     }
 }
 
@@ -667,6 +694,84 @@ content:
         assert_eq!(result.injected_names.len(), 2);
         assert_eq!(result.injected_names[0], "trust");
         assert_eq!(result.injected_names[1], "sand");
+    }
+
+    /// A Required note sitting in the same list as BestEffort trivia gave the
+    /// model no reason to prefer it over a conflicting persona default (the
+    /// concierge persona says "mirror the user's language"; a pinned note says
+    /// "always reply in zh-TW"). Required renders in its own block, marked as
+    /// outranking persona/style defaults, and LAST so it holds the recency end.
+    #[test]
+    fn required_renders_as_overriding_block_after_best_effort() {
+        let skills = vec![
+            note("zz-permanent", "回覆固定使用繁體中文", true),
+            note("aa-trivia", "user likes tabs", false),
+        ];
+        let r = inject_layer2(
+            &skills,
+            &SkillsConfig::default(),
+            &MemoryConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
+        let a = &r.system_addendum;
+        let header = a
+            .find(REQUIRED_HEADER)
+            .unwrap_or_else(|| panic!("Required block header missing:\n{a}"));
+        let pinned = a.find("回覆固定使用繁體中文").unwrap();
+        let trivia = a.find("user likes tabs").unwrap();
+        assert!(
+            header < pinned,
+            "pinned note must sit under the header:\n{a}"
+        );
+        assert!(trivia < header, "Required must come after BestEffort:\n{a}");
+    }
+
+    /// Regression: the adaptive cutoff used to `return` before the
+    /// Required/BestEffort split, so once `cumulative_input_tokens` (runner
+    /// lifetime, never reset) crossed 80% of the window, every permanent
+    /// instruction silently vanished from the prompt. Required is a
+    /// guarantee of injection (plan invariant 2); the cutoff may only shed
+    /// trigger-gated skills and BestEffort memories.
+    #[test]
+    fn required_memory_survives_adaptive_cutoff() {
+        let skills = vec![
+            note("zz-permanent", "永遠用中文回答我", true),
+            note("aa-trivia", "user likes tabs", false),
+            loaded(
+                "x",
+                "hi",
+                TrustLevel::Verified,
+                "triggers:\n  - type: session_start\n",
+            ),
+        ];
+        let cfg = SkillsConfig {
+            adaptive: Some(mur_common::config::AdaptiveSkillsConfig {
+                min_remaining_context_ratio: 0.5,
+                ..mur_common::config::AdaptiveSkillsConfig::default()
+            }),
+            ..SkillsConfig::default()
+        };
+        let r = inject_layer2(
+            &skills,
+            &cfg,
+            &MemoryConfig::default(),
+            0.85,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            r.system_addendum.contains("永遠用中文回答我"),
+            "Required must survive the adaptive cutoff; got:\n{}",
+            r.system_addendum
+        );
+        assert_eq!(r.injected_names, vec!["zz-permanent".to_string()]);
+        assert!(r.budget_skipped, "the cutoff itself must still be reported");
     }
 
     #[test]
