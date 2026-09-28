@@ -180,5 +180,5 @@ Caveats:
   independent source, not two.
 - The research also covered a second topic, design principles as agent
   skills (SOLID/DRY/KISS/YAGNI sources, published principle skills). It is
-  unrelated to the routing options labelled B1–B3 above. None of it is
+  unrelated to the B1 named under "Known wrong answers". None of it is
   used by this design, so it is not summarized here.
