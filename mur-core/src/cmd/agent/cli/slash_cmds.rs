@@ -454,7 +454,12 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             }
         }
         SlashCmd::Login(arg) => match arg {
-            None => run_manage(app, move |agent| Ok(login::render_status_all(&agent))).await,
+            None => {
+                run_manage(app, move |agent| {
+                    Ok((login::render_status_all(&agent), None))
+                })
+                .await
+            }
             Some(word) => match login::Provider::parse(&word) {
                 None => app.push_error(format!(
                     "unknown provider {word:?} — try anthropic or chatgpt"
@@ -561,11 +566,16 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
 /// its outcome as a system note.
 pub(super) async fn run_manage<F>(app: &mut App, f: F)
 where
-    F: FnOnce(String) -> Result<String> + Send + 'static,
+    F: FnOnce(String) -> Result<manage::Managed> + Send + 'static,
 {
     let agent = app.agent.clone();
     match tokio::task::spawn_blocking(move || f(agent)).await {
-        Ok(Ok(text)) => app.push_system(text),
+        Ok(Ok((text, chip))) => {
+            app.push_system(text);
+            if let Some(p) = chip {
+                proposal::offer(app, p);
+            }
+        }
         Ok(Err(e)) => app.push_error(format!("error: {e:#}")),
         Err(e) => app.push_error(format!("task failed: {e}")),
     }

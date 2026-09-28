@@ -36,6 +36,7 @@ mod panel;
 mod paste;
 pub mod persist;
 mod plain;
+mod proposal;
 mod recover;
 mod render_card;
 mod search;

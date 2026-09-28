@@ -65,12 +65,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
     // menu keeps the compact popup (the user is typing, not reading).
     let chooser_h = chooser_band_height(app, f.area().height, input_height);
     let rail_h = fleet_rail_height(app);
+    // The proposal chip is one row directly above the composer.
+    let chip = super::proposal::chip_line(app);
+    let chip_h = u16::from(chip.is_some()); // keep in step with band_inner_rows
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
             Constraint::Length(rail_h),
             Constraint::Length(chooser_h),
+            Constraint::Length(chip_h),
             Constraint::Length(input_height),
             Constraint::Length(1),
         ])
@@ -83,10 +87,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if chooser_h > 0 {
         render_chooser_band(f, app, chunks[2]);
     } else {
-        render_completion(f, app, chunks[3]);
+        render_completion(f, app, chunks[4]);
     }
-    f.render_widget(&app.input, chunks[3]);
-    render_status(f, app, chunks[4]);
+    if let Some((what, hint)) = chip {
+        render_chip(f, app, chunks[3], &what, &hint);
+    }
+    f.render_widget(&app.input, chunks[4]);
+    render_status(f, app, chunks[5]);
 
     // The centered modal is the fallback whenever the approval's inline row on
     // a step card is not actually visible. Key it on VISIBILITY recomputed per
@@ -114,6 +121,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
         // the page size back rather than the key handler guessing one.
         app.hitl_page = shown;
     }
+}
+
+/// One row: the proposal (always shown in full — principle C) and, dimmed,
+/// which key does what right now.
+fn render_chip(f: &mut Frame, app: &App, area: Rect, what: &str, hint: &str) {
+    let line = Line::from(vec![
+        Span::styled(format!(" {what}"), app.theme.accent),
+        Span::styled(format!("  {hint}"), app.theme.muted),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 /// Draw the full-screen transcript overlay (Ctrl+O): the plain-text

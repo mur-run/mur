@@ -140,6 +140,7 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             }
         }
         StreamMsg::Note(text) => app.push_system(text),
+        StreamMsg::RestartDone(outcome) => proposal::finish_restart(app, outcome),
         StreamMsg::Expired { tool, retry } => {
             // The gate auto-denied `tool` at timeout before this approval
             // landed (#8). Stash the user's last message so [Ctrl+R] can
@@ -201,6 +202,12 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             if name == suggest::SUGGEST_REPLIES_NAME {
                 // No step card: stash replies and reveal at turn end.
                 app.pending_suggestions = suggest::parse_suggestions(&args);
+            } else if name == mur_common::proposal::PROPOSE_TOOL {
+                // No step card. Same vet as the runtime's executor, so a
+                // proposal the model is told was rejected is never shown.
+                if let Ok(p) = mur_common::proposal::vet(&args) {
+                    proposal::offer(app, p);
+                }
             } else {
                 app.saw_step_this_turn = true;
                 // A delegated fleet run is a long, otherwise-opaque step:

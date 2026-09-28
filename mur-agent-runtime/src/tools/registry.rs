@@ -69,6 +69,13 @@ pub async fn build_tools(
         defs.push(exec.def());
         map.insert(crate::tools::suggest::SUGGEST_REPLIES.to_string(), exec);
     }
+    // Built-in `propose`: same registration and gating as suggest_replies;
+    // its executor vets the args (mur_common::proposal::vet).
+    if resolve_tool_policy(rules, mur_common::proposal::PROPOSE_TOOL) != ToolPolicy::Deny {
+        let exec: Arc<dyn ToolExecutor> = Arc::new(crate::tools::propose::ProposeTool);
+        defs.push(exec.def());
+        map.insert(mur_common::proposal::PROPOSE_TOOL.to_string(), exec);
+    }
 
     let discovery_futs: Vec<_> = servers
         .iter()
@@ -139,15 +146,20 @@ pub fn attach_bash_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::sandbox::SandboxPolicy;
+
+    /// Always-registered built-ins: `suggest_replies` and `propose`.
+    const BUILTINS: usize = 2;
 
     #[tokio::test]
     async fn no_servers_empty_result() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(None, None, None, None, &[], &[], pool).await;
-        // suggest_replies is always registered as a built-in.
-        assert_eq!(defs.len(), 1);
+        // the chrome built-ins (suggest_replies, propose) are always registered.
+        assert_eq!(defs.len(), BUILTINS);
         assert!(map.contains_key("suggest_replies"));
+        assert!(map.contains_key("propose"));
     }
 
     #[tokio::test]
@@ -173,8 +185,8 @@ mod tests {
             pool,
         )
         .await;
-        // bash + suggest_replies
-        assert_eq!(defs.len(), 2);
+        // bash + the chrome built-ins
+        assert_eq!(defs.len(), BUILTINS + 1);
         assert!(map.contains_key("bash"));
     }
 
@@ -214,8 +226,8 @@ mod tests {
             pool,
         )
         .await;
-        // bash is denied; suggest_replies is still registered.
-        assert_eq!(defs.len(), 1);
+        // bash is denied; the chrome built-ins are still registered.
+        assert_eq!(defs.len(), BUILTINS);
         assert!(!map.contains_key("bash"));
         assert!(map.contains_key("suggest_replies"));
     }
@@ -239,8 +251,8 @@ mod tests {
             pool,
         )
         .await;
-        // read_file + suggest_replies
-        assert_eq!(defs.len(), 2);
+        // read_file + the chrome built-ins
+        assert_eq!(defs.len(), BUILTINS + 1);
         assert!(map.contains_key("read_file"));
     }
 
@@ -268,8 +280,8 @@ mod tests {
             pool,
         )
         .await;
-        // read_file is denied; suggest_replies is still registered.
-        assert_eq!(defs.len(), 1);
+        // read_file is denied; the chrome built-ins are still registered.
+        assert_eq!(defs.len(), BUILTINS);
         assert!(!map.contains_key("read_file"));
         assert!(map.contains_key("suggest_replies"));
     }
@@ -293,8 +305,8 @@ mod tests {
             pool,
         )
         .await;
-        // write_file + suggest_replies
-        assert_eq!(defs.len(), 2);
+        // write_file + the chrome built-ins
+        assert_eq!(defs.len(), BUILTINS + 1);
         assert!(map.contains_key("write_file"));
     }
 
@@ -322,8 +334,8 @@ mod tests {
             pool,
         )
         .await;
-        // write_file is denied; suggest_replies is still registered.
-        assert_eq!(defs.len(), 1);
+        // write_file is denied; the chrome built-ins are still registered.
+        assert_eq!(defs.len(), BUILTINS);
         assert!(!map.contains_key("write_file"));
         assert!(map.contains_key("suggest_replies"));
     }
@@ -347,8 +359,8 @@ mod tests {
             pool,
         )
         .await;
-        // edit_file + suggest_replies
-        assert_eq!(defs.len(), 2);
+        // edit_file + the chrome built-ins
+        assert_eq!(defs.len(), BUILTINS + 1);
         assert!(map.contains_key("edit_file"));
     }
 
@@ -376,8 +388,8 @@ mod tests {
             pool,
         )
         .await;
-        // edit_file is denied; suggest_replies is still registered.
-        assert_eq!(defs.len(), 1);
+        // edit_file is denied; the chrome built-ins are still registered.
+        assert_eq!(defs.len(), BUILTINS);
         assert!(!map.contains_key("edit_file"));
         assert!(map.contains_key("suggest_replies"));
     }

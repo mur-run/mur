@@ -113,6 +113,7 @@ pub(crate) use prompt::prompt_path_for;
 pub use prompt::{cmd_prompt_edit, cmd_prompt_set, cmd_prompt_show};
 #[allow(unused_imports)]
 pub use reconnect::cmd_agent_reconnect;
+pub(crate) use restart::{QuietRestart, restart_quiet};
 #[allow(unused_imports)]
 pub use restart::{cmd_restart, restart_stale_excluding};
 pub use routing::cmd_routing;
