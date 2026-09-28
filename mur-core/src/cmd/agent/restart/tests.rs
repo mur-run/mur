@@ -285,3 +285,26 @@ fn unknown_shas_never_manufacture_a_failure() {
     assert!(!restart_changed_nothing("old", "unknown", "old"));
     assert!(!restart_changed_nothing("", "new", ""));
 }
+
+// ── Output sink ──────────────────────────────────────────────────────
+
+/// `restart_one_with` reports through the sink, never stdout: an agent that
+/// is not running fails before any progress line, so the sink stays empty and
+/// the error carries the reason.
+#[test]
+fn restart_one_with_not_running_emits_no_notes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let agents_dir = tmp.path().join("agents");
+    std::fs::create_dir_all(agents_dir.join("idle-agent")).unwrap();
+    let mut notes: Vec<String> = Vec::new();
+    let mut sink = |n: RestartNote| {
+        notes.push(match n {
+            RestartNote::Info(l) | RestartNote::Failure(l) => l,
+        })
+    };
+    let err = restart_one_with("idle-agent", &agents_dir, "deadbeef", &mut sink)
+        .err()
+        .expect("not-running agent must error");
+    assert!(format!("{err:#}").contains("is not running"));
+    assert!(notes.is_empty(), "unexpected notes: {notes:?}");
+}

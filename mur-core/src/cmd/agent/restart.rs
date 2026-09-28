@@ -316,6 +316,36 @@ fn unexamined(agents_dir: &Path, has_service: &dyn Fn(&str) -> bool) -> (Vec<Str
 /// lock. `ok: false` means the agent was NOT confirmed running — never a
 /// silent note.
 fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<RestartReport> {
+    restart_one_with(name, agents_dir, on_disk_sha, &mut print_note)
+}
+
+/// A progress line from a restart, handed to the caller instead of printed so
+/// a non-CLI caller (the murmur TUI) can render it without stdout writes
+/// tearing its screen.
+pub(super) enum RestartNote {
+    /// Ordinary progress — the CLI prints it to stdout as-is.
+    Info(String),
+    /// A verdict the agent is NOT confirmed running — the CLI prints it to
+    /// stderr prefixed with `✗`.
+    Failure(String),
+}
+
+/// The CLI's sink: exactly the stdout/stderr lines `restart_one` always wrote.
+pub(super) fn print_note(note: RestartNote) {
+    match note {
+        RestartNote::Info(line) => println!("{line}"),
+        RestartNote::Failure(line) => eprintln!("✗ {line}"),
+    }
+}
+
+/// [`restart_one`] without any stdout/stderr writes: every progress line goes
+/// to `note`. Behavior is otherwise identical.
+fn restart_one_with(
+    name: &str,
+    agents_dir: &Path,
+    on_disk_sha: &str,
+    note: &mut dyn FnMut(RestartNote),
+) -> Result<RestartReport> {
     let agent_home = agents_dir.join(name);
     let lock_path = agent_home.join("running.lock");
 
@@ -349,11 +379,11 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
                 // default, but say so — silently truncating an operator's
                 // configured drain window is exactly the kind of thing
                 // that only shows up as a mysteriously-killed agent later.
-                println!(
+                note(RestartNote::Info(format!(
                     "agent '{name}': could not read stop_timeout_secs from \
                      {}; defaulting to {DEFAULT_STOP_TIMEOUT_SECS}s",
                     pp.display()
-                );
+                )));
                 DEFAULT_STOP_TIMEOUT_SECS
             }
         }
@@ -391,7 +421,9 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
     // its slow cold start instead of treating it as "not coming back".
     let mut direct_pid: Option<u32> = None;
     if !has_service {
-        println!("agent '{name}' has no service installed; respawning runtime directly");
+        note(RestartNote::Info(format!(
+            "agent '{name}' has no service installed; respawning runtime directly"
+        )));
         direct_pid = Some(direct_respawn(name, &agent_home)?);
     }
 
@@ -407,6 +439,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
         old_pid,
         has_service,
         direct_pid,
+        note,
     )?;
 
     Ok(match new_pid {
@@ -426,7 +459,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
                     short8(on_disk_sha),
                     stale::runtime_path_for(name).display()
                 );
-                eprintln!("✗ {line}");
+                note(RestartNote::Failure(line.clone()));
                 return Ok(RestartReport {
                     ok: false,
                     detail: line,
@@ -437,7 +470,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
                 short8(&old_sha),
                 short8(landed),
             );
-            println!("{line}");
+            note(RestartNote::Info(line.clone()));
             RestartReport {
                 ok: true,
                 detail: line,
@@ -447,7 +480,7 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
             let line = format!(
                 "'{name}' not confirmed running — check `mur agent status {name}` and its stderr.log"
             );
-            eprintln!("✗ {line}");
+            note(RestartNote::Failure(line.clone()));
             RestartReport {
                 ok: false,
                 detail: line,
