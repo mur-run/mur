@@ -169,7 +169,7 @@ cross-verification passes (correctness, recency, source independence).
 | A5 | Self-preference bias: GPT-4 +10%, Claude +25% on own outputs | Zheng et al. — arxiv.org/abs/2306.05685 | **Qualified:** plausible, exact percentages not re-verified from the PDF |
 | A6 | "multi-agent systems work best today when writes stay single-threaded and the additional agents contribute intelligence rather than actions" | Cognition — cognition.com/blog/multi-agents-working | Confirmed |
 | A6 | "information positioned near the center of the context window is more likely to be overlooked" | Liu et al., TACL 2024 (Lost in the Middle) — aclanthology.org/2024.tacl-1.9 | Confirmed |
-| A6 | Extractive compression (verbatim + citation) keeps precision that abstractive summaries lose | RECOMP | Confirmed |
+| A6 | Extractive compression (verbatim + citation) keeps precision that abstractive summaries lose | [RECOMP (Xu et al., ICLR 2024)](https://proceedings.iclr.cc/paper_files/paper/2024/file/bda88ed2892f5e61c9a9bf215c566913-Paper-Conference.pdf) | Confirmed |
 | A7 | MAST: 14 failure modes over 1600+ traces, κ = 0.88; step repetition 15.7%, reasoning-action mismatch 13.2%, unaware of termination 12.4% | Cemri et al., NeurIPS 2025 — arxiv.org/abs/2503.13657 | Confirmed (spot-checked frequencies) |
 
 Caveats:
@@ -178,6 +178,7 @@ Caveats:
   A3/A5/A6: the "corroborating" link was often the same paper on another
   site. The claims still stand on their primary source, but most have one
   independent source, not two.
-- The research also covered design principles as agent skills (Part B:
-  SOLID/DRY/KISS/YAGNI sources, published principle skills). None of it is
+- The research also covered a second topic, design principles as agent
+  skills (SOLID/DRY/KISS/YAGNI sources, published principle skills). It is
+  unrelated to the routing options labelled B1–B3 above. None of it is
   used by this design, so it is not summarized here.
