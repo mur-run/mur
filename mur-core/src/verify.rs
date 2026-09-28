@@ -520,6 +520,13 @@ fn verify_file_path(path_str: &str, project_root: &Path) -> VerifyResult {
         }
     }
 
+    // `~/` paths name a location on the reader's machine, not in the repo.
+    // Absence on this host proves nothing: `~/.config/autostart` is correct
+    // on Linux yet missing on macOS/Windows. Existence still confirms it.
+    if path_str.starts_with("~/") {
+        return VerifyResult::Skipped("home path not present on this host".into());
+    }
+
     VerifyResult::Invalid(format!("path not found: {}", check_path.display()))
 }
 
@@ -825,6 +832,18 @@ mod tests {
             verify_command("cargo build"),
             VerifyResult::Skipped(_)
         ));
+    }
+
+    #[test]
+    fn test_verify_home_path_missing_on_host_is_skipped() {
+        // `~/` paths describe the reader's machine, not the repo: a Linux-only
+        // dir like `~/.config/autostart` must not fail on a macOS host.
+        let root = std::env::temp_dir();
+        let result = verify_file_path("~/.mur-verify-test-nonexistent/autostart", &root);
+        assert!(
+            matches!(result, VerifyResult::Skipped(_)),
+            "expected Skipped, got {result:?}"
+        );
     }
 
     #[test]
