@@ -18,7 +18,7 @@ use std::process::Command;
 
 use anyhow::bail;
 
-use super::restart::{direct_respawn, kickstart_service, poll_new_lock};
+use super::restart::{RestartNote, direct_respawn, kickstart_service, poll_new_lock};
 
 /// Passive wait for launchd/systemd's natural respawn. Covers respawn latency
 /// (old-process shutdown + ExitTimeOut + any ThrottleInterval) with headroom —
@@ -48,6 +48,7 @@ pub(super) fn wait_for_confirmed_lock(
     old_pid: u32,
     has_service: bool,
     direct_pid: Option<u32>,
+    note: &mut dyn FnMut(RestartNote),
 ) -> anyhow::Result<Option<(u32, String)>> {
     // Passive: launchd KeepAlive=true respawns on process exit; wait for the
     // new lock to appear.
@@ -72,15 +73,17 @@ pub(super) fn wait_for_confirmed_lock(
             let fresh_after = if has_service {
                 match kickstart_service(name) {
                     Ok(true) => {
-                        println!("agent '{name}': no respawn seen; kicked the service unit");
+                        note(RestartNote::Info(format!(
+                            "agent '{name}': no respawn seen; kicked the service unit"
+                        )));
                         // The kick restarts the clock from zero, so gate the
                         // post-kick window on the service manager's new pid.
                         managed_pid(name)
                     }
                     Ok(false) => {
-                        println!(
+                        note(RestartNote::Info(format!(
                             "agent '{name}': service kickstart failed; falling back to direct respawn"
-                        );
+                        )));
                         Some(direct_respawn(name, agent_home)?)
                     }
                     Err(e) => {
@@ -92,7 +95,9 @@ pub(super) fn wait_for_confirmed_lock(
                     }
                 }
             } else {
-                println!("agent '{name}': no respawn seen; retrying direct respawn");
+                note(RestartNote::Info(format!(
+                    "agent '{name}': no respawn seen; retrying direct respawn"
+                )));
                 Some(direct_respawn(name, agent_home)?)
             };
             // A kick / fresh spawn is a cold start from zero: give the fresh
