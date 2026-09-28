@@ -137,22 +137,23 @@ mod tests {
         p
     }
 
-    /// A named temp file holding `content`, written through the handle
-    /// `tempfile` already owns.
+    /// A source file holding `content`, inside a private temp directory.
     ///
-    /// `fs::write(src.path(), …)` opens a SECOND write handle to a path the
-    /// `NamedTempFile` still holds open. POSIX allows that; Windows
-    /// intermittently refuses it with `Access is denied` (os error 5), which
-    /// reddened a CI run on a PR that touched none of this code and passed on
-    /// a bare re-run — the worst shape of flake, since it reads as "your change
-    /// broke Windows".
+    /// Both earlier shapes created a *file* directly in the shared OS temp dir
+    /// via `NamedTempFile::new()`. On Windows that call itself intermittently
+    /// fails with `Access is denied` (os error 5): a random name can collide
+    /// with a file another process just deleted but whose delete is still
+    /// pending (or that a scanner holds open), and `tempfile` only retries on
+    /// `AlreadyExists`, not on `PermissionDenied`. Creating a fresh directory
+    /// and writing a fixed name inside it keeps every file operation inside a
+    /// path no other process has ever touched.
     ///
-    /// The file lives only as long as the returned handle, so callers must bind
-    /// it for the duration of the test rather than drop it on the spot.
-    fn temp_file_with(content: &[u8]) -> tempfile::NamedTempFile {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(content).unwrap();
-        f
+    /// The file lives only as long as the returned `TempDir`, so callers must
+    /// bind it for the duration of the test rather than drop it on the spot.
+    fn temp_file_with(content: &[u8]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_file(dir.path(), "source.bin", content);
+        (dir, path)
     }
 
     #[test]
@@ -180,14 +181,13 @@ mod tests {
     #[test]
     fn file_url_copies_content() {
         let content = b"kokoro model data";
-        let src = temp_file_with(content);
+        let (_src_dir, src) = temp_file_with(content);
         // Box::leak is required: ModelSpec.sha256 is &'static str, but the hash
         // is computed at runtime in this test — leak produces a 'static reference.
         let expected_sha: &'static str = Box::leak(sha256_hex(content).into_boxed_str());
 
         let mur_tmp = tempfile::tempdir().unwrap();
-        let url: &'static str =
-            Box::leak(format!("file://{}", src.path().display()).into_boxed_str());
+        let url: &'static str = Box::leak(format!("file://{}", src.display()).into_boxed_str());
 
         let spec = ModelSpec {
             name: "kokoro-test.onnx",
@@ -202,9 +202,8 @@ mod tests {
 
     #[test]
     fn hash_mismatch_returns_error() {
-        let src = temp_file_with(b"real content");
-        let url: &'static str =
-            Box::leak(format!("file://{}", src.path().display()).into_boxed_str());
+        let (_src_dir, src) = temp_file_with(b"real content");
+        let url: &'static str = Box::leak(format!("file://{}", src.display()).into_boxed_str());
 
         let mur_tmp = tempfile::tempdir().unwrap();
         let spec = ModelSpec {
