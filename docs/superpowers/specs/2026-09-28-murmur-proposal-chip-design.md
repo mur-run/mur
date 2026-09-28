@@ -1,7 +1,7 @@
 # murmur proposal chip — agent-proposed commands and actions (design)
 
 **Date:** 2026-09-28
-**Status:** Design approved (Q1–Q7 settled); PR 2 built (see "As built")
+**Status:** Design approved (Q1–Q7 settled); tool contract and vetting location settled in §1; PR 2 built
 **Scope:** `mur agent cli` (murmur) TUI. Lets an agent *propose* a command or a
 native action; the user decides with one key. First native action: `/restart`.
 Builds on the `suggest_replies` tool
@@ -43,14 +43,33 @@ kind = Insert(Shell(cmd) | Slash(cmd))        // insert_only
      | Action(Restart)                        // executable, always the proposing agent
 ```
 
+**Tool contract (settled).** The agent proposes through a dedicated tool,
+`propose` (`mur_common::proposal::PROPOSE_TOOL`), separate from the no-op
+`suggest_replies`. Input schema, `additionalProperties: false`:
+
+| Field | Type | Rule |
+|---|---|---|
+| `label` | string | required; ≤ `LABEL_MAX_CHARS` (80) |
+| `kind` | `"shell"` \| `"slash"` \| `"restart"` | required |
+| `command` | string | ≤ `COMMAND_MAX_CHARS` (500); required for `shell`/`slash` (a leading `!`/`/` is accepted and stripped); **forbidden** for `restart` |
+
+**Where vetting lives (settled).** `Proposal` and
+`vet(&serde_json::Value) -> Result<Proposal, VetError>` live in
+`mur-common` (`mur_common::proposal`). Both sides call the same pure function:
+the runtime's tool executor (rejection → `ToolError::InvalidInput`, so the
+agent sees why) and murmur (renders only what passes). It cannot live in
+`mur-core`: `mur-agent-runtime` must not depend on it.
+
 Vetting is a pure function run when the tool call arrives; a rejected proposal
 returns a tool error to the agent and never reaches the UI. Reject:
 
 - newlines or control characters
 - unresolved placeholders (`<name>`, `{agent}`, …)
 - secret-shaped strings
-- an `action` outside the allowlist, or an action whose target is not the
-  current agent
+- a `kind` outside the allowlist (`shell`, `slash`, `restart`)
+- a `command` on `restart` — `restart` carries no target, so a proposal aimed
+  at another agent cannot be expressed (stricter than rejecting one; replaces
+  the earlier "reject a foreign target" rule)
 
 **As built (PR 2):** the agent proposes via a dedicated `propose` tool
 (`{label, kind: shell|slash|restart, command?}`), separate from the no-op
@@ -145,8 +164,8 @@ structured proposal, not a string. Fixed as part of PR 2.
 ## §5 Tests
 
 **Vetting (pure, unit):** newline / control char / `<name>` / `{agent}` /
-secret-shaped → rejected with a tool error; unknown action or foreign target →
-rejected; `shell`/`slash` → insert_only; `restart` → executable.
+secret-shaped → rejected with a tool error; unknown kind, or `restart` with a
+`command` → rejected; `shell`/`slash` → insert_only; `restart` → executable.
 
 **Keys (state machine, no TTY):**
 - empty + executable + idle + Enter → restart fires
