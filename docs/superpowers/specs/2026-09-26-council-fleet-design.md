@@ -3,7 +3,8 @@
 Status: approved design, v1 not yet built
 Research: 3 deep-research reports + 3 cross-verifications, kept as local run
 artifacts on the author's machine (not committed). This spec is self-contained;
-the code citations below are the evidence it relies on.
+the code citations below are the evidence it relies on, and the
+research findings it cites by ID are summarized in the appendix.
 
 ## Goal
 
@@ -146,3 +147,38 @@ Known wrong answers the pack must be able to rule out: B1, and a
 3. `mur fleet create council --router orchestrator --members …`
 4. `mur fleet limits council --deadline … --stuck … --cost-usd …`
 5. Pilot Q1 and Q2; score against the acceptance table.
+
+## Appendix: research findings
+
+Summary of the research this spec cites by ID (A1–A7). Quotes are as the
+research workers recorded them; the verification column is from the three
+cross-verification passes (correctness, recency, source independence).
+
+| ID | Finding used by this design | Source | Verification |
+|---|---|---|---|
+| A1 | "Majority Voting alone accounts for most of the performance gains typically attributed to MAD" | Choi et al., NeurIPS 2025 — arxiv.org/abs/2508.17536 | Confirmed |
+| A1 | Homogeneous debate costs 2.1–3.4× the tokens of isolated self-correction, at equal or lower accuracy | arxiv.org/abs/2605.00914 | Confirmed |
+| A2 | "sycophancy is a core failure mode that amplifies disagreement collapse … in multi-agent debates" | Yao et al. 2025 — arxiv.org/abs/2509.23055 | Confirmed |
+| A2 | "the adaptive break of debate and the modest level of 'tit for tat' state are required for MAD to obtain good performance" (assigned opposing roles) | Liang et al., EMNLP 2024 — aclanthology.org/2024.emnlp-main.992 | Confirmed |
+| A2 | Anonymous Delphi-style rounds preserve answer diversity | DeLLMphi — openreview.org/forum?id=W7a4UjLk1I | Confirmed |
+| A2 | Mandatory dissent / minority report with measured effect | — | **Not found** (hence the grounded-dissent rule) |
+| A3 | Heterogeneous mixtures beat a single model (MoA) | Wang et al., ICLR 2025 — arxiv.org/abs/2406.04692 | Confirmed |
+| A3 | **Contested:** a single strong model's own samples (Self-MoA) "outperforms mixtures in most scenarios" | arxiv.org/abs/2502.00674 | Claim confirmed; effect sizes not extracted |
+| A4 | "the maximum effect is achieved in the second or third round, after which further discussions can lead to the repetition of the same arguments" | systems-analysis.ru (literature synthesis) | Confirmed; recency pass qualifies it as diminishing returns rather than a hard plateau |
+| A5 | Position bias: 10–15 winrate points of swing depending on slot order | Zheng et al. (MT-Bench), via futureagi.com; corroborated by Wang et al., ACL 2024 | Confirmed, secondary source |
+| A5 | Self-preference bias: GPT-4 +10%, Claude +25% on own outputs | Zheng et al. — arxiv.org/abs/2306.05685 | **Qualified:** plausible, exact percentages not re-verified from the PDF |
+| A6 | "multi-agent systems work best today when writes stay single-threaded and the additional agents contribute intelligence rather than actions" | Cognition — cognition.com/blog/multi-agents-working | Confirmed |
+| A6 | "information positioned near the center of the context window is more likely to be overlooked" | Liu et al., TACL 2024 (Lost in the Middle) — aclanthology.org/2024.tacl-1.9 | Confirmed |
+| A6 | Extractive compression (verbatim + citation) keeps precision that abstractive summaries lose | [RECOMP (Xu et al., ICLR 2024)](https://proceedings.iclr.cc/paper_files/paper/2024/file/bda88ed2892f5e61c9a9bf215c566913-Paper-Conference.pdf) | Confirmed |
+| A7 | MAST: 14 failure modes over 1600+ traces, κ = 0.88; step repetition 15.7%, reasoning-action mismatch 13.2%, unaware of termination 12.4% | Cemri et al., NeurIPS 2025 — arxiv.org/abs/2503.13657 | Confirmed (spot-checked frequencies) |
+
+Caveats:
+
+- The source-independence pass rejected 14 of 24 corroboration pairs for
+  A3/A5/A6: the "corroborating" link was often the same paper on another
+  site. The claims still stand on their primary source, but most have one
+  independent source, not two.
+- The research also covered a second topic, design principles as agent
+  skills (SOLID/DRY/KISS/YAGNI sources, published principle skills). It is
+  unrelated to the B1 named under "Known wrong answers". None of it is
+  used by this design, so it is not summarized here.
