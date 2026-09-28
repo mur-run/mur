@@ -17,8 +17,9 @@ pub(crate) type RestartOutcome = std::result::Result<crate::cmd::agent::QuietRes
 
 /// Handle a keypress for the chip. `true` means the key was consumed.
 ///
-/// Called after HITL and the completion overlay have had their turn, and
-/// before the ghost suggestion — priority HITL > overlay > chip > ghost.
+/// Called after HITL and the completion overlay have had their turn —
+/// priority HITL > overlay > chip. The ghost is a chip too
+/// (`ProposalKind::Reply`); it only ever answers `Tab`, as it always has.
 pub(super) fn handle_key(
     app: &mut App,
     key: &crossterm::event::KeyEvent,
@@ -43,6 +44,11 @@ pub(super) fn handle_key_with(
         return false;
     }
     let empty = app.input_text().is_empty();
+    // The ghost keeps its original rule: Tab fills an empty composer; every
+    // other key keeps its ordinary meaning (Enter still submits and clears it).
+    if chip.is_reply() && key.code != KeyCode::Tab {
+        return false;
+    }
     match key.code {
         KeyCode::Tab if empty => match chip.insert_text() {
             Some(text) => {
@@ -51,7 +57,7 @@ pub(super) fn handle_key_with(
                 true
             }
             // Executable chips have nothing to insert; Tab keeps its
-            // ordinary meaning (ghost fill, slash menu).
+            // ordinary meaning (slash menu).
             None => false,
         },
         // An image-only send is still a send; let `submit` have it.
@@ -123,15 +129,18 @@ pub(super) fn finish_restart(app: &mut App, outcome: RestartOutcome) {
     }
 }
 
-/// Offer a chip. A newer proposal replaces the old one.
+/// Offer a chip. A newer proposal replaces the old one — including a ghost,
+/// whose placeholder text goes with it.
 pub(super) fn offer(app: &mut App, p: Proposal) {
+    app.clear_suggestion_ghost();
     app.proposal = Some(p);
 }
 
 /// The one line rendered under the composer: what the chip is, then which key
 /// does what right now. The command itself is always shown (principle C).
 pub(super) fn chip_line(app: &App) -> Option<(String, String)> {
-    let p = app.proposal.as_ref()?;
+    // The ghost renders as the composer's placeholder, not a chip row.
+    let p = app.proposal.as_ref().filter(|p| !p.is_reply())?;
     let what = match p.insert_text() {
         Some(text) => format!("⤷ {text} — {}", p.label),
         None => format!("⤷ restart {} — {}", app.agent, p.label),

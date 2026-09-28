@@ -164,3 +164,15 @@ fn every_error_tells_the_model_what_to_change() {
     let e = err(json!({"label": "x", "kind": "nope"}));
     assert!(e.to_string().contains("shell, slash, restart"), "{e}");
 }
+
+#[test]
+fn reply_is_insert_only_verbatim_and_not_vettable() {
+    let p = Proposal::reply("yes please");
+    assert!(p.is_reply());
+    assert!(!p.is_executable());
+    assert_eq!(p.insert_text().as_deref(), Some("yes please"));
+    // `reply` is murmur-internal: the model cannot propose it.
+    let err =
+        vet(&serde_json::json!({"label": "x", "kind": "reply", "command": "hi"})).unwrap_err();
+    assert!(matches!(err, VetError::UnknownKind(_)));
+}
