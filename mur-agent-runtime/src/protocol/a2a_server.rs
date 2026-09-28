@@ -15,20 +15,30 @@ use tokio::sync::mpsc;
 #[derive(Clone, Default)]
 pub struct RequestContext {
     pub notifier: Option<mpsc::Sender<Value>>,
+    /// Who is on the other end of this connection, and whether it has
+    /// redeemed a shim ticket. `None` for transports that cannot say.
+    pub conn: Option<std::sync::Arc<crate::hitl::shim_ticket::Connection>>,
 }
 
 impl RequestContext {
     /// A context with no per-connection notifier (single-client / non-streaming
     /// transports).
     pub fn none() -> Self {
-        Self { notifier: None }
+        Self::default()
     }
 
     /// A context routing notifications to one connection's sink.
     pub fn with_notifier(notifier: mpsc::Sender<Value>) -> Self {
         Self {
             notifier: Some(notifier),
+            conn: None,
         }
+    }
+
+    /// Attach this connection's identity (unix socket transport).
+    pub fn with_conn(mut self, conn: crate::hitl::shim_ticket::Connection) -> Self {
+        self.conn = Some(std::sync::Arc::new(conn));
+        self
     }
 }
 
@@ -54,6 +64,11 @@ pub enum HandlerError {
     CommunicationDenied(String),
     #[error("approval expired: {0}")]
     ApprovalExpired(String),
+    /// An `allow` that could not be shown to come from a human surface. Its
+    /// own code so a sender can tell "you may not approve this" apart from
+    /// "this approval window closed".
+    #[error("approval refused: {0}")]
+    ApprovalRefused(String),
 }
 
 impl HandlerError {
@@ -69,6 +84,7 @@ impl HandlerError {
             Self::UnsupportedCapability(_) => -32010,
             Self::CommunicationDenied(_) => -32011,
             Self::ApprovalExpired(_) => -32012,
+            Self::ApprovalRefused(_) => -32013,
         }
     }
 }

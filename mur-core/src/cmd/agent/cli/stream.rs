@@ -317,8 +317,22 @@ pub fn spawn_stream(
 /// surface to `"unknown"`, so the channel records that someone answered without
 /// recording who. Build the params here rather than inline so both CLI senders
 /// stay in step.
-pub(crate) fn hitl_respond_params(hitl_id: &str, allow: bool, surface: &str) -> serde_json::Value {
-    json!({ "hitl_id": hitl_id, "allow": allow, "surface": surface })
+///
+/// An allow also carries the home's approval token
+/// (`mur_common::hitl::approval_token`); the runtime refuses an allow without
+/// it. A token that cannot be read is not fatal here — the allow goes out bare
+/// and the runtime's refusal names the cause.
+pub(crate) fn hitl_respond_params(
+    home: &Path,
+    hitl_id: &str,
+    allow: bool,
+    surface: &str,
+) -> serde_json::Value {
+    let mut p = json!({ "hitl_id": hitl_id, "allow": allow, "surface": surface });
+    if let Err(e) = mur_common::hitl::approval_token::attach(&mut p, home) {
+        tracing::warn!(error = %e, "could not read the HITL approval token; sending the answer without it");
+    }
+    p
 }
 
 /// Answer a pending HITL request on a fresh connection. Does not block the
@@ -335,7 +349,7 @@ pub async fn respond_hitl(
             &home,
             &agent,
             "tool/hitl_respond",
-            hitl_respond_params(&hitl_id, allow, surface),
+            hitl_respond_params(&home, &hitl_id, allow, surface),
             DialMode::RequireRunning,
         )
     })
@@ -439,8 +453,9 @@ mod tests {
         // The defect this guards: the CLI used to send only hitl_id and allow,
         // so the runtime defaulted the surface to "unknown" and the signed
         // channel could not say which surface answered.
+        let home = tempfile::tempdir().unwrap();
         for (allow, surface) in [(true, "cli"), (false, "cli"), (true, "auto")] {
-            let p = hitl_respond_params("h-1", allow, surface);
+            let p = hitl_respond_params(home.path(), "h-1", allow, surface);
             assert_eq!(p["hitl_id"], "h-1");
             assert_eq!(p["allow"], allow);
             assert_eq!(
@@ -452,6 +467,17 @@ mod tests {
                 "a missing surface is recorded as \"unknown\" by the runtime"
             );
         }
+    }
+
+    #[test]
+    fn hitl_respond_params_carry_the_token_only_on_allow() {
+        use mur_common::hitl::approval_token;
+        let home = tempfile::tempdir().unwrap();
+        let token = approval_token::load_or_create(home.path()).unwrap();
+        let allow = hitl_respond_params(home.path(), "h-1", true, "cli");
+        assert_eq!(allow[approval_token::PARAM], token.as_str());
+        let deny = hitl_respond_params(home.path(), "h-1", false, "cli");
+        assert!(deny.get(approval_token::PARAM).is_none());
     }
 
     #[test]

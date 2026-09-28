@@ -38,6 +38,7 @@ pub struct GuardedToolCall {
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
     pub(crate) pending_approvals: Option<HitlApprovals>,
+    pub(crate) shim_trust: Option<crate::hitl::shim_ticket::ShimTrust>,
     /// B1 sandbox enforcing on this boot. `false` refuses every `Ask` tool
     /// before the gate asks — see `refuse_unsandboxed`.
     pub(crate) sandbox_enforcing: bool,
@@ -157,6 +158,7 @@ impl GuardedToolCall {
             approvals: pa,
             notifier,
             store: self.decision_store.as_ref(),
+            shim_trust: self.shim_trust.as_ref(),
         };
         out.extend(gate.resolve(pending).await);
         (out, step_ids)

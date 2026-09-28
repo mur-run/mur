@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod approval_token;
 pub mod pin;
 
 /// Approvals and denials settle a gate for this long. Content staleness is

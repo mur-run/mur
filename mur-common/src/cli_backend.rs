@@ -252,6 +252,7 @@ pub fn mcp_config_json(
     shim_bin: &str,
     socket: &std::path::Path,
     task_id: &str,
+    shim_ticket: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "mcpServers": {
@@ -262,10 +263,18 @@ pub fn mcp_config_json(
                     "--socket", socket.to_string_lossy(),
                     "--task-id", task_id,
                 ],
+                // Not an argv flag: argv is visible to every process in `ps`.
+                // The file itself is readable by the agent's tools too, which
+                // is why the runtime also checks the redeemer's lineage.
+                "env": { SHIM_TICKET_ENV: shim_ticket },
             }
         }
     })
 }
+
+/// Env var carrying a CLI-spawn turn's one-time shim ticket from the MCP
+/// config to the shim. See `mur-agent-runtime/src/hitl/shim_ticket.rs`.
+pub const SHIM_TICKET_ENV: &str = "MUR_SHIM_TICKET";
 
 /// Marks a model registry `provider` as naming the CLI-spawn track.
 ///
@@ -499,8 +508,10 @@ mod tests {
             "/usr/local/bin/mur_agent_x",
             std::path::Path::new("/tmp/x/agent.sock"),
             "t-9",
+            "tk",
         );
         let s = &v["mcpServers"]["mur"];
+        assert_eq!(s["env"][SHIM_TICKET_ENV], "tk");
         assert_eq!(s["command"], "/usr/local/bin/mur_agent_x");
         let args: Vec<String> = s["args"]
             .as_array()
@@ -517,7 +528,7 @@ mod tests {
     fn the_config_declares_exactly_one_server() {
         // `--strict-mcp-config` means this document is the whole tool
         // surface. A second entry here would be a second unaudited source.
-        let v = mcp_config_json("bin", std::path::Path::new("/s"), "t");
+        let v = mcp_config_json("bin", std::path::Path::new("/s"), "t", "k");
         assert_eq!(v["mcpServers"].as_object().expect("obj").len(), 1);
     }
 

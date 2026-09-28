@@ -26,6 +26,9 @@ pub struct BatchGate<'a> {
     pub approvals: &'a HitlApprovals,
     pub notifier: &'a tokio::sync::mpsc::Sender<serde_json::Value>,
     pub store: Option<&'a Arc<dyn DecisionStore>>,
+    /// Records which task raised each approval, so a trusted shim can answer
+    /// only its own turn's. `None` = no CLI-spawn track wired.
+    pub shim_trust: Option<&'a crate::hitl::shim_ticket::ShimTrust>,
 }
 
 const TIMED_OUT: &str = "timed out";
@@ -63,6 +66,9 @@ impl BatchGate<'_> {
                 let hitl_id = uuid::Uuid::now_v7().to_string();
                 let (tx, rx) = tokio::sync::oneshot::channel::<HitlDecision>();
                 pa.insert(hitl_id.clone(), tx);
+                if let Some(t) = self.shim_trust {
+                    t.record_owner(&hitl_id, self.task_id);
+                }
                 wire.push(serde_json::json!({
                     "hitl_id": hitl_id,
                     "step_id": c.step_id,
@@ -97,7 +103,11 @@ impl BatchGate<'_> {
         // against what is left of it.
         let deadline = tokio::time::Instant::now() + self.timeout;
         for (c, hitl_id, rx) in waiting {
-            let decision = match tokio::time::timeout_at(deadline, rx).await {
+            let waited = tokio::time::timeout_at(deadline, rx).await;
+            if let Some(t) = self.shim_trust {
+                t.forget_owner(&hitl_id);
+            }
+            let decision = match waited {
                 Ok(Ok(d)) => d,
                 _ => {
                     self.approvals.lock().await.remove(&hitl_id);
@@ -219,6 +229,7 @@ mod tests {
             approvals: &approvals,
             notifier: &tx,
             store: None,
+            shim_trust: None,
         };
         let g2 = BatchGate {
             task_id: "task-1",
@@ -226,6 +237,7 @@ mod tests {
             approvals: &approvals,
             notifier: &tx,
             store: None,
+            shim_trust: None,
         };
         let (a, b) = tokio::join!(g1.resolve(vec![call("yes")]), g2.resolve(vec![call("no")]));
 

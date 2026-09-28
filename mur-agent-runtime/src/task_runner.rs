@@ -523,6 +523,8 @@ pub struct TaskRunner {
     hook_ctx: Option<HookCtx>,
     hook_cancel: Option<CancellationToken>,
     pending_approvals: Option<HitlApprovals>,
+    /// One-time shim tickets for CLI-spawn turns (`hitl::shim_ticket`).
+    shim_trust: crate::hitl::shim_ticket::ShimTrust,
     /// P3: settled chat-gate decisions (gate B memory). `None` = ask every time.
     decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     /// The agent's own name, for `chat_action_hash`. Empty until the supervisor
@@ -730,6 +732,7 @@ impl TaskRunner {
             hook_ctx: None,
             hook_cancel: None,
             pending_approvals: None,
+            shim_trust: Default::default(),
             decision_store: None,
             agent_name: String::new(),
             notifier: None,
@@ -960,6 +963,12 @@ impl TaskRunner {
         self.hook_ctx = Some(ctx);
         self.hook_cancel = Some(cancel);
         self
+    }
+
+    /// The registry `shim/hello` and `tool/hitl_respond` consult. Owned here
+    /// because this is where tickets are issued and where the gate runs.
+    pub fn shim_trust(&self) -> crate::hitl::shim_ticket::ShimTrust {
+        self.shim_trust.clone()
     }
 
     pub fn with_pending_approvals(mut self, pa: HitlApprovals) -> Self {
@@ -1497,8 +1506,12 @@ impl TaskRunner {
                     let shim = std::env::current_exe()
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_else(|_| "mur-agent-runtime".to_string());
+                    // Revoked when `ticket` drops at the end of this arm —
+                    // success, error and cancellation alike.
+                    let ticket = self.shim_trust.issue(&id);
                     let reply = crate::cli_spawn::run_turn(crate::cli_spawn::SpawnRequest {
                         backend,
+                        ticket: Some(&ticket),
                         mur_home: &mur_common::trust::mur_home(),
                         shim_bin: &shim,
                         socket: &socket,
@@ -2144,6 +2157,7 @@ impl TaskRunner {
             decision_store: self.decision_store.clone(),
             hitl_timeout_secs: self.hitl_timeout_secs,
             pending_approvals: self.pending_approvals.clone(),
+            shim_trust: Some(self.shim_trust.clone()),
             sandbox_enforcing: self.sandbox_enforcing,
         }
     }
