@@ -1561,7 +1561,8 @@ pub fn stale_cap_warnings(hitl: &mur_common::agent::HitlConfig) -> Vec<String> {
     out
 }
 
-#[cfg(test)]
+// Drives the real unix-socket transport, which does not exist on Windows.
+#[cfg(all(test, unix))]
 mod self_approval_tests;
 
 #[cfg(test)]
