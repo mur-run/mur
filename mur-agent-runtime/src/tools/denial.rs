@@ -188,19 +188,43 @@ pub(super) fn spawn_denied_path(
     })
 }
 
-/// Does this path start with a `#!` line?
+/// The interpreter command from this file's `#!` line, if it has one.
 ///
-/// Decides which half of [`spawn_denied_hint`] applies. Read rather than
-/// guessed from the extension: the denied file in the reported failure was
-/// named `cmdtest`, with no suffix at all. Unreadable or absent ⇒ `false`,
-/// so the conservative branch (ask the user) is what a failed read produces.
-fn is_script(path: &str) -> bool {
+/// Decides which half of [`spawn_denied_hint`] applies, and what the script
+/// half tells the model to run. Read rather than guessed from the extension:
+/// the denied file in the reported failure was named `cmdtest`, with no suffix
+/// at all. Unreadable, absent, or an empty `#!` ⇒ `None`, so the conservative
+/// branch (ask the user) is what a failed read produces.
+///
+/// The whole line is kept, not just its first word: `#!/usr/bin/env node`
+/// needs `node`, and suggesting `sh` for it (what this used to do) runs
+/// JavaScript through the shell.
+fn shebang(path: &str) -> Option<String> {
     use std::io::Read;
-    let mut buf = [0u8; 2];
+    // A shebang longer than this is not one the kernel would honour either.
+    const MAX_SHEBANG: u64 = 256;
+    let mut head = Vec::new();
     std::fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut buf))
-        .is_ok()
-        && &buf == b"#!"
+        .ok()?
+        .take(MAX_SHEBANG)
+        .read_to_end(&mut head)
+        .ok()?;
+    let rest = head.strip_prefix(b"#!")?;
+    let line = rest.split(|b| *b == b'\n').next()?;
+    let interp = std::str::from_utf8(line).ok()?.trim();
+    (!interp.is_empty()).then(|| interp.to_string())
+}
+
+/// Quote a path for the shell line shown to the model — cache paths such as
+/// `Google Chrome for Testing.app` carry spaces.
+fn sh_quote(s: &str) -> String {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+~@:=".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
 }
 
 /// Turn an opaque kernel EPERM into a route that can actually resolve it. The
@@ -232,12 +256,24 @@ pub(super) fn spawn_denied_hint(bin: &str, agent: &str, routes: &ExecRoutes) -> 
     // BINARIES, which no interpreter can rescue. Saying so turns a dead end
     // into a one-word fix instead of an interruption for the user — the same
     // reason this module exists.
-    if is_script(bin) {
+    //
+    // bash words this case as `<script>: <interp>: bad interpreter: Operation
+    // not permitted`, which reads as if the INTERPRETER were blocked. It is
+    // not: Seatbelt checks `process-exec` on the script path itself, and
+    // `/usr/bin/env`, `/bin/sh` sit under the system exec paths already.
+    // Verified 2026-09-27: a `#!/bin/sh` script under `/usr/bin` ran while
+    // the same shebang under `~/.mur` was refused; granting `/usr/bin/env`
+    // changed nothing. So say it outright, or the agent asks for exactly that
+    // useless grant — which it did, twice.
+    if let Some(interp) = shebang(bin) {
+        let run = format!("{interp} {}", sh_quote(bin));
         return format!(
             "\n\n[sandbox] `{name}` is not in agent '{agent}''s spawn allowlist, so the kernel \
-             refused to exec it directly. It is a script, so run it through its interpreter \
-             instead — that needs no new permission:\n    sh {bin}\n\
-             (Use `bash {bin}` if it needs bash.) Nothing else about the command changes."
+             refused to exec it directly. If bash said `bad interpreter`, that is misleading: \
+             the SCRIPT's path was refused, not `{interp}` — do not ask for the interpreter to \
+             be granted, it would not help. Run it through its interpreter instead; that needs \
+             no new permission:\n    {run}\n\
+             Nothing else about the command changes."
         );
     }
     // `mur` is not a binary among binaries: it is the ENTIRE CLI surface,
@@ -435,6 +471,37 @@ mod tests {
             !hint.contains("allow-spawn"),
             "must NOT send the agent to the user for a script it can already run: {hint}"
         );
+    }
+
+    /// The `playwright-mcp` case: an `env node` script under an npx cache.
+    /// The hint must name `node` (not `sh`), quote a path with spaces, and
+    /// steer away from granting the interpreter bash blamed.
+    #[test]
+    fn a_denied_env_script_names_its_real_interpreter() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("with space").join("playwright-mcp");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(&script, "#!/usr/bin/env node\nconsole.log(1)\n").unwrap();
+        let path = script.to_str().unwrap();
+        let hint = spawn_denied_hint(path, "mur", &ExecRoutes::default());
+        assert!(
+            hint.contains(&format!("/usr/bin/env node '{path}'")),
+            "must run it via its own shebang, quoted: {hint}"
+        );
+        assert!(hint.contains("bad interpreter"), "{hint}");
+        assert!(!hint.contains("allow-spawn"), "{hint}");
+    }
+
+    #[test]
+    fn shebang_rejects_non_scripts_and_empty_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("e");
+        std::fs::write(&empty, "#!\n").unwrap();
+        assert_eq!(shebang(empty.to_str().unwrap()), None);
+        assert_eq!(shebang(dir.path().join("missing").to_str().unwrap()), None);
+        let sh = dir.path().join("s");
+        std::fs::write(&sh, "#! /bin/sh -e \n").unwrap();
+        assert_eq!(shebang(sh.to_str().unwrap()).as_deref(), Some("/bin/sh -e"));
     }
 
     /// Negative control: a real binary cannot be rescued by an interpreter, so
