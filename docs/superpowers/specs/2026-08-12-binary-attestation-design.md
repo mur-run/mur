@@ -1,6 +1,6 @@
 # Binary Attestation Design
 
-**Status:** Draft
+**Status:** Implemented (#930, `9338674a`)
 **Date:** 2026-08-12
 **Scope:** Follow-on to launch-chain protection (#924, merged `7e7dbbac`).
 
@@ -97,7 +97,13 @@ runtime binary at <path> failed signature verification
 launchd `KeepAlive` / systemd `Restart=on-failure` respawn the runtime without
 going through MUR code. Attestation covers every MUR-triggered spawn; the
 supervisor-driven respawn path has no verification point and none is claimed.
-This is the same boundary the launch-chain design accepted for autostart units.
+
+The two designs split the autostart surface between them: launch-chain
+protection denies agents write access to the autostart directory and the
+runtime binary's location, and attestation checks every spawn MUR itself
+triggers. A runtime replaced from outside MUR and then respawned by launchd /
+systemd is covered by neither; the launch-chain spec lists it under
+"Deliberately not covered".
 
 ### Pipeline changes (`.github/workflows/release.yml`)
 
