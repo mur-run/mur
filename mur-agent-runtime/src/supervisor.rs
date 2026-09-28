@@ -476,6 +476,18 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }
     }
 
+    // The approval token lives in `secrets/`, which the seal below makes
+    // unreadable — to this process too. Load (or create) it now. Failure is
+    // not fatal: the agent still runs, and every allow is refused with a
+    // message that says why, which is the safe direction.
+    let approval_token = match mur_common::hitl::approval_token::load_or_create(&mur_home) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            warn!(error = %e, "could not load the HITL approval token before sealing; approvals will be refused until restart");
+            None
+        }
+    };
+
     let loopback_ports: Vec<u16> = egress_proxy.iter().map(|h| h.addr.port()).collect();
     let granted_digest =
         mur_common::agent::filesystem_grants_digest(&profile.inner.entitlements.filesystem);
@@ -614,6 +626,10 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         model_switch,
         runtime_skills.clone(),
         secrets.clone(),
+        crate::hitl::authority::ApprovalAuthority::new(
+            approval_token,
+            sandbox_record.as_ref().is_some_and(|r| r.enforcing),
+        ),
     ));
 
     // 7. Transports
@@ -991,6 +1007,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
 
 struct HitlRespondHandler {
     pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>>,
+    authority: crate::hitl::authority::ApprovalAuthority,
+    shim_trust: crate::hitl::shim_ticket::ShimTrust,
 }
 
 #[async_trait::async_trait]
@@ -998,7 +1016,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
     async fn handle(
         &self,
         params: Option<serde_json::Value>,
-        _ctx: &crate::protocol::a2a_server::RequestContext,
+        ctx: &crate::protocol::a2a_server::RequestContext,
     ) -> Result<serde_json::Value, crate::protocol::a2a_server::HandlerError> {
         let p = params.ok_or_else(|| {
             crate::protocol::a2a_server::HandlerError::InvalidParams("missing params".into())
@@ -1014,6 +1032,19 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
         })?;
         let reason = p["reason"].as_str().map(str::to_string);
         let surface = p["surface"].as_str().map(str::to_string);
+        // Checked BEFORE the pending entry is taken: a refused allow must not
+        // consume the gate, or a spawned tool could burn the human's answer.
+        let trusted_shim = self.shim_trust.authorizes(ctx.conn.as_deref(), &hitl_id);
+        self.authority
+            .check_from(
+                allow,
+                p[mur_common::hitl::approval_token::PARAM].as_str(),
+                trusted_shim,
+            )
+            .map_err(|r| {
+                tracing::warn!(hitl_id = %hitl_id, refusal = ?r, "refused an unauthenticated HITL allow");
+                crate::protocol::a2a_server::HandlerError::ApprovalRefused(r.message().to_string())
+            })?;
         let tx = self
             .pending_approvals
             .lock()
@@ -1098,6 +1129,7 @@ fn build_dispatcher(
     model_switch: Option<Arc<crate::llm::switchable::ModelSwitchHandle>>,
     runtime_skills: Arc<crate::skills::RuntimeSkills>,
     secrets: Arc<crate::secrets::SecretVault>,
+    approval_authority: crate::hitl::authority::ApprovalAuthority,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
@@ -1154,6 +1186,14 @@ fn build_dispatcher(
         "tool/hitl_respond",
         Box::new(HitlRespondHandler {
             pending_approvals: pending_approvals.clone(),
+            authority: approval_authority,
+            shim_trust: runner.shim_trust(),
+        }),
+    );
+    d.register(
+        "shim/hello",
+        Box::new(crate::protocol::methods::shim::ShimHelloHandler {
+            trust: runner.shim_trust(),
         }),
     );
     d.register(
@@ -1521,6 +1561,10 @@ pub fn stale_cap_warnings(hitl: &mur_common::agent::HitlConfig) -> Vec<String> {
     out
 }
 
+// Drives the real unix-socket transport, which does not exist on Windows.
+#[cfg(all(test, unix))]
+mod self_approval_tests;
+
 #[cfg(test)]
 mod hitl_tests {
     use super::*;
@@ -1529,6 +1573,12 @@ mod hitl_tests {
     use serde_json::json;
     use std::time::Duration;
     use tokio::sync::oneshot;
+
+    const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn test_authority() -> crate::hitl::authority::ApprovalAuthority {
+        crate::hitl::authority::ApprovalAuthority::new(Some(TEST_TOKEN.into()), true)
+    }
 
     #[tokio::test]
     async fn hitl_respond_resolves_pending() {
@@ -1539,10 +1589,12 @@ mod hitl_tests {
 
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
+            authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let result = handler
             .handle(
-                Some(json!({"hitl_id": "test-id", "allow": true, "reason": "looks good"})),
+                Some(json!({"hitl_id": "test-id", "allow": true, "reason": "looks good", "approval_token": TEST_TOKEN})),
                 &crate::protocol::a2a_server::RequestContext::none(),
             )
             .await;
@@ -1562,10 +1614,12 @@ mod hitl_tests {
             Arc::new(Mutex::new(HashMap::new()));
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
+            authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let err = handler
             .handle(
-                Some(json!({"hitl_id": "long-gone", "allow": true})),
+                Some(json!({"hitl_id": "long-gone", "allow": true, "approval_token": TEST_TOKEN})),
                 &crate::protocol::a2a_server::RequestContext::none(),
             )
             .await
@@ -1585,6 +1639,8 @@ mod hitl_tests {
 
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
+            authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let result = handler
             .handle(
@@ -1605,6 +1661,8 @@ mod hitl_tests {
             Arc::new(Mutex::new(HashMap::new()));
         let handler = HitlRespondHandler {
             pending_approvals: pending.clone(),
+            authority: test_authority(),
+            shim_trust: Default::default(),
         };
         let result = handler
             .handle(

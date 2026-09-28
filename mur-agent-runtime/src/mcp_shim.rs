@@ -53,6 +53,13 @@ pub async fn run(socket: std::path::PathBuf, task_id: String) -> anyhow::Result<
         });
     }
 
+    // Redeem the ticket before serving anything: every tool this turn runs
+    // comes through us, so no tool of this turn can race us to it. Without a
+    // ticket we still serve — denials need no proof — but allows then fail
+    // closed at the agent.
+    let mut next_id: u64 = 0;
+    hello(&sock_write, &pending_calls, &mut next_id, &task_id).await;
+
     // ── stdin reader: the CLI's requests, and answers to our elicitations ──
     let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<Request>(16);
     {
@@ -91,7 +98,6 @@ pub async fn run(socket: std::path::PathBuf, task_id: String) -> anyhow::Result<
         });
     }
 
-    let mut next_id: u64 = 0;
     loop {
         tokio::select! {
             Some(req) = req_rx.recv() => {
@@ -105,6 +111,39 @@ pub async fn run(socket: std::path::PathBuf, task_id: String) -> anyhow::Result<
         }
     }
     Ok(())
+}
+
+/// How often and how long `shim/hello` retries a `not ready` answer — the
+/// narrow window between the CLI spawning and the runtime recording its pid.
+const HELLO_ATTEMPTS: u32 = 5;
+const HELLO_RETRY: std::time::Duration = std::time::Duration::from_millis(100);
+
+async fn hello(
+    sock: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    pending: &Pending,
+    next_id: &mut u64,
+    task_id: &str,
+) {
+    // Left in the env: it is single-use, so once redeemed it is worth nothing.
+    let Ok(ticket) = std::env::var(crate::hitl::shim_ticket::SHIM_TICKET_ENV) else {
+        tracing::warn!("no shim ticket in env; approvals from this CLI will be refused");
+        return;
+    };
+    let params = json!({ "task_id": task_id, "ticket": ticket });
+    for attempt in 1..=HELLO_ATTEMPTS {
+        match call_agent(sock, pending, next_id, "shim/hello", params.clone()).await {
+            Ok(_) => return,
+            Err(e)
+                if e.ends_with(crate::hitl::shim_ticket::NOT_READY) && attempt < HELLO_ATTEMPTS =>
+            {
+                tokio::time::sleep(HELLO_RETRY).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "shim hello refused; approvals from this CLI will be refused");
+                return;
+            }
+        }
+    }
 }
 
 /// JSON-RPC ids are numbers or strings; both key the same map.

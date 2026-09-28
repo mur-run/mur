@@ -179,7 +179,7 @@ pub(super) fn run_plain(
                     home,
                     agent,
                     "tool/hitl_respond",
-                    stream::hitl_respond_params(&id, allow, surface),
+                    stream::hitl_respond_params(home, &id, allow, surface),
                     DialMode::RequireRunning,
                 );
             },
