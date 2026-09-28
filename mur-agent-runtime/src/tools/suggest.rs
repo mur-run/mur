@@ -84,17 +84,24 @@ impl ToolExecutor for SuggestRepliesTool {
     }
 }
 
-/// Whether `name` should be offered to the model this turn. Everything is
-/// offered normally; `suggest_replies` is offered only on streaming
-/// (interactive) turns so non-interactive callers never see it.
-pub fn offer_for_streaming(name: &str, streaming: bool) -> bool {
-    streaming || name != SUGGEST_REPLIES
+/// Built-ins whose only effect is TUI chrome carried by the streamed args:
+/// `suggest_replies` and `propose`. No side effects, no step card.
+fn is_chrome_tool(name: &str) -> bool {
+    name == SUGGEST_REPLIES || name == mur_common::proposal::PROPOSE_TOOL
 }
 
-/// `suggest_replies` is a no-side-effect built-in and is always auto-approved,
-/// regardless of the agent's default tool policy.
+/// Whether `name` should be offered to the model this turn. Everything is
+/// offered normally; the chrome tools (`suggest_replies`, `propose`) are
+/// offered only on streaming (interactive) turns — only murmur renders them.
+pub fn offer_for_streaming(name: &str, streaming: bool) -> bool {
+    streaming || !is_chrome_tool(name)
+}
+
+/// The chrome tools are no-side-effect built-ins and are always
+/// auto-approved, regardless of the agent's default tool policy. `propose`
+/// only vets its args; running anything is the user's keypress in murmur.
 pub fn suggest_replies_allowed(name: &str) -> bool {
-    name == SUGGEST_REPLIES
+    is_chrome_tool(name)
 }
 
 #[cfg(test)]
@@ -144,11 +151,14 @@ mod tests {
         // Other tools are always offered.
         assert!(offer_for_streaming("bash", false));
         assert!(offer_for_streaming("bash", true));
+        assert!(offer_for_streaming("propose", true));
+        assert!(!offer_for_streaming("propose", false));
     }
 
     #[test]
     fn policy_exemption_only_for_suggest() {
         assert!(suggest_replies_allowed("suggest_replies"));
+        assert!(suggest_replies_allowed("propose"));
         assert!(!suggest_replies_allowed("bash"));
     }
 }

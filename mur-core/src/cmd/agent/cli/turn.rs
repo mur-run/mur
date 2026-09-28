@@ -4,6 +4,12 @@
 use super::*;
 
 pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    // A chip-triggered restart is draining the agent; a turn sent now would
+    // race it. The draft stays in the composer for after.
+    if app.restart_in_flight {
+        app.push_warn("restart in progress — send again once it finishes");
+        return;
+    }
     app.clear_suggestion_ghost();
     let mut trimmed = app.input_text().trim().to_string();
     // Allow an image-only send (caption optional) when a screenshot is staged.

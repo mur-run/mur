@@ -99,6 +99,11 @@ impl App {
             self.push_system(format!(
                 "↻ this agent ran a tool without streaming step detail — restart it (mur agent restart {agent}) for the step view"
             ));
+            // Same restart, one key away (spec §4). Never replaces a chip the
+            // agent itself offered this turn.
+            if self.proposal.is_none() {
+                self.proposal = Some(mur_common::proposal::Proposal::restart("get the step view"));
+            }
         }
     }
 

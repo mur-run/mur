@@ -319,6 +319,35 @@ fn restart_one(name: &str, agents_dir: &Path, on_disk_sha: &str) -> Result<Resta
     restart_one_with(name, agents_dir, on_disk_sha, &mut print_note)
 }
 
+/// Outcome of [`restart_quiet`]: the verdict plus every progress line, in
+/// order. `notes` pairs each line with `true` when it is a failure.
+#[derive(Debug)]
+pub(crate) struct QuietRestart {
+    pub ok: bool,
+    pub detail: String,
+    pub notes: Vec<(bool, String)>,
+}
+
+/// Restart one agent for a non-CLI caller (murmur's `/restart` chip): the
+/// same path as `mur agent restart <name>`, with no stdout/stderr writes —
+/// progress is collected instead. Blocks; run it off the UI thread.
+pub(crate) fn restart_quiet(name: &str) -> Result<QuietRestart> {
+    let agents_dir = resolve_mur_home()?.join("agents");
+    let on_disk = stale::on_disk_sha_for(name);
+    let mut notes = Vec::new();
+    let report = restart_one_with(name, &agents_dir, &on_disk, &mut |n| {
+        notes.push(match n {
+            RestartNote::Info(line) => (false, line),
+            RestartNote::Failure(line) => (true, line),
+        })
+    })?;
+    Ok(QuietRestart {
+        ok: report.ok,
+        detail: report.detail,
+        notes,
+    })
+}
+
 /// A progress line from a restart, handed to the caller instead of printed so
 /// a non-CLI caller (the murmur TUI) can render it without stdout writes
 /// tearing its screen.
