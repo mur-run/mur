@@ -611,23 +611,13 @@ pub fn respond_hitl(
 ) {
     let res = (|| -> anyhow::Result<()> {
         let svc = ChannelService::open(home)?;
-        // Echo the pending request's action_hash so the gate's hash check passes.
-        let request: mur_common::hitl::HitlRequest = svc
-            .load_events(channel_id)?
-            .iter()
-            .rev()
-            .filter(|e| e.kind == EventKind::HitlRequest)
-            // Match the request by `hitl_id` INSIDE find_map: a channel can hold
-            // several stacked HitlRequest events (one serviced, one pending; or two
-            // concurrent v3b delegations), and `.rev()` visits the newest first. A
-            // trailing `.filter()` on the collapsed Option would only test that one
-            // newest request and drop a valid approval for any older gate.
-            .find_map(|e| {
-                serde_json::from_value::<mur_common::hitl::HitlRequest>(e.payload.clone())
-                    .ok()
-                    .filter(|r| r.hitl_id == hitl_id)
-            })
-            .ok_or_else(|| anyhow::anyhow!("no pending HitlRequest {hitl_id} in {channel_id}"))?;
+        // Echo the pending request's action_hash so the gate's hash check
+        // passes — and only a request the router asked (see
+        // `hitl::authority::request_to_answer`), matched by id, not merely
+        // the newest one.
+        let events = svc.load_events(channel_id)?;
+        let request =
+            crate::hitl::authority::request_to_answer(home, channel_id, &events, hitl_id)?;
         let resp = mur_common::hitl::HitlResponse {
             hitl_id: request.hitl_id,
             action_hash: request.action_hash,
@@ -754,11 +744,15 @@ mod tests {
     #[test]
     fn respond_hitl_writes_a_hitl_response_echoing_the_request() {
         let tmp = tempfile::TempDir::new().unwrap();
+        // `respond_hitl` only answers a request the router signed.
+        let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_agent("mur").unwrap();
         // A pending HitlRequest the phone will respond to.
-        svc.append(
+        svc.append_signed(
             &ch.id,
+            &router,
+            0,
             ChannelActor::System,
             EventKind::HitlRequest,
             serde_json::json!({
@@ -799,11 +793,14 @@ mod tests {
         // of them. respond_hitl must echo the action_hash of the TARGETED hitl_id,
         // not whichever request is newest.
         let tmp = tempfile::TempDir::new().unwrap();
+        let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_agent("mur").unwrap();
         for (hid, ah) in [("h1", "AH1"), ("h2", "AH2")] {
-            svc.append(
+            svc.append_signed(
                 &ch.id,
+                &router,
+                0,
                 ChannelActor::System,
                 EventKind::HitlRequest,
                 serde_json::json!({
@@ -833,10 +830,13 @@ mod tests {
     #[test]
     fn respond_hitl_from_params_dispatches_a_well_formed_request() {
         let tmp = tempfile::TempDir::new().unwrap();
+        let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_agent("mur").unwrap();
-        svc.append(
+        svc.append_signed(
             &ch.id,
+            &router,
+            0,
             ChannelActor::System,
             EventKind::HitlRequest,
             serde_json::json!({

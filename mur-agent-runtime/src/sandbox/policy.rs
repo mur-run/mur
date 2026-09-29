@@ -14,13 +14,42 @@ pub const RESTRICTED_GENERAL_PORTS: [u16; 4] = [80, 443, 8080, 8443];
 /// of what the entitlements grant (issue #712, fail-closed): `profile.yaml`
 /// is the agent's own entitlements source and `identity.key` its signing
 /// identity — an agent that can rewrite either and self-restart escalates
-/// past every other control (observed live, 2026-07-16). Only these two
-/// files are denied; the rest of agent_home stays writable (running.lock,
-/// running.sentinel, stderr.log). The runtime itself reads both once at
-/// startup, BEFORE the sandbox seals, so the deny costs it nothing. Shared
-/// with the tool-level entitlement gate (`tools::fs_policy`) so the kernel
-/// profile and the file tools deny the same set.
-pub const SELF_PROTECTED_AGENT_FILES: [&str; 2] = ["profile.yaml", "identity.key"];
+/// past every other control (observed live, 2026-07-16).
+///
+/// `identity.pub` and `rotations.jsonl` are the key other parties verify this
+/// agent against (`mur_channel::sign::resolve_writer_pubkey` reads the chain
+/// first, then falls back to the pubkey). For the router agent that key is the
+/// human's authority: a HITL answer releases a gate only if it verifies against
+/// it (`hitl::authority::is_router_authority`). Replacing either file with a
+/// key the agent generated itself lets it sign its own approvals, and
+/// `verify_chain` has no trust anchor, so a planted chain passes. Nothing in
+/// the runtime writes either file after the seal — `mur agent create` and
+/// `mur agent rekey` do, from the user's shell.
+///
+/// The rest of agent_home stays writable (running.lock, running.sentinel,
+/// stderr.log). Shared with the tool-level entitlement gate
+/// (`tools::fs_policy`) so the kernel profile and the file tools deny the same
+/// set. Which of these stay READABLE is [`SELF_PROTECTED_WRITE_ONLY`].
+pub const SELF_PROTECTED_AGENT_FILES: [&str; 4] = [
+    "profile.yaml",
+    "identity.key",
+    "identity.pub",
+    "rotations.jsonl",
+];
+
+/// The subset of [`SELF_PROTECTED_AGENT_FILES`] denied for WRITE only.
+///
+/// `profile.yaml` (issue #007): reading its own entitlements escalates nothing
+/// and is how the agent explains its limits. `identity.pub` and
+/// `rotations.jsonl` are public verification material: peers and the runtime
+/// itself read them to verify this agent's signed events, and a read deny
+/// would fail-close every channel it writes to. `identity.key` is absent — it
+/// stays read-denied, because holding it is signing authority.
+///
+/// One list for both enforcement points, so the SBPL profile and the file-tool
+/// read gate cannot disagree about what is readable.
+pub const SELF_PROTECTED_WRITE_ONLY: [&str; 3] =
+    ["profile.yaml", "identity.pub", "rotations.jsonl"];
 
 /// Expand a `~`-relative entitlement path the way the sandbox builder does.
 ///
@@ -282,7 +311,7 @@ impl SandboxPolicy {
         let mut fs_deny: Vec<PathBuf> = ent.filesystem.deny.iter().map(|s| expand(s)).collect();
 
         // Self-protection (issue #712): unconditionally deny the agent's own
-        // profile.yaml + identity.key, even when a write grant covers them
+        // SELF_PROTECTED_AGENT_FILES, even when a write grant covers them
         // (e.g. a broad grant on the agents root, or agent_home itself which
         // is force-granted just below). Without this, an agent can rewrite
         // its own entitlements and self-restart to apply them — the seal is
@@ -1118,13 +1147,22 @@ mod tests {
             agent_home.to_string_lossy().into_owned(),
         ];
         let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+        // Pinned by name, not only by iterating the constant: dropping the
+        // public key material from the list would let the router agent sign
+        // its own HITL approvals, and a loop over the list cannot notice that.
+        for f in ["identity.pub", "rotations.jsonl"] {
+            assert!(
+                SELF_PROTECTED_AGENT_FILES.contains(&f),
+                "{f} must stay self-protected"
+            );
+        }
         for f in SELF_PROTECTED_AGENT_FILES {
             assert!(
                 policy.fs_deny.contains(&agent_home.join(f)),
                 "{f} must always be in fs_deny"
             );
         }
-        // Only those two files are denied — the rest of agent_home
+        // Only those files are denied — the rest of agent_home
         // (running.lock, running.sentinel, stderr.log) stays writable.
         assert!(policy.fs_write.contains(&agent_home));
     }

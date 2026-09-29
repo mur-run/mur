@@ -285,6 +285,34 @@ fn self_protected_denies_own_profile_despite_write_grant() {
     );
 }
 
+/// The router's public key decides whether a HITL answer came from the human
+/// (`hitl::authority::is_router_authority`), and it is read from the router
+/// agent's own home. If that agent could replace `identity.pub`, or plant a
+/// `rotations.jsonl` (checked first, and it need not exist yet), it could sign
+/// its own approvals. Both stay READABLE: peers verify this agent from them.
+#[test]
+fn own_public_key_material_is_write_denied_but_readable() {
+    let (_tmp, home, chain) = refusal_fixture();
+    let agent_home = home.join("agents/mur");
+    std::fs::write(agent_home.join("identity.pub"), "zPUB").unwrap();
+    // rotations.jsonl is deliberately NOT created: a planted chain is a new
+    // file, and the gate must refuse it before it exists.
+    let fs = for_file_tools(FilesystemEntitlement::default(), &agent_home);
+
+    for f in ["identity.pub", "rotations.jsonl"] {
+        let p = agent_home.join(f);
+        check_write_entitlement(TEST_AGENT, &fs, &p, &chain)
+            .expect_err(&format!("{f} must be write-denied in the agent's own home"));
+        assert_eq!(
+            check_read_refusal(&fs, &p, &chain),
+            Ok(()),
+            "{f} must stay readable — it is how this agent is verified"
+        );
+    }
+    // Negative control: the home itself is still writable.
+    check_write_entitlement(TEST_AGENT, &fs, &agent_home.join("notes.md"), &chain)
+        .expect("the rest of the agent's home stays writable");
+}
 /// Build a real repo + linked worktree. Returns `None` when git is
 /// unavailable so the test skips loudly rather than passing vacuously.
 fn repo_with_worktree() -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
