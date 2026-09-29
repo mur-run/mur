@@ -35,8 +35,6 @@ event (§D7).
 - [ ] **A4 · seq from raw lines.** Derive the next `seq` from a minimal
   `{seq}` parse of every non-empty line (`mur-channel/src/store.rs:214`). Test
   with a trailing line of unknown kind (R7).
-- [ ] **A5 · HITL actor finding.** File the design's "Related finding" as its
-  own issue. Not fixed here.
 
 ### B. Event model (release N, `mur-common` / `mur-channel` / `mur-core`)
 
@@ -119,7 +117,7 @@ folds unchanged.
 
 ## Order of execution
 
-1. A1 → A2 (A2 edits the code A1 moves). A4 and A5 in parallel with them.
+1. A1 → A2 (A2 edits the code A1 moves). A4 in parallel with them.
    A3 whenever a Linux box is available; it only blocks E4's Linux path.
 2. B1 → B2 → B3/B4.
 3. C1, C2, C3 (independent of each other; after B1).

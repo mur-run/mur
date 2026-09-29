@@ -275,18 +275,6 @@ macOS enforces the write-deny in the kernel
 (`mur-agent-runtime/src/sandbox/macos.rs:228-235`). Windows has not been
 examined, so `consult` refuses there until someone checks.
 
-## Related finding (out of scope, tracked separately)
-
-The HITL gate verifies a `HitlResponse` but never checks **who** sent it.
-`mur-core/src/hitl/gate.rs:402-420` matches on `hitl_id` and verifies the
-signature, then takes `allow` from the payload (`:438-442`). There is no actor
-check anywhere in the file. The `action_hash` it compares against is written
-in the `HitlRequest` payload (`mur-common/src/hitl/mod.rs:196`), in a channel
-every agent can write. With `MUR_CHANNEL_REQUIRE_SIG` unset (the default), an
-unsigned response passes. Reading the code, an agent can approve its own gated
-action. This is the same principle §D3 enforces: a verified signature is not
-an authorization.
-
 ## Requirements
 
 Each requirement lists the scenarios the implementation must test (plan §F).
