@@ -1,5 +1,5 @@
 //! `propose` — the agent offers the user ONE command or native action, shown
-//! by murmur as a chip under the composer. Like `suggest_replies`, the
+//! by murmur as a chip above the composer. Like `suggest_replies`, the
 //! user-facing effect rides on the streamed tool-call args; unlike it, the
 //! executor vets the args and returns a tool error on rejection, so the model
 //! learns why and can fix it. Vetting is `mur_common::proposal::vet`, the same
@@ -25,7 +25,7 @@ impl ToolExecutor for ProposeTool {
             name: PROPOSE_TOOL.into(),
             description: format!(
                 "Propose ONE command or action for the user instead of telling them to \
-                type it. It appears as a chip under their input; nothing runs until they \
+                type it. It appears as a chip just above their input; nothing runs until they \
                 act. Kinds: `{KIND_SHELL}` (a shell command; the user presses Tab to put \
                 it in their input, reviews it, and sends it), `{KIND_SLASH}` (a slash \
                 command, same Tab flow), `{KIND_RESTART}` (restart YOU, the current agent, \

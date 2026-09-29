@@ -12,7 +12,7 @@ Builds on the `suggest_replies` tool
 Today an agent that needs the user to run something prints it as prose
 ("restart the agent to apply (mur agent stop <name>, then start it again)").
 The user retypes it. This design turns that into a structured proposal that
-murmur renders as a chip under the composer:
+murmur renders as a chip above the composer:
 
 - **insert-only** proposals (`shell`, `slash`) — `Tab` puts the text in the
   empty composer; the user reviews and sends it themselves.
