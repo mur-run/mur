@@ -537,15 +537,38 @@ pub fn cmd_perm_allow_spawn(name: &str, binary: &str) -> Result<()> {
 
 pub fn cmd_perm_deny_spawn(name: &str, binary: &str) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
-    profile
-        .entitlements
-        .processes
-        .spawn
-        .allowed
-        .retain(|b| b != binary);
+    if let Err(near) = remove_spawn(&mut profile.entitlements.processes.spawn.allowed, binary) {
+        let mut msg =
+            format!("'{binary}' is not in the spawn allowlist of '{name}'; nothing removed");
+        for n in near {
+            msg.push_str(&format!("\n  near match (stored value, escaped): {n:?}"));
+        }
+        bail!(msg);
+    }
     save_profile(&path, &mut profile)?;
     warn_if_running(name);
     Ok(())
+}
+
+/// Drop `binary` from the spawn allowlist. The match is exact, so a miss is
+/// an error rather than a silent no-op: an entry whose stored value differs
+/// by an invisible byte (a YAML-folded newline, a doubled space) would
+/// otherwise look revoked while staying granted. On a miss, returns entries
+/// equal to `binary` once whitespace is collapsed, so the caller can show
+/// the real stored value.
+fn remove_spawn(allowed: &mut Vec<String>, binary: &str) -> Result<(), Vec<String>> {
+    let before = allowed.len();
+    allowed.retain(|b| b != binary);
+    if allowed.len() != before {
+        return Ok(());
+    }
+    let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let want = squash(binary);
+    Err(allowed
+        .iter()
+        .filter(|b| squash(b) == want)
+        .cloned()
+        .collect())
 }
 
 /// Grant the build lane: every executable under `dir` becomes spawnable.
@@ -650,7 +673,7 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_port, is_base_port, parse_outbound_mode, remove_path, remove_port,
+        add_port, is_base_port, parse_outbound_mode, remove_path, remove_port, remove_spawn,
         validate_host_pattern,
     };
 
@@ -757,5 +780,18 @@ mod tests {
         assert_eq!(parse_outbound_mode("proxy-only").unwrap(), M::ProxyOnly);
         assert_eq!(parse_outbound_mode("off").unwrap(), M::Off);
         assert!(parse_outbound_mode("open").is_err());
+    }
+
+    /// A deny-spawn that matches nothing must fail, and must surface the
+    /// YAML-folded entry the operator actually meant.
+    #[test]
+    fn remove_spawn_reports_misses_and_whitespace_near_matches() {
+        let folded = "/x/Google Chrome for\n Testing.app/bin".to_string();
+        let mut allowed = vec!["/usr/bin/git".to_string(), folded.clone()];
+        assert_eq!(remove_spawn(&mut allowed, "/usr/bin/git"), Ok(()));
+        let near = remove_spawn(&mut allowed, "/x/Google Chrome for Testing.app/bin");
+        assert_eq!(near, Err(vec![folded.clone()]));
+        assert_eq!(remove_spawn(&mut allowed, "/nope"), Err(vec![]));
+        assert_eq!(allowed, vec![folded], "a miss removes nothing");
     }
 }
