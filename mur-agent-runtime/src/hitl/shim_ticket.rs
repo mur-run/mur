@@ -38,7 +38,7 @@ const TICKET_BYTES: usize = 32;
 /// How far up the process tree lineage is walked before giving up. A real
 /// shim is two or three levels under the CLI; the cap only bounds a cycle
 /// from a pid being reused mid-walk.
-const MAX_LINEAGE_DEPTH: usize = 64;
+pub(crate) const MAX_LINEAGE_DEPTH: usize = 64;
 
 /// `HelloRefusal::NotReady`'s wire message; the shim retries on exactly this.
 pub const NOT_READY: &str = "shim ticket not ready yet; retry";
@@ -257,7 +257,7 @@ fn is_strict_descendant(pid: u32, ancestor: u32, parent: impl Fn(u32) -> Option<
 }
 
 #[cfg(target_os = "macos")]
-fn parent_of(pid: u32) -> Option<u32> {
+pub(crate) fn parent_of(pid: u32) -> Option<u32> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
     // SAFETY: `info` is a correctly sized, writable proc_bsdinfo.
@@ -274,7 +274,7 @@ fn parent_of(pid: u32) -> Option<u32> {
 }
 
 #[cfg(target_os = "linux")]
-fn parent_of(pid: u32) -> Option<u32> {
+pub(crate) fn parent_of(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // `comm` may hold spaces and parens; the fields after the LAST ')' are
     // fixed: state, then ppid.
@@ -283,7 +283,7 @@ fn parent_of(pid: u32) -> Option<u32> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn parent_of(_pid: u32) -> Option<u32> {
+pub(crate) fn parent_of(_pid: u32) -> Option<u32> {
     // No lineage, no trust: the shim path fails closed here.
     None
 }

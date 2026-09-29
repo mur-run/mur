@@ -23,7 +23,7 @@ use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
 #[cfg(unix)]
-use crate::transport::unix_socket::serve_unix;
+use crate::transport::unix_socket::serve_unix_gated;
 use crate::transport::webhook;
 use crate::watch_scheduler::WatchScheduler;
 use mur_common::identity::AgentIdentity;
@@ -655,8 +655,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         lock_transports.unix_socket = Some(canonical.to_string_lossy().to_string());
         let d = dispatcher.clone();
         let bind = res.bind_path.clone();
+        let policy = std::sync::Arc::new(crate::communication_policy::AcceptPolicy {
+            accepts_from: profile.inner.communication.accepts_from.clone(),
+            agents_dir: mur_home.join("agents"),
+            self_pid: std::process::id(),
+        });
         transport_tasks.push(tokio::spawn(async move {
-            let _ = serve_unix(d, bind, sock_notif_rx).await;
+            let _ = serve_unix_gated(d, bind, sock_notif_rx, Some(policy)).await;
         }));
     }
     #[cfg(not(unix))]
