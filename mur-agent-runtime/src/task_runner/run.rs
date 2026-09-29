@@ -333,6 +333,12 @@ impl TaskRunner {
                 // populated `error` — not a Completed task whose reply body
                 // happens to contain "llm error:". Callers (message/send) and
                 // the scheduler's `Failed` branch rely on this distinction.
+                tracing::warn!(
+                    task_id = %id,
+                    code = %err.code,
+                    error = %err.message,
+                    "task failed"
+                );
                 self.set_state(&id, TaskState::Failed);
                 TaskOutcome::Failed(Task {
                     id,
