@@ -73,3 +73,16 @@ fn grid_rule_quote_marker_and_header_take_their_tokens() {
         "table header weight"
     );
 }
+
+/// Inline and fenced code take the skin's `code` ink: a hard-coded terminal
+/// yellow washed out on `light`'s white page.
+#[test]
+fn code_uses_the_skin_code_token() {
+    for theme in [&ANSI, &LIGHT, &MUR, &CLAY] {
+        let t = render("see `inline` here\n\n```\nfenced\n```\n", WIDTH, theme);
+        for word in ["inline", "fenced"] {
+            let (_, style) = span(&t, |s| s.content.contains(word));
+            assert_eq!(style.fg, theme.code.fg, "{word}");
+        }
+    }
+}

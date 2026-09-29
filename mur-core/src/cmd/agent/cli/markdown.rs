@@ -7,16 +7,12 @@
 //! Markdown an assistant actually emits, not full CommonMark fidelity.
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthChar;
 
 use super::theme::{ANSI, Theme};
 
-// ponytail: inline code keeps a pinned named slot until the code-block
-// design picks its token (murmur UI spec §1); every other colour in this
-// file comes from the skin.
-const CODE: Color = Color::Yellow;
 const RULE: &str = "────────────────────────";
 const INDENT: &str = "  ";
 
@@ -103,7 +99,7 @@ impl Renderer {
             s = s.add_modifier(Modifier::ITALIC);
         }
         if self.code {
-            s = s.fg(CODE);
+            s = s.patch(self.skin.0.code);
         }
         s
     }
@@ -170,14 +166,14 @@ impl Renderer {
                             break;
                         }
                         self.cur
-                            .push(Span::styled(part.to_string(), Style::default().fg(CODE)));
+                            .push(Span::styled(part.to_string(), self.skin.0.code));
                     }
                 } else {
                     self.push_text(&t);
                 }
             }
             Event::Code(t) => {
-                let span = Span::styled(t.to_string(), Style::default().fg(CODE));
+                let span = Span::styled(t.to_string(), self.skin.0.code);
                 if self.in_table {
                     self.table_cur_cell.push(span);
                 } else {

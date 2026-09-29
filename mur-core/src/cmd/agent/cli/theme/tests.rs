@@ -231,7 +231,7 @@ fn ansi_paints_no_decorative_bg() {
 
 /// Every token that inks text, by name — the set the no-DIM and contrast
 /// guards walk.
-fn ink_tokens(t: &Theme) -> [(&'static str, Style); 21] {
+fn ink_tokens(t: &Theme) -> [(&'static str, Style); 22] {
     [
         ("text", t.text),
         ("muted", t.muted),
@@ -241,6 +241,7 @@ fn ink_tokens(t: &Theme) -> [(&'static str, Style); 21] {
         ("ok", t.ok),
         ("warn", t.warn),
         ("error", t.error),
+        ("code", t.code),
         ("diff_add_mark", t.diff_add_mark),
         ("diff_del_mark", t.diff_del_mark),
         ("diff_add_text", t.diff_add_text),

@@ -31,6 +31,10 @@ pub struct Theme {
     pub ok: Style,
     pub warn: Style,
     pub error: Style,
+    /// Inline code and fenced code-block text. Same hue family as `warn` on
+    /// every skin (`ansi` keeps the terminal's own yellow slot), measured
+    /// against the skin's page like any other ink.
+    pub code: Style,
     // ── diff ──────────────────────────────────────────────────────────────
     /// The `▌+` / `▌-` gutter marks on an edit card's diff rows. Saturated
     /// colour lives HERE and not on the row text: a whole line painted red or
@@ -115,6 +119,7 @@ pub static ANSI: Theme = Theme {
     ok: fg(Color::Green),
     warn: fg(Color::Yellow),
     error: fg(Color::Red),
+    code: fg(Color::Yellow),
     diff_add_mark: fg(Color::Green).add_modifier(Modifier::BOLD),
     diff_del_mark: fg(Color::Red).add_modifier(Modifier::BOLD),
     // A background tint needs a background colour to sit next to, and this is
@@ -165,6 +170,7 @@ pub static LIGHT: Theme = Theme {
     ok: rgb(0x0f, 0x6e, 0x35),
     warn: rgb(0x8a, 0x5a, 0x00),
     error: rgb(0xb3, 0x26, 0x1e),
+    code: rgb(0x8a, 0x5a, 0x00),
     diff_add_mark: rgb(0x15, 0x6e, 0x30).add_modifier(Modifier::BOLD),
     diff_del_mark: rgb(0xcf, 0x22, 0x2e).add_modifier(Modifier::BOLD),
     diff_add_bg: bg(0xe4, 0xf2, 0xe7),
@@ -211,6 +217,7 @@ pub static MUR: Theme = Theme {
     ok: rgb(0x7f, 0xd4, 0x8f),
     warn: rgb(0xf2, 0xc7, 0x6a),
     error: rgb(0xf2, 0x8b, 0x98),
+    code: rgb(0xf2, 0xc7, 0x6a),
     diff_add_mark: rgb(0x7f, 0xd4, 0x8f).add_modifier(Modifier::BOLD),
     diff_del_mark: rgb(0xf2, 0x8b, 0x98).add_modifier(Modifier::BOLD),
     diff_add_bg: bg(0x1d, 0x40, 0x30),
@@ -255,6 +262,7 @@ pub static CLAY: Theme = Theme {
     ok: rgb(0x4e, 0xba, 0x65),
     warn: rgb(0xff, 0xc1, 0x07),
     error: rgb(0xff, 0x6b, 0x80),
+    code: rgb(0xff, 0xc1, 0x07),
     diff_add_mark: rgb(0x6b, 0xd4, 0x7f).add_modifier(Modifier::BOLD),
     diff_del_mark: rgb(0xff, 0x8c, 0x9c).add_modifier(Modifier::BOLD),
     diff_add_bg: bg(0x26, 0x48, 0x2e),

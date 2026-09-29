@@ -70,6 +70,7 @@ pub fn check(theme: &Theme, assumed_bg: Color) -> Vec<Failure> {
             ("ok", theme.ok),
             ("warn", theme.warn),
             ("error", theme.error),
+            ("code", theme.code),
         ] {
             pairs.push((fg, style, on, ground, MIN_TEXT));
         }
