@@ -1,4 +1,4 @@
-# murmur UI pass: every colour through the theme, approvals docked above the composer
+# murmur UI pass: every colour through the theme, approvals docked above the composer, user skins
 
 **Status**: designed, not started.
 **Field report**: a computer-use walk of one transcript (HITL approval, a
@@ -78,14 +78,18 @@ Taken with the user on 2026-09-29.
 | 5 | `/skin` applies immediately and prints one muted notice; scrollback is never cleared. |
 | 6 | The approval panel is a **layout band docked above the composer**, like the suggested-reply chooser (#643); it is no longer a `Clear` overlay. |
 | 7 | Countdown is shown whenever the request carries a deadline; deferred requests have none and show none. No fleet special case. |
-| 8 | Options are uncoloured; the selected row is `badge`; only option 3 ("any tool") carries `warn` and `⚠`. |
+| 8 | Options are uncoloured; the selected row is `badge`; only option 3 ("any tool") carries `warn` and `▲` — the glyph Warn notices already use; `⚠` renders two columns wide in many terminals and would push the panel's right border. |
 | 9 | No "press n to add notes" feature. The reason for a denial is whatever is in the composer when the operator denies — the existing behaviour, now made visible in option 4's label. |
 | 10 | Long diffs fold; the panel does not scroll internally (↑/↓ select options, PgUp scrolls the transcript — a third scroll owner would collide with both). |
 | 11 | The role label shows the agent's `display_name`. |
 | 12 | Colour marks exceptions, not the normal case: a successful tool row colours only its `✔`. |
 | 13 | Consecutive tool rows stack with no blank row between them; the gap stays at every change of speaker. |
 | 14 | A long run of tool rows is **not** collapsed into a summary line. Rows already in scrollback cannot be recollapsed (the scrollback limit of Problem 5), so a collapse would have to hide rows while they run. Revisit only if density is still a complaint after 12–13 ship. |
-| 15 | The approve-then-fail-on-entitlement ordering (approving a write the agent can never perform) is behaviour, not UI: its own issue. |
+| 15 | Users can add skins as `<mur home>/skins/<name>.yaml` (§6). Built-in names cannot be shadowed. |
+| 16 | A user skin names its base with a mandatory `inherits:` (a built-in, or `none`); unset tokens come from the base. |
+| 17 | The file schema is an explicit whitelist split into required and optional keys; any other key is an error. |
+| 18 | A skin that fails to load is rejected whole — never partly applied. At startup murmur falls back to `ansi`; a runtime `/skin` keeps the current skin. |
+| 19 | The approve-then-fail-on-entitlement ordering (approving a write the agent can never perform) is behaviour, not UI: its own issue. |
 
 ## Design
 
@@ -106,7 +110,7 @@ pub badge_warn: Style,
 | `surface_alt` | *(none)* | bg `#f4f5f8` | bg `#12122a` | bg `#212121` |
 | `badge_warn` | `Yellow` + REVERSED + BOLD | `#8a5a00` on `#fbefd5` | `#0b0b1a` on `#f2c76a` | `#1a1a1a` on `#ffc107` |
 
-The RGB values are starting points; §6's guard is the source of truth and
+The RGB values are starting points; §7's guard is the source of truth and
 the plan adjusts any that fail it.
 
 Paint-site moves:
@@ -160,7 +164,7 @@ is drawn over it.
 │                                                            │
 │ ▸ 1 Yes                                                    │
 │   2 Yes · don't ask again for edit_file                    │
-│   3 Yes · don't ask again for any tool                   ⚠ │
+│   3 Yes · don't ask again for any tool                   ▲ │
 │   4 No — type a reason below first, or Esc                 │
 ╰────────────────────────────────────────────────────────────╯
  ─ message · /help ─────────────────────────────────────────
@@ -191,7 +195,7 @@ the Ctrl+O transcript view can show the pending request's full body; if it
 cannot, the plan adds that before the panel ships.
 
 **Options.** Rows in `text`; the selected row in `badge` (on `ansi` that is
-reverse video — the focus exception of decision 2); option 3's `⚠` and the
+reverse video — the focus exception of decision 2); option 3's `▲` and the
 words "any tool" in `warn`. Option 4's label follows the composer:
 
 - empty: `No — type a reason below first, or Esc`
@@ -271,7 +275,120 @@ omitted, as today.
 `push_agent_header` takes the agent's `display_name` (`● MUR`, streaming:
 `⠋ MUR`). `you ›` is unchanged.
 
-### 6. Guards
+
+### 6. User skins (P4)
+
+Proposed 2026-09-11, never built; decided here. A user skin is a file the
+operator puts in place by hand. It is read once when selected and leaked to
+`&'static`, so every frame costs what a built-in costs.
+
+**Location and selection.**
+
+- `<mur home>/skins/<name>.yaml`, where `<mur home>` is the `home` murmur
+  already resolves for `config.yaml` (default `~/.mur`). `<name>` is the
+  file stem, `[a-z0-9-]+`.
+- Selected exactly like a built-in: `cli.skin: <name>`, `--skin <name>`,
+  `/skin <name>`.
+- Lookup is built-ins first, then `skins/`. A file named after a built-in
+  (`ansi`, `dark`, `light`, `mur`, `clay`) is never loaded and is listed as
+  invalid (`shadows a built-in skin`).
+- The directory is scanned when a name is resolved and when `/skin` lists;
+  there is no watcher and no hot reload.
+- Nothing writes to `skins/` except the operator: no fleet, skill,
+  `.muragent`, capability or official-catalog install carries or creates a
+  skin file. A skin controls whether an approval is legible, so it is not
+  content an import may bring along.
+
+**File.**
+
+```yaml
+# ~/.mur/skins/dusk.yaml
+inherits: mur              # required: a built-in skin name, or `none`
+assumed_bg: "#101020"      # conditional, see below
+tokens:
+  accent: "#ff9e64"
+  muted: "#a0a0c8"
+  surface_alt: "on #16162e"
+  badge_warn: "bold #101020 on #f2c76a"
+layout:
+  border_type: rounded
+```
+
+Top-level keys: `inherits`, `assumed_bg`, `tokens`, `layout`. Anything else
+is an error.
+
+**Whitelist.** The `tokens` and `layout` keys are exactly the fields of
+`Theme`, split in two classes. With `inherits: <built-in>` every key is
+optional and falls back to the base. With `inherits: none`, required keys
+must be present, and optional keys that are absent are **derived** by the
+rule in the right column — a fixed, documented function of the file's own
+required tokens, never a value from some other skin.
+
+| key | class | derived when absent under `inherits: none` |
+|---|---|---|
+| `text`, `muted`, `emphasis`, `accent`, `accent_alt`, `ok`, `warn`, `error`, `border`, `badge` | required | — |
+| `surface`, `surface_alt`, `settlement_surface`, `diff_add_bg`, `diff_del_bg` | optional | none (no background) |
+| `diff_add_mark` / `diff_del_mark` | optional | `ok` / `error` + bold |
+| `diff_add_text` / `diff_del_text` | optional | `ok` / `error` when the matching `diff_*_bg` is absent, else `text` — the one-channel rule `theme.rs` documents |
+| `settlement_text`, `_muted`, `_accent`, `_ok`, `_warn`, `_error` | optional | `text`, `muted`, `accent`, `ok`, `warn`, `error` |
+| `badge_warn` | optional | `warn` + reversed + bold |
+| `layout.border_type` | optional | `plain` (`plain` \| `rounded` \| `double` \| `thick`) |
+| `layout.inner_padding` | optional | `1` (0–4) |
+| `layout.compact_input` | optional | `false` |
+
+The whitelist lives next to `Theme` as one table the parser and the
+`/skin` listing both read, so adding a `Theme` field without a whitelist row
+fails a test (below), not a user.
+
+**Value syntax** for a token: `[modifier …] [fg] [on bg]`, space-separated,
+case-insensitive.
+
+- modifier: `bold`, `dim`, `italic`, `underlined`, `reversed`
+- colour: `#rrggbb`; one of the sixteen named slots `black red green yellow
+  blue magenta cyan gray dark-gray light-red light-green light-yellow
+  light-blue light-magenta light-cyan white`; or `default` (the terminal's
+  own)
+- `none` alone: the empty style (clears an inherited value)
+
+Every value parses into a typed `Style`; no string reaches the terminal, so
+there is no escape-sequence path.
+
+**`assumed_bg`.** Required when the resolved skin — after inheritance and
+derivation — contains any `#rrggbb` colour. Resolved from the file, else the
+base's assumed background (`light`, `mur`, `clay` have one; `ansi` does
+not), else it is an error. A skin whose colours are all named slots or
+`default` needs none and is not contrast-checked, the same reasoning as the
+built-in `ansi`.
+
+**Contrast check at load**, against `assumed_bg`, with the §7 thresholds
+(`text` ≥ 7:1, every other text token and `badge`/`badge_warn` fg on bg
+≥ 4.5:1, settlement tokens against `settlement_surface` when set). `dim` is
+modelled as the colour blended 50 % toward the background before measuring
+— the A7 gap closed for user files too. Named-slot and `default` colours are
+skipped.
+
+**Failure.** Load errors are: YAML that does not parse, an unknown key, a
+malformed value, a missing required key under `none`, a missing
+`assumed_bg`, a contrast failure, a shadowing name, an unknown `inherits`.
+All are collected, then the skin is rejected whole.
+
+| when | result | notice (`warn`, one row) |
+|---|---|---|
+| startup (`cli.skin`, `--skin`) | `ansi` | `▲ skin dusk not loaded: tokens.warn 2.1:1 on #101020 (needs 4.5:1) (+3 more) — using ansi` |
+| `/skin dusk` | current skin kept; config not written | `▲ skin dusk not loaded: … (+3 more) — keeping mur` |
+
+`(+N more)` appears only when there is more than one error. The full list is
+in `/skin` with no argument, which lists built-ins then user skins; an
+invalid file is shown as `dusk (invalid) — <first error>` and any further
+errors indented under it.
+
+`persist_skin` writes the name only after a successful load.
+
+Ceiling, recorded: each successful user-skin load leaks one `Theme`
+(~1 KB). Bounded by how often an operator types `/skin`; revisit only if a
+reload loop ever exists.
+
+### 7. Guards
 
 In `theme.rs`:
 
@@ -312,7 +429,43 @@ In `ui/` (TestBackend, the `band_growth_tests` pattern):
 - `intent_is_tail_elided`: a long intent keeps its first words and ends in
   `…)`; it never contains `…` followed by more text.
 
-### 7. Delivery
+User skins (§6), parser-level unless noted:
+
+- `whitelist_covers_theme`: every `Theme` field has exactly one whitelist
+  row, and every row names a field.
+- `whitelist_classes`: under `inherits: none`, a file with only the ten
+  required tokens loads and every optional token equals its derivation; a
+  file missing any one required token fails naming it.
+- `none_with_bg_but_missing_required`: `inherits: none`, `assumed_bg` set,
+  `warn` absent → rejected, error names `tokens.warn`.
+- `inherits_fills_unset`: `inherits: mur` + one `accent` override equals
+  `MUR` in every other field.
+- `unknown_key_rejected`: at top level, under `tokens`, under `layout`.
+- `value_syntax`: `bold #d97757 on #262626`, `on #16162e`, `dim cyan`,
+  `default`, `none` parse to the expected `Style`; `#12345`, `blod red`,
+  `red on` are errors.
+- `layout_override`: `border_type: double`, `inner_padding: 2`,
+  `compact_input: true` reach the loaded `Theme`; `inner_padding: 9` is an
+  error.
+- `assumed_bg_resolution`: RGB under `inherits: mur` with no `assumed_bg`
+  loads (uses `#0b0b1a`); RGB under `inherits: ansi` or `none` without it
+  is rejected; named-slot-only under `none` loads without it.
+- `contrast_rejects_invisible_ink`: `warn` equal to `assumed_bg` is
+  rejected with the measured ratio in the error; `dim` on a passing colour
+  that falls under 4.5 after the blend is rejected.
+- `cannot_shadow_builtin`: `skins/mur.yaml` is never loaded; `/skin mur`
+  gives the built-in.
+- `multiple_errors_first_plus_count`: three errors → notice holds the first
+  and `(+2 more)`.
+- `startup_broken_falls_back_to_ansi` (term setup): `cli.skin` naming a
+  broken file starts on `ansi` with the startup notice.
+- `runtime_broken_keeps_current` (slash): under `mur`, `/skin broken`
+  leaves `app.theme` on `MUR`, prints `keeping mur`, and leaves
+  `config.yaml` unchanged.
+- `skin_list_shows_user_skins`: `/skin` lists a valid user skin by name and
+  a broken one as `(invalid)` with its first error.
+
+### 8. Delivery
 
 Three PRs, each reviewable on its own screenshot:
 
@@ -324,8 +477,14 @@ Three PRs, each reviewable on its own screenshot:
    panel.
 3. **Approval panel and failure rows.** §3, and §4's one-line failure,
    `fix:` row and denial row.
+4. **User skins.** §6. Last, because its whitelist is `Theme`'s field list
+   and must see PR-1's `surface_alt` and `badge_warn`. User-facing: README
+   skin section, the docs-site `/skin` page (the `update-docs` skill), and
+   `--skin` / `config.cli.skin` help naming `<mur home>/skins/`.
 
-Not in scope: composer hint text and the status bar's other fields
+Not in scope: a `mur skin` subcommand (validate, scaffold, export) — `/skin`
+listing reports errors; OSC 11 background detection; skins shipped by
+anything other than the operator. Also not in scope: composer hint text and the status bar's other fields
 (`⏵ 534 · 01a0eae7`, `0/… tok`); code-block and inline-code styling;
 the welcome layout; the approve-then-entitlement-failure ordering. Each is
 its own design.
