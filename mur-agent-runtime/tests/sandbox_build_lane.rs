@@ -96,7 +96,12 @@ fn sandbox_build_lane_subprocess_main() {
     match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
         Ok(status) if status.enforcing => {}
         other => {
-            if running_in_ci() {
+            // Set to a non-empty value by CI providers (GitHub Actions,
+            // GitLab, Buildkite, ...).
+            const CI_ENV_VAR: &str = "CI";
+            let in_ci = std::env::var_os(CI_ENV_VAR)
+                .is_some_and(|v| !v.is_empty() && v != "false" && v != "0");
+            if in_ci {
                 // CI runners are not sandboxed: an unenforced sandbox there is
                 // a real regression, not an environment quirk.
                 eprintln!("ERROR: sandbox not enforcing under CI: {other:?}");
@@ -130,15 +135,4 @@ fn sandbox_build_lane_subprocess_main() {
          off_lane={off_lane_ran} (want false)"
     );
     std::process::exit(1);
-}
-
-/// Env var CI providers set (GitHub Actions, GitLab, Buildkite, ...) to any
-/// non-empty value.
-#[cfg(target_os = "macos")]
-const CI_ENV_VAR: &str = "CI";
-
-/// True under CI, where an unenforced sandbox must fail rather than skip.
-#[cfg(target_os = "macos")]
-fn running_in_ci() -> bool {
-    std::env::var_os(CI_ENV_VAR).is_some_and(|v| !v.is_empty() && v != "false" && v != "0")
 }
