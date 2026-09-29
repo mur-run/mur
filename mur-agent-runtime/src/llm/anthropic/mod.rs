@@ -645,9 +645,11 @@ fn finish_stream(
             return Err(LlmError::Timeout);
         }
         let msg = empty_stream_error(&acc);
-        // Warn, not debug: this is the line that tells a silent `end_turn`
-        // from a failed stream, and the default filter drops debug.
-        tracing::warn!(model = %model, "{msg}");
+        // Debug, not warn: the provider cannot tell a failure from the model
+        // deliberately ending its turn after `suggest_replies` (the normal
+        // case). The task runner decides which it is and logs the real
+        // failures at warn with this same message attached.
+        tracing::debug!(model = %model, "{msg}");
         return Err(LlmError::InvalidResponse(msg));
     }
     let stop_reason = if interrupted {
