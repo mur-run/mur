@@ -1,4 +1,4 @@
-//! Extracted helpers for supervisor.rs — keeps it under 800 lines per CLAUDE.md §4.
+//! Extracted helpers for supervisor/mod.rs — keeps it under 800 lines per CLAUDE.md §4.
 
 use std::sync::Arc;
 
@@ -386,7 +386,7 @@ pub async fn build_provider_runner(
     // profile and sandboxed children can dial it. See profile_needs_egress.
     let egress = egress_proxy;
     let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress);
-    // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor.rs`
+    // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor/mod.rs`
     // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
     // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).
     let mur_home = std::env::var_os("MUR_HOME")

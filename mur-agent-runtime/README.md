@@ -110,7 +110,7 @@ mur-agent-runtime/
 │   │   └── methods/             agent/card, message/send, tasks/*
 │   ├── retry.rs                 fixed/linear/exp backoff per RetryPolicy
 │   ├── socket_path.rs           macOS 104-byte sun_path fallback (/tmp + symlink)
-│   ├── supervisor.rs            entrypoint(): startup + signal + shutdown
+│   ├── supervisor/              entrypoint(): startup + signal + shutdown
 │   ├── task_runner.rs           TaskRunner (stub + Llm backends, sync + async)
 │   ├── telemetry_writer.rs      JSONL writer + JSON-RPC notification fan-out
 │   └── transport/

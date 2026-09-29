@@ -25,7 +25,7 @@ use tempfile::TempDir;
 /// reports `enforcing=false`, and because the default profile carries
 /// `fail_closed_on_sandbox_error: true` the supervisor refuses to start
 /// unconfined rather than run with more access than the profile grants —
-/// see `mur-agent-runtime/src/supervisor.rs:492`. That is the runtime
+/// see the fail-closed check in `mur-agent-runtime/src/supervisor/seal.rs`. That is the runtime
 /// behaving correctly, so the test has nothing to prove here and skips.
 ///
 /// This is deliberately narrower than the `MUR_TEST_SANDBOX=1` opt-in used

@@ -73,7 +73,7 @@ async fn sigterm_removes_running_lock_and_flushes_telemetry() {
 
     // Wait for the agent/card JSON-RPC response (skips telemetry lines).
     // The response proves the stdio transport is alive. Signal handlers are
-    // installed BEFORE the transport spawns (supervisor.rs step 9→10), so
+    // installed BEFORE the transport spawns (supervisor/mod.rs step 9→10), so
     // SIGTERM will be caught.
     tokio::time::timeout(std::time::Duration::from_secs(10), ready_rx.recv())
         .await

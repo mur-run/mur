@@ -275,8 +275,9 @@ impl LaunchChain {
             // list could never name it.
             //
             // No re-allow for the agent's own key, and none is needed: the
-            // runtime loads its identity at supervisor.rs:174 and seals the
-            // sandbox at :314, so nothing reads a private key after the seal.
+            // runtime loads its identity in `supervisor::entrypoint` before
+            // `supervisor::seal` applies the sandbox, so nothing reads a
+            // private key after the seal.
             self.mur_home.join("keys"),
             self.mur_home.join("secrets"),
             self.mur_home.join("auth.json"),
