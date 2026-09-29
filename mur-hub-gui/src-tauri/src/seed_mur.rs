@@ -328,6 +328,13 @@ pub fn seed_mur_if_missing(template_dir: &Path, mur_home: &Path) -> std::io::Res
         std::fs::remove_dir_all(&dst)?;
     }
     std::fs::rename(&staging, &dst)?;
+    // #712: pin the freshly seeded concierge so its first start trusts the
+    // template's entitlements rather than whatever a stale pin said.
+    // Best-effort: on failure the stale pin is removed instead, and the
+    // runtime pins on first start (trust on first use).
+    if mur_common::entitlements_pin::repin_from_profile(mur_home, "mur").is_err() {
+        let _ = mur_common::entitlements_pin::remove_pin(mur_home, "mur");
+    }
     Ok(true)
 }
 

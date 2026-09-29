@@ -2218,6 +2218,7 @@ async fn run_agent(action: AgentAction) -> Result<()> {
             AgentPermAction::SetLimit { name, key, value } => {
                 cmd::agent::cmd_perm_set_limit(&name, &key, value)?
             }
+            AgentPermAction::Reseal { name } => cmd::agent::cmd_perm_reseal(&name)?,
             AgentPermAction::ToolAllow { name, pattern } => cmd::agent::cmd_perm_set_tool(
                 &name,
                 mur_common::agent::ToolPolicy::Allow,

@@ -524,6 +524,17 @@ Agent** wizard offers the same catalog as a source.
   ones you approved earlier. The refusal points at
   `mur agent perm list-paths <agent>`, whose header shows the seal state.
   Tools set to `allow` still run.
+- **An agent can't grant itself more** — Landlock is allow-only, so on Linux
+  an agent's shell could rewrite its own `profile.yaml` and widen the
+  entitlements its next start seals. MUR now keeps a copy of each agent's
+  `entitlements` in `~/.mur/entitlement-pins/`, where no agent sandbox can
+  write, and refuses to start an agent whose entitlements changed outside MUR
+  (`error[entitlements_unpinned]`, naming the fields that changed). Every
+  `mur agent perm …` command updates the pin for you. After a hand edit of
+  `entitlements:`, review it and accept it with `mur agent perm reseal <agent>`.
+  Other fields (model, skills, companion) aren't pinned and can be edited
+  freely. An existing agent is pinned automatically on its first start after
+  the upgrade.
 - **Nobody watching is not permission** — a durable monitor acting on what it
   found asks the same way. Reading its evidence runs unattended; anything that
   would change something outside MUR parks a request pinned to that exact
@@ -818,7 +829,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only) · secret ·
+│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret ·
 │                fallback · smart · routing · effort · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
