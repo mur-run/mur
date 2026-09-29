@@ -529,7 +529,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                         theme::SKIN_NAMES
                     ));
                 } else {
-                    app.theme = theme::resolve_skin(&name);
+                    app.apply_theme(theme::resolve_skin(&name));
                     app.mascot_mode =
                         welcome::resolve_mascot_mode(app.theme, std::io::stdout().is_terminal());
                     let h = app.home.clone();

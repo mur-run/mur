@@ -114,7 +114,7 @@ impl App {
     }
 
     pub fn clear_input(&mut self) {
-        self.input = new_input();
+        self.input = new_input(self.theme);
     }
 
     /// Ingest a `Task.usage` JSON object: update per-turn and session counters
@@ -219,7 +219,7 @@ impl App {
 
     /// Replace the input buffer with `text` (used by slash-command completion).
     pub fn set_input(&mut self, text: &str) {
-        self.input = new_input();
+        self.input = new_input(self.theme);
         self.input.insert_str(text);
     }
 
@@ -242,6 +242,16 @@ impl App {
                 m.rendered = Some(markdown::render(&m.text, width, theme).lines);
             }
         }
+    }
+
+    /// Switch skin for everything murmur can still repaint: the theme, every
+    /// cached markdown render (a table's stripe is baked in when it
+    /// finishes), and the composer placeholder. Rows already written to the
+    /// terminal's scrollback keep their colours; nothing can reach them.
+    pub fn apply_theme(&mut self, theme: &'static crate::cmd::agent::cli::theme::Theme) {
+        self.theme = theme;
+        self.rerender_markdown();
+        self.input.set_placeholder_style(theme.muted);
     }
 
     /// Does the welcome banner belong on screen? While no one has spoken — a

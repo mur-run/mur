@@ -5,7 +5,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyModifiers};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Padding};
 use tui_textarea::TextArea;
@@ -423,7 +423,7 @@ impl App {
             home,
             agent,
             messages: Vec::new(),
-            input: new_input(),
+            input: new_input(theme),
             context_task_id: None,
             current_task_id: None,
             inflight_params: None,
@@ -658,7 +658,7 @@ pub(super) const COMPOSER_PAD_BELOW: u16 = 1;
 /// Composer placeholder when no ghost suggestion is showing.
 pub(super) const INPUT_PLACEHOLDER: &str = "Type a message…";
 
-fn new_input() -> TextArea<'static> {
+fn new_input(theme: &'static Theme) -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_block(
         Block::default()
@@ -668,7 +668,7 @@ fn new_input() -> TextArea<'static> {
     );
     ta.set_cursor_line_style(Style::default());
     ta.set_placeholder_text(INPUT_PLACEHOLDER);
-    ta.set_placeholder_style(Style::default().fg(Color::DarkGray));
+    ta.set_placeholder_style(theme.muted);
     ta
 }
 
