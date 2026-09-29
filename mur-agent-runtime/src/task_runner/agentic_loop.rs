@@ -87,6 +87,14 @@ impl TaskRunner {
         // freezes it on screen, so the CLI still holds it in the same bubble
         // the final reply replaces; the reply must carry it or it is erased.
         let mut carried: Vec<String> = Vec::new();
+        // The bubble on screen already holds text from an earlier model call
+        // this turn, with no step card after it. The next call streams into
+        // the same bubble, so it must open with the same `"\n\n"` the reply
+        // joins the segments with — otherwise the streamed text and the reply
+        // differ, and the CLI can no longer tell which part of the reply it
+        // has already committed to scrollback (it re-printed the whole reply
+        // under the part already there).
+        let mut bubble_has_text = false;
 
         let mut iteration: u32 = 0;
         while iteration < self.iteration_ceiling {
@@ -178,6 +186,14 @@ impl TaskRunner {
                 loop {
                     let req_try = req.clone();
                     let result = match &sink {
+                        Some(s) if bubble_has_text => {
+                            let (tx, fwd) = separated(s.clone());
+                            let r = client.generate_stream(req_try, tx).await;
+                            // Drain before anything else writes to `s` (the
+                            // truncation markers below), so order holds.
+                            let _ = fwd.await;
+                            r
+                        }
                         Some(s) => client.generate_stream(req_try, s.clone()).await,
                         None => client.generate(req_try).await,
                     };
@@ -201,7 +217,7 @@ impl TaskRunner {
                             );
                             ledger.iterations = iteration;
                             ledger.stop = crate::turn_ledger::StopKind::EndTurn;
-                            return Ok((settle(shown.join("\n\n"), &ledger), None));
+                            return Ok((settle(shown.join(SEGMENT_SEP), &ledger), None));
                         }
                         Err(LlmError::InvalidResponse(ref msg))
                             if attempt == 0 && msg.contains("empty streamed response") =>
@@ -258,7 +274,7 @@ impl TaskRunner {
                             ledger.stop = crate::turn_ledger::StopKind::LlmFailedAfterOutput {
                                 error: e.to_string(),
                             };
-                            let mut text = shown.join("\n\n");
+                            let mut text = shown.join(SEGMENT_SEP);
                             text.push_str(crate::llm::LLM_FAILED_TRUNCATION_MARKER);
                             return Ok((settle(text, &ledger), None));
                         }
@@ -271,6 +287,7 @@ impl TaskRunner {
 
             if streaming && !resp.text.is_empty() {
                 shown.push(resp.text.clone());
+                bubble_has_text = true;
             }
 
             self.cumulative_input_tokens
@@ -404,6 +421,12 @@ impl TaskRunner {
                 ) {
                     Ok(()) => {
                         continuations_used += 1;
+                        // Already on screen, in the bubble the next call keeps
+                        // streaming into; the reply must carry it or it is
+                        // erased when the reply replaces the streamed text.
+                        if !resp.text.is_empty() {
+                            carried.push(resp.text.clone());
+                        }
                         if !resp.text.is_empty() {
                             history.push(RichMessage::Text {
                                 role: "assistant".into(),
@@ -444,7 +467,7 @@ impl TaskRunner {
                 } else {
                     carried.push(resp.text);
                     carried.retain(|t| !t.is_empty());
-                    carried.join("\n\n")
+                    carried.join(SEGMENT_SEP)
                 };
                 return Ok((settle(reply, &ledger), None));
             }
@@ -637,6 +660,7 @@ impl TaskRunner {
             if !after_suggest_only {
                 // A real tool drew a card; the text above it is frozen there.
                 carried.clear();
+                bubble_has_text = false;
             } else if !resp.text.is_empty() {
                 carried.push(resp.text.clone());
             }
