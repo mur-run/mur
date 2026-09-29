@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -34,7 +34,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
             .saturating_sub(req.created_at.elapsed().as_secs());
         (
             format!("⏳ approve {} · auto-deny in {remaining}s", req.tool_name),
-            Style::default().fg(Color::Yellow),
+            theme.warn,
         )
     } else if app.streaming {
         let spin = SPINNER[app.spinner % SPINNER.len()];
@@ -66,13 +66,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     // Pure display; no behaviour change. Fixes the "AUTO badge vanished in a
     // new session" illusion where `[a]`-muted tools left no visible trace.
     if app.auto_approve {
-        spans.push(Span::styled(
-            " AUTO ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(" AUTO ", theme.badge_warn));
         spans.push(Span::raw("  "));
     } else if !app.session_tool_allow.is_empty() {
         // Name the muted tools when they fit. `AUTO:2` said something was
@@ -87,13 +81,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         } else {
             format!(" AUTO:{} ", names.len())
         };
-        spans.push(Span::styled(
-            label,
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(label, theme.badge_warn));
         spans.push(Span::raw("  "));
     }
     // The read lane is ON by default now, so a badge on every session would be
@@ -101,32 +89,20 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     // is the one thing still answering for the operator — and its absence
     // there is the real signal (`--no-auto-reads`: everything stops).
     if app.auto_reads && !app.auto_approve {
-        spans.push(Span::styled(
-            " READS ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(" READS ", theme.badge));
         spans.push(Span::raw("  "));
     }
     // `MONITOR (n)` reports registered monitors, including healthy sleeping
     // ones. Conditions are rendered separately so adding a monitor always
     // changes the count without hiding alerts. Both counts are cached on App.
     if let Some(label) = crate::cmd::agent::cli::footer::monitor_label(app.monitor_total) {
-        spans.push(Span::styled(
-            format!(" {label} "),
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Rgb(255, 165, 0))
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(format!(" {label} "), theme.badge));
         if let Some(issue) =
             crate::cmd::agent::cli::footer::monitor_issue_label(app.monitor_conditions)
         {
             spans.push(Span::styled(
                 format!(" {issue} "),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                theme.error.add_modifier(Modifier::BOLD),
             ));
         }
         spans.push(Span::raw("  "));

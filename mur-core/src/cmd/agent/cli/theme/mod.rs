@@ -11,6 +11,9 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::BorderType;
 
+pub mod contrast;
+
+#[derive(Clone, Copy, Debug)]
 pub struct Theme {
     // ── text ──────────────────────────────────────────────────────────────
     /// Body text: agent replies; user turns take this plus DIM.
@@ -28,6 +31,10 @@ pub struct Theme {
     pub ok: Style,
     pub warn: Style,
     pub error: Style,
+    /// Inline code and fenced code-block text. Same hue family as `warn` on
+    /// every skin (`ansi` keeps the terminal's own yellow slot), measured
+    /// against the skin's page like any other ink.
+    pub code: Style,
     // ── diff ──────────────────────────────────────────────────────────────
     /// The `▌+` / `▌-` gutter marks on an edit card's diff rows. Saturated
     /// colour lives HERE and not on the row text: a whole line painted red or
@@ -57,6 +64,10 @@ pub struct Theme {
     pub border: Style,
     /// Status bar and ordinary card background (bg only).
     pub surface: Style,
+    /// Alternate-row background: the table zebra stripe (bg only). `ansi`
+    /// leaves it empty — it never learns the terminal's background, and a
+    /// guessed slab is what hid striped rows on light terminals.
+    pub surface_alt: Style,
     /// Per-turn settlement card palette. It is complete rather than only a
     /// background: `light` may run inside a dark terminal, so inheriting its
     /// normal dark-on-light text tokens would make the card unreadable.
@@ -67,8 +78,11 @@ pub struct Theme {
     pub settlement_ok: Style,
     pub settlement_warn: Style,
     pub settlement_error: Style,
-    /// Agent-name / AUTO badge on the status bar; the SETTLEMENT title chip.
+    /// Agent-name / READS / MONITOR chip on the status bar; the SETTLEMENT
+    /// title chip.
     pub badge: Style,
+    /// A status chip that means risk is on: AUTO and AUTO:<tools>.
+    pub badge_warn: Style,
     // ── layout ────────────────────────────────────────────────────────────
     pub border_type: BorderType,
     pub inner_padding: u8,
@@ -105,6 +119,7 @@ pub static ANSI: Theme = Theme {
     ok: fg(Color::Green),
     warn: fg(Color::Yellow),
     error: fg(Color::Red),
+    code: fg(Color::Yellow),
     diff_add_mark: fg(Color::Green).add_modifier(Modifier::BOLD),
     diff_del_mark: fg(Color::Red).add_modifier(Modifier::BOLD),
     // A background tint needs a background colour to sit next to, and this is
@@ -119,6 +134,7 @@ pub static ANSI: Theme = Theme {
     diff_del_text: fg(Color::Red),
     border: Style::new().add_modifier(Modifier::DIM),
     surface: Style::new(),
+    surface_alt: Style::new(),
     // Do not invert a completed turn: on light terminals that becomes a large,
     // attention-stealing white slab. The cyan rail and title chip define this
     // card while the body stays inside the terminal's own quiet surface.
@@ -130,6 +146,9 @@ pub static ANSI: Theme = Theme {
     settlement_warn: fg(Color::Yellow),
     settlement_error: fg(Color::Red),
     badge: fg(Color::Cyan)
+        .add_modifier(Modifier::REVERSED)
+        .add_modifier(Modifier::BOLD),
+    badge_warn: fg(Color::Yellow)
         .add_modifier(Modifier::REVERSED)
         .add_modifier(Modifier::BOLD),
     border_type: BorderType::Plain,
@@ -151,6 +170,7 @@ pub static LIGHT: Theme = Theme {
     ok: rgb(0x0f, 0x6e, 0x35),
     warn: rgb(0x8a, 0x5a, 0x00),
     error: rgb(0xb3, 0x26, 0x1e),
+    code: rgb(0x8a, 0x5a, 0x00),
     diff_add_mark: rgb(0x15, 0x6e, 0x30).add_modifier(Modifier::BOLD),
     diff_del_mark: rgb(0xcf, 0x22, 0x2e).add_modifier(Modifier::BOLD),
     diff_add_bg: bg(0xe4, 0xf2, 0xe7),
@@ -160,6 +180,7 @@ pub static LIGHT: Theme = Theme {
     diff_del_text: rgb(0x1f, 0x24, 0x30),
     border: rgb(0xc9, 0xcc, 0xd6),
     surface: Style::new().bg(Color::Rgb(0xee, 0xf0, 0xf5)),
+    surface_alt: Style::new().bg(Color::Rgb(0xe9, 0xec, 0xf2)),
     // A self-contained dark inset avoids both failure modes seen in practice:
     // a bright paper-like slab and dark light-skin text disappearing into the
     // user's dark terminal background.
@@ -173,6 +194,9 @@ pub static LIGHT: Theme = Theme {
     badge: Style::new()
         .fg(Color::Rgb(0x0b, 0x6e, 0x8f))
         .bg(Color::Rgb(0xe0, 0xf0, 0xf8)),
+    badge_warn: Style::new()
+        .fg(Color::Rgb(0x8a, 0x5a, 0x00))
+        .bg(Color::Rgb(0xfb, 0xef, 0xd5)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
     compact_input: false,
@@ -193,6 +217,7 @@ pub static MUR: Theme = Theme {
     ok: rgb(0x7f, 0xd4, 0x8f),
     warn: rgb(0xf2, 0xc7, 0x6a),
     error: rgb(0xf2, 0x8b, 0x98),
+    code: rgb(0xf2, 0xc7, 0x6a),
     diff_add_mark: rgb(0x7f, 0xd4, 0x8f).add_modifier(Modifier::BOLD),
     diff_del_mark: rgb(0xf2, 0x8b, 0x98).add_modifier(Modifier::BOLD),
     diff_add_bg: bg(0x1d, 0x40, 0x30),
@@ -201,6 +226,7 @@ pub static MUR: Theme = Theme {
     diff_del_text: rgb(0xe4, 0xe4, 0xf4),
     border: rgb(0x3f, 0x3f, 0x78),
     surface: Style::new().bg(Color::Rgb(0x14, 0x14, 0x2c)),
+    surface_alt: Style::new().bg(Color::Rgb(0x1a, 0x1a, 0x36)),
     settlement_surface: Style::new().bg(Color::Rgb(0x1d, 0x1d, 0x3a)),
     settlement_text: rgb(0xe4, 0xe4, 0xf4),
     settlement_muted: rgb(0x9a, 0x9a, 0xc4),
@@ -211,6 +237,9 @@ pub static MUR: Theme = Theme {
     badge: Style::new()
         .fg(Color::Rgb(0xfb, 0xbf, 0x24))
         .bg(Color::Rgb(0x22, 0x1a, 0x06)),
+    badge_warn: Style::new()
+        .fg(Color::Rgb(0x0b, 0x0b, 0x1a))
+        .bg(Color::Rgb(0xf2, 0xc7, 0x6a)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
     compact_input: true,
@@ -233,6 +262,7 @@ pub static CLAY: Theme = Theme {
     ok: rgb(0x4e, 0xba, 0x65),
     warn: rgb(0xff, 0xc1, 0x07),
     error: rgb(0xff, 0x6b, 0x80),
+    code: rgb(0xff, 0xc1, 0x07),
     diff_add_mark: rgb(0x6b, 0xd4, 0x7f).add_modifier(Modifier::BOLD),
     diff_del_mark: rgb(0xff, 0x8c, 0x9c).add_modifier(Modifier::BOLD),
     diff_add_bg: bg(0x26, 0x48, 0x2e),
@@ -241,6 +271,7 @@ pub static CLAY: Theme = Theme {
     diff_del_text: rgb(0xff, 0xff, 0xff),
     border: rgb(0x88, 0x88, 0x88),
     surface: Style::new().bg(Color::Rgb(0x26, 0x26, 0x26)),
+    surface_alt: Style::new().bg(Color::Rgb(0x2a, 0x2a, 0x2a)),
     settlement_surface: Style::new().bg(Color::Rgb(0x30, 0x27, 0x25)),
     settlement_text: rgb(0xff, 0xff, 0xff),
     settlement_muted: rgb(0xb8, 0xae, 0xaa),
@@ -251,6 +282,9 @@ pub static CLAY: Theme = Theme {
     badge: Style::new()
         .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
         .bg(Color::Rgb(0xd9, 0x77, 0x57)),
+    badge_warn: Style::new()
+        .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
+        .bg(Color::Rgb(0xff, 0xc1, 0x07)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
     compact_input: false,
@@ -301,261 +335,4 @@ pub fn is_known_skin(name: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dark_is_an_alias_of_ansi() {
-        assert!(std::ptr::eq(resolve_skin("dark"), &ANSI));
-        assert!(std::ptr::eq(resolve_skin("ansi"), &ANSI));
-        assert_eq!(skin_name(&ANSI), "ansi");
-        assert!(is_known_skin("dark"), "saved config still says dark");
-    }
-
-    #[test]
-    fn unknown_skins_fall_back_to_ansi() {
-        assert!(std::ptr::eq(resolve_skin("neon"), &ANSI));
-        assert!(std::ptr::eq(resolve_skin(""), &ANSI));
-        assert!(!is_known_skin("neon"));
-        assert!(!is_known_skin("DARK"));
-    }
-
-    #[test]
-    fn light_and_mur_resolve_to_themselves() {
-        assert!(std::ptr::eq(resolve_skin("light"), &LIGHT));
-        assert!(std::ptr::eq(resolve_skin("mur"), &MUR));
-        assert_eq!(skin_name(&LIGHT), "light");
-        assert_eq!(skin_name(&MUR), "mur");
-    }
-
-    /// WCAG 2 relative luminance of an sRGB colour.
-    fn luminance(c: Color) -> f64 {
-        let Color::Rgb(r, g, b) = c else {
-            panic!("contrast is only defined for Rgb tokens, got {c:?}")
-        };
-        let lin = |v: u8| {
-            let v = f64::from(v) / 255.0;
-            if v <= 0.03928 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-    }
-
-    fn contrast_ratio(a: Color, b: Color) -> f64 {
-        let (la, lb) = (luminance(a), luminance(b));
-        let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
-        (hi + 0.05) / (lo + 0.05)
-    }
-
-    /// The truecolor skins assume a background and every text token must
-    /// read against it: body 7:1, everything else 4.5:1. The assumed
-    /// background is a constant beside the palette so this test and the
-    /// spec cannot drift apart.
-    #[test]
-    fn rgb_skins_meet_wcag() {
-        for (name, theme, bg) in [
-            ("light", &LIGHT, ASSUMED_BG_LIGHT),
-            ("mur", &MUR, ASSUMED_BG_MUR),
-            ("clay", &CLAY, ASSUMED_BG_CLAY),
-        ] {
-            // Each surface is judged against the tokens actually painted on
-            // it: the settlement card never draws with the terminal-surface
-            // tokens, so checking those against its background is meaningless.
-            let check = |surface: &str, bg: Color, text: Style, tokens: &[(&str, Style)]| {
-                let r = contrast_ratio(text.fg.expect("text token has a colour"), bg);
-                assert!(r >= 7.0, "{name}/{surface}: text is {r:.1}:1");
-                for (label, s) in tokens {
-                    let r = contrast_ratio(s.fg.expect("text token has a colour"), bg);
-                    assert!(r >= 4.5, "{name}/{surface}: {label} is {r:.1}:1");
-                }
-            };
-            check(
-                "terminal",
-                bg,
-                theme.text,
-                &[
-                    ("muted", theme.muted),
-                    ("emphasis", theme.emphasis),
-                    ("accent", theme.accent),
-                    ("accent_alt", theme.accent_alt),
-                    ("ok", theme.ok),
-                    ("warn", theme.warn),
-                    ("error", theme.error),
-                ],
-            );
-            check(
-                "settlement",
-                theme.settlement_surface.bg.unwrap_or(bg),
-                theme.settlement_text,
-                &[
-                    ("muted", theme.settlement_muted),
-                    ("accent", theme.settlement_accent),
-                    ("ok", theme.settlement_ok),
-                    ("warn", theme.settlement_warn),
-                    ("error", theme.settlement_error),
-                ],
-            );
-            let badge_bg = theme.badge.bg.expect("badge has a background");
-            let r = contrast_ratio(theme.badge.fg.expect("badge has a foreground"), badge_bg);
-            assert!(r >= 4.5, "{name}: badge is {r:.1}:1");
-        }
-    }
-
-    /// A diff row's tint is a *wash*, not a highlight. Two things must hold on
-    /// every RGB skin: the body text still clears 7:1 when it sits on the
-    /// tint instead of the bare background, and the tint itself stays within
-    /// 1.9:1 of that background — past that it stops reading as "this line
-    /// changed" and starts reading as a coloured slab, which is the banner
-    /// look this whole treatment exists to avoid.
-    ///
-    /// The ceiling was 1.35 and that was too timid: on a near-black terminal
-    /// a tint that close to the background is invisible under any ambient
-    /// light, which defeats the point of having one.
-    #[test]
-    fn diff_tints_are_a_wash_not_a_highlight() {
-        for (name, theme, bg) in [
-            ("light", &LIGHT, ASSUMED_BG_LIGHT),
-            ("mur", &MUR, ASSUMED_BG_MUR),
-            ("clay", &CLAY, ASSUMED_BG_CLAY),
-        ] {
-            let text = theme.text.fg.expect("text token has a colour");
-            for (label, tint) in [("add", theme.diff_add_bg), ("del", theme.diff_del_bg)] {
-                let tint = tint.bg.expect("rgb skin tints its diff rows");
-
-                let r = contrast_ratio(text, tint);
-                assert!(r >= 7.0, "{name}/{label}: text on tint is only {r:.1}:1");
-
-                let loud = contrast_ratio(tint, bg);
-                assert!(
-                    loud <= 1.9,
-                    "{name}/{label}: tint is {loud:.2}:1 against the background — that is a slab, not a wash"
-                );
-            }
-        }
-    }
-
-    /// The gutter mark still has to be legible once it is painted ON the
-    /// tint rather than on the terminal background — it is the only thing
-    /// carrying the +/- sign in colour.
-    #[test]
-    fn diff_marks_read_against_their_own_tint() {
-        for (name, theme) in [("light", &LIGHT), ("mur", &MUR), ("clay", &CLAY)] {
-            for (label, mark, tint) in [
-                ("add", theme.diff_add_mark, theme.diff_add_bg),
-                ("del", theme.diff_del_mark, theme.diff_del_bg),
-            ] {
-                let r = contrast_ratio(
-                    mark.fg.expect("mark has a colour"),
-                    tint.bg.expect("rgb skin tints its diff rows"),
-                );
-                assert!(r >= 4.5, "{name}/{label}: mark on tint is only {r:.1}:1");
-            }
-        }
-    }
-
-    #[test]
-    fn light_settlement_is_readable_without_terminal_background_assumptions() {
-        let bg = LIGHT
-            .settlement_surface
-            .bg
-            .expect("light settlement must paint a stable background");
-        let text = LIGHT
-            .settlement_text
-            .fg
-            .expect("light settlement copy must have a foreground");
-        let ratio = contrast_ratio(text, bg);
-        assert!(ratio >= 7.0, "light settlement text is only {ratio:.1}:1");
-    }
-
-    /// `ansi` pins no *foreground*: every text colour is a named ANSI slot or
-    /// Reset, so the terminal's own theme is what the user sees. Nothing in
-    /// this palette pins a background either — see the diff tokens below for
-    /// why it inks its changed rows instead of tinting them.
-    #[test]
-    fn ansi_pins_no_colour() {
-        let named = |c: Option<Color>| match c {
-            None | Some(Color::Reset) => true,
-            Some(Color::Rgb(..)) | Some(Color::Indexed(_)) => false,
-            Some(_) => true,
-        };
-        for (label, s) in [
-            ("text", ANSI.text),
-            ("muted", ANSI.muted),
-            ("emphasis", ANSI.emphasis),
-            ("accent", ANSI.accent),
-            ("accent_alt", ANSI.accent_alt),
-            ("ok", ANSI.ok),
-            ("warn", ANSI.warn),
-            ("error", ANSI.error),
-            ("border", ANSI.border),
-            ("surface", ANSI.surface),
-            ("badge", ANSI.badge),
-            ("diff_add_mark", ANSI.diff_add_mark),
-            ("diff_del_mark", ANSI.diff_del_mark),
-            ("diff_add_text", ANSI.diff_add_text),
-            ("diff_del_text", ANSI.diff_del_text),
-        ] {
-            assert!(
-                named(s.fg) && named(s.bg),
-                "ansi.{label} pins a colour: {s:?}"
-            );
-        }
-    }
-
-    /// The `ansi` diff rows carry their change in the row's *ink*, using the
-    /// named green/red slots — never a background tint and never RGB. This
-    /// palette cannot see the terminal's background, so a tint that reads on
-    /// a dark terminal hides the text on a light one; the user's own theme has
-    /// already made the named slots legible against whatever they run.
-    #[test]
-    fn ansi_diff_rows_are_inked_not_tinted() {
-        for (label, tint) in [("add", ANSI.diff_add_bg), ("del", ANSI.diff_del_bg)] {
-            assert!(
-                tint == Style::new(),
-                "ansi.diff_{label}_bg must stay empty, got {tint:?}"
-            );
-        }
-        for (label, ink, want) in [
-            ("add", ANSI.diff_add_text, Color::Green),
-            ("del", ANSI.diff_del_text, Color::Red),
-        ] {
-            assert_eq!(
-                ink.fg,
-                Some(want),
-                "ansi.diff_{label}_text must use the named {want:?} slot"
-            );
-            assert!(
-                ink.bg.is_none(),
-                "ansi.diff_{label}_text must not pin a background"
-            );
-        }
-    }
-
-    /// The two channels are exclusive by design: a skin either tints the row
-    /// or inks it. Doing both is what makes a diff read as a stack of
-    /// error/success banners — the exact look this treatment avoids.
-    #[test]
-    fn no_skin_both_tints_and_inks_a_diff_row() {
-        for (name, theme) in [
-            ("ansi", &ANSI),
-            ("light", &LIGHT),
-            ("mur", &MUR),
-            ("clay", &CLAY),
-        ] {
-            for (label, tint, ink) in [
-                ("add", theme.diff_add_bg, theme.diff_add_text),
-                ("del", theme.diff_del_bg, theme.diff_del_text),
-            ] {
-                let tinted = tint.bg.is_some();
-                let inked = ink.fg != theme.text.fg;
-                assert!(
-                    tinted != inked,
-                    "{name}/{label}: tinted={tinted} inked={inked} — exactly one channel must carry the change"
-                );
-            }
-        }
-    }
-}
+mod tests;

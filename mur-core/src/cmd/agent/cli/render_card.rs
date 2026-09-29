@@ -68,7 +68,7 @@ pub fn card_lines(
     let budget = hint_budget(width);
 
     let accent = match card.state {
-        StepState::Error => Style::default().fg(ratatui::style::Color::Red),
+        StepState::Error => theme.error,
         _ => theme.accent,
     };
 
@@ -145,7 +145,7 @@ pub fn card_lines(
     }
 
     // ── Result / error (bounded) ──────────────────────────────────────────────
-    if let Some(line) = error_line(card) {
+    if let Some(line) = error_line(card, theme) {
         out.push(line);
     }
 
@@ -180,13 +180,10 @@ pub fn card_lines(
 
 /// Error line for a card, or `None` when the tool succeeded. Shown in both
 /// collapsed and expanded modes.
-fn error_line(card: &StepCard) -> Option<Line<'static>> {
-    card.error.as_ref().map(|err| {
-        Line::styled(
-            format!(" ✗ {err}"),
-            Style::default().fg(ratatui::style::Color::Red),
-        )
-    })
+fn error_line(card: &StepCard, theme: &'static Theme) -> Option<Line<'static>> {
+    card.error
+        .as_ref()
+        .map(|err| Line::styled(format!(" ✗ {err}"), theme.error))
 }
 
 /// The `[y] approve [a] always [n] deny` inline-HITL prompt row.
@@ -219,7 +216,7 @@ fn hitl_row(theme: &'static Theme) -> Line<'static> {
 /// Collapsed-card tail: error line (if any) + pending-HITL row (if any). The
 /// success gist is folded into the header instead.
 fn push_error_and_hitl(out: &mut Vec<Line<'static>>, card: &StepCard, theme: &'static Theme) {
-    if let Some(line) = error_line(card) {
+    if let Some(line) = error_line(card, theme) {
         out.push(line);
     }
     if card.awaiting_hitl {

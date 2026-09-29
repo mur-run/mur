@@ -113,6 +113,7 @@ impl App {
     /// phantom line or thread a stale context id.
     pub fn finish_agent_turn(&mut self, reply: String, task_id: Option<String>) {
         let width = self.body_cols();
+        let theme = self.theme;
         let mut body = None;
         if let Some(m) = self.streaming_agent_mut() {
             if !reply.is_empty() {
@@ -122,7 +123,7 @@ impl App {
             m.text = text;
             m.settlement = settlement;
             m.streaming = false;
-            m.rendered = Some(markdown::render(&m.text, width).lines);
+            m.rendered = Some(markdown::render(&m.text, width, theme).lines);
             body = Some(m.text.clone());
         } else if self.streaming && !reply.is_empty() {
             // Tool-using turns run the agentic loop, which doesn't stream text
@@ -132,7 +133,7 @@ impl App {
             // Guard: self.streaming is false after finish_partial() so stale
             // Done events from cancelled tasks are still silently ignored.
             self.messages
-                .push(ChatMsg::agent_rendered(reply.clone(), width));
+                .push(ChatMsg::agent_rendered(reply.clone(), width, theme));
             self.scroll_back = 0;
             body = Some(reply);
         }
@@ -214,8 +215,9 @@ impl App {
                 self.messages.remove(i);
             } else {
                 // Freeze the current text segment.
-                let rendered =
-                    Some(markdown::render(&self.messages[i].text, self.body_cols()).lines);
+                let rendered = Some(
+                    markdown::render(&self.messages[i].text, self.body_cols(), self.theme).lines,
+                );
                 self.messages[i].streaming = false;
                 self.messages[i].rendered = rendered;
             }

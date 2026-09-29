@@ -144,7 +144,7 @@ fn title_line(
         Span::styled(
             TITLE,
             theme
-                .muted
+                .settlement_muted
                 .add_modifier(Modifier::BOLD)
                 .patch(theme.settlement_surface),
         ),
@@ -347,9 +347,10 @@ mod tests {
             assert_eq!(
                 chip.style,
                 theme
-                    .muted
+                    .settlement_muted
                     .add_modifier(Modifier::BOLD)
-                    .patch(theme.settlement_surface)
+                    .patch(theme.settlement_surface),
+                "the title sits on the card's surface, so it takes the card's muted ink, not the page's"
             );
             assert!(
                 !chip.style.add_modifier.contains(Modifier::REVERSED),
