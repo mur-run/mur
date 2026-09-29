@@ -11,6 +11,8 @@ mod hitl;
 mod message;
 mod rail;
 mod status;
+#[cfg(test)]
+mod theme_paint_tests;
 
 pub use band::flush_finished;
 pub(super) use hitl::hitl_scroll_step;
