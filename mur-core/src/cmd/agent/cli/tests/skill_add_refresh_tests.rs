@@ -102,7 +102,9 @@ fn browser_add_refreshes_the_skill_menu_in_the_same_session() {
     ));
 
     assert!(
-        app.messages.iter().any(|m| m.text.contains("installed skill")),
+        app.messages
+            .iter()
+            .any(|m| m.text.contains("installed skill")),
         "the add itself must have succeeded first: {:?}",
         app.messages
             .iter()

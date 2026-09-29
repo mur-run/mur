@@ -13,6 +13,6 @@ mod persist_skin_tests;
 mod pricing_book_tests;
 mod resize_resilience_tests;
 mod shell_menu_tests;
-mod skill_add_refresh_tests;
 mod shell_turn_tests;
+mod skill_add_refresh_tests;
 mod viewport_tests;
