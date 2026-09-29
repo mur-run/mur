@@ -479,8 +479,9 @@ pub fn skill_display_name(raw: &str) -> String {
 
 /// Load this agent's skills as menu candidates. Fail-soft: any read error
 /// yields an empty list (the menu just shows built-in commands). Disabled
-/// skills are excluded since they are not injected. ponytail: cached once at
-/// startup; mid-session `/skill add` won't refresh it.
+/// skills are excluded since they are not injected. Loaded at startup
+/// (`term.rs`) and re-read after every profile-mutating `/...` command
+/// (`slash_cmds::run_manage`), so a mid-session add takes effect immediately.
 pub fn load_agent_skills(agent: &str) -> Vec<Candidate> {
     let Ok((_path, profile)) = crate::cmd::agent::load_profile_for_edit(agent) else {
         return Vec::new();
