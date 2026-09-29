@@ -107,18 +107,24 @@ pub badge_warn: Style,
 
 | token | ansi | light | mur | clay |
 |---|---|---|---|---|
-| `surface_alt` | *(none)* | bg `#f4f5f8` | bg `#12122a` | bg `#212121` |
+| `surface_alt` | *(none)* | bg `#e9ecf2` | bg `#1a1a36` | bg `#2a2a2a` |
 | `badge_warn` | `Yellow` + REVERSED + BOLD | `#8a5a00` on `#fbefd5` | `#0b0b1a` on `#f2c76a` | `#1a1a1a` on `#ffc107` |
 
-The RGB values are starting points; §7's guard is the source of truth and
-the plan adjusts any that fail it.
+`surface_alt` sits 1.16–1.21:1 from each assumed background — the visual
+weight of today's `Indexed(236)` stripe (1.3–1.5:1), quieter. Every pair in
+§6's contrast table passes with these values (checked 2026-09-29); §7's
+guard is the source of truth.
 
 Paint-site moves:
 
 | site | today | becomes |
 |---|---|---|
 | `markdown.rs` `STRIPE` | `Indexed(236)` | `surface_alt` (const deleted) |
-| `markdown.rs` `QUOTE` | `DarkGray` | `muted` |
+| `markdown.rs` `QUOTE` on the `▏` quote bar | `DarkGray` | `muted` |
+| `markdown.rs` `QUOTE` on the `---` rule and the table grid | `DarkGray` | `border` (the 09-09 spec's "grid in `border`") |
+| `markdown.rs` `HEADING` on list markers and table headers | `Cyan` | `accent` (+ BOLD on headers; identical on `ansi`) |
+| `ui/status.rs` approval countdown | `Yellow` | `warn` |
+| `ui/status.rs` monitor issue suffix | `Red` + BOLD | `error` + BOLD |
 | `ui/status.rs` AUTO, AUTO:n | black on Yellow | `badge_warn` |
 | `ui/status.rs` READS | black on Cyan | `badge` |
 | `ui/status.rs` MONITOR | black on `Rgb(255,165,0)` | `badge` |
@@ -128,7 +134,17 @@ Paint-site moves:
 | `render_card.rs` error accent | `Color::Red` | `error` (see §4) |
 
 `welcome.rs`'s `MascotMode::Accent(Rgb(0xfb,0xbf,0x24))` is the brand mark
-on the `mur` skin only and stays.
+on the `mur` skin only and stays. `markdown.rs` `CODE` (`Yellow`) stays
+until the code-block design (out of scope below): it is a named slot, so it
+breaks no `ansi` guarantee, and routing it now would pick a token the later
+design may not keep. `ui/hitl.rs`'s option tints and `Yellow` command are
+replaced wholesale by §3 and are not touched before it.
+
+**Markdown needs the theme.** `markdown::render(src, width)` has no theme
+today and its output is cached on the message (`ChatMsg.rendered`), so the
+stripe cannot follow the skin without it. `render` gains a `theme`
+argument; switching skin goes through one `App::apply_theme` that sets the
+theme, re-renders cached markdown, and restyles the composer placeholder.
 
 ### 2. Rendering fixes (P1)
 
