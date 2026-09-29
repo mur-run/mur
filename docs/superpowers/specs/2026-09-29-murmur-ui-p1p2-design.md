@@ -46,7 +46,18 @@ Seen on screen, grouped by cause rather than by symptom:
 7. **One failed tool call is three red lines.** `✔ approved edit_file · …`,
    `✗ edit_file … · 19ms`, `✗ tool error: tool execution failed: …` — the
    error text is repeated and the whole block reads as an alarm.
-8. **The agent is anonymous.** Every reply is headed `● agent`
+8. **A busy turn paints the page in the accent colour.** A 30-call turn
+   (user screenshot, 2026-09-29) is 30 success rows whose whole header —
+   glyph, tool name, command — is `accent` + BOLD (`render_card.rs`
+   `card_lines`), each followed by a blank row (`ui/band.rs` `message_block`
+   puts `gap_row` before every message). Success is the normal case, so the
+   loudest ink goes to the least informative rows, and the agent's own
+   sentences between them — the part the operator reads — drown. Three
+   smaller defects on the same rows: the error state is a pinned
+   `Color::Red`; durations print raw milliseconds (`126076ms`); and the
+   intent note is middle-elided (`(Branching and…t and`), which reads as
+   garbage.
+9. **The agent is anonymous.** Every reply is headed `● agent`
    (`ui/message.rs` `push_agent_header`), including in split panes where
    several agents talk at once.
 
@@ -71,7 +82,10 @@ Taken with the user on 2026-09-29.
 | 9 | No "press n to add notes" feature. The reason for a denial is whatever is in the composer when the operator denies — the existing behaviour, now made visible in option 4's label. |
 | 10 | Long diffs fold; the panel does not scroll internally (↑/↓ select options, PgUp scrolls the transcript — a third scroll owner would collide with both). |
 | 11 | The role label shows the agent's `display_name`. |
-| 12 | The approve-then-fail-on-entitlement ordering (approving a write the agent can never perform) is behaviour, not UI: its own issue. |
+| 12 | Colour marks exceptions, not the normal case: a successful tool row colours only its `✔`. |
+| 13 | Consecutive tool rows stack with no blank row between them; the gap stays at every change of speaker. |
+| 14 | A long run of tool rows is **not** collapsed into a summary line. Rows already in scrollback cannot be recollapsed (the scrollback limit of Problem 5), so a collapse would have to hide rows while they run. Revisit only if density is still a complaint after 12–13 ship. |
+| 15 | The approve-then-fail-on-entitlement ordering (approving a write the agent can never perform) is behaviour, not UI: its own issue. |
 
 ## Design
 
@@ -107,6 +121,7 @@ Paint-site moves:
 | `ui/hitl.rs`, `ui/chooser.rs`, `ui.rs` `DarkGray` | `DarkGray` | `muted` |
 | `app/mod.rs` placeholder | `DarkGray` | `muted` |
 | user body text | `text` + DIM | `muted` |
+| `render_card.rs` error accent | `Color::Red` | `error` (see §4) |
 
 `welcome.rs`'s `MascotMode::Accent(Rgb(0xfb,0xbf,0x24))` is the brand mark
 on the `mur` skin only and stays.
@@ -212,6 +227,45 @@ One line per call, the approval folded in:
 - Session-allow bookkeeping lines (`approved bash · …` verb/badge split in
   `ui/message.rs`) are unchanged.
 
+**Ink, per span of a tool row** (`render_card.rs` `card_lines`):
+
+| span | state | today | becomes |
+|---|---|---|---|
+| glyph | done `✔` | `accent` + BOLD | `ok` |
+| glyph | error `✗` | `Color::Red` | `error` + BOLD |
+| glyph | running `◐`, yielded `⏳` | `accent` + BOLD | `accent` |
+| tool name | any | `accent` + BOLD | `muted`; `error` + BOLD on error |
+| command / arg hint | any | `accent` + BOLD | `text` |
+| `→ gist`, duration, `[auto]` | any | `muted` | `muted` (unchanged) |
+| intent note | any | `muted` + DIM | `muted` (DIM goes with decision 4) |
+
+Nothing on a successful row is bold, so on a page of them the eye lands on
+the `●` role label and the agent's sentences.
+
+**Stacking.** `message_block` skips the gap row when both the previous
+message and this one are step cards (`m.step.is_some()`). Measured and
+painted blocks share `message_block`, so the band's row count stays exact.
+A system notice, a user turn or an agent turn between two cards restores the
+gap on both sides as today.
+
+**Duration.** One formatter for the card header and the `dump.rs` line:
+`< 1 s` → `640ms`; `< 60 s` → `12.4s`; otherwise `2m06s`.
+
+**Intent note.** Tail-elided at a word boundary — `elide_tail_at_word`'s
+rule, budgeted in display columns as `elide_middle_cols` is (the existing
+helper counts bytes, which over-cuts CJK) — not middle-elided: the model's
+sentence keeps its opening and loses its end. Below `INTENT_MIN_COLS` it is
+omitted, as today.
+
+```
+✔ bash cd mur-agent-runtime/src; grep -n "HitlRespond…   → 17 lines · 37ms
+✔ bash cd mur-agent-runtime/src; python3 - <<'EOF'…      → 18 lines · 66ms
+✔ bash cargo test -q -p mur-agent-runtime --locked …     → 30 lines · 2m06s  (Running the…)
+
+● MUR
+  supervisor_shutdown 掛了。我先用 mur-debugging 的做法…
+```
+
 ### 5. Role label (P2)
 
 `push_agent_header` takes the agent's `display_name` (`● MUR`, streaming:
@@ -247,6 +301,16 @@ In `ui/` (TestBackend, the `band_growth_tests` pattern):
   bold and no `**`.
 - `failed_tool_is_one_summary_line`: the edit_file failure above renders
   one `✗` row plus one `fix:` row.
+- `success_row_colours_only_the_glyph`: under each skin, a done card's
+  header has `ok` on the `✔` cell and no cell carrying `accent`, `ok` or
+  BOLD elsewhere on the row.
+- `consecutive_cards_stack`: card, card, agent turn, card renders no blank
+  row between the first two cards and one blank row on each side of the
+  agent turn; the measured height equals the painted height.
+- `duration_formats`: `640` → `640ms`, `12_400` → `12.4s`,
+  `126_076` → `2m06s`.
+- `intent_is_tail_elided`: a long intent keeps its first words and ends in
+  `…)`; it never contains `…` followed by more text.
 
 ### 7. Delivery
 
@@ -255,8 +319,11 @@ Three PRs, each reviewable on its own screenshot:
 1. **Tokens.** §1 and the guards on tokens. Visual change limited to the
    status chips, the stripe, and user text colour on RGB skins.
 2. **Text rendering.** Hanging indent, CJK emphasis, `/skin` notice, role
-   label.
-3. **Approval panel and tool lines.** §3, §4.
+   label, and the tool-row ink / stacking / duration / intent of §4 — the
+   change the 30-call screenshot asks for, independent of the approval
+   panel.
+3. **Approval panel and failure rows.** §3, and §4's one-line failure,
+   `fix:` row and denial row.
 
 Not in scope: composer hint text and the status bar's other fields
 (`⏵ 534 · 01a0eae7`, `0/… tok`); code-block and inline-code styling;
