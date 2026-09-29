@@ -136,7 +136,7 @@ pub(super) fn offer(app: &mut App, p: Proposal) {
     app.proposal = Some(p);
 }
 
-/// The one line rendered under the composer: what the chip is, then which key
+/// The one line rendered above the composer: what the chip is, then which key
 /// does what right now. The command itself is always shown (principle C).
 pub(super) fn chip_line(app: &App) -> Option<(String, String)> {
     // The ghost renders as the composer's placeholder, not a chip row.
