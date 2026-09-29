@@ -164,9 +164,9 @@ pub(super) fn render_hitl(
             );
             let (cmd, intent) = crate::cmd::agent::cli::call_summary::split_intent(&summary);
             Line::from(vec![
-                Span::styled("tool: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("tool: ", theme.muted),
                 Span::styled(cmd.to_string(), Style::default().fg(Color::Yellow)),
-                Span::styled(intent.to_string(), Style::default().fg(Color::DarkGray)),
+                Span::styled(intent.to_string(), theme.muted),
             ])
         },
     ];
@@ -177,7 +177,7 @@ pub(super) fn render_hitl(
     let mut body: Vec<Line> = Vec::new();
     for l in input.lines() {
         for row in wrap_row(l, row_w) {
-            body.push(Line::styled(row, Style::default().fg(Color::DarkGray)));
+            body.push(Line::styled(row, theme.muted));
         }
     }
     // The decision menu. Numbered rows instead of the old y/a/A/n key row:
@@ -212,7 +212,7 @@ pub(super) fn render_hitl(
         .collect();
     keys.push(Line::styled(
         "   ↑/↓ select · Enter confirm · 1-4 pick directly · Esc deny",
-        Style::default().fg(Color::DarkGray),
+        theme.muted,
     ));
 
     let block = Block::default()
@@ -270,7 +270,7 @@ pub(super) fn render_hitl(
         } else {
             format!("… {above} above · {below} below — PgUp/PgDn")
         };
-        lines.push(Line::styled(note, Style::default().fg(Color::DarkGray)));
+        lines.push(Line::styled(note, theme.muted));
         above as u16
     } else {
         lines.extend(body);

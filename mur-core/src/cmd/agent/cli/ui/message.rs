@@ -152,7 +152,7 @@ pub(super) fn agent_body_lines(
         // Finished reply: reuse the markdown rendered once at finish time.
         cached.iter().cloned().map(indent_line).collect()
     } else {
-        markdown::render(text, markdown::body_cols(width, theme.inner_padding))
+        markdown::render(text, markdown::body_cols(width, theme.inner_padding), theme)
             .lines
             .into_iter()
             .map(indent_line)
@@ -185,10 +185,7 @@ pub(super) fn push_message(
                 theme.accent_alt.add_modifier(Modifier::BOLD),
             )));
             for l in m.text.lines() {
-                lines.push(Line::styled(
-                    format!("{MSG_INDENT}{l}"),
-                    theme.text.add_modifier(Modifier::DIM),
-                ));
+                lines.push(Line::styled(format!("{MSG_INDENT}{l}"), theme.muted));
             }
         }
         Role::System => {

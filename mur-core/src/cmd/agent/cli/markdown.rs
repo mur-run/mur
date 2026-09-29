@@ -7,16 +7,12 @@
 //! Markdown an assistant actually emits, not full CommonMark fidelity.
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use unicode_width::UnicodeWidthChar;
 
-const HEADING: Color = Color::Cyan;
-const CODE: Color = Color::Yellow;
-const QUOTE: Color = Color::DarkGray;
-/// Zebra-stripe background for alternating table body rows. Kept at the
-/// terminal's own dim index so it reads on both light and dark schemes.
-const STRIPE: Color = Color::Indexed(236);
+use super::theme::{ANSI, Theme};
+
 const RULE: &str = "────────────────────────";
 const INDENT: &str = "  ";
 
@@ -47,9 +43,10 @@ pub(crate) fn body_cols(pane_width: u16, inner_padding: u8) -> usize {
 /// Render Markdown source into owned ratatui `Text`. `width` is the columns
 /// the text will be painted into; prose wraps at paint time, but a table has
 /// to know its width here to decide column widths and wrap its cells.
-pub fn render(src: &str, width: usize) -> Text<'static> {
+pub fn render(src: &str, width: usize, theme: &'static Theme) -> Text<'static> {
     let mut r = Renderer {
         width: width.max(MIN_BODY_COLS),
+        skin: Skin(theme),
         ..Renderer::default()
     };
     let parser = Parser::new_ext(src, Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES);
@@ -59,10 +56,22 @@ pub fn render(src: &str, width: usize) -> Text<'static> {
     r.finish()
 }
 
+/// The skin a render paints with. A newtype only so `Renderer` keeps
+/// `#[derive(Default)]`; `render` always sets it.
+#[derive(Clone, Copy)]
+struct Skin(&'static Theme);
+
+impl Default for Skin {
+    fn default() -> Self {
+        Skin(&ANSI)
+    }
+}
+
 #[derive(Default)]
 struct Renderer {
     /// Columns available to a table (see `render`).
     width: usize,
+    skin: Skin,
     lines: Vec<Line<'static>>,
     cur: Vec<Span<'static>>,
     bold: bool,
@@ -90,7 +99,7 @@ impl Renderer {
             s = s.add_modifier(Modifier::ITALIC);
         }
         if self.code {
-            s = s.fg(CODE);
+            s = s.patch(self.skin.0.code);
         }
         s
     }
@@ -130,7 +139,7 @@ impl Renderer {
         let depth = self.list_stack.len().saturating_sub(1);
         if self.quote {
             self.cur
-                .push(Span::styled("▏ ".to_string(), Style::default().fg(QUOTE)));
+                .push(Span::styled("▏ ".to_string(), self.skin.0.muted));
         }
         for _ in 0..depth {
             self.cur.push(Span::raw(INDENT.to_string()));
@@ -157,14 +166,14 @@ impl Renderer {
                             break;
                         }
                         self.cur
-                            .push(Span::styled(part.to_string(), Style::default().fg(CODE)));
+                            .push(Span::styled(part.to_string(), self.skin.0.code));
                     }
                 } else {
                     self.push_text(&t);
                 }
             }
             Event::Code(t) => {
-                let span = Span::styled(t.to_string(), Style::default().fg(CODE));
+                let span = Span::styled(t.to_string(), self.skin.0.code);
                 if self.in_table {
                     self.table_cur_cell.push(span);
                 } else {
@@ -187,7 +196,7 @@ impl Renderer {
             Event::Rule => {
                 self.flush_line();
                 self.lines
-                    .push(Line::styled(RULE.to_string(), Style::default().fg(QUOTE)));
+                    .push(Line::styled(RULE.to_string(), self.skin.0.border));
             }
             _ => {}
         }
@@ -218,8 +227,7 @@ impl Renderer {
                     }
                     _ => "• ".to_string(),
                 };
-                self.cur
-                    .push(Span::styled(marker, Style::default().fg(HEADING)));
+                self.cur.push(Span::styled(marker, self.skin.0.accent));
             }
             Tag::Paragraph => {
                 if self.in_table {
@@ -353,15 +361,17 @@ impl Renderer {
         let pad = " ".repeat(CELL_PAD);
         let widths = fit_columns(&natural, room);
 
+        let border = self.skin.0.border;
+        let header = self.skin.0.accent.add_modifier(Modifier::BOLD);
+        let stripe_bg = self.skin.0.surface_alt;
         let rule = |l: &str, m: &str, r: &str| -> Line<'static> {
             let bars = widths
                 .iter()
                 .map(|w| "─".repeat(w + 2 * CELL_PAD))
                 .collect::<Vec<_>>()
                 .join(m);
-            Line::styled(format!("{l}{bars}{r}"), Style::default().fg(QUOTE))
+            Line::styled(format!("{l}{bars}{r}"), border)
         };
-        let border = Style::default().fg(QUOTE);
 
         self.lines.push(rule("╭", "┬", "╮"));
         for (ri, row) in rows.iter().enumerate() {
@@ -376,7 +386,8 @@ impl Renderer {
             // between every line. Row 0 is the header and never striped.
             let stripe = ri > 0 && ri % 2 == 0;
             for k in 0..height {
-                let mut line: Vec<Span<'static>> = vec![Span::styled(format!("│{pad}"), border)];
+                let mut line: Vec<Span<'static>> =
+                    vec![Span::styled("│", border), Span::styled(pad.clone(), border)];
                 for (ci, cell) in cells.iter().enumerate() {
                     if ci > 0 {
                         line.push(Span::styled(format!("{pad}│{pad}"), border));
@@ -388,24 +399,32 @@ impl Renderer {
                     if ri == 0 {
                         // Header: bold and in the heading colour, so the
                         // column names read as labels, not data.
-                        line.extend(text.into_iter().map(|s| {
-                            Span::styled(
-                                s.content,
-                                s.style.fg(HEADING).add_modifier(Modifier::BOLD),
-                            )
-                        }));
+                        line.extend(
+                            text.into_iter()
+                                .map(|s| Span::styled(s.content, s.style.patch(header))),
+                        );
                     } else {
                         line.extend(text);
                     }
                     line.push(Span::raw(" ".repeat(widths[ci].saturating_sub(used))));
                 }
-                line.push(Span::styled(format!("{pad}│"), border));
+                line.push(Span::styled(pad.clone(), border));
+                line.push(Span::styled("│", border));
                 if stripe {
+                    // Paint inside the frame only: a terminal fills the whole
+                    // cell behind the centred `│`, so a painted outer border
+                    // bleeds half a cell past the table's edge.
+                    let last = line.len() - 1;
                     line = line
                         .into_iter()
-                        .map(|s| {
-                            let style = s.style;
-                            Span::styled(s.content, style.bg(STRIPE))
+                        .enumerate()
+                        .map(|(i, s)| {
+                            if i == 0 || i == last {
+                                s
+                            } else {
+                                let style = s.style;
+                                Span::styled(s.content, style.patch(stripe_bg))
+                            }
                         })
                         .collect();
                 }
@@ -542,7 +561,7 @@ mod tests {
 
     /// Every test renders into a plain 80-column body unless it says otherwise.
     fn render(src: &str) -> Text<'static> {
-        super::render(src, 80)
+        super::render(src, 80, &crate::cmd::agent::cli::theme::ANSI)
     }
 
     fn plain(text: &Text) -> String {
@@ -628,7 +647,7 @@ mod tests {
     fn a_wide_table_wraps_its_cells_inside_the_width() {
         let long = "one two three four five six seven eight nine ten eleven twelve";
         let src = format!("| key | value |\n| --- | --- |\n| k | {long} |");
-        let t = super::render(&src, 40);
+        let t = super::render(&src, 40, &crate::cmd::agent::cli::theme::ANSI);
         let lines = rows(&t);
         assert!(lines.iter().all(|l| l.width() <= 40), "overflow: {lines:?}");
         let body: Vec<&String> = lines.iter().filter(|l| l.starts_with('│')).collect();
@@ -671,6 +690,7 @@ mod tests {
         let t = super::render(
             "| a | b |\n| --- | --- |\n| 這是一段很長的中文內容用來測試換行 | y |",
             24,
+            &crate::cmd::agent::cli::theme::ANSI,
         );
         let lines = rows(&t);
         assert!(lines.iter().all(|l| l.width() <= 24), "overflow: {lines:?}");
@@ -744,3 +764,6 @@ mod tests {
         assert!(s.contains("italic"));
     }
 }
+
+#[cfg(test)]
+mod theme_tests;

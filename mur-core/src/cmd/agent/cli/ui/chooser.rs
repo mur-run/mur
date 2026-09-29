@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Padding};
 
@@ -83,10 +83,7 @@ pub(super) fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
                     Span::styled(c.display.clone(), theme.text),
                 ];
                 if !c.desc.is_empty() {
-                    spans.push(Span::styled(
-                        format!(" — {}", c.desc),
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    spans.push(Span::styled(format!(" — {}", c.desc), theme.muted));
                 }
                 ListItem::new(Line::from(spans))
             } else {
@@ -97,7 +94,7 @@ pub(super) fn render_chooser_band(f: &mut Frame, app: &App, area: Rect) {
                 if !c.desc.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("   {}", c.desc),
-                        Style::default().fg(Color::DarkGray),
+                        theme.muted,
                     )));
                 }
                 lines.push(Line::default());
