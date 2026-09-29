@@ -72,12 +72,12 @@ Taken with the user on 2026-09-29.
 | # | Decision |
 |---|---|
 | 1 | One design for colour cleanup and the approval panel, so the panel is born on tokens. |
-| 2 | `ansi` paints **no decorative background**: no zebra stripe, no code-block fill, no diff tint (the last is already so). Reverse video is allowed for **focus only** — one element at a time. |
+| 2 | `ansi` paints **no decorative background**: no zebra stripe, no code-block fill, no diff tint (the last is already so), no card surface. Reverse video is allowed in exactly two places: the **status row** (its chips — `badge`, `badge_warn` — which are fixed-position labels, not content) and the **one focused element** (the selected approval option, the selected menu row). Nowhere else. |
 | 3 | New tokens: `surface_alt` (bg only; stripe) and `badge_warn` (AUTO chip). `READS` and `MONITOR` use the existing `badge`. No other new tokens. |
 | 4 | User body text takes `muted` in every skin. `ansi`'s `muted` is DIM, so `ansi` renders as today; the RGB skins get a real, measured colour. RGB skins carry no `DIM` on any text token. |
 | 5 | `/skin` applies immediately and prints one muted notice; scrollback is never cleared. |
 | 6 | The approval panel is a **layout band docked above the composer**, like the suggested-reply chooser (#643); it is no longer a `Clear` overlay. |
-| 7 | Countdown is shown whenever the request carries a deadline; deferred requests have none and show none. No fleet special case. |
+| 7 | The countdown and the CLI's own expiry both read one `deadline` on the request, taken from the runtime's `timeout_ms`. No fleet special case: murmur's approval path never receives a deferred request (deferral lives on the fleet channel), so every request murmur shows has a deadline. |
 | 8 | Options are uncoloured; the selected row is `badge`; only option 3 ("any tool") carries `warn` and `▲` — the glyph Warn notices already use; `⚠` renders two columns wide in many terminals and would push the panel's right border. |
 | 9 | No "press n to add notes" feature. The reason for a denial is whatever is in the composer when the operator denies — the existing behaviour, now made visible in option 4's label. |
 | 10 | Long diffs fold; the panel does not scroll internally (↑/↓ select options, PgUp scrolls the transcript — a third scroll owner would collide with both). |
@@ -176,8 +176,26 @@ is drawn over it.
 `border_type` from the skin.
 
 **Title.** `<tool> · <target>` in `emphasis`; target is the path for file
-tools, omitted when there is none. Right-aligned countdown `m:ss` in `muted`,
-`warn` at ≤ 30 s, absent when the request has no deadline.
+tools, omitted when there is none. Right-aligned countdown `m:ss` to the
+request's `deadline`, in `muted`, `warn` at ≤ 30 s.
+
+**Deadline.** Today the CLI ignores the `timeout_ms` the runtime sends with
+`tool/approval_needed` (`mur-agent-runtime/src/hitl/batch.rs`) and assumes
+`gate::DEFAULT_TIMEOUT` (300 s) in four places: the status countdown
+(`ui/status.rs`), the wake timer (`events.rs`), `expire_stale_hitl`
+(`hitl.rs`) and the field doc on `HitlRequest` (`stream.rs`). This design:
+
+- `HitlRequest` gains `deadline: Instant`, set once at receipt to
+  `received_at + timeout_ms`. A notification without `timeout_ms` (a runtime
+  predating it) gets `DEFAULT_TIMEOUT` — today's behaviour, now in one place.
+- The panel countdown, the status line, the wake timer and
+  `expire_stale_hitl` all read `deadline`; none of them names
+  `DEFAULT_TIMEOUT` again.
+- The CLI's clock starts at receipt, after the runtime's started at send, so
+  the CLI always retires a request at or after the runtime has already
+  denied it. A decision sent in that gap is refused by the runtime; nothing
+  is approved late. Fail-closed, as today.
+- No "no deadline" state is added; see decision 7.
 
 **Body, by tool:**
 
@@ -187,10 +205,36 @@ tools, omitted when there is none. Right-aligned countdown `m:ss` in `muted`,
 | `bash` | the command, wrapped with the hanging indent of §2 |
 | anything else | `key: value` rows, strings unescaped, each value truncated to one row with `…` |
 
-**Height.** At most 60 % of the terminal's rows, and never less than the
-four options plus title and border. A body that does not fit keeps the first
-and last hunks (or rows) and replaces the middle with one `muted` row:
-`⋯ 184 lines hidden · Ctrl+O shows all`. Precondition for the plan: confirm
+**Height.** The panel is sized after the rows that are never given up —
+status bar (1) and composer (its current height, 2 up to `INPUT_H_MAX` when
+the operator has typed several lines) — and after the fleet rail at its
+current height. What remains is `avail`. Then, in order, first that fits:
+
+| form | rows | when |
+|---|---|---|
+| full | border + title + body + blank + 4 options | fits in `min(avail − 1, 60 % of terminal rows)` with the body folded to at least 3 rows |
+| no body | border + title + 4 options = 7 | full does not fit; body replaced by `⋯ Ctrl+O shows the call` |
+| compact | 2, no border: title row, then `1 Yes · 2 edit_file · 3 any tool ▲ · 4 No` | `avail` < 8 |
+| status only | 0 | `avail` < 2: the status bar reads `approve edit_file — 1-4 · Ctrl+O` |
+
+The transcript keeps at least one row whenever the full or no-body form is
+used, and gives up its rows before the panel does in the compact form: the
+decision outranks the history. Keys work identically in every form, so the
+operator can always decide. While a gate is open the suggested-reply
+chooser and the proposal chip are not drawn (they need the composer the
+approval has taken over) and reappear after it closes.
+
+A body that does not fit keeps the first and last hunks (or rows) and
+replaces the middle with one `muted` row:
+`⋯ 184 lines hidden · Ctrl+O shows all`.
+
+**One surface.** Today an open gate shows on the step card's inline row and
+falls back to the centred modal when that row is off screen
+(`hitl_inline_visible`, `ui.rs`). The docked panel is always on screen, so
+it becomes the only place a decision is made; the step card keeps its
+`⏳ awaiting approval` state as a marker with no keys of its own. The
+invariant in `ui.rs` — an open gate is always visible somewhere — holds by
+construction, including the status-only form. Precondition for the plan: confirm
 the Ctrl+O transcript view can show the pending request's full body; if it
 cannot, the plan adds that before the panel ships.
 
@@ -360,12 +404,27 @@ not), else it is an error. A skin whose colours are all named slots or
 `default` needs none and is not contrast-checked, the same reasoning as the
 built-in `ansi`.
 
-**Contrast check at load**, against `assumed_bg`, with the §7 thresholds
-(`text` ≥ 7:1, every other text token and `badge`/`badge_warn` fg on bg
-≥ 4.5:1, settlement tokens against `settlement_surface` when set). `dim` is
-modelled as the colour blended 50 % toward the background before measuring
-— the A7 gap closed for user files too. Named-slot and `default` colours are
-skipped.
+**Contrast check at load** measures every foreground against the
+background it is actually painted on, not against `assumed_bg` alone. A
+token's effective background is its own `bg` if it has one, else the
+surface named in this table, else `assumed_bg`.
+
+| foreground | on | min |
+|---|---|---|
+| `text` | `assumed_bg`, `surface`, `surface_alt` | 7:1 |
+| `muted`, `emphasis`, `accent`, `accent_alt`, `ok`, `warn`, `error` | `assumed_bg`, `surface`, `surface_alt` | 4.5:1 |
+| `diff_add_text` / `diff_del_text` | `diff_add_bg` / `diff_del_bg` | 4.5:1 |
+| `diff_add_mark` / `diff_del_mark` | `diff_add_bg` / `diff_del_bg` | 3:1 (a glyph, WCAG 1.4.11) |
+| `settlement_text` | `settlement_surface` | 7:1 |
+| `settlement_muted`, `_accent`, `_ok`, `_warn`, `_error` | `settlement_surface` | 4.5:1 |
+| `badge`, `badge_warn` | their own `bg` | 4.5:1 |
+
+A surface that is unset collapses to `assumed_bg`, so the pairs are always
+defined. `dim` is modelled as the colour blended 50 % toward the background
+it is on — the A7 gap closed for user files too. A pair where either side is
+a named slot or `default` is skipped. The same function runs over the
+built-in skins in `rgb_skins_meet_wcag`, so built-ins and user files meet
+one rule; the plan adjusts any built-in value that fails it.
 
 **Failure.** Load errors are: YAML that does not parse, an unknown key, a
 malformed value, a missing required key under `none`, a missing
@@ -406,12 +465,37 @@ In `ui/` (TestBackend, the `band_growth_tests` pattern):
   panel.
 - `approval_shows_diff_for_edit`: an `edit_file` request renders `▌-`/`▌+`
   rows and no `"old_string"`.
-- `approval_countdown`: absent without a deadline; `warn` at 30 s; `muted`
-  at 31 s.
+- `approval_countdown`: `warn` at 30 s left, `muted` at 31 s.
+- `deadline_from_runtime_timeout`: a notification with `timeout_ms: 90000`
+  gets a 90 s deadline; the panel shows `1:30`; `expire_stale_hitl` retires
+  it after 90 s and not at 89 s; the wake timer is armed for 90 s.
+- `deadline_legacy_default`: a notification without `timeout_ms` gets
+  `DEFAULT_TIMEOUT`.
+- `no_default_timeout_outside_receipt` (source-level): `DEFAULT_TIMEOUT` is
+  referenced only where `deadline` is set.
 - `approval_height_caps_and_folds`: a 400-line diff in a 40-row terminal
   yields a panel of ≤ 24 rows containing the `lines hidden` row.
+- `approval_forms_by_height`: with a 1-row composer and no rail, terminals
+  of 40 / 12 / 8 / 5 / 4 rows produce the full / no-body / compact / compact
+  / status-only form; every frame shows the four choices or the status-only
+  hint, and the status bar is on the last row.
+- `approval_with_multiline_composer`: a 12-row terminal with a 5-line
+  composer drops to the compact form, the composer keeps all 5 lines.
+- `approval_with_fleet_rail`: the rail's rows are subtracted before the
+  panel is sized.
+- `approval_hides_chooser_and_chip`: with suggested replies and a proposal
+  pending, opening a gate removes both bands; closing it restores them.
+- `approval_single_surface`: a gate whose step card is on screen renders
+  the panel and no inline decision row.
 - `ansi_render_has_no_rgb`: a frame with a table, the approval panel and
   the status bar under `ansi` contains no `Rgb` or `Indexed` cell colour.
+- `ansi_reverse_only_status_and_focus`: in the same frame, every
+  `REVERSED` cell is on the status row or on the selected option's row.
+- `contrast_pairs_catch_hidden_diff` (user skin): `inherits: mur` with
+  `diff_add_bg: "on #e4e4f4"` is rejected naming
+  `diff_add_text on diff_add_bg`.
+- `contrast_pairs_catch_stripe`: a `surface_alt` equal to `text`'s colour
+  is rejected naming `text on surface_alt`.
 - `wrapped_body_keeps_indent`: a CJK paragraph wider than the pane; every
   continuation row starts with `MSG_INDENT`.
 - `cjk_bold`: the example from Problem 3 renders `33f30194 這次 …確認。`
@@ -475,7 +559,8 @@ Three PRs, each reviewable on its own screenshot:
    label, and the tool-row ink / stacking / duration / intent of §4 — the
    change the 30-call screenshot asks for, independent of the approval
    panel.
-3. **Approval panel and failure rows.** §3, and §4's one-line failure,
+3. **Approval panel and failure rows.** §3 — including the `deadline`
+   plumbing and the single-surface change — and §4's one-line failure,
    `fix:` row and denial row.
 4. **User skins.** §6. Last, because its whitelist is `Theme`'s field list
    and must see PR-1's `surface_alt` and `badge_warn`. User-facing: README
