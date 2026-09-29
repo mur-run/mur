@@ -312,3 +312,49 @@
   font-size: 12px;
   color: var(--text-secondary, #888);
 }
+
+/* `propose` chip above the composer (#1566). */
+.proposal-chip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-line);
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--text-sm, 12px);
+}
+.proposal-chip__mark { color: var(--text-tertiary); }
+.proposal-chip__cmd {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-primary, inherit);
+  user-select: all;
+  word-break: break-all;
+}
+.proposal-chip__label { color: var(--text-tertiary); }
+.proposal-chip__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.proposal-chip__btn,
+.proposal-chip__dismiss {
+  padding: 2px 8px;
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.proposal-chip__btn:hover,
+.proposal-chip__dismiss:hover { background: var(--surface-hover); }
+.proposal-chip__btn--primary { border-color: var(--accent, currentColor); }
+.proposal-chip__dismiss { border-color: transparent; }
+.proposal-chip__error { color: var(--danger, #d33); }

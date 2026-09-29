@@ -116,6 +116,7 @@ pub async fn agent_chat_send(
     let dialed = tokio::task::spawn_blocking(move || {
         let agent = name.clone();
         let app2 = app.clone();
+        let app3 = app.clone();
         // Stream over the running agent's socket; fall back to a one-shot
         // ephemeral dial if it isn't running.
         match dial_message_streaming(
@@ -150,7 +151,11 @@ pub async fn agent_chat_send(
                     }),
                 );
             },
-            |_step| {},
+            |step| {
+                if let Some(chip) = crate::proposal_chip::chip_from_step(&agent, &step) {
+                    let _ = app3.emit(crate::proposal_chip::PROPOSAL_EVENT, chip);
+                }
+            },
         ) {
             Ok(v) => Ok((v, true)),
             Err(e) if e.to_string().contains("is not running") => {

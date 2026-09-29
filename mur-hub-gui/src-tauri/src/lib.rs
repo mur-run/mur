@@ -39,6 +39,7 @@ pub mod panel;
 mod perm_admin;
 pub mod pet;
 pub mod preset;
+pub mod proposal_chip;
 pub mod seed_mur;
 pub mod skills_installed;
 pub mod upgrade_status;
@@ -670,6 +671,7 @@ pub fn run() {
             panel::data::panel_recommend_input,
             start_agent,
             stop_agent,
+            proposal_chip::restart_agent,
             chat::agent_chat_send,
             chat::agent_chat_cancel,
             chat::channel_load,
