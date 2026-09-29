@@ -48,6 +48,10 @@ pub enum ProposalKind {
     Slash(String),
     /// Restart the proposing agent. Executable. No target by construction.
     Restart,
+    /// A single suggested reply (murmur's ghost), inserted verbatim.
+    /// Insert-only. Never built by [`vet`] — `reply` is not in [`KINDS`];
+    /// only murmur's `suggest_replies` reveal constructs it.
+    Reply(String),
 }
 
 /// A vetted proposal. Only [`vet`] builds one from untrusted args.
@@ -67,6 +71,20 @@ impl Proposal {
         }
     }
 
+    /// A suggested reply shown as the composer's ghost text. Insert-only.
+    pub fn reply(text: impl Into<String>) -> Self {
+        let text = text.into();
+        Self {
+            label: text.clone(),
+            kind: ProposalKind::Reply(text),
+        }
+    }
+
+    /// Whether this is a suggested reply (murmur's ghost).
+    pub fn is_reply(&self) -> bool {
+        matches!(self.kind, ProposalKind::Reply(_))
+    }
+
     /// Whether `Enter` may run this proposal. Only native actions qualify;
     /// insert-only kinds never run on a single key (spec principle C).
     pub fn is_executable(&self) -> bool {
@@ -78,6 +96,7 @@ impl Proposal {
         match &self.kind {
             ProposalKind::Shell(cmd) => Some(format!("!{cmd}")),
             ProposalKind::Slash(cmd) => Some(format!("/{cmd}")),
+            ProposalKind::Reply(text) => Some(text.clone()),
             ProposalKind::Restart => None,
         }
     }

@@ -351,10 +351,10 @@ pub struct App {
     /// Replies captured from a `suggest_replies` tool call this turn, revealed
     /// after the turn finishes (see `reveal_suggestions`).
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
-    /// The single suggestion currently shown as ghost placeholder text, if any.
-    pub suggestion_ghost: Option<String>,
-    /// The agent's current `propose` chip (see `cli/proposal.rs`). Its own
-    /// field, not part of `completion`: the overlay's Enter sends a leaf.
+    /// The agent's current `propose` chip (see `cli/proposal.rs`), or the
+    /// single `suggest_replies` ghost — a ghost is an insert-only chip
+    /// (`ProposalKind::Reply`) rendered as placeholder text. Its own field,
+    /// not part of `completion`: the overlay's Enter sends a leaf.
     pub proposal: Option<mur_common::proposal::Proposal>,
     /// A chip-triggered `/restart` is running; turn submission is locked.
     pub restart_in_flight: bool,
@@ -495,7 +495,6 @@ impl App {
             menu_ctx: super::complete::MenuContext::default(),
             path_bins: None,
             pending_suggestions: Vec::new(),
-            suggestion_ghost: None,
             proposal: None,
             restart_in_flight: false,
             wants_screen_wipe: false,
@@ -655,6 +654,9 @@ fn composer_padding(theme: &Theme) -> Padding {
 /// `ui::INPUT_H_MIN` counts them; change both together.
 pub(super) const COMPOSER_PAD_BELOW: u16 = 1;
 
+/// Composer placeholder when no ghost suggestion is showing.
+pub(super) const INPUT_PLACEHOLDER: &str = "Type a message…";
+
 fn new_input() -> TextArea<'static> {
     let mut ta = TextArea::default();
     ta.set_block(
@@ -664,7 +666,7 @@ fn new_input() -> TextArea<'static> {
             .title(enter_hint(false)),
     );
     ta.set_cursor_line_style(Style::default());
-    ta.set_placeholder_text("Type a message…");
+    ta.set_placeholder_text(INPUT_PLACEHOLDER);
     ta.set_placeholder_style(Style::default().fg(Color::DarkGray));
     ta
 }

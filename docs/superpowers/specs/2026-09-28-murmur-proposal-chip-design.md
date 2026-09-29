@@ -1,7 +1,7 @@
 # murmur proposal chip — agent-proposed commands and actions (design)
 
 **Date:** 2026-09-28
-**Status:** Design approved (Q1–Q7 settled); tool contract and vetting location settled in §1; PR 2 built
+**Status:** Design approved (Q1–Q7 settled); tool contract and vetting location settled in §1; PR 2 built; PR 3 built
 **Scope:** `mur agent cli` (murmur) TUI. Lets an agent *propose* a command or a
 native action; the user decides with one key. First native action: `/restart`.
 Builds on the `suggest_replies` tool
@@ -197,3 +197,11 @@ empty); submission locked during restart and unlocked after;
 - Native actions beyond `restart`.
 - CLI (non-TUI) restart hints.
 - Hub GUI rendering of proposals.
+
+**As built (PR 3):** `App::suggestion_ghost` is gone. A single
+`suggest_replies` reply becomes `ProposalKind::Reply(text)` in the one
+`App::proposal` slot, rendered as placeholder text (no chip row). A ghost
+answers only `Tab` on an empty composer — Enter and Esc keep their ordinary
+meaning, exactly as before. An agent chip outranks a ghost on reveal, and a
+newer chip replaces a ghost. `reply` is not in `KINDS`, so `vet` never builds
+one: the model cannot propose it.

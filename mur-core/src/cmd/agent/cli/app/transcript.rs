@@ -101,7 +101,7 @@ impl App {
             ));
             // Same restart, one key away (spec §4). Never replaces a chip the
             // agent itself offered this turn.
-            if self.proposal.is_none() {
+            if self.proposal.is_none() || self.has_suggestion_ghost() {
                 self.proposal = Some(mur_common::proposal::Proposal::restart("get the step view"));
             }
         }

@@ -521,19 +521,9 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                     _ => {}
                 }
             }
-            // Proposal chip: after HITL and the completion overlay, before
-            // the ghost (spec §2 priority).
+            // Proposal chip (the ghost is one too): after HITL and the
+            // completion overlay (spec §2 priority).
             if proposal::handle_key(app, &key, tx) {
-                return;
-            }
-            // Agent ghost suggestion: Tab fills it when the composer is empty.
-            if app.suggestion_ghost.is_some()
-                && key.code == KeyCode::Tab
-                && app.input_text().is_empty()
-            {
-                if let Some(s) = app.suggestion_ghost.take() {
-                    app.set_input(&s);
-                }
                 return;
             }
             match key.code {

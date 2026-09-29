@@ -199,3 +199,79 @@ fn chip_line_always_shows_the_command() {
     let (what, _) = chip_line(&a).unwrap();
     assert!(what.contains("restart a"), "{what}");
 }
+
+// ── PR 3: the ghost is an insert-only chip (`ProposalKind::Reply`) ──
+
+fn app_with_ghost(text: &str) -> App {
+    let mut a = App::test_fixture();
+    a.pending_suggestions = vec![suggest::Suggestion {
+        text: text.into(),
+        desc: None,
+    }];
+    a.reveal_suggestions();
+    a
+}
+
+#[tokio::test]
+async fn ghost_tab_fills_an_empty_composer() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = app_with_ghost("yes please");
+    assert!(a.has_suggestion_ghost());
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    assert_eq!(a.input_text(), "yes please");
+    assert!(a.proposal.is_none());
+}
+
+#[tokio::test]
+async fn ghost_tab_never_touches_a_draft() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = app_with_ghost("yes please");
+    a.set_input("my draft");
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    assert!(a.input_text().starts_with("my draft"), "{}", a.input_text());
+    assert!(!a.input_text().contains("yes please"));
+}
+
+#[tokio::test]
+async fn ghost_ignores_esc_and_enter_like_before() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = app_with_ghost("yes please");
+    let esc = press(KeyCode::Esc);
+    assert!(!handle_key_with(&mut a, &esc, &tx, fake_restart));
+    let enter = press(KeyCode::Enter);
+    assert!(!handle_key_with(&mut a, &enter, &tx, fake_restart));
+    assert!(a.has_suggestion_ghost());
+    assert!(a.input_text().is_empty(), "Enter never inserts the ghost");
+}
+
+#[test]
+fn ghost_has_no_chip_row() {
+    let a = app_with_ghost("yes please");
+    assert!(chip_line(&a).is_none(), "ghost renders as placeholder only");
+}
+
+#[test]
+fn agent_chip_outranks_a_ghost_on_reveal() {
+    let mut a = app_with(shell_chip());
+    a.pending_suggestions = vec![suggest::Suggestion {
+        text: "yes".into(),
+        desc: None,
+    }];
+    a.reveal_suggestions();
+    assert_eq!(a.proposal, Some(shell_chip()));
+}
+
+#[test]
+fn a_new_chip_replaces_the_ghost() {
+    let mut a = app_with_ghost("yes please");
+    offer(&mut a, shell_chip());
+    assert_eq!(a.proposal, Some(shell_chip()));
+    assert!(!a.has_suggestion_ghost());
+}
+
+#[test]
+fn submit_clear_leaves_a_real_chip() {
+    let mut a = app_with(shell_chip());
+    a.clear_suggestion_ghost();
+    assert_eq!(a.proposal, Some(shell_chip()));
+}
