@@ -310,8 +310,12 @@ fn converted_crates_never_mutate_the_environment_directly() {
             "the guard's own implementation, which holds the lock",
         ),
         (
-            "mur-agent-runtime/src/supervisor.rs",
+            "mur-agent-runtime/src/supervisor/mod.rs",
             "argv0 name stash at startup, before tokio spawns",
+        ),
+        (
+            "mur-agent-runtime/src/supervisor/bootstrap.rs",
+            ".muragent slug stash at startup, before tokio spawns",
         ),
         (
             "mur-core/src/cmd/deep_research/ask.rs",

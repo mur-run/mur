@@ -346,7 +346,7 @@ impl SandboxPolicy {
             && !fs_write.contains(&channels)
         {
             // Ensure the directory exists before granting it — same idiom as
-            // the VLC `runtime_dir` precedent below in supervisor.rs. Unlike
+            // the VLC `runtime_dir` precedent in supervisor/seal.rs. Unlike
             // user-declared entries, this path is runtime-owned so we create
             // it rather than drop the grant (Issue 16: a dead grant here
             // would destabilize other file-write* checks under this policy).

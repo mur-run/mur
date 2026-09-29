@@ -96,7 +96,7 @@ tests or commands without hitting a real provider, set:
 
     export MUR_AGENT_FORCE_ECHO=1
 
-This is wired in `mur-agent-runtime/src/supervisor.rs`: when the variable is
+This is wired in `mur-agent-runtime/src/supervisor/mod.rs`: when the variable is
 set, the supervisor skips provider initialisation and routes all LLM calls
 through a deterministic stub-echo runner. The integration tests (M8.*) all
 use it. There is no real-LLM nightly smoke script yet; run against a live

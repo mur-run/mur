@@ -33,7 +33,7 @@ use std::process::{Child, Command};
 /// ```
 ///
 /// Ordering makes this hold here: `sandbox::apply` seals the supervisor
-/// (`supervisor.rs`) before the MCP pool is built, and the pool spawns lazily
+/// (`supervisor/seal.rs`) before the MCP pool is built, and the pool spawns lazily
 /// on first tool use — every MCP server starts after the seal.
 ///
 /// **What is actually missing is per-child policy.** A child cannot be given a
