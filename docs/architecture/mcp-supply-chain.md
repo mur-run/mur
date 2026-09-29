@@ -65,7 +65,7 @@ Resolution canonicalizes, so a symlinked install (Homebrew's `bin` into its Cell
 
 ### Rule 6 resolves against the PATH the spawn uses
 
-Rule 6 hashed the binary `mur_common::exec::resolve_command` found on the **ambient** PATH, while the spawn resolves against `augmented_path_var` (`protocol/mcp_client.rs`, `supervisor_runner.rs`). The two disagree exactly where it matters: `augmented_path_var` appends `~/.local/bin`, where an installed MUR lives since #935, and launchd/systemd hand the runtime a PATH without it. A first-party binary found only there resolved for the spawn but not for the check — verification soft-failed with "command not resolvable, continuing" and the binary then ran **entirely unpinned**. Both passes now consult one PATH.
+Rule 6 hashed the binary `mur_common::exec::resolve_command` found on the **ambient** PATH, while the spawn resolves against `augmented_path_var` (`protocol/mcp_client.rs`, `supervisor_runner/prepare.rs`). The two disagree exactly where it matters: `augmented_path_var` appends `~/.local/bin`, where an installed MUR lives since #935, and launchd/systemd hand the runtime a PATH without it. A first-party binary found only there resolved for the spawn but not for the check — verification soft-failed with "command not resolvable, continuing" and the binary then ran **entirely unpinned**. Both passes now consult one PATH.
 
 ### Interpreter-launched entries are reported, not enforced
 
@@ -149,7 +149,7 @@ The open follow-on is to connect the two: a server whose provenance cannot be ve
 | Concern | Location |
 |---|---|
 | Startup enforcement (rules 6 + 11) | `mur-agent-runtime/src/hooks/b0.rs` — `verify_mcp_supply_chain` |
-| Called by | `mur-agent-runtime/src/supervisor_runner.rs` (with `?`, before the hook chain) |
+| Called by | `mur-agent-runtime/src/supervisor_runner/prepare.rs` — `prepare_runtime` (with `?`, before the hook chain) |
 | Re-pin of MUR's own servers (bundle + siblings) | `mur-agent-runtime/src/mcp_repin.rs` — `repin_first_party` |
 | Pin status classification | `mur-core/src/cmd/agent_mcp_pin.rs` — `binary_status` |
 | Vendoring + signature audit + provenance | `mur-core/src/cmd/agent_mcp_vendor.rs` |

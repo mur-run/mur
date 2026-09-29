@@ -30,7 +30,7 @@ use mur_common::model::ModelEntry;
 /// mislabeling a `guarded_http` failure for `local`/`ollama` (which have no
 /// arm in that reinterpretation) as "unsupported model provider". Wrapping
 /// the error lets the caller `downcast_ref` on it and restore the original
-/// hard-fail semantic. See `build_provider_runner` in `supervisor_runner.rs`.
+/// hard-fail semantic. See `build_provider_runner` in `supervisor_runner/provider.rs`.
 #[derive(Debug)]
 pub(crate) struct GuardedHttpBuildError(pub anyhow::Error);
 
@@ -51,7 +51,7 @@ impl std::error::Error for GuardedHttpBuildError {}
 /// callers must propagate this directly), "echo" (deliberate placeholder —
 /// never has a real client), and unsupported providers; callers reconstruct
 /// the differentiated stub/log behaviour for those two on `Err` (see
-/// `build_provider_runner` in `supervisor_runner.rs`).
+/// `build_provider_runner` in `supervisor_runner/provider.rs`).
 pub(crate) fn build_client_from_entry(
     entry: &ModelEntry,
     profile: &Profile,
