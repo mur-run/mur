@@ -235,11 +235,16 @@ pub struct App {
     /// as complete markdown blocks while that turn was still streaming (0 when
     /// nothing of it is committed). The live band paints only what follows.
     pub flushed_bytes: usize,
-    /// Hash of the exact committed prefix, so a message whose text was
-    /// replaced (`finish_agent_turn` installs the authoritative reply) or
-    /// dropped (`fail_turn`) can be detected instead of splicing a remainder
-    /// onto text that never had that prefix.
-    pub flushed_hash: u64,
+    /// The exact committed prefix, so a message whose text was replaced
+    /// (`finish_agent_turn` installs the authoritative reply) or dropped
+    /// (`fail_turn`) can be detected — and, when the reply only re-spaced
+    /// what streamed, re-located — instead of splicing a remainder onto text
+    /// that never had that prefix.
+    pub flushed_text: String,
+    /// The committed prefix of that message ended mid-block, as raw lines
+    /// (a table or fence taller than the band). Its remainder then paints
+    /// raw too — rendered as markdown from mid-table it would open torn.
+    pub flushed_raw: bool,
     /// True while the Ctrl+O transcript overlay is showing. The overlay
     /// stays in raw mode/alt-screen and keys route through the normal event
     /// loop (`overlay_key_action`) instead of a blocking stdin read.
@@ -464,7 +469,8 @@ impl App {
             render_mode: RenderMode::Inline,
             flushed_upto: 0,
             flushed_bytes: 0,
-            flushed_hash: 0,
+            flushed_text: String::new(),
+            flushed_raw: false,
             overlay_open: false,
             overlay_text: None,
             last_ctrl_c_at: None,

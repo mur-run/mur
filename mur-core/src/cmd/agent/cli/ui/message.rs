@@ -129,16 +129,7 @@ pub(super) fn agent_body_lines(
     width: u16,
 ) -> Vec<Line<'static>> {
     if streaming {
-        let mut body: Vec<Line<'static>> = text
-            .lines()
-            .map(|l| {
-                if l.is_empty() {
-                    Line::default()
-                } else {
-                    Line::raw(format!("{MSG_INDENT}{l}"))
-                }
-            })
-            .collect();
+        let mut body = raw_body_lines(text);
         // Trailing spinner so the user sees liveness.
         let spin = SPINNER[spinner % SPINNER.len()];
         match body.last_mut() {
@@ -158,6 +149,20 @@ pub(super) fn agent_body_lines(
             .map(indent_line)
             .collect()
     }
+}
+
+/// Body lines of raw (not yet markdown-rendered) text, indented like every
+/// other body row — the shape a streaming turn paints, minus the spinner.
+pub(super) fn raw_body_lines(text: &str) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|l| {
+            if l.is_empty() {
+                Line::default()
+            } else {
+                Line::raw(format!("{MSG_INDENT}{l}"))
+            }
+        })
+        .collect()
 }
 
 pub(super) fn push_message(
