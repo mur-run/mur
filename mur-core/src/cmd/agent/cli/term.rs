@@ -402,6 +402,7 @@ pub(super) fn rebuild_after_resize(
     purge_and_reanchor(terminal, h, banner.as_deref())?;
     app.flushed_upto = 0;
     app.flushed_bytes = 0;
+    app.flushed_raw = false;
     Ok(h)
 }
 

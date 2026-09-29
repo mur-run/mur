@@ -691,3 +691,54 @@ async fn loop_ends_on_end_turn_no_tools() {
     let outcome = runner.run_sync(spec).await;
     assert!(matches!(outcome, TaskOutcome::Completed(_)));
 }
+
+/// Stream what the user sees, and the reply that replaces it.
+async fn streamed_and_reply(tool: &'static str) -> (String, String) {
+    let runner = TaskRunner::with_llm(Arc::new(AnswerThenFollowUpLlm {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        tool,
+    }))
+    .with_pending_approvals(empty_pending_approvals())
+    .with_notifier(tokio::sync::mpsc::channel(16).0)
+    .with_hitl_timeout_secs(1)
+    .with_iteration_ceiling(50);
+    let (sink, mut seen) = tokio::sync::mpsc::channel(64);
+    let outcome = runner
+        .run_sync_streaming(user_turn("q", "t-sep", None), sink, None)
+        .await;
+    let TaskOutcome::Completed(task) = outcome else {
+        panic!("turn must complete, got {outcome:?}");
+    };
+    let mut streamed = String::new();
+    while let Ok(d) = seen.try_recv() {
+        streamed.push_str(&d.text);
+    }
+    (streamed, text_of(task.messages.last().expect("reply")))
+}
+
+/// The terminal ghost (a reply re-printed under its own head): two calls
+/// streamed into one bubble with nothing between them, while the reply
+/// joined them with a blank line. What streamed must BE the reply, or the
+/// CLI cannot tell how much of the reply it has already committed.
+#[tokio::test]
+async fn one_bubble_streams_exactly_the_reply() {
+    let (streamed, reply) = streamed_and_reply("suggest_replies").await;
+    // The settlement card rides after the prose and the CLI splits it off
+    // before comparing; the prose itself must match exactly.
+    let prose = reply
+        .split("\n\n```\n─ settlement ─")
+        .next()
+        .unwrap_or(&reply);
+    assert_eq!(streamed, prose, "the bubble and the reply must be one text");
+}
+
+/// A step card between the calls starts a fresh bubble: no separator leaks
+/// into the start of it.
+#[tokio::test]
+async fn a_fresh_bubble_after_a_card_opens_without_a_separator() {
+    let (streamed, _) = streamed_and_reply("read_file").await;
+    assert!(
+        streamed.contains(&format!("{ANSWER}{FOLLOW_UP}")),
+        "no separator after a card: {streamed:?}"
+    );
+}

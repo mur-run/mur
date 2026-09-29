@@ -458,3 +458,37 @@ pub(super) fn text_response(text: &str) -> Message {
         parts: vec![MessagePart::Text { text: text.into() }],
     }
 }
+
+/// Separator between two model calls that stream into one on-screen bubble.
+/// It is the one `run_agentic_loop` joins the reply's segments with, so what
+/// the user watched stream and the reply that replaces it are the same text.
+pub(super) const SEGMENT_SEP: &str = "\n\n";
+
+/// A sink that forwards to `out`, opening the first visible (non-thinking,
+/// non-empty) delta with [`SEGMENT_SEP`]. Lazily, not up front: a call that
+/// streams no text must not leave a dangling separator in the bubble.
+///
+/// The returned handle finishes once the sender (and every clone the client
+/// made) is dropped and everything has been forwarded; await it before
+/// writing to `out` directly.
+pub(super) fn separated(
+    out: tokio::sync::mpsc::Sender<crate::llm::StreamDelta>,
+) -> (
+    tokio::sync::mpsc::Sender<crate::llm::StreamDelta>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::llm::StreamDelta>(out.max_capacity());
+    let fwd = tokio::spawn(async move {
+        let mut opened = false;
+        while let Some(mut d) = rx.recv().await {
+            if !opened && !d.thinking && !d.text.is_empty() {
+                opened = true;
+                d.text.insert_str(0, SEGMENT_SEP);
+            }
+            if out.send(d).await.is_err() {
+                break;
+            }
+        }
+    });
+    (tx, fwd)
+}

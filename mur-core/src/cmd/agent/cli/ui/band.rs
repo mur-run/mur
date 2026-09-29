@@ -3,7 +3,7 @@
 
 use super::INPUT_H_MIN;
 use super::chooser::chooser_band_height;
-use super::message::{agent_body_lines, gap_row, push_agent_header, push_message};
+use super::message::{agent_body_lines, gap_row, push_agent_header, push_message, raw_body_lines};
 use super::rail::fleet_rail_height;
 use ratatui::Frame;
 use ratatui::backend::Backend;
@@ -14,6 +14,8 @@ use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 
 use super::super::app::{App, ChatMsg, Role};
 
+#[cfg(test)]
+mod ghost_tests;
 #[cfg(test)]
 mod tests;
 
@@ -65,20 +67,16 @@ pub(super) fn settle_end(app: &App) -> usize {
     end
 }
 
-pub(super) fn prefix_hash(s: &str) -> u64 {
-    use std::hash::Hasher;
-    let mut h = std::hash::DefaultHasher::new();
-    h.write(s.as_bytes());
-    h.finish()
-}
-
 /// Bytes of `messages[flushed_upto].text` already committed to scrollback —
 /// or 0 when that bookkeeping no longer describes the message there.
 ///
 /// It can stop describing it two ways: `finish_agent_turn` installs the
 /// authoritative reply over the streamed text, and `fail_turn` drops the
-/// streaming message outright. Both are caught by re-hashing the prefix, so a
-/// remainder is never spliced onto text that never had that prefix.
+/// streaming message outright. The committed text itself is kept, so the
+/// check is exact, and a reply that only differs in whitespace (the runtime
+/// joins its segments with blank lines the stream may not have carried) is
+/// re-located instead of being printed a second time under its own head —
+/// the "new table drawn over the old reply" ghost.
 pub(super) fn effective_skip(app: &App) -> usize {
     if app.flushed_bytes == 0 {
         return 0;
@@ -89,10 +87,39 @@ pub(super) fn effective_skip(app: &App) -> usize {
     if m.role != Role::Agent || m.step.is_some() {
         return 0;
     }
-    match m.text.get(..app.flushed_bytes) {
-        Some(p) if prefix_hash(p) == app.flushed_hash => app.flushed_bytes,
-        _ => 0,
+    if m.text.get(..app.flushed_bytes) == Some(app.flushed_text.as_str()) {
+        return app.flushed_bytes;
     }
+    relocate_prefix(&m.text, &app.flushed_text).unwrap_or(0)
+}
+
+/// Byte offset in `text` just past the end of `prefix`, matching every
+/// non-whitespace char in order and skipping whitespace on both sides — or
+/// `None` when `text` does not start with `prefix` in that sense.
+///
+/// The offset lands on a block boundary: past any whitespace that follows the
+/// match, so the remainder starts where the next block does.
+pub(super) fn relocate_prefix(text: &str, prefix: &str) -> Option<usize> {
+    let mut t = text.char_indices().peekable();
+    for pc in prefix.chars().filter(|c| !c.is_whitespace()) {
+        loop {
+            let (_, tc) = t.next()?;
+            if tc.is_whitespace() {
+                continue;
+            }
+            if tc != pc {
+                return None;
+            }
+            break;
+        }
+    }
+    while let Some(&(_, c)) = t.peek() {
+        if !c.is_whitespace() {
+            break;
+        }
+        t.next();
+    }
+    Some(t.peek().map_or(text.len(), |&(i, _)| i))
 }
 
 /// Byte offset one past the FIRST complete markdown block in `rest` (0 when
@@ -192,8 +219,15 @@ pub(super) fn push_live_inner(
         push_agent_header(lines, m, app.spinner, app.theme);
     }
     // Continuation of a partially-committed agent turn: body only, no header.
+    let rest = m.text.get(skip..).unwrap_or("");
+    if skip > 0 && app.flushed_raw && !(m.streaming && !as_settled) {
+        // Its head went up as raw lines from mid-block; rendering the tail
+        // as markdown would open it with a torn table.
+        lines.extend(raw_body_lines(rest));
+        return;
+    }
     lines.extend(agent_body_lines(
-        m.text.get(skip..).unwrap_or(""),
+        rest,
         m.streaming && !as_settled,
         app.spinner,
         app.theme,
@@ -351,6 +385,7 @@ pub fn flush_finished<B: Backend>(
         // forget it and let that message flush whole. A visible duplicate of
         // the partial text beats splicing a remainder onto the wrong body.
         app.flushed_bytes = 0;
+        app.flushed_raw = false;
     }
 
     // ── 1. whole settled messages, oldest first ────────────────────────────
@@ -435,12 +470,16 @@ pub fn flush_finished<B: Backend>(
         emit(terminal, lines, pad, width)?;
         app.flushed_upto = end;
         app.flushed_bytes = 0;
+        app.flushed_raw = false;
         skip = 0;
     }
 
     // ── 2. still overflowing → spill complete blocks of the streaming turn ──
     // One block at a time, re-measuring, so the band keeps painting a full
     // screenful instead of emptying out mid-turn.
+    // Once a turn has spilled raw lines, the rest of it stays raw: a block
+    // rendered as markdown from mid-table would open with a torn table.
+    let mut raw = app.flushed_raw;
     while total > cap {
         let Some(m) = app.messages.get(app.flushed_upto) else {
             break;
@@ -452,9 +491,19 @@ pub fn flush_finished<B: Backend>(
             break;
         }
         let rest = m.text.get(skip..).unwrap_or("");
-        let block_end = next_block_end(rest);
+        let mut block_end = next_block_end(rest);
         if block_end == 0 {
-            break;
+            // One block taller than the band (a long table or fence has no
+            // blank line inside it): waiting for it to close hides its head
+            // behind "↑ N more" for as long as it streams. Commit its complete
+            // lines instead. They go up as the raw text the band was already
+            // showing — a streaming turn paints raw text, so nothing on
+            // screen changes shape, only where it lives.
+            block_end = rest.rfind('\n').map_or(0, |i| i + 1);
+            if block_end == 0 {
+                break;
+            }
+            raw = true;
         }
         let chunk = &rest[..block_end];
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -470,22 +519,28 @@ pub fn flush_finished<B: Backend>(
                 theme.accent.add_modifier(Modifier::BOLD),
             )));
         }
-        lines.extend(agent_body_lines(
-            chunk,
-            false,
-            app.spinner,
-            theme,
-            None,
-            width,
-        ));
-        // The block ended at a blank line and the renderer trims its own
-        // trailing blank; put the separator back, or every paragraph a
-        // streaming reply spilled sat flush against the next.
-        lines.push(Line::default());
+        if raw {
+            lines.extend(raw_body_lines(chunk));
+        } else {
+            lines.extend(agent_body_lines(
+                chunk,
+                false,
+                app.spinner,
+                theme,
+                None,
+                width,
+            ));
+            // The block ended at a blank line and the renderer trims its own
+            // trailing blank; put the separator back, or every paragraph a
+            // streaming reply spilled sat flush against the next.
+            lines.push(Line::default());
+        }
         emit(terminal, lines, pad, width)?;
         skip += block_end;
         app.flushed_bytes = skip;
-        app.flushed_hash = prefix_hash(&app.messages[app.flushed_upto].text[..skip]);
+        app.flushed_text = app.messages[app.flushed_upto].text[..skip].to_string();
+
+        app.flushed_raw = raw;
 
         let mut live = Vec::new();
         push_live_measured(&mut live, app, &app.messages[app.flushed_upto], skip);
