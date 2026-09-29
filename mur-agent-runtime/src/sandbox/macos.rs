@@ -117,7 +117,7 @@ fn sbpl_escape(s: &str) -> String {
     out
 }
 
-/// Resolve MUR_HOME the same way the supervisor does (`supervisor.rs`'s
+/// Resolve MUR_HOME the same way the supervisor does (`supervisor/mod.rs`'s
 /// startup resolution): the `MUR_HOME` env var if set, else `$HOME/.mur`.
 /// Needed so the per-agent `agents/` directory (peer `agent.sock` files,
 /// dialed for A2A) can be subpath-allowed for unix-socket network-outbound
