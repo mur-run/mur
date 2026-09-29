@@ -161,6 +161,31 @@ pub fn cmd_perm_set_limit(name: &str, key: &str, value: u64) -> Result<()> {
     Ok(())
 }
 
+/// `mur agent perm reseal <name>` — trust the entitlements now on disk (#712).
+pub fn cmd_perm_reseal(name: &str) -> Result<()> {
+    use mur_common::entitlements_pin::{self, PinCheck};
+    let mur_home = resolve_mur_home()?;
+    let path = mur_home.join("agents").join(name).join("profile.yaml");
+    let yaml = fs::read_to_string(&path).map_err(|_| anyhow!("agent '{name}' not found"))?;
+    let ent = entitlements_pin::entitlements_from_yaml(&yaml, &path)?;
+    match entitlements_pin::check(&mur_home, name, &ent) {
+        Ok(PinCheck::Match) => {
+            println!("{name}: entitlements already match the pin; nothing to reseal");
+            return Ok(());
+        }
+        Ok(PinCheck::Mismatch { changed }) => {
+            println!(
+                "{name}: accepting changed entitlements: {}",
+                changed.join(", ")
+            );
+        }
+        Ok(PinCheck::Missing) | Err(_) => println!("{name}: pinning current entitlements"),
+    }
+    entitlements_pin::write_pin(&mur_home, name, &ent)?;
+    println!("Resealed. Review with `mur agent perm {name}`; restart the agent to apply.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_outbound_mode;

@@ -875,6 +875,10 @@ pub enum AgentPermAction {
     ToolClear { name: String, pattern: String },
     /// List all tool rules
     ToolList { name: String },
+    /// Accept the entitlements now in profile.yaml as trusted (#712). Needed
+    /// after a hand edit of `entitlements:`; the agent refuses to start on
+    /// entitlements that changed outside MUR until you reseal
+    Reseal { name: String },
 }
 
 #[derive(Subcommand)]

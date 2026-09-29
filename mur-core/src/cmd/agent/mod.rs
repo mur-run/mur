@@ -105,7 +105,8 @@ pub use perm::{
     cmd_perm_allow_spawn_dir, cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host,
     cmd_perm_deny_path, cmd_perm_deny_port, cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir,
     cmd_perm_list_hosts, cmd_perm_list_paths, cmd_perm_list_ports, cmd_perm_list_tools,
-    cmd_perm_remove_path, cmd_perm_set_limit, cmd_perm_set_mode, cmd_perm_set_tool, cmd_perm_show,
+    cmd_perm_remove_path, cmd_perm_reseal, cmd_perm_set_limit, cmd_perm_set_mode,
+    cmd_perm_set_tool, cmd_perm_show,
 };
 #[allow(unused_imports)]
 pub(crate) use prompt::prompt_path_for;
@@ -278,6 +279,41 @@ fn sync_model_block_from_disk(profile: &mut _AgentProfile) {
     }
 }
 
+/// Move the #712 entitlement pin to what a trusted writer just saved — only
+/// from a trusted state (see `entitlements_pin::advance_pin`). Best-effort: a
+/// pin that could not advance makes the next start refuse with a `reseal` hint,
+/// which is fail-closed, so the save itself still succeeds.
+pub(crate) fn advance_entitlements_pin(
+    profile_path: &Path,
+    prior: Option<&mur_common::agent::Entitlements>,
+    new: &mur_common::agent::Entitlements,
+) {
+    let Some(agent_dir) = profile_path.parent() else {
+        return;
+    };
+    let (Some(agents_root), Some(name)) = (
+        agent_dir.parent(),
+        agent_dir.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return;
+    };
+    let Some(mur_home) = agents_root.parent() else {
+        return;
+    };
+    if agents_root.file_name().and_then(|n| n.to_str()) != Some("agents") {
+        return;
+    }
+    match mur_common::entitlements_pin::advance_pin(mur_home, name, prior, new) {
+        Ok(true) => {}
+        Ok(false) => eprintln!(
+            "warning: {name}'s entitlements had changed outside MUR before this save; \
+             the agent will refuse to start until you review them and run \
+             `mur agent perm reseal {name}`"
+        ),
+        Err(e) => tracing::warn!(agent = name, error = %e, "entitlement pin not updated"),
+    }
+}
+
 pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
     // Fail-closed guard (#717): a profile save must never *introduce* a skill
     // ref that does not resolve to an installed skill under the agent dir.
@@ -299,10 +335,17 @@ pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<(
         skill::validate_skill_refs(agent_dir, &added)?;
     }
 
+    // #712: entitlements on disk before this write, for the pin advance below.
+    let prior_ents = fs::read_to_string(path)
+        .ok()
+        .and_then(|y| serde_yaml_ng::from_str::<_AgentProfile>(&y).ok())
+        .map(|p| p.entitlements);
+
     sync_model_block_from_disk(profile);
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
     write_atomic(path, yaml.as_bytes())?;
+    advance_entitlements_pin(path, prior_ents.as_ref(), &profile.entitlements);
 
     // Version gate: when the agents git repo is active, commit this change.
     // Best-effort — a commit failure never fails the primary save.

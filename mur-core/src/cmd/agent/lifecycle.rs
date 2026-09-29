@@ -209,6 +209,13 @@ pub fn cmd_create(
 
     let yaml = serde_yaml_ng::to_string(&profile).context("serialize profile.yaml")?;
     write_atomic(&agent_home.join("profile.yaml"), yaml.as_bytes())?;
+    // #712: a fresh profile is trusted by construction; pin it now so a stale
+    // pin from an earlier agent of this name cannot block the first start.
+    super::advance_entitlements_pin(
+        &agent_home.join("profile.yaml"),
+        None,
+        &profile.entitlements,
+    );
     write_atomic(
         &agent_home.join("sys_prompt.md"),
         format!("# {name}\n\nYou are an assistant.\n").as_bytes(),
@@ -999,6 +1006,10 @@ pub fn cmd_remove(name: &str, purge: bool, force: bool) -> Result<()> {
         if let Some(key_dir) = purge_agent_state(&agent_home)? {
             println!("Removed private key {}", key_dir.display());
         }
+        // #712: a stale pin would make a new agent of this name refuse to start.
+        if let Err(e) = mur_common::entitlements_pin::remove_pin(&mur_home, name) {
+            eprintln!("warning: could not remove entitlement pin: {e}");
+        }
         println!("Purged agent '{name}'");
     } else {
         println!(
@@ -1066,6 +1077,11 @@ pub fn cmd_rename(old: &str, new: &str) -> Result<()> {
 
     fs::rename(&old_home, &new_home)
         .with_context(|| format!("rename {} -> {}", old_home.display(), new_home.display()))?;
+    if let Err(e) = mur_common::entitlements_pin::rename_pin(&mur_home, old, new) {
+        eprintln!(
+            "warning: could not move entitlement pin ({e}); run `mur agent perm reseal {new}`"
+        );
+    }
 
     let bin_dir = resolve_bin_dir()?;
     let old_symlink = bin_dir.join(format!("mur_agent_{old}"));

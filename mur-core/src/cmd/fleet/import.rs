@@ -492,6 +492,10 @@ pub(crate) fn install_bundled_members(
                     .with_context(|| format!("serialize profile for '{canon}'"))?;
                 std::fs::write(dir.join("profile.yaml"), profile_yaml.as_bytes())
                     .with_context(|| format!("write profile for '{canon}'"))?;
+                // #712: the imported member's entitlements are what the user
+                // just approved by importing; pin them over any stale pin.
+                mur_common::entitlements_pin::write_pin(mur_home, &canon, &profile.entitlements)
+                    .with_context(|| format!("pin entitlements for '{canon}'"))?;
             }
             Err(e) => {
                 bail!(
