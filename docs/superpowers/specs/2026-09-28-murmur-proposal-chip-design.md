@@ -1,7 +1,7 @@
 # murmur proposal chip — agent-proposed commands and actions (design)
 
 **Date:** 2026-09-28
-**Status:** Design approved (Q1–Q7 settled); tool contract and vetting location settled in §1; PR 2 built; PR 3 built
+**Status:** Design approved (Q1–Q10 settled); tool contract and vetting location settled in §1; PR 2 built; PR 3 built
 **Scope:** `mur agent cli` (murmur) TUI. Lets an agent *propose* a command or a
 native action; the user decides with one key. First native action: `/restart`.
 Builds on the `suggest_replies` tool
@@ -33,6 +33,9 @@ thing being run. Insert-only proposals can *never* be sent by a single key.
 | Q2 | What happens to an existing draft? | Never moved, hidden, or overwritten | Moving text out of sight is surprise |
 | Q6 | Tab with a draft in the composer | **A:** Tab inserts only when the composer is empty; with a draft, Tab keeps opening slash completion and the chip hint reads `(清空後 Tab 插入)` / "(clear to Tab-insert)" | Identical to the existing ghost rule; cursor insertion (B) breaks `!` shell mode and steals slash-completion Tab; stash-the-draft (C) is what Q2 rejected |
 | Q6b | Merge ghost into chip now? | **No — separate PR 3** | Keeps PR 2 reviewable and revertible |
+| Q8 | Tab when the `suggest_replies` chooser and a chip are both up | **Chip wins** — on an empty composer, an open `spaced` chooser, and an insertable (`shell`/`slash`) chip. Slash menu and restart chips keep today's routing | The chip row advertises "Tab to insert"; the chooser advertises only `1-9 pick · ↑↓ move · Enter accept`. Letting the chooser eat Tab inserted its highlighted reply instead of the chip's command |
+| Q9 | Does an ignored chip stay forever? | **No — `PROPOSAL_TTL` = 120 s**, armed when the turn stops streaming; countdown shown in the hint row; the ghost never expires | A stale command should not squat on the composer for the rest of the session; arming mid-turn would expire it while the user is still reading the reply |
+| Q10 | How does the user keep a chip they want? | **`Ctrl+K` ("keep") toggles a pin** on an empty composer. Pinned: no countdown, no wake-ups. Unpin: a fresh 120 s countdown. A newer chip always starts unpinned | 120 s is too short when the user needs to go check something before running a command. `Ctrl+K` is unbound in the composer loop and the completion overlay, and on an empty composer the textarea's kill-to-end-of-line has nothing to kill |
 | Q7 | `/restart` while a turn is streaming | **A:** not accepted. Hint reads `(回合結束後 Enter 執行)`; Enter is inert until the turn ends | Restart drains in-flight turns — the in-flight turn is the one on screen, so allowing it invites a self-deadlock. Queueing (B) is a hidden delayed action; aborting (C) drops output |
 
 ## §1 Proposal model and vetting
@@ -87,7 +90,9 @@ completion overlay accepts *and sends* a leaf candidate
 submenu) we also send right away instead of forcing a second Enter"). Riding
 on that state would let one Enter send an insert-only proposal — breaking C.
 
-Priority, highest first: **HITL > completion overlay > chip > ghost > default.**
+Priority, highest first: **HITL > completion overlay > chip > ghost > default**,
+with one exception (Q8): Tab reaches the chip ahead of the `suggest_replies`
+chooser — see `proposal::owns_tab_over_chooser`.
 HITL handles Esc and returns first (`cli/events.rs:404`), so the chip can never
 swallow an approval denial.
 
@@ -95,15 +100,45 @@ swallow an approval denial.
 |---|---|---|
 | Tab | empty composer, chip present | insert proposal text (`set_input` — safe only because the composer is empty) |
 | Tab | draft present | unchanged: opens slash completion; chip untouched |
+| Tab | empty composer, `suggest_replies` chooser open, insertable chip | insert the chip's text, not the chooser's highlighted reply (Q8) |
+| Tab | chooser open, `restart` chip | unchanged: chooser accepts (nothing to insert) |
 | Enter | empty composer, `executable`, idle | run the action |
 | Enter | empty composer, `insert_only` | **nothing** — not sent, not inserted |
 | Enter | draft present | sends the draft; chip stays |
 | Enter | streaming, `executable` | inert (Q7) |
 | Esc | idle + empty composer, chip present | dismiss chip (this slot is `EscAction::Nothing` today, `cli/app/keys.rs:30/37`) |
 | Esc | streaming or draft | unchanged double-Esc state machine (`esc_action`, `cli/app/keys.rs:17`) |
+| Ctrl+K | empty composer, real chip (not the ghost) | toggle pin (Q10) |
+| Ctrl+K | draft present, or only the ghost | unchanged: falls through to the textarea (kill to end of line) |
 
 The chip is also cleared when a newer proposal replaces it or a new turn
 starts (same place the ghost is cleared today, `cli/turn.rs:7`).
+
+**Expiry (Q9).** A real chip (not the ghost) expires `PROPOSAL_TTL` (120 s)
+after it becomes idle:
+
+- `proposal::tick` runs at the top of every loop pass. It arms
+  the `proposal_deadline` field on `App` only while no turn is streaming and no restart is
+  in flight; while either holds, the deadline is cleared, so the full 120 s
+  starts again once the chip is idle.
+- The hint row shows the remaining seconds, e.g.
+  `Tab to insert · Esc to dismiss · 117s`.
+- `proposal::next_wake` gives the event loop a `sleep_until` point at each
+  whole-second step, capped at the deadline. The countdown redraws, and the chip
+  is removed, even when no key is pressed.
+- A newer proposal (including a step-hint `restart` chip,
+  `cli/app/transcript.rs`) resets the deadline.
+
+**Pin (Q10).** `Ctrl+K` toggles the `proposal_pinned` field on `App`
+(`proposal::toggle_pin`). Either direction clears `proposal_deadline`:
+
+- Pinned: `tick` treats the chip as it treats a streaming turn and never arms
+  a deadline. `next_wake` returns `None`, so a pinned chip causes no
+  wake-ups. The hint reads `… · Ctrl+K to unpin · pinned`.
+- Unpinned: the next idle `tick` arms a fresh `PROPOSAL_TTL`. It does not
+  resume the old remaining time. The hint reads `… · Ctrl+K to keep · 117s`.
+- A newer proposal resets `proposal_pinned` to `false`. A pin applies to one
+  chip only and never carries over to the next command.
 
 `cli/events.rs` is 685 lines; key handling lives in a new `cli/proposal.rs`,
 with `events.rs` gaining only a dispatch hook (Rule 5, ≤ 800 lines).
@@ -176,6 +211,22 @@ secret-shaped → rejected with a tool error; unknown kind, or `restart` with a
 - streaming + Enter/Esc → chip untouched, existing semantics hold
 - completion overlay open → overlay wins
 - HITL open + Esc → approval denied, chip unaffected
+- chooser open + insertable chip + empty composer + Tab → chip text inserted,
+  not the chooser's reply (**Q8 regression test**)
+- chooser open + chip up → chooser still owns Enter and digits
+
+**Expiry (injected `Instant`, no sleeping):**
+- deadline not armed while streaming; armed on turn end
+- chip removed at `now >= deadline`; ghost never expires
+- countdown text reflects remaining seconds; `next_wake` is capped at the deadline
+- replacing the chip resets the deadline
+
+**Pin (injected `Instant`):**
+- empty composer + chip + `Ctrl+K` → pinned; never expires; `next_wake` is
+  `None`; hint shows `Ctrl+K to unpin` and `pinned`
+- `Ctrl+K` again → unpinned, with a fresh countdown
+- draft present, or only the ghost → `Ctrl+K` is not handled by the chip
+- a new chip starts unpinned
 
 **Restart:** pure `restart_one` writes nothing to stdout (capture and assert
 empty); submission locked during restart and unlocked after;

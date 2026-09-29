@@ -215,6 +215,8 @@ pub(super) async fn event_loop(
         if expire_stale_hitl(app) {
             promote_queued_hitl(app, &tx);
         }
+        // Same ordering reason: retire a lapsed chip before painting it.
+        proposal::tick(app, StdInstant::now());
         if app.needs_full_redraw {
             terminal.clear()?;
             app.needs_full_redraw = false;
@@ -272,6 +274,13 @@ pub(super) async fn event_loop(
             .as_ref()
             .map(|r| TokioInstant::from_std(r.created_at + crate::hitl::gate::DEFAULT_TIMEOUT))
             .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
+        // The chip countdown repaints once a second and must wake an idle
+        // loop to retire the chip at zero.
+        let chip_wake = proposal::next_wake(app, StdInstant::now());
+        let chip_armed = chip_wake.is_some();
+        let chip_at = chip_wake
+            .map(TokioInstant::from_std)
+            .unwrap_or_else(|| TokioInstant::from_std(StdInstant::now()));
         tokio::select! {
             maybe = events.next() => match maybe {
                 Some(Ok(ev)) => {
@@ -299,6 +308,7 @@ pub(super) async fn event_loop(
             // wake-up. No state change needed here.
             _ = tokio::time::sleep_until(rail_at), if rail_armed => {}
             _ = tokio::time::sleep_until(hitl_at), if hitl_armed => {}
+            _ = tokio::time::sleep_until(chip_at), if chip_armed => {}
             _ = tokio::time::sleep_until(input_due), if input_armed => {
                 if let Some(raw) = take_due_input(app, StdInstant::now())
                     && let Some(p) = &app.panel
@@ -442,6 +452,10 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
             // While the completion menu is open it owns navigation / accept /
             // dismiss keys; everything else falls through to normal editing and
             // re-filters the menu at the end of this handler.
+            // Tab reaches an insert-only chip even over the reply chooser.
+            if proposal::owns_tab_over_chooser(app, &key) && proposal::handle_key(app, &key, tx) {
+                return;
+            }
             if app.completion.is_some() {
                 match key.code {
                     // Chooser (suggested replies): a digit picks that option and
