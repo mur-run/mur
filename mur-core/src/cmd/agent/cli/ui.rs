@@ -26,7 +26,7 @@ use status::render_status;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph};
 
@@ -168,9 +168,7 @@ fn render_overlay(f: &mut Frame, app: &App) {
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
             OVERLAY_HINT,
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
+            app.theme.muted.add_modifier(Modifier::ITALIC),
         ))),
         chunks[1],
     );
@@ -206,7 +204,7 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
                 if !c.desc.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("   {}", c.desc), // align under the label (past "N  ")
-                        Style::default().fg(Color::DarkGray),
+                        theme.muted,
                     )));
                 }
                 lines.push(Line::default()); // spacer between options
@@ -228,10 +226,7 @@ fn render_completion(f: &mut Frame, app: &App, input_area: Rect) {
                 }
                 if !c.desc.is_empty() {
                     spans.push(Span::raw(" "));
-                    spans.push(Span::styled(
-                        c.desc.clone(),
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    spans.push(Span::styled(c.desc.clone(), theme.muted));
                 }
                 ListItem::new(Line::from(spans))
             }
