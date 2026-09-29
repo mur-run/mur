@@ -114,9 +114,9 @@ pub enum SkillAction {
         level: String,
     },
     #[command(display_order = 5)]
-    /// Install a skill from registry, file, or URL.
+    /// Install a skill from the registry, a local manifest file, or a skill directory.
     Install {
-        /// Skill name (registry), local path, or git URL.
+        /// Skill name (registry), local manifest file, or directory containing skill.yaml / SKILL.md.
         source: String,
     },
     #[command(display_order = 25)]

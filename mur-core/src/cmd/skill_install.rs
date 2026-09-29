@@ -29,7 +29,9 @@ pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> 
         return install_from_agent(home, agent_name, skill_name);
     }
 
-    let src_path = Path::new(source);
+    // Classify before touching the network: a bad local path must fail as a
+    // path error, never as "not found in registry cache" (#1572).
+    let local = skill_resolver::local_manifest(source)?;
 
     let (reg_dir, _idx) =
         skill_registry::fetch_and_load(home, registry_url).context("fetch registry")?;
@@ -39,10 +41,9 @@ pub fn cmd_install(home: &Path, registry_url: &str, source: &str) -> Result<()> 
         registry_dir: reg_dir,
     };
 
-    let source_enum = if src_path.exists() && src_path.is_file() {
-        ResolveSource::LocalFile(src_path)
-    } else {
-        ResolveSource::RegistryLatest(source)
+    let source_enum = match &local {
+        Some(p) => ResolveSource::LocalFile(p),
+        None => ResolveSource::RegistryLatest(source),
     };
 
     let order = skill_resolver::resolve(&input, source_enum)?;

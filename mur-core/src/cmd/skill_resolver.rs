@@ -34,6 +34,8 @@ pub enum ResolveError {
     BadConstraint(#[from] ConstraintError),
     #[error("manifest parse: {0}")]
     BadManifest(String),
+    #[error("{0}")]
+    BadSource(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -96,6 +98,57 @@ fn load_root(input: &ResolverInput, src: ResolveSource<'_>) -> Result<ResolvedNo
             load_from_path(&path)
         }
     }
+}
+
+/// Manifest filenames looked for, in order, when `mur skill install` is given
+/// a directory. Matches the `<dir>/<name>/skill.yaml` layout `mur skill new`
+/// writes, plus the markdown form `load_from_path` already accepts.
+pub const DIR_MANIFEST_NAMES: &[&str] = &["skill.yaml", "skill.yml", "SKILL.md"];
+
+/// Classify an install `<SOURCE>` that is not an `agent://` URL.
+///
+/// - existing file → that file
+/// - existing directory → its manifest (see [`DIR_MANIFEST_NAMES`]); a
+///   directory without one is an error, never a registry lookup
+/// - URL (`scheme://`) → error: remote URLs are not installable yet
+/// - anything path-shaped that does not exist → "path not found"
+/// - otherwise → `Ok(None)`: treat as a registry name
+///
+/// Registry names can never contain a separator (`is_valid_skill_name`), so
+/// "has a separator" is a safe path signal on every platform.
+pub fn local_manifest(source: &str) -> Result<Option<PathBuf>, ResolveError> {
+    let p = Path::new(source);
+    if p.is_file() {
+        return Ok(Some(p.to_path_buf()));
+    }
+    if p.is_dir() {
+        return DIR_MANIFEST_NAMES
+            .iter()
+            .map(|n| p.join(n))
+            .find(|c| c.is_file())
+            .map(Some)
+            .ok_or_else(|| {
+                ResolveError::BadSource(format!(
+                    "no skill manifest in directory {} (looked for: {})",
+                    p.display(),
+                    DIR_MANIFEST_NAMES.join(", ")
+                ))
+            });
+    }
+    if source.contains("://") {
+        return Err(ResolveError::BadSource(format!(
+            "installing from a URL is not supported yet: {source} — clone it and pass the local path"
+        )));
+    }
+    let path_shaped = p.is_absolute()
+        || source.contains('/')
+        || source.contains('\\')
+        || source.starts_with('.')
+        || source.starts_with('~');
+    if path_shaped {
+        return Err(ResolveError::BadSource(format!("path not found: {source}")));
+    }
+    Ok(None)
 }
 
 fn load_from_path(path: &Path) -> Result<ResolvedNode, ResolveError> {
@@ -224,6 +277,67 @@ mod tests {
         assert!(
             matches!(err, ResolveError::BadManifest(_)),
             "expected BadManifest, got: {err}"
+        );
+    }
+
+    const MIN_YAML: &str = "name: dir-skill\nversion: 1.0.0\npublisher: human:test\n\
+        description: d\ncategory: context\ncontent:\n  abstract: a\n  context: b\n";
+
+    /// #1572: a directory holding `skill.yaml` resolves to that manifest
+    /// instead of being looked up as a registry name.
+    #[test]
+    fn directory_with_skill_yaml_resolves_to_manifest() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("my-skill");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("skill.yaml"), MIN_YAML).unwrap();
+        let got = local_manifest(dir.to_str().unwrap()).unwrap();
+        assert_eq!(got, Some(dir.join("skill.yaml")));
+        let node = load_from_path(&got.unwrap()).unwrap();
+        assert_eq!(node.name, "dir-skill");
+    }
+
+    #[test]
+    fn directory_with_skill_md_resolves_to_manifest() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("SKILL.md"), "---\nname: m\n---\n").unwrap();
+        let got = local_manifest(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(got, Some(tmp.path().join("SKILL.md")));
+    }
+
+    #[test]
+    fn empty_directory_is_a_path_error_not_registry() {
+        let tmp = tempdir().unwrap();
+        let err = local_manifest(tmp.path().to_str().unwrap()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no skill manifest"), "{msg}");
+        assert!(!msg.contains("registry"), "{msg}");
+    }
+
+    #[test]
+    fn missing_path_says_path_not_found() {
+        let tmp = tempdir().unwrap();
+        let missing = tmp.path().join("nope");
+        for src in [missing.to_str().unwrap(), "./nope-xyz", "..\\nope-xyz"] {
+            let msg = local_manifest(src).unwrap_err().to_string();
+            assert!(msg.contains("path not found"), "{src}: {msg}");
+        }
+    }
+
+    #[test]
+    fn url_source_is_rejected_clearly() {
+        let msg = local_manifest("https://github.com/o/r.git")
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("not supported"), "{msg}");
+    }
+
+    /// Negative control: a bare name still goes to the registry.
+    #[test]
+    fn bare_name_is_a_registry_lookup() {
+        assert_eq!(
+            local_manifest("definitely-not-a-local-dir-xyz").unwrap(),
+            None
         );
     }
 
