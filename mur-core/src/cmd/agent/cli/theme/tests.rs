@@ -27,32 +27,14 @@ fn light_and_mur_resolve_to_themselves() {
     assert_eq!(skin_name(&MUR), "mur");
 }
 
-/// WCAG 2 relative luminance of an sRGB colour.
-fn luminance(c: Color) -> f64 {
-    let Color::Rgb(r, g, b) = c else {
-        panic!("contrast is only defined for Rgb tokens, got {c:?}")
-    };
-    let lin = |v: u8| {
-        let v = f64::from(v) / 255.0;
-        if v <= 0.03928 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-}
-
 fn contrast_ratio(a: Color, b: Color) -> f64 {
-    let (la, lb) = (luminance(a), luminance(b));
-    let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
-    (hi + 0.05) / (lo + 0.05)
+    super::contrast::ratio(a, b).expect("contrast is only defined for Rgb tokens")
 }
 
-/// The truecolor skins assume a background and every text token must
-/// read against it: body 7:1, everything else 4.5:1. The assumed
-/// background is a constant beside the palette so this test and the
-/// spec cannot drift apart.
+/// The truecolor skins assume a background, and every foreground must read
+/// against the ground it is actually painted on — the terminal, the status
+/// surface, the table stripe, a diff tint, the settlement card, a chip's own
+/// fill. One function decides, the same one user skin files go through.
 #[test]
 fn rgb_skins_meet_wcag() {
     for (name, theme, bg) in [
@@ -60,46 +42,16 @@ fn rgb_skins_meet_wcag() {
         ("mur", &MUR, ASSUMED_BG_MUR),
         ("clay", &CLAY, ASSUMED_BG_CLAY),
     ] {
-        // Each surface is judged against the tokens actually painted on
-        // it: the settlement card never draws with the terminal-surface
-        // tokens, so checking those against its background is meaningless.
-        let check = |surface: &str, bg: Color, text: Style, tokens: &[(&str, Style)]| {
-            let r = contrast_ratio(text.fg.expect("text token has a colour"), bg);
-            assert!(r >= 7.0, "{name}/{surface}: text is {r:.1}:1");
-            for (label, s) in tokens {
-                let r = contrast_ratio(s.fg.expect("text token has a colour"), bg);
-                assert!(r >= 4.5, "{name}/{surface}: {label} is {r:.1}:1");
-            }
-        };
-        check(
-            "terminal",
-            bg,
-            theme.text,
-            &[
-                ("muted", theme.muted),
-                ("emphasis", theme.emphasis),
-                ("accent", theme.accent),
-                ("accent_alt", theme.accent_alt),
-                ("ok", theme.ok),
-                ("warn", theme.warn),
-                ("error", theme.error),
-            ],
+        let failures = super::contrast::check(theme, bg);
+        assert!(
+            failures.is_empty(),
+            "{name}: {}",
+            failures
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
         );
-        check(
-            "settlement",
-            theme.settlement_surface.bg.unwrap_or(bg),
-            theme.settlement_text,
-            &[
-                ("muted", theme.settlement_muted),
-                ("accent", theme.settlement_accent),
-                ("ok", theme.settlement_ok),
-                ("warn", theme.settlement_warn),
-                ("error", theme.settlement_error),
-            ],
-        );
-        let badge_bg = theme.badge.bg.expect("badge has a background");
-        let r = contrast_ratio(theme.badge.fg.expect("badge has a foreground"), badge_bg);
-        assert!(r >= 4.5, "{name}: badge is {r:.1}:1");
     }
 }
 

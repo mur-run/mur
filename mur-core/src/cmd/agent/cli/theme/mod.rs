@@ -11,6 +11,8 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::BorderType;
 
+pub mod contrast;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     // ── text ──────────────────────────────────────────────────────────────
