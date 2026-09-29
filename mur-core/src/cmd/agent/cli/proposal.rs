@@ -12,8 +12,30 @@
 use super::*;
 use mur_common::proposal::Proposal;
 
+/// How long a real chip stays up once the turn that offered it has ended.
+/// Long enough to read the command; short enough that a stale suggestion does
+/// not squat on the composer for the rest of the session.
+pub(super) const PROPOSAL_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Outcome of a chip-triggered restart, as delivered to the UI loop.
 pub(crate) type RestartOutcome = std::result::Result<crate::cmd::agent::QuietRestart, String>;
+
+/// Whether `Tab` belongs to the chip even though the completion overlay is
+/// open. The `suggest_replies` chooser (`spaced`) never advertises Tab — its
+/// keys are digits, arrows and Enter — while the chip row says "Tab to
+/// insert", so on an empty composer Tab must reach the chip instead of
+/// accepting the chooser's highlighted reply. The slash menu (not `spaced`)
+/// only opens on a non-empty composer and keeps Tab.
+pub(super) fn owns_tab_over_chooser(app: &App, key: &crossterm::event::KeyEvent) -> bool {
+    key.code == KeyCode::Tab
+        && key.modifiers.is_empty()
+        && app.completion.as_ref().is_some_and(|c| c.spaced)
+        && app.input_text().is_empty()
+        && app
+            .proposal
+            .as_ref()
+            .is_some_and(|p| !p.is_reply() && p.insert_text().is_some())
+}
 
 /// Handle a keypress for the chip. `true` means the key was consumed.
 ///
@@ -39,6 +61,10 @@ pub(super) fn handle_key_with(
     let Some(chip) = app.proposal.as_ref() else {
         return false;
     };
+    if is_pin_key(key) && !chip.is_reply() && app.input_text().is_empty() {
+        toggle_pin(app);
+        return true;
+    }
     // Modified keys (Shift/Alt+Enter = newline, Ctrl+…) are never the chip's.
     if !key.modifiers.is_empty() {
         return false;
@@ -76,6 +102,20 @@ pub(super) fn handle_key_with(
         }
         _ => false,
     }
+}
+
+/// `Ctrl+K` ("keep"): pins or unpins the chip. Unbound elsewhere in the
+/// composer loop and in the completion overlay; on an empty composer the
+/// textarea's own kill-to-end-of-line has nothing to kill.
+fn is_pin_key(key: &crossterm::event::KeyEvent) -> bool {
+    key.code == KeyCode::Char('k') && key.modifiers == crossterm::event::KeyModifiers::CONTROL
+}
+
+/// Pin stops the countdown for good; unpin gives the chip a fresh one
+/// (re-armed by `tick`).
+fn toggle_pin(app: &mut App) {
+    app.proposal_pinned = !app.proposal_pinned;
+    app.proposal_deadline = None;
 }
 
 /// Run the restart on a worker thread; the result comes back as
@@ -134,6 +174,59 @@ pub(super) fn finish_restart(app: &mut App, outcome: RestartOutcome) {
 pub(super) fn offer(app: &mut App, p: Proposal) {
     app.clear_suggestion_ghost();
     app.proposal = Some(p);
+    // A fresh chip gets a fresh, unpinned countdown, armed by `tick` once idle.
+    app.proposal_deadline = None;
+    app.proposal_pinned = false;
+}
+
+/// Whether the slot holds a real (rendered-row) chip rather than the ghost.
+fn has_real_chip(app: &App) -> bool {
+    app.proposal.as_ref().is_some_and(|p| !p.is_reply())
+}
+
+/// Advance the chip countdown; run at the top of every loop pass. Arms the
+/// deadline once no turn is streaming (a chip offered mid-turn must not tick
+/// away while the user is still reading the reply), and retires the chip when
+/// it lapses. The ghost never expires — it is placeholder text, not a row.
+/// Returns `true` when the chip was dismissed.
+pub(super) fn tick(app: &mut App, now: std::time::Instant) -> bool {
+    if !has_real_chip(app) {
+        app.proposal_deadline = None;
+        return false;
+    }
+    if app.streaming || app.restart_in_flight || app.proposal_pinned {
+        app.proposal_deadline = None;
+        return false;
+    }
+    let deadline = *app.proposal_deadline.get_or_insert(now + PROPOSAL_TTL);
+    if now >= deadline {
+        app.proposal = None;
+        app.proposal_deadline = None;
+        return true;
+    }
+    false
+}
+
+/// When the event loop must next wake for the chip: the next whole-second
+/// step of the visible countdown, capped at the deadline itself. `None` when
+/// no countdown is running.
+pub(super) fn next_wake(app: &App, now: std::time::Instant) -> Option<std::time::Instant> {
+    let deadline = app.proposal_deadline.filter(|_| has_real_chip(app))?;
+    let left = deadline.saturating_duration_since(now);
+    let frac = std::time::Duration::from_nanos((left.as_nanos() % 1_000_000_000) as u64);
+    let step = if frac.is_zero() {
+        std::time::Duration::from_secs(1)
+    } else {
+        frac
+    };
+    Some((now + step).min(deadline))
+}
+
+/// Whole seconds left on the countdown, rounded up (so it never shows `0s`
+/// while the chip is still up).
+fn secs_left(app: &App, now: std::time::Instant) -> Option<u64> {
+    let left = app.proposal_deadline?.saturating_duration_since(now);
+    Some(left.as_millis().div_ceil(1000) as u64)
 }
 
 /// The one line rendered above the composer: what the chip is, then which key
@@ -146,6 +239,11 @@ pub(super) fn chip_line(app: &App) -> Option<(String, String)> {
         None => format!("⤷ restart {} — {}", app.agent, p.label),
     };
     let empty = app.input_text().is_empty();
+    let pin = if app.proposal_pinned {
+        "Ctrl+K to unpin"
+    } else {
+        "Ctrl+K to keep"
+    };
     let hint = if p.is_executable() {
         if app.streaming || app.restart_in_flight {
             "(Enter to run after the turn ends)"
@@ -159,7 +257,16 @@ pub(super) fn chip_line(app: &App) -> Option<(String, String)> {
     } else {
         "(clear to Tab-insert)"
     };
-    Some((what, hint.to_string()))
+    let mut hint = hint.to_string();
+    if empty {
+        hint = format!("{hint} · {pin}");
+    }
+    if app.proposal_pinned {
+        hint.push_str(" · pinned");
+    } else if let Some(s) = secs_left(app, std::time::Instant::now()) {
+        hint = format!("{hint} · {s}s");
+    }
+    Some((what, hint))
 }
 
 #[cfg(test)]

@@ -103,6 +103,8 @@ impl App {
             // agent itself offered this turn.
             if self.proposal.is_none() || self.has_suggestion_ghost() {
                 self.proposal = Some(mur_common::proposal::Proposal::restart("get the step view"));
+                self.proposal_deadline = None;
+                self.proposal_pinned = false;
             }
         }
     }
