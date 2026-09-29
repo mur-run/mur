@@ -139,6 +139,8 @@ The checker recomputes the same matches and fails for either missing or stale ro
 | `mur-agent-runtime/tests/sandbox_build_lane.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/sandbox_build_lane.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/sandbox_e2e.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
+| `mur-agent-runtime/tests/sandbox_e2e.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | macOS SBPL profile-bypass regression test (#1580); compiled out on FreeBSD, no change needed. | #1580 |
+| `mur-agent-runtime/tests/sandbox_e2e.rs` | `#[cfg(target_os = "macos")]` | test-only | `portable` | macOS SBPL profile-bypass regression test (#1580); compiled out on FreeBSD, no change needed. | #1580 |
 | `mur-agent-runtime/tests/sandbox_e2e.rs` | `#[cfg(target_os = "windows")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/sandbox_e2e.rs` | `#[cfg_attr(target_os = "macos", ignore)]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
 | `mur-agent-runtime/tests/sandbox_e2e.rs` | `#[cfg(target_os = "linux")]` | test-only | `portable` | Keep compiling/running under the native FreeBSD workspace test lane. | Task 6 |
