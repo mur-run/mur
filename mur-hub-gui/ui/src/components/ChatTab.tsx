@@ -3,7 +3,7 @@
 //! we append them to a live bubble, then commit the final reply when the call
 //! resolves. Multi-turn context is threaded via the previous turn's task id.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useT } from "../i18n";
@@ -12,6 +12,8 @@ import { HitlCard } from "./HitlCard";
 import { Markdown } from "./Markdown";
 import type { AgentDetail, HitlBatchPayload, HitlRequest, PermissionsView } from "../types";
 import { expandBatch, groupBatches } from "./hitlModel";
+import { ProposalChip } from "./ProposalChip";
+import { chipReducer, NO_CHIP, PROPOSAL_EVENT, type ProposalChipPayload } from "./proposalChipModel";
 
 interface ChatMsg {
   role: "user" | "agent" | "error";
@@ -149,6 +151,9 @@ export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Pro
     };
   }, [agentName]);
   const [input, setInput] = useState("");
+  const [chip, chipDispatch] = useReducer(chipReducer, NO_CHIP);
+  // Bumped per offer so a replacing chip remounts (fresh "copied" state).
+  const [chipSeq, setChipSeq] = useState(0);
   const [busy, setBusy] = useState(false);
   // Live answer text accumulating from `chat-delta` events (null when idle).
   const [streaming, setStreaming] = useState<string | null>(null);
@@ -253,9 +258,17 @@ export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Pro
       if (e.payload.agent !== agentName) return;
       setHitlRequests((prev) => [...prev, ...expandBatch(e.payload)]);
     });
+    const unChip = listen<ProposalChipPayload>(PROPOSAL_EVENT, (e) => {
+      if (e.payload.agent !== agentName) return;
+      chipDispatch({ type: "offer", chip: e.payload, agent: agentName });
+      setChipSeq((n) => n + 1);
+    });
     return () => {
       void un.then((f) => f());
       void unHitl.then((f) => f());
+      void unChip.then((f) => f());
+      // A chip belongs to one conversation; switching agent drops it.
+      chipDispatch({ type: "dismiss" });
     };
   }, [agentName]);
 
@@ -268,6 +281,8 @@ export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Pro
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
+    // Sending moves the conversation on; the old proposal no longer applies.
+    chipDispatch({ type: "dismiss" });
     setMessages((m) => [...m, { role: "user", text }]);
     setBusy(true);
     streamingRef.current = "";
@@ -329,6 +344,11 @@ export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Pro
     if (e.key === "Escape" && busy) {
       e.preventDefault();
       void stop();
+      return;
+    }
+    if (e.key === "Escape" && chip.phase !== "none") {
+      e.preventDefault();
+      chipDispatch({ type: "dismiss" });
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
@@ -422,6 +442,7 @@ export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Pro
         <div ref={endRef} />
       </div>
       {aboveCompose}
+      <ProposalChip key={chipSeq} agentName={agentName} state={chip} dispatch={chipDispatch} />
       <div className="chat__compose">
         <textarea
           className="chat__input"
