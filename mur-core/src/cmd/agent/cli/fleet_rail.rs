@@ -574,8 +574,9 @@ fn channel_derived_line(fleet: &str, members: &[MemberRow]) -> String {
 /// up to two file reads plus a rotation-chain verify; on a channel with
 /// thousands of events, re-resolving per event means thousands of synchronous
 /// file reads on the event-loop thread every ~700ms. Semantics are identical
-/// to `channel_verify::verify_event` per event, including its
-/// `None => !require_sig` fallback for an actor whose key can't be resolved.
+/// to `channel_verify::verify_event` per event: a signed event whose key can't
+/// be resolved fails closed, and only an unsigned one falls back to
+/// `!require_sig`.
 fn verify_events(
     home: &Path,
     channel_id: &str,
@@ -591,17 +592,19 @@ fn verify_events(
                 ChannelActor::Agent { id } => id.as_str(),
                 _ => crate::channel_writer::ROUTER_AGENT,
             };
+            // Same key-dir resolution as `actor_pubkey`, including its refusal
+            // to join an actor id that is not a valid agent name.
             let pk = *cache
                 .entry((agent.to_string(), ev.key_version))
                 .or_insert_with(|| {
-                    mur_channel::sign::resolve_writer_pubkey(
-                        &home.join("agents").join(agent),
-                        ev.key_version,
-                    )
+                    crate::channel_verify::actor_key_dir(home, &ev.actor).and_then(|dir| {
+                        mur_channel::sign::resolve_writer_pubkey(&dir, ev.key_version)
+                    })
                 });
             match pk {
                 Some(pk) => mur_channel::sign::verify_one(channel_id, ev, &pk, require_sig),
-                None => !require_sig,
+                None if ev.sig.is_none() => !require_sig,
+                None => false,
             }
         })
         .collect()
