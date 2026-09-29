@@ -386,7 +386,8 @@ impl Renderer {
             // between every line. Row 0 is the header and never striped.
             let stripe = ri > 0 && ri % 2 == 0;
             for k in 0..height {
-                let mut line: Vec<Span<'static>> = vec![Span::styled(format!("│{pad}"), border)];
+                let mut line: Vec<Span<'static>> =
+                    vec![Span::styled("│", border), Span::styled(pad.clone(), border)];
                 for (ci, cell) in cells.iter().enumerate() {
                     if ci > 0 {
                         line.push(Span::styled(format!("{pad}│{pad}"), border));
@@ -407,13 +408,23 @@ impl Renderer {
                     }
                     line.push(Span::raw(" ".repeat(widths[ci].saturating_sub(used))));
                 }
-                line.push(Span::styled(format!("{pad}│"), border));
+                line.push(Span::styled(pad.clone(), border));
+                line.push(Span::styled("│", border));
                 if stripe {
+                    // Paint inside the frame only: a terminal fills the whole
+                    // cell behind the centred `│`, so a painted outer border
+                    // bleeds half a cell past the table's edge.
+                    let last = line.len() - 1;
                     line = line
                         .into_iter()
-                        .map(|s| {
-                            let style = s.style;
-                            Span::styled(s.content, style.patch(stripe_bg))
+                        .enumerate()
+                        .map(|(i, s)| {
+                            if i == 0 || i == last {
+                                s
+                            } else {
+                                let style = s.style;
+                                Span::styled(s.content, style.patch(stripe_bg))
+                            }
                         })
                         .collect();
                 }

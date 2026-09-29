@@ -86,3 +86,25 @@ fn code_uses_the_skin_code_token() {
         }
     }
 }
+
+/// The stripe stays inside the frame: a painted outer `│` fills its whole
+/// cell, so half a cell of stripe showed past the table's edge.
+#[test]
+fn stripe_leaves_the_outer_borders_unpainted() {
+    for theme in [&LIGHT, &MUR, &CLAY] {
+        let t = render(DOC, WIDTH, theme);
+        let striped: Vec<_> = t
+            .lines
+            .iter()
+            .filter(|l| l.spans.iter().any(|s| s.style.bg.is_some()))
+            .collect();
+        assert!(!striped.is_empty(), "no striped row");
+        for l in striped {
+            let (first, last) = (l.spans.first().unwrap(), l.spans.last().unwrap());
+            assert_eq!(first.content, "│");
+            assert_eq!(last.content, "│");
+            assert!(first.style.bg.is_none(), "left border painted");
+            assert!(last.style.bg.is_none(), "right border painted");
+        }
+    }
+}
