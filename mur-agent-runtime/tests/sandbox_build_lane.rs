@@ -88,9 +88,28 @@ fn sandbox_build_lane_subprocess_main() {
         vec![]
     };
 
-    if sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]).is_err() {
-        // No sandbox support here — nothing to assert either way.
-        std::process::exit(0);
+    // `apply` reports a failed `sandbox_init` as `Ok` with `enforcing: false`
+    // (the supervisor decides via `fail_closed_on_sandbox_error`), so checking
+    // `is_err()` alone never skips. Unenforced here usually means we are
+    // already inside another sandbox (macOS refuses nesting); asserting on
+    // exec results then measures the OUTER sandbox, not the build lane.
+    match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
+        Ok(status) if status.enforcing => {}
+        other => {
+            // Set to a non-empty value by CI providers (GitHub Actions,
+            // GitLab, Buildkite, ...).
+            const CI_ENV_VAR: &str = "CI";
+            let in_ci = std::env::var_os(CI_ENV_VAR)
+                .is_some_and(|v| !v.is_empty() && v != "false" && v != "0");
+            if in_ci {
+                // CI runners are not sandboxed: an unenforced sandbox there is
+                // a real regression, not an environment quirk.
+                eprintln!("ERROR: sandbox not enforcing under CI: {other:?}");
+                std::process::exit(1);
+            }
+            eprintln!("SKIP: sandbox not enforcing here (nested sandbox?): {other:?}");
+            std::process::exit(0);
+        }
     }
 
     let ran = |p: &std::path::Path| {
