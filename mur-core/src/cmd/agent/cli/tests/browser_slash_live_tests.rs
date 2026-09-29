@@ -9,7 +9,7 @@
 //! the turn.
 //!
 //! The fixture profile is pinned to `provider: echo` — the deliberate,
-//! no-network test stub (`supervisor_runner.rs`'s `"echo"` arm,
+//! no-network test stub (`supervisor_runner/provider.rs`'s `"echo"` arm,
 //! `RunnerBackend::StubEcho`) — rather than the base fixture's
 //! `provider: ollama`, which this test's live runtime would actually try to
 //! dial at `127.0.0.1:11434`; nothing listens there in this environment, so
@@ -89,8 +89,8 @@ fn write_profile(home: &std::path::Path, name: &str, sock_path: &str) {
     // test's live runtime would actually dial — nothing is listening on
     // 127.0.0.1:11434 here, so the turn would fail with a connect error
     // rather than complete. `echo` is the deliberate, no-network test stub
-    // (`supervisor_runner.rs`'s `"echo"` arm, `RunnerBackend::StubEcho`) —
-    // the same override pattern `supervisor_runner.rs`'s own fixture helper
+    // (`supervisor_runner/provider.rs`'s `"echo"` arm, `RunnerBackend::StubEcho`) —
+    // the same override pattern `supervisor_runner/tests.rs`'s own fixture helper
     // uses (`p.model.provider = provider.to_string()`).
     profile.model.provider = "echo".to_string();
     profile.model.name = "echo".to_string();

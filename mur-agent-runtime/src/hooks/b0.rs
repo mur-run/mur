@@ -158,7 +158,7 @@ pub fn verify_mcp_supply_chain(
             continue;
         }
         // Resolve against the SAME augmented PATH the spawn uses
-        // (`protocol/mcp_client.rs`, `supervisor_runner.rs`), so the file
+        // (`protocol/mcp_client.rs`, `supervisor_runner/prepare.rs`), so the file
         // hashed here is provably the file `Command::new` will exec. A bare
         // `node`/`npx` opened verbatim is a CWD-relative path that doesn't
         // exist, which previously soft-failed and skipped the pin entirely.
