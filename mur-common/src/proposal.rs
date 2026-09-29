@@ -1,7 +1,7 @@
 //! Agent-proposed commands and actions — the `propose` tool's shared model.
 //!
 //! An agent that needs the user to run something calls `propose`; murmur shows
-//! it as a chip under the composer. Two families:
+//! it as a chip above the composer. Two families:
 //!
 //! - **insert-only** (`shell`, `slash`): `Tab` puts the text into an empty
 //!   composer; the user reviews and sends it. Never sent by a single key.
@@ -25,7 +25,7 @@ use std::fmt;
 /// Canonical tool name. Shared by the runtime executor and the TUI interceptor.
 pub const PROPOSE_TOOL: &str = "propose";
 
-/// Longest label accepted, in chars. The chip is one line under the composer.
+/// Longest label accepted, in chars. The chip is one line above the composer.
 pub const LABEL_MAX_CHARS: usize = 80;
 
 /// Longest insert-only command accepted, in chars.
