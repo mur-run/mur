@@ -135,7 +135,7 @@ fn shred_dir(dir: &Path) -> Result<()> {
 }
 
 fn shred_file(path: &Path) -> Result<()> {
-    // Try `shred -u` first (matches supervisor.rs::shred_file).
+    // Try `shred -u` first (matches supervisor/identity.rs::shred_file).
     let r = std::process::Command::new("shred")
         .arg("-u")
         .arg(path)

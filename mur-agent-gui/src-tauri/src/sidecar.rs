@@ -4,7 +4,7 @@
 //! Architectural notes:
 //!
 //! * On Unix, the runtime calls `setpgid(0, 0)` at the top of
-//!   `entrypoint()` (see `mur-agent-runtime/src/supervisor.rs`), so
+//!   `entrypoint()` (see `mur-agent-runtime/src/supervisor/mod.rs`), so
 //!   sending `SIGTERM` to its process group reaches the runtime AND
 //!   every MCP child it spawned.
 //! * On Windows, this manager wraps the spawn in a Job Object with
