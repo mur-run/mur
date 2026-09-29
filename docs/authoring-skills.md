@@ -127,7 +127,7 @@ the configured budget:
 - `max_total_tokens` — default **2000**
 
 (Both live under `skills:` in `~/.mur/config.yaml`; see
-`mur-common/src/config.rs`.)
+`mur-common/src/config/skills.rs`.)
 
 Because the abstract recurs on every turn, keep it to **1–3 sentences**. Skills
 that overflow the budget are silently dropped from the prompt.
