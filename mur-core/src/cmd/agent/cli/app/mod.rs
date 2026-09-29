@@ -358,6 +358,13 @@ pub struct App {
     pub proposal: Option<mur_common::proposal::Proposal>,
     /// A chip-triggered `/restart` is running; turn submission is locked.
     pub restart_in_flight: bool,
+    /// When the current real chip auto-dismisses. `None` while the countdown
+    /// has not started (no chip, a ghost, or a turn still streaming); armed
+    /// and swept by `proposal::tick`.
+    pub proposal_deadline: Option<std::time::Instant>,
+    /// The user pinned the chip (`Ctrl+K`): no countdown until unpinned or
+    /// replaced.
+    pub proposal_pinned: bool,
     /// Set when the visible transcript no longer matches the conversation
     /// (/clear, /channels switch): the event loop wipes screen + scrollback
     /// and re-anchors a fresh viewport before the next draw.
@@ -497,6 +504,8 @@ impl App {
             pending_suggestions: Vec::new(),
             proposal: None,
             restart_in_flight: false,
+            proposal_deadline: None,
+            proposal_pinned: false,
             wants_screen_wipe: false,
             follow: None,
             sent_history: Vec::new(),

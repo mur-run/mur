@@ -275,3 +275,162 @@ fn submit_clear_leaves_a_real_chip() {
     a.clear_suggestion_ghost();
     assert_eq!(a.proposal, Some(shell_chip()));
 }
+
+// ── Chip vs. the reply chooser, and the auto-dismiss countdown ──
+
+fn chooser(a: &mut App) {
+    a.pending_suggestions = vec![
+        suggest::Suggestion {
+            text: "yes".into(),
+            desc: None,
+        },
+        suggest::Suggestion {
+            text: "no".into(),
+            desc: None,
+        },
+    ];
+    a.reveal_suggestions();
+    assert!(a.completion.as_ref().is_some_and(|c| c.spaced));
+}
+
+/// Regression: with a `suggest_replies` chooser up, Tab inserted the
+/// chooser's highlighted reply instead of the chip the row advertised.
+#[tokio::test]
+async fn tab_inserts_the_chip_even_with_the_reply_chooser_open() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = App::test_fixture();
+    offer(&mut a, shell_chip());
+    chooser(&mut a);
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    assert_eq!(a.input_text(), "!git status");
+    assert!(a.proposal.is_none());
+}
+
+#[tokio::test]
+async fn chooser_keeps_enter_and_digits_when_a_chip_is_up() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = App::test_fixture();
+    offer(&mut a, restart_chip());
+    chooser(&mut a);
+    // Executable chip has nothing to insert: Tab stays the chooser's.
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    assert_eq!(a.input_text(), "yes");
+    assert!(a.proposal.is_some(), "restart chip untouched");
+}
+
+#[test]
+fn chip_countdown_arms_only_when_idle_and_expires() {
+    let t0 = std::time::Instant::now();
+    let mut a = app_with(shell_chip());
+    a.streaming = true;
+    assert!(!tick(&mut a, t0));
+    assert!(a.proposal_deadline.is_none(), "no countdown mid-turn");
+    a.streaming = false;
+    assert!(!tick(&mut a, t0));
+    assert_eq!(a.proposal_deadline, Some(t0 + PROPOSAL_TTL));
+    assert!(!tick(
+        &mut a,
+        t0 + PROPOSAL_TTL - std::time::Duration::from_millis(1)
+    ));
+    assert!(a.proposal.is_some());
+    assert!(tick(&mut a, t0 + PROPOSAL_TTL));
+    assert!(a.proposal.is_none(), "chip dismissed at zero");
+    assert!(a.proposal_deadline.is_none());
+}
+
+#[test]
+fn ghost_never_counts_down() {
+    let t0 = std::time::Instant::now();
+    let mut a = app_with_ghost("yes please");
+    assert!(!tick(&mut a, t0 + PROPOSAL_TTL * 10));
+    assert!(a.has_suggestion_ghost());
+    assert!(next_wake(&a, t0).is_none());
+}
+
+#[test]
+fn a_new_chip_restarts_the_countdown() {
+    let t0 = std::time::Instant::now();
+    let mut a = app_with(shell_chip());
+    tick(&mut a, t0);
+    offer(&mut a, restart_chip());
+    assert!(a.proposal_deadline.is_none());
+    tick(&mut a, t0 + PROPOSAL_TTL);
+    assert_eq!(a.proposal_deadline, Some(t0 + PROPOSAL_TTL * 2));
+    assert!(a.proposal.is_some());
+}
+
+#[test]
+fn countdown_shows_in_the_hint_and_wakes_each_second() {
+    let now = std::time::Instant::now();
+    let mut a = app_with(shell_chip());
+    tick(&mut a, now);
+    let (_, hint) = chip_line(&a).unwrap();
+    assert!(hint.ends_with("s"), "{hint}");
+    assert!(hint.contains(" · "), "{hint}");
+    let wake = next_wake(&a, now).unwrap();
+    assert!(wake > now && wake <= now + std::time::Duration::from_secs(1));
+}
+
+fn ctrl_k() -> KeyEvent {
+    KeyEvent {
+        code: KeyCode::Char('k'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }
+}
+
+#[tokio::test]
+async fn ctrl_k_pins_the_chip_and_stops_the_countdown() {
+    let (tx, _rx) = mpsc::channel(4);
+    let t0 = std::time::Instant::now();
+    let mut a = app_with(shell_chip());
+    tick(&mut a, t0);
+    assert!(a.proposal_deadline.is_some());
+    assert!(handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart));
+    assert!(a.proposal_pinned);
+    assert!(
+        !tick(&mut a, t0 + PROPOSAL_TTL * 10),
+        "pinned never expires"
+    );
+    assert!(a.proposal.is_some());
+    assert!(next_wake(&a, t0).is_none(), "no wake-ups while pinned");
+    let (_, hint) = chip_line(&a).unwrap();
+    assert!(
+        hint.ends_with("pinned") && hint.contains("Ctrl+K to unpin"),
+        "{hint}"
+    );
+}
+
+#[tokio::test]
+async fn ctrl_k_again_unpins_with_a_fresh_countdown() {
+    let (tx, _rx) = mpsc::channel(4);
+    let t0 = std::time::Instant::now();
+    let mut a = app_with(shell_chip());
+    handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart);
+    handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart);
+    assert!(!a.proposal_pinned);
+    let later = t0 + PROPOSAL_TTL * 3;
+    tick(&mut a, later);
+    assert_eq!(a.proposal_deadline, Some(later + PROPOSAL_TTL));
+}
+
+#[tokio::test]
+async fn ctrl_k_is_not_the_chips_with_a_draft_or_on_a_ghost() {
+    let (tx, _rx) = mpsc::channel(4);
+    let mut a = app_with(shell_chip());
+    a.set_input("draft");
+    assert!(!handle_key_with(&mut a, &ctrl_k(), &tx, fake_restart));
+    assert!(!a.proposal_pinned);
+    let mut g = app_with_ghost("yes");
+    assert!(!handle_key_with(&mut g, &ctrl_k(), &tx, fake_restart));
+    assert!(!g.proposal_pinned);
+}
+
+#[test]
+fn a_new_chip_is_unpinned() {
+    let mut a = app_with(shell_chip());
+    a.proposal_pinned = true;
+    offer(&mut a, restart_chip());
+    assert!(!a.proposal_pinned);
+}
