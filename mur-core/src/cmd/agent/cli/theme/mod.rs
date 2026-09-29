@@ -11,6 +11,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::BorderType;
 
+#[derive(Clone, Copy, Debug)]
 pub struct Theme {
     // ── text ──────────────────────────────────────────────────────────────
     /// Body text: agent replies; user turns take this plus DIM.
@@ -57,6 +58,10 @@ pub struct Theme {
     pub border: Style,
     /// Status bar and ordinary card background (bg only).
     pub surface: Style,
+    /// Alternate-row background: the table zebra stripe (bg only). `ansi`
+    /// leaves it empty — it never learns the terminal's background, and a
+    /// guessed slab is what hid striped rows on light terminals.
+    pub surface_alt: Style,
     /// Per-turn settlement card palette. It is complete rather than only a
     /// background: `light` may run inside a dark terminal, so inheriting its
     /// normal dark-on-light text tokens would make the card unreadable.
@@ -67,8 +72,11 @@ pub struct Theme {
     pub settlement_ok: Style,
     pub settlement_warn: Style,
     pub settlement_error: Style,
-    /// Agent-name / AUTO badge on the status bar; the SETTLEMENT title chip.
+    /// Agent-name / READS / MONITOR chip on the status bar; the SETTLEMENT
+    /// title chip.
     pub badge: Style,
+    /// A status chip that means risk is on: AUTO and AUTO:<tools>.
+    pub badge_warn: Style,
     // ── layout ────────────────────────────────────────────────────────────
     pub border_type: BorderType,
     pub inner_padding: u8,
@@ -119,6 +127,7 @@ pub static ANSI: Theme = Theme {
     diff_del_text: fg(Color::Red),
     border: Style::new().add_modifier(Modifier::DIM),
     surface: Style::new(),
+    surface_alt: Style::new(),
     // Do not invert a completed turn: on light terminals that becomes a large,
     // attention-stealing white slab. The cyan rail and title chip define this
     // card while the body stays inside the terminal's own quiet surface.
@@ -130,6 +139,9 @@ pub static ANSI: Theme = Theme {
     settlement_warn: fg(Color::Yellow),
     settlement_error: fg(Color::Red),
     badge: fg(Color::Cyan)
+        .add_modifier(Modifier::REVERSED)
+        .add_modifier(Modifier::BOLD),
+    badge_warn: fg(Color::Yellow)
         .add_modifier(Modifier::REVERSED)
         .add_modifier(Modifier::BOLD),
     border_type: BorderType::Plain,
@@ -160,6 +172,7 @@ pub static LIGHT: Theme = Theme {
     diff_del_text: rgb(0x1f, 0x24, 0x30),
     border: rgb(0xc9, 0xcc, 0xd6),
     surface: Style::new().bg(Color::Rgb(0xee, 0xf0, 0xf5)),
+    surface_alt: Style::new().bg(Color::Rgb(0xe9, 0xec, 0xf2)),
     // A self-contained dark inset avoids both failure modes seen in practice:
     // a bright paper-like slab and dark light-skin text disappearing into the
     // user's dark terminal background.
@@ -173,6 +186,9 @@ pub static LIGHT: Theme = Theme {
     badge: Style::new()
         .fg(Color::Rgb(0x0b, 0x6e, 0x8f))
         .bg(Color::Rgb(0xe0, 0xf0, 0xf8)),
+    badge_warn: Style::new()
+        .fg(Color::Rgb(0x8a, 0x5a, 0x00))
+        .bg(Color::Rgb(0xfb, 0xef, 0xd5)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
     compact_input: false,
@@ -201,6 +217,7 @@ pub static MUR: Theme = Theme {
     diff_del_text: rgb(0xe4, 0xe4, 0xf4),
     border: rgb(0x3f, 0x3f, 0x78),
     surface: Style::new().bg(Color::Rgb(0x14, 0x14, 0x2c)),
+    surface_alt: Style::new().bg(Color::Rgb(0x1a, 0x1a, 0x36)),
     settlement_surface: Style::new().bg(Color::Rgb(0x1d, 0x1d, 0x3a)),
     settlement_text: rgb(0xe4, 0xe4, 0xf4),
     settlement_muted: rgb(0x9a, 0x9a, 0xc4),
@@ -211,6 +228,9 @@ pub static MUR: Theme = Theme {
     badge: Style::new()
         .fg(Color::Rgb(0xfb, 0xbf, 0x24))
         .bg(Color::Rgb(0x22, 0x1a, 0x06)),
+    badge_warn: Style::new()
+        .fg(Color::Rgb(0x0b, 0x0b, 0x1a))
+        .bg(Color::Rgb(0xf2, 0xc7, 0x6a)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
     compact_input: true,
@@ -241,6 +261,7 @@ pub static CLAY: Theme = Theme {
     diff_del_text: rgb(0xff, 0xff, 0xff),
     border: rgb(0x88, 0x88, 0x88),
     surface: Style::new().bg(Color::Rgb(0x26, 0x26, 0x26)),
+    surface_alt: Style::new().bg(Color::Rgb(0x2a, 0x2a, 0x2a)),
     settlement_surface: Style::new().bg(Color::Rgb(0x30, 0x27, 0x25)),
     settlement_text: rgb(0xff, 0xff, 0xff),
     settlement_muted: rgb(0xb8, 0xae, 0xaa),
@@ -251,6 +272,9 @@ pub static CLAY: Theme = Theme {
     badge: Style::new()
         .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
         .bg(Color::Rgb(0xd9, 0x77, 0x57)),
+    badge_warn: Style::new()
+        .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
+        .bg(Color::Rgb(0xff, 0xc1, 0x07)),
     border_type: BorderType::Rounded,
     inner_padding: 1,
     compact_input: false,

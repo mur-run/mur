@@ -196,6 +196,9 @@ fn ansi_pins_no_colour() {
         ("diff_del_mark", ANSI.diff_del_mark),
         ("diff_add_text", ANSI.diff_add_text),
         ("diff_del_text", ANSI.diff_del_text),
+        ("surface_alt", ANSI.surface_alt),
+        ("badge_warn", ANSI.badge_warn),
+        ("settlement_surface", ANSI.settlement_surface),
     ] {
         assert!(
             named(s.fg) && named(s.bg),
@@ -256,4 +259,92 @@ fn no_skin_both_tints_and_inks_a_diff_row() {
             );
         }
     }
+}
+
+/// `ansi` never learns the terminal's background, so it paints none: no
+/// stripe, no card surface, no diff tint. The only background it may show is
+/// reverse video on a status chip or the one focused row.
+#[test]
+fn ansi_paints_no_decorative_bg() {
+    for (label, s) in [
+        ("surface", ANSI.surface),
+        ("surface_alt", ANSI.surface_alt),
+        ("settlement_surface", ANSI.settlement_surface),
+        ("diff_add_bg", ANSI.diff_add_bg),
+        ("diff_del_bg", ANSI.diff_del_bg),
+    ] {
+        assert!(s.bg.is_none(), "ansi.{label} paints a background: {s:?}");
+    }
+}
+
+/// Every token that inks text, by name — the set the no-DIM and contrast
+/// guards walk.
+fn ink_tokens(t: &Theme) -> [(&'static str, Style); 21] {
+    [
+        ("text", t.text),
+        ("muted", t.muted),
+        ("emphasis", t.emphasis),
+        ("accent", t.accent),
+        ("accent_alt", t.accent_alt),
+        ("ok", t.ok),
+        ("warn", t.warn),
+        ("error", t.error),
+        ("diff_add_mark", t.diff_add_mark),
+        ("diff_del_mark", t.diff_del_mark),
+        ("diff_add_text", t.diff_add_text),
+        ("diff_del_text", t.diff_del_text),
+        ("settlement_text", t.settlement_text),
+        ("settlement_muted", t.settlement_muted),
+        ("settlement_accent", t.settlement_accent),
+        ("settlement_ok", t.settlement_ok),
+        ("settlement_warn", t.settlement_warn),
+        ("settlement_error", t.settlement_error),
+        ("badge", t.badge),
+        ("badge_warn", t.badge_warn),
+        ("border", t.border),
+    ]
+}
+
+/// An RGB skin says "quieter" with a measured colour. DIM hands that choice
+/// to the terminal, which on a light background lands far under 4.5:1 —
+/// how user turns became unreadable on `light`.
+#[test]
+fn rgb_skins_carry_no_dim() {
+    for (name, t) in [("light", &LIGHT), ("mur", &MUR), ("clay", &CLAY)] {
+        for (label, s) in ink_tokens(t) {
+            assert!(
+                !s.add_modifier.contains(Modifier::DIM),
+                "{name}.{label} carries DIM: {s:?}"
+            );
+        }
+    }
+}
+
+/// The two new tokens exist on every skin with the shape their paint sites
+/// rely on: a stripe is background only; a warn chip has ink on a ground.
+#[test]
+fn surface_alt_is_bg_only_and_badge_warn_is_a_chip() {
+    for (name, t) in [
+        ("ansi", &ANSI),
+        ("light", &LIGHT),
+        ("mur", &MUR),
+        ("clay", &CLAY),
+    ] {
+        assert!(
+            t.surface_alt.fg.is_none(),
+            "{name}.surface_alt sets a foreground"
+        );
+        assert!(
+            t.badge_warn.fg.is_some(),
+            "{name}.badge_warn has no foreground"
+        );
+    }
+    for (name, t) in [("light", &LIGHT), ("mur", &MUR), ("clay", &CLAY)] {
+        assert!(t.surface_alt.bg.is_some(), "{name} does not stripe");
+        assert!(t.badge_warn.bg.is_some(), "{name}.badge_warn has no ground");
+    }
+    assert!(
+        ANSI.badge_warn.add_modifier.contains(Modifier::REVERSED),
+        "ansi chips are reverse video"
+    );
 }
