@@ -187,15 +187,19 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     // deny comes later. fs_deny overriding fs_read/fs_write is the field's
     // documented contract (see `SandboxPolicy::fs_deny`).
     //
-    // Issue #007: `profile.yaml` is write-only-denied, so the read deny is
-    // skipped for it. The kernel must agree with the tool gate here — if SBPL
+    // Issue #007: the write-only self-protected files (`profile.yaml`, and the
+    // public verification material) are write-denied only, so the read deny is
+    // skipped for them. The kernel must agree with the tool gate here — if SBPL
     // still denied the read, `read_file` would allow it and the agent would
     // get a bare EPERM with no explanation, which is the failure mode the tool
     // gate exists to prevent.
-    let own_profile = policy.launch_chain.agent_self_home().join("profile.yaml");
+    let write_only: Vec<PathBuf> = crate::sandbox::policy::SELF_PROTECTED_WRITE_ONLY
+        .iter()
+        .map(|f| policy.launch_chain.agent_self_home().join(f))
+        .collect();
     for path in &policy.fs_deny {
         let p = sbpl_escape(&path.to_string_lossy());
-        if path != &own_profile {
+        if !write_only.contains(path) {
             lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
         }
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
@@ -205,7 +209,7 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     // so ordering is the mechanism: deny the whole agents tree (siblings'
     // profiles + signing keys, and names not created yet — the regression a
     // path list cannot catch), re-allow this agent's own home, then re-assert
-    // the self-protection denies on profile.yaml/identity.key — the fs_deny
+    // the SELF_PROTECTED_AGENT_FILES denies — the fs_deny
     // emission above is overridden by the re-allow and must land last.
     for path in policy.launch_chain.deny_paths() {
         let p = sbpl_escape(&path.to_string_lossy());
@@ -222,10 +226,10 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                 .to_string_lossy(),
         );
         // #007: reads are re-asserted only for `identity.key` — holding it is
-        // signing authority. `profile.yaml` is write-denied only; the agent
-        // reading its own entitlements escalates nothing (a sibling's profile
-        // was readable all along) and is how it explains its own limits.
-        if f != "profile.yaml" {
+        // signing authority. The write-only set (own profile, own public key
+        // material) is readable: reading escalates nothing, and peers must
+        // read the public half to verify this agent at all.
+        if !crate::sandbox::policy::SELF_PROTECTED_WRITE_ONLY.contains(&f) {
             lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
         }
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
@@ -549,6 +553,41 @@ mod tests {
             )),
             "own identity.key must stay read-denied:\n{sbpl}"
         );
+    }
+
+    /// The SBPL twin of the tool-gate test: the agent's own public key
+    /// material is write-denied (a replaced key signs its own HITL approvals)
+    /// but never read-denied (peers verify the agent from it). The deny list is
+    /// the full `SELF_PROTECTED_AGENT_FILES` set, as `from_entitlements` builds
+    /// it, so the read carve-out is exercised against every sibling entry.
+    #[test]
+    fn sbpl_write_denies_own_public_key_material_but_keeps_it_readable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_home = tmp.path().join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let mut policy = policy_with_launch_chain(&agent_home.to_string_lossy());
+        policy.fs_deny = crate::sandbox::policy::SELF_PROTECTED_AGENT_FILES
+            .iter()
+            .map(|f| agent_home.join(f))
+            .collect();
+        let sbpl = build_sbpl_profile(&policy);
+
+        for f in ["identity.pub", "rotations.jsonl"] {
+            let p = agent_home.join(f);
+            let rule = |verb: &str| format!("(deny {verb} (subpath \"{}\"))", p.display());
+            // Last match wins, so the deny must come after the own-home allow.
+            let allow = format!("(allow file-write* (subpath \"{}\"))", agent_home.display());
+            let allow_at = sbpl.rfind(&allow).expect("own home re-allow");
+            let deny_at = sbpl.rfind(&rule("file-write*"));
+            assert!(
+                deny_at.is_some_and(|d| d > allow_at),
+                "own {f} must be write-denied after the own-home allow:\n{sbpl}"
+            );
+            assert!(
+                !sbpl.contains(&rule("file-read*")),
+                "own {f} must not be read-denied — peers verify from it:\n{sbpl}"
+            );
+        }
     }
 
     #[test]
