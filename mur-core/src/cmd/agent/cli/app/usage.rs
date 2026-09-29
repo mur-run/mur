@@ -176,10 +176,13 @@ impl App {
         let input_empty = self.input_text().is_empty();
         match super::super::suggest::plan_reveal(pending, input_empty) {
             super::super::suggest::Reveal::None => {}
-            super::super::suggest::Reveal::Ghost(text) => {
-                self.suggestion_ghost = Some(text.clone());
-                self.input.set_placeholder_text(text);
+            // A chip the agent proposed this turn outranks the ghost (spec
+            // §2 priority); the one slot holds only one of them.
+            super::super::suggest::Reveal::Ghost(text) if self.proposal.is_none() => {
+                self.input.set_placeholder_text(text.clone());
+                self.proposal = Some(mur_common::proposal::Proposal::reply(text));
             }
+            super::super::suggest::Reveal::Ghost(_) => {}
             super::super::suggest::Reveal::Chooser(items) => {
                 let candidates: Vec<super::super::complete::Candidate> = items
                     .into_iter()
@@ -200,10 +203,17 @@ impl App {
         }
     }
 
-    /// Clear the ghost placeholder (used when the user starts typing).
+    /// Whether the proposal slot holds the ghost (a `suggest_replies` reply).
+    pub fn has_suggestion_ghost(&self) -> bool {
+        self.proposal.as_ref().is_some_and(|p| p.is_reply())
+    }
+
+    /// Clear the ghost placeholder (used when a turn is submitted). A real
+    /// chip in the slot is left alone.
     pub fn clear_suggestion_ghost(&mut self) {
-        if self.suggestion_ghost.take().is_some() {
-            self.input.set_placeholder_text("Type a message…");
+        if self.has_suggestion_ghost() {
+            self.proposal = None;
+            self.input.set_placeholder_text(super::INPUT_PLACEHOLDER);
         }
     }
 

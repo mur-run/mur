@@ -40,7 +40,7 @@ pub(super) fn band_inner_rows(app: &App, viewport_h: u16) -> u16 {
     let chooser_h = chooser_band_height(app, viewport_h, INPUT_H_MIN);
     // The proposal chip row is counted like the rail: while it is up, the
     // band paints one row less, and a kept row it cannot show is hidden text.
-    let chip_h = u16::from(app.proposal.is_some());
+    let chip_h = u16::from(super::super::proposal::chip_line(app).is_some());
     band_capacity(
         viewport_h,
         INPUT_H_MIN,
