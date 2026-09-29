@@ -106,7 +106,7 @@ impl FallbackLlmClient {
     /// Attach the routing-telemetry sink + owning agent name. Optional — a
     /// client built without this call simply never emits `Event::Routing`
     /// (used by every existing fallback/cascade unit test). Wired in
-    /// production by `build_provider_runner` (see `supervisor_runner.rs`).
+    /// production by `build_provider_runner` (see `supervisor_runner/provider.rs`).
     pub fn with_telemetry(
         mut self,
         tx: tokio::sync::mpsc::Sender<Event>,
