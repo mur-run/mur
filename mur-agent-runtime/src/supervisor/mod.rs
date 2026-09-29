@@ -38,6 +38,7 @@ use tracing::{info, warn};
 mod bootstrap;
 mod dispatch;
 mod identity;
+mod pin;
 mod seal;
 mod test_bridge;
 
@@ -198,6 +199,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             eprintln!("error: {e}");
             std::process::exit(1);
         }
+    }
+
+    // 2b. #712: refuse entitlements that changed outside MUR (the agent's own
+    //     bash can rewrite profile.yaml on Linux, where Landlock cannot deny it).
+    if let pin::Verdict::Refuse(msg) = pin::verify(&profile, &agent_home, &mur_home) {
+        eprintln!("{msg}");
+        std::process::exit(1);
     }
 
     // 3. Warn on loose entitlements

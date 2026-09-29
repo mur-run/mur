@@ -83,6 +83,13 @@ impl LaunchChain {
                  entitlements and its identity.key is that agent's signing authority",
             );
         }
+        if path.starts_with(self.mur_home.join(mur_common::entitlements_pin::PINS_DIR)) {
+            return Some(
+                "the entitlement pins — the supervisor trusts a profile's \
+                 entitlements only if they match the pin, so rewriting it grants \
+                 whatever the profile says",
+            );
+        }
         if self.is_launch_artifact(path) {
             return Some(
                 "MUR's runtime binary or a per-agent symlink — exec'd before \
@@ -234,7 +241,10 @@ impl LaunchChain {
     /// (SBPL). `<mur_home>/agents` is included as a whole; the caller is
     /// responsible for re-allowing `agent_self_home()` after it.
     pub fn deny_paths(&self) -> Vec<PathBuf> {
-        let mut out = vec![self.mur_home.join("agents")];
+        let mut out = vec![
+            self.mur_home.join("agents"),
+            self.mur_home.join(mur_common::entitlements_pin::PINS_DIR),
+        ];
         out.push(self.bin_dir.join(RUNTIME_BINARY));
         out.extend(self.existing_agent_symlinks());
         out.extend(self.autostart.iter().cloned());
@@ -602,6 +612,22 @@ mod tests {
              the file tools and `mur agent perm` disagree with the kernel: {}",
             gaps.join(", ")
         );
+    }
+
+    /// #712: the pins decide which entitlements the supervisor trusts, so the
+    /// agent must not write them — refused by the tools, denied by the kernel,
+    /// and a grant covering them (e.g. `~/.mur`) dropped whole on Landlock.
+    #[test]
+    fn entitlement_pins_are_write_protected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur = tmp.path().to_path_buf();
+        let chain =
+            LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+        let pin = mur_common::entitlements_pin::pin_path(&mur, "alice");
+        assert!(chain.protects_write(&pin).is_some());
+        assert!(chain.deny_paths().iter().any(|d| pin.starts_with(d)));
+        let (kept, dropped) = chain.partition_grants(std::slice::from_ref(&mur));
+        assert!(kept.is_empty() && dropped == vec![mur]);
     }
 
     /// A read grant wide enough to contain the credential store is dropped
