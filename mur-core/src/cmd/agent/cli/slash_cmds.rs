@@ -572,6 +572,13 @@ where
     match tokio::task::spawn_blocking(move || f(agent)).await {
         Ok(Ok((text, chip))) => {
             app.push_system(text);
+            // Every `manage::*` op rewrites the agent profile, and `app.skills`
+            // is otherwise read from disk exactly once at startup (`term.rs`).
+            // Without this reload, a mid-session `/skill add` or `/browser
+            // --add` succeeds on disk while the same session's guards and
+            // completion menu still see the pre-add set — the "browser skill
+            // not attached — run /browser --add first" loop.
+            app.skills = complete::load_agent_skills(&app.agent);
             if let Some(p) = chip {
                 proposal::offer(app, p);
             }
