@@ -1,9 +1,10 @@
 //! Unix domain socket transport — JSON-RPC 2.0 newline-delimited,
 //! with SO_PEERCRED caller resolution (Task 22 consumes this).
 
-use crate::protocol::a2a_server::{Dispatcher, RequestContext};
+use crate::communication_policy::AcceptPolicy;
+use crate::protocol::a2a_server::{Dispatcher, HandlerError, RequestContext};
 use futures::StreamExt;
-use mur_common::JsonRpcRequest;
+use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,7 +33,20 @@ pub struct PeerInfo {
 pub async fn serve_unix(
     dispatcher: Arc<Dispatcher>,
     path: PathBuf,
+    notifications: mpsc::Receiver<Value>,
+) -> std::io::Result<()> {
+    serve_unix_gated(dispatcher, path, notifications, None).await
+}
+
+/// `serve_unix` with the profile's `accepts_from` enforced per connection.
+/// A refused connection stays open and answers every request with
+/// `CommunicationDenied` (-32011), so the caller sees why instead of a hang
+/// or a bare EOF; it never reaches the dispatcher or the notification stream.
+pub async fn serve_unix_gated(
+    dispatcher: Arc<Dispatcher>,
+    path: PathBuf,
     mut notifications: mpsc::Receiver<Value>,
+    policy: Option<Arc<AcceptPolicy>>,
 ) -> std::io::Result<()> {
     if path.exists() {
         let _ = std::fs::remove_file(&path);
@@ -61,8 +75,23 @@ pub async fn serve_unix(
         let (stream, _) = listener.accept().await?;
         let peer = peer_info(&stream);
         let dispatcher = dispatcher.clone();
+        let policy = policy.clone();
+        // Subscribe at accept time, as before the gate existed, so no
+        // notification slips between accept and the check; a refused
+        // connection drops its receiver unread.
         let mut bcast_rx = bcast_tx.subscribe();
         tokio::spawn(async move {
+            let denied = match policy.as_deref().map(|p| p.check(peer.map(|p| p.pid))) {
+                Some(Err(reason)) => {
+                    tracing::warn!(peer_pid = ?peer.map(|p| p.pid), %reason, "unix_socket: accepts_from refused connection");
+                    Some(reason)
+                }
+                _ => None,
+            };
+            if let Some(reason) = denied {
+                refuse(stream, &reason).await;
+                return;
+            }
             let (read, write) = stream.into_split();
             let write = std::sync::Arc::new(tokio::sync::Mutex::new(write));
             let w_notif = write.clone();
@@ -132,6 +161,41 @@ pub async fn serve_unix(
             notif_task.abort();
             req_notif_task.abort();
         });
+    }
+}
+
+/// Answer every request on a refused connection with -32011 until the peer
+/// hangs up. Notifications (no `id`) get no reply, as JSON-RPC requires.
+async fn refuse(stream: tokio::net::UnixStream, reason: &str) {
+    let (read, mut write) = stream.into_split();
+    let mut framed = FramedRead::new(read, LinesCodec::new_with_max_length(MAX_LINE_BYTES));
+    let code = HandlerError::CommunicationDenied(String::new()).code();
+    while let Some(Ok(line)) = framed.next().await {
+        let Ok(req) = serde_json::from_str::<JsonRpcRequest>(line.trim()) else {
+            continue;
+        };
+        let Some(id) = req.id else { continue };
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(JsonRpcError {
+                code,
+                message: reason.to_string(),
+                data: None,
+            }),
+        };
+        let Ok(out) = serde_json::to_string(&resp) else {
+            continue;
+        };
+        if write
+            .write_all(format!("{out}\n").as_bytes())
+            .await
+            .is_err()
+        {
+            break;
+        }
+        let _ = write.flush().await;
     }
 }
 
