@@ -80,7 +80,7 @@ signature passes unless the caller asks otherwise
 (`mur-channel/src/sign.rs:100`: `None => !require_sig,`). The only enforcement
 switch is the opt-in `MUR_CHANNEL_REQUIRE_SIG`
 (`mur-core/src/channel_writer.rs:9`, parsed at
-`mur-core/src/channel_verify.rs:56-60`).
+`mur-core/src/channel_verify.rs:62-66`).
 
 Events are signed in two ways:
 
@@ -93,8 +93,8 @@ Events are signed in two ways:
   its own identity and attributed to `Agent{self}`
   (`mur-agent-runtime/src/protocol/methods/channel_delegate.rs:1-2`,
   `append_self_reply` at `:57`). The identity is loaded before the sandbox
-  seals (`mur-agent-runtime/src/tools/fleet_run.rs:62`), and every agent can
-  write the channel store (`mur-agent-runtime/src/sandbox/policy.rs:308-312`).
+  seals (`mur-agent-runtime/src/tools/fleet_run.rs:61`), and every agent can
+  write the channel store (`mur-agent-runtime/src/sandbox/policy.rs:337-341`).
 
 Verification looks up the pubkey from the actor. `Agent{id}` resolves to
 `<mur_home>/agents/<id>`, and anything else resolves to the router
@@ -158,7 +158,7 @@ Every failed check refuses the call. Nothing falls back to a default.
    parameters carry no scope.
 
 The caller of the dial is **not** trusted and is not identified
-(`mur-agent-runtime/src/communication_policy.rs:23-24` treats an unmatched pid
+(`mur-agent-runtime/src/communication_policy.rs:24-25` treats an unmatched pid
 as the user). The `Ask` authenticates itself, so knowing the caller is
 unnecessary.
 
@@ -167,8 +167,8 @@ unnecessary.
 **Read scope.** A path P is readable in the consult turn only when the
 answerer could read P in its own turn **and** the asker could read P in its
 own turn. The check lives in `decide_read`
-(`mur-agent-runtime/src/tools/fs_policy/mod.rs:326`), so `read_file` and the
-project-instructions loader (`:343-346`) both go through it.
+(`mur-agent-runtime/src/tools/fs_policy/mod.rs:418`), so `read_file` and the
+project-instructions loader (`:435-438`) both go through it.
 
 **Tool allowlist.** On its own, the read-scope check does not hold.
 `decide_read` guards the file tools only: `mur-agent-runtime/src/tools/bash.rs`
@@ -181,14 +181,14 @@ consult turn gets `read_file` only: no `bash`, no MCP tools, no write tools,
 and no `ask`, which also rules out recursion.
 
 `TaskSpec` has no per-task tool field today
-(`mur-agent-runtime/src/task_runner.rs:23`). The only per-turn list is
-`disabled` (`:2193`), which holds tools that were refused at runtime. The
+(`mur-agent-runtime/src/task_runner/mod.rs:35`). The only per-turn list is
+`disabled` (`mur-agent-runtime/src/task_runner/agentic_loop.rs:27`), which holds tools that were refused at runtime. The
 allowlist has to be added.
 
 ### D5. The reply is as public as the channel
 
 `AskReply` goes to the same channel, and every agent can read and write the
-channel store (`mur-agent-runtime/src/sandbox/policy.rs:308-312`). What the
+channel store (`mur-agent-runtime/src/sandbox/policy.rs:337-341`). What the
 scope rule bounds is **what the answer can draw on**: never more than the
 asker could read. It does not limit **who reads the answer**. That matches the
 existing channel model, where anything the asker posts is already visible to
@@ -199,7 +199,7 @@ was already posted to the channel.
 
 `recall` reads the loaded snapshot
 (`mur-agent-runtime/src/tools/recall.rs:75`), and memories reach the system
-prompt by injection (`mur-agent-runtime/src/skills/injector.rs:1`). An answer
+prompt by injection (`mur-agent-runtime/src/skills/injector/mod.rs:1`). An answer
 can therefore reflect what the answerer remembers, regardless of file scope.
 We accept this, and the user-facing docs have to say so.
 
@@ -213,7 +213,7 @@ append gets the `Ask`'s `seq`. The index guard `AND ?2 > last_seq`
 `seq > since` cursor. The older writer's event disappears silently.
 
 The Hub builds `mur-channel` in (`mur-hub-gui/src-tauri/Cargo.toml:48`) and
-appends events itself (`mur-hub-gui/src-tauri/src/chat.rs:318`), so a CLI and
+appends events itself (`mur-hub-gui/src-tauri/src/chat.rs:323`), so a CLI and
 Hub on different versions can hit this.
 
 Changing `CHANNEL_SCHEMA_VERSION` would not help, because no reader compares
@@ -232,10 +232,10 @@ is still exposed; the release notes say so.
 Several readers treat any `Agent{..}` event as the agent's output. An
 `AskReply` would be read as:
 - fleet progress, resetting stuck detection
-  (`mur-core/src/cmd/fleet/loop_run.rs:1047-1049`);
-- a fleet reply printed to the user (`mur-core/src/cmd/fleet/run.rs:597-606`);
+  (`mur-core/src/cmd/fleet/loop_run.rs:1064-1066`);
+- a fleet reply printed to the user (`mur-core/src/cmd/fleet/run.rs:601-610`);
 - a deep-research final answer
-  (`mur-core/src/cmd/deep_research/ask.rs:281-283`).
+  (`mur-core/src/cmd/deep_research/ask.rs:282-284`).
 
 Each of these needs an explicit kind filter. Neither `Ask` nor `AskReply`
 counts as progress.
@@ -249,7 +249,7 @@ depend on `mur-core`). The stale Linux comment at
 
 **P1. Validate the actor id before joining it into a path.** `actor_pubkey`
 joins `Agent{id}` into `agents/<id>` unchecked. Every agent can write
-`channels/` (`mur-agent-runtime/src/sandbox/policy.rs:308-312`). An id such as
+`channels/` (`mur-agent-runtime/src/sandbox/policy.rs:337-341`). An id such as
 `../channels/<dir>` could therefore point verification at a key the attacker
 planted, and would point `consult` at a `profile.yaml` the attacker wrote. The
 id has to be validated inside the moved `actor_pubkey`, so every verifier
@@ -258,13 +258,13 @@ been run.*
 
 **P2. Linux: the asker's `profile.yaml` is readable but cannot be trusted.**
 Readability is fine: `agents/` is granted for reading as a whole
-(`mur-agent-runtime/src/sandbox/policy.rs:462-472`, commit `feb7107c`), so the
+(`mur-agent-runtime/src/sandbox/policy.rs:490-500`, commit `feb7107c`), so the
 comment at `mur-core/src/channel_verify.rs:29-30` saying peers created after
 the seal are unreadable is out of date. Trust is the problem. Landlock has no
-deny-within-allow (`mur-agent-runtime/src/sandbox/policy.rs:289-293`).
-`agent_home` is always writable (`policy.rs:301-306`), and the self-home is
+deny-within-allow (`mur-agent-runtime/src/sandbox/policy.rs:318-322`).
+`agent_home` is always writable (`policy.rs:330-335`), and the self-home is
 exempt from grant partitioning
-(`mur-agent-runtime/src/sandbox/launch_chain.rs:315-317`). That leaves only
+(`mur-agent-runtime/src/sandbox/launch_chain.rs:316-318`). That leaves only
 the file-tool gate protecting `profile.yaml` on Linux, and `bash` bypasses it,
 so on Linux an agent can apparently rewrite its own entitlements. That is #712
 on Linux, a problem that exists independently of this change. `consult`
@@ -272,16 +272,16 @@ refuses on Linux until it is fixed. *Found by reading the code; not
 reproduced on Linux.*
 
 macOS enforces the write-deny in the kernel
-(`mur-agent-runtime/src/sandbox/macos.rs:224-231`). Windows has not been
+(`mur-agent-runtime/src/sandbox/macos.rs:228-235`). Windows has not been
 examined, so `consult` refuses there until someone checks.
 
 ## Related finding (out of scope, tracked separately)
 
 The HITL gate verifies a `HitlResponse` but never checks **who** sent it.
-`mur-core/src/hitl/gate.rs:410-428` matches on `hitl_id` and verifies the
-signature, then takes `allow` from the payload (`:443-449`). There is no actor
+`mur-core/src/hitl/gate.rs:402-420` matches on `hitl_id` and verifies the
+signature, then takes `allow` from the payload (`:438-442`). There is no actor
 check anywhere in the file. The `action_hash` it compares against is written
-in the `HitlRequest` payload (`mur-common/src/hitl/mod.rs:195`), in a channel
+in the `HitlRequest` payload (`mur-common/src/hitl/mod.rs:196`), in a channel
 every agent can write. With `MUR_CHANNEL_REQUIRE_SIG` unset (the default), an
 unsigned response passes. Reading the code, an agent can approve its own gated
 action. This is the same principle §D3 enforces: a verified signature is not

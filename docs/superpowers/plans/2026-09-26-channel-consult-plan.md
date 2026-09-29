@@ -47,18 +47,18 @@ event (§D7).
   (`mur-core/src/cmd/agent/cli/follow.rs`, `mur-channel/src/index.rs`, and
   whatever else the compiler finds).
 - [ ] **B3.** Kind-filter the actor-only readers (§D8):
-  `mur-core/src/cmd/fleet/loop_run.rs:1047-1049`,
-  `mur-core/src/cmd/fleet/run.rs:597-606`,
-  `mur-core/src/cmd/deep_research/ask.rs:281-283`.
+  `mur-core/src/cmd/fleet/loop_run.rs:1064-1066`,
+  `mur-core/src/cmd/fleet/run.rs:601-610`,
+  `mur-core/src/cmd/deep_research/ask.rs:282-284`.
 - [ ] **B4.** MUR Hub renders `Ask` / `AskReply`.
 
 ### C. Runtime plumbing (release N, `mur-agent-runtime`)
 
 - [ ] **C1.** `TaskSpec` gains a tool allowlist
-  (`mur-agent-runtime/src/task_runner.rs:23`); the loop both **offers** and
-  **dispatches** from it (`task_runner.rs:2259-2265`, `:2632`). Offering alone
+  (`mur-agent-runtime/src/task_runner/mod.rs:35`); the loop both **offers** and
+  **dispatches** from it (`task_runner/agentic_loop.rs:93-99`, `:466`). Offering alone
   is not enough — a model can emit a call for a tool it was not shown.
-- [ ] **C2.** `decide_read` (`mur-agent-runtime/src/tools/fs_policy/mod.rs:326`)
+- [ ] **C2.** `decide_read` (`mur-agent-runtime/src/tools/fs_policy/mod.rs:418`)
   gains an optional second `FilesystemEntitlement`; a path passes only when
   both allow it.
 - [ ] **C3.** The `Ask` expiry window comes from config, not a constant.
@@ -75,7 +75,7 @@ event (§D7).
 ### E. `channel/consult`, answerer side
 
 - [ ] **E1.** Register the method next to `channel/delegate`
-  (`mur-agent-runtime/src/supervisor.rs:1106`).
+  (`mur-agent-runtime/src/supervisor/dispatch.rs:140`).
 - [ ] **E2.** Run the checks in §D3 order; every failure refuses with a named
   reason, nothing falls back to a default.
 - [ ] **E3.** Single-use ledger of `(asker, nonce)` in agent-owned state.
