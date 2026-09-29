@@ -400,6 +400,100 @@ fn sandbox_cred_read_subprocess_main() {
     }
 }
 
+/// Issue #712 regression: the agent's own home is writable, but its
+/// `profile.yaml` must stay sealed against every write-path bypass that goes
+/// through the writable parent directory — rename-over, hardlink (create and
+/// write-through), rename-away and unlink — not just a direct write. SBPL is
+/// last-match-wins, so this fails if the self-protected denies ever stop being
+/// emitted after the agent-home re-allow.
+///
+/// macOS only: Landlock cannot deny inside an allowed directory, so on Linux the
+/// profile is guarded at the tool layer (`tools::fs_policy`), not the kernel.
+#[test]
+#[cfg(target_os = "macos")]
+fn sandbox_denies_profile_bypass_via_agent_home() {
+    let root = tempfile::tempdir().unwrap();
+    // SBPL matches resolved paths; macOS tempdirs sit behind /var -> /private/var.
+    let mur_home = root.path().canonicalize().unwrap().join("mur");
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(&exe)
+        .env("MUR_TEST_SANDBOX_PROFILE_BYPASS", &mur_home)
+        .env_remove("MUR_AGENT_SKIP_SANDBOX")
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "sealed agent must not modify its own profile.yaml via rename/hardlink/unlink"
+    );
+}
+
+/// Subprocess entry point for `sandbox_denies_profile_bypass_via_agent_home`.
+#[cfg(target_os = "macos")]
+#[ctor::ctor]
+fn sandbox_profile_bypass_subprocess_main() {
+    let Some(mur_home) = std::env::var_os("MUR_TEST_SANDBOX_PROFILE_BYPASS") else {
+        return;
+    };
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::AgentProfile;
+    use std::path::PathBuf;
+
+    const ORIGINAL: &[u8] = b"orig\n";
+    let agent_home = PathBuf::from(mur_home).join("agents").join("tester");
+    let profile_path = agent_home.join("profile.yaml");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    std::fs::write(&profile_path, ORIGINAL).unwrap();
+
+    let profile = AgentProfile::default_for_tests();
+    match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
+        Ok(s) if s.enforcing => {}
+        other => skip_or_fail_unenforced(&other),
+    }
+
+    // Controls: without both, a "denied" below proves nothing.
+    let sibling = agent_home.join("sibling.txt");
+    if let Err(e) = std::fs::write(&sibling, b"x") {
+        eprintln!("ERROR: control write inside agent_home failed ({e}); test proves nothing");
+        std::process::exit(2);
+    }
+    if std::fs::write(&profile_path, b"evil\n").is_ok() {
+        eprintln!("ERROR: direct write to profile.yaml SUCCEEDED");
+        std::process::exit(1);
+    }
+
+    let hardlink = agent_home.join("hl.yaml");
+    let moved = agent_home.join("moved.yaml");
+    let bypasses: [(&str, bool); 4] = [
+        (
+            "rename-over",
+            std::fs::rename(&sibling, &profile_path).is_ok(),
+        ),
+        (
+            "hardlink-create",
+            std::fs::hard_link(&profile_path, &hardlink).is_ok(),
+        ),
+        (
+            "rename-away",
+            std::fs::rename(&profile_path, &moved).is_ok(),
+        ),
+        ("unlink", std::fs::remove_file(&profile_path).is_ok()),
+    ];
+    let mut failed = false;
+    for (name, succeeded) in bypasses {
+        if succeeded {
+            eprintln!("ERROR: {name} on profile.yaml SUCCEEDED");
+            failed = true;
+        }
+    }
+    // Belt and braces: whatever the per-op results, the bytes must be untouched.
+    if std::fs::read(&profile_path).ok().as_deref() != Some(ORIGINAL) {
+        eprintln!("ERROR: profile.yaml content changed or missing after bypass attempts");
+        failed = true;
+    }
+    std::process::exit(i32::from(failed));
+}
+
 /// Env var that turns "sandbox not enforcing" from a skip into a failure. CI sets
 /// it on runners whose kernel must seal (Linux Landlock, macOS SBPL) so a runner
 /// that silently can't sandbox shows red instead of a green that proved nothing.
