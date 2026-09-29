@@ -77,9 +77,13 @@ impl ChatMsg {
     }
 
     /// A finished agent message whose markdown is pre-rendered (resume path).
-    pub(super) fn agent_rendered(text: String, width: usize) -> Self {
+    pub(super) fn agent_rendered(
+        text: String,
+        width: usize,
+        theme: &'static crate::cmd::agent::cli::theme::Theme,
+    ) -> Self {
         let (text, settlement) = super::super::settlement::split(&text);
-        let rendered = Some(markdown::render(&text, width).lines);
+        let rendered = Some(markdown::render(&text, width, theme).lines);
         Self {
             role: Role::Agent,
             severity: Severity::Info,

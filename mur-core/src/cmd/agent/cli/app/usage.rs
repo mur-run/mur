@@ -236,9 +236,10 @@ impl App {
     /// from index 0 anyway, so the fresh render is what gets painted.
     pub fn rerender_markdown(&mut self) {
         let width = self.body_cols();
+        let theme = self.theme;
         for m in &mut self.messages {
             if m.rendered.is_some() {
-                m.rendered = Some(markdown::render(&m.text, width).lines);
+                m.rendered = Some(markdown::render(&m.text, width, theme).lines);
             }
         }
     }

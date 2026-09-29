@@ -536,7 +536,8 @@ impl App {
                 if let Some(id) = &t.task_id {
                     last_task = Some(id.clone());
                 }
-                self.messages.push(ChatMsg::agent_rendered(t.text, width));
+                self.messages
+                    .push(ChatMsg::agent_rendered(t.text, width, self.theme));
             } else {
                 if role == Role::User {
                     self.history_record(&t.text);

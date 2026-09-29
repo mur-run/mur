@@ -152,7 +152,7 @@ pub(super) fn agent_body_lines(
         // Finished reply: reuse the markdown rendered once at finish time.
         cached.iter().cloned().map(indent_line).collect()
     } else {
-        markdown::render(text, markdown::body_cols(width, theme.inner_padding))
+        markdown::render(text, markdown::body_cols(width, theme.inner_padding), theme)
             .lines
             .into_iter()
             .map(indent_line)
