@@ -185,10 +185,7 @@ pub(super) fn push_message(
                 theme.accent_alt.add_modifier(Modifier::BOLD),
             )));
             for l in m.text.lines() {
-                lines.push(Line::styled(
-                    format!("{MSG_INDENT}{l}"),
-                    theme.text.add_modifier(Modifier::DIM),
-                ));
+                lines.push(Line::styled(format!("{MSG_INDENT}{l}"), theme.muted));
             }
         }
         Role::System => {

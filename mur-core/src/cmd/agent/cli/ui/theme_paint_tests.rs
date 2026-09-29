@@ -83,3 +83,58 @@ fn the_ansi_status_row_pins_no_colour() {
         }
     }
 }
+
+use super::message::push_message;
+use crate::cmd::agent::cli::app::{ChatMsg, Role};
+use crate::cmd::agent::cli::render_card::card_lines;
+use crate::cmd::agent::cli::step::{CallOutcome, StepCard};
+use ratatui::style::Modifier;
+use ratatui::text::Line;
+
+/// Effective style of the first span whose text contains `needle`.
+fn style_in(lines: &[Line<'static>], needle: &str) -> Style {
+    lines
+        .iter()
+        .flat_map(|l| l.spans.iter().map(move |s| (s, l.style.patch(s.style))))
+        .find(|(s, _)| s.content.contains(needle))
+        .map(|(_, st)| st)
+        .unwrap_or_else(|| panic!("{needle:?} not rendered"))
+}
+
+/// Decision 4: a user turn reads in `muted` — a measured colour on RGB
+/// skins, DIM on `ansi` — never `text` + DIM.
+#[test]
+fn user_body_is_muted() {
+    for theme in [&ANSI, &LIGHT, &MUR, &CLAY] {
+        let m = ChatMsg::for_test(Role::User, "hello there");
+        let mut lines = Vec::new();
+        push_message(&mut lines, &m, 0, theme, false, 80);
+        let got = style_in(&lines, "hello there");
+        assert_eq!(got.fg, theme.muted.fg, "user body colour");
+        assert_eq!(
+            got.add_modifier.contains(Modifier::DIM),
+            theme.muted.add_modifier.contains(Modifier::DIM),
+            "user body DIM follows muted"
+        );
+    }
+}
+
+/// A failed call's header and error line take the skin's `error`, not a
+/// pinned red.
+#[test]
+fn a_failed_card_takes_error() {
+    for theme in [&ANSI, &LIGHT, &MUR, &CLAY] {
+        let mut c = StepCard::new("s1".into(), "edit_file".into(), serde_json::json!({}));
+        c.complete(
+            CallOutcome::Failed,
+            String::new(),
+            false,
+            0,
+            Some("boom".into()),
+            19,
+        );
+        let lines = card_lines(&c, theme, false, 80);
+        assert_eq!(style_in(&lines, "edit_file").fg, theme.error.fg, "header");
+        assert_eq!(style_in(&lines, "boom").fg, theme.error.fg, "error line");
+    }
+}
