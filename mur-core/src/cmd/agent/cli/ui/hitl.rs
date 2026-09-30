@@ -103,7 +103,13 @@ impl HitlChoice {
         match self {
             Self::Once => "Yes".to_string(),
             Self::Tool => grant.label(),
-            Self::All => "Yes, and don't ask again for any tool this session".to_string(),
+            // NOT "any tool": `stream_handler` ANDs `auto_approve` with
+            // `tier_may_be_granted`, so this row can never cover `sudo`,
+            // `rm -rf`, a `curl` upload or a `git push`. It used to promise
+            // "any tool" anyway, which is how an operator could press it,
+            // watch the same command ask again, and conclude the menu was
+            // broken — the row was the only place that could have told them.
+            Self::All => "Yes, and stop asking this session (risky calls still ask)".to_string(),
             Self::Deny => "No, and tell MUR what to do differently (Esc)".to_string(),
         }
     }

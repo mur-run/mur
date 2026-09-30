@@ -2,6 +2,7 @@
 
 mod auto_ceiling_tests;
 mod browser_slash_live_tests;
+mod egress_audit_tests;
 mod enter_hint_tests;
 mod fallback_visibility_tests;
 mod help_coverage_tests;

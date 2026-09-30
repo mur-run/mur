@@ -76,13 +76,62 @@ const GH_BARE_FLAGS: &[&str] = &[
     "--fill-verbose",
 ];
 
-/// What a grant covers. Constructed only by [`classify`].
+/// `curl` flags that change nothing about WHERE the request goes or WHAT it
+/// carries. Everything absent from this list keeps asking, which is the point:
+/// the flag surface of `curl` is a data-upload API with a download tool
+/// attached, so the safe direction for an unknown flag is a prompt.
+///
+/// DELIBERATELY ABSENT — do not add without reading why:
+///   `-d/--data*/-F/--form/-T/--upload-file` — send a body. The whole reason
+///            this tier exists.
+///   `-X/--method`  — turns a GET into anything at all.
+///   `-H/--header`  — carries arbitrary bytes (and credentials) off-machine
+///            under a grant the operator gave for "a GET".
+///   `-o/-O/--output` — writes a local file. Cheap to keep asking about.
+///   `-K/--config`  — reads a file of MORE flags, i.e. defeats this list.
+///   `--data-urlencode`, `--json` — bodies wearing other names.
+const CURL_GET_BARE_FLAGS: &[&str] = &[
+    "-s",
+    "--silent",
+    "-S",
+    "--show-error",
+    "-L",
+    "--location",
+    "-f",
+    "--fail",
+    "-i",
+    "--include",
+    "-I",
+    "--head",
+    "-k",
+    "--insecure",
+    "--compressed",
+    "-g",
+    "--globoff",
+];
+
+/// Hosts a session grant may never cover, whatever the operator answered: the
+/// cloud metadata endpoints. A GET against one of these is the standard SSRF
+/// credential read, and "don't ask again for this host" is exactly the wrong
+/// thing to be able to say about it.
+const NEVER_GRANTABLE_HOSTS: &[&str] = &[
+    "169.254.169.254",
+    "metadata.google.internal",
+    "metadata",
+    "100.100.100.200",
+    "alibaba-inc.com",
+];
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(super) enum EgressScope {
     /// `git push` of a non-protected branch to this remote URL.
     GitPush { url: String },
     /// `gh pr create` / `gh pr comment` on this repo.
     GhPr { repo: String },
+    /// A plain, bodyless GET against this host. Keyed on the HOST, not the
+    /// full URL: a session that polls one endpoint walks its path and query
+    /// (`?page=2`), and a key per URL is a key that never hits twice.
+    HttpGet { host: String },
 }
 
 impl EgressScope {
@@ -90,6 +139,7 @@ impl EgressScope {
         match self {
             Self::GitPush { url } => format!("egress:git-push:{url}:unprotected"),
             Self::GhPr { repo } => format!("egress:gh-pr-write:{repo}"),
+            Self::HttpGet { host } => format!("egress:http-get:{host}"),
         }
     }
 
@@ -101,6 +151,9 @@ impl EgressScope {
             Self::GhPr { repo } => format!(
                 "Yes, and don't ask again this session for `gh pr create`/`comment` on `{repo}`"
             ),
+            Self::HttpGet { host } => {
+                format!("Yes, and don't ask again this session for plain GETs to `{host}`")
+            }
         }
     }
 }
@@ -125,6 +178,9 @@ pub(super) fn classify(cmd: &str) -> Option<EgressScope> {
         let scope = match head {
             "git" => git_push(dir.as_deref()?, &seg[1..]),
             "gh" => gh_pr(dir.as_deref()?, &seg[1..]),
+            // A GET proves nothing about the repo it runs in, so unlike the
+            // two above it does not need a resolved `cd`.
+            "curl" => curl_get(&seg[1..]),
             _ => None,
         };
         match scope {
@@ -251,6 +307,54 @@ fn gh_pr(dir: &Path, args: &[Word]) -> Option<EgressScope> {
     Some(EgressScope::GhPr {
         repo: gh_base_repo(&repo)?,
     })
+}
+
+/// `curl … <url>` with no body, no method override and no header: a download.
+///
+/// Returns the HOST, so the session answer covers the next page of the same
+/// endpoint. Anything unrecognised — one unknown flag, two URLs, a `@` — is
+/// `None`, and `None` means the operator is asked again.
+fn curl_get(args: &[Word]) -> Option<EgressScope> {
+    let mut url: Option<&str> = None;
+    for a in args {
+        let t = a.text.as_str();
+        if t.starts_with('-') {
+            // `--flag=value` is one token; only the bare, valueless flags
+            // above are allowed, so an `=` is already a rejection.
+            if !CURL_GET_BARE_FLAGS.contains(&t) {
+                return None;
+            }
+        } else if url.replace(t).is_some() {
+            return None; // two URLs is two decisions behind one row
+        }
+    }
+    let host = get_url_host(url?)?;
+    if NEVER_GRANTABLE_HOSTS
+        .iter()
+        .any(|h| host == *h || host.ends_with(&format!(".{h}")))
+    {
+        return None;
+    }
+    Some(EgressScope::HttpGet { host })
+}
+
+/// The host of a plain `http`/`https` URL, lowercased, port and userinfo
+/// stripped. `None` for any other scheme (`file:`, `gopher:`, `dict:` — curl
+/// speaks about twenty, and most of them are not a web GET) and for a URL
+/// carrying `@`, which is how userinfo hides the real host from a reader.
+fn get_url_host(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.contains('@') {
+        return None;
+    }
+    let host = authority.split(':').next()?;
+    if host.is_empty() || host.contains('*') {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
 }
 
 /// The repo `gh` will act on, mirroring its own resolution: a remote marked

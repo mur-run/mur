@@ -88,6 +88,16 @@ const EGRESS_HEADS: &[&str] = &[
     "docker",
     "gh",
     "glab",
+    // Forge CLIs, same reason as `gh`: `tea pr create` publishes to a Gitea
+    // instance. `tea` was missing here, so it fell through to the `Write`
+    // fallback and the default session answered it with nobody in the loop.
+    // Its READ verbs are held in the read lane by `bash_class`, which runs
+    // first — the deny-list only ever sees what that list refused.
+    "tea",
+    // Sync/object-store clients: their ordinary use is uploading a local tree.
+    "rclone",
+    "s3cmd",
+    "gsutil",
     "npm",
     "pnpm",
     "yarn",
@@ -127,7 +137,19 @@ const DESTRUCTIVE_ARGS: &[&str] = &[
 ];
 
 /// `git` subcommands that publish, i.e. leave this machine.
-const GIT_EGRESS_SUBCMDS: &[&str] = &["push", "fetch", "pull", "clone", "remote", "submodule"];
+///
+/// INBOUND IS NOT EGRESS. `fetch` and `pull` used to sit here beside `push`,
+/// and the cost was measured: `NetworkEgress` is above
+/// `tier_may_be_granted`, so the approval menu's "don't ask again" row came
+/// back `Refused` and `/auto` could not cover them either — every `git fetch`
+/// of a session asked again, identically, and a prompt that is always
+/// answered the same way is what trains blind approval. A fetch downloads;
+/// nothing of the operator's is disclosed by it. They now fall to the `Write`
+/// fallback, which is the honest tier (`pull` moves the working tree) and is
+/// inside the ceiling. `clone` stays: it names a remote URL and writes a new
+/// tree from it. `remote`/`submodule` stay: both have write modes that
+/// repoint where a later push lands.
+const GIT_EGRESS_SUBCMDS: &[&str] = &["push", "clone", "remote", "submodule"];
 
 /// Shell operators that mean "more than one command" — the classifier cannot
 /// reason past them, so their presence can only raise a tier, never lower it.
