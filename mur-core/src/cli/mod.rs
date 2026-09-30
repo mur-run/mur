@@ -662,8 +662,10 @@ mod tests {
         }
     }
 
+    /// Bare `setup` must stay the asking form: `yes` defaults to false, so
+    /// the consent prompts are only skipped when the flag is actually typed.
     #[test]
-    fn cli_browser_setup_parses_and_has_no_yes_flag() {
+    fn cli_browser_setup_does_not_consent_by_default() {
         use crate::cli::actions::BrowserAction;
         use clap::Parser;
         assert!(matches!(
@@ -671,11 +673,45 @@ mod tests {
                 .unwrap()
                 .command,
             Commands::Browser {
-                action: BrowserAction::Setup
+                action: BrowserAction::Setup {
+                    agent: None,
+                    yes: false
+                }
             }
         ));
-        // Spec: nothing downloads without a human typing `yes`.
-        assert!(Cli::try_parse_from(["mur", "browser", "setup", "--yes"]).is_err());
+    }
+
+    /// `--yes` exists so setup is usable where there is no TTY to prompt on
+    /// (inside murmur). It replaces the typed `yes`; it does not widen what
+    /// setup may do, and it is never the default (see the test above).
+    #[test]
+    fn cli_browser_setup_takes_yes() {
+        use crate::cli::actions::BrowserAction;
+        use clap::Parser;
+        assert!(matches!(
+            Cli::try_parse_from(["mur", "browser", "setup", "--yes"])
+                .unwrap()
+                .command,
+            Commands::Browser {
+                action: BrowserAction::Setup { yes: true, .. }
+            }
+        ));
+    }
+
+    /// The permission step grants to a named agent; `--agent` must reach it
+    /// rather than being swallowed as an unknown flag.
+    #[test]
+    fn cli_browser_setup_takes_an_agent() {
+        use crate::cli::actions::BrowserAction;
+        use clap::Parser;
+        let parsed = Cli::try_parse_from(["mur", "browser", "setup", "--agent", "mur"]).unwrap();
+        let Commands::Browser {
+            action: BrowserAction::Setup { agent, .. },
+        } = parsed.command
+        else {
+            panic!("expected browser setup");
+        };
+        assert_eq!(agent.as_deref(), Some("mur"));
     }
 
     /// `mur deep-research status` must open the status panel, never be

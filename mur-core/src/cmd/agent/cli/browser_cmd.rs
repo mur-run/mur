@@ -8,9 +8,21 @@
 //! guard is gated on `Unknown` and this dispatch arm has to do the whole job
 //! itself, including the turn-start `matched_skill` would otherwise have done.
 
+use mur_common::proposal::{Proposal, ProposalKind};
+
 use super::*;
 
 const SKILL_NAME: &str = "browser";
+
+/// Step 2 of `--add`. Not run automatically: it downloads ~96 MiB and
+/// widens the agent's spawn entitlements, so a human types `yes` for both.
+/// `--yes` because there is no TTY inside murmur to type it on. Consent is
+/// not skipped, it moves: the user approves this exact command as a chip,
+/// and the spawn itself still passes the HITL gate.
+const SETUP_CMD: &str = "mur browser setup --yes";
+const SETUP_HINT: &str = "next: run `mur browser setup --yes` — it installs Chromium (~96 MiB) \
+     and grants the spawn permissions a browser run needs. Approving the command below is the \
+     consent for both.";
 
 pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<StreamMsg>) {
     if args.first().map(String::as_str) == Some("--add") {
@@ -26,7 +38,20 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
             .join("SKILL.md")
             .to_string_lossy()
             .into_owned();
-        run_manage(app, move |agent| manage::browser_skill_add(&agent, &source)).await;
+        run_manage(app, move |agent| manage::skill_add(&agent, &source)).await;
+        // Step 2. `--add` attaches the skill and nothing else: the browser
+        // download and the three spawn grants are privilege, and both live
+        // behind the literal `yes` in `mur browser setup`. Point there
+        // instead of granting silently — and offer it as a chip, so the
+        // whole flow stays inside murmur.
+        app.push_system(SETUP_HINT);
+        proposal::offer(
+            app,
+            Proposal {
+                label: "install the browser and grant its permissions".into(),
+                kind: ProposalKind::Shell(SETUP_CMD.into()),
+            },
+        );
         return;
     }
 
@@ -42,4 +67,24 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
     };
     app.clear_input();
     start_turn(app, instruction, tx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_hint_and_chip_agree_and_pass_vet() {
+        // The chip is the consent for both the download and the grants, so the
+        // hint must name the same command the chip runs, and that command must
+        // survive the same vet an agent's proposal does (no `<placeholder>`).
+        assert!(SETUP_HINT.contains(SETUP_CMD), "{SETUP_HINT}");
+        assert!(!SETUP_HINT.contains('<'), "{SETUP_HINT}");
+        let args = serde_json::json!({
+            "label": "install the browser and grant its permissions",
+            "kind": "shell",
+            "command": SETUP_CMD,
+        });
+        assert!(mur_common::proposal::vet(&args).is_ok());
+    }
 }

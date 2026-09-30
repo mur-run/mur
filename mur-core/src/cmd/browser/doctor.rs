@@ -87,6 +87,7 @@ fn live_args() -> Vec<String> {
     args.extend(mur_browser::chromium::headless_exe_args(
         mur_browser::chromium::system_browsers_dir().as_deref(),
     ));
+    args.extend(mur_browser::chromium::system_extra_args());
     args
 }
 
@@ -319,6 +320,15 @@ pub async fn live_check(output: &mut dyn Write) -> Result<()> {
                     "  the browser never reached the page; if Chromium is missing: {}",
                     install_hint()
                 )?;
+                // A crash with the binary present is the classic
+                // sandbox-inside-a-sandbox failure.
+                if std::env::var_os(mur_browser::chromium::EXTRA_ARGS_ENV).is_none() {
+                    writeln!(
+                        output,
+                        "  if it is installed and still crashes (sandboxed host): {}=--no-sandbox",
+                        mur_browser::chromium::EXTRA_ARGS_ENV
+                    )?;
+                }
             }
             bail!("live test failed")
         }

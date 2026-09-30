@@ -862,11 +862,23 @@ pub enum BrowserAction {
         #[arg(long)]
         live: bool,
     },
-    /// Install the Chromium replay needs, then prove it renders. Prints the
-    /// exact `npx … install-browser --only-shell chromium` command and runs it
-    /// only if you type `yes`. Interactive only; exits non-zero unless the live
-    /// test passes.
-    Setup,
+    /// Install the Chromium replay needs, grant the spawn permissions a
+    /// browser run requires, then prove it renders. Prints the exact
+    /// `npx … install-browser --only-shell chromium` command and the
+    /// `mur agent perm …` commands, and runs each only if you type `yes`.
+    /// Interactive only; exits non-zero unless the live test passes.
+    Setup {
+        /// Agent to grant the browser spawn permissions to. Defaults to
+        /// `$MUR_AGENT`, so `mur browser setup` inside murmur grants the
+        /// agent you are talking to.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Consent up front instead of being asked. Required when there is
+        /// no terminal to prompt on, which is the case inside murmur. Every
+        /// step still prints what it does before doing it.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Delete old recorded runs, keeping the most recently recorded ones.
     Prune {
         /// Number of most recent runs to keep.
