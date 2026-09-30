@@ -42,8 +42,9 @@ pub enum SlashCmd {
     Clear,
     Card,
     Sessions,
-    /// `/channels [N|<id-prefix>] [--follow]` — list channels, switch to one,
-    /// or live-tail it (`--follow` with no target stops following).
+    /// `/channels [N|<id-prefix>] [--follow] | --stop` — list channels, switch
+    /// to one, live-tail it, or stop the tail (`--stop`; bare `--follow` is the
+    /// older spelling of the same thing).
     ///
     /// Two ways to name a channel: the stable ordinal shown in the listing
     /// (`/channels 2`) or a channel-id prefix (`/channels 01a0d420`). Bare
@@ -144,10 +145,19 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
         "sessions" | "ls" => SlashCmd::Sessions,
         "channels" | "chan" => {
             let args: Vec<&str> = words.collect();
+            // `--stop` never starts a follow, so a target beside it is dropped
+            // and it maps onto the existing "follow with no target" stop path.
+            if args.contains(&"--stop") {
+                return Some(SlashCmd::Channels {
+                    target: None,
+                    follow: true,
+                });
+            }
             SlashCmd::Channels {
                 target: args
                     .iter()
-                    .find(|s| !s.starts_with('-'))
+                    // `list` is the menu's explicit spelling of bare `/channels`.
+                    .find(|s| !s.starts_with('-') && **s != "list")
                     .map(|s| parse_channel_ref(s)),
                 follow: args.iter().any(|s| *s == "--follow" || *s == "-f"),
             }
