@@ -20,11 +20,35 @@ const SHELL_META: &[char] = &[
 ///   `tree`     — `tree -o FILE` writes.
 ///   `date`     — `date -s …` sets the system clock.
 ///   `hostname` — `hostname NAME` sets the hostname.
+/// DELIBERATELY ABSENT — do not add without reading why:
+///   `sort` — `-o FILE` overwrites.
+///   `tree` — `-o FILE` writes the listing to a file.
+///   `env`  — execs its argv.
 const READONLY_HEADS: &[&str] = &[
     "cat", "ls", "ll", "pwd", "echo", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg",
     "which", "type", "file", "stat", "du", "df", "realpath", "dirname", "basename", "printenv",
     "whoami", "uname", "cut", "diff", "cmp", "shasum", "md5sum", "od", "nl", "tac", "column",
     "true", "false",
+    // Plumbing a poll loop cannot avoid. `sleep` and `seq` touch no bytes at
+    // all, and `jq` has no write flag (a `>` is a redirect, and the tokenizer
+    // splits on it). They were missing, so one bare `sleep 30` between two
+    // `gh pr checks` lifted the whole chain out of the read lane and made
+    // every iteration of a CI-watching loop stop for a human.
+    //
+    // `date` is NOT here: `date -s` sets the system clock. It is handled
+    // below, allowed only when it carries no flag that writes.
+    "sleep", "seq", "jq",
+];
+
+/// `date` flags that only FORMAT. `-s`/`--set` sets the system clock, so the
+/// head cannot be allowed outright — but `date +%s` is in every poll loop.
+const DATE_READONLY_FLAGS: &[&str] = &[
+    "-u",
+    "--utc",
+    "--universal",
+    "-R",
+    "--rfc-email",
+    "-Iseconds",
 ];
 
 /// `git` subcommands that only read (regardless of flags). Excludes anything
@@ -96,6 +120,34 @@ const GH_READONLY_NOUNS: &[&str] = &[
 
 /// Verbs that only read, shared by every `gh` noun above.
 const GH_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff", "checks", "watch"];
+
+/// `tea` (Gitea's CLI) nouns and verbs that only read. `tea` as a HEAD is on
+/// the egress deny-list in `tool_tier` — `tea pr create` publishes — so this
+/// pair of lists is the only thing that keeps `tea pr list` out of a prompt.
+/// Verbs are listed rather than nouns-only for the same reason as `gh`: the
+/// nouns mix read and mutate under one name (`tea login add`).
+const TEA_READONLY_NOUNS: &[&str] = &[
+    "pr",
+    "pulls",
+    "issue",
+    "issues",
+    "repo",
+    "repos",
+    "release",
+    "releases",
+    "milestone",
+    "milestones",
+    "label",
+    "labels",
+    "branch",
+    "branches",
+    "notification",
+    "notifications",
+    "times",
+    "org",
+    "orgs",
+];
+const TEA_READONLY_VERBS: &[&str] = &["list", "ls", "view", "show", "status"];
 
 /// `gh api` flags that turn a GET into a write. `-f/-F/--field/--raw-field`
 /// switch the default method to POST; `--input` sends a body; `-X/--method`
@@ -205,6 +257,20 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
             noun.is_some_and(|n| GLAB_READONLY_NOUNS.contains(&n))
                 && verb.is_some_and(|v| GLAB_READONLY_VERBS.contains(&v))
         }
+        // `tea` reads only for a fixed noun + verb pair. A bare `tea pr` opens
+        // an interactive prompt and `tea pr create` publishes, so both fail
+        // here and are caught by the egress deny-list instead.
+        "tea" => {
+            let noun = toks.next();
+            let verb = toks.next();
+            noun.is_some_and(|n| TEA_READONLY_NOUNS.contains(&n))
+                && verb.is_some_and(|v| TEA_READONLY_VERBS.contains(&v))
+        }
+        // `date` prints unless it SETS. `+FORMAT` is the read form. A bare
+        // positional is NOT allowed: on BSD `date 010203` sets the clock
+        // without any flag at all, so an allowlist of two shapes is the only
+        // safe read of this head.
+        "date" => toks.all(|t| t.starts_with('+') || DATE_READONLY_FLAGS.contains(&t)),
         other => READONLY_HEADS.contains(&other),
     }
 }
