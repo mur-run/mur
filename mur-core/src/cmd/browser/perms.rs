@@ -155,6 +155,12 @@ mod tests {
         PathBuf::from("/tmp/murhome")
     }
 
+    /// The expected probe dir, spelled the way the platform spells it:
+    /// `probe_dir` joins components, so the separator is `\` on Windows.
+    fn probe(agent: &str) -> String {
+        probe_dir(&home(), agent).to_string_lossy().into_owned()
+    }
+
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_string()).collect()
     }
@@ -163,16 +169,13 @@ mod tests {
     fn empty_profile_needs_every_grant() {
         let p = plan(&home(), "mur", &[], &[]);
         assert_eq!(p.binaries, s(&["playwright-mcp", "chrome-headless-shell"]));
-        assert_eq!(
-            p.dir.as_deref(),
-            Some("/tmp/murhome/artifacts/mur/shim/probe")
-        );
+        assert_eq!(p.dir, Some(probe("mur")));
         assert!(!p.is_empty());
     }
 
     #[test]
     fn fully_granted_profile_is_a_no_op() {
-        let dirs = s(&["/tmp/murhome/artifacts/mur/shim/probe"]);
+        let dirs = vec![probe("mur")];
         let p = plan(
             &home(),
             "mur",
@@ -185,12 +188,9 @@ mod tests {
     /// The probe dir is per-agent: another agent's grant must not count.
     #[test]
     fn dir_grant_is_not_shared_between_agents() {
-        let dirs = s(&["/tmp/murhome/artifacts/other/shim/probe"]);
+        let dirs = vec![probe("other")];
         let p = plan(&home(), "mur", &[], &dirs);
-        assert_eq!(
-            p.dir.as_deref(),
-            Some("/tmp/murhome/artifacts/mur/shim/probe")
-        );
+        assert_eq!(p.dir, Some(probe("mur")));
     }
 
     #[test]
@@ -200,7 +200,7 @@ mod tests {
         let cmds = commands("mur", &p);
         assert_eq!(cmds.len(), 2, "{cmds:?}");
         assert!(cmds[0].ends_with("allow-spawn mur chrome-headless-shell"));
-        assert!(cmds[1].contains("allow-spawn-dir mur /tmp/murhome/artifacts/mur/shim/probe"));
+        assert!(cmds[1].contains(&format!("allow-spawn-dir mur {}", probe("mur"))));
     }
 
     fn run(answer: &str, p: &Plan) -> (bool, String, Vec<String>) {
