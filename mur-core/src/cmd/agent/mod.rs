@@ -279,41 +279,6 @@ fn sync_model_block_from_disk(profile: &mut _AgentProfile) {
     }
 }
 
-/// Move the #712 entitlement pin to what a trusted writer just saved — only
-/// from a trusted state (see `entitlements_pin::advance_pin`). Best-effort: a
-/// pin that could not advance makes the next start refuse with a `reseal` hint,
-/// which is fail-closed, so the save itself still succeeds.
-pub(crate) fn advance_entitlements_pin(
-    profile_path: &Path,
-    prior: Option<&mur_common::agent::Entitlements>,
-    new: &mur_common::agent::Entitlements,
-) {
-    let Some(agent_dir) = profile_path.parent() else {
-        return;
-    };
-    let (Some(agents_root), Some(name)) = (
-        agent_dir.parent(),
-        agent_dir.file_name().and_then(|n| n.to_str()),
-    ) else {
-        return;
-    };
-    let Some(mur_home) = agents_root.parent() else {
-        return;
-    };
-    if agents_root.file_name().and_then(|n| n.to_str()) != Some("agents") {
-        return;
-    }
-    match mur_common::entitlements_pin::advance_pin(mur_home, name, prior, new) {
-        Ok(true) => {}
-        Ok(false) => eprintln!(
-            "warning: {name}'s entitlements had changed outside MUR before this save; \
-             the agent will refuse to start until you review them and run \
-             `mur agent perm reseal {name}`"
-        ),
-        Err(e) => tracing::warn!(agent = name, error = %e, "entitlement pin not updated"),
-    }
-}
-
 pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<()> {
     // Fail-closed guard (#717): a profile save must never *introduce* a skill
     // ref that does not resolve to an installed skill under the agent dir.
@@ -345,7 +310,11 @@ pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<(
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
     write_atomic(path, yaml.as_bytes())?;
-    advance_entitlements_pin(path, prior_ents.as_ref(), &profile.entitlements);
+    let _ = crate::store::entitlements_pin::advance_entitlements_pin(
+        path,
+        prior_ents.as_ref(),
+        &profile.entitlements,
+    );
 
     // Version gate: when the agents git repo is active, commit this change.
     // Best-effort — a commit failure never fails the primary save.

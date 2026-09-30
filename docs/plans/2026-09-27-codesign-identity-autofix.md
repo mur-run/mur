@@ -1,7 +1,7 @@
 # Design draft: detect and auto-fix a missing codesign identity
 
 Date: 2026-09-27
-Status: draft (needs review)
+Status: implemented (CLI surfaces); `mur init` + Hub card still open
 Related: #1587, #866 (keychain grants break after an ad-hoc re-sign)
 
 ## Problem
@@ -82,13 +82,43 @@ Failure must roll back: if the certificate import fails, do not touch `config.ya
   The authorisation dialog comes from the system, so the GUI must handle the user
   cancelling it.
 
-## Open questions
+## Settled: `add-trusted-cert` is NOT needed
 
-- Is adding a self-signed certificate to `trustRoot` acceptable? The alternative is
-  to import it untrusted — codesign still works, but the Gatekeeper semantics are
-  weaker. We need to confirm that we only care about a *stable* signing identity,
-  not a *trusted* one. If so, step 3 can be dropped entirely and the one-click fix
-  becomes genuinely non-interactive. **This is the thing most worth settling first.**
-- Should `mur update` also point at `mur doctor --fix` when it detects it just
-  signed ad-hoc?
+Measured on a real login keychain (2026-09-30), the question that shaped this
+whole design:
+
+```
+security import id.p12 -k ~/Library/Keychains/login.keychain-db -P <pass> -T /usr/bin/codesign
+  -> 1 identity imported.
+codesign -f -s "MUR Local Signing Test" ./t
+codesign -vvv ./t
+  -> ./t: valid on disk
+  -> ./t: satisfies its Designated Requirement
+```
+
+An imported-but-**untrusted** self-signed certificate signs and verifies. We only
+ever needed a *stable* signing identity, not a Gatekeeper-*trusted* one, so step 3
+(`security add-trusted-cert`) is dropped and the fix raises no admin dialog — at
+most the keychain asks for the login password during `security import`.
+
+Two further findings from the same test:
+
+- `certtool` cannot set the `codeSigning` EKU, so openssl stays.
+- openssl 3 writes PKCS#12 with AES-256-CBC + PBKDF2, which macOS `security
+  import` rejects. The bundle must be written with the legacy
+  `-macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES`.
+
+## What shipped
+
+`mur-core/src/cmd/doctor_codesign.rs` — the `codesign-identity` check (decision
+table above, unit-tested) plus `apply_fix`. `mur doctor --fix` in
+`mur-core/src/cmd/misc.rs` asks once per fix and declines on EOF, so
+`mur doctor --fix </dev/null` mutates nothing. Config is written only after a
+real `codesign -s` + `codesign -v` round-trip on a probe binary succeeds.
+
+## Still open
+
+- `mur init` hint and the MUR Hub home card (design above stands; the shell flow
+  is now a single reusable function, so neither should reimplement it).
+- Should `mur update` point at `mur doctor --fix` when it has just signed ad-hoc?
 - Behaviour on Linux / Windows (currently skip).

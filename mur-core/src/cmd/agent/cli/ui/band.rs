@@ -17,6 +17,8 @@ use super::super::app::{App, ChatMsg, Role};
 #[cfg(test)]
 mod ghost_tests;
 #[cfg(test)]
+mod scrub_tests;
+#[cfg(test)]
 mod tests;
 
 /// Rows left for the live transcript band inside `viewport_h` once the
@@ -220,7 +222,7 @@ pub(super) fn push_live_inner(
     }
     // Continuation of a partially-committed agent turn: body only, no header.
     let rest = m.text.get(skip..).unwrap_or("");
-    if skip > 0 && app.flushed_raw && (as_settled || !m.streaming) {
+    if skip > 0 && app.flushed_raw && (!m.streaming || as_settled) {
         // Its head went up as raw lines from mid-block; rendering the tail
         // as markdown would open it with a torn table.
         lines.extend(raw_body_lines(rest));
@@ -342,6 +344,7 @@ fn emit_chunk<B: Backend>(
             .wrap(Wrap { trim: false })
             .block(block())
             .render(buf.area, buf);
+        crate::cmd::agent::cli::scrub::scrub_buffer(buf);
         blank_wide_char_continuations(buf);
     })
 }

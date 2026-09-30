@@ -68,3 +68,23 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
     app.clear_input();
     start_turn(app, instruction, tx);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_hint_and_chip_agree_and_pass_vet() {
+        // The chip is the consent for both the download and the grants, so the
+        // hint must name the same command the chip runs, and that command must
+        // survive the same vet an agent's proposal does (no `<placeholder>`).
+        assert!(SETUP_HINT.contains(SETUP_CMD), "{SETUP_HINT}");
+        assert!(!SETUP_HINT.contains('<'), "{SETUP_HINT}");
+        let args = serde_json::json!({
+            "label": "install the browser and grant its permissions",
+            "kind": "shell",
+            "command": SETUP_CMD,
+        });
+        assert!(mur_common::proposal::vet(&args).is_ok());
+    }
+}

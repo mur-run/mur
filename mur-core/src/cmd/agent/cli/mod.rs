@@ -39,6 +39,7 @@ mod plain;
 mod proposal;
 mod recover;
 mod render_card;
+mod scrub;
 mod search;
 mod secret_cmd;
 mod settlement;

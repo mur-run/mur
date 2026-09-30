@@ -32,6 +32,20 @@ pub struct AgentRevision {
     pub sha: String,
 }
 
+/// What a rollback did beyond the new revision, so the caller can show it:
+/// a rollback can widen entitlements as easily as narrow them.
+#[derive(Debug, Clone)]
+pub struct RollbackOutcome {
+    pub revision: AgentRevision,
+    /// Top-level entitlement keys that differ from the profile it replaced.
+    /// Empty when the prior profile could not be parsed (nothing to diff).
+    pub changed_entitlements: Vec<String>,
+    /// Whether the #712 pin now matches the rolled-back entitlements. False
+    /// when the prior profile was tampered with or unreadable: the agent will
+    /// refuse to start until `mur agent perm reseal`.
+    pub pin_advanced: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentHistoryEntry {
     pub version: u32,
@@ -270,17 +284,80 @@ impl VersionedAgentStore {
     }
 
     /// Roll back agent profile to `to_version` as a new commit.
-    pub fn rollback_profile(&mut self, agent: &str, to_version: u32) -> Result<AgentRevision> {
-        let archive = self
-            .root
-            .join(agent)
-            .join("archive")
-            .join(format!("v{to_version}.yaml"));
-        if !archive.exists() {
-            return Err(anyhow!("no archived v{to_version} for agent '{agent}'"));
+    ///
+    /// Moves the #712 entitlement pin with the profile, like every other
+    /// trusted writer; otherwise the next start refuses with
+    /// `entitlements_unpinned`. The pin only moves from a trusted state (see
+    /// `entitlements_pin::advance_pin`), so a profile tampered with before the
+    /// rollback keeps its stale pin and still needs `mur agent perm reseal`.
+    pub fn rollback_profile(&mut self, agent: &str, to_version: u32) -> Result<RollbackOutcome> {
+        // Read the committed profile, never `archive/vN.yaml`: the archive sits
+        // in the agent's own writable home, the agents git repo does not.
+        let content = self.committed_profile(agent, to_version)?;
+        let source = PathBuf::from(agent).join("profile.yaml");
+        let profile_path = self.root.join(agent).join("profile.yaml");
+        let prior = Self::prior_entitlements(&profile_path);
+        let revision = self.save_profile(agent, &content, &format!("rollback to v{to_version}"))?;
+        let new = mur_common::entitlements_pin::entitlements_from_yaml(&content, &source);
+        if let Err(e) = &new {
+            tracing::warn!(agent, error = %e, "entitlement pin not updated");
         }
-        let content = std::fs::read_to_string(&archive)?;
-        self.save_profile(agent, &content, &format!("rollback to v{to_version}"))
+        let changed_entitlements = match (&prior, &new) {
+            (Some(Some(p)), Ok(n)) => mur_common::entitlements_pin::changed_entitlements(p, n),
+            _ => Vec::new(),
+        };
+        // Fail closed: current profile unreadable/unparseable → do not treat it
+        // as fresh (that would launder it), just leave the pin alone.
+        let pin_advanced = match (prior, new) {
+            (Some(prior), Ok(new)) => crate::store::entitlements_pin::advance_entitlements_pin(
+                &profile_path,
+                prior.as_ref(),
+                &new,
+            ),
+            _ => false,
+        };
+        Ok(RollbackOutcome {
+            revision,
+            changed_entitlements,
+            pin_advanced,
+        })
+    }
+
+    /// `<agent>/profile.yaml` as committed at `version` in the agents repo.
+    fn committed_profile(&self, agent: &str, version: u32) -> Result<String> {
+        let no_version = || anyhow!("no archived v{version} for agent '{agent}'");
+        let sha = self
+            .index
+            .agents
+            .get(agent)
+            .and_then(|a| a.versions.iter().find(|e| e.v == version))
+            .map(|e| e.sha.clone())
+            .ok_or_else(no_version)?;
+        let commit = self
+            .agents_repo
+            .revparse_single(&sha)
+            .and_then(|o| o.peel_to_commit())
+            .map_err(|_| no_version())?;
+        let entry = commit
+            .tree()?
+            .get_path(&PathBuf::from(agent).join("profile.yaml"))
+            .map_err(|_| no_version())?;
+        let blob = self.agents_repo.find_blob(entry.id())?;
+        Ok(std::str::from_utf8(blob.content())
+            .map_err(|e| anyhow!("v{version} of '{agent}' is not UTF-8: {e}"))?
+            .to_string())
+    }
+
+    /// Entitlements on disk before a rollback: `Some(None)` when there is no
+    /// profile yet, `None` when one exists but cannot be read or parsed.
+    fn prior_entitlements(profile_path: &Path) -> Option<Option<mur_common::agent::Entitlements>> {
+        match std::fs::read_to_string(profile_path) {
+            Ok(yaml) => mur_common::entitlements_pin::entitlements_from_yaml(&yaml, profile_path)
+                .ok()
+                .map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+            Err(_) => None,
+        }
     }
 
     /// Export a single agent's git history as a portable bundle file.
