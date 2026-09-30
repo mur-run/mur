@@ -121,6 +121,21 @@ fn light_settlement_is_readable_without_terminal_background_assumptions() {
     assert!(ratio >= 7.0, "light settlement text is only {ratio:.1}:1");
 }
 
+/// On a white page the card is an inset, not a slab: its ground stays within
+/// a hair of the page so it reads as part of the transcript.
+#[test]
+fn light_settlement_is_a_light_inset_on_the_page() {
+    let bg = LIGHT
+        .settlement_surface
+        .bg
+        .expect("light settlement must paint a stable background");
+    let ratio = contrast_ratio(bg, ASSUMED_BG_LIGHT);
+    assert!(
+        ratio <= 1.2,
+        "light settlement ground is {ratio:.1}:1 against the page — a dark slab on white"
+    );
+}
+
 /// `ansi` pins no *foreground*: every text colour is a named ANSI slot or
 /// Reset, so the terminal's own theme is what the user sees. Nothing in
 /// this palette pins a background either — see the diff tokens below for

@@ -181,16 +181,17 @@ pub static LIGHT: Theme = Theme {
     border: rgb(0xc9, 0xcc, 0xd6),
     surface: Style::new().bg(Color::Rgb(0xee, 0xf0, 0xf5)),
     surface_alt: Style::new().bg(Color::Rgb(0xe9, 0xec, 0xf2)),
-    // A self-contained dark inset avoids both failure modes seen in practice:
-    // a bright paper-like slab and dark light-skin text disappearing into the
-    // user's dark terminal background.
-    settlement_surface: Style::new().bg(Color::Rgb(0x20, 0x26, 0x31)),
-    settlement_text: rgb(0xf4, 0xf6, 0xfa),
-    settlement_muted: rgb(0xb8, 0xc0, 0xcc),
-    settlement_accent: rgb(0x65, 0xcb, 0xe8),
-    settlement_ok: rgb(0x70, 0xd6, 0x9a),
-    settlement_warn: rgb(0xf2, 0xc6, 0x6d),
-    settlement_error: rgb(0xff, 0x9a, 0x96),
+    // A light inset, one step off the page: the card paints its own ground so
+    // its ink never depends on the terminal background, and it reuses the
+    // page's own ink so it reads as part of the transcript. (#1319 used a dark
+    // inset here; on the white page it is designed for, that was a slab.)
+    settlement_surface: Style::new().bg(Color::Rgb(0xf4, 0xf6, 0xfa)),
+    settlement_text: rgb(0x1f, 0x24, 0x30),
+    settlement_muted: rgb(0x5c, 0x63, 0x70),
+    settlement_accent: rgb(0x0b, 0x6e, 0x8f),
+    settlement_ok: rgb(0x0f, 0x6e, 0x35),
+    settlement_warn: rgb(0x8a, 0x5a, 0x00),
+    settlement_error: rgb(0xb3, 0x26, 0x1e),
     badge: Style::new()
         .fg(Color::Rgb(0x0b, 0x6e, 0x8f))
         .bg(Color::Rgb(0xe0, 0xf0, 0xf8)),
