@@ -48,7 +48,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             cmd::notes_cmd::cmd_search(&query, limit)?
         }
         Commands::Stats => cmd::misc::cmd_stats()?,
-        Commands::Doctor => cmd::misc::cmd_doctor()?,
+        Commands::Doctor { fix } => cmd::misc::cmd_doctor(fix)?,
         Commands::Limits {
             name,
             json,

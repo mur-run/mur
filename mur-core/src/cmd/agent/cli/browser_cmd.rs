@@ -26,7 +26,7 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
             .join("SKILL.md")
             .to_string_lossy()
             .into_owned();
-        run_manage(app, move |agent| manage::skill_add(&agent, &source)).await;
+        run_manage(app, move |agent| manage::browser_skill_add(&agent, &source)).await;
         return;
     }
 

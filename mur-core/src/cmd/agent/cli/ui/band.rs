@@ -222,7 +222,7 @@ pub(super) fn push_live_inner(
     }
     // Continuation of a partially-committed agent turn: body only, no header.
     let rest = m.text.get(skip..).unwrap_or("");
-    if skip > 0 && app.flushed_raw && !(m.streaming && !as_settled) {
+    if skip > 0 && app.flushed_raw && (!m.streaming || as_settled) {
         // Its head went up as raw lines from mid-block; rendering the tail
         // as markdown would open it with a torn table.
         lines.extend(raw_body_lines(rest));
