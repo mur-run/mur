@@ -17,6 +17,8 @@ use super::super::app::{App, ChatMsg, Role};
 #[cfg(test)]
 mod ghost_tests;
 #[cfg(test)]
+mod scrub_tests;
+#[cfg(test)]
 mod tests;
 
 /// Rows left for the live transcript band inside `viewport_h` once the
@@ -342,6 +344,7 @@ fn emit_chunk<B: Backend>(
             .wrap(Wrap { trim: false })
             .block(block())
             .render(buf.area, buf);
+        crate::cmd::agent::cli::scrub::scrub_buffer(buf);
         blank_wide_char_continuations(buf);
     })
 }
