@@ -313,10 +313,31 @@ async fn run_agent_browser(
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Is the `agent-browser` wrapper resolvable as an executable?
+///
+/// Used to decide whether the native-lightpanda engine has a Chrome tier to
+/// escalate INTO (#1473). An absolute/relative path is checked on disk; a bare
+/// command name is resolved against the augmented PATH — the same resolution
+/// the spawn itself will use, so this never says yes to a binary the spawn
+/// cannot find. Existence only, like the other preflights: a broken
+/// agent-browser still counts as present and fails loudly at spawn.
+pub fn agent_browser_available(cfg: &BrowserCfg) -> bool {
+    let bin = cfg.agent_browser_bin.trim();
+    if bin.is_empty() {
+        return false;
+    }
+    if bin.contains(std::path::MAIN_SEPARATOR) {
+        return std::path::Path::new(bin).exists();
+    }
+    mur_common::exec::resolve_command(bin).is_ok()
+}
+
 /// Decide (binary, argv, tier) for a render, dispatching on the engine. Pure
-/// (proxy passed in) → unit-testable without spawning. obscura and native
-/// lightpanda are each single engines covering JS render, so `want_chrome` is
-/// ignored and the tier is 2 for both; the agent-browser path keeps the
+/// (proxy passed in) → unit-testable without spawning. obscura is a single
+/// engine, so `want_chrome` is ignored and its tier is always 2. Native
+/// lightpanda is tier 2 normally, but under `want_chrome` it escalates by
+/// handing the retry to the agent-browser wrapper's chrome tier (#1473) — it
+/// has no Chrome of its own. The agent-browser path keeps the
 /// lightpanda(2)/chrome(3) split.
 fn plan_render(
     url: &str,
@@ -333,6 +354,16 @@ fn plan_render(
                 .unwrap_or_else(|| "obscura".to_string());
             (bin, build_obscura_argv(url, proxy, timeout), 2)
         }
+        // Native lightpanda is tier 2. On escalation (`want_chrome`) we cannot
+        // re-run lightpanda — that is the engine that just failed — so hand the
+        // retry to the agent-browser wrapper's chrome tier. The server only
+        // sets `want_chrome` for this engine when agent-browser is actually
+        // present (`render_can_escalate`), so the bin is safe to use here.
+        RenderEngine::Lightpanda if want_chrome => (
+            cfg.agent_browser_bin.clone(),
+            build_fetch_argv(url, cfg, true),
+            3,
+        ),
         RenderEngine::Lightpanda => {
             let bin = cfg
                 .lightpanda_path
@@ -704,12 +735,66 @@ mod tests {
         let (bin, argv, tier) = plan_render(
             "https://example.com",
             &cfg,
-            true, /*ignored: single engine, no chrome escalation*/
+            false,
             Some("http://t:x@127.0.0.1:9"),
             Duration::from_secs(20),
         );
         assert_eq!(bin, "/x/lightpanda");
         assert_eq!(tier, 2);
         assert_eq!(argv[0], "fetch");
+    }
+
+    /// #1473: escalating native lightpanda must NOT re-run lightpanda — that is
+    /// the engine that just failed. The retry goes to the agent-browser wrapper
+    /// on its chrome tier, carrying the stealth args chrome needs.
+    #[test]
+    fn lightpanda_escalation_switches_to_agent_browser_chrome() {
+        let cfg = BrowserCfg {
+            agent_browser_bin: "agent-browser".into(),
+            lightpanda_path: Some("/x/lightpanda".into()),
+            chrome_stealth_args: "--no-sandbox".into(),
+            render_engine: RenderEngine::Lightpanda,
+            obscura_path: None,
+        };
+        let (bin, argv, tier) = plan_render(
+            "https://example.com",
+            &cfg,
+            true,
+            Some("http://t:x@127.0.0.1:9"),
+            Duration::from_secs(20),
+        );
+        assert_eq!(bin, "agent-browser", "must not re-spawn lightpanda");
+        assert_eq!(tier, 3);
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--engine" && w[1] == "chrome"),
+            "{argv:?}"
+        );
+        assert!(argv.iter().any(|a| a.contains("no-sandbox")), "{argv:?}");
+    }
+
+    #[test]
+    fn agent_browser_available_checks_path_and_disk() {
+        let base = BrowserCfg {
+            agent_browser_bin: "sh".into(),
+            lightpanda_path: None,
+            chrome_stealth_args: String::new(),
+            render_engine: RenderEngine::Lightpanda,
+            obscura_path: None,
+        };
+        // bare name resolvable on PATH
+        assert!(agent_browser_available(&base));
+        // absolute path that does not exist
+        let missing = BrowserCfg {
+            agent_browser_bin: "/nonexistent/agent-browser".into(),
+            ..base
+        };
+        assert!(!agent_browser_available(&missing));
+        // empty is never "present"
+        let empty = BrowserCfg {
+            agent_browser_bin: String::new(),
+            ..missing
+        };
+        assert!(!agent_browser_available(&empty));
     }
 }
