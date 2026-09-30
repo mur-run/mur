@@ -20,6 +20,10 @@ use crate::llm::ToolDef;
 
 pub const REMEMBER: &str = "remember";
 
+/// Resolves the current project id for `scope: project`. Boxed rather than a
+/// plain `fn` pointer because production closes over the session cwd.
+pub type ProjectResolver = std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
 /// System-prompt block appended when capture is enabled. The tool description
 /// stays terse; this carries the behavioral contract, including the two hard
 /// rules: never capture secrets or tool-output-sourced text, and always
@@ -50,6 +54,18 @@ pub fn capture_mode(mur_home: &std::path::Path) -> mur_common::config::CaptureMo
         .capture
 }
 
+/// The production resolver: the project of the directory THIS TURN works in.
+///
+/// Wraps the runtime's [`SessionCwd`], which is the same source `bash` and the
+/// file tools resolve relative paths against, so "where am I" has one answer
+/// across every tool. `MUR_ACTIVE_PROJECT` still overrides, via
+/// [`mur_common::project::active_project_id_from`].
+///
+/// [`SessionCwd`]: crate::tools::fs_policy::SessionCwd
+pub fn session_project_resolver(cwd: crate::tools::fs_policy::SessionCwd) -> ProjectResolver {
+    std::sync::Arc::new(move || mur_common::project::active_project_id_from(Some(&cwd.current())))
+}
+
 pub struct RememberTool {
     pub mur_home: PathBuf,
     /// Canonical (on-disk) agent name — the note lands in this agent's home.
@@ -63,11 +79,20 @@ pub struct RememberTool {
     /// lie: the boot-time snapshot served until a restart.
     pub skills: std::sync::Arc<crate::skills::RuntimeSkills>,
     /// Resolves the project id a `scope: project` memory is stamped with.
-    /// Production passes [`mur_common::project::active_project_id`] — the same
-    /// function injection filters with, so stamp and match cannot diverge.
+    /// Production closes over the runtime's [`SessionCwd`] so the answer is
+    /// the directory THIS TURN works in — the same directory `bash` and the
+    /// file tools use, and the same one skill injection filters with.
+    ///
+    /// It must not be [`mur_common::project::active_project_id`] with no
+    /// argument: that reads the process cwd, which for a runtime is the agent
+    /// home and never a repo, so every `scope: project` save degraded to user
+    /// scope even when the user was plainly sitting in their repository.
+    ///
     /// A field rather than a direct call so tests can name a project without
     /// mutating the process cwd.
-    pub active_project: fn() -> Option<String>,
+    ///
+    /// [`SessionCwd`]: crate::tools::fs_policy::SessionCwd
+    pub active_project: ProjectResolver,
 }
 
 #[async_trait::async_trait]
@@ -156,7 +181,7 @@ impl ToolExecutor for RememberTool {
                 )));
             }
         };
-        let project = want_project.then(self.active_project).flatten();
+        let project = want_project.then(|| (self.active_project)()).flatten();
         let downgraded = want_project && project.is_none();
 
         let dir = agent_skill_dir(&self.mur_home, &self.agent_name).join(&name);
@@ -278,14 +303,14 @@ mod tests {
             agent_name: "w1".into(),
             identity: std::sync::Arc::new(mur_common::identity::AgentIdentity::generate()),
             skills: std::sync::Arc::new(crate::skills::RuntimeSkills::build(vec![])),
-            active_project: || None,
+            active_project: std::sync::Arc::new(|| None),
         }
     }
 
     /// Same tool, but running "inside" a repo.
     fn tool_in_project(home: &std::path::Path) -> RememberTool {
         RememberTool {
-            active_project: || Some("/repos/alpha".to_string()),
+            active_project: std::sync::Arc::new(|| Some("/repos/alpha".to_string())),
             ..tool(home)
         }
     }
@@ -549,6 +574,51 @@ mod tests {
             .unwrap();
         assert_eq!(m.scope, mur_common::skill::manifest::SkillScope::User);
         assert!(m.project.is_none());
+    }
+
+    /// The regression this file exists to prevent: production wires
+    /// `active_project` to the session cwd, so a turn working inside a repo
+    /// gets project scope even though the runtime PROCESS sits in the agent
+    /// home, which is never a repo. Resolving from the process cwd made every
+    /// `scope: project` request silently degrade to user scope.
+    #[tokio::test]
+    async fn project_scope_follows_the_session_cwd_not_the_process_cwd() {
+        let _env = mur_common::test_env::EnvGuard::unset(["MUR_ACTIVE_PROJECT"]);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+
+        // A repo the turn works in, and an agent home that is not one. The
+        // process cwd is wherever the test harness runs; neither of these.
+        let repo = std::fs::canonicalize(home).unwrap().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let agent_home = std::fs::canonicalize(home).unwrap().join("agent-home");
+        std::fs::create_dir_all(&agent_home).unwrap();
+
+        let session = crate::tools::fs_policy::SessionCwd::new(agent_home);
+        session.set(repo.clone());
+        let t = RememberTool {
+            active_project: crate::tools::remember::session_project_resolver(session),
+            ..tool(home)
+        };
+
+        let mut req = input("repo-conventions", "fact");
+        req["scope"] = serde_json::json!("project");
+        let out = t.execute(req).await.unwrap();
+
+        let want = mur_common::project::project_id(&repo).unwrap();
+        // Match against `text` itself, not its Debug form: on Windows the id
+        // carries backslashes, which `{:?}` escapes into `\\`, so a needle
+        // holding the raw path could never be found.
+        assert!(
+            out.text.contains(&want),
+            "expected project scope at {want}, got {}",
+            out.text
+        );
+        let m =
+            mur_common::skill::read_from_dir(&agent_skill_dir(home, "w1").join("repo-conventions"))
+                .unwrap();
+        assert_eq!(m.scope, mur_common::skill::manifest::SkillScope::Project);
+        assert_eq!(m.project.as_deref(), Some(want.as_str()));
     }
 
     /// Same body, different scope is a real edit — narrowing an existing

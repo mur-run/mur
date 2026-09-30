@@ -55,7 +55,9 @@ impl TaskRunner {
         if let Some(frag) = self.secrets.as_ref().and_then(|v| v.prompt_fragment()) {
             base.push_str(&frag);
         }
-        if let Some(dir) = self.working_dir(turn) {
+        // Bound before `turn` is shadowed by the turn counter below.
+        let session_dir = self.working_dir(turn);
+        if let Some(dir) = &session_dir {
             base.push_str(&WORKING_DIR_RULE.replace("{path}", &dir.to_string_lossy()));
             // Names the pinned block right after the path it describes. The
             // file contents themselves travel as the first user message
@@ -111,7 +113,12 @@ impl TaskRunner {
         // with the CLI hook); fleet from the turn's `fleet-<name>` channel id,
         // threaded in by the `channel/delegate` handler. Fleet- and project-scoped
         // skills only surface in their matching context; user/enterprise always.
-        let active_project = mur_common::project::active_project_id();
+        // From the turn's own working directory, the same one `## Working
+        // directory` above states and the file tools resolve against. Reading
+        // the PROCESS cwd here answered "is the runtime daemon in a repo",
+        // which is always no (it sits in the agent home), so project-scoped
+        // skills never injected for anyone.
+        let active_project = mur_common::project::active_project_id_from(session_dir.as_deref());
         let injection = inject_layer2(
             &skills.loaded,
             &self.skills_cfg,
