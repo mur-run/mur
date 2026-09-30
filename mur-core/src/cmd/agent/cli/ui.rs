@@ -50,8 +50,15 @@ pub(super) const INPUT_H_MIN: u16 = 1 + INPUT_CHROME_ROWS;
 
 const INPUT_H_MAX: u16 = 7 + INPUT_CHROME_ROWS;
 
-/// Draw the whole UI for one frame.
+/// Draw the whole UI for one frame, then scrub control characters from every
+/// cell. Scrubbing the finished buffer, not each string, means no widget —
+/// transcript, HITL card, chooser, status — can let one through.
 pub fn render(f: &mut Frame, app: &mut App) {
+    render_frame(f, app);
+    super::scrub::scrub_buffer(f.buffer_mut());
+}
+
+fn render_frame(f: &mut Frame, app: &mut App) {
     // Full-screen transcript overlay (Ctrl+O) takes over the whole frame and
     // owns every keypress (see `overlay_key_action` in `mod.rs`'s
     // `handle_event`) — nothing else renders underneath it this frame.
