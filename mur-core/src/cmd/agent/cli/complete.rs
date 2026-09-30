@@ -68,12 +68,18 @@ pub struct MenuContext {
 
 /// The session half of "what is in force": a `/effort` override or a `/skin`
 /// switch never touches the profile, so `MenuContext::load` cannot see them.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Current {
     pub session_effort: Option<mur_common::llm::Effort>,
     pub auto: bool,
     pub verbose: bool,
     pub skin: &'static str,
+    /// `/channels` handle of the channel this pane is on: marked in force,
+    /// and never offered a follow (the handler refuses to follow it).
+    pub active_channel: Option<String>,
+    /// Short id of the channel being live-tailed; the `--stop`
+    /// row only exists while this is set.
+    pub following: Option<String>,
 }
 
 impl Default for Current {
@@ -83,6 +89,8 @@ impl Default for Current {
             auto: false,
             verbose: false,
             skin: "ansi",
+            active_channel: None,
+            following: None,
         }
     }
 }
@@ -177,7 +185,7 @@ pub enum Args {
     Secret,
     /// `MenuContext::notes` — agent-local note names, plus `last`.
     Note,
-    /// `list`, then `MenuContext::channels` to switch to, then `--follow`.
+    /// `list`, then `MenuContext::channels` to switch to, then `--stop` while following.
     Channels,
 }
 
@@ -234,7 +242,12 @@ const LOGIN_PROVIDERS: &[(&str, &str)] = &[
     ("chatgpt", "ChatGPT subscription"),
 ];
 const CHANNELS_LIST: (&str, &str) = ("list", "show recent channels");
-const CHANNELS_FOLLOW: (&str, &str) = ("--follow", "live-tail another channel (bare: stop)");
+const CHANNELS_STOP: &str = "--stop";
+/// Layer 3 under a channel row: (word, suffix appended to the handle, desc).
+const CHANNEL_ACTIONS: &[(&str, &str, &str)] = &[
+    ("switch", "", "make this the active channel"),
+    ("--follow", " --follow", "live-tail this channel"),
+];
 
 /// Built-in commands: (word without slash, description, argument source).
 /// `exit` is omitted as a duplicate of `quit`.
@@ -337,7 +350,7 @@ fn args_for(cmd: &str) -> Option<Args> {
 }
 
 /// Layer-2 candidates for a command word, resolved against `ctx`.
-fn build_args(cmd: &str, args: Args, ctx: &MenuContext) -> Vec<Candidate> {
+fn build_args(cmd: &str, args: Args, ctx: &MenuContext, cur: &Current) -> Vec<Candidate> {
     let rows: Vec<(String, String)> = match args {
         Args::None => return Vec::new(),
         Args::Fixed(f) => f
@@ -362,7 +375,9 @@ fn build_args(cmd: &str, args: Args, ctx: &MenuContext) -> Vec<Candidate> {
             let row = |(w, d): (&str, &str)| (w.to_string(), d.to_string());
             let mut v = vec![row(CHANNELS_LIST)];
             v.extend(ctx.channels.iter().cloned());
-            v.push(row(CHANNELS_FOLLOW));
+            if let Some(tag) = &cur.following {
+                v.push((CHANNELS_STOP.to_string(), format!("stop following {tag}")));
+            }
             v
         }
         Args::Secret => {
@@ -377,9 +392,35 @@ fn build_args(cmd: &str, args: Args, ctx: &MenuContext) -> Vec<Candidate> {
     };
     rows.into_iter()
         .map(|(word, desc)| Candidate {
-            display: word.clone(),
+            // A channel row opens its own switch/follow layer (`channel_actions`).
+            has_children: matches!(args, Args::Channels) && is_followable(ctx, cur, &word),
             insert: format!("/{cmd} {word} "),
+            display: word,
             desc,
+        })
+        .collect()
+}
+
+/// True when `word` is one of the recent-channel handles in the menu.
+fn is_channel(ctx: &MenuContext, word: &str) -> bool {
+    ctx.channels.iter().any(|(h, _)| h == word)
+}
+
+/// A recent channel other than the one this pane is on — only those get the
+/// switch/follow layer, since following the active channel is refused.
+fn is_followable(ctx: &MenuContext, cur: &Current, word: &str) -> bool {
+    is_channel(ctx, word) && cur.active_channel.as_deref() != Some(word)
+}
+
+/// Layer-3 candidates under a `/channels <handle>` row. Inserts carry no
+/// trailing space: both are complete commands, so the menu closes on accept.
+fn channel_actions(handle: &str) -> Vec<Candidate> {
+    CHANNEL_ACTIONS
+        .iter()
+        .map(|(word, suffix, desc)| Candidate {
+            display: (*word).to_string(),
+            insert: format!("/channels {handle}{suffix}"),
+            desc: (*desc).to_string(),
             has_children: false,
         })
         .collect()
@@ -391,7 +432,7 @@ fn build_args(cmd: &str, args: Args, ctx: &MenuContext) -> Vec<Candidate> {
 /// show right now, not merely from its declared source: `/effort` on a model
 /// that takes no reasoning parameter has an `Effort` source and no rows, and
 /// promising a layer that never opens is worse than promising nothing.
-fn build_top_level(skills: &[Candidate], ctx: &MenuContext) -> Vec<Candidate> {
+fn build_top_level(skills: &[Candidate], ctx: &MenuContext, cur: &Current) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = COMMANDS
         .iter()
         .map(|(word, desc, args)| Candidate {
@@ -404,7 +445,7 @@ fn build_top_level(skills: &[Candidate], ctx: &MenuContext) -> Vec<Candidate> {
             desc: (*desc).to_string(),
             // Bare `/deep-research` means status and must be directly
             // sendable; a manually typed trailing space still opens layer 2.
-            has_children: *word != "deep-research" && !build_args(word, *args, ctx).is_empty(),
+            has_children: *word != "deep-research" && !build_args(word, *args, ctx, cur).is_empty(),
         })
         .collect();
     out.extend_from_slice(skills);
@@ -434,6 +475,7 @@ fn current_word(cmd: &str, ctx: &MenuContext, cur: &Current) -> Option<String> {
         "auto" => on_off(cur.auto),
         "verbose" => on_off(cur.verbose),
         "skin" => Some(cur.skin.to_string()),
+        "channels" => cur.active_channel.clone(),
         "model" => ctx.model_ref.clone(),
         // Unset on both sides marks nothing: the API default is the model's
         // business, and a ✔ on a guess would be a lie.
@@ -461,15 +503,29 @@ pub fn compute(
     let after = input.trim_start().strip_prefix('/')?;
     let (items, current) = match after.split_once(char::is_whitespace) {
         // Still typing the command word.
-        None => (filter(build_top_level(skills, ctx), after), None),
+        None => (filter(build_top_level(skills, ctx, cur), after), None),
         // Command word complete → maybe an argument layer.
         Some((cmd, rest)) => {
-            // A second whitespace means we're typing an arg past layer 2.
-            if rest.trim_start().contains(char::is_whitespace) {
-                return None;
+            // A second whitespace means we're typing an arg past layer 2 —
+            // only a recent channel row has a third layer.
+            if let Some((arg, tail)) = rest.trim_start().split_once(char::is_whitespace) {
+                let tail = tail.trim_start();
+                if cmd != "channels"
+                    || !is_followable(ctx, cur, arg)
+                    || tail.contains(char::is_whitespace)
+                {
+                    return None;
+                }
+                let items = filter(channel_actions(arg), tail);
+                return (!items.is_empty()).then_some(CompletionState {
+                    items,
+                    selected: 0,
+                    spaced: false,
+                    current: None,
+                });
             }
             let args = args_for(cmd)?;
-            let items = filter(build_args(cmd, args, ctx), rest.trim_start());
+            let items = filter(build_args(cmd, args, ctx, cur), rest.trim_start());
             // Looked up AFTER the filter so the index is into the rows shown.
             let current =
                 current_word(cmd, ctx, cur).and_then(|w| items.iter().position(|c| c.display == w));

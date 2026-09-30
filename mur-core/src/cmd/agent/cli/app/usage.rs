@@ -106,6 +106,11 @@ impl App {
             auto: self.auto_approve,
             verbose: self.cards_expanded,
             skin: super::super::theme::skin_name(self.theme),
+            active_channel: self
+                .channel
+                .as_ref()
+                .map(|c| super::super::slash_cmds::handle_of(c.ordinal, &c.id)),
+            following: self.follow.as_ref().map(|f| f.tag().to_string()),
         }
     }
 

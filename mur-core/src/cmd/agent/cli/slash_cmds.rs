@@ -40,10 +40,15 @@ pub(super) fn short_id(id: &str) -> &str {
 /// What a user types at `/channels` to name this channel: its ordinal, or
 /// the short id when it has no number yet.
 pub(super) fn channel_handle(s: &persist::SessionInfo) -> String {
-    if s.ordinal >= FIRST_ORDINAL {
-        s.ordinal.to_string()
+    handle_of(s.ordinal, &s.id)
+}
+
+/// `channel_handle` from the raw parts, for callers holding a `ChannelMeta`.
+pub(super) fn handle_of(ordinal: u64, id: &str) -> String {
+    if ordinal >= FIRST_ORDINAL {
+        ordinal.to_string()
     } else {
-        short_id(&s.id).to_string()
+        short_id(id).to_string()
     }
 }
 
@@ -185,7 +190,7 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
                                 let id = s.id.clone();
                                 match app.start_follow(&id, StdInstant::now()) {
                                     Ok(()) => app.push_system(format!(
-                                        "following {} — new events appear here; /channels --follow to stop",
+                                        "following {} — new events appear here; /channels --stop to stop",
                                         short_id(&id)
                                     )),
                                     Err(e) => app.push_system(format!("could not follow: {e:#}")),

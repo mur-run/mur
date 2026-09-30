@@ -432,6 +432,18 @@ fn parse_slash_channels() {
             follow: true
         })
     );
+    // `--stop` is the explicit spelling of "stop following"; it never
+    // starts a follow, so any target next to it is ignored.
+    for line in ["/channels --stop", "/channels 2 --stop", "/chan --stop 2"] {
+        assert_eq!(
+            parse_slash(line),
+            Some(SlashCmd::Channels {
+                target: None,
+                follow: true
+            }),
+            "{line}"
+        );
+    }
     // A word that is neither a number nor a hex prefix must be carried through
     // as a target, not dropped: dropping it silently degrades `/channels zzz`
     // into "list everything", which looks like the command worked.
