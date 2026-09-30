@@ -873,6 +873,11 @@ pub enum BrowserAction {
         /// agent you are talking to.
         #[arg(long)]
         agent: Option<String>,
+        /// Consent up front instead of being asked. Required when there is
+        /// no terminal to prompt on, which is the case inside murmur. Every
+        /// step still prints what it does before doing it.
+        #[arg(long)]
+        yes: bool,
     },
     /// Delete old recorded runs, keeping the most recently recorded ones.
     Prune {

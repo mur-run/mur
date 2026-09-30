@@ -651,7 +651,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     println!("  (install check only — add --live to launch a headless browser)");
                 }
             }
-            BrowserAction::Setup { agent } => {
+            BrowserAction::Setup { agent, yes } => {
                 use std::io::IsTerminal;
                 let home = dirs::home_dir();
                 let browsers = cmd::browser::doctor::browsers_dir(
@@ -660,8 +660,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 );
                 let stdin = std::io::stdin();
                 let mut out = std::io::stdout();
+                let consent = cmd::browser::setup::Consent::new(stdin.is_terminal(), yes);
                 cmd::browser::setup::prepare(
-                    stdin.is_terminal(),
+                    consent,
                     &mut stdin.lock(),
                     &mut out,
                     // Same PATH as doctor and replay: the install must use
@@ -671,7 +672,12 @@ pub async fn run(cli: Cli) -> Result<()> {
                     &mut cmd::browser::doctor::system_probe,
                     &mut cmd::browser::setup::system_installer,
                 )?;
-                cmd::browser::setup::grant_perms(agent.as_deref(), &mut stdin.lock(), &mut out)?;
+                cmd::browser::setup::grant_perms(
+                    agent.as_deref(),
+                    consent,
+                    &mut stdin.lock(),
+                    &mut out,
+                )?;
                 cmd::browser::doctor::live_check(&mut out).await?;
                 println!("mur browser is ready.");
             }

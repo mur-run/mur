@@ -16,9 +16,13 @@ const SKILL_NAME: &str = "browser";
 
 /// Step 2 of `--add`. Not run automatically: it downloads ~96 MiB and
 /// widens the agent's spawn entitlements, so a human types `yes` for both.
-const SETUP_CMD: &str = "mur browser setup";
-const SETUP_HINT: &str = "next: run `mur browser setup` — it installs Chromium and grants the \
-     spawn permissions a browser run needs (asks before each).";
+/// `--yes` because there is no TTY inside murmur to type it on. Consent is
+/// not skipped, it moves: the user approves this exact command as a chip,
+/// and the spawn itself still passes the HITL gate.
+const SETUP_CMD: &str = "mur browser setup --yes";
+const SETUP_HINT: &str = "next: run `mur browser setup --yes` — it installs Chromium (~96 MiB) \
+     and grants the spawn permissions a browser run needs. Approving the command below is the \
+     consent for both.";
 
 pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<StreamMsg>) {
     if args.first().map(String::as_str) == Some("--add") {

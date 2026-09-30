@@ -3,8 +3,15 @@
 //!
 //! Doctor stays read-only and prints the install command; setup runs that
 //! same argv (`doctor::install_argv`) after printing it and asking. The
-//! consent rule is shared with deep research (`cmd::consent`). There is no
-//! `--yes`: nothing downloads without a human typing `yes`.
+//! consent rule is shared with deep research (`cmd::consent`).
+//!
+//! Consent is a typed `yes` on a terminal, or the explicit `--yes` flag. The
+//! flag exists because setup is unusable from inside murmur otherwise: there
+//! is no TTY there, so the prompt has nothing to read and setup bails before
+//! it can grant anything. `--yes` is not a silent mode — every step still
+//! prints what it is about to do first — and it is not a default: an agent
+//! reaches it only by spawning `mur`, which the HITL gate already put in
+//! front of a human. Precedent: `grant_egress(…, yes)` in deep research.
 //!
 //! [`prepare`] covers everything up to the live test and is pure over its
 //! inputs, so tests exec nothing. `Ok(())` means "run the live test next";
@@ -33,9 +40,39 @@ pub fn system_installer(argv: &[String]) -> Result<bool> {
     Ok(status.success())
 }
 
+/// How consent will be obtained, and whether it can be at all.
+///
+/// One type rather than two bools because only three of the four
+/// combinations are meaningful, and the fourth (`--yes` on a terminal) must
+/// behave as pre-approved rather than prompt anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Consent {
+    /// Ask on the terminal; only a literal `yes` proceeds.
+    Ask,
+    /// `--yes` was passed: consent already given, still print every step.
+    Given,
+    /// No terminal and no `--yes` — nothing may be asked, so nothing runs.
+    Impossible,
+}
+
+impl Consent {
+    /// `interactive` is `stdin.is_terminal()`; `yes` is the `--yes` flag.
+    pub fn new(interactive: bool, yes: bool) -> Self {
+        match (yes, interactive) {
+            (true, _) => Self::Given,
+            (false, true) => Self::Ask,
+            (false, false) => Self::Impossible,
+        }
+    }
+
+    fn given(self) -> bool {
+        self == Self::Given
+    }
+}
+
 /// Steps 1–5 of the setup flow: check, and install only on consent.
 pub fn prepare(
-    interactive: bool,
+    consent: Consent,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
     path_var: &OsStr,
@@ -43,9 +80,10 @@ pub fn prepare(
     probe: Probe<'_>,
     install: Installer<'_>,
 ) -> Result<()> {
-    if !interactive {
+    if consent == Consent::Impossible {
         bail!(
-            "`setup` is interactive; in scripts run:\n  {}\n  mur browser doctor --live",
+            "`setup` needs a terminal to ask for consent. Pass --yes to consent up front \
+             (this is how it runs inside murmur), or run:\n  {}\n  mur browser doctor --live",
             install_hint()
         );
     }
@@ -77,7 +115,7 @@ pub fn prepare(
         output,
         "    note      npx may print a WARNING box about `npm install`; it does not apply here"
     )?;
-    if !crate::cmd::consent::literal_yes(input, output)? {
+    if !consent.given() && !crate::cmd::consent::literal_yes(input, output)? {
         writeln!(output, "  skipped — nothing was downloaded.")?;
         bail!("Chromium not installed; mur browser is not ready");
     }
@@ -119,6 +157,7 @@ pub fn prepare(
 /// and the live test still tells the truth about rendering.
 pub fn grant_perms(
     agent: Option<&str>,
+    consent: Consent,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
 ) -> Result<()> {
@@ -144,7 +183,7 @@ pub fn grant_perms(
         perms::Grant::Binary(b) => crate::cmd::agent::cmd_perm_allow_spawn(&agent, b),
         perms::Grant::Dir(d) => crate::cmd::agent::cmd_perm_allow_spawn_dir(&agent, d),
     };
-    perms::confirm_and_apply(&agent, &plan, input, output, &mut grant)?;
+    perms::confirm_and_apply(&agent, &plan, consent.given(), input, output, &mut grant)?;
     Ok(())
 }
 
@@ -189,6 +228,17 @@ mod tests {
         browsers: Option<&Path>,
         on_install: &dyn Fn() -> Result<bool>,
     ) -> Run {
+        run_with(interactive, false, answer, path_var, browsers, on_install)
+    }
+
+    fn run_with(
+        interactive: bool,
+        yes: bool,
+        answer: &str,
+        path_var: &OsStr,
+        browsers: Option<&Path>,
+        on_install: &dyn Fn() -> Result<bool>,
+    ) -> Run {
         let mut out = Vec::new();
         let mut probes = 0;
         let mut installs = Vec::new();
@@ -201,7 +251,7 @@ mod tests {
             on_install()
         };
         let result = prepare(
-            interactive,
+            Consent::new(interactive, yes),
             &mut answer.as_bytes(),
             &mut out,
             path_var,
@@ -233,11 +283,50 @@ mod tests {
             &never,
         );
         let err = format!("{:#}", r.result.unwrap_err());
-        assert!(err.contains("`setup` is interactive"), "{err}");
+        assert!(err.contains("needs a terminal"), "{err}");
+        // The bail must name the way out, or murmur is a dead end.
+        assert!(err.contains("--yes"), "{err}");
         assert!(err.contains(&install_hint()), "{err}");
         assert!(err.contains("mur browser doctor --live"), "{err}");
         assert_eq!(r.probes, 0, "bail before any check");
         assert!(r.out.is_empty(), "{}", r.out);
+    }
+
+    /// The murmur path: no TTY, but `--yes` carries the consent, so setup
+    /// proceeds and installs instead of bailing.
+    #[test]
+    fn non_tty_with_yes_installs_without_prompting() {
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        let dir = browsers.path().to_path_buf();
+        let r = run_with(false, true, "", bin.path().as_os_str(), Some(&dir), &|| {
+            complete(&dir, "chromium_headless_shell-1200");
+            Ok(true)
+        });
+        assert!(r.result.is_ok(), "{:?} / {}", r.result, r.out);
+        assert_eq!(r.installs.len(), 1, "installed exactly once");
+        assert_eq!(r.installs[0], install_argv());
+        // Consent is pre-given, not silent: the plan is still printed.
+        assert!(!r.out.contains("Type 'yes'"), "{}", r.out);
+        assert!(r.out.contains("Installing Chromium"), "{}", r.out);
+    }
+
+    /// `--yes` must not become a way to install on an empty answer without
+    /// the flag: the same non-TTY run with `yes = false` still refuses.
+    #[test]
+    fn non_tty_without_yes_installs_nothing() {
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        let r = run_with(
+            false,
+            false,
+            "yes\n",
+            bin.path().as_os_str(),
+            Some(browsers.path()),
+            &never,
+        );
+        assert!(r.result.is_err());
+        assert!(r.installs.is_empty());
     }
 
     #[test]

@@ -105,9 +105,15 @@ pub type Granter<'a> = &'a mut dyn FnMut(&Grant) -> Result<()>;
 /// A refusal is **not** an error: the skill is attached and the browser is
 /// installed either way, so setup prints the commands and carries on to the
 /// live test rather than unwinding work the user already consented to.
+///
+/// `pre_approved` skips the question, for `--yes`. It is not a way to grant
+/// silently: the grants are still printed first, and the only caller that
+/// can set it is a human passing the flag, or an agent whose `mur` spawn the
+/// HITL gate already put in front of that human.
 pub fn confirm_and_apply(
     agent: &str,
     plan: &Plan,
+    pre_approved: bool,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
     grant: Granter<'_>,
@@ -130,7 +136,7 @@ pub fn confirm_and_apply(
             "    note      the directory grant is an exec lane, not a write grant"
         )?;
     }
-    if !crate::cmd::consent::literal_yes(input, output)? {
+    if !pre_approved && !crate::cmd::consent::literal_yes(input, output)? {
         writeln!(output, "  skipped — run the commands above when ready.")?;
         return Ok(false);
     }
@@ -204,7 +210,15 @@ mod tests {
             applied.push(command_for("mur", g));
             Ok(())
         };
-        let ok = confirm_and_apply("mur", p, &mut answer.as_bytes(), &mut out, &mut grant).unwrap();
+        let ok = confirm_and_apply(
+            "mur",
+            p,
+            false,
+            &mut answer.as_bytes(),
+            &mut out,
+            &mut grant,
+        )
+        .unwrap();
         (ok, String::from_utf8(out).unwrap(), applied)
     }
 
