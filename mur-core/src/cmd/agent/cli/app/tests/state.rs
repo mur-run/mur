@@ -391,6 +391,8 @@ fn parse_slash_channels() {
     assert_eq!(parse_slash("/channels"), plain(None));
     assert_eq!(parse_slash("/channels 2"), plain(ord(2)));
     assert_eq!(parse_slash("/chan"), plain(None));
+    // `list` is the completion menu's spelling of the bare listing.
+    assert_eq!(parse_slash("/channels list"), plain(None));
     // A hex-looking word is a channel-id prefix — this is the form you can
     // copy straight out of the Hub or the listing.
     assert_eq!(parse_slash("/channels 01a0d420"), plain(id("01a0d420")));

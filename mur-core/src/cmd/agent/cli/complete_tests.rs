@@ -365,3 +365,23 @@ fn monitor_is_offered_between_its_alphabetical_neighbours_and_parses() {
     ));
     assert!(matches!(parse_slash("/mon"), Some(SlashCmd::Monitor(_))));
 }
+
+/// `/channels ` opens a real option layer: list, each recent channel to
+/// switch to (by its ordinal), and `--follow` — not one lone flag.
+#[test]
+fn channels_menu_offers_list_switch_and_follow() {
+    let c = MenuContext {
+        channels: vec![
+            ("2".into(), "01a0d420 · 6 turns · fix the menu".into()),
+            ("1".into(), "9f3c2b11 · 2 turns · hello".into()),
+        ],
+        ..ctx()
+    };
+    let st = compute("/channels ", &[], &c, &cur()).unwrap();
+    let words: Vec<&str> = st.items.iter().map(|i| i.display.as_str()).collect();
+    assert_eq!(words, ["list", "2", "1", "--follow"]);
+    assert_eq!(st.items[1].insert, "/channels 2 ");
+    assert!(st.items[1].desc.contains("fix the menu"));
+    let top = compute("/chann", &[], &c, &cur()).unwrap();
+    assert!(top.items[0].has_children);
+}

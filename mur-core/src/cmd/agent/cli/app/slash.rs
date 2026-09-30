@@ -147,7 +147,8 @@ pub fn parse_slash(line: &str) -> Option<SlashCmd> {
             SlashCmd::Channels {
                 target: args
                     .iter()
-                    .find(|s| !s.starts_with('-'))
+                    // `list` is the menu's explicit spelling of bare `/channels`.
+                    .find(|s| !s.starts_with('-') && **s != "list")
                     .map(|s| parse_channel_ref(s)),
                 follow: args.iter().any(|s| *s == "--follow" || *s == "-f"),
             }

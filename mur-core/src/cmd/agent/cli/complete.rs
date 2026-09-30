@@ -62,6 +62,8 @@ pub struct MenuContext {
     pub profile_effort: Option<mur_common::llm::Effort>,
     pub model_id: String,
     pub model_ref: Option<String>,
+    /// Recent channels as (handle typed at `/channels`, "id · turns · preview").
+    pub channels: Vec<(String, String)>,
 }
 
 /// The session half of "what is in force": a `/effort` override or a `/skin`
@@ -127,6 +129,22 @@ impl MenuContext {
             // beside the names — and first, because it is the common case.
             notes.insert(0, "last".to_string());
         }
+        let channels = super::persist::list_recent(home, agent, super::RECENT_LIMIT)
+            .map(|recent| {
+                recent
+                    .iter()
+                    .map(|s| {
+                        let desc = format!(
+                            "{} · {} turns · {}",
+                            super::slash_cmds::short_id(&s.id),
+                            s.turns,
+                            s.preview
+                        );
+                        (super::slash_cmds::channel_handle(s), desc)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             effort,
             models,
@@ -135,6 +153,7 @@ impl MenuContext {
             profile_effort,
             model_id,
             model_ref,
+            channels,
         }
     }
 }
@@ -158,6 +177,8 @@ pub enum Args {
     Secret,
     /// `MenuContext::notes` — agent-local note names, plus `last`.
     Note,
+    /// `list`, then `MenuContext::channels` to switch to, then `--follow`.
+    Channels,
 }
 
 const ON_OFF: &[(&str, &str)] = &[("on", "enable"), ("off", "disable")];
@@ -212,7 +233,8 @@ const LOGIN_PROVIDERS: &[(&str, &str)] = &[
     ("anthropic", "Claude subscription"),
     ("chatgpt", "ChatGPT subscription"),
 ];
-const CHANNELS_ARGS: &[(&str, &str)] = &[("--follow", "live-tail another channel")];
+const CHANNELS_LIST: (&str, &str) = ("list", "show recent channels");
+const CHANNELS_FOLLOW: (&str, &str) = ("--follow", "live-tail another channel (bare: stop)");
 
 /// Built-in commands: (word without slash, description, argument source).
 /// `exit` is omitted as a duplicate of `quit`.
@@ -230,7 +252,7 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     (
         "channels",
         "list, switch, or follow channels",
-        Args::Fixed(CHANNELS_ARGS),
+        Args::Channels,
     ),
     ("clear", "start a new conversation", Args::None),
     (
@@ -336,6 +358,13 @@ fn build_args(cmd: &str, args: Args, ctx: &MenuContext) -> Vec<Candidate> {
             .iter()
             .map(|n| (n.clone(), String::new()))
             .collect(),
+        Args::Channels => {
+            let row = |(w, d): (&str, &str)| (w.to_string(), d.to_string());
+            let mut v = vec![row(CHANNELS_LIST)];
+            v.extend(ctx.channels.iter().cloned());
+            v.push(row(CHANNELS_FOLLOW));
+            v
+        }
         Args::Secret => {
             let mut v: Vec<(String, String)> = ctx
                 .secrets

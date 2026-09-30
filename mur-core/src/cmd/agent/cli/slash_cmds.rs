@@ -37,6 +37,16 @@ pub(super) fn short_id(id: &str) -> &str {
     &id[..id.len().min(SHORT_ID_LEN)]
 }
 
+/// What a user types at `/channels` to name this channel: its ordinal, or
+/// the short id when it has no number yet.
+pub(super) fn channel_handle(s: &persist::SessionInfo) -> String {
+    if s.ordinal >= FIRST_ORDINAL {
+        s.ordinal.to_string()
+    } else {
+        short_id(&s.id).to_string()
+    }
+}
+
 /// One row of the `/channels` listing.
 fn channel_line(s: &persist::SessionInfo) -> String {
     let n = if s.ordinal >= FIRST_ORDINAL {
