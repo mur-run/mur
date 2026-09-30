@@ -203,6 +203,15 @@ pub fn check(mur_home: &Path, agent: &str, ent: &Entitlements) -> Result<PinChec
     })
 }
 
+/// Top-level entitlement keys that differ between `a` and `b`, sorted.
+pub fn changed_entitlements(a: &Entitlements, b: &Entitlements) -> Vec<String> {
+    let (a, b) = (canonical(a), canonical(b));
+    if a == b {
+        return Vec::new();
+    }
+    changed_keys(&a, &b)
+}
+
 fn changed_keys(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
     let (Some(a), Some(b)) = (a.as_object(), b.as_object()) else {
         return vec!["entitlements".to_string()];

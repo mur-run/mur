@@ -163,7 +163,7 @@ fn rollback_restores_profile_as_new_version() {
         .save_profile("agent-f", &profile("modified"), "update")
         .unwrap(); // v2
 
-    let rev = store.rollback_profile("agent-f", 1).unwrap(); // v3 = rollback to v1
+    let rev = store.rollback_profile("agent-f", 1).unwrap().revision; // v3 = rollback to v1
     assert_eq!(rev.version, 3);
 
     let loaded = store.read_profile("agent-f").unwrap().unwrap();
