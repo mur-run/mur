@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod embedding;
+pub mod entitlements_pin;
 pub mod exchange;
 pub mod pipeline_yaml;
 pub mod spot_rate;

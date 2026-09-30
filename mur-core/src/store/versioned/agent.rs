@@ -293,9 +293,11 @@ impl VersionedAgentStore {
         // as fresh (that would launder it), just leave the pin alone.
         if let Some(prior) = prior {
             match mur_common::entitlements_pin::entitlements_from_yaml(&content, &archive) {
-                Ok(new) => {
-                    crate::cmd::agent::advance_entitlements_pin(&profile_path, prior.as_ref(), &new)
-                }
+                Ok(new) => crate::store::entitlements_pin::advance_entitlements_pin(
+                    &profile_path,
+                    prior.as_ref(),
+                    &new,
+                ),
                 Err(e) => tracing::warn!(agent, error = %e, "entitlement pin not updated"),
             }
         }
