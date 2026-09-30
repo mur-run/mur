@@ -60,7 +60,7 @@ pub(super) fn run_plain(
             |delta, thinking, _task_id| {
                 if !thinking {
                     streamed.set(true);
-                    let _ = write!(out2.borrow_mut(), "{delta}");
+                    let _ = write!(out2.borrow_mut(), "{}", super::scrub::scrub_str(delta));
                     let _ = out2.borrow_mut().flush();
                 }
             },
@@ -98,10 +98,16 @@ pub(super) fn run_plain(
                     // ignore the flag outright, so the identical flag
                     // behaved differently depending on how the CLI was started
                     // — and plain mode is exactly where unattended runs live.
-                    eprintln!("  [auto-approved read-only {tool} (read lane)]");
+                    eprintln!(
+                        "  [auto-approved read-only {} (read lane)]",
+                        super::scrub::scrub_str(tool)
+                    );
                     (true, "auto")
                 } else if within_ceiling && session_allow.borrow().contains(tool) {
-                    eprintln!("  [auto-approved {tool} (session allow)]");
+                    eprintln!(
+                        "  [auto-approved {} (session allow)]",
+                        super::scrub::scrub_str(tool)
+                    );
                     (true, "auto")
                 } else if let Some(k) = dest::grant_for(tool, hitl.get("tool_input"), tier)
                     .key()
@@ -109,7 +115,11 @@ pub(super) fn run_plain(
                 {
                     // Same key the TUI row stores: a scope the operator
                     // granted with [a], never a tier (`dest::grant_for`).
-                    eprintln!("  [auto-approved {tool} (session grant: {k})]");
+                    eprintln!(
+                        "  [auto-approved {} (session grant: {})]",
+                        super::scrub::scrub_str(tool),
+                        super::scrub::scrub_str(&k)
+                    );
                     (true, "auto")
                 } else if interactive {
                     // Outer loop releases stdin lock between reads (Task 2), so
@@ -133,7 +143,7 @@ pub(super) fn run_plain(
                         width,
                         super::call_summary::ApprovalFrame::Transcript,
                     );
-                    let _ = writeln!(o, "  tool approval: {summary}");
+                    let _ = writeln!(o, "  tool approval: {}", super::scrub::scrub_str(&summary));
                     let _ = write!(o, "  [y]es / [a]lways / [n]o? ");
                     let _ = o.flush();
                     let mut ans = String::new();
@@ -148,7 +158,11 @@ pub(super) fn run_plain(
                             // the lookup could never keep.
                             match dest::grant_for(tool, hitl.get("tool_input"), tier).key() {
                                 Some(k) => {
-                                    let _ = writeln!(o, "  [won't ask again this session for {k}]");
+                                    let _ = writeln!(
+                                        o,
+                                        "  [won't ask again this session for {}]",
+                                        super::scrub::scrub_str(&k)
+                                    );
                                     session_allow.borrow_mut().insert(k);
                                 }
                                 None => {
@@ -202,7 +216,12 @@ pub(super) fn run_plain(
                         step_names
                             .borrow_mut()
                             .insert(step_id.clone(), name.clone());
-                        let _ = writeln!(out2.borrow_mut(), "→ {name} {hint}");
+                        let _ = writeln!(
+                            out2.borrow_mut(),
+                            "→ {} {}",
+                            super::scrub::scrub_str(&name),
+                            super::scrub::scrub_str(&hint)
+                        );
                         let _ = out2.borrow_mut().flush();
                     }
                     StepEvent::Completed {
@@ -217,7 +236,11 @@ pub(super) fn run_plain(
                             .get(&step_id)
                             .cloned()
                             .unwrap_or_default();
-                        let _ = writeln!(out2.borrow_mut(), "{glyph} {name} · {duration_ms}ms");
+                        let _ = writeln!(
+                            out2.borrow_mut(),
+                            "{glyph} {} · {duration_ms}ms",
+                            super::scrub::scrub_str(&name)
+                        );
                         let _ = out2.borrow_mut().flush();
                     }
                 }
@@ -228,7 +251,7 @@ pub(super) fn run_plain(
                 Ok((reply, tid)) => {
                     // Fall back to the final reply if the agent didn't stream deltas.
                     if !streamed.get() && !reply.trim().is_empty() {
-                        write!(out2.borrow_mut(), "{reply}")?;
+                        write!(out2.borrow_mut(), "{}", super::scrub::scrub_str(&reply))?;
                     }
                     writeln!(out2.borrow_mut())?;
                     // Usage footer: total tokens + cost (reuse footer helpers).
@@ -251,11 +274,19 @@ pub(super) fn run_plain(
                     context = tid;
                 }
                 Err(cause) => {
-                    writeln!(out2.borrow_mut(), "\nerror: {cause}")?;
+                    writeln!(
+                        out2.borrow_mut(),
+                        "\nerror: {}",
+                        super::scrub::scrub_str(&cause.to_string())
+                    )?;
                 }
             },
             Err(e) => {
-                writeln!(out2.borrow_mut(), "\nerror: {e:#}")?;
+                writeln!(
+                    out2.borrow_mut(),
+                    "\nerror: {}",
+                    super::scrub::scrub_str(&format!("{e:#}"))
+                )?;
             }
         }
     }
