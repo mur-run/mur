@@ -275,7 +275,13 @@ pub async fn build_provider_runner(
                     agent_name: profile.inner.name.clone(),
                     identity: identity.clone(),
                     skills: runtime_skills.clone(),
-                    active_project: mur_common::project::active_project_id,
+                    // The turn's session cwd, not the process cwd: a runtime
+                    // process lives in the agent home, which is never a repo,
+                    // so resolving there made every `scope: project` save
+                    // degrade to user scope.
+                    active_project: crate::tools::remember::session_project_resolver(
+                        session_cwd.clone(),
+                    ),
                 }),
             );
             // Registered with `remember`, under the same capture gate: an agent

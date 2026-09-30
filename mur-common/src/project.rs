@@ -41,13 +41,27 @@ pub fn project_id(start: &Path) -> Option<String> {
 /// (→ only user/enterprise skills inject). Single source used by both the CLI
 /// injection hook and the agent runtime injector so they can't diverge.
 pub fn active_project_id() -> Option<String> {
+    active_project_id_from(std::env::current_dir().ok().as_deref())
+}
+
+/// The active project id as seen from `start`, which is the directory the
+/// *caller* considers current — for the agent runtime that is the turn's
+/// session cwd, not the process cwd.
+///
+/// The distinction is the whole point: a long-lived runtime process sits in
+/// the agent home (`~/.mur/agents/<name>`, never a repo) while its turns work
+/// in the user's project. Resolving from [`std::env::current_dir`] there
+/// answers "is the *daemon* in a repo", which is always no, so project scope
+/// silently degraded to user scope for every agent. `None` for `start` keeps
+/// the env override working and otherwise means "no project".
+pub fn active_project_id_from(start: Option<&Path>) -> Option<String> {
     if let Ok(v) = std::env::var("MUR_ACTIVE_PROJECT") {
         let v = v.trim();
         if !v.is_empty() {
             return Some(v.to_string());
         }
     }
-    std::env::current_dir().ok().and_then(|d| project_id(&d))
+    start.and_then(project_id)
 }
 
 #[cfg(test)]
@@ -59,6 +73,24 @@ mod tests {
     fn active_project_id_prefers_env_override() {
         let _env = crate::test_env::EnvGuard::set([("MUR_ACTIVE_PROJECT", "/explicit")]);
         assert_eq!(active_project_id().as_deref(), Some("/explicit"));
+    }
+
+    /// The caller's directory decides the project, not the process's. This is
+    /// the runtime case: the process sits in a non-repo agent home while the
+    /// turn works inside a repo, and the repo must win.
+    #[test]
+    fn active_project_id_from_reads_the_callers_directory_not_the_process() {
+        let _env = crate::test_env::EnvGuard::unset(["MUR_ACTIVE_PROJECT"]);
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let not_repo = tmp.path().join("agent-home");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&not_repo).unwrap();
+
+        // Process cwd is irrelevant; the passed directory is the answer.
+        assert_eq!(active_project_id_from(Some(&repo)), project_id(&repo));
+        assert!(active_project_id_from(Some(&not_repo)).is_none());
+        assert!(active_project_id_from(None).is_none());
     }
 
     #[test]
