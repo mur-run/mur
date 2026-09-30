@@ -80,7 +80,7 @@ All paths below are relative to the code worktree root
 **Interfaces** — Produces: worktree `.worktrees/murmur-theme-tokens` on
 branch `feat/murmur-theme-tokens`, based on `origin/main`.
 
-- [ ] Create it (run from the main checkout):
+- [x] Create it (run from the main checkout):
 
 ```bash
 cd /Volumes/Firecuda4tb/Projects/mur
@@ -92,7 +92,7 @@ git log --oneline -1
 
 Expected: one line, the current `origin/main` head.
 
-- [ ] Baseline — the theme tests pass before anything changes:
+- [x] Baseline — the theme tests pass before anything changes:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::theme::/)'
@@ -108,7 +108,7 @@ Expected: `… passed, 0 failed`.
 (`theme/mod.rs`, `theme/tests.rs`); every public item keeps its path
 `crate::cmd::agent::cli::theme::*`.
 
-- [ ] Move the file and split its test module out verbatim:
+- [x] Move the file and split its test module out verbatim:
 
 ```bash
 cd mur-core/src/cmd/agent/cli
@@ -134,7 +134,7 @@ EOF
 cd -
 ```
 
-- [ ] Verify nothing but location changed:
+- [x] Verify nothing but location changed:
 
 ```bash
 cargo fmt --all
@@ -145,7 +145,7 @@ git diff --stat -M HEAD
 Expected: the same pass count as Task 0's baseline; the diff stat shows
 `theme.rs => theme/mod.rs` and a new `theme/tests.rs`, nothing else.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add -A mur-core/src/cmd/agent/cli/theme mur-core/src/cmd/agent/cli/theme.rs
@@ -160,7 +160,7 @@ git commit -m "refactor(murmur): move theme tests into theme/tests.rs (pure move
 `Theme: Clone + Copy + Debug`; fields `pub surface_alt: Style` and
 `pub badge_warn: Style` on every palette (values in the spec §1 table).
 
-- [ ] Write the failing guards. Append to `CLI/theme/tests.rs`:
+- [x] Write the failing guards. Append to `CLI/theme/tests.rs`:
 
 ```rust
 /// `ansi` never learns the terminal's background, so it paints none: no
@@ -250,7 +250,7 @@ line `("diff_del_text", ANSI.diff_del_text),` add
             ("settlement_surface", ANSI.settlement_surface),
 ```
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::theme::/)'
@@ -258,7 +258,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::theme::/)'
 
 Expected: compile error `no field 'surface_alt' on type 'Theme'`.
 
-- [ ] Add the fields. In `CLI/theme/mod.rs` replace
+- [x] Add the fields. In `CLI/theme/mod.rs` replace
 
 ```rust
 pub struct Theme {
@@ -306,7 +306,7 @@ with
     pub badge_warn: Style,
 ```
 
-- [ ] Fill the four palettes. In `ANSI` replace
+- [x] Fill the four palettes. In `ANSI` replace
 
 ```rust
     border: Style::new().add_modifier(Modifier::DIM),
@@ -426,7 +426,7 @@ with
         .bg(Color::Rgb(0xff, 0xc1, 0x07)),
 ```
 
-- [ ] Watch it pass:
+- [x] Watch it pass:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::theme::/)'
@@ -434,7 +434,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::theme::/)'
 
 Expected: all pass, including the three new tests.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add mur-core/src/cmd/agent/cli/theme
@@ -461,7 +461,7 @@ pub fn check(theme: &Theme, assumed_bg: Color) -> Vec<Failure>;
 
 PR-4 (user skins) calls `check` at load; keep the signature.
 
-- [ ] Create `CLI/theme/contrast.rs` with the types, a stub `check`, and
+- [x] Create `CLI/theme/contrast.rs` with the types, a stub `check`, and
 its tests:
 
 ```rust
@@ -621,7 +621,7 @@ use ratatui::widgets::BorderType;
 pub mod contrast;
 ```
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::theme::contrast::/)'
@@ -630,7 +630,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::theme::contrast::/)'
 Expected: 4 failed (`a_diff_tint…`, `a_stripe…`, `dim_is_measured_dimmed`,
 `an_unreadable_badge_warn…`), 2 passed.
 
-- [ ] Implement `check`. Replace the stub
+- [x] Implement `check`. Replace the stub
 
 ```rust
 pub fn check(_theme: &Theme, _assumed_bg: Color) -> Vec<Failure> {
@@ -704,7 +704,7 @@ pub fn check(theme: &Theme, assumed_bg: Color) -> Vec<Failure> {
 }
 ```
 
-- [ ] Hold the built-ins to it. In `CLI/theme/tests.rs` replace the two
+- [x] Hold the built-ins to it. In `CLI/theme/tests.rs` replace the two
 local helpers
 
 ```rust
@@ -750,7 +750,7 @@ fn rgb_skins_meet_wcag() {
 }
 ```
 
-- [ ] Watch it pass:
+- [x] Watch it pass:
 
 ```bash
 cargo fmt --all
@@ -761,7 +761,7 @@ Expected: all pass. If `rgb_skins_meet_wcag` fails, the message names the
 pair and ratio; stop and report it — do not change a palette value without
 recording the new ratio in the spec §1 table.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add mur-core/src/cmd/agent/cli/theme
@@ -785,7 +785,7 @@ Colour mapping: quote bar `muted`; `---` rule and table grid `border`; list
 marker `accent`; table header `accent` + BOLD; stripe `surface_alt`
 (patched, so an empty `ansi` value draws nothing). `CODE` stays.
 
-- [ ] Write the failing tests. Create `CLI/markdown/theme_tests.rs`:
+- [x] Write the failing tests. Create `CLI/markdown/theme_tests.rs`:
 
 ```rust
 //! The markdown renderer paints only with the active skin (murmur UI spec
@@ -889,7 +889,7 @@ with
     }
 ```
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::markdown::/)'
@@ -897,7 +897,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::markdown::/)'
 
 Expected: compile error — `render` takes 2 arguments but 3 were supplied.
 
-- [ ] Thread the theme through the renderer. In `CLI/markdown.rs`:
+- [x] Thread the theme through the renderer. In `CLI/markdown.rs`:
 
 Replace
 
@@ -1077,7 +1077,7 @@ with
                             Span::styled(s.content, style.patch(stripe_bg))
 ```
 
-- [ ] Pass the theme at every caller.
+- [x] Pass the theme at every caller.
 
 `CLI/ui/message.rs` — replace
 
@@ -1196,7 +1196,7 @@ with
                 m.rendered = Some(markdown::render(&m.text, width, theme).lines);
 ```
 
-- [ ] Confirm no caller was missed:
+- [x] Confirm no caller was missed:
 
 ```bash
 command grep -rn "markdown::render(\|agent_rendered(" --include='*.rs' mur-core/src | command grep -v "fn render\|fn agent_rendered"
@@ -1204,7 +1204,7 @@ command grep -rn "markdown::render(\|agent_rendered(" --include='*.rs' mur-core/
 
 Expected: every hit shows three arguments.
 
-- [ ] Watch it pass:
+- [x] Watch it pass:
 
 ```bash
 cargo fmt --all
@@ -1213,7 +1213,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::/)'
 
 Expected: all pass, including the three `markdown::theme_tests`.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add mur-core/src/cmd/agent/cli
@@ -1236,7 +1236,7 @@ fn new_input(theme: &'static Theme) -> TextArea<'static>;
 PR-4's runtime `/skin` load and the spec §2 `/skin` notice call
 `apply_theme`; nothing else assigns `app.theme` outside tests.
 
-- [ ] Write the failing tests. Create `CLI/app/tests/theme_tests.rs`:
+- [x] Write the failing tests. Create `CLI/app/tests/theme_tests.rs`:
 
 ```rust
 //! `App::apply_theme`: a skin switch repaints everything murmur still owns
@@ -1299,7 +1299,7 @@ mod step_app_tests;
 mod theme_tests;
 ```
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::app::tests::theme_tests::/)'
@@ -1307,7 +1307,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::app::tests::theme_tests
 
 Expected: compile error — no method named `apply_theme`.
 
-- [ ] Implement. In `CLI/app/mod.rs` replace
+- [x] Implement. In `CLI/app/mod.rs` replace
 
 ```rust
 fn new_input() -> TextArea<'static> {
@@ -1394,7 +1394,7 @@ with
                     app.apply_theme(theme::resolve_skin(&name));
 ```
 
-- [ ] Watch it pass:
+- [x] Watch it pass:
 
 ```bash
 cargo fmt --all
@@ -1404,7 +1404,7 @@ wc -l mur-core/src/cmd/agent/cli/slash_cmds.rs mur-core/src/cmd/agent/cli/app/mo
 
 Expected: all pass; both files still ≤ 800 lines.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add mur-core/src/cmd/agent/cli
@@ -1419,7 +1419,7 @@ git commit -m "feat(murmur): App::apply_theme re-renders cached markdown and the
 `CLI/ui/theme_paint_tests.rs` with helpers `status_buffer(theme, auto_all)`
 and `assert_painted(buf, needle, want)`, extended in Task 8.
 
-- [ ] Write the failing tests. Create `CLI/ui/theme_paint_tests.rs`:
+- [x] Write the failing tests. Create `CLI/ui/theme_paint_tests.rs`:
 
 ```rust
 //! Paint-site guards for the murmur UI spec §1: every colour a frame shows
@@ -1523,7 +1523,7 @@ mod status;
 mod theme_paint_tests;
 ```
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::ui::theme_paint_tests::/)'
@@ -1532,7 +1532,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::ui::theme_paint_tests::
 Expected: 2 failed — `chips_and_states…` on `"READS": colours` (pinned
 Black on Cyan), `the_ansi_status_row…` on `Rgb(255, 165, 0)`.
 
-- [ ] Implement. In `CLI/ui/status.rs`:
+- [x] Implement. In `CLI/ui/status.rs`:
 
 Replace
 
@@ -1642,7 +1642,7 @@ with
 use ratatui::style::{Modifier, Style};
 ```
 
-- [ ] Watch it pass:
+- [x] Watch it pass:
 
 ```bash
 cargo fmt --all
@@ -1651,7 +1651,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::ui::/)'
 
 Expected: all pass.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add mur-core/src/cmd/agent/cli/ui.rs mur-core/src/cmd/agent/cli/ui
@@ -1668,7 +1668,7 @@ left in `ui.rs`, `ui/chooser.rs`, `ui/hitl.rs`.
 This task is a mechanical token swap with no new behaviour to test; the
 check is the grep and the existing suites.
 
-- [ ] `CLI/ui/chooser.rs` — replace
+- [x] `CLI/ui/chooser.rs` — replace
 
 ```rust
                         format!(" — {}", c.desc),
@@ -1708,7 +1708,7 @@ with
 use ratatui::style::Modifier;
 ```
 
-- [ ] `CLI/ui.rs` — replace
+- [x] `CLI/ui.rs` — replace
 
 ```rust
             Style::default()
@@ -1762,7 +1762,7 @@ with
 use ratatui::style::{Modifier, Style};
 ```
 
-- [ ] `CLI/ui/hitl.rs` (the `DarkGray` sites only; the rest is PR-3's) —
+- [x] `CLI/ui/hitl.rs` (the `DarkGray` sites only; the rest is PR-3's) —
 replace
 
 ```rust
@@ -1825,7 +1825,7 @@ with
         lines.push(Line::styled(note, theme.muted));
 ```
 
-- [ ] Verify:
+- [x] Verify:
 
 ```bash
 command grep -rn "DarkGray" mur-core/src/cmd/agent/cli --include='*.rs' | command grep -v "diff.rs"
@@ -1836,7 +1836,7 @@ cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::/)'
 Expected: the grep prints nothing (`diff.rs`'s `DarkGray` is an ANSI
 escape table entry, not a paint site); all tests pass.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add mur-core/src/cmd/agent/cli
@@ -1850,7 +1850,7 @@ git commit -m "fix(murmur): secondary text takes muted, not a pinned DarkGray"
 **Interfaces** — Consumes: Task 6's `theme_paint_tests.rs`. Produces:
 `render_card::error_line(card, theme)` (private; signature change only).
 
-- [ ] Write the failing tests. Append to `CLI/ui/theme_paint_tests.rs`:
+- [x] Write the failing tests. Append to `CLI/ui/theme_paint_tests.rs`:
 
 ```rust
 use super::message::push_message;
@@ -1902,7 +1902,7 @@ fn a_failed_card_takes_error() {
 }
 ```
 
-- [ ] Watch it fail:
+- [x] Watch it fail:
 
 ```bash
 cargo nextest run -p mur-core -E 'test(/cmd::agent::cli::ui::theme_paint_tests::/)'
@@ -1912,7 +1912,7 @@ Expected: `user_body_is_muted` fails on `light` (`Rgb(31, 36, 48)` vs
 `Rgb(92, 99, 112)`); `a_failed_card_takes_error` fails on `light`
 (`Red` vs `Rgb(179, 38, 30)`).
 
-- [ ] Implement. `CLI/ui/message.rs` — replace
+- [x] Implement. `CLI/ui/message.rs` — replace
 
 ```rust
             for l in m.text.lines() {
@@ -1978,7 +1978,7 @@ with
     if let Some(line) = error_line(card, theme) {
 ```
 
-- [ ] Watch it pass:
+- [x] Watch it pass:
 
 ```bash
 cargo fmt --all
@@ -1990,7 +1990,7 @@ Expected: all pass. If a pre-existing test in `ui/message.rs` or
 assertion to the token (`theme.muted` / `theme.error`) and say so in the
 commit body.
 
-- [ ] Commit:
+- [x] Commit:
 
 ```bash
 git add mur-core/src/cmd/agent/cli
@@ -2003,7 +2003,7 @@ git commit -m "fix(murmur): user turns read in muted; failed tool calls take the
 
 **Interfaces** — Consumes: Tasks 1–8. Produces: a PR against `main`.
 
-- [ ] CI's lint and the full suite:
+- [x] CI's lint and the full suite:
 
 ```bash
 cargo fmt --all -- --check
@@ -2014,7 +2014,7 @@ cargo nextest run -p mur-core; echo "nextest exit=$?"
 Expected: fmt prints nothing; `clippy exit=0`; `nextest exit=0`. Read the
 exit codes, not a filtered grep.
 
-- [ ] File-size rule:
+- [x] File-size rule:
 
 ```bash
 wc -l mur-core/src/cmd/agent/cli/{theme/mod.rs,theme/tests.rs,theme/contrast.rs,markdown.rs,slash_cmds.rs,app/mod.rs,ui/status.rs,render_card.rs}
@@ -2022,7 +2022,7 @@ wc -l mur-core/src/cmd/agent/cli/{theme/mod.rs,theme/tests.rs,theme/contrast.rs,
 
 Expected: every count ≤ 800.
 
-- [ ] Look at it, all four skins, the way the spec was reviewed: a real
+- [x] Look at it, all four skins, the way the spec was reviewed: a real
 session driven in tmux, displayed in kitty (Ghostty hosts Claude Code and
 is masked from computer-use screenshots). Note the saved skin first so you
 can prove `--skin` did not change it:
@@ -2064,7 +2064,7 @@ turns are readable on `light`. Afterwards `tmux kill-session -t murui` and
 re-run `grep 'skin:' ~/.mur/config.yaml` — it must print the same line as
 before.
 
-- [ ] Push and open the PR:
+- [x] Push and open the PR:
 
 ```bash
 git push -u origin feat/murmur-theme-tokens
@@ -2078,12 +2078,12 @@ PR-1 of the murmur UI pass (spec: docs/superpowers/specs/2026-09-29-murmur-ui-p1
 
 Visible change: status chips in the skin's colours; table stripe from the skin (none on `ansi`, which fixes striped rows vanishing on light terminals); user turns readable on `light`; table headers and list markers in `accent`.
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+Generated with [MUR](https://app.mur.run/products/mur)
 EOF
 )"
 ```
 
-- [ ] Before any merge, check CI independently (`gh pr checks <n>`; zero
+- [x] Before any merge, check CI independently (`gh pr checks <n>`; zero
 pending, zero failing). Do not use `--auto`.
 
 ---
