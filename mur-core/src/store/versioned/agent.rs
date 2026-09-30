@@ -270,6 +270,12 @@ impl VersionedAgentStore {
     }
 
     /// Roll back agent profile to `to_version` as a new commit.
+    ///
+    /// Moves the #712 entitlement pin with the profile, like every other
+    /// trusted writer; otherwise the next start refuses with
+    /// `entitlements_unpinned`. The pin only moves from a trusted state (see
+    /// `entitlements_pin::advance_pin`), so a profile tampered with before the
+    /// rollback keeps its stale pin and still needs `mur agent perm reseal`.
     pub fn rollback_profile(&mut self, agent: &str, to_version: u32) -> Result<AgentRevision> {
         let archive = self
             .root
@@ -280,7 +286,32 @@ impl VersionedAgentStore {
             return Err(anyhow!("no archived v{to_version} for agent '{agent}'"));
         }
         let content = std::fs::read_to_string(&archive)?;
-        self.save_profile(agent, &content, &format!("rollback to v{to_version}"))
+        let profile_path = self.root.join(agent).join("profile.yaml");
+        let prior = Self::prior_entitlements(&profile_path);
+        let rev = self.save_profile(agent, &content, &format!("rollback to v{to_version}"))?;
+        // Fail closed: current profile unreadable/unparseable → do not treat it
+        // as fresh (that would launder it), just leave the pin alone.
+        if let Some(prior) = prior {
+            match mur_common::entitlements_pin::entitlements_from_yaml(&content, &archive) {
+                Ok(new) => {
+                    crate::cmd::agent::advance_entitlements_pin(&profile_path, prior.as_ref(), &new)
+                }
+                Err(e) => tracing::warn!(agent, error = %e, "entitlement pin not updated"),
+            }
+        }
+        Ok(rev)
+    }
+
+    /// Entitlements on disk before a rollback: `Some(None)` when there is no
+    /// profile yet, `None` when one exists but cannot be read or parsed.
+    fn prior_entitlements(profile_path: &Path) -> Option<Option<mur_common::agent::Entitlements>> {
+        match std::fs::read_to_string(profile_path) {
+            Ok(yaml) => mur_common::entitlements_pin::entitlements_from_yaml(&yaml, profile_path)
+                .ok()
+                .map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(None),
+            Err(_) => None,
+        }
     }
 
     /// Export a single agent's git history as a portable bundle file.
