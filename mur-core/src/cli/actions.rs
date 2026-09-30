@@ -803,6 +803,7 @@ pub enum BrowserAction {
         run: String,
         #[arg(long)]
         profile: Option<String>,
+        /// `test` | `automation` | `live` (interactive, behind the egress proxy).
         #[arg(long, default_value = "test")]
         mode: String,
         #[arg(long)]

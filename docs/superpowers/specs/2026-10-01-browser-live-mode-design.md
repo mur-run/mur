@@ -68,11 +68,25 @@ So CDP is an observation channel, not a boundary. Request interception over
 CDP may be used for UX (showing what was blocked). It is never the reason a
 request fails.
 
-### D2 — The allowlist is per-run input with no built-in sites
+### D2 — The allowlist is the browser entry's `network` policy, with no built-in sites
 
-The allowlist comes from the run's configuration. MUR ships no site list
-(CLAUDE.md rules 1 and 2). An empty allowlist denies everything. Real shops
-are the user's input, not the product's.
+The allowlist is the `network:` allowlist of the agent profile's `mur-browser`
+MCP entry — the same policy `mcp_client.rs:467` already registers with the
+proxy when it spawns the child. MUR ships no site list (CLAUDE.md rules 1
+and 2). An empty allowlist denies everything. Real shops are the user's
+input, not the product's.
+
+**Revised 2026-10-01 (was: per-run input).** `register_policy` is an
+in-process `Mutex<HashMap>` in the runtime (`egress_proxy.rs:60-70`);
+`mur-browser` is a separate process and its crate does not — and per the
+layering rule must not — depend on `mur-agent-runtime`. It therefore cannot
+mint a per-run token. The only credential it can reach is the entry token
+the runtime places in `HTTP_PROXY`'s userinfo. Live mode reuses that token,
+so the allowlist is per-entry, not per-run. A per-run token would need the
+proxy to expose a control endpoint (mint a sub-token under the entry
+token); that is phase 2, not v1. Changing the allowlist means editing the
+profile and restarting the agent, which is the existing `mur agent mcp`
+contract.
 
 ### D3 — v1 acceptance runs on local fixtures, not real shops
 
@@ -135,9 +149,11 @@ Consequences:
 
 - A port alone proves who is listening only while the listener is up. A
   token also proves who is *sending*: an attacker that takes the port still
-  needs the run's token to be granted that run's allowlist, and with a
-  per-run token (Gap 2) it is never reused. Token identity is the stronger
-  claim, so Gaps 1 and 2 stay in v1.
+  needs the entry's token to be granted that entry's allowlist. The token
+  is per-entry, not per-run (D2, revised): it lives as long as the
+  `mur-browser` child does and is never written anywhere but the 0600
+  config file (Gap 2). Token identity is still the stronger claim, so Gaps
+  1 and 2 stay in v1.
 - The proxy binding once per runtime, not per run, means there is no
   per-run port to steal at run end; the port outlives every run and dies
   with the runtime.
@@ -184,7 +200,7 @@ request line and `Proxy-Authorization` and never tunnels. Target
 - Renaming the env var is not the fix. It routes traffic to the proxy but
   loses the token (B, C). [read] `normalizeProxySettings` rebuilds `server`
   as `protocol + "//" + host` (`coreBundle.js:52274`), dropping the userinfo.
-- **The fix is Gap 2's per-run config file together with Gap 1's 407.**
+- **The fix is Gap 2's config file together with Gap 1's 407.**
   Neither alone is enough (C has 407 without config; B has neither).
 - Per-port identity (B alone, no credentials) was considered and rejected;
   see D6.
@@ -225,9 +241,20 @@ not change.
 `browser.launchOptions.proxy.username` / `.password` (`:73569-73570`), and the
 config file is chosen with `--config` / `PLAYWRIGHT_MCP_CONFIG` (`:73890`).
 
-Fix: write a per-run MCP config file with mode 0600 in the run's private
-directory, pass it with `--config`, and delete it once MCP `initialize`
-returns. The token is per-run and dies with the run.
+Fix: `mur-browser` parses the proxy URL the runtime already exports in
+`HTTPS_PROXY` (`http://<token>:x@127.0.0.1:<port>`, `mcp_client.rs:467-472`),
+writes an MCP config file with mode 0600 in a 0700 private directory
+(`{"browser":{"launchOptions":{"proxy":{"server","username","password"}}}}`),
+passes it with `--config`, and deletes it when the Playwright child exits.
+[read] `@playwright/mcp` reads the file once at process start
+(`resolveCLIConfigForMCP` → `loadConfig`, `coreBundle.js:73641-73645`), so
+there is no earlier moment worth hooking. Implemented as `mur browser record
+--mode live` (`mur-core/src/cmd/browser/mod.rs`, `live_config_for`) over
+`mur-browser/src/live_proxy.rs`; the same `record` entry the browser MCP
+entry already launches, so no new launcher. The
+token is the entry token (D2, revised); the file dies with the launch. If
+`HTTPS_PROXY` is absent or carries no userinfo, live mode refuses to launch
+rather than starting an unproxied Chromium (D1).
 
 ### Gap 3 — The proxy forwards CONNECT only
 
@@ -276,8 +303,9 @@ pass.
 ## Architecture (v1)
 
 ```
-agent ──MCP──▶ mur-browser (Mode::Live)
-                 │  per run: token = proxy.register_policy(allowlist)
+agent ──MCP──▶ mur browser record --mode live   (mur-browser, Mode::Live)
+                 │  token = userinfo of HTTPS_PROXY (set by the runtime,
+                 │          mcp_client.rs:467, from the entry's allowlist)
                  │  writes 0600 MCP config {proxy.server, username=token}
                  ▼
               @playwright/mcp --config <run cfg> --no-sandbox ──▶ Chromium
@@ -367,7 +395,7 @@ does not need the run id.
   in flight is the case D5 names for revisiting.
 - It is not resumable across a runtime restart. Deferred cards survive
   (existing HITL), but a live run does not: the Chromium profile is
-  `--isolated` and the token dies with the run (Gap 2), so a late approval
+  `--isolated` and the config file dies with the launch (Gap 2), so a late approval
   resolves to a run that no longer exists and is dropped.
 
 ## Acceptance (v1)
@@ -396,7 +424,13 @@ seal. In this session's seal, `chrome-headless-shell --dump-dom` returned exit
 network behaviour could be observed from there. F1–F7 are opt-in end-to-end
 tests (gated by an env var named in the plan), run in CI or a plain terminal.
 F4 is a pure proxy test and runs in the normal suite, next to the existing
-tests in `egress_proxy.rs`.
+tests in `egress_proxy.rs` (`bare_connect_is_challenged_with_407`; the
+unknown-token 403 and valid-token 200 cases were already covered by
+`allowed_host_tunnels_denied_host_403`). F4 only proves the proxy *issues*
+the challenge. That Chromium *answers* it with the config-file credentials
+is the D row of the matrix above and is integration-only: it needs Gap 0
+(proxy wired into the launch) and Gap 2 (the config file) in place,
+so it lands with F1–F7, not in the unit suite.
 
 ## Phase 2 — conditional
 

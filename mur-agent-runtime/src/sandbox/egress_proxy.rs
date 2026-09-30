@@ -128,9 +128,26 @@ async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Resu
         .and_then(decode_basic_user);
 
     let host = target.rsplit_once(':').map(|(h, _)| h).unwrap_or(target);
-    let entry = token
-        .as_deref()
-        .and_then(|t| registry.lock().unwrap().get(t).cloned());
+
+    // No credentials at all → *challenge*, don't refuse. Clients that take a
+    // proxy address but carry credentials separately (Chromium: --proxy-server
+    // + a config-file username/password) send a bare CONNECT first and only
+    // replay Basic auth after a 407. A present-but-unknown token, or a known
+    // token for a disallowed host, is a plain 403 below — no retry helps.
+    let Some(token) = token else {
+        tracing::info!(host, "egress proxy CONNECT CHALLENGE");
+        client
+            .write_all(
+                b"HTTP/1.1 407 Proxy Authentication Required\r\n\
+                  Proxy-Authenticate: Basic realm=\"mur\"\r\n\
+                  Content-Length: 0\r\n\
+                  Connection: close\r\n\
+                  \r\n",
+            )
+            .await?;
+        return Ok(());
+    };
+    let entry = registry.lock().unwrap().get(&token).cloned();
     let allowed = match &entry {
         Some(e) if e.broad => !e.deny.iter().any(|p| host_matches_pattern(host, p)),
         Some(e) => host_allowed(host, &e.allow),
@@ -272,6 +289,42 @@ mod tests {
         let mut buf = [0u8; 64];
         let n = s.read(&mut buf).await.unwrap();
         String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    /// CONNECT with no `Proxy-Authorization` at all: the shape a client that
+    /// has a proxy address but no credentials yet (Chromium) sends first.
+    async fn connect_bare(proxy: SocketAddr, target: &str) -> String {
+        let mut s = TcpStream::connect(proxy).await.unwrap();
+        let req = format!("CONNECT {target} HTTP/1.1\r\n\r\n");
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = [0u8; 512];
+        let n = s.read(&mut buf).await.unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    /// F4: a bare CONNECT must be *challenged* (407 + Proxy-Authenticate), not
+    /// silently refused (403) — Chromium only replays the config-file
+    /// credentials after a 407. Present-but-unknown tokens stay 403.
+    #[tokio::test]
+    async fn bare_connect_is_challenged_with_407() {
+        let up = upstream().await;
+        let proxy = start_egress_proxy().await.unwrap();
+        let _token = proxy.register(vec!["127.0.0.1".to_string()]);
+
+        let resp = connect_bare(proxy.addr, &up.to_string()).await;
+        assert!(
+            resp.starts_with("HTTP/1.1 407 Proxy Authentication Required\r\n"),
+            "bare CONNECT is 407: {resp}"
+        );
+        assert!(
+            resp.contains("\r\nProxy-Authenticate: Basic realm=\"mur\"\r\n"),
+            "407 carries the Basic challenge: {resp}"
+        );
+        assert!(
+            resp.contains("\r\nContent-Length: 0\r\n")
+                && resp.contains("\r\nConnection: close\r\n"),
+            "407 is self-delimiting: {resp}"
+        );
     }
 
     #[tokio::test]
