@@ -1,4 +1,7 @@
 /target
+# Extra cargo target dirs used by per-PR worktrees (target-wt1587, ...);
+# build output must never be committed.
+/target-*/
 .DS_Store
 CLAUDE.md
 openspec/
