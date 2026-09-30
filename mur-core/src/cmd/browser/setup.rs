@@ -17,6 +17,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::doctor::{Chromium, Probe, install_argv, install_hint, l1_check, usable_build};
+use super::perms;
 
 /// Runs the install argv. `Ok(true)` = exit 0.
 pub type Installer<'a> = &'a mut dyn FnMut(&[String]) -> Result<bool>;
@@ -107,6 +108,44 @@ pub fn prepare(
             bail!("Chromium install finished but no build appeared");
         }
     }
+}
+
+/// Step 6: grant the spawn permissions a browser run needs.
+///
+/// The impure edge over [`perms`]: it resolves the agent, reads the profile
+/// to see what is already granted, and applies each grant through the same
+/// `mur agent perm` code path the printed commands would. A refusal leaves
+/// the commands on screen and returns `Ok` — the install already happened
+/// and the live test still tells the truth about rendering.
+pub fn grant_perms(
+    agent: Option<&str>,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<()> {
+    let mur_home = crate::cmd::agent::resolve_mur_home()?;
+    let Some(agent) = agent
+        .map(str::to_owned)
+        .or_else(|| std::env::var("MUR_AGENT").ok())
+    else {
+        writeln!(
+            output,
+            "\nPermissions: no agent given (pass --agent <name> or set MUR_AGENT); skipping."
+        )?;
+        return Ok(());
+    };
+    // Case-insensitive like every other CLI agent lookup (rule 10), so the
+    // grant lands on the profile the spoof check will compare against.
+    let agent = crate::a2a_dial::canonicalize_agent_name(&mur_home, &agent);
+
+    let (_, profile) = crate::cmd::agent::load_profile_for_edit(&agent)?;
+    let spawn = &profile.entitlements.processes.spawn;
+    let plan = perms::plan(&mur_home, &agent, &spawn.allowed, &spawn.allowed_dirs);
+    let mut grant = |g: &perms::Grant| match g {
+        perms::Grant::Binary(b) => crate::cmd::agent::cmd_perm_allow_spawn(&agent, b),
+        perms::Grant::Dir(d) => crate::cmd::agent::cmd_perm_allow_spawn_dir(&agent, d),
+    };
+    perms::confirm_and_apply(&agent, &plan, input, output, &mut grant)?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -667,11 +667,27 @@ mod tests {
                 .unwrap()
                 .command,
             Commands::Browser {
-                action: BrowserAction::Setup
+                action: BrowserAction::Setup { agent: None }
             }
         ));
         // Spec: nothing downloads without a human typing `yes`.
         assert!(Cli::try_parse_from(["mur", "browser", "setup", "--yes"]).is_err());
+    }
+
+    /// The permission step grants to a named agent; `--agent` must reach it
+    /// rather than being swallowed as an unknown flag.
+    #[test]
+    fn cli_browser_setup_takes_an_agent() {
+        use crate::cli::actions::BrowserAction;
+        use clap::Parser;
+        let parsed = Cli::try_parse_from(["mur", "browser", "setup", "--agent", "mur"]).unwrap();
+        let Commands::Browser {
+            action: BrowserAction::Setup { agent },
+        } = parsed.command
+        else {
+            panic!("expected browser setup");
+        };
+        assert_eq!(agent.as_deref(), Some("mur"));
     }
 
     /// `mur deep-research status` must open the status panel, never be

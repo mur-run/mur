@@ -651,7 +651,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     println!("  (install check only — add --live to launch a headless browser)");
                 }
             }
-            BrowserAction::Setup => {
+            BrowserAction::Setup { agent } => {
                 use std::io::IsTerminal;
                 let home = dirs::home_dir();
                 let browsers = cmd::browser::doctor::browsers_dir(
@@ -671,6 +671,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     &mut cmd::browser::doctor::system_probe,
                     &mut cmd::browser::setup::system_installer,
                 )?;
+                cmd::browser::setup::grant_perms(agent.as_deref(), &mut stdin.lock(), &mut out)?;
                 cmd::browser::doctor::live_check(&mut out).await?;
                 println!("mur browser is ready.");
             }

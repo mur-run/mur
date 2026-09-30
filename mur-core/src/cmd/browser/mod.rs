@@ -1,6 +1,7 @@
 //! `mur browser` command handlers. Heavy implementation lives in `mur-browser`.
 
 pub mod doctor;
+pub mod perms;
 mod replay;
 pub mod setup;
 
