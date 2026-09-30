@@ -52,7 +52,11 @@ pub enum Commands {
     /// Show statistics and effectiveness
     Stats,
     /// Check MUR setup and configuration health
-    Doctor,
+    Doctor {
+        /// Offer to repair what can be repaired, confirming each change.
+        #[arg(long)]
+        fix: bool,
+    },
     /// Every execution limit in force for a fleet or an agent, with the scope
     /// it came from, and the legacy keys that will stop applying. Pass a
     /// --deadline/--stuck/--cost-usd/--unset to edit that one scope instead.

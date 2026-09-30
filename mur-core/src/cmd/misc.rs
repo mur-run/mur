@@ -262,7 +262,7 @@ fn keychain_verdict(keychain_refs: usize, adhoc: Option<bool>) -> KeychainVerdic
     }
 }
 
-pub(crate) fn cmd_doctor() -> Result<()> {
+pub(crate) fn cmd_doctor(fix: bool) -> Result<()> {
     use mur_common::llm::is_reasoning_model;
 
     println!("🩺 MUR Doctor\n");
@@ -306,6 +306,11 @@ pub(crate) fn cmd_doctor() -> Result<()> {
     // #866: Keychain grants die on upgrade for ad-hoc-signed binaries.
     check_keychain_survives_upgrade();
 
+    // #1587: the cause of the above — no stable identity for `mur update` to
+    // re-sign with. Deliberately separate from the `apple-signing` check in
+    // `cmd::doctor`, which is about release signing / notarization.
+    let codesign = crate::cmd::doctor_codesign::report(config.update.codesign_identity.as_deref());
+
     // Check embedding provider (semantic search silently degrades without it)
     let emb = &config.embedding;
     match embedding_probe_addr(emb) {
@@ -348,7 +353,57 @@ pub(crate) fn cmd_doctor() -> Result<()> {
 
     report_mcp_pins(&mur_dir);
 
+    if fix {
+        run_fixes(&codesign)?;
+    } else if codesign.needs_attention() {
+        println!("\n💡 `mur doctor --fix` can repair the codesign identity above.");
+    }
+
     Ok(())
+}
+
+/// The `--fix` pass: offer each actionable fix, one confirmation per item.
+///
+/// Doctor had no fix mechanism before #1587; this is deliberately the smallest
+/// thing that works — a list of verdicts that know how to describe and apply
+/// themselves. Add the next fixable check here rather than growing a framework
+/// before there is a second caller to shape it.
+fn run_fixes(codesign: &crate::cmd::doctor_codesign::CodesignVerdict) -> Result<()> {
+    use crate::cmd::doctor_codesign as cs;
+
+    let Some(desc) = cs::fix_description(codesign) else {
+        println!("\n✅ Nothing to fix.");
+        return Ok(());
+    };
+
+    println!("\n🔧 Fix available: {desc}");
+    if !confirm("   Apply this fix?")? {
+        println!("   Skipped.");
+        return Ok(());
+    }
+    // A failed fix is reported, not fatal: other fixes (once there are more)
+    // must still get their turn, and doctor's exit code stays about the scan.
+    if let Err(e) = cs::apply_fix(codesign) {
+        println!("   ❌ Fix failed: {e:#}");
+    }
+    Ok(())
+}
+
+/// Ask a yes/no question on stdin, defaulting to no. A non-tty (piped) stdin
+/// reads EOF and declines, so `mur doctor --fix </dev/null` changes nothing
+/// rather than silently mutating config in a script.
+fn confirm(prompt: &str) -> Result<bool> {
+    use std::io::Write as _;
+    print!("{prompt} [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer)? == 0 {
+        return Ok(false);
+    }
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Report agents whose pinned MCP binaries no longer match what's on disk.

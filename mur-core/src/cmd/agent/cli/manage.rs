@@ -174,6 +174,23 @@ pub fn skill_add(agent: &str, source: &str) -> Result<Managed> {
     Ok(applied(format!("installed skill from '{source}'")))
 }
 
+/// Second step of the two-step `/browser --add` flow. `--add` installs the
+/// skill and grants nothing: the browser skill additionally needs
+/// `allow-spawn` for `playwright-mcp` and `chrome-headless-shell`, plus
+/// `allow-spawn-dir` for the agent's `shim/probe` directory (`~/.mur` is
+/// writable but not executable). Those are privilege escalations, so they are
+/// never applied silently here — `mur browser setup` owns them and asks first.
+pub const BROWSER_SETUP_HINT: &str =
+    "then run `mur browser setup` to grant the browser skill what it needs to spawn";
+
+/// `/browser --add`: install the skill, then point at the setup step that
+/// performs the grants. The restart chip stays the offered action — the
+/// profile just changed and the supervisor only reads it at startup.
+pub fn browser_skill_add(agent: &str, source: &str) -> Result<Managed> {
+    let (text, chip) = skill_add(agent, source)?;
+    Ok((format!("{text}\n{BROWSER_SETUP_HINT}"), chip))
+}
+
 pub fn skill_remove(agent: &str, query: &str) -> Result<Managed> {
     crate::cmd::agent::skill::cmd_skill_remove(agent, query)?;
     Ok(applied(format!("removed skill '{query}'")))
@@ -219,6 +236,14 @@ mod tests {
         let (text, chip) = applied("removed skill 'x'".into());
         assert!(text.ends_with(RESTART_HINT), "{text}");
         assert!(chip.is_some_and(|p| p.is_executable()));
+    }
+
+    #[test]
+    fn browser_add_points_at_the_setup_step() {
+        // The hint must survive the same vet an agent's proposal does (no
+        // `<placeholder>`), and `--add` must never be the thing that grants.
+        assert!(!BROWSER_SETUP_HINT.contains('<'), "{BROWSER_SETUP_HINT}");
+        assert!(BROWSER_SETUP_HINT.contains("mur browser setup"));
     }
 
     #[test]
