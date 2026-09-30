@@ -606,9 +606,13 @@ mod tests {
         let out = t.execute(req).await.unwrap();
 
         let want = mur_common::project::project_id(&repo).unwrap();
+        // Match against `text` itself, not its Debug form: on Windows the id
+        // carries backslashes, which `{:?}` escapes into `\\`, so a needle
+        // holding the raw path could never be found.
         assert!(
-            format!("{out:?}").contains(&want),
-            "expected project scope at {want}, got {out:?}"
+            out.text.contains(&want),
+            "expected project scope at {want}, got {}",
+            out.text
         );
         let m =
             mur_common::skill::read_from_dir(&agent_skill_dir(home, "w1").join("repo-conventions"))
