@@ -62,10 +62,17 @@ pub(crate) fn cmd_agent_rollback(name: &str, to: u32) -> Result<()> {
         );
     }
 
-    let rev = store.rollback_profile(name, to)?;
+    let out = store.rollback_profile(name, to)?;
+    let rev = &out.revision;
     println!(
         "Rolled back agent '{name}' profile to v{to} → new commit v{} ({})",
         rev.version, rev.sha
     );
+    if !out.changed_entitlements.is_empty() {
+        println!(
+            "Entitlements changed: {}. Review with `mur agent perm {name}`.",
+            out.changed_entitlements.join(", ")
+        );
+    }
     Ok(())
 }

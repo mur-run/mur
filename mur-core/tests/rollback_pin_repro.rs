@@ -83,3 +83,64 @@ fn rollback_over_a_tampered_profile_keeps_the_pin() {
         "the pin must not move from a tampered state"
     );
 }
+
+#[test]
+fn rollback_ignores_a_tampered_archive_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path();
+    let (mut store, _) = granted_store(mur_home);
+
+    // `archive/` lives in the agent's own (writable) home; the agents git
+    // repo does not. A widened archive copy must not become the rollback.
+    let archive = mur_home
+        .join("agents")
+        .join(AGENT)
+        .join("archive")
+        .join("v1.yaml");
+    let widened = std::fs::read_to_string(&archive)
+        .unwrap()
+        .replace("write: []", "write: [\"/\"]");
+    assert!(
+        widened.contains("write: [\"/\"]"),
+        "fixture must contain `write: []`"
+    );
+    std::fs::write(&archive, &widened).unwrap();
+
+    store.rollback_profile(AGENT, 1).unwrap();
+    assert_eq!(
+        on_disk(mur_home),
+        V1,
+        "rollback restores committed v1, not the archive copy"
+    );
+    assert_eq!(
+        entitlements_pin::check(mur_home, AGENT, &ent(V1)).unwrap(),
+        PinCheck::Match,
+        "the pin follows committed v1"
+    );
+}
+
+#[test]
+fn rollback_reports_changed_entitlements_and_pin_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path();
+    let (mut store, v2) = granted_store(mur_home);
+
+    let out = store.rollback_profile(AGENT, 1).unwrap();
+    assert_eq!(out.changed_entitlements, vec!["filesystem".to_string()]);
+    assert!(out.pin_advanced, "trusted rollback moves the pin");
+
+    // Rolling back to v2 widens again; the caller must be able to say so.
+    let out = store.rollback_profile(AGENT, 2).unwrap();
+    assert_eq!(on_disk(mur_home), v2);
+    assert_eq!(out.changed_entitlements, vec!["filesystem".to_string()]);
+
+    // Tampered current profile: rollback succeeds, pin stays, caller is told.
+    let tampered = v2.replace("/tmp/granted", "/");
+    std::fs::write(
+        mur_home.join("agents").join(AGENT).join("profile.yaml"),
+        &tampered,
+    )
+    .unwrap();
+    let out = store.rollback_profile(AGENT, 1).unwrap();
+    assert!(!out.pin_advanced, "tampered prior must not advance the pin");
+}
