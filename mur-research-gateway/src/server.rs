@@ -29,12 +29,22 @@ fn should_escalate_to_chrome(result: &Result<fetcher::FetchResult, FetchError>) 
     }
 }
 
-/// Tier-3 (Chrome) escalation only makes sense for the agent-browser engine —
-/// obscura is a single embedded engine, so re-rendering with `want_chrome:
-/// true` would just run obscura again (a wasted subprocess spawn). Gate the
-/// escalation on this.
+/// Can this config escalate a failed tier-2 render to Chrome (tier 3)?
+///
+/// - `AgentBrowser`: yes, that wrapper owns the lightpanda(2)→chrome(3) split.
+/// - `Lightpanda` (native): yes, but only when the `agent-browser` wrapper is
+///   actually installed — native lightpanda cannot reach Chrome itself, so
+///   `plan_render` hands the retry to the wrapper's chrome tier (#1473). With
+///   no wrapper on disk there is nothing to escalate TO, so stay on tier 2
+///   rather than spawn a binary that isn't there.
+/// - `Obscura`: no. It is a single embedded engine, so re-rendering with
+///   `want_chrome: true` would just run obscura again (a wasted spawn).
 pub(crate) fn render_can_escalate(cfg: &BrowserCfg) -> bool {
-    matches!(cfg.render_engine, browser::RenderEngine::AgentBrowser)
+    match cfg.render_engine {
+        browser::RenderEngine::AgentBrowser => true,
+        browser::RenderEngine::Lightpanda => browser::agent_browser_available(cfg),
+        browser::RenderEngine::Obscura => false,
+    }
 }
 
 fn fetch_error_response(id: Option<serde_json::Value>, verb: &str, err: FetchError) -> Response {
@@ -308,10 +318,21 @@ mod tests {
     }
 
     #[test]
-    fn lightpanda_engine_does_not_escalate_to_chrome() {
-        // Native lightpanda is a single engine (tier 2), same as obscura — no
-        // chrome tier-3 re-call.
-        let lp = browser_cfg(crate::browser::RenderEngine::Lightpanda);
+    fn native_lightpanda_escalates_to_chrome_when_agent_browser_is_present() {
+        // #1473: native lightpanda is the primary tier but has no Chrome of its
+        // own, so a page it fails on must retry via the agent-browser wrapper.
+        // `sh` stands in for an agent-browser that resolves on PATH.
+        let mut lp = browser_cfg(crate::browser::RenderEngine::Lightpanda);
+        lp.agent_browser_bin = "sh".into();
+        assert!(render_can_escalate(&lp));
+    }
+
+    #[test]
+    fn native_lightpanda_does_not_escalate_without_agent_browser() {
+        // Nothing to escalate INTO — must stay on tier 2 rather than spawn a
+        // binary that isn't installed.
+        let mut lp = browser_cfg(crate::browser::RenderEngine::Lightpanda);
+        lp.agent_browser_bin = "/nonexistent/agent-browser".into();
         assert!(!render_can_escalate(&lp));
     }
 
