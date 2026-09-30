@@ -310,7 +310,7 @@ pub(crate) fn save_profile(path: &Path, profile: &mut _AgentProfile) -> Result<(
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let yaml = serde_yaml_ng::to_string(profile).context("serialize profile.yaml")?;
     write_atomic(path, yaml.as_bytes())?;
-    crate::store::entitlements_pin::advance_entitlements_pin(
+    let _ = crate::store::entitlements_pin::advance_entitlements_pin(
         path,
         prior_ents.as_ref(),
         &profile.entitlements,
