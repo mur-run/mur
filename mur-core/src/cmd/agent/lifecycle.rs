@@ -211,7 +211,7 @@ pub fn cmd_create(
     write_atomic(&agent_home.join("profile.yaml"), yaml.as_bytes())?;
     // #712: a fresh profile is trusted by construction; pin it now so a stale
     // pin from an earlier agent of this name cannot block the first start.
-    super::advance_entitlements_pin(
+    crate::store::entitlements_pin::advance_entitlements_pin(
         &agent_home.join("profile.yaml"),
         None,
         &profile.entitlements,
