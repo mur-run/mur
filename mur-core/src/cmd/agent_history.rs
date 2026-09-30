@@ -63,16 +63,83 @@ pub(crate) fn cmd_agent_rollback(name: &str, to: u32) -> Result<()> {
     }
 
     let out = store.rollback_profile(name, to)?;
-    let rev = &out.revision;
-    println!(
-        "Rolled back agent '{name}' profile to v{to} → new commit v{} ({})",
-        rev.version, rev.sha
-    );
-    if !out.changed_entitlements.is_empty() {
-        println!(
-            "Entitlements changed: {}. Review with `mur agent perm {name}`.",
-            out.changed_entitlements.join(", ")
-        );
+    for line in rollback_summary(name, to, &out) {
+        println!("{line}");
     }
     Ok(())
+}
+
+/// What `mur agent rollback` tells the user: the new revision, any changed
+/// entitlement keys (a rollback can widen them), and a reseal hint when the
+/// pin was left behind so the agent would refuse to start.
+fn rollback_summary(
+    name: &str,
+    to: u32,
+    out: &crate::store::versioned::agent::RollbackOutcome,
+) -> Vec<String> {
+    let rev = &out.revision;
+    let mut lines = vec![format!(
+        "Rolled back agent '{name}' profile to v{to} → new commit v{} ({})",
+        rev.version, rev.sha
+    )];
+    if !out.changed_entitlements.is_empty() {
+        lines.push(format!(
+            "Entitlements changed: {}. Review with `mur agent perm {name}`.",
+            out.changed_entitlements.join(", ")
+        ));
+    }
+    if !out.pin_advanced {
+        lines.push(format!(
+            "Entitlements pin not advanced: the profile it replaced did not match its pin. \
+             Review, then run `mur agent perm reseal {name}` before starting the agent."
+        ));
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rollback_summary;
+    use crate::store::versioned::agent::{AgentRevision, RollbackOutcome};
+
+    fn outcome(changed: &[&str], pin_advanced: bool) -> RollbackOutcome {
+        RollbackOutcome {
+            revision: AgentRevision {
+                name: "a".into(),
+                version: 3,
+                sha: "abc123def456".into(),
+            },
+            changed_entitlements: changed.iter().map(|s| s.to_string()).collect(),
+            pin_advanced,
+        }
+    }
+
+    #[test]
+    fn summary_lists_changed_entitlements() {
+        let lines = rollback_summary("a", 1, &outcome(&["filesystem", "network"], true));
+        assert!(
+            lines[0].contains("v1") && lines[0].contains("v3"),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("filesystem, network")),
+            "{lines:?}"
+        );
+        assert!(!lines.iter().any(|l| l.contains("reseal")), "{lines:?}");
+    }
+
+    #[test]
+    fn summary_warns_to_reseal_when_pin_did_not_advance() {
+        let lines = rollback_summary("a", 1, &outcome(&[], false));
+        assert!(
+            lines.iter().any(|l| l.contains("mur agent perm reseal a")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn summary_is_one_line_when_nothing_changed() {
+        let lines = rollback_summary("a", 1, &outcome(&[], true));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+    }
 }
