@@ -83,7 +83,8 @@ After a user-facing change, update all three: **`README.md`**, the **docs site**
 6. **Read narrowly.** Prefer LSP queries (goToDefinition, findReferences) and `grep`/`Grep` over reading whole large files. When you must read a file, target the relevant range with `offset`/`limit`.
 7. **CLAUDE.md is operational, not a changelog.** Historical milestone descriptions, completed phase notes, and detailed design walkthroughs belong in `docs/architecture/` or `docs/superpowers/specs/`. Keep this file lean so every session starts cheap.
 8. **Brand name is uppercase "MUR".** Everywhere a user can see it — GUI strings, `display_name`, docs, marketing copy, companion/voice text, notifications. The ONLY exceptions are the CLI binary/command (`mur`), code identifiers, file paths, internal `name`/directory slugs, and the `~/.mur` home. Use `display_name` for the uppercase label; keep internal `name` lowercase so it matches the on-disk directory (the runtime spoof check is exact-match).
-9. **Agent name lookup is case-insensitive (CLI).** `mur agent send mur` and `... Mur` must both resolve, via `a2a_dial::canonicalize_agent_name`; downstream uses the exact canonical name so the spoof check passes.
+9. **Write all issues, PRs, plans, and specs in English.** Issue titles and bodies, PR titles and descriptions, `docs/plans/`, `docs/superpowers/specs/`, and OpenSpec change specs are English-only, regardless of the language of the conversation that produced them. Chat with the user in whatever language they use; the repository artifact is English.
+10. **Agent name lookup is case-insensitive (CLI).** `mur agent send mur` and `... Mur` must both resolve, via `a2a_dial::canonicalize_agent_name`; downstream uses the exact canonical name so the spoof check passes.
 
 ## Token Saving
 
