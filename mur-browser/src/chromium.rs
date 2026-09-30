@@ -97,6 +97,26 @@ pub fn headless_exe_args(browsers: Option<&Path>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Env var holding extra Chromium flags for headless launches, whitespace
+/// separated. A sandboxed host needs `--no-sandbox` (Chromium's own sandbox
+/// cannot start inside an outer one), and there is otherwise no way to reach
+/// the browser command line from outside.
+pub const EXTRA_ARGS_ENV: &str = "MUR_BROWSER_CHROMIUM_ARGS";
+
+/// Parse [`EXTRA_ARGS_ENV`]. Unset or blank yields nothing, so the default
+/// launch is exactly what it was before.
+pub fn extra_args(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// [`extra_args`] for this process's environment.
+pub fn system_extra_args() -> Vec<String> {
+    extra_args(std::env::var(EXTRA_ARGS_ENV).ok().as_deref())
+}
+
 /// The browsers dir for this process's environment.
 pub fn system_browsers_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")
@@ -173,6 +193,22 @@ mod tests {
         let new = complete(d.path(), "chromium_headless_shell-1246");
         let p = exe(&new, "chrome-headless-shell-linux64/chrome-headless-shell");
         assert_eq!(headless_shell_exe(d.path()), Some(p));
+    }
+
+    #[test]
+    fn extra_args_are_off_unless_set() {
+        assert!(extra_args(None).is_empty());
+        assert!(extra_args(Some("")).is_empty());
+        assert!(extra_args(Some("   ")).is_empty());
+    }
+
+    #[test]
+    fn extra_args_split_on_whitespace() {
+        assert_eq!(extra_args(Some("--no-sandbox")), ["--no-sandbox"]);
+        assert_eq!(
+            extra_args(Some("  --no-sandbox   --disable-gpu\t--foo ")),
+            ["--no-sandbox", "--disable-gpu", "--foo"]
+        );
     }
 
     #[test]

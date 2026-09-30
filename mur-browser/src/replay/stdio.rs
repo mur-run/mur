@@ -111,6 +111,8 @@ pub(super) fn live_args(storage_state: Option<&std::path::Path>) -> Vec<String> 
     args.extend(crate::chromium::headless_exe_args(
         crate::chromium::system_browsers_dir().as_deref(),
     ));
+    // Host-level escape hatch (e.g. `--no-sandbox` inside an outer sandbox).
+    args.extend(crate::chromium::system_extra_args());
     args
 }
 
