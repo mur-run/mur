@@ -52,7 +52,7 @@ fn settings_menus_mark_the_value_in_force() {
     assert_eq!(at("/effort ", &cur).as_deref(), Some("high"), "profile");
     let overridden = Current {
         session_effort: Some(Effort::Low),
-        ..cur
+        ..cur.clone()
     };
     assert_eq!(
         at("/effort ", &overridden).as_deref(),
@@ -364,4 +364,89 @@ fn monitor_is_offered_between_its_alphabetical_neighbours_and_parses() {
         Some(SlashCmd::Monitor(_))
     ));
     assert!(matches!(parse_slash("/mon"), Some(SlashCmd::Monitor(_))));
+}
+
+/// `/channels ` opens a real option layer: list, each recent channel to
+/// switch to (by its ordinal) — not one lone flag.
+#[test]
+fn channels_menu_offers_list_switch_and_follow() {
+    let c = MenuContext {
+        channels: vec![
+            ("2".into(), "01a0d420 · 6 turns · fix the menu".into()),
+            ("1".into(), "9f3c2b11 · 2 turns · hello".into()),
+        ],
+        ..ctx()
+    };
+    let st = compute("/channels ", &[], &c, &cur()).unwrap();
+    let words: Vec<&str> = st.items.iter().map(|i| i.display.as_str()).collect();
+    assert_eq!(words, ["list", "2", "1"], "stop row only while following");
+    assert_eq!(st.items[1].insert, "/channels 2 ");
+    assert!(st.items[1].desc.contains("fix the menu"));
+    let top = compute("/chann", &[], &c, &cur()).unwrap();
+    assert!(top.items[0].has_children);
+}
+
+/// Each channel row opens a third layer: switch to it, or live-tail it.
+/// Unknown handles and other commands get no third layer.
+#[test]
+fn channel_row_opens_switch_and_follow_layer() {
+    let c = MenuContext {
+        channels: vec![("2".into(), "01a0d420 · 6 turns · fix the menu".into())],
+        ..ctx()
+    };
+    let l2 = compute("/channels ", &[], &c, &cur()).unwrap();
+    assert!(l2.items[1].has_children, "channel row must descend");
+    assert!(!l2.items[0].has_children, "`list` stays a leaf");
+    let st = compute("/channels 2 ", &[], &c, &cur()).unwrap();
+    let words: Vec<&str> = st.items.iter().map(|i| i.display.as_str()).collect();
+    assert_eq!(words, ["switch", "--follow"]);
+    assert_eq!(st.items[0].insert, "/channels 2");
+    assert_eq!(st.items[1].insert, "/channels 2 --follow");
+    assert!(st.items.iter().all(|i| !i.has_children));
+    let filtered = compute("/channels 2 --f", &[], &c, &cur()).unwrap();
+    assert_eq!(filtered.items.len(), 1);
+    assert!(compute("/channels 9 ", &[], &c, &cur()).is_none());
+    assert!(compute("/channels 2 --follow ", &[], &c, &cur()).is_none());
+    assert!(compute("/model foo ", &[], &c, &cur()).is_none());
+}
+
+/// The menu never offers a follow that the handler refuses: the channel this
+/// pane is on gets no switch/follow layer (it is marked current instead), and
+/// the bare `--follow` (= stop) only appears while something is followed.
+#[test]
+fn channels_menu_hides_follows_the_handler_refuses() {
+    let c = MenuContext {
+        channels: vec![
+            ("2".into(), "01a0d420 · 6 turns · fix the menu".into()),
+            ("1".into(), "9f3c2b11 · 2 turns · hello".into()),
+        ],
+        ..ctx()
+    };
+    let on_2 = Current {
+        active_channel: Some("2".into()),
+        ..cur()
+    };
+    let st = compute("/channels ", &[], &c, &on_2).unwrap();
+    let words: Vec<&str> = st.items.iter().map(|i| i.display.as_str()).collect();
+    assert_eq!(words, ["list", "2", "1"], "no stop row when not following");
+    assert_eq!(st.current, Some(1), "active channel is marked");
+    assert!(
+        !st.items[1].has_children,
+        "active channel has no follow layer"
+    );
+    assert!(st.items[2].has_children);
+    assert!(compute("/channels 2 ", &[], &c, &on_2).is_none());
+
+    let following = Current {
+        following: Some("9f3c2b11".into()),
+        ..on_2.clone()
+    };
+    let st = compute("/channels ", &[], &c, &following).unwrap();
+    let stop = st.items.last().unwrap();
+    assert_eq!(stop.display, "--stop");
+    assert_eq!(stop.insert, "/channels --stop ");
+    assert!(
+        stop.desc.contains("9f3c2b11"),
+        "stop row names what it stops"
+    );
 }
