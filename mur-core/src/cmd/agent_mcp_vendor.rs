@@ -233,7 +233,7 @@ fn vendor_python(entry: &mut McpServerEntry, dir: &Path, name: &str, version: &s
 }
 
 /// Install `name@version` into `dir` with npm, scripts disabled.
-fn npm_install(dir: &Path, name: &str, version: &str) -> Result<()> {
+pub(crate) fn npm_install(dir: &Path, name: &str, version: &str) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let spec = format!("{name}@{version}");
     let out = std::process::Command::new("npm")
@@ -300,12 +300,12 @@ fn resolve_bin(dir: &Path, name: &str) -> Result<PathBuf> {
 }
 
 /// Outcome of `npm audit signatures` over the installed tree.
-struct SignatureAudit {
+pub(crate) struct SignatureAudit {
     /// Packages whose registry signature failed to verify. Non-empty means the
     /// bytes on disk are not what the registry signed.
-    invalid: Vec<String>,
+    pub(crate) invalid: Vec<String>,
     /// Packages that published no signature at all.
-    missing: u32,
+    pub(crate) missing: u32,
 }
 
 /// Parse `npm audit signatures --json`.
@@ -347,7 +347,7 @@ fn parse_audit(body: &str) -> Option<SignatureAudit> {
 /// `Ok(None)` when the audit could not run (npm too old, offline). Refusing to
 /// vendor over an unavailable audit would trade a real capability for a check
 /// that is advisory by nature.
-fn audit_signatures(dir: &Path) -> Result<Option<SignatureAudit>> {
+pub(crate) fn audit_signatures(dir: &Path) -> Result<Option<SignatureAudit>> {
     let out = match std::process::Command::new("npm")
         .args(["audit", "signatures", "--json"])
         .current_dir(dir)

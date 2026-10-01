@@ -684,6 +684,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                     &mut cmd::browser::doctor::system_probe,
                     &mut cmd::browser::setup::system_installer,
                 )?;
+                // Before the grants: `allow-read` refuses a path that does
+                // not exist yet, and the install dir is one of them.
+                cmd::browser::server_install::ensure(
+                    consent,
+                    &cmd::agent::resolve_mur_home()?,
+                    &mut stdin.lock(),
+                    &mut out,
+                    &mut cmd::browser::server_install::system_installer,
+                )?;
                 cmd::browser::setup::grant_perms(
                     agent.as_deref(),
                     consent,

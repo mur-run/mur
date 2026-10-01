@@ -3,6 +3,19 @@
 
 use std::path::{Path, PathBuf};
 
+/// This process's MUR home: `MUR_HOME` if set, else `$HOME/.mur`. Same rule
+/// as every other MUR binary, so the runtime and `mur browser` agree on it.
+pub fn system_mur_home() -> Option<PathBuf> {
+    std::env::var_os("MUR_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|h| !h.is_empty())
+                .map(|h| PathBuf::from(h).join(".mur"))
+        })
+}
+
 /// Root of all browser state under a MUR home.
 pub fn browser_root(mur_home: &Path) -> PathBuf {
     mur_home.join("browser")

@@ -1,9 +1,12 @@
 //! The spawn grants `mur browser` needs, and the consent that applies them.
 //!
 //! Step 6 of setup (`/browser --add` only attaches the skill and points
-//! here). Three grants, and none of them is optional for a working replay:
+//! here). Four grants, and none of them is optional for a working replay:
 //!
-//! * `playwright-mcp` — the MCP server `record`/`replay` spawn via `npx`.
+//! * `node` — what `record`/`replay` spawn: the MCP server is launched as
+//!   `node <install>/…/cli.js` (`mur_browser::server`), never through `npx`.
+//! * read on that install dir — Landlock is a read allowlist, so without it
+//!   `node` starts and then cannot open the script.
 //! * `chrome-headless-shell` — the browser that server launches.
 //! * `<mur_home>/artifacts/<agent>/shim/probe` — a *directory* grant, not a
 //!   write grant. The probe binary is written at run time and then exec'd;
@@ -19,7 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 /// Binaries `mur browser` must be allowed to spawn.
-pub const REQUIRED_BINARIES: [&str; 2] = ["playwright-mcp", "chrome-headless-shell"];
+pub const REQUIRED_BINARIES: [&str; 2] = ["node", "chrome-headless-shell"];
 
 /// `<mur_home>/artifacts/<agent>/shim/probe` — the exec lane for the probe.
 pub fn probe_dir(mur_home: &Path, agent: &str) -> PathBuf {
@@ -37,20 +40,28 @@ pub struct Plan {
     pub binaries: Vec<String>,
     /// Probe dir, when absent from `spawn.allowed_dirs`.
     pub dir: Option<String>,
+    /// MCP server install dir, when absent from `filesystem.read`.
+    pub read: Option<String>,
 }
 
 impl Plan {
     pub fn is_empty(&self) -> bool {
-        self.binaries.is_empty() && self.dir.is_none()
+        self.binaries.is_empty() && self.dir.is_none() && self.read.is_none()
     }
 }
 
 /// Diff the required grants against what the profile already allows.
 ///
-/// Pure: `allowed` / `allowed_dirs` come from the caller, so this never
-/// reads or writes a profile. Matching is exact, like `perm deny-spawn`'s —
+/// Pure: `allowed` / `allowed_dirs` / `reads` come from the caller, so this
+/// never reads or writes a profile. Matching is exact, like `perm deny-spawn`'s —
 /// a near match must show up as missing rather than be silently accepted.
-pub fn plan(mur_home: &Path, agent: &str, allowed: &[String], allowed_dirs: &[String]) -> Plan {
+pub fn plan(
+    mur_home: &Path,
+    agent: &str,
+    allowed: &[String],
+    allowed_dirs: &[String],
+    reads: &[String],
+) -> Plan {
     let binaries = REQUIRED_BINARIES
         .iter()
         .filter(|b| !allowed.iter().any(|a| a == *b))
@@ -58,7 +69,15 @@ pub fn plan(mur_home: &Path, agent: &str, allowed: &[String], allowed_dirs: &[St
         .collect();
     let want = probe_dir(mur_home, agent).to_string_lossy().into_owned();
     let dir = (!allowed_dirs.contains(&want)).then_some(want);
-    Plan { binaries, dir }
+    let server = mur_browser::server::install_dir(mur_home)
+        .to_string_lossy()
+        .into_owned();
+    let read = (!reads.contains(&server)).then_some(server);
+    Plan {
+        binaries,
+        dir,
+        read,
+    }
 }
 
 /// One grant to apply. The two arms map to the two `perm` subcommands,
@@ -67,6 +86,7 @@ pub fn plan(mur_home: &Path, agent: &str, allowed: &[String], allowed_dirs: &[St
 pub enum Grant {
     Binary(String),
     Dir(String),
+    Read(String),
 }
 
 impl Plan {
@@ -75,6 +95,9 @@ impl Plan {
         let mut out: Vec<Grant> = self.binaries.iter().cloned().map(Grant::Binary).collect();
         if let Some(d) = &self.dir {
             out.push(Grant::Dir(d.clone()));
+        }
+        if let Some(r) = &self.read {
+            out.push(Grant::Read(r.clone()));
         }
         out
     }
@@ -86,6 +109,7 @@ pub fn command_for(agent: &str, grant: &Grant) -> String {
     match grant {
         Grant::Binary(b) => format!("mur agent perm allow-spawn {agent} {b}"),
         Grant::Dir(d) => format!("mur agent perm allow-spawn-dir {agent} {d}"),
+        Grant::Read(r) => format!("mur agent perm allow-read {agent} {r}"),
     }
 }
 
@@ -165,11 +189,18 @@ mod tests {
         v.iter().map(|x| (*x).to_string()).collect()
     }
 
+    fn server() -> String {
+        mur_browser::server::install_dir(&home())
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
     fn empty_profile_needs_every_grant() {
-        let p = plan(&home(), "mur", &[], &[]);
-        assert_eq!(p.binaries, s(&["playwright-mcp", "chrome-headless-shell"]));
+        let p = plan(&home(), "mur", &[], &[], &[]);
+        assert_eq!(p.binaries, s(&["node", "chrome-headless-shell"]));
         assert_eq!(p.dir, Some(probe("mur")));
+        assert_eq!(p.read, Some(server()));
         assert!(!p.is_empty());
     }
 
@@ -179,8 +210,9 @@ mod tests {
         let p = plan(
             &home(),
             "mur",
-            &s(&["playwright-mcp", "chrome-headless-shell"]),
+            &s(&["node", "chrome-headless-shell"]),
             &dirs,
+            &[server()],
         );
         assert!(p.is_empty(), "{p:?}");
     }
@@ -189,18 +221,32 @@ mod tests {
     #[test]
     fn dir_grant_is_not_shared_between_agents() {
         let dirs = vec![probe("other")];
-        let p = plan(&home(), "mur", &[], &dirs);
+        let p = plan(&home(), "mur", &[], &dirs, &[server()]);
         assert_eq!(p.dir, Some(probe("mur")));
     }
 
     #[test]
     fn partial_profile_only_lists_what_is_missing() {
-        let p = plan(&home(), "mur", &s(&["playwright-mcp"]), &[]);
+        let p = plan(&home(), "mur", &s(&["node"]), &[], &[server()]);
         assert_eq!(p.binaries, s(&["chrome-headless-shell"]));
         let cmds = commands("mur", &p);
         assert_eq!(cmds.len(), 2, "{cmds:?}");
         assert!(cmds[0].ends_with("allow-spawn mur chrome-headless-shell"));
         assert!(cmds[1].contains(&format!("allow-spawn-dir mur {}", probe("mur"))));
+    }
+
+    /// The launch chain is `node <install>/…`; the npx-era bare name
+    /// `playwright-mcp` never resolves to an executable and must not count.
+    #[test]
+    fn grants_match_the_vendored_launch_chain() {
+        let p = plan(&home(), "mur", &s(&["playwright-mcp"]), &[], &[]);
+        assert!(p.binaries.contains(&"node".to_string()), "{p:?}");
+        let cmds = commands("mur", &p);
+        assert!(
+            cmds.iter()
+                .any(|c| c == &format!("mur agent perm allow-read mur {}", server())),
+            "{cmds:?}"
+        );
     }
 
     fn run(answer: &str, p: &Plan) -> (bool, String, Vec<String>) {
@@ -224,7 +270,7 @@ mod tests {
 
     #[test]
     fn nothing_is_granted_without_a_literal_yes() {
-        let p = plan(&home(), "mur", &[], &[]);
+        let p = plan(&home(), "mur", &[], &[], &[]);
         for a in ["y\n", "YES\n", "\n", "", "no\n"] {
             let (ok, out, applied) = run(a, &p);
             assert!(!ok, "{a:?} must not consent");
@@ -235,7 +281,7 @@ mod tests {
 
     #[test]
     fn a_literal_yes_applies_every_missing_grant() {
-        let p = plan(&home(), "mur", &[], &[]);
+        let p = plan(&home(), "mur", &[], &[], &[]);
         let (ok, out, applied) = run("yes\n", &p);
         assert!(ok);
         assert_eq!(applied, commands("mur", &p));
