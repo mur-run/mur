@@ -156,7 +156,7 @@ pub(super) fn split_intent(summary: &str) -> (&str, &str) {
 /// Fewest columns worth spending on a trailing intent. Below this the note is
 /// an open paren and an ellipsis, which is noise beside the command rather
 /// than context for it — so it is dropped entirely instead.
-const INTENT_MIN_COLS: usize = 12;
+pub(super) const INTENT_MIN_COLS: usize = 12;
 
 /// Columns of separator and parens the intent note wraps itself in.
 const INTENT_CHROME_COLS: usize = 5;

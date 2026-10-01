@@ -3,7 +3,10 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::call_summary::{arg_hint, hint_budget, intent_note, tool_description, width_of};
+use super::call_summary::{
+    ARG_HINT_MIN, INTENT_MIN_COLS, arg_hint, elide_middle_cols, hint_budget, tool_description,
+    width_of,
+};
 use super::step::{ARGS_MAX_LINES, StepCard, StepState};
 use super::theme::Theme;
 
@@ -13,6 +16,14 @@ pub const OUTPUT_MAX_LINES: usize = 20;
 /// Columns the `  → ` lead-in of a result gist occupies, charged against the
 /// row before deciding whether a trailing intent still fits.
 const GIST_CHROME_COLS: usize = 4;
+
+/// Columns the ` (` … `)` around an inline command occupy on a row that
+/// leads with the intent.
+const COMMAND_CHROME_COLS: usize = 3;
+
+/// Indent of the command when it did not fit beside the intent and moved to
+/// its own row: under the name, past the glyph.
+const COMMAND_ROW_INDENT: &str = "    ";
 
 /// Maximum changed/context rows shown on a collapsed edit card. The path header
 /// is always retained; the full unbounded patch stays one Ctrl+O away.
@@ -72,48 +83,82 @@ pub fn card_lines(
         _ => theme.accent,
     };
 
-    // ── Header: glyph · name · arg-hint · duration ───────────────────────────
+    // ── Header: glyph · name · intent (command) → gist · duration / tokens ──
     //
-    // The command always leads, in the accent weight, because the command is
-    // the only thing that actually runs. A `description` is model-generated
-    // prose that can drift from the call it describes, so it trails as a DIM
-    // parenthetical — present as context, never mistakable for the subject.
-    // It used to hold the header line with the command indented beneath it,
-    // which trained the eye to read the paraphrase and skim the receipt.
-    let dur = card
-        .duration_ms
-        .map(|ms| format!(" · {ms}ms"))
-        .unwrap_or_default();
-    let hint = arg_hint(card, budget);
-    let header = format!("{} {} {}", card.glyph(), card.name, hint);
+    // When the call carries a `description`, the human-readable intent leads
+    // in the accent weight and the command trails as a DIM parenthetical: in
+    // a scrolling transcript the eye wants "what was this for" first, and the
+    // literal command is the receipt it can check against. When the row is
+    // too tight to hold both, the command is NOT dropped — it moves to its
+    // own dim line beneath, because the command is the only thing that ran.
+    // Without a description the row is the plain `glyph name hint` it always
+    // was.
+    let meta = header_meta(card);
+    let desc = tool_description(card);
     let auto_tag = if card.auto_approved {
         Span::styled(" [auto]", theme.muted.add_modifier(Modifier::DIM))
     } else {
         Span::raw("")
     };
-    let mut header_spans = vec![Span::styled(
-        header.clone(),
-        accent.add_modifier(Modifier::BOLD),
-    )];
     let gist = (!expanded && card.error.is_none())
         .then(|| result_gist(card, budget))
         .flatten();
+    let gist_cols = gist
+        .as_deref()
+        .map_or(0, |g| width_of(g) + GIST_CHROME_COLS);
+    let mut header_spans = Vec::new();
+    let mut command_row: Option<String> = None;
+    match desc {
+        Some(desc) => {
+            let prefix = format!("{} {} ", card.glyph(), card.name);
+            let fixed = width_of(&prefix) + gist_cols + width_of(&meta);
+            let desc_room = usize::from(width)
+                .saturating_sub(fixed)
+                .max(INTENT_MIN_COLS);
+            let lead = format!("{prefix}{}", elide_middle_cols(&desc, desc_room));
+            header_spans.push(Span::styled(
+                lead.clone(),
+                accent.add_modifier(Modifier::BOLD),
+            ));
+            let room = usize::from(width)
+                .saturating_sub(width_of(&lead) + gist_cols + width_of(&meta))
+                .saturating_sub(COMMAND_CHROME_COLS);
+            let full_hint = arg_hint(card, budget);
+            if !full_hint.is_empty() {
+                if room >= ARG_HINT_MIN {
+                    header_spans.push(Span::styled(
+                        format!(" ({})", arg_hint(card, room)),
+                        theme.muted.add_modifier(Modifier::DIM),
+                    ));
+                } else {
+                    // Its own row has the whole width, less indent and parens.
+                    let own_row = usize::from(width)
+                        .saturating_sub(COMMAND_ROW_INDENT.len() + COMMAND_CHROME_COLS)
+                        .max(ARG_HINT_MIN);
+                    command_row = Some(arg_hint(card, own_row));
+                }
+            }
+        }
+        None => {
+            let hint = arg_hint(card, budget);
+            header_spans.push(Span::styled(
+                format!("{} {} {}", card.glyph(), card.name, hint),
+                accent.add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
     if let Some(gist) = &gist {
         header_spans.push(Span::styled(format!("  → {gist}"), theme.muted));
     }
-    header_spans.push(Span::styled(dur.clone(), theme.muted));
+    header_spans.push(Span::styled(meta, theme.muted));
     header_spans.push(auto_tag);
-    // Sized against what the row has already spent, so a long command pushes
-    // the intent out rather than wrapping the line that carries the command.
-    let spent = width_of(&header)
-        + gist
-            .as_deref()
-            .map_or(0, |g| width_of(g) + GIST_CHROME_COLS)
-        + width_of(&dur);
-    if let Some(note) = intent_note(tool_description(card).as_deref(), spent, width) {
-        header_spans.push(Span::styled(note, theme.muted.add_modifier(Modifier::DIM)));
-    }
     out.push(Line::from(header_spans));
+    if let Some(cmd) = command_row {
+        out.push(Line::from(Span::styled(
+            format!("{COMMAND_ROW_INDENT}({cmd})"),
+            theme.muted.add_modifier(Modifier::DIM),
+        )));
+    }
 
     // Collapsed cards keep the transcript compact, but edits need a visible
     // receipt: include their diff and let the transcript viewport scroll it.
@@ -229,6 +274,26 @@ fn push_error_and_hitl(out: &mut Vec<Line<'static>>, card: &StepCard, theme: &'s
 /// length of a `results`/`matches`/`items` array); otherwise fall back to a
 /// short inline value or a line/char count. `None` when there's nothing useful
 /// to say (empty output).
+/// Trailing ` · 77ms / 100 tokens` metadata. Duration first because it is
+/// always known once the call finishes; tokens only once the runtime has
+/// counted what the model actually received (after compression), so an older
+/// runtime — or a still-running call — shows the duration alone.
+fn header_meta(card: &StepCard) -> String {
+    let mut meta = String::new();
+    if let Some(ms) = card.duration_ms {
+        meta.push_str(&format!(" · {ms}ms"));
+    }
+    if let Some(tokens) = card.tokens {
+        meta.push_str(if card.duration_ms.is_some() {
+            " / "
+        } else {
+            " · "
+        });
+        meta.push_str(&format!("{tokens} tokens"));
+    }
+    meta
+}
+
 fn result_gist(card: &StepCard, budget: usize) -> Option<String> {
     let out = card.output.trim();
     if out.is_empty() {
@@ -338,72 +403,70 @@ mod tests {
             .collect()
     }
 
-    /// The command leads and the intent trails it, dim. The old layout put the
-    /// model's paraphrase on the header with the command indented beneath, so
-    /// the reviewable thing was the subordinate one.
+    /// The intent leads, the command trails it as a dim parenthetical, and
+    /// duration and tokens close the row: `✔ bash intent (cmd) · 77ms / 100 tokens`.
     #[test]
-    fn a_description_trails_the_command_as_dim_metadata() {
+    fn a_description_leads_and_the_command_trails_dim() {
+        let mut card = done_card(serde_json::json!({
+            "description": "Checking the workspace version",
+            "command": "grep -m1 '^version' Cargo.toml"
+        }));
+        card.tokens = Some(100);
+        let r = rows_at(&card, 200);
+        assert_eq!(r.len(), 1, "one row when it fits: {r:?}");
+        let intent_at = r[0].find("Checking").expect("intent on the row");
+        let cmd_at = r[0].find("(grep").expect("command in parens on the row");
+        assert!(intent_at < cmd_at, "intent must lead: {r:?}");
+        assert!(
+            r[0].contains(" · 21ms / 100 tokens"),
+            "duration then tokens: {r:?}"
+        );
+
+        let sp = spans(&card);
+        let intent = sp.iter().find(|(t, _)| t.contains("Checking")).unwrap();
+        assert!(
+            intent.1.add_modifier.contains(Modifier::BOLD),
+            "intent carries the header weight: {intent:?}"
+        );
+        let cmd = sp.iter().find(|(t, _)| t.contains("grep")).unwrap();
+        assert!(
+            cmd.1.add_modifier.contains(Modifier::DIM),
+            "command trails dim: {cmd:?}"
+        );
+    }
+
+    /// No token count yet (older runtime, or the follow-up has not arrived):
+    /// the row ends at the duration, with no dangling `/`.
+    #[test]
+    fn without_a_token_count_the_row_ends_at_the_duration() {
         let card = done_card(serde_json::json!({
             "description": "Checking the workspace version",
             "command": "grep -m1 '^version' Cargo.toml"
         }));
         let r = rows_at(&card, 200);
-        assert_eq!(r.len(), 1, "one row, not a split card: {r:?}");
-        let cmd_at = r[0].find("grep").expect("command on the row");
-        let intent_at = r[0].find("Checking").expect("intent on the row");
-        assert!(cmd_at < intent_at, "command must lead: {r:?}");
-        assert!(r[0].contains("21ms"), "{r:?}");
-
-        let intent = spans(&card)
-            .into_iter()
-            .find(|(t, _)| t.contains("Checking"))
-            .expect("intent span");
-        assert!(
-            intent.1.add_modifier.contains(Modifier::DIM),
-            "intent must be dim: {intent:?}"
-        );
-        assert!(
-            !intent.1.add_modifier.contains(Modifier::BOLD),
-            "intent must not be bold: {intent:?}"
-        );
+        assert!(r[0].contains(" · 21ms"), "{r:?}");
+        assert!(!r[0].contains('/') && !r[0].contains("tokens"), "{r:?}");
     }
 
-    /// The command keeps the bold accent it always had — demoting the intent
-    /// must not also demote the thing the intent sits beside.
+    /// A tight row never loses the command: it moves to its own dim line
+    /// under the intent instead of being elided away.
     #[test]
-    fn the_command_stays_the_brightest_thing_on_the_row() {
-        let card = done_card(serde_json::json!({
-            "description": "Checking the workspace version",
-            "command": "grep -m1 '^version' Cargo.toml"
-        }));
-        let cmd = spans(&card)
-            .into_iter()
-            .find(|(t, _)| t.contains("grep"))
-            .expect("command span");
-        assert!(
-            cmd.1.add_modifier.contains(Modifier::BOLD),
-            "command must stay bold: {cmd:?}"
-        );
-    }
-
-    /// A narrow row spends its columns on the command, not the paraphrase.
-    #[test]
-    fn a_tight_row_drops_the_intent_rather_than_the_command() {
+    fn a_tight_row_moves_the_command_to_a_second_line() {
         let card = done_card(serde_json::json!({
             "description": "Checking the workspace version of the crate",
             "command": "grep -m1 '^version' Cargo.toml"
         }));
-        let text: String = super::card_lines(&card, &theme::ANSI, false, 44)
-            .first()
-            .expect("a header row")
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert!(text.contains("grep"), "command must survive: {text}");
+        let r = rows_at(&card, 44);
+        assert!(r[0].starts_with("✔ bash Check"), "intent leads: {r:?}");
+        assert!(!r[0].contains("grep"), "command left the tight row: {r:?}");
+        let second = r.get(1).expect("command row");
         assert!(
-            !text.contains("Checking"),
-            "intent must be dropped when tight: {text}"
+            second.trim_start().starts_with("(grep"),
+            "command on its own row: {r:?}"
+        );
+        assert!(
+            second.contains("Cargo.toml"),
+            "its own row has room for the whole command: {r:?}"
         );
     }
 

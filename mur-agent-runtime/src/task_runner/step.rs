@@ -342,6 +342,53 @@ impl TaskRunner {
         }
     }
 
+    /// `step/tokens` follow-up for every call that ran: the token count of the
+    /// result as it enters history, i.e. after `post_tool_use` rewrote it.
+    /// A separate notification rather than a field on `step/completed`
+    /// because that frame is sent from inside the tool call, before any hook
+    /// has seen the output. Attended turns only; an older client ignores the
+    /// unknown method.
+    pub(super) async fn emit_step_tokens(
+        &self,
+        task_id: &str,
+        step_ids: &[Option<String>],
+        results: &[crate::llm::ToolResultEntry],
+    ) {
+        let Some(tx) = self.step_sink(task_id).await else {
+            return;
+        };
+        for (step_id, entry) in step_ids.iter().zip(results.iter()) {
+            let Some(step_id) = step_id else { continue };
+            let tokens = result_token_counter().count(&entry.content);
+            let _ = tx
+                .send(super::helpers::step_notification(
+                    "step/tokens",
+                    serde_json::json!({
+                        "step_id": step_id,
+                        "task_id": task_id,
+                        "tokens": tokens,
+                    }),
+                ))
+                .await;
+        }
+    }
+
+    /// The notifier `step/*` frames go to: the connection watching this task,
+    /// else the runner's baked notifier — the same routing `GuardedToolCall`
+    /// uses for `step/started` and `step/completed`.
+    async fn step_sink(
+        &self,
+        task_id: &str,
+    ) -> Option<tokio::sync::mpsc::Sender<serde_json::Value>> {
+        let routed = self
+            .client_notifiers
+            .lock()
+            .await
+            .get(task_id)
+            .map(|(tx, _)| tx.clone());
+        routed.or_else(|| self.notifier.clone())
+    }
+
     /// One line into the live transcript of the connection that holds this
     /// turn, as a `message/delta` text frame — the frame murmur already
     /// renders, so no new frame type and no client change. Attended turns
@@ -459,4 +506,14 @@ impl TaskRunner {
         };
         settle(text, &ledger)
     }
+}
+
+/// Process-wide counter for `step/tokens`. Built once: the tiktoken tables
+/// take real time to load, and this runs after every tool call.
+fn result_token_counter() -> &'static dyn mur_compress::tokenizer::TokenCounter {
+    static COUNTER: std::sync::OnceLock<Box<dyn mur_compress::tokenizer::TokenCounter>> =
+        std::sync::OnceLock::new();
+    COUNTER
+        .get_or_init(mur_compress::tokenizer::default_counter)
+        .as_ref()
 }

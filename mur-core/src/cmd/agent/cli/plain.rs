@@ -243,6 +243,9 @@ pub(super) fn run_plain(
                         );
                         let _ = out2.borrow_mut().flush();
                     }
+                    // Plain mode has already printed the row by the time the
+                    // count arrives; it cannot be edited in place.
+                    StepEvent::Tokens { .. } => {}
                 }
             },
         );

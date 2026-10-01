@@ -247,6 +247,9 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             );
             app.finish_auto_fleet(&step_id, ok, duration_ms);
         }
+        StreamMsg::StepTokens {
+            step_id, tokens, ..
+        } => app.update_step_tokens(&step_id, tokens),
     }
 }
 

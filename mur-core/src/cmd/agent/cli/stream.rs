@@ -101,6 +101,12 @@ pub enum StreamMsg {
         /// The call yielded and the command is still running.
         running: bool,
     },
+    /// Post-hook token count for a finished call (`step/tokens`).
+    StepTokens {
+        task_id: String,
+        step_id: String,
+        tokens: usize,
+    },
 }
 
 impl StreamMsg {
@@ -113,7 +119,8 @@ impl StreamMsg {
             | StreamMsg::Err { task_id, .. }
             | StreamMsg::TurnLost { task_id, .. }
             | StreamMsg::StepStarted { task_id, .. }
-            | StreamMsg::StepCompleted { task_id, .. } => Some(task_id),
+            | StreamMsg::StepCompleted { task_id, .. }
+            | StreamMsg::StepTokens { task_id, .. } => Some(task_id),
             StreamMsg::Note(_)
             | StreamMsg::RestartDone(_)
             | StreamMsg::Expired { .. }
@@ -291,6 +298,15 @@ pub fn spawn_stream(
                         duration_ms,
                         denied,
                         running,
+                    },
+                    crate::a2a_dial::StepEvent::Tokens {
+                        step_id,
+                        task_id,
+                        tokens,
+                    } => StreamMsg::StepTokens {
+                        task_id,
+                        step_id,
+                        tokens,
                     },
                 };
                 let _ = tx.blocking_send(msg);

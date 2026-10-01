@@ -338,6 +338,26 @@ pub enum StepEvent {
         /// bash-yield release sends this; older ones omit it = not running).
         running: bool,
     },
+    /// Tokens the model received for a finished call, counted by the runtime
+    /// after its post-tool hooks (compression, redaction) rewrote the result.
+    /// Arrives after `Completed`; an older runtime never sends it.
+    Tokens {
+        step_id: String,
+        task_id: String,
+        tokens: usize,
+    },
+}
+
+/// Parse the `params` of a `step/tokens` notification, or `None` when the
+/// frame lacks the count (nothing to show, so nothing to forward).
+pub fn parse_step_tokens(p: &Value) -> Option<StepEvent> {
+    let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let tokens = p.get("tokens").and_then(Value::as_u64)? as usize;
+    Some(StepEvent::Tokens {
+        step_id: s("step_id"),
+        task_id: s("task_id"),
+        tokens,
+    })
 }
 
 /// Parse the `params` of a `step/started` (`completed = false`) or
@@ -486,6 +506,12 @@ pub fn dial_message_streaming(
             if v.get("method").and_then(Value::as_str) == Some("step/completed") {
                 if let Some(params) = v.get("params") {
                     on_step(parse_step(params, true));
+                }
+                continue;
+            }
+            if v.get("method").and_then(Value::as_str) == Some("step/tokens") {
+                if let Some(ev) = v.get("params").and_then(parse_step_tokens) {
+                    on_step(ev);
                 }
                 continue;
             }
@@ -984,7 +1010,26 @@ mod timeout_tests {
 
 #[cfg(test)]
 mod step_parse_tests {
-    use super::{StepEvent, parse_step};
+    use super::{StepEvent, parse_step, parse_step_tokens};
+
+    #[test]
+    fn step_tokens_parses_and_a_frame_without_a_count_is_dropped() {
+        let p = serde_json::json!({ "step_id": "s1", "task_id": "t1", "tokens": 100 });
+        match parse_step_tokens(&p) {
+            Some(StepEvent::Tokens {
+                step_id,
+                task_id,
+                tokens,
+            }) => {
+                assert_eq!(
+                    (step_id.as_str(), task_id.as_str(), tokens),
+                    ("s1", "t1", 100)
+                );
+            }
+            other => panic!("expected Tokens, got {other:?}"),
+        }
+        assert!(parse_step_tokens(&serde_json::json!({ "step_id": "s1" })).is_none());
+    }
 
     #[test]
     fn parses_started() {
@@ -1006,7 +1051,7 @@ mod step_parse_tests {
                 assert_eq!(name, "edit");
                 assert_eq!(args["path"], "a.rs");
             }
-            StepEvent::Completed { .. } => panic!("expected Started"),
+            other => panic!("expected Started, got {other:?}"),
         }
     }
 
@@ -1048,7 +1093,7 @@ mod step_parse_tests {
                 assert!(!denied);
                 assert!(!running);
             }
-            StepEvent::Started { .. } => panic!("expected Completed"),
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
