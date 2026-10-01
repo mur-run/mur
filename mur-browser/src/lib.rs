@@ -27,6 +27,7 @@ pub mod paths;
 pub mod proxy;
 pub mod recorder;
 pub mod replay;
+pub mod server;
 pub mod state;
 
 /// npm package spawned as the downstream MCP server. Pinned: each release
