@@ -261,6 +261,18 @@ impl App {
         }
     }
 
+    /// Attach the runtime's post-hook token count to the matching step card.
+    pub fn update_step_tokens(&mut self, step_id: &str, tokens: usize) {
+        if let Some(card) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find_map(|m| m.step.as_mut().filter(|c| c.id == step_id))
+        {
+            card.tokens = Some(tokens);
+        }
+    }
+
     /// Close every step card still spinning, because the turn that owned them
     /// has ended.
     ///
