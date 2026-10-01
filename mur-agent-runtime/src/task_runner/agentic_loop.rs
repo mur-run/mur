@@ -481,6 +481,11 @@ impl TaskRunner {
             // other places that build one are synthesised errors and refusals
             // with no execution to measure (issue #1197).
             let mut durations_ms: Vec<u64> = Vec::new();
+            // Step ids per call that actually ran, positionally matched to
+            // `results`, so the post-hook token count below can be sent to
+            // the card the client already opened for that call. `None` for
+            // a withdrawn call: no step was ever started for it.
+            let mut ran_step_ids: Vec<Option<String>> = Vec::new();
             for call in &resp.tool_calls {
                 let t0 = std::time::Instant::now();
                 // Withdrawn this turn (spec §3.8): the tool left the list
@@ -489,6 +494,7 @@ impl TaskRunner {
                 if disabled.contains(&call.tool_name) {
                     withdrawn_calls += 1;
                     durations_ms.push(0);
+                    ran_step_ids.push(None);
                     results.push(crate::llm::ToolResultEntry {
                         call_id: call.call_id.clone(),
                         content: format!(
@@ -504,17 +510,23 @@ impl TaskRunner {
                     });
                     continue;
                 }
+                // Minted here when the gate did not already (Allow-lane
+                // calls), so the id is known on this side of the call too.
+                let step_id = step_ids
+                    .remove(&call.call_id)
+                    .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
                 match self
                     .handle_tool_call(
                         task_id,
                         call,
                         decisions.remove(&call.call_id),
-                        step_ids.remove(&call.call_id),
+                        Some(step_id.clone()),
                     )
                     .await
                 {
                     Ok(entry) => {
                         durations_ms.push(t0.elapsed().as_millis() as u64);
+                        ran_step_ids.push(Some(step_id));
                         results.push(entry);
                     }
                     Err(e) => return Err(e),
@@ -527,6 +539,10 @@ impl TaskRunner {
             // redacts PII. Patches are content-deterministic, so the doom-loop
             // fingerprint below stays stable.
             self.apply_post_tool_use(&resp.tool_calls, &mut results, &durations_ms)
+                .await;
+            // What the model will actually read — counted AFTER the hooks, so
+            // a compressed result reports the size of the note, not the blob.
+            self.emit_step_tokens(task_id, &ran_step_ids, &results)
                 .await;
 
             // Doom-loop detection (safety layer): fingerprint every tool call

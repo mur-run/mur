@@ -554,6 +554,38 @@ mod approver_tests {
         assert!(rx.recv().await.is_some());
     }
 
+    /// `step/tokens` counts the result as it enters history (post-hook), goes
+    /// to the watching client, and skips a withdrawn call that never got a
+    /// step card.
+    #[tokio::test]
+    async fn step_tokens_counts_the_post_hook_result_per_started_step() {
+        let r = runner();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        r.register_client_notifier("t1", tx, true).await;
+        let entry = |content: &str| crate::llm::ToolResultEntry {
+            call_id: "c".into(),
+            content: content.into(),
+            is_error: false,
+            status: Default::default(),
+            images: Vec::new(),
+        };
+        let note = "[Large output compressed; original stored.]";
+        r.emit_step_tokens(
+            "t1",
+            &[Some("s1".into()), None],
+            &[entry(note), entry("withdrawn")],
+        )
+        .await;
+
+        let n = rx.recv().await.expect("one frame for the started step");
+        assert_eq!(n["method"], "step/tokens");
+        assert_eq!(n["params"]["step_id"], "s1");
+        assert_eq!(n["params"]["task_id"], "t1");
+        let tokens = n["params"]["tokens"].as_u64().expect("a count");
+        assert!(tokens > 0 && tokens < note.len() as u64, "{tokens}");
+        assert!(rx.try_recv().is_err(), "no frame for the withdrawn call");
+    }
+
     /// Unregistering clears both halves.
     #[tokio::test]
     async fn unregister_removes_the_entry() {

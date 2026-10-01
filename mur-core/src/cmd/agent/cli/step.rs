@@ -47,6 +47,12 @@ pub struct StepCard {
     pub full_len: usize,
     pub error: Option<String>,
     pub duration_ms: Option<u64>,
+    /// Tokens the model actually received for this result, counted by the
+    /// runtime AFTER its post-tool hooks (compression, redaction) ran — so a
+    /// compressed 2 000-line read shows the ~100-token note the model saw,
+    /// not the bytes on disk. `None` until the runtime's `step/tokens`
+    /// follow-up arrives, or forever on a runtime that predates it.
+    pub tokens: Option<usize>,
     /// True while this card's tool call is waiting on a HITL decision (P2 inline
     /// approval). Set when the matching `tool/approval_needed` arrives, cleared
     /// on decision.
@@ -70,6 +76,7 @@ impl StepCard {
             full_len: 0,
             error: None,
             duration_ms: None,
+            tokens: None,
             awaiting_hitl: false,
             auto_approved: false,
         }
