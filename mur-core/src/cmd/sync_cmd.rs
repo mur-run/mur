@@ -1235,6 +1235,7 @@ pub(crate) fn ensure_mur_skill(home: &std::path::Path, mur_root: &std::path::Pat
             "mur-project-search",
             include_str!("../skills/mur_project_search.yaml"),
         ),
+        ("mur-search", include_str!("../skills/mur_search.yaml")),
         ("mur-compress", include_str!("../skills/mur_compress.yaml")),
         (
             "mur-settlement",
@@ -2171,6 +2172,11 @@ mod builtin_skill_tests {
             (
                 "mur-project-search",
                 include_str!("../skills/mur_project_search.yaml"),
+                true,
+            ),
+            (
+                "mur-search",
+                include_str!("../skills/mur_search.yaml"),
                 false,
             ),
         ];

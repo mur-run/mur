@@ -1,0 +1,129 @@
+name: mur-search
+version: 0.1.0
+publisher: human:mur
+description: "Route a code search to the cheapest tool: rg, LSP symbols, ast-grep, semantic index, or per-project fan-out."
+category: context
+hosts: [all]
+content:
+  abstract: |
+    Classify the query first, then take the cheapest rung whose entry
+    condition holds. Each rung has an observable entry condition and a
+    fixed fallback. Never start from the semantic rung by reflex; never
+    fan out across repos when one tool can answer locally.
+  context: |
+    # mur-search — cheapest rung first
+
+    ```
+    CLASSIFY THE QUERY BEFORE PICKING A TOOL. ONE RUNG AT A TIME.
+    ```
+
+    Announce the rung you are on ("rung: symbol → serena").
+
+    ## The ladder
+
+    | Rung | Entry condition (observable) | Tool | Fallback |
+    |---|---|---|---|
+    | Exact | Query is an error message, a literal, a config key, a log line | `rg -n -F '<literal>'` | — (zero hits is the answer) |
+    | Symbol | Query is an identifier and asks for definition / references / callers across files; tool list has `find_symbol` and `find_referencing_symbols` | `find_symbol` / `find_referencing_symbols` | LSP returns nothing → `rg -n -w '<symbol>'` |
+    | Structure | Query is a code shape ("every `unwrap()` inside an `async fn`"); `which ast-grep` succeeds | `ast-grep run -p '<pattern>' -l <lang>` | `which` fails or no hit → `rg -n -U` multiline regex |
+    | Semantic | Query is an intent or concept ("where is retry handled"); `mur project status` shows `Indexed: yes` | `mur project search '<query>'` (`/search` in chat) | `Indexed: no` → run `mur project index` first, then retry; do NOT report "no results" |
+    | Cross-project | Scope spans more than one repo | `mur project search '<query>' --all` | Error `No vector column found … dimension` → per-project fan-out (below) |
+
+    Entry conditions are predicates, not vibes. "The query mentions a
+    function name" is Symbol. "The query is a sentence about behavior" is
+    Semantic. Read the query text; do not guess from the task.
+
+    ## Classify in one pass
+
+    1. Contains quotes, an error string, or a path fragment → **Exact**.
+    2. Is a single identifier (CamelCase, snake_case, `::` path) → **Symbol**.
+    3. Describes code shape with syntax words (inside, wrapped in, returns, arm) → **Structure**.
+    4. Describes behavior or purpose in prose → **Semantic**.
+    5. Names other repos, "everywhere", "all projects" → **Cross-project**.
+
+    First match wins. If 1 and 4 both fire, 1 wins — the literal is cheaper
+    and sharper.
+
+    ## Per-project fan-out (Cross-project fallback)
+
+    `--all` embeds the query once and runs it against every index; indexes
+    built with different embedding models have different dimensions and
+    the call fails. Fall back to one `--project` call per indexed project:
+
+    ```sh
+    # `mur project list` prints one project per line as
+    #   "<name> — last indexed: <timestamp>" followed by an indented "path:" line.
+    # Capture everything before the literal " — last indexed:" separator so
+    # names containing spaces survive. If that line format ever changes,
+    # read the names from `mur project list` by eye and run --project per name.
+    mur project list \
+      | sed -n 's/^[[:space:]]*\(.*\) — last indexed:.*/\1/p' \
+      | while IFS= read -r project; do
+          mur project search '<query>' --project "$project" --limit 3
+        done
+    ```
+
+    Reading the output of each call:
+
+    - A line `WARN … OMLX_API_KEY is unset` (or any other missing-key
+      warning) is a *diagnostic*, not a verdict. Ignore that line, then
+      judge success by whether any result line contains `score=`.
+    - Result lines present → that project answered; collect them.
+    - No `score=` line → do NOT record "no match". First run
+      `mur project status --json` from that project's `path:` and check
+      `"indexed": true`. Not indexed means the search never ran; a missing
+      key with `indexed: true` and no results means embedding failed —
+      report that as a failure, not as an empty match.
+
+    ## Why the rungs are ordered this way
+
+    - `rg` is milliseconds, deterministic, zero tokens. A literal found by
+      `rg` and by `mur project search` is the same hit; `rg` just gets there first.
+    - LSP answers "who calls this" exactly; `rg -w` answers it noisily
+      (strings, comments, same-named locals). Use `rg -w` only as the fallback.
+    - ast-grep matches AST, so `foo(bar)` and `foo (bar)` are one pattern;
+      `rg` needs a regex that breaks on whitespace. Only worth it when the
+      query is about shape.
+    - `mur project search` is hybrid vector + BM25 over an index. It finds
+      synonyms `rg` is blind to, but it only sees indexed files, and only
+      this project unless `--all` / `--project`.
+    - Per-project fan-out is N processes; `--all` is one call when dims
+      agree. Try the single call first.
+
+    ## Prohibitions
+
+    | Do not | Because |
+    |---|---|
+    | Use semantic search for an exact string | Semantic ranking can drop the literal match below paraphrases; `rg -F` cannot miss it |
+    | `rg` a known symbol when `find_symbol` is in the tool list | `rg` returns strings, comments, shadowed locals; LSP returns the definition |
+    | Fan out per project before `--all` has failed | Fan-out is N processes; `--all` is one call when dims agree |
+    | Report "no results" after `Indexed: no` | Not indexed is not empty — the index was never built |
+    | Treat a missing-key WARN as "nothing matched" | The warning says embedding may not have run; check `indexed` and `score=` lines before concluding |
+    | Read whole files to find something | Every rung above returns `file:line`; open that range only |
+    | Pipe `ls -R` / `find` to eyeball | Not a search rung; it costs a turn and finds nothing by meaning |
+
+    Violating the letter of a prohibition is violating the spirit. "Just one
+    quick semantic search for the literal" is the first row.
+
+    ## Rationalizations
+
+    | Excuse | Reality |
+    |---|---|
+    | "Semantic will find it anyway" | It may rank it 7th. `rg -F` ranks it 1st in 20ms. |
+    | "I'm not sure the LSP is loaded" | Check the tool list for `find_symbol`. Present → Symbol rung. Absent → `rg -w`. |
+    | "ast-grep is overkill" | Only if the query is not about shape. Shape queries with `rg` produce false positives you then read by hand. |
+    | "The repo probably isn't indexed" | `mur project status` says in one line. Probably is not observable. |
+    | "I'll search everything to be safe" | Cross-project is the most expensive rung. Enter it only when scope names another repo. |
+
+    ## Leaves (read on demand)
+
+    - `mur skill show mur-project-search` — semantic vs grep trade-offs,
+      search flags, when exhaustive matching is required.
+
+    Do not restate those here; this hub only routes.
+tags: [mur, search, grep, lsp, ast-grep, semantic, builtin]
+triggers:
+  - type: keyword
+    pattern: "(find (the )?(code|definition|references|callers|usages)|where (is|does) .{0,40}(defined|handled|implemented)|search (the )?(codebase|project|repo|all projects)|grep for|which file)"
+  - type: manual
+priority: normal
