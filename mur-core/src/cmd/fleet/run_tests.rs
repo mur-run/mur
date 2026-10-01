@@ -215,3 +215,81 @@ fn partition_procedure_constrains_each_member_to_its_region() {
     // Steps reference different units
     assert_ne!(intents[0], intents[1]);
 }
+
+/// #1607: the routing note names the directory the CALLER gave, resolved to
+/// its git root, and never this process's cwd. Outside a checkout the
+/// directory itself is the target.
+#[test]
+fn routing_note_targets_the_given_dir_not_process_cwd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("proj");
+    let nested = repo.join("src").join("deep");
+    std::fs::create_dir_all(&nested).unwrap();
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&repo)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("skipping: git unavailable");
+        return;
+    }
+    // `git init` on a symlinked tmpdir (macOS) reports the canonical path.
+    let repo_canon = repo.canonicalize().unwrap();
+
+    let note = routing_note(&nested, false);
+    assert!(
+        note.contains(&format!("`{}`", repo_canon.display())),
+        "{note}"
+    );
+    assert!(
+        !note.contains("assumed"),
+        "explicit cwd is not a guess: {note}"
+    );
+    // discover_repo_root is anchored on the argument, not on where the test
+    // runner happens to be.
+    let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+    assert_ne!(cwd, repo_canon);
+    assert_eq!(
+        discover_repo_root(&nested).unwrap().canonicalize().unwrap(),
+        repo_canon
+    );
+
+    let plain = tmp.path().join("no-git");
+    std::fs::create_dir_all(&plain).unwrap();
+    let note = routing_note(&plain, true);
+    assert!(
+        note.contains(&format!("`{}`", plain.display())),
+        "falls back to the dir itself: {note}"
+    );
+    assert!(
+        note.contains("assumed from the calling agent's session directory"),
+        "inferred cwd is marked: {note}"
+    );
+}
+
+#[test]
+fn run_cwd_rejects_relative_and_missing_paths() {
+    let rel = RunCwd {
+        path: Some(PathBuf::from("relative/dir")),
+        inferred: false,
+    };
+    assert!(rel.resolve().unwrap_err().to_string().contains("absolute"));
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = RunCwd {
+        path: Some(tmp.path().join("nope")),
+        inferred: false,
+    };
+    assert!(
+        missing
+            .resolve()
+            .unwrap_err()
+            .to_string()
+            .contains("not a directory")
+    );
+    assert_eq!(
+        RunCwd::default().resolve().unwrap(),
+        std::env::current_dir().unwrap()
+    );
+}

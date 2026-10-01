@@ -217,6 +217,7 @@ pub async fn build_provider_runner(
                     // reason we still have it: the child cannot read `keys/`.
                     signing: Some(identity.clone()),
                     key_version: profile.inner.identity.key_version,
+                    session_cwd: Some(session_cwd.clone()),
                 }),
             );
         }
