@@ -422,7 +422,11 @@ rely on it.
 seal. In this session's seal, `chrome-headless-shell --dump-dom` returned exit
 0 with empty output even for a `data:` URL, so nothing about Chromium's
 network behaviour could be observed from there. F1–F7 are opt-in end-to-end
-tests (gated by an env var named in the plan), run in CI or a plain terminal.
+tests gated by `MUR_BROWSER_E2E=1`, run in CI or a plain terminal. The
+fixture is `scripts/e2e/browser-live-fixture.py` (two HTTPS shops on
+`127.0.0.1`, self-signed cert minted per start — HTTPS because of Gap 3);
+the tool-level F1 + minimal F2 is `mur-core/tests/browser_live_f1.rs`; the
+LLM-in-the-loop F1 is `scripts/e2e/browser-live-f1.sh`.
 F4 is a pure proxy test and runs in the normal suite, next to the existing
 tests in `egress_proxy.rs` (`bare_connect_is_challenged_with_407`; the
 unknown-token 403 and valid-token 200 cases were already covered by
