@@ -306,3 +306,68 @@ fn profile_needs_egress_matches_scoped_modes() {
         entry(Some(McpNetMode::BroadAudited))
     ]));
 }
+
+fn entry(provider: &str, base_url: Option<&str>) -> ModelEntry {
+    ModelEntry {
+        provider: provider.to_string(),
+        model: "m".to_string(),
+        base_url: base_url.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+fn no_env(_: &str) -> Option<String> {
+    None
+}
+
+/// The seal must cover every model the agent can switch to after sealing
+/// (`/model`, `autopick_cheap`), not just the current one: a registry with
+/// models on two loopback ports yields both, de-duplicated and sorted, and
+/// remote / non-loopback entries contribute nothing.
+#[test]
+fn llm_loopback_ports_cover_current_and_every_registry_entry() {
+    let mut reg = mur_common::model::ModelRegistry::default();
+    for (name, e) in [
+        ("proxy_a", entry("openai", Some("http://127.0.0.1:8088/v1"))),
+        ("proxy_b", entry("anthropic", Some("http://localhost:8088"))),
+        ("mlx", entry("openai", Some("http://127.0.0.1:8000/v1"))),
+        (
+            "remote",
+            entry("openai", Some("https://api.deepseek.com/v1")),
+        ),
+        ("cloud", entry("anthropic", None)),
+    ] {
+        reg.models.insert(name.to_string(), e);
+    }
+    let current = entry("ollama", None);
+    let home = std::path::Path::new("/nonexistent");
+
+    assert_eq!(
+        llm_loopback_ports(Some(&current), Some(&reg), &no_env, home),
+        vec![8000, 8088, 11434]
+    );
+    // No registry (unreadable / absent) → the current model alone.
+    assert_eq!(
+        llm_loopback_ports(Some(&current), None, &no_env, home),
+        vec![11434]
+    );
+    // Nothing resolvable → nothing granted.
+    assert!(llm_loopback_ports(None, None, &no_env, home).is_empty());
+}
+
+/// Base-URL env overrides come from the injected lookup, not the process:
+/// a cloud provider bridged to loopback is granted, a remote one is not.
+#[test]
+fn entry_loopback_port_reads_injected_env() {
+    let home = std::path::Path::new("/nonexistent");
+    let bridged =
+        |k: &str| (k == "ANTHROPIC_BASE_URL").then(|| "http://127.0.0.1:9123".to_string());
+    let remote =
+        |k: &str| (k == "ANTHROPIC_BASE_URL").then(|| "https://api.anthropic.com".to_string());
+    let e = entry("anthropic", None);
+    assert_eq!(entry_loopback_port(&e, &bridged, home), Some(9123));
+    assert_eq!(entry_loopback_port(&e, &remote, home), None);
+    // An explicit loopback base_url beats the provider default.
+    let pinned = entry("ollama", Some("http://127.0.0.1:12000"));
+    assert_eq!(entry_loopback_port(&pinned, &no_env, home), Some(12000));
+}
