@@ -388,6 +388,10 @@ pub async fn fleet_run_loop(name: String, app: tauri::AppHandle) -> Result<(), S
                 None,
                 None,
                 None,
+                // The Hub has no target directory to offer here, and a GUI
+                // process's own cwd is not one (#1607): leave the loop
+                // unrouted, as the daemon's scheduled loop does.
+                None,
             ))
             .is_ok();
         let _ = app.emit(
