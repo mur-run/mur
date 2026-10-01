@@ -15,8 +15,9 @@
 # the fixture's certificate. A plain terminal or CI is fine.
 #
 # Needs: a MUR agent runtime that can start, `mur browser setup` done once on
-# this machine (npx + @playwright/mcp + chromium headless shell), python3,
-# openssl, and a model the agent can call.
+# this machine (it installs the pinned @playwright/mcp under
+# <mur_home>/browser/mcp-server/<version> and the chromium headless shell),
+# node, python3, openssl, and a model the agent can call.
 #
 # Usage:
 #   scripts/e2e/browser-live-f1.sh [--model <id>] [--provider <name>] [--keep]
@@ -51,9 +52,23 @@ if [[ ! -x "$MUR" ]]; then
   cargo build -p mur-core --bin mur --quiet
 fi
 
-for bin in python3 openssl npx; do
+for bin in python3 openssl node; do
   command -v "$bin" >/dev/null || { echo "FAIL: $bin not on PATH" >&2; exit 1; }
 done
+
+# The launch is `node <mur_home>/browser/mcp-server/<version>/…/cli.js` with no
+# npx fallback, and installing it needs the npm registry, which the agent's
+# seal does not allow. Check here, outside the seal, so a missing install
+# fails with the fix instead of as an MCP server that never answers.
+MUR_HOME_DIR="${MUR_HOME:-$HOME/.mur}"
+PW_MCP_VERSION="$(sed -n 's/^pub const VERSION: &str = "\(.*\)";$/\1/p' mur-browser/src/server.rs)"
+[[ -n "$PW_MCP_VERSION" ]] || { echo "FAIL: cannot read the pinned version from mur-browser/src/server.rs" >&2; exit 1; }
+PW_MCP_DIR="$MUR_HOME_DIR/browser/mcp-server/$PW_MCP_VERSION"
+if [[ ! -f "$PW_MCP_DIR/node_modules/@playwright/mcp/package.json" ]]; then
+  echo "FAIL: @playwright/mcp@$PW_MCP_VERSION is not installed at $PW_MCP_DIR" >&2
+  echo "      run \`$MUR browser setup --yes\` in this terminal first" >&2
+  exit 1
+fi
 
 FIXTURE_PID=""
 cleanup() {
@@ -72,7 +87,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> 0/5 tool-level gate (same proxy, same fixture, no model)"
-MUR_BROWSER_E2E=1 cargo test -p mur-core --test browser_live_f1 --quiet -- --quiet
+MUR_BROWSER_E2E=1 cargo test -p mur-core --test browser_live_f1 --quiet
 
 echo "==> 1/5 fixture: two HTTPS shops on 127.0.0.1"
 FIXTURE_OUT="$(mktemp)"
@@ -97,16 +112,32 @@ echo "    cheaper: $CHEAPER_NAME"
 
 echo "==> 2/5 agent with a Restricted live-mode browser entry"
 "$MUR" agent remove "$AGENT" --purge --force >/dev/null 2>&1 || true
-"$MUR" agent create "$AGENT" --no-interactive "${MODEL_ARGS[@]}" >/dev/null
+"$MUR" agent create "$AGENT" --no-interactive ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} >/dev/null
 # The entry: `mur browser record --mode live`. Trailing args reach
 # @playwright/mcp verbatim; the fixture's cert is self-signed.
-yes | "$MUR" agent mcp add "$AGENT" browser --no-probe --force \
-  --command mur --arg browser --arg record --arg --run --arg live --arg --mode --arg live \
+"$MUR" agent mcp add "$AGENT" browser --no-probe --force </dev/null \
+  --command "$MUR" --arg browser --arg record --arg --run --arg live --arg --mode --arg live \
   --arg=-- --arg=--ignore-https-errors >/dev/null
 "$MUR" agent mcp set-network "$AGENT" browser --allow-host 127.0.0.1 >/dev/null
-# What `mur browser record` spawns on the agent's behalf (perms.rs REQUIRED_BINARIES).
-"$MUR" agent perm allow-spawn "$AGENT" playwright-mcp >/dev/null
+# What `mur browser record` spawns on the agent's behalf (perms.rs
+# REQUIRED_BINARIES): `node <install>/…/cli.js`, then Chromium. No npx, so no
+# npx binary and no npx cache lane.
+PW_CACHE="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
+"$MUR" agent perm allow-spawn "$AGENT" node >/dev/null
 "$MUR" agent perm allow-spawn "$AGENT" chrome-headless-shell >/dev/null
+# Landlock/Seatbelt reads are an allowlist: without this `node` starts and
+# then cannot open cli.js (perms.rs Grant::Read).
+"$MUR" agent perm allow-read "$AGENT" "$PW_MCP_DIR" >/dev/null
+# [probed] the bare `chrome-headless-shell` resolves against standard exec
+# dirs only, so it is dropped at seal time; the real binary lives in the
+# Playwright browser cache, which is not searched. Grant that lane.
+"$MUR" agent perm allow-spawn-dir "$AGENT" "$PW_CACHE" >/dev/null
+# `record` binds the secret-broker socket at `<mur_home>/browser/broker.sock`
+# and writes the run's actions.yaml beside it. The seal denies file-write
+# everywhere except the agent's own home, so without this lane the broker
+# never gets its socket and the MCP server exits before `tools/list`.
+mkdir -p "$MUR_HOME_DIR/browser"   # the seal drops grants for paths missing at start
+"$MUR" agent perm allow-write "$AGENT" "$MUR_HOME_DIR/browser" >/dev/null
 # Read-only browser tools need no card for F1; F6 covers the ones that do.
 "$MUR" agent perm tool-allow "$AGENT" 'mcp__browser__browser_navigate' >/dev/null
 "$MUR" agent perm tool-allow "$AGENT" 'mcp__browser__browser_snapshot' >/dev/null
@@ -115,22 +146,27 @@ yes | "$MUR" agent mcp add "$AGENT" browser --no-probe --force \
 
 echo "==> 3/5 start"
 "$MUR" agent start "$AGENT" >/dev/null
+# Capture first, filter second: a running agent prints more lines after
+# "Active: running", so `status | grep -q` / `status | head -3` can SIGPIPE
+# the writer and trip pipefail.
+STATUS=""
 for _ in $(seq 1 100); do
-  "$MUR" agent status "$AGENT" 2>/dev/null | grep -q "Active: running" && break
+  STATUS="$("$MUR" agent status "$AGENT" 2>/dev/null || true)"
+  case "$STATUS" in *"Active: running"*) break ;; esac
   sleep 0.2
 done
-"$MUR" agent status "$AGENT" | head -3
+head -3 <<<"$STATUS"
 
 echo "==> 4/5 the comparison"
 TASK="Compare the price of the same product on these two shop pages. Open each page with the browser, read the price shown on it, then answer with BOTH prices exactly as written and the name of the cheaper shop. Shop pages: $URL_A and $URL_B"
 MSG="$(python3 -c 'import json,sys; print(json.dumps({"role":"user","parts":[{"kind":"text","text":sys.argv[1]}]}))' "$TASK")"
 REPLY="$("$MUR" agent send "$AGENT" "$MSG" 2>&1 || true)"
-echo "$REPLY" | sed 's/^/    | /' | head -40
+head -40 <<<"$REPLY" | sed 's/^/    | /'
 
 echo "==> 5/5 verdict"
 fail=0
 for want in "$PRICE_A" "$PRICE_B" "$CHEAPER_NAME"; do
-  if echo "$REPLY" | grep -qF -- "$want"; then
+  if grep -qF -- "$want" <<<"$REPLY"; then
     echo "    ✓ reply contains: $want"
   else
     echo "    ✗ reply missing: $want"
