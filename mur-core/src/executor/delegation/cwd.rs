@@ -116,14 +116,15 @@ mod tests {
             eprintln!("skipping: git unavailable");
             return;
         }
-        // `git init` on a symlinked tmpdir (macOS) reports the canonical path.
+        // The note quotes git's own spelling of the root. Compare directory
+        // identity via canonicalize, never the strings: macOS symlinks the
+        // tmpdir, and on Windows git prints `C:/...` while canonicalize
+        // returns the verbatim `\\?\C:\...` form.
         let repo_canon = repo.canonicalize().unwrap();
+        let root = discover_repo_root(&nested).unwrap();
 
         let note = routing_note(&nested, false);
-        assert!(
-            note.contains(&format!("`{}`", repo_canon.display())),
-            "{note}"
-        );
+        assert!(note.contains(&format!("`{}`", root.display())), "{note}");
         assert!(
             !note.contains("assumed"),
             "explicit cwd is not a guess: {note}"
@@ -132,10 +133,7 @@ mod tests {
         // runner happens to be.
         let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
         assert_ne!(cwd, repo_canon);
-        assert_eq!(
-            discover_repo_root(&nested).unwrap().canonicalize().unwrap(),
-            repo_canon
-        );
+        assert_eq!(root.canonicalize().unwrap(), repo_canon);
 
         let plain = tmp.path().join("no-git");
         std::fs::create_dir_all(&plain).unwrap();
