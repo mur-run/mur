@@ -6,13 +6,16 @@ use mur_common::hitl::{HitlRequest, HitlResponse, RiskTier, Unanswered};
 
 use super::*;
 
+/// `path` as a YAML single-quoted scalar. Double quotes would read the `\U`
+/// in a Windows path (`C:\Users\...`) as an escape and fail to parse.
+pub(crate) fn yaml_path(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
+}
+
 /// A minimal valid profile whose `filesystem.write` is exactly `write`.
 /// Shared with the dispatch-site tests that need a real member on disk.
 pub(crate) fn profile_yaml(name: &str, write: &[&Path]) -> String {
-    let write: Vec<String> = write
-        .iter()
-        .map(|p| format!("\"{}\"", p.display()))
-        .collect();
+    let write: Vec<String> = write.iter().map(|p| yaml_path(p)).collect();
     format!(
         r#"
 schema: 1
@@ -199,7 +202,7 @@ async fn denied_list_blocks_without_asking() {
     let f = Fixture::new("w", &[]);
     let project = f.project.clone();
     let yaml = profile_yaml("w", &[&project])
-        .replace("deny: []", &format!("deny: [\"{}\"]", project.display()));
+        .replace("deny: []", &format!("deny: [{}]", yaml_path(&project)));
     std::fs::write(f.home().join("agents/w/profile.yaml"), yaml).unwrap();
     let targets = targets_for(["w"], &project, false);
     let out = ensure_write_grants(&f.ctx(Unanswered::Defer, false), &targets)
@@ -326,4 +329,16 @@ fn prompt_combines_inferred_and_grant_in_one_gate() {
     let s = prompt(&t, false, false, 2);
     assert!(s.contains("mur agent restart w"), "{s}");
     assert!(s.contains("this dispatch will fail"), "{s}");
+}
+
+#[test]
+fn yaml_path_round_trips_windows_and_quoted_paths() {
+    for raw in [
+        r"C:\Users\runneradmin\AppData\Local\Temp\x",
+        "/tmp/it's here",
+    ] {
+        let doc = format!("p: {}", yaml_path(Path::new(raw)));
+        let v: std::collections::BTreeMap<String, String> = serde_yaml_ng::from_str(&doc).unwrap();
+        assert_eq!(v["p"], raw);
+    }
 }
