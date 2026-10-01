@@ -15,6 +15,7 @@ use mur_common::skill::manifest::{Procedure, ProcedureStep};
 
 use crate::a2a_dial::canonicalize_agent_name;
 use crate::executor::dag::{DagExecOptions, execute_dag};
+pub use crate::executor::delegation::cwd::RunCwd;
 
 /// A single job: a prompt and the (canonicalized) agent to delegate it to.
 pub struct Job {
@@ -25,7 +26,10 @@ pub struct Job {
 /// One rank-0 `ProcedureStep` per job (all parallel, no deps). Sets BOTH
 /// `intent` (the delegate prompt) and `description` (channel/ledger labels)
 /// to the job text, and a stable unique `id` for idempotency / crash-resume.
-pub fn build_jobs_procedure(jobs: &[Job]) -> Procedure {
+/// `routing` — the note naming the target directory — is appended to the
+/// prompt only, never to the label: a member that is told nothing about where
+/// the work is builds in whatever directory it happens to sit in (#1607).
+pub fn build_jobs_procedure(jobs: &[Job], routing: Option<&str>) -> Procedure {
     Procedure {
         variables: vec![],
         steps: jobs
@@ -33,7 +37,10 @@ pub fn build_jobs_procedure(jobs: &[Job]) -> Procedure {
             .enumerate()
             .map(|(i, j)| ProcedureStep {
                 description: j.description.clone(),
-                intent: Some(j.description.clone()),
+                intent: Some(match routing {
+                    Some(note) => format!("{}{note}", j.description),
+                    None => j.description.clone(),
+                }),
                 delegate_to: Some(j.assignee.clone()),
                 id: Some(format!("job-{i}")),
                 ..Default::default()
@@ -134,14 +141,18 @@ pub struct Dispatched {
 /// execution-limits §3.6): the caller polls `mur_job_status`. The run
 /// executes on the CURRENT tokio runtime — inside `mur-mcp-server` that is
 /// the server's own lifetime, which the tool description says out loud.
+/// `cwd` is where the jobs are routed; a bad one fails here, before any
+/// channel is minted.
 pub fn dispatch_parallel_jobs(
     mur_home: &Path,
     jobs: &[Job],
     max_concurrency: Option<usize>,
     yes: bool,
+    cwd: &RunCwd,
 ) -> Result<Dispatched> {
     authorize_targets(mur_home, jobs)?;
-    let proc = build_jobs_procedure(jobs);
+    let routing = cwd.routing_note()?;
+    let proc = build_jobs_procedure(jobs, Some(&routing));
     let svc = ChannelService::open(mur_home)?;
     let channel_id = svc.create_for_workflow("parallel-jobs")?.id;
     let run_id = format!("run-{}", uuid::Uuid::now_v7());
@@ -178,8 +189,9 @@ pub async fn run_parallel_jobs(
     jobs: &[Job],
     max_concurrency: Option<usize>,
     yes: bool,
+    cwd: &RunCwd,
 ) -> Result<(String, PipelineOutput)> {
-    let d = dispatch_parallel_jobs(mur_home, jobs, max_concurrency, yes)?;
+    let d = dispatch_parallel_jobs(mur_home, jobs, max_concurrency, yes, cwd)?;
     let out = d
         .handle
         .await
@@ -203,7 +215,7 @@ mod tests {
                 assignee: "frontend".into(),
             },
         ];
-        let p = build_jobs_procedure(&jobs);
+        let p = build_jobs_procedure(&jobs, None);
         assert_eq!(p.steps.len(), 2);
         // delegate target per job
         assert_eq!(p.steps[0].delegate_to.as_deref(), Some("rustsmith"));
@@ -216,6 +228,56 @@ mod tests {
         assert_eq!(p.steps[1].id.as_deref(), Some("job-1"));
         // all rank-0 (no dependencies => all parallel)
         assert!(p.steps.iter().all(|s| s.depends_on.is_empty()));
+    }
+
+    /// #1607: the routing note reaches the member (intent) but never the
+    /// channel/ledger label (description).
+    #[test]
+    fn build_jobs_procedure_routes_prompt_not_label() {
+        let jobs = vec![Job {
+            description: "fix the build".into(),
+            assignee: "coder".into(),
+        }];
+        let note = "\n\nIMPORTANT: the directory you are working in is `/proj`.";
+        let p = build_jobs_procedure(&jobs, Some(note));
+        assert_eq!(
+            p.steps[0].intent.as_deref(),
+            Some("fix the build\n\nIMPORTANT: the directory you are working in is `/proj`.")
+        );
+        assert_eq!(p.steps[0].description, "fix the build");
+    }
+
+    /// A bad `cwd` is refused before any channel exists — nothing to clean up.
+    #[test]
+    fn dispatch_rejects_relative_cwd_before_minting() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.yaml"),
+            "parallel_jobs:\n  targets: [ghost]\n",
+        )
+        .unwrap();
+        let jobs = vec![Job {
+            description: "a".into(),
+            assignee: "ghost".into(),
+        }];
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _g = rt.enter();
+        let err = match dispatch_parallel_jobs(
+            tmp.path(),
+            &jobs,
+            Some(1),
+            false,
+            &RunCwd::from_tool_args(Some("rel/dir"), false),
+        ) {
+            Ok(_) => panic!("relative cwd must be refused"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("absolute"), "{err}");
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        assert!(
+            svc.list(100).unwrap_or_default().is_empty(),
+            "no channel may be minted for a refused dispatch"
+        );
     }
 
     #[test]
@@ -327,7 +389,7 @@ mod tests {
             description: "do A".into(),
             assignee: "nonexistent-agent-xyz".into(),
         }];
-        let result = run_parallel_jobs(tmp.path(), &jobs, Some(2), false).await;
+        let result = run_parallel_jobs(tmp.path(), &jobs, Some(2), false, &RunCwd::default()).await;
         assert!(
             result.is_err(),
             "empty allowlist must block run_parallel_jobs"
@@ -363,9 +425,10 @@ mod tests {
             description: "do A".into(),
             assignee: "nonexistent-agent-xyz".into(),
         }];
-        let (channel_id, _out) = run_parallel_jobs(tmp.path(), &jobs, Some(2), false)
-            .await
-            .expect("must not error when the delegate is unreachable");
+        let (channel_id, _out) =
+            run_parallel_jobs(tmp.path(), &jobs, Some(2), false, &RunCwd::default())
+                .await
+                .expect("must not error when the delegate is unreachable");
         assert!(!channel_id.is_empty(), "a channel should have been minted");
         // The minted channel is persisted and loadable.
         let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
@@ -388,7 +451,7 @@ mod tests {
             description: "do x".into(),
             assignee: "ghost".into(),
         }];
-        let d = dispatch_parallel_jobs(home, &jobs, Some(1), false).unwrap();
+        let d = dispatch_parallel_jobs(home, &jobs, Some(1), false, &RunCwd::default()).unwrap();
         // No wall-clock bound here, deliberately. The previous
         // `elapsed() < 2s` measured what `dispatch_parallel_jobs` does
         // *synchronously* before it spawns — authorize, open the channel

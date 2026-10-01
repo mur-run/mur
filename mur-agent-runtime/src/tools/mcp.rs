@@ -7,10 +7,39 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
+use super::fs_policy::SessionCwd;
 use super::{ToolError, ToolExecutor, ToolImage, ToolOutput};
 use crate::llm::ToolDef;
 use crate::mcp::pool::McpPool;
 use crate::protocol::mcp_client::McpClient;
+
+/// MCP tools that fan work out to other agents and therefore need to know
+/// WHERE the work is. For these, a missing `cwd` is filled from the session
+/// directory and flagged `cwd_inferred` so the receiving side can say it was
+/// a guess (#1607). A fixed list, not a scan: injecting `cwd` into an
+/// arbitrary third-party tool's arguments would be a schema violation.
+pub const CWD_ROUTED_TOOLS: &[&str] = &["parallel_jobs"];
+
+/// Fill in `cwd`/`cwd_inferred` for a routed tool when the model gave none.
+/// An explicit `cwd` is never overridden — the model naming the target is
+/// the fast path. Non-object inputs are left alone for the server to reject.
+pub fn inject_session_cwd(tool: &str, input: &mut Value, session_cwd: Option<&SessionCwd>) {
+    if !CWD_ROUTED_TOOLS.contains(&tool) {
+        return;
+    }
+    let Some(cwd) = session_cwd else { return };
+    let Some(obj) = input.as_object_mut() else {
+        return;
+    };
+    if obj.get("cwd").is_some_and(|v| !v.is_null()) {
+        return;
+    }
+    obj.insert(
+        "cwd".into(),
+        Value::String(cwd.current().display().to_string()),
+    );
+    obj.insert("cwd_inferred".into(), Value::Bool(true));
+}
 
 /// Default per-tool-call timeout when an MCP server entry sets no
 /// `timeout_secs`. Deliberately short (spec 2026-09-12 execution-limits
@@ -89,6 +118,10 @@ pub struct McpToolExecutor {
     pub def: ToolDef,
     pub pool: Arc<McpPool>,
     pub timeout: Duration,
+    /// The agent's session directory, used to route fan-out tools
+    /// (`CWD_ROUTED_TOOLS`) when the model names no target. `None` in
+    /// contexts with no session (tests, headless probes).
+    pub session_cwd: Option<SessionCwd>,
 }
 
 #[async_trait]
@@ -101,7 +134,8 @@ impl ToolExecutor for McpToolExecutor {
         self.def.clone()
     }
 
-    async fn execute(&self, input: Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, mut input: Value) -> Result<ToolOutput, ToolError> {
+        inject_session_cwd(&self.tool, &mut input, self.session_cwd.as_ref());
         let client_arc: Arc<Mutex<McpClient>> = self
             .pool
             .client(&self.server)
@@ -209,5 +243,37 @@ mod tests {
         // so the filter above is real and not "always returns one".
         let text_only = json!({"content": [{"type": "text", "text": "hi"}]});
         assert!(extract_mcp_images(&text_only).is_empty());
+    }
+
+    /// #1607: a routed tool with no `cwd` gets the session directory and is
+    /// marked inferred; an explicit `cwd` is left exactly as the model gave it.
+    #[test]
+    fn injects_session_cwd_only_when_absent() {
+        let session = SessionCwd::new(std::path::PathBuf::from("/home"));
+        session.set(std::path::PathBuf::from("/proj"));
+
+        let mut absent = json!({"jobs": [{"description": "x"}]});
+        inject_session_cwd("parallel_jobs", &mut absent, Some(&session));
+        assert_eq!(absent["cwd"], "/proj");
+        assert_eq!(absent["cwd_inferred"], true);
+
+        let mut explicit = json!({"jobs": [], "cwd": "/elsewhere"});
+        inject_session_cwd("parallel_jobs", &mut explicit, Some(&session));
+        assert_eq!(explicit["cwd"], "/elsewhere");
+        assert!(explicit.get("cwd_inferred").is_none(), "{explicit}");
+    }
+
+    /// Only the allowlisted tools are touched: a third-party tool's arguments
+    /// are not a place to smuggle fields into.
+    #[test]
+    fn leaves_unrouted_tools_and_missing_session_alone() {
+        let session = SessionCwd::new(std::path::PathBuf::from("/home"));
+        let mut other = json!({"q": "hi"});
+        inject_session_cwd("mur_notes_search", &mut other, Some(&session));
+        assert_eq!(other, json!({"q": "hi"}));
+
+        let mut no_session = json!({"jobs": []});
+        inject_session_cwd("parallel_jobs", &mut no_session, None);
+        assert_eq!(no_session, json!({"jobs": []}));
     }
 }
