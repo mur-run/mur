@@ -299,3 +299,87 @@ async fn fleet_run_blocks_a_member_without_the_write_grant() {
     assert_eq!(jobs.len(), 1);
     assert_ne!(jobs[0].status, JobStatus::Running, "{:?}", jobs[0]);
 }
+
+/// Put `dev` on a manual loop that stops on an empty queue, so a run that
+/// clears the gate ends before it would need a live member.
+fn queue_empty_loop(home: &Path) {
+    let mut f = crate::cmd::fleet::store::load_fleet(home, "dev").unwrap();
+    f.loop_cfg = Some(mur_common::fleet::FleetLoop {
+        trigger: "manual".into(),
+        max_iterations: 0,
+        budget_usd: 0.0,
+        deadline: String::new(),
+        done_when: "queue-empty".into(),
+    });
+    crate::cmd::fleet::store::save_fleet(home, &f).unwrap();
+}
+
+fn hitl_count(home: &Path) -> usize {
+    mur_channel::ChannelService::open(home)
+        .unwrap()
+        .load_events("fleet-dev")
+        .unwrap()
+        .iter()
+        .filter(|e| e.kind == mur_common::channel::EventKind::HitlRequest)
+        .count()
+}
+
+/// #1607 rollout 3b: `mur fleet run --loop` with a target gates once before
+/// the first iteration. A blocked member stops the run; the queued job is
+/// left queued (never claimed), so the run after the approval picks it up.
+#[tokio::test]
+async fn loop_run_blocks_a_member_without_the_write_grant() {
+    use crate::cmd::fleet::loop_run::run_guarded;
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let project = grant_fleet(home, "coder", false);
+    queue_empty_loop(home);
+    crate::cmd::fleet::jobs::enqueue_job(home, "dev", "fix the build", "cli").unwrap();
+    let cwd = RunCwd {
+        path: Some(project),
+        inferred: false,
+    };
+    let err = run_guarded(home, "dev", None, None, None, None, None, Some(cwd))
+        .await
+        .expect_err("an ungranted member must not be dispatched");
+    let err = format!("{err:#}");
+    assert!(err.contains("needs approval"), "{err}");
+    assert_eq!(hitl_count(home), 1, "one approval for one member, once");
+    let jobs = crate::cmd::fleet::jobs::list_jobs_raw(home, "dev").unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].status, JobStatus::Queued, "the job was not claimed");
+    assert!(
+        crate::cmd::fleet::progress::load_view(home, "dev").is_none(),
+        "no iteration started, so no progress record"
+    );
+}
+
+/// A granted, stated target passes silently and the loop runs; no target at
+/// all (deep-research, the daemon tick) is not gated, as before.
+#[tokio::test]
+async fn loop_run_passes_a_granted_target_and_skips_the_gate_without_one() {
+    use crate::cmd::fleet::loop_run::{LoopStop, run_guarded};
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let project = grant_fleet(home, "coder", true);
+    queue_empty_loop(home);
+    let cwd = RunCwd {
+        path: Some(project),
+        inferred: false,
+    };
+    let (stop, _, _) = run_guarded(home, "dev", None, None, None, None, None, Some(cwd))
+        .await
+        .unwrap();
+    assert_eq!(stop, LoopStop::QueueDrained);
+    assert_eq!(hitl_count(home), 0, "granted and stated: nothing to ask");
+
+    // Same fleet with the grant gone: no cwd means no gate.
+    let ungranted = tempfile::tempdir().unwrap();
+    grant_fleet(ungranted.path(), "coder", false);
+    queue_empty_loop(ungranted.path());
+    let (stop, _, _) = run_guarded(ungranted.path(), "dev", None, None, None, None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(stop, LoopStop::QueueDrained);
+    assert_eq!(hitl_count(ungranted.path()), 0);
+}

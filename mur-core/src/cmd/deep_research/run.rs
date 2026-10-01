@@ -53,6 +53,8 @@ pub async fn cmd_deep_research_run(
         budget_usd,
         run_id,
         question,
+        // Research has no target tree: nothing to route, nothing to gate.
+        None,
     )
     .await
 }

@@ -368,6 +368,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                         if let Some(text) = job {
                             cmd::fleet::jobs::enqueue_job(&mur_home, &name, &text, "cli")?;
                         }
+                        // Same target as a one-shot run: `--cwd`, else the
+                        // shell's directory. Gated once before the loop (#1607).
                         cmd::fleet::loop_run::cmd_fleet_run_loop(
                             &mur_home,
                             &name,
@@ -376,6 +378,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                             budget_usd,
                             run_id,
                             None,
+                            Some(cmd::fleet::run::RunCwd {
+                                path: cwd,
+                                inferred: cwd_inferred,
+                            }),
                         )
                         .await?
                     } else {

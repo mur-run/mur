@@ -197,8 +197,11 @@ pub fn tick(mur_home: &Path) {
             };
             tracing::info!(fleet = %fleet, "fleet_tick: auto-running loop");
             // None args → use the fleet.yaml loop config (max_iterations/deadline/budget).
+            // No cwd: a fleet has no configured directory, and the daemon's own
+            // cwd says nothing about where the work is — so no routing and no
+            // write-grant gate (#1607). Unattended runs stay where they were.
             if let Err(e) = rt.block_on(mur_core::cmd::fleet::loop_run::cmd_fleet_run_loop(
-                &home, &fleet, None, None, None, None, None,
+                &home, &fleet, None, None, None, None, None, None,
             )) {
                 tracing::error!(error = %e, fleet = %fleet, "fleet_tick: loop failed");
             }
