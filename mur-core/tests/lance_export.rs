@@ -8,13 +8,16 @@
 //! # 1. dump (run once per build)
 //! LANCE_EXPORT_TABLE=/abs/path/index/patterns.lance \
 //! LANCE_EXPORT_OUT=/abs/path/patterns.before.jsonl \
-//!   cargo test -p mur-core --test lance_export -- --ignored --exact export_table_from_env
+//!   cargo test -p mur-core --test lance_export -- --ignored --exact tests::export_table_from_env
 //!
 //! # 2. compare
 //! LANCE_COMPARE_A=/abs/path/patterns.before.jsonl \
 //! LANCE_COMPARE_B=/abs/path/patterns.after.jsonl \
-//!   cargo test -p mur-core --test lance_export -- --ignored --exact compare_dumps_from_env
+//!   cargo test -p mur-core --test lance_export -- --ignored --exact tests::compare_dumps_from_env
 //! ```
+//!
+//! If the build fails extracting `ort-sys` because the cache dir is not
+//! writable (sandboxed agents), set `ORT_CACHE_DIR=$PWD/target/ort-cache`.
 //!
 //! Optional: `LANCE_EXPORT_KEY` (primary-key column; default: first of
 //! `chunk_id`, `id`, `name` present), `LANCE_EXPORT_SAMPLE` (rows; default 5),
