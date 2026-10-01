@@ -513,45 +513,9 @@ impl SandboxPolicy {
         let fs_exec = system_exec_paths(&home);
 
         // Search dirs for resolving bare `spawn.allowed` binary names
-        // (Issue 17): the shared exec_dirs list (Homebrew/Cargo/user-local,
-        // kept in lockstep with the bash tool's PATH augmentation), the
-        // standard system exec dirs, and — existence-checked, no subprocess
-        // spawned — the active Xcode/CommandLineTools developer dirs. The
-        // active developer dir is read directly from the
-        // `/var/db/xcode_select_link` symlink target (this is exactly what
-        // `xcode-select -p` resolves; reading the symlink avoids spawning a
-        // subprocess to determine it, which the sandboxed exec chain cannot
-        // rely on being permitted — Issue 17).
-        let mut spawn_search_dirs: Vec<PathBuf> = crate::exec_dirs::standard_exec_dirs();
-        spawn_search_dirs.extend(system_exec_paths(&home));
-        if let Ok(xcode_dir) = std::fs::read_link("/var/db/xcode_select_link") {
-            let usr_bin = xcode_dir.join("usr/bin");
-            if usr_bin.exists() {
-                spawn_search_dirs.push(usr_bin);
-            }
-        }
-        let clt_usr_bin = PathBuf::from("/Library/Developer/CommandLineTools/usr/bin");
-        if clt_usr_bin.exists() {
-            spawn_search_dirs.push(clt_usr_bin);
-        }
-
-        // Rustup toolchain bin dirs (Issue 17): the `cargo`/`rustc`/etc.
-        // shims installed in `~/.cargo/bin` are rustup PROXIES that re-exec
-        // the active toolchain's real binary under
-        // `<rustup_home>/toolchains/<toolchain>/bin/` at runtime. Seatbelt
-        // must see that real exec path too, so search every toolchain's
-        // `bin` dir directly (existence-checked, no subprocess spawned).
-        let rustup_home = std::env::var_os("RUSTUP_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".rustup"));
-        if let Ok(entries) = std::fs::read_dir(rustup_home.join("toolchains")) {
-            for entry in entries.flatten() {
-                let bin_dir = entry.path().join("bin");
-                if bin_dir.is_dir() {
-                    spawn_search_dirs.push(bin_dir);
-                }
-            }
-        }
+        // (Issue 17) — one source shared with the MCP child PATH, see
+        // `sandbox::search_dirs`.
+        let spawn_search_dirs = super::search_dirs::spawn_search_dirs(&home);
 
         // Resolve each allowlisted binary name to EVERY absolute,
         // canonicalized, executable path it matches (Issue 17): a bare name
@@ -1008,7 +972,7 @@ fn is_guarded_prefix(path: &Path, home: &Path) -> bool {
     }
     false
 }
-fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
+pub(super) fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     {
         vec![

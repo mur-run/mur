@@ -96,7 +96,7 @@ pub(crate) async fn prepare_runtime(
         Arc::new(WriterTelemetryEmitter::new(writer.sender()));
     let hook_chain = crate::hooks::builder::build_chain(&profile.inner, agent_home, &mur_home);
     let mcp_server_binaries: Vec<std::path::PathBuf> = {
-        // Resolve against the same AUGMENTED PATH the spawn uses
+        // Resolve against the same child PATH the spawn uses
         // (`mcp_client::spawn`), so the B0 signature/pin checks (rules 6 & 11)
         // inspect the same binary `Command::new` will exec — including under a
         // Hub-spawned sidecar whose ambient GUI PATH lacks the standard
@@ -108,7 +108,9 @@ pub(crate) async fn prepare_runtime(
         // Enabled entries only, for the same reason rule 6 filters: a disabled
         // server is never spawned, so it has no business refusing startup —
         // and `mcp disable` has to stay a way out.
-        let aug_path = mur_common::exec::augmented_path_var();
+        let aug_path = crate::sandbox::search_dirs::mcp_child_path(
+            profile.inner.entitlements.processes.spawn.mode,
+        );
         profile
             .inner
             .enabled_mcp_servers()
