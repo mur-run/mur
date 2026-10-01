@@ -338,7 +338,7 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "parallel_jobs".into(),
-            description: "Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running. Pass `cwd` (absolute) when the jobs belong to a specific project; each job is told to work there.".into(),
+            description: "Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running. Pass `cwd` (absolute) when the jobs belong to a specific project; each job is told to work there, and each agent must be allowed to write there (an approval is parked otherwise).".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
                 properties: Some(BTreeMap::from([
