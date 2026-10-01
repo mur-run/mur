@@ -20,6 +20,7 @@ use super::progress::{
 use super::run::build_fleet_procedure;
 use super::store;
 use crate::executor::dag::{StepEvent, StepEventKind};
+use crate::executor::delegation::cwd::{RunCwd, routing_note};
 
 /// Diagnostic ceiling on loop iterations (spec §6). Not a setting — the bounds
 /// a user sets are `deadline`, `stuck` and `cost_usd` (`mur fleet limits`).
@@ -512,6 +513,13 @@ fn terminal_state_for(stop: LoopStop) -> &'static str {
 /// check — sees the same text, and `fleet.yaml` is never written. A run writes
 /// run state, never the fleet's definition: an agent-triggered run cannot
 /// write `fleets/` at all.
+///
+/// `cwd` is where the work is (#1607). `Some` routes every iteration's
+/// members to it and runs the write-grant gate ONCE, before the first
+/// iteration — a blocked member stops the run before anything is sent.
+/// `None` means the run has no target tree (research, a daemon tick with no
+/// directory configured): nothing is routed and nothing is gated, as before.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_guarded(
     mur_home: &Path,
     name: &str,
@@ -520,6 +528,7 @@ pub async fn run_guarded(
     budget_usd: Option<f64>,
     run_id: Option<String>,
     goal_override: Option<String>,
+    cwd: Option<RunCwd>,
 ) -> Result<(LoopStop, u32, f64)> {
     let mut fleet = store::load_fleet(mur_home, name)?;
     if let Some(goal) = goal_override {
@@ -608,6 +617,22 @@ pub async fn run_guarded(
     let projection = estimate_iteration_cost_usd(fleet.members.len(), price_per_1k);
     // Real cumulative spend, accumulated from each iteration's actual token usage.
     let mut spent = 0.0_f64;
+    // Resolve and gate before the clock starts, so an approval wait does not
+    // eat the deadline. Gated once for the whole run: members and the target
+    // are fixed for its lifetime. A queued job is claimed per iteration, so a
+    // block here leaves it queued for the run after the approval.
+    let route = match &cwd {
+        Some(c) => {
+            let work_dir = c.resolve()?;
+            if let Some(msg) =
+                super::run::gate_members(mur_home, &fleet, &work_dir, c.inferred).await?
+            {
+                anyhow::bail!("fleet '{name}': {msg}");
+            }
+            Some(routing_note(&work_dir, c.inferred))
+        }
+        None => None,
+    };
     let start = Instant::now();
     let svc = mur_channel::ChannelService::open(mur_home)?;
     let mut last_seq = svc
@@ -833,18 +858,28 @@ pub async fn run_guarded(
             println!("── fleet '{name}': job queue empty — nothing to do ──");
             break LoopStop::QueueDrained;
         }
+        // What members are sent: the goal plus the routing note when the run
+        // has a target. Synthesis below keeps the bare goal — it writes no files.
+        let dispatch_goal = match &route {
+            Some(note) => format!("{iter_goal}{note}"),
+            None => iter_goal.clone(),
+        };
         let planning_fleet = mur_common::fleet::Fleet {
-            goal: iter_goal.clone(),
+            goal: dispatch_goal.clone(),
             ..fleet.clone()
         };
         // Static `procedure:` first (never falls back); else router, else broadcast.
-        let proc = match super::plan::static_procedure(&planning_fleet, &iter_goal)? {
+        let proc = match super::plan::static_procedure(&planning_fleet, &dispatch_goal)? {
             Some(p) => p,
             None => {
-                super::plan::plan_via_router(mur_home, &planning_fleet, &iter_goal, &pre_events)
+                super::plan::plan_via_router(mur_home, &planning_fleet, &dispatch_goal, &pre_events)
                     .unwrap_or_else(|| {
-                        build_fleet_procedure(&iter_goal, &fleet.members, fleet.parallel.as_ref())
-                            .expect("members validated by caller guard")
+                        build_fleet_procedure(
+                            &dispatch_goal,
+                            &fleet.members,
+                            fleet.parallel.as_ref(),
+                        )
+                        .expect("members validated by caller guard")
                     })
             }
         };
@@ -1177,6 +1212,8 @@ fn emit_stop_event(
 
 /// `mur fleet run --loop`: run guarded iterations until the router converges or
 /// a guard trips. Requires the member + router agents to be running.
+/// `cwd`: see [`run_guarded`].
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_fleet_run_loop(
     mur_home: &Path,
     name: &str,
@@ -1185,6 +1222,7 @@ pub async fn cmd_fleet_run_loop(
     budget_usd: Option<f64>,
     run_id: Option<String>,
     goal_override: Option<String>,
+    cwd: Option<RunCwd>,
 ) -> Result<()> {
     let (stop, iteration, spent) = run_guarded(
         mur_home,
@@ -1194,6 +1232,7 @@ pub async fn cmd_fleet_run_loop(
         budget_usd,
         run_id,
         goal_override,
+        cwd,
     )
     .await?;
     // Read back what the run recorded rather than recomputing billing: the
@@ -1732,7 +1771,7 @@ mod tests {
 
     /// Test seam: run one guarded iteration and return the stop reason.
     async fn run_loop_for_test(home: &Path) -> LoopStop {
-        run_guarded(home, "dev", Some(1), None, None, None, None)
+        run_guarded(home, "dev", Some(1), None, None, None, None, None)
             .await
             .map(|(stop, _, _)| stop)
             .unwrap_or(LoopStop::MaxIterations)
@@ -2423,6 +2462,7 @@ mod tests {
             None,
             Some("fleet-dev-abc".into()),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -2437,10 +2477,19 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(status.state, crate::run_status::State::Done);
-        let e = run_guarded(home, "dev", None, None, None, Some("bad id!".into()), None)
-            .await
-            .unwrap_err()
-            .to_string();
+        let e = run_guarded(
+            home,
+            "dev",
+            None,
+            None,
+            None,
+            Some("bad id!".into()),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(e.contains("invalid --run-id"), "{e}");
     }
 
@@ -2474,6 +2523,7 @@ mod tests {
             None,
             None,
             Some("what changed in 2.91?".into()),
+            None,
         )
         .await
         .unwrap();
