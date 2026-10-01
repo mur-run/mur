@@ -1108,7 +1108,7 @@ entitlements:
   network:
     inbound: {{ ports: [] }}
     outbound: {{ mode: restricted, allow_hosts: [], protocols: ["tcp"], resolve_dns: {{ mode: system }} }}
-  filesystem: {{ read: [], write: ["{write}"], deny: [] }}
+  filesystem: {{ read: [], write: ['{write}'], deny: [] }}
   processes: {{ spawn: {{ mode: allowlist, allowed: [] }} }}
   syscalls: {{ mode: default }}
   limits: {{ memory_mb: 512, file_descriptors: 1024, processes: 32 }}
@@ -1120,7 +1120,8 @@ lifecycle: {{ restart: on_failure }}
 created_at: "2026-04-29T10:00:00+00:00"
 updated_at: "2026-04-29T10:00:00+00:00"
 "#,
-            write = write.display()
+            // Single-quoted in YAML so a Windows `C:\Users\...` is not read as escapes.
+            write = write.display().to_string().replace('\'', "''")
         );
         std::fs::write(dir.join("profile.yaml"), yaml).unwrap();
     }
