@@ -4,3 +4,4 @@
 //! `docs/superpowers/specs/2026-10-01-delegation-write-grant-design.md`.
 
 pub mod cwd;
+pub mod grant;
