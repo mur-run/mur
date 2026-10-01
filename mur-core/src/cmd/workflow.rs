@@ -88,6 +88,20 @@ async fn run_workflow_skill(
     } else {
         channel
     };
+    // #1607: gate `delegate_to` members before the first step (channel runs
+    // only — without a channel those steps never dial anyone).
+    let procedure = crate::executor::delegation::workflow::prepare_procedure(
+        mur_dir,
+        procedure,
+        channel_id.as_deref(),
+        &std::env::current_dir()?,
+        crate::hitl::gate::GatePolicy {
+            yes,
+            unanswered: crate::executor::dag::default_unanswered(),
+            auto_approve_tiers: vec![],
+        },
+    )
+    .await?;
     let opts = crate::executor::dag::DagExecOptions {
         yes,
         device_id: "cli".to_string(),
@@ -99,7 +113,7 @@ async fn run_workflow_skill(
         ..Default::default()
     };
     let output =
-        crate::executor::dag::execute_dag(mur_dir, &skill.manifest.name, procedure, &opts).await?;
+        crate::executor::dag::execute_dag(mur_dir, &skill.manifest.name, &procedure, &opts).await?;
     if output.exit_code != 0 {
         std::process::exit(output.exit_code);
     }
