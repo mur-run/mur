@@ -69,6 +69,12 @@ pub struct FleetRunTool {
     /// `identity.key_version` from the profile, carried with the signature so
     /// a verifier can resolve the right key across a rotation.
     pub key_version: u32,
+    /// The conversation's working directory, shared with the bash/file tools.
+    /// The spawned `mur fleet run` inherits THIS process's cwd, which is the
+    /// runtime's home, not the project the user is in — so the target goes on
+    /// argv as `--cwd` instead of being guessed from where the child lands
+    /// (#1607). `None` only in tests that never reach the spawn.
+    pub session_cwd: Option<crate::tools::fs_policy::SessionCwd>,
 }
 
 /// Is `agent` allowed to run `fleet` per the global config? Deny-by-default:
@@ -112,6 +118,10 @@ cost_usd) and by `mur fleet stop`."
                     "goal": {
                         "type": "string",
                         "description": "Research question / job text. For deep-research this becomes the research goal; for other fleets it runs as a one-shot job."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Absolute path of the project the fleet should work in. Pass the TARGET project, not the directory you happen to be sitting in. Omitted: your current session directory is used and the members are told it was inferred."
                     }
                 },
                 "required": ["fleet"]
@@ -129,6 +139,21 @@ cost_usd) and by `mur fleet stop`."
             .get("goal")
             .and_then(|v| v.as_str())
             .map(str::to_string);
+        // Explicit target wins; otherwise the session cwd, flagged as a guess.
+        // Relative paths are refused rather than resolved — against what?
+        let (cwd, cwd_inferred) = match input.get("cwd").and_then(|v| v.as_str()) {
+            Some(p) => {
+                let p = PathBuf::from(p);
+                if !p.is_absolute() {
+                    return Err(ToolError::InvalidInput(format!(
+                        "`cwd` must be an absolute path, got `{}`",
+                        p.display()
+                    )));
+                }
+                (Some(p), false)
+            }
+            None => (self.session_cwd.as_ref().map(|c| c.current()), true),
+        };
         // Accepted for one release so an older prompt does not break; the run
         // is bounded by the fleet's limits now, not by how long this call may
         // block (spec §3.6).
@@ -209,6 +234,16 @@ cost_usd) and by `mur fleet stop`."
         };
         args.push("--run-id".into());
         args.push(run_id.clone());
+        // `mur deep-research` has no `--cwd`: research has no target tree.
+        if fleet != DEEP_RESEARCH
+            && let Some(dir) = &cwd
+        {
+            args.push("--cwd".into());
+            args.push(dir.display().to_string());
+            if cwd_inferred {
+                args.push("--cwd-inferred".into());
+            }
+        }
         // The child's stdio goes to a log beside its run record — `runs/` is
         // already inside the fleet_run carve-in — because nobody is waiting
         // on this pipe any more.
@@ -383,6 +418,7 @@ mod tests {
             agent_name: "mur".into(),
             signing: None,
             key_version: 0,
+            session_cwd: None,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "deep-research"}))
@@ -414,6 +450,7 @@ mod tests {
             agent_name: "mur".into(),
             signing: None,
             key_version: 0,
+            session_cwd: None,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "selfy"}))
@@ -432,6 +469,7 @@ mod tests {
             agent_name: "mur".into(),
             signing: None,
             key_version: 0,
+            session_cwd: None,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "../etc"}))
@@ -460,6 +498,7 @@ mod tests {
             agent_name: "mur".into(),
             signing: None,
             key_version: 0,
+            session_cwd: None,
         };
         let def = tool.def();
         assert_eq!(def.name, FLEET_RUN);
@@ -499,6 +538,7 @@ mod tests {
             agent_name: "mur".into(),
             signing: None,
             key_version: 0,
+            session_cwd: None,
         };
         let err = tool
             .execute(serde_json::json!({"fleet": "deep-research", "goal": "q"}))
@@ -553,6 +593,7 @@ mod tests {
             agent_name: "mur".into(),
             signing: None,
             key_version: 0,
+            session_cwd: None,
         };
         let t0 = std::time::Instant::now();
         let out = tool
@@ -598,5 +639,146 @@ mod tests {
         let _ = std::process::Command::new("pkill")
             .args(["-f", &fake.display().to_string()])
             .status();
+    }
+
+    /// A `mur` stand-in that records its argv and lingers, plus the file it
+    /// writes to. `None` when this sandbox refuses to exec under $TMPDIR —
+    /// the caller skips, since that failure is not about fleet_run.
+    #[cfg(unix)]
+    fn fake_mur(home: &std::path::Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        use std::os::unix::fs::PermissionsExt;
+        let argv_log = home.join("argv.txt");
+        let fake = home.join("fake-mur");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho \"$@\" > {}\nsleep 30\n",
+                argv_log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = home.join("exec-probe");
+        std::fs::write(&probe, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !std::process::Command::new(&probe)
+            .status()
+            .is_ok_and(|s| s.success())
+        {
+            eprintln!("skipping: this sandbox cannot exec under $TMPDIR");
+            return None;
+        }
+        Some((fake, argv_log))
+    }
+
+    #[cfg(unix)]
+    async fn argv_of(argv_log: &std::path::Path) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Ok(s) = std::fs::read_to_string(argv_log)
+                && s.ends_with('\n')
+            {
+                return s;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never wrote its argv within 10s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// #1607: the child is told the SESSION cwd on argv. Where this process
+    /// sits is irrelevant — the runtime's cwd is its home, not the project.
+    /// No explicit `cwd` → the session dir, marked inferred; an explicit one
+    /// → verbatim, not marked.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fleet_run_passes_session_cwd_on_argv_not_process_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        write_config(home, "fleet_run:\n  agents: [mur]\n  fleets: [coder]\n");
+        write_fleet(home, "coder", 0.0);
+        let Some((fake, argv_log)) = fake_mur(home) else {
+            return;
+        };
+        let _env = mur_common::test_env::EnvGuard::set([("MUR_BIN", &fake)]);
+        let project = home.join("the-project");
+        std::fs::create_dir_all(&project).unwrap();
+        let session_cwd = crate::tools::fs_policy::SessionCwd::new(home.to_path_buf());
+        session_cwd.set(project.clone());
+        let tool = FleetRunTool {
+            mur_home: home.to_path_buf(),
+            agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
+            session_cwd: Some(session_cwd),
+        };
+        let process_cwd = std::env::current_dir().unwrap();
+        assert_ne!(process_cwd, project);
+
+        tool.execute(serde_json::json!({"fleet": "coder", "goal": "build it"}))
+            .await
+            .unwrap();
+        let argv = argv_of(&argv_log).await;
+        assert!(argv.starts_with("fleet run coder build it"), "{argv}");
+        assert!(
+            argv.contains(&format!("--cwd {} --cwd-inferred", project.display())),
+            "{argv}"
+        );
+        assert!(
+            !argv.contains(&process_cwd.display().to_string()),
+            "process cwd leaked into argv: {argv}"
+        );
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", &fake.display().to_string()])
+            .status();
+
+        // Second dispatch with an explicit target: a fresh fleet, since one
+        // live run per fleet is the rule.
+        write_config(
+            home,
+            "fleet_run:\n  agents: [mur]\n  fleets: [coder, other]\n",
+        );
+        write_fleet(home, "other", 0.0);
+        let _ = std::fs::remove_file(&argv_log);
+        let explicit = home.join("elsewhere");
+        std::fs::create_dir_all(&explicit).unwrap();
+        tool.execute(serde_json::json!({
+            "fleet": "other", "goal": "g", "cwd": explicit.display().to_string()
+        }))
+        .await
+        .unwrap();
+        let argv = argv_of(&argv_log).await;
+        assert!(
+            argv.contains(&format!("--cwd {}", explicit.display())),
+            "{argv}"
+        );
+        assert!(!argv.contains("--cwd-inferred"), "{argv}");
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", &fake.display().to_string()])
+            .status();
+    }
+
+    #[tokio::test]
+    async fn fleet_run_rejects_relative_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_config(
+            tmp.path(),
+            "fleet_run:\n  agents: [mur]\n  fleets: [coder]\n",
+        );
+        write_fleet(tmp.path(), "coder", 0.0);
+        let tool = FleetRunTool {
+            mur_home: tmp.path().to_path_buf(),
+            agent_name: "mur".into(),
+            signing: None,
+            key_version: 0,
+            session_cwd: None,
+        };
+        let err = tool
+            .execute(serde_json::json!({"fleet": "coder", "goal": "g", "cwd": "rel/dir"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("absolute"), "{err}");
     }
 }

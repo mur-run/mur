@@ -338,7 +338,7 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "parallel_jobs".into(),
-            description: "Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running.".into(),
+            description: "Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running. Pass `cwd` (absolute) when the jobs belong to a specific project; each job is told to work there.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
                 properties: Some(BTreeMap::from([
@@ -360,6 +360,16 @@ pub fn all_tools() -> Vec<Tool> {
                     ("yes".into(), ToolParam {
                         param_type: "boolean".into(),
                         description: "Auto-approve risk-tiered steps. Default false (fail-closed).".into(),
+                        default: Some(json!(false)),
+                    }),
+                    ("cwd".into(), ToolParam {
+                        param_type: "string".into(),
+                        description: "Absolute path of the project the jobs should work in — the TARGET, not wherever you happen to be sitting. Every job is told to work there. Omitted: your session directory is assumed and the jobs are told it was a guess.".into(),
+                        default: None,
+                    }),
+                    ("cwd_inferred".into(), ToolParam {
+                        param_type: "boolean".into(),
+                        description: "Set by the agent runtime when it filled `cwd` in from the session directory; marks the routing as assumed. Not for models to set.".into(),
                         default: Some(json!(false)),
                     }),
                 ])),
@@ -787,6 +797,15 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 .get("yes")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            // Where the jobs are routed (#1607). Without this the member only
+            // ever saw the job text and built in whatever directory it sat in.
+            let cwd = mur_core::executor::jobs::RunCwd::from_tool_args(
+                arguments.get("cwd").and_then(|v| v.as_str()),
+                arguments
+                    .get("cwd_inferred")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            );
 
             let home = resolve_mur_home().map_err(|e| format!("parallel_jobs failed: {e}"))?;
             let jobs = mur_core::executor::jobs::resolve_jobs(&home, &jobs_in, default_agent)
@@ -800,6 +819,7 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 &jobs,
                 Some(max_concurrency),
                 yes,
+                &cwd,
             )
             .map_err(|e| format!("parallel_jobs failed: {e}"))?;
             let (run_id, channel_id) = (d.run_id.clone(), d.channel_id.clone());
@@ -1094,6 +1114,29 @@ mod job_status_tests {
             v["follow"].as_str().unwrap().contains("mur_job_status"),
             "{v}"
         );
+    }
+
+    /// #1607: a bad `cwd` is refused at the tool boundary, before a channel
+    /// exists — the routing argument is validated, not just forwarded.
+    #[tokio::test]
+    async fn parallel_jobs_rejects_relative_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.yaml"),
+            "parallel_jobs:\n  targets: [ghost]\n",
+        )
+        .unwrap();
+        let err = call_tool_json_in(
+            tmp.path(),
+            "parallel_jobs",
+            serde_json::json!({
+                "jobs": [{"description": "x", "agent": "ghost"}],
+                "cwd": "rel/dir"
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("absolute"), "{err}");
     }
 
     #[tokio::test]

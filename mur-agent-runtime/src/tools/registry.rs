@@ -9,10 +9,31 @@ use std::sync::Arc;
 use futures::future;
 use mur_common::agent::{McpServerEntry, ToolPolicy, ToolRule, resolve_tool_policy};
 
+use super::fs_policy::SessionCwd;
 use super::naming::{sanitize_server, wire_name};
 use super::{ToolExecutor, mcp::McpToolExecutor};
 use crate::llm::ToolDef;
 use crate::mcp::pool::McpPool;
+
+/// What every MCP-backed executor is built against: the shared pool and the
+/// agent's session directory, which fan-out tools (`mcp::CWD_ROUTED_TOOLS`)
+/// are routed to when the model names no target (#1607).
+pub struct McpBackend {
+    pub pool: Arc<McpPool>,
+    /// `None` in contexts with no session (tests, headless probes).
+    pub session_cwd: Option<SessionCwd>,
+}
+
+impl McpBackend {
+    /// A pool with no session: tools are discovered and called, nothing is
+    /// routed.
+    pub fn unrouted(pool: Arc<McpPool>) -> Self {
+        Self {
+            pool,
+            session_cwd: None,
+        }
+    }
+}
 
 /// Discover bash + all MCP tools, apply policy filter, return (defs, map).
 ///
@@ -20,7 +41,8 @@ use crate::mcp::pool::McpPool;
 ///   if bash is already registered elsewhere.
 /// - `servers`: list of MCP server entries to probe.
 /// - `rules`: per-tool policy rules from `Entitlements.tools`.
-/// - `pool`: shared `McpPool` for the agent.
+/// - `mcp`: the shared `McpPool` plus the session directory every MCP
+///   executor is built against.
 pub async fn build_tools(
     bash: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
     read_file: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
@@ -28,8 +50,9 @@ pub async fn build_tools(
     edit_file: Option<(ToolDef, Arc<dyn ToolExecutor>)>,
     servers: &[McpServerEntry],
     rules: &[ToolRule],
-    pool: Arc<McpPool>,
+    mcp: McpBackend,
 ) -> (Vec<ToolDef>, HashMap<String, Arc<dyn ToolExecutor>>) {
+    let McpBackend { pool, session_cwd } = mcp;
     let mut defs: Vec<ToolDef> = Vec::new();
     let mut map: HashMap<String, Arc<dyn ToolExecutor>> = HashMap::new();
 
@@ -121,6 +144,7 @@ pub async fn build_tools(
                 def,
                 pool: pool.clone(),
                 timeout,
+                session_cwd: session_cwd.clone(),
             });
             map.insert(wname, exec);
         }
@@ -155,7 +179,8 @@ mod tests {
     #[tokio::test]
     async fn no_servers_empty_result() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(None, None, None, None, &[], &[], pool).await;
+        let (defs, map) =
+            build_tools(None, None, None, None, &[], &[], McpBackend::unrouted(pool)).await;
         // the chrome built-ins (suggest_replies, propose) are always registered.
         assert_eq!(defs.len(), BUILTINS);
         assert!(map.contains_key("suggest_replies"));
@@ -182,7 +207,7 @@ mod tests {
             None,
             &[],
             &[],
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // bash + the chrome built-ins
@@ -193,7 +218,8 @@ mod tests {
     #[tokio::test]
     async fn suggest_replies_is_registered() {
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
-        let (defs, map) = build_tools(None, None, None, None, &[], &[], pool).await;
+        let (defs, map) =
+            build_tools(None, None, None, None, &[], &[], McpBackend::unrouted(pool)).await;
         assert!(map.contains_key("suggest_replies"));
         assert!(defs.iter().any(|d| d.name == "suggest_replies"));
     }
@@ -223,7 +249,7 @@ mod tests {
             None,
             &[],
             &rules,
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // bash is denied; the chrome built-ins are still registered.
@@ -248,7 +274,7 @@ mod tests {
             None,
             &[],
             &[],
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // read_file + the chrome built-ins
@@ -277,7 +303,7 @@ mod tests {
             None,
             &[],
             &rules,
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // read_file is denied; the chrome built-ins are still registered.
@@ -302,7 +328,7 @@ mod tests {
             None,
             &[],
             &[],
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // write_file + the chrome built-ins
@@ -331,7 +357,7 @@ mod tests {
             None,
             &[],
             &rules,
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // write_file is denied; the chrome built-ins are still registered.
@@ -356,7 +382,7 @@ mod tests {
             Some((edit_file_def, edit_file_exec)),
             &[],
             &[],
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // edit_file + the chrome built-ins
@@ -385,7 +411,7 @@ mod tests {
             Some((edit_file_def, edit_file_exec)),
             &[],
             &rules,
-            pool,
+            McpBackend::unrouted(pool),
         )
         .await;
         // edit_file is denied; the chrome built-ins are still registered.
@@ -421,7 +447,7 @@ mod tests {
                 None,
                 &[],
                 &rules,
-                pool,
+                McpBackend::unrouted(pool),
             )
             .await;
             attach_bash_control(&mut map, bash.control_tools());

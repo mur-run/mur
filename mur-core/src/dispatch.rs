@@ -355,6 +355,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                     budget_usd,
                     worktree,
                     run_id,
+                    cwd,
+                    cwd_inferred,
                 } => {
                     if loop_flag {
                         if worktree {
@@ -377,8 +379,18 @@ pub async fn run(cli: Cli) -> Result<()> {
                         )
                         .await?
                     } else {
-                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job, worktree, run_id)
-                            .await?
+                        cmd::fleet::run::cmd_fleet_run(
+                            &mur_home,
+                            &name,
+                            job,
+                            worktree,
+                            run_id,
+                            cmd::fleet::run::RunCwd {
+                                path: cwd,
+                                inferred: cwd_inferred,
+                            },
+                        )
+                        .await?
                     }
                 }
                 FleetAction::Limits {

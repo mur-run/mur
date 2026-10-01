@@ -17,6 +17,8 @@ use crate::parallel::semantic::{SupportedLanguage, extract_units};
 use crate::parallel::track::{TrackSet, worktree};
 
 use super::store;
+pub use crate::executor::delegation::cwd::RunCwd;
+use crate::executor::delegation::cwd::{discover_repo_root, routing_note};
 
 /// Map a fleet run's **channel outcome** to a terminal [`JobStatus`] (#10).
 ///
@@ -195,20 +197,6 @@ fn parallel_exec_enabled(force: bool) -> bool {
     force || std::env::var(EXEC_FLAG_ENV).as_deref() == Ok("1")
 }
 
-/// Main repo root (where `.worktrees/` lives), discovered from the invoking cwd.
-fn discover_repo_root() -> Result<PathBuf> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("git rev-parse --show-toplevel")?;
-    if !out.status.success() {
-        bail!("parallel execution must run inside a git repository");
-    }
-    Ok(PathBuf::from(
-        String::from_utf8_lossy(&out.stdout).trim().to_string(),
-    ))
-}
-
 /// Concurrency cap for the fan-out — closes the unbounded-spawn gap documented
 /// on `DagExecOptions::max_concurrency` (N worktree agents must not cascade past
 /// API rate limits). At most `cores-2`, never below 1, never above the step count.
@@ -302,8 +290,10 @@ pub async fn cmd_fleet_run(
     job_arg: Option<String>,
     force_worktree: bool,
     run_id: Option<String>,
+    cwd: RunCwd,
 ) -> Result<()> {
     let fleet = store::load_fleet(mur_home, name)?;
+    let work_dir = cwd.resolve()?;
     if fleet.members.is_empty() {
         bail!("fleet '{name}' has no members");
     }
@@ -353,7 +343,7 @@ pub async fn cmd_fleet_run(
     }
     let (proc, parallel_run) = if exec_parallel {
         let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
-        let repo_root = discover_repo_root()?;
+        let repo_root = discover_repo_root(&work_dir)?;
         let fleet_dir = super::store::state_dir(mur_home, name);
         // Clean slate: tear down any leftover worktrees from a prior run of THIS fleet.
         if let Ok(prev) = TrackSet::load(&fleet_dir) {
@@ -382,12 +372,7 @@ pub async fn cmd_fleet_run(
         // bare goal and has no idea which repo/dir to work in. Best-effort: discover the
         // repo root and append a routing note. Not being in a git repo is not fatal here.
         let mut routed_goal = goal.clone();
-        if let Ok(repo_root) = discover_repo_root() {
-            let repo = repo_root.display();
-            routed_goal.push_str(&format!(
-                "\n\nIMPORTANT: the repository you are working on is at `{repo}`. cd there (or pass cwd=`{repo}` on every bash/tool call) before doing anything else."
-            ));
-        }
+        routed_goal.push_str(&routing_note(&work_dir, cwd.inferred));
         let routed_fleet = mur_common::fleet::Fleet {
             goal: routed_goal.clone(),
             ..planning_fleet.clone()

@@ -193,7 +193,10 @@ pub async fn build_provider_runner(
         Some((edit_file_def, edit_file_exec)),
         &enabled_mcp,
         &tools_policy,
-        pool.clone(),
+        crate::tools::registry::McpBackend {
+            pool: pool.clone(),
+            session_cwd: Some(session_cwd.clone()),
+        },
     )
     .await;
     // bash_wait / bash_kill ride on bash's registration and policy (D6/D11).
@@ -217,6 +220,7 @@ pub async fn build_provider_runner(
                     // reason we still have it: the child cannot read `keys/`.
                     signing: Some(identity.clone()),
                     key_version: profile.inner.identity.key_version,
+                    session_cwd: Some(session_cwd.clone()),
                 }),
             );
         }

@@ -536,6 +536,16 @@ pub enum FleetAction {
         /// and will poll `mur_job_status`). Default: a fresh id.
         #[arg(long, value_name = "RUN_ID")]
         run_id: Option<String>,
+        /// Directory the work is in (absolute). Members are routed to its git
+        /// repo root, or to the directory itself outside a checkout. Default:
+        /// this process's cwd — right at a shell, wrong when spawned, so the
+        /// agent runtime always passes it.
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<std::path::PathBuf>,
+        /// `--cwd` was not named by the caller but taken from the calling
+        /// agent's session directory. Marks the routing note as a guess.
+        #[arg(long, requires = "cwd")]
+        cwd_inferred: bool,
     },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
     /// deadline, done-when policy). Only the flags you pass are changed —

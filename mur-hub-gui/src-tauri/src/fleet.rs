@@ -356,7 +356,14 @@ pub async fn fleet_run(name: String, worktree: bool, app: tauri::AppHandle) -> R
     tokio::task::spawn_blocking(move || {
         let ok = tokio::runtime::Runtime::new()
             .expect("fleet run runtime")
-            .block_on(run::cmd_fleet_run(&home, &fleet_name, None, worktree, None))
+            .block_on(run::cmd_fleet_run(
+                &home,
+                &fleet_name,
+                None,
+                worktree,
+                None,
+                run::RunCwd::default(),
+            ))
             .is_ok();
         let _ = app.emit(
             "fleet:run_done",
