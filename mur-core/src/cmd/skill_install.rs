@@ -207,9 +207,16 @@ fn install_resolved_node(home: &Path, registry_dir: &Path, node: &ResolvedNode) 
         stamp_registry_origin(&mut manifest);
     }
     write_to_dir(&dir, &manifest)?;
-    // Trust-store key: the trust hash, so a later transfer or generation
-    // increment does not re-key this entry (see `content_hash_for_trust`).
-    let hash = content_hash_for_trust(&node.manifest)?;
+    // Allow-list key: the trust hash of what was WRITTEN, origin stamp
+    // included. The loader hashes the on-disk manifest, so keying this off the
+    // pre-stamp registry manifest makes every registry install miss the lookup
+    // and load Sandboxed. The trust hash (not the raw content hash) keeps a
+    // later transfer or generation increment from re-keying the entry.
+    let hash = content_hash_for_trust(&manifest)?;
+    // Drift baseline: the registry manifest's trust hash, pre-stamp. That is
+    // what `registry-add` compares against, so stamping it would report
+    // "content changed" on every later `registry-add` of the same skill.
+    let baseline = content_hash_for_trust(&node.manifest)?;
     let mut trust = SkillTrustStore::load(home).map_err(|e| anyhow::anyhow!("load trust: {e}"))?;
     let level = if report.has_blocking_findings() {
         TrustLevel::Sandboxed
@@ -251,7 +258,7 @@ fn install_resolved_node(home: &Path, registry_dir: &Path, node: &ResolvedNode) 
             level,
             installed_at,
             publisher,
-            content_sha256: hash,
+            content_sha256: baseline,
             signer_key_fp: None,
         },
     );
@@ -669,6 +676,44 @@ mod tests {
         assert_ne!(
             baseline, new_hash,
             "a content rewrite must move the trust hash, or drift is undetectable"
+        );
+    }
+
+    /// A registry install writes an `origin*`-stamped manifest, and the loader
+    /// keys trust off what is on disk. If the allow-list entry is keyed by the
+    /// pre-stamp manifest the lookup misses and every registry skill loads
+    /// Sandboxed, while `mur skill list` (name lookup) still says Verified.
+    #[test]
+    fn registry_install_is_trusted_when_loaded_back_from_disk() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path();
+        let registry = home.join("registry");
+        std::fs::create_dir_all(&registry).unwrap();
+        let mut n = node("demo", "1.0.0");
+        n.yaml_path = registry.join("skills/demo/versions/1.0.0.yaml");
+
+        install_resolved_node(home, &registry, &n).unwrap();
+
+        let on_disk = mur_common::skill::read_from_dir(&global_skill_dir(home, "demo")).unwrap();
+        assert!(on_disk.origin.is_some(), "precondition: origin is stamped");
+
+        let loaded = mur_common::skill::load_all(home, "a1");
+        let s = loaded
+            .iter()
+            .find(|s| s.name == "demo")
+            .expect("not loaded");
+        assert_eq!(
+            s.trust,
+            TrustLevel::Verified,
+            "registry install lost its trust"
+        );
+
+        // The drift baseline stays in the registry manifest's trust domain,
+        // which is what `registry-add` compares against.
+        let trust = SkillTrustStore::load(home).unwrap();
+        assert_eq!(
+            trust.entries["demo"].content_sha256,
+            content_hash_for_trust(&n.manifest).unwrap()
         );
     }
 
