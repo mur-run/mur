@@ -351,26 +351,26 @@ fn ensure_tool_succeeded<'a>(tool: &str, response: &'a Value) -> Result<&'a Valu
     Ok(result)
 }
 
-/// Build the argv passed to `npx` for the Playwright MCP package.
+/// Argv for the Playwright MCP launch, against a stand-in entry script.
 #[cfg(test)]
 fn playwright_args(extra_args: &[String]) -> Vec<String> {
-    crate::server::launch_argv(None, extra_args).1
+    crate::server::launch_argv(std::path::Path::new("/i/cli.js"), extra_args).1
 }
 
-/// Build the Playwright MCP command: `node <installed entry>` when `mur
-/// browser setup` installed the pinned package (no registry at spawn time,
-/// see [`crate::server`]), else `npx -y @playwright/mcp@<pin>`. Extra args are
-/// passed through verbatim (`--headless`, `--isolated`, `--storage-state=…`).
-pub fn playwright_command(extra_args: &[String]) -> Command {
-    let entry = crate::server::system_entry();
-    let (program, args) = crate::server::launch_argv(entry.as_deref(), extra_args);
+/// Build the Playwright MCP command: `node <installed entry>`, where the entry
+/// is the pinned package `mur browser setup` installed (no registry at spawn
+/// time, see [`crate::server`]). Fails, naming setup, when it is not installed.
+/// Extra args are passed through verbatim (`--headless`, `--isolated`, …).
+pub fn playwright_command(extra_args: &[String]) -> Result<Command> {
+    let entry = crate::server::system_entry()?;
+    let (program, args) = crate::server::launch_argv(&entry, extra_args);
     let mut cmd = Command::new(program);
     cmd.args(args);
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
         .kill_on_drop(true);
-    cmd
+    Ok(cmd)
 }
 
 /// Relay a blocking reader (our stdin) into an `AsyncRead` from a detached OS
@@ -444,7 +444,7 @@ impl AsyncRead for ChannelReader {
 pub async fn run_stdio<H: Hook>(mut cmd: Command, hook: H) -> Result<()> {
     let mut child: Child = cmd
         .spawn()
-        .context("spawn downstream MCP server (is `npx` on PATH and in the spawn allowlist?)")?;
+        .context("spawn downstream MCP server (is `node` on PATH and in the spawn allowlist?)")?;
     tracing::info!(pid = child.id(), "downstream MCP server started");
     let child_in = child.stdin.take().context("child stdin")?;
     let child_out = child.stdout.take().context("child stdout")?;
@@ -475,10 +475,11 @@ pub async fn capture_storage_state(url: &str, browser: &str) -> Result<Vec<u8>> 
     let output_arg = format!("--output-dir={}", output.display());
     let browser_arg = format!("--browser={browser}");
     // @playwright/mcp runs headed by default; its CLI has no `--headed` flag.
-    let mut cmd = playwright_command(&["--isolated".into(), browser_arg, output_arg]);
-    let mut child = match cmd.spawn().context(
-        "spawn headed Playwright MCP server (is `npx` on PATH and in the spawn allowlist?)",
-    ) {
+    let mut child = match playwright_command(&["--isolated".into(), browser_arg, output_arg])
+        .and_then(|mut cmd| {
+            cmd.spawn()
+                .context("spawn headed Playwright MCP server (is `node` on PATH and in the spawn allowlist?)")
+        }) {
         Ok(child) => child,
         Err(error) => {
             // No state exists yet, but do not leave private scratch directories

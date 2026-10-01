@@ -286,9 +286,9 @@ pub async fn live_check(output: &mut dyn Write) -> Result<()> {
     )?;
     let page = serve_render_page()?;
     let started = Instant::now();
-    let mut child = mur_browser::proxy::playwright_command(&live_args())
+    let mut child = mur_browser::proxy::playwright_command(&live_args())?
         .spawn()
-        .context("spawn Playwright MCP server (is `npx` on PATH?)")?;
+        .context("spawn Playwright MCP server (is `node` on PATH?)")?;
     let stdin = child.stdin.take().context("child stdin")?;
     let stdout = child.stdout.take().context("child stdout")?;
     let url = page.url.clone();

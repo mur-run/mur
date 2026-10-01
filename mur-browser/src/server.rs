@@ -12,8 +12,18 @@
 //! step, no network, the same bytes each time. Same shape as
 //! `mur agent mcp vendor`, specialised to the one server `mur browser` owns.
 //!
-//! When the install is absent the launch falls back to `npx`, so a machine
-//! that has not re-run setup keeps today's behaviour outside a seal.
+//! When the install is absent there is no fallback: the launch fails with an
+//! error that names `mur browser setup`. Falling back to `npx` would fail
+//! inside a seal anyway (registry egress, read-only npm cache), and with an
+//! npm error that never mentions setup.
+//!
+//! Old versions are not removed: bumping [`VERSION`] installs beside the
+//! previous tree, which stays until the user deletes it.
+//!
+//! The install runs `npm install --ignore-scripts` on purpose, so npm executes
+//! no package code at install time. `@playwright/mcp@0.0.82` and its two
+//! dependencies (`playwright`, `playwright-core`) declare no install scripts;
+//! if a later pin starts to depend on one, that flag is the first place to look.
 
 use std::path::{Path, PathBuf};
 
@@ -61,27 +71,44 @@ pub fn installed_entry(install_dir: &Path) -> Option<PathBuf> {
 
 /// Program and argv for the server. Pure, so the choice is testable without
 /// Node or an install on disk.
-pub fn launch_argv(entry: Option<&Path>, extra_args: &[String]) -> (String, Vec<String>) {
-    let mut args = match entry {
-        Some(script) => {
-            // `node <script>`, not the script itself: its `#!/usr/bin/env
-            // node` would consult PATH, which a seal does not control.
-            return (
-                "node".to_owned(),
-                std::iter::once(script.display().to_string())
-                    .chain(extra_args.iter().cloned())
-                    .collect(),
-            );
-        }
-        None => vec!["-y".to_owned(), crate::PLAYWRIGHT_MCP_PKG.to_owned()],
-    };
-    args.extend(extra_args.iter().cloned());
-    ("npx".to_owned(), args)
+///
+/// `node <script>`, not the script itself: its `#!/usr/bin/env node` would
+/// consult PATH for the interpreter. `node` here is still a bare name, so it
+/// resolves through the child PATH the runtime builds from the seal's spawn
+/// search dirs (#1611), the same `node` the seal allows.
+pub fn launch_argv(entry: &Path, extra_args: &[String]) -> (String, Vec<String>) {
+    (
+        "node".to_owned(),
+        std::iter::once(entry.display().to_string())
+            .chain(extra_args.iter().cloned())
+            .collect(),
+    )
 }
 
-/// The installed entry for this process's MUR home, if any.
-pub fn system_entry() -> Option<PathBuf> {
-    crate::paths::system_mur_home().and_then(|h| installed_entry(&install_dir(&h)))
+/// The installed entry under `mur_home`, or an error that says how to fix it.
+pub fn require_entry(mur_home: Option<&Path>) -> anyhow::Result<PathBuf> {
+    let Some(home) = mur_home else {
+        anyhow::bail!("cannot locate the MUR home, so the browser MCP server cannot be found");
+    };
+    let dir = install_dir(home);
+    installed_entry(&dir).ok_or_else(|| missing_install_error(&dir))
+}
+
+/// Shown when the pinned server is not installed. It names the fix and where
+/// to run it: setup needs npm and the registry, which an agent's seal does not
+/// grant, so running it from inside an agent fails.
+pub fn missing_install_error(dir: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "the browser MCP server ({PACKAGE}@{VERSION}) is not installed at {}. \
+         Run `mur browser setup` in a terminal, outside any agent (it needs npm \
+         and the npm registry, which an agent's sandbox does not allow), then retry.",
+        dir.display()
+    )
+}
+
+/// The installed entry for this process's MUR home.
+pub fn system_entry() -> anyhow::Result<PathBuf> {
+    require_entry(crate::paths::system_mur_home().as_deref())
 }
 
 #[cfg(test)]
@@ -151,16 +178,37 @@ mod tests {
 
     #[test]
     fn installed_launch_is_node_on_the_script_with_no_npx() {
-        let (prog, args) = launch_argv(Some(Path::new("/i/cli.js")), &s(&["--headless"]));
+        let (prog, args) = launch_argv(Path::new("/i/cli.js"), &s(&["--headless"]));
         assert_eq!(prog, "node");
         assert_eq!(args, s(&["/i/cli.js", "--headless"]));
         assert!(!args.iter().any(|a| a == "-y" || a.contains('@')));
     }
 
     #[test]
-    fn uninstalled_launch_falls_back_to_pinned_npx() {
-        let (prog, args) = launch_argv(None, &s(&["--headless"]));
-        assert_eq!(prog, "npx");
-        assert_eq!(args, s(&["-y", crate::PLAYWRIGHT_MCP_PKG, "--headless"]));
+    fn a_missing_install_is_an_error_naming_setup_not_an_npx_fallback() {
+        let t = tempfile::tempdir().unwrap();
+        let err = require_entry(Some(t.path())).unwrap_err().to_string();
+        assert!(err.contains("mur browser setup"), "{err}");
+        assert!(err.contains("outside any agent"), "{err}");
+        assert!(
+            err.contains(&install_dir(t.path()).display().to_string()),
+            "{err}"
+        );
+        assert!(!err.contains("npx"), "{err}");
+    }
+
+    #[test]
+    fn a_stale_install_is_the_same_error() {
+        let t = tempfile::tempdir().unwrap();
+        fake_install(&install_dir(t.path()), "0.0.1", serde_json::json!("cli.js"));
+        let err = require_entry(Some(t.path())).unwrap_err().to_string();
+        assert!(err.contains("mur browser setup"), "{err}");
+    }
+
+    #[test]
+    fn an_installed_tree_resolves() {
+        let t = tempfile::tempdir().unwrap();
+        fake_install(&install_dir(t.path()), VERSION, serde_json::json!("cli.js"));
+        assert!(require_entry(Some(t.path())).unwrap().ends_with("cli.js"));
     }
 }

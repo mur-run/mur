@@ -57,6 +57,9 @@ pub async fn record(
     if trace {
         args.push("--save-trace".into());
     }
+    // Resolve the server before any broker state exists, so a missing install
+    // fails with the setup hint and leaves no socket behind.
+    let server = playwright_command(&args)?;
     let run_state = Run {
         name: run.to_string(),
         mode: mode.parse::<Mode>()?,
@@ -90,7 +93,7 @@ pub async fn record(
         actions = %paths::run_actions(&mur_home, run).display(),
         "browser record started"
     );
-    let result = run_stdio(playwright_command(&args), hook).await;
+    let result = run_stdio(server, hook).await;
     tracing::info!(run, ok = result.is_ok(), "browser record finished");
     // The child has ended; kill the broker and unlink its private endpoint
     // even when Playwright exited with an error.
