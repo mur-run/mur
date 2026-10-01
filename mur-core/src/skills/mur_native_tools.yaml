@@ -1,5 +1,5 @@
 name: mur-native-tools
-version: 1.0.0
+version: 1.0.1
 publisher: human:mur-official
 description: 'How MUR reaches for its own tools when searching a codebase, planning a task, or offering the user choices.'
 category: context
@@ -18,6 +18,11 @@ content:
       know (an error message, a function name).
       *Why: exact-match tools are precise but blind to synonyms — the opposite
       trade-off from semantic search.*
+    - For a search that fits neither rule above — a symbol's definition or
+      references, a structural code pattern, or a hunt across repos — run
+      `mur skill show mur-search` and follow its ladder.
+      *Why: those need LSP, ast-grep, or per-project fan-out; mur-search owns
+      their entry conditions and fallbacks, so they aren't duplicated here.*
     - `mur_notes_search` is for the user's **saved notes/patterns**, not source
       code. Don't reach for it to answer a code question.
       *Why: it searches a different corpus and will return 0 results for code,

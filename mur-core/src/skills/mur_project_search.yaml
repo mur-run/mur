@@ -3,6 +3,7 @@ version: 0.2.0
 publisher: human:mur
 description: "Search project code by meaning. Use for concept/intent queries; use grep for exact strings and exhaustive matches."
 category: context
+visibility: on_demand
 hosts: [all]
 content:
   abstract: |
