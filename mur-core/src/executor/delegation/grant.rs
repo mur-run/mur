@@ -379,4 +379,4 @@ fn record(ctx: &GrantContext<'_>, t: &DelegationTarget, outcome: &GrantOutcome) 
 
 #[cfg(test)]
 #[path = "grant_tests.rs"]
-mod tests;
+pub(crate) mod tests;

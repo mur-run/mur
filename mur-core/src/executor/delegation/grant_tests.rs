@@ -6,7 +6,9 @@ use mur_common::hitl::{HitlRequest, HitlResponse, RiskTier, Unanswered};
 
 use super::*;
 
-fn profile_yaml(name: &str, write: &[&Path]) -> String {
+/// A minimal valid profile whose `filesystem.write` is exactly `write`.
+/// Shared with the dispatch-site tests that need a real member on disk.
+pub(crate) fn profile_yaml(name: &str, write: &[&Path]) -> String {
     let write: Vec<String> = write
         .iter()
         .map(|p| format!("\"{}\"", p.display()))
