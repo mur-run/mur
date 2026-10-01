@@ -178,10 +178,17 @@ pub fn grant_perms(
 
     let (_, profile) = crate::cmd::agent::load_profile_for_edit(&agent)?;
     let spawn = &profile.entitlements.processes.spawn;
-    let plan = perms::plan(&mur_home, &agent, &spawn.allowed, &spawn.allowed_dirs);
+    let plan = perms::plan(
+        &mur_home,
+        &agent,
+        &spawn.allowed,
+        &spawn.allowed_dirs,
+        &profile.entitlements.filesystem.read,
+    );
     let mut grant = |g: &perms::Grant| match g {
         perms::Grant::Binary(b) => crate::cmd::agent::cmd_perm_allow_spawn(&agent, b),
         perms::Grant::Dir(d) => crate::cmd::agent::cmd_perm_allow_spawn_dir(&agent, d),
+        perms::Grant::Read(r) => crate::cmd::agent::cmd_perm_allow_read(&agent, r),
     };
     perms::confirm_and_apply(&agent, &plan, consent.given(), input, output, &mut grant)?;
     Ok(())

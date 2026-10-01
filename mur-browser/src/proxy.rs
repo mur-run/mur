@@ -352,17 +352,20 @@ fn ensure_tool_succeeded<'a>(tool: &str, response: &'a Value) -> Result<&'a Valu
 }
 
 /// Build the argv passed to `npx` for the Playwright MCP package.
+#[cfg(test)]
 fn playwright_args(extra_args: &[String]) -> Vec<String> {
-    let mut args = vec!["-y".to_owned(), crate::PLAYWRIGHT_MCP_PKG.to_owned()];
-    args.extend(extra_args.iter().cloned());
-    args
+    crate::server::launch_argv(None, extra_args).1
 }
 
-/// Build the `npx @playwright/mcp` command. Extra args are passed through
-/// verbatim (`--headless`, `--isolated`, `--storage-state=…`).
+/// Build the Playwright MCP command: `node <installed entry>` when `mur
+/// browser setup` installed the pinned package (no registry at spawn time,
+/// see [`crate::server`]), else `npx -y @playwright/mcp@<pin>`. Extra args are
+/// passed through verbatim (`--headless`, `--isolated`, `--storage-state=…`).
 pub fn playwright_command(extra_args: &[String]) -> Command {
-    let mut cmd = Command::new("npx");
-    cmd.args(playwright_args(extra_args));
+    let entry = crate::server::system_entry();
+    let (program, args) = crate::server::launch_argv(entry.as_deref(), extra_args);
+    let mut cmd = Command::new(program);
+    cmd.args(args);
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())

@@ -3,6 +3,7 @@
 pub mod doctor;
 pub mod perms;
 mod replay;
+pub mod server_install;
 pub mod setup;
 
 pub use replay::{parse_heal_ratio, replay};
