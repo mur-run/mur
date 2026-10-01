@@ -1,6 +1,8 @@
 //! Entitlement warnings + category presets.
 //! P0a declares; P0b enforces.
 
+use std::path::Path;
+
 use mur_common::agent::{NetworkOutboundMode, SpawnMode};
 use mur_common::{AgentProfile, PersonaCategory};
 
@@ -106,5 +108,86 @@ pub fn preset_for_category(cat: PersonaCategory) -> EntitlementPreset {
             filesystem_read_extras: vec![],
             filesystem_write_extras: vec![],
         },
+    }
+}
+
+/// Whether a member may WRITE under `dir`, decided the way its own tool gate
+/// will decide it (`fs_policy::check_write_entitlement`): `deny` is literal
+/// and checked first; `write` is tried literally, then through one derived
+/// worktree hop (#004). Exposed so a dispatcher (`mur fleet run`,
+/// `parallel_jobs`) can ask BEFORE fan-out and not learn the answer from a
+/// member that built in the wrong tree (#1607).
+///
+/// `dir` is canonicalized here; a path that does not exist is `Missing`, not
+/// `NotGranted` — offering to grant a directory that is not there would be
+/// accepted and still dropped by the sandbox at start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteVerdict {
+    /// Under a `write` root (or a worktree of one) and not under `deny`.
+    Allowed,
+    /// Under an explicit `deny` root. Never grant past this.
+    Denied,
+    /// Outside every `write` root; a grant would make it `Allowed`.
+    NotGranted,
+    /// `dir` does not exist (or cannot be canonicalized).
+    Missing,
+}
+
+pub fn write_verdict(fs: &mur_common::agent::FilesystemEntitlement, dir: &Path) -> WriteVerdict {
+    let Ok(canonical) = std::fs::canonicalize(dir) else {
+        return WriteVerdict::Missing;
+    };
+    if crate::tools::fs_policy::under_any(&fs.deny, &canonical) {
+        return WriteVerdict::Denied;
+    }
+    if crate::tools::fs_policy::under_any_or_worktree(&fs.write, &canonical) {
+        return WriteVerdict::Allowed;
+    }
+    WriteVerdict::NotGranted
+}
+
+#[cfg(test)]
+mod write_verdict_tests {
+    use super::*;
+    use mur_common::agent::FilesystemEntitlement;
+
+    fn fs(write: &[&str], deny: &[&str]) -> FilesystemEntitlement {
+        FilesystemEntitlement {
+            read: vec![],
+            write: write.iter().map(|s| s.to_string()).collect(),
+            deny: deny.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn verdict_follows_the_tool_gate_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("proj");
+        let secret = proj.join("secret");
+        std::fs::create_dir_all(&secret).unwrap();
+        let root = proj.to_string_lossy().to_string();
+        let sec = secret.to_string_lossy().to_string();
+
+        assert_eq!(
+            write_verdict(&fs(&[&root], &[]), &proj),
+            WriteVerdict::Allowed
+        );
+        assert_eq!(
+            write_verdict(&fs(&[], &[]), &proj),
+            WriteVerdict::NotGranted
+        );
+        // deny beats write, and is literal
+        assert_eq!(
+            write_verdict(&fs(&[&root], &[&sec]), &secret),
+            WriteVerdict::Denied
+        );
+        assert_eq!(
+            write_verdict(&fs(&[&root], &[&sec]), &proj),
+            WriteVerdict::Allowed
+        );
+        assert_eq!(
+            write_verdict(&fs(&[&root], &[]), &proj.join("nope")),
+            WriteVerdict::Missing
+        );
     }
 }

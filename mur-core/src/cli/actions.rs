@@ -233,7 +233,9 @@ pub enum WorkflowAction {
         /// Record execution as events on an existing channel ID
         #[arg(long, value_name = "CHANNEL_ID")]
         channel: Option<String>,
-        /// Create a new channel and record execution on it
+        /// Create a new channel and record execution on it. `delegate_to`
+        /// steps only call their member on a channel run; each member is
+        /// first checked for write access to this directory's git root.
         #[arg(long, conflicts_with = "channel")]
         channel_new: bool,
     },
@@ -537,9 +539,10 @@ pub enum FleetAction {
         #[arg(long, value_name = "RUN_ID")]
         run_id: Option<String>,
         /// Directory the work is in (absolute). Members are routed to its git
-        /// repo root, or to the directory itself outside a checkout. Default:
-        /// this process's cwd — right at a shell, wrong when spawned, so the
-        /// agent runtime always passes it.
+        /// repo root, or to the directory itself outside a checkout, after
+        /// each is checked for write access there. Default: this process's
+        /// cwd — right at a shell, wrong when spawned, so the agent runtime
+        /// always passes it.
         #[arg(long, value_name = "DIR")]
         cwd: Option<std::path::PathBuf>,
         /// `--cwd` was not named by the caller but taken from the calling

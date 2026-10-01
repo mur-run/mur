@@ -284,6 +284,45 @@ fn git_porcelain(repo: &Path) -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
+/// Run the write-grant gate for every fleet member against the routed target
+/// of `work_dir`. Approvals park on the fleet's own channel and follow the
+/// fleet's declared `hitl:` policy, exactly as the DAG's own gates do; `--yes`
+/// is never reachable from here. `Some(message)` means do not dispatch.
+pub(crate) async fn gate_members(
+    mur_home: &Path,
+    fleet: &mur_common::fleet::Fleet,
+    work_dir: &Path,
+    inferred: bool,
+) -> Result<Option<String>> {
+    use crate::executor::delegation::grant::{
+        GrantContext, block_message, ensure_write_grants, targets_for,
+    };
+    let gate_run_id = format!("grant-{}", uuid::Uuid::now_v7());
+    let ctx = GrantContext {
+        mur_home,
+        channel_id: &fleet.channel_id,
+        run_id: &gate_run_id,
+        policy: crate::hitl::gate::GatePolicy {
+            yes: false,
+            unanswered: fleet
+                .hitl
+                .as_ref()
+                .and_then(|h| h.mode)
+                .unwrap_or_else(crate::executor::dag::default_unanswered),
+            auto_approve_tiers: fleet
+                .hitl
+                .as_ref()
+                .map(|h| h.auto_approve_tiers.clone())
+                .unwrap_or_default(),
+        },
+        job_count: fleet.members.len(),
+    };
+    let target = crate::executor::delegation::cwd::routing_target(work_dir);
+    let targets = targets_for(fleet.members.iter().map(String::as_str), &target, inferred);
+    let results = ensure_write_grants(&ctx, &targets).await?;
+    Ok(block_message(&results, &fleet.channel_id))
+}
+
 pub async fn cmd_fleet_run(
     mur_home: &Path,
     name: &str,
@@ -323,6 +362,19 @@ pub async fn cmd_fleet_run(
         );
     }
     let svc = mur_channel::ChannelService::open(mur_home)?;
+    // Write-grant gate (#1607) BEFORE any worktree is created or the goal is
+    // sent: every member must be able to write where it is routed. Worktree
+    // tracks live under the repo root's `.worktrees/`, which the runtime's
+    // worktree rule already covers, so the routed root is the one to check.
+    if let Some(msg) = gate_members(mur_home, &fleet, &work_dir, cwd.inferred).await? {
+        if let Some(job) = active_job.as_mut() {
+            job.status = JobStatus::Failed;
+            job.finished_at = Some(chrono::Utc::now().to_rfc3339());
+            job.error = Some(msg.clone());
+            let _ = super::jobs::save_job(mur_home, name, job);
+        }
+        bail!("fleet '{name}': {msg}");
+    }
     let events = svc.load_events(&fleet.channel_id)?;
     // Cursor BEFORE this run so the reply tail prints only THIS run's events.
     let since = events.last().map(|e| e.seq).unwrap_or(0);

@@ -25,6 +25,12 @@ No delegation path checks this today:
 | `parallel_jobs` (MCP tool) | `mur-mcp-server/src/tools.rs:751` → `mur-core/src/executor/jobs.rs:28 build_jobs_procedure` | **not at all** — the member gets only `description` | none |
 | workflow `delegate_to` | `mur-core/src/executor/dag.rs:855` | not at all | none |
 
+`delegate_to` only dials a member on a **channel run**: the delegation branch at
+`dag.rs:855` needs both a target and a channel id. A run without `--channel` /
+`--channel-new` falls through to intent mode (`dag.rs:743`), prints the step
+description, and reports `exit_code: 0` — no member is called, so it carries no
+write risk. Only channel runs need the gate.
+
 Two compounding bugs in how the target directory is *discovered*:
 
 - `fleet_run.rs:243` spawns `mur fleet run` with no `.current_dir(…)`, so
@@ -113,10 +119,23 @@ pub enum GrantOutcome {
     Blocked(BlockReason),           // dispatch must not proceed
 }
 
-pub fn ensure_write_grants(
-    targets: &[DelegationTarget], mur_home: &Path, opts: &RunOpts,
+pub struct GrantContext<'a> {
+    pub mur_home: &'a Path,
+    pub channel_id: &'a str,   // where approvals park and outcomes are recorded
+    pub run_id: &'a str,
+    pub policy: GatePolicy,    // yes / unanswered / auto_approve_tiers
+    pub job_count: usize,      // quoted in the prompt
+}
+
+pub async fn ensure_write_grants(
+    ctx: &GrantContext<'_>, targets: &[DelegationTarget],
 ) -> Result<Vec<(DelegationTarget, GrantOutcome)>>;
 ```
+
+The target `dir` is always the **routing target** — the git root of the work
+dir (`cwd::routing_target`), i.e. the directory the routing note sends the
+member to. Checking the raw cwd instead would pass a member that may only
+write a subdirectory while sending it to the root.
 
 Per unique `(member, canonical dir)`:
 
@@ -128,7 +147,7 @@ Per unique `(member, canonical dir)`:
 3. **Decide whether HITL is needed:** `!allowed || inferred`.
    `allowed && !inferred` → `AlreadyAllowed`.
 4. **Raise one HITL gate** through the existing channel HITL
-   (`mur_common::hitl`, `RunOpts::hitl_unanswered`, `hitl_auto_approve_tiers`).
+   (`mur_common::hitl`, via the caller's `GatePolicy` — see the site table below).
    Risk tier is `write`-equivalent, so `--yes` / `yes=true` /
    `auto_approve_tiers` containing `write` may satisfy it (capped by
    `tier_may_be_granted`, consistent with the rest of HITL). Unattended with no
@@ -143,10 +162,29 @@ Per unique `(member, canonical dir)`:
 6. **On approval, if `allowed && inferred`:** nothing to write; return
    `AlreadyAllowed`.
 
-The whole function runs **before** `dispatch_parallel_jobs` mints the channel
-(`jobs.rs:137`), before fleet fan-out (`run.rs` after worktree creation, before
-the goal is sent), and before the first `delegate_to` step executes. One
-restart per member per run, never one per job.
+The gate needs a channel (approvals park there; outcomes are recorded there
+as `delegation.write_grant`), so each site **creates or resolves its channel
+first, then gates, then dispatches**. A blocked run leaves a channel holding
+only its `delegation.write_grant` records and the parked request — that is the
+audit trail, not litter. One restart per member per run, never one per job.
+
+| Site | Channel | Target | Policy | When blocked |
+|---|---|---|---|---|
+| `parallel_jobs` (`jobs.rs` `dispatch_parallel_jobs`, now `async`) | minted per call | caller `cwd` (inferred if the runtime injected it) | `yes` from the call; unanswered **Defer** (a tool call has no human on stdin) | tool error naming `mur channel approve <channel> <hitl>` |
+| `mur fleet run` (one-shot, `run.rs`) | the fleet's channel | `--cwd` (`--cwd-inferred` when the tool supplied it) | `yes: false` always; fleet `hitl:` mode and `auto_approve_tiers` | bail before worktree creation; the claimed job is marked failed with the reason |
+| `mur workflow run` (`mur-core/src/executor/delegation/workflow.rs` `prepare_procedure`) | `--channel` / `--channel-new` only | repo root of the invocation dir, **always inferred** (no `--cwd` flag) | same as the DAG's own gates: `--yes`, TTY-aware `default_unanswered` | bail before the first step; on pass, the routing note is appended to every delegate step's prompt |
+
+A workflow run **without** a channel is not gated (nothing is dialled); if any
+step has `delegate_to`, it warns that those members will not be called and
+names `--channel-new` / `--channel <id>`. That a channel-less delegate step
+reports success while doing nothing is a separate defect, tracked on its own.
+
+**Not covered: `mur fleet run --loop`** (and its callers `fleet_tick` and
+`deep-research`). `cmd_fleet_run_loop` takes no cwd at all
+(`dispatch.rs:371`), so where its members work was never defined. Gating it
+first needs a `cwd` parameter on the loop and its daemon / deep-research
+callers — a routing change, done in a follow-up PR, then gated once before
+the loop starts.
 
 ### 4.3 HITL copy (the user signs a *complete* action)
 
@@ -206,7 +244,12 @@ matching (deferred unattended gates) is stable across retries.
    process-cwd guess on its own, safe to ship first. **Done.**
 2. Runtime injection for `parallel_jobs` + schema `cwd`; routing note
    appended to each job's prompt via the shared `delegation::cwd`. **Done.**
-3. `grant.rs` gate wired into the three dispatch sites, HITL copy, tests.
+3. `grant.rs` gate wired into the three dispatch sites (`parallel_jobs`,
+   one-shot `mur fleet run`, channel-mode `mur workflow run`), HITL copy,
+   tests. **Done.**
+3b. `mur fleet run --loop` (`fleet_tick`, `deep-research`): add a `cwd` to the
+   loop and its callers, route members with it, gate once before the loop.
+   Follow-up PR.
 4. Docs: `README.md`, docs site, product page via the `update-docs` skill;
    `mur fleet run --help` and the `parallel_jobs` tool description mention
    `cwd`.

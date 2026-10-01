@@ -75,13 +75,21 @@ pub fn discover_repo_root(from: &Path) -> Result<PathBuf> {
     ))
 }
 
+/// The directory a member is actually told to work in: the git root when
+/// `work_dir` is inside a checkout, `work_dir` itself otherwise. The routing
+/// note and the write-grant check both use this, so the directory the member
+/// is sent to and the one it is checked against cannot differ.
+pub fn routing_target(work_dir: &Path) -> PathBuf {
+    discover_repo_root(work_dir).unwrap_or_else(|_| work_dir.to_path_buf())
+}
+
 /// The line appended to a delegated prompt telling the member where the work
 /// is. Repo root when `work_dir` is inside a git checkout, the directory
 /// itself otherwise — a member with no idea which tree to touch is how a build
 /// dir ends up in the wrong project. An inferred cwd says so, so the member
 /// and the reader of the log both know it was a guess, not an instruction.
 pub fn routing_note(work_dir: &Path, inferred: bool) -> String {
-    let target = discover_repo_root(work_dir).unwrap_or_else(|_| work_dir.to_path_buf());
+    let target = routing_target(work_dir);
     let target = target.display();
     let provenance = if inferred {
         " (assumed from the calling agent's session directory — no explicit target was given)"

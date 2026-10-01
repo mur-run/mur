@@ -31,7 +31,7 @@ pub(super) fn service_file_in(base: &Path, name: &str) -> PathBuf {
 
 /// The installed service descriptor for `name`, if this platform has services
 /// and one is actually on disk.
-pub(super) fn installed_service(name: &str) -> Option<PathBuf> {
+pub(crate) fn installed_service(name: &str) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     let base = dirs::home_dir()?;
     #[cfg(target_os = "linux")]

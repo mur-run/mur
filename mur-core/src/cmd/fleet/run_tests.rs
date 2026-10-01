@@ -215,3 +215,87 @@ fn partition_procedure_constrains_each_member_to_its_region() {
     // Steps reference different units
     assert_ne!(intents[0], intents[1]);
 }
+
+/// A one-member fleet on its own channel, the member's profile granting
+/// `write`, and a `project` dir to send it to.
+fn grant_fleet(home: &Path, member: &str, grant: bool) -> PathBuf {
+    crate::channel_writer::plant_writer_identity(home);
+    let project = std::fs::canonicalize(home).unwrap().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let agent = home.join("agents").join(member);
+    std::fs::create_dir_all(&agent).unwrap();
+    let write: Vec<&Path> = if grant { vec![&project] } else { vec![] };
+    std::fs::write(
+        agent.join("profile.yaml"),
+        crate::executor::delegation::grant::tests::profile_yaml(member, &write),
+    )
+    .unwrap();
+    let fleet = mur_common::fleet::Fleet {
+        name: "dev".into(),
+        display_name: String::new(),
+        goal: "standing goal".into(),
+        router: None,
+        members: vec![member.into()],
+        team_id: None,
+        channel_id: "fleet-dev".into(),
+        procedure: vec![],
+        rules: vec![],
+        skills: vec![],
+        loop_cfg: None,
+        parallel: None,
+        hitl: None,
+        requires_programs: vec![],
+        limits: None,
+        needs: vec![],
+    };
+    crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+    mur_channel::ChannelService::open(home)
+        .unwrap()
+        .create_for_fleet("dev", "mur", &[member.into()])
+        .unwrap();
+    project
+}
+
+/// #1607 rollout 3: `mur fleet run` never sends a member somewhere it may not
+/// write. The approval is parked on the fleet's channel, the run never
+/// reaches the DAG, and the claimed job is not left `running` forever.
+#[tokio::test]
+async fn fleet_run_blocks_a_member_without_the_write_grant() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let project = grant_fleet(home, "coder", false);
+    let err = cmd_fleet_run(
+        home,
+        "dev",
+        Some("fix the build".into()),
+        false,
+        None,
+        RunCwd {
+            path: Some(project.clone()),
+            inferred: false,
+        },
+    )
+    .await
+    .expect_err("an ungranted member must not be dispatched");
+    let err = format!("{err:#}");
+    assert!(err.contains("needs approval"), "{err}");
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let events = svc.load_events("fleet-dev").unwrap();
+    let parked = events
+        .iter()
+        .filter(|e| e.kind == mur_common::channel::EventKind::HitlRequest)
+        .count();
+    assert_eq!(parked, 1, "one approval for one member");
+    // The gate's own pause moves the channel to `input-required`; what must
+    // NOT exist is any delegate step — the DAG never ran.
+    assert!(
+        !events.iter().any(|e| matches!(
+            e.kind,
+            mur_common::channel::EventKind::Delegation | mur_common::channel::EventKind::Message
+        )),
+        "nothing was delegated or sent to a member: {events:?}"
+    );
+    let jobs = crate::cmd::fleet::jobs::list_jobs_raw(home, "dev").unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_ne!(jobs[0].status, JobStatus::Running, "{:?}", jobs[0]);
+}

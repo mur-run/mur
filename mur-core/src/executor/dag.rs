@@ -203,7 +203,7 @@ pub enum StepEventKind {
 /// schedules, cron and the fleet loop all land here, which is exactly where
 /// waiting out a gate timeout converts the whole window into an automatic
 /// denial.
-fn default_unanswered() -> mur_common::hitl::Unanswered {
+pub(crate) fn default_unanswered() -> mur_common::hitl::Unanswered {
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         mur_common::hitl::Unanswered::Wait
     } else {
