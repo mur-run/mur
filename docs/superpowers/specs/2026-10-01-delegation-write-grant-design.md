@@ -88,6 +88,11 @@ re-implement glob/`~` expansion.
   `input` has no `cwd`, insert `cwd = SessionCwd::current()` and
   `cwd_inferred = true`. Never override an explicit `cwd`. Allowlist is a
   constant next to the tool names, not a scan of every MCP tool.
+- **`mur-core/src/executor/delegation/cwd.rs`** (shared) — `RunCwd`,
+  `discover_repo_root(from)`, `routing_note(dir, inferred)`. Both `mur fleet
+  run` and `parallel_jobs` build the member prompt through it, so the two
+  paths cannot drift. `RunCwd::from_tool_args` treats an absent `cwd` at a tool
+  boundary as inferred (the serving process's cwd is a guess there).
 - **`tools/fleet_run.rs`** — pass the session cwd explicitly: add
   `--cwd <path>` to the spawned `mur fleet run` (or `.current_dir(…)`; prefer
   the flag so it is visible in the job log) and `--cwd-inferred` when the
@@ -198,8 +203,9 @@ matching (deferred unattended gates) is stable across retries.
 ## 7. Rollout
 
 1. `fleet_run` `--cwd` plumbing + `discover_repo_root(path)` — removes the
-   process-cwd guess on its own, safe to ship first.
-2. Runtime injection for `parallel_jobs` + schema `cwd`.
+   process-cwd guess on its own, safe to ship first. **Done.**
+2. Runtime injection for `parallel_jobs` + schema `cwd`; routing note
+   appended to each job's prompt via the shared `delegation::cwd`. **Done.**
 3. `grant.rs` gate wired into the three dispatch sites, HITL copy, tests.
 4. Docs: `README.md`, docs site, product page via the `update-docs` skill;
    `mur fleet run --help` and the `parallel_jobs` tool description mention

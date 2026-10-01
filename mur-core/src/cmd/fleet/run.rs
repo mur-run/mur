@@ -17,6 +17,8 @@ use crate::parallel::semantic::{SupportedLanguage, extract_units};
 use crate::parallel::track::{TrackSet, worktree};
 
 use super::store;
+pub use crate::executor::delegation::cwd::RunCwd;
+use crate::executor::delegation::cwd::{discover_repo_root, routing_note};
 
 /// Map a fleet run's **channel outcome** to a terminal [`JobStatus`] (#10).
 ///
@@ -195,44 +197,6 @@ fn parallel_exec_enabled(force: bool) -> bool {
     force || std::env::var(EXEC_FLAG_ENV).as_deref() == Ok("1")
 }
 
-/// Main repo root (where `.worktrees/` lives), discovered from `from` — the
-/// caller's working directory, never this process's. When the agent runtime
-/// spawns `mur fleet run`, the process cwd is wherever the runtime happens to
-/// sit (its home, `/`), not the project the user is in; resolving git there
-/// routed members to the wrong repo (#1607). The CLI passes `--cwd`, or its
-/// own cwd when invoked by hand.
-fn discover_repo_root(from: &Path) -> Result<PathBuf> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(from)
-        .output()
-        .context("git rev-parse --show-toplevel")?;
-    if !out.status.success() {
-        bail!("parallel execution must run inside a git repository");
-    }
-    Ok(PathBuf::from(
-        String::from_utf8_lossy(&out.stdout).trim().to_string(),
-    ))
-}
-
-/// The line appended to a one-shot goal telling members where the work is.
-/// Repo root when `work_dir` is inside a git checkout, the directory itself
-/// otherwise — a member with no idea which tree to touch is how a build dir
-/// ends up in the wrong project. An inferred cwd says so, so the member and
-/// the reader of the log both know it was a guess, not an instruction.
-fn routing_note(work_dir: &Path, inferred: bool) -> String {
-    let target = discover_repo_root(work_dir).unwrap_or_else(|_| work_dir.to_path_buf());
-    let target = target.display();
-    let provenance = if inferred {
-        " (assumed from the calling agent's session directory — no explicit target was given)"
-    } else {
-        ""
-    };
-    format!(
-        "\n\nIMPORTANT: the directory you are working in is `{target}`{provenance}. cd there (or pass cwd=`{target}` on every bash/tool call) before doing anything else."
-    )
-}
-
 /// Concurrency cap for the fan-out — closes the unbounded-spawn gap documented
 /// on `DagExecOptions::max_concurrency` (N worktree agents must not cascade past
 /// API rate limits). At most `cores-2`, never below 1, never above the step count.
@@ -318,35 +282,6 @@ fn git_porcelain(repo: &Path) -> std::collections::HashSet<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Where the work is: the directory members are routed to. `None` means the
-/// caller gave none and this process's cwd stands in — right for a human at a
-/// shell, wrong for a spawned child, which is why the runtime always passes it.
-#[derive(Debug, Clone, Default)]
-pub struct RunCwd {
-    pub path: Option<PathBuf>,
-    /// The caller did not name the directory; it was taken from the calling
-    /// agent's session cwd. Surfaces in the routing note so a member (and the
-    /// log) can tell a stated target from a guessed one.
-    pub inferred: bool,
-}
-
-impl RunCwd {
-    fn resolve(&self) -> Result<PathBuf> {
-        match &self.path {
-            Some(p) => {
-                if !p.is_absolute() {
-                    bail!("--cwd must be an absolute path, got `{}`", p.display());
-                }
-                if !p.is_dir() {
-                    bail!("--cwd `{}` is not a directory", p.display());
-                }
-                Ok(p.clone())
-            }
-            None => std::env::current_dir().context("current_dir"),
-        }
-    }
 }
 
 pub async fn cmd_fleet_run(
