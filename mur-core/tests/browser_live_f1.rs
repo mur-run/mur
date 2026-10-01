@@ -305,7 +305,9 @@ async fn f1_two_shops_both_prices_read_through_the_egress_proxy() {
 
 /// D1: live mode must not start an unproxied Chromium. No `HTTPS_PROXY` →
 /// the child exits non-zero before any MCP traffic. This one needs no
-/// browser, so it is not gated.
+/// browser, so it is not gated. Unix only: without Unix domain sockets the
+/// `record` command bails before live mode is considered at all.
+#[cfg(unix)]
 #[tokio::test]
 async fn live_mode_refuses_to_launch_without_the_proxy_env() {
     let mur_home = tempfile::tempdir().expect("tempdir");
