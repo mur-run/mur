@@ -338,7 +338,7 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "parallel_jobs".into(),
-            description: "Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running. Pass `cwd` (absolute) when the jobs belong to a specific project; each job is told to work there.".into(),
+            description: "Fan out N distinct jobs to running MUR agents in parallel and return a handle at once: {run_id, channel_id, status: dispatched}. Poll mur_job_status <run_id> for progress; each job's reply lands in the channel. The run lives in this MCP server process — if the server exits, the run ends. Before coding fan-out, apply the parallel-code gate: disjoint files (no shared registry/lockfile), contracts frozen first, one writer per file. Targets the agents you name; runtimes must already be running. Pass `cwd` (absolute) when the jobs belong to a specific project; each job is told to work there, and each agent must be allowed to write there (an approval is parked otherwise).".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
                 properties: Some(BTreeMap::from([
@@ -821,6 +821,7 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 yes,
                 &cwd,
             )
+            .await
             .map_err(|e| format!("parallel_jobs failed: {e}"))?;
             let (run_id, channel_id) = (d.run_id.clone(), d.channel_id.clone());
             drop(d.handle);
@@ -1079,6 +1080,52 @@ mod job_status_tests {
         assert!(out.contains("alive"), "liveness missing from output: {out}");
     }
 
+    /// A minimal valid profile for `name` whose only write grant is `write`.
+    fn write_member_profile(home: &std::path::Path, name: &str, write: &std::path::Path) {
+        let dir = home.join("agents").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let yaml = format!(
+            r#"
+schema: 1
+id: 01JQX4TM8Y9K7VQH6B2N3R5DPF
+name: {name}
+display_name: "Test"
+version: "0.1.0"
+persona:
+  category: custom
+  description: "Test agent"
+  traits: {{ tone: neutral, risk: cautious, verbosity: low }}
+sys_prompt_file: "sys_prompt.md"
+model: {{ provider: ollama, name: "llama3.2:3b", params: {{ temperature: 0.2, max_tokens: 4096 }} }}
+mcp_servers: []
+skills: []
+transport:
+  stdio: true
+  socket: {{ enabled: false, bind: "" }}
+communication: {{ accepts_from: ["*"], sends_to: [] }}
+capabilities: []
+entitlements:
+  network:
+    inbound: {{ ports: [] }}
+    outbound: {{ mode: restricted, allow_hosts: [], protocols: ["tcp"], resolve_dns: {{ mode: system }} }}
+  filesystem: {{ read: [], write: ['{write}'], deny: [] }}
+  processes: {{ spawn: {{ mode: allowlist, allowed: [] }} }}
+  syscalls: {{ mode: default }}
+  limits: {{ memory_mb: 512, file_descriptors: 1024, processes: 32 }}
+notifications: {{ on_task_complete: [], on_error: [], on_shutdown: [] }}
+retry:
+  llm: {{ max_retries: 3, backoff: exponential, initial_delay_ms: 1000, max_delay_ms: 30000, retry_on: [rate_limit, timeout] }}
+  tool: {{ max_retries: 1, backoff: fixed, initial_delay_ms: 500 }}
+lifecycle: {{ restart: on_failure }}
+created_at: "2026-04-29T10:00:00+00:00"
+updated_at: "2026-04-29T10:00:00+00:00"
+"#,
+            // Single-quoted in YAML so a Windows `C:\Users\...` is not read as escapes.
+            write = write.display().to_string().replace('\'', "''")
+        );
+        std::fs::write(dir.join("profile.yaml"), yaml).unwrap();
+    }
+
     /// The tool answers with a handle, not with output: one job to an
     /// authorized agent that is not running dispatches at once and fails on
     /// its own afterwards.
@@ -1090,11 +1137,19 @@ mod job_status_tests {
             "parallel_jobs:\n  targets: [ghost]\n",
         )
         .unwrap();
+        // #1607: dispatch is gated on the member's write grant, so `ghost`
+        // needs a profile that may already write the stated `cwd`.
+        let project = std::fs::canonicalize(tmp.path()).unwrap().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        write_member_profile(tmp.path(), "ghost", &project);
         let t0 = std::time::Instant::now();
         let v = call_tool_json_in(
             tmp.path(),
             "parallel_jobs",
-            serde_json::json!({"jobs": [{"description": "x", "agent": "ghost"}]}),
+            serde_json::json!({
+                "jobs": [{"description": "x", "agent": "ghost"}],
+                "cwd": project.to_string_lossy(),
+            }),
         )
         .await
         .unwrap();

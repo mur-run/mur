@@ -16,6 +16,12 @@ use mur_common::skill::manifest::{Procedure, ProcedureStep};
 use crate::a2a_dial::canonicalize_agent_name;
 use crate::executor::dag::{DagExecOptions, execute_dag};
 pub use crate::executor::delegation::cwd::RunCwd;
+use crate::executor::delegation::cwd::{routing_note, routing_target};
+use crate::executor::delegation::grant::{
+    GrantContext, block_message, ensure_write_grants, targets_for,
+};
+use crate::hitl::gate::GatePolicy;
+use mur_common::hitl::Unanswered;
 
 /// A single job: a prompt and the (canonicalized) agent to delegate it to.
 pub struct Job {
@@ -143,7 +149,14 @@ pub struct Dispatched {
 /// the server's own lifetime, which the tool description says out loud.
 /// `cwd` is where the jobs are routed; a bad one fails here, before any
 /// channel is minted.
-pub fn dispatch_parallel_jobs(
+///
+/// Before anything is spawned, every member must be allowed to write `cwd`
+/// (#1607, write-grant gate). The gate parks its approval on the run's own
+/// channel, so the channel is minted first; a blocked dispatch keeps it as
+/// the record of what was refused and why. Approvals here never wait: the
+/// caller is an agent's tool call, which has no human on the other end of
+/// stdin, so an unanswered gate defers and the error names the release.
+pub async fn dispatch_parallel_jobs(
     mur_home: &Path,
     jobs: &[Job],
     max_concurrency: Option<usize>,
@@ -151,11 +164,36 @@ pub fn dispatch_parallel_jobs(
     cwd: &RunCwd,
 ) -> Result<Dispatched> {
     authorize_targets(mur_home, jobs)?;
-    let routing = cwd.routing_note()?;
+    let dir = cwd.resolve()?;
+    let routing = routing_note(&dir, cwd.inferred);
     let proc = build_jobs_procedure(jobs, Some(&routing));
-    let svc = ChannelService::open(mur_home)?;
-    let channel_id = svc.create_for_workflow("parallel-jobs")?.id;
+    let channel_id = ChannelService::open(mur_home)?
+        .create_for_workflow("parallel-jobs")?
+        .id;
     let run_id = format!("run-{}", uuid::Uuid::now_v7());
+    let ctx = GrantContext {
+        mur_home,
+        channel_id: &channel_id,
+        run_id: &run_id,
+        policy: GatePolicy {
+            yes,
+            unanswered: Unanswered::Defer,
+            auto_approve_tiers: vec![],
+        },
+        job_count: jobs.len(),
+    };
+    // Gate the directory the routing note names (the git root), not `dir`:
+    // the member is sent there, so that is where it must be able to write.
+    let routed = routing_target(&dir);
+    let targets = targets_for(
+        jobs.iter().map(|j| j.assignee.as_str()),
+        &routed,
+        cwd.inferred,
+    );
+    let results = ensure_write_grants(&ctx, &targets).await?;
+    if let Some(msg) = block_message(&results, &channel_id) {
+        bail!("{msg}");
+    }
     let home = mur_home.to_path_buf();
     let (rid, cid) = (run_id.clone(), channel_id.clone());
     let label = format!("{} parallel job(s)", jobs.len());
@@ -191,7 +229,7 @@ pub async fn run_parallel_jobs(
     yes: bool,
     cwd: &RunCwd,
 ) -> Result<(String, PipelineOutput)> {
-    let d = dispatch_parallel_jobs(mur_home, jobs, max_concurrency, yes, cwd)?;
+    let d = dispatch_parallel_jobs(mur_home, jobs, max_concurrency, yes, cwd).await?;
     let out = d
         .handle
         .await
@@ -248,8 +286,8 @@ mod tests {
     }
 
     /// A bad `cwd` is refused before any channel exists — nothing to clean up.
-    #[test]
-    fn dispatch_rejects_relative_cwd_before_minting() {
+    #[tokio::test]
+    async fn dispatch_rejects_relative_cwd_before_minting() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("config.yaml"),
@@ -260,15 +298,15 @@ mod tests {
             description: "a".into(),
             assignee: "ghost".into(),
         }];
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _g = rt.enter();
         let err = match dispatch_parallel_jobs(
             tmp.path(),
             &jobs,
             Some(1),
             false,
             &RunCwd::from_tool_args(Some("rel/dir"), false),
-        ) {
+        )
+        .await
+        {
             Ok(_) => panic!("relative cwd must be refused"),
             Err(e) => e,
         };
@@ -415,18 +453,15 @@ mod tests {
         // (No runtime is running, so the delegate dial fails fast (RequireRunning).
         // run_parallel_jobs must still mint the channel and return Ok — the
         // executor turns a failed delegate into a failed step, not an Err.)
-        let tmp = tempfile::TempDir::new().unwrap();
-        std::fs::write(
-            tmp.path().join("config.yaml"),
-            "parallel_jobs:\n  targets:\n    - nonexistent-agent-xyz\n",
-        )
-        .unwrap();
+        // The member has a profile that may write the target, so the
+        // write-grant gate passes and what is under test is the dial failure.
+        let (tmp, project) = grant_home("offline-agent", true);
         let jobs = vec![Job {
             description: "do A".into(),
-            assignee: "nonexistent-agent-xyz".into(),
+            assignee: "offline-agent".into(),
         }];
         let (channel_id, _out) =
-            run_parallel_jobs(tmp.path(), &jobs, Some(2), false, &RunCwd::default())
+            run_parallel_jobs(tmp.path(), &jobs, Some(2), false, &explicit(&project))
                 .await
                 .expect("must not error when the delegate is unreachable");
         assert!(!channel_id.is_empty(), "a channel should have been minted");
@@ -435,23 +470,148 @@ mod tests {
         assert!(svc.load_events(&channel_id).is_ok());
     }
 
+    /// A home with `member` allowlisted for parallel_jobs, a real profile that
+    /// may write `write`, and a `project` dir to route to.
+    fn grant_home(member: &str, grant_project: bool) -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        crate::channel_writer::plant_writer_identity(home);
+        std::fs::write(
+            home.join("config.yaml"),
+            format!("parallel_jobs:\n  targets:\n    - {member}\n"),
+        )
+        .unwrap();
+        let project = std::fs::canonicalize(home).unwrap().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let agent = home.join("agents").join(member);
+        std::fs::create_dir_all(&agent).unwrap();
+        let write: Vec<&Path> = if grant_project {
+            vec![&project]
+        } else {
+            vec![]
+        };
+        std::fs::write(
+            agent.join("profile.yaml"),
+            crate::executor::delegation::grant::tests::profile_yaml(member, &write),
+        )
+        .unwrap();
+        (tmp, project)
+    }
+
+    fn explicit(dir: &Path) -> RunCwd {
+        RunCwd {
+            path: Some(dir.to_path_buf()),
+            inferred: false,
+        }
+    }
+
+    /// #1607 rollout 3: a member that may not write the target is never sent
+    /// there. The request is parked on the run's channel (unattended defers,
+    /// never times out) and the caller is told how to release it.
+    #[tokio::test]
+    async fn dispatch_blocks_a_member_without_the_write_grant() {
+        let (tmp, project) = grant_home("coder", false);
+        let home = tmp.path();
+        let jobs = vec![Job {
+            description: "fix it".into(),
+            assignee: "coder".into(),
+        }];
+        let err =
+            match dispatch_parallel_jobs(home, &jobs, Some(1), false, &explicit(&project)).await {
+                Ok(_) => panic!("an ungranted member must not be dispatched"),
+                Err(e) => e.to_string(),
+            };
+        assert!(err.contains("needs approval"), "{err}");
+        assert!(err.contains("mur channel approve"), "{err}");
+        // The gate parked exactly one request on the run's channel, which is
+        // kept as the record of the refused dispatch.
+        let svc = mur_channel::ChannelService::open(home).unwrap();
+        let channels = svc.list(100).unwrap();
+        assert_eq!(channels.len(), 1, "{channels:?}");
+        let parked = svc
+            .load_events(&channels[0].id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == mur_common::channel::EventKind::HitlRequest)
+            .count();
+        assert_eq!(parked, 1);
+        // Nothing was written to the member's profile.
+        let yaml = std::fs::read_to_string(home.join("agents/coder/profile.yaml")).unwrap();
+        assert!(!yaml.contains(&*project.to_string_lossy()), "{yaml}");
+    }
+
+    /// The gate checks the directory the member is actually SENT to — the git
+    /// root the routing note names — not the subdirectory the caller stood
+    /// in. A grant on the subdirectory alone must not pass for the root.
+    #[tokio::test]
+    async fn dispatch_checks_the_routed_repo_root_not_the_subdir() {
+        let (tmp, project) = grant_home("coder", false);
+        let home = tmp.path();
+        let ok = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("git unavailable; skipping");
+            return;
+        }
+        let sub = project.join("crate");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            home.join("agents/coder/profile.yaml"),
+            crate::executor::delegation::grant::tests::profile_yaml("coder", &[&sub]),
+        )
+        .unwrap();
+        let jobs = vec![Job {
+            description: "fix it".into(),
+            assignee: "coder".into(),
+        }];
+        let err = match dispatch_parallel_jobs(home, &jobs, Some(1), false, &explicit(&sub)).await {
+            Ok(_) => panic!("a subdir grant must not cover the routed repo root"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains(&*project.to_string_lossy()), "{err}");
+    }
+
+    /// Already allowed and stated explicitly: no prompt, dispatch proceeds.
+    #[tokio::test]
+    async fn dispatch_proceeds_when_the_member_already_writes_the_target() {
+        let (tmp, project) = grant_home("coder", true);
+        let home = tmp.path();
+        let jobs = vec![Job {
+            description: "fix it".into(),
+            assignee: "coder".into(),
+        }];
+        let d = dispatch_parallel_jobs(home, &jobs, Some(1), false, &explicit(&project))
+            .await
+            .expect("granted + explicit is the silent fast path");
+        let _ = d.handle.await;
+        let svc = mur_channel::ChannelService::open(home).unwrap();
+        let parked = svc
+            .load_events(&d.channel_id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == mur_common::channel::EventKind::HitlRequest)
+            .count();
+        assert_eq!(parked, 0, "the fast path asks nothing");
+    }
+
     /// §7: dispatch returns at once with an id; the run is recorded under it
     /// and finishes on its own. The target is not running, so the run fails
     /// fast — what is under test is the shape, not the delegation.
     #[tokio::test]
     async fn dispatch_returns_before_the_run_finishes_and_records_it() {
-        let tmp = tempfile::TempDir::new().unwrap();
+        let (tmp, project) = grant_home("ghost", true);
         let home = tmp.path();
-        std::fs::write(
-            home.join("config.yaml"),
-            "parallel_jobs:\n  targets:\n    - ghost\n",
-        )
-        .unwrap();
         let jobs = vec![Job {
             description: "do x".into(),
             assignee: "ghost".into(),
         }];
-        let d = dispatch_parallel_jobs(home, &jobs, Some(1), false, &RunCwd::default()).unwrap();
+        let d = dispatch_parallel_jobs(home, &jobs, Some(1), false, &explicit(&project))
+            .await
+            .unwrap();
         // No wall-clock bound here, deliberately. The previous
         // `elapsed() < 2s` measured what `dispatch_parallel_jobs` does
         // *synchronously* before it spawns — authorize, open the channel
