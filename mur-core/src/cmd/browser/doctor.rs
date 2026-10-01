@@ -345,6 +345,16 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    /// The runtime sets this marker and the browser reads it, but neither
+    /// crate depends on the other; this is the one place both are in reach.
+    #[test]
+    fn sealed_marker_names_agree_across_runtime_and_browser() {
+        assert_eq!(
+            mur_agent_runtime::sandbox::SEALED_ENV,
+            mur_browser::chromium::SEALED_ENV
+        );
+    }
+
     /// A completed build; a headless shell also gets its binary, since
     /// only a launchable shell counts.
     fn complete(dir: &Path, name: &str) {

@@ -112,9 +112,37 @@ pub fn extra_args(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// [`extra_args`] for this process's environment.
+/// Set to `1` by the agent runtime on every MCP child it spawns while its own
+/// kernel seal is enforcing. Must match `mur_agent_runtime::sandbox::SEALED_ENV`
+/// (the runtime does not depend on this crate; `mur-core` asserts the two
+/// agree).
+pub const SEALED_ENV: &str = "MUR_SEALED";
+
+/// Whether [`SEALED_ENV`] says the parent is sealed. Only the exact value `1`
+/// counts, so a stray empty or `0` never changes the launch.
+pub fn sealed_marker(raw: Option<&str>) -> bool {
+    raw == Some("1")
+}
+
+/// The extra Chromium flags for a launch. Chromium's own sandbox cannot start
+/// inside an outer one (the browser dies on launch), so a sealed parent gets
+/// `--no-sandbox` without anyone having to know the escape hatch; the outer
+/// seal is what confines the browser then. Anything in [`EXTRA_ARGS_ENV`]
+/// follows, and an explicit `--no-sandbox` there is not doubled.
+pub fn launch_extra_args(raw: Option<&str>, sealed: bool) -> Vec<String> {
+    let mut args = extra_args(raw);
+    if sealed && !args.iter().any(|a| a == "--no-sandbox") {
+        args.insert(0, "--no-sandbox".to_owned());
+    }
+    args
+}
+
+/// [`launch_extra_args`] for this process's environment.
 pub fn system_extra_args() -> Vec<String> {
-    extra_args(std::env::var(EXTRA_ARGS_ENV).ok().as_deref())
+    launch_extra_args(
+        std::env::var(EXTRA_ARGS_ENV).ok().as_deref(),
+        sealed_marker(std::env::var(SEALED_ENV).ok().as_deref()),
+    )
 }
 
 /// The browsers dir for this process's environment.
@@ -209,6 +237,37 @@ mod tests {
             extra_args(Some("  --no-sandbox   --disable-gpu\t--foo ")),
             ["--no-sandbox", "--disable-gpu", "--foo"]
         );
+    }
+
+    #[test]
+    fn a_sealed_parent_adds_no_sandbox_once() {
+        assert_eq!(launch_extra_args(None, true), ["--no-sandbox"]);
+        assert_eq!(
+            launch_extra_args(Some("--disable-gpu"), true),
+            ["--no-sandbox", "--disable-gpu"]
+        );
+        // Already passed by hand: not doubled.
+        assert_eq!(
+            launch_extra_args(Some("--no-sandbox --disable-gpu"), true),
+            ["--no-sandbox", "--disable-gpu"]
+        );
+    }
+
+    #[test]
+    fn an_unsealed_parent_launches_exactly_as_configured() {
+        assert!(launch_extra_args(None, false).is_empty());
+        assert_eq!(
+            launch_extra_args(Some("--disable-gpu"), false),
+            ["--disable-gpu"]
+        );
+    }
+
+    #[test]
+    fn sealed_marker_is_exact() {
+        assert!(sealed_marker(Some("1")));
+        assert!(!sealed_marker(None));
+        assert!(!sealed_marker(Some("")));
+        assert!(!sealed_marker(Some("0")));
     }
 
     #[test]

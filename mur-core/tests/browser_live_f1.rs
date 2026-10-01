@@ -244,7 +244,7 @@ async fn f1_two_shops_both_prices_read_through_the_egress_proxy() {
     seed_server_install(mur_home.path());
     let fixture = Fixture::start().await;
 
-    let proxy = mur_agent_runtime::sandbox::egress_proxy::start_egress_proxy()
+    let proxy = mur_agent_runtime::sandbox::egress_proxy::start_egress_proxy("f1")
         .await
         .expect("egress proxy binds 127.0.0.1:0");
     let token = proxy.register(vec!["127.0.0.1".to_owned()]);

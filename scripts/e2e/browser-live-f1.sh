@@ -73,9 +73,11 @@ fi
 FIXTURE_PID=""
 cleanup() {
   local rc=$?
-  if [[ $KEEP -eq 1 && $rc -eq 0 ]]; then
+  # Keep on failure too: a failed run is exactly when the agent's seal and
+  # logs are worth inspecting.
+  if [[ $KEEP -eq 1 ]]; then
     echo
-    echo "--keep: left running. Clean up with:"
+    echo "--keep: left running (exit $rc). Clean up with:"
     echo "  kill $FIXTURE_PID"
     echo "  $MUR agent stop $AGENT; $MUR agent remove $AGENT --purge --force"
     return
@@ -119,6 +121,15 @@ echo "==> 2/5 agent with a Restricted live-mode browser entry"
   --command "$MUR" --arg browser --arg record --arg --run --arg live --arg --mode --arg live \
   --arg=-- --arg=--ignore-https-errors >/dev/null
 "$MUR" agent mcp set-network "$AGENT" browser --allow-host 127.0.0.1 >/dev/null
+# [probed] the egress proxy runs inside the sealed runtime, so its upstream
+# dial is bound by the same SBPL port gate (80/443/8080/8443 under
+# Restricted). The fixture listens on ephemeral ports; without these grants
+# CONNECT is ALLOWed by the proxy, the dial fails with EPERM, and the proxy
+# logs the `allow-port` fix and answers 502.
+for u in "$URL_A" "$URL_B"; do
+  p="${u%/}"; p="${p##*:}"
+  "$MUR" agent perm allow-port "$AGENT" "$p" >/dev/null
+done
 # What `mur browser record` spawns on the agent's behalf (perms.rs
 # REQUIRED_BINARIES): `node <install>/…/cli.js`, then Chromium. No npx, so no
 # npx binary and no npx cache lane.
@@ -138,6 +149,12 @@ PW_CACHE="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
 # never gets its socket and the MCP server exits before `tools/list`.
 mkdir -p "$MUR_HOME_DIR/browser"   # the seal drops grants for paths missing at start
 "$MUR" agent perm allow-write "$AGENT" "$MUR_HOME_DIR/browser" >/dev/null
+# [probed] playwright-mcp's `initializeServer` opens a lock file under
+# `<browsers path>/b/` (the browser registry). Without a write lane it fails
+# with EPERM before Chromium starts. The link path is enough: the seal adds
+# the resolved form of a symlinked grant (relocated home) itself.
+mkdir -p "$PW_CACHE/b"
+"$MUR" agent perm allow-write "$AGENT" "$PW_CACHE/b" >/dev/null
 # Read-only browser tools need no card for F1; F6 covers the ones that do.
 "$MUR" agent perm tool-allow "$AGENT" 'mcp__browser__browser_navigate' >/dev/null
 "$MUR" agent perm tool-allow "$AGENT" 'mcp__browser__browser_snapshot' >/dev/null

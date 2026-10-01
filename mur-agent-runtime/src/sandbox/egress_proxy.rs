@@ -78,7 +78,9 @@ impl EgressProxyHandle {
 
 /// Bind `127.0.0.1:0`, spawn the accept loop, and return the handle (with the
 /// chosen ephemeral port). Missing/unreadable connections are dropped.
-pub async fn start_egress_proxy() -> std::io::Result<EgressProxyHandle> {
+/// `agent` is only used to word the fix in a seal-denied dial's log line.
+pub async fn start_egress_proxy(agent: &str) -> std::io::Result<EgressProxyHandle> {
+    let agent: Arc<str> = Arc::from(agent);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let registry: Registry = Arc::new(Mutex::new(HashMap::new()));
@@ -89,8 +91,9 @@ pub async fn start_egress_proxy() -> std::io::Result<EgressProxyHandle> {
                 continue;
             };
             let reg = reg.clone();
+            let agent = agent.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_conn(sock, reg).await {
+                if let Err(e) = handle_conn(sock, reg, &agent).await {
                     tracing::warn!("egress proxy conn ended: {e}");
                 }
             });
@@ -99,7 +102,11 @@ pub async fn start_egress_proxy() -> std::io::Result<EgressProxyHandle> {
     Ok(EgressProxyHandle { addr, registry })
 }
 
-async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Result<()> {
+async fn handle_conn(
+    mut client: TcpStream,
+    registry: Registry,
+    agent: &str,
+) -> std::io::Result<()> {
     // Read the request head (request line + headers, up to the blank line).
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -193,12 +200,46 @@ async fn handle_conn(mut client: TcpStream, registry: Registry) -> std::io::Resu
         client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
         return Ok(());
     };
-    let mut upstream = TcpStream::connect(pinned).await?;
+    let mut upstream = match TcpStream::connect(pinned).await {
+        Ok(u) => u,
+        Err(e) => {
+            match upstream_dial_hint(agent, &pinned.to_string(), &e) {
+                Some(hint) => tracing::warn!(host, %pinned, "{hint}"),
+                None => tracing::warn!(host, %pinned, "egress proxy upstream dial failed: {e}"),
+            }
+            // Answer the CONNECT rather than hanging up, so the client
+            // reports a proxy failure instead of a bare reset.
+            client
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                .await?;
+            return Ok(());
+        }
+    };
     client
         .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         .await?;
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
     Ok(())
+}
+
+/// The actionable line for an upstream dial the seal refused, or `None` for
+/// any other failure.
+///
+/// The proxy runs inside the sealed runtime, so its dials face the same SBPL /
+/// Landlock port gate as everything else: `CONNECT ALLOW` for an allowed host
+/// on a port outside that set still ends in EPERM (os error 1). The bare OS
+/// error named neither the port nor the fix.
+fn upstream_dial_hint(agent: &str, addr: &str, err: &std::io::Error) -> Option<String> {
+    if err.raw_os_error() != Some(1) {
+        return None;
+    }
+    let port = addr.rsplit_once(':').map(|(_, p)| p).unwrap_or(addr);
+    Some(format!(
+        "egress proxy: the sandbox refused the upstream dial to {addr} — port {port} \
+         is not in this agent's outbound port set (the host is allowed; the port \
+         is a separate grant). Fix: `mur agent perm allow-port {agent} {port}`, \
+         then restart the agent"
+    ))
 }
 
 /// Decode `Basic base64(user:pass)` and return `user` (our token); the password
@@ -238,6 +279,41 @@ mod tests {
     use base64::Engine;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn a_seal_denied_dial_names_the_port_and_the_grant() {
+        let eperm = std::io::Error::from_raw_os_error(1);
+        let msg = upstream_dial_hint("shop", "127.0.0.1:52489", &eperm)
+            .expect("EPERM is the seal's port gate");
+        assert!(msg.contains("port 52489"), "{msg}");
+        assert!(
+            msg.contains("mur agent perm allow-port shop 52489"),
+            "{msg}"
+        );
+        // IPv6 literal: the port is still the part after the last colon.
+        let msg = upstream_dial_hint("shop", "[::1]:8000", &eperm).unwrap();
+        assert!(msg.contains("allow-port shop 8000"), "{msg}");
+    }
+
+    #[test]
+    fn other_dial_failures_get_no_seal_hint() {
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(upstream_dial_hint("shop", "127.0.0.1:52489", &refused).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_failed_upstream_dial_answers_502_instead_of_hanging_up() {
+        // Bind then drop: nothing listens there, so the dial is refused.
+        let dead = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let proxy = start_egress_proxy("shop").await.unwrap();
+        let token = proxy.register(vec!["127.0.0.1".into()]);
+        let resp = connect_via(proxy.addr, &token, &dead.to_string()).await;
+        assert!(resp.starts_with("HTTP/1.1 502"), "{resp}");
+    }
 
     #[test]
     fn proxy_auth_token_is_header_case_insensitive() {
@@ -308,7 +384,7 @@ mod tests {
     #[tokio::test]
     async fn bare_connect_is_challenged_with_407() {
         let up = upstream().await;
-        let proxy = start_egress_proxy().await.unwrap();
+        let proxy = start_egress_proxy("test").await.unwrap();
         let _token = proxy.register(vec!["127.0.0.1".to_string()]);
 
         let resp = connect_bare(proxy.addr, &up.to_string()).await;
@@ -330,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn allowed_host_tunnels_denied_host_403() {
         let up = upstream().await;
-        let proxy = start_egress_proxy().await.unwrap();
+        let proxy = start_egress_proxy("test").await.unwrap();
 
         // Allowlist the upstream's loopback host → CONNECT establishes.
         let token = proxy.register(vec!["127.0.0.1".to_string()]);
@@ -359,7 +435,7 @@ mod tests {
     #[tokio::test]
     async fn broad_audited_allows_all_except_deny() {
         let up = upstream().await;
-        let proxy = start_egress_proxy().await.unwrap();
+        let proxy = start_egress_proxy("test").await.unwrap();
 
         // BroadAudited: deny only "blocked.example"; everything else allowed,
         // including a host never mentioned in any list.
@@ -387,7 +463,7 @@ mod tests {
         // A broad-audited grant (allow-all-except-deny) must STILL refuse a CONNECT
         // to a link-local / cloud-metadata IP — the SSRF screen backstops the
         // hostname allow/deny list.
-        let proxy = start_egress_proxy().await.unwrap();
+        let proxy = start_egress_proxy("test").await.unwrap();
         let token = proxy.register_policy(vec![], vec![], true); // broad, empty deny
         let resp = connect_via(proxy.addr, &token, "169.254.169.254:80").await;
         assert!(
