@@ -275,6 +275,9 @@ impl StdioMcpClient {
         for (k, v) in proxy_env_for(entry, proxy) {
             std_cmd.env(k, v);
         }
+        if let Some((k, v)) = crate::sandbox::sealed_child_env(crate::sandbox::last_status()) {
+            std_cmd.env(k, v);
+        }
         let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;
 
         let raw_stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;

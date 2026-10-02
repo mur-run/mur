@@ -22,6 +22,7 @@ pub mod chromium;
 pub mod export;
 pub mod guard;
 pub mod heal;
+pub mod live_proxy;
 pub mod locator;
 pub mod paths;
 pub mod proxy;
