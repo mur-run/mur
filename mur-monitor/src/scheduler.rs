@@ -84,9 +84,14 @@ pub fn plan_cycle(row: &MonitorRow, obs: Observation, now: DateTime<Utc>) -> Cyc
         // again (`MonitorState::is_claimable`), which is what makes the
         // terminal side-effect fire exactly once — requirement 3.
         u.unknown_streak = 0;
-        let actions = match obs.outcome {
+        // Exhaustive on purpose: a new terminal outcome must decide its
+        // action list here rather than fall into `on_failure` by default.
+        // `Abandoned` (#1622) runs nothing — the work's fate is unknown,
+        // and firing `on_failure` (a `rerun`, say) would act on a guess.
+        let actions: &[_] = match obs.outcome {
             Outcome::Succeeded => &row.spec.actions.on_success,
-            _ => &row.spec.actions.on_failure,
+            Outcome::Failed | Outcome::Cancelled => &row.spec.actions.on_failure,
+            Outcome::Abandoned | Outcome::Pending | Outcome::Unknown => &[],
         };
         u.new_state = if actions.is_empty() {
             MonitorState::Completed
