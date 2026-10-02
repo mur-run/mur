@@ -25,6 +25,31 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const GATE: &str = "MUR_BROWSER_E2E";
 const STEP_TIMEOUT: Duration = Duration::from_secs(90);
+/// Whole-run cap. `STEP_TIMEOUT` bounds each MCP call, but nothing bounded
+/// the run as a whole, and one run was seen hanging >600 s. Override with
+/// `MUR_BROWSER_E2E_DEADLINE_SECS`.
+const RUN_DEADLINE_ENV: &str = "MUR_BROWSER_E2E_DEADLINE_SECS";
+const RUN_DEADLINE_DEFAULT: Duration = Duration::from_secs(300);
+
+fn run_deadline() -> Duration {
+    std::env::var(RUN_DEADLINE_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map_or(RUN_DEADLINE_DEFAULT, Duration::from_secs)
+}
+
+/// Fail loudly instead of hanging. Dropping the future on expiry drops every
+/// child handle it owns; they are all `kill_on_drop`, so nothing is orphaned.
+async fn with_run_deadline<T>(limit: Duration, run: impl std::future::Future<Output = T>) -> T {
+    match tokio::time::timeout(limit, run).await {
+        Ok(v) => v,
+        Err(_) => panic!(
+            "browser_live_f1 exceeded its whole-run deadline of {}s (set {RUN_DEADLINE_ENV} to change)",
+            limit.as_secs_f64()
+        ),
+    }
+}
 
 fn gated() -> bool {
     if std::env::var_os(GATE).is_some_and(|v| !v.is_empty() && v != "0") {
@@ -240,6 +265,10 @@ async fn f1_two_shops_both_prices_read_through_the_egress_proxy() {
     if !gated() {
         return;
     }
+    with_run_deadline(run_deadline(), f1_run()).await;
+}
+
+async fn f1_run() {
     let mur_home = tempfile::tempdir().expect("tempdir");
     seed_server_install(mur_home.path());
     let fixture = Fixture::start().await;
@@ -328,4 +357,16 @@ async fn live_mode_refuses_to_launch_without_the_proxy_env() {
         stderr.contains("egress proxy"),
         "expected the D1 refusal, got:\n{stderr}"
     );
+}
+
+#[tokio::test]
+#[should_panic(expected = "whole-run deadline")]
+async fn run_deadline_fails_a_hung_run_instead_of_waiting_forever() {
+    with_run_deadline(Duration::from_millis(50), std::future::pending::<()>()).await;
+}
+
+#[tokio::test]
+async fn run_deadline_passes_through_a_run_that_finishes() {
+    let v = with_run_deadline(Duration::from_secs(5), async { 7 }).await;
+    assert_eq!(v, 7);
 }

@@ -213,6 +213,28 @@ Two seal findings to recheck under the live-mode seal: exec of
 MCP writes `~/Library/Caches/ms-playwright/b` (`serverRegistry`,
 `coreBundle.js:53178`), so the probe pointed `HOME` at a writable directory.
 
+[probed 2026-10-02] Both findings are profile grants, not seal limits.
+`mur-core/tests/browser_live_f1.rs` passes inside the MUR concierge's seal
+(2 passed, 8.45 s; both fixture shops logged `GET /`) once the agent profile
+holds all three of:
+
+| Requirement | Failure without it |
+|---|---|
+| Spawn grant on the **full path** of `chrome-headless-shell` (under `~/Library/Caches/ms-playwright/chromium_headless_shell-<rev>/…`); the bare name is not enough | `spawn EPERM` |
+| Write grant on `~/Library/Caches/ms-playwright/b` (one `browser@<hash>` file per launch) | `EPERM: open …/ms-playwright/b/browser@<hash>` in `initializeServer` |
+| `MUR_BROWSER_CHROMIUM_ARGS=--no-sandbox` (D5) | Chromium dies at launch |
+
+Grant the `b/` directory only, not all of `ms-playwright`. The spawn grant is
+pinned to a Chromium revision, so a Playwright upgrade that changes `<rev>`
+needs a new grant. Each run logs one
+`WARN mur_browser::recorder: action failed downstream; step not recorded
+tool="browser_navigate"`. This is expected: it is the minimal F2 check in
+`mur-core/tests/browser_live_f1.rs:291-299`, which navigates to an
+off-allowlist host and asserts the proxy refuses it; the recorder skips the
+failed step. Five consecutive runs on 2026-10-02 (120 s cap each) all passed
+in 7–9 s with exactly one such WARN. One earlier run hung for >600 s with no
+captured output; cause unknown, not reproduced.
+
 ### Gap 1 — The proxy answers 403 where Chromium needs 407
 
 [read] The proxy identifies a client by the token in `Proxy-Authorization:
@@ -418,10 +440,11 @@ rely on it.
 | F6 | Approval card | Two identical `browser_file_upload` calls in one run raise two cards. Deny: the fixture never receives the upload. Approve: it receives it exactly once. A `browser_run_code_unsafe` call is refused with no card. |
 | F7 | Background traffic | Informational, not pass/fail: log the count and hosts of non-fixture CONNECTs. |
 
-**Where they run.** Chromium-level tests need a real browser outside the agent
-seal. In this session's seal, `chrome-headless-shell --dump-dom` returned exit
+**Where they run.** Chromium-level tests need a real browser. In an
+ungranted seal, `chrome-headless-shell --dump-dom` returned exit
 0 with empty output even for a `data:` URL, so nothing about Chromium's
-network behaviour could be observed from there. F1–F7 are opt-in end-to-end
+network behaviour could be observed from there. With the three grants listed
+under Gap 0, the tool-level F1 runs inside the seal too. F1–F7 are opt-in end-to-end
 tests gated by `MUR_BROWSER_E2E=1`, run in CI or a plain terminal. The
 fixture is `scripts/e2e/browser-live-fixture.py` (two HTTPS shops on
 `127.0.0.1`, self-signed cert minted per start — HTTPS because of Gap 3);
@@ -492,5 +515,12 @@ Each failure is classified by layer before anything is changed:
    nothing in v1.
 4. ~~D6: token or per-agent port as the proxy identity.~~ Decided: token
    (D6). Gaps 1 and 2 stay in v1.
-5. Rerun the Gap 0 probe under the live-mode seal: `chrome-headless-shell`
-   exec denial and the `~/Library/Caches/ms-playwright/b` write.
+5. ~~Rerun the Gap 0 probe under the live-mode seal.~~ Done 2026-10-02 in the
+   MUR concierge's seal: both are profile grants (table under Gap 0).
+   Remaining: confirm the same grants are what the `e2e_browser_live` agent
+   needs (`scripts/e2e/browser-live-f1.sh`). The recorder WARN is the
+   expected F2 deny (see Gap 0). The single >600 s hang is unexplained; the
+   test has per-step timeouts (`STEP_TIMEOUT`, 90 s) and, since 2026-10-02,
+   a whole-run deadline (default 300 s, `MUR_BROWSER_E2E_DEADLINE_SECS`)
+   that fails the test loudly instead of hanging; a forced 1 s deadline
+   failed in 1.00 s. If the hang recurs, the panic now marks it.
