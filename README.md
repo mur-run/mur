@@ -606,7 +606,9 @@ Agent** wizard offers the same catalog as a source.
   approval names the `mur channel approve` that releases it. A workflow's
   `delegate_to` steps only call a member on a channel run (`--channel-new` /
   `--channel <id>`); without one, `mur workflow run` warns that they will only
-  print. `mur fleet run --loop` is not gated yet.
+  print. `mur fleet run --loop` routes and checks once, before the first
+  iteration; a daemon-scheduled loop and `mur deep-research` have no target
+  directory, so they are neither routed nor checked.
 - **Settings that were accepted and then did nothing** — `mur agent perm
   allow-host` took `10.0.0.5:3306`, listed it back, and matched nothing: host
   allowlists compare portless hosts, and the OS sandbox restricts by port with

@@ -179,12 +179,17 @@ step has `delegate_to`, it warns that those members will not be called and
 names `--channel-new` / `--channel <id>`. That a channel-less delegate step
 reports success while doing nothing is a separate defect, tracked on its own.
 
-**Not covered: `mur fleet run --loop`** (and its callers `fleet_tick` and
-`deep-research`). `cmd_fleet_run_loop` takes no cwd at all
-(`dispatch.rs:371`), so where its members work was never defined. Gating it
-first needs a `cwd` parameter on the loop and its daemon / deep-research
-callers — a routing change, done in a follow-up PR, then gated once before
-the loop starts.
+**`mur fleet run --loop`** (rollout 3b). `run_guarded` takes an
+`Option<RunCwd>`. With `Some` (the CLI's `--cwd` or shell cwd, and the
+`fleet_run` tool's goal-less `--loop` spawn, which passes the caller's cwd)
+the gate runs once, before the deadline clock starts, and every iteration's
+dispatched goal carries the routing note; synthesis keeps the bare goal. A
+block bails before any job is claimed, so a queued job stays queued for the
+run after the approval. With `None` nothing is routed or gated:
+`deep-research` has no target tree, and `fleet_tick` has no directory to give
+— a fleet has no configured cwd and the daemon's own cwd says nothing about
+the work. Giving scheduled loops a target needs a `fleet.yaml` field; not
+built here.
 
 ### 4.3 HITL copy (the user signs a *complete* action)
 
@@ -249,7 +254,7 @@ matching (deferred unattended gates) is stable across retries.
    tests. **Done.**
 3b. `mur fleet run --loop` (`fleet_tick`, `deep-research`): add a `cwd` to the
    loop and its callers, route members with it, gate once before the loop.
-   Follow-up PR.
+   **Done** (scheduled loops stay ungated until a fleet can name a target).
 4. Docs: `README.md`, docs site, product page via the `update-docs` skill;
    `mur fleet run --help` and the `parallel_jobs` tool description mention
    `cwd`.
