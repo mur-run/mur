@@ -11,7 +11,7 @@ use tempfile::TempDir;
 
 fn write_bridge_fixture(dir: &std::path::Path) {
     // Minimal AgentProfile YAML w/ entitlements.llm.mode = off. Adapted
-    // from the round-trip fixture at mur-common/src/agent.rs:691 with
+    // from the round-trip fixture at mur-common/src/agent/lifecycle.rs (`profile_round_trip_yaml`) with
     // `entitlements.llm: { mode: off }` injected. The profile's own
     // `name:` is irrelevant — `collect_bridge_statuses` keys results
     // off the on-disk directory name (matching `~/.mur/agents/<name>/`).

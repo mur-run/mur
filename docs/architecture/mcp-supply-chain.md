@@ -155,7 +155,7 @@ The open follow-on is to connect the two: a server whose provenance cannot be ve
 | Vendoring + signature audit + provenance | `mur-core/src/cmd/agent_mcp_vendor.rs` |
 | Deep audit | `mur-core/src/cmd/agent_mcp_deep_audit.rs` |
 | Package spec parsing / version resolution | `mur-common/src/mcp_package.rs` |
-| Which lockfile a pin covers | `mur-common/src/agent.rs` — `McpPackagePin::lockfile_path` |
+| Which lockfile a pin covers | `mur-common/src/agent/mcp.rs` — `McpPackagePin::lockfile_path` |
 | Fleet-wide reporting | `mur-core/src/cmd/misc.rs` — `report_mcp_pins`, behind `mur doctor` |
 
 User-facing documentation: https://app.mur.run/docs/core/mcp-pinning

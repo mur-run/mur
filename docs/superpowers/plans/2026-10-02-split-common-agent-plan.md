@@ -75,39 +75,39 @@ Historical plans and specs in `docs/superpowers/plans/` and `docs/superpowers/sp
 
 ## Task 1 — Preflight
 
-- [ ] `git switch main && git pull --ff-only`, then branch `refactor/split-common-agent`. A local branch with that name already exists, created at `93b40752`. Reuse it if `main` has not moved, or recreate it.
-- [ ] `git log -1 --format=%h origin/main -- mur-common/src/agent.rs`. If it is not `951c64f6`, re-derive the ranges (the `rust-split-module` §2–3 commands) and rerun the dry-run coverage check before going further.
-- [ ] Check for open PRs that touch the file: `gh pr list --repo mur-run/mur --state open --json number,files -q '.[] | select(.files[].path == "mur-common/src/agent.rs") | .number'`. Seven remote branches touch it, but all are 325+ commits behind `main` (newest 2026-09-19). Treat them as stale, but confirm none has an open PR.
-- [ ] `df -h .`: a workspace check needs several GB. 67 GiB were free at planning time.
+- [x] `git switch main && git pull --ff-only`, then branch `refactor/split-common-agent`. A local branch with that name already exists, created at `93b40752`. Reuse it if `main` has not moved, or recreate it.
+- [x] `git log -1 --format=%h origin/main -- mur-common/src/agent.rs`. If it is not `951c64f6`, re-derive the ranges (the `rust-split-module` §2–3 commands) and rerun the dry-run coverage check before going further.
+- [x] Check for open PRs that touch the file: `gh pr list --repo mur-run/mur --state open --json number,files -q '.[] | select(.files[].path == "mur-common/src/agent.rs") | .number'`. Seven remote branches touch it, but all are 325+ commits behind `main` (newest 2026-09-19). Treat them as stale, but confirm none has an open PR.
+- [x] `df -h .`: a workspace check needs several GB. 67 GiB were free at planning time.
 
 ## Task 2 — Generate the children
 
-- [ ] Run the `rust-split-module` §4 generator against `plan.json`. It asserts full coverage and writes `mur-common/src/agent/*.rs`, then deletes `agent.rs`.
-- [ ] Fix up `mod.rs` by hand. The `//!` lines go first, then the four original `use` lines, then `mod mcp; mod transport; mod entitlements; mod lifecycle; mod companion;` and the matching `pub use <child>::*;` lines. The generator puts the `mod` lines above the inner docs, which is a compile error.
-- [ ] Each child starts with `use super::*;` (generator default). The `serde`/`BTreeMap`/`ProgramDep` imports come in through that.
+- [x] Run the `rust-split-module` §4 generator against `plan.json`. It asserts full coverage and writes `mur-common/src/agent/*.rs`, then deletes `agent.rs`.
+- [x] Fix up `mod.rs` by hand. The `//!` lines go first, then the four original `use` lines, then `mod mcp; mod transport; mod entitlements; mod lifecycle; mod companion;` and the matching `pub use <child>::*;` lines. The generator puts the `mod` lines above the inner docs, which is a compile error.
+- [x] Each child starts with `use super::*;` (generator default). The `serde`/`BTreeMap`/`ProgramDep` imports come in through that.
 
 ## Task 3 — Prove equivalence
 
-- [ ] `cargo check -p mur-common --all-targets`. Fix only visibility or import paths, and record each one.
-- [ ] `cargo fmt --all`
-- [ ] Test count: `git show HEAD:mur-common/src/agent.rs | grep -c '#\[test\]'` (59) equals `cat mur-common/src/agent/*.rs | grep -c '#\[test\]'`. Also check `cargo test -p mur-common --lib -- --list | grep -c '^agent::'`. Test paths change from `agent::<mod>::…` to `agent::<child>::<mod>::…`, and the count must match.
-- [ ] `cargo test -p mur-common --lib agent::`
-- [ ] Public surface diff is empty:
+- [x] `cargo check -p mur-common --all-targets`. Fix only visibility or import paths, and record each one.
+- [x] `cargo fmt --all`
+- [x] Test count: `git show HEAD:mur-common/src/agent.rs | grep -c '#\[test\]'` (59) equals `cat mur-common/src/agent/*.rs | grep -c '#\[test\]'`. Also check `cargo test -p mur-common --lib -- --list | grep -c '^agent::'`. Test paths change from `agent::<mod>::…` to `agent::<child>::<mod>::…`, and the count must match.
+- [x] `cargo test -p mur-common --lib agent::`
+- [x] Public surface diff is empty:
   ```bash
   diff <(git show HEAD:mur-common/src/agent.rs | grep -oE '^pub (struct|enum|const|fn|trait|type) [A-Za-z_0-9]+' | sort) \
        <(cat mur-common/src/agent/*.rs        | grep -oE '^pub (struct|enum|const|fn|trait|type) [A-Za-z_0-9]+' | sort)
   ```
-- [ ] `cargo clippy --all --all-targets --no-deps --locked -- -D warnings` (CI invocation, verbatim).
-- [ ] `cargo check --workspace --all-targets --locked`. 1068 files reference `mur_common::agent` and must compile untouched.
-- [ ] `wc -l mur-common/src/agent/*.rs`: every file is ≤ 800.
-- [ ] `python3 scripts/check-freebsd-audit.py` passes after the doc row update.
+- [x] `cargo clippy --all --all-targets --no-deps --locked -- -D warnings` (CI invocation, verbatim).
+- [x] `cargo check --workspace --all-targets --locked`. 1068 files reference `mur_common::agent` and must compile untouched.
+- [x] `wc -l mur-common/src/agent/*.rs`: every file is ≤ 800.
+- [x] `python3 scripts/check-freebsd-audit.py` passes after the doc row update.
 
 ## Task 4 — References and PR
 
-- [ ] Update the three references in the table above.
-- [ ] `git grep -n 'mur-common/src/agent\.rs' -- ':!docs/superpowers/plans' ':!docs/superpowers/specs'` returns nothing.
-- [ ] Commit as `refactor(common): split agent.rs into submodules (pure code movement)`.
-- [ ] PR body contains: the child-layout table (file → lines → contents), the visibility-change list (expected: none), the verification table (check / clippy / fmt / test count / public-surface diff / workspace check / FreeBSD audit / `wc -l`), and the sentence "Pure code movement, no behavior change." End the body with the configured MUR attribution line.
+- [x] Update the three references in the table above.
+- [x] `git grep -n 'mur-common/src/agent\.rs' -- ':!docs/superpowers/plans' ':!docs/superpowers/specs'` returns nothing.
+- [x] Commit as `refactor(common): split agent.rs into submodules (pure code movement)`.
+- [x] PR body contains: the child-layout table (file → lines → contents), the visibility-change list (expected: none), the verification table (check / clippy / fmt / test count / public-surface diff / workspace check / FreeBSD audit / `wc -l`), and the sentence "Pure code movement, no behavior change." End the body with the configured MUR attribution line.
 
 ## Out of scope
 
