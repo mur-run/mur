@@ -1,4 +1,4 @@
-use super::ensure_union_merge;
+use super::transport::ensure_union_merge;
 
 /// Runs on every sync, so it has to be idempotent and must not clobber a
 /// `.gitattributes` the user wrote for their own reasons.
