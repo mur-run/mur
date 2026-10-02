@@ -1,6 +1,6 @@
 # Per-agent scratch directory (`<mur_home>/tmp/<agent>`)
 
-Status: Approved — implementation in progress
+Status: Implemented
 Date: 2026-10-03
 
 ## Problem

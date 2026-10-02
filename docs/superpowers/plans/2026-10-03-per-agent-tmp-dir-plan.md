@@ -167,14 +167,14 @@ File `mur-agent-runtime/tests/scratch_seal.rs`, each test forks a sealed child.
 ## Task 8 — Docs
 
 - [x] `runtime-overview.md` sandbox section: macOS kernel layer lets every agent write `/private/tmp` and `/private/var/folders`; `TMPDIR` sets the default, not isolation; tightening is a follow-up change. Also note BSD `mktemp` without a template ignores `TMPDIR` (see T7 Known gap).
-- [ ] Spec status was set to `Approved — implementation in progress` when the plan was approved (2026-10-03). After T9 passes, set it to `Implemented`. Commit.
+- [x] Spec status was set to `Approved — implementation in progress` when the plan was approved (2026-10-03). After T9 passes, set it to `Implemented`. Commit.
 
 **As built.** New `### Per-Agent Scratch Dir` section in `runtime-overview.md`, just before Per-Server MCP Egress: grants, env, cleanup knobs, the macOS `/private/tmp` + `/private/var/folders` exemption, and the BSD `mktemp` gap. `mur verify` adds no new stale claims. Spec status stays `in progress` until T9.
 
 ## Task 9 — Manual E2E (#9, human step, macOS)
 
-- [ ] Restart the `mur` agent, ask it to "save a scratch file".
-- [ ] Turn ledger shows the path under `tmp/mur`, no `path not write-entitled`, `bash` still available next call.
+- [x] Restart the `mur` agent, ask it to "save a scratch file".
+- [x] Turn ledger shows the path under `tmp/mur`, no `path not write-entitled`, `bash` still available next call.
 
 ## Final verification
 
