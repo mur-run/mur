@@ -92,6 +92,25 @@ fn restricted_and_unrestricted_unchanged_by_proxy_upstream() {
     assert_eq!(policy.net_allow_ports, None);
 }
 
+/// Restricted: a loopback LLM port granted via `allow_loopback_ports` lands
+/// ONLY in the loopback carve-out (SBPL `localhost:port`) — it must not
+/// widen the general `*:port` list to remote hosts on the same port.
+#[test]
+fn restricted_llm_port_via_loopback_does_not_widen_general_list() {
+    let mut ent = minimal_entitlements();
+    ent.network.outbound.mode = NetworkOutboundMode::Restricted;
+    let mut policy = SandboxPolicy::from_entitlements(&ent, &PathBuf::from("/tmp/a"));
+    let before = policy.net_allow_ports.clone().unwrap();
+    policy.allow_loopback_ports(&[8000, 8088]);
+    assert_eq!(
+        policy.net_allow_ports.unwrap(),
+        before,
+        "general list untouched"
+    );
+    assert!(policy.net_allow_loopback_ports.contains(&8000));
+    assert!(policy.net_allow_loopback_ports.contains(&8088));
+}
+
 #[test]
 fn allow_extra_ports_adds_llm_port_in_restricted_mode() {
     let mut ent = minimal_entitlements();

@@ -518,3 +518,78 @@ fn skip_or_fail_unenforced(why: &dyn std::fmt::Debug) -> ! {
     eprintln!("SKIP: sandbox not enforcing: {why:?}");
     std::process::exit(0);
 }
+
+/// Kernel-level proof that a port granted through `loopback_ports` (SBPL
+/// `localhost:{port}`, Landlock `NetPort`) is actually dialable at
+/// `127.0.0.1` from a Restricted-mode seal — the address every loopback LLM
+/// `base_url` uses — while an ungranted ephemeral loopback port is denied.
+/// The denied control is load-bearing: without it a pass could mean the seal
+/// never restricted TCP at all.
+#[test]
+#[cfg(unix)]
+fn restricted_loopback_grant_reaches_127_0_0_1() {
+    let exe = std::env::current_exe().unwrap();
+    let out = std::process::Command::new(&exe)
+        .env("MUR_TEST_SANDBOX_LOOPBACK_CONNECT", "1")
+        .env_remove("MUR_AGENT_SKIP_SANDBOX")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Subprocess entry point for `restricted_loopback_grant_reaches_127_0_0_1`.
+#[cfg(unix)]
+#[ctor::ctor]
+fn sandbox_loopback_connect_subprocess_main() {
+    if std::env::var_os("MUR_TEST_SANDBOX_LOOPBACK_CONNECT").is_none() {
+        return;
+    }
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::{AgentProfile, NetworkOutboundMode};
+    use std::net::{TcpListener, TcpStream};
+
+    let mut profile = AgentProfile::default_for_tests();
+    profile.entitlements.network.outbound.mode = NetworkOutboundMode::Restricted;
+    let agent_home = std::path::PathBuf::from("/tmp/b1_test_loopback_home");
+    std::fs::create_dir_all(&agent_home).unwrap();
+
+    // Ephemeral ports: never in RESTRICTED_GENERAL_PORTS, so only the
+    // loopback carve-out can let the granted one through.
+    let granted = TcpListener::bind("127.0.0.1:0").unwrap();
+    let denied = TcpListener::bind("127.0.0.1:0").unwrap();
+    let granted_port = granted.local_addr().unwrap().port();
+    let denied_port = denied.local_addr().unwrap().port();
+
+    match sandbox::apply(
+        &profile.entitlements,
+        &agent_home,
+        &[],
+        &[granted_port],
+        &[],
+    ) {
+        Ok(s) if s.enforcing => {}
+        other => skip_or_fail_unenforced(&other),
+    }
+
+    let granted_ok = TcpStream::connect(("127.0.0.1", granted_port)).is_ok();
+    let denied_ok = TcpStream::connect(("127.0.0.1", denied_port)).is_ok();
+    eprintln!(
+        "granted {granted_port} connect={granted_ok}; ungranted {denied_port} connect={denied_ok}"
+    );
+    match (granted_ok, denied_ok) {
+        (true, false) => std::process::exit(0),
+        (false, _) => {
+            eprintln!("ERROR: loopback-granted port NOT reachable at 127.0.0.1");
+            std::process::exit(1);
+        }
+        (true, true) => {
+            eprintln!("ERROR: ungranted loopback port reachable — seal did not restrict TCP");
+            std::process::exit(2);
+        }
+    }
+}
