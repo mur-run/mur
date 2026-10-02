@@ -41,7 +41,14 @@ pub async fn cmd_consolidate(
         method: method.clone(),
         llm_adjudicate,
     };
-    let report = run_consolidate(home, &embed_config, &*store, &opts).await?;
+    let report = run_consolidate(home, &embed_config, &*store, &opts)
+        .await
+        .map_err(|e| {
+            crate::store::vector::unreadable::hinted(
+                e,
+                crate::store::vector::unreadable::hint::SKILLS,
+            )
+        })?;
     print_summary(&report, apply);
     Ok(())
 }

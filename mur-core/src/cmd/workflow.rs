@@ -200,7 +200,13 @@ pub(crate) async fn cmd_workflow_run(
                 VectorStore::open(&index_path, cfg.embedding.dimensions as i32).await?;
             let results = vector_store
                 .search(&query_embedding, 1, Some("workflow"))
-                .await?;
+                .await
+                .map_err(|e| {
+                    crate::store::vector::unreadable::hinted(
+                        e,
+                        crate::store::vector::unreadable::hint::PATTERNS,
+                    )
+                })?;
             if let Some(r) = results.first()
                 && r.similarity > 0.6
             {
@@ -475,7 +481,13 @@ pub(crate) async fn cmd_workflow_search(query: &str, limit: usize) -> Result<()>
                 // Search with item_type filter = "workflow"
                 let results = vector_store
                     .search(&query_embedding, limit, Some("workflow"))
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        crate::store::vector::unreadable::hinted(
+                            e,
+                            crate::store::vector::unreadable::hint::PATTERNS,
+                        )
+                    })?;
 
                 if results.is_empty() {
                     println!("No matching workflows found for: {}", query);

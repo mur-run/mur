@@ -267,10 +267,11 @@ pub enum Commands {
   Authoring:   new, edit, validate, fmt, deps, publish, exchange, drafts
   Trust:       audit, trust, scope, curate
   Lifecycle:   stats, doctor, pin, unpin, sweep, archive, consolidate,
-               evolve, generate, suggest, recombine, credit, eval
+               evolve, generate, suggest, recombine, credit, eval,
+               reindex-vec
 
 Internal/plumbing commands (schema, registry-index, reindex-stats,
-reindex-vec, intent) are hidden from this list but still available;
+intent) are hidden from this list but still available;
 see `mur skill <command> --help`.")]
     Skill {
         #[command(subcommand)]

@@ -1100,7 +1100,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                                 &embed_config,
                                 &*store,
                             )
-                            .await?
+                            .await
+                            .map_err(|e| {
+                                crate::store::vector::unreadable::hinted(
+                                    e,
+                                    crate::store::vector::unreadable::hint::SKILLS,
+                                )
+                            })?
                         }
                     };
                     let mode = if apply && !dry_run {

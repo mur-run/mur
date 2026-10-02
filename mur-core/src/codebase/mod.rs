@@ -262,6 +262,18 @@ impl CodebaseIndex {
 
         let mut old_meta = if rebuild { None } else { self.load_meta() };
 
+        // An unreadable table cannot be reused or even dropped by name later
+        // on; clear it now so this run rebuilds from scratch.
+        if self.lance_path.exists()
+            && crate::store::vector::unreadable::drop_if_unreadable(
+                self.get_db().await?,
+                TABLE_NAME,
+            )
+            .await?
+        {
+            old_meta = None;
+        }
+
         // Auto-rebuild on embedding-dims change (#757): a recorded width that
         // differs from the configured one means the lance table's vectors are
         // the wrong size — append/reuse would fail (or worse, hang). Drop the
@@ -569,77 +581,87 @@ impl CodebaseIndex {
     }
 
     pub async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<CodeChunk>> {
-        let db = self.get_db().await?;
+        let table_path = self.lance_path.join(format!("{TABLE_NAME}.lance"));
+        crate::store::vector::unreadable::guard(TABLE_NAME, &table_path, async move {
+            let db = self.get_db().await?;
 
-        let table_names = db.table_names().execute().await?;
-        if !table_names.contains(&TABLE_NAME.to_string()) {
-            return Ok(Vec::new());
-        }
-
-        let table = db.open_table(TABLE_NAME).execute().await?;
-        let batches: Vec<RecordBatch> = table
-            .vector_search(query_embedding)?
-            .distance_type(lancedb::DistanceType::Cosine)
-            .limit(limit)
-            .execute()
-            .await?
-            .try_collect()
-            .await?;
-
-        let mut results = Vec::new();
-        for batch in &batches {
-            let file_col = batch
-                .column_by_name("file")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-            let lang_col = batch
-                .column_by_name("language")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-            let type_col = batch
-                .column_by_name("chunk_type")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-            let symbol_col = batch
-                .column_by_name("symbol")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-            let content_col = batch
-                .column_by_name("content")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-            let line_start_col = batch
-                .column_by_name("line_start")
-                .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
-            let line_end_col = batch
-                .column_by_name("line_end")
-                .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
-            let dist_col = batch
-                .column_by_name("_distance")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
-
-            let Some(files) = file_col else { continue };
-            let Some(langs) = lang_col else { continue };
-            let Some(types) = type_col else { continue };
-            let Some(contents) = content_col else {
-                continue;
-            };
-
-            for i in 0..batch.num_rows() {
-                let symbol = symbol_col
-                    .map(|s| s.value(i).to_string())
-                    .filter(|s| !s.is_empty());
-                let score = dist_col.map_or(0.0, |d| 1.0 - d.value(i));
-
-                results.push(CodeChunk {
-                    file: files.value(i).to_string(),
-                    language: langs.value(i).to_string(),
-                    chunk_type: types.value(i).to_string(),
-                    symbol,
-                    content: contents.value(i).to_string(),
-                    line_start: line_start_col.map_or(0, |c| c.value(i)),
-                    line_end: line_end_col.map_or(0, |c| c.value(i)),
-                    score,
-                });
+            let table_names = db.table_names().execute().await?;
+            if !table_names.contains(&TABLE_NAME.to_string()) {
+                return Ok(Vec::new());
             }
-        }
 
-        Ok(results)
+            let table = db.open_table(TABLE_NAME).execute().await?;
+            let batches: Vec<RecordBatch> = table
+                .vector_search(query_embedding)?
+                .distance_type(lancedb::DistanceType::Cosine)
+                .limit(limit)
+                .execute()
+                .await?
+                .try_collect()
+                .await?;
+
+            let mut results = Vec::new();
+            for batch in &batches {
+                let file_col = batch
+                    .column_by_name("file")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+                let lang_col = batch
+                    .column_by_name("language")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+                let type_col = batch
+                    .column_by_name("chunk_type")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+                let symbol_col = batch
+                    .column_by_name("symbol")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+                let content_col = batch
+                    .column_by_name("content")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+                let line_start_col = batch
+                    .column_by_name("line_start")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
+                let line_end_col = batch
+                    .column_by_name("line_end")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
+                let dist_col = batch
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+
+                let Some(files) = file_col else { continue };
+                let Some(langs) = lang_col else { continue };
+                let Some(types) = type_col else { continue };
+                let Some(contents) = content_col else {
+                    continue;
+                };
+
+                for i in 0..batch.num_rows() {
+                    let symbol = symbol_col
+                        .map(|s| s.value(i).to_string())
+                        .filter(|s| !s.is_empty());
+                    let score = dist_col.map_or(0.0, |d| 1.0 - d.value(i));
+
+                    results.push(CodeChunk {
+                        file: files.value(i).to_string(),
+                        language: langs.value(i).to_string(),
+                        chunk_type: types.value(i).to_string(),
+                        symbol,
+                        content: contents.value(i).to_string(),
+                        line_start: line_start_col.map_or(0, |c| c.value(i)),
+                        line_end: line_end_col.map_or(0, |c| c.value(i)),
+                        score,
+                    });
+                }
+            }
+
+            Ok(results)
+        })
+        .await
+        .map_err(|e| {
+            crate::store::vector::unreadable::hinted(
+                e,
+                crate::store::vector::unreadable::hint::CODEBASE,
+            )
+        })
     }
 
     pub async fn stats_async(&self) -> Result<IndexStats> {
@@ -665,8 +687,18 @@ impl CodebaseIndex {
             });
         }
 
-        let table = db.open_table(TABLE_NAME).execute().await?;
-        let count = table.count_rows(None).await?;
+        let table_path = self.lance_path.join(format!("{TABLE_NAME}.lance"));
+        let count = crate::store::vector::unreadable::guard(TABLE_NAME, &table_path, async {
+            let table = db.open_table(TABLE_NAME).execute().await?;
+            Ok(table.count_rows(None).await?)
+        })
+        .await
+        .map_err(|e| {
+            crate::store::vector::unreadable::hinted(
+                e,
+                crate::store::vector::unreadable::hint::CODEBASE,
+            )
+        })?;
 
         Ok(IndexStats {
             files_indexed: 0,
