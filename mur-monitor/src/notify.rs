@@ -4,7 +4,7 @@
 //! `store::notify` (the queue) and `mur-core`'s channels.
 
 use crate::action::verb_and_index_from_key;
-use crate::state::MonitorState;
+use crate::state::{MonitorState, Outcome};
 use crate::store::{ActionRow, EventRow, MonitorRow};
 
 /// Exactly the kinds §通知策略 lists. Everything else a monitor records —
@@ -59,6 +59,12 @@ fn next_step(row: &MonitorRow, kind: &str) -> String {
         "soft_deadline" => {
             format!("running longer than expected. `mur monitor show {short}` for evidence")
         }
+        // #1622: the generic line would read like a verdict. Say what an
+        // abandoned run is, that it is not a failure, and where to look.
+        "terminal" if row.outcome == Outcome::Abandoned => format!(
+            "abandoned: the run's process died without recording a result — not a failure verdict. \
+             Check `mur fleet status` / `mur monitor show {short}` and re-run it if still needed"
+        ),
         "terminal" => format!(
             "settled as {}. `mur monitor show {short}`",
             row.outcome.as_str()
@@ -155,7 +161,6 @@ mod tests {
     use super::*;
     use crate::action::ActionState;
     use crate::spec::MonitorSpec;
-    use crate::state::{MonitorState, Outcome};
     use chrono::{TimeZone, Utc};
 
     fn spec() -> MonitorSpec {
@@ -320,6 +325,50 @@ mod tests {
             "exactly the cap is named, the rest counted: {:?}",
             n.body
         );
+    }
+
+    /// #1622: an abandoned settlement must say what it means — the run
+    /// died without a result, and this is NOT a failure verdict — and give
+    /// the one useful step, rather than the generic "settled as …".
+    #[test]
+    fn an_abandoned_terminal_explains_itself_and_is_not_called_failed() {
+        let n = render(
+            &row(MonitorState::Completed, Outcome::Abandoned),
+            &event("terminal"),
+            &[],
+        );
+        for needle in ["abandoned", "died", "not a failure", "mur fleet status"] {
+            assert!(
+                n.next_step.contains(needle),
+                "{needle:?}: {:?}",
+                n.next_step
+            );
+        }
+    }
+
+    /// The desktop channel (when the user has enabled it) is offered an
+    /// abandoned settlement — it rides the `terminal` kind, so it is never
+    /// filtered as bookkeeping.
+    #[test]
+    fn an_abandoned_terminal_reaches_the_desktop_queue() {
+        let d = tempfile::tempdir().unwrap();
+        let s = crate::store::MonitorStore::open(d.path()).unwrap();
+        let t = crate::store::tests::t0();
+        s.pending_notifications("desktop", t, 10).unwrap();
+        let id = s.create(&spec(), t, None).unwrap().id;
+        let cyc = s.get(&id).unwrap().unwrap().cycle_id;
+        s.append_event(
+            &id,
+            &cyc,
+            "terminal",
+            serde_json::json!({"outcome": "abandoned"}),
+            false,
+            t,
+        )
+        .unwrap();
+        let p = s.pending_notifications("desktop", t, 10).unwrap();
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].event.kind, "terminal");
     }
 
     #[test]
