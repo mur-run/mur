@@ -186,6 +186,26 @@ the sandbox paragraph (currently around line 363, next to the seatbelt
 inheritance note), as part of this change. The README is not changed: it
 makes no isolation claim about `/tmp`.
 
+### Bare `mktemp` ignores `TMPDIR` on macOS
+
+Observed during manual verification (T9): on macOS, `/usr/bin/mktemp` with no
+template creates its file under the per-user `/var/folders/…/T/` directory
+even when `TMPDIR` points at the agent's scratch dir — including under
+`env -i TMPDIR=<scratch> /usr/bin/mktemp`, so this is the BSD tool's own
+behavior, not a gap in the runtime's environment override. The file still
+lands, because `/private/var/folders` is in the macOS write baseline above; it
+just lands outside the per-agent dir and outside its cleanup.
+
+Forms that do honor the scratch dir, verified in the same session:
+
+- `mktemp "$TMPDIR/name.XXXXXX"` (explicit template under `$TMPDIR`)
+- Python `tempfile.gettempdir()` / `tempfile.mkstemp()`
+
+Guidance: prompts, skills, and shipped scripts that need a temp file must put
+`$TMPDIR` in the template explicitly rather than relying on bare `mktemp`.
+Linux (GNU coreutils `mktemp`) honors `TMPDIR` for the bare form; the explicit
+form is portable to both and is the one to teach.
+
 ## Verification
 
 | # | Claim | Level | Platform | Method | Expected |
@@ -194,7 +214,7 @@ makes no isolation claim about `/tmp`.
 | 2 | Not dropped by launch chain | unit | both | `dropped_grants` excludes the path | pass |
 | 3 | Tool gate | unit | both | `check_write_entitlement` on `tmp/<agent>/x` and `/tmp/x` | Ok / `path not write-entitled` |
 | 4 | Env override | unit | both | Inspect bash `Command` env, including with a pre-set user `TMPDIR` | `TMPDIR`/`TMP`/`TEMP` all = tmp dir; same on the MCP `spawn_sandboxed` path |
-| 5 | Writes land | integration | both | In a sealed child: `mktemp`, `touch "$TMPDIR/x"` | exit 0, file under own dir |
+| 5 | Writes land | integration | both | In a sealed child: `mktemp "$TMPDIR/x.XXXXXX"`, `touch "$TMPDIR/x"` (bare `mktemp` is not used — see "Bare `mktemp` ignores `TMPDIR` on macOS") | exit 0, file under own dir |
 | 6 | Cross-agent denied | integration | both | Agent A's sandbox writes `<home>/tmp/B/x` | EPERM (Linux) / seatbelt deny (macOS) |
 | 7 | Kernel blocks `/tmp` | integration | **Linux only** | Sealed child writes `/tmp/x` | EPERM |
 | 8 | Cleanup | unit | both | Old file, fresh file, old symlink to an external file | old deleted, fresh kept, link removed, target intact |
