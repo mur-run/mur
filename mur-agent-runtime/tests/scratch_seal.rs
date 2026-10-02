@@ -48,7 +48,7 @@ fn run_case(case: &str) -> PathBuf {
     home
 }
 
-/// #5: `mktemp` and `$TMPDIR` writes land in the agent's own scratch dir.
+/// #5: `mktemp "$TMPDIR/…"` and `$TMPDIR` writes land in the agent's own scratch dir.
 #[test]
 fn sealed_child_writes_its_own_scratch_dir() {
     let home = run_case("own");
@@ -112,7 +112,7 @@ fn scratch_seal_subprocess_main() {
             let st = Command::new("sh")
                 .arg("-c")
                 .arg(format!(
-                    r#"f=$(mktemp) && case "$f" in "$TMPDIR"/*) ;; *) exit 2;; esac && rm "$f" && touch "$TMPDIR/{PROBE_FILE}""#
+                    r#"f=$(mktemp "$TMPDIR/probe.XXXXXX") && case "$f" in "$TMPDIR"/*) ;; *) exit 2;; esac && rm "$f" && touch "$TMPDIR/{PROBE_FILE}""#
                 ))
                 .envs(mur_agent_runtime::agent_paths::scratch_env(&scratch))
                 .status()
