@@ -75,10 +75,23 @@ async fn sigterm_removes_running_lock_and_flushes_telemetry() {
     // The response proves the stdio transport is alive. Signal handlers are
     // installed BEFORE the transport spawns (supervisor/mod.rs step 9→10), so
     // SIGTERM will be caught.
-    tokio::time::timeout(std::time::Duration::from_secs(10), ready_rx.recv())
-        .await
-        .unwrap()
-        .expect("agent/card response not received before channel closed");
+    // On failure, surface the child's stderr: a runtime that exits during
+    // startup (e.g. a fail-closed sandbox error) otherwise leaves no trace.
+    let ready = tokio::time::timeout(std::time::Duration::from_secs(10), ready_rx.recv()).await;
+    let failure = match ready {
+        Ok(Some(())) => None,
+        Ok(None) => Some("agent/card response not received before channel closed"),
+        Err(_) => Some("agent/card response not received within 10s"),
+    };
+    if let Some(reason) = failure {
+        let _ = child.start_kill();
+        let stderr_output = tokio::time::timeout(std::time::Duration::from_secs(5), stderr_task)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_else(|| "<stderr unavailable>".to_string());
+        panic!("{reason}\nstderr: {stderr_output}");
+    }
 
     assert!(lock_path.exists(), "running.lock should exist while up");
 
