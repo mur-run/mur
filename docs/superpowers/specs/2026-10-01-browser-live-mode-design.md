@@ -226,7 +226,7 @@ holds all three of:
 
 Grant the `b/` directory only, not all of `ms-playwright`. The spawn grant is
 pinned to a Chromium revision, so a Playwright upgrade that changes `<rev>`
-needs a new grant. Each run logs one
+needs a new grant (see Gap 5). Each run logs one
 `WARN mur_browser::recorder: action failed downstream; step not recorded
 tool="browser_navigate"`. This is expected: it is the minimal F2 check in
 `mur-core/tests/browser_live_f1.rs:291-299`, which navigates to an
@@ -298,6 +298,57 @@ carry UDP. The OS seal filters by port, not host (`egress_proxy.rs:1-5`), so
 UDP is not covered by G2 unless the launch disables non-proxied UDP.
 Candidate switch: `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`.
 It must be verified by acceptance test F5 and must not be assumed.
+
+### Gap 5 — Upgrades to Chromium or Playwright break the spawn grant
+
+[read] The seal's spawn grant is an exact path that embeds the Chromium
+revision, e.g. `~/Library/Caches/ms-playwright/chromium_headless_shell-<rev>/
+chrome-headless-shell-mac-arm64/chrome-headless-shell` (Gap 0 table). The
+revision moves whenever any of these move:
+
+| Component | Where it is pinned | What an upgrade changes |
+|---|---|---|
+| `@playwright/mcp` | `PLAYWRIGHT_MCP_PKG` (`mur-browser/src/lib.rs:37`) | the `playwright-core` it pulls in |
+| `playwright-core` | transitive, via `@playwright/mcp` | the Chromium `<rev>` it downloads and launches |
+| Chromium / headless shell | `ms-playwright/chromium*-<rev>/` (picked newest-first by `mur_browser::chromium::headless_shell_exe`) | the executable path in the spawn grant |
+| `node` / `npx` | system install | the path of the launcher in the spawn grant |
+
+After any of these upgrades, the live run fails with `spawn EPERM` even
+though the browser is installed and `mur browser doctor` reports it ready:
+MUR launches the new `<rev>`, while the profile still grants the old one.
+Nothing today notices the mismatch or repairs it; the fix is a hand edit of
+`profile.yaml`.
+
+**Requirement (v1): the spawn grant must follow the upgrade.** MUR must be
+able to update the grant for the programs it spawns when they are upgraded,
+rather than relying on a hand edit:
+
+1. **Derive, don't hard-code.** The grant is computed from the same
+   resolver that picks the binary to launch
+   (`mur_browser::chromium::headless_shell_exe` / `headless_exe_args`), so
+   the path granted and the path launched cannot diverge. No `<rev>` is
+   written into code, docs, or skill examples.
+2. **Detect drift.** `mur browser doctor` compares the resolved executable
+   (and the resolved `node`/`npx`) with the agent's spawn grants and reports
+   a grant that is missing or points at a revision that is no longer
+   installed. It stays read-only and warn-only, like `mur model doctor`.
+3. **Update through the existing permission path.** Repair goes through
+   `mur agent perm` as a proposal the user approves, not a silent profile
+   rewrite: an upgraded binary is a new executable, and widening spawn
+   rights stays a user decision (D1 spirit: never weaken the seal
+   implicitly). The proposal replaces the stale revision's entry instead of
+   accumulating one entry per revision.
+4. **Keep the grant narrow.** Grant the one resolved executable path, never
+   a glob over `ms-playwright/`, and keep the write grant on `b/` only
+   (Gap 0).
+5. **Fail with a pointer.** When a live run hits `spawn EPERM` on a path
+   under the browsers directory, the error names the stale grant and the
+   command that fixes it, instead of surfacing a bare EPERM.
+
+Acceptance: with the grant set for revision N, install revision N+1 (or
+point the resolver at a fixture directory holding a newer `<rev>`); doctor
+must flag the drift, the generated proposal must replace N with N+1, and F1
+must pass after it is approved.
 
 ### Not a gap: loopback is proxied
 
@@ -524,3 +575,6 @@ Each failure is classified by layer before anything is changed:
    a whole-run deadline (default 300 s, `MUR_BROWSER_E2E_DEADLINE_SECS`)
    that fails the test loudly instead of hanging; a forced 1 s deadline
    failed in 1.00 s. If the hang recurs, the panic now marks it.
+6. Gap 5: spawn-grant drift after a Chromium / Playwright / node upgrade.
+   Must ship in v1: doctor detects the drift, `mur agent perm` proposes the
+   replacement grant, and the EPERM error points at the fix.
