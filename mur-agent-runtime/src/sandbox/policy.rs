@@ -68,6 +68,26 @@ pub fn expand_entitlement_path(s: &str) -> PathBuf {
     }
 }
 
+/// Append the resolved form of every path that differs from it, once.
+///
+/// Seatbelt evaluates `subpath` against the RESOLVED path, so a grant named by
+/// a symlink (a relocated cache, a `/tmp` path) matched nothing and every
+/// access under it was denied without a hint. The link path is kept as well:
+/// Landlock and the tool-level gate compare the name as written. Paths that do
+/// not resolve (a dead deny entry) are left as they are.
+fn with_resolved_aliases(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out = paths.clone();
+    for p in &paths {
+        if let Ok(real) = std::fs::canonicalize(p)
+            && real != *p
+            && !out.contains(&real)
+        {
+            out.push(real);
+        }
+    }
+    out
+}
+
 /// Resolved, OS-ready sandbox policy derived from agent entitlements.
 /// All paths are absolute (tilde expanded). All fields are ready to
 /// feed directly to Landlock / SBPL / Job Object APIs.
@@ -214,6 +234,7 @@ impl SandboxPolicy {
                 }
             })
             .collect();
+        let fs_read = with_resolved_aliases(fs_read);
         // Drop any user-declared read grant that reaches the credential store
         // or a sibling's signing key, BEFORE anything else is added (#850).
         //
@@ -279,7 +300,7 @@ impl SandboxPolicy {
             }
         }
 
-        let mut fs_write: Vec<PathBuf> = ent
+        let fs_write: Vec<PathBuf> = ent
             .filesystem
             .write
             .iter()
@@ -303,12 +324,16 @@ impl SandboxPolicy {
                 }
             })
             .collect();
+        let mut fs_write = with_resolved_aliases(fs_write);
         // fs_deny entries are kept verbatim even if the path doesn't exist:
         // dropping a dead deny entry would be fail-OPEN — if the path later
         // appears (mount, create, restore) the agent would silently regain
         // access we meant to permanently deny. Deny-side dead paths are
         // harmless (confirmed: no hang mechanism triggers off `fs_deny`).
-        let mut fs_deny: Vec<PathBuf> = ent.filesystem.deny.iter().map(|s| expand(s)).collect();
+        // A deny also gets its resolved alias, so a symlink cannot be used to
+        // reach the target under a name the deny does not mention.
+        let mut fs_deny: Vec<PathBuf> =
+            with_resolved_aliases(ent.filesystem.deny.iter().map(|s| expand(s)).collect());
 
         // Self-protection (issue #712): unconditionally deny the agent's own
         // SELF_PROTECTED_AGENT_FILES, even when a write grant covers them
@@ -1836,6 +1861,47 @@ mod tests {
             assert!(
                 !sbpl.contains(&format!("(allow file-write* (subpath \"{dead_p}\"))")),
                 "SBPL must NOT contain an allow-write subpath for the dropped dead path"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn from_entitlements_adds_resolved_path_for_symlinked_fs_grants() {
+        // Seatbelt matches the RESOLVED path. A grant named by its link path
+        // (a relocated `~/Library/Caches/ms-playwright`) silently denied every
+        // write under it until the user re-granted the real path (F1, run3a).
+        // Both forms must reach the kernel: the link path for Landlock and the
+        // file tools, the resolved one for Seatbelt. A deny gets the same
+        // treatment, so a symlink cannot be used to walk around it.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).expect("mkdir real");
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let real_canon = std::fs::canonicalize(&real).expect("canonicalize real");
+
+        let mut ent = minimal_entitlements();
+        ent.filesystem.read = vec![link.to_string_lossy().to_string()];
+        ent.filesystem.write = vec![link.to_string_lossy().to_string()];
+        ent.filesystem.deny = vec![link.to_string_lossy().to_string()];
+        let agent_home = tmp.path().join("agents").join("symlink-grant-test");
+        let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+        for (verb, list) in [
+            ("read", &policy.fs_read),
+            ("write", &policy.fs_write),
+            ("deny", &policy.fs_deny),
+        ] {
+            assert!(list.contains(&link), "{verb} keeps the link path: {list:?}");
+            assert!(
+                list.contains(&real_canon),
+                "{verb} adds the resolved path: {list:?}"
+            );
+            assert_eq!(
+                list.iter().filter(|p| **p == real_canon).count(),
+                1,
+                "{verb} adds the resolved path once: {list:?}"
             );
         }
     }
