@@ -6412,7 +6412,7 @@ dependencies = [
 
 [[package]]
 name = "mur-agent-launcher"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "libc",
 ]
@@ -6492,7 +6492,7 @@ dependencies = [
 
 [[package]]
 name = "mur-browser"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "age",
  "anyhow",
@@ -6513,7 +6513,7 @@ dependencies = [
 
 [[package]]
 name = "mur-channel"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6534,7 +6534,7 @@ dependencies = [
 
 [[package]]
 name = "mur-common"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "age",
  "anyhow",
@@ -6584,7 +6584,7 @@ dependencies = [
 
 [[package]]
 name = "mur-compress"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "blake3",
  "chrono",
@@ -6611,7 +6611,7 @@ dependencies = [
 
 [[package]]
 name = "mur-core"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -6709,7 +6709,7 @@ dependencies = [
 
 [[package]]
 name = "mur-daemon"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -6738,7 +6738,7 @@ dependencies = [
 
 [[package]]
 name = "mur-gui-core"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6761,7 +6761,7 @@ dependencies = [
 
 [[package]]
 name = "mur-mcp-proto"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -6770,7 +6770,7 @@ dependencies = [
 
 [[package]]
 name = "mur-mcp-server"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6788,7 +6788,7 @@ dependencies = [
 
 [[package]]
 name = "mur-mobile-sdk"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -6805,7 +6805,7 @@ dependencies = [
 
 [[package]]
 name = "mur-monitor"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6822,7 +6822,7 @@ dependencies = [
 
 [[package]]
 name = "mur-open-items"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6834,7 +6834,7 @@ dependencies = [
 
 [[package]]
 name = "mur-research-gateway"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "mur-common",
  "reqwest 0.12.28",
@@ -6849,7 +6849,7 @@ dependencies = [
 
 [[package]]
 name = "mur-zfs-agent"
-version = "2.91.8"
+version = "2.91.9"
 dependencies = [
  "anyhow",
  "mur-common",
