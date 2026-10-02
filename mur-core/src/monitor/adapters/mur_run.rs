@@ -24,19 +24,11 @@ impl MurRunAdapter {
     }
 }
 
-/// How many stale thresholds a DEAD process's last heartbeat must be past
-/// before its run settles as `abandoned` (#1622). Generous on purpose:
-/// `status_of` already reconciles a terminal state from the channel, so
-/// this window only has to cover a process that died between its last
-/// heartbeat and writing its result — and a false `abandoned` ends the
-/// watch, so err long. Default: 30 s × 30 = 15 min.
-pub const ABANDON_AFTER_STALE_MULTIPLE: i32 = 30;
-
 /// The heartbeat age past which a dead, never-settled run is `abandoned`.
 /// Scales with `run_status::stale_after`, so a user who slows the heartbeat
 /// (`runs:` in config.yaml) also widens this window — they cannot drift.
 pub fn abandon_grace(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
-    run_status::stale_after(cfg) * ABANDON_AFTER_STALE_MULTIPLE
+    run_status::abandon::grace(run_status::stale_after(cfg))
 }
 
 /// Pure mapping from a classified run to an observation. `now` and
@@ -57,7 +49,14 @@ pub fn map(s: RunStatus, now: DateTime<Utc>, abandon_grace: chrono::Duration) ->
             // still not `failed`. `Liveness::Dead` always carries a beat
             // (`classify` answers `Unknown` when there is none).
             Liveness::Dead => match s.run.last_heartbeat_at {
-                Some(beat) if now.signed_duration_since(beat) > abandon_grace => {
+                Some(beat)
+                    if run_status::abandon::is_abandoned(
+                        s.liveness,
+                        Some(beat),
+                        now,
+                        abandon_grace,
+                    ) =>
+                {
                     Observation::terminal(
                         Outcome::Abandoned,
                         format!(
@@ -146,6 +145,7 @@ mod tests {
         RunStatus {
             state,
             liveness,
+            abandoned: false,
             run: run(state, beat),
         }
     }
