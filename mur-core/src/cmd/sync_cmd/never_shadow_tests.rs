@@ -41,15 +41,27 @@ fn shadow_predicate_publisher_rules() {
     let f = dir.path().join("skill.yaml");
     // Foreign publisher → shadowed (skip).
     std::fs::write(&f, "name: mur-tdd\nversion: 0.0.1\npublisher: human:alice\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n  context: c\n").unwrap();
-    assert!(super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
+    assert!(super::skill_install::dev_skill_shadowed_by_user(
+        dir.path(),
+        "mur-tdd"
+    ));
     // MUR publisher → not shadowed (update as usual).
     std::fs::write(&f, "name: mur-tdd\nversion: 0.0.1\npublisher: human:mur-official\ndescription: d\ncategory: workflow\ncontent:\n  abstract: a\n  context: c\n").unwrap();
-    assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
+    assert!(!super::skill_install::dev_skill_shadowed_by_user(
+        dir.path(),
+        "mur-tdd"
+    ));
     // Non-dev names never shadow (existing builtin semantics unchanged).
-    assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-run"));
+    assert!(!super::skill_install::dev_skill_shadowed_by_user(
+        dir.path(),
+        "mur-run"
+    ));
     // No file on disk → nothing to shadow.
     std::fs::remove_file(&f).unwrap();
-    assert!(!super::dev_skill_shadowed_by_user(dir.path(), "mur-tdd"));
+    assert!(!super::skill_install::dev_skill_shadowed_by_user(
+        dir.path(),
+        "mur-tdd"
+    ));
 }
 
 /// Pins the predicate the pull-path guard uses, on the file that actually
