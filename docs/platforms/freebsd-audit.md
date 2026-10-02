@@ -362,9 +362,9 @@ The checker recomputes the same matches and fails for either missing or stale ro
 | `mur-core/src/cmd/session.rs` | `let cmd = if cfg!(target_os = "macos") {` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/session.rs` | `} else if cfg!(target_os = "windows") {` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/session.rs` | `if cfg!(target_os = "windows") {` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/session.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/session.rs` | `#[cfg(target_os = "linux")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
-| `mur-core/src/cmd/session.rs` | `#[cfg(target_os = "windows")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/session/show.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/session/show.rs` | `#[cfg(target_os = "linux")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
+| `mur-core/src/cmd/session/show.rs` | `#[cfg(target_os = "windows")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/source_cmd.rs` | `/// Generate launchd / systemd unit files for scheduled sync.` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/source_cmd.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
 | `mur-core/src/cmd/source_cmd.rs` | `#[cfg(target_os = "macos")]` | `mur` CLI path | `portable` | No source change identified; native workspace tests verify the existing fallback. | Task 6 |
