@@ -526,10 +526,9 @@ impl CodebaseIndex {
             ],
         )?;
 
-        let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
-        db.create_table(TABLE_NAME, Box::new(reader))
-            .execute()
-            .await?;
+        let reader: Box<dyn arrow_array::RecordBatchReader + Send> =
+            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
+        db.create_table(TABLE_NAME, reader).execute().await?;
 
         let mut new_meta = IndexMetadata {
             project_path: self.project_path.display().to_string(),
