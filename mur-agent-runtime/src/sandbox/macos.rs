@@ -72,7 +72,7 @@ const MACOS_SYSTEM_WRITE_PATHS: &[&str] = &[
 /// to run the shell interpreter and coreutils (per-agent spawn allowlists
 /// enumerate arbitrary tool binaries, but the shell itself and basic
 /// coreutils it relies on live here). Mirrors `system_exec_paths` in
-/// `policy.rs`'s narrower set — this is deliberately the coarse system
+/// `sandbox::policy`'s narrower set — this is deliberately the coarse system
 /// locations only; anything else must be explicitly allowlisted via
 /// `spawn_allowed_paths`.
 ///
@@ -139,7 +139,7 @@ fn resolved_mur_home() -> PathBuf {
 /// so the `(deny network-outbound)` baseline (see below) would otherwise
 /// reject any process- or test-owned domain socket. Scoped to: the macOS
 /// per-user temp root and `/tmp` (where test/tool sockets land — same dirs
-/// `system_read_paths` re-allows for reads in `policy.rs`), and this agent's
+/// `system_read_paths` re-allows for reads in `sandbox::policy`), and this agent's
 /// own `<mur_home>/agents` directory (peer `agent.sock` files dialed for
 /// A2A). Subpaths, not path-literals, since exact socket filenames vary.
 fn unix_socket_allow_paths() -> Vec<PathBuf> {

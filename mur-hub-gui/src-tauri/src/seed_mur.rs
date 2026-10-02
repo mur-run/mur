@@ -295,7 +295,7 @@ pub fn seed_mur_if_missing(template_dir: &Path, mur_home: &Path) -> std::io::Res
     std::fs::create_dir_all(&agents)?;
 
     // The template grants write on these, but the sandbox drops a grant whose
-    // path does not exist at seal time (policy.rs, Issue 16) — so on a fresh
+    // path does not exist at seal time (sandbox/policy/build.rs, Issue 16) — so on a fresh
     // host the concierge would boot with every authoring grant silently gone.
     // Create them here, next to the seed that grants them.
     for d in AUTHORING_DIRS {
