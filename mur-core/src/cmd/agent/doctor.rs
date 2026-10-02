@@ -144,6 +144,9 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
     let agents_dir = mur_home.join("agents");
 
     let mut rows: Vec<AgentRow> = Vec::new();
+    let warn_size_mb = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
+        .scratch
+        .warn_size_mb;
 
     if agents_dir.is_dir() {
         let mut entries: Vec<_> = std::fs::read_dir(&agents_dir)
@@ -304,6 +307,12 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
                     p.display(),
                     r.name
                 );
+            }
+            if let Ok(dir) = mur_agent_runtime::agent_paths::agent_scratch_dir(
+                &mur_home.join("agents").join(&r.name),
+            ) && let Some(line) = super::scratch_check::scratch_line(&r.name, &dir, warn_size_mb)
+            {
+                println!("{line}");
             }
             for (p, reason) in neutralised(&r.name) {
                 println!("  {}: grant has NO EFFECT: {}", r.name, p.display());

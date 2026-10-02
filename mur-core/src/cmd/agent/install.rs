@@ -202,6 +202,13 @@ pub fn cmd_uninstall(name: &str, delete_data: bool) -> Result<()> {
 
     if delete_data {
         fs::remove_dir_all(&agent_dir).context("remove agent directory")?;
+        // Per-agent scratch (`<mur_home>/tmp/<name>`) goes with the data.
+        // Derived via the runtime helper so the path cannot drift from the grant.
+        let scratch = mur_agent_runtime::agent_paths::agent_scratch_dir(&agent_dir)?;
+        if scratch.exists() {
+            fs::remove_dir_all(&scratch)
+                .with_context(|| format!("remove scratch dir {}", scratch.display()))?;
+        }
         println!("Uninstalled '{name}' and deleted all data");
     } else {
         for entry in fs::read_dir(&agent_dir)? {
@@ -398,6 +405,24 @@ fn read_field(prompt: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #9: `--purge` removes `<mur_home>/tmp/<name>`; a plain uninstall keeps it.
+    #[test]
+    fn uninstall_purge_removes_scratch_dir_only_when_deleting_data() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mur_home = tmp.path();
+        let mut envg = mur_common::test_env::EnvGuard::hold();
+        envg.set_var("MUR_HOME", mur_home);
+        for (name, purge) in [("keep", false), ("gone", true)] {
+            std::fs::create_dir_all(mur_home.join("agents").join(name).join("data")).unwrap();
+            let scratch = mur_home.join("tmp").join(name);
+            std::fs::create_dir_all(&scratch).unwrap();
+            std::fs::write(scratch.join("f"), b"x").unwrap();
+            cmd_uninstall(name, purge).unwrap();
+            assert_eq!(scratch.exists(), !purge, "{name}");
+        }
+        assert!(mur_home.join("tmp").is_dir(), "tmp root itself is kept");
+    }
 
     #[test]
     fn maybe_resolve_with_model_ref_applies_without_prompt() {

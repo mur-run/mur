@@ -57,6 +57,7 @@ mod reconnect;
 mod restart;
 mod restart_confirm;
 mod routing;
+mod scratch_check;
 mod secret;
 mod service;
 pub mod skill;
