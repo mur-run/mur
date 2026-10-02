@@ -12,6 +12,14 @@ pub async fn cmd_reindex_vec(home: &Path, filter: Option<&str>, prune: bool) -> 
     let cfg = mur_common::config::Config::load_or_default(&home.join("config.yaml"));
     let embed_config = EmbeddingConfig::from_config(&cfg);
     let index_dir = home.join("lance");
+    // A table this command cannot read is the table it exists to rebuild.
+    if cfg.storage.vector_backend == "lancedb" {
+        crate::store::vector::unreadable::drop_unreadable_at(
+            &index_dir,
+            crate::store::vector::lancedb::SOURCES_TABLE,
+        )
+        .await?;
+    }
     let store = crate::store::vector::factory::get_vector_store(&cfg, &index_dir)
         .await
         .context("opening vector store")?;

@@ -15,11 +15,14 @@ pub mod factory;
 pub mod lancedb;
 #[cfg(feature = "qdrant")]
 pub mod qdrant;
+pub mod unreadable;
 
 #[cfg(test)]
 pub mod tests;
 
 pub use self::lancedb::LanceDbStore;
+#[allow(unused_imports)] // re-exported for callers attaching rebuild hints
+pub use self::unreadable::{VectorStoreError, with_rebuild_hint};
 // QdrantStore selected at runtime via factory; re-exported for `tests/qdrant_smoke.rs`.
 #[cfg(all(feature = "qdrant", feature = "sources"))]
 #[allow(unused_imports)]

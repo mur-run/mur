@@ -104,6 +104,18 @@ pub enum AddKind {
 }
 
 pub async fn handle(cmd: SourceCommand) -> Result<()> {
+    let id = match &cmd {
+        SourceCommand::Sync { id, .. } => id.clone(),
+        SourceCommand::Reindex { id, .. } | SourceCommand::Remove { id, .. } => Some(id.clone()),
+        _ => None,
+    };
+    handle_inner(cmd).await.map_err(|e| {
+        let (what, command) = crate::store::vector::unreadable::hint::sources(id.as_deref());
+        crate::store::vector::unreadable::with_rebuild_hint(e, what, &command)
+    })
+}
+
+async fn handle_inner(cmd: SourceCommand) -> Result<()> {
     match cmd {
         SourceCommand::Add { kind } => match kind {
             AddKind::Obsidian {
@@ -710,6 +722,19 @@ async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
         .context("no home dir")?
         .join(".mur")
         .join("index");
+    // The connector table is shared by every source, so dropping an
+    // unreadable one means the other sources need a reindex too; say so.
+    if cfg.storage.vector_backend == "lancedb"
+        && crate::store::vector::unreadable::drop_unreadable_at(
+            &index_path,
+            crate::store::vector::lancedb::SOURCES_TABLE,
+        )
+        .await?
+    {
+        eprintln!(
+            "note: other sources were in the same table; run `mur source sync --full` for each"
+        );
+    }
     let vector_store = get_vector_store(&cfg, &index_path).await?;
     let tantivy =
         TantivyIndex::open_or_create(&dirs::home_dir().context("no home dir")?.join(".mur"))?;
