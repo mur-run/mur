@@ -2,7 +2,7 @@ use crate::sandbox::launch_chain::LaunchChain;
 use std::path::PathBuf;
 
 // The Landlock/seccomp application path is Linux-only; the module compiles
-// everywhere so `partition_write_grants` (shared with policy.rs, and tested on
+// everywhere so `partition_write_grants` (shared with sandbox::policy, and tested on
 // macOS) is not cfg-gated.
 #[cfg(target_os = "linux")]
 use super::{SandboxPolicy, SandboxStatus};

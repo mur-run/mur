@@ -52,7 +52,7 @@ impl LaunchChain {
     }
 
     fn build(agent_home: &Path, bin_dir: &Path, home: &Path) -> Self {
-        // `<mur_home>/agents/<name>` — the same derivation policy.rs uses for
+        // `<mur_home>/agents/<name>` — the same derivation policy/build.rs uses for
         // the channels and open-items force-grants.
         let mur_home = agent_home
             .parent()
@@ -310,7 +310,7 @@ impl LaunchChain {
     ///
     /// Lives here rather than in `sandbox::linux` because it is pure launch-chain
     /// path logic that every platform needs — the module comment there already
-    /// said as much ("shared with policy.rs on every platform; only the apply
+    /// said as much ("shared with sandbox::policy on every platform; only the apply
     /// path inside is linux-gated"). Being private to that module is also why
     /// `mur agent doctor` could not report what it computes.
     ///
@@ -425,7 +425,7 @@ fn autostart_dirs(_home: &Path) -> Vec<PathBuf> {
 /// A grant root so broad that granting it is equivalent to no sandbox.
 ///
 /// Unifies the judgement previously duplicated in `access.rs::is_overbroad_root`
-/// (cwd consent) and `policy.rs::is_guarded_prefix` (spawn prefixes). Those two
+/// (cwd consent) and `policy/mod.rs::is_guarded_prefix` (spawn prefixes). Those two
 /// disagreed: one knew about `/usr` and `/opt`, the other about depth. This is
 /// the union.
 pub fn is_overbroad_grant_root(path: &Path, home: &Path) -> bool {
