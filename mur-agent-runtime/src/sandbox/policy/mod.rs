@@ -106,6 +106,10 @@ pub struct SandboxPolicy {
     pub fs_read: Vec<PathBuf>,
     /// Paths the process may read AND write.
     pub fs_write: Vec<PathBuf>,
+    /// The per-agent scratch dir (`<mur_home>/tmp/<agent>`) when it was
+    /// granted — children (bash, MCP servers) get it as `TMPDIR`/`TMP`/`TEMP`.
+    /// `None` when the path could not be derived (already logged once).
+    pub scratch_dir: Option<PathBuf>,
     /// Paths that are explicitly denied (override fs_read/fs_write).
     pub fs_deny: Vec<PathBuf>,
     /// Directories containing executable binaries the process may exec.
@@ -178,6 +182,7 @@ impl Default for SandboxPolicy {
         SandboxPolicy {
             fs_read: Vec::new(),
             fs_write: Vec::new(),
+            scratch_dir: None,
             fs_deny: Vec::new(),
             fs_exec: Vec::new(),
             spawn_mode: SpawnMode::Allowlist,

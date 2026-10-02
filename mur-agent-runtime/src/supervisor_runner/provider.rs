@@ -131,7 +131,9 @@ pub async fn build_provider_runner(
                     .collect(),
             )
             .with_secrets(secrets.clone())
-            .with_jobs(bash_jobs.clone()),
+            .with_jobs(bash_jobs.clone())
+            // Same helper as the kernel grant; Err already logged there.
+            .with_scratch_dir(crate::agent_paths::agent_scratch_dir(agent_home).ok()),
     );
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> = bash.clone();
     let bash_def = bash_exec.def();
