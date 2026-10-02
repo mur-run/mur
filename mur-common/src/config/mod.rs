@@ -5,12 +5,14 @@ mod attribution;
 mod backend;
 mod conversations;
 mod ops;
+mod scratch;
 mod skills;
 
 pub use attribution::*;
 pub use backend::*;
 pub use conversations::*;
 pub use ops::*;
+pub use scratch::*;
 pub use skills::*;
 
 use ops::{
@@ -328,6 +330,10 @@ pub struct Config {
     /// MUR's credit line on work an agent publishes (`attribution:`).
     #[serde(default)]
     pub attribution: AttributionConfig,
+
+    /// Per-agent scratch dir retention and doctor threshold (`scratch:`).
+    #[serde(default)]
+    pub scratch: ScratchConfig,
 }
 
 impl Config {

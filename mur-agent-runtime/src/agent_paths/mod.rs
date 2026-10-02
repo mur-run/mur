@@ -64,5 +64,7 @@ pub fn scratch_env(dir: &Path) -> [(String, String); 3] {
     SCRATCH_ENV_KEYS.map(|k| (k.to_string(), v.clone()))
 }
 
+pub mod prune;
+
 #[cfg(test)]
 mod tests;

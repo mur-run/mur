@@ -87,6 +87,12 @@ pub(super) async fn prepare_and_seal(
     // BEFORE telemetry writer (its file I/O must be within sandbox bounds).
     // BEFORE on_startup hooks.
     // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
+    // Scratch retention (spec §Cleanup), strictly before `sandbox::apply`:
+    // (1) ensure + prune here, (2) `from_entitlements` inside `apply` re-runs
+    // the idempotent ensure and grants the path, (3) the seal. The agent
+    // cannot alter this pass — it runs before its code does.
+    prune_agent_scratch(agent_home, mur_home);
+
     let fail_closed = profile.inner.entitlements.fail_closed_on_sandbox_error;
     // The agent's local LLM ports (current model + every registry entry, so a
     // post-seal `/model` switch or autopick still reaches its endpoint) go
@@ -352,4 +358,26 @@ pub(super) async fn prepare_and_seal(
         approval_token,
         sandbox_record,
     })
+}
+
+/// Create the agent's scratch dir and drop entries past `scratch.retention_days`.
+/// Skipped (already-logged helper error) when the path cannot be derived.
+fn prune_agent_scratch(agent_home: &Path, mur_home: &Path) {
+    let Ok(dir) = crate::agent_paths::agent_scratch_dir(agent_home) else {
+        return;
+    };
+    if let Err(e) = crate::agent_paths::ensure_scratch_dir(&dir) {
+        tracing::warn!(dir = %dir.display(), error = %e, "scratch dir not created; prune skipped");
+        return;
+    }
+    let days = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
+        .scratch
+        .retention_days;
+    let retention = std::time::Duration::from_secs(u64::from(days) * 86_400);
+    let r = crate::agent_paths::prune::prune_scratch(&dir, retention, std::time::SystemTime::now());
+    tracing::info!(
+        dir = %dir.display(), retention_days = days,
+        removed = r.removed, kept = r.kept, errors = r.errors,
+        "scratch prune"
+    );
 }
