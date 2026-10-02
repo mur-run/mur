@@ -620,3 +620,36 @@ fn session_cwd_table_is_bounded() {
         PathBuf::from("/p")
     );
 }
+
+/// #3: the file-tool gate accepts the scratch dir and still refuses `/tmp`.
+#[test]
+fn the_agents_own_scratch_dir_is_writable_by_the_file_tools() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = std::fs::canonicalize(tmp.path()).unwrap();
+    let agent_home = mur_home.join("agents/rustsmith");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let chain = crate::sandbox::launch_chain::LaunchChain::inert();
+    let fs = for_file_tools(FilesystemEntitlement::default(), &agent_home);
+
+    check_write_entitlement(TEST_AGENT, &fs, &mur_home.join("tmp/rustsmith/x"), &chain)
+        .expect("own scratch dir must be writable");
+    check_write_entitlement(TEST_AGENT, &fs, &mur_home.join("tmp/pm/x"), &chain)
+        .expect_err("a sibling's scratch dir must not be writable");
+    let err = check_write_entitlement(TEST_AGENT, &fs, Path::new("/tmp/x"), &chain)
+        .expect_err("system /tmp stays refused");
+    assert!(
+        format!("{err}").contains("path not write-entitled"),
+        "{err}"
+    );
+}
+
+/// #10 grant half, tool side: helper Err ⇒ no tmp path in the write list.
+#[test]
+fn file_tool_scratch_grant_is_skipped_when_helper_errs() {
+    let fs = for_file_tools(FilesystemEntitlement::default(), Path::new("/w1"));
+    assert!(
+        fs.write.iter().all(|p| !p.contains("tmp")),
+        "{:?}",
+        fs.write
+    );
+}

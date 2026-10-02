@@ -393,3 +393,62 @@ fn channel_index_subdir_granted_not_whole_index_dir() {
     // The grant idiom creates the dir so Landlock rules stick.
     assert!(mur_home.join("index").join("channels").is_dir());
 }
+
+/// #1/#2: the per-agent scratch dir `<mur_home>/tmp/<agent>` is granted at
+/// the kernel layer, created `0700`, never dropped, and never widened to
+/// the shared `tmp/` root or a sibling.
+#[test]
+fn the_agents_own_scratch_dir_is_granted_but_not_a_siblings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("w1");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+
+    let mine = mur_home.join("tmp").join("w1");
+    assert!(policy.fs_write.contains(&mine), "{:?}", policy.fs_write);
+    assert!(mine.is_dir());
+    assert!(!policy.fs_write.contains(&mur_home.join("tmp")));
+    assert!(!policy.fs_write.contains(&mur_home.join("tmp").join("w2")));
+    let mine_s = mine.to_string_lossy();
+    assert!(
+        policy.dropped.iter().all(|d| d.path != mine_s),
+        "scratch grant must not be dropped: {:?}",
+        policy.dropped
+    );
+}
+
+/// #10 grant half: a home with no `<mur_home>/agents` ancestor grants no
+/// scratch path and logs exactly the error the operator needs.
+#[test]
+fn scratch_grant_is_skipped_and_logged_when_helper_errs() {
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone, Default)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Buf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buf = Buf::default();
+    let w = buf.clone();
+    let sub = tracing_subscriber::fmt()
+        .with_writer(move || w.clone())
+        .with_max_level(tracing::Level::ERROR)
+        .with_ansi(false)
+        .finish();
+    let policy = tracing::subscriber::with_default(sub, || {
+        SandboxPolicy::from_entitlements(&minimal_entitlements(), Path::new("/w1"))
+    });
+    assert!(
+        policy.fs_write.iter().all(|p| !p.ends_with("tmp/w1")),
+        "{:?}",
+        policy.fs_write
+    );
+    let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("scratch dir not granted"), "log: {log}");
+}

@@ -261,6 +261,28 @@ impl SandboxPolicy {
             }
         }
 
+        // `<mur_home>/tmp/<agent>` — the per-agent scratch dir children get
+        // as `TMPDIR`. Path comes from `agent_paths` so this grant and the
+        // file-tool gate (`tools::fs_policy::for_file_tools`) cannot drift.
+        // Created `0700` before granting (Landlock skips absent paths). On
+        // helper Err this is the ONE place that logs; the tool gate skips
+        // silently so one fault is not reported twice.
+        match crate::agent_paths::agent_scratch_dir(agent_home) {
+            Ok(scratch) => {
+                if let Err(e) = crate::agent_paths::ensure_scratch_dir(&scratch) {
+                    tracing::warn!(path = %scratch.display(), %e, "scratch dir not prepared");
+                }
+                if !fs_write.contains(&scratch) {
+                    fs_write.push(scratch);
+                }
+            }
+            Err(e) => tracing::error!(
+                agent_home = %agent_home.display(),
+                %e,
+                "scratch dir not granted"
+            ),
+        }
+
         // fleet_run carve-ins (config-gated, deny-by-default): when THIS agent
         // is allowlisted in `~/.mur/config.yaml` `fleet_run.agents`, the
         // spawned `mur fleet run` / `mur deep-research` child (which inherits

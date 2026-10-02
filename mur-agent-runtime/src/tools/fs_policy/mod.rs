@@ -255,6 +255,14 @@ pub(crate) fn for_file_tools(
             fs.write.push(mine);
         }
     }
+    // `<mur_home>/tmp/<agent>`: same helper as the kernel grant so the two
+    // cannot drift. On Err skip silently — `from_entitlements` already logged.
+    if let Ok(scratch) = crate::agent_paths::agent_scratch_dir(agent_home) {
+        let s = scratch.to_string_lossy().into_owned();
+        if !fs.write.contains(&s) {
+            fs.write.push(s);
+        }
+    }
     for f in crate::sandbox::policy::SELF_PROTECTED_AGENT_FILES {
         let p = agent_home.join(f).to_string_lossy().into_owned();
         if !fs.deny.contains(&p) {
