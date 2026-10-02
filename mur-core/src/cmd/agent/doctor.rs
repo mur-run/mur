@@ -235,6 +235,10 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
         if rows.is_empty() {
             println!("No running agents found.");
         }
+        // Stopped agents still hold disk: report their scratch size too.
+        for line in super::scratch_check::stopped_scratch_lines(&mur_home, warn_size_mb) {
+            println!("{line}");
+        }
         // Text only: `--json` is a running-agents array that build.sh greps for
         // stale counts, and this is a host-level fact about an agent that may
         // not be running at all. Reshaping the array to carry it would break

@@ -54,6 +54,31 @@ pub fn scratch_line(name: &str, dir: &Path, warn_size_mb: u64) -> Option<String>
     })
 }
 
+/// Scratch lines for installed agents with no `running.lock` — the
+/// running ones are already reported in the per-agent section. Sorted by
+/// name; agents whose scratch dir does not exist are skipped.
+pub fn stopped_scratch_lines(mur_home: &Path, warn_size_mb: u64) -> Vec<String> {
+    let agents_dir = mur_home.join("agents");
+    let Ok(rd) = std::fs::read_dir(&agents_dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<_> = rd
+        .flatten()
+        .filter(|e| e.path().is_dir() && !e.path().join("running.lock").exists())
+        .map(|e| e.file_name())
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|n| {
+            let dir =
+                mur_agent_runtime::agent_paths::agent_scratch_dir(&agents_dir.join(&n)).ok()?;
+            let label = format!("{} (stopped)", n.to_string_lossy());
+            scratch_line(&label, &dir, warn_size_mb)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +102,23 @@ mod tests {
         let line = scratch_line("a", &d, 1).unwrap();
         assert!(line.contains("over warn_size_mb 1"), "{line}");
         assert!(!scratch_line("a", &d, 2).unwrap().contains("over"));
+    }
+
+    #[test]
+    fn stopped_agents_reported_running_ones_skipped() {
+        let t = tempfile::TempDir::new().unwrap();
+        let home = t.path();
+        for n in ["run", "stop", "fresh"] {
+            std::fs::create_dir_all(home.join("agents").join(n)).unwrap();
+        }
+        std::fs::write(home.join("agents/run/running.lock"), "").unwrap();
+        for n in ["run", "stop"] {
+            std::fs::create_dir_all(home.join("tmp").join(n)).unwrap();
+        }
+        std::fs::write(home.join("tmp/stop/f"), vec![0u8; 10]).unwrap();
+        let lines = stopped_scratch_lines(home, 1);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("stop (stopped)"), "{lines:?}");
     }
 
     #[cfg(unix)]
