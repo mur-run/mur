@@ -17,6 +17,17 @@ fn run(yaml: &str) -> Run {
     from_yaml(yaml).unwrap()
 }
 
+#[test]
+fn live_runs_are_never_replayed() {
+    // Live sessions are interactive (spec: "not replayed and heal does not
+    // apply"); every entry point funnels through check_navigation.
+    let live = run(&THREE.replace("mode: test", "mode: live"));
+    assert_eq!(live.mode, Mode::Live);
+    let err = dry_run(&live, &[]).unwrap_err().to_string();
+    assert!(err.contains("live"), "{err}");
+    assert!(check_navigation(&live, &[]).is_err());
+}
+
 const THREE: &str = r#"
 name: demo
 mode: test

@@ -355,6 +355,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                     budget_usd,
                     worktree,
                     run_id,
+                    cwd,
+                    cwd_inferred,
                 } => {
                     if loop_flag {
                         if worktree {
@@ -366,6 +368,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                         if let Some(text) = job {
                             cmd::fleet::jobs::enqueue_job(&mur_home, &name, &text, "cli")?;
                         }
+                        // Same target as a one-shot run: `--cwd`, else the
+                        // shell's directory. Gated once before the loop (#1607).
                         cmd::fleet::loop_run::cmd_fleet_run_loop(
                             &mur_home,
                             &name,
@@ -374,11 +378,25 @@ pub async fn run(cli: Cli) -> Result<()> {
                             budget_usd,
                             run_id,
                             None,
+                            Some(cmd::fleet::run::RunCwd {
+                                path: cwd,
+                                inferred: cwd_inferred,
+                            }),
                         )
                         .await?
                     } else {
-                        cmd::fleet::run::cmd_fleet_run(&mur_home, &name, job, worktree, run_id)
-                            .await?
+                        cmd::fleet::run::cmd_fleet_run(
+                            &mur_home,
+                            &name,
+                            job,
+                            worktree,
+                            run_id,
+                            cmd::fleet::run::RunCwd {
+                                path: cwd,
+                                inferred: cwd_inferred,
+                            },
+                        )
+                        .await?
                     }
                 }
                 FleetAction::Limits {
@@ -671,6 +689,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                     browsers.as_deref(),
                     &mut cmd::browser::doctor::system_probe,
                     &mut cmd::browser::setup::system_installer,
+                )?;
+                // Before the grants: `allow-read` refuses a path that does
+                // not exist yet, and the install dir is one of them.
+                cmd::browser::server_install::ensure(
+                    consent,
+                    &cmd::agent::resolve_mur_home()?,
+                    &mut stdin.lock(),
+                    &mut out,
+                    &mut cmd::browser::server_install::system_installer,
                 )?;
                 cmd::browser::setup::grant_perms(
                     agent.as_deref(),

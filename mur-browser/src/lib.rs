@@ -22,11 +22,13 @@ pub mod chromium;
 pub mod export;
 pub mod guard;
 pub mod heal;
+pub mod live_proxy;
 pub mod locator;
 pub mod paths;
 pub mod proxy;
 pub mod recorder;
 pub mod replay;
+pub mod server;
 pub mod state;
 
 /// npm package spawned as the downstream MCP server. Pinned: each release

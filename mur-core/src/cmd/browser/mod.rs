@@ -3,6 +3,7 @@
 pub mod doctor;
 pub mod perms;
 mod replay;
+pub mod server_install;
 pub mod setup;
 
 pub use replay::{parse_heal_ratio, replay};
@@ -11,7 +12,7 @@ use std::{fs, path::PathBuf};
 #[cfg(unix)]
 use std::{os::unix::fs::FileTypeExt, sync::Arc, time::Duration};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use mur_browser::auth::write_meta;
 #[cfg(unix)]
@@ -46,19 +47,36 @@ pub async fn record(
     if let Some(profile) = profile {
         mur_browser::paths::validate_name(profile)?;
     }
-    if !matches!(mode, "test" | "automation") {
-        bail!("mode must be test|automation, got {mode:?}");
-    }
+    let mode = mode.parse::<Mode>()?;
 
-    let mut args = extra.to_vec();
+    // Live mode (Gap 0): Chromium ignores HTTP_PROXY, so the runtime's egress
+    // token is handed over in a 0600 `--config` file instead. Refusing when
+    // the env is absent is deliberate — an unproxied live browser violates D1.
+    // `@playwright/mcp` reads the file once at process start
+    // (`resolveCLIConfigForMCP` → `loadConfig`), so it is removed when the
+    // child exits; there is no earlier point worth a hook.
+    let live_config = live_config_for(
+        mode,
+        std::env::var(mur_browser::live_proxy::PROXY_ENV)
+            .ok()
+            .as_deref(),
+    )?;
+    let mut args = match &live_config {
+        Some(config) => mur_browser::live_proxy::launch_args(config),
+        None => Vec::new(),
+    };
     // These flags are intentionally merely forwarded. `@playwright/mcp`
     // owns their validation, keeping this proxy compatible with new releases.
+    args.extend(extra.iter().cloned());
     if trace {
         args.push("--save-trace".into());
     }
+    // Resolve the server before any broker state exists, so a missing install
+    // fails with the setup hint and leaves no socket behind.
+    let server = playwright_command(&args)?;
     let run_state = Run {
         name: run.to_string(),
-        mode: mode.parse::<Mode>()?,
+        mode,
         profile: profile.map(ToOwned::to_owned),
         recorded_at: chrono::Utc::now(),
         steps: Vec::new(),
@@ -85,11 +103,14 @@ pub async fn record(
     );
     tracing::info!(
         run,
-        mode,
+        mode = ?mode,
+        live = live_config.is_some(),
         actions = %paths::run_actions(&mur_home, run).display(),
         "browser record started"
     );
-    let result = run_stdio(playwright_command(&args), hook).await;
+    let result = run_stdio(server, hook).await;
+    // Removes the token-bearing config directory (no-op for test/automation).
+    drop(live_config);
     tracing::info!(run, ok = result.is_ok(), "browser record finished");
     // The child has ended; kill the broker and unlink its private endpoint
     // even when Playwright exited with an error.
@@ -97,6 +118,26 @@ pub async fn record(
     let _ = broker_task.await;
     let _ = std::fs::remove_file(&socket);
     result
+}
+
+/// The token-bearing Playwright config for a live session, or `None` for the
+/// recording modes. `proxy_env` is the runtime's `HTTPS_PROXY` value; live
+/// mode fails closed without it (D1) rather than launching unproxied.
+fn live_config_for(
+    mode: Mode,
+    proxy_env: Option<&str>,
+) -> Result<Option<mur_browser::live_proxy::ConfigFile>> {
+    match mode {
+        Mode::Live => {
+            let creds = mur_browser::live_proxy::parse_proxy_url(proxy_env)
+                .context("live mode needs the runtime's egress proxy")?;
+            Ok(Some(mur_browser::live_proxy::ConfigFile::write(
+                &std::env::temp_dir(),
+                &creds,
+            )?))
+        }
+        Mode::Test | Mode::Automation => Ok(None),
+    }
 }
 
 #[cfg(not(unix))]
@@ -437,6 +478,28 @@ fn profile_statuses_reports_cookie_expiry_from_metadata() {
         profile_statuses(temp.path()).unwrap(),
         vec!["example (cookie expires 2023-11-16 02:00:00 UTC)"]
     );
+}
+
+#[test]
+fn live_mode_fails_closed_without_the_proxy_and_never_touches_record_modes() {
+    // Recording modes ignore the proxy env entirely (Chromium never read it).
+    assert!(live_config_for(Mode::Test, None).unwrap().is_none());
+    assert!(
+        live_config_for(Mode::Automation, Some("http://tok:x@127.0.0.1:1"))
+            .unwrap()
+            .is_none()
+    );
+    // Live with no proxy: refuse rather than launch an unproxied browser (D1).
+    let err = format!("{:#}", live_config_for(Mode::Live, None).unwrap_err());
+    assert!(err.contains("HTTPS_PROXY"), "{err}");
+    // Live with the runtime's URL: a --config file carrying the token.
+    let cfg = live_config_for(Mode::Live, Some("http://tok:x@127.0.0.1:1"))
+        .unwrap()
+        .unwrap();
+    let body = std::fs::read_to_string(cfg.path()).unwrap();
+    assert!(body.contains("\"username\": \"tok\""), "{body}");
+    let args = mur_browser::live_proxy::launch_args(&cfg);
+    assert!(args.contains(&"--config".to_owned()), "{args:?}");
 }
 
 #[test]

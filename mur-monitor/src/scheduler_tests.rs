@@ -357,6 +357,49 @@ fn cancelled_takes_the_failure_branch() {
     );
 }
 
+/// #1622: `abandoned` settles the monitor (it leaves the footer count) but
+/// is NOT a failure, so it must never fire `on_failure` — a `rerun` on a
+/// guess is exactly what the never-call-unknown-failed rule forbids. It
+/// still records the notifiable `terminal` event, so every registered
+/// notification channel hears about it.
+#[test]
+fn abandoned_completes_without_running_failure_actions() {
+    let (_d, s, id) = fresh("  on_failure:\n    - type: rerun", true);
+    let rep = tick(
+        &s,
+        &registry(vec![Observation::terminal(
+            Outcome::Abandoned,
+            "abandoned: process dead",
+        )]),
+        t0(),
+        "w",
+        8,
+    )
+    .unwrap();
+    assert_eq!(rep.completed, 1);
+    assert_eq!(rep.action_pending, 0);
+    let r = s.get(&id).unwrap().unwrap();
+    assert_eq!(
+        (r.state, r.outcome),
+        (MonitorState::Completed, Outcome::Abandoned)
+    );
+    assert_eq!(r.unknown_streak, 0);
+    assert!(s.actions_for(&id).unwrap().is_empty());
+    assert!(
+        s.list(&crate::store::ListFilter::default())
+            .unwrap()
+            .is_empty(),
+        "the default list (the footer's MONITOR (N)) must not count it"
+    );
+    let terminal = s
+        .events(&id)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "terminal")
+        .count();
+    assert_eq!(terminal, 1);
+}
+
 #[test]
 fn stalled_then_recovered_are_each_one_event() {
     let (_d, s, id) = fresh("  on_success: []", true);

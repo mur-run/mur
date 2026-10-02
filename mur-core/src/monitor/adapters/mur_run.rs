@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+
 use mur_monitor::adapter::{Observation, SourceAdapter};
 use mur_monitor::spec::SourceType;
 use mur_monitor::state::Outcome;
@@ -22,8 +24,25 @@ impl MurRunAdapter {
     }
 }
 
-/// Pure mapping from a classified run to an observation.
-pub fn map(s: RunStatus) -> Observation {
+/// How many stale thresholds a DEAD process's last heartbeat must be past
+/// before its run settles as `abandoned` (#1622). Generous on purpose:
+/// `status_of` already reconciles a terminal state from the channel, so
+/// this window only has to cover a process that died between its last
+/// heartbeat and writing its result — and a false `abandoned` ends the
+/// watch, so err long. Default: 30 s × 30 = 15 min.
+pub const ABANDON_AFTER_STALE_MULTIPLE: i32 = 30;
+
+/// The heartbeat age past which a dead, never-settled run is `abandoned`.
+/// Scales with `run_status::stale_after`, so a user who slows the heartbeat
+/// (`runs:` in config.yaml) also widens this window — they cannot drift.
+pub fn abandon_grace(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
+    run_status::stale_after(cfg) * ABANDON_AFTER_STALE_MULTIPLE
+}
+
+/// Pure mapping from a classified run to an observation. `now` and
+/// `abandon_grace` are parameters (not ambient reads) so the tests address
+/// both sides of the window without a clock or a config file.
+pub fn map(s: RunStatus, now: DateTime<Utc>, abandon_grace: chrono::Duration) -> Observation {
     match s.state {
         State::Done => Observation::terminal(Outcome::Succeeded, "run state: done"),
         State::Failed => Observation::terminal(Outcome::Failed, "run state: failed"),
@@ -31,9 +50,26 @@ pub fn map(s: RunStatus) -> Observation {
         State::Running | State::Blocked => match s.liveness {
             // The process is gone and nothing wrote a terminal state: we do
             // not know what happened, and saying `failed` would be a guess.
-            Liveness::Dead => {
-                Observation::unknown("process is dead but no terminal state was recorded")
-            }
+            // Within the grace window that stays `unknown` (a result may yet
+            // reconcile from the channel); past it, nothing will ever write
+            // one, so the run settles as `abandoned` — terminal, so the
+            // monitor stops instead of polling a corpse forever (#1622), yet
+            // still not `failed`. `Liveness::Dead` always carries a beat
+            // (`classify` answers `Unknown` when there is none).
+            Liveness::Dead => match s.run.last_heartbeat_at {
+                Some(beat) if now.signed_duration_since(beat) > abandon_grace => {
+                    Observation::terminal(
+                        Outcome::Abandoned,
+                        format!(
+                            "abandoned: process is dead and no terminal state was recorded; \
+                             last heartbeat {} is older than the {}s grace",
+                            beat.to_rfc3339(),
+                            abandon_grace.num_seconds()
+                        ),
+                    )
+                }
+                _ => Observation::unknown("process is dead but no terminal state was recorded"),
+            },
             _ => {
                 let beat = s
                     .run
@@ -69,7 +105,11 @@ impl SourceAdapter for MurRunAdapter {
 
     fn observe(&self, reference: &str, _credential_ref: Option<&str>) -> Observation {
         match run_status::status_of(&self.mur_home, reference) {
-            Ok(Some(s)) => map(s),
+            Ok(Some(s)) => {
+                let cfg =
+                    mur_common::config::Config::load_or_default(&self.mur_home.join("config.yaml"));
+                map(s, Utc::now(), abandon_grace(&cfg.runs))
+            }
             Ok(None) => {
                 Observation::unknown("no run record: not started yet, or recorded on another host")
             }
@@ -83,7 +123,7 @@ impl SourceAdapter for MurRunAdapter {
 mod tests {
     use super::*;
     use crate::run_status::{Liveness, RunKind, RunState, RunStatus, State};
-    use chrono::{TimeZone, Utc};
+    use chrono::TimeZone;
 
     fn run(state: State, beat: Option<chrono::DateTime<Utc>>) -> RunState {
         RunState {
@@ -110,18 +150,25 @@ mod tests {
         }
     }
 
+    fn grace() -> chrono::Duration {
+        chrono::Duration::minutes(15)
+    }
+    fn at(s: RunStatus) -> Observation {
+        map(s, Utc::now(), grace())
+    }
+
     #[test]
     fn terminal_states_map_to_terminal_outcomes() {
         assert_eq!(
-            map(status(State::Done, Liveness::NotApplicable, None)).outcome,
+            at(status(State::Done, Liveness::NotApplicable, None)).outcome,
             Outcome::Succeeded
         );
         assert_eq!(
-            map(status(State::Failed, Liveness::NotApplicable, None)).outcome,
+            at(status(State::Failed, Liveness::NotApplicable, None)).outcome,
             Outcome::Failed
         );
         assert_eq!(
-            map(status(State::Stopped, Liveness::NotApplicable, None)).outcome,
+            at(status(State::Stopped, Liveness::NotApplicable, None)).outcome,
             Outcome::Cancelled
         );
     }
@@ -130,8 +177,8 @@ mod tests {
     fn running_is_pending_with_the_heartbeat_as_progress() {
         let b1 = Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 10).unwrap();
         let b2 = Utc.with_ymd_and_hms(2026, 9, 15, 12, 0, 20).unwrap();
-        let o1 = map(status(State::Running, Liveness::Alive, Some(b1)));
-        let o2 = map(status(State::Running, Liveness::Alive, Some(b2)));
+        let o1 = at(status(State::Running, Liveness::Alive, Some(b1)));
+        let o2 = at(status(State::Running, Liveness::Alive, Some(b2)));
         assert_eq!(o1.outcome, Outcome::Pending);
         assert_ne!(
             o1.progress_token, o2.progress_token,
@@ -139,24 +186,91 @@ mod tests {
         );
         assert_eq!(
             o1.progress_token,
-            map(status(State::Running, Liveness::Stalled, Some(b1))).progress_token,
+            at(status(State::Running, Liveness::Stalled, Some(b1))).progress_token,
             "stalled is the deadline evaluator's call, not the adapter's"
         );
         assert_eq!(
-            map(status(State::Blocked, Liveness::Alive, Some(b1))).outcome,
+            at(status(State::Blocked, Liveness::Alive, Some(b1))).outcome,
             Outcome::Pending
         );
     }
 
     #[test]
     fn dead_process_without_terminal_record_is_unknown_not_failed() {
-        let o = map(status(State::Running, Liveness::Dead, Some(Utc::now())));
+        let now = Utc::now();
+        let o = map(
+            status(State::Running, Liveness::Dead, Some(now)),
+            now,
+            grace(),
+        );
         assert_eq!(o.outcome, Outcome::Unknown);
         assert!(o.adapter_error.is_some());
         assert_eq!(
-            map(status(State::Running, Liveness::Unknown, None)).outcome,
+            map(
+                status(State::Running, Liveness::Unknown, None),
+                now,
+                grace()
+            )
+            .outcome,
             Outcome::Pending,
             "a rebuilt record with no heartbeat is still running as far as we know"
+        );
+    }
+
+    /// #1622: a dead process within the grace window may still be about to
+    /// have its terminal state reconciled from the channel — stay unknown.
+    #[test]
+    fn dead_process_within_grace_stays_unknown() {
+        let beat = Utc.with_ymd_and_hms(2026, 9, 30, 8, 42, 48).unwrap();
+        let now = beat + grace();
+        for state in [State::Running, State::Blocked] {
+            let o = map(status(state, Liveness::Dead, Some(beat)), now, grace());
+            assert_eq!(
+                o.outcome,
+                Outcome::Unknown,
+                "{state:?} at exactly the grace"
+            );
+        }
+    }
+
+    /// #1622: past the grace window the run will never record a result.
+    /// Settle it as `abandoned` — terminal, so the monitor completes — and
+    /// never as `failed`, which would be a guess about what happened.
+    #[test]
+    fn dead_process_past_grace_settles_as_abandoned_not_failed() {
+        let beat = Utc.with_ymd_and_hms(2026, 9, 30, 8, 42, 48).unwrap();
+        let now = beat + grace() + chrono::Duration::seconds(1);
+        for state in [State::Running, State::Blocked] {
+            let o = map(status(state, Liveness::Dead, Some(beat)), now, grace());
+            assert_eq!(o.outcome, Outcome::Abandoned, "{state:?}");
+            assert!(o.outcome.is_terminal());
+            assert!(o.evidence.contains("abandoned"), "{}", o.evidence);
+        }
+    }
+
+    /// A live process with an expired heartbeat is the deadline evaluator's
+    /// call (stalled), never an adapter-side settlement — however old.
+    #[test]
+    fn stalled_or_unknown_liveness_never_becomes_abandoned() {
+        let beat = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
+        let now = beat + chrono::Duration::days(30);
+        assert_eq!(
+            map(
+                status(State::Running, Liveness::Stalled, Some(beat)),
+                now,
+                grace()
+            )
+            .outcome,
+            Outcome::Pending
+        );
+        assert_eq!(
+            map(
+                status(State::Running, Liveness::Unknown, None),
+                now,
+                grace()
+            )
+            .outcome,
+            Outcome::Pending
         );
     }
 

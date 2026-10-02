@@ -356,7 +356,14 @@ pub async fn fleet_run(name: String, worktree: bool, app: tauri::AppHandle) -> R
     tokio::task::spawn_blocking(move || {
         let ok = tokio::runtime::Runtime::new()
             .expect("fleet run runtime")
-            .block_on(run::cmd_fleet_run(&home, &fleet_name, None, worktree, None))
+            .block_on(run::cmd_fleet_run(
+                &home,
+                &fleet_name,
+                None,
+                worktree,
+                None,
+                run::RunCwd::default(),
+            ))
             .is_ok();
         let _ = app.emit(
             "fleet:run_done",
@@ -380,6 +387,10 @@ pub async fn fleet_run_loop(name: String, app: tauri::AppHandle) -> Result<(), S
                 None,
                 None,
                 None,
+                None,
+                // The Hub has no target directory to offer here, and a GUI
+                // process's own cwd is not one (#1607): leave the loop
+                // unrouted, as the daemon's scheduled loop does.
                 None,
             ))
             .is_ok();

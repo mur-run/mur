@@ -194,7 +194,7 @@ fn non_allowlisted_python3_is_denied_under_enforced_profile() {
 /// binary (a copy of `/usr/bin/true`, so it is a real executable that is
 /// NOT under any `MACOS_SYSTEM_EXEC_PATHS` root) plus `/bin/bash` itself
 /// (mirroring what `SandboxPolicy::from_entitlements` auto-seeds into
-/// `spawn_allowed_paths` for `Strict` mode — see `policy.rs`'s
+/// `spawn_allowed_paths` for `Strict` mode — see `sandbox/policy/tests/resolve.rs`'s
 /// `strict_mode_seeds_shell_into_spawn_allowed` unit test). Unlike
 /// `write_allowlist_profile`, `MACOS_SYSTEM_EXEC_PATHS` is NOT re-allowed
 /// under `Strict`, so a coreutil like `/bin/mkdir` must be kernel-denied.
@@ -214,7 +214,7 @@ fn write_strict_profile() -> (tempfile::TempDir, PathBuf, PathBuf) {
     // `/private/var/folders/...`; without canonicalizing here the SBPL
     // literal would never match what the kernel actually resolves at
     // exec time (`from_entitlements` does this same canonicalization
-    // for real profiles -- see e.g. policy.rs lines ~240 and ~262-280).
+    // for real profiles -- see the spawn-allowlist block in sandbox/policy/build.rs).
     let allowed_binary_canonical =
         std::fs::canonicalize(&allowed_binary).expect("canonicalize copied binary");
 

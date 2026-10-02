@@ -122,6 +122,7 @@ pub use routing::cmd_routing;
 pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]
 pub use service::cmd_install_service;
+pub(crate) use service::installed_service;
 #[allow(unused_imports)]
 pub use skill::{
     cmd_skill_add, cmd_skill_convert, cmd_skill_list, cmd_skill_remove, cmd_skill_set_enabled,

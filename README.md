@@ -501,7 +501,13 @@ Agent** wizard offers the same catalog as a source.
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
-  `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. While a gate is open the
+  `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only
+  answers read and write calls: spend, destructive, privileged and
+  network-egress calls — `rm -rf`, `curl`, `sudo`, `git push --force` — still
+  stop and ask. Browser MCP tools that act on your logged-in web session
+  (navigate, click, fill a form, run page JavaScript) count as network egress,
+  so they ask too; observers such as snapshots and screenshots are reads, and
+  exporting or replacing the session's cookies is privileged. While a gate is open the
   decision keys only count when you aren't mid-message, and a session-wide
   grant takes two presses — typing an ordinary sentence can't hand a tool
   blanket approval. An open gate always renders somewhere, `/auto off` revokes
@@ -589,6 +595,20 @@ Agent** wizard offers the same catalog as a source.
   A freshly seeded MUR owns
   `~/.mur/{skills,workflows,fleets,artifacts}`, so it can build the skill,
   workflow or fleet it just designed instead of handing you a list of commands.
+- **Delegation checks the write grant before it sends anyone** — `mur fleet
+  run`, `parallel_jobs`, and a workflow's `delegate_to` steps tell each member
+  which directory to work in (the git root of the target), and first check
+  that the member may write there. A member without the grant gets one
+  approval prompt that adds the directory to its `filesystem.write` list,
+  reseals, and restarts it if it runs as a service; a target that was guessed
+  rather than given (no `cwd`) is always confirmed, even when the grant
+  exists. Nothing is dispatched until every member passes, and a parked
+  approval names the `mur channel approve` that releases it. A workflow's
+  `delegate_to` steps only call a member on a channel run (`--channel-new` /
+  `--channel <id>`); without one, `mur workflow run` warns that they will only
+  print. `mur fleet run --loop` routes and checks once, before the first
+  iteration; a daemon-scheduled loop and `mur deep-research` have no target
+  directory, so they are neither routed nor checked.
 - **Settings that were accepted and then did nothing** — `mur agent perm
   allow-host` took `10.0.0.5:3306`, listed it back, and matched nothing: host
   allowlists compare portless hosts, and the OS sandbox restricts by port with

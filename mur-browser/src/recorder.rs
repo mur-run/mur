@@ -170,6 +170,9 @@ pub struct Run {
 pub enum Mode {
     Test,
     Automation,
+    /// Interactive session driven by an agent behind the egress proxy
+    /// (live-mode design). Never replayed; heal does not apply.
+    Live,
 }
 
 impl std::str::FromStr for Mode {
@@ -178,7 +181,8 @@ impl std::str::FromStr for Mode {
         match s {
             "test" => Ok(Mode::Test),
             "automation" => Ok(Mode::Automation),
-            other => anyhow::bail!("mode must be test|automation, got {other:?}"),
+            "live" => Ok(Mode::Live),
+            other => anyhow::bail!("mode must be test|automation|live, got {other:?}"),
         }
     }
 }

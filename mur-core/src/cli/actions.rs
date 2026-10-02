@@ -233,7 +233,9 @@ pub enum WorkflowAction {
         /// Record execution as events on an existing channel ID
         #[arg(long, value_name = "CHANNEL_ID")]
         channel: Option<String>,
-        /// Create a new channel and record execution on it
+        /// Create a new channel and record execution on it. `delegate_to`
+        /// steps only call their member on a channel run; each member is
+        /// first checked for write access to this directory's git root.
         #[arg(long, conflicts_with = "channel")]
         channel_new: bool,
     },
@@ -536,6 +538,17 @@ pub enum FleetAction {
         /// and will poll `mur_job_status`). Default: a fresh id.
         #[arg(long, value_name = "RUN_ID")]
         run_id: Option<String>,
+        /// Directory the work is in (absolute). Members are routed to its git
+        /// repo root, or to the directory itself outside a checkout, after
+        /// each is checked for write access there. Default: this process's
+        /// cwd — right at a shell, wrong when spawned, so the agent runtime
+        /// always passes it.
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<std::path::PathBuf>,
+        /// `--cwd` was not named by the caller but taken from the calling
+        /// agent's session directory. Marks the routing note as a guess.
+        #[arg(long, requires = "cwd")]
+        cwd_inferred: bool,
     },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
     /// deadline, done-when policy). Only the flags you pass are changed —
@@ -790,6 +803,7 @@ pub enum BrowserAction {
         run: String,
         #[arg(long)]
         profile: Option<String>,
+        /// `test` | `automation` | `live` (interactive, behind the egress proxy).
         #[arg(long, default_value = "test")]
         mode: String,
         #[arg(long)]

@@ -15,6 +15,8 @@ use tokio_util::sync::CancellationToken;
 /// shared file provides one (e.g. running outside Hub). Points at the
 /// conventional local sidecar port.
 pub(crate) const LOCAL_LLM_DEFAULT_BASE_URL: &str = "http://127.0.0.1:50320/v1";
+/// Ollama's default endpoint when `OLLAMA_BASE_URL` is unset.
+const OLLAMA_DEFAULT_BASE_URL: &str = "http://127.0.0.1:11434";
 
 /// Placeholder API key for the local OpenAI-compatible MLX server, which does
 /// not authenticate. Not a secret.
@@ -74,68 +76,100 @@ pub(crate) fn provider_host(entry: &ModelEntry) -> Option<String> {
     }
 }
 
-/// The TCP port of the agent's own local LLM endpoint, if its resolved model
-/// points at a loopback address. The runtime grants this port through the B1
-/// sandbox so an agent can always reach its configured model — whatever the
-/// provider or port (ollama 11434, bundled MLX 50320, an oMLX / LM Studio /
-/// OpenAI-compatible server on any local port via `base_url`). Returns `None`
-/// for remote endpoints (anthropic/openai cloud), which already use 443.
+/// The TCP port of `url` when its host is loopback (`127.0.0.1`, `localhost`,
+/// `::1`); `None` for remote hosts or unparsable URLs.
+fn loopback_port(url: &str) -> Option<u16> {
+    let u = url.parse::<reqwest::Url>().ok()?;
+    match u.host_str()? {
+        "127.0.0.1" | "localhost" | "::1" | "[::1]" => u.port_or_known_default(),
+        _ => None,
+    }
+}
+
+/// The loopback TCP port one model entry talks to, if any. Pure over its
+/// inputs: `env` stands in for the process environment so callers (and
+/// tests) decide where base-URL overrides come from. An explicit loopback
+/// `base_url` wins; otherwise the provider's conventional default / env var
+/// decides (ollama 11434, bundled MLX 50320, a cloud provider routed through a
+/// local bridge via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`). Remote
+/// endpoints return `None` — they go out on 443 through the general list.
+pub(crate) fn entry_loopback_port(
+    entry: &ModelEntry,
+    env: &dyn Fn(&str) -> Option<String>,
+    mur_home: &std::path::Path,
+) -> Option<u16> {
+    if let Some(base) = entry.base_url.as_deref()
+        && let Some(p) = loopback_port(base)
+    {
+        return Some(p);
+    }
+    match entry.provider.as_str() {
+        "ollama" => loopback_port(
+            &env("OLLAMA_BASE_URL").unwrap_or_else(|| OLLAMA_DEFAULT_BASE_URL.to_string()),
+        ),
+        "local" => loopback_port(&resolve_local_base_url(
+            None,
+            env("MUR_LOCAL_LLM_BASE_URL"),
+            mur_home,
+        )),
+        "anthropic" => env("ANTHROPIC_BASE_URL").and_then(|b| loopback_port(&b)),
+        "openai" => env("OPENAI_BASE_URL").and_then(|b| loopback_port(&b)),
+        _ => None,
+    }
+}
+
+/// Every loopback LLM port this agent may dial during its lifetime: the
+/// resolved model's port plus the port of every registry entry, because
+/// `/model` hot-switch and `autopick_cheap` can move the agent to any
+/// registry model AFTER the seal is applied (the seal cannot be widened
+/// later). Sorted and de-duplicated. Pure over its inputs.
+///
+/// These are granted through the loopback carve-out (SBPL `localhost:port`),
+/// never the general `*:port` list — a local LLM port has no business
+/// reaching a remote host on the same port number.
+pub(crate) fn llm_loopback_ports(
+    current: Option<&ModelEntry>,
+    registry: Option<&mur_common::model::ModelRegistry>,
+    env: &dyn Fn(&str) -> Option<String>,
+    mur_home: &std::path::Path,
+) -> Vec<u16> {
+    let mut ports: Vec<u16> = current
+        .into_iter()
+        .chain(registry.into_iter().flat_map(|r| r.models.values()))
+        .filter_map(|e| entry_loopback_port(e, env, mur_home))
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+/// [`llm_loopback_ports`] against the live process: the profile's resolved
+/// model, the on-disk registry (unreadable registry → current model only),
+/// and the real environment.
+pub(crate) fn local_llm_ports(
+    profile: &mur_common::agent::AgentProfile,
+    mur_home: &std::path::Path,
+) -> Vec<u16> {
+    let current = crate::supervisor::resolve_model_entry(profile).ok();
+    let registry = mur_common::model::ModelRegistry::default_path()
+        .ok()
+        .and_then(|p| mur_common::model::ModelRegistry::load_from(&p).ok());
+    llm_loopback_ports(
+        current.as_ref(),
+        registry.as_ref(),
+        &|k| std::env::var(k).ok(),
+        mur_home,
+    )
+}
+
+/// The loopback port of the agent's CURRENT model only (no registry sweep).
+#[cfg(test)]
 pub(crate) fn local_llm_port(
     profile: &mur_common::agent::AgentProfile,
     mur_home: &std::path::Path,
 ) -> Option<u16> {
-    fn loopback_port(url: &str) -> Option<u16> {
-        let u = url.parse::<reqwest::Url>().ok()?;
-        match u.host_str()? {
-            "127.0.0.1" | "localhost" | "::1" => u.port_or_known_default(),
-            _ => None,
-        }
-    }
-
-    // Prefer the resolved registry entry (honours `model_ref`, e.g. a
-    // user-configured oMLX endpoint with an explicit base_url).
-    if let Ok(entry) = crate::supervisor::resolve_model_entry(profile) {
-        if let Some(base) = entry.base_url.as_deref()
-            && let Some(p) = loopback_port(base)
-        {
-            return Some(p);
-        }
-        match entry.provider.as_str() {
-            "ollama" => {
-                return loopback_port(
-                    &std::env::var("OLLAMA_BASE_URL")
-                        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string()),
-                );
-            }
-            "local" => {
-                return loopback_port(&resolve_local_base_url(
-                    None,
-                    std::env::var("MUR_LOCAL_LLM_BASE_URL").ok(),
-                    mur_home,
-                ));
-            }
-            // Cloud providers routed through a local bridge (e.g. an OAuth proxy
-            // / cc-proxy) via their conventional base-URL env var. Remote
-            // endpoints (https://api.anthropic.com) are not loopback, so
-            // `loopback_port` returns `None` and cloud behaviour is unchanged.
-            "anthropic" => {
-                if let Ok(base) = std::env::var("ANTHROPIC_BASE_URL")
-                    && let Some(p) = loopback_port(&base)
-                {
-                    return Some(p);
-                }
-            }
-            "openai" => {
-                if let Ok(base) = std::env::var("OPENAI_BASE_URL")
-                    && let Some(p) = loopback_port(&base)
-                {
-                    return Some(p);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    let entry = crate::supervisor::resolve_model_entry(profile).ok()?;
+    entry_loopback_port(&entry, &|k| std::env::var(k).ok(), mur_home)
 }
 
 /// Resolve the local model base URL: entry.base_url → env → shared file → default.

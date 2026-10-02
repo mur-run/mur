@@ -3,8 +3,9 @@ pub mod egress_proxy;
 pub mod launch_chain;
 pub mod policy;
 pub mod reqwest_guard;
+pub mod search_dirs;
 
-// Unconditional: `partition_write_grants` is shared with policy.rs on every
+// Unconditional: `partition_write_grants` is shared with sandbox::policy on every
 // platform; only the apply path inside is linux-gated.
 mod linux;
 #[cfg(target_os = "macos")]
@@ -38,6 +39,18 @@ pub struct SandboxStatus {
     /// policy and never see what was discarded producing it. [`apply`] fills it
     /// from the policy immediately after they return.
     pub dropped: Vec<mur_common::agent::DroppedGrant>,
+}
+
+/// Env var set to `1` on MCP children spawned while the seal enforces. Tools
+/// that bring their own sandbox (Chromium) read it to stand theirs down, since
+/// a nested one cannot start. Must match `mur_browser::chromium::SEALED_ENV`.
+pub const SEALED_ENV: &str = "MUR_SEALED";
+
+/// The env pair telling a child it runs inside an enforcing seal, if it does.
+/// An advisory-only run (apply failed, fail-open) or no apply at all yields
+/// nothing, so the child keeps its own sandbox there.
+pub fn sealed_child_env(status: Option<&SandboxStatus>) -> Option<(&'static str, &'static str)> {
+    status.filter(|s| s.enforcing).map(|_| (SEALED_ENV, "1"))
 }
 
 /// Apply the kernel sandbox derived from `entitlements` to the current process.
@@ -114,5 +127,24 @@ mod tests {
         // last_status() returns None before apply() or Some after.
         // This test just verifies the API compiles and is callable.
         let _ = last_status();
+    }
+
+    fn status(enforcing: bool) -> SandboxStatus {
+        SandboxStatus {
+            platform: "test".into(),
+            effective_abi: None,
+            enforcing,
+            dropped: vec![],
+        }
+    }
+
+    #[test]
+    fn children_hear_about_the_seal_only_when_it_enforces() {
+        assert_eq!(
+            sealed_child_env(Some(&status(true))),
+            Some((SEALED_ENV, "1"))
+        );
+        assert_eq!(sealed_child_env(Some(&status(false))), None);
+        assert_eq!(sealed_child_env(None), None);
     }
 }

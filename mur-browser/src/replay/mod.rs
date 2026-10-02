@@ -128,6 +128,15 @@ impl ReplayReport {
 /// profile's allowlist. Checking up front means a bad step 9 never lets
 /// steps 1–8 act on an authenticated session first.
 pub fn check_navigation(run: &Run, allow: &[String]) -> Result<()> {
+    // Every replay entry point (dry-run, live, in-process) passes through
+    // here before anything is spawned, so this is where a live run is
+    // refused: live sessions are interactive and are never replayed.
+    if run.mode == Mode::Live {
+        bail!(
+            "run {:?} is a live session (mode: live); live runs are not replayed",
+            run.name
+        );
+    }
     for step in run.steps.iter().filter(|s| s.action == Action::Goto) {
         let url = step
             .value

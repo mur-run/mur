@@ -88,11 +88,11 @@ pub(super) async fn prepare_and_seal(
     // BEFORE on_startup hooks.
     // On platforms without Landlock/SBPL support, returns enforcing=false — B0 still applies.
     let fail_closed = profile.inner.entitlements.fail_closed_on_sandbox_error;
-    // Always allow the agent's own local LLM port through the kernel sandbox.
-    let mut extra_ports: Vec<u16> =
-        crate::supervisor_runner::local_llm_port(&profile.inner, mur_home)
-            .into_iter()
-            .collect();
+    // The agent's local LLM ports (current model + every registry entry, so a
+    // post-seal `/model` switch or autopick still reaches its endpoint) go
+    // through the loopback carve-out, never the general `*:port` list.
+    let llm_ports = crate::supervisor_runner::local_llm_ports(&profile.inner, mur_home);
+    let mut extra_ports: Vec<u16> = Vec::new();
     // Also allow the persisted VLC HTTP port + the shared runtime-state directory
     // so the proactive co-watching WatchScheduler can operate under the enforced
     // sandbox. Gated on co-watching being set up (vlc.json present): a non-media
@@ -146,7 +146,7 @@ pub(super) async fn prepare_and_seal(
     // CONNECTs reached the proxy; standalone gateway fetch worked).
     let egress_proxy =
         if crate::supervisor_runner::profile_needs_egress(&profile.inner.enabled_mcp_servers()) {
-            match crate::sandbox::egress_proxy::start_egress_proxy().await {
+            match crate::sandbox::egress_proxy::start_egress_proxy(&profile.inner.name).await {
                 Ok(h) => {
                     tracing::info!(addr = %h.addr, "egress proxy started (pre-sandbox)");
                     Some(h)
@@ -287,7 +287,11 @@ pub(super) async fn prepare_and_seal(
         }
     };
 
-    let loopback_ports: Vec<u16> = egress_proxy.iter().map(|h| h.addr.port()).collect();
+    let loopback_ports: Vec<u16> = egress_proxy
+        .iter()
+        .map(|h| h.addr.port())
+        .chain(llm_ports)
+        .collect();
     let granted_digest =
         mur_common::agent::filesystem_grants_digest(&profile.inner.entitlements.filesystem);
     let sandbox_record = match crate::sandbox::apply(

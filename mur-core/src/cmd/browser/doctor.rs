@@ -286,9 +286,9 @@ pub async fn live_check(output: &mut dyn Write) -> Result<()> {
     )?;
     let page = serve_render_page()?;
     let started = Instant::now();
-    let mut child = mur_browser::proxy::playwright_command(&live_args())
+    let mut child = mur_browser::proxy::playwright_command(&live_args())?
         .spawn()
-        .context("spawn Playwright MCP server (is `npx` on PATH?)")?;
+        .context("spawn Playwright MCP server (is `node` on PATH?)")?;
     let stdin = child.stdin.take().context("child stdin")?;
     let stdout = child.stdout.take().context("child stdout")?;
     let url = page.url.clone();
@@ -344,6 +344,16 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::path::PathBuf;
+
+    /// The runtime sets this marker and the browser reads it, but neither
+    /// crate depends on the other; this is the one place both are in reach.
+    #[test]
+    fn sealed_marker_names_agree_across_runtime_and_browser() {
+        assert_eq!(
+            mur_agent_runtime::sandbox::SEALED_ENV,
+            mur_browser::chromium::SEALED_ENV
+        );
+    }
 
     /// A completed build; a headless shell also gets its binary, since
     /// only a launchable shell counts.

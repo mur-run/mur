@@ -127,9 +127,9 @@ pub async fn replay_live(
 ) -> Result<ReplayReport> {
     check_navigation(run, allow)?;
     let args = live_args(storage_state);
-    let mut child = crate::proxy::playwright_command(&args)
+    let mut child = crate::proxy::playwright_command(&args)?
         .spawn()
-        .context("spawn Playwright MCP server (is `npx` on PATH and in the spawn allowlist?)")?;
+        .context("spawn Playwright MCP server (is `node` on PATH and in the spawn allowlist?)")?;
     let stdin = child.stdin.take().context("child stdin")?;
     let stdout = child.stdout.take().context("child stdout")?;
     let result = async {

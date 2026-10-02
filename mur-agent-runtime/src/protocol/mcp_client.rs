@@ -243,8 +243,11 @@ impl StdioMcpClient {
         // resolves against the same augmented PATH). Falls back to the
         // command as-written when nothing resolves, preserving the
         // add-before-install workflow: the spawn then fails with the OS error.
+        // Under an allowlist the seal's own search dirs lead that PATH
+        // (`sandbox::search_dirs::mcp_child_path`), so a shebang's
+        // `env node` finds the binary the seal granted, not a shim dir's.
         let bundled = mur_common::exec::bundled_mcp_server_path();
-        let aug_path = mur_common::exec::augmented_path_var();
+        let aug_path = crate::sandbox::search_dirs::mcp_child_path(policy.spawn_mode);
         let resolved: std::borrow::Cow<'_, str> =
             if std::path::Path::new(&entry.command).file_name() == bundled.file_name()
                 && bundled.is_file()
@@ -260,8 +263,8 @@ impl StdioMcpClient {
         std_cmd
             .args(&entry.args)
             // The server's own subprocesses (`npx` re-execing node, a shell
-            // step) must resolve identically, so the child gets the augmented
-            // PATH too — ambient entries keep priority.
+            // step) must resolve identically, so the child gets the same
+            // PATH — seal dirs first under an allowlist, ambient otherwise.
             .env("PATH", &aug_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -270,6 +273,9 @@ impl StdioMcpClient {
         // runtime's) when the server declares a Restricted policy. Empty
         // otherwise ⇒ byte-for-byte the previous behavior.
         for (k, v) in proxy_env_for(entry, proxy) {
+            std_cmd.env(k, v);
+        }
+        if let Some((k, v)) = crate::sandbox::sealed_child_env(crate::sandbox::last_status()) {
             std_cmd.env(k, v);
         }
         let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;

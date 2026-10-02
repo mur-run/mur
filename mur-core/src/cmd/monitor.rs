@@ -409,6 +409,16 @@ fn show(store: &MonitorStore, id: &str, history: bool, out: &mut dyn Write) -> R
         r.state.as_str(),
         r.outcome.as_str()
     )?;
+    // #1622: `completed / abandoned` alone reads like a verdict. Say right
+    // under it what it means, so nobody mistakes it for a failure — or for
+    // the run having been stopped.
+    if r.outcome == mur_monitor::state::Outcome::Abandoned {
+        writeln!(
+            out,
+            "  ⚠ abandoned:   the run's process died without recording a result (not a failure verdict). \
+             The run itself was not touched; re-run it if it still matters"
+        )?;
+    }
     writeln!(out, "  work started:  {}", r.work_started_at.to_rfc3339())?;
     writeln!(
         out,
