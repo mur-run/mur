@@ -277,8 +277,7 @@ pub enum SkillAction {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Rebuild skill embedding index (M6c.1).
-    #[command(hide = true)]
+    /// Rebuild the skill embedding index (also repairs an unreadable one)
     ReindexVec {
         /// Optional skill name to reindex; all if omitted.
         name: Option<String>,

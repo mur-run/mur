@@ -211,6 +211,9 @@ pub async fn cmd_conversations_reindex(args: ReindexArgs) -> Result<()> {
             crate::store::embedding::EmbeddingConfig::from_config(&cfg).dimensions as i32
         };
         let mut idx = crate::conversations::index::ConversationIndex::open(dims, None).await?;
+        if idx.drop_if_unreadable().await? {
+            eprintln!("note: dropped unreadable conversations index; rebuilding all layers");
+        }
         for (date, _) in days {
             let msgs = store::read_day(date, None)?;
             if msgs.is_empty() {

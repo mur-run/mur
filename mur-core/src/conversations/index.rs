@@ -70,6 +70,17 @@ pub struct RollupRow<'a> {
     pub vector: &'a [f32],
 }
 
+/// Classify LanceDB failures on the existing table and attach its rebuild hint.
+async fn guarded<T>(
+    path: &std::path::Path,
+    fut: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    use crate::store::vector::unreadable as u;
+    u::guard(TABLE, path, fut)
+        .await
+        .map_err(|e| u::hinted(e, u::hint::CONVERSATIONS))
+}
+
 impl ConversationIndex {
     pub async fn open(dims: i32, root_override: Option<&str>) -> Result<Self> {
         let path = index_path(root_override);
@@ -79,6 +90,16 @@ impl ConversationIndex {
             .await
             .context("opening LanceDB for conversations")?;
         Ok(Self { db, dims })
+    }
+
+    fn table_path(&self) -> std::path::PathBuf {
+        std::path::Path::new(self.db.uri()).join(format!("{TABLE}.lance"))
+    }
+
+    /// Drop the table when it exists but cannot be read, so `reindex` can
+    /// recreate it. Returns `true` when it was dropped.
+    pub async fn drop_if_unreadable(&self) -> Result<bool> {
+        crate::store::vector::unreadable::drop_if_unreadable(&self.db, TABLE).await
     }
 
     fn schema(&self) -> Schema {
@@ -117,96 +138,100 @@ impl ConversationIndex {
     }
 
     async fn upsert_internal(&mut self, entries: &[(Message, Vec<f32>, i8)]) -> Result<()> {
-        let _span = info_span!("conversations.index.upsert", count = entries.len()).entered();
-        if entries.is_empty() {
-            return Ok(());
-        }
-        let schema = Arc::new(self.schema());
-        let tables = self.db.table_names().execute().await?;
+        let path = self.table_path();
+        guarded(&path, async {
+            let _span = info_span!("conversations.index.upsert", count = entries.len()).entered();
+            if entries.is_empty() {
+                return Ok(());
+            }
+            let schema = Arc::new(self.schema());
+            let tables = self.db.table_names().execute().await?;
 
-        let ids: Vec<String> = entries
-            .iter()
-            .enumerate()
-            .map(|(i, (m, _, layer))| {
-                // Meta can override the batch-index suffix for layer-aware
-                // semantic ids (e.g. layer=2 span rows use line_hint).
-                let suffix: String = m
-                    .meta
-                    .get("id_suffix")
-                    .and_then(|v| v.as_u64())
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| i.to_string());
-                if *layer == 0 {
-                    format!("{}_{}_{}", m.src.file_prefix(), m.conv, suffix)
-                } else {
-                    format!("{}_{}_L{}_{}", m.src.file_prefix(), m.conv, layer, suffix)
-                }
-            })
-            .collect();
-        let tss: Vec<i64> = entries.iter().map(|(m, _, _)| m.ts.timestamp()).collect();
-        let srcs: Vec<&str> = entries
-            .iter()
-            .map(|(m, _, _)| m.src.file_prefix())
-            .collect();
-        let convs: Vec<&str> = entries.iter().map(|(m, _, _)| m.conv.as_str()).collect();
-        let roles: Vec<&'static str> = entries
-            .iter()
-            .map(|(m, _, _)| match m.role {
-                mur_common::Role::User => "user",
-                mur_common::Role::Assistant => "assistant",
-                mur_common::Role::System => "system",
-                mur_common::Role::Tool => "tool",
-            })
-            .collect();
-        let layers: Vec<i8> = entries.iter().map(|(_, _, l)| *l).collect();
-        let contents: Vec<String> = entries
-            .iter()
-            .map(|(m, _, _)| m.content.as_text().to_owned())
-            .collect();
-        let content_refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
+            let ids: Vec<String> = entries
+                .iter()
+                .enumerate()
+                .map(|(i, (m, _, layer))| {
+                    // Meta can override the batch-index suffix for layer-aware
+                    // semantic ids (e.g. layer=2 span rows use line_hint).
+                    let suffix: String = m
+                        .meta
+                        .get("id_suffix")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| i.to_string());
+                    if *layer == 0 {
+                        format!("{}_{}_{}", m.src.file_prefix(), m.conv, suffix)
+                    } else {
+                        format!("{}_{}_L{}_{}", m.src.file_prefix(), m.conv, layer, suffix)
+                    }
+                })
+                .collect();
+            let tss: Vec<i64> = entries.iter().map(|(m, _, _)| m.ts.timestamp()).collect();
+            let srcs: Vec<&str> = entries
+                .iter()
+                .map(|(m, _, _)| m.src.file_prefix())
+                .collect();
+            let convs: Vec<&str> = entries.iter().map(|(m, _, _)| m.conv.as_str()).collect();
+            let roles: Vec<&'static str> = entries
+                .iter()
+                .map(|(m, _, _)| match m.role {
+                    mur_common::Role::User => "user",
+                    mur_common::Role::Assistant => "assistant",
+                    mur_common::Role::System => "system",
+                    mur_common::Role::Tool => "tool",
+                })
+                .collect();
+            let layers: Vec<i8> = entries.iter().map(|(_, _, l)| *l).collect();
+            let contents: Vec<String> = entries
+                .iter()
+                .map(|(m, _, _)| m.content.as_text().to_owned())
+                .collect();
+            let content_refs: Vec<&str> = contents.iter().map(|s| s.as_str()).collect();
 
-        let flat: Vec<f32> = entries
-            .iter()
-            .flat_map(|(_, v, _)| v.iter().copied())
-            .collect();
-        let vec_arr = FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            self.dims,
-            Arc::new(Float32Array::from(flat)),
-            None,
-        )?;
+            let flat: Vec<f32> = entries
+                .iter()
+                .flat_map(|(_, v, _)| v.iter().copied())
+                .collect();
+            let vec_arr = FixedSizeListArray::try_new(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                self.dims,
+                Arc::new(Float32Array::from(flat)),
+                None,
+            )?;
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(StringArray::from(
-                    ids.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                )),
-                Arc::new(Int64Array::from(tss)),
-                Arc::new(StringArray::from(srcs)),
-                Arc::new(StringArray::from(convs)),
-                Arc::new(StringArray::from(roles)),
-                Arc::new(Int8Array::from(layers)),
-                Arc::new(StringArray::from(content_refs)),
-                Arc::new(vec_arr),
-            ],
-        )?;
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(StringArray::from(
+                        ids.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(Int64Array::from(tss)),
+                    Arc::new(StringArray::from(srcs)),
+                    Arc::new(StringArray::from(convs)),
+                    Arc::new(StringArray::from(roles)),
+                    Arc::new(Int8Array::from(layers)),
+                    Arc::new(StringArray::from(content_refs)),
+                    Arc::new(vec_arr),
+                ],
+            )?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
+            let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
+            let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
 
-        if tables.contains(&TABLE.to_string()) {
-            self.db
-                .open_table(TABLE)
-                .execute()
-                .await?
-                .add(reader)
-                .execute()
-                .await?;
-        } else {
-            self.db.create_table(TABLE, reader).execute().await?;
-        }
-        Ok(())
+            if tables.contains(&TABLE.to_string()) {
+                self.db
+                    .open_table(TABLE)
+                    .execute()
+                    .await?
+                    .add(reader)
+                    .execute()
+                    .await?;
+            } else {
+                self.db.create_table(TABLE, reader).execute().await?;
+            }
+            Ok(())
+        })
+        .await
     }
 
     pub async fn search(
@@ -216,106 +241,110 @@ impl ConversationIndex {
         source_filter: Option<Source>,
         layer: Option<i8>,
     ) -> Result<Vec<SearchHit>> {
-        let _span = info_span!(
-            "conversations.index.search",
-            k = limit,
-            source = ?source_filter,
-            layer = ?layer
-        )
-        .entered();
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&TABLE.to_string()) {
-            return Ok(Vec::new());
-        }
-        let table = self.db.open_table(TABLE).execute().await?;
-        let mut q = table.query().nearest_to(query_vec)?.limit(limit);
-        q = q.select(Select::Columns(vec![
-            "id".into(),
-            "ts".into(),
-            "source".into(),
-            "conv_id".into(),
-            "role".into(),
-            "layer".into(),
-            "content".into(),
-            "vector".into(),
-        ]));
-
-        let predicates: Vec<String> = std::iter::empty::<String>()
-            .chain(source_filter.map(|s| format!("source = '{}'", s.file_prefix())))
-            .chain(layer.map(|l| format!("layer = {l}")))
-            .collect();
-        if !predicates.is_empty() {
-            q = q.only_if(predicates.join(" AND "));
-        }
-
-        let stream = q.execute().await?;
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
-        let mut out = Vec::new();
-        for b in batches {
-            let ids = b
-                .column_by_name("id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let tss = b
-                .column_by_name("ts")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let srcs = b
-                .column_by_name("source")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let convs = b
-                .column_by_name("conv_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let contents = b
-                .column_by_name("content")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let dists = b
-                .column_by_name("_distance")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
-            let layers = b
-                .column_by_name("layer")
-                .and_then(|c| c.as_any().downcast_ref::<Int8Array>());
-            let vectors = b
-                .column_by_name("vector")
-                .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
-            for i in 0..b.num_rows() {
-                let source = parse_source_or_placeholder(srcs.value(i));
-                let layer = layers.map(|a| a.value(i)).unwrap_or(0);
-                let vector = vectors.and_then(|arr| {
-                    let fsl = arr.value(i);
-                    let floats = fsl.as_any().downcast_ref::<Float32Array>()?;
-                    Some(
-                        (0..floats.len())
-                            .map(|j| floats.value(j))
-                            .collect::<Vec<f32>>(),
-                    )
-                });
-                out.push(SearchHit {
-                    id: ids.value(i).to_string(),
-                    ts: tss.value(i),
-                    source,
-                    conv_id: convs.value(i).to_string(),
-                    content: contents.value(i).to_string(),
-                    distance: dists.map(|d| d.value(i)).unwrap_or(0.0),
-                    layer,
-                    vector,
-                });
+        let path = self.table_path();
+        guarded(&path, async {
+            let _span = info_span!(
+                "conversations.index.search",
+                k = limit,
+                source = ?source_filter,
+                layer = ?layer
+            )
+            .entered();
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&TABLE.to_string()) {
+                return Ok(Vec::new());
             }
-        }
-        Ok(out)
+            let table = self.db.open_table(TABLE).execute().await?;
+            let mut q = table.query().nearest_to(query_vec)?.limit(limit);
+            q = q.select(Select::Columns(vec![
+                "id".into(),
+                "ts".into(),
+                "source".into(),
+                "conv_id".into(),
+                "role".into(),
+                "layer".into(),
+                "content".into(),
+                "vector".into(),
+            ]));
+
+            let predicates: Vec<String> = std::iter::empty::<String>()
+                .chain(source_filter.map(|s| format!("source = '{}'", s.file_prefix())))
+                .chain(layer.map(|l| format!("layer = {l}")))
+                .collect();
+            if !predicates.is_empty() {
+                q = q.only_if(predicates.join(" AND "));
+            }
+
+            let stream = q.execute().await?;
+            let batches: Vec<RecordBatch> = stream.try_collect().await?;
+            let mut out = Vec::new();
+            for b in batches {
+                let ids = b
+                    .column_by_name("id")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let tss = b
+                    .column_by_name("ts")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let srcs = b
+                    .column_by_name("source")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let convs = b
+                    .column_by_name("conv_id")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let contents = b
+                    .column_by_name("content")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let dists = b
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+                let layers = b
+                    .column_by_name("layer")
+                    .and_then(|c| c.as_any().downcast_ref::<Int8Array>());
+                let vectors = b
+                    .column_by_name("vector")
+                    .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
+                for i in 0..b.num_rows() {
+                    let source = parse_source_or_placeholder(srcs.value(i));
+                    let layer = layers.map(|a| a.value(i)).unwrap_or(0);
+                    let vector = vectors.and_then(|arr| {
+                        let fsl = arr.value(i);
+                        let floats = fsl.as_any().downcast_ref::<Float32Array>()?;
+                        Some(
+                            (0..floats.len())
+                                .map(|j| floats.value(j))
+                                .collect::<Vec<f32>>(),
+                        )
+                    });
+                    out.push(SearchHit {
+                        id: ids.value(i).to_string(),
+                        ts: tss.value(i),
+                        source,
+                        conv_id: convs.value(i).to_string(),
+                        content: contents.value(i).to_string(),
+                        distance: dists.map(|d| d.value(i)).unwrap_or(0.0),
+                        layer,
+                        vector,
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await
     }
 
     /// Phase 3.2: filter-only scan — no k-NN. Returns all rows at the given
@@ -327,88 +356,92 @@ impl ConversationIndex {
         ts_lo_inclusive: i64,
         ts_hi_exclusive: i64,
     ) -> Result<Vec<SearchHit>> {
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&TABLE.to_string()) {
-            return Ok(Vec::new());
-        }
-        let table = self.db.open_table(TABLE).execute().await?;
-        let filter =
-            format!("layer = {layer} AND ts >= {ts_lo_inclusive} AND ts < {ts_hi_exclusive}");
-        let mut q = table.query().only_if(filter);
-        q = q.select(Select::Columns(vec![
-            "id".into(),
-            "ts".into(),
-            "source".into(),
-            "conv_id".into(),
-            "role".into(),
-            "layer".into(),
-            "content".into(),
-            "vector".into(),
-        ]));
-        let stream = q.execute().await?;
-        let batches: Vec<RecordBatch> = stream.try_collect().await?;
-        let mut out = Vec::new();
-        for b in batches {
-            let ids = b
-                .column_by_name("id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let tss = b
-                .column_by_name("ts")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
-            let srcs = b
-                .column_by_name("source")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let convs = b
-                .column_by_name("conv_id")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let contents = b
-                .column_by_name("content")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let layers = b
-                .column_by_name("layer")
-                .and_then(|c| c.as_any().downcast_ref::<Int8Array>());
-            let vectors = b
-                .column_by_name("vector")
-                .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
-            for i in 0..b.num_rows() {
-                let layer_val = layers.map(|a| a.value(i)).unwrap_or(0);
-                let vector = vectors.and_then(|arr| {
-                    let fsl = arr.value(i);
-                    let floats = fsl.as_any().downcast_ref::<Float32Array>()?;
-                    Some(
-                        (0..floats.len())
-                            .map(|j| floats.value(j))
-                            .collect::<Vec<f32>>(),
-                    )
-                });
-                out.push(SearchHit {
-                    id: ids.value(i).to_string(),
-                    ts: tss.value(i),
-                    source: parse_source_or_placeholder(srcs.value(i)),
-                    conv_id: convs.value(i).to_string(),
-                    content: contents.value(i).to_string(),
-                    distance: 0.0, // no k-NN score for filter-only scan
-                    layer: layer_val,
-                    vector,
-                });
+        let path = self.table_path();
+        guarded(&path, async {
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&TABLE.to_string()) {
+                return Ok(Vec::new());
             }
-        }
-        Ok(out)
+            let table = self.db.open_table(TABLE).execute().await?;
+            let filter =
+                format!("layer = {layer} AND ts >= {ts_lo_inclusive} AND ts < {ts_hi_exclusive}");
+            let mut q = table.query().only_if(filter);
+            q = q.select(Select::Columns(vec![
+                "id".into(),
+                "ts".into(),
+                "source".into(),
+                "conv_id".into(),
+                "role".into(),
+                "layer".into(),
+                "content".into(),
+                "vector".into(),
+            ]));
+            let stream = q.execute().await?;
+            let batches: Vec<RecordBatch> = stream.try_collect().await?;
+            let mut out = Vec::new();
+            for b in batches {
+                let ids = b
+                    .column_by_name("id")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let tss = b
+                    .column_by_name("ts")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                let srcs = b
+                    .column_by_name("source")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let convs = b
+                    .column_by_name("conv_id")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let contents = b
+                    .column_by_name("content")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let layers = b
+                    .column_by_name("layer")
+                    .and_then(|c| c.as_any().downcast_ref::<Int8Array>());
+                let vectors = b
+                    .column_by_name("vector")
+                    .and_then(|c| c.as_any().downcast_ref::<FixedSizeListArray>());
+                for i in 0..b.num_rows() {
+                    let layer_val = layers.map(|a| a.value(i)).unwrap_or(0);
+                    let vector = vectors.and_then(|arr| {
+                        let fsl = arr.value(i);
+                        let floats = fsl.as_any().downcast_ref::<Float32Array>()?;
+                        Some(
+                            (0..floats.len())
+                                .map(|j| floats.value(j))
+                                .collect::<Vec<f32>>(),
+                        )
+                    });
+                    out.push(SearchHit {
+                        id: ids.value(i).to_string(),
+                        ts: tss.value(i),
+                        source: parse_source_or_placeholder(srcs.value(i)),
+                        conv_id: convs.value(i).to_string(),
+                        content: contents.value(i).to_string(),
+                        distance: 0.0, // no k-NN score for filter-only scan
+                        layer: layer_val,
+                        vector,
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await
     }
 
     /// Build/refresh a RaBitQ index on the vector column. Call periodically
@@ -429,68 +462,76 @@ impl ConversationIndex {
 
     /// Count rows at a specific layer. Used by doctor to report coverage.
     pub async fn count_rows_at_layer(&self, layer: i8) -> Result<u64> {
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&TABLE.to_string()) {
-            return Ok(0);
-        }
-        let table = self.db.open_table(TABLE).execute().await?;
-        let n = table.count_rows(Some(format!("layer = {layer}"))).await?;
-        Ok(n as u64)
+        let path = self.table_path();
+        guarded(&path, async {
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&TABLE.to_string()) {
+                return Ok(0);
+            }
+            let table = self.db.open_table(TABLE).execute().await?;
+            let n = table.count_rows(Some(format!("layer = {layer}"))).await?;
+            Ok(n as u64)
+        })
+        .await
     }
 
     pub async fn upsert_rollup_row(&mut self, row: RollupRow<'_>) -> Result<()> {
-        let _span = info_span!(
-            "conversations.index.upsert_rollup",
-            layer = row.layer,
-            conv = row.conv_id
-        )
-        .entered();
-        let schema = Arc::new(self.schema());
-        let tables = self.db.table_names().execute().await?;
+        let path = self.table_path();
+        guarded(&path, async {
+            let _span = info_span!(
+                "conversations.index.upsert_rollup",
+                layer = row.layer,
+                conv = row.conv_id
+            )
+            .entered();
+            let schema = Arc::new(self.schema());
+            let tables = self.db.table_names().execute().await?;
 
-        let id_arr = StringArray::from(vec![row.id]);
-        let ts_arr = Int64Array::from(vec![row.ts]);
-        let src_arr = StringArray::from(vec![row.source]);
-        let conv_arr = StringArray::from(vec![row.conv_id]);
-        let role_arr = StringArray::from(vec!["user"]); // placeholder
-        let layer_arr = Int8Array::from(vec![row.layer]);
-        let content_arr = StringArray::from(vec![row.content]);
-        let vec_arr = FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            self.dims,
-            Arc::new(Float32Array::from(row.vector.to_vec())),
-            None,
-        )?;
+            let id_arr = StringArray::from(vec![row.id]);
+            let ts_arr = Int64Array::from(vec![row.ts]);
+            let src_arr = StringArray::from(vec![row.source]);
+            let conv_arr = StringArray::from(vec![row.conv_id]);
+            let role_arr = StringArray::from(vec!["user"]); // placeholder
+            let layer_arr = Int8Array::from(vec![row.layer]);
+            let content_arr = StringArray::from(vec![row.content]);
+            let vec_arr = FixedSizeListArray::try_new(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                self.dims,
+                Arc::new(Float32Array::from(row.vector.to_vec())),
+                None,
+            )?;
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(id_arr),
-                Arc::new(ts_arr),
-                Arc::new(src_arr),
-                Arc::new(conv_arr),
-                Arc::new(role_arr),
-                Arc::new(layer_arr),
-                Arc::new(content_arr),
-                Arc::new(vec_arr),
-            ],
-        )?;
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(id_arr),
+                    Arc::new(ts_arr),
+                    Arc::new(src_arr),
+                    Arc::new(conv_arr),
+                    Arc::new(role_arr),
+                    Arc::new(layer_arr),
+                    Arc::new(content_arr),
+                    Arc::new(vec_arr),
+                ],
+            )?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
+            let batches = RecordBatchIterator::new(vec![Ok(batch)].into_iter(), schema.clone());
+            let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
 
-        if tables.contains(&TABLE.to_string()) {
-            self.db
-                .open_table(TABLE)
-                .execute()
-                .await?
-                .add(reader)
-                .execute()
-                .await?;
-        } else {
-            self.db.create_table(TABLE, reader).execute().await?;
-        }
-        Ok(())
+            if tables.contains(&TABLE.to_string()) {
+                self.db
+                    .open_table(TABLE)
+                    .execute()
+                    .await?
+                    .add(reader)
+                    .execute()
+                    .await?;
+            } else {
+                self.db.create_table(TABLE, reader).execute().await?;
+            }
+            Ok(())
+        })
+        .await
     }
 }
 

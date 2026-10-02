@@ -58,6 +58,11 @@ impl LanceDbStore {
         Ok(Self { db, dimensions })
     }
 
+    /// On-disk directory of `table`, used only in error messages.
+    fn table_path(&self, table: &str) -> std::path::PathBuf {
+        Path::new(self.db.uri()).join(format!("{table}.lance"))
+    }
+
     /// Build/rebuild the entire index from patterns + their embeddings.
     #[allow(dead_code)] // Public API, used by tests
     pub async fn build_index(&self, patterns: &[(Pattern, Vec<f32>)]) -> Result<()> {
@@ -203,59 +208,63 @@ impl LanceDbStore {
         limit: usize,
         item_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&TABLE_NAME.to_string()) {
-            return Ok(vec![]);
-        }
-
-        let table = self.db.open_table(TABLE_NAME).execute().await?;
-
-        let mut query = table
-            .vector_search(query_embedding)
-            .context("vector search")?;
-
-        if let Some(t) = item_type {
-            query = query.only_if(format!("item_type = '{}'", t));
-        }
-
-        let results = query
-            .limit(limit)
-            .execute()
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        let mut search_results = Vec::new();
-        for batch in &results {
-            let names = batch
-                .column_by_name("name")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let distances = batch
-                .column_by_name("_distance")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .unwrap();
-            let types = batch
-                .column_by_name("item_type")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-
-            for i in 0..batch.num_rows() {
-                search_results.push(SearchResult {
-                    name: names.value(i).to_string(),
-                    distance: distances.value(i),
-                    similarity: 1.0 / (1.0 + distances.value(i)),
-                    item_type: types
-                        .map(|t| t.value(i).to_string())
-                        .unwrap_or_else(|| "pattern".into()),
-                });
+        let table_path = self.table_path(TABLE_NAME);
+        super::unreadable::guard(TABLE_NAME, &table_path, async move {
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&TABLE_NAME.to_string()) {
+                return Ok(vec![]);
             }
-        }
 
-        Ok(search_results)
+            let table = self.db.open_table(TABLE_NAME).execute().await?;
+
+            let mut query = table
+                .vector_search(query_embedding)
+                .context("vector search")?;
+
+            if let Some(t) = item_type {
+                query = query.only_if(format!("item_type = '{}'", t));
+            }
+
+            let results = query
+                .limit(limit)
+                .execute()
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            let mut search_results = Vec::new();
+            for batch in &results {
+                let names = batch
+                    .column_by_name("name")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                let distances = batch
+                    .column_by_name("_distance")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .unwrap();
+                let types = batch
+                    .column_by_name("item_type")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+
+                for i in 0..batch.num_rows() {
+                    search_results.push(SearchResult {
+                        name: names.value(i).to_string(),
+                        distance: distances.value(i),
+                        similarity: 1.0 / (1.0 + distances.value(i)),
+                        item_type: types
+                            .map(|t| t.value(i).to_string())
+                            .unwrap_or_else(|| "pattern".into()),
+                    });
+                }
+            }
+
+            Ok(search_results)
+        })
+        .await
     }
 
     fn schema(dimensions: i32) -> Schema {
@@ -327,266 +336,290 @@ use async_trait::async_trait;
 #[async_trait]
 impl VectorStore for LanceDbStore {
     async fn upsert(&self, chunks: &[EmbeddedChunk]) -> Result<()> {
-        if chunks.is_empty() {
-            return Ok(());
-        }
-        // Validate dimensions BEFORE touching the table. The upsert is
-        // delete-then-add; if the add fails on a dimension mismatch after the
-        // delete succeeded, the rows are silently lost.
-        let want = self.dimensions as usize;
-        if let Some(bad) = chunks.iter().find(|c| c.embedding.len() != want) {
-            anyhow::bail!(
-                "embedding for chunk '{}' has {} dimensions, store expects {}",
-                bad.chunk_id,
-                bad.embedding.len(),
-                want
-            );
-        }
-        self.ensure_sources_table().await?;
-        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
-        let existing = table.schema().await?;
-        if let Ok(field) = existing.field_with_name("vector")
-            && let DataType::FixedSizeList(_, n) = field.data_type()
-            && *n != self.dimensions
-        {
-            anyhow::bail!(
-                "sources table has {n}-dimensional vectors but the configured embedding \
-                 dimension is {}; move the table aside and run `mur skill reindex-vec` \
-                 to rebuild it",
-                self.dimensions
-            );
-        }
+        let table_path = self.table_path(SOURCES_TABLE);
+        super::unreadable::guard(SOURCES_TABLE, &table_path, async move {
+            if chunks.is_empty() {
+                return Ok(());
+            }
+            // Validate dimensions BEFORE touching the table. The upsert is
+            // delete-then-add; if the add fails on a dimension mismatch after the
+            // delete succeeded, the rows are silently lost.
+            let want = self.dimensions as usize;
+            if let Some(bad) = chunks.iter().find(|c| c.embedding.len() != want) {
+                anyhow::bail!(
+                    "embedding for chunk '{}' has {} dimensions, store expects {}",
+                    bad.chunk_id,
+                    bad.embedding.len(),
+                    want
+                );
+            }
+            self.ensure_sources_table().await?;
+            let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+            let existing = table.schema().await?;
+            if let Ok(field) = existing.field_with_name("vector")
+                && let DataType::FixedSizeList(_, n) = field.data_type()
+                && *n != self.dimensions
+            {
+                anyhow::bail!(
+                    "sources table has {n}-dimensional vectors but the configured embedding \
+                     dimension is {}; move the table aside and run `mur skill reindex-vec` \
+                     to rebuild it",
+                    self.dimensions
+                );
+            }
 
-        // Delete any existing rows with these chunk_ids (idempotent upsert).
-        let ids: Vec<String> = chunks
-            .iter()
-            .map(|c| format!("'{}'", c.chunk_id.replace('\'', "''")))
-            .collect();
-        let predicate = format!("chunk_id IN ({})", ids.join(","));
-        let _ = table.delete(&predicate).await;
+            // Delete any existing rows with these chunk_ids (idempotent upsert).
+            let ids: Vec<String> = chunks
+                .iter()
+                .map(|c| format!("'{}'", c.chunk_id.replace('\'', "''")))
+                .collect();
+            let predicate = format!("chunk_id IN ({})", ids.join(","));
+            let _ = table.delete(&predicate).await;
 
-        // Build column arrays.
-        let chunk_ids: Vec<&str> = chunks.iter().map(|c| c.chunk_id.as_str()).collect();
-        let source_ids: Vec<&str> = chunks.iter().map(|c| c.source_id.as_str()).collect();
-        let external_ids: Vec<&str> = chunks.iter().map(|c| c.external_id.as_str()).collect();
-        let ordinals: Vec<u64> = chunks.iter().map(|c| c.ordinal as u64).collect();
-        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-        let heading_paths: Vec<String> = chunks
-            .iter()
-            .map(|c| serde_json::to_string(&c.heading_path).unwrap_or_else(|_| "[]".into()))
-            .collect();
-        let heading_path_refs: Vec<&str> = heading_paths.iter().map(|s| s.as_str()).collect();
-        let char_starts: Vec<u64> = chunks.iter().map(|c| c.char_range.0 as u64).collect();
-        let char_ends: Vec<u64> = chunks.iter().map(|c| c.char_range.1 as u64).collect();
-        let updated_at_ms: Vec<i64> = chunks
-            .iter()
-            .map(|c| c.updated_at.timestamp_millis())
-            .collect();
+            // Build column arrays.
+            let chunk_ids: Vec<&str> = chunks.iter().map(|c| c.chunk_id.as_str()).collect();
+            let source_ids: Vec<&str> = chunks.iter().map(|c| c.source_id.as_str()).collect();
+            let external_ids: Vec<&str> = chunks.iter().map(|c| c.external_id.as_str()).collect();
+            let ordinals: Vec<u64> = chunks.iter().map(|c| c.ordinal as u64).collect();
+            let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+            let heading_paths: Vec<String> = chunks
+                .iter()
+                .map(|c| serde_json::to_string(&c.heading_path).unwrap_or_else(|_| "[]".into()))
+                .collect();
+            let heading_path_refs: Vec<&str> = heading_paths.iter().map(|s| s.as_str()).collect();
+            let char_starts: Vec<u64> = chunks.iter().map(|c| c.char_range.0 as u64).collect();
+            let char_ends: Vec<u64> = chunks.iter().map(|c| c.char_range.1 as u64).collect();
+            let updated_at_ms: Vec<i64> = chunks
+                .iter()
+                .map(|c| c.updated_at.timestamp_millis())
+                .collect();
 
-        let all_vectors: Vec<f32> = chunks.iter().flat_map(|c| c.embedding.clone()).collect();
-        let values = Float32Array::from(all_vectors);
-        let item_field = Arc::new(Field::new("item", DataType::Float32, true));
-        let vector_array =
-            FixedSizeListArray::new(item_field, self.dimensions, Arc::new(values), None);
+            let all_vectors: Vec<f32> = chunks.iter().flat_map(|c| c.embedding.clone()).collect();
+            let values = Float32Array::from(all_vectors);
+            let item_field = Arc::new(Field::new("item", DataType::Float32, true));
+            let vector_array =
+                FixedSizeListArray::new(item_field, self.dimensions, Arc::new(values), None);
 
-        let schema = sources_schema(self.dimensions);
-        use arrow_array::{Int64Array, UInt64Array};
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![
-                Arc::new(StringArray::from(chunk_ids)),
-                Arc::new(StringArray::from(source_ids)),
-                Arc::new(StringArray::from(external_ids)),
-                Arc::new(UInt64Array::from(ordinals)),
-                Arc::new(StringArray::from(texts)),
-                Arc::new(StringArray::from(heading_path_refs)),
-                Arc::new(UInt64Array::from(char_starts)),
-                Arc::new(UInt64Array::from(char_ends)),
-                Arc::new(Int64Array::from(updated_at_ms)),
-                Arc::new(vector_array),
-            ],
-        )?;
+            let schema = sources_schema(self.dimensions);
+            use arrow_array::{Int64Array, UInt64Array};
+            let batch = RecordBatch::try_new(
+                Arc::new(schema.clone()),
+                vec![
+                    Arc::new(StringArray::from(chunk_ids)),
+                    Arc::new(StringArray::from(source_ids)),
+                    Arc::new(StringArray::from(external_ids)),
+                    Arc::new(UInt64Array::from(ordinals)),
+                    Arc::new(StringArray::from(texts)),
+                    Arc::new(StringArray::from(heading_path_refs)),
+                    Arc::new(UInt64Array::from(char_starts)),
+                    Arc::new(UInt64Array::from(char_ends)),
+                    Arc::new(Int64Array::from(updated_at_ms)),
+                    Arc::new(vector_array),
+                ],
+            )?;
 
-        let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
-        let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
-        table.add(reader).execute().await?;
-        Ok(())
+            let batches = RecordBatchIterator::new(vec![Ok(batch)], Arc::new(schema));
+            let reader: Box<dyn arrow_array::RecordBatchReader + Send> = Box::new(batches);
+            table.add(reader).execute().await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn search(&self, query_vec: &[f32], k: usize, filter: &SearchFilter) -> Result<Vec<Hit>> {
-        use futures::TryStreamExt;
-        use lancedb::query::{ExecutableQuery, QueryBase};
+        let table_path = self.table_path(SOURCES_TABLE);
+        super::unreadable::guard(SOURCES_TABLE, &table_path, async move {
+            use futures::TryStreamExt;
+            use lancedb::query::{ExecutableQuery, QueryBase};
 
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&SOURCES_TABLE.to_string()) {
-            return Ok(vec![]);
-        }
-        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
-
-        let mut query = table
-            .vector_search(query_vec.to_vec())
-            .context("vector_search")?;
-
-        // Build WHERE predicate from filter.
-        let mut predicates: Vec<String> = Vec::new();
-        if let Some(ids) = &filter.source_ids
-            && !ids.is_empty()
-        {
-            let escaped: Vec<String> = ids
-                .iter()
-                .map(|s| format!("'{}'", s.replace('\'', "''")))
-                .collect();
-            predicates.push(format!("source_id IN ({})", escaped.join(",")));
-        }
-        if let Some(since) = filter.since {
-            predicates.push(format!("updated_at_ms >= {}", since.timestamp_millis()));
-        }
-        if !predicates.is_empty() {
-            query = query.only_if(predicates.join(" AND "));
-        }
-
-        let results = query
-            .limit(k)
-            .execute()
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        let mut hits: Vec<Hit> = Vec::new();
-        for batch in &results {
-            use arrow_array::{Int64Array, StringArray};
-            let chunk_ids = batch
-                .column_by_name("chunk_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("column chunk_id missing or wrong type")?;
-            let source_ids = batch
-                .column_by_name("source_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("column source_id missing")?;
-            let external_ids = batch
-                .column_by_name("external_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("column external_id missing")?;
-            let texts = batch
-                .column_by_name("text")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("column text missing")?;
-            let heading_paths = batch
-                .column_by_name("heading_path")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("column heading_path missing")?;
-            let updated_at_ms = batch
-                .column_by_name("updated_at_ms")
-                .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
-                .context("column updated_at_ms missing")?;
-            let distances = batch
-                .column_by_name("_distance")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
-                .context("column _distance missing")?;
-
-            for i in 0..batch.num_rows() {
-                let d = distances.value(i);
-                let score = 1.0 / (1.0 + d);
-                let hp: Vec<String> =
-                    serde_json::from_str(heading_paths.value(i)).unwrap_or_default();
-                let ms = updated_at_ms.value(i);
-                let ts = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
-                    .unwrap_or_else(chrono::Utc::now);
-                hits.push(Hit {
-                    chunk_id: chunk_ids.value(i).to_string(),
-                    source_id: source_ids.value(i).to_string(),
-                    external_id: external_ids.value(i).to_string(),
-                    score,
-                    text: texts.value(i).to_string(),
-                    heading_path: hp,
-                    updated_at: ts,
-                });
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&SOURCES_TABLE.to_string()) {
+                return Ok(vec![]);
             }
-        }
-        Ok(hits)
+            let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+
+            let mut query = table
+                .vector_search(query_vec.to_vec())
+                .context("vector_search")?;
+
+            // Build WHERE predicate from filter.
+            let mut predicates: Vec<String> = Vec::new();
+            if let Some(ids) = &filter.source_ids
+                && !ids.is_empty()
+            {
+                let escaped: Vec<String> = ids
+                    .iter()
+                    .map(|s| format!("'{}'", s.replace('\'', "''")))
+                    .collect();
+                predicates.push(format!("source_id IN ({})", escaped.join(",")));
+            }
+            if let Some(since) = filter.since {
+                predicates.push(format!("updated_at_ms >= {}", since.timestamp_millis()));
+            }
+            if !predicates.is_empty() {
+                query = query.only_if(predicates.join(" AND "));
+            }
+
+            let results = query
+                .limit(k)
+                .execute()
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            let mut hits: Vec<Hit> = Vec::new();
+            for batch in &results {
+                use arrow_array::{Int64Array, StringArray};
+                let chunk_ids = batch
+                    .column_by_name("chunk_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .context("column chunk_id missing or wrong type")?;
+                let source_ids = batch
+                    .column_by_name("source_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .context("column source_id missing")?;
+                let external_ids = batch
+                    .column_by_name("external_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .context("column external_id missing")?;
+                let texts = batch
+                    .column_by_name("text")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .context("column text missing")?;
+                let heading_paths = batch
+                    .column_by_name("heading_path")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .context("column heading_path missing")?;
+                let updated_at_ms = batch
+                    .column_by_name("updated_at_ms")
+                    .and_then(|c| c.as_any().downcast_ref::<Int64Array>())
+                    .context("column updated_at_ms missing")?;
+                let distances = batch
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
+                    .context("column _distance missing")?;
+
+                for i in 0..batch.num_rows() {
+                    let d = distances.value(i);
+                    let score = 1.0 / (1.0 + d);
+                    let hp: Vec<String> =
+                        serde_json::from_str(heading_paths.value(i)).unwrap_or_default();
+                    let ms = updated_at_ms.value(i);
+                    let ts = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+                        .unwrap_or_else(chrono::Utc::now);
+                    hits.push(Hit {
+                        chunk_id: chunk_ids.value(i).to_string(),
+                        source_id: source_ids.value(i).to_string(),
+                        external_id: external_ids.value(i).to_string(),
+                        score,
+                        text: texts.value(i).to_string(),
+                        heading_path: hp,
+                        updated_at: ts,
+                    });
+                }
+            }
+            Ok(hits)
+        })
+        .await
     }
 
     async fn delete_by_external_ids(&self, source_id: &str, external_ids: &[String]) -> Result<()> {
-        if external_ids.is_empty() {
-            return Ok(());
-        }
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&SOURCES_TABLE.to_string()) {
-            return Ok(());
-        }
-        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
-        let escaped: Vec<String> = external_ids
-            .iter()
-            .map(|e| format!("'{}'", e.replace('\'', "''")))
-            .collect();
-        let predicate = format!(
-            "source_id = '{}' AND external_id IN ({})",
-            source_id.replace('\'', "''"),
-            escaped.join(",")
-        );
-        table.delete(&predicate).await?;
-        Ok(())
+        let table_path = self.table_path(SOURCES_TABLE);
+        super::unreadable::guard(SOURCES_TABLE, &table_path, async move {
+            if external_ids.is_empty() {
+                return Ok(());
+            }
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&SOURCES_TABLE.to_string()) {
+                return Ok(());
+            }
+            let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+            let escaped: Vec<String> = external_ids
+                .iter()
+                .map(|e| format!("'{}'", e.replace('\'', "''")))
+                .collect();
+            let predicate = format!(
+                "source_id = '{}' AND external_id IN ({})",
+                source_id.replace('\'', "''"),
+                escaped.join(",")
+            );
+            table.delete(&predicate).await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn delete_by_source(&self, source_id: &str) -> Result<()> {
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&SOURCES_TABLE.to_string()) {
-            return Ok(());
-        }
-        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
-        let predicate = format!("source_id = '{}'", source_id.replace('\'', "''"));
-        table.delete(&predicate).await?;
-        Ok(())
+        let table_path = self.table_path(SOURCES_TABLE);
+        super::unreadable::guard(SOURCES_TABLE, &table_path, async move {
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&SOURCES_TABLE.to_string()) {
+                return Ok(());
+            }
+            let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+            let predicate = format!("source_id = '{}'", source_id.replace('\'', "''"));
+            table.delete(&predicate).await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn list_external_ids(&self, source_id: &str) -> Result<Vec<String>> {
-        use futures::TryStreamExt;
-        use lancedb::query::{ExecutableQuery, QueryBase};
+        let table_path = self.table_path(SOURCES_TABLE);
+        super::unreadable::guard(SOURCES_TABLE, &table_path, async move {
+            use futures::TryStreamExt;
+            use lancedb::query::{ExecutableQuery, QueryBase};
 
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&SOURCES_TABLE.to_string()) {
-            return Ok(vec![]);
-        }
-        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
-        let batches = table
-            .query()
-            .only_if(format!("source_id = '{}'", source_id.replace('\'', "''")))
-            .select(lancedb::query::Select::Columns(vec![
-                "external_id".to_string(),
-            ]))
-            .execute()
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        let mut set: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for batch in &batches {
-            let col = batch
-                .column_by_name("external_id")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
-                .context("column external_id missing")?;
-            for i in 0..batch.num_rows() {
-                set.insert(col.value(i).to_string());
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&SOURCES_TABLE.to_string()) {
+                return Ok(vec![]);
             }
-        }
-        Ok(set.into_iter().collect())
+            let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+            let batches = table
+                .query()
+                .only_if(format!("source_id = '{}'", source_id.replace('\'', "''")))
+                .select(lancedb::query::Select::Columns(vec![
+                    "external_id".to_string(),
+                ]))
+                .execute()
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            let mut set: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for batch in &batches {
+                let col = batch
+                    .column_by_name("external_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .context("column external_id missing")?;
+                for i in 0..batch.num_rows() {
+                    set.insert(col.value(i).to_string());
+                }
+            }
+            Ok(set.into_iter().collect())
+        })
+        .await
     }
 
     async fn count(&self, source_id: Option<&str>) -> Result<usize> {
-        let tables = self.db.table_names().execute().await?;
-        if !tables.contains(&SOURCES_TABLE.to_string()) {
-            return Ok(0);
-        }
-        let table = self.db.open_table(SOURCES_TABLE).execute().await?;
-        let total = match source_id {
-            None => table.count_rows(None).await?,
-            Some(sid) => {
-                table
-                    .count_rows(Some(format!("source_id = '{}'", sid.replace('\'', "''"))))
-                    .await?
+        let table_path = self.table_path(SOURCES_TABLE);
+        super::unreadable::guard(SOURCES_TABLE, &table_path, async move {
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&SOURCES_TABLE.to_string()) {
+                return Ok(0);
             }
-        };
-        Ok(total)
+            let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+            let total = match source_id {
+                None => table.count_rows(None).await?,
+                Some(sid) => {
+                    table
+                        .count_rows(Some(format!("source_id = '{}'", sid.replace('\'', "''"))))
+                        .await?
+                }
+            };
+            Ok(total)
+        })
+        .await
     }
 
     async fn rebuild_index(&self) -> Result<()> {
