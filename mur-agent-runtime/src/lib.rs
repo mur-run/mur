@@ -5,6 +5,9 @@
 
 #![allow(dead_code)]
 
+/// Per-agent scratch dir (`<mur_home>/tmp/<agent>`), shared by grants,
+/// child env and prompt.
+pub mod agent_paths;
 pub mod bounds;
 pub mod bridge;
 pub mod cli_spawn;
