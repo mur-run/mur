@@ -14,7 +14,7 @@ fn copy_dir_recursive_copies_nested_subdirectories() {
     std::fs::write(src.join("skill.yaml"), "top-level").unwrap();
     std::fs::write(src.join("references").join("auth.md"), "nested").unwrap();
 
-    super::copy_dir_recursive(&src, &dest).unwrap();
+    super::skill_install::copy_dir_recursive(&src, &dest).unwrap();
 
     assert_eq!(
         std::fs::read_to_string(dest.join("skill.yaml")).unwrap(),
