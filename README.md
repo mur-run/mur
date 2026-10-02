@@ -704,8 +704,12 @@ Agent** wizard offers the same catalog as a source.
   **dead** the moment you ask instead of claiming to be running until a timeout
   expires; a long run is not falsely failed while it is still working; and a
   record rebuilt from the channel admits its heartbeat is unknown rather than
-  printing a stale pid as fact. An unreadable record is reported as unreadable,
-  never as a run that never existed.
+  printing a stale pid as fact. A run whose process died without recording a
+  result, and whose last heartbeat is past the grace window (15 min at the
+  default heartbeat), reads **abandoned** on every surface — `mur job status`,
+  `mur job list`, `mur fleet status`, `mur_job_status` and `mur monitor` alike —
+  with a note that this is not a failure verdict. An unreadable record is
+  reported as unreadable, never as a run that never existed.
 - **Settlement** — a turn that changed anything ends with a card the runtime
   draws from its own tool records, not from the model's summary: what was
   **verified** (a command ran and passed), what was **changed** (files edited,
