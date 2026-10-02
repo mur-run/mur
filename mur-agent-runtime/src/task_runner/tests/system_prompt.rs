@@ -498,3 +498,32 @@ async fn an_unattended_turn_is_refused_at_once_with_a_readable_reason() {
         .unwrap_or_default();
     assert!(!why.contains("tool-allow"), "different path: {why}");
 }
+
+/// #10 prompt half: a granted scratch dir adds the spec's line right after
+/// the artifacts bullet; without one the rule is byte-for-byte unchanged.
+#[test]
+fn scratch_line_follows_artifacts_bullet_only_when_granted() {
+    let p = std::path::Path::new("/home/u/.mur/tmp/w1");
+    let with = output_locations_rule(Some(p));
+    let line = "- Scratch files (temp output, intermediate data) go in `/home/u/.mur/tmp/w1` — this is also `$TMPDIR`. Never use `/tmp`: it is outside your write entitlement and write_file/edit_file will reject it.";
+    let art = with.find("- Run artifacts").expect("artifacts bullet");
+    let at = with.find(line).expect("scratch line present");
+    assert!(at > art, "scratch line comes after the artifacts bullet");
+    assert!(!with.contains("`/tmp` is not writable"));
+    assert!(with.ends_with(line));
+
+    let without = output_locations_rule(None);
+    assert!(!without.contains("Scratch files"));
+    assert_eq!(
+        with.strip_suffix(line).unwrap().trim_end_matches('\n'),
+        without
+    );
+}
+
+/// The runner's own scratch dir reaches the assembled prompt.
+#[test]
+fn runner_scratch_dir_reaches_the_system_prompt() {
+    let runner = TaskRunner::new_stub_echo().with_scratch_dir(Some("/x/tmp/a".into()));
+    let (sys, _) = runner.assemble_system_prompt(None, "hi", None, None);
+    assert!(sys.contains("go in `/x/tmp/a`"));
+}

@@ -328,7 +328,7 @@ fn allow_extra_write_paths_adds_and_dedups() {
     assert_eq!(policy.fs_write.iter().filter(|p| **p == extra).count(), 1);
 }
 
-/// The system prompt's output-locations rule (`OUTPUT_LOCATIONS_RULE`)
+/// The system prompt's output-locations rule (`output_locations_rule`)
 /// tells every agent to put reports and scratch output in
 /// `~/.mur/artifacts/<agent>/<run>/`. Nothing granted it, so an agent
 /// following its own instructions was refused — observed 2026-09-13, after

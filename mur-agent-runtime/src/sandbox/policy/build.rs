@@ -237,7 +237,7 @@ impl SandboxPolicy {
         }
 
         // `<mur_home>/artifacts/<agent>` — where the system prompt's
-        // output-locations rule (`task_runner::OUTPUT_LOCATIONS_RULE`) tells
+        // output-locations rule (`task_runner::output_locations_rule`) tells
         // every agent to put reports, quarantined files and scratch output.
         // Nothing granted it, so an agent following its own instructions was
         // refused; on 2026-09-13 one then reached for `/tmp`, and that denial

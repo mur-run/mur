@@ -5,10 +5,25 @@ use super::*;
 /// earlier wording ("never write into the working directory; the only
 /// exception is editing an existing file") sent an agent asked for a new
 /// `ci.yml` in the user's repo off to `~/.mur/artifacts` instead.
-pub(super) const OUTPUT_LOCATIONS_RULE: &str = "\n\n## Output locations\n\
+const OUTPUT_LOCATIONS_BASE: &str = "\n\n## Output locations\n\
 - Files that belong to the project in the working directory (source, config, CI definitions — new or existing) go in that project, where the user expects them.\n\
 - Knowledge objects (workflows, skills, notes): register with the real command so they land in ~/.mur and show up in MUR and the Hub — `mur skill install <path>` for a skill, `mur workflow new` for a workflow. Never leave the definition in a source tree.\n\
 - Run artifacts that are not part of any project (reports, quarantined files, scratch output): write to ~/.mur/artifacts/<your-agent-name>/<run>/, where <run> is a short timestamp or task label — never into a source tree.";
+
+/// The scratch-dir bullet, appended after the artifacts bullet. Deliberately
+/// does not claim "`/tmp` is not writable" — false for bash children on macOS.
+const SCRATCH_LINE: &str = "\n- Scratch files (temp output, intermediate data) go in `{tmp_dir}` — this is also `$TMPDIR`. Never use `/tmp`: it is outside your write entitlement and write_file/edit_file will reject it.";
+
+/// The output-locations rule. `scratch` is the agent's granted scratch dir;
+/// `None` (path could not be derived, already logged) omits the scratch line
+/// rather than pointing at a path that is not granted.
+pub(super) fn output_locations_rule(scratch: Option<&std::path::Path>) -> String {
+    let mut s = OUTPUT_LOCATIONS_BASE.to_string();
+    if let Some(p) = scratch {
+        s.push_str(&SCRATCH_LINE.replace("{tmp_dir}", &p.to_string_lossy()));
+    }
+    s
+}
 
 /// Declares the session working directory in the system prompt every turn.
 /// It lives here and not in the first user message because history is
@@ -51,7 +66,7 @@ impl TaskRunner {
         active_team: Option<&str>,
     ) -> (String, Vec<String>) {
         let mut base = self.system_prompt.clone().unwrap_or_default();
-        base.push_str(OUTPUT_LOCATIONS_RULE);
+        base.push_str(&output_locations_rule(self.scratch_dir.as_deref()));
         if let Some(frag) = self.secrets.as_ref().and_then(|v| v.prompt_fragment()) {
             base.push_str(&frag);
         }

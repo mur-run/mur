@@ -356,9 +356,10 @@ pub async fn build_provider_runner(
     // One configuration chain, fed by either track. Split out so the CLI
     // branch below cannot drift from the in-process one: a runner missing its
     // tools policy would spawn a CLI whose calls arrive unpoliced.
+    let scratch_dir = crate::agent_paths::agent_scratch_dir(agent_home).ok();
     let build_base = |base: TaskRunner| {
         crate::supervisor_runner::build_runner(
-            base,
+            base.with_scratch_dir(scratch_dir.clone()),
             system_prompt_with_memory.clone(),
             runtime_skills.clone(),
             skills_cfg.clone(),
