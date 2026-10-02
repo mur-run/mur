@@ -43,7 +43,7 @@ pub const FLEET_PROGRESS_FILE: &str = ".run_progress.json";
 ///
 /// [`FLEET_STATE`] is listed for the CLI side and for tests; the sandbox
 /// carves in only the `fleet_run.fleets` subdirectories of it (see
-/// `mur-agent-runtime` `sandbox/policy.rs`), so an agent cannot queue work
+/// `mur-agent-runtime` `sandbox/policy/build.rs`), so an agent cannot queue work
 /// for a fleet the operator never let it run.
 pub const RUN_STATE_DIRS: [&str; 5] =
     [FLEET_STATE, "commander", "conversations", "artifacts", RUNS];

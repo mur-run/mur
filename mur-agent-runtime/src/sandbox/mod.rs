@@ -5,7 +5,7 @@ pub mod policy;
 pub mod reqwest_guard;
 pub mod search_dirs;
 
-// Unconditional: `partition_write_grants` is shared with policy.rs on every
+// Unconditional: `partition_write_grants` is shared with sandbox::policy on every
 // platform; only the apply path inside is linux-gated.
 mod linux;
 #[cfg(target_os = "macos")]
