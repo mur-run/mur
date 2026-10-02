@@ -407,7 +407,8 @@ fn actions_for_outcome(row: &MonitorRow) -> &[Action] {
     match row.outcome {
         Outcome::Succeeded => &row.spec.actions.on_success,
         Outcome::Failed | Outcome::Cancelled => &row.spec.actions.on_failure,
-        Outcome::Pending | Outcome::Unknown => &[],
+        // `Abandoned` (#1622): the work's fate is unknown — same as `Unknown`.
+        Outcome::Pending | Outcome::Unknown | Outcome::Abandoned => &[],
     }
 }
 

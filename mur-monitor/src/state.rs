@@ -63,6 +63,11 @@ pub enum Outcome {
     Failed,
     Cancelled,
     Unknown,
+    /// The work's process is gone and nothing ever recorded a result, past
+    /// the grace window (#1622). Terminal, so the monitor settles instead of
+    /// polling a corpse forever — but deliberately NOT `Failed`: we do not
+    /// know what happened, and `failed` would be a guess. Runs no actions.
+    Abandoned,
 }
 
 impl Outcome {
@@ -73,6 +78,7 @@ impl Outcome {
             Outcome::Failed => "failed",
             Outcome::Cancelled => "cancelled",
             Outcome::Unknown => "unknown",
+            Outcome::Abandoned => "abandoned",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -82,13 +88,14 @@ impl Outcome {
             "failed" => Some(Outcome::Failed),
             "cancelled" => Some(Outcome::Cancelled),
             "unknown" => Some(Outcome::Unknown),
+            "abandoned" => Some(Outcome::Abandoned),
             _ => None,
         }
     }
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            Outcome::Succeeded | Outcome::Failed | Outcome::Cancelled
+            Outcome::Succeeded | Outcome::Failed | Outcome::Cancelled | Outcome::Abandoned
         )
     }
 }
@@ -110,12 +117,22 @@ mod tests {
     }
 
     #[test]
-    fn only_three_outcomes_are_terminal() {
+    fn only_settled_outcomes_are_terminal() {
         assert!(Outcome::Succeeded.is_terminal());
         assert!(Outcome::Failed.is_terminal());
         assert!(Outcome::Cancelled.is_terminal());
         assert!(!Outcome::Pending.is_terminal());
         assert!(!Outcome::Unknown.is_terminal());
         assert_eq!(Outcome::parse("unknown"), Some(Outcome::Unknown));
+    }
+
+    #[test]
+    fn abandoned_is_terminal_distinct_from_failed_and_round_trips() {
+        // #1622: a run whose process died without recording a result must
+        // settle, but saying `failed` would be a guess.
+        assert!(Outcome::Abandoned.is_terminal());
+        assert_ne!(Outcome::Abandoned, Outcome::Failed);
+        assert_eq!(Outcome::Abandoned.as_str(), "abandoned");
+        assert_eq!(Outcome::parse("abandoned"), Some(Outcome::Abandoned));
     }
 }
