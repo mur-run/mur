@@ -378,7 +378,7 @@ pub fn all_tools() -> Vec<Tool> {
         },
         Tool {
             name: "mur_job_status".into(),
-            description: "Report the live status of a MUR run (a parallel_jobs dispatch, a fleet_run, or a workflow run) by its run_id. Returns both a semantic state (running / blocked / done / failed / stopped) and a liveness verdict (alive / STALLED / DEAD / unknown). Use this after parallel_jobs or fleet_run hand you a run_id — poll here instead of re-dispatching.".into(),
+            description: "Report the live status of a MUR run (a parallel_jobs dispatch, a fleet_run, or a workflow run) by its run_id. Returns both a semantic state (running / blocked / done / failed / stopped / abandoned — the process died without recording a result; not a failure verdict) and a liveness verdict (alive / STALLED / DEAD / unknown). Use this after parallel_jobs or fleet_run hand you a run_id — poll here instead of re-dispatching.".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
                 properties: Some(BTreeMap::from([(
@@ -856,13 +856,10 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 mur_core::run_status::Liveness::Unknown => "unknown",
                 mur_core::run_status::Liveness::NotApplicable => "n/a",
             };
-            let state = match status.state {
-                mur_core::run_status::State::Running => "running",
-                mur_core::run_status::State::Blocked => "blocked",
-                mur_core::run_status::State::Done => "done",
-                mur_core::run_status::State::Failed => "failed",
-                mur_core::run_status::State::Stopped => "stopped",
-            };
+            // The same STATE cell `mur job status` prints, so a long-dead run
+            // reads `abandoned` here too instead of an agent polling a
+            // `running` corpse forever.
+            let state = mur_core::cmd::job::state_cell(&status);
             let mut output = format!(
                 "run {} — state: {state}, liveness: {liveness}\nlabel: {}\nstarted: {}\nsteps: {}",
                 status.run.run_id,

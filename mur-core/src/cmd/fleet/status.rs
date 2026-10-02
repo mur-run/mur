@@ -248,6 +248,48 @@ mod tests {
         );
     }
 
+    /// #1622 follow-up, end to end through `status_of`: the fleet's latest
+    /// run is still `running` on disk, its process is gone, and its last
+    /// heartbeat is long past the grace window. `mur fleet status` must say
+    /// `abandoned`, not `running`.
+    #[test]
+    fn fleet_status_reports_a_long_dead_run_as_abandoned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        super::super::store::save_fleet(mur_home, &sample_fleet("dev", "fleet-dev")).unwrap();
+        save_run(mur_home, "run-dead", "fleet-dev", chrono::Utc::now());
+        let stale = crate::run_status::stale_after(&mur_common::config::RunsConfig::default());
+        store::update(mur_home, "run-dead", |r| {
+            r.state = State::Running;
+            r.pid = dead_pid();
+            r.last_heartbeat_at = Some(
+                chrono::Utc::now()
+                    - crate::run_status::abandon::grace(stale)
+                    - chrono::Duration::minutes(1),
+            );
+        })
+        .unwrap();
+
+        let mut out = Vec::new();
+        cmd_fleet_status(mur_home, "dev", &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("state     abandoned\n"), "{text}");
+        assert!(!text.contains("state     running"), "{text}");
+    }
+
+    fn dead_pid() -> u32 {
+        #[cfg(unix)]
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit 0"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
     #[test]
     fn fleet_status_without_any_run_says_so() {
         let tmp = tempfile::tempdir().unwrap();

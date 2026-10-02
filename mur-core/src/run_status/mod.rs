@@ -18,6 +18,7 @@
 //! indexes the channel lives inside that directory, and without it there is
 //! no way to know which channel to fold.
 
+pub mod abandon;
 pub mod heartbeat;
 pub mod rebuild;
 pub mod store;
@@ -158,6 +159,11 @@ pub struct RunState {
 pub struct RunStatus {
     pub state: State,
     pub liveness: Liveness,
+    /// The process died without recording a terminal state, and its last
+    /// heartbeat is past `abandon::grace` — nothing will ever record one.
+    /// Derived here (never stored) so every surface reports the same verdict
+    /// for the same run; `state` keeps saying what the record says.
+    pub abandoned: bool,
     pub run: RunState,
 }
 
@@ -185,9 +191,16 @@ pub fn classify(run: RunState, now: DateTime<Utc>, stale_after: chrono::Duration
             Some(_) => Liveness::Stalled,
         }
     };
+    let abandoned = abandon::is_abandoned(
+        liveness,
+        run.last_heartbeat_at,
+        now,
+        abandon::grace(stale_after),
+    );
     RunStatus {
         state: run.state,
         liveness,
+        abandoned,
         run,
     }
 }

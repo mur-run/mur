@@ -70,6 +70,17 @@ fn state_label(s: State) -> &'static str {
     }
 }
 
+/// The STATE a surface prints for a run. The stored state, except that a run
+/// `classify` judged `abandoned` says so — printing `running` for a process
+/// that died long ago is the lie #1622 removed from `mur monitor`.
+pub fn state_cell(s: &RunStatus) -> &'static str {
+    if s.abandoned {
+        "abandoned"
+    } else {
+        state_label(s.state)
+    }
+}
+
 /// Render one run's full status — the shared renderer for `mur job status`
 /// AND `mur fleet status`. Spec §4: these two surfaces derive through
 /// `status_of` and render through this ONE function; two renderers is how
@@ -78,8 +89,18 @@ pub fn print_status(w: &mut dyn std::io::Write, s: &RunStatus) {
     let _ = writeln!(w, "run       {}", s.run.run_id);
     let _ = writeln!(w, "kind      {:?}", s.run.kind);
     let _ = writeln!(w, "label     {}", s.run.label);
-    let _ = writeln!(w, "state     {}", state_label(s.state));
+    let _ = writeln!(w, "state     {}", state_cell(s));
     let _ = writeln!(w, "liveness  {}", liveness_label(s.liveness));
+    if s.abandoned {
+        // Same wording as `mur monitor show`: say what is known, and that it
+        // is not a verdict on the work.
+        let _ = writeln!(
+            w,
+            "note      process died without recording a result; the record still says `{}` \
+             (not a failure verdict — rerun to find out)",
+            state_label(s.state)
+        );
+    }
     // `last_heartbeat_at` is the one field a rebuild cannot recover, so `None`
     // IS the rebuilt marker (see `RunState`'s field doc). Deriving it once
     // keeps the pid and heartbeat lines from ever disagreeing about what this
@@ -149,7 +170,7 @@ pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
                 println!(
                     "{:<28} {:<9} {:<9} {}",
                     s.run.run_id,
-                    state_label(s.state),
+                    state_cell(&s),
                     liveness_label(s.liveness),
                     s.run.label
                 );
@@ -330,6 +351,48 @@ mod tests {
             visible_in_list(&s),
             "a crashed run was filtered out of the list"
         );
+    }
+
+    /// #1622 follow-up: a run whose process died long ago without a result
+    /// must not keep reading `running`. Both renderers (`mur job status` /
+    /// `mur fleet status` share `print_status`; `mur job list` uses the same
+    /// label) say `abandoned`, while liveness still says `DEAD`.
+    #[test]
+    fn a_dead_run_past_grace_renders_as_abandoned_not_running() {
+        let grace_secs =
+            crate::run_status::abandon::grace(chrono::Duration::seconds(30)).num_seconds();
+        let s = status(State::Running, dead_pid(), Some(grace_secs + 60));
+        assert!(s.abandoned);
+        assert_eq!(state_cell(&s), "abandoned");
+        let mut out = Vec::new();
+        print_status(&mut out, &s);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("state     abandoned\n"), "{text}");
+        assert!(text.contains("liveness  DEAD\n"), "{text}");
+        assert!(
+            !text.contains("state     running"),
+            "a long-dead run still reads as running: {text}"
+        );
+        let note = text
+            .lines()
+            .find(|l| l.starts_with("note"))
+            .unwrap_or_else(|| panic!("no explanation line:\n{text}"));
+        assert!(note.contains("not a failure"), "{note}");
+    }
+
+    /// Inside the grace window a result may still reconcile from the
+    /// channel, so the stored state is shown as-is; a stalled live process
+    /// is never abandoned.
+    #[test]
+    fn a_fresh_crash_or_a_stall_is_not_called_abandoned() {
+        let fresh = status(State::Running, dead_pid(), Some(5));
+        assert!(!fresh.abandoned);
+        assert_eq!(state_cell(&fresh), "running");
+
+        let stalled = status(State::Running, std::process::id(), Some(100_000));
+        assert_eq!(stalled.liveness, Liveness::Stalled);
+        assert!(!stalled.abandoned);
+        assert_eq!(state_cell(&stalled), "running");
     }
 
     #[test]
