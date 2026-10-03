@@ -282,31 +282,6 @@ fn anthropic_via_local_bridge_grants_loopback_port() {
     assert_eq!(local_llm_port(&profile, mur_home), None);
 }
 
-#[test]
-fn profile_needs_egress_matches_scoped_modes() {
-    use mur_common::agent::{McpNetMode, McpServerEntry, McpServerNetwork};
-    fn entry(mode: Option<McpNetMode>) -> McpServerEntry {
-        let mut e = McpServerEntry {
-            name: "s".into(),
-            command: "cmd".into(),
-            ..Default::default()
-        };
-        e.network = mode.map(|m| McpServerNetwork {
-            mode: m,
-            ..Default::default()
-        });
-        e
-    }
-    assert!(!profile_needs_egress(&[entry(None)]));
-    assert!(!profile_needs_egress(&[entry(Some(McpNetMode::Inherit))]));
-    assert!(!profile_needs_egress(&[entry(Some(McpNetMode::Off))]));
-    assert!(profile_needs_egress(&[entry(Some(McpNetMode::Restricted))]));
-    assert!(profile_needs_egress(&[
-        entry(None),
-        entry(Some(McpNetMode::BroadAudited))
-    ]));
-}
-
 fn entry(provider: &str, base_url: Option<&str>) -> ModelEntry {
     ModelEntry {
         provider: provider.to_string(),

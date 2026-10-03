@@ -251,6 +251,25 @@ pub struct McpServerNetwork {
     pub authorization: Option<EgressAuthorization>,
 }
 
+/// True when any of `entries` declares a scoped network policy
+/// (`Restricted` / `BroadAudited`) — i.e. it must be spawned behind the
+/// loopback egress proxy with a tokened `HTTPS_PROXY`.
+///
+/// The single source for that decision. The runtime calls it before the
+/// kernel sandbox seals (so the proxy port can be carved into the profile);
+/// `mur agent mcp add`'s live probe calls it to decide whether the probe child
+/// needs a proxy at all. Both must agree, or a server that passes the probe
+/// fails under the runtime (or vice versa) — which is why it lives here and
+/// not in either caller.
+pub fn entries_need_egress(entries: &[McpServerEntry]) -> bool {
+    entries.iter().any(|e| {
+        matches!(
+            e.network.as_ref().map(|n| n.mode),
+            Some(McpNetMode::Restricted) | Some(McpNetMode::BroadAudited)
+        )
+    })
+}
+
 /// A plugin-group imported by one agent (add-on Phase 2). Self-contained:
 /// members are installed PER-AGENT (skills under
 /// `~/.mur/agents/<a>/skills/`, mcp appended to this profile's
@@ -482,5 +501,33 @@ requires_programs:
         let without = "name: x\ncommand: y\n";
         let e2: crate::agent::McpServerEntry = serde_yaml::from_str(without).unwrap();
         assert!(e2.requires_programs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod egress_need_tests {
+    #[test]
+    fn entries_need_egress_matches_scoped_modes() {
+        use super::*;
+        fn entry(mode: Option<McpNetMode>) -> McpServerEntry {
+            let mut e = McpServerEntry {
+                name: "s".into(),
+                command: "cmd".into(),
+                ..Default::default()
+            };
+            e.network = mode.map(|m| McpServerNetwork {
+                mode: m,
+                ..Default::default()
+            });
+            e
+        }
+        assert!(!entries_need_egress(&[entry(None)]));
+        assert!(!entries_need_egress(&[entry(Some(McpNetMode::Inherit))]));
+        assert!(!entries_need_egress(&[entry(Some(McpNetMode::Off))]));
+        assert!(entries_need_egress(&[entry(Some(McpNetMode::Restricted))]));
+        assert!(entries_need_egress(&[
+            entry(None),
+            entry(Some(McpNetMode::BroadAudited))
+        ]));
     }
 }

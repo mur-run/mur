@@ -22,22 +22,6 @@ const OLLAMA_DEFAULT_BASE_URL: &str = "http://127.0.0.1:11434";
 /// not authenticate. Not a secret.
 pub(crate) const LOCAL_LLM_PLACEHOLDER_KEY: &str = "local-no-key";
 
-/// True when any enabled MCP server declares a scoped network policy
-/// (`Restricted` / `BroadAudited`) — i.e. the loopback egress proxy is
-/// needed. Called by `supervisor::entrypoint()` BEFORE the kernel sandbox
-/// seals, so the proxy's listener port can be carved into the profile
-/// (a post-seal ephemeral port is unreachable to sandboxed children —
-/// the G1 root cause).
-pub(crate) fn profile_needs_egress(entries: &[mur_common::agent::McpServerEntry]) -> bool {
-    entries.iter().any(|e| {
-        matches!(
-            e.network.as_ref().map(|n| n.mode),
-            Some(mur_common::agent::McpNetMode::Restricted)
-                | Some(mur_common::agent::McpNetMode::BroadAudited)
-        )
-    })
-}
-
 /// Provider marker for "this agent's model reference did not resolve".
 ///
 /// Deliberately NOT `echo`. A failure that borrows a legitimate value's
