@@ -275,6 +275,9 @@ impl StdioMcpClient {
         for (k, v) in proxy_env_for(entry, proxy) {
             std_cmd.env(k, v);
         }
+        for (k, v) in scratch_env_for(policy) {
+            std_cmd.env(k, v);
+        }
         if let Some((k, v)) = crate::sandbox::sealed_child_env(crate::sandbox::last_status()) {
             std_cmd.env(k, v);
         }
@@ -494,6 +497,16 @@ pub fn proxy_env_for(
     env
 }
 
+/// `TMPDIR`/`TMP`/`TEMP` for an MCP server child: the policy's granted
+/// scratch dir, or nothing (inherited env stands).
+pub(crate) fn scratch_env_for(policy: &SandboxPolicy) -> Vec<(String, String)> {
+    policy
+        .scratch_dir
+        .as_deref()
+        .map(|d| crate::agent_paths::scratch_env(d).to_vec())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,6 +619,20 @@ mod tests {
     }
 
     /// `McpClient::connect` picks the HTTP variant when the entry has a `url`.
+    #[test]
+    fn mcp_child_gets_scratch_env_only_when_granted() {
+        let mut p = SandboxPolicy::default();
+        assert!(scratch_env_for(&p).is_empty());
+        p.scratch_dir = Some(std::path::PathBuf::from("/m/tmp/a"));
+        let got = scratch_env_for(&p);
+        for k in ["TMPDIR", "TMP", "TEMP"] {
+            assert!(
+                got.contains(&(k.to_string(), "/m/tmp/a".to_string())),
+                "{k}: {got:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn connect_picks_http_for_url_entry() {
         let entry = McpServerEntry {

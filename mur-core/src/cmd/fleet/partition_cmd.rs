@@ -17,7 +17,7 @@ use super::store::{load_fleet, state_dir};
 
 /// Resolve the repo root from the current working directory via git.
 fn cwd_git_root() -> Result<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = mur_common::repo_walk::bound_git(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .context("spawn git rev-parse")?;

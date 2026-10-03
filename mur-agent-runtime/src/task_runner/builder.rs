@@ -85,6 +85,7 @@ impl TaskRunner {
             tools_policy: vec![],
             socket_path: None,
             secrets: None,
+            scratch_dir: None,
             bash_jobs: None,
             effort: std::sync::RwLock::new(None),
             conversations: Mutex::new(ConversationStore::default()),
@@ -149,6 +150,12 @@ impl TaskRunner {
 
     pub fn with_secrets(mut self, vault: Arc<crate::secrets::SecretVault>) -> Self {
         self.secrets = Some(vault);
+        self
+    }
+
+    /// The agent's granted scratch dir, named in the system prompt.
+    pub fn with_scratch_dir(mut self, dir: Option<std::path::PathBuf>) -> Self {
+        self.scratch_dir = dir;
         self
     }
 

@@ -196,6 +196,7 @@ mod tests {
             agent: None,
             write_grants: Vec::new(),
             secrets: None,
+            scratch_dir: None,
             jobs: crate::tools::bash_jobs::JobTable::new(),
         });
         let bash_def = bash_exec.def();
@@ -233,6 +234,7 @@ mod tests {
             agent: None,
             write_grants: Vec::new(),
             secrets: None,
+            scratch_dir: None,
             jobs: crate::tools::bash_jobs::JobTable::new(),
         });
         let bash_def = bash_exec.def();

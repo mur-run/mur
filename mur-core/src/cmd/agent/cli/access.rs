@@ -53,7 +53,7 @@ fn is_overbroad_root(p: &Path, home: &Path) -> bool {
 
 /// The git toplevel containing `cwd`, if any.
 fn git_repo_root(cwd: &Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = mur_common::repo_walk::bound_git(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(cwd)
         .args(["rev-parse", "--show-toplevel"])

@@ -62,7 +62,7 @@ impl RunCwd {
 /// routed members to the wrong repo (#1607). The CLI passes `--cwd`, or its
 /// own cwd when invoked by hand.
 pub fn discover_repo_root(from: &Path) -> Result<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = mur_common::repo_walk::bound_git(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(from)
         .output()
