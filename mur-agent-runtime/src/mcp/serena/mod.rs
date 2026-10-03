@@ -4,8 +4,12 @@
 //! Everything here is derived from the agent home and the entry's fixed
 //! `project:` — never from the session cwd and never from the profile's
 //! free-form fields — so the spawn site, the preflight and the tool filter
-//! all see the same paths. The pure preflight (C1–C8) lives alongside in
-//! task 2.3; spawn wiring is 2.4–2.6.
+//! all see the same paths. The pure preflight (C1–C8) is in [`preflight`];
+//! spawn wiring is 2.4–2.6.
+
+mod preflight;
+
+pub use preflight::{SerenaPreflightError, preflight};
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
