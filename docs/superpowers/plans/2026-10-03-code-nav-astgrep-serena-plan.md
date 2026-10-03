@@ -186,7 +186,13 @@ Items 13–15 reconstructed from the risk-tier decision; confirm wording.
         procMacro re-enable from a repo ratoml, and repeat cases A–J on
         more than one rust-analyzer version.
 
-## Phase 1 — ast-grep wrapper (`ast_grep_search` tool)
+## Phase 1 — ast-grep wrapper (`ast_grep_search` tool) — done
+
+**Status:** done. Config bounds, the wrapper, and output handling landed in
+#1655; the `mur-search` skill routing (`mur-core/src/skills/mur_search.yaml`)
+landed in #1663. Added beyond this plan: the `paths` and `max_results` tool
+arguments, and the `search.ast_grep.max_match_bytes` config bound (the
+per-match cap that `text` / `lines` truncation uses).
 
 - Spawn with `-c <MUR-owned empty sgconfig>` and cwd = MUR-owned dir; repo
   passed as path argument.
