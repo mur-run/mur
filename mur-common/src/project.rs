@@ -14,15 +14,11 @@ use std::path::{Path, PathBuf};
 /// Note: a `git worktree` has its own `.git` *file*, so it resolves to the
 /// worktree's own root — a worktree and its main checkout get distinct project
 /// ids (project-scoped skills don't cross between them). Acceptable for now.
+///
+/// The walk never climbs out of an agent scratch dir into a git-tracked
+/// `<mur_home>`; see [`crate::repo_walk`].
 pub fn repo_root_of(start: &Path) -> Option<PathBuf> {
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        if d.join(".git").exists() {
-            return Some(d.to_path_buf());
-        }
-        dir = d.parent();
-    }
-    None
+    crate::repo_walk::git_root_of(start)
 }
 
 /// Canonical project id (repo-root path string) for scope matching, or `None`

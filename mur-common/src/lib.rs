@@ -64,6 +64,7 @@ pub mod project;
 pub mod proposal;
 pub mod redact;
 pub mod removable_volume;
+pub mod repo_walk;
 pub mod research_provider;
 pub mod route;
 pub mod schedule;

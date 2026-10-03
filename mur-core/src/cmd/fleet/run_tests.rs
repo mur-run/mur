@@ -243,7 +243,13 @@ fn grant_fleet(home: &Path, member: &str, grant: bool) -> PathBuf {
         skills: vec![],
         loop_cfg: None,
         parallel: None,
-        hitl: None,
+        // Pin `defer`: left unset, the mode falls back to `default_unanswered()`,
+        // which waits when stdin is a TTY — so these tests hung from a terminal
+        // and passed only under `< /dev/null`.
+        hitl: Some(mur_common::fleet::FleetHitl {
+            mode: Some(mur_common::hitl::Unanswered::Defer),
+            auto_approve_tiers: vec![],
+        }),
         requires_programs: vec![],
         limits: None,
         needs: vec![],

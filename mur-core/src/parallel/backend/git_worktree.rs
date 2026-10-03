@@ -127,16 +127,10 @@ impl ParallelBackend for GitWorktreeBackend {
     }
 }
 
+/// Shared bounded walk: never resolves an agent scratch dir to a git-tracked
+/// `<mur_home>` (see `mur_common::repo_walk`).
 pub fn find_git_root(from: &Path) -> Option<PathBuf> {
-    let mut cur = from.to_path_buf();
-    loop {
-        if cur.join(".git").exists() {
-            return Some(cur);
-        }
-        if !cur.pop() {
-            return None;
-        }
-    }
+    mur_common::repo_walk::git_root_of(from)
 }
 
 #[cfg(test)]

@@ -237,7 +237,7 @@ impl SandboxPolicy {
         }
 
         // `<mur_home>/artifacts/<agent>` — where the system prompt's
-        // output-locations rule (`task_runner::OUTPUT_LOCATIONS_RULE`) tells
+        // output-locations rule (`task_runner::output_locations_rule`) tells
         // every agent to put reports, quarantined files and scratch output.
         // Nothing granted it, so an agent following its own instructions was
         // refused; on 2026-09-13 one then reached for `/tmp`, and that denial
@@ -260,6 +260,32 @@ impl SandboxPolicy {
                 fs_write.push(mine);
             }
         }
+
+        // `<mur_home>/tmp/<agent>` — the per-agent scratch dir children get
+        // as `TMPDIR`. Path comes from `agent_paths` so this grant and the
+        // file-tool gate (`tools::fs_policy::for_file_tools`) cannot drift.
+        // Created `0700` before granting (Landlock skips absent paths). On
+        // helper Err this is the ONE place that logs; the tool gate skips
+        // silently so one fault is not reported twice.
+        let scratch_dir = match crate::agent_paths::agent_scratch_dir(agent_home) {
+            Ok(scratch) => {
+                if let Err(e) = crate::agent_paths::ensure_scratch_dir(&scratch) {
+                    tracing::warn!(path = %scratch.display(), %e, "scratch dir not prepared");
+                }
+                if !fs_write.contains(&scratch) {
+                    fs_write.push(scratch.clone());
+                }
+                Some(scratch)
+            }
+            Err(e) => {
+                tracing::error!(
+                    agent_home = %agent_home.display(),
+                    %e,
+                    "scratch dir not granted"
+                );
+                None
+            }
+        };
 
         // fleet_run carve-ins (config-gated, deny-by-default): when THIS agent
         // is allowlisted in `~/.mur/config.yaml` `fleet_run.agents`, the
@@ -605,10 +631,14 @@ impl SandboxPolicy {
                 reason: "overlaps MUR's launch chain and cannot be carved (Landlock)".into(),
             });
         }
+        // Export only what the kernel still grants: a later carve may have
+        // pulled the path out of `fs_write`.
+        let scratch_dir = scratch_dir.filter(|d| fs_write.contains(d));
         SandboxPolicy {
             dropped,
             fs_read,
             fs_write,
+            scratch_dir,
             fs_deny,
             fs_exec,
             spawn_mode,

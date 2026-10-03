@@ -235,6 +235,9 @@ pub struct TaskRunner {
     /// Credentials the user handed the agent. Names go into the system prompt;
     /// values are masked out of every tool result. `None` = no vault (stubs).
     secrets: Option<Arc<crate::secrets::SecretVault>>,
+    /// Per-agent scratch dir named in the output-locations rule. `None` =
+    /// not granted (or a stub), so the prompt omits the scratch line.
+    scratch_dir: Option<std::path::PathBuf>,
     /// The bash job table (spec D3/D8), so the loop can end a task's jobs on
     /// an unattended stop or a cancel, and the supervisor every job at exit.
     bash_jobs: Option<Arc<crate::tools::bash_jobs::JobTable>>,

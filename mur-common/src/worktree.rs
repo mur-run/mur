@@ -100,16 +100,10 @@ pub fn main_checkout_of(start: &Path) -> Option<PathBuf> {
 /// Walk up from `start` to the nearest directory holding a `.git` entry of
 /// either shape. Mirrors `project::repo_root_of` but is kept separate because
 /// that function's contract (one project id per checkout) is deliberately
-/// worktree-blind and callers depend on that.
+/// worktree-blind and callers depend on that. Both share the one bounded walk
+/// in [`crate::repo_walk`], so neither can escape a scratch dir alone.
 fn worktree_root_of(start: &Path) -> Option<PathBuf> {
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        if d.join(".git").exists() {
-            return Some(d.to_path_buf());
-        }
-        dir = d.parent();
-    }
-    None
+    crate::repo_walk::git_root_of(start)
 }
 
 /// Every matching path in a linked worktree registered under the checkout that

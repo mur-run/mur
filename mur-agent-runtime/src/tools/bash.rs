@@ -68,6 +68,9 @@ pub struct BashTool {
     /// Credentials the user handed the agent, exported into every child's
     /// environment. `None` (tests, embedded uses) exports nothing.
     pub secrets: Option<std::sync::Arc<crate::secrets::SecretVault>>,
+    /// Per-agent scratch dir exported as `TMPDIR`/`TMP`/`TEMP`. `None`
+    /// (tests, embedded uses, underivable path) leaves the inherited value.
+    pub scratch_dir: Option<PathBuf>,
     /// The runtime-wide job table (spec D3): shared with `bash_wait` and
     /// `bash_kill`, and with `TaskRunner` for deadline/cancel cleanup.
     pub jobs: std::sync::Arc<crate::tools::bash_jobs::JobTable>,
@@ -90,6 +93,7 @@ impl BashTool {
             agent: None,
             write_grants: Vec::new(),
             secrets: None,
+            scratch_dir: None,
             jobs: crate::tools::bash_jobs::JobTable::new(),
         }
     }
@@ -117,6 +121,12 @@ impl BashTool {
             &mur_home.join("agents").join(agent),
         )?;
         Some(write_denied_hint(&denied, agent, &kind))
+    }
+
+    /// Attach the per-agent scratch dir exported as `TMPDIR`/`TMP`/`TEMP`.
+    pub fn with_scratch_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.scratch_dir = dir;
+        self
     }
 
     /// Attach the write grants used to explain a filesystem denial.
@@ -247,6 +257,14 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         // before it reaches the tail or the spool (D10).
         if let Some(vault) = &self.secrets {
             env.extend(vault.env_pairs());
+        }
+        // Later `.envs` entries win over the inherited env, so this overrides
+        // a `TMPDIR` the runtime itself was launched with.
+        if let Some(d) = &self.scratch_dir {
+            if std::env::var_os("TMPDIR").is_some_and(|v| v != d.as_os_str()) {
+                tracing::debug!(scratch = %d.display(), "overriding inherited TMPDIR");
+            }
+            env.extend(crate::agent_paths::scratch_env(d));
         }
         let spool_dir = self.working_dir.join("jobs");
         let job_id = self
@@ -537,6 +555,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.text.trim(), "unset");
+    }
+
+    /// #4: a granted scratch dir becomes `TMPDIR`/`TMP`/`TEMP`, overriding
+    /// whatever the runtime inherited.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn scratch_dir_is_exported_as_tmpdir() {
+        let d = tempfile::tempdir().unwrap();
+        let t = make_tool().with_scratch_dir(Some(d.path().to_path_buf()));
+        let out = t
+            .execute(
+                serde_json::json!({"command": "printf '%s:%s:%s' \"$TMPDIR\" \"$TMP\" \"$TEMP\""}),
+            )
+            .await
+            .unwrap();
+        let v = d.path().display();
+        assert_eq!(out.text.trim(), format!("{v}:{v}:{v}"));
+    }
+
+    /// #4: no scratch dir → no override; the child sees the inherited value.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_scratch_dir_leaves_tmpdir_inherited() {
+        let t = make_tool();
+        let out = t
+            .execute(serde_json::json!({"command": "printf '%s' \"${TMPDIR:-unset}\""}))
+            .await
+            .unwrap();
+        let want = std::env::var("TMPDIR").unwrap_or_else(|_| "unset".into());
+        assert_eq!(out.text.trim(), want);
     }
 
     #[cfg(unix)]

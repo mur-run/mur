@@ -358,6 +358,14 @@ mcp_requirements:
 
 **`mur skill show`** — When a skill has `mcp_requirements`, the command prints a formatted "MCP Requirements:" block after the YAML, listing each tool pattern with its capability and optional fallback.
 
+### Per-Agent Scratch Dir
+
+Each agent gets its own scratch directory, `<mur_home>/tmp/<agent>` (`agent_paths::agent_scratch_dir`). The supervisor creates it before sealing, grants it in both layers (the file-tool gate `tools::fs_policy` and the B1 kernel sandbox), exports it to child processes as `TMPDIR`/`TMP`/`TEMP`, and names it in the system prompt. A sibling agent's scratch dir is not writable (`mur-agent-runtime/tests/scratch_seal.rs`).
+
+- **Cleanup:** at start, before `sandbox::apply`, top-level entries older than `scratch.retention_days` (default 7) are pruned; entries whose age cannot be read are kept. `mur agent doctor` warns when a running agent's dir exceeds `scratch.warn_size_mb` (default 2048). `mur agent uninstall --purge` removes the dir.
+- **`TMPDIR` sets the default, not isolation.** On macOS the kernel baseline still lets every agent write `/private/tmp` and `/private/var/folders`; on Linux `/tmp` is denied. Tightening the macOS exemptions is a follow-up change.
+- **BSD `mktemp` ignores `TMPDIR`.** On macOS, bare `mktemp` and `mktemp -t prefix` create under `/var/folders/.../T`, outside the scratch dir (allowed by the baseline, so nothing fails). Use an explicit template: `mktemp "$TMPDIR/name.XXXXXX"`. GNU `mktemp` on Linux honors `TMPDIR`.
+
 ### Per-Server MCP Egress
 
 By default an agent's outbound network policy (`entitlements.network.outbound`) applies to the whole agent; MCP server subprocesses inherit the agent's sandbox in full — Landlock/seccomp on Linux, a seatbelt sandbox across `fork`+`exec` on macOS (verified empirically; the check is in `mur-agent-runtime/src/sandbox/child.rs`). What does not exist is granularity: no server can be given a *narrower* cage than the agent itself. A single MCP server can additionally be scoped to a **host allowlist**:
