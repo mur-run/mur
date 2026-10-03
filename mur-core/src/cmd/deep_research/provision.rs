@@ -397,6 +397,7 @@ pub fn grant_egress(mur_home: &Path, worker: &str, deny_hosts: &[String], yes: b
         worker,
         GATEWAY_MCP_NAME,
         vec![],
+        vec![],
         egress_deny_list(deny_hosts),
         false,
         true,
