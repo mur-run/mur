@@ -173,6 +173,39 @@ jobs:
       - name: Create test signing identity (macOS)
         if: runner.os == 'macOS'
         run: bash scripts/test-signing-identity.sh
+      - name: Install pinned ast-grep
+        # The ast_grep_search live tests (mur-mcp-server) run against the exact
+        # binary MUR pins. MUR_REQUIRE_AST_GREP=1 makes a missing binary fail
+        # instead of skip. Release zips are checked against pinned sha256s;
+        # bump them together with AST_GREP_PINNED_VERSION.
+        shell: bash
+        env:
+          AST_GREP_VERSION: "0.45.3"
+        run: |
+          set -euo pipefail
+          grep -q "AST_GREP_PINNED_VERSION: &str = \"$AST_GREP_VERSION\"" \
+            mur-mcp-server/src/tools/ast_grep.rs \
+            || { echo "::error::AST_GREP_VERSION drifted from AST_GREP_PINNED_VERSION"; exit 1; }
+          case "$RUNNER_OS" in
+            Linux)   t=x86_64-unknown-linux-gnu; exe=ast-grep
+                     sha=f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8 ;;
+            macOS)   t=aarch64-apple-darwin; exe=ast-grep
+                     sha=6d2279dea5bea2ad79c66ea93f5fe54ba926e398a8a26de76c56db68fe59eac6 ;;
+            Windows) t=x86_64-pc-windows-msvc; exe=ast-grep.exe
+                     sha=3751b7d6be7fd39a80df1180ffe7e053903dcf92d3190e5a8336ff1746af9059 ;;
+          esac
+          dir="$RUNNER_TEMP/ast-grep"
+          zip="$RUNNER_TEMP/ast-grep.zip"
+          curl -fsSL --retry 3 -o "$zip" \
+            "https://github.com/ast-grep/ast-grep/releases/download/$AST_GREP_VERSION/app-$t.zip"
+          if command -v sha256sum >/dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
+          echo "$sha  $zip" | $sum -c -
+          unzip -q -o "$zip" -d "$dir"
+          bin="$dir/$exe"
+          "$bin" --version
+          if [ "$RUNNER_OS" = Windows ]; then bin=$(cygpath -w "$bin"); fi
+          echo "MUR_AST_GREP_BIN=$bin" >> "$GITHUB_ENV"
+          echo "MUR_REQUIRE_AST_GREP=1" >> "$GITHUB_ENV"
       # `cargo nextest run` builds + runs in one cargo invocation; `cargo
       # check --all` was a redundant pre-check whose .rmeta artifacts don't
       # help nextest's downstream test-binary build (different codegen
