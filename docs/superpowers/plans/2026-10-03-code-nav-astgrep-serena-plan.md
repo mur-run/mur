@@ -78,7 +78,7 @@ original list if one turns up.
 - [x] 11. SIGTERM ⇒ exit 143; threads only, no child processes.
 - [x] 12. `outline` and `lsp` subcommands exist — out of scope, noted.
 
-### serena / LSP (items 13–16) — pending serena hookup
+### serena / LSP (items 13–16) — done
 
 Items 13–15 reconstructed from the risk-tier decision; confirm wording.
 
