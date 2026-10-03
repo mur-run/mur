@@ -427,7 +427,9 @@ pub fn cmd_mcp_add_remote(
     Ok(())
 }
 
-#[cfg(test)]
+// Unix-only: the fake MCP server is a `/bin/sh` script made executable with
+// `PermissionsExt`, neither of which exists on Windows.
+#[cfg(all(test, unix))]
 #[path = "mcp_add_proxy_tests.rs"]
 mod proxy_tests;
 
