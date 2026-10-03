@@ -34,6 +34,41 @@ pub fn browsers_dir(
         .map(|d| d.join("ms-playwright"))
 }
 
+/// Leaf Playwright appends to its cache dir for the server registry.
+const SERVER_REGISTRY_LEAF: [&str; 2] = ["ms-playwright", "b"];
+
+/// Playwright's server registry (`browser@<hash>` lock files), which the MCP
+/// server writes on every launch. Mirrors `registryDirectory()` in
+/// playwright-core's `serverRegistry.js`: unlike [`browsers_dir`] it ignores
+/// `PLAYWRIGHT_BROWSERS_PATH`, so it is NOT `browsers_dir()/b`.
+pub fn server_registry_dir(
+    env: &dyn Fn(&str) -> Option<OsString>,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    let base = if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Caches"))
+    } else if cfg!(windows) {
+        env("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home.map(|h| h.join("AppData/Local")))
+    } else {
+        env("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home.map(|h| h.join(".cache")))
+    }?;
+    Some(SERVER_REGISTRY_LEAF.iter().fold(base, |p, c| p.join(c)))
+}
+
+/// [`server_registry_dir`] against the real environment.
+pub fn system_server_registry_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from);
+    server_registry_dir(&|k: &str| std::env::var_os(k), home.as_deref())
+}
+
 /// Folder prefix of the headless shell build.
 pub const SHELL_PREFIX: &str = "chromium_headless_shell";
 /// Folder prefix of the full Chromium (Chrome for Testing) build.
@@ -276,5 +311,28 @@ mod tests {
         assert_eq!(browsers_dir(&env, Some(Path::new("/h"))), None);
         let env = |k: &str| (k == "PLAYWRIGHT_BROWSERS_PATH").then(|| OsString::from("/x"));
         assert_eq!(browsers_dir(&env, None), Some(PathBuf::from("/x")));
+    }
+
+    /// The registry ignores `PLAYWRIGHT_BROWSERS_PATH` — that is the whole
+    /// reason it is not derived from `browsers_dir`.
+    #[test]
+    fn server_registry_ignores_browsers_path() {
+        let env = |k: &str| (k == "PLAYWRIGHT_BROWSERS_PATH").then(|| OsString::from("/x"));
+        let got = server_registry_dir(&env, Some(Path::new("/h"))).unwrap();
+        assert!(
+            got.ends_with(Path::new("ms-playwright").join("b")),
+            "{got:?}"
+        );
+        assert!(!got.starts_with("/x"), "{got:?}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn server_registry_on_macos_is_under_library_caches() {
+        let none = |_: &str| None;
+        assert_eq!(
+            server_registry_dir(&none, Some(Path::new("/h"))),
+            Some(PathBuf::from("/h/Library/Caches/ms-playwright/b"))
+        );
     }
 }
