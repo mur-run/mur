@@ -16,7 +16,8 @@ pub enum AgentPathError {
 }
 
 /// Directory name under `<mur_home>` holding every agent's scratch dir.
-pub const SCRATCH_ROOT: &str = "tmp";
+/// Owned by `mur_common::repo_walk`, whose `.git` walk is bounded by it.
+pub use mur_common::repo_walk::SCRATCH_ROOT;
 
 /// Unix mode for both `<mur_home>/tmp` and `<mur_home>/tmp/<agent>`.
 #[cfg(unix)]

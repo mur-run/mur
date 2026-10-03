@@ -206,6 +206,46 @@ Guidance: prompts, skills, and shipped scripts that need a temp file must put
 Linux (GNU coreutils `mktemp`) honors `TMPDIR` for the bare form; the explicit
 form is portable to both and is the one to teach.
 
+## Known issue: repo discovery under a git-tracked `<mur_home>` (fixed)
+
+`<mur_home>` is commonly itself a git repo (the versioned store). Any upward
+walk to the nearest `.git` that starts inside `<mur_home>/tmp/<agent>`
+therefore lands on `<mur_home>`, so project instructions, project-scoped
+skills, delegation routing (`routing_target`), and worktree grant expansion
+all pointed scratch-dir turns at MUR's own store. Found by running the
+workspace tests locally inside an agent (`TMPDIR=<mur_home>/tmp/mur`): 11
+failures across `mur-common`, `mur-agent-runtime`, `mur-core`, and
+`mur-mcp-server`. Linux CI cannot catch it — its `TMPDIR` is `/tmp`.
+
+Fix: one bounded walk in `mur_common::repo_walk`, shared by every walker.
+
+- `git_root_of(start)` walks up and never enters a ceiling. Ceilings
+  (`walk_ceilings()`) are `<mur_home>/<SCRATCH_ROOT>` and the process temp
+  dir; a repo strictly below a ceiling (an agent's own `git init`) still
+  counts. `SCRATCH_ROOT` is defined here and re-exported by
+  `agent_paths`, so the bound and the created dir cannot drift.
+- `bound_git(cmd)` applies the same ceilings to spawned `git` through
+  `GIT_CEILING_DIRECTORIES`, appended to any inherited value.
+
+Call sites now on the shared walk: `project::repo_root_of`,
+`worktree::worktree_root_of`, `parallel::backend::git_worktree::find_git_root`.
+On `bound_git`: `delegation::cwd::discover_repo_root`,
+`cmd::agent::cli::access::git_repo_root`, `cmd::fleet::partition_cmd`, and
+both `codebase::scanner` root probes.
+
+Audited and left unbounded on purpose:
+
+- `cmd::fleet::cherry_cmd::project_root_from_worktree` — input is a fleet
+  worktree path, never a scratch dir.
+- Fixed-path `.join(".git").exists()` checks (`sync_cmd`, `reindex`,
+  `store_health`, `store/yaml.rs`, …) — they test one known directory, they
+  do not walk.
+- Test-only walkers (`parallel::track::worktree::find_main_repo`).
+
+Other upward walks for markers other than `.git` (`Cargo.toml`,
+`package.json`, …) were not part of this fix; new walkers should go through
+`repo_walk` rather than reimplement the loop.
+
 ## Verification
 
 | # | Claim | Level | Platform | Method | Expected |

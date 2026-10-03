@@ -221,7 +221,7 @@ pub fn main_repo_root(path: &Path) -> Option<PathBuf> {
 /// For the primary worktree this equals `git_main_repo_root`; for a linked
 /// worktree it is the worktree dir. `None` when not in a repo / git missing.
 fn git_worktree_root(path: &Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = mur_common::repo_walk::bound_git(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(path)
         .args(["rev-parse", "--path-format=absolute", "--show-toplevel"])
@@ -243,7 +243,7 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 fn git_main_repo_root(path: &Path) -> Option<PathBuf> {
     // ponytail: shell out — avoids threading a git2 Repository through this pure
     // path helper; one subprocess per CLI invocation is negligible.
-    let out = std::process::Command::new("git")
+    let out = mur_common::repo_walk::bound_git(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(path)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
