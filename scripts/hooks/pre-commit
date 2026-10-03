@@ -24,6 +24,18 @@ if [ "$got" != "$want" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Repo-root allowlist (#1607): no new top-level file or directory unless it is
+# listed in scripts/repo-root-allowlist.txt. Runs on every commit, before the
+# .rs-only early exit below, because a leak is usually not a .rs file.
+root_check="$(git rev-parse --show-toplevel)/scripts/check-repo-root.sh"
+if [ -f "$root_check" ]; then
+    sh "$root_check" || {
+        echo "  Bypass deliberately with: git commit --no-verify"
+        exit 1
+    }
+fi
+
+# ---------------------------------------------------------------------------
 # rustfmt, matching the CI "Format" job exactly.
 #
 # `cargo fmt --all` covers the workspace only. mur-agent-gui and mur-hub-gui
@@ -32,7 +44,7 @@ fi
 # so --all silently skips them and an unformatted GUI file sails past the
 # hook and turns CI red later. #1404 died exactly this way.
 #
-# Mirrors .github/workflows/ci.yml:236-240 — keep the two in sync.
+# Mirrors the "Format" job in .github/workflows/ci.yml — keep the two in sync.
 # Only runs when the commit actually touches .rs files.
 git diff --cached --name-only --diff-filter=ACM | grep -q '\.rs$' || exit 0
 
