@@ -17,6 +17,8 @@ use super::super::app::{App, ChatMsg, Role};
 #[cfg(test)]
 mod cjk_tail_tests;
 #[cfg(test)]
+mod cjk_wrap_tests;
+#[cfg(test)]
 mod ghost_tests;
 #[cfg(test)]
 mod scrub_tests;
@@ -227,7 +229,7 @@ pub(super) fn push_live_inner(
     if skip > 0 && app.flushed_raw && (!m.streaming || as_settled) {
         // Its head went up as raw lines from mid-block; rendering the tail
         // as markdown would open it with a torn table.
-        lines.extend(raw_body_lines(rest));
+        lines.extend(raw_body_lines(rest, app.body_cols()));
         return;
     }
     lines.extend(agent_body_lines(
@@ -533,7 +535,10 @@ pub fn flush_finished<B: Backend>(
             )));
         }
         if raw {
-            lines.extend(raw_body_lines(chunk));
+            lines.extend(raw_body_lines(
+                chunk,
+                crate::cmd::agent::cli::markdown::body_cols(width, theme.inner_padding),
+            ));
         } else {
             lines.extend(agent_body_lines(
                 chunk,
