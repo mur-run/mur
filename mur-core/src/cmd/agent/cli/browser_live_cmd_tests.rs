@@ -389,3 +389,46 @@ fn unchanged_rerun_offers_no_restart() {
     let (_, chip) = run("bob", &s(&["b.example.com"]), true, &mut f).unwrap();
     assert!(chip.is_some());
 }
+
+// #1639: the sealed live server execs Playwright's headless shell, which
+// lives outside every allowlisted binary — the grant must be its build dir.
+#[test]
+fn live_spawn_dir_is_the_newest_complete_headless_build() {
+    let d = tempfile::tempdir().unwrap();
+    for (name, done) in [
+        ("chromium_headless_shell-1217", true),
+        ("chromium_headless_shell-1246", true),
+        ("chromium_headless_shell-1300", false),
+    ] {
+        let exe = d
+            .path()
+            .join(name)
+            .join("chrome-headless-shell-mac-arm64/chrome-headless-shell");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "").unwrap();
+        if done {
+            std::fs::write(d.path().join(name).join("INSTALLATION_COMPLETE"), "").unwrap();
+        }
+    }
+    let want = d.path().join("chromium_headless_shell-1246");
+    assert_eq!(
+        live_spawn_dir(Some(d.path())),
+        Some(want.to_string_lossy().into_owned())
+    );
+}
+
+#[test]
+fn live_spawn_dir_is_none_without_a_shell() {
+    let d = tempfile::tempdir().unwrap();
+    assert_eq!(live_spawn_dir(Some(d.path())), None);
+    assert_eq!(live_spawn_dir(None), None);
+}
+
+#[test]
+fn spawn_dir_is_granted_once_with_a_note() {
+    let mut dirs = vec!["/keep".to_string()];
+    let note = ensure_spawn_dir(&mut dirs, "/b/shell-1246");
+    assert_eq!(dirs, s(&["/keep", "/b/shell-1246"]));
+    assert!(note.unwrap().contains("/b/shell-1246"));
+    assert_eq!(ensure_spawn_dir(&mut dirs, "/b/shell-1246"), None);
+}
