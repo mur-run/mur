@@ -1,18 +1,18 @@
-# MuR Agent Package & Two-Surface Architecture
+# MUR Agent Package & Two-Surface Architecture
 
 **Date:** 2026-05-20
 **Status:** Implemented (as-built sync). Sections 1–16.6 describe the shipped `mur-common::muragent` design; §16.7 and §17 are future work and are not implemented.
 **Owner:** david
 **Supersedes:** `2026-04-29-mur-agent-gui-export-design.md` (per-agent `.app` as default export artifact — entirely replaced; no migration)
-**Builds on:** `2026-05-11-mur-hub-companion-design.md` (MuR Hub desktop surface); `2026-05-18-commander-feedback-wire-protocol-design.md` (Signal envelope, the runtime channel between surfaces)
+**Builds on:** `2026-05-11-mur-hub-companion-design.md` (MUR Hub desktop surface); `2026-05-18-commander-feedback-wire-protocol-design.md` (Signal envelope, the runtime channel between surfaces)
 **Related:** `2026-05-07-b1-runtime-enforcement-design.md`, `2026-04-29-model-registry-and-secret-refs-design.md`, `2026-05-09-mur-agent-c7-slack-bridge-design.md`, `2026-05-08-mur-agent-c6-idle-triggers-design.md`
 
 ## 1. Problem
 
-The MuR ecosystem has two products that both instantiate "agents" today, but with no shared portable identity unit:
+The MUR ecosystem has two products that both instantiate "agents" today, but with no shared portable identity unit:
 
-1. **MuR Hub** (`mur-hub-gui`, Tauri 2) — desktop UI surface. Per-agent windows, companion pet (drag to desktop), voice (D1), per-agent Dock icons. Local-first, single user.
-2. **MuR Commander** (`mur-commander` workspace, separate repo at `~/Projects/mur-commander`, version line v0.10.x independent of mur v2.13.x) — chat/automation surface. Slack / Telegram / Discord gateway, workflow engine, MCP plugins, sub-agents, Jira, programs, supervisor. Daemon, multi-user via chat platforms.
+1. **MUR Hub** (`mur-hub-gui`, Tauri 2) — desktop UI surface. Per-agent windows, companion pet (drag to desktop), voice (D1), per-agent Dock icons. Local-first, single user.
+2. **MUR Commander** (`mur-commander` workspace, separate repo at `~/Projects/mur-commander`, version line v0.10.x independent of mur v2.13.x) — chat/automation surface. Slack / Telegram / Discord gateway, workflow engine, MCP plugins, sub-agents, Jira, programs, supervisor. Daemon, multi-user via chat platforms.
 
 Both products are mature, both ship independently, both have their own CLI (`mur` vs `murc`), distribution channel (`brew install --cask mur-hub` vs `brew install mur-run/tap/mur-commander` + Docker), and release cadence. They are **brand siblings**, not one product.
 
@@ -85,7 +85,7 @@ This is the same trick Chrome uses for PWAs: a signed parent app (Chrome / Hub) 
 ### 3.3 Mur never signs user-authored content
 
 Mur signs exactly two things:
-1. The Hub app binary (`MuR Agent Host.app` / `.exe` / `.AppImage`) — signed once per release with mur's own Developer ID.
+1. The Hub app binary (`MUR Agent Host.app` / `.exe` / `.AppImage`) — signed once per release with mur's own Developer ID.
 2. (V2 only, deferred) The mur-issued trust badge over a Pro user's `.muragent` manifest, after content review.
 
 We **never** sign user-authored code or wrap a user-authored payload inside a mur-signed binary. This bounds our legal and revocation exposure: a malicious user can lose their own trust badge (V2) but cannot revoke mur's macOS Developer ID for everyone.
@@ -98,9 +98,9 @@ A `.muragent` is a tarball of YAML + images. No `.so` / `.dylib` / `.dll` / `.ex
 
 On macOS 13+ (Ventura), Apple introduced `SMAppService` and the "Login Items & Extensions" section of System Settings. Items that an app schedules at login MUST surface there in a way the user can disable; hand-written `~/Library/LaunchAgents/*.plist` files without proper grouping appear as orphaned entries.
 
-For the long-term ideal path (SMAppService-native), the agent's runtime binary would live inside `MuR Agent Host.app/Contents/Helpers/` and be registered via `SMAppService.agent(plistName:)`. This conflicts with the existing BusyBox-style `mur_agent_<name>` symlink architecture in `~/.mur/bin/` and would require restructuring out of scope for v1.
+For the long-term ideal path (SMAppService-native), the agent's runtime binary would live inside `MUR Agent Host.app/Contents/Helpers/` and be registered via `SMAppService.agent(plistName:)`. This conflicts with the existing BusyBox-style `mur_agent_<name>` symlink architecture in `~/.mur/bin/` and would require restructuring out of scope for v1.
 
-**v1 compromise:** continue writing `~/Library/LaunchAgents/run.mur.agent.<slug>.plist`, but **always include `AssociatedBundleIdentifiers = ["run.mur.host"]`** so the entries group correctly under "MuR Agent Host" in Login Items. v2 may move the runtime inside the Host bundle on macOS only, behind a build flag, to enable full `SMAppService` integration. Document both paths in `mur agent doctor` output so users can see which the system is using.
+**v1 compromise:** continue writing `~/Library/LaunchAgents/run.mur.agent.<slug>.plist`, but **always include `AssociatedBundleIdentifiers = ["run.mur.host"]`** so the entries group correctly under "MUR Agent Host" in Login Items. v2 may move the runtime inside the Host bundle on macOS only, behind a build flag, to enable full `SMAppService` integration. Document both paths in `mur agent doctor` output so users can see which the system is using.
 
 References: [SMAppService docs](https://developer.apple.com/documentation/servicemanagement/smappservice); [Apple DTS thread 750528 — non-bundled binaries fall back to legacy plist](https://developer.apple.com/forums/thread/750528); [theevilbit on SMAppService](https://theevilbit.github.io/posts/smappservice/).
 
@@ -116,7 +116,7 @@ There is no "Continue anyway" button on signature, integrity, or revocation fail
 
 ### 3.8 Two surfaces, one identity
 
-`.muragent` is the **canonical agent package for the entire MuR ecosystem** — Hub and Commander both consume it, neither owns it. An agent has exactly one Ed25519 identity, one slug, one set of capabilities; the manifest carries optional surface-specific configuration blocks (`hub:`, `commander:`) that each surface reads selectively.
+`.muragent` is the **canonical agent package for the entire MUR ecosystem** — Hub and Commander both consume it, neither owns it. An agent has exactly one Ed25519 identity, one slug, one set of capabilities; the manifest carries optional surface-specific configuration blocks (`hub:`, `commander:`) that each surface reads selectively.
 
 Concrete consequences:
 
@@ -125,7 +125,7 @@ Concrete consequences:
 - Trust accrues by **author identity**, not by surface. Trusting an author in Hub means Commander also trusts them and vice versa (shared `~/.mur/trust/` — §7.1).
 - Signal protocol (`mur-common::Signal`, frozen 2026-05-18) is the **runtime** feedback channel between surfaces, orthogonal to the install-time `.muragent` artifact. See §16 for how the two pieces compose.
 
-This principle is the reason for renaming the artifact from "MuR Hub package" to "MuR Agent Package" — Hub is one consumer; the package is a property of the ecosystem.
+This principle is the reason for renaming the artifact from "MUR Hub package" to "MUR Agent Package" — Hub is one consumer; the package is a property of the ecosystem.
 
 ## 4. Three-Layer Runtime Topology
 
@@ -139,7 +139,7 @@ This principle is the reason for renaming the artifact from "MuR Hub package" to
 │                       A2A v0.3 over local socket   │                    │
 └────────────────────────────────────────────────────┼────────────────────┘
                                                      │
-   ┌─── MuR Agent Host.app ── single Tauri instance ─┘ (open on demand)
+   ┌─── MUR Agent Host.app ── single Tauri instance ─┘ (open on demand)
    │       ├── window: Coach
    │       ├── window: Alice
    │       └── pet:    Bob
@@ -189,14 +189,14 @@ Slug sanitisation: lowercase, `[a-z0-9-]` only, no leading/trailing dash, length
 | **Explicit scheme claim** | `LSSetDefaultHandlerForURLScheme(scheme, bundle_id)` after `lsregister -f` | `IApplicationAssociationRegistration` per-user default | `xdg-mime default run.mur.agent.<slug>.desktop x-scheme-handler/muragent-<slug>` |
 | **NSServices / context menu** | Info.plist `NSServices` (3 entries: text / URL / image; `serviceShare:` selector) | Optional shell context menu via `HKCU\Software\Classes\*\shell\SendTo<Slug>` (v1 skipped) | None (no cross-DE standard; v1 skipped) |
 | **Per-agent Dock / taskbar icon** | `Contents/Resources/Icon.icns` (1024×1024) | `.lnk` IconFileName field; **AUMID set by launched process** | `.desktop` `Icon=run.mur.agent.<slug>` + `~/.local/share/icons/hicolor/512x512/apps/<slug>.png` |
-| **Per-agent launcher** | `Contents/MacOS/<Slug>` = copy of `mur-agent-launcher` binary, ad-hoc resigned in place. **Calls `execv` directly** on the host binary at the path recorded in `~/.mur/host_path` (NOT `open -b`). | `.lnk` target = direct path to `MuR Agent Host.exe --agent <slug>` (no shim binary needed; Host sets AUMID itself) | `.desktop` `Exec=mur-agent-host --agent <slug> %u` (no shim binary) |
+| **Per-agent launcher** | `Contents/MacOS/<Slug>` = copy of `mur-agent-launcher` binary, ad-hoc resigned in place. **Calls `execv` directly** on the host binary at the path recorded in `~/.mur/host_path` (NOT `open -b`). | `.lnk` target = direct path to `MUR Agent Host.exe --agent <slug>` (no shim binary needed; Host sets AUMID itself) | `.desktop` `Exec=mur-agent-host --agent <slug> %u` (no shim binary) |
 | **Re-registration hook** | `lsregister -f <stub>` + `/System/Library/CoreServices/pbs -update` for NSServices + `LSSetDefaultHandlerForURLScheme` | `IApplicationAssociationRegistration::SetAppAsDefault` | `update-desktop-database ~/.local/share/applications/` + `xdg-mime default` (never edit `mimeapps.list` directly; never write to deprecated `~/.local/share/applications/mimeapps.list`) |
 | **`.desktop` completeness** | n/a | n/a | MUST include `StartupWMClass=run.mur.agent.<slug>`, `StartupNotify=true`, reverse-DNS file ID |
 | **Signed by mur?** | No — stub is locally generated by Hub (already signed), no quarantine xattr → Gatekeeper does not gate. Launcher is ad-hoc resigned in place. | No — `.lnk` files do not get MOTW when created by an unflagged process. Host `.exe` reputation carries through the shortcut (SmartScreen is target-keyed, not shortcut-keyed). | No — Linux has no equivalent gate. |
 
 ### 5.2 macOS launcher binary contract
 
-`mur-agent-launcher` (shipped inside `MuR Agent Host.app/Contents/MacOS/`, copied per stub):
+`mur-agent-launcher` (shipped inside `MUR Agent Host.app/Contents/MacOS/`, copied per stub):
 
 1. Reads `Contents/Resources/agent.txt` → agent slug.
 2. Reads `~/.mur/host_path` → absolute path to current Host binary, written by Host on every start. If absent or stale (Host version field doesn't match the version recorded in stub's `agent.txt`), triggers Hub's stub-regeneration flow before continuing.
@@ -210,7 +210,7 @@ Slug sanitisation: lowercase, `[a-z0-9-]` only, no leading/trailing dash, length
 
 **Hard requirements:**
 
-- `MuR Agent Host.app` MUST be installed in `/Applications` (not `~/Applications`) for reliable LaunchServices URL scheme dispatch. Stubs live in `~/Applications/MuR-Agent-<Slug>.app/` (different location intentional — stubs need user-write access, Host benefits from system-wide registration).
+- `MUR Agent Host.app` MUST be installed in `/Applications` (not `~/Applications`) for reliable LaunchServices URL scheme dispatch. Stubs live in `~/Applications/MuR-Agent-<Slug>.app/` (different location intentional — stubs need user-write access, Host benefits from system-wide registration).
 - Host MUST write absolute path + version to `~/.mur/host_path` on every startup, atomically (write to `.tmp` + rename).
 - Launcher binary size budget: < 100 KB statically linked. No Tauri, no async runtime, no `@rpath` to frameworks (avoids the 2022 Chromium PWA designated-requirement breakage).
 - Launcher MUST be ad-hoc signed (`codesign -s - --force --timestamp=none`) after copying. Do **NOT** apply `--options=runtime` (hardened runtime) to the launcher.
@@ -705,7 +705,7 @@ brew install --cask mur-hub            # Host.app only
 brew install mur mur-hub               # both (documented meta-command)
 
 # Path B: Official download (Host with embedded CLI)
-# User downloads MuR Agent Host.dmg from mur.run/get
+# User downloads MUR Agent Host.dmg from mur.run/get
 # Drags to /Applications
 # Opens Host → Preferences → Advanced → [Install Command Line Tool]
 #   ↓
@@ -715,10 +715,10 @@ brew install mur mur-hub               # both (documented meta-command)
 ### 9.2 Embedded CLI inside Host bundle
 
 ```
-MuR Agent Host.app/
+MUR Agent Host.app/
 ├── Contents/
 │   ├── MacOS/
-│   │   ├── MuR Agent Host           # Tauri binary
+│   │   ├── MUR Agent Host           # Tauri binary
 │   │   ├── mur-agent-runtime        # universal sidecar
 │   │   └── mur-agent-launcher       # stub launcher template
 │   └── Resources/
@@ -741,7 +741,7 @@ On Host update, the embedded CLI is updated automatically; if the symlink is in 
 
 **EV certificates no longer bypass SmartScreen** as of March 2024 ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation)). Both OV and EV must build reputation organically, and reputation resets per binary hash. Microsoft's current recommendation is **Trusted Signing** ($9.99/mo, cloud-managed certs), which reportedly accumulates SmartScreen reputation faster than third-party OV at our scale.
 
-Adopt Trusted Signing for `MuR Agent Host.exe` (and the embedded `mur.exe` CLI) from the first release that ships the Host + data model. Keep a stable signing identity across releases — every release with a new signer resets SmartScreen reputation to zero.
+Adopt Trusted Signing for `MUR Agent Host.exe` (and the embedded `mur.exe` CLI) from the first release that ships the Host + data model. Keep a stable signing identity across releases — every release with a new signer resets SmartScreen reputation to zero.
 
 Per-agent `.lnk` shortcuts do NOT need signing (SmartScreen is target-binary-keyed, not shortcut-keyed). Stub regeneration after Host upgrade preserves the unsigned-shortcut + signed-target relationship.
 
@@ -751,7 +751,7 @@ Per-agent `.lnk` shortcuts do NOT need signing (SmartScreen is target-binary-key
 
 1. Recipient receives `coach.muragent` via any channel (email, AirDrop, USB, Slack file).
 2. Double-click. OS does not recognize the extension → prompts file association.
-3. (Alternative) Recipient visits `mur.run/get`, downloads `MuR Agent Host.dmg`, installs.
+3. (Alternative) Recipient visits `mur.run/get`, downloads `MUR Agent Host.dmg`, installs.
 4. **Host installer enforces `/Applications` placement** (not `~/Applications`). On launch from `~/Applications` or `~/Downloads`, Host prompts the user: "Move to /Applications? (Required for deep-link delivery.)" Refusing leaves Host usable but URL scheme dispatch and `mur-agent-coach://...` deep links are unreliable. The installer makes the canonical choice the default.
 5. On first launch (from `/Applications`), Host:
    - Registers itself as default handler for `.muragent` files via Info.plist + `lsregister -f`.
@@ -778,7 +778,7 @@ Per-agent `.lnk` shortcuts do NOT need signing (SmartScreen is target-binary-key
    │ └─────────────────────────────────────────────────┘ │
    │                                                     │
    │ Requires:                                           │
-   │   • MuR Agent Host v2.13+                           │
+   │   • MUR Agent Host v2.13+                           │
    │   • npx (for context7 MCP server) — found           │
    │                                                     │
    │ ☐ Start automatically at login                      │
@@ -829,7 +829,7 @@ Hub:
 | Condition | UX |
 |---|---|
 | Tarball corrupted | "File is corrupted. Ask the author to re-share." Fatal (§7.5). |
-| Schema newer than Hub | "Requires MuR Hub v2.15+. [ Check for Updates ]" |
+| Schema newer than Hub | "Requires MUR Hub v2.15+. [ Check for Updates ]" |
 | Schema is anything other than `mur-agent/2` (incl. legacy `mur-agent-package/1`) | **Fatal**. "Unsupported package format." No auto-upgrade path. |
 | Same agent already installed (same uuid + same pubkey) | Offers Update flow |
 | Same uuid, different pubkey, **with rotation manifest** (§7.1.1) | "Author rotated their signing key on `<date>`" — accepted automatically |
@@ -944,7 +944,7 @@ All four originally-flagged decision questions (B1–B4) have been resolved and 
 2. **macOS LaunchAgent label collisions** with users who installed an agent under both the old per-agent `.app` and the new Hub model. Detection logic in §11.2 should disambiguate, but the exact dedup heuristic needs an integration test.
 3. **Windows EV cert decision — resolved.** Switch to Microsoft Trusted Signing (§9.4); EV certs no longer bypass SmartScreen as of March 2024. Trusted Signing is cheaper, cloud-managed, and accumulates reputation faster at our scale.
 4. **Linux per-distro autostart** — `.config/autostart` works on GNOME / KDE / XFCE; tiling WMs handle it but render no Dock surface. Acceptable v1 limitation, document in release notes.
-5. **Future SMAppService-native path on macOS.** Moving `mur-agent-runtime` from `~/.mur/bin/` into `MuR Agent Host.app/Contents/Helpers/` would enable full SMAppService integration (cleaner Login Items UX, future-proof against macOS deprecating user-LaunchAgent plists). Conflicts with the current BusyBox-style symlink architecture. Reserved for v2 / a dedicated platform-restructure spec; v1 ships with the `AssociatedBundleIdentifiers` compromise (§3.5).
+5. **Future SMAppService-native path on macOS.** Moving `mur-agent-runtime` from `~/.mur/bin/` into `MUR Agent Host.app/Contents/Helpers/` would enable full SMAppService integration (cleaner Login Items UX, future-proof against macOS deprecating user-LaunchAgent plists). Conflicts with the current BusyBox-style symlink architecture. Reserved for v2 / a dedicated platform-restructure spec; v1 ships with the `AssociatedBundleIdentifiers` compromise (§3.5).
 6. **Wayland focus semantics on Linux.** Single-instance activation on Wayland depends on the per-agent IPC (§5.3) — there is no external `wmctrl`-equivalent. KDE Plasma 6.8 is removing X11; testing matrix for Sequoia-era Linux desktops needs to cover GNOME 45+, KDE Plasma 6+ Wayland. Not blocking v1 but a known constraint.
 7. **`revocations.json` distribution channel** — V2 will fetch from the Hub update channel (§7.4.1). Exact endpoint, signing key custody, and refresh cadence to be specified in the V2 trust-badge spec when written. v1 leaves the embedded root pubkey set (§7.3) populated but unused, ensuring forward compatibility.
 8. **Sigstore migration path.** The DSSE envelope (§6.3) is byte-compatible with Rekor entries. If we outgrow `revocations.json` at scale, migrating to Sigstore transparency-log monitoring requires only the verifier change (recipients query Rekor); the on-disk format does not change. No action in v1.
@@ -968,18 +968,18 @@ Standalone path (`--standalone`) is touched only by M-export-2 (flag wiring + ha
 
 ## 16. Multi-Surface Architecture
 
-This section consolidates how `.muragent` v2 fits between the two surfaces in the MuR ecosystem. It is normative for the v1 implementation and is the long-form companion to §3.8.
+This section consolidates how `.muragent` v2 fits between the two surfaces in the MUR ecosystem. It is normative for the v1 implementation and is the long-form companion to §3.8.
 
 ### 16.1 The two surfaces
 
-| | **MuR Hub** | **MuR Commander** |
+| | **MUR Hub** | **MUR Commander** |
 |---|---|---|
 | Repo | `~/Projects/mur` (this repo) | `~/Projects/mur-commander` (separate repo) |
 | Version line | v2.13.x | v0.10.x |
 | Binary set | `mur` (CLI), `mur-agent-runtime` (sidecar), `mur-hub-gui` (Tauri 2 desktop app), `mur-daemon` | `murc` (CLI), `mur-daemon` (Commander's own daemon), `mur-gateway` (Slack/TG/DC handler), `mur-web` (dashboard on :3939), `mur-supervisor` |
 | User-visible surface | Per-agent windows, Dock icons, companion pet, voice | Slack / Telegram / Discord messages, web dashboard, workflows, programs, Jira |
 | Lifecycle owner | macOS launchd / Linux systemd-user / Windows Run (per-agent sidecars); Hub UI on demand | Single `mur-daemon` process (Docker or native), gateway maintains chat platform connections |
-| Distribution | `brew install --cask mur-hub`; `MuR Agent Host.dmg` from mur.run/get | `brew install mur-run/tap/mur-commander`; `docker pull murrun/mur-commander`; `curl install.mur.run \| sh` |
+| Distribution | `brew install --cask mur-hub`; `MUR Agent Host.dmg` from mur.run/get | `brew install mur-run/tap/mur-commander`; `docker pull murrun/mur-commander`; `curl install.mur.run \| sh` |
 | Reads `.muragent` | YES (this spec) | YES (this spec) |
 | Writes `.muragent` | YES via `mur agent export` | YES via `murc agent export` (mirror of mur subcommand; same crate as `mur-common`-level package writer) |
 | Reads / writes shared trust store at `~/.mur/trust/` | YES | YES |
