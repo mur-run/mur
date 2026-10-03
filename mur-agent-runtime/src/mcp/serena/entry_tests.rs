@@ -26,7 +26,7 @@ impl Fx {
             &paths.config_file,
             format!(
                 "trusted_project_path_patterns: []\n\
-                 project_serena_folder_location: \"{}/$projectFolderName\"\n\
+                 project_serena_folder_location: '{}/$projectFolderName'\n\
                  fixed_tools: [{tools}]\n\
                  web_dashboard: false\n",
                 paths.projects_dir.display()

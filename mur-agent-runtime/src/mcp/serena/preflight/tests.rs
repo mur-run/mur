@@ -4,7 +4,7 @@ use std::fs;
 
 const GOOD: &str = r#"
 trusted_project_path_patterns: []
-project_serena_folder_location: "$SPD/$projectFolderName"
+project_serena_folder_location: '$SPD/$projectFolderName'
 fixed_tools:
   - get_symbols_overview
   - find_symbol
@@ -45,6 +45,8 @@ impl Fx {
         fx
     }
 
+    /// `$SPD` sits inside a single-quoted YAML scalar: no escapes are
+    /// processed there, so Windows `\` separators survive parsing.
     fn config(&self, yaml: &str) {
         let yaml = yaml.replace("$SPD", &self.paths.projects_dir.to_string_lossy());
         fs::write(&self.paths.config_file, yaml).unwrap();
@@ -111,15 +113,15 @@ fn c3_absent_or_nonempty_trust() {
 fn c4_folder_outside_projects_dir_unknown_placeholder_or_missing() {
     let fx = Fx::new();
     for bad in [
-        "\"$projectDir/.serena\"",
-        "\"$SPD/../$projectFolderName\"",
-        "\"$SPD/$nope\"",
+        "'$projectDir/.serena'",
+        "'$SPD/../$projectFolderName'",
+        "'$SPD/$nope'",
     ] {
-        fx.patch("\"$SPD/$projectFolderName\"", bad);
+        fx.patch("'$SPD/$projectFolderName'", bad);
         assert_refused!(fx, C4ProjectFolder);
     }
     fx.patch(
-        "project_serena_folder_location: \"$SPD/$projectFolderName\"\n",
+        "project_serena_folder_location: '$SPD/$projectFolderName'\n",
         "",
     );
     assert_refused!(fx, C4ProjectFolder);

@@ -251,10 +251,14 @@ mod tests {
 
     #[test]
     fn env_is_serena_home_only() {
-        let p = serena_paths(Path::new("/x/a"));
+        let home = Path::new("/x/a");
+        let p = serena_paths(home);
         assert_eq!(
             launch_env(&p),
-            vec![("SERENA_HOME".to_owned(), OsString::from("/x/a/serena"))]
+            vec![(
+                "SERENA_HOME".to_owned(),
+                home.join(SERENA_HOME_DIR).into_os_string()
+            )]
         );
     }
 
