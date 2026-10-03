@@ -22,6 +22,21 @@ pub(super) fn indent_line(mut line: Line<'static>) -> Line<'static> {
     line
 }
 
+/// Wrap a body line to `cols`, THEN indent every row (#1645). Indenting first
+/// left continuation rows flush with the pane edge, and ratatui's whitespace-
+/// only `Wrap` broke mixed CJK prose far short of the edge. Each row now fits
+/// the pane, so the paint-time wrap never fires and measured rows equal
+/// painted rows.
+fn indent_wrapped(line: Line<'static>, cols: usize) -> Vec<Line<'static>> {
+    if line.width() == 0 {
+        return vec![line];
+    }
+    markdown::wrap_line(&line, cols)
+        .into_iter()
+        .map(indent_line)
+        .collect()
+}
+
 /// Same, but rendered the way the message will look once it SETTLES — used for
 /// every flush decision.
 ///
@@ -128,8 +143,9 @@ pub(super) fn agent_body_lines(
     cached: Option<&Vec<Line<'static>>>,
     width: u16,
 ) -> Vec<Line<'static>> {
+    let cols = markdown::body_cols(width, theme.inner_padding);
     if streaming {
-        let mut body = raw_body_lines(text);
+        let mut body = raw_body_lines(text, cols);
         // Trailing spinner so the user sees liveness.
         let spin = SPINNER[spinner % SPINNER.len()];
         match body.last_mut() {
@@ -141,25 +157,30 @@ pub(super) fn agent_body_lines(
         body
     } else if let Some(cached) = cached {
         // Finished reply: reuse the markdown rendered once at finish time.
-        cached.iter().cloned().map(indent_line).collect()
+        cached
+            .iter()
+            .cloned()
+            .flat_map(|l| indent_wrapped(l, cols))
+            .collect()
     } else {
-        markdown::render(text, markdown::body_cols(width, theme.inner_padding), theme)
+        markdown::render(text, cols, theme)
             .lines
             .into_iter()
-            .map(indent_line)
+            .flat_map(|l| indent_wrapped(l, cols))
             .collect()
     }
 }
 
 /// Body lines of raw (not yet markdown-rendered) text, indented like every
 /// other body row — the shape a streaming turn paints, minus the spinner.
-pub(super) fn raw_body_lines(text: &str) -> Vec<Line<'static>> {
+/// `cols` is `markdown::body_cols` — the width a row may use before indent.
+pub(super) fn raw_body_lines(text: &str, cols: usize) -> Vec<Line<'static>> {
     text.lines()
-        .map(|l| {
+        .flat_map(|l| {
             if l.is_empty() {
-                Line::default()
+                vec![Line::default()]
             } else {
-                Line::raw(format!("{MSG_INDENT}{l}"))
+                indent_wrapped(Line::raw(l.to_string()), cols)
             }
         })
         .collect()
