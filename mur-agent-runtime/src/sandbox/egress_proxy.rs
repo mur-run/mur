@@ -8,6 +8,9 @@
 //! `HTTP_PROXY=http://<token>:x@127.0.0.1:<port>`; the proxy reads the token
 //! from `Proxy-Authorization: Basic …` on the `CONNECT host:port` request,
 //! looks up that server's allowlist, and tunnels only if the host is allowed.
+//! Plain `http://` proxy requests (absolute-form `GET http://host/path`) get
+//! the same token, allowlist, and SSRF checks, then are forwarded in
+//! origin-form (#1677).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -17,6 +20,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use super::reqwest_guard::{host_allowed, host_matches_pattern};
+
+mod http_forward;
 
 /// A registered per-server policy: either a `Restricted` allowlist, or a
 /// `BroadAudited` allow-all-except-`deny` policy.
@@ -117,20 +122,23 @@ async fn handle_conn(
         head.push(byte[0]);
     }
     let head = String::from_utf8_lossy(&head);
-    let mut lines = head.lines();
-    let request_line = lines.next().unwrap_or_default();
-
-    // MVP supports CONNECT (https) only; plain http forwarding is a follow-up.
-    let Some(target) = request_line
-        .strip_prefix("CONNECT ")
-        .and_then(|r| r.split(' ').next())
-    else {
-        client
-            .write_all(b"HTTP/1.1 501 Not Implemented\r\n\r\n")
-            .await?;
-        return Ok(());
+    let request = http_forward::classify(&head);
+    let kind = request.kind();
+    let (target, forward_head) = match request {
+        http_forward::Classified::Connect { target } => (target, None),
+        http_forward::Classified::Forward { target, head } => (target, Some(head)),
+        http_forward::Classified::Unsupported(reason) => {
+            tracing::info!(reason, "egress proxy request UNSUPPORTED");
+            client
+                .write_all(http_forward::unsupported_response(reason).as_bytes())
+                .await?;
+            return Ok(());
+        }
     };
-    let token = lines
+    let target = target.as_str();
+    let token = head
+        .lines()
+        .skip(1)
         .find_map(parse_proxy_auth_token)
         .and_then(decode_basic_user);
 
@@ -142,7 +150,7 @@ async fn handle_conn(
     // replay Basic auth after a 407. A present-but-unknown token, or a known
     // token for a disallowed host, is a plain 403 below — no retry helps.
     let Some(token) = token else {
-        tracing::info!(host, "egress proxy CONNECT CHALLENGE");
+        tracing::info!(host, "egress proxy {kind} CHALLENGE");
         client
             .write_all(
                 b"HTTP/1.1 407 Proxy Authentication Required\r\n\
@@ -165,7 +173,7 @@ async fn handle_conn(
         tracing::info!(
             host,
             broad = entry.as_ref().map(|e| e.broad),
-            "egress proxy CONNECT DENY"
+            "egress proxy {kind} DENY"
         );
         client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
         return Ok(());
@@ -173,7 +181,7 @@ async fn handle_conn(
     tracing::info!(
         host,
         broad = entry.as_ref().map(|e| e.broad),
-        "egress proxy CONNECT ALLOW"
+        "egress proxy {kind} ALLOW"
     );
     // SSRF screen + IP-pin: resolve the CONNECT target once, drop link-local /
     // unspecified (cloud-metadata) addresses, connect to the pinned SocketAddr
@@ -196,7 +204,7 @@ async fn handle_conn(
     // host loses std's automatic try-all-addresses fallback — accepted for the
     // no-rebinding guarantee.)
     let Some(pinned) = safe_addrs.into_iter().next() else {
-        tracing::info!(host, reason = "ssrf", "egress proxy CONNECT DENY");
+        tracing::info!(host, reason = "ssrf", "egress proxy {kind} DENY");
         client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
         return Ok(());
     };
@@ -207,7 +215,7 @@ async fn handle_conn(
                 Some(hint) => tracing::warn!(host, %pinned, "{hint}"),
                 None => tracing::warn!(host, %pinned, "egress proxy upstream dial failed: {e}"),
             }
-            // Answer the CONNECT rather than hanging up, so the client
+            // Answer the request rather than hanging up, so the client
             // reports a proxy failure instead of a bare reset.
             client
                 .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
@@ -215,9 +223,15 @@ async fn handle_conn(
             return Ok(());
         }
     };
-    client
-        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        .await?;
+    match forward_head {
+        // Plain HTTP (#1677): the upstream's own status line is the reply.
+        Some(head) => upstream.write_all(head.as_bytes()).await?,
+        None => {
+            client
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .await?
+        }
+    }
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
     Ok(())
 }
@@ -456,6 +470,88 @@ mod tests {
             denied.starts_with("HTTP/1.1 403"),
             "broad-audited still denies deny_hosts: {denied}"
         );
+    }
+
+    /// An upstream that records the request head it receives and answers one
+    /// fixed response (#1677).
+    async fn http_upstream() -> (SocketAddr, tokio::sync::oneshot::Receiver<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut b = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && s.read(&mut b).await.unwrap() == 1 {
+                head.push(b[0]);
+            }
+            let _ = tx.send(String::from_utf8_lossy(&head).into_owned());
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello")
+                .await
+                .unwrap();
+        });
+        (addr, rx)
+    }
+
+    /// Absolute-form plain-HTTP request through the proxy; returns the whole
+    /// reply (the proxy closes after one response).
+    async fn http_via(proxy: SocketAddr, token: &str, url: &str) -> String {
+        let mut s = TcpStream::connect(proxy).await.unwrap();
+        let cred = base64::engine::general_purpose::STANDARD.encode(format!("{token}:x"));
+        let req =
+            format!("GET {url} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic {cred}\r\n\r\n");
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.unwrap();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[tokio::test]
+    async fn allowed_plain_http_is_forwarded_in_origin_form() {
+        let (up, seen) = http_upstream().await;
+        let proxy = start_egress_proxy("test").await.unwrap();
+        let token = proxy.register(vec!["127.0.0.1".to_string()]);
+        let resp = http_via(proxy.addr, &token, &format!("http://{up}/page?q=1")).await;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        assert!(resp.ends_with("hello"), "{resp}");
+        let head = seen.await.unwrap();
+        assert!(head.starts_with("GET /page?q=1 HTTP/1.1\r\n"), "{head}");
+        assert!(
+            !head.to_ascii_lowercase().contains("proxy-authorization"),
+            "credentials must not leak upstream: {head}"
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_http_is_denied_and_challenged_like_connect() {
+        let (up, _seen) = http_upstream().await;
+        let proxy = start_egress_proxy("test").await.unwrap();
+        let token = proxy.register(vec!["example.com".to_string()]);
+        let denied = http_via(proxy.addr, &token, &format!("http://{up}/")).await;
+        assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+
+        let mut s = TcpStream::connect(proxy.addr).await.unwrap();
+        s.write_all(format!("GET http://{up}/ HTTP/1.1\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.unwrap();
+        let bare = String::from_utf8_lossy(&out);
+        assert!(bare.starts_with("HTTP/1.1 407"), "{bare}");
+    }
+
+    #[tokio::test]
+    async fn origin_form_request_gets_a_501_that_says_why() {
+        let proxy = start_egress_proxy("test").await.unwrap();
+        let mut s = TcpStream::connect(proxy.addr).await.unwrap();
+        s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.unwrap();
+        let resp = String::from_utf8_lossy(&out);
+        assert!(resp.starts_with("HTTP/1.1 501"), "{resp}");
+        assert!(resp.contains("absolute-form"), "{resp}");
     }
 
     #[tokio::test]

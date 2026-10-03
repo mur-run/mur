@@ -52,7 +52,8 @@ pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
     }
     let mut out: Vec<String> = Vec::new();
     for raw in args {
-        let (host, port) = match raw.rsplit_once(':') {
+        let authority = strip_url(raw)?;
+        let (host, port) = match authority.rsplit_once(':') {
             Some((_, "")) => {
                 return Err(format!(
                     "`{raw}`: the port after `:` is empty — drop the colon or give a port"
@@ -64,7 +65,7 @@ pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
                     .map_err(|_| format!("`{raw}`: port is not a number"))?;
                 (h, Some(port))
             }
-            None => (raw.as_str(), None),
+            None => (authority, None),
         };
         // `-` first: `/browser live` parses no flags, so `--add` here is a
         // mistake, never a hostname to put in the allowlist.
@@ -90,6 +91,26 @@ pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// Schemes `/browser live` accepts in a pasted URL (#1676).
+const URL_SCHEMES: [&str; 2] = ["http", "https"];
+
+/// Reduce URL-shaped input to its `host[:port]` (#1676): a pasted
+/// `https://example.com:8443/path?q` becomes `example.com:8443`. Bare
+/// `host[:port]` passes through unchanged; a non-web scheme is refused.
+fn strip_url(raw: &str) -> Result<&str, String> {
+    let Some((scheme, rest)) = raw.split_once("://") else {
+        return Ok(raw);
+    };
+    if !URL_SCHEMES.iter().any(|s| s.eq_ignore_ascii_case(scheme)) {
+        return Err(format!(
+            "`{raw}`: only http:// and https:// URLs are accepted — or pass a bare hostname, \
+             e.g. `{USAGE_EXAMPLE}`"
+        ));
+    }
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    Ok(&rest[..end])
 }
 
 /// What [`apply`] changed, for the summary line.

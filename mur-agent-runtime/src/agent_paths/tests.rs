@@ -60,6 +60,35 @@ fn existing_0755_dirs_are_tightened_to_0700() {
     assert_eq!(mode(&parent), 0o700);
 }
 
+#[cfg(unix)]
+#[test]
+fn only_a_wrong_mode_needs_tightening() {
+    assert!(!needs_tighten(0o040_700));
+    assert!(needs_tighten(0o040_755));
+    assert!(needs_tighten(0o040_500));
+}
+
+/// #1678: post-seal, `<mur_home>/tmp` is not writable, so a re-run on an
+/// already-prepared dir must not `chmod` anything. `chmod` always bumps
+/// ctime (even to the same mode), so an unchanged ctime proves no write.
+#[cfg(unix)]
+#[test]
+fn already_prepared_dir_is_not_chmodded_again() {
+    use std::os::unix::fs::MetadataExt;
+    let home = tempfile::tempdir().unwrap();
+    let parent = home.path().join("tmp");
+    let dir = parent.join("a");
+    ensure_scratch_dir(&dir).unwrap();
+    let ctime = |p: &Path| {
+        let m = std::fs::metadata(p).unwrap();
+        (m.ctime(), m.ctime_nsec())
+    };
+    let before = (ctime(&parent), ctime(&dir));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    ensure_scratch_dir(&dir).unwrap();
+    assert_eq!((ctime(&parent), ctime(&dir)), before);
+}
+
 mod prune {
     use super::super::prune::{PruneReport, prune_scratch};
     use std::fs;

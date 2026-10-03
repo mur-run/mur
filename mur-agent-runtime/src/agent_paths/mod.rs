@@ -45,18 +45,39 @@ pub fn agent_scratch_dir(agent_home: &Path) -> Result<PathBuf, AgentPathError> {
 
 /// Create `dir` (and its parent) and force both to `0700`, also when they
 /// already existed with a looser mode.
+///
+/// Idempotent with no writes when already prepared: `chmod` only runs on a
+/// mode that differs. The runtime calls this again AFTER the seal (via
+/// `SandboxPolicy::from_entitlements` when building the MCP pool), where the
+/// parent `<mur_home>/tmp` is not writable — an unconditional `chmod` there
+/// was the EPERM behind "scratch dir not prepared" (#1678).
 pub fn ensure_scratch_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = || std::fs::Permissions::from_mode(SCRATCH_MODE);
         if let Some(parent) = dir.parent() {
-            std::fs::set_permissions(parent, perms())?;
+            tighten_to_scratch_mode(parent)?;
         }
-        std::fs::set_permissions(dir, perms())?;
+        tighten_to_scratch_mode(dir)?;
     }
     Ok(())
+}
+
+/// `chmod` `p` to [`SCRATCH_MODE`] unless it already has exactly that mode.
+#[cfg(unix)]
+fn tighten_to_scratch_mode(p: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let current = std::fs::metadata(p)?.permissions().mode();
+    if needs_tighten(current) {
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(SCRATCH_MODE))?;
+    }
+    Ok(())
+}
+
+/// Whether a dir with st_mode `mode` must be `chmod`ed to [`SCRATCH_MODE`].
+#[cfg(unix)]
+fn needs_tighten(mode: u32) -> bool {
+    mode & 0o777 != SCRATCH_MODE
 }
 
 /// `[("TMPDIR", dir), ("TMP", dir), ("TEMP", dir)]`.
