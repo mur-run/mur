@@ -479,6 +479,7 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
         return Ok(());
     }
 
+    let mut failed = 0usize;
     for mut inst in targets {
         if inst.type_name == "notion" {
             use crate::sources::adapters::notion::NotionAdapter;
@@ -493,7 +494,7 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("no notion token in keyring for `{}`", inst.id))?;
             let adapter = NotionAdapter::from_instance(&inst, token)?;
             println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
-            let report = sync_source(
+            let outcome = sync_source(
                 &adapter,
                 &mut inst,
                 &store,
@@ -502,17 +503,8 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
                 &emb_cfg,
                 full,
             )
-            .await?;
-            println!(
-                "  synced {} docs ({} chunks), deleted {}, {} errors",
-                report.docs_synced,
-                report.chunks_emitted,
-                report.docs_deleted,
-                report.errors.len()
-            );
-            for e in report.errors.iter().take(3) {
-                println!("  ! {e}");
-            }
+            .await;
+            failed += print_sync_outcome(&inst.id, outcome);
             continue;
         }
         if inst.type_name == "joplin" {
@@ -533,7 +525,7 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
             };
             let adapter = JoplinAdapter::from_instance(&inst, token)?;
             println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
-            let report = sync_source(
+            let outcome = sync_source(
                 &adapter,
                 &mut inst,
                 &store,
@@ -542,17 +534,8 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
                 &emb_cfg,
                 full,
             )
-            .await?;
-            println!(
-                "  synced {} docs ({} chunks), deleted {}, {} errors",
-                report.docs_synced,
-                report.chunks_emitted,
-                report.docs_deleted,
-                report.errors.len()
-            );
-            for e in report.errors.iter().take(3) {
-                println!("  ! {e}");
-            }
+            .await;
+            failed += print_sync_outcome(&inst.id, outcome);
             continue;
         }
         if inst.type_name != "obsidian" {
@@ -564,7 +547,7 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
         }
         let adapter = ObsidianAdapter::from_instance(&inst)?;
         println!("↻ syncing {}{}", inst.id, if full { " (full)" } else { "" });
-        let report = sync_source(
+        let outcome = sync_source(
             &adapter,
             &mut inst,
             &store,
@@ -573,19 +556,37 @@ async fn sync(id: Option<&str>, full: bool) -> Result<()> {
             &emb_cfg,
             full,
         )
-        .await?;
-        println!(
-            "  synced {} docs ({} chunks), deleted {}, {} errors",
-            report.docs_synced,
-            report.chunks_emitted,
-            report.docs_deleted,
-            report.errors.len()
-        );
-        for e in report.errors.iter().take(3) {
-            println!("  ! {e}");
-        }
+        .await;
+        failed += print_sync_outcome(&inst.id, outcome);
+    }
+    // Scripts, cron, and CI must be able to tell a sync that wrote nothing
+    // from one that worked (#1614).
+    if failed > 0 {
+        bail!("{failed} source(s) synced with errors");
     }
     Ok(())
+}
+
+/// Print one source's sync result; returns 1 when it had any error.
+fn print_sync_outcome(id: &str, outcome: Result<crate::sources::sync::SyncReport>) -> usize {
+    let report = match outcome {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  ✗ {id}: {e:#}");
+            return 1;
+        }
+    };
+    println!(
+        "  synced {} docs ({} chunks), deleted {}, {} errors",
+        report.docs_synced,
+        report.chunks_emitted,
+        report.docs_deleted,
+        report.errors.len()
+    );
+    for e in report.errors.iter().take(3) {
+        println!("  ! {e}");
+    }
+    usize::from(!report.errors.is_empty())
 }
 
 async fn remove(id: &str, keep_index: bool) -> Result<()> {
@@ -742,6 +743,12 @@ async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
     let store = SourceInstanceStore::default_store()?;
     let mut inst = store.load(id)?;
 
+    // Reindex wipes the source before re-adding it; refuse up front when the
+    // index cannot take the re-add, or the wipe is all that happens (#1614).
+    vector_store
+        .check_writable()
+        .await
+        .context("vector store rejects writes; nothing was deleted")?;
     vector_store.delete_by_source(id).await?;
     tantivy.delete_by_source(id)?;
     inst.sync.last_cursor = None;
@@ -773,6 +780,15 @@ async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()> {
         report.chunks_emitted,
         report.errors.len()
     );
+    for e in report.errors.iter().take(3) {
+        println!("  ! {e}");
+    }
+    if !report.errors.is_empty() {
+        bail!(
+            "reindex of `{id}` finished with {} error(s)",
+            report.errors.len()
+        );
+    }
     Ok(())
 }
 
