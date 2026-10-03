@@ -138,6 +138,8 @@ pub fn cmd_mcp_add(
         requires_programs: Vec::new(),
         state_paths: state_paths.to_vec(),
         package: None,
+        kind: None,
+        project: None,
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
     if !profile

@@ -89,6 +89,30 @@ pub struct McpServerEntry {
     /// directory MUR owns and can be checked before the agent comes up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<McpPackagePin>,
+
+    /// Which known server this entry launches, when MUR must harden its launch.
+    ///
+    /// Absent for every ordinary entry, which then behaves exactly as before.
+    /// A typed kind (not a generic `env` field) is the one hook point for
+    /// server-specific preflight checks and runtime-computed environment, so
+    /// no profile can set arbitrary environment variables on an MCP child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<McpServerKind>,
+
+    /// The one project directory this server serves. Only meaningful with a
+    /// `kind` that is project-scoped (serena); ignored otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<std::path::PathBuf>,
+}
+
+/// A known MCP server that MUR launches with server-specific hardening.
+///
+/// Unknown values are a parse error, never silently ignored: a profile that
+/// asks for hardening MUR does not know must not start the server unhardened.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerKind {
+    Serena,
 }
 
 /// A package MUR installed itself, and the fingerprint that proves the
@@ -529,5 +553,42 @@ mod egress_need_tests {
             entry(None),
             entry(Some(McpNetMode::BroadAudited))
         ]));
+    }
+}
+
+#[cfg(test)]
+mod server_kind_tests {
+    use super::*;
+
+    const LEGACY: &str = "name: fs\ncommand: npx\nargs:\n- -y\n- fs\n";
+
+    #[test]
+    fn absent_kind_and_project_serialize_byte_identical() {
+        let e: McpServerEntry = serde_yaml_ng::from_str(LEGACY).unwrap();
+        assert!(e.kind.is_none());
+        assert!(e.project.is_none());
+        assert_eq!(serde_yaml_ng::to_string(&e).unwrap(), LEGACY);
+    }
+
+    #[test]
+    fn serena_kind_and_project_roundtrip() {
+        let e = McpServerEntry {
+            name: "serena".into(),
+            command: "serena".into(),
+            kind: Some(McpServerKind::Serena),
+            project: Some("/work/repo".into()),
+            ..Default::default()
+        };
+        let y = serde_yaml_ng::to_string(&e).unwrap();
+        assert!(y.contains("kind: serena"), "{y}");
+        let back: McpServerEntry = serde_yaml_ng::from_str(&y).unwrap();
+        assert_eq!(back, e);
+    }
+
+    #[test]
+    fn unknown_kind_is_a_parse_error() {
+        let y = format!("{LEGACY}kind: not_a_server\n");
+        let err = serde_yaml_ng::from_str::<McpServerEntry>(&y).unwrap_err();
+        assert!(err.to_string().contains("kind"), "{err}");
     }
 }
