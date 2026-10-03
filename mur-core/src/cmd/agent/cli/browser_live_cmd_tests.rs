@@ -147,18 +147,21 @@ struct Fake {
     adds: Vec<Vec<String>>,
     saves: usize,
     fail_save: bool,
-    removes: usize,
-    fail_remove: bool,
+    fail_add: bool,
 }
 
 impl LiveOps for Fake {
     fn servers(&mut self) -> anyhow::Result<Vec<McpServerEntry>> {
         Ok(self.servers.clone())
     }
-    fn mcp_add(&mut self, argv: &[String]) -> anyhow::Result<String> {
+    fn mcp_add(&mut self, argv: &[String], network: McpServerNetwork) -> anyhow::Result<String> {
         self.adds.push(argv.to_vec());
+        if self.fail_add {
+            anyhow::bail!("probe failed");
+        }
         let mut e = live_entry();
         e.args = argv.to_vec();
+        e.network = Some(network);
         self.servers.push(e);
         Ok("added".into())
     }
@@ -168,14 +171,6 @@ impl LiveOps for Fake {
             anyhow::bail!("disk full");
         }
         self.servers = servers;
-        Ok(())
-    }
-    fn remove(&mut self, name: &str) -> anyhow::Result<()> {
-        self.removes += 1;
-        if self.fail_remove {
-            anyhow::bail!("profile locked");
-        }
-        self.servers.retain(|e| e.name != name);
         Ok(())
     }
 }
@@ -210,21 +205,22 @@ fn run_adds_once_with_per_agent_run_and_offers_restart() {
     assert_eq!(hosts_of(&f.servers), s(&["new.example.com"]));
 }
 
-// 11a: entry created this call + allowlist save fails → rolled back, Err
+// 11a: a new entry is written ONCE, by `mcp_add`, already restricted — no
+// second save, so no window where it exists without an allowlist (#1639).
 #[test]
-fn save_failure_rolls_back_an_entry_created_here() {
+fn new_entry_is_created_with_its_allowlist_in_one_write() {
     let mut f = Fake {
-        fail_save: true,
+        fail_save: true, // would trip if the create path still saved twice
         ..Fake::default()
     };
-    let err = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap_err();
-    assert_eq!(f.adds.len(), 1);
-    assert_eq!(f.removes, 1);
-    assert!(
-        f.servers.iter().all(|e| e.name != LIVE_ENTRY),
-        "entry left behind"
-    );
-    assert!(format!("{err:#}").contains("disk full"), "{err:#}");
+    run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    assert_eq!((f.adds.len(), f.saves), (1, 0));
+    let net = f.servers[0]
+        .network
+        .as_ref()
+        .expect("created with a policy");
+    assert_eq!(net.mode, McpNetMode::Restricted);
+    assert_eq!(hosts_of(&f.servers), s(&["a.example.com"]));
 }
 
 // 11b: entry already existed + save fails → leave it alone, Err
@@ -235,24 +231,20 @@ fn save_failure_keeps_a_preexisting_entry() {
         fail_save: true,
         ..Fake::default()
     };
-    assert!(run("bob", &s(&["a.example.com"]), true, &mut f).is_err());
-    assert_eq!(f.removes, 0);
+    let err = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap_err();
+    assert!(f.adds.is_empty());
     assert!(f.servers.iter().any(|e| e.name == LIVE_ENTRY));
+    assert!(format!("{err:#}").contains("disk full"), "{err:#}");
 }
 
-// 11c: rollback itself fails → both errors surface, plus a manual-check hint
+// 11c: add (probe) fails → Err, nothing persisted, no chip
 #[test]
-fn failed_rollback_reports_both_errors() {
+fn failed_add_leaves_no_entry() {
     let mut f = Fake {
-        fail_save: true,
-        fail_remove: true,
+        fail_add: true,
         ..Fake::default()
     };
-    let msg = format!(
-        "{:#}",
-        run("bob", &s(&["a.example.com"]), true, &mut f).unwrap_err()
-    );
-    for want in ["disk full", "profile locked", "check the profile"] {
-        assert!(msg.contains(want), "missing {want:?} in {msg}");
-    }
+    let err = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap_err();
+    assert!(format!("{err:#}").contains("probe failed"), "{err:#}");
+    assert!(f.servers.is_empty() && f.saves == 0);
 }

@@ -144,6 +144,7 @@ pub async fn probe_mcp_descriptions(
     entry: &McpServerEntry,
     timeout: std::time::Duration,
     policy: &mur_agent_runtime::sandbox::policy::SandboxPolicy,
+    proxy: Option<&mur_agent_runtime::sandbox::egress_proxy::EgressProxyHandle>,
 ) -> Result<
     (
         String,
@@ -157,7 +158,7 @@ pub async fn probe_mcp_descriptions(
         // dies on a sandbox EPERM fails here too (#1161); the pin path passes a
         // permissive one, where the job is only to hash tool descriptions.
         let mut client =
-            mur_agent_runtime::protocol::mcp_client::McpClient::connect(entry, policy, None)
+            mur_agent_runtime::protocol::mcp_client::McpClient::connect(entry, policy, proxy)
                 .await?;
         let _info = client.initialize().await?;
         let tools = client.list_tools().await?;
@@ -465,7 +466,9 @@ pub async fn inspect_one_probed(
             return binary_status;
         }
     };
-    match probe_mcp_descriptions(&probe_entry, timeout, policy).await {
+    // No proxy: `inspect` of a `Restricted` server has the same gap #1639
+    // closes for `mcp add` — deliberately unfixed here, tracked in #1647.
+    match probe_mcp_descriptions(&probe_entry, timeout, policy, None).await {
         Ok((current, _)) => {
             let descr_drifted = !current.eq_ignore_ascii_case(expected_descr);
             if descr_drifted {
@@ -694,6 +697,7 @@ pub fn cmd_mcp_pin(
                 // descriptions, and a sandbox denial here would drop the
                 // hash for a server that is otherwise fine to pin.
                 &mur_agent_runtime::sandbox::policy::SandboxPolicy::default(),
+                None, // deliberately unfixed, not "no proxy needed" — #1647
             ))
         }) {
             Ok((hash, tools)) => {

@@ -119,12 +119,17 @@ pub(super) fn apply(
         .map(|n| n.allow_hosts)
         .unwrap_or_default();
     // Replace, never merge: the allowlist is exactly what this call named.
-    entry.network = Some(McpServerNetwork {
+    entry.network = Some(live_network(hosts));
+    Applied { added, previous }
+}
+
+/// The live entry's network policy: `Restricted` to exactly `hosts`.
+pub(super) fn live_network(hosts: &[String]) -> McpServerNetwork {
+    McpServerNetwork {
         mode: McpNetMode::Restricted,
         allow_hosts: hosts.to_vec(),
         ..Default::default()
-    });
-    Applied { added, previous }
+    }
 }
 
 /// Gate on `mur browser setup`: refuse (and name the command) when not ready.
@@ -165,12 +170,12 @@ pub(super) const RESTART_LABEL: &str = "restart to enable browser live mode";
 pub(super) trait LiveOps {
     /// Current MCP entries on the agent.
     fn servers(&mut self) -> anyhow::Result<Vec<McpServerEntry>>;
-    /// Create the entry through `manage::mcp_add` (pins + probes + saves).
-    fn mcp_add(&mut self, argv: &[String]) -> anyhow::Result<String>;
+    /// Create the entry WITH its network policy through
+    /// `manage::mcp_add_with_network` (pins + probes behind the egress proxy +
+    /// one atomic save). `Err` means nothing was written.
+    fn mcp_add(&mut self, argv: &[String], network: McpServerNetwork) -> anyhow::Result<String>;
     /// Persist `servers` back to the profile.
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<()>;
-    /// Drop the named entry (rollback of an entry this call created).
-    fn remove(&mut self, name: &str) -> anyhow::Result<()>;
 }
 
 /// The whole `/browser live` flow. Every refusal returns before the first
@@ -184,35 +189,29 @@ pub(super) fn run(
     let hosts = parse_hosts(args).map_err(anyhow::Error::msg)?;
     check_setup(ready).map_err(anyhow::Error::msg)?;
     let mut notes = Vec::new();
-    // `mcp_add` bails on a duplicate name by contract; decide here instead.
-    let created_here = !ops.servers()?.iter().any(|e| e.name == LIVE_ENTRY);
-    if created_here {
-        notes.push(ops.mcp_add(&live_argv(agent))?);
-    }
-    // Re-read, not redundant: `mcp_add` saved the profile itself, and the
-    // list we save below must include the entry it just wrote.
     let mut servers = ops.servers()?;
-    let out = apply(&mut servers, &hosts, || unreachable!("added above"));
-    if let Err(save_err) = ops.save(servers) {
-        // `mcp_add` saved the entry with no network policy. If this call made
-        // it, undo that rather than leave an unrestricted `browser` entry. A
-        // pre-existing entry keeps its old (still valid) policy: the save is
-        // atomic (`save_profile` → `write_atomic`), so a failed save changed
-        // nothing.
-        if created_here && let Err(rm_err) = ops.remove(LIVE_ENTRY) {
-            return Err(save_err.context(format!(
-                "the '{LIVE_ENTRY}' entry was created but could not be removed \
-                 ({rm_err:#}); check the profile by hand: it may have no \
-                 network allowlist"
-            )));
-        }
-        return Err(save_err.context("could not save the browser live allowlist"));
-    }
+    // `mcp_add` bails on a duplicate name by contract; decide here instead.
+    let previous = if servers.iter().any(|e| e.name == LIVE_ENTRY) {
+        // Existing entry: overwrite its allowlist. The save is atomic
+        // (`save_profile` → `write_atomic`), so a failed save leaves the old,
+        // still-valid policy in place — nothing to roll back.
+        let out = apply(&mut servers, &hosts, || unreachable!("entry exists"));
+        ops.save(servers)
+            .map_err(|e| e.context("could not save the browser live allowlist"))?;
+        out.previous
+    } else {
+        // New entry: created WITH its policy in a single save. The probe sees
+        // it `Restricted` (so it runs behind the egress proxy, #1639), and
+        // there is no on-disk moment where `browser` exists unrestricted — so
+        // no rollback path is needed.
+        notes.push(ops.mcp_add(&live_argv(agent), live_network(&hosts))?);
+        Vec::new()
+    };
     notes.push(format!("browser live mode may reach: {}", hosts.join(", ")));
-    if !out.previous.is_empty() && out.previous != hosts {
+    if !previous.is_empty() && previous != hosts {
         notes.push(format!(
             "replaced previous allowlist: {}",
-            out.previous.join(", ")
+            previous.join(", ")
         ));
     }
     let (text, _) = manage::applied(&notes.join("\n"));
@@ -228,16 +227,13 @@ impl LiveOps for ProfileOps<'_> {
             .1
             .mcp_servers)
     }
-    fn mcp_add(&mut self, argv: &[String]) -> anyhow::Result<String> {
-        Ok(manage::mcp_add(self.0, LIVE_ENTRY, "mur", argv)?.0)
+    fn mcp_add(&mut self, argv: &[String], network: McpServerNetwork) -> anyhow::Result<String> {
+        Ok(manage::mcp_add_with_network(self.0, LIVE_ENTRY, "mur", argv, Some(network))?.0)
     }
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<()> {
         let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
         profile.mcp_servers = servers;
         crate::cmd::agent::save_profile(&path, &mut profile)
-    }
-    fn remove(&mut self, name: &str) -> anyhow::Result<()> {
-        manage::mcp_remove(self.0, name).map(|_| ())
     }
 }
 

@@ -151,7 +151,7 @@ pub(super) async fn prepare_and_seal(
     // arrival — proven live 2026-07-09 (deep-research workers: zero
     // CONNECTs reached the proxy; standalone gateway fetch worked).
     let egress_proxy =
-        if crate::supervisor_runner::profile_needs_egress(&profile.inner.enabled_mcp_servers()) {
+        if mur_common::agent::entries_need_egress(&profile.inner.enabled_mcp_servers()) {
             match crate::sandbox::egress_proxy::start_egress_proxy(&profile.inner.name).await {
                 Ok(h) => {
                     tracing::info!(addr = %h.addr, "egress proxy started (pre-sandbox)");

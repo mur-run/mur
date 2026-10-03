@@ -62,6 +62,21 @@ pub fn mcp_list(agent: &str) -> Result<String> {
 /// Non-interactive port of `cmd_mcp_add` (force semantics): best-effort
 /// binary pin, spawn-allowlist sync, warnings folded into the returned text.
 pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> Result<Managed> {
+    mcp_add_with_network(agent, server_id, command, args, None)
+}
+
+/// [`mcp_add`] with the entry's network policy set BEFORE the probe and the
+/// save, so both see the entry as it will run: a `Restricted` server is
+/// probed behind the egress proxy (#1639), and the entry and its allowlist
+/// land in one atomic save — there is never an on-disk moment where the entry
+/// exists with no policy.
+pub fn mcp_add_with_network(
+    agent: &str,
+    server_id: &str,
+    command: &str,
+    args: &[String],
+    network: Option<mur_common::agent::McpServerNetwork>,
+) -> Result<Managed> {
     let (path, mut profile) = load_profile_for_edit(agent)?;
     if profile.mcp_servers.iter().any(|s| s.name == server_id) {
         bail!("MCP server '{server_id}' already exists on '{agent}'");
@@ -102,7 +117,7 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
         publisher: None,
         installed_at: Some(chrono::Utc::now()),
         timeout_secs: None,
-        network: None,
+        network,
         url: None,
         auth: None,
         requires_programs: Vec::new(),
