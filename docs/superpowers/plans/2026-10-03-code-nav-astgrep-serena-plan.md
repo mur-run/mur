@@ -114,13 +114,25 @@ Items 13–15 reconstructed from the risk-tier decision; confirm wording.
         `-fplugin=` and `-Xclang -load`: `load_flag_lines=2` (flags reached
         the compile command), `plugin_loaded=0` (plugin not loaded). Same
         result as Apple clangd 21. Not tested: `-fpass-plugin=` and other
-        plugin spellings; Linux builds of 19.1.2.
+        plugin spellings; Linux builds of 19.1.2. macOS code signing is not
+        the cause: the upstream binary is ad-hoc, linker-signed, without the
+        hardened runtime (`flags=0x20002`) or entitlements, so library
+        validation does not apply, and the marker dylib is ad-hoc signed the
+        same way.
       - Serena writes a rewritten database into the repo's `.serena/`
         (`compile_commands_dir` default). MUR must point it at a MUR-owned
         directory.
       Evidence: `~/.mur/artifacts/mur/clangd-item14-202610031414/`.
-- [ ] 15. gopls / jdtls / sourcekit-lsp: confirm import runs build tooling
+- [x] 15. gopls / jdtls / sourcekit-lsp: confirm import runs build tooling
       and cannot be disabled (justifies "skipped unless named").
+      **Design decision, not probed.** These are High and off by default;
+      they start only under an explicit `--lsp <lang>`. Unlike Rust and
+      C/C++, their safety does not rest on configuration that narrows a
+      default-on server, so a probe cannot change the tier or the default.
+      Not verified: whether opening a hostile repo runs `go list` / `go`
+      toolchain downloads, Gradle/Maven, or SwiftPM manifests, and whether
+      any of it can be turned off. Probe in v2, or before any of these is
+      moved below High.
 - [x] 16. How does serena pass settings to each LSP? (serena-agent
       2.0.0.dev0, source read statically; rust-analyzer 1.98.1 driven by a
       hand-written LSP client that mimics serena, because the serena binary
