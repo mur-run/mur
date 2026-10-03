@@ -1,7 +1,7 @@
 # MuR Agent Package & Two-Surface Architecture
 
 **Date:** 2026-05-20
-**Status:** Draft (brainstorming approved, pending user review before plan)
+**Status:** Implemented (as-built sync). Sections 1–16.6 describe the shipped `mur-common::muragent` design; §16.7 and §17 are future work and are not implemented.
 **Owner:** david
 **Supersedes:** `2026-04-29-mur-agent-gui-export-design.md` (per-agent `.app` as default export artifact — entirely replaced; no migration)
 **Builds on:** `2026-05-11-mur-hub-companion-design.md` (MuR Hub desktop surface); `2026-05-18-commander-feedback-wire-protocol-design.md` (Signal envelope, the runtime channel between surfaces)
@@ -71,6 +71,10 @@ The user has confirmed no production users of either the existing `.app` export 
 - OS notifications, TTS, system tray actions are delivered by the sidecar directly via OS APIs, not via Hub.
 
 > **Why this is in §3 and not buried later:** the old per-agent `.app` model bound the sidecar lifecycle to `NSApplication`'s run loop. If we don't make decoupling an architectural rule, future contributors will reflexively put background logic in Hub and we will re-create the old failure mode in V3.
+
+> **Migration from current code:** the existing `mur-gui-core/src/sidecar.rs` implements a Hub-spawns-children model where Hub supervises sidecar processes with exponential backoff and kills them on shutdown. This code is the **current production behavior** and is incompatible with the launchd/systemd ownership model defined here. Migration plan: M-export-5 rewrites sidecar lifecycle to use OS init systems. During the transition (M-export-1 through M-export-4), Hub continues to spawn sidecars as before; the launchd/systemd wiring is a leaf-level change in M-export-5 that swaps the supervisor without changing any other module. The decoupling principle is the target architecture — the existing child-process model is a v0 implementation that predates this spec and is explicitly superseded by it.
+
+> **Expression engine location:** the Hub Companion Design places the pet ExpressionStateMachine and event bus (`tokio::sync::broadcast`) inside Hub. Under the decoupled model (§3.1), background features (C6 idle triggers, C7 Slack bridge, D1 voice) must function without Hub. This requires moving the expression evaluation engine into `mur-agent-runtime` (the sidecar), with Hub consuming expression state via the per-agent IPC channel (§5.3) when it is open. The expression engine migration is scoped to M-export-5 alongside the sidecar lifecycle change. Until then, the pet is dormant when Hub is closed — an acceptable v1 limitation documented in release notes.
 
 ### 3.2 OS identity is data, not a binary
 
@@ -359,7 +363,8 @@ commander:                             # OPTIONAL — present iff Commander feat
     - file: assets/commander/programs/research.md
   jira:
     base_url: https://example.atlassian.net
-    auth_ref: secret:jira_token        # references model-registry secret-ref (existing pattern)
+    secret: env:JIRA_TOKEN             # SecretRef — uses existing codec prefixes: env:|keychain:|file:|cmd:
+                                       # the recipient substitutes their own JIRA_TOKEN env var
   sub_agents:
     max_concurrent: 5
   schedule_defaults:
@@ -390,8 +395,10 @@ coach.muragent (tar.gz)
 1. Parse `manifest.yaml`.
 2. Reject if any of: YAML anchors, aliases, merge keys (`<<:`), duplicate keys, non-string keys, native (`!!timestamp` / `!!date`) timestamps. Reject silently-quoted variants of the Norway problem (`no`, `false` etc. as bare values are coerced — require explicit strings).
 3. Reject any file path in the tarball that contains a NUL byte, control character, backslash, `..` component, or absolute prefix.
-4. Normalise all paths to Unicode NFC.
+4. Normalise all string values to Unicode NFC (paths AND all other string fields — prevents cross-system canonicalization divergence for display names, descriptions, etc.).
 5. Emit RFC 8785 canonical JSON (lex-sorted keys, no insignificant whitespace, JSON-only number serialization).
+
+**JCS implementation note:** The existing `mur-common::canonical` module explicitly does NOT implement RFC 8785 (it uses a simpler canonicalization sufficient for identity rotation signatures). The `.muragent` JCS canonicalizer MUST be a separate implementation (`mur-common::jcs`) that fully conforms to RFC 8785, including its number-serialization rules (no scientific notation, no trailing zeros, `1e10` → `10000000000`). Do NOT reuse the existing `canonical` module for `.muragent` — the two canonical forms serve different contracts and must not be conflated.
 
 **In-toto v1 Statement built at export time:**
 
@@ -407,11 +414,15 @@ coach.muragent (tar.gz)
     { "name": "assets/...",        "digest": { "sha256": "<hex>" } }
   ],
   "predicateType": "https://mur.run/agent-manifest/v1",
-  "predicate": { /* parsed contents of manifest.signed.json */ }
+  "predicate": {
+    "manifest_sha256": "<sha256 hex of manifest.signed.json bytes>"
+  }
 }
 ```
 
 `subject` lists every tarball file **except** `manifest.yaml`, `signatures.json`, and `manifest.signed.json` itself, sorted lex by NFC-normalised path. Each subject is a structured JSON object (not concatenated bytes) — this defeats the path-collision second-preimage attack class that the original `path || 0x00 || hash` construction would have been vulnerable to.
+
+> **Why `manifest_sha256` and not parsed content:** embedding the parsed JSON object as the predicate creates a JSON parse-re-serialize round-trip risk: the author's JCS serializer may format numbers differently from the verifier's (`1e10` vs `10000000000`), causing byte-for-byte comparison to fail. A SHA-256 hash eliminates this entire class of bugs — the verifier computes SHA-256 of the raw `manifest.signed.json` bytes and compares the hex digest. No re-serialization, no canonicalization divergence.
 
 **DSSE PAE (Pre-Authentication Encoding):**
 
@@ -422,6 +433,8 @@ payload     = utf8(canonical_json(statement))
 ```
 
 Signature = `Ed25519(PAE)`. PAE binds the `payloadType` into the signed bytes, so a verifier can never be tricked into interpreting an in-toto Statement as something else (the alg-confusion class of bugs that killed JWS-EdDSA in earlier ecosystems).
+
+**`len()` means byte length, not character count.** All three `len()` calls in the PAE formula count UTF-8 bytes. `payloadType` is the fixed ASCII string `"application/vnd.in-toto+json"` (25 bytes) — this is unambiguous, but implementations MUST use byte-length primitives (Rust: `.len()`, Go: `len()`, Python: `len(x.encode("utf-8"))`), never character-count functions.
 
 **`signatures.json` (DSSE envelope shape):**
 
@@ -451,16 +464,22 @@ On import, Hub validates in order. **Every step's failure is fatal**: there is N
 
 1. **Tarball integrity** — gz CRC, tar entries readable, no symlinks, no entry escapes archive root.
 2. **No executable content** (hard fail):
-   - Reject any tar entry with execute mode bits.
-   - Reject any entry path ending in `.so`, `.dylib`, `.dll`, `.exe`, `.dmg`, `.pkg`, `.msi`, `.AppImage`.
-   - Reject any `mcp_servers[].command` that is an absolute path or contains `/` or `\`.
-   - Reject any `mcp_servers[].command` listed in a deny-list (`/bin/sh`, `bash`, `zsh`, `sh`, `python` / `python3` without subcommand, `curl | sh` / `wget -O- | sh` shapes).
-   - Reject any path containing NUL bytes, control characters, backslashes, `..`, or absolute prefixes (per §6.3 derivation rules).
+   - **Tar mode bits:** Reject any regular file entry with execute mode bits (directories may have execute bits — directory traversal is not execution).
+   - **Extension block (case-insensitive):** Reject any entry whose lowercased path ends in `.so`, `.so.<version>` (versioned shared libraries), `.dylib`, `.dll`, `.exe`, `.dmg`, `.pkg`, `.msi`, `.AppImage`, `.elf`, `.wasm`, `.bin`, `.sys`, `.ko` (kernel module), `.kext`, `.app` (nested bundle), `.sh`, `.bash`, `.zsh`, `.fish`, `.py`, `.rb`, `.pl`, `.php`, `.lua`, `.js` (standalone script files — assets inside `assets/commander/` may contain `.js`/`.ts` as data for workflow definitions, not as executable code; those are exempt because they live under a known data namespace and are never directly invoked by the runtime).
+   - **MCP command restrictions:**
+     - Reject any `mcp_servers[].command` that is an absolute path or contains `/` or `\`.
+     - Reject any `mcp_servers[].command` whose basename appears in the **interpreter deny-list**: `sh`, `bash`, `zsh`, `dash`, `fish`, `python`, `python3`, `ruby`, `perl`, `php`, `node`, `deno`, `bun`, `lua`, `luajit`, `awk`, `Rscript`, `groovy`, `kotlin`, `scala`, `jq`, `execline`, `rc`. Additionally reject any command containing `-e`, `--eval`, `-c`, `--command`, `-r`, `--require`, `-exec`, `--exec` as standalone arguments (these flags enable inline code execution in interpreters).
+     - Reject any command containing shell metacharacters: `|`, `;`, `&`, `$()`, `` ` ``, `$((`, `() {`, `&&`, `||`, `>`, `<`, `!` (excluding `!` in negated flags like `--no-foo` which is safe).
+     - Reject any `mcp_servers[].args` entry that contains the same metacharacters.
+     - Reject commands that chain package-manager installs: any command containing `install` or `add` together with `&&`, `;`, `|`, or newline.
+   - **Permit-list for MCP commands (defense-in-depth):** beyond the deny-list, the validator SHOULD check that the command basename appears in a curated permit-list. The v1 permit-list includes: `npx`, `uvx`, `docker`, `podman`, `git`, `gh`, `npm`, `yarn`, `pnpm`, `cargo` (restricted to subcommands `check`/`build`/`test`/`run`/`clippy`/`fmt` — NOT `install`), common Unix tools (`curl`, `wget`, `jq`, `rg`, `fd`, `sd`, `bat`, `delta`, `ghostscript`, `imagemagick`, `ffmpeg`, `sqlite3`, `psql`, `mysql`, `redis-cli`). Commands outside the permit-list trigger a **warning** (not hard fail) so new tools can be added organically. V2 may hard-fail on unknown commands after the permit-list stabilizes.
+   - **Runtime sandbox (defense-in-depth):** regardless of static validation, every MCP server process MUST be spawned inside an OS-level sandbox where available: macOS `sandbox-exec` with a minimal profile (network-out-only, no file writes outside `$TMPDIR`), Linux Landlock LSM (ruleset covering the agent's home directory only), Windows AppContainer (network-only capability). This catches interpreter-based execution vectors that the static deny-list cannot cover (e.g., `npx evil-pkg` downloading and executing arbitrary code at runtime).
+   - **Path safety:** Reject any path containing NUL bytes, control characters, backslashes, `..`, or absolute prefixes (per §6.3 derivation rules). Apply case-insensitive comparison for extension matching against a lowercased version of the path.
 3. **Schema version** — `schema: mur-agent/2` required exactly; any other value (including legacy `mur-agent-package/1`) is rejected with no compat path.
 4. **Version compatibility** — `min_host_version` ≤ current Hub version ≤ `max_host_version`.
 5. **`manifest.signed.json` matches `manifest.yaml`** — re-derive canonical JSON from `manifest.yaml`, compare byte-for-byte to embedded `manifest.signed.json`. Mismatch = fatal.
 6. **DSSE envelope structure** — well-formed JSON, `payloadType == "application/vnd.in-toto+json"`, ≥1 signature entry, all signature entries decode.
-7. **Statement structure** — payload decodes to in-toto Statement v1 shape, `predicateType == "https://mur.run/agent-manifest/v1"`, `predicate` matches embedded `manifest.signed.json` byte-for-byte.
+7. **Statement structure** — payload decodes to in-toto Statement v1 shape, `predicateType == "https://mur.run/agent-manifest/v1"`, `predicate.manifest_sha256` equals SHA-256 of the raw `manifest.signed.json` bytes extracted from the tarball.
 8. **Author signature** — first `signatures[]` entry MUST verify (`Ed25519.verify_strict(PAE, signature, publicKey)`). Use `ed25519-dalek`'s strict verifier (rejects non-canonical encodings and small-order points).
 9. **Subject hashes** — every file listed in `statement.subject` exists in the tarball with matching sha256; every tarball file (excluding `manifest.yaml` / `signatures.json` / `manifest.signed.json`) is listed in `subject`.
 10. **Mur signature** (v1: ignored; V2: verify against embedded root pubkey set — §7.4). Failure is fatal in V2 only if the user has opted in to "mur-verified-only" filtering.
@@ -486,6 +505,7 @@ agents:
     word_list: "tango victor whiskey alpha"   # 4-word fingerprint for human verify (Signal-style)
     rotated_from: null                 # set by §7.1.1 rotation manifest
     superseded_at: null
+    last_rotation_at: null             # timestamp of most recent rotation; used for replay prevention (§7.1.1)
 ```
 
 Path layout:
@@ -500,8 +520,11 @@ Path layout:
 
 Concurrent-write posture: Hub and Commander both write `trust.yaml` rarely (on import) and read it on every signature verification. Use file lock (`fcntl::flock` on macOS/Linux, `LockFileEx` on Windows) during write; readers retry on transient lock failures. Race window is small (single import operations); no daemon-coordinator needed.
 
+**Implementation note — path and format reconciliation:** The existing Commander trust store (`crates/engine/src/trust/store.rs` in the `mur-commander` repo) writes to `~/.mur/trust.json` (a flat JSON file), not `~/.mur/trust/trust.yaml`. Before the shared trust store ships, the two surfaces MUST reconcile on the canonical path and format defined here. The migration path: on first access, `mur-common::trust` checks for the legacy `~/.mur/trust.json`; if present and no `~/.mur/trust/trust.yaml` exists, migrate entries to the new format and path atomically, then remove the legacy file. Both surfaces call the same `mur-common::trust` module so the migration runs exactly once.
+
 - First import of a previously-unseen pubkey → `trust_level: pending`. UI surfaces the §7.2 prompt (Hub: import dialog; Commander: chat confirmation message).
-- Subsequent imports of the same pubkey → silent OK (no prompt) unless `display_name` changed (display-name change forces re-confirm — adopted from VS Code Marketplace's verified-publisher revocation trigger).
+- Subsequent imports of the same pubkey → accepted, but a **lightweight permission acknowledgement** is always shown (one line summarizing new permissions: MCP servers, network mode, voice, idle triggers). This requires a single click to dismiss — not a full re-consent dialog, but a deliberate action that prevents capability-creep. An author who builds trust with benign agents and later publishes one with expanded capabilities cannot slip new permissions past a user who is clicking through on muscle memory.
+- Display-name change on same pubkey → forces full §7.2 re-confirm (adopted from VS Code Marketplace's verified-publisher revocation trigger).
 - **Known author, key changed, no rotation manifest = HARD REFUSE.** This is the actual MITM detection surface. The user must explicitly remove the old entry from `trust.yaml` before the new key can be imported. This is the SSH known_hosts pattern — and unlike WhatsApp's non-blocking "identity changed" toast, the warning is blocking, because at the trust frontier non-blocking warnings train users to dismiss them.
 - For legitimate key rotation, see §7.1.1.
 
@@ -522,9 +545,11 @@ sig_new: <Ed25519(old_pubkey || new_pubkey || issued_at) by new_key>
 
 Hub flow on encountering a `.muragent` signed by an unknown pubkey when a known pubkey exists for that display name:
 1. Look for a `rotation` artifact (file in Hub's known location, or fetched from author registry in V2).
-2. If found and `old_pubkey ∈ trust.yaml` as `known`, verify both signatures.
-3. On verify success: append `new_pubkey` to `trust.yaml` with `rotated_from: <old>` and mark old entry `trust_level: superseded, superseded_at: <ts>`. Old artifacts still verify against the superseded key; new artifacts must use the new key.
-4. On verify failure (or no rotation artifact): hard refuse per §7.1.
+2. If found and `old_pubkey ∈ trust.yaml` as `known` (any trust_level except `rejected`), verify both signatures.
+3. **Replay prevention:** verify `issued_at > trust_entry.last_rotation_at` (if `last_rotation_at` is set). Reject rotation manifests whose `issued_at` is not strictly newer than the last recorded rotation. This prevents an attacker from replaying a historical rotation manifest (e.g., key_A→key_B) to resurrect a superseded key after the author has already rotated to key_C.
+4. **Trust-level gating:** if the old pubkey's `trust_level` is `superseded`, the rotation is still accepted (it's a chain rotation: A→B→C where B is already superseded), but `last_rotation_at` on the *original* entry (key_A) must still be older than `issued_at`.
+5. On verify success: append `new_pubkey` to `trust.yaml` with `rotated_from: <old>` and `last_rotation_at: <issued_at>`. Mark old entry `trust_level: superseded, superseded_at: <ts>`, and set `last_rotation_at: <issued_at>` on the old entry too. Old artifacts still verify against the superseded key (flagged as "superseded source" in UI); new artifacts must use the new key.
+6. On verify failure (or no rotation artifact): hard refuse per §7.1.
 
 ### 7.2 First-time-author prompt — UI design
 
@@ -533,9 +558,9 @@ Research finding: SmartScreen's wall-of-text dialog trained users to "More info 
 V1 prompt design rules:
 
 1. **Frame as observation, not warning.** Text: *"First time you've imported anything from this author."* No "WARNING" prefix, no scariness.
-2. **Show display name prominently; fingerprint as confirmable detail.** 8-hex-character short fingerprint (first 8 hex of SHA-256 of pubkey) **plus a 4-word fingerprint** ("tango victor whiskey alpha") for human side-channel verification.
+2. **Show display name prominently; fingerprint as confirmable detail.** 8-hex-character short fingerprint (first 8 hex of SHA-256 of pubkey) **plus a 4-word fingerprint** ("tango victor whiskey alpha") for human side-channel verification. The 4-word fingerprint uses the **EFF long word list** (7776 words, `https://eff.org/files/2016/09/08/eff_long_wordlist.txt`), encoding 51.6 bits of the SHA-256(pubkey) truncated to 52 bits then split into four 13-bit indices. This provides ~52 bits of entropy — sufficient for human comparison against a known-trusted fingerprint shared out-of-band, while being short enough to read aloud in a phone call. The 8-hex-char fingerprint (32 bits) is for quick visual scanning only and MUST NOT be relied upon as the sole identity check.
 3. **No "always trust this author" checkbox.** Trust accrues from successful imports. A checkbox is a click-through training device.
-4. **Two buttons: Cancel (left, secondary), Import (right, primary).** Primary action is the user's clearly-intended one — install the agent they chose to import. Asymmetric override (à la SmartScreen "Run anyway" being the prominent button) is anti-pattern in the *opposite* direction; here we don't have a safe default to push them toward, so the cleanest path is symmetric buttons with no nag checkboxes.
+4. **Two buttons: Cancel (left, secondary), Import (right, primary).** Primary action is the user's clearly-intended one — install the agent they chose to import. Asymmetric override (à la SmartScreen "Run anyway" being the prominent button) is anti-pattern in the *opposite* direction; here we don't have a safe default to push them toward, so the cleanest path is symmetric buttons with no nag checkboxes. **Import button activates after a 5-second delay** on the first-time prompt — this prevents muscle-memory click-through (the user must pause and read the permissions list) without adding a separate "I have read" checkbox. The delay applies only to first-time-author prompts; known-author imports have no delay.
 5. **Surface declared permissions in the same dialog.** Signature proves *who*; permissions tell user *what*. Show: MCP servers it will spawn, network outbound mode (per `entitlements.network.outbound.mode`), idle/scheduled triggers, voice/microphone usage. These come from the verified `manifest.signed.json`.
 6. **Keep prompt body under 4 lines** plus the permissions list.
 
@@ -612,9 +637,17 @@ Modeled on TUF's `timestamp.json` role, scaled down. Not in v1 scope; defined he
 }
 ```
 
-Signed by an offline mur root key from §7.3 (DSSE envelope, same primitive). Hub fetches via the existing Hub update channel on a daily timer. If `expires_at` is in the past, Hub refuses to operate (no stale-trust-during-network-block attack); the user sees a "Trust list expired — connect to refresh" dialog. Rollback detection via monotonic `crl_number`.
+Signed by an offline mur root key from §7.3 (DSSE envelope, same primitive). Hub fetches via the existing Hub update channel on a daily timer. If `expires_at` is in the past, Hub refuses to operate (no stale-trust-during-network-block attack); the user sees a "Trust list expired — connect to refresh" dialog.
+
+**Rollback and clock-rollback defense:**
+
+- **`crl_number` monotonicity:** Hub MUST reject any `revocations.json` whose `crl_number` is ≤ the last known `crl_number`, regardless of its `expires_at`. This provides protection against clock-rollback attacks: even if the system clock is rolled back to a time when an old revocation list was still valid, the monotonic counter prevents re-acceptance.
+- **First-fetch bootstrapping:** on first fetch (no prior `crl_number`), accept any validly-signed `revocations.json` with a future `expires_at`. The integrity guarantee comes from the mur root key signature on the file, not from the counter.
+- **7-day fail-closed tradeoff:** the 7-day expiration balances security (shorter window for a compromised key to operate while revocation is blocked) against availability (network outages, users traveling offline). The parameter is configurable by the revocation issuer (`expires_at` is set at signing time). V2 may reduce this to 72 hours based on operational experience.
 
 **Revoke granularity:** prefer `kind: package` (specific manifest hash) over `kind: author` (entire pubkey). Author-level revocation should be reserved for true credential compromise — has the optics of an Apple-style kill-switch and should be used sparingly.
+
+**Anti-whack-a-mole extension:** a `kind: package` revocation only covers a specific `manifest_hash`. A malicious author can re-publish a trivially-modified version (different hash, same malicious content) to bypass the revocation. When the content itself is problematic (not just a specific signed instance), use `kind: author` to revoke the entire pubkey. V2 may add a `kind: agent_slug` revocation that covers all versions of a named agent from a specific author, bridging the granularity gap between single-manifest and entire-author.
 
 ### 7.5 Critical rule: signature failure is fatal, never advisory
 
@@ -835,12 +868,13 @@ The `parse_share_url` test in particular **does not change** — the URL format 
 | `mur-common/tests/muragent_dsse.rs` | DSSE PAE byte-exact construction, multi-signature envelope round-trip (author + simulated mur sig), `verify_strict` on small-order points |
 | `mur-common/tests/muragent_statement.rs` | In-toto v1 Statement shape, subject list completeness vs tarball contents, NFC path normalization, reject `\x00` / control chars / `..` in paths |
 | `mur-common/tests/muragent_surface_blocks.rs` | `hub:` / `commander:` block parsing; unknown blocks ignored not rejected; `required_surfaces` validation; `optional_capabilities` feature-flag semantics |
-| `mur-common/tests/muragent_executable_ban.rs` | Each forbidden case in §6.4 step 2 rejected with specific error code (includes deny-list entries `.AppImage`, `.msi`, `sh -c`, `wget -O- \| sh`) |
+| `mur-common/tests/muragent_executable_ban.rs` | Each forbidden case in §6.4 step 2 rejected with specific error code: case-insensitive extension block (`.DLL`, `.So`, `.EXE` all caught), versioned `.so.1`/`.so.0.1.0` caught, `.elf`/`.wasm` caught, interpreter `-e`/`-c`/`--eval` flags caught (`ruby -e`, `perl -e`, `php -r`, `node -e`, `lua -e`, `awk ... system()`), shell metacharacter chains rejected, `pip install &&` / `npm install -g &&` chains rejected, execute bits on regular files rejected (directories with execute bit OK) |
+| `mur-common/src/muragent/executable_ban.rs` (unit tests) | MCP permit-list: known-safe commands (`uvx`, `npx`, `docker`, `gh`) pass; unknown commands (`my-custom-tool`) warn but don't reject; permit-list gating exercises all v1 safe-list entries |
 | `mur-common/tests/muragent_legacy_reject.rs` | Any non-`mur-agent/2` schema (incl. `mur-agent-package/1`) is rejected with the §10.5 fatal "Unsupported package format" error code |
 | `mur-common/tests/muragent_key_rotation.rs` | Rotation manifest dual-signature verify; trust store entry transitions `known → superseded`; importing artifact signed by old key after rotation still verifies but flagged as superseded source |
 | `mur-common/tests/muragent_trust_hard_refuse.rs` | Known author, key changed, NO rotation manifest → hard refuse with no override path |
 | `mur-common/tests/muragent_fatal_not_advisory.rs` | Every §6.4 failure path returns error, never falls through to import. Property test: any byte-flip in `signatures.json` causes refuse; any byte-flip in `manifest.signed.json` causes refuse; any tarball file content tamper causes refuse. |
-| `mur-common/tests/trust_store_concurrent.rs` | Hub and Commander both write `~/.mur/trust/trust.yaml` under file lock; concurrent reads non-blocking; lock timeout retries cleanly |
+| `mur-common/tests/trust_store_concurrent.rs` | Hub and Commander both write `~/.mur/trust/trust.yaml` under file lock; concurrent reads non-blocking; lock timeout retries cleanly; legacy `~/.mur/trust.json` → `~/.mur/trust/trust.yaml` migration runs exactly once |
 | `mur-hub-gui/src-tauri/tests/stub_generation.rs` | macOS stub `.app` created with correct Info.plist (bundle id, URL scheme, NSServices), ad-hoc resigned, `host_version.txt` written, `lsregister -f` + `LSSetDefaultHandlerForURLScheme` + `pbs -update` called in order |
 | `mur-hub-gui/src-tauri/tests/stub_generation_win.rs` | Windows `.lnk` shape (absolute Target path, no relative components), per-agent registry tree under `HKCU\Software\Classes\muragent-<slug>`, `IApplicationAssociationRegistration` invoked |
 | `mur-hub-gui/src-tauri/tests/stub_generation_linux.rs` | `.desktop` reverse-DNS file ID, `StartupWMClass`, `StartupNotify=true`, `update-desktop-database` + `xdg-mime default` invocation, `mimeapps.list` NOT touched directly |
@@ -914,16 +948,19 @@ All four originally-flagged decision questions (B1–B4) have been resolved and 
 6. **Wayland focus semantics on Linux.** Single-instance activation on Wayland depends on the per-agent IPC (§5.3) — there is no external `wmctrl`-equivalent. KDE Plasma 6.8 is removing X11; testing matrix for Sequoia-era Linux desktops needs to cover GNOME 45+, KDE Plasma 6+ Wayland. Not blocking v1 but a known constraint.
 7. **`revocations.json` distribution channel** — V2 will fetch from the Hub update channel (§7.4.1). Exact endpoint, signing key custody, and refresh cadence to be specified in the V2 trust-badge spec when written. v1 leaves the embedded root pubkey set (§7.3) populated but unused, ensuring forward compatibility.
 8. **Sigstore migration path.** The DSSE envelope (§6.3) is byte-compatible with Rekor entries. If we outgrow `revocations.json` at scale, migrating to Sigstore transparency-log monitoring requires only the verifier change (recipients query Rekor); the on-disk format does not change. No action in v1.
+9. **`mur-common::canonical` vs `mur-common::jcs` split.** The existing `canonical.rs` explicitly does NOT implement RFC 8785 JCS. `.muragent` requires full JCS compliance (number serialization rules, no scientific notation). Decision: create a separate `mur-common::jcs` module for `.muragent` rather than upgrading `canonical.rs` (which would break existing identity rotation signatures). The two canonical forms serve different contracts — document this explicitly so future contributors don't try to "unify" them.
+10. **`mur-common::muragent` as shared library across repos.** The package reader/writer/validator lives in the mur repo's `mur-common` and is consumed by Commander via Git dependency. This means Commander's `murc agent export` depends on a pinned mur repo commit. The release coordination overhead (update Commander's Cargo.toml rev when muragent format changes) is acceptable for v1. If it becomes a friction point, extract `mur-common::muragent` into a standalone crate published to crates.io.
+11. **macOS quarantine xattr behavior on future macOS versions.** The spec relies on "stubs created by locally-signed code don't get quarantine xattr." Apple has progressively tightened bundle creation policies (Ventura → Sonoma → Sequoia). The §12.4 Gatekeeper validation gate catches regressions, but if a future macOS version starts quarantining locally-created bundles, all existing stubs fail at once and the self-update mechanism (§5.4) must bootstrap from a broken state. Mitigation: Host should run `spctl --assess` on each stub during startup health check (not just version comparison) and regenerate proactively on failure.
 
 ## 15. Implementation Order (preview, full plan in writing-plans skill)
 
 Phased rollout to keep CI green throughout:
 
-1. **M-export-1** — `mur-common::muragent` shared library (writer + reader + validator). DSSE envelope, in-toto Statement, JCS canonicalization, manifest schema with `hub:` / `commander:` / `required_surfaces:` / `optional_capabilities:`. Property-test suite for fatal-not-advisory contract.
+1. **M-export-1** — `mur-common::muragent` shared library (writer + reader + validator). `mur-common::jcs` RFC 8785 canonical JSON module (separate from existing `canonical.rs`). DSSE envelope, in-toto Statement with `manifest_sha256` predicate, manifest schema with `hub:` / `commander:` / `required_surfaces:` / `optional_capabilities:` and reserved `deployment:` / `assignment:` blocks. Property-test suite for fatal-not-advisory contract. MCP command permit-list and validation rules (§6.4 step 2).
 2. **M-export-2** — `mur agent export <name>` switches default to `.muragent` (no deprecation phase per §8.2). `mur agent install / uninstall / inspect` CLI surface. Trust store data layer at `~/.mur/trust/`.
 3. **M-export-3** — Hub-side import dialog (§7.2 design), shared trust store integration, first-time-author prompt UI snapshot tests, surface-block reading (Hub picks `hub:` block).
 4. **M-export-4** — Per-platform stub generation (macOS first with Gatekeeper validation gate §12.4, then Windows with `IApplicationAssociationRegistration`, then Linux with `xdg-mime`/`update-desktop-database`). Per-agent IPC layer (§5.3). Microsoft Trusted Signing for the Windows Host installer.
-5. **M-export-5** — Per-platform autostart wiring: launchd plist with `AssociatedBundleIdentifiers`, Windows Run registry, systemd `--user` unit. Stub self-update flow (§5.4). Key rotation manifest support (§7.1.1).
+5. **M-export-5** — Per-platform autostart wiring: launchd plist with `AssociatedBundleIdentifiers`, Windows Run registry, systemd `--user` unit. Stub self-update flow (§5.4). Key rotation manifest support (§7.1.1). **Sidecar lifecycle migration:** swap Hub's child-process supervisor (`mur-gui-core/src/sidecar.rs`) for OS init system ownership (§3.1). **Expression engine relocation:** move expression evaluation from Hub into `mur-agent-runtime` sidecar so C6/C7/D1 features function without Hub open (§3.1 migration note).
 6. **M-export-6 (cross-repo)** — `mur-commander` consumes `mur-common::muragent` at the pinned commit; adds `murc agent install / export` that respects `commander:` blocks; both surfaces interoperate on `~/.mur/trust/` and `~/.mur/agents/`. Coordinated release in the Commander repo.
 7. **M-export-7** — `revocations.json` consumer scaffolding shipped in both surfaces (issuer infrastructure remains V2 work; v1 only ships the consumer so the format is forward-compatible).
 
@@ -1020,7 +1057,7 @@ Runtime:                                                                  │
   Hub user dismisses suggestion → Signal {kind: Override, …}    ────────→ ┘
 ```
 
-Surfaces do not need to be running simultaneously: Commander writes to `~/.mur/outbox/` (atomic file drops); `mur-daemon` polls it. If `mur-daemon` is not running, the outbox accumulates and is processed on next start. This is delay-tolerant by design (per the 2026-04-18 commander memory-sync spec and 2026-05-18 wire-protocol freeze).
+Surfaces do not need to be running simultaneously: Commander writes to `~/.mur/commander/outbox/` (atomic file drops, per the 2026-05-18 wire-protocol spec §5.3); `mur-daemon` polls it. If `mur-daemon` is not running, the outbox accumulates and is processed on next start. This is delay-tolerant by design (per the 2026-04-18 commander memory-sync spec and 2026-05-18 wire-protocol freeze).
 
 ### 16.5 Distribution stays separate
 
@@ -1045,6 +1082,146 @@ mur-common = { git = "https://github.com/mur-run/mur", rev = "<sha>" }
 Format changes (new optional fields, new validation rules, future schema bumps) happen in this repo; `mur-commander` pulls the new commit when it wants to support them. This is the existing pattern for `Signal` and `SignedEnvelope` — extend it to `.muragent`.
 
 Breaking schema changes (`mur-agent/2` → `mur-agent/3`) require coordinated releases of both repos, gated by the version negotiation in `manifest.exporter.min_*_version`.
+
+### 16.7 Commander agent discovery (cross-Commander sharing)
+
+> **Status: future — not implemented.** Nothing in this section exists in code yet; it records the reserved design only.
+
+The design above covers Hub↔Hub and Hub↔Commander sharing through the `.muragent` file. For Commander↔Commander sharing — where a Commander user wants to share an agent with another Commander user without involving Hub — three additional mechanisms are defined.
+
+#### 16.7.1 URL-based install
+
+Commander accepts `.muragent` files from URLs, enabling serverless sharing:
+
+```
+murc agent install https://example.com/coach.muragent
+murc agent install https://agent.mur.run/david/coach/muragent   # future Agent Directory
+```
+
+Commander downloads the URL, verifies the DSSE signature, and imports exactly as if the file were local. URL install supports `--auto-start` and all other recipient flags from §8.3. The download is streamed to a temp file (no in-memory buffering of large tarballs); verification runs on the temp file before extraction.
+
+#### 16.7.2 Agent Directory (V2, URL format reserved now)
+
+A public Agent Directory at `https://agent.mur.run/` serves as an optional discovery surface. The URL scheme is reserved in v1 so that Commander and Hub can link to it immediately:
+
+```
+https://agent.mur.run/<author>/<slug>/muragent    # latest version
+https://agent.mur.run/<author>/<slug>/v2.13.0     # version-pinned
+```
+
+The directory is indexed by author pubkey and agent slug. Listing/search endpoints are defined in a separate Agent Directory spec. v1 Commander ships with a placeholder `/agent directory` command that prints the URL scheme and notes "coming in v2."
+
+#### 16.7.3 A2A AgentCard `package_url` extension
+
+Commander's existing A2A agent discovery (`crates/engine/src/a2a/discovery.rs` in the `mur-commander` repo) discovers *running* agent services from well-known URLs. To bridge discovery to installation, add an optional `package_url` field to the A2A AgentCard:
+
+```json
+{
+  "agent_card": {
+    "name": "Coach",
+    "description": "Daily standup coach",
+    "package_url": "https://agent.mur.run/david/coach/muragent",
+    "package_sha256": "<hex>",
+    "capabilities": { ... }
+  }
+}
+```
+
+When Commander discovers an agent via A2A, it can offer one-click install if `package_url` is present. The `package_sha256` provides integrity verification independent of the DSSE envelope (defense-in-depth: even if the URL host is compromised, the manifest signature in the downloaded `.muragent` must still verify against a known author key).
+
+#### 16.7.4 Commander peer share command
+
+On the Commander side, sharing an installed agent with another Commander user on the same chat platform:
+
+```
+/agent share coach with @bob
+```
+
+Commander sends a chat message to @bob containing the `.muragent` as a file attachment (Slack: `files.upload`; Telegram: `sendDocument`; Discord: attachment). If the file is too large for the platform's limit, Commander uploads to a user-configured object store (S3 bucket, R2, or the future Agent Directory) and sends the URL instead. The recipient's Commander sees the file/URL and offers to install.
+
+---
+
+## 17. Deployment and Assignment Extension Points
+
+This section defines reserved manifest blocks and CLI surfaces for **agent deployment** (push to remote machine) and **agent assignment** (assign to a specific machine or user). These are NOT implemented in v1 — they are extension points reserved in the `.muragent` format so that future specs can add these capabilities without a schema-breaking change.
+
+### 17.1 Why deployment and assignment are separate concerns
+
+The v1 `.muragent` solves **export and packaging**: producing a portable, signed agent artifact that can be shared and installed. Two closely-related capabilities are explicitly deferred:
+
+| Capability | v1 Status | What's missing |
+|---|---|---|
+| **Export/publish** | ✅ Covered | `mur agent export --format=muragent` |
+| **Package as portable unit** | ✅ Covered | `.muragent` tar.gz + DSSE signature |
+| **Deploy to remote** | ❌ Deferred | Remote machine identity, transport layer, remote launch, health reporting, rollback |
+| **Assign to machine/user** | ❌ Deferred | Machine/user registry, assignment semantics, lifecycle management, ACL integration |
+
+Deployment and assignment require infrastructure that does not exist in v1: device identity (per-machine keypair), a secure transport channel (mTLS, SSH, or WireGuard), a device registry (which machines does the user control?), and integration with Commander's existing seats/roles ACL. These are product-level decisions that span both surfaces and the cloud infrastructure.
+
+### 17.2 Reserved manifest blocks
+
+The following blocks are reserved in `manifest.yaml` for future use. v1 validators MUST ignore them (forward-compat rule per §16.2). Future specs define their schemas:
+
+```yaml
+# ─── Deployment (future spec) ─────────────────────────────────────────────
+deployment:                          # IGNORED in v1; reserved
+  target_os: [macos, linux, windows] # which OS the agent supports when deployed
+  min_ram_mb: 512
+  min_disk_mb: 200
+  required_binaries:                 # binaries that must exist on target
+    - npx
+    - uvx
+  post_install:                      # post-install script (constrained: must use
+    command: systemctl               #   permit-listed commands only)
+    args: ["--user", "restart", "mur-agent-coach"]
+
+# ─── Assignment (future spec) ─────────────────────────────────────────────
+assignment:                          # IGNORED in v1; reserved
+  mode: claim                        # claim | invite | push
+  target_label: staging              # label selector for target machines
+  auto_start: true
+  revoke_on: 2026-12-31T23:59:59Z    # optional expiry
+```
+
+### 17.3 Device identity (prerequisite for deployment)
+
+Deploying an agent to a remote machine requires the machine to have an identity that the sender can authenticate. The prerequisite infrastructure (not in this spec):
+
+```
+~/.mur/device/
+├── device.key              # Ed25519 device keypair (generated on first run)
+├── device.pub              # public key
+└── device.yaml             # device metadata (hostname, OS, capabilities)
+```
+
+The device keypair is generated once per machine (by Hub or Commander, whichever installs first) and registered with the user's mur account (V2 cloud component). Remote deployment targets this device identity. The `.muragent` itself does not carry deployment target information — the deployment command references device identities from the registry.
+
+### 17.4 CLI surface (future)
+
+```
+# Deployment (future spec)
+mur agent deploy <name> --to <device-id>            # push to a registered device
+mur agent deploy <name> --to-label <label>           # push to all devices matching label
+mur agent deploy <name> --to-user <commander-user>   # push to all devices owned by a Commander user
+mur agent deploy status <deployment-id>               # check deployment health
+mur agent deploy rollback <name> --to <device-id>     # rollback to previous version
+
+# Assignment (future spec)
+mur agent assign <name> --to machine:<device-id>      # assign to specific machine
+mur agent assign <name> --to user:<commander-user-id> # assign to Commander user
+mur agent assign revoke <name> --from <target>        # revoke assignment
+mur agent assign list <name>                          # list current assignments
+```
+
+### 17.5 Implementation sequencing
+
+1. **This spec (v1):** `.muragent` format, export/import, trust model, Hub stubs, Commander `commander:` block consumption.
+2. **Agent Directory spec (v1.5):** public directory at `agent.mur.run`, search, version listing.
+3. **Device Identity spec (v2 prerequisite):** `~/.mur/device/`, device registration, cloud account binding.
+4. **Deployment spec (v2):** remote push, health reporting, rollback, deployment ACL.
+5. **Assignment spec (v2):** machine/user assignment, lifecycle, Commander seats/ACL integration.
+
+The `deployment:` and `assignment:` manifest blocks reserved above ensure that when these specs are written, the `.muragent` format requires no breaking change.
 
 ---
 
