@@ -83,8 +83,20 @@ pub fn mcp_add_with_network(
         command,
         args,
         network,
-        &Default::default(),
+        &Policy {
+            fs: &FilesystemEntitlement::default(),
+            spawn_dirs: &[],
+        },
     )
+}
+
+/// Sandbox grants an MCP server needs beyond its own binary, merged in the
+/// same atomic save as the entry.
+pub struct Policy<'a> {
+    /// Filesystem grants (vetted and created by the caller).
+    pub fs: &'a FilesystemEntitlement,
+    /// Build-lane dirs whose executables the server may spawn (#1639).
+    pub spawn_dirs: &'a [String],
 }
 
 /// [`mcp_add_with_network`] that also merges filesystem grants the server
@@ -98,14 +110,21 @@ pub fn mcp_add_with_policy(
     command: &str,
     args: &[String],
     network: Option<mur_common::agent::McpServerNetwork>,
-    fs: &FilesystemEntitlement,
+    policy: &Policy<'_>,
 ) -> Result<Managed> {
     let (path, mut profile) = load_profile_for_edit(agent)?;
     if profile.mcp_servers.iter().any(|s| s.name == server_id) {
         bail!("MCP server '{server_id}' already exists on '{agent}'");
     }
 
-    let mut notes = merge_fs(&mut profile.entitlements.filesystem, fs);
+    let mut notes = merge_fs(&mut profile.entitlements.filesystem, policy.fs);
+    let dirs = &mut profile.entitlements.processes.spawn.allowed_dirs;
+    for d in policy.spawn_dirs {
+        if !dirs.contains(d) {
+            dirs.push(d.clone());
+            notes.push(format!("allowed spawn under {d}"));
+        }
+    }
     let (binary_sha256, resolved_path) = match crate::cmd::agent_mcp_pin::resolve_command(command) {
         Ok(p) => {
             let sha = match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
