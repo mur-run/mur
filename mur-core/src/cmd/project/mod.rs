@@ -15,6 +15,7 @@ use crate::store::embedding::{EmbeddingConfig, embed};
 // an `#[allow(unused_imports)]`, and suppressing the warning hides the next
 // genuinely dead import. The function is imported by value below; a module
 // and a function may share a name, they live in different namespaces.
+pub(crate) mod hook_report;
 pub mod status_json;
 use status_json::status_json;
 
@@ -408,6 +409,13 @@ pub(crate) async fn cmd_project_index(
     }
 
     crate::codebase::ensure_git_hook(&project_path, quiet)?;
+    // #1672: states the install step cannot fix are reported here, once.
+    if !quiet
+        && let Some(notice) =
+            hook_report::index_notice(&crate::codebase::hook_health(&project_path))
+    {
+        eprintln!("  {notice}");
+    }
     Ok(())
 }
 
@@ -492,6 +500,13 @@ pub fn cmd_project_status(path: Option<String>, json: bool) -> Result<()> {
         println!(
             "  ⚠ Index built at {recorded} dims but config is {configured} — run `mur project index` to rebuild."
         );
+    }
+    if info.indexed {
+        match hook_report::check(std::path::Path::new(&info.path)) {
+            Some(Ok(ok)) => println!("  Auto-index hook: {ok}"),
+            Some(Err(problem)) => println!("  ⚠ Auto-index hook {problem}"),
+            None => {}
+        }
     }
 
     Ok(())

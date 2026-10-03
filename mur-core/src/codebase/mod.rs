@@ -1,6 +1,9 @@
 pub mod chunker;
 pub mod scanner;
 
+mod hooks_dir;
+pub(crate) use hooks_dir::{HookHealth, MANUAL_HOOK_CMD, hook_health};
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -890,10 +893,17 @@ fn hook_block_span(existing: &str) -> Option<(usize, usize)> {
 }
 
 pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
-    let hooks_dir = project_path.join(".git").join("hooks");
-    if !hooks_dir.exists() {
-        return Ok(false);
-    }
+    // #1672: honour core.hooksPath, worktrees and submodules — ask git.
+    let hooks_dir = match hooks_dir::resolve(project_path) {
+        hooks_dir::HooksDir::Writable(dir) => dir,
+        hooks_dir::HooksDir::None => return Ok(false),
+        hooks_dir::HooksDir::InWorkTree(dir) => {
+            // A versioned hooks dir is the user's to edit. The caller reports
+            // it to the user (cmd/project hook_report), so only trace here.
+            tracing::debug!(dir = %dir.display(), "auto-index hook not installed: core.hooksPath is in the working tree");
+            return Ok(false);
+        }
+    };
     let hook_path = hooks_dir.join("post-commit");
     let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
 

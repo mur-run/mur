@@ -352,6 +352,7 @@ pub(crate) fn cmd_doctor(fix: bool) -> Result<()> {
     }
 
     report_mcp_pins(&mur_dir);
+    report_auto_index_hook();
 
     if fix {
         run_fixes(&codesign)?;
@@ -360,6 +361,28 @@ pub(crate) fn cmd_doctor(fix: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// #1672: whether the current project's auto-index hook will fire. Only for an
+/// indexed project; a repo nobody indexed has no hook to expect.
+fn report_auto_index_hook() {
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    // Same key `mur project index` uses, so the index lookup matches.
+    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    let name = crate::codebase::scanner::project_name_from_path(&cwd);
+    if !crate::codebase::CodebaseIndex::new(&name, &cwd)
+        .lance_path()
+        .exists()
+    {
+        return;
+    }
+    match crate::cmd::project::hook_report::check(&cwd) {
+        Some(Ok(ok)) => println!("✅ Auto-index hook ({name}): {ok}"),
+        Some(Err(problem)) => println!("⚠️  Auto-index hook ({name}) {problem}"),
+        None => {}
+    }
 }
 
 /// The `--fix` pass: offer each actionable fix, one confirmation per item.
