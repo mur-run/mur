@@ -148,6 +148,7 @@ struct Fake {
     saves: usize,
     fail_save: bool,
     fail_add: bool,
+    save_notes: Vec<String>,
 }
 
 impl LiveOps for Fake {
@@ -165,13 +166,13 @@ impl LiveOps for Fake {
         self.servers.push(e);
         Ok("added".into())
     }
-    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<()> {
+    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>> {
         self.saves += 1;
         if self.fail_save {
             anyhow::bail!("disk full");
         }
         self.servers = servers;
-        Ok(())
+        Ok(self.save_notes.clone())
     }
 }
 
@@ -247,4 +248,144 @@ fn failed_add_leaves_no_entry() {
     let err = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap_err();
     assert!(format!("{err:#}").contains("probe failed"), "{err:#}");
     assert!(f.servers.is_empty() && f.saves == 0);
+}
+
+// #1639 layer 2: the sealed server dies with EPERM unless all three grants
+// exist — read on the install, write on the browser root and the registry.
+#[test]
+fn live_fs_grants_install_read_and_both_writes() {
+    let home = std::path::Path::new("/murhome");
+    let reg = std::path::Path::new("/cache/ms-playwright/b");
+    let fs = live_fs(home, Some(reg));
+    let s = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
+    assert_eq!(fs.read, vec![s(mur_browser::server::install_dir(home))]);
+    assert_eq!(
+        fs.write,
+        vec![
+            s(mur_browser::paths::browser_root(home)),
+            "/cache/ms-playwright/b".to_string()
+        ]
+    );
+    assert!(fs.deny.is_empty());
+}
+
+// No registry location → no guessed path, the other grants still apply.
+#[test]
+fn live_fs_without_registry_skips_only_that_grant() {
+    let fs = live_fs(std::path::Path::new("/murhome"), None);
+    assert_eq!((fs.read.len(), fs.write.len()), (1, 1));
+}
+
+// The entry must launch THIS binary by absolute path (B0 rule 6), and the
+// `murmur` alias must not leak into the command.
+#[test]
+fn live_command_is_absolute_and_never_the_murmur_alias() {
+    // The alias is swapped with `Path::join`, so the expected value must use
+    // the platform separator too (`/opt/bin\mur` on Windows).
+    let swapped = std::path::Path::new("/opt/bin").join("mur");
+    let p = std::path::PathBuf::from("/opt/bin/murmur");
+    assert_eq!(live_command(Ok(p)), swapped.to_string_lossy());
+    let p = std::path::PathBuf::from("/opt/bin/mur");
+    assert_eq!(live_command(Ok(p)), "/opt/bin/mur");
+    assert_eq!(live_command(Err(std::io::Error::other("x"))), "mur");
+}
+
+// Grants merge exactly once and report only what was new.
+#[test]
+fn merge_fs_adds_missing_paths_once() {
+    use mur_common::agent::FilesystemEntitlement;
+    let mut dst = FilesystemEntitlement {
+        read: s(&["/a"]),
+        ..Default::default()
+    };
+    let add = FilesystemEntitlement {
+        read: s(&["/a", "/b"]),
+        write: s(&["/w"]),
+        ..Default::default()
+    };
+    let notes = super::manage::merge_fs(&mut dst, &add);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert_eq!((dst.read, dst.write), (s(&["/a", "/b"]), s(&["/w"])));
+    let mut again = FilesystemEntitlement {
+        read: s(&["/a", "/b"]),
+        write: s(&["/w"]),
+        ..Default::default()
+    };
+    assert!(super::manage::merge_fs(&mut again, &add).is_empty());
+}
+
+// Backfill: re-running `/browser live` on an entry that predates the fs
+// grants surfaces the grants `save` added, alongside the allowlist note.
+#[test]
+fn existing_entry_save_reports_backfilled_grants() {
+    let mut ops = Fake {
+        servers: vec![live_entry()],
+        save_notes: vec!["granted write on /x/browser".into()],
+        ..Default::default()
+    };
+    let (text, chip) = run("bot", &["example.com".into()], true, &mut ops).unwrap();
+    assert_eq!(ops.saves, 1);
+    assert!(ops.adds.is_empty(), "existing entry must not be re-added");
+    assert!(text.contains("granted write on /x/browser"), "{text}");
+    assert!(text.contains("example.com"), "{text}");
+    assert!(chip.is_some());
+}
+
+// existing bare-`mur` entry → absolute command + fresh pin, one note
+#[test]
+fn repin_rewrites_bare_command_and_hash() {
+    let mut e = live_entry();
+    e.binary_sha256 = Some("old".into());
+    e.description_hash = Some("tools".into());
+    let note = repin_command(&mut e, "/opt/mur/bin/mur", "abc123".into()).expect("changed");
+    assert!(note.contains("/opt/mur/bin/mur"), "{note}");
+    assert_eq!(e.command, "/opt/mur/bin/mur");
+    assert_eq!(e.binary_sha256.as_deref(), Some("abc123"));
+    // the Playwright tools are unchanged, so their pin stays
+    assert_eq!(e.description_hash.as_deref(), Some("tools"));
+}
+
+// already absolute and pinned to the same bytes → no-op, no note
+#[test]
+fn repin_is_a_noop_when_already_current() {
+    let mut e = live_entry();
+    e.command = "/opt/mur/bin/mur".into();
+    e.binary_sha256 = Some("ABC123".into());
+    assert!(repin_command(&mut e, "/opt/mur/bin/mur", "abc123".into()).is_none());
+    assert_eq!(e.binary_sha256.as_deref(), Some("ABC123"));
+}
+
+// same path but the binary was rebuilt → re-pinned, not left drifted
+#[test]
+fn repin_refreshes_hash_after_rebuild() {
+    let mut e = live_entry();
+    e.command = "/opt/mur/bin/mur".into();
+    e.binary_sha256 = Some("old".into());
+    assert!(repin_command(&mut e, "/opt/mur/bin/mur", "new".into()).is_some());
+    assert_eq!(e.binary_sha256.as_deref(), Some("new"));
+}
+
+#[test]
+fn spawn_allowlist_gets_absolute_command_once() {
+    let abs = "/opt/x/target/debug/mur";
+    let mut allowed = vec!["mur".to_string()];
+    let note = ensure_spawn_allowed(&mut allowed, abs);
+    assert_eq!(allowed, vec!["mur".to_string(), abs.to_string()]);
+    assert!(note.unwrap().contains(abs));
+    assert_eq!(ensure_spawn_allowed(&mut allowed, abs), None);
+    assert_eq!(allowed.len(), 2);
+}
+
+// Rerun with the same hosts and nothing for `save` to fix: no restart chip,
+// and the reply says so instead of "profile updated".
+#[test]
+fn unchanged_rerun_offers_no_restart() {
+    let mut f = Fake::default();
+    run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    let (text, chip) = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    assert!(chip.is_none(), "{text}");
+    assert!(text.contains("nothing changed"), "{text}");
+    // A different allowlist is a real change again.
+    let (_, chip) = run("bob", &s(&["b.example.com"]), true, &mut f).unwrap();
+    assert!(chip.is_some());
 }

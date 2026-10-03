@@ -9,7 +9,10 @@
 //! touch a profile on disk or spawn the install probe `manage::mcp_add` runs.
 
 use mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS;
-use mur_common::agent::{McpNetMode, McpServerEntry, McpServerNetwork};
+use std::path::Path;
+
+use anyhow::Context;
+use mur_common::agent::{FilesystemEntitlement, McpNetMode, McpServerEntry, McpServerNetwork};
 use mur_common::proposal::Proposal;
 
 use super::manage::{self, Managed};
@@ -163,6 +166,87 @@ pub(super) fn live_argv(agent: &str) -> Vec<String> {
     .collect()
 }
 
+/// Filesystem grants the sealed live server cannot start without (#1639
+/// layer 2: missing any one exits the server with `Operation not permitted`
+/// before `tools/list`):
+///
+/// * read on the pinned MCP server install — `node` must open its script;
+/// * write on the browser root — run dirs, profiles, the npm/pw scratch;
+/// * write on Playwright's server registry — a `browser@<hash>` lock per
+///   launch. Skipped when it cannot be located (no `HOME`); the probe then
+///   reports the denial rather than this guessing a path.
+pub(super) fn live_fs(mur_home: &Path, registry: Option<&Path>) -> FilesystemEntitlement {
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let mut write = vec![s(&mur_browser::paths::browser_root(mur_home))];
+    write.extend(registry.map(s));
+    FilesystemEntitlement {
+        read: vec![s(&mur_browser::server::install_dir(mur_home))],
+        write,
+        deny: Vec::new(),
+    }
+}
+
+/// The `mur` the entry should launch: this very binary, by absolute path.
+/// A bare `mur` is resolved against whatever PATH the runtime has, so the
+/// pinned hash and the exec'd file could drift apart (B0 rule 6). The
+/// `murmur` alias is normalized, or `murmur browser …` would mis-dispatch.
+pub(super) fn live_command(exe: std::io::Result<std::path::PathBuf>) -> String {
+    match exe {
+        Ok(p) => super::multiplex::canonical_mur_exe(p)
+            .to_string_lossy()
+            .into_owned(),
+        Err(_) => "mur".into(),
+    }
+}
+
+/// Point an existing live entry at `command` (from [`live_command`]) and
+/// re-pin it to `sha`, the hash of that very file. An entry made before
+/// absolute paths existed still says bare `mur`, which leaves the exec'd
+/// binary up to the runtime's PATH (B0 rule 6). `description_hash` is kept:
+/// it covers the Playwright server's tools, which `mur browser record`
+/// launches unchanged whichever `mur` starts it. Returns a note on change.
+pub(super) fn repin_command(
+    entry: &mut McpServerEntry,
+    command: &str,
+    sha: String,
+) -> Option<String> {
+    let same_pin = entry
+        .binary_sha256
+        .as_deref()
+        .is_some_and(|old| old.eq_ignore_ascii_case(&sha));
+    if entry.command == command && same_pin {
+        return None;
+    }
+    let note = format!(
+        "re-pinned `{LIVE_ENTRY}` to {command} (sha256 {}…)",
+        &sha[..16.min(sha.len())]
+    );
+    entry.command = command.to_string();
+    entry.binary_sha256 = Some(sha);
+    Some(note)
+}
+
+/// Add `command` to the spawn allowlist if it is not there verbatim. The
+/// runtime resolves a bare name through its search dirs, so a re-pinned
+/// absolute `command` needs its own literal entry or the seal denies the exec
+/// (EPERM) even though `mur` is allowlisted. Existing entries are kept.
+pub(super) fn ensure_spawn_allowed(allowed: &mut Vec<String>, command: &str) -> Option<String> {
+    if allowed.iter().any(|a| a == command) {
+        return None;
+    }
+    allowed.push(command.to_string());
+    Some(format!("allowed spawn of {command}"))
+}
+
+/// Reply when a rerun changes nothing: no restart, nothing written.
+pub(super) fn unchanged_text(hosts: &[String]) -> String {
+    format!(
+        "browser live mode already set up for: {} — nothing changed, no restart needed.\n\
+         (If you skipped the restart after an earlier change, restart the agent to apply it.)",
+        hosts.join(", ")
+    )
+}
+
 /// Chip label for the restart live mode needs.
 pub(super) const RESTART_LABEL: &str = "restart to enable browser live mode";
 
@@ -174,8 +258,11 @@ pub(super) trait LiveOps {
     /// `manage::mcp_add_with_network` (pins + probes behind the egress proxy +
     /// one atomic save). `Err` means nothing was written.
     fn mcp_add(&mut self, argv: &[String], network: McpServerNetwork) -> anyhow::Result<String>;
-    /// Persist `servers` back to the profile.
-    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<()>;
+    /// Persist `servers` back to the profile, together with any missing
+    /// [`live_fs`] grants and a [`repin_command`] onto this binary's absolute
+    /// path (an entry made before those existed lacks both).
+    /// Returns one note per grant added. `Err` means nothing was written.
+    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>>;
 }
 
 /// The whole `/browser live` flow. Every refusal returns before the first
@@ -195,9 +282,19 @@ pub(super) fn run(
         // Existing entry: overwrite its allowlist. The save is atomic
         // (`save_profile` → `write_atomic`), so a failed save leaves the old,
         // still-valid policy in place — nothing to roll back.
+        let before = servers.clone();
         let out = apply(&mut servers, &hosts, || unreachable!("entry exists"));
-        ops.save(servers)
+        let entry_changed = servers != before;
+        let saved = ops
+            .save(servers)
             .map_err(|e| e.context("could not save the browser live allowlist"))?;
+        // `save` reports one note per change it made (re-pin, grant, spawn),
+        // so no notes + same entry means the profile is exactly as it was:
+        // a restart would reload identical config, so offer none.
+        if !entry_changed && saved.is_empty() {
+            return Ok((unchanged_text(&hosts), None));
+        }
+        notes.extend(saved);
         out.previous
     } else {
         // New entry: created WITH its policy in a single save. The probe sees
@@ -228,12 +325,62 @@ impl LiveOps for ProfileOps<'_> {
             .mcp_servers)
     }
     fn mcp_add(&mut self, argv: &[String], network: McpServerNetwork) -> anyhow::Result<String> {
-        Ok(manage::mcp_add_with_network(self.0, LIVE_ENTRY, "mur", argv, Some(network))?.0)
+        let fs = self.prepared_fs()?;
+        let command = live_command(std::env::current_exe());
+        Ok(manage::mcp_add_with_policy(self.0, LIVE_ENTRY, &command, argv, Some(network), &fs)?.0)
     }
-    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<()> {
+    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>> {
+        let fs = self.prepared_fs()?;
+        let mut servers = servers;
+        let mut notes = Vec::new();
+        let mut spawn_command = None;
+        if let Some(entry) = servers.iter_mut().find(|e| e.name == LIVE_ENTRY) {
+            // Hash before any write: a binary we cannot hash must not be
+            // pinned, and bailing here leaves the profile untouched.
+            let command = live_command(std::env::current_exe());
+            let resolved = crate::cmd::agent_mcp_pin::resolve_command(&command)
+                .with_context(|| format!("resolve browser live command `{command}`"))?;
+            let sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&resolved)?;
+            notes.extend(repin_command(entry, &command, sha));
+            spawn_command = Some(command);
+        }
         let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
+        let servers_changed = profile.mcp_servers != servers;
         profile.mcp_servers = servers;
-        crate::cmd::agent::save_profile(&path, &mut profile)
+        notes.extend(manage::merge_fs(&mut profile.entitlements.filesystem, &fs));
+        if let Some(command) = spawn_command {
+            notes.extend(ensure_spawn_allowed(
+                &mut profile.entitlements.processes.spawn.allowed,
+                &command,
+            ));
+        }
+        // Nothing to persist: skip the write so `updated_at` stays put and the
+        // caller can tell "no change" from "saved".
+        if servers_changed || !notes.is_empty() {
+            crate::cmd::agent::save_profile(&path, &mut profile)?;
+        }
+        Ok(notes)
+    }
+}
+
+impl ProfileOps<'_> {
+    /// [`live_fs`] for this install, vetted and ready to seal: same guards as
+    /// `perm allow-*`, and write dirs created, since the seal drops a path
+    /// that does not exist yet. Runs before any profile write.
+    fn prepared_fs(&self) -> anyhow::Result<FilesystemEntitlement> {
+        let home = crate::cmd::agent::resolve_mur_home()?;
+        let registry = mur_browser::chromium::system_server_registry_dir();
+        let fs = live_fs(&home, registry.as_deref());
+        for (paths, write) in [(&fs.read, false), (&fs.write, true)] {
+            for p in paths {
+                crate::cmd::agent::perm::reject_ungrantable_path(self.0, p, write)?;
+                if write {
+                    std::fs::create_dir_all(p)
+                        .with_context(|| format!("create browser live dir {p}"))?;
+                }
+            }
+        }
+        Ok(fs)
     }
 }
 

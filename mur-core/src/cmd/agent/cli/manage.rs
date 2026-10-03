@@ -7,7 +7,7 @@
 //! are reused as-is.
 
 use anyhow::{Result, bail};
-use mur_common::agent::McpServerEntry;
+use mur_common::agent::{FilesystemEntitlement, McpServerEntry};
 use mur_common::proposal::Proposal;
 
 use crate::cmd::agent::{load_profile_for_edit, save_profile};
@@ -77,12 +77,35 @@ pub fn mcp_add_with_network(
     args: &[String],
     network: Option<mur_common::agent::McpServerNetwork>,
 ) -> Result<Managed> {
+    mcp_add_with_policy(
+        agent,
+        server_id,
+        command,
+        args,
+        network,
+        &Default::default(),
+    )
+}
+
+/// [`mcp_add_with_network`] that also merges filesystem grants the server
+/// needs — before the probe, since the probe is sealed from these same
+/// entitlements, and in the same atomic save as the entry. Callers vet the
+/// paths (`perm::reject_ungrantable_path`) and create them first: the sandbox
+/// drops entitlement paths that do not exist when it seals.
+pub fn mcp_add_with_policy(
+    agent: &str,
+    server_id: &str,
+    command: &str,
+    args: &[String],
+    network: Option<mur_common::agent::McpServerNetwork>,
+    fs: &FilesystemEntitlement,
+) -> Result<Managed> {
     let (path, mut profile) = load_profile_for_edit(agent)?;
     if profile.mcp_servers.iter().any(|s| s.name == server_id) {
         bail!("MCP server '{server_id}' already exists on '{agent}'");
     }
 
-    let mut notes = Vec::new();
+    let mut notes = merge_fs(&mut profile.entitlements.filesystem, fs);
     let (binary_sha256, resolved_path) = match crate::cmd::agent_mcp_pin::resolve_command(command) {
         Ok(p) => {
             let sha = match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
@@ -165,6 +188,27 @@ pub fn mcp_add_with_network(
         out.push_str(&format!("\n  {n}"));
     }
     Ok(applied(&out))
+}
+
+/// Add each path in `add` that `dst` lacks (exact match, like `perm`).
+/// Returns one note per new grant; an empty `add` is a no-op.
+pub(super) fn merge_fs(
+    dst: &mut FilesystemEntitlement,
+    add: &FilesystemEntitlement,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    for (kind, have, want) in [
+        ("read", &mut dst.read, &add.read),
+        ("write", &mut dst.write, &add.write),
+    ] {
+        for p in want {
+            if !have.contains(p) {
+                have.push(p.clone());
+                notes.push(format!("granted {kind} on {p}"));
+            }
+        }
+    }
+    notes
 }
 
 pub fn mcp_remove(agent: &str, server_id: &str) -> Result<Managed> {
