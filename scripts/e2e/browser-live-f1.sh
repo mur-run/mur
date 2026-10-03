@@ -113,6 +113,9 @@ echo "    B $URL_B  $PRICE_B"
 echo "    cheaper: $CHEAPER_NAME"
 
 echo "==> 2/5 agent with a Restricted live-mode browser entry"
+# A leftover from an interrupted run may still be running, and `remove`
+# refuses a running agent — stop first, same order as cleanup().
+"$MUR" agent stop "$AGENT" >/dev/null 2>&1 || true
 "$MUR" agent remove "$AGENT" --purge --force >/dev/null 2>&1 || true
 "$MUR" agent create "$AGENT" --no-interactive ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} >/dev/null
 # The entry: `mur browser record --mode live`. Trailing args reach
