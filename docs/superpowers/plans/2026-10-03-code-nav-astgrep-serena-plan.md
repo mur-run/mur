@@ -211,10 +211,182 @@ Items 13–15 reconstructed from the risk-tier decision; confirm wording.
     `--enable-config=false` (via global `ls_extra_args`), contains no
     `--query-driver`, and `compile_commands_dir` resolves to a MUR-owned
     directory (item 14).
-- Expose six read-only tools; tool-deny write tools.
+- Expose five read-only tools (was six; see 2.1); everything else is
+  dropped by an allow-list, not a deny-list.
 - LSP settings: only launch-command keys are controllable through serena
   (item 16). rust-analyzer init options are serena-hardcoded and not
   degraded in v1.
+
+### Phase 2 decisions
+
+- **D1. Typed `kind: serena`, no generic `env` field.** The three serena
+  checks are serena-specific; a typed kind gives them one hook point, and
+  `SERENA_HOME` is computed by the runtime, never written in the profile. A
+  generic `env` would let any MCP entry set environment variables and widen
+  the supply-chain surface.
+- **D2. Five tools, not six.** `get_diagnostics_for_file` is excluded: for
+  Rust it sends `didSave` first, which runs `cargo check` (item 16). No
+  sixth tool is added to fill the count. The implementation PR must say
+  "plan said six, shipped five" with this reason.
+- **D3. No install in Phase 2.** Phase 2 only launches an already-installed
+  serena safely. A missing `SERENA_HOME` or config refuses startup; it never
+  triggers an install. Install (uv venv, `--require-hashes`, consent) is
+  Phase 3.
+
+### Phase 2 facts found while splitting tasks (serena-agent 2.0.0.dev0)
+
+- **Repo `.serena/` fallback.** `get_project_serena_folder`
+  (`serena_config.py:1489-1507`) uses the configured folder only if it
+  *exists*; otherwise it falls back to `$projectDir/.serena` when that
+  exists. Pointing `project_serena_folder_location` at a MUR dir is not
+  enough — the resolved MUR folder must exist before spawn (2.3 check C4).
+- **serena rewrites its own global config at runtime.** Activating a project
+  not yet registered calls `add_project_from_path` → `_persist_projects` →
+  `_save()` (`agent.py:1531`, `serena_config.py:1373-1416`). So
+  `SERENA_HOME` must be writable by the child, and the preflight cannot be
+  startup-only: it re-runs at every spawn (2.4).
+- **Dashboard on by default.** `web_dashboard: bool = True`
+  (`serena_config.py:898`); MUR launches with
+  `--enable-web-dashboard false --open-web-dashboard false`.
+- **Tool names** are snake_case of the class name minus `Tool`
+  (`tools_base.py:162-168`).
+
+### Phase 2 tasks
+
+Branch from `origin/main`. Files touched are listed per task; no file may
+pass 800 lines (`mcp_client.rs` is 651, `b0.rs` 751 — logic goes in a new
+module, those files get call sites only).
+
+- [ ] 2.1 **Type.** `mur-common/src/agent/mcp.rs`: add
+      `pub kind: Option<McpServerKind>` to `McpServerEntry`
+      (`#[serde(default, skip_serializing_if = "Option::is_none")]`), and
+      `enum McpServerKind { Serena }` (`rename_all = "snake_case"`), and
+      `pub project: Option<PathBuf>` (same serde attributes) — the one
+      project serena serves (D4).
+      Absent ⇒ today's behaviour, byte-identical serialization.
+      Tests: round-trip with and without `kind` / `project`; unknown kind is
+      a parse error, not silently ignored.
+- [ ] 2.2 **Module + paths.** New `mur-agent-runtime/src/mcp/serena.rs`
+      (registered in `mur-agent-runtime/src/mcp/mod.rs`):
+      - `pub const SERENA_TOOL_ALLOWLIST: [&str; 5] = ["get_symbols_overview",
+        "find_symbol", "find_referencing_symbols", "find_implementations",
+        "find_declaration"]`.
+      - `pub struct SerenaPaths { home, config_file, projects_dir }` and
+        `pub fn serena_paths(agent_home: &Path) -> SerenaPaths` — derived
+        from agent home only, directory names as constants.
+      - `pub fn launch_env(&SerenaPaths) -> Vec<(String, String)>` →
+        `SERENA_HOME` only.
+      - `pub fn launch_args(project_root: &Path) -> Vec<String>` →
+        `--project <root>`, both dashboard flags `false`.
+- [ ] 2.3 **Preflight (pure).** `pub fn preflight(paths: &SerenaPaths,
+      project_root: &Path) -> Result<(), SerenaPreflightError>` in
+      `serena.rs`; parses `config_file` with `serde_yaml_ng` (already a
+      dependency). One error variant per check, each naming the file, key,
+      found value and expected value:
+      - C1 `paths.home` is a directory.
+      - C2 `config_file` exists and parses.
+      - C3 `trusted_project_path_patterns` is **present** and `[]`. A
+        missing key fails: serena's default is `["**"]`
+        (`serena_config.py:942`).
+      - C4 `project_serena_folder_location`, after `$projectDir` /
+        `$projectFolderName` substitution, is under `paths.projects_dir`,
+        and that resolved folder **exists** (fallback, see facts).
+      - C5 `fixed_tools` equals `SERENA_TOOL_ALLOWLIST` (as a set);
+        `excluded_tools` and `included_optional_tools` are empty.
+      - C6 `web_dashboard` is `false`.
+      - C7 no `ls_path` / `ls_base_cmd` under any `ls_specific_settings`
+        language (arbitrary exec, item 16).
+      - C8 if C/C++ is enabled: clangd args contain `--enable-config=false`,
+        contain no `--query-driver`, and `compile_commands_dir` resolves
+        under `paths.projects_dir` (item 14). Exact settings key names are
+        confirmed from serena source before coding, not guessed.
+      Tests: one passing fixture; one failing fixture per check; a hostile
+      repo with `.serena/project.yml` setting `ls_path` while C4's folder is
+      missing ⇒ C4 refuses.
+- [ ] 2.4 **Hook: refuse startup.** `mur-agent-runtime/src/supervisor_runner/prepare.rs`, right
+      after the `verify_mcp_supply_chain` call (~line 129), add
+      `crate::mcp::serena::verify_entries(&profile.inner.enabled_mcp_servers(),
+      agent_home).map_err(|e| anyhow::anyhow!(e))?;` — for every enabled
+      entry with `kind: Some(Serena)`: `project` must be `Some`, absolute and
+      an existing directory (else refuse; never fall back to cwd), then
+      `preflight(&serena_paths(agent_home), project)`; same
+      fail-closed path as rules 11/6, before the hook chain (which only
+      warns).
+- [ ] 2.5 **Hook: every spawn.** `mur-agent-runtime/src/protocol/mcp_client.rs`,
+      `StdioMcpClient::spawn` (~lines 262-283): when `entry.kind ==
+      Some(Serena)`, re-run `preflight` with `entry.project` (serena
+      rewrites its own config — see facts), then `std_cmd.envs(serena::launch_env(..))` and append
+      `serena::launch_args(..)`. A failed preflight returns `McpError` and
+      nothing is spawned. `spawn` needs the agent home: expose it read-only
+      from `SandboxPolicy` (its `launch_chain` already holds it) rather than
+      adding a parameter through `McpPool`.
+- [ ] 2.6 **Hook: tool allow-list.** `mur-agent-runtime/src/tools/registry.rs`, the discovery
+      loop (~line 129, next to the `ToolPolicy::Deny` skip): for a serena
+      entry, skip any `t.name` not in `SERENA_TOOL_ALLOWLIST`. This is the
+      MUR-side gate; C5 is the serena-side one. Both, because the child can
+      rewrite its own config. Test: a fake tools/list containing write tools
+      and `get_diagnostics_for_file` registers exactly the five.
+- [ ] 2.7 **Docs.** `docs/architecture/mcp-supply-chain.md`: a `kind:
+      serena` section — what C1–C8 cover, what they cannot (code running
+      *inside* an LSP the user enabled; rust-analyzer per item 16), why no
+      generic `env` field (D1), why five tools (D2), and the agent-writable
+      config gap (G1) with all four parts: the risk, when it can be
+      exploited, why v1 accepts it, the v2 fix.
+
+### Phase 2 acceptance (two layers)
+
+- **Layer A — unit + static (MUR agent can run):** tests for 2.1–2.6 pass;
+  `cargo clippy --all --all-targets --no-deps --locked -- -D warnings` and
+  `cargo fmt --all -- --check` clean.
+- **Layer B — end-to-end (fleet or user; serena does not run inside the MUR
+  seal: `bad interpreter: Operation not permitted`, same as item 16):**
+  1. Valid config ⇒ agent starts, tools/list shows exactly the five.
+  2. Each of C1–C8 broken in turn ⇒ startup refused with that check's error
+     (C8 needs a C/C++-enabled fixture with clangd installed).
+  3. Hostile repo `.serena/project.yml` with `ls_path` ⇒ marker never runs.
+  4. Config rewritten between two spawns to `trusted_project_path_patterns:
+     ["**"]` ⇒ second spawn refused (2.5).
+  5. No dashboard port is listening after start.
+
+**Phase 2 is not complete until Layer B passes.** Layer A green alone may
+merge as a PR, but the checkbox for Phase 2 stays open.
+
+### Phase 2 decisions (round 2)
+
+- **D4. `project:` on the entry, written at setup.** `activate_project` is
+  not exposed, so the project is fixed at launch. The path is written into
+  the profile's `mcp_servers` entry when serena is set up (Phase 3 writes
+  it; in Phase 2 a test fixture or the user does), never inferred from the
+  session cwd at spawn time: cwd moves mid-session, and a serena respawn
+  costs seconds to tens of seconds. A fixed input is also what lets 2.5
+  re-run the same preflight at every spawn. `profile.yaml` is in
+  `SELF_PROTECTED_WRITE_ONLY` (`mur-agent-runtime/src/sandbox/policy/mod.rs:57`), so the agent
+  cannot retarget it.
+
+### Phase 2 known gaps (not solved in v1)
+
+- **G1. Agent-writable serena config.** *Status: known gap, accepted for
+  v1 — not solved.*
+  - *Why it is writable.* No read-only list covering serena files exists
+    yet: the runtime's write-deny list is `SELF_PROTECTED_AGENT_FILES`
+    (`mur-agent-runtime/src/sandbox/policy/mod.rs:39-44`) = `profile.yaml`, `identity.key`,
+    `identity.pub`, `rotations.jsonl`. `SERENA_HOME` (agent home) is inside
+    the agent's write grant, so its file tools can edit
+    `serena_config.yml` and the MUR-owned `project.yml`.
+  - *When it can be exploited.* Only at the **next spawn**. serena reads
+    the global config once (`mcp.py:354` → `agent.py:590`) and builds
+    language servers from that in-memory copy (`project.py:522`). The one
+    runtime re-read, `_persist_projects` (`serena_config.py:1385`), loads
+    the disk copy only to write the project list back; it does not replace
+    the running settings. A running serena is unaffected; the next spawn
+    runs 2.5's preflight, which refuses (C3/C5/C6/C7).
+  - *Why v1 accepts it.* Every exploit path goes through a spawn, and every
+    spawn is preflighted; the 2.6 MUR-side allow-list holds regardless of
+    the config. Same treatment as the shim deferred to v2.
+  - *v2 fix.* Pre-register the project in `serena_config.yml` at setup, so
+    serena never calls `_persist_projects` → `_save()` (facts above), then
+    add `serena_config.yml` to the write-deny list. Needs proof that a
+    pre-registered project never triggers a save before the deny lands.
 
 ## Phase 3 — setup consent flow
 
