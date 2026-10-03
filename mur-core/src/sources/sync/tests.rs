@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use tempfile::TempDir;
 
 const DIM: i32 = 16;
-const SOURCE_ID: &str = "fake:vault";
+// No ':' — the id becomes a yaml filename and NTFS rejects colons
+// (see `SourceInstanceStore::path_for`).
+const SOURCE_ID: &str = "fake-vault";
 const DOC: &str = "alpha.md";
 
 /// One-document adapter; never touches the network or the filesystem.
