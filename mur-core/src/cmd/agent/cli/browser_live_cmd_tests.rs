@@ -124,6 +124,22 @@ fn port_is_normalized_away_and_duplicates_collapse() {
     assert_eq!(hosts, s(&["shop-a.example.com"]));
 }
 
+// 9b. a trailing colon says the port is empty, not "not a number"
+#[test]
+fn empty_port_is_named_as_empty() {
+    let err = parse_hosts(&s(&["shop-a.example.com:"])).unwrap_err();
+    assert!(err.contains("empty"), "{err}");
+}
+
+// 9c. a flag-looking arg is never written into the allowlist
+#[test]
+fn flag_like_host_is_refused() {
+    for raw in ["--add", "-x"] {
+        let err = parse_hosts(&s(&[raw])).unwrap_err();
+        assert!(err.contains("not a host"), "{raw}: {err}");
+    }
+}
+
 /// Fake [`LiveOps`]: records every call, never touches disk or spawns.
 #[derive(Default)]
 struct Fake {
@@ -164,7 +180,7 @@ impl LiveOps for Fake {
     }
 }
 
-// 7 (flow): refused port → no add, no save, and no chip (it's an Err)
+// flow: refused port → no add, no save, and no chip (it's an Err)
 #[test]
 fn run_refusal_writes_nothing_and_offers_no_chip() {
     let mut f = Fake::default();
@@ -176,7 +192,7 @@ fn run_refusal_writes_nothing_and_offers_no_chip() {
     assert!(f.adds.is_empty() && f.saves == 0);
 }
 
-// 2/4/5 (flow): add once with live-<agent> argv, chip offered, idempotent
+// flow: add once with live-<agent> argv, chip offered, idempotent on rerun
 #[test]
 fn run_adds_once_with_per_agent_run_and_offers_restart() {
     let mut f = Fake::default();

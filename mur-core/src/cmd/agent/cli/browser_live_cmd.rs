@@ -50,6 +50,11 @@ pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     for raw in args {
         let (host, port) = match raw.rsplit_once(':') {
+            Some((_, "")) => {
+                return Err(format!(
+                    "`{raw}`: the port after `:` is empty — drop the colon or give a port"
+                ));
+            }
             Some((h, p)) => {
                 let port: u16 = p
                     .parse()
@@ -58,7 +63,9 @@ pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
             }
             None => (raw.as_str(), None),
         };
-        if host.is_empty() || host.contains('/') {
+        // `-` first: `/browser live` parses no flags, so `--add` here is a
+        // mistake, never a hostname to put in the allowlist.
+        if host.is_empty() || host.contains('/') || host.starts_with('-') {
             return Err(format!(
                 "`{raw}` is not a host — pass a bare hostname, e.g. `{USAGE_EXAMPLE}`"
             ));
@@ -182,13 +189,16 @@ pub(super) fn run(
     if created_here {
         notes.push(ops.mcp_add(&live_argv(agent))?);
     }
+    // Re-read, not redundant: `mcp_add` saved the profile itself, and the
+    // list we save below must include the entry it just wrote.
     let mut servers = ops.servers()?;
     let out = apply(&mut servers, &hosts, || unreachable!("added above"));
     if let Err(save_err) = ops.save(servers) {
         // `mcp_add` saved the entry with no network policy. If this call made
         // it, undo that rather than leave an unrestricted `browser` entry. A
         // pre-existing entry keeps its old (still valid) policy: the save is
-        // atomic, so a failed save changed nothing.
+        // atomic (`save_profile` → `write_atomic`), so a failed save changed
+        // nothing.
         if created_here && let Err(rm_err) = ops.remove(LIVE_ENTRY) {
             return Err(save_err.context(format!(
                 "the '{LIVE_ENTRY}' entry was created but could not be removed \
