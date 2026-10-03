@@ -128,3 +128,87 @@ fn returns_false_when_not_a_git_repo() {
     assert!(!ensure_git_hook(&base, true).unwrap());
     fs::remove_dir_all(&base).ok();
 }
+
+/// A real `git init` repo (the hooks-dir resolution asks git itself).
+fn real_repo(tag: &str) -> std::path::PathBuf {
+    let n = HOOK_TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let base =
+        std::env::temp_dir().join(format!("mur-hook-real-{tag}-{}-{}", std::process::id(), n));
+    fs::create_dir_all(&base).unwrap();
+    git(&base, &["init", "-q"]);
+    base
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
+
+/// #1672: with `core.hooksPath` set to a tracked in-tree dir (husky-style),
+/// git never reads `.git/hooks`. The hook must not land there, and the
+/// versioned dir must not be rewritten behind the user's back.
+#[test]
+fn honours_core_hooks_path_and_never_writes_an_unread_dir() {
+    let repo = real_repo("hookspath");
+    fs::create_dir_all(repo.join(".husky")).unwrap();
+    git(&repo, &["config", "core.hooksPath", ".husky"]);
+
+    assert!(
+        !ensure_git_hook(&repo, true).unwrap(),
+        "an in-tree hooks dir must be reported, not silently written"
+    );
+    assert!(
+        !repo.join(".git/hooks/post-commit").exists(),
+        "must not write to .git/hooks, which git does not read here"
+    );
+    assert!(
+        !repo.join(".husky/post-commit").exists(),
+        "must not modify a versioned hooks dir"
+    );
+    fs::remove_dir_all(&repo).ok();
+}
+
+/// #1672: in a linked worktree `.git` is a file; the hook belongs in the
+/// common git dir's hooks, which is where git looks.
+#[test]
+fn installs_into_the_common_hooks_dir_from_a_linked_worktree() {
+    let repo = real_repo("wt-main");
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    );
+    let wt = repo.with_file_name(format!(
+        "{}-wt",
+        repo.file_name().unwrap().to_string_lossy()
+    ));
+    git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+    assert!(wt.join(".git").is_file());
+
+    assert!(ensure_git_hook(&wt, true).unwrap(), "must install");
+    assert!(
+        fs::read_to_string(repo.join(".git/hooks/post-commit"))
+            .unwrap()
+            .contains("# mur auto-index"),
+        "hook must land in the common hooks dir git actually runs"
+    );
+    fs::remove_dir_all(&wt).ok();
+    fs::remove_dir_all(&repo).ok();
+}
