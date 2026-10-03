@@ -142,12 +142,21 @@ fn resolved_mur_home() -> PathBuf {
 /// `system_read_paths` re-allows for reads in `sandbox::policy`), and this agent's
 /// own `<mur_home>/agents` directory (peer `agent.sock` files dialed for
 /// A2A). Subpaths, not path-literals, since exact socket filenames vary.
-fn unix_socket_allow_paths() -> Vec<PathBuf> {
-    vec![
+///
+/// Plus the per-agent scratch dir when granted: children get it as `TMPDIR`
+/// (#1642), so tools that create a socket under `$TMPDIR` and then dial it
+/// (Playwright MCP's `browser-*.sock`) land here, not under
+/// `/private/var/folders`. Without it `connect` fails with `EPERM`.
+fn unix_socket_allow_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
+    let mut paths = vec![
         PathBuf::from("/private/var/folders"),
         PathBuf::from("/private/tmp"),
         resolved_mur_home().join("agents"),
-    ]
+    ];
+    if let Some(scratch) = &policy.scratch_dir {
+        paths.push(scratch.clone());
+    }
+    paths
 }
 
 /// Build an SBPL profile string from the policy.
@@ -330,7 +339,7 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                 lines.push(format!(
                     "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
                 ));
-                for p in unix_socket_allow_paths() {
+                for p in unix_socket_allow_paths(policy) {
                     let p = sbpl_escape(&p.to_string_lossy());
                     lines.push(format!(
                         "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
@@ -352,7 +361,7 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
             // sockets under the temp dirs, and peer agent.sock dialing under
             // <mur_home>/agents. Does NOT widen general network-outbound access —
             // TCP stays port-gated by the loop below.
-            for p in unix_socket_allow_paths() {
+            for p in unix_socket_allow_paths(policy) {
                 let p = sbpl_escape(&p.to_string_lossy());
                 lines.push(format!(
                     "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"

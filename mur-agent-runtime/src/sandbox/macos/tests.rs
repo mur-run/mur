@@ -412,6 +412,27 @@ fn restricted_allows_scoped_unix_sockets() {
 }
 
 #[test]
+fn restricted_allows_unix_sockets_under_the_scratch_dir() {
+    // #1642 made the scratch dir every child's TMPDIR, so Playwright MCP
+    // binds `<scratch>/pw-*/browser/browser-*.sock` there and then dials
+    // it. Without this carve-out `connect` fails with EPERM.
+    let scratch = PathBuf::from("/Users/someone/.mur/tmp/agent_x");
+    for ports in [vec![443], vec![]] {
+        let mut policy = policy_with(vec![scratch.clone()], vec![]);
+        policy.scratch_dir = Some(scratch.clone());
+        policy.net_allow_ports = Some(ports);
+        policy.net_allow_loopback_ports = vec![8080];
+        let sbpl = build_sbpl_profile(&policy);
+        assert!(
+            sbpl.contains(
+                "(allow network-outbound (remote unix-socket (subpath \"/Users/someone/.mur/tmp/agent_x\")))"
+            ),
+            "restricted profile must allow unix sockets under the scratch dir:\n{sbpl}"
+        );
+    }
+}
+
+#[test]
 fn off_mode_does_not_allow_unix_sockets() {
     // Off (deny-all) must not get the scoped AF_UNIX carve-out either —
     // it stays fully air-gapped, matching off_mode_denies_network.
