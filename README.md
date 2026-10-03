@@ -1084,6 +1084,7 @@ monitor yet to show that on, look for it in the daemon log.
 
 ```bash
 git clone https://github.com/mur-run/mur.git && cd mur
+sh scripts/hooks/install.sh      # once per clone: link the tracked pre-commit hook
 
 cargo build --workspace          # debug build (GUI apps are workspace-excluded)
 cargo nextest run --workspace    # tests (CI uses nextest)
