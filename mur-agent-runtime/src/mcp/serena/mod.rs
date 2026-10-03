@@ -29,6 +29,24 @@ pub const SERENA_TOOL_ALLOWLIST: [&str; 5] = [
     "find_declaration",
 ];
 
+/// MUR-side tool gate (plan 2.6): for a serena entry, keep only tools named
+/// in [`SERENA_TOOL_ALLOWLIST`]; any other entry passes through untouched.
+///
+/// C5 is the serena-side gate. Both exist because the child can rewrite its
+/// own config after preflight; this one holds regardless of what it lists.
+pub fn admit_tools(
+    kind: Option<McpServerKind>,
+    tools: Vec<crate::protocol::mcp_client::ToolInfo>,
+) -> Vec<crate::protocol::mcp_client::ToolInfo> {
+    if kind != Some(McpServerKind::Serena) {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|t| SERENA_TOOL_ALLOWLIST.contains(&t.name.as_str()))
+        .collect()
+}
+
 /// Directory under the agent home used as serena's `SERENA_HOME`.
 pub const SERENA_HOME_DIR: &str = "serena";
 /// serena's global config file name inside `SERENA_HOME`.

@@ -177,3 +177,47 @@ fn launch_additions_rerun_preflight_after_config_drift() {
     assert!(matches!(err, SerenaEntryError::Preflight { .. }), "{err}");
     assert!(err.to_string().contains("serena C3"), "{err}");
 }
+
+// ── tool allow-list (code-nav 2.6) ────────────────────────────────────────
+
+fn fake_tools(names: &[&str]) -> Vec<crate::protocol::mcp_client::ToolInfo> {
+    names
+        .iter()
+        .map(|n| crate::protocol::mcp_client::ToolInfo {
+            name: (*n).to_owned(),
+            description: String::new(),
+            input_schema: serde_json::json!({"type": "object"}),
+        })
+        .collect()
+}
+
+/// What a fully-enabled serena would list: the five, plus write/exec tools
+/// and the excluded `get_diagnostics_for_file`.
+const FAKE_LIST: [&str; 10] = [
+    "get_symbols_overview",
+    "replace_symbol_body",
+    "find_symbol",
+    "execute_shell_command",
+    "find_referencing_symbols",
+    "get_diagnostics_for_file",
+    "find_implementations",
+    "create_text_file",
+    "find_declaration",
+    "insert_after_symbol",
+];
+
+#[test]
+fn serena_registers_exactly_the_five() {
+    let got = admit_tools(Some(McpServerKind::Serena), fake_tools(&FAKE_LIST));
+    let mut names: Vec<_> = got.iter().map(|t| t.name.as_str()).collect();
+    names.sort_unstable();
+    let mut want = SERENA_TOOL_ALLOWLIST.to_vec();
+    want.sort_unstable();
+    assert_eq!(names, want);
+}
+
+#[test]
+fn plain_entry_tools_pass_through() {
+    let got = admit_tools(None, fake_tools(&FAKE_LIST));
+    assert_eq!(got.len(), FAKE_LIST.len());
+}

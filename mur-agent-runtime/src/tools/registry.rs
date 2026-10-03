@@ -106,10 +106,14 @@ pub async fn build_tools(
             let pool = pool.clone();
             let name = entry.name.clone();
             let timeout_secs = entry.timeout_secs;
+            let kind = entry.kind;
             async move {
                 let sanitized = sanitize_server(&name);
                 match pool.list_tools(&name).await {
-                    Ok(tools) => Some((name, sanitized, tools, timeout_secs)),
+                    Ok(tools) => {
+                        let tools = crate::mcp::serena::admit_tools(kind, tools);
+                        Some((name, sanitized, tools, timeout_secs))
+                    }
                     Err(e) => {
                         tracing::warn!(server = %name, "mcp tools/list failed: {e:#}");
                         None
