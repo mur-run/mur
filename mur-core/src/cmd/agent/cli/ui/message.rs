@@ -210,9 +210,14 @@ pub(super) fn push_message(
                 "you ›",
                 theme.accent_alt.add_modifier(Modifier::BOLD),
             )));
-            for l in m.text.lines() {
-                lines.push(Line::styled(format!("{MSG_INDENT}{l}"), theme.muted));
-            }
+            // Wrap, then indent each row, like an agent body (#1650): a
+            // pre-indented line lost the indent on every continuation row.
+            let cols = markdown::body_cols(width, theme.inner_padding);
+            lines.extend(
+                m.text
+                    .lines()
+                    .flat_map(|l| indent_wrapped(Line::styled(l.to_string(), theme.muted), cols)),
+            );
         }
         Role::System => {
             // Severity paints the whole note and picks a lead glyph, so a
