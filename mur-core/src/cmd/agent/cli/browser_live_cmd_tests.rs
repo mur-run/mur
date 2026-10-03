@@ -280,8 +280,11 @@ fn live_fs_without_registry_skips_only_that_grant() {
 // `murmur` alias must not leak into the command.
 #[test]
 fn live_command_is_absolute_and_never_the_murmur_alias() {
+    // The alias is swapped with `Path::join`, so the expected value must use
+    // the platform separator too (`/opt/bin\mur` on Windows).
+    let swapped = std::path::Path::new("/opt/bin").join("mur");
     let p = std::path::PathBuf::from("/opt/bin/murmur");
-    assert_eq!(live_command(Ok(p)), "/opt/bin/mur");
+    assert_eq!(live_command(Ok(p)), swapped.to_string_lossy());
     let p = std::path::PathBuf::from("/opt/bin/mur");
     assert_eq!(live_command(Ok(p)), "/opt/bin/mur");
     assert_eq!(live_command(Err(std::io::Error::other("x"))), "mur");
