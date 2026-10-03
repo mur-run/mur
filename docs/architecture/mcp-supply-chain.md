@@ -130,6 +130,64 @@ It is a command rather than a startup check because it costs a full reinstall. R
 
 ---
 
+## `kind: serena` — a launch policy, not a pin
+
+serena (LSP-backed code navigation, opt-in) is the first MCP entry whose risk is not the bytes of the server but **what its config tells it to launch**. A repo-controlled or agent-edited config can name any executable as a language server. So a `kind: serena` entry gets a typed launch policy on top of the pins above. Plan: `docs/superpowers/plans/2026-10-03-code-nav-astgrep-serena-plan.md`, Phase 2. Upstream behaviour cited below is serena-agent 2.0.0.dev0.
+
+### What MUR does at launch
+
+- **`SERENA_HOME`** is computed by the runtime as `<agent home>/serena` and set *after* the inherited, policy and seal env, so nothing upstream can override it. If the sandbox policy carries no agent home (`LaunchChain::is_inert()`), a serena entry refuses (`NoAgentHome`) rather than guess one.
+- **`--project <root>`** comes from the entry's own `project:` field, which is written at setup into `profile.yaml`. That file is write-protected (`SELF_PROTECTED_WRITE_ONLY`), so the agent cannot retarget it. `project:` is never inferred from the session cwd.
+- **The dashboard is forced off**: `--enable-web-dashboard false --open-web-dashboard false`. serena defaults it to on.
+
+### The checks, C1–C8
+
+`preflight` runs at **startup** (`verify_entries`, before the agent comes up) **and at every spawn** (`launch_additions`, before the child exists). The spawn re-run is not optional: serena rewrites its own `serena_config.yml` while it runs (registering a new project calls `_save()`), so a startup-only check is stale by the next spawn. Every refusal names the file, the key, what was found and what was expected.
+
+| Check | Requires | Why |
+|---|---|---|
+| C1 | `SERENA_HOME` is an existing directory | A missing home never triggers an install (that is Phase 3); it refuses |
+| C2 | `serena_config.yml` is readable YAML with a mapping root | Everything below reads it |
+| C3 | `trusted_project_path_patterns: []` | Absent means serena's default `["**"]`, i.e. every repo is trusted and the project config in its own `.serena` folder may set `ls_path` / `ls_base_cmd` |
+| C4 | `project_serena_folder_location` resolves under `<SERENA_HOME>/projects`, exists, and still lies there after `canonicalize` | serena uses the configured folder only if it *exists*, else falls back to the repo's own `.serena` folder. The canonicalize step refuses a symlink under `<SERENA_HOME>/projects` that leads back into the repo |
+| C5 | `fixed_tools` is exactly the five allow-listed tools; `excluded_tools` and `included_optional_tools` empty or absent | serena-side tool gate |
+| C6 | `web_dashboard: false` | Absent means serena's default `true` |
+| C7 | No `ls_specific_settings.<lang>` sets `ls_path` or `ls_base_cmd` | Either one replaces the language-server executable — arbitrary exec |
+| C8 | When C/C++ may run: effective clangd args contain `--enable-config=false` and no `--query-driver*`; `compile_commands_dir` resolves under `<SERENA_HOME>/projects` | clangd reads repo `.clangd` files and can be told to run arbitrary compiler drivers |
+
+**Why C7/C8 read only the global config.** serena ignores a project's `ls_specific_settings` for an untrusted project (upstream serena, `project.py` lines 522–530). With C3 holding, no project is trusted, so the global file is the only place those settings can come from.
+
+**C8 is conservative on purpose.** It applies when the global config has `ls_specific_settings.cpp`, when the MUR folder's `project.yml` lists `cpp`, **and** when that `project.yml` is missing or has no readable language list — because serena then auto-detects languages and C/C++ cannot be ruled out. The cost: the first start of a non-C++ repo needs either a `project.yml` that excludes `cpp` or the clangd lock-down. The C8 error names both fixes. Over-refusing is accepted; under-checking is not.
+
+### The tool gate, twice
+
+Only five tools are ever registered: `get_symbols_overview`, `find_symbol`, `find_referencing_symbols`, `find_implementations`, `find_declaration` (`SERENA_TOOL_ALLOWLIST`). It is an allow-list, so a tool added by a future serena release stays hidden until it is reviewed and listed.
+
+The gate exists on both sides. C5 checks serena's own config. `admit_tools` filters `tools/list` in the MUR registry, and it holds no matter what the child lists, because the child can rewrite its config after preflight.
+
+### What these checks cannot cover
+
+- **Code running inside a language server the user enabled.** The checks control *which* executable starts and with which launch flags. They do not make that server safe. rust-analyzer is the main case: serena hardcodes its init options, and MUR only controls the launch command, so build scripts, proc-macros and `cargo check` still run under Rust support. A shim that rewrites `initializationOptions` is deferred to v2.
+- **ccls.** `cpp_ccls` is not checked. C7 still blocks `ls_path` / `ls_base_cmd` for every language, and ccls is never serena's default. v2 reviews how ccls loads its own config.
+- **The per-agent bound.** As with every MCP server, serena runs with the agent's entitlements (see the next section). None of the checks narrow that.
+
+### Decisions, with reasons
+
+**D1 — a typed `kind`, no generic `env` field.** The serena checks are serena-specific; a typed kind gives them one hook point, and `SERENA_HOME` is computed by the runtime, never written in the profile. A generic `env:` on MCP entries would let any entry set any environment variable — a new supply-chain surface for every server, added to solve one server's problem.
+
+**D2 — five tools, not six.** The plan originally listed six. `get_diagnostics_for_file` is excluded: for Rust it sends `didSave` first, which runs `cargo check` — the build-script exec path above, reachable from a read-looking tool. No sixth tool was added to fill the count.
+
+### Known gap G1: the agent can write serena's config
+
+*Status: known gap, accepted for v1 — not solved.*
+
+- **The risk.** `SERENA_HOME` is under the agent home, inside the agent's write grant. The runtime's write-deny list (`SELF_PROTECTED_AGENT_FILES` in `mur-agent-runtime/src/sandbox/policy/mod.rs`) covers `profile.yaml` and the identity files only. So the agent's own file tools can edit `serena_config.yml` and the MUR-owned `project.yml` — for example, adding an `ls_path`.
+- **When it can be exploited.** Only at the **next spawn**. serena reads its global config once at startup and builds language servers from that in-memory copy. The one runtime re-read (`_persist_projects`) loads the disk copy only to write the project list back; it does not replace the running settings. A running serena is unaffected.
+- **Why v1 accepts it.** Every exploit path goes through a spawn, and every spawn re-runs C1–C8, so an edited config refuses (C3/C5/C6/C7) instead of launching. The MUR-side `admit_tools` gate holds regardless of the config.
+- **The v2 fix.** Pre-register the project in `serena_config.yml` at setup, so serena never reaches `_persist_projects` → `_save()`, then add `serena_config.yml` to the write-deny list. This needs proof first that a pre-registered project never triggers a save, or the deny breaks serena.
+
+---
+
 ## What a pin does not say
 
 **"The same code", never "safe code".** What bounds the damage from a compromised MCP server is the agent's entitlements and sandbox, not its hash. A vendored, signed, provenance-carrying server still runs with everything that agent was granted.
@@ -157,5 +215,9 @@ The open follow-on is to connect the two: a server whose provenance cannot be ve
 | Package spec parsing / version resolution | `mur-common/src/mcp_package.rs` |
 | Which lockfile a pin covers | `mur-common/src/agent/mcp.rs` — `McpPackagePin::lockfile_path` |
 | Fleet-wide reporting | `mur-core/src/cmd/misc.rs` — `report_mcp_pins`, behind `mur doctor` |
+| serena preflight (C1–C8) | `mur-agent-runtime/src/mcp/serena/preflight.rs` — `preflight` |
+| serena startup gate | `mur-agent-runtime/src/mcp/serena/mod.rs` — `verify_entries`, called from `supervisor_runner/prepare.rs` |
+| serena spawn gate + launch env/args | `mur-agent-runtime/src/mcp/serena/mod.rs` — `launch_additions`, called from `protocol/mcp_client.rs` — `StdioMcpClient::spawn` |
+| serena tool allow-list | `mur-agent-runtime/src/mcp/serena/mod.rs` — `SERENA_TOOL_ALLOWLIST`, `admit_tools`, called from `mur-agent-runtime/src/tools/registry.rs` |
 
 User-facing documentation: https://app.mur.run/docs/core/mcp-pinning

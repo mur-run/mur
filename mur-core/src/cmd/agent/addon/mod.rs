@@ -345,6 +345,8 @@ mod tests {
                 requires_programs: Vec::new(),
                 state_paths: Vec::new(),
                 package: None,
+                kind: None,
+                project: None,
             });
         }
 

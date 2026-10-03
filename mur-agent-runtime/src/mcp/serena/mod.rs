@@ -1,0 +1,290 @@
+//! serena (LSP-backed code navigation) launched as an MCP server with
+//! `kind: serena` (code-nav Phase 2).
+//!
+//! Everything here is derived from the agent home and the entry's fixed
+//! `project:` — never from the session cwd and never from the profile's
+//! free-form fields — so the spawn site, the preflight and the tool filter
+//! all see the same paths. The pure preflight (C1–C8) is in [`preflight`];
+//! [`verify_entries`] is the startup gate (2.4); spawn wiring is 2.5–2.6.
+
+mod preflight;
+
+pub use preflight::{SerenaPreflightError, preflight};
+
+use mur_common::agent::{McpServerEntry, McpServerKind};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+/// The only serena tools an agent ever sees. An allow-list, not a
+/// deny-list: a tool added by a future serena release stays hidden until
+/// it is reviewed and listed here.
+///
+/// Five, not six: `get_diagnostics_for_file` is excluded because for Rust
+/// it sends `didSave` first, which runs `cargo check` (plan D2).
+pub const SERENA_TOOL_ALLOWLIST: [&str; 5] = [
+    "get_symbols_overview",
+    "find_symbol",
+    "find_referencing_symbols",
+    "find_implementations",
+    "find_declaration",
+];
+
+/// MUR-side tool gate (plan 2.6): for a serena entry, keep only tools named
+/// in [`SERENA_TOOL_ALLOWLIST`]; any other entry passes through untouched.
+///
+/// C5 is the serena-side gate. Both exist because the child can rewrite its
+/// own config after preflight; this one holds regardless of what it lists.
+pub fn admit_tools(
+    kind: Option<McpServerKind>,
+    tools: Vec<crate::protocol::mcp_client::ToolInfo>,
+) -> Vec<crate::protocol::mcp_client::ToolInfo> {
+    if kind != Some(McpServerKind::Serena) {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|t| SERENA_TOOL_ALLOWLIST.contains(&t.name.as_str()))
+        .collect()
+}
+
+/// Directory under the agent home used as serena's `SERENA_HOME`.
+pub const SERENA_HOME_DIR: &str = "serena";
+/// serena's global config file name inside `SERENA_HOME`.
+pub const SERENA_CONFIG_FILE: &str = "serena_config.yml";
+/// MUR-owned parent of every per-project serena folder, inside
+/// `SERENA_HOME`. `project_serena_folder_location` must resolve under it,
+/// so serena never falls back to the repo's own `.serena/`.
+pub const SERENA_PROJECTS_DIR: &str = "projects";
+
+/// Env var serena reads to locate its home directory.
+pub const SERENA_HOME_ENV: &str = "SERENA_HOME";
+
+/// serena CLI flags MUR always passes. The dashboard defaults to on in
+/// serena (`web_dashboard: bool = True`), so both are forced off.
+const PROJECT_FLAG: &str = "--project";
+const DASHBOARD_FLAGS: [(&str, &str); 2] = [
+    ("--enable-web-dashboard", "false"),
+    ("--open-web-dashboard", "false"),
+];
+
+/// The three MUR-owned serena locations for one agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerenaPaths {
+    /// `SERENA_HOME`: `<agent_home>/serena`.
+    pub home: PathBuf,
+    /// `<home>/serena_config.yml`.
+    pub config_file: PathBuf,
+    /// `<home>/projects`.
+    pub projects_dir: PathBuf,
+}
+
+/// Derive the serena paths from the agent home alone. No I/O, no
+/// canonicalization: the preflight checks what is actually on disk.
+pub fn serena_paths(agent_home: &Path) -> SerenaPaths {
+    let home = agent_home.join(SERENA_HOME_DIR);
+    SerenaPaths {
+        config_file: home.join(SERENA_CONFIG_FILE),
+        projects_dir: home.join(SERENA_PROJECTS_DIR),
+        home,
+    }
+}
+
+/// Environment for the serena child: `SERENA_HOME` and nothing else.
+/// There is deliberately no profile-level `env` field (plan D1).
+///
+/// Values are `OsString`, not `String`, so a non-UTF-8 agent home reaches
+/// serena unchanged instead of being lossily rewritten into another path.
+pub fn launch_env(paths: &SerenaPaths) -> Vec<(String, OsString)> {
+    vec![(
+        SERENA_HOME_ENV.to_owned(),
+        paths.home.clone().into_os_string(),
+    )]
+}
+
+/// Arguments appended after the entry's own `args`: the fixed project and
+/// both dashboard flags off. `OsString` for the same reason as
+/// [`launch_env`].
+pub fn launch_args(project_root: &Path) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from(PROJECT_FLAG),
+        project_root.as_os_str().to_owned(),
+    ];
+    for (flag, value) in DASHBOARD_FLAGS {
+        args.push(OsString::from(flag));
+        args.push(OsString::from(value));
+    }
+    args
+}
+
+/// Why a `kind: serena` entry refused agent startup. Always names the
+/// entry, so a profile with several servers points at the right one.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SerenaEntryError {
+    #[error(
+        "MCP server `{entry}` (kind: serena): `project` is {found}, expected an absolute path \
+         to an existing directory; serena never falls back to the working directory"
+    )]
+    Project { entry: String, found: String },
+    #[error(
+        "MCP server `{entry}` (kind: serena): the sandbox policy carries no absolute agent \
+         home, so `SERENA_HOME` cannot be fixed; refusing to spawn"
+    )]
+    NoAgentHome { entry: String },
+    #[error("MCP server `{entry}` (kind: serena): {source}")]
+    Preflight {
+        entry: String,
+        #[source]
+        source: Box<SerenaPreflightError>,
+    },
+}
+
+/// Startup gate: every enabled `kind: serena` entry must name an absolute,
+/// existing `project` directory and pass [`preflight`]. Entries without a
+/// kind are untouched. The first failure wins; there is no fallback to the
+/// session cwd.
+pub fn verify_entries(
+    entries: &[McpServerEntry],
+    agent_home: &Path,
+) -> Result<(), SerenaEntryError> {
+    let paths = serena_paths(agent_home);
+    for entry in entries {
+        if entry.kind != Some(McpServerKind::Serena) {
+            continue;
+        }
+        verify_entry(entry, &paths)?;
+    }
+    Ok(())
+}
+
+/// One entry: the `project` checks, then [`preflight`]. Returns the checked
+/// project root so the caller launches serena on exactly what was verified.
+fn verify_entry<'e>(
+    entry: &'e McpServerEntry,
+    paths: &SerenaPaths,
+) -> Result<&'e Path, SerenaEntryError> {
+    let project = checked_project(entry)?;
+    preflight(paths, project).map_err(|e| SerenaEntryError::Preflight {
+        entry: entry.name.clone(),
+        source: Box::new(e),
+    })?;
+    Ok(project)
+}
+
+/// What a spawn adds to the child: env pairs and trailing args.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LaunchAdditions {
+    pub env: Vec<(String, OsString)>,
+    pub args: Vec<OsString>,
+}
+
+/// Spawn gate (code-nav 2.5). Serena rewrites its own config while it
+/// runs, so the startup check alone is stale by the next spawn: every
+/// spawn re-runs [`preflight`]. Entries without a kind get empty additions
+/// and are spawned exactly as before. `agent_home` is `None` when the
+/// sandbox policy carries none — a serena entry then refuses rather than
+/// guessing a `SERENA_HOME`.
+pub fn launch_additions(
+    entry: &McpServerEntry,
+    agent_home: Option<&Path>,
+) -> Result<LaunchAdditions, SerenaEntryError> {
+    if entry.kind != Some(McpServerKind::Serena) {
+        return Ok(LaunchAdditions::default());
+    }
+    let Some(agent_home) = agent_home else {
+        return Err(SerenaEntryError::NoAgentHome {
+            entry: entry.name.clone(),
+        });
+    };
+    let paths = serena_paths(agent_home);
+    let project = verify_entry(entry, &paths)?;
+    Ok(LaunchAdditions {
+        env: launch_env(&paths),
+        args: launch_args(project),
+    })
+}
+
+/// The entry's `project`, if it is absolute and an existing directory.
+fn checked_project(entry: &McpServerEntry) -> Result<&Path, SerenaEntryError> {
+    let refuse = |found: String| SerenaEntryError::Project {
+        entry: entry.name.clone(),
+        found,
+    };
+    let Some(project) = entry.project.as_deref() else {
+        return Err(refuse("<absent>".to_owned()));
+    };
+    if !project.is_absolute() {
+        return Err(refuse(format!("{} (relative)", project.display())));
+    }
+    if !project.is_dir() {
+        return Err(refuse(format!("{} (not a directory)", project.display())));
+    }
+    Ok(project)
+}
+
+#[cfg(test)]
+mod entry_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allowlist_is_five_unique_tools_without_diagnostics() {
+        let set: std::collections::BTreeSet<_> = SERENA_TOOL_ALLOWLIST.iter().collect();
+        assert_eq!(set.len(), 5);
+        assert!(!SERENA_TOOL_ALLOWLIST.contains(&"get_diagnostics_for_file"));
+    }
+
+    #[test]
+    fn paths_derive_from_agent_home_only() {
+        let p = serena_paths(Path::new("/h/.mur/agents/a"));
+        assert_eq!(p.home, Path::new("/h/.mur/agents/a/serena"));
+        assert_eq!(
+            p.config_file,
+            Path::new("/h/.mur/agents/a/serena/serena_config.yml")
+        );
+        assert_eq!(
+            p.projects_dir,
+            Path::new("/h/.mur/agents/a/serena/projects")
+        );
+    }
+
+    #[test]
+    fn env_is_serena_home_only() {
+        let home = Path::new("/x/a");
+        let p = serena_paths(home);
+        assert_eq!(
+            launch_env(&p),
+            vec![(
+                "SERENA_HOME".to_owned(),
+                home.join(SERENA_HOME_DIR).into_os_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn args_fix_project_and_disable_dashboard() {
+        let args = launch_args(Path::new("/repo"));
+        let got: Vec<_> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            got,
+            [
+                "--project",
+                "/repo",
+                "--enable-web-dashboard",
+                "false",
+                "--open-web-dashboard",
+                "false"
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_project_path_passes_through_unchanged() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw = std::ffi::OsStr::from_bytes(b"/repo/\xff");
+        let args = launch_args(Path::new(raw));
+        assert_eq!(args[1].as_bytes(), raw.as_bytes());
+    }
+}

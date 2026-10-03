@@ -201,6 +201,18 @@ impl Default for SandboxPolicy {
     }
 }
 
+impl SandboxPolicy {
+    /// The agent home this policy was built for, read-only, or `None` for a
+    /// policy not built from one (`Default`, some tests). Taken from the
+    /// launch chain, which `from_entitlements` already roots there, so no
+    /// second copy can drift. Serena's spawn gate needs it (code-nav 2.5).
+    pub fn agent_home(&self) -> Option<&std::path::Path> {
+        let chain = &self.launch_chain;
+        let home = chain.agent_self_home();
+        (!chain.is_inert() && home.is_absolute()).then_some(home)
+    }
+}
+
 /// The set of TCP ports that should receive a Landlock `ConnectTcp` rule:
 /// the general allow-list (when outbound is restricted) plus the loopback
 /// carve-outs. Returns empty for Unrestricted (`None`, Landlock installs no

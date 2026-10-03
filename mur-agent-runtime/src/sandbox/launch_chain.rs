@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 const RUNTIME_BINARY: &str = "mur-agent-runtime";
 /// BusyBox-style per-agent symlinks to `RUNTIME_BINARY`.
 const AGENT_SYMLINK_PREFIX: &str = "mur_agent_";
+/// Root of the `Default` chain: outside any real path, so it never fires.
+const INERT_ROOT: &str = "/nonexistent-launch-chain-root";
 
 #[derive(Clone, Debug)]
 pub struct LaunchChain {
@@ -69,6 +71,11 @@ impl LaunchChain {
 
     pub fn agent_self_home(&self) -> &Path {
         &self.agent_home
+    }
+
+    /// True for the never-firing chain of `Default` — no real agent home.
+    pub fn is_inert(&self) -> bool {
+        self.mur_home.starts_with(INERT_ROOT)
     }
 
     /// Why `path` may never be written, or `None` if it is not in the set.
@@ -396,7 +403,7 @@ impl Default for LaunchChain {
     /// real policy is built by `from_entitlements`, which constructs the
     /// actual chain from `agent_home`.
     fn default() -> Self {
-        let root = Path::new("/nonexistent-launch-chain-root");
+        let root = Path::new(INERT_ROOT);
         Self::build(&root.join("agents/none"), &root.join("bin"), root)
     }
 }

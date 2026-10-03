@@ -337,7 +337,21 @@ module, those files get call sites only).
       *inside* an LSP the user enabled; rust-analyzer per item 16), why no
       generic `env` field (D1), why five tools (D2), and the agent-writable
       config gap (G1) with all four parts: the risk, when it can be
-      exploited, why v1 accepts it, the v2 fix.
+      exploited, why v1 accepts it, the v2 fix. Also, found during 2.3/2.4:
+      - Why C7/C8 read only the global config: serena ignores a project's
+        `ls_specific_settings` for untrusted projects
+        (`serena/project.py:522-530`), so C3 holding narrows them.
+      - C8 is conservative on purpose: it also applies when the MUR
+        folder's `project.yml` is missing or has no readable language list,
+        because serena then auto-detects languages. Cost: a first start of a
+        non-C++ repo needs `project.yml` or the clangd lock-down; the C8
+        error names both fixes. Over-refusing is accepted; under-checking
+        is not.
+      - C4 also canonicalizes, so a symlink in `projects_dir` that leads
+        back into the repo is refused (not in the original task text).
+      - Known gap, accepted for v1: `cpp_ccls` (ccls) is not checked. C7
+        still blocks `ls_path` / `ls_base_cmd` for every language, and ccls
+        is never serena's default; v2 reviews ccls's own config loading.
 
 ### Phase 2 acceptance (two layers)
 
