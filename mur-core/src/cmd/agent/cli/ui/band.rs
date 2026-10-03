@@ -23,6 +23,8 @@ mod ghost_tests;
 #[cfg(test)]
 mod scrub_tests;
 #[cfg(test)]
+mod settled_md_tests;
+#[cfg(test)]
 mod tests;
 
 /// Rows left for the live transcript band inside `viewport_h` once the
@@ -151,6 +153,31 @@ pub(super) fn next_block_end(rest: &str) -> usize {
     0
 }
 
+/// Byte offset of the first block boundary in `text` strictly past `from`, or
+/// `None` when no later block is complete yet.
+///
+/// Boundaries are walked from the start of `text`, never from `from`: a torn
+/// spill can leave `from` inside a fence, and scanning from there would read
+/// the closing fence as an opening one.
+pub(super) fn next_boundary_after(text: &str, from: usize) -> Option<usize> {
+    let mut off = 0usize;
+    loop {
+        let e = next_block_end(&text[off..]);
+        if e == 0 {
+            return None;
+        }
+        off += e;
+        if off > from {
+            return Some(off);
+        }
+    }
+}
+
+/// Whether `at` sits on a block boundary of `text` (0 always does).
+pub(super) fn is_block_boundary(text: &str, at: usize) -> bool {
+    at == 0 || next_boundary_after(text, at.saturating_sub(1)) == Some(at)
+}
+
 /// Lines the live band paints for one message, honoring a committed prefix on
 /// the band's head message (its committed part is already in scrollback).
 pub(super) fn push_live(lines: &mut Vec<Line<'static>>, app: &App, m: &ChatMsg, skip: usize) {
@@ -226,11 +253,17 @@ pub(super) fn push_live_inner(
     }
     // Continuation of a partially-committed agent turn: body only, no header.
     let rest = m.text.get(skip..).unwrap_or("");
+    let mut rest = rest;
     if skip > 0 && app.flushed_raw && (!m.streaming || as_settled) {
-        // Its head went up as raw lines from mid-block; rendering the tail
-        // as markdown would open it with a torn table.
-        lines.extend(raw_body_lines(rest, app.body_cols()));
-        return;
+        // Its head went up as raw lines from mid-block; rendering the rest of
+        // THAT block as markdown would open it with a torn table. Only the
+        // torn block stays raw — every block after it renders (#1649).
+        let torn = next_boundary_after(&m.text, skip).map_or(rest.len(), |b| b - skip);
+        lines.extend(raw_body_lines(&rest[..torn], app.body_cols()));
+        rest = &rest[torn..];
+        if rest.trim().is_empty() {
+            return;
+        }
     }
     lines.extend(agent_body_lines(
         rest,
@@ -492,8 +525,10 @@ pub fn flush_finished<B: Backend>(
     // ── 2. still overflowing → spill complete blocks of the streaming turn ──
     // One block at a time, re-measuring, so the band keeps painting a full
     // screenful instead of emptying out mid-turn.
-    // Once a turn has spilled raw lines, the rest of it stays raw: a block
-    // rendered as markdown from mid-table would open with a torn table.
+    // While the committed prefix ends mid-block, the rest of THAT block stays
+    // raw: rendered as markdown from mid-table it would open with a torn
+    // table. Once a spill reaches a real boundary again the latch clears, so
+    // later headings and tables go up rendered (#1649).
     let mut raw = app.flushed_raw;
     while total > cap {
         let Some(m) = app.messages.get(app.flushed_upto) else {
@@ -506,7 +541,7 @@ pub fn flush_finished<B: Backend>(
             break;
         }
         let rest = m.text.get(skip..).unwrap_or("");
-        let mut block_end = next_block_end(rest);
+        let mut block_end = next_boundary_after(&m.text, skip).map_or(0, |b| b - skip);
         if block_end == 0 {
             // One block taller than the band (a long table or fence has no
             // blank line inside it): waiting for it to close hides its head
@@ -557,7 +592,7 @@ pub fn flush_finished<B: Backend>(
         skip += block_end;
         app.flushed_bytes = skip;
         app.flushed_text = app.messages[app.flushed_upto].text[..skip].to_string();
-
+        raw = !is_block_boundary(&app.messages[app.flushed_upto].text, skip);
         app.flushed_raw = raw;
 
         let mut live = Vec::new();
