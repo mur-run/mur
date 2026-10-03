@@ -24,7 +24,7 @@ pub const RESTART_LABEL: &str = "apply the profile change";
 pub type Managed = (String, Option<Proposal>);
 
 /// `text` + the restart hint line, with the restart offered as a chip.
-fn applied(text: String) -> Managed {
+pub(super) fn applied(text: &str) -> Managed {
     (
         format!("{text}\n{RESTART_HINT}"),
         Some(Proposal::restart(RESTART_LABEL)),
@@ -149,12 +149,12 @@ pub fn mcp_add(agent: &str, server_id: &str, command: &str, args: &[String]) -> 
     for n in notes {
         out.push_str(&format!("\n  {n}"));
     }
-    Ok(applied(out))
+    Ok(applied(&out))
 }
 
 pub fn mcp_remove(agent: &str, server_id: &str) -> Result<Managed> {
     crate::cmd::agent::mcp::cmd_mcp_remove(agent, server_id)?;
-    Ok(applied(format!("removed MCP server '{server_id}'")))
+    Ok(applied(&format!("removed MCP server '{server_id}'")))
 }
 
 pub fn skill_list(agent: &str) -> Result<String> {
@@ -171,12 +171,12 @@ pub fn skill_list(agent: &str) -> Result<String> {
 
 pub fn skill_add(agent: &str, source: &str) -> Result<Managed> {
     crate::cmd::agent::skill::cmd_skill_add(agent, source)?;
-    Ok(applied(format!("installed skill from '{source}'")))
+    Ok(applied(&format!("installed skill from '{source}'")))
 }
 
 pub fn skill_remove(agent: &str, query: &str) -> Result<Managed> {
     crate::cmd::agent::skill::cmd_skill_remove(agent, query)?;
-    Ok(applied(format!("removed skill '{query}'")))
+    Ok(applied(&format!("removed skill '{query}'")))
 }
 
 /// Usage strings shown for bad arguments.
@@ -216,7 +216,7 @@ mod tests {
         assert!(!RESTART_HINT.contains('<'), "{RESTART_HINT}");
         let args = serde_json::json!({ "label": RESTART_LABEL, "kind": "restart" });
         assert!(mur_common::proposal::vet(&args).is_ok());
-        let (text, chip) = applied("removed skill 'x'".into());
+        let (text, chip) = applied("removed skill 'x'");
         assert!(text.ends_with(RESTART_HINT), "{text}");
         assert!(chip.is_some_and(|p| p.is_executable()));
     }

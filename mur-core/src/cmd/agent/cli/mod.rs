@@ -10,6 +10,7 @@ mod access;
 mod app;
 mod bash_class;
 mod browser_cmd;
+mod browser_live_cmd;
 mod call_summary;
 mod complete;
 mod deep_research;

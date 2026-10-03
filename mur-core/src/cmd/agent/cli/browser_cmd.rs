@@ -25,7 +25,18 @@ const SETUP_HINT: &str = "next: run `mur browser setup --yes` — it installs Ch
      consent for both.";
 
 pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<StreamMsg>) {
-    if args.first().map(String::as_str) == Some("--add") {
+    use super::browser_live_cmd::{self as live, Route};
+    let route = live::route(&args);
+    if let Route::Live(hosts) = route {
+        let ready = mur_browser::server::require_entry(Some(&app.home)).is_ok();
+        run_manage(app, move |agent| {
+            live::run(&agent, &hosts, ready, &mut live::ProfileOps(&agent))
+        })
+        .await;
+        return;
+    }
+    // `--add` path is the pre-live behavior, kept byte-for-byte.
+    if route == Route::Add {
         // D6: reuse `/skill add`'s own path unmodified. The global copy of
         // `mur-browser/SKILL.md` (shipped by `ensure_mur_skill`, D2/D3) is
         // the source `cmd_skill_add` parses; its `BUNDLE_ASSET_DIRS` copy
