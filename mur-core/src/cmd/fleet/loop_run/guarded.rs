@@ -427,8 +427,10 @@ pub async fn run_guarded(
                     sp.state = StepState::Pending;
                     println!("⏸ {} awaiting approval", sp.id);
                 }
-                StepEventKind::Done | StepEventKind::Failed => {
-                    let done = e.kind == StepEventKind::Done;
+                // Skipped only arises without a channel and a fleet run always
+                // has one; should it ever arrive, it did not fail.
+                StepEventKind::Done | StepEventKind::Failed | StepEventKind::Skipped => {
+                    let done = e.kind != StepEventKind::Failed;
                     sp.state = if done {
                         StepState::Done
                     } else {

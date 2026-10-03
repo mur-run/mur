@@ -206,6 +206,9 @@ pub enum StepEventKind {
     Failed,
     /// Waiting on a human: the step did not run, and it did not fail.
     Blocked,
+    /// Reported success without doing its work: a `delegate_to` step run
+    /// without a channel prints its description and calls no member (#1613).
+    Skipped,
 }
 
 /// The default policy when the caller did not state one: nothing can answer an
@@ -235,7 +238,7 @@ pub struct StepEvent {
     pub kind: StepEventKind,
     /// Per-step delegate token usage (0 for non-delegate or unknown).
     pub tokens_used: u64,
-    /// Why the step ended this way. Only meaningful on `Failed`.
+    /// Why the step ended this way. Set on `Failed` and `Skipped`.
     pub error: Option<String>,
 }
 
@@ -282,6 +285,7 @@ fn apply_step_event(record: &mut crate::run_status::RunState, event: &StepEvent)
         StepEventKind::Started => (crate::run_status::State::Running, Some(now), None),
         StepEventKind::Done => (crate::run_status::State::Done, None, Some(now)),
         StepEventKind::Failed => (crate::run_status::State::Failed, None, Some(now)),
+        StepEventKind::Skipped => (crate::run_status::State::Skipped, None, Some(now)),
         // Not ended: a blocked step is expected to run once approved, so it
         // keeps no end stamp (`mur job status` shows it as still outstanding).
         StepEventKind::Blocked => (crate::run_status::State::Blocked, None, None),
@@ -495,3 +499,5 @@ fn delegate_result(
 }
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod undelegated_tests;

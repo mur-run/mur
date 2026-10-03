@@ -37,6 +37,9 @@ pub fn abandon_grace(cfg: &mur_common::config::RunsConfig) -> chrono::Duration {
 pub fn map(s: RunStatus, now: DateTime<Utc>, abandon_grace: chrono::Duration) -> Observation {
     match s.state {
         State::Done => Observation::terminal(Outcome::Succeeded, "run state: done"),
+        // Step-only state; a run never carries it. Should one ever, it did
+        // not fail, so it is not reported as a failure.
+        State::Skipped => Observation::terminal(Outcome::Succeeded, "run state: skipped"),
         State::Failed => Observation::terminal(Outcome::Failed, "run state: failed"),
         State::Stopped => Observation::terminal(Outcome::Cancelled, "run state: stopped"),
         State::Running | State::Blocked => match s.liveness {
