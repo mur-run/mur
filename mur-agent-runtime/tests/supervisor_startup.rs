@@ -34,6 +34,9 @@ async fn runtime_starts_and_responds_to_agent_card_over_stdio() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // A panic below must not orphan the runtime: an orphan keeps the
+        // inherited stdio handles open and nextest reports the test as LEAK.
+        .kill_on_drop(true)
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
@@ -82,5 +85,9 @@ async fn runtime_starts_and_responds_to_agent_card_over_stdio() {
     unsafe {
         libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGTERM);
     }
+    // Off unix the runtime only exits on Ctrl-C (supervisor/mod.rs), which a
+    // piped child cannot be sent; terminate it so it does not outlive the test.
+    #[cfg(not(unix))]
+    let _ = child.start_kill();
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
 }
