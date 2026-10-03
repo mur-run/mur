@@ -44,8 +44,19 @@ pub struct ToolInputSchema {
     pub required: Option<Vec<String>>,
 }
 
-/// Return all registered tools.
+/// Return all registered tools. `ast_grep_search` appears only when the
+/// pinned binary is installed under mur home.
 pub fn all_tools() -> Vec<Tool> {
+    let mut tools = base_tools();
+    if let Ok(home) = resolve_mur_home()
+        && ast_grep::resolve_binary(&home).is_some()
+    {
+        tools.push(ast_grep::tool());
+    }
+    tools
+}
+
+fn base_tools() -> Vec<Tool> {
     vec![
         // ── notes tools ──
         Tool {
@@ -447,6 +458,10 @@ fn maybe_compress_tool_output(name: &str, arguments: &Value, out: Value) -> Valu
 /// Dispatch a tool call by name. Returns the result as a JSON Value.
 async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
     match name {
+        ast_grep::TOOL_NAME => {
+            let home = resolve_mur_home().map_err(|e| format!("{name} failed: {e}"))?;
+            ast_grep::call(&home, arguments).await
+        }
         "mur_notes_search" => {
             let query = arguments
                 .get("query")
@@ -896,6 +911,8 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
 fn resolve_mur_home() -> anyhow::Result<std::path::PathBuf> {
     mur_core::cmd::resolve_mur_home()
 }
+
+mod ast_grep;
 
 #[cfg(test)]
 mod media_tool_tests;

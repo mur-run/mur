@@ -6,6 +6,7 @@ mod backend;
 mod conversations;
 mod ops;
 mod scratch;
+mod search;
 mod skills;
 
 pub use attribution::*;
@@ -13,6 +14,7 @@ pub use backend::*;
 pub use conversations::*;
 pub use ops::*;
 pub use scratch::*;
+pub use search::*;
 pub use skills::*;
 
 use ops::{
@@ -334,6 +336,10 @@ pub struct Config {
     /// Per-agent scratch dir retention and doctor threshold (`scratch:`).
     #[serde(default)]
     pub scratch: ScratchConfig,
+
+    /// Code-search tool bounds (`search:`), e.g. `search.ast_grep`.
+    #[serde(default)]
+    pub search: SearchConfig,
 }
 
 impl Config {
