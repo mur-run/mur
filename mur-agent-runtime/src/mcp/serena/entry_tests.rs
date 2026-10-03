@@ -1,4 +1,5 @@
-//! Tests for the startup gate [`verify_entries`] (code-nav 2.4).
+//! Tests for the startup gate [`verify_entries`] (code-nav 2.4) and the
+//! per-spawn gate [`launch_additions`] (2.5).
 
 use super::*;
 use std::fs;
@@ -121,4 +122,58 @@ fn second_serena_entry_is_checked_too() {
     bad.name = "second".into();
     let err = fx.verify(&[ok, bad]).unwrap_err();
     assert!(err.to_string().contains("`second`"), "{err}");
+}
+
+// ── spawn gate (code-nav 2.5) ─────────────────────────────────────────────
+
+#[test]
+fn launch_additions_carry_home_and_fixed_project() {
+    let fx = Fx::new();
+    let got = launch_additions(&fx.serena(Some(fx.repo.clone())), Some(&fx.agent_home)).unwrap();
+    let paths = serena_paths(&fx.agent_home);
+    assert_eq!(got.env, launch_env(&paths));
+    assert_eq!(got.args, launch_args(&fx.repo));
+}
+
+#[test]
+fn launch_additions_are_empty_for_plain_entries_even_without_home() {
+    let plain = McpServerEntry {
+        name: "fs".into(),
+        command: "mcp-fs".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        launch_additions(&plain, None).unwrap(),
+        LaunchAdditions::default()
+    );
+}
+
+#[test]
+fn launch_additions_refuse_without_agent_home() {
+    let fx = Fx::new();
+    let err = launch_additions(&fx.serena(Some(fx.repo.clone())), None).unwrap_err();
+    assert!(matches!(err, SerenaEntryError::NoAgentHome { .. }), "{err}");
+    assert!(err.to_string().contains("`code-nav`"), "{err}");
+}
+
+/// Serena rewrites its own config: a check that passed at startup must not
+/// carry over to the next spawn.
+#[test]
+fn launch_additions_rerun_preflight_after_config_drift() {
+    let fx = Fx::new();
+    let entry = fx.serena(Some(fx.repo.clone()));
+    fx.verify(std::slice::from_ref(&entry)).unwrap();
+    let cfg = serena_paths(&fx.agent_home).config_file;
+    let text = fs::read_to_string(&cfg).unwrap();
+    fs::write(
+        &cfg,
+        text.replace(
+            "trusted_project_path_patterns: []",
+            "trusted_project_path_patterns: [\"**\"]",
+        ),
+    )
+    .unwrap();
+    let err = launch_additions(&entry, Some(&fx.agent_home)).unwrap_err();
+    assert!(matches!(err, SerenaEntryError::Preflight { .. }), "{err}");
+    assert!(err.to_string().contains("serena C3"), "{err}");
 }

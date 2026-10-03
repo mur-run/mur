@@ -107,6 +107,11 @@ pub enum SerenaEntryError {
          to an existing directory; serena never falls back to the working directory"
     )]
     Project { entry: String, found: String },
+    #[error(
+        "MCP server `{entry}` (kind: serena): the sandbox policy carries no absolute agent \
+         home, so `SERENA_HOME` cannot be fixed; refusing to spawn"
+    )]
+    NoAgentHome { entry: String },
     #[error("MCP server `{entry}` (kind: serena): {source}")]
     Preflight {
         entry: String,
@@ -128,13 +133,56 @@ pub fn verify_entries(
         if entry.kind != Some(McpServerKind::Serena) {
             continue;
         }
-        let project = checked_project(entry)?;
-        preflight(&paths, project).map_err(|e| SerenaEntryError::Preflight {
-            entry: entry.name.clone(),
-            source: Box::new(e),
-        })?;
+        verify_entry(entry, &paths)?;
     }
     Ok(())
+}
+
+/// One entry: the `project` checks, then [`preflight`]. Returns the checked
+/// project root so the caller launches serena on exactly what was verified.
+fn verify_entry<'e>(
+    entry: &'e McpServerEntry,
+    paths: &SerenaPaths,
+) -> Result<&'e Path, SerenaEntryError> {
+    let project = checked_project(entry)?;
+    preflight(paths, project).map_err(|e| SerenaEntryError::Preflight {
+        entry: entry.name.clone(),
+        source: Box::new(e),
+    })?;
+    Ok(project)
+}
+
+/// What a spawn adds to the child: env pairs and trailing args.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LaunchAdditions {
+    pub env: Vec<(String, OsString)>,
+    pub args: Vec<OsString>,
+}
+
+/// Spawn gate (code-nav 2.5). Serena rewrites its own config while it
+/// runs, so the startup check alone is stale by the next spawn: every
+/// spawn re-runs [`preflight`]. Entries without a kind get empty additions
+/// and are spawned exactly as before. `agent_home` is `None` when the
+/// sandbox policy carries none — a serena entry then refuses rather than
+/// guessing a `SERENA_HOME`.
+pub fn launch_additions(
+    entry: &McpServerEntry,
+    agent_home: Option<&Path>,
+) -> Result<LaunchAdditions, SerenaEntryError> {
+    if entry.kind != Some(McpServerKind::Serena) {
+        return Ok(LaunchAdditions::default());
+    }
+    let Some(agent_home) = agent_home else {
+        return Err(SerenaEntryError::NoAgentHome {
+            entry: entry.name.clone(),
+        });
+    };
+    let paths = serena_paths(agent_home);
+    let project = verify_entry(entry, &paths)?;
+    Ok(LaunchAdditions {
+        env: launch_env(&paths),
+        args: launch_args(project),
+    })
 }
 
 /// The entry's `project`, if it is absolute and an existing directory.
