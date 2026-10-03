@@ -179,6 +179,12 @@ pub(crate) fn provision_one(
     // the worker resolves real credentials via the models.yaml registry
     // instead of falling to the ollama/llama3.2:3b StubEcho default.
     cmd_create(name, true, None, Some(model.to_string()), None)?;
+    // Deliberately NOT `mcp_add_with_network` (#1647): the gateway entry is
+    // installed with `network: None` (Inherit) and the runtime spawns it that
+    // way — no egress proxy — until the separate consent step in
+    // `grant_egress`. The install probe is therefore unproxied for the same
+    // reason the runtime is, which is correct. Writing `BroadAudited` here to
+    // get a proxied probe would grant egress without consent.
     cmd_mcp_add(
         name,
         GATEWAY_MCP_NAME,

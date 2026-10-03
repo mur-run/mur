@@ -1,6 +1,8 @@
 //! #1639: the install-time probe must spawn a `Restricted` server the way the
 //! runtime does — with a live egress proxy and a tokened `HTTPS_PROXY` — or a
 //! server that (correctly) refuses to start unproxied can never be installed.
+//! #1647 extends the same rule to `mur agent mcp inspect`, which shares the
+//! probe helper (`agent_mcp_pin::probe_as_runtime_would`).
 //!
 //! The fake server below mirrors the live-mode rule in `cmd/browser`: no
 //! tokened proxy URL ⇒ exit 1 before speaking MCP. It is written into a
@@ -133,6 +135,30 @@ fn probe_failure_still_tears_down_its_proxy() {
     assert!(
         !msg.contains("tokenless"),
         "failed for the wrong reason: {msg}"
+    );
+    assert_port_closed(recorded_proxy_port(&f.record));
+}
+
+#[test]
+fn inspect_probes_a_restricted_server_behind_a_tokened_proxy() {
+    use crate::cmd::agent_mcp_pin::{InspectStatus, compute_binary_sha256, inspect_one_probed};
+    let f = fixture("ok");
+    let mut entry = f.profile.mcp_servers.last().unwrap().clone();
+    // Real binary pin, so the binary side is CLEAN and only the probe decides.
+    entry.binary_sha256 = Some(compute_binary_sha256(&f.script).unwrap());
+    // A mismatched pin: reaching DESCRIPTION DRIFT proves `tools/list` was
+    // answered, which the fake server only does when handed a tokened proxy.
+    entry.description_hash = Some("0".repeat(64));
+    let status = inspect_one_probed(
+        "carol",
+        &entry,
+        std::time::Duration::from_secs(10),
+        &mur_agent_runtime::sandbox::policy::SandboxPolicy::default(),
+    );
+    assert_eq!(
+        status,
+        InspectStatus::DescriptionDrift,
+        "the probe must reach tools/list; StartupWouldFail means it ran unproxied"
     );
     assert_port_closed(recorded_proxy_port(&f.record));
 }
