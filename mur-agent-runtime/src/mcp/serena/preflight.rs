@@ -108,12 +108,17 @@ pub enum SerenaPreflightError {
         found: String,
         expected: String,
     },
-    #[error("serena C8: {file}: `{key}` is {found}, expected {expected}")]
+    /// C8 also says *why* C/C++ was considered enabled and how to fix it:
+    /// a missing `project.yml` triggers it on non-C++ repos, and "C8
+    /// failed" alone would leave the user guessing. Boxed to keep the
+    /// error small.
+    #[error("serena C8: {file}: `{key}` is {found}, expected {expected} ({hint})")]
     C8Clangd {
         file: PathBuf,
         key: String,
         found: String,
         expected: String,
+        hint: Box<str>,
     },
 }
 
@@ -229,10 +234,81 @@ pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaP
 
     // C8
     let cpp = ls.and_then(|m| m.get(CPP_LS_ID));
-    if cpp_enabled(&folder, cpp.is_some()) {
-        check_clangd(cpp, cfg_file, paths, project_root)?;
+    if let Some(why) = cpp_enabled(&folder, cpp.is_some()) {
+        check_clangd(cpp, cfg_file, paths, project_root)
+            .map_err(|e| e.into_c8(why, &folder, paths))?;
     }
     Ok(())
+}
+
+/// Why C8 applies. Each reason maps to the fixes that actually help.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CppReason {
+    GlobalSettings,
+    ProjectListsCpp,
+    LanguagesUnknown,
+}
+
+/// A C8 failure before the reason/fix are attached.
+struct ClangdViolation {
+    file: PathBuf,
+    key: String,
+    found: String,
+    expected: String,
+}
+
+impl ClangdViolation {
+    fn into_c8(self, why: CppReason, folder: &Path, paths: &SerenaPaths) -> SerenaPreflightError {
+        let project_file = folder.join(PROJECT_FILE);
+        let lock_down = format!(
+            "set `{KEY_LS_SETTINGS}.{CPP_LS_ID}.{KEY_LS_EXTRA_ARGS}: [{CLANGD_REQUIRED_ARG}]` \
+             and `{KEY_LS_SETTINGS}.{CPP_LS_ID}.{KEY_COMPILE_COMMANDS_DIR}` to a directory under {}",
+            paths.projects_dir.display()
+        );
+        let (why, fix) = match why {
+            CppReason::GlobalSettings => (
+                format!(
+                    "`{KEY_LS_SETTINGS}.{CPP_LS_ID}` is set in {}",
+                    self.file.display()
+                ),
+                lock_down,
+            ),
+            CppReason::ProjectListsCpp => (
+                format!("{} lists `{CPP_LS_ID}`", project_file.display()),
+                lock_down,
+            ),
+            CppReason::LanguagesUnknown => (
+                format!(
+                    "{} is missing or has no readable language list, so serena \
+                     auto-detects languages and C/C++ cannot be ruled out",
+                    project_file.display()
+                ),
+                format!(
+                    "create {} with a `language_servers` list that excludes `{CPP_LS_ID}`, or {lock_down}",
+                    project_file.display()
+                ),
+            ),
+        };
+        SerenaPreflightError::C8Clangd {
+            file: self.file,
+            key: self.key,
+            found: self.found,
+            expected: self.expected,
+            hint: format!("C/C++ checked because {why}; fix: {fix}").into(),
+        }
+    }
+}
+
+/// Build a [`ClangdViolation`] from `(file, key, found, expected)`.
+macro_rules! clangd_fail {
+    ($file:expr, $key:expr, $found:expr, $expected:expr) => {
+        Err(ClangdViolation {
+            file: $file.to_path_buf(),
+            key: $key.to_string(),
+            found: $found.to_string(),
+            expected: $expected.to_string(),
+        })
+    };
 }
 
 /// C4: resolve `project_serena_folder_location` the way serena does and
@@ -278,21 +354,22 @@ fn check_project_folder(
 /// folder's `project.yml`; when that file is missing serena auto-detects
 /// the languages on activation, so C/C++ cannot be ruled out and C8
 /// applies.
-fn cpp_enabled(folder: &Path, global_cpp_settings: bool) -> bool {
+fn cpp_enabled(folder: &Path, global_cpp_settings: bool) -> Option<CppReason> {
     if global_cpp_settings {
-        return true;
+        return Some(CppReason::GlobalSettings);
     }
     let Ok(text) = std::fs::read_to_string(folder.join(PROJECT_FILE)) else {
-        return true;
+        return Some(CppReason::LanguagesUnknown);
     };
     let Ok(doc) = serde_yaml_ng::from_str::<Value>(&text) else {
-        return true;
+        return Some(CppReason::LanguagesUnknown);
     };
-    match KEY_LANGUAGES.iter().find_map(|k| doc.get(*k)) {
+    let lists_cpp = match KEY_LANGUAGES.iter().find_map(|k| doc.get(*k)) {
         Some(Value::Sequence(langs)) => langs.iter().any(|l| l.as_str() == Some(CPP_LS_ID)),
         Some(Value::String(l)) => l == CPP_LS_ID,
-        _ => true,
-    }
+        _ => return Some(CppReason::LanguagesUnknown),
+    };
+    lists_cpp.then_some(CppReason::ProjectListsCpp)
 }
 
 /// C8: effective clangd args (serena's assembly rule) and the
@@ -302,7 +379,7 @@ fn check_clangd(
     cfg_file: &Path,
     paths: &SerenaPaths,
     project_root: &Path,
-) -> Result<(), SerenaPreflightError> {
+) -> Result<(), ClangdViolation> {
     let key = |k: &str| format!("{KEY_LS_SETTINGS}.{CPP_LS_ID}.{k}");
     let get = |k: &str| cpp.and_then(|c| c.get(k));
 
@@ -316,14 +393,14 @@ fn check_clangd(
     let args_key = format!("{} + {}", key(KEY_LS_ARGS), key(KEY_LS_EXTRA_ARGS));
     if !args.iter().any(|a| a == CLANGD_REQUIRED_ARG) {
         let expected = format!("to contain {CLANGD_REQUIRED_ARG}");
-        return fail!(C8Clangd, cfg_file, args_key, format!("{args:?}"), expected);
+        return clangd_fail!(cfg_file, args_key, format!("{args:?}"), expected);
     }
     if args
         .iter()
         .any(|a| a.starts_with(CLANGD_FORBIDDEN_ARG_PREFIX))
     {
         let expected = format!("no {CLANGD_FORBIDDEN_ARG_PREFIX}");
-        return fail!(C8Clangd, cfg_file, args_key, format!("{args:?}"), expected);
+        return clangd_fail!(cfg_file, args_key, format!("{args:?}"), expected);
     }
 
     let raw = match get(KEY_COMPILE_COMMANDS_DIR) {
@@ -331,26 +408,14 @@ fn check_clangd(
         Some(Value::String(s)) => s.clone(),
         Some(v) => {
             let expected = format!("a path under {}", paths.projects_dir.display());
-            return fail!(
-                C8Clangd,
-                cfg_file,
-                key(KEY_COMPILE_COMMANDS_DIR),
-                show(v),
-                expected
-            );
+            return clangd_fail!(cfg_file, key(KEY_COMPILE_COMMANDS_DIR), show(v), expected);
         }
     };
     let resolved = normalize(&project_root.join(&raw));
     if !resolved.starts_with(normalize(&paths.projects_dir)) {
         let found = format!("{raw:?} -> {}", resolved.display());
         let expected = format!("a path under {}", paths.projects_dir.display());
-        return fail!(
-            C8Clangd,
-            cfg_file,
-            key(KEY_COMPILE_COMMANDS_DIR),
-            found,
-            expected
-        );
+        return clangd_fail!(cfg_file, key(KEY_COMPILE_COMMANDS_DIR), found, expected);
     }
     Ok(())
 }

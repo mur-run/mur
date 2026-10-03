@@ -284,3 +284,28 @@ fn substitute_matches_serena_placeholder_rules() {
     assert_eq!(substitute("/a$/b", root).unwrap(), Path::new("/a$/b"));
     assert_eq!(substitute("/a/$foo1", root).unwrap_err(), "foo1");
 }
+
+/// C8 on a repo whose `project.yml` is missing must say why C/C++ was
+/// considered and offer the non-clangd way out, not just "C8 failed".
+#[test]
+fn c8_message_explains_reason_and_fix() {
+    let fx = Fx::new();
+    fs::remove_file(fx.folder.join("project.yml")).unwrap();
+    let msg = assert_refused!(fx, C8Clangd).to_string();
+    assert!(msg.contains("serena C8"), "{msg}");
+    assert!(msg.contains("project.yml is missing"), "{msg}");
+    assert!(msg.contains("auto-detects"), "{msg}");
+    assert!(msg.contains("create "), "{msg}");
+    assert!(msg.contains("`language_servers`"), "{msg}");
+    assert!(msg.contains("--enable-config=false"), "{msg}");
+
+    // Explicit `cpp` in project.yml: the fix is the clangd lock-down only.
+    cpp(&fx, Some("{compile_commands_dir: \"$CCD\"}"));
+    let msg = assert_refused!(fx, C8Clangd).to_string();
+    assert!(msg.contains("C/C++ checked because"), "{msg}");
+    assert!(!msg.contains("auto-detects"), "{msg}");
+    assert!(
+        msg.contains("ls_specific_settings.cpp.ls_extra_args"),
+        "{msg}"
+    );
+}

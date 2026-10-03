@@ -5,12 +5,13 @@
 //! `project:` — never from the session cwd and never from the profile's
 //! free-form fields — so the spawn site, the preflight and the tool filter
 //! all see the same paths. The pure preflight (C1–C8) is in [`preflight`];
-//! spawn wiring is 2.4–2.6.
+//! [`verify_entries`] is the startup gate (2.4); spawn wiring is 2.5–2.6.
 
 mod preflight;
 
 pub use preflight::{SerenaPreflightError, preflight};
 
+use mur_common::agent::{McpServerEntry, McpServerKind};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -96,6 +97,66 @@ pub fn launch_args(project_root: &Path) -> Vec<OsString> {
     }
     args
 }
+
+/// Why a `kind: serena` entry refused agent startup. Always names the
+/// entry, so a profile with several servers points at the right one.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SerenaEntryError {
+    #[error(
+        "MCP server `{entry}` (kind: serena): `project` is {found}, expected an absolute path \
+         to an existing directory; serena never falls back to the working directory"
+    )]
+    Project { entry: String, found: String },
+    #[error("MCP server `{entry}` (kind: serena): {source}")]
+    Preflight {
+        entry: String,
+        #[source]
+        source: Box<SerenaPreflightError>,
+    },
+}
+
+/// Startup gate: every enabled `kind: serena` entry must name an absolute,
+/// existing `project` directory and pass [`preflight`]. Entries without a
+/// kind are untouched. The first failure wins; there is no fallback to the
+/// session cwd.
+pub fn verify_entries(
+    entries: &[McpServerEntry],
+    agent_home: &Path,
+) -> Result<(), SerenaEntryError> {
+    let paths = serena_paths(agent_home);
+    for entry in entries {
+        if entry.kind != Some(McpServerKind::Serena) {
+            continue;
+        }
+        let project = checked_project(entry)?;
+        preflight(&paths, project).map_err(|e| SerenaEntryError::Preflight {
+            entry: entry.name.clone(),
+            source: Box::new(e),
+        })?;
+    }
+    Ok(())
+}
+
+/// The entry's `project`, if it is absolute and an existing directory.
+fn checked_project(entry: &McpServerEntry) -> Result<&Path, SerenaEntryError> {
+    let refuse = |found: String| SerenaEntryError::Project {
+        entry: entry.name.clone(),
+        found,
+    };
+    let Some(project) = entry.project.as_deref() else {
+        return Err(refuse("<absent>".to_owned()));
+    };
+    if !project.is_absolute() {
+        return Err(refuse(format!("{} (relative)", project.display())));
+    }
+    if !project.is_dir() {
+        return Err(refuse(format!("{} (not a directory)", project.display())));
+    }
+    Ok(project)
+}
+
+#[cfg(test)]
+mod entry_tests;
 
 #[cfg(test)]
 mod tests {
