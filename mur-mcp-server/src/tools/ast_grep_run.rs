@@ -285,6 +285,10 @@ pub async fn call(mur_home: &Path, arguments: &Value) -> Result<Value, String> {
     let limits = cfg.search.ast_grep.resolve(args.max_results, args.context);
     let iso = super::ensure_isolation(mur_home)
         .map_err(|e| format!("ast-grep isolation dir unavailable: {e}"))?;
+    if let Some(l) = &args.lang {
+        let budget = super::lang::PROBE_TIMEOUT.min(Duration::from_secs(limits.timeout_secs));
+        super::lang::ensure_lang(&bin, &iso.cwd, &iso.sgconfig, l, budget).await?;
+    }
     let argv = super::build_argv(&args, &iso.sgconfig, limits.context_lines);
     run(&bin, &argv, &iso.cwd, &limits).await
 }

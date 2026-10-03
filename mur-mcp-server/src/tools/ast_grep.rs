@@ -314,6 +314,9 @@ pub fn tool() -> Tool {
 mod run;
 pub use run::call;
 
+#[path = "ast_grep_lang.rs"]
+mod lang;
+
 #[cfg(test)]
 #[path = "ast_grep_tests.rs"]
 mod tests;

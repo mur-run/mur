@@ -303,7 +303,10 @@ async fn live_unsupported_lang_is_an_error() {
     let mut a = args("x", &repo);
     a["lang"] = "klingon".into();
     let e = call(home.path(), &a).await.unwrap_err();
-    assert!(e.contains("exit 2") && e.contains("klingon"), "{e}");
+    assert!(
+        e.contains("unsupported lang") && e.contains("klingon"),
+        "{e}"
+    );
 }
 
 #[tokio::test]
