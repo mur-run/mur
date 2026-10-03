@@ -3,15 +3,12 @@
 //!
 //! This module owns the parts that need no child process: the tool schema,
 //! argument validation, path checks, binary resolution and argv
-//! construction. Spawning, stream parsing and exit-code mapping build on top.
+//! construction. Spawning, stream parsing and exit-code mapping are in
+//! `ast_grep_run.rs`.
 //!
 //! Isolation (phase 0, item 2a): `-c <MUR-owned empty sgconfig>` is the
 //! control that stops a repo's `sgconfig.yml` (and its `libraryPath`
 //! dlopen vector) from loading; the MUR-owned cwd is a second layer only.
-
-// Task 2 lands the pieces; task 3 (spawn + stream parse) is their caller.
-// Remove this allow in task 3 — clippy then proves nothing is left unused.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,6 +31,8 @@ const AST_GREP_BIN_STEM: &str = "ast-grep";
 /// MUR-owned run directory (cwd + empty sgconfig) under mur home.
 const RUNTIME_DIR: &str = "runtime";
 const SGCONFIG_FILE: &str = "sgconfig.yml";
+/// MUR's config file under mur home (holds `search.ast_grep`).
+const CONFIG_FILE: &str = "config.yaml";
 
 /// Input-size bounds. Not config knobs: they guard argv size, not search cost.
 pub const MAX_PATTERN_BYTES: usize = 4 * 1024;
@@ -310,6 +309,10 @@ pub fn tool() -> Tool {
         },
     }
 }
+
+#[path = "ast_grep_run.rs"]
+mod run;
+pub use run::call;
 
 #[cfg(test)]
 #[path = "ast_grep_tests.rs"]

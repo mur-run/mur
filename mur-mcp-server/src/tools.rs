@@ -458,6 +458,10 @@ fn maybe_compress_tool_output(name: &str, arguments: &Value, out: Value) -> Valu
 /// Dispatch a tool call by name. Returns the result as a JSON Value.
 async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
     match name {
+        ast_grep::TOOL_NAME => {
+            let home = resolve_mur_home().map_err(|e| format!("{name} failed: {e}"))?;
+            ast_grep::call(&home, arguments).await
+        }
         "mur_notes_search" => {
             let query = arguments
                 .get("query")
