@@ -445,6 +445,11 @@ fn report_mcp_pins(mur_dir: &std::path::Path) {
     let mut dirs: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     dirs.sort(); // deterministic output
 
+    // Same first-party test the runtime re-pins with on every start: drift on
+    // one of MUR's own shipped binaries is a routine upgrade, not a refusal.
+    let install_dir = mur_common::mcp_first_party::current_install_dir();
+    let bundled = mur_common::exec::bundled_mcp_server_path();
+
     let mut checked = 0usize;
     let mut problems: Vec<String> = Vec::new();
 
@@ -463,6 +468,22 @@ fn report_mcp_pins(mur_dir: &std::path::Path) {
             checked += 1;
             match binary_status(entry) {
                 InspectStatus::Clean => {}
+                InspectStatus::BinaryDrift
+                    if install_dir.as_deref().is_some_and(|dir| {
+                        mur_common::mcp_first_party::first_party_target(
+                            &entry.command,
+                            Some(&bundled),
+                            dir,
+                        )
+                        .is_some()
+                    }) =>
+                {
+                    problems.push(format!(
+                        "  ⚠ {agent}/{name}: MUR's own server was upgraded; the agent re-pins it \
+                         on its next start.\n     `mur agent restart {agent}` to apply now.",
+                        name = entry.name,
+                    ))
+                }
                 InspectStatus::BinaryDrift => problems.push(format!(
                     "  ❌ {agent}/{name}: binary changed since install — this agent will REFUSE \
                      to start.\n     `mur agent mcp inspect {agent} --server {name}` to review, \
