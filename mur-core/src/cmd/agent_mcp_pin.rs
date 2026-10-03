@@ -132,14 +132,16 @@ pub enum ProbeError {
     Timeout(std::time::Duration),
     #[error("MCP spawn / handshake failed: {0}")]
     Mcp(#[from] mur_agent_runtime::protocol::mcp_client::McpError),
+    /// Probe setup failed (runtime, egress proxy, thread); the server never ran.
+    #[error("{0}")]
+    Setup(String),
 }
 
 /// Spawn the MCP, run `initialize` + `tools/list` + `shutdown`, and
 /// return the canonical description hash plus the raw tools list.
 ///
-/// Async because the underlying `McpClient` is async; callers in sync
-/// CLI commands wrap with `tokio::runtime::Handle::current().block_on`
-/// or `tokio::task::block_in_place`.
+/// Callers go through `probe_egress::probe_as_runtime_would`, which supplies
+/// the egress proxy a `Restricted` entry needs and owns its lifetime (#1647).
 pub async fn probe_mcp_descriptions(
     entry: &McpServerEntry,
     timeout: std::time::Duration,
@@ -438,7 +440,7 @@ pub fn inspect_one(agent: &str, entry: &mur_common::agent::McpServerEntry) -> In
 /// `tools/list` against `entry.description_hash` (B0 rule 6 / M9.3.5).
 /// Lights up the `DescriptionDrift` and `BothDrifted` exit codes that
 /// M9.4 reserved.
-pub async fn inspect_one_probed(
+pub fn inspect_one_probed(
     agent: &str,
     entry: &mur_common::agent::McpServerEntry,
     timeout: std::time::Duration,
@@ -466,9 +468,7 @@ pub async fn inspect_one_probed(
             return binary_status;
         }
     };
-    // No proxy: `inspect` of a `Restricted` server has the same gap #1639
-    // closes for `mcp add` — deliberately unfixed here, tracked in #1647.
-    match probe_mcp_descriptions(&probe_entry, timeout, policy, None).await {
+    match probe_egress::probe_as_runtime_would(agent, &probe_entry, timeout, policy) {
         Ok((current, _)) => {
             let descr_drifted = !current.eq_ignore_ascii_case(expected_descr);
             if descr_drifted {
@@ -551,14 +551,7 @@ pub fn cmd_mcp_inspect(
             println!();
         }
         let status = if probe {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(inspect_one_probed(
-                    name,
-                    entry,
-                    probe_timeout(),
-                    &probe_policy,
-                ))
-            }) as u8
+            inspect_one_probed(name, entry, probe_timeout(), &probe_policy) as u8
         } else {
             inspect_one(name, entry) as u8
         };
@@ -689,17 +682,16 @@ pub fn cmd_mcp_pin(
             command: resolved.display().to_string(),
             ..entry.clone()
         };
-        match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(probe_mcp_descriptions(
-                &probe_entry,
-                probe_timeout(),
-                // Permissive on purpose: this probe exists to hash tool
-                // descriptions, and a sandbox denial here would drop the
-                // hash for a server that is otherwise fine to pin.
-                &mur_agent_runtime::sandbox::policy::SandboxPolicy::default(),
-                None, // deliberately unfixed, not "no proxy needed" — #1647
-            ))
-        }) {
+        // Permissive policy on purpose: this probe exists to hash tool
+        // descriptions, and a sandbox denial would drop the hash for a server
+        // that is otherwise fine to pin. The proxy is not optional: a
+        // fail-closed `Restricted` server never answers `tools/list` without it.
+        match probe_egress::probe_as_runtime_would(
+            name,
+            &probe_entry,
+            probe_timeout(),
+            &mur_agent_runtime::sandbox::policy::SandboxPolicy::default(),
+        ) {
             Ok((hash, tools)) => {
                 tracing::info!(
                     mcp = %entry.name,
@@ -802,5 +794,7 @@ pub fn cmd_mcp_pin(
     Ok(())
 }
 
+mod probe_egress;
+pub(crate) use probe_egress::probe_as_runtime_would;
 #[cfg(test)]
 mod tests;

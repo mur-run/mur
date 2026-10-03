@@ -218,73 +218,15 @@ pub(crate) fn probe_new_entry(
 
     // Prints nothing: the murmur slash command renders its own notes into a
     // TUI pane and cannot have stdout written underneath it. Callers report.
-    //
-    // Runs on its own thread with its own runtime, rather than reaching for
-    // the caller's. `Handle::current()` panics outside a runtime and
-    // `block_in_place` panics on a current_thread one, and the callers do not
-    // all look alike: the CLI is inside a multi-thread runtime, but
-    // `agent_admin::mcp::add` is a synchronous Tauri command that is not
-    // inside one at all — so the convenient version would have turned a GUI
-    // install into a panic. A thread costs one probe's worth of nothing and
-    // makes this callable from anywhere, unit tests included.
-    let result = std::thread::scope(|s| {
-        s.spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("build probe runtime: {e}"))
-                .map(|rt| {
-                    rt.block_on(async {
-                        // #1639: a `Restricted` / `BroadAudited` server is spawned
-                        // by the runtime behind a loopback egress proxy with a
-                        // tokened `HTTPS_PROXY`; one that (rightly) refuses to
-                        // start without it must see the same thing here, or it
-                        // can never be installed. Same predicate as the runtime.
-                        let proxy = if mur_common::agent::entries_need_egress(std::slice::from_ref(
-                            &probe_entry,
-                        )) {
-                            // ⚠ LIFETIME: this proxy's accept loop is a task on
-                            // `rt`, and the ONLY thing that stops it is `rt`
-                            // being dropped when this closure returns. The
-                            // probe-owned, thread-local runtime IS the proxy's
-                            // RAII guard. Do NOT move this onto the caller's
-                            // runtime the way `cmd_mcp_pin` does
-                            // (`Handle::current().block_on(...)` in
-                            // agent_mcp_pin.rs) — there, the proxy would keep
-                            // listening on 127.0.0.1 for the rest of the
-                            // caller's process, long after the probe returned.
-                            // `probe_failure_still_tears_down_its_proxy` and
-                            // `probe_hands_a_restricted_server_a_tokened_proxy`
-                            // fail if this guarantee breaks.
-                            Some(
-                                mur_agent_runtime::sandbox::egress_proxy::start_egress_proxy(agent)
-                                    .await
-                                    .map_err(|e| format!("start probe egress proxy: {e}"))?,
-                            )
-                        } else {
-                            None
-                        };
-                        Ok(crate::cmd::agent_mcp_pin::probe_mcp_descriptions(
-                            &probe_entry,
-                            timeout,
-                            &policy,
-                            proxy.as_ref(),
-                        )
-                        .await)
-                    })
-                })
-                .and_then(|r: Result<_, String>| r)
-        })
-        .join()
-        .map_err(|_| "probe thread panicked".to_string())
-    });
-    let result = match result {
-        Ok(Ok(inner)) => inner,
-        Ok(Err(e)) | Err(e) => bail!("could not probe '{server_id}': {e}"),
-    };
+    // The helper owns the egress proxy (#1639) and its lifetime.
+    let result =
+        crate::cmd::agent_mcp_pin::probe_as_runtime_would(agent, &probe_entry, timeout, &policy);
 
     match result {
         Ok((hash, tools)) => Ok((hash, tools.len())),
+        Err(e @ crate::cmd::agent_mcp_pin::ProbeError::Setup(_)) => {
+            bail!("could not probe '{server_id}': {e}")
+        }
         Err(e) => {
             let timed_out = matches!(e, crate::cmd::agent_mcp_pin::ProbeError::Timeout(_));
             bail!(
