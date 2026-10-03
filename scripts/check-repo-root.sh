@@ -31,7 +31,9 @@ trap 'rm -rf "$tmp"' EXIT
 
 # One name per line; blank lines and `#` comments ignored.
 sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$allowlist" | grep -v '^$' | LC_ALL=C sort -u >"$tmp/allowed"
-git -C "$repo_root" ls-files | cut -d/ -f1 | LC_ALL=C sort -u >"$tmp/present"
+# `-z` matters: without it git C-quotes non-ASCII paths under the default
+# core.quotePath=true (CI), so `docs/<CJK name>.md` reads as a stray `"docs`.
+git -C "$repo_root" ls-files -z | tr '\0' '\n' | cut -d/ -f1 | LC_ALL=C sort -u >"$tmp/present"
 
 # Entries present in the index but absent from the allowlist.
 strays=$(LC_ALL=C comm -23 "$tmp/present" "$tmp/allowed")
