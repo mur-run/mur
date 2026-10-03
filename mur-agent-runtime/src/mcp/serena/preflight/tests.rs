@@ -194,7 +194,7 @@ fn c7_ls_exec_override() {
     }
 }
 
-const CPP_OK: &str = "{ls_extra_args: [--enable-config=false], compile_commands_dir: \"$CCD\"}";
+const CPP_OK: &str = "{ls_extra_args: [--enable-config=false], compile_commands_dir: '$CCD'}";
 
 /// Enable C/C++ in `project.yml` and set `ls_specific_settings.cpp`.
 fn cpp(fx: &Fx, settings: Option<&str>) {
@@ -220,14 +220,14 @@ fn c8_clangd_passes_when_locked_down() {
 fn c8_clangd_violations() {
     let fx = Fx::new();
     // default args (`--background-index`) lack --enable-config=false
-    cpp(&fx, Some("{compile_commands_dir: \"$CCD\"}"));
+    cpp(&fx, Some("{compile_commands_dir: '$CCD'}"));
     assert_refused!(fx, C8Clangd);
     // --query-driver present
     cpp(
         &fx,
         Some(
             "{ls_extra_args: [--enable-config=false, \"--query-driver=/usr/bin/*\"], \
-             compile_commands_dir: \"$CCD\"}",
+             compile_commands_dir: '$CCD'}",
         ),
     );
     assert_refused!(fx, C8Clangd);
@@ -302,7 +302,7 @@ fn c8_message_explains_reason_and_fix() {
     assert!(msg.contains("--enable-config=false"), "{msg}");
 
     // Explicit `cpp` in project.yml: the fix is the clangd lock-down only.
-    cpp(&fx, Some("{compile_commands_dir: \"$CCD\"}"));
+    cpp(&fx, Some("{compile_commands_dir: '$CCD'}"));
     let msg = assert_refused!(fx, C8Clangd).to_string();
     assert!(msg.contains("C/C++ checked because"), "{msg}");
     assert!(!msg.contains("auto-detects"), "{msg}");
