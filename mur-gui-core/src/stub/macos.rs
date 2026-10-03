@@ -1,6 +1,6 @@
 //! macOS per-agent `.app` stub generation — spec §5.1, §5.2, §12.4.
 //!
-//! Creates `~/Applications/MuR-Agent-<DisplayName>.app` with:
+//! Creates `~/Applications/MUR-Agent-<DisplayName>.app` with:
 //! - `Contents/Info.plist` (bundle ID, URL scheme, NSServices)
 //! - `Contents/MacOS/<slug>` (copy of `mur-agent-launcher`, ad-hoc re-signed)
 //! - `Contents/Resources/agent.txt`, `host_version.txt`, `Icon.icns`
@@ -13,6 +13,13 @@ use anyhow::{Context, Result};
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// File-name prefix of a generated stub bundle.
+pub(crate) const STUB_APP_PREFIX: &str = "MUR-Agent-";
+
+/// Prefix used before the brand casing fix. Stubs still carrying it are
+/// regenerated under [`STUB_APP_PREFIX`] by the startup scan.
+pub(crate) const LEGACY_STUB_APP_PREFIX: &str = "MuR-Agent-";
 
 pub fn generate(
     slug: &str,
@@ -152,7 +159,7 @@ fn find_launcher_binary() -> Result<PathBuf> {
     )
 }
 
-/// Derive the stub `.app` path: `~/Applications/MuR-Agent-<DisplayName>.app`.
+/// Derive the stub `.app` path: `~/Applications/MUR-Agent-<DisplayName>.app`.
 fn stub_app_path(display_name: &str) -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -169,7 +176,7 @@ fn stub_app_path(display_name: &str) -> Result<PathBuf> {
         .collect();
     let apps_dir = home.join("Applications");
     std::fs::create_dir_all(&apps_dir).context("create ~/Applications")?;
-    Ok(apps_dir.join(format!("MuR-Agent-{safe_name}.app")))
+    Ok(apps_dir.join(format!("{STUB_APP_PREFIX}{safe_name}.app")))
 }
 
 /// Run a command, returning `Err` with captured stderr on non-zero exit.

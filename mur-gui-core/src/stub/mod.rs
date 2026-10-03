@@ -130,14 +130,20 @@ fn scan_stale_macos(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    for entry in std::fs::read_dir(&apps_dir)? {
-        let entry = entry?;
-        let path = entry.path();
+    // Collect first: regeneration and legacy cleanup mutate this directory.
+    let entries: Vec<PathBuf> = std::fs::read_dir(&apps_dir)?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|e| e.path())
+        .collect();
+
+    for path in entries {
         if path.extension() != Some(OsStr::new("app")) {
             continue;
         }
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if !name.starts_with("MuR-Agent-") {
+        let legacy = name.starts_with(macos::LEGACY_STUB_APP_PREFIX);
+        if !legacy && !name.starts_with(macos::STUB_APP_PREFIX) {
             continue;
         }
 
@@ -149,7 +155,9 @@ fn scan_stale_macos(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
             continue;
         };
         let stub_version = stub_version.trim();
-        if stub_version == hub_version {
+        // Legacy-cased stubs are regenerated even when current, so they move
+        // to the new name.
+        if stub_version == hub_version && !legacy {
             continue;
         }
 
@@ -161,9 +169,46 @@ fn scan_stale_macos(hub_version: &str, mur_home: &Path) -> anyhow::Result<()> {
         tracing::info!("regenerating stale stub for {slug} ({stub_version} → {hub_version})");
         if let Err(e) = regenerate_from_slug(&slug, hub_version, mur_home) {
             tracing::warn!("stub regeneration failed for {slug}: {e}");
+            continue;
+        }
+        // On a case-insensitive volume (the APFS default) `generate` already
+        // replaced the legacy bundle in place. On a case-sensitive one the
+        // legacy bundle is still there under its exact old name; remove it.
+        if legacy
+            && let Some(file_name) = path.file_name().and_then(|s| s.to_str())
+            && has_exact_entry(&apps_dir, file_name)
+            && let Err(e) = std::fs::remove_dir_all(&path)
+        {
+            tracing::warn!("could not remove legacy stub {}: {e}", path.display());
         }
     }
     Ok(())
+}
+
+/// Whether `dir` holds an entry named exactly `name`, byte for byte.
+///
+/// `Path::exists` is not enough on a case-insensitive filesystem: it also
+/// matches a sibling that differs only in letter case.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+pub(crate) fn has_exact_entry(dir: &Path, name: &str) -> bool {
+    std::fs::read_dir(dir)
+        .map(|it| {
+            it.flatten()
+                .any(|e| e.file_name() == std::ffi::OsStr::new(name))
+        })
+        .unwrap_or(false)
+}
+
+/// Rename `dir/legacy` to `dir/current` when only the legacy spelling is on
+/// disk. Returns `Ok(true)` when a rename happened. A case-only rename is
+/// valid on case-insensitive filesystems.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn rename_legacy_entry(dir: &Path, legacy: &str, current: &str) -> Result<bool> {
+    if !has_exact_entry(dir, legacy) || has_exact_entry(dir, current) {
+        return Ok(false);
+    }
+    std::fs::rename(dir.join(legacy), dir.join(current))?;
+    Ok(true)
 }
 
 #[cfg(target_os = "linux")]
@@ -265,5 +310,35 @@ mod tests {
         // Just verify the sync scanner returns Ok when the stubs dir doesn't exist.
         let mur_home = std::path::PathBuf::from("/tmp/nonexistent-mur-scan-test");
         assert!(scan_stale_sync("2.0.0", &mur_home).is_ok());
+    }
+
+    #[test]
+    fn rename_legacy_entry_moves_legacy_casing() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("MuR Agents")).unwrap();
+        std::fs::write(tmp.path().join("MuR Agents").join("a.lnk"), b"x").unwrap();
+
+        assert!(rename_legacy_entry(tmp.path(), "MuR Agents", "MUR Agents").unwrap());
+        assert!(has_exact_entry(tmp.path(), "MUR Agents"));
+        assert!(!has_exact_entry(tmp.path(), "MuR Agents"));
+        assert!(tmp.path().join("MUR Agents").join("a.lnk").exists());
+    }
+
+    #[test]
+    fn rename_legacy_entry_is_noop_without_legacy() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!rename_legacy_entry(tmp.path(), "MuR Agents", "MUR Agents").unwrap());
+
+        std::fs::create_dir(tmp.path().join("MUR Agents")).unwrap();
+        assert!(!rename_legacy_entry(tmp.path(), "MuR Agents", "MUR Agents").unwrap());
+        assert!(has_exact_entry(tmp.path(), "MUR Agents"));
+    }
+
+    #[test]
+    fn has_exact_entry_is_case_exact() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("MUR-Agent-Coach.app")).unwrap();
+        assert!(has_exact_entry(tmp.path(), "MUR-Agent-Coach.app"));
+        assert!(!has_exact_entry(tmp.path(), "MuR-Agent-Coach.app"));
     }
 }
