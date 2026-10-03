@@ -120,16 +120,18 @@ echo "==> 2/5 agent with a Restricted live-mode browser entry"
 "$MUR" agent mcp add "$AGENT" browser --no-probe --force </dev/null \
   --command "$MUR" --arg browser --arg record --arg --run --arg live --arg --mode --arg live \
   --arg=-- --arg=--ignore-https-errors >/dev/null
-"$MUR" agent mcp set-network "$AGENT" browser --allow-host 127.0.0.1 >/dev/null
 # [probed] the egress proxy runs inside the sealed runtime, so its upstream
 # dial is bound by the same SBPL port gate (80/443/8080/8443 under
-# Restricted). The fixture listens on ephemeral ports; without these grants
+# Restricted). The fixture listens on ephemeral ports; without a port grant
 # CONNECT is ALLOWed by the proxy, the dial fails with EPERM, and the proxy
-# logs the `allow-port` fix and answers 502.
+# logs the `allow-port` fix and answers 502. `set-network` takes host:port
+# plus `--allow-port` and writes both grants in one step (#1619).
+NET_ARGS=()
 for u in "$URL_A" "$URL_B"; do
   p="${u%/}"; p="${p##*:}"
-  "$MUR" agent perm allow-port "$AGENT" "$p" >/dev/null
+  NET_ARGS+=(--allow-host "127.0.0.1:$p" --allow-port "$p")
 done
+"$MUR" agent mcp set-network "$AGENT" browser "${NET_ARGS[@]}" >/dev/null
 # What `mur browser record` spawns on the agent's behalf (perms.rs
 # REQUIRED_BINARIES): `node <install>/…/cli.js`, then Chromium. No npx, so no
 # npx binary and no npx cache lane.
