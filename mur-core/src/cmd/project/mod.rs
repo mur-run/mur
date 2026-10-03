@@ -409,18 +409,12 @@ pub(crate) async fn cmd_project_index(
     }
 
     crate::codebase::ensure_git_hook(&project_path, quiet)?;
-    // #1672: the in-tree case was just explained by ensure_git_hook; the
-    // states it cannot fix (stranded block, missing +x) are reported here.
-    if !quiet {
-        let health = crate::codebase::hook_health(&project_path);
-        if matches!(
-            health,
-            crate::codebase::HookHealth::Stranded { .. }
-                | crate::codebase::HookHealth::NotExecutable { .. }
-        ) && let Err(problem) = hook_report::describe(&health)
-        {
-            eprintln!("  ⚠ Auto-index hook {problem}");
-        }
+    // #1672: states the install step cannot fix are reported here, once.
+    if !quiet
+        && let Some(notice) =
+            hook_report::index_notice(&crate::codebase::hook_health(&project_path))
+    {
+        eprintln!("  {notice}");
     }
     Ok(())
 }

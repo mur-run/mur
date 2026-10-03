@@ -34,6 +34,26 @@ pub(crate) fn describe(health: &HookHealth) -> std::result::Result<String, Strin
     }
 }
 
+/// The single notice `mur project index` prints after trying to install the
+/// hook: only for states the install step cannot fix itself (a versioned
+/// hooks dir, a stranded block, a missing execute bit). `None` otherwise.
+pub(crate) fn index_notice(health: &HookHealth) -> Option<String> {
+    let reportable = matches!(
+        health,
+        HookHealth::NotInstalled {
+            in_work_tree: true,
+            ..
+        } | HookHealth::Stranded { .. }
+            | HookHealth::NotExecutable { .. }
+    );
+    if !reportable {
+        return None;
+    }
+    describe(health)
+        .err()
+        .map(|problem| format!("⚠ Auto-index hook {problem}"))
+}
+
 /// One-line verdict for `project_path`, or `None` when there is no repo.
 pub(crate) fn check(project_path: &Path) -> Option<std::result::Result<String, String>> {
     let health = hook_health(project_path);
@@ -71,5 +91,35 @@ mod tests {
             );
         }
         assert!(describe(&HookHealth::Active).is_ok());
+    }
+
+    #[test]
+    fn index_reports_only_states_install_cannot_fix_once() {
+        let dir = PathBuf::from("/r/.husky");
+        let hook = PathBuf::from("/r/.git/hooks/post-commit");
+        for h in [
+            HookHealth::NotInstalled {
+                hooks_dir: dir.clone(),
+                in_work_tree: true,
+            },
+            HookHealth::Stranded {
+                hook: hook.clone(),
+                hooks_dir: dir.clone(),
+            },
+            HookHealth::NotExecutable { hook: hook.clone() },
+        ] {
+            let msg = index_notice(&h).unwrap_or_else(|| panic!("{h:?} must be reported"));
+            assert_eq!(msg.lines().count(), 1, "{h:?} must be one line: {msg}");
+        }
+        for h in [
+            HookHealth::Active,
+            HookHealth::NotARepo,
+            HookHealth::NotInstalled {
+                hooks_dir: dir,
+                in_work_tree: false,
+            },
+        ] {
+            assert_eq!(index_notice(&h), None, "{h:?} needs no notice");
+        }
     }
 }
