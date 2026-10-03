@@ -305,3 +305,31 @@ fn project_search_skill_carries_the_routing_contract() {
         "stale scope claim still present in mur-project-search"
     );
 }
+
+/// What this proves: mur-search routes structural queries to the bounded
+/// `ast_grep_search` MCP tool first and keeps the shell binary as the
+/// fallback. What it does NOT prove: that a model follows the order.
+#[test]
+fn search_skill_prefers_the_ast_grep_tool_over_the_shell() {
+    let m = mur_common::skill::parse_canonical(include_str!("../../skills/mur_search.yaml"))
+        .expect("mur-search must parse");
+    let body = m.content.context.clone().unwrap_or_default();
+    let row = body
+        .lines()
+        .find(|l| l.trim_start().starts_with("| Structure |"))
+        .expect("mur-search lost its Structure routing row");
+    let tool = row
+        .find("`ast_grep_search` with")
+        .expect("Structure row must name ast_grep_search as the first choice");
+    let shell = row
+        .find("`ast-grep run")
+        .expect("Structure row must keep the shell ast-grep fallback");
+    assert!(
+        tool < shell,
+        "ast_grep_search must come before the shell fallback"
+    );
+    assert!(
+        body.contains("`truncated: true`"),
+        "mur-search must teach that a truncated result is not the full answer"
+    );
+}
