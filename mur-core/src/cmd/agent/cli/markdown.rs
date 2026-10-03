@@ -13,6 +13,9 @@ use unicode_width::UnicodeWidthChar;
 
 use super::theme::{ANSI, Theme};
 
+mod wrap;
+pub(crate) use wrap::wrap_line;
+
 const RULE: &str = "────────────────────────";
 const INDENT: &str = "  ";
 
