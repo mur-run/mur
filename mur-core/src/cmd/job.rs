@@ -50,6 +50,30 @@ fn load_status(mur_home: &Path, run_id: &str) -> Result<Option<RunStatus>> {
     crate::run_status::status_of(mur_home, run_id)
 }
 
+/// A run `mur job list` could not read: its id and why.
+type UnreadableRun = (String, anyhow::Error);
+
+/// The rows for `mur job list`, newest first, plus every run that could not
+/// be read.
+///
+/// One bad `run.json` (a corrupt write, or a state value written by a newer
+/// MUR) must not hide every other run, so a per-run read failure is returned
+/// beside the rows rather than aborting the list. Failing to enumerate the
+/// runs directory itself is still an error: then there is no list to show.
+fn collect_list_rows(mur_home: &Path, all: bool) -> Result<(Vec<RunStatus>, Vec<UnreadableRun>)> {
+    let mut rows = Vec::new();
+    let mut unreadable = Vec::new();
+    for id in store::list_ids(mur_home)? {
+        match load_status(mur_home, &id) {
+            Ok(Some(status)) if all || visible_in_list(&status) => rows.push(status),
+            Ok(_) => {}
+            Err(error) => unreadable.push((id, error)),
+        }
+    }
+    rows.sort_by_key(|r| std::cmp::Reverse(r.run.started_at));
+    Ok((rows, unreadable))
+}
+
 fn liveness_label(l: Liveness) -> &'static str {
     match l {
         Liveness::Alive => "alive",
@@ -152,15 +176,12 @@ pub fn print_status(w: &mut dyn std::io::Write, s: &RunStatus) {
 pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
     match action {
         JobAction::List { all } => {
-            let mut rows = Vec::new();
-            for id in store::list_ids(mur_home)? {
-                if let Some(status) = load_status(mur_home, &id)?
-                    && (all || visible_in_list(&status))
-                {
-                    rows.push(status);
-                }
+            let (rows, unreadable) = collect_list_rows(mur_home, all)?;
+            // Named on stderr, never swallowed: the operator who wonders why a
+            // run is missing from the table gets the id and the reason.
+            for (id, error) in &unreadable {
+                eprintln!("warning: skipped unreadable run `{id}`: {error:#}");
             }
-            rows.sort_by_key(|r| std::cmp::Reverse(r.run.started_at));
             if rows.is_empty() {
                 println!("no runs");
                 return Ok(());
@@ -407,5 +428,31 @@ mod tests {
                 "{terminal:?} should be hidden without --all"
             );
         }
+    }
+
+    /// #1674: one unreadable `run.json` must not hide every other run. The
+    /// good run is listed and the bad one is reported by id, not dropped.
+    #[test]
+    fn list_skips_an_unreadable_run_and_reports_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let mut good = status(State::Running, std::process::id(), Some(1)).run;
+        good.run_id = "run-good".into();
+        store::save(mur_home, &good).unwrap();
+        // No sidecar, so `status_of` cannot rebuild it from a channel either.
+        let bad = store::run_path(mur_home, "run-bad");
+        std::fs::create_dir_all(bad.parent().unwrap()).unwrap();
+        std::fs::write(&bad, b"{ not json").unwrap();
+
+        let (rows, unreadable) = collect_list_rows(mur_home, true).unwrap();
+
+        let ids: Vec<_> = rows.iter().map(|r| r.run.run_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["run-good"],
+            "the bad record must not hide the good one"
+        );
+        assert_eq!(unreadable.len(), 1);
+        assert_eq!(unreadable[0].0, "run-bad", "the skipped run must be named");
     }
 }

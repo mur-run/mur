@@ -36,8 +36,20 @@ pub fn find_latest_run_for_channel(
         if sidecar.channel_id != channel_id {
             continue;
         }
-        let Some(status) = crate::run_status::status_of(mur_home, &run_id)? else {
-            continue;
+        // Same rule for the record itself: one unreadable `run.json` on the
+        // fleet's channel must not make `mur fleet status` fail outright. It
+        // is warned, because skipping it may mean an older run is shown.
+        let status = match crate::run_status::status_of(mur_home, &run_id) {
+            Ok(Some(status)) => status,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    run_id,
+                    error = format!("{error:#}"),
+                    "unreadable run record — skipping this run while looking for the fleet's latest"
+                );
+                continue;
+            }
         };
         if newest
             .as_ref()
@@ -303,5 +315,28 @@ mod tests {
             msg.contains("no run recorded for fleet `dev`"),
             "the operator must be told there is no run, not an empty screen: {msg}"
         );
+    }
+
+    /// #1674: an unreadable `run.json` on the fleet's own channel is skipped,
+    /// not fatal — even when it is the newest run — so `mur fleet status`
+    /// still shows the newest run it can read.
+    #[test]
+    fn an_unreadable_run_record_on_the_channel_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        let base = chrono::Utc::now();
+        save_run(
+            mur_home,
+            "run-good",
+            "fleet-x",
+            base - chrono::Duration::hours(1),
+        );
+        save_run(mur_home, "run-bad", "fleet-x", base);
+        std::fs::write(store::run_path(mur_home, "run-bad"), b"{ not json").unwrap();
+
+        let found = find_latest_run_for_channel(mur_home, "fleet-x")
+            .expect("one bad record must not fail the lookup")
+            .expect("the readable run is still there");
+        assert_eq!(found.run.run_id, "run-good");
     }
 }
