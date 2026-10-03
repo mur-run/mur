@@ -395,7 +395,8 @@ pub struct ProcedureStep {
     /// (v3b, Channel mode). When set, the channel-aware executor dials this
     /// agent via `message/send` instead of running `command`/`intent`, and
     /// attributes the reply to `Agent{<canonical agent name>}` in the channel.
-    /// Ignored when the executor runs without a channel.
+    /// Without a channel no member is called: the step only prints, and its
+    /// run record shows it `skipped`, not `done` (#1613).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegate_to: Option<String>,
 
