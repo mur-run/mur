@@ -12,6 +12,13 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Start Menu folder that holds the agent shortcuts.
+const STUB_LNK_DIR: &str = "MUR Agents";
+
+/// Folder name used before the brand casing fix; renamed in place on the
+/// next stub generation.
+const LEGACY_STUB_LNK_DIR: &str = "MuR Agents";
+
 pub fn generate(
     slug: &str,
     display_name: &str,
@@ -28,13 +35,20 @@ pub fn generate(
     let appdata = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .context("APPDATA not set")?;
-    let lnk_dir = appdata
+    let programs_dir = appdata
         .join("Microsoft")
         .join("Windows")
         .join("Start Menu")
-        .join("Programs")
-        .join("MuR Agents");
-    std::fs::create_dir_all(&lnk_dir).context("create MuR Agents dir")?;
+        .join("Programs");
+    let lnk_dir = programs_dir.join(STUB_LNK_DIR);
+    // NTFS is case-insensitive, so `create_dir_all` would happily reuse the
+    // legacy-cased folder and keep its old name. Rename it first.
+    if let Err(e) =
+        crate::stub::rename_legacy_entry(&programs_dir, LEGACY_STUB_LNK_DIR, STUB_LNK_DIR)
+    {
+        tracing::warn!("stub(windows): could not rename legacy Start Menu folder: {e}");
+    }
+    std::fs::create_dir_all(&lnk_dir).context("create MUR Agents dir")?;
     let safe_name: String = display_name
         .chars()
         .map(|c| {
@@ -52,7 +66,7 @@ pub fn generate(
         "$s=(New-Object -Com WScript.Shell).CreateShortcut('{lnk}');\
          $s.TargetPath='{exe}';\
          $s.Arguments='--agent {slug}';\
-         $s.Description='MuR Agent: {display_name}';\
+         $s.Description='MUR Agent: {display_name}';\
          $s.Save()",
         lnk = lnk_path.to_string_lossy().replace('\'', "''"),
         exe = hub_exe.to_string_lossy().replace('\'', "''"),
