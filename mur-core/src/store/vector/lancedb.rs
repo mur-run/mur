@@ -355,18 +355,7 @@ impl VectorStore for LanceDbStore {
             }
             self.ensure_sources_table().await?;
             let table = self.db.open_table(SOURCES_TABLE).execute().await?;
-            let existing = table.schema().await?;
-            if let Ok(field) = existing.field_with_name("vector")
-                && let DataType::FixedSizeList(_, n) = field.data_type()
-                && *n != self.dimensions
-            {
-                anyhow::bail!(
-                    "sources table has {n}-dimensional vectors but the configured embedding \
-                     dimension is {}; move the table aside and run `mur skill reindex-vec` \
-                     to rebuild it",
-                    self.dimensions
-                );
-            }
+            self.check_sources_dims(&table).await?;
 
             // Delete any existing rows with these chunk_ids (idempotent upsert).
             let ids: Vec<String> = chunks
@@ -624,6 +613,39 @@ impl VectorStore for LanceDbStore {
 
     async fn rebuild_index(&self) -> Result<()> {
         anyhow::bail!("LanceDbStore::rebuild_index (trait) is a stub until P1.3 orchestrates")
+    }
+
+    async fn check_writable(&self) -> Result<()> {
+        let table_path = self.table_path(SOURCES_TABLE);
+        super::unreadable::guard(SOURCES_TABLE, &table_path, async move {
+            let tables = self.db.table_names().execute().await?;
+            if !tables.contains(&SOURCES_TABLE.to_string()) {
+                return Ok(());
+            }
+            let table = self.db.open_table(SOURCES_TABLE).execute().await?;
+            self.check_sources_dims(&table).await
+        })
+        .await
+    }
+}
+
+impl LanceDbStore {
+    /// Reject a `sources` table whose vector width differs from the
+    /// configured embedding dimension; nothing written into it could land.
+    async fn check_sources_dims(&self, table: &lancedb::Table) -> Result<()> {
+        let existing = table.schema().await?;
+        if let Ok(field) = existing.field_with_name("vector")
+            && let DataType::FixedSizeList(_, n) = field.data_type()
+            && *n != self.dimensions
+        {
+            anyhow::bail!(
+                "sources table has {n}-dimensional vectors but the configured embedding \
+                 dimension is {}; move the table aside and run `mur skill reindex-vec` \
+                 to rebuild it",
+                self.dimensions
+            );
+        }
+        Ok(())
     }
 }
 
