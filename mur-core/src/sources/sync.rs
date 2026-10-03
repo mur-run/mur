@@ -46,6 +46,14 @@ pub async fn sync_source(
             .filter(|c| !c.is_empty())
     };
 
+    // Every per-doc write below is delete-then-add. If the index cannot take
+    // the add (e.g. a vector-width mismatch), stop before the first delete
+    // instead of emptying the source one document at a time (#1614).
+    vector_store
+        .check_writable()
+        .await
+        .context("vector store rejects writes; nothing was deleted")?;
+
     if full {
         tantivy
             .delete_by_source(&source_id)
@@ -146,12 +154,6 @@ async fn fetch_chunk_embed_upsert(
     if chunks.is_empty() {
         return Ok(0);
     }
-    // Delete-by-external_id before upserting (handles the case where the same
-    // document's chunk set changed — old chunk_ids no longer valid).
-    vector_store
-        .delete_by_external_ids(&doc.source_id, std::slice::from_ref(&doc.external_id))
-        .await
-        .context("delete old chunks for doc")?;
     let mut embedded: Vec<EmbeddedChunk> = Vec::with_capacity(chunks.len());
     for c in chunks {
         let vec = embed(&c.text, embedding_cfg)
@@ -170,6 +172,13 @@ async fn fetch_chunk_embed_upsert(
         });
     }
     let n = embedded.len();
+    // Delete-by-external_id before upserting (the doc's chunk set may have
+    // changed, so old chunk_ids are no longer valid). This runs only after
+    // every chunk embedded: an embedding outage must not cost the old rows.
+    vector_store
+        .delete_by_external_ids(&doc.source_id, std::slice::from_ref(&doc.external_id))
+        .await
+        .context("delete old chunks for doc")?;
     vector_store
         .upsert(&embedded)
         .await
@@ -188,3 +197,6 @@ async fn fetch_chunk_embed_upsert(
     tantivy.upsert(&rows).context("tantivy.upsert")?;
     Ok(n)
 }
+
+#[cfg(test)]
+mod tests;

@@ -95,4 +95,12 @@ pub trait VectorStore: Send + Sync {
 
     /// Drop and recreate all state.
     async fn rebuild_index(&self) -> Result<()>;
+
+    /// Fail when the existing index cannot accept writes from this store's
+    /// configuration (e.g. its vectors have a different width than the
+    /// configured embedding dimension). Callers that delete before writing
+    /// must call this first, so a doomed write never costs the old rows.
+    async fn check_writable(&self) -> Result<()> {
+        Ok(())
+    }
 }
