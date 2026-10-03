@@ -360,8 +360,16 @@ impl Renderer {
         }
         // Every column costs its text plus its padding each side and a
         // border; the last border closes the row.
-        let room = self.width.saturating_sub((2 * CELL_PAD + 1) * ncols + 1);
-        let pad = " ".repeat(CELL_PAD);
+        // A narrow pane gives up cell padding before the grid spills past
+        // the width: each column needs at least `MIN_COL` (or its own text).
+        let floor: usize = natural.iter().map(|n| (*n).min(MIN_COL)).sum();
+        let cost = |p: usize| (2 * p + 1) * ncols + 1;
+        let cell_pad = (0..=CELL_PAD)
+            .rev()
+            .find(|p| self.width >= cost(*p) + floor)
+            .unwrap_or(0);
+        let room = self.width.saturating_sub(cost(cell_pad));
+        let pad = " ".repeat(cell_pad);
         let widths = fit_columns(&natural, room);
 
         let border = self.skin.0.border;
@@ -370,7 +378,7 @@ impl Renderer {
         let rule = |l: &str, m: &str, r: &str| -> Line<'static> {
             let bars = widths
                 .iter()
-                .map(|w| "─".repeat(w + 2 * CELL_PAD))
+                .map(|w| "─".repeat(w + 2 * cell_pad))
                 .collect::<Vec<_>>()
                 .join(m);
             Line::styled(format!("{l}{bars}{r}"), border)
@@ -698,6 +706,20 @@ mod tests {
         let lines = rows(&t);
         assert!(lines.iter().all(|l| l.width() <= 24), "overflow: {lines:?}");
         assert!(lines.iter().filter(|l| l.starts_with('│')).count() > 2);
+    }
+
+    /// A 40-column pane leaves 36 body columns; four columns at full cell
+    /// padding cost 21 of them, leaving less than `MIN_COL` each. The padding
+    /// gives way before the grid spills past the width.
+    #[test]
+    fn a_four_column_table_fits_a_narrow_pane() {
+        let t = super::render(
+            "| 級別 | 進入條件 | 工具 | 退路 |\n| --- | --- | --- | --- |\n| Exact | 錯誤訊息 | rg -n | 零結果本身就是答案 |",
+            36,
+            &crate::cmd::agent::cli::theme::ANSI,
+        );
+        let lines = rows(&t);
+        assert!(lines.iter().all(|l| l.width() <= 36), "overflow: {lines:?}");
     }
 
     #[test]
