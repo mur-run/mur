@@ -144,8 +144,8 @@ This principle is the reason for renaming the artifact from "MUR Hub package" to
    │       ├── window: Alice
    │       └── pet:    Bob
    │
-   └─── invoked by stubs in ~/Applications/MuR-Agent-*.app
-                                ~\Start Menu\Programs\MuR Agents\*.lnk
+   └─── invoked by stubs in ~/Applications/MUR-Agent-*.app
+                                ~\Start Menu\Programs\MUR Agents\*.lnk
                                 ~/.local/share/applications/run.mur.agent.*.desktop
 ```
 
@@ -184,7 +184,7 @@ Slug sanitisation: lowercase, `[a-z0-9-]` only, no leading/trailing dash, length
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| **Stub location** | `~/Applications/MuR-Agent-<Slug>.app/` | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\MuR Agents\<Slug>.lnk` | `~/.local/share/applications/run.mur.agent.<slug>.desktop` |
+| **Stub location** | `~/Applications/MUR-Agent-<Slug>.app/` | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\MUR Agents\<Slug>.lnk` | `~/.local/share/applications/run.mur.agent.<slug>.desktop` |
 | **Per-agent URL scheme** | Info.plist `CFBundleURLSchemes = ["muragent-<slug>"]` | `HKCU\Software\Classes\muragent-<slug>` registry tree | `MimeType=x-scheme-handler/muragent-<slug>` in `.desktop` |
 | **Explicit scheme claim** | `LSSetDefaultHandlerForURLScheme(scheme, bundle_id)` after `lsregister -f` | `IApplicationAssociationRegistration` per-user default | `xdg-mime default run.mur.agent.<slug>.desktop x-scheme-handler/muragent-<slug>` |
 | **NSServices / context menu** | Info.plist `NSServices` (3 entries: text / URL / image; `serviceShare:` selector) | Optional shell context menu via `HKCU\Software\Classes\*\shell\SendTo<Slug>` (v1 skipped) | None (no cross-DE standard; v1 skipped) |
@@ -210,7 +210,7 @@ Slug sanitisation: lowercase, `[a-z0-9-]` only, no leading/trailing dash, length
 
 **Hard requirements:**
 
-- `MUR Agent Host.app` MUST be installed in `/Applications` (not `~/Applications`) for reliable LaunchServices URL scheme dispatch. Stubs live in `~/Applications/MuR-Agent-<Slug>.app/` (different location intentional — stubs need user-write access, Host benefits from system-wide registration).
+- `MUR Agent Host.app` MUST be installed in `/Applications` (not `~/Applications`) for reliable LaunchServices URL scheme dispatch. Stubs live in `~/Applications/MUR-Agent-<Slug>.app/` (different location intentional — stubs need user-write access, Host benefits from system-wide registration).
 - Host MUST write absolute path + version to `~/.mur/host_path` on every startup, atomically (write to `.tmp` + rename).
 - Launcher binary size budget: < 100 KB statically linked. No Tauri, no async runtime, no `@rpath` to frameworks (avoids the 2022 Chromium PWA designated-requirement breakage).
 - Launcher MUST be ad-hoc signed (`codesign -s - --force --timestamp=none`) after copying. Do **NOT** apply `--options=runtime` (hardened runtime) to the launcher.
