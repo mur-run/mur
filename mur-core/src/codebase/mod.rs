@@ -2,6 +2,7 @@ pub mod chunker;
 pub mod scanner;
 
 mod hooks_dir;
+pub(crate) use hooks_dir::{HookHealth, MANUAL_HOOK_CMD, hook_health};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -897,10 +898,14 @@ pub fn ensure_git_hook(project_path: &Path, quiet: bool) -> Result<bool> {
         hooks_dir::HooksDir::Writable(dir) => dir,
         hooks_dir::HooksDir::None => return Ok(false),
         hooks_dir::HooksDir::InWorkTree(dir) => {
+            // Already wired up by hand: nothing to say.
+            if hook_health(project_path) == HookHealth::Active {
+                return Ok(false);
+            }
             tracing::warn!(dir = %dir.display(), "auto-index hook not installed: core.hooksPath is in the working tree");
             if !quiet {
                 eprintln!(
-                    "  Auto-index hook not installed: core.hooksPath points to {} (inside the repo, likely versioned).\n  To enable auto-reindex on commit, add this to its post-commit hook:\n    mur project index --main-repo --quiet --background",
+                    "  Auto-index hook not installed: core.hooksPath points to {} (inside the repo, likely versioned).\n  To enable auto-reindex on commit, add this to its post-commit hook:\n    {MANUAL_HOOK_CMD}",
                     dir.display()
                 );
             }
