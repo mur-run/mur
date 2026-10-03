@@ -1,5 +1,5 @@
 name: mur-search
-version: 0.1.0
+version: 0.2.0
 publisher: human:mur
 description: "Route a code search to the cheapest tool: rg, LSP symbols, ast-grep, semantic index, or per-project fan-out."
 category: context
@@ -25,7 +25,7 @@ content:
     |---|---|---|---|
     | Exact | Query is an error message, a literal, a config key, a log line | `rg -n -F '<literal>'` | — (zero hits is the answer) |
     | Symbol | Query is an identifier and asks for definition / references / callers across files; tool list has `find_symbol` and `find_referencing_symbols` | `find_symbol` / `find_referencing_symbols` | LSP returns nothing → `rg -n -w '<symbol>'` |
-    | Structure | Query is a code shape ("every `unwrap()` inside an `async fn`"); `which ast-grep` succeeds | `ast-grep run -p '<pattern>' -l <lang>` | `which` fails or no hit → `rg -n -U` multiline regex |
+    | Structure | Query is a code shape ("every `unwrap()` inside an `async fn`"); tool list has `ast_grep_search`, or `which ast-grep` succeeds | `ast_grep_search` with `pattern`, absolute `paths`, `lang` | Tool absent → `ast-grep run -p '<pattern>' -l <lang>`; neither → `rg -n -U` multiline regex |
     | Semantic | Query is an intent or concept ("where is retry handled"); `mur project status` shows `Indexed: yes` | `mur project search '<query>'` (`/search` in chat) | `Indexed: no` → run `mur project index` first, then retry; do NOT report "no results" |
     | Cross-project | Scope spans more than one repo | `mur project search '<query>' --all` | Error `No vector column found … dimension` → per-project fan-out (below) |
 
@@ -83,7 +83,12 @@ content:
       (strings, comments, same-named locals). Use `rg -w` only as the fallback.
     - ast-grep matches AST, so `foo(bar)` and `foo (bar)` are one pattern;
       `rg` needs a regex that breaks on whitespace. Only worth it when the
-      query is about shape.
+      query is about shape. `ast_grep_search` runs a pinned binary with
+      capped output and only appears when that binary is installed; the
+      shell `ast-grep` is whatever is on `PATH`, unbounded. Before trusting
+      zero hits, read the returned warnings (an `ERROR` node means the
+      pattern did not parse). `truncated: true` means narrow `paths` or
+      `globs`, not "that is everything".
     - `mur project search` is hybrid vector + BM25 over an index. It finds
       synonyms `rg` is blind to, but it only sees indexed files, and only
       this project unless `--all` / `--project`.
@@ -96,6 +101,7 @@ content:
     |---|---|
     | Use semantic search for an exact string | Semantic ranking can drop the literal match below paraphrases; `rg -F` cannot miss it |
     | `rg` a known symbol when `find_symbol` is in the tool list | `rg` returns strings, comments, shadowed locals; LSP returns the definition |
+    | Shell out to `ast-grep` when `ast_grep_search` is in the tool list | The shell run has no output cap and may be a different version |
     | Fan out per project before `--all` has failed | Fan-out is N processes; `--all` is one call when dims agree |
     | Report "no results" after `Indexed: no` | Not indexed is not empty — the index was never built |
     | Treat a missing-key WARN as "nothing matched" | The warning says embedding may not have run; check `indexed` and `score=` lines before concluding |
