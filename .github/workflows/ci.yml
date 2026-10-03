@@ -280,6 +280,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Repo-root allowlist (#1607)
+        # Stray top-level files are how agent scratch output leaked into
+        # merged PRs (#1602). Same script the pre-commit hook runs.
+        run: sh scripts/check-repo-root.sh
       - run: cargo fmt --all -- --check
       - name: fmt mur-agent-gui (workspace-excluded)
         run: cargo fmt --manifest-path mur-agent-gui/src-tauri/Cargo.toml -- --check
