@@ -140,6 +140,43 @@ fn flag_like_host_is_refused() {
     }
 }
 
+// 9d. #1676: a pasted URL grants its host[:port], scheme and path dropped
+#[test]
+fn full_urls_are_reduced_to_host_and_port() {
+    assert_eq!(
+        parse_hosts(&s(&["https://example.com"])).unwrap(),
+        s(&["example.com"])
+    );
+    assert_eq!(
+        parse_hosts(&s(&["https://Example.com:8443/path?q=1#x"])).unwrap(),
+        s(&["example.com"])
+    );
+    assert_eq!(
+        parse_hosts(&s(&["http://example.com/", "example.com"])).unwrap(),
+        s(&["example.com"])
+    );
+}
+
+// 9e. #1676: a URL's port still goes through the web-set gate
+#[test]
+fn url_with_non_web_port_is_refused() {
+    let err = parse_hosts(&s(&["https://example.com:9000/x"])).unwrap_err();
+    assert!(err.contains("perm allow-port"), "{err}");
+    assert!(err.contains("9000"), "{err}");
+}
+
+// 9f. #1676: other schemes are refused with a clear message
+#[test]
+fn non_web_scheme_is_refused() {
+    for raw in ["ftp://example.com", "file:///etc/passwd"] {
+        let err = parse_hosts(&s(&[raw])).unwrap_err();
+        assert!(err.contains("only http:// and https://"), "{raw}: {err}");
+    }
+    // A scheme with no host is still "not a host".
+    let err = parse_hosts(&s(&["https:///path"])).unwrap_err();
+    assert!(err.contains("not a host"), "{err}");
+}
+
 /// Fake [`LiveOps`]: records every call, never touches disk or spawns.
 #[derive(Default)]
 struct Fake {
