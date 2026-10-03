@@ -734,7 +734,7 @@ On Host update, the embedded CLI is updated automatically; if the symlink is in 
 
 ### 9.3 Windows / Linux equivalents
 
-- **Windows:** Host installer (MSIX or NSIS) optionally adds `%LOCALAPPDATA%\Programs\MuR\bin` to PATH; embeds `mur.exe` in `%LOCALAPPDATA%\Programs\MuR\bin\mur.exe`. No symlink dance.
+- **Windows:** Host installer (MSIX or NSIS) optionally adds `%LOCALAPPDATA%\Programs\MUR\bin` to PATH; embeds `mur.exe` in `%LOCALAPPDATA%\Programs\MUR\bin\mur.exe`. No symlink dance.
 - **Linux:** Host AppImage doesn't write outside its bundle (AppImage convention). Instead, `mur agent doctor` instructs the user to `ln -s "$(appimage path)/mur" ~/.local/bin/mur` or install the standalone CLI tarball.
 
 ### 9.4 Windows code signing — Microsoft Trusted Signing
