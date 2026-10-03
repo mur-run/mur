@@ -15,6 +15,8 @@ use ratatui::widgets::{Block, Padding, Paragraph, Widget, Wrap};
 use super::super::app::{App, ChatMsg, Role};
 
 #[cfg(test)]
+mod cjk_tail_tests;
+#[cfg(test)]
 mod ghost_tests;
 #[cfg(test)]
 mod scrub_tests;
@@ -285,11 +287,19 @@ pub(super) const REPLAY_ROWS_MAX: u32 = 20_000;
 /// Wrapped row count of ONE logical line, measured exactly as `emit` renders
 /// it. Lines wrap independently under `Wrap { trim: false }`, so per-line
 /// counts sum to the paragraph's.
-fn line_rows(line: &Line<'static>, pad: u16, width: u16) -> u16 {
+///
+/// Wraps at the INNER width, like `band_rows`. ratatui 0.29's `line_count`
+/// with a block only adds the block's vertical space — it wraps at the full
+/// width it is given, ignoring horizontal padding — so passing the block
+/// undercounted any line that crosses the padded edge, the `insert_before`
+/// buffer came up a row short, and a reply's last row never reached
+/// scrollback (#1643).
+pub(super) fn line_rows(line: &Line<'static>, pad: u16, width: u16) -> u16 {
+    let block = Block::default().padding(Padding::horizontal(pad));
+    let inner = block.inner(Rect::new(0, 0, width.max(1), 1)).width;
     let n = Paragraph::new(Text::from(line.clone()))
         .wrap(Wrap { trim: false })
-        .block(Block::default().padding(Padding::horizontal(pad)))
-        .line_count(width.max(1));
+        .line_count(inner.max(1));
     n.clamp(1, u16::MAX as usize) as u16
 }
 
