@@ -98,7 +98,7 @@ pub async fn build_provider_runner(
     let enabled_mcp = profile.inner.enabled_mcp_servers();
     // The egress proxy (if any) was started by supervisor::entrypoint()
     // BEFORE the kernel sandbox sealed, so its port is carved into the
-    // profile and sandboxed children can dial it. See profile_needs_egress.
+    // profile and sandboxed children can dial it. See mur_common::agent::entries_need_egress.
     let egress = egress_proxy;
     let pool = McpPool::new(enabled_mcp.clone(), sandbox_policy, egress);
     // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor/mod.rs`

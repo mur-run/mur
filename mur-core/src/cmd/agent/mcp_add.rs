@@ -234,12 +234,46 @@ pub(crate) fn probe_new_entry(
                 .build()
                 .map_err(|e| format!("build probe runtime: {e}"))
                 .map(|rt| {
-                    rt.block_on(crate::cmd::agent_mcp_pin::probe_mcp_descriptions(
-                        &probe_entry,
-                        timeout,
-                        &policy,
-                    ))
+                    rt.block_on(async {
+                        // #1639: a `Restricted` / `BroadAudited` server is spawned
+                        // by the runtime behind a loopback egress proxy with a
+                        // tokened `HTTPS_PROXY`; one that (rightly) refuses to
+                        // start without it must see the same thing here, or it
+                        // can never be installed. Same predicate as the runtime.
+                        let proxy = if mur_common::agent::entries_need_egress(std::slice::from_ref(
+                            &probe_entry,
+                        )) {
+                            // ⚠ LIFETIME: this proxy's accept loop is a task on
+                            // `rt`, and the ONLY thing that stops it is `rt`
+                            // being dropped when this closure returns. The
+                            // probe-owned, thread-local runtime IS the proxy's
+                            // RAII guard. Do NOT move this onto the caller's
+                            // runtime the way `cmd_mcp_pin` does
+                            // (`Handle::current().block_on(...)` in
+                            // agent_mcp_pin.rs) — there, the proxy would keep
+                            // listening on 127.0.0.1 for the rest of the
+                            // caller's process, long after the probe returned.
+                            // `probe_failure_still_tears_down_its_proxy` and
+                            // `probe_hands_a_restricted_server_a_tokened_proxy`
+                            // fail if this guarantee breaks.
+                            Some(
+                                mur_agent_runtime::sandbox::egress_proxy::start_egress_proxy(agent)
+                                    .await
+                                    .map_err(|e| format!("start probe egress proxy: {e}"))?,
+                            )
+                        } else {
+                            None
+                        };
+                        Ok(crate::cmd::agent_mcp_pin::probe_mcp_descriptions(
+                            &probe_entry,
+                            timeout,
+                            &policy,
+                            proxy.as_ref(),
+                        )
+                        .await)
+                    })
                 })
+                .and_then(|r: Result<_, String>| r)
         })
         .join()
         .map_err(|_| "probe thread panicked".to_string())
@@ -392,6 +426,12 @@ pub fn cmd_mcp_add_remote(
     println!("Added remote MCP server '{name}' → {url} for agent '{agent}'.");
     Ok(())
 }
+
+// Unix-only: the fake MCP server is a `/bin/sh` script made executable with
+// `PermissionsExt`, neither of which exists on Windows.
+#[cfg(all(test, unix))]
+#[path = "mcp_add_proxy_tests.rs"]
+mod proxy_tests;
 
 #[cfg(test)]
 mod tests {
