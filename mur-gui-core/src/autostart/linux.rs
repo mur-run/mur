@@ -19,7 +19,7 @@ pub fn register(
 
     let unit = format!(
         "[Unit]\n\
-         Description=MuR Agent: {display_name}\n\
+         Description=MUR Agent: {display_name}\n\
          \n\
          [Service]\n\
          Type=simple\n\
@@ -117,7 +117,7 @@ mod tests {
         let runtime = Path::new("/usr/bin/mur-agent-runtime");
         let unit = format!(
             "[Unit]\n\
-             Description=MuR Agent: {display_name}\n\
+             Description=MUR Agent: {display_name}\n\
              \n\
              [Service]\n\
              Type=simple\n\
