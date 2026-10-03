@@ -20,8 +20,8 @@ fn entry_for(command: &str, pin: Option<&str>) -> mur_common::agent::McpServerEn
 // platform-independent, but it needs a known executable that is guaranteed
 // present and guaranteed not to speak JSON-RPC. Windows has no /bin/echo.
 #[cfg(unix)]
-#[tokio::test(flavor = "multi_thread")]
-async fn a_server_that_never_answers_initialize_is_not_reported_clean() {
+#[test]
+fn a_server_that_never_answers_initialize_is_not_reported_clean() {
     // The pin must be the REAL hash: with a wrong one `inspect_one` already
     // reports drift and the assertion below passes without the probe ever
     // mattering. /bin/echo exists, hashes fine, and speaks no JSON-RPC, so
@@ -45,8 +45,7 @@ async fn a_server_that_never_answers_initialize_is_not_reported_clean() {
         &entry,
         std::time::Duration::from_secs(5),
         &mur_agent_runtime::sandbox::policy::SandboxPolicy::default(),
-    )
-    .await;
+    );
 
     assert_ne!(
         status,
