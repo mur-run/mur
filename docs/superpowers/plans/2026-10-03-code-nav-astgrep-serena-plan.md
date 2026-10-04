@@ -817,7 +817,12 @@ real agent through serena; end-to-end is task 3.6b's acceptance.
       lane) are history, not grants; clearing them is optional.
 - [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
       rewrite.
-- [ ] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
+- [x] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
+      README: command tree (35) and an integrations paragraph.
+      `mcp-supply-chain.md`: C7 row rewritten, exec-lane scope added.
+      mur-server branch `docs/code-nav`: `commands.md` index row and
+      subcommand row (35), product-page card. A dedicated docs-site page is
+      deferred until code-nav has more than `setup`.
 
 ## Open questions
 
