@@ -493,6 +493,11 @@ see `mur skill <command> --help`.")]
         #[command(subcommand)]
         action: BrowserAction,
     },
+    /// Code navigation for agents: ast-grep and (opt-in) serena.
+    CodeNav {
+        #[command(subcommand)]
+        action: CodeNavAction,
+    },
     /// MUR-native deep research (wizard: `setup`; status: bare or `status`; run: pass a question)
     #[command(args_conflicts_with_subcommands = true)]
     DeepResearch {

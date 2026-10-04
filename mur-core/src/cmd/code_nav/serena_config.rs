@@ -56,28 +56,45 @@ pub const OWNED_KEYS: [&str; 10] = [
 
 /// Find the template inside a serena install dir from 3.3.
 pub fn template_path(install_dir: &Path) -> Option<PathBuf> {
+    find_resource(install_dir, &TEMPLATE_REL)
+}
+
+/// Read the template and refuse it unless it is the pinned one.
+pub fn read_pinned_template(install_dir: &Path) -> Result<String> {
+    read_pinned_resource(
+        install_dir,
+        &TEMPLATE_REL,
+        SERENA_CONFIG_TEMPLATE_SHA256,
+        "serena config template",
+    )
+}
+
+/// Find a file shipped in the serena package (`rel` ends at the file).
+pub(super) fn find_resource(install_dir: &Path, rel: &[&str]) -> Option<PathBuf> {
+    let rel: PathBuf = rel.iter().collect();
     walkdir::WalkDir::new(install_dir)
         .max_depth(TEMPLATE_SEARCH_DEPTH)
         .into_iter()
         .filter_map(|e| e.ok())
         .map(|e| e.into_path())
-        .find(|p| p.is_file() && p.ends_with(TEMPLATE_REL.iter().collect::<PathBuf>()))
+        .find(|p| p.is_file() && p.ends_with(&rel))
 }
 
-/// Read the template and refuse it unless it is the pinned one.
-pub fn read_pinned_template(install_dir: &Path) -> Result<String> {
-    let path = template_path(install_dir).with_context(|| {
-        format!(
-            "serena config template not found under {}",
-            install_dir.display()
-        )
-    })?;
+/// Read a packaged file and refuse it unless its sha256 is `want`.
+pub(super) fn read_pinned_resource(
+    install_dir: &Path,
+    rel: &[&str],
+    want: &str,
+    what: &str,
+) -> Result<String> {
+    let path = find_resource(install_dir, rel)
+        .with_context(|| format!("{what} not found under {}", install_dir.display()))?;
     let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
     let got = hex::encode(Sha256::digest(&bytes));
-    if got != SERENA_CONFIG_TEMPLATE_SHA256 {
+    if got != want {
         bail!(
-            "{}: sha256 {got}, expected {SERENA_CONFIG_TEMPLATE_SHA256} (the pinned serena's \
-             template); refusing to generate a config from an unknown template",
+            "{}: sha256 {got}, expected {want} (the pinned serena's {what}); refusing to \
+             generate from an unknown template",
             path.display()
         );
     }
@@ -143,6 +160,24 @@ pub fn owned_values(
 /// MUR's values appended. Fails if the template lacks an owned key, since
 /// that means it is not the layout this was written against.
 pub fn render(template: &str, owned: &Mapping) -> Result<String> {
+    render_owned(
+        template,
+        &OWNED_KEYS,
+        owned,
+        HEADER,
+        "serena config template",
+    )
+}
+
+/// [`render`] over any key set: drop each of `keys` (with its block) from
+/// `template`, then append `header` and `owned`.
+pub(super) fn render_owned(
+    template: &str,
+    keys: &[&str],
+    owned: &Mapping,
+    header: &str,
+    what: &str,
+) -> Result<String> {
     let mut out = String::with_capacity(template.len());
     let mut seen: Vec<&str> = Vec::new();
     let mut skipping = false;
@@ -151,7 +186,7 @@ pub fn render(template: &str, owned: &Mapping) -> Result<String> {
             continue;
         }
         skipping = false;
-        if let Some(key) = OWNED_KEYS
+        if let Some(key) = keys
             .iter()
             .find(|k| line.strip_prefix(**k).is_some_and(|r| r.starts_with(':')))
         {
@@ -161,20 +196,20 @@ pub fn render(template: &str, owned: &Mapping) -> Result<String> {
         }
         out.push_str(line);
     }
-    if let Some(missing) = OWNED_KEYS.iter().find(|k| !seen.contains(k)) {
-        bail!("serena config template has no top-level `{missing}`; refusing to generate");
+    if let Some(missing) = keys.iter().find(|k| !seen.contains(k)) {
+        bail!("{what} has no top-level `{missing}`; refusing to generate");
     }
     if let Some(dup) = seen
         .iter()
         .enumerate()
         .find(|(i, k)| seen[..*i].contains(k))
     {
-        bail!("serena config template sets `{}` twice", dup.1);
+        bail!("{what} sets `{}` twice", dup.1);
     }
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(HEADER);
+    out.push_str(header);
     out.push_str(&serde_yaml_ng::to_string(owned).context("serialize MUR-owned keys")?);
     Ok(out)
 }
@@ -213,7 +248,7 @@ pub fn write_config(
 
 /// Temp + rename, with the temp file created owner-only so the secret is
 /// never readable by others, even briefly. serena itself chmods to 0600.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("yml.tmp");
     let mut opts = std::fs::OpenOptions::new();

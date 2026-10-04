@@ -28,11 +28,11 @@ use crate::cli::{
     AgentAction, AgentAddonAction, AgentEvalAction, AgentHooksAction, AgentMcpAction,
     AgentPendingAction, AgentPermAction, AgentPromptAction, AgentQueueAction, AgentScheduleAction,
     AgentSecretAction, AgentSkillAction, AgentTrashAction, AgentWebhookAction, AuthAction,
-    BrowserAction, CapabilityAction, ChannelAction, ChatAction, Cli, CommanderAction, Commands,
-    ConversationsAction, DaemonAction, DeepResearchAction, DeployAction, DraftsAction, EvalAction,
-    ExchangeAction, FleetAction, HookEvent, InternalsAction, MurmurdAction, OfficialAction,
-    OpenAction, ProjectAction, ScheduleAction, SessionAction, SleepAction, SyncAction, TeamAction,
-    VoiceAction, WorkflowAction,
+    BrowserAction, CapabilityAction, ChannelAction, ChatAction, Cli, CodeNavAction,
+    CommanderAction, Commands, ConversationsAction, DaemonAction, DeepResearchAction, DeployAction,
+    DraftsAction, EvalAction, ExchangeAction, FleetAction, HookEvent, InternalsAction,
+    MurmurdAction, OfficialAction, OpenAction, ProjectAction, ScheduleAction, SessionAction,
+    SleepAction, SyncAction, TeamAction, VoiceAction, WorkflowAction,
 };
 use crate::store::config as store_config;
 use crate::{cmd, dashboard, team, verify};
@@ -300,6 +300,41 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
         Commands::Browser { action } => run_browser(action).await?,
+        Commands::CodeNav { action } => match action {
+            CodeNavAction::Setup {
+                agent,
+                with_serena,
+                project,
+                no_ast_grep,
+                lsp,
+                yes,
+            } => {
+                use std::io::IsTerminal;
+                let consent =
+                    cmd::browser::setup::Consent::new(std::io::stdin().is_terminal(), yes);
+                let args = cmd::code_nav::setup::Args {
+                    agent,
+                    project,
+                    flags: cmd::code_nav::plan::Flags {
+                        with_serena,
+                        no_ast_grep,
+                        lsp,
+                    },
+                };
+                // The installers use blocking HTTP and `Command::status`;
+                // a blocking client inside the async runtime panics on drop.
+                tokio::task::spawn_blocking(move || {
+                    cmd::code_nav::setup::run(
+                        args,
+                        consent,
+                        &mut std::io::stdin().lock(),
+                        &mut std::io::stdout(),
+                    )
+                })
+                .await
+                .context("code-nav setup task")??
+            }
+        },
         Commands::DeepResearch {
             action,
             question,
