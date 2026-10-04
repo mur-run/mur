@@ -36,46 +36,9 @@
 //! Everything else is untouched: third-party entries, interpreter-launched
 //! entries, and vendored packages.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// The name prefix MUR's own shipped binaries carry (`mur-mcp-server`,
-/// `mur-research-gateway`, …). Half of the first-party test above; see the
-/// module docs for why matching on the directory alone is not enough.
-const MUR_BINARY_PREFIX: &str = "mur-";
-
-/// The first-party binary `entry` should be re-pinned to, or `None` when the
-/// entry is third-party and rule 6 must keep enforcing its install-time hash.
-///
-/// `bundled` is the refreshed `~/.mur/mcp-servers/mur-mcp-server`, when the
-/// supervisor refreshed one this start. `runtime_dir` is the directory holding
-/// this runtime's own executable.
-fn first_party_target(
-    command: &str,
-    bundled: Option<&Path>,
-    runtime_dir: &Path,
-) -> Option<PathBuf> {
-    if let Some(bundled) = bundled {
-        let c = Path::new(command);
-        if c == bundled || c.file_name() == bundled.file_name() {
-            return Some(bundled.to_path_buf());
-        }
-    }
-
-    // Resolve exactly as the spawn does, so the file re-pinned is the file that
-    // will run. Resolution canonicalizes, so a symlinked install (Homebrew's
-    // `bin` into its Cellar) compares equal to the runtime's own resolved dir.
-    let prog = command.split_whitespace().next()?;
-    if !Path::new(prog)
-        .file_name()?
-        .to_str()?
-        .starts_with(MUR_BINARY_PREFIX)
-    {
-        return None;
-    }
-    let resolved =
-        mur_common::exec::resolve_command_in(&mur_common::exec::augmented_path_var(), prog).ok()?;
-    (resolved.parent()? == runtime_dir).then_some(resolved)
-}
+use mur_common::mcp_first_party::first_party_target;
 
 /// Re-pin every profile entry that resolves to one of MUR's own binaries.
 ///
@@ -143,6 +106,7 @@ mod tests {
     use super::*;
     use mur_common::AgentProfile;
     use mur_common::agent::McpServerEntry;
+    use std::path::PathBuf;
 
     fn entry(name: &str, command: &str, pin: Option<&str>) -> McpServerEntry {
         McpServerEntry {
