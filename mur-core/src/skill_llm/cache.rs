@@ -58,14 +58,7 @@ fn cache_path_at(home: &Path, key: &str) -> PathBuf {
 }
 
 pub(crate) fn mur_home() -> PathBuf {
-    if let Ok(p) = std::env::var("MUR_HOME")
-        && !p.is_empty()
-    {
-        return PathBuf::from(p);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
+    mur_common::home::mur_home_lossy()
 }
 
 #[cfg(test)]

@@ -176,15 +176,7 @@ fn config_path() -> PathBuf {
     // calls `SHGetKnownFolderPath` and ignores `HOME`/`USERPROFILE` env
     // overrides, so integration tests that override only `HOME` would read
     // the host's real `~/.mur/config.yaml` without this MUR_HOME check.
-    if let Ok(p) = std::env::var("MUR_HOME")
-        && !p.is_empty()
-    {
-        return PathBuf::from(p).join("config.yaml");
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
-        .join("config.yaml")
+    mur_common::home::mur_home_lossy().join("config.yaml")
 }
 
 #[cfg(test)]

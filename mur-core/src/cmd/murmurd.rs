@@ -1,10 +1,7 @@
 use anyhow::{Context, Result, bail};
 
 pub fn cmd_murmurd_status() -> Result<()> {
-    let lock_path = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur")
-        .join("murmurd.lock");
+    let lock_path = mur_common::home::mur_home_or_err()?.join("murmurd.lock");
 
     match std::fs::read_to_string(&lock_path) {
         Ok(s) => {
@@ -25,10 +22,7 @@ pub fn cmd_murmurd_status() -> Result<()> {
 }
 
 pub fn cmd_murmurd_stop() -> Result<()> {
-    let lock_path = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur")
-        .join("murmurd.lock");
+    let lock_path = mur_common::home::mur_home_or_err()?.join("murmurd.lock");
 
     let s = match std::fs::read_to_string(&lock_path) {
         Ok(s) => s,
@@ -96,10 +90,7 @@ pub fn cmd_murmurd_start(detach: bool) -> Result<()> {
 const MURMURD_STOP_WAIT_SECS: u64 = 15;
 
 fn murmurd_lock_path() -> Result<std::path::PathBuf> {
-    Ok(dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur")
-        .join("murmurd.lock"))
+    Ok(mur_common::home::mur_home_or_err()?.join("murmurd.lock"))
 }
 
 /// Whether a murmurd instance is currently alive (lock exists AND its pid is).

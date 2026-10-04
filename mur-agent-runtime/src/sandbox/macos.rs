@@ -125,13 +125,7 @@ fn sbpl_escape(s: &str) -> String {
 /// paths, but falls back to `/tmp` instead of panicking (this runs inside
 /// the already-sandboxing process, where a hard `.expect` would be fatal).
 fn resolved_mur_home() -> PathBuf {
-    std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".mur")
-        })
+    mur_common::home::mur_home_lossy()
 }
 
 /// AF_UNIX socket paths the restricted network profile must not blanket-deny.

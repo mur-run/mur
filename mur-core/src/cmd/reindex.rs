@@ -28,10 +28,7 @@ pub(crate) async fn cmd_reindex() -> Result<()> {
 
     let cfg = crate::store::config::load_config()?;
     let config = EmbeddingConfig::from_config(&cfg);
-    let index_path = dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("index");
+    let index_path = mur_common::home::mur_home().join("index");
 
     println!(
         "🔄 Reindexing {} patterns + {} workflows using {} ({})...",

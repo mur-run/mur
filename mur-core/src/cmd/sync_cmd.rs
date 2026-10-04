@@ -31,7 +31,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
     // pristine home the corpus is empty and the early return below would
     // otherwise skip installation forever (issue #593).
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("HOME directory not found"))?;
-    let mur_dir = mur_common::trust::mur_home();
+    let mur_dir = mur_common::home::mur_home();
     let skill_installed = ensure_mur_skill(&home, &mur_dir)?;
     if !quiet && skill_installed {
         println!("  🎓 MUR skill installed/updated for AI tools");
@@ -96,7 +96,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
     }
 
     // ─── Auto-reindex if dirty ───────────────────────────────
-    let index_dirty = is_index_dirty(&home);
+    let index_dirty = is_index_dirty(&mur_dir);
     if index_dirty {
         if !quiet {
             println!("  🔄 Index outdated — reindexing...");
@@ -117,7 +117,7 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
     }
 
     // ─── Ensure default templates exist ──────────────────────
-    ensure_default_templates(&home, quiet)?;
+    ensure_default_templates(&mur_dir, quiet)?;
 
     if !quiet {
         println!("Sync complete.");
@@ -126,8 +126,8 @@ pub(crate) async fn cmd_sync(quiet: bool, project_aware: bool, team: Option<&str
 }
 
 /// Bootstrap default template files if they don't exist.
-fn ensure_default_templates(home: &std::path::Path, quiet: bool) -> Result<()> {
-    let templates_dir = home.join(".mur").join("templates");
+fn ensure_default_templates(mur_dir: &std::path::Path, quiet: bool) -> Result<()> {
+    let templates_dir = mur_dir.join("templates");
     let extract_prompt = templates_dir.join("extract-prompt.md");
 
     if !extract_prompt.exists() {
@@ -145,8 +145,7 @@ fn ensure_default_templates(home: &std::path::Path, quiet: bool) -> Result<()> {
 }
 
 /// Check if the LanceDB index is stale compared to pattern/workflow YAML files.
-fn is_index_dirty(home: &std::path::Path) -> bool {
-    let mur_dir = home.join(".mur");
+fn is_index_dirty(mur_dir: &std::path::Path) -> bool {
     let index_dir = mur_dir.join("index");
 
     // No index → dirty
@@ -308,8 +307,8 @@ pub(crate) fn run_status() -> anyhow::Result<()> {
     let outbox_pending = outbox.list_pending()?.len();
 
     // Count inbox pending files directly — Inbox doesn't expose a list API.
-    let inbox_dir = dirs::home_dir()
-        .map(|h| h.join(".mur/inbox"))
+    let inbox_dir = mur_common::home::try_mur_home()
+        .map(|h| h.join("inbox"))
         .unwrap_or_default();
     let inbox_pending = if inbox_dir.exists() {
         std::fs::read_dir(&inbox_dir)

@@ -7,9 +7,8 @@ use std::path::Path;
 
 /// Read the current snapshot ref for `agent_name`. Returns None if no snapshot exists.
 pub fn read_snapshot_ref(agent_name: &str) -> Result<Option<SnapshotRef>> {
-    let path = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur/agents")
+    let path = mur_common::home::mur_home_or_err()?
+        .join("agents")
         .join(agent_name)
         .join("patterns_cache/.snapshot-ref");
     if !path.exists() {

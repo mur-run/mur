@@ -293,9 +293,7 @@ pub fn has_llm_config() -> bool {
 // ─── Helpers ─────────────────────────────────────────────────────────
 
 fn cache_path_for(session_id: &str) -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("~"))
-        .join(".mur")
+    mur_common::home::mur_home_lossy()
         .join("session")
         .join("recordings")
         .join(format!("{}.extracted.json", session_id))

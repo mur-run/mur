@@ -162,10 +162,7 @@ fn trust_store_path() -> PathBuf {
 /// Resolve `~/.mur` (or `$MUR_HOME` if set). Shared root for the trust store,
 /// agent home dirs, and other on-disk state used by every surface.
 pub fn mur_home() -> PathBuf {
-    if let Some(p) = std::env::var_os("MUR_HOME") {
-        return PathBuf::from(p);
-    }
-    dirs::home_dir().expect("home dir").join(".mur")
+    crate::home::mur_home()
 }
 
 /// Placeholder wordlist for v1 fingerprints. The full 7776-word EFF long

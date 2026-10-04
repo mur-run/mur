@@ -10,17 +10,13 @@ pub(super) async fn sync(id: Option<&str>, full: bool) -> Result<()> {
     use crate::sources::sync::sync_source;
     use crate::store::embedding::EmbeddingConfig;
     use crate::store::vector::factory::get_vector_store;
-    use anyhow::Context;
 
     let cfg = crate::store::config::load_config()?;
     let emb_cfg = EmbeddingConfig::from_config(&cfg);
-    let index_path = dirs::home_dir()
-        .context("no home dir")?
-        .join(".mur")
-        .join("index");
+    let index_path = mur_common::home::mur_home_or_err()?.join("index");
     let vector_store = get_vector_store(&cfg, &index_path).await?;
     let tantivy = crate::sources::tantivy::TantivyIndex::open_or_create(
-        &dirs::home_dir().context("no home dir")?.join(".mur"),
+        &mur_common::home::mur_home_or_err()?,
     )?;
 
     let store = SourceInstanceStore::default_store()?;
@@ -155,16 +151,12 @@ pub(super) async fn sync_watch() -> Result<()> {
     use crate::sources::watch::{WatchOptions, run_watch};
     use crate::store::embedding::EmbeddingConfig;
     use crate::store::vector::factory::get_vector_store;
-    use anyhow::Context;
 
     let cfg = crate::store::config::load_config()?;
     let emb_cfg = EmbeddingConfig::from_config(&cfg);
-    let index_path = dirs::home_dir()
-        .context("no home dir")?
-        .join(".mur")
-        .join("index");
+    let index_path = mur_common::home::mur_home_or_err()?.join("index");
     let vector_store = get_vector_store(&cfg, &index_path).await?;
-    let tantivy = TantivyIndex::open_or_create(&dirs::home_dir().unwrap().join(".mur"))?;
+    let tantivy = TantivyIndex::open_or_create(&mur_common::home::mur_home_or_err()?)?;
     let instance_store = SourceInstanceStore::default_store()?;
     run_watch(
         instance_store,

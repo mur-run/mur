@@ -172,10 +172,7 @@ impl CooccurrenceMatrix {
 
     /// Default path: `~/.mur/cooccurrence.json`
     pub fn default_path() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("~"))
-            .join(".mur")
-            .join("cooccurrence.json")
+        mur_common::home::mur_home_lossy().join("cooccurrence.json")
     }
 
     /// Load from a JSON file. Returns empty matrix if file doesn't exist.

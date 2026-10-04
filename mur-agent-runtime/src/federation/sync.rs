@@ -103,8 +103,8 @@ fn flush_outbox(agent_name: &str, identity: &mur_common::identity::AgentIdentity
 /// with EPERM under sandbox.) Uses the same `<mur_home>/inbox/...` write
 /// grant the outbox flush above relies on.
 fn refresh_snapshot(agent_name: &str, identity: &mur_common::identity::AgentIdentity) {
-    let mur_home = match dirs::home_dir() {
-        Some(h) => h.join(".mur"),
+    let mur_home = match mur_common::home::try_mur_home() {
+        Some(h) => h,
         None => {
             warn!(agent = %agent_name, "agent sleep-cycle: no home dir; skipping snapshot request");
             return;
@@ -138,15 +138,12 @@ fn write_snapshot_request_at(
 }
 
 fn mur_inbox_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    Ok(home.join(".mur/inbox"))
+    Ok(mur_common::home::mur_home_or_err()?.join("inbox"))
 }
 
 fn agent_idle_minutes() -> u64 {
     // Read from config file; fall back to 5 min if config unreadable.
-    let config_path = dirs::home_dir()
-        .map(|h| h.join(".mur/config.yaml"))
-        .unwrap_or_else(|| PathBuf::from(".mur/config.yaml"));
+    let config_path = mur_common::home::mur_home_lossy().join("config.yaml");
     if let Ok(yaml) = std::fs::read_to_string(&config_path)
         && let Ok(val) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&yaml)
         && let Some(minutes) = val

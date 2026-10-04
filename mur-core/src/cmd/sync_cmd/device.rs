@@ -26,9 +26,7 @@ pub(crate) async fn device_sync(
             }
             // Cloud sync via server API — requires authentication
             let server_url = &config.server.url;
-            let mur_dir = dirs::home_dir()
-                .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-                .join(".mur");
+            let mur_dir = mur_common::home::mur_home_or_err()?;
             let token = match crate::auth::load_tokens() {
                 Some(t) => t.access_token,
                 None => {
@@ -586,9 +584,7 @@ pub(crate) async fn device_sync(
                 }
                 return Ok(());
             }
-            let mur_dir = dirs::home_dir()
-                .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-                .join(".mur");
+            let mur_dir = mur_common::home::mur_home_or_err()?;
 
             // Initialize git repo in ~/.mur if needed
             if !mur_dir.join(".git").exists() {

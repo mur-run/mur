@@ -507,13 +507,13 @@ async fn resolve_file(path: &std::path::Path) -> Result<SecretString, SecretErro
 async fn decrypt_age(bytes: &[u8]) -> Result<String, SecretError> {
     let id_path: std::path::PathBuf = match std::env::var("MUR_AGE_IDENTITY_PATH") {
         Ok(p) => std::path::PathBuf::from(p),
-        Err(_) => dirs::home_dir()
+        Err(_) => crate::home::try_mur_home()
             .ok_or_else(|| {
                 SecretError::AgeDecrypt(
-                    "MUR_AGE_IDENTITY_PATH unset and home dir not resolvable".into(),
+                    "MUR_AGE_IDENTITY_PATH unset and MUR home not resolvable".into(),
                 )
             })?
-            .join(".mur/age/identity.txt"),
+            .join("age/identity.txt"),
     };
 
     let id_str = tokio::fs::read_to_string(&id_path).await.map_err(|e| {

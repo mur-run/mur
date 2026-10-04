@@ -32,9 +32,7 @@ pub fn cmd_eval_run(suite: &str, format: &str) -> Result<i32> {
 }
 
 fn run_federation_eval(format: &str) -> Result<i32> {
-    let agents_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur/agents");
+    let agents_dir = mur_common::home::mur_home_or_err()?.join("agents");
 
     if !agents_dir.exists() {
         println!("mur eval — federation suite");

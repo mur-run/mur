@@ -162,8 +162,7 @@ pub fn cmd_publish(path: &str) -> Result<()> {
 }
 
 fn resolve_publisher_identity() -> Result<AgentIdentity> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("cannot determine home directory"))?;
-    resolve_publisher_identity_in(&home.join(".mur"))
+    resolve_publisher_identity_in(&mur_common::home::mur_home_or_err()?)
 }
 
 /// Split out from `resolve_publisher_identity` so the thing that matters can be

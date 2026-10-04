@@ -95,10 +95,7 @@ pub struct SourceInstanceStore {
 impl SourceInstanceStore {
     /// Default is `~/.mur/sources/`.
     pub fn default_store() -> Result<Self> {
-        let root = dirs::home_dir()
-            .context("no home dir")?
-            .join(".mur")
-            .join("sources");
+        let root = mur_common::home::mur_home_or_err()?.join("sources");
         Ok(Self::new(root))
     }
 

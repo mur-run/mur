@@ -22,8 +22,7 @@ impl Outbox {
 
     /// Open the default outbox at `$HOME/.mur/outbox/`.
     pub fn default_location() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no HOME directory"))?;
-        Self::new(home.join(".mur/outbox"))
+        Self::new(mur_common::home::mur_home_or_err()?.join("outbox"))
     }
 
     /// Serialize a signal to YAML and persist atomically. Returns the final path.

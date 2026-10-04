@@ -258,10 +258,7 @@ fn render_cooccurrence_links() {
 fn render_recent_feedback_hint() {
     // Show a hint about feedback — we can't read historical feedback
     // without a dedicated log, but we can check last_injection.json
-    let path = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".mur")
-        .join("last_injection.json");
+    let path = mur_common::home::mur_home_lossy().join("last_injection.json");
 
     if path.exists() {
         header("Recent Injection");

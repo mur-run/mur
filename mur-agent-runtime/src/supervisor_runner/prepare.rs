@@ -13,7 +13,6 @@ use mur_common::telemetry::{
     METHOD_SKILL_EXECUTED, MUR_SKILL_DURATION_MS, MUR_SKILL_MANIFEST_DIGEST, MUR_SKILL_NAME,
     MUR_SKILL_OUTCOME, MUR_SKILL_VERSION,
 };
-use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 /// Telemetry writer + notification routing + hook chain + skills loaded once at boot.
@@ -49,9 +48,7 @@ pub(crate) async fn prepare_runtime(
 
     // M5a: stats aggregator — flushes skill execution counters to
     // ~/.mur/skills/<name>/stats.json sidecars on a 64-event / 2 s tick.
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+    let mur_home = mur_common::home::mur_home();
     let (stats_tx, stats_rx) = tokio::sync::mpsc::channel::<StatsEvent>(256);
     let _stats_aggregator = StatsAggregator::spawn(mur_home.clone(), stats_rx);
 

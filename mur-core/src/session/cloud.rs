@@ -11,9 +11,7 @@ use std::path::PathBuf;
 use super::SessionEvent;
 
 fn recordings_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".mur")
+    mur_common::home::mur_home_lossy()
         .join("session")
         .join("recordings")
 }

@@ -126,8 +126,11 @@ fn read_file_trimmed(path: &std::path::Path) -> Result<String, String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Local copy of `mur_common::home` — this launcher deliberately depends on
+/// `libc` only. Keep the rule identical: non-empty `MUR_HOME` wins, an empty
+/// one counts as unset (#1696).
 fn mur_home_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("MUR_HOME") {
+    if let Some(p) = std::env::var_os("MUR_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(p);
     }
     let home = std::env::var_os("HOME")

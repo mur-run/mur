@@ -93,10 +93,10 @@ fn dir_size_bytes(dir: &std::path::Path) -> std::io::Result<u64> {
 /// Read retention_days from `~/.mur/config.yaml` (`conversations.retention_days`).
 /// Defaults to 30 if absent or unreadable.
 pub fn retention_days_from_config() -> u32 {
-    let Some(home) = dirs::home_dir() else {
+    let Some(mur_dir) = mur_common::home::try_mur_home() else {
         return 30;
     };
-    let cfg = home.join(".mur").join("config.yaml");
+    let cfg = mur_dir.join("config.yaml");
     let Ok(text) = fs::read_to_string(&cfg) else {
         return 30;
     };

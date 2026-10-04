@@ -20,10 +20,7 @@ pub(super) async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()
         println!("🔧 vector_backend set to {backend}");
     }
     let emb_cfg = EmbeddingConfig::from_config(&cfg);
-    let index_path = dirs::home_dir()
-        .context("no home dir")?
-        .join(".mur")
-        .join("index");
+    let index_path = mur_common::home::mur_home_or_err()?.join("index");
     // The connector table is shared by every source, so dropping an
     // unreadable one means the other sources need a reindex too; say so.
     if cfg.storage.vector_backend == "lancedb"
@@ -38,8 +35,7 @@ pub(super) async fn reindex(id: &str, vector_backend: Option<&str>) -> Result<()
         );
     }
     let vector_store = get_vector_store(&cfg, &index_path).await?;
-    let tantivy =
-        TantivyIndex::open_or_create(&dirs::home_dir().context("no home dir")?.join(".mur"))?;
+    let tantivy = TantivyIndex::open_or_create(&mur_common::home::mur_home_or_err()?)?;
 
     let store = SourceInstanceStore::default_store()?;
     let mut inst = store.load(id)?;
@@ -107,10 +103,7 @@ pub(super) async fn search(
 
     let cfg = crate::store::config::load_config()?;
     let emb_cfg = EmbeddingConfig::from_config(&cfg);
-    let index_path = dirs::home_dir()
-        .context("no home dir")?
-        .join(".mur")
-        .join("index");
+    let index_path = mur_common::home::mur_home_or_err()?.join("index");
     let vs = get_vector_store(&cfg, &index_path).await?;
 
     let qvec = embed(query, &emb_cfg).await.context("embed query")?;

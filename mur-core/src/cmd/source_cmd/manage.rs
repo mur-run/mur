@@ -91,16 +91,13 @@ pub(super) async fn remove(id: &str, keep_index: bool) -> Result<()> {
 
     if !keep_index {
         let cfg = crate::store::config::load_config()?;
-        let index_path = dirs::home_dir()
-            .context("no home dir")?
-            .join(".mur")
-            .join("index");
+        let index_path = mur_common::home::mur_home_or_err()?.join("index");
         let vs = get_vector_store(&cfg, &index_path).await?;
         vs.delete_by_source(id)
             .await
             .context("delete source chunks")?;
         let tantivy = crate::sources::tantivy::TantivyIndex::open_or_create(
-            &dirs::home_dir().context("no home dir")?.join(".mur"),
+            &mur_common::home::mur_home_or_err()?,
         )?;
         tantivy
             .delete_by_source(id)

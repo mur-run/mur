@@ -4,19 +4,13 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub fn queue_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
+    mur_common::home::mur_home()
         .join("queue")
         .join("events.jsonl")
 }
 
 pub fn offset_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("queue")
-        .join("offset")
+    mur_common::home::mur_home().join("queue").join("offset")
 }
 
 /// Read byte offset from disk; returns 0 if file missing.

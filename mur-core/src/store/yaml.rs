@@ -233,18 +233,13 @@ impl YamlStore {
 
 /// Default patterns directory: ~/.mur/patterns/
 pub fn default_patterns_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
-        .join("patterns")
+    mur_common::home::mur_home_lossy().join("patterns")
 }
 
 /// Default MUR root directory: ~/.mur/
 #[allow(dead_code)] // Public API
 pub fn default_mur_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
+    mur_common::home::mur_home_lossy()
 }
 
 #[cfg(test)]

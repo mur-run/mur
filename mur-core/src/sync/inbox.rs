@@ -65,8 +65,7 @@ impl Inbox {
 
     /// Open the default inbox at `$HOME/.mur/inbox/`.
     pub fn default_location() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no HOME"))?;
-        Self::new(home.join(".mur/inbox"))
+        Self::new(mur_common::home::mur_home_or_err()?.join("inbox"))
     }
 
     /// Persist a signal received from the server into the inbox (used by the
