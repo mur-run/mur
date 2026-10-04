@@ -134,6 +134,8 @@ mod tests {
             requires_programs: Vec::new(),
             state_paths: vec![],
             package: None,
+            kind: None,
+            project: None,
         };
         let output = render_server_line(&server);
         assert!(output.contains("browser\tfirefox --mcp"));
@@ -163,6 +165,8 @@ mod tests {
             requires_programs: Vec::new(),
             state_paths: vec![],
             package: None,
+            kind: None,
+            project: None,
         };
         let output = render_server_line(&server);
         assert!(output.contains("browser\tfirefox"));
@@ -192,6 +196,8 @@ mod tests {
             requires_programs: Vec::new(),
             state_paths: vec![],
             package: None,
+            kind: None,
+            project: None,
         };
         let output = render_server_line(&server);
         assert!(output.contains("api\tmcp-api"));
@@ -216,6 +222,8 @@ mod tests {
             requires_programs: Vec::new(),
             state_paths: vec![],
             package: None,
+            kind: None,
+            project: None,
         };
         let output = render_server_line(&server);
         assert!(output.contains("local\tlocal-mcp"));

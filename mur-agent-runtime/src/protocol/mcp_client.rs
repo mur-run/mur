@@ -179,6 +179,9 @@ pub enum McpError {
     /// Server returned HTTP 401 Unauthorized.
     #[error("unauthorized")]
     Unauthorized,
+    /// A `kind: serena` entry failed its per-spawn gate; nothing was spawned.
+    #[error(transparent)]
+    Serena(Box<crate::mcp::serena::SerenaEntryError>),
 }
 
 impl InitializeInfo {
@@ -246,6 +249,9 @@ impl StdioMcpClient {
         // Under an allowlist the seal's own search dirs lead that PATH
         // (`sandbox::search_dirs::mcp_child_path`), so a shebang's
         // `env node` finds the binary the seal granted, not a shim dir's.
+        // Serena gate first: a refused preflight must spawn nothing.
+        let serena = crate::mcp::serena::launch_additions(entry, policy.agent_home())
+            .map_err(|e| McpError::Serena(Box::new(e)))?;
         let bundled = mur_common::exec::bundled_mcp_server_path();
         let aug_path = crate::sandbox::search_dirs::mcp_child_path(policy.spawn_mode);
         let resolved: std::borrow::Cow<'_, str> =
@@ -281,6 +287,12 @@ impl StdioMcpClient {
         if let Some((k, v)) = crate::sandbox::sealed_child_env(crate::sandbox::last_status()) {
             std_cmd.env(k, v);
         }
+        // Last, so neither an inherited nor a policy env var can move
+        // `SERENA_HOME`, and the fixed `--project` follows the entry's args.
+        for k in &serena.env_remove {
+            std_cmd.env_remove(k);
+        }
+        std_cmd.envs(serena.env).args(serena.args);
         let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;
 
         let raw_stdin = child.stdin.take().ok_or(McpError::StreamClosed)?;
@@ -631,6 +643,40 @@ mod tests {
                 "{k}: {got:?}"
             );
         }
+    }
+
+    /// A serena entry whose gate fails returns `McpError::Serena` and spawns
+    /// nothing: the command does not exist, so a spawn attempt would surface
+    /// as `Io` instead.
+    #[tokio::test]
+    async fn serena_gate_refuses_before_spawning() {
+        let entry = McpServerEntry {
+            name: "code-nav".into(),
+            command: "/nonexistent/serena-never-spawned".into(),
+            kind: Some(mur_common::agent::McpServerKind::Serena),
+            project: Some(std::path::PathBuf::from("relative/repo")),
+            ..Default::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("agents/a");
+        let policy = SandboxPolicy {
+            launch_chain: crate::sandbox::launch_chain::LaunchChain::new(&home),
+            ..SandboxPolicy::default()
+        };
+        assert_eq!(policy.agent_home(), Some(home.as_path()));
+        let err = StdioMcpClient::spawn(&entry, &policy, None)
+            .await
+            .err()
+            .expect("gate must refuse");
+        assert!(matches!(err, McpError::Serena(_)), "{err}");
+        assert!(err.to_string().contains("`code-nav`"), "{err}");
+
+        // The default policy has no agent home: refused, not guessed.
+        let err = StdioMcpClient::spawn(&entry, &SandboxPolicy::default(), None)
+            .await
+            .err()
+            .expect("no home must refuse");
+        assert!(err.to_string().contains("no absolute agent"), "{err}");
     }
 
     #[tokio::test]
