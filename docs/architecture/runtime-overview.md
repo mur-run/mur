@@ -374,7 +374,10 @@ By default an agent's outbound network policy (`entitlements.network.outbound`) 
 mur agent mcp set-network <agent> <server> --allow-host example.com --allow-host '*.api.example.com'
 mur agent mcp set-network <agent> <server> --off       # deny all outbound for this server
 mur agent mcp set-network <agent> <server>             # clear → inherit the agent policy
+mur agent mcp set-network <agent> <server> --allow-host db.internal:9000 --allow-port 9000
 ```
+
+**Why `--allow-host` alone is not enough for a non-web port (#1619).** The egress proxy runs *inside* the agent's sealed runtime, so its own outbound dial faces the same OS port gate as everything else: an allowed host on a port outside `80/443/8080/8443` still fails (the proxy answers `502`). `set-network` therefore accepts `host:port` and requires the port to be granted in the same command with `--allow-port`; without it the command is refused and names the flag. Web ports are implied and stripped (`host:443` → `host`), since the proxy matches portless hosts. `--allow-port` writes the same agent-wide grant as `mur agent perm allow-port` — the macOS SBPL / Linux Landlock port rule does **not** bind a host, so the port opens to *any* host for the whole agent, not just this server. Only add it when nothing else in the agent should reach that port directly; revoke with `mur agent perm deny-port`.
 
 This sets `McpServerEntry.network` (`mode: restricted|off`, `allow_hosts`). When any server is `restricted`, the supervisor starts a loopback **egress proxy** (`mur-agent-runtime/src/sandbox/egress_proxy.rs`); that server's child is spawned with `HTTP_PROXY`/`HTTPS_PROXY` pointing at it (with a per-server token), and the proxy CONNECT-tunnels only to allowlisted hosts (logging every allow/deny for audit). Restart the agent to apply.
 

@@ -1113,6 +1113,13 @@ pub enum AgentMcpAction {
         /// Allowed host (repeatable), e.g. `--allow-host example.com --allow-host '*.api.example.com'`.
         #[arg(long = "allow-host")]
         allow_hosts: Vec<String>,
+        /// Also grant this agent an extra outbound TCP port (repeatable).
+        /// Required when an `--allow-host` names a non-web port
+        /// (`host:9000`): the egress proxy runs inside the agent's sandbox,
+        /// so the host grant alone cannot reach it. Opens the port to ANY
+        /// host for the whole agent — same grant as `perm allow-port`.
+        #[arg(long = "allow-port", conflicts_with = "off")]
+        allow_ports: Vec<u16>,
         /// Denied host (repeatable). With `--broad-audited`, these are the
         /// deny-overlay hosts; ignored otherwise.
         #[arg(long = "deny-host")]
