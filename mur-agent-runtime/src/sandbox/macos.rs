@@ -386,7 +386,26 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     lines.join("\n")
 }
 
+/// See [`super::current_process_sealed`]. `sandbox_check(pid, NULL, 0)`
+/// returns non-zero when `pid` runs under any sandbox profile.
+pub(super) fn current_process_sealed() -> bool {
+    pid_sealed(unsafe { libc::getpid() })
+}
+
+fn pid_sealed(pid: libc::pid_t) -> bool {
+    // SAFETY: plain libSystem call; a NULL operation with no filter
+    // arguments only queries whether a profile is attached.
+    unsafe { sandbox_check(pid, std::ptr::null(), 0) != 0 }
+}
+
 unsafe extern "C" {
+    fn sandbox_check(
+        pid: libc::pid_t,
+        operation: *const libc::c_char,
+        filter_type: libc::c_int,
+        ...
+    ) -> libc::c_int;
+
     fn sandbox_init_with_parameters(
         profile: *const libc::c_char,
         flags: u64,
