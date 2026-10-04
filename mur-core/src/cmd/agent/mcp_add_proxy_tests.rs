@@ -113,8 +113,25 @@ fn assert_port_closed(port: u16) {
     );
 }
 
+/// From an already-sealed shell (a MUR agent session) macOS refuses the
+/// probe child's own seal with `EPERM`, so these tests cannot run (#1697).
+/// Returns true after printing a visible SKIP line.
+fn skip_if_nested_seal(test: &str) -> bool {
+    let sealed = mur_agent_runtime::sandbox::current_process_sealed();
+    if sealed {
+        eprintln!(
+            "SKIP {test}: this process is already sandboxed, so the probe's \
+             restricted child cannot apply its own seal (#1697)"
+        );
+    }
+    sealed
+}
+
 #[test]
 fn probe_hands_a_restricted_server_a_tokened_proxy() {
+    if skip_if_nested_seal("probe_hands_a_restricted_server_a_tokened_proxy") {
+        return;
+    }
     let f = fixture("ok");
     let res = probe_new_entry("carol", &f.profile, "live-srv", &f.script);
     let (_hash, tools) =
@@ -126,6 +143,9 @@ fn probe_hands_a_restricted_server_a_tokened_proxy() {
 
 #[test]
 fn probe_failure_still_tears_down_its_proxy() {
+    if skip_if_nested_seal("probe_failure_still_tears_down_its_proxy") {
+        return;
+    }
     let f = fixture("fail");
     let err = probe_new_entry("carol", &f.profile, "live-srv", &f.script)
         .expect_err("a server that exits must fail the probe");
@@ -141,6 +161,9 @@ fn probe_failure_still_tears_down_its_proxy() {
 
 #[test]
 fn inspect_probes_a_restricted_server_behind_a_tokened_proxy() {
+    if skip_if_nested_seal("inspect_probes_a_restricted_server_behind_a_tokened_proxy") {
+        return;
+    }
     use crate::cmd::agent_mcp_pin::{InspectStatus, compute_binary_sha256, inspect_one_probed};
     let f = fixture("ok");
     let mut entry = f.profile.mcp_servers.last().unwrap().clone();

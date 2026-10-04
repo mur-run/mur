@@ -9,6 +9,15 @@ use tokio::process::Command;
 #[cfg(unix)]
 #[tokio::test]
 async fn sigterm_removes_running_lock_and_flushes_telemetry() {
+    // The runtime seals itself on start; from an already-sealed shell (a MUR
+    // agent session) macOS refuses that nested seal, so nothing here can run.
+    if mur_agent_runtime::sandbox::current_process_sealed() {
+        eprintln!(
+            "SKIP sigterm_removes_running_lock_and_flushes_telemetry: this process is \
+             already sandboxed, so the runtime cannot apply its own seal (#1697)"
+        );
+        return;
+    }
     let tmp = TempDir::new().unwrap();
     let agent_home = tmp.path().join("agents").join("agent_t");
     std::fs::create_dir_all(&agent_home).unwrap();

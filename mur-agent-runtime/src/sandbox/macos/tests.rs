@@ -582,3 +582,11 @@ fn proxy_only_sbpl_allows_loopback_and_dns_but_no_wildcard() {
         "no wildcard tcp allow:\n{sbpl}"
     );
 }
+
+/// #1697: launchd (pid 1) never runs under a seatbelt profile, so the probe
+/// must say "not sealed" for it. A probe stuck at `true` would silently skip
+/// the nested-seal tests on CI too, dropping their coverage.
+#[test]
+fn sandbox_check_reports_launchd_unsealed() {
+    assert!(!pid_sealed(1));
+}
