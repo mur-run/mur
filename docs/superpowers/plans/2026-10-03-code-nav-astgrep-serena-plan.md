@@ -781,14 +781,17 @@ real agent through serena; end-to-end is task 3.6b's acceptance.
       asks nothing and rewrites both serena files byte-identically. Setup
       runs on `spawn_blocking` (blocking HTTP in the async dispatcher
       panicked).
-- [ ] 3.6b Pre-install pyright, launch via `ls_path` (see `### 3.6b`). To
+- [x] 3.6b Pre-install pyright, launch via `ls_path` (see `### 3.6b`). To
       build: install row, `ls_path` in `serena_config.yml`, new C7, seal
       exec grant. **Built** (install row, `ls_path`, C7, seal grant).
       **Acceptance:** offline `initialize` proven by LSP script against the
       pyright that `mur code-nav setup` installed (bundled `dist/`, no npm,
       nothing written to `$HOME`); serena's own provider resolves the launch
-      command to `[ls_path, --stdio]`. **Pending:** the same inside a real
-      agent seal through serena.
+      command to `[ls_path, --stdio]`. **Proven in a real agent seal:**
+      serena's log shows `Starting language server process via command:
+      ['<mur_home>/tools/pyright/1.1.403/bin/pyright-langserver', '--stdio']`,
+      `Pyright language server 1.1.403 starting`, no npm activity, and a
+      `find_symbol --include-info` call returns pyright hover text.
 - [x] 3.6c serena's own Python under `<mur_home>/tools/` (3.3's isolation
       pattern, applied to serena; pyright already has it). To build:
       - serena's install command adds `--python-preference only-managed` and
