@@ -5,7 +5,7 @@ use super::*;
 use crate::cmd::code_nav::plan::{Detected, Flags, UV, plan};
 
 fn tools() -> Detected {
-    let mut on_path: BTreeSet<String> = ["uvx", "node", "npm", "go", "gopls"]
+    let mut on_path: BTreeSet<String> = ["node", "npm", "go", "gopls"]
         .into_iter()
         .map(String::from)
         .collect();
@@ -43,7 +43,8 @@ fn first_run_needs_consent_for_everything() {
     let plan = p(true, &[]);
     let d = diff(&plan, Some(Path::new("/r")), &Manifest::default());
     assert!(!d.is_empty());
-    assert_eq!(d.installs.len(), 2);
+    // ast-grep, serena, and pyright (Python is on by default).
+    assert_eq!(d.installs.len(), 3);
     assert_eq!(d.languages, ["python", "php", "lua", "cpp"]);
     assert_eq!(d.project.as_deref(), Some(Path::new("/r")));
 }
@@ -117,7 +118,7 @@ fn corrupt_manifest_is_an_error_not_empty() {
 #[test]
 fn tables_show_skipped_flag_high_note_and_disabled_lines() {
     let mut detected = tools();
-    detected.on_path.remove("uvx");
+    detected.on_path.remove("node");
     let flags = Flags {
         with_serena: true,
         no_ast_grep: false,
@@ -131,7 +132,7 @@ fn tables_show_skipped_flag_high_note_and_disabled_lines() {
         "Install:",
         "Language servers (serena):",
         "skipped (--lsp go)",
-        "python disabled: uvx not found on PATH",
+        "python disabled: node not found on PATH",
     ] {
         assert!(text.contains(want), "missing {want:?} in:\n{text}");
     }

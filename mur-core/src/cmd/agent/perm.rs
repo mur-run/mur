@@ -21,16 +21,17 @@ pub use network::{
 pub(crate) use paths::reject_ungrantable_path;
 pub use paths::{
     cmd_perm_allow_read, cmd_perm_allow_write, cmd_perm_deny_path, cmd_perm_list_paths,
-    cmd_perm_remove_path,
+    cmd_perm_remove_path, grant_read,
 };
 pub use spawn::{
     cmd_perm_allow_spawn, cmd_perm_allow_spawn_dir, cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir,
+    grant_spawn, grant_spawn_dir,
 };
 pub use tools::{cmd_perm_clear_tool, cmd_perm_list_tools, cmd_perm_set_tool};
 
 /// Emit a stderr warning when changing perms on a running agent. Wraps
 /// the lock-file probe so callers don't need to know the file layout.
-pub(super) fn warn_if_running(name: &str) {
+pub(crate) fn warn_if_running(name: &str) {
     let mur_home = match resolve_mur_home() {
         Ok(p) => p,
         Err(_) => return,

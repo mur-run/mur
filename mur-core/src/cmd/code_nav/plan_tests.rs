@@ -172,19 +172,20 @@ fn lsp_flag_is_case_insensitive() {
 
 #[test]
 fn missing_prerequisite_disables_with_a_visible_line() {
+    // npm, not node: Python needs node too (3.6b) and must stay on here.
     let mut d = all_tools();
-    d.on_path.remove("node");
+    d.on_path.remove("npm");
     let p = plan(home(), &flags(true, &["php", "python"]), &d).unwrap();
     assert_eq!(
         row(&p, Lang::Php).status,
         LspStatus::Disabled {
-            missing: "node".into()
+            missing: "npm".into()
         }
     );
     assert_eq!(row(&p, Lang::Python).status, LspStatus::Enabled);
     assert_eq!(
         p.disabled_lines(),
-        vec!["php disabled: node not found on PATH"]
+        vec!["php disabled: npm not found on PATH"]
     );
 }
 
@@ -222,8 +223,12 @@ fn permissions_cover_serena_and_enabled_languages_only() {
             _ => None,
         })
         .collect();
-    // uv is install-time only (P3-D2); uvx is what serena spawns for pyright.
-    assert_eq!(spawn, BTreeSet::from(["go", "gopls", "uvx"]));
+    // uv is install-time only (P3-D2, 3.6b): pyright is pre-installed and
+    // runs on node, so uvx is never granted.
+    assert_eq!(spawn, BTreeSet::from(["go", "gopls", "node"]));
+    assert!(p.permissions.contains(&Permission::SpawnDir(
+        home().join("tools").join(PYRIGHT).join(PYRIGHT_PIN)
+    )));
     assert!(p.permissions.contains(&Permission::Read(
         home().join("tools").join(SERENA).join(SERENA_PIN)
     )));
@@ -246,4 +251,53 @@ fn duplicate_lsp_flags_collapse() {
     let a = plan(home(), &flags(true, &["go", "go"]), &all_tools()).unwrap();
     let b = plan(home(), &flags(true, &["go"]), &all_tools()).unwrap();
     assert_eq!(a, b);
+}
+
+#[test]
+fn python_adds_a_pinned_pyright_install_row() {
+    let p = plan(home(), &flags(true, &["python"]), &all_tools()).unwrap();
+    let row = p.install.iter().find(|r| r.name == PYRIGHT).unwrap();
+    assert_eq!(row.version, PYRIGHT_PIN);
+    assert_eq!(
+        row.dir,
+        home().join("tools").join(PYRIGHT).join(PYRIGHT_PIN)
+    );
+    assert!(row.missing.is_none());
+}
+
+#[test]
+fn no_pyright_row_or_grant_without_python() {
+    let p = plan(home(), &flags(true, &["go"]), &all_tools()).unwrap();
+    assert!(p.install.iter().all(|r| r.name != PYRIGHT));
+    assert!(
+        !p.permissions
+            .iter()
+            .any(|g| matches!(g, Permission::SpawnDir(_)))
+    );
+}
+
+#[test]
+fn python_without_node_is_disabled_and_installs_no_pyright() {
+    let mut d = all_tools();
+    d.on_path.remove("node");
+    let p = plan(home(), &flags(true, &["python"]), &d).unwrap();
+    assert_eq!(
+        row(&p, Lang::Python).status,
+        LspStatus::Disabled {
+            missing: "node".into()
+        }
+    );
+    assert!(p.install.iter().all(|r| r.name != PYRIGHT));
+    assert!(
+        p.disabled_lines()
+            .contains(&"python disabled: node not found on PATH".to_string())
+    );
+}
+
+#[test]
+fn python_no_longer_needs_uvx() {
+    let mut d = all_tools();
+    d.on_path.remove("uvx");
+    let p = plan(home(), &flags(true, &["python"]), &d).unwrap();
+    assert_eq!(row(&p, Lang::Python).status, LspStatus::Enabled);
 }

@@ -22,6 +22,16 @@ fn fake_install(dir: &Path, version: &str, commit: &str) {
     let bin = serena_binary_path_in(dir);
     std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
     std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+    let home = dir
+        .join(PYTHON_SUBDIR)
+        .join("cpython-3.13.2-macos-aarch64-none/bin");
+    set_venv_home(dir, &home);
+}
+
+fn set_venv_home(dir: &Path, home: &Path) {
+    let cfg = dir.join(UV_TOOL_SUBDIR).join(PACKAGE).join(PYVENV_CFG);
+    let text = format!("home = {}\nimplementation = CPython\n", home.display());
+    std::fs::write(cfg, text).unwrap();
 }
 
 fn env_of(cmd: &std::process::Command, key: &str) -> Option<PathBuf> {
@@ -78,6 +88,10 @@ fn command_confines_uv_to_the_managed_dir() {
     let cmd = install_command(Path::new("uv"), dir, false);
     assert_eq!(env_of(&cmd, "UV_TOOL_DIR"), Some(dir.join(UV_TOOL_SUBDIR)));
     assert_eq!(env_of(&cmd, "UV_TOOL_BIN_DIR"), Some(dir.join(BIN_SUBDIR)));
+    assert_eq!(
+        env_of(&cmd, "UV_PYTHON_INSTALL_DIR"),
+        Some(dir.join(PYTHON_SUBDIR))
+    );
     assert_eq!(cmd.get_current_dir(), Some(dir), "no repo pyproject in cwd");
 }
 
@@ -112,6 +126,30 @@ fn missing_entry_point_is_not_verified() {
 }
 
 #[test]
+fn command_requires_a_uv_managed_python() {
+    let cmd = install_command(Path::new("uv"), Path::new("/d"), false);
+    let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy()).collect();
+    let at = args
+        .iter()
+        .position(|a| a == "--python-preference")
+        .expect("--python-preference");
+    assert_eq!(args[at + 1], "only-managed");
+}
+
+#[test]
+fn shared_uv_python_is_a_mismatch() {
+    // What every install before only-managed looks like: the venv's base
+    // interpreter is uv's global one, outside the managed dir.
+    let t = tempfile::tempdir().unwrap();
+    fake_install(t.path(), plan::SERENA_PIN, SERENA_GIT_REV);
+    let global = t
+        .path()
+        .join(".local/share/uv/python/cpython-3.13.2-macos-aarch64-none/bin");
+    set_venv_home(t.path(), &global);
+    assert_eq!(installed_state(t.path()), Installed::Mismatch);
+}
+
+#[test]
 fn record_carries_the_full_pin() {
     let r = Record::for_dir(Path::new("/d"));
     assert_eq!(r.version, plan::SERENA_PIN);
@@ -137,6 +175,7 @@ mod with_fake_uv {
         let script = format!(
             "#!/bin/sh\necho call >> '{log}'\nrm -rf \"$UV_TOOL_DIR/{PACKAGE}\"\nmkdir -p \"{site}\" \"$UV_TOOL_BIN_DIR\"\n\
              printf '{{\"vcs_info\":{{\"commit_id\":\"{commit}\"}}}}' > \"{site}/direct_url.json\"\n\
+             printf 'home = %s\\n' \"$UV_PYTHON_INSTALL_DIR/cpython/bin\" > \"$UV_TOOL_DIR/{PACKAGE}/{PYVENV_CFG}\"\n\
              : > \"$UV_TOOL_BIN_DIR/serena\"\nexit {exit}\n",
             log = t.join("calls").display(),
         );

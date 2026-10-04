@@ -30,7 +30,9 @@ struct Fx {
 impl Fx {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
-        let paths = serena_paths(&tmp.path().join("agent"));
+        let mut paths = serena_paths(&tmp.path().join("agent"));
+        paths.tools_dir = tmp.path().join("mur").join("tools");
+        fs::create_dir_all(&paths.tools_dir).unwrap();
         let repo = tmp.path().join("repo");
         let folder = paths.projects_dir.join("repo");
         fs::create_dir_all(&folder).unwrap();
@@ -192,6 +194,120 @@ fn c7_ls_exec_override() {
         fx.patch("ls_specific_settings: {}", bad);
         let err = assert_refused!(fx, C7LsExec);
         assert!(err.to_string().contains("ls_specific_settings."), "{err}");
+    }
+}
+
+/// A MUR-installed server: `<tools>/pyright/<pin>/bin/pyright-langserver`.
+fn installed_ls(fx: &Fx) -> PathBuf {
+    let bin = fx
+        .paths
+        .tools_dir
+        .join("pyright")
+        .join("1.1.403")
+        .join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let exe = bin.join("pyright-langserver");
+    fs::write(&exe, "").unwrap();
+    exe
+}
+
+fn ls_path_yaml(p: &Path) -> String {
+    format!(
+        "ls_specific_settings: {{python: {{ls_path: '{}'}}}}",
+        p.display()
+    )
+}
+
+#[test]
+fn c7_ls_path_under_tools_dir_passes() {
+    let fx = Fx::new();
+    let exe = installed_ls(&fx);
+    fx.patch("ls_specific_settings: {}", &ls_path_yaml(&exe));
+    fx.run().unwrap();
+}
+
+#[test]
+fn c7_ls_path_outside_missing_or_relative_is_refused() {
+    let fx = Fx::new();
+    let outside = fx.repo.join("pwn.sh");
+    fs::write(&outside, "").unwrap();
+    let missing = fx.paths.tools_dir.join("pyright").join("nope");
+    for p in [outside, missing] {
+        fx.patch("ls_specific_settings: {}", &ls_path_yaml(&p));
+        let msg = assert_refused!(fx, C7LsExec).to_string();
+        assert!(msg.contains("ls_specific_settings.python.ls_path"), "{msg}");
+        assert!(msg.contains("expected an absolute path under"), "{msg}");
+    }
+    for bad in [
+        "{python: {ls_path: pyright/bin/x}}",
+        "{python: {ls_path: [a]}}",
+    ] {
+        fx.patch(
+            "ls_specific_settings: {}",
+            &format!("ls_specific_settings: {bad}"),
+        );
+        assert_refused!(fx, C7LsExec);
+    }
+}
+
+/// `..` lexically leaves the tools root; canonicalization must see it.
+#[test]
+fn c7_ls_path_dotdot_escape_is_refused() {
+    let fx = Fx::new();
+    installed_ls(&fx);
+    let outside = fx.repo.join("pwn.sh");
+    fs::write(&outside, "").unwrap();
+    let sneaky = fx
+        .paths
+        .tools_dir
+        .join("pyright")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("repo")
+        .join("pwn.sh");
+    fx.patch("ls_specific_settings: {}", &ls_path_yaml(&sneaky));
+    assert_refused!(fx, C7LsExec);
+}
+
+#[cfg(unix)]
+#[test]
+fn c7_ls_path_symlink_out_of_tools_dir_is_refused() {
+    let fx = Fx::new();
+    let outside = fx.repo.join("pwn.sh");
+    fs::write(&outside, "").unwrap();
+    let link = fx.paths.tools_dir.join("pyright-langserver");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    fx.patch("ls_specific_settings: {}", &ls_path_yaml(&link));
+    let msg = assert_refused!(fx, C7LsExec).to_string();
+    assert!(msg.contains("pwn.sh"), "{msg}");
+}
+
+/// serena ignores these while C3 holds; C7 refuses them anyway.
+#[test]
+fn c7_checks_mur_project_files_too() {
+    let fx = Fx::new();
+    let exe = installed_ls(&fx);
+    for file in ["project.yml", "project.local.yml"] {
+        let path = fx.folder.join(file);
+        let before = fs::read_to_string(&path).ok();
+        fs::write(
+            &path,
+            "language_servers: [rust]\nls_specific_settings: {rust: {ls_base_cmd: [sh]}}\n",
+        )
+        .unwrap();
+        let msg = assert_refused!(fx, C7LsExec).to_string();
+        assert!(msg.contains(file), "{msg}");
+        fs::write(
+            &path,
+            format!("language_servers: [rust]\n{}\n", ls_path_yaml(&exe)),
+        )
+        .unwrap();
+        fx.run().unwrap();
+        match before {
+            Some(b) => fs::write(&path, b).unwrap(),
+            None => fs::remove_file(&path).unwrap(),
+        }
     }
 }
 

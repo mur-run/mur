@@ -82,6 +82,23 @@ fn same_entry(a: &McpServerEntry, b: &McpServerEntry) -> bool {
     strip(a) == strip(b)
 }
 
+/// Refuse when `name` is taken by an entry that is not `kind: serena` (the
+/// user's own server). Pure, so setup can run it before anything is
+/// installed or written, not only at the final profile save.
+pub fn check_slot(profile: &AgentProfile, name: &str) -> Result<()> {
+    let Some(slot) = profile.mcp_servers.iter().find(|m| m.name == name) else {
+        return Ok(());
+    };
+    if slot.kind != Some(McpServerKind::Serena) {
+        bail!(
+            "agent `{agent}` already has an MCP server named `{name}` that is not kind: serena; \
+             remove or rename it first (`mur agent mcp remove {agent} {name}`)",
+            agent = profile.name,
+        );
+    }
+    Ok(())
+}
+
 /// Merge `entry` into `profile` and allow its `command` to spawn.
 ///
 /// An existing `kind: serena` entry of the same name is replaced; one that
@@ -89,6 +106,7 @@ fn same_entry(a: &McpServerEntry, b: &McpServerEntry) -> bool {
 /// [`Change::Unchanged`]. A same-named entry that is not `kind: serena` is
 /// the user's own server and is refused, never overwritten.
 pub fn upsert(profile: &mut AgentProfile, entry: McpServerEntry) -> Result<Change> {
+    check_slot(profile, &entry.name)?;
     let spawn = &mut profile.entitlements.processes.spawn.allowed;
     if !spawn.iter().any(|a| a == &entry.command) {
         spawn.push(entry.command.clone());
@@ -101,16 +119,6 @@ pub fn upsert(profile: &mut AgentProfile, entry: McpServerEntry) -> Result<Chang
         profile.mcp_servers.push(entry);
         return Ok(Change::Added);
     };
-    if slot.kind != Some(McpServerKind::Serena) {
-        bail!(
-            "agent `{}` already has an MCP server named `{}` that is not kind: serena; \
-             remove or rename it first (`mur agent mcp remove {} {}`)",
-            profile.name,
-            entry.name,
-            profile.name,
-            entry.name
-        );
-    }
     if same_entry(slot, &entry) {
         return Ok(Change::Unchanged);
     }

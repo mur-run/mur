@@ -88,6 +88,14 @@ fn reject_ungrantable(name: &str, path_arg: &str, write: bool) -> Result<()> {
 }
 
 pub fn cmd_perm_allow_read(name: &str, path_arg: &str) -> Result<()> {
+    grant_read(name, path_arg)?;
+    warn_if_running(name);
+    Ok(())
+}
+
+/// [`cmd_perm_allow_read`] without the running-agent warning, for callers
+/// that apply several grants and warn once at the end.
+pub fn grant_read(name: &str, path_arg: &str) -> Result<()> {
     reject_ungrantable(name, path_arg, false)?;
     reject_dead_grant(path_arg)?;
     let (path, mut profile) = load_profile_for_edit(name)?;
@@ -104,9 +112,7 @@ pub fn cmd_perm_allow_read(name: &str, path_arg: &str) -> Result<()> {
             .read
             .push(path_arg.to_string());
     }
-    save_profile(&path, &mut profile)?;
-    warn_if_running(name);
-    Ok(())
+    save_profile(&path, &mut profile)
 }
 
 pub fn cmd_perm_allow_write(name: &str, path_arg: &str) -> Result<()> {
