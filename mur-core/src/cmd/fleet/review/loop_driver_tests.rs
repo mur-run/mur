@@ -112,15 +112,10 @@ impl ReviewTransport for StubClockTransport {
 /// Returns a fresh `~/.mur`-shaped tempdir with a review channel created and
 /// the router's signing identity planted — copied from
 /// `driver_tests.rs::setup_channel` (same shape the retry/pause path needs).
-fn setup_channel() -> (
-    tempfile::TempDir,
-    String,
-    mur_common::identity::AgentIdentity,
-    u32,
-) {
+fn setup_channel() -> (tempfile::TempDir, String) {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
-    let identity = crate::channel_writer::plant_writer_identity(home);
+    crate::channel_writer::plant_writer_identity(home);
     let svc = mur_channel::ChannelService::open(home).unwrap();
     let channel_id = "review-ac12-channel".to_string();
     svc.store()
@@ -137,7 +132,7 @@ fn setup_channel() -> (
             updated_at: chrono::Utc::now(),
         })
         .unwrap();
-    (tmp, channel_id, identity, 0)
+    (tmp, channel_id)
 }
 
 /// Read back every review payload on `channel_id`, in channel order — the
@@ -162,7 +157,7 @@ fn read_payloads(home: &std::path::Path, channel_id: &str) -> Vec<ReviewPayload>
 /// in-memory ledger exactly.
 #[test]
 fn ac12_full_loop_runs_to_approve() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
 
     let round1_reviewer = serde_json::json!({
@@ -189,8 +184,6 @@ fn ac12_full_loop_runs_to_approve() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(3600),
         Stuck::Off,
@@ -227,7 +220,7 @@ fn ac12_full_loop_runs_to_approve() {
 /// folded, signed, and end the loop cleanly.
 #[test]
 fn long_turn_that_returns_is_not_stuck() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
 
     let clock = Rc::new(Cell::new(Instant::now()));
@@ -246,8 +239,6 @@ fn long_turn_that_returns_is_not_stuck() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(3600),
         Stuck::After(Duration::from_secs(5 * 60)),
@@ -273,7 +264,7 @@ fn long_turn_that_returns_is_not_stuck() {
 /// `approve` normally.
 #[test]
 fn stuck_off_never_trips() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
 
     let clock = Rc::new(Cell::new(Instant::now()));
@@ -292,8 +283,6 @@ fn stuck_off_never_trips() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(3600),
         Stuck::Off,
@@ -354,7 +343,7 @@ impl ReviewTransport for ScriptedClockTransport {
 /// a channel replay through `fold_rounds` reproduces the stuck ledger.
 #[test]
 fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
     let clock = Rc::new(Cell::new(Instant::now()));
     let transport = ScriptedClockTransport::new(
@@ -382,8 +371,6 @@ fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(3600),
         Stuck::Off,
@@ -403,7 +390,7 @@ fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
 /// in issue order normally, disputed first after an approve (§8.3).
 #[test]
 fn ac13_limit_stop_lists_open_and_disputed_findings() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
     let clock = Rc::new(Cell::new(Instant::now()));
     // 25 s per main turn, deadline 55 s: rounds 1–2 complete (t=25, t=50),
@@ -442,8 +429,6 @@ fn ac13_limit_stop_lists_open_and_disputed_findings() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(55),
         Stuck::Off,
@@ -488,7 +473,7 @@ impl ReviewTransport for RecordingTransport {
 /// answer — not just the round number.
 #[test]
 fn main_receives_open_findings_from_round_two() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let round1 = serde_json::json!({
         "verdict": "revise",
         "findings": [{"severity": "high", "issue": "unchecked unwrap"}],
@@ -512,8 +497,6 @@ fn main_receives_open_findings_from_round_two() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(3600),
         Stuck::Off,
@@ -537,7 +520,7 @@ fn main_receives_open_findings_from_round_two() {
 /// replays cleanly to the in-memory ledger.
 #[test]
 fn unissued_finding_id_blocks_without_poisoning_channel() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
     let bad = serde_json::json!({
         "verdict": "approve",
@@ -554,8 +537,6 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(3600),
         Stuck::Off,
@@ -578,7 +559,7 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
 /// delivered turn leaves a `turn_sent` before the round's verdict.
 #[test]
 fn channel_records_session_started_and_turn_sent() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
     let revise = serde_json::json!({
         "verdict": "revise",
@@ -600,8 +581,6 @@ fn channel_records_session_started_and_turn_sent() {
         "main",
         "reviewer",
         Mode::Auto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(3600),
         Stuck::Off,
@@ -655,7 +634,7 @@ fn channel_records_session_started_and_turn_sent() {
 /// push an extra open-set snapshot the live loop never took.
 #[test]
 fn round_cut_after_turn_sent_replays_to_live_ledger() {
-    let (tmp, channel_id, identity, kv) = setup_channel();
+    let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
     let revise = serde_json::json!({
         "verdict": "revise",
@@ -681,8 +660,6 @@ fn round_cut_after_turn_sent_replays_to_live_ledger() {
         "main",
         "reviewer",
         Mode::SemiAuto,
-        &identity,
-        kv,
         Duration::ZERO,
         Duration::from_secs(10 * 60),
         Stuck::Off,
@@ -713,4 +690,75 @@ fn round_cut_after_turn_sent_replays_to_live_ledger() {
         "the late round-2 verdict must be discarded"
     );
     assert_eq!(fold_rounds(&payloads).unwrap(), ledger);
+}
+
+/// Main answers; the reviewer's transport always fails, so the loop pauses
+/// after one retry and `driver.rs` writes `paused` + `mode_changed`.
+struct ReviewerDownTransport;
+
+impl ReviewTransport for ReviewerDownTransport {
+    fn send(&self, member: &str, _params: &serde_json::Value) -> anyhow::Result<String> {
+        match member {
+            "main" => Ok("main output".to_string()),
+            _ => anyhow::bail!("reviewer offline"),
+        }
+    }
+}
+
+/// One writer per session channel: the loop's own events and the
+/// `paused` / `mode_changed` pair `driver.rs` writes on a transport failure
+/// are all signed by the router identity, so every one verifies under
+/// `require_sig = true` — the mode the product is meant to run in.
+#[test]
+fn every_session_event_verifies_under_one_writer() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+
+    let (_ledger, stop) = run_review_loop(
+        &ReviewerDownTransport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        Mode::Auto,
+        Duration::ZERO,
+        Duration::from_secs(3600),
+        Stuck::Off,
+        &Instant::now,
+    )
+    .unwrap();
+    assert!(
+        matches!(stop, LoopDriverStop::Paused { .. }),
+        "reviewer offline must pause, got {stop:?}"
+    );
+
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let events = svc.load_events(&channel_id).unwrap();
+    let kinds: Vec<&str> = events
+        .iter()
+        .filter_map(|ev| match classify_note_payload(&ev.payload) {
+            NoteClassification::Review(env) => Some(match env.payload {
+                ReviewPayload::SessionStarted { .. } => "session_started",
+                ReviewPayload::TurnSent { .. } => "turn_sent",
+                ReviewPayload::Paused { .. } => "paused",
+                ReviewPayload::ModeChanged { .. } => "mode_changed",
+                _ => "other",
+            }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["session_started", "turn_sent", "paused", "mode_changed"],
+        "both writers (loop_driver + driver) must land on the channel"
+    );
+    for ev in &events {
+        assert!(ev.sig.is_some(), "event seq {} is unsigned", ev.seq);
+        assert!(
+            crate::channel_verify::verify_event(home, &channel_id, ev, true),
+            "event seq {} does not verify under the router key",
+            ev.seq
+        );
+    }
 }

@@ -22,7 +22,6 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
-use mur_common::identity::AgentIdentity;
 use mur_common::limits::Stuck;
 use serde::Deserialize;
 
@@ -84,21 +83,24 @@ fn zero_cumulative() -> Cumulative {
     }
 }
 
-/// Append one review payload to `channel_id`, signed by `identity` at key
-/// version `kv` — the task calls for `ChannelService::append_signed`
-/// directly (unlike `channel_writer::append_as_writer`'s migration-safe
-/// fallback), so the caller plants and owns the signing identity.
+/// Append one review payload to `channel_id` as the router writer — the
+/// SAME identity `driver::write_paused_and_revert` signs `paused` /
+/// `mode_changed` with. The verifier resolves a `ChannelActor::System`
+/// event to the router's key (`channel_verify::actor_key_dir`), so a
+/// caller-chosen key here would write events that fail verification and
+/// seal replay at the first one. One writer per session channel, resolved
+/// in one place (`channel_writer::writer_key`, incl. the sandbox handoff).
 fn append(
     svc: &ChannelService,
-    identity: &AgentIdentity,
-    kv: u32,
+    mur_home: &Path,
     channel_id: &str,
     payload: &ReviewPayload,
 ) -> Result<()> {
-    svc.append_signed(
+    crate::channel_writer::append_as_writer(
+        svc,
+        mur_home,
         channel_id,
-        identity,
-        kv,
+        crate::channel_writer::ROUTER_AGENT,
         ChannelActor::System,
         EventKind::Note,
         to_note_payload(payload),
@@ -120,8 +122,6 @@ pub fn run_review_loop(
     main: &str,
     reviewer: &str,
     mode: Mode,
-    identity: &AgentIdentity,
-    kv: u32,
     retry_delay: Duration,
     deadline: Duration,
     stuck: Stuck,
@@ -136,7 +136,7 @@ pub fn run_review_loop(
         mode,
     };
     ledger.apply(&started)?;
-    append(&svc, identity, kv, channel_id, &started)?;
+    append(&svc, mur_home, channel_id, &started)?;
     let start = now();
     // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
     // defines stuck as "no agent-authored channel event for the window", so
@@ -180,7 +180,7 @@ pub fn run_review_loop(
                 return Ok((ledger, LoopDriverStop::Paused { reason }));
             }
             RetryOutcome::Sent(reply) => {
-                append_turn_sent(&svc, identity, kv, channel_id, round, Role::Main)?;
+                append_turn_sent(&svc, mur_home, channel_id, round, Role::Main)?;
                 if let Some(stop) = check_guards(
                     round,
                     now().saturating_duration_since(start),
@@ -210,7 +210,7 @@ pub fn run_review_loop(
                 return Ok((ledger, LoopDriverStop::Paused { reason }));
             }
             RetryOutcome::Sent(reply) => {
-                append_turn_sent(&svc, identity, kv, channel_id, round, Role::Reviewer)?;
+                append_turn_sent(&svc, mur_home, channel_id, round, Role::Reviewer)?;
                 if let Some(stop) = check_guards(
                     round,
                     now().saturating_duration_since(start),
@@ -244,12 +244,12 @@ pub fn run_review_loop(
                 cumulative: zero_cumulative(),
             };
             ledger.apply(&payload)?;
-            append(&svc, identity, kv, channel_id, &payload)?;
+            append(&svc, mur_home, channel_id, &payload)?;
             ledger.note_round_complete();
             return Ok((ledger, LoopDriverStop::Blocked));
         };
         for payload in &payloads {
-            append(&svc, identity, kv, channel_id, payload)?;
+            append(&svc, mur_home, channel_id, payload)?;
         }
         ledger = scratch;
         let parsed_verdict = verdict;
@@ -281,8 +281,7 @@ pub fn run_review_loop(
 /// it is safe to sign directly (unlike the reviewer's untrusted verdict).
 fn append_turn_sent(
     svc: &ChannelService,
-    identity: &AgentIdentity,
-    kv: u32,
+    mur_home: &Path,
     channel_id: &str,
     round: u32,
     to: Role,
@@ -292,7 +291,7 @@ fn append_turn_sent(
         to,
         restart_note: None,
     };
-    append(svc, identity, kv, channel_id, &payload)
+    append(svc, mur_home, channel_id, &payload)
 }
 
 fn main_turn_params(round: u32, ledger: &Ledger) -> serde_json::Value {
