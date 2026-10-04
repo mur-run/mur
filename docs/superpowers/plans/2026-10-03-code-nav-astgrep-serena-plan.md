@@ -185,6 +185,77 @@ Items 13–15 reconstructed from the risk-tier decision; confirm wording.
         `check.overrideCommand` pinned to a no-op; cases I/J). Gate: test
         procMacro re-enable from a repo ratoml, and repeat cases A–J on
         more than one rust-analyzer version.
+- [x] 17. End-to-end matrix through serena itself (serena-agent
+      2.0.0.dev0, run outside the MUR seal on Darwin arm64, 2026-10-04,
+      isolated `solidlsp_dir`; `~/.solidlsp` untouched). Each language:
+      cold start + warm start, cross-file `find_referencing_symbols` on a
+      two-file fixture.
+      | Language | Cold result | Cold download | Note |
+      |---|---|---|---|
+      | Java | PASS | 406.7 MB | warm 4.5 s |
+      | Kotlin | PASS | 1245.2 MB | heaviest; cold 154 s |
+      | Dart | PASS | 565.7 MB | |
+      | Dart (missing `flutter` import) | PASS | 0 MB (shared) | unresolved import does not break cross-file refs |
+      | Rust | PASS | 0 MB | rust-analyzer from PATH |
+      | Bash | PASS | 72.2 MB | npm install + pinned shellcheck |
+      | C# / F# | FAIL @create | — | needs .NET runtime 10.0 / 8.0; serena does not install it |
+      | Ruby | FAIL @create | — | `gem install` into system Ruby → `Gem::FilePermissionError` (`/Library/Ruby/Gems/2.6.0`); hits every macOS stock-Ruby user |
+      | Scala | FAIL @create | — | `coursier is not installed or not in PATH.` |
+      | Elixir | FAIL @create | — | `Elixir is not installed.` |
+      Warm starts download ~0 MB for every passing language, so serena does
+      not re-fetch per start.
+      Hostile-repo cases (marker files written by repo code, server held 30 s
+      after the query so async build steps get their turn):
+      - **RS1 — `build.rs` marker: written.** Opening the repo under serena's
+        defaults runs `build.rs`; no user action needed. Confirms item 16
+        end-to-end.
+      - **K1 — `settings.gradle.kts` marker: written**; `build.gradle.kts`
+        marker absent because the Gradle import then failed (`Unable to
+        import a Gradle project: The supplied build action failed with an
+        exception.`; root cause not captured — log was in the cleaned
+        temp dir). Settings scripts are arbitrary Kotlin, so **opening a
+        Kotlin/Gradle repo executes repo code.**
+      - R1–R4 (Ruby): no markers, but ruby-lsp never started (initialize /
+        create failed), so this is **not** evidence that Ruby is safe.
+      - N1 (.NET): blocked, no `dotnet` on the host.
+      - Low-tier hostile cases (run 2026-10-04T03:04Z, serena 2.0.0.dev0):
+        - T1 (TypeScript): **marker written.** A repo-shipped
+          `node_modules/typescript` is preferred by the server (log:
+          `Using Typescript version (workspace) 5.9.3`), and its
+          `tsserver.js` runs on open. **Opening a TS repo with its own
+          `node_modules/typescript` executes repo code.**
+        - T2 (TypeScript): `tsconfig.json` `compilerOptions.plugins` →
+          repo `node_modules/evil-plugin`: no marker (server used the
+          bundled TypeScript; plugin not loaded).
+        - T1/T2 re-run with tsserver pinned (run 2026-10-04T03:18Z):
+          the probe injected `initializationOptions.tsserver.path` =
+          serena's own `ts-lsp/node_modules/typescript/lib/tsserver.js`.
+          T1 and T2: **no marker**; every log shows
+          `Using Typescript version (user-setting) 5.9.3`. Cold and warm
+          still PASS (symbol `greet`, cross-file ref `b.ts`; warm 0 bytes
+          downloaded). typescript-language-server 5.1.3 resolves tsserver
+          user-setting > workspace > bundled, so a valid pinned path means
+          the repo copy is never consulted. The pin was applied by
+          monkeypatching `_create_base_initialize_params` inside the probe:
+          serena 2.0.0.dev0 has no setting for it (its TS
+          `ls_specific_settings` take only version and timeout, and
+          `initializationOptions` is hard-coded to
+          `disableAutomaticTypingAcquisition`).
+        - P1 (Python): `pyrightconfig.json` `venvPath`/`venv` → repo
+          wrapper `python`: no marker; pyright read the venv layout without
+          executing the interpreter (`Assuming Python version 3.13.2`).
+        - P2 (Python): unconfigured repo `.venv/bin/python`: no marker.
+        - PH1 (PHP, negative control): `composer.json` scripts +
+          `vendor/autoload.php`: no marker, as expected.
+        - L1 (Lua): `.luarc.json` `runtime.plugin` → repo `plugin.lua`: no
+          marker. LuaLS only warned (`The current settings try to load the
+          plugin at this location … malicious plugin may harm your
+          computer`). This depends on LuaLS gating plugins behind a trust
+          prompt that serena does not answer; a serena or LuaLS change
+          there would flip the result.
+      Evidence: `~/.mur/artifacts/mur/serena-lsp-matrix/` (`report.md`,
+      `results/`; the earlier RS1/K1 run is kept in
+      `runs/2026-10-04T0228Z/`).
 
 ## Phase 1 — ast-grep wrapper (`ast_grep_search` tool) — done
 
@@ -427,9 +498,31 @@ LSP risk tiers:
 
 | Tier | Languages | Default |
 |---|---|---|
-| Low | Python, TypeScript, PHP, Lua | listed, enabled |
+| Low | Python, PHP, Lua | listed, enabled |
 | Medium, contained | C/C++ (`--enable-config=false` via `ls_extra_args`, no `--query-driver`, MUR-owned `compile_commands_dir`) | listed, enabled |
-| High | Rust (`--lsp rust` ≡ `--lsp rust-full` in v1), Go, Java, Swift, Ruby (Phase 3 finding 1) | needs explicit `--lsp <lang>` |
+| High | Rust (`--lsp rust` ≡ `--lsp rust-full` in v1), Kotlin, TypeScript, Go, Java, Swift, Ruby | needs explicit `--lsp <lang>` |
+
+Rust, Kotlin and TypeScript are High on evidence, not by design decision:
+item 17 shows each executes repo code on open (RS1 `build.rs`, K1
+`settings.gradle.kts`, T1 repo `node_modules/typescript/lib/tsserver.js`).
+The setup table must say "opening a repo runs its build scripts" in the
+Rust and Kotlin rows, and "opening a repo runs its own TypeScript" in the
+TypeScript row.
+
+Python, PHP and Lua are Low on evidence (P1, P2, PH1, L1: no marker). Lua's
+result rests on LuaLS refusing an unanswered plugin trust prompt, so the
+matrix's L1 case must be re-run whenever the pinned serena or LuaLS version
+changes.
+
+Go, Java and Swift remain High by design decision (item 15).
+
+Ruby is High provisionally (fail closed): `bundle exec ruby-lsp` evaluates
+the repo `Gemfile`, and item 17 could not rule that out because ruby-lsp
+never started. It drops to Low only if a re-run of R1–R4 on a working
+ruby-lsp host leaves no marker (see Open questions).
+
+Not yet tiered, so not offered by setup in v1: Dart, Bash, C#, F#, Scala,
+Elixir. Their hostile-repo behaviour has not been probed.
 
 In v1 `rust` and `rust-full` behave identically: serena hardcodes
 `buildScripts`, `procMacro` and `checkOnSave` on and sends `didSave` before
@@ -547,5 +640,25 @@ Findings that change the Phase 3 design:
   truncation/teardown. All other items were reconstructed for this plan. If
   the original list turns up, diff it against this one.
 - v2: rust-analyzer shim (see item 16, deferred).
+- Ruby is provisionally High because `bundle exec ruby-lsp` evaluates the
+  repo `Gemfile` (Ruby code). Item 17 could not test this: ruby-lsp did not
+  start on stock macOS Ruby. Re-run R1–R4 on a host with rbenv/mise +
+  ruby-lsp; if no case writes a marker, Ruby may drop to Low. If any marker
+  appears, Ruby stays High and its setup row must say "opening a repo runs
+  its Gemfile".
+- Gradle import failure root cause in K1 (keep the IntelliJ log on re-run).
+- TypeScript containment: the mechanism is proven (item 17, pinned T1/T2
+  re-run: no marker, cold/warm PASS) but not shippable yet. serena exposes
+  no way to set `initializationOptions.tsserver.path`, so
+  `ls_specific_settings` cannot do it. TypeScript stays High until one of:
+  (a) serena upstream accepts a TS setting that forwards `tsserver.path`
+  (preferred; MUR then sets it in the global `serena_config.yml`;
+  filed as https://github.com/oraios/serena/issues/2129), or
+  (b) MUR launches serena through a wrapper that injects the path. (b)
+  patches a private method and breaks silently on serena upgrades, so it
+  needs a startup assertion that the server reports
+  `source: user-setting`, failing closed to High otherwise. Either way,
+  re-run T1/T2 through the shipping path (not the probe hook) before moving
+  TypeScript to "Medium, contained".
 - Whether `outline` could replace part of serena for symbol listing (out of
   scope for v1).
