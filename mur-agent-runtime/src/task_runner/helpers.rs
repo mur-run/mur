@@ -273,6 +273,29 @@ pub(crate) fn decide_without_asking(
     })
 }
 
+/// Byte cap on the arguments logged for a call refused without asking.
+pub(crate) const DENIED_ARGS_LOG_MAX_BYTES: usize = 512;
+
+/// Redacted, capped view of a refused call's arguments for `stderr.log`.
+///
+/// A non-interactive denial ends the task before any `step/*` event or
+/// conversation record is written, so this log line is the only trace of
+/// *what* the model asked for (#1685: which path did `read_file` want?).
+/// Secrets are redacted and the length is capped so a huge or sensitive
+/// argument cannot flood or leak through the log.
+pub(crate) fn denied_args_preview(input: &serde_json::Value) -> String {
+    let raw = input.to_string();
+    let red = mur_common::redact::redact_secrets(&raw);
+    if red.len() <= DENIED_ARGS_LOG_MAX_BYTES {
+        return red.into_owned();
+    }
+    let mut end = DENIED_ARGS_LOG_MAX_BYTES;
+    while !red.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… ({} bytes total)", &red[..end], red.len())
+}
+
 pub(crate) fn deny_message(reason: Option<&str>) -> String {
     match reason.map(str::trim) {
         Some(r) if !r.is_empty() && r != "denied" => format!("tool call denied: {r}"),

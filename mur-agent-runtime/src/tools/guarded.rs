@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::task_runner::{
-    cap_step_output, decide_without_asking, deny_message, effective_tool_policy, step_notification,
-    task_error,
+    cap_step_output, decide_without_asking, denied_args_preview, deny_message,
+    effective_tool_policy, step_notification, task_error,
 };
 use mur_common::a2a::TaskError;
 
@@ -126,6 +126,12 @@ impl GuardedToolCall {
             if let Some(d) =
                 decide_without_asking(entry.as_ref().map(|(_, ok)| *ok), &call.tool_name)
             {
+                tracing::warn!(
+                    task_id,
+                    tool = %call.tool_name,
+                    args = %denied_args_preview(&call.input),
+                    "tool call refused: caller cannot approve"
+                );
                 out.insert(call.call_id.clone(), d);
                 continue;
             }
