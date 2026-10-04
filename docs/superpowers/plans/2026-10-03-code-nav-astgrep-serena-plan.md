@@ -566,12 +566,12 @@ language; that run has to happen outside the MUR seal, like Layer B.
 
 | Language | Server | How serena gets it | Pin | Integrity check | Runtime prerequisite |
 |---|---|---|---|---|---|
-| Python | pyright | `uvx pyright==<pin>` on first start (`LanguageServerDependencyProviderUvx`) | 1.1.403 | uv's resolver (PyPI), no sha in serena | uv / uvx on PATH |
+| Python | pyright | `uvx pyright==<pin>` on first start (`LanguageServerDependencyProviderUvx`) | 1.1.403 | uv's resolver (PyPI), no sha in serena | uv / uvx on PATH; **node on PATH** (else pyright's `nodeenv` downloads node at runtime); CPython 3.13 in the pinned `UV_PYTHON_INSTALL_DIR` |
 | TypeScript | typescript-language-server + typescript | `npm install --prefix ./ pkg@pin` in the serena-managed dir | 5.1.3 / 5.9.3 | none (npm registry); no `--ignore-scripts` | node + npm on PATH |
 | PHP | intelephense | same npm path | 1.14.4 | none; no `--ignore-scripts` | node + npm |
 | Lua | lua-language-server | PATH first, else GitHub release download | 3.15.0 | sha256 per asset, host allow-list | none |
 | C/C++ | clangd | GitHub release download | 19.1.2 | sha256 (`d3b329b3…` osx-arm64) | none |
-| Ruby | ruby-lsp | **see below** | 0.26.8 | none | ruby; bundler / gem |
+| Ruby | ruby-lsp | **see below** | 0.26.8 | none | ruby; bundler / gem. Pre-warm cannot contain it: `gem install` writes to the user's **global** gem dir, outside the agent home |
 | Rust | rust-analyzer | PATH or `~/.cargo/bin` only; never downloaded | user's | n/a | user-installed |
 | Go | gopls | PATH only (`cmd="gopls"`) | user's | n/a | go + gopls |
 | Swift | sourcekit-lsp | PATH only | user's | n/a | Xcode / toolchain |
@@ -599,9 +599,8 @@ Findings that change the Phase 3 design:
 3. **First-start network.** Python / TS / PHP / Lua / C/C++ / Java fetch on
    the first LS start, from inside the running agent. Either setup pre-warms
    the cache (start serena once per enabled language during setup) or the
-   agent's seal must allow that egress. Open: pick one in 3.6. Leaning
-   pre-warm, consistent with "setup prepares on the host, the agent stays
-   offline".
+   agent's seal must allow that egress. **Decision: pre-warm** (3.6b,
+   below). The agent seal grants no egress for language servers.
 4. **Runtime PATH prerequisites** (uv, node/npm, go, sourcekit-lsp,
    rust-analyzer) are checked by setup and shown in the install table; a
    missing one disables that language with a reason, it does not fail setup.
@@ -609,6 +608,80 @@ Findings that change the Phase 3 design:
    language naming the language and the missing tool (e.g. `python
    disabled: uv not found on PATH`), and the setup manifest records it, so a
    user never believes a language is on when it is off.
+
+### 3.6b — pre-warm decision (finding 3)
+
+**Decision: setup pre-warms; the agent stays offline.** No egress is added to
+the agent seal for language servers. Consent covers the downloads (they
+happen during the `yes` in 3.6), failures surface at setup, and the
+unverified fetches (pyright via PyPI, TS / PHP via npm) run once, under
+consent, instead of whenever a cache goes missing.
+
+**Measured (uv 0.x on macOS, network blocked with a dead proxy
+`127.0.0.1:9`, `uvx -p 3.13 --from pyright==1.1.403 pyright-langserver`):**
+
+| Case | Result |
+|---|---|
+| Control: empty cache, blocked | `Connection refused (os error 61)` — the block is real |
+| Warm cache < 10 min old, blocked | `Found fresh response`; resolves offline |
+| Warm cache > 10 min old, blocked, no `UV_OFFLINE` | **fails**: `error sending request for url (https://pypi.org/simple/pyright/)` … `Request failed after 3 retries` |
+| Warm cache > 10 min old, blocked, `UV_OFFLINE=1` | `Found stale (but allowed) response`; resolves offline |
+| `UV_OFFLINE=1`, pin not in cache (`1.1.404`) | loud error: `the network is disabled, registry packages may only be read from the cache.` |
+
+uv's PyPI index entries are fresh for ~10 minutes; after that uv
+revalidates against `pypi.org` even when every wheel is local.
+
+**Hard requirements (same weight as C1–C9: not met → refuse to start, not
+a warning):**
+
+1. **The runtime `launch_env` MUST set `UV_OFFLINE=1`.** Without it the
+   agent works for ~10 minutes after setup and then every pyright start
+   fails. It MUST also set the same `UV_CACHE_DIR` and
+   `UV_PYTHON_INSTALL_DIR` that setup used; a mismatch is a cold cache.
+2. **The agent seal MUST allow exec from the uv cache and the uv Python
+   install dir.** Pre-warm alone is not enough: without this grant the
+   warmed pyright cannot run (observed: MUR's own seal refused exec under
+   `$TMPDIR` with `Operation not permitted`). This grant is a second
+   condition of "the agent is offline and works", not a footnote.
+3. **Pre-warm installs CPython 3.13** into the pinned
+   `UV_PYTHON_INSTALL_DIR` (serena passes `-p 3.13`; on a cold machine uv
+   downloaded `cpython-3.13.2`, 14.9 MiB, at first start).
+4. **Python requires node on PATH.** `uvx` installs only `pyright`,
+   `nodeenv`, `typing-extensions` (no `nodejs-wheel`); with no node on PATH,
+   pyright downloads node via `nodeenv` at runtime. Missing node disables
+   Python with a reason (finding 4), it does not fall back to a download.
+5. **Pre-warm runs against an empty scratch project, never the user's
+   repo.** Opening the repo at setup would run repo-controlled code
+   (Gemfile, `build.rs`) with host privileges — worse than in the agent.
+6. **A missing cache fails loudly in the agent.** No silent re-fetch: report
+   e.g. `python LSP cache missing — re-run mur code-nav setup`. Same rule as
+   finding 4. `UV_OFFLINE=1` already gives this for pyright.
+
+**From source reading, not run:**
+
+- pyright does not run npm: the `pyright==1.1.403` wheel bundles
+  `<wheel>/pyright/dist/langserver.index.js`; `_utils.py` uses it when versions match
+  (`using bundled pyright`), and the langserver path passes `quiet=True`,
+  so the PyPI JSON "newer version" check is skipped.
+- TS / PHP: serena runs `npm install` only when
+  `os.path.exists(executable)` is false, so a pre-warmed install is not
+  re-fetched and npm's own cache / `--offline` never comes into play.
+  `initializationOptions` sets `"disableAutomaticTypingAcquisition": True`,
+  so tsserver does not fetch `@types/*` in the background.
+
+**Known gap G2 (inference, not tested): executable cache dirs must be
+read-only to the agent.** Requirement 2 makes the uv cache and the Python
+install dir places the agent can exec from. If they sit inside the agent's
+write grant (as `SERENA_HOME` does, see G1), the agent can swap a cached
+wheel or the Python binary and have it run on the next start. Same class as
+`<agent_home>/serena/language_servers/` needing to be read-only. The uv cache, the uv Python
+dir and `<agent_home>/serena/language_servers/` all go on the read-only
+list; until that list exists (G1's v2 fix), this is an accepted gap and
+must be named in `mcp-supply-chain.md`.
+
+**Not proven yet:** pyright-langserver actually starting with a warmed,
+offline cache. Every probe stopped at the seal exec denial above. This is a
+Phase 3 acceptance item (3.6 below), not a precondition of the decision.
 
 ### Phase 3 tasks
 
@@ -683,11 +756,12 @@ Findings that change the Phase 3 design:
       asks nothing and rewrites both serena files byte-identically. Setup
       runs on `spawn_blocking` (blocking HTTP in the async dispatcher
       panicked).
-- [ ] 3.6b Pre-warm vs egress (finding 3). Not decided in 3.6. Pre-warm is
-      not just "start serena once": pyright comes via `uvx`, whose cache is
-      uv's, not `SERENA_HOME`, so the seal would still need read on uv's
-      cache; npm (TS/PHP) installs into the serena-managed dir. Needs a
-      per-language list of where each first-start download lands.
+- [ ] 3.6b Pre-warm (decided; see `### 3.6b — pre-warm decision`). Not
+      implemented: 3.6 installs serena but does not pre-warm the language
+      servers, and `launch_env` does not yet set `UV_OFFLINE=1`.
+      **Acceptance (not yet proven):** after pre-warm, start pyright LSP once
+      inside a real agent with the network blocked and `UV_OFFLINE=1`, and
+      get a successful `initialize`.
 - [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
       rewrite.
 - [ ] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
