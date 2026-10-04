@@ -51,6 +51,40 @@ pub const REVIEW_STOP_REASON_CORRUPTED: &str = "corrupted";
 /// Abandon instead of Continue after a partial-damage replay.
 pub const REVIEW_STOP_REASON_REPLAY_FAILED: &str = "replay_failed";
 
+/// §3.1: main's turn prompt. Placeholders: `{task}`, `{round}`,
+/// `{open_findings}` (a rendered list, or [`REVIEW_NO_OPEN_FINDINGS`]).
+pub const REVIEW_MAIN_PROMPT: &str = "You are the main agent in a review loop (round {round}).
+
+Task:
+{task}
+
+Open review findings from the reviewer:
+{open_findings}
+
+Do the task, or revise your previous work to address the open findings. For each open finding, say whether you accept, reject, or partially accept it, and give a reason for reject or partial. Then summarise what you changed.";
+
+/// §3.2: the reviewer's turn prompt. Placeholders: `{task}`, `{round}`,
+/// `{main_reply}`, `{open_findings}`. It pins the verdict wire shape and
+/// tells the reviewer to return `blocked` when uncertain (§3.2).
+pub const REVIEW_REVIEWER_PROMPT: &str = "You are the reviewer in a review loop (round {round}).
+
+Task the main agent is working on:
+{task}
+
+The main agent's latest reply:
+{main_reply}
+
+Previously issued findings that are still open:
+{open_findings}
+
+Review the work. End your reply with exactly one fenced ```json block of this shape:
+{\"verdict\": \"approve\" | \"revise\" | \"blocked\", \"findings\": [{\"severity\": \"high\" | \"medium\" | \"low\", \"issue\": \"...\"}], \"prior\": [{\"id\": \"F1\", \"status\": \"open\" | \"withdrawn\" | \"resolved\" | \"disputed\", \"reason\": \"...\"}]}
+
+Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. If you are uncertain, return \"blocked\" rather than guess.";
+
+/// Rendered in place of `{open_findings}` when the open set is empty.
+pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";
+
 #[cfg(test)]
 mod tests {
     use super::*;

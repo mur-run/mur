@@ -23,7 +23,7 @@ use crate::executor::dag::{StepEvent, StepEventKind};
 use crate::executor::delegation::cwd::{RunCwd, routing_note};
 
 mod guarded;
-mod synth;
+pub(crate) mod synth;
 
 pub use guarded::*;
 use synth::*;

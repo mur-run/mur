@@ -40,7 +40,7 @@ pub struct A2aTransport<'a> {
 impl ReviewTransport for A2aTransport<'_> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
         let mut streamed = String::new();
-        crate::a2a_dial::dial_message_streaming(
+        let task = crate::a2a_dial::dial_message_streaming(
             self.mur_home,
             member,
             params.clone(),
@@ -52,7 +52,14 @@ impl ReviewTransport for A2aTransport<'_> {
             |_hitl| {},
             |_step| {},
         )?;
-        Ok(streamed)
+        // Same fallback `loop_run::synth` uses: prefer the task's final
+        // reply, and use the streamed deltas only when it is empty.
+        let final_reply = crate::cmd::fleet::loop_run::synth::extract_task_reply(&task);
+        Ok(if final_reply.trim().is_empty() {
+            streamed
+        } else {
+            final_reply
+        })
     }
 }
 

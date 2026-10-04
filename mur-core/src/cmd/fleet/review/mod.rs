@@ -26,6 +26,7 @@ pub mod ledger;
 pub mod loop_driver;
 pub mod rollback;
 pub mod schema;
+pub mod wire;
 
 #[cfg(test)]
 #[path = "driver_tests.rs"]

@@ -31,6 +31,7 @@ use super::schema::{
     Cumulative, Mode, NewFindingDto, PriorUpdateDto, ReviewPayload, Role, SessionLimits,
     VerdictKind, to_note_payload,
 };
+use super::wire::{extract_verdict_json, main_turn_params, reviewer_turn_params};
 use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
 
 /// The reviewer's wire reply (§3.2): `verdict: approve | revise | blocked`,
@@ -121,6 +122,7 @@ pub fn run_review_loop(
     channel_id: &str,
     main: &str,
     reviewer: &str,
+    task: &str,
     mode: Mode,
     retry_delay: Duration,
     limits: SessionLimits,
@@ -169,7 +171,7 @@ pub fn run_review_loop(
         // a structured verdict (§3.2).
         // From round 2 on, main must see what to answer (§3.3: "For each
         // open finding the main agent answers accept | reject | partial").
-        let main_params = main_turn_params(round, &ledger);
+        let main_params = main_turn_params(task, round, &ledger);
         let main_reply = match run_turn_with_retry(
             transport,
             mur_home,
@@ -199,7 +201,7 @@ pub fn run_review_loop(
         };
 
         // Reviewer's turn, fed main's output.
-        let reviewer_params = serde_json::json!({ "round": round, "main_reply": main_reply });
+        let reviewer_params = reviewer_turn_params(task, round, &main_reply, &ledger);
         let reviewer_reply = match run_turn_with_retry(
             transport,
             mur_home,
@@ -234,8 +236,8 @@ pub fn run_review_loop(
         // once the whole round folds cleanly. A reply that cannot be parsed
         // or that names an unissued finding (§8.2 illegal transition) is
         // treated as `blocked` instead of poisoning the channel for replay.
-        let staged = serde_json::from_str::<VerdictReply>(&reviewer_reply)
-            .ok()
+        let staged = extract_verdict_json(&reviewer_reply)
+            .and_then(|json| serde_json::from_str::<VerdictReply>(json).ok())
             .and_then(|parsed| {
                 let mut scratch = ledger.clone();
                 let payloads = stage_round(&mut scratch, round, &parsed)?;
@@ -276,8 +278,6 @@ pub fn run_review_loop(
     }
 }
 
-/// Params for main's turn: the round number plus, once the reviewer has
-/// spoken, every finding still in the open set with its current status.
 /// §4 `turn_sent`, written once a send to `to` has actually gone out
 /// (`RetryOutcome::Sent`). Written after the send rather than before, so a
 /// `.stopped` observed inside `run_turn_with_retry` never leaves a
@@ -296,22 +296,6 @@ fn append_turn_sent(
         restart_note: None,
     };
     append(svc, mur_home, channel_id, &payload)
-}
-
-fn main_turn_params(round: u32, ledger: &Ledger) -> serde_json::Value {
-    let open: Vec<serde_json::Value> = ledger
-        .stop_screen_findings(false)
-        .into_iter()
-        .map(|f| {
-            serde_json::json!({
-                "id": f.id,
-                "severity": f.severity,
-                "issue": f.issue,
-                "status": f.status,
-            })
-        })
-        .collect();
-    serde_json::json!({ "round": round, "open_findings": open })
 }
 
 /// Fold one reviewer reply into `scratch`, returning the payloads in channel

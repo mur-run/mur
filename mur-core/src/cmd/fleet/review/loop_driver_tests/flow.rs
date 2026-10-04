@@ -1,6 +1,8 @@
 //! Full-loop flow: approve end-to-end, what main receives, unissued-finding block.
 
 use super::*;
+use crate::cmd::fleet::review::constants::REVIEW_NO_OPEN_FINDINGS;
+use crate::cmd::fleet::review::wire::message_text;
 
 /// AC12: "a full loop runs to `approve`". The reviewer replies `revise`
 /// (with one finding) in round 1, then `approve` in round 2. Assert: stop
@@ -35,6 +37,7 @@ fn ac12_full_loop_runs_to_approve() {
         &channel_id,
         "main",
         "reviewer",
+        "task",
         Mode::SemiAuto,
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
@@ -107,6 +110,7 @@ fn main_receives_open_findings_from_round_two() {
         &channel_id,
         "main",
         "reviewer",
+        "task",
         Mode::SemiAuto,
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
@@ -117,12 +121,11 @@ fn main_receives_open_findings_from_round_two() {
 
     let seen = transport.main_params.lock().unwrap();
     assert_eq!(seen.len(), 2);
-    assert_eq!(seen[0]["open_findings"], serde_json::json!([]));
-    let open = seen[1]["open_findings"].as_array().unwrap();
-    assert_eq!(open.len(), 1);
-    assert_eq!(open[0]["id"], "F1");
-    assert_eq!(open[0]["issue"], "unchecked unwrap");
-    assert_eq!(open[0]["status"], "open");
+    let round1_text = message_text(&seen[0]).expect("round 1 is an A2A text message");
+    assert!(round1_text.contains("task"));
+    assert!(round1_text.contains(REVIEW_NO_OPEN_FINDINGS));
+    let round2_text = message_text(&seen[1]).expect("round 2 is an A2A text message");
+    assert!(round2_text.contains("- F1 [high, open]: unchecked unwrap"));
 }
 
 /// §8.2: a reviewer reply naming an unissued finding must not be signed
@@ -146,6 +149,7 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         &channel_id,
         "main",
         "reviewer",
+        "task",
         Mode::SemiAuto,
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
@@ -162,4 +166,29 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         "the illegal finding_status must never reach the channel"
     );
     assert_eq!(fold_rounds(&payloads).unwrap(), ledger);
+}
+
+/// §3.2: real models wrap the verdict in prose and a ```json fence; the
+/// loop must read it rather than treat the round as `blocked`.
+#[test]
+fn fenced_verdict_inside_prose_is_accepted() {
+    let (tmp, channel_id) = setup_channel();
+    let fenced = "Looks good overall.\n```json\n{\"verdict\": \"approve\"}\n```\n";
+    let transport = StubLoopTransport::new(vec![], vec![fenced]);
+
+    let (_, stop) = run_review_loop(
+        &transport,
+        tmp.path(),
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        "task",
+        Mode::SemiAuto,
+        Duration::ZERO,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        &Instant::now,
+    )
+    .unwrap();
+    assert_eq!(stop, LoopDriverStop::Approve);
 }
