@@ -238,13 +238,7 @@ fn resolve_key_ref(provider: SearchProvider, raw_ref: Option<&str>) -> Option<St
 /// `mur_common::config::default_mur_dir` makes, since this gateway binary is
 /// deliberately dependency-light (no mur-core, no `dirs`).
 pub fn mur_home_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("MUR_HOME")
-        && !p.is_empty()
-    {
-        return PathBuf::from(p);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".mur")
+    mur_common::home::mur_home_lossy()
 }
 
 /// Load the gateway config from `<mur_home>/config.yaml`, falling back to

@@ -28,7 +28,7 @@ fn install_launchd(murmurd_path: &Path) -> Result<()> {
     std::fs::create_dir_all(&agents_dir)?;
 
     let plist_path = agents_dir.join(format!("{label}.plist"));
-    let log_path = home.join(".mur").join("murmurd.log");
+    let log_path = mur_common::home::mur_home_or_err()?.join("murmurd.log");
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -50,12 +50,13 @@ fn install_launchd(murmurd_path: &Path) -> Result<()> {
     <key>StandardOutPath</key>
     <string>{log}</string>
     <key>ThrottleInterval</key>
-    <integer>5</integer>
+    <integer>5</integer>{env}
 </dict>
 </plist>
 "#,
         bin = murmurd_path.display(),
         log = log_path.display(),
+        env = launchd_env_block(mur_common::home::env_override().as_deref()),
     );
     std::fs::write(&plist_path, &plist)?;
 
@@ -82,9 +83,10 @@ fn install_systemd(murmurd_path: &Path) -> Result<()> {
     let unit_path = unit_dir.join("murmurd.service");
     let unit = format!(
         "[Unit]\nDescription=murmurd — mur pattern daemon\n\n\
-         [Service]\nExecStart={bin}\nRestart=always\nRestartSec=5\n\n\
+         [Service]\nExecStart={bin}\n{env}Restart=always\nRestartSec=5\n\n\
          [Install]\nWantedBy=default.target\n",
         bin = murmurd_path.display(),
+        env = systemd_env_line(mur_common::home::env_override().as_deref()),
     );
     std::fs::write(&unit_path, &unit)?;
 
@@ -99,6 +101,45 @@ fn install_systemd(murmurd_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `EnvironmentVariables` entry carrying `MUR_HOME` into the launchd job, or
+/// nothing when it is unset. launchd does not inherit the installing shell's
+/// environment, so without this the daemon reads `~/.mur` while the CLI
+/// writes `$MUR_HOME` (#1696).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn launchd_env_block(mur_home: Option<&Path>) -> String {
+    let Some(h) = mur_home else {
+        return String::new();
+    };
+    let v = h
+        .display()
+        .to_string()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    format!(
+        "\n    <key>EnvironmentVariables</key>\n    <dict>\n        <key>{key}</key>\n        <string>{v}</string>\n    </dict>",
+        key = mur_common::home::MUR_HOME_ENV,
+    )
+}
+
+/// systemd `Environment=` line carrying `MUR_HOME`, or empty when unset.
+/// Same reason as [`launchd_env_block`].
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn systemd_env_line(mur_home: Option<&Path>) -> String {
+    let Some(h) = mur_home else {
+        return String::new();
+    };
+    let v = h
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!(
+        "Environment=\"{key}={v}\"\n",
+        key = mur_common::home::MUR_HOME_ENV
+    )
+}
+
 /// Locate the murmurd binary next to the current mur executable.
 pub(crate) fn murmurd_bin_path() -> PathBuf {
     std::env::current_exe()
@@ -110,6 +151,19 @@ pub(crate) fn murmurd_bin_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_units_carry_mur_home_only_when_set() {
+        assert_eq!(launchd_env_block(None), "");
+        assert_eq!(systemd_env_line(None), "");
+        let b = launchd_env_block(Some(Path::new("/data/a&b")));
+        assert!(b.contains("<key>MUR_HOME</key>"), "{b}");
+        assert!(b.contains("<string>/data/a&amp;b</string>"), "{b}");
+        assert_eq!(
+            systemd_env_line(Some(Path::new("/data/my mur"))),
+            "Environment=\"MUR_HOME=/data/my mur\"\n"
+        );
+    }
 
     #[test]
     fn murmurd_bin_path_returns_path() {

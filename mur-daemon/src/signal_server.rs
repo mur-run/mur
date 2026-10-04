@@ -163,6 +163,5 @@ fn check_bearer(expected: &str, headers: &HeaderMap) -> bool {
 }
 
 fn token_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    Ok(home.join(".mur").join(TOKEN_FILE))
+    Ok(mur_common::home::mur_home_or_err()?.join(TOKEN_FILE))
 }

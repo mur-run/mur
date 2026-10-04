@@ -165,8 +165,7 @@ const CACHE_TTL: Duration = Duration::from_secs(300);
 const USER_AGENT: &str = concat!("mur-update/", env!("CARGO_PKG_VERSION"));
 
 fn cache_path() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    Some(home.join(".mur").join("update-cache.json"))
+    Some(mur_common::home::try_mur_home()?.join("update-cache.json"))
 }
 
 /// Read the cached release if it is still fresh.

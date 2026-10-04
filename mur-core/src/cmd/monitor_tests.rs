@@ -273,33 +273,20 @@ fn add_succeeds_when_the_probe_is_unknown_for_a_non_credential_reason() {
     assert!(list.contains("active"), "{list}");
 }
 
-/// The bug: `mur monitor add` (CLI/murmur) resolves its home via
-/// `crate::paths::mur_root`, which honors `MUR_HOME`, but the daemon —
-/// what actually polls the monitor going forward — always resolves its
-/// home via `crate::store::yaml::default_mur_dir()`, which ignores
-/// `MUR_HOME` entirely. A monitor created while `MUR_HOME` points anywhere
-/// other than the daemon's default is silently written where the daemon
-/// never looks, and just sits `sleeping` forever with no error anywhere.
-/// `add` must say so up front.
+/// `mur monitor add` writes under `crate::paths::mur_root`; the daemon that
+/// polls monitors reads `crate::store::yaml::default_mur_dir()`. They used to
+/// disagree under `MUR_HOME` (the daemon ignored it), so a monitor added there
+/// sat `sleeping` forever. Both now resolve through `mur_common::home` (#1696).
 #[test]
-fn add_warns_when_mur_home_diverges_from_the_daemon_default() {
+fn cli_and_daemon_agree_on_mur_home() {
     let mut envg = mur_common::test_env::EnvGuard::hold();
     let (d, _envg) = home();
-    let f = spec_file(d.path(), "mur_run", "run-1");
     envg.set_var("MUR_HOME", d.path());
-    let out = go(
-        d.path(),
-        MonitorAction::Add {
-            file: f,
-            started_at: None,
-        },
+    assert_eq!(
+        crate::paths::mur_root(None),
+        crate::store::yaml::default_mur_dir()
     );
-    let out = out.unwrap();
-    assert!(out.contains("warning: MUR_HOME"), "{out}");
-    assert!(
-        out.contains(&d.path().display().to_string()),
-        "must name the CLI-side path: {out}"
-    );
+    assert_eq!(crate::store::yaml::default_mur_dir(), d.path());
 }
 
 #[test]

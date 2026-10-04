@@ -694,10 +694,10 @@ fn parse_sources(s: &str) -> Vec<Source> {
 }
 
 fn read_aider_watched() -> Vec<std::path::PathBuf> {
-    let Some(home) = dirs::home_dir() else {
+    let Some(mur_dir) = mur_common::home::try_mur_home() else {
         return Vec::new();
     };
-    let cfg = home.join(".mur").join("config.yaml");
+    let cfg = mur_dir.join("config.yaml");
     let Ok(text) = std::fs::read_to_string(&cfg) else {
         return Vec::new();
     };

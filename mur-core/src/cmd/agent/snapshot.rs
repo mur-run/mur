@@ -2,9 +2,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 fn mur_home() -> Result<PathBuf> {
-    Ok(dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur"))
+    mur_common::home::mur_home_or_err()
 }
 
 /// `mur agent snapshot pull <name>` — assemble the skill snapshot into the

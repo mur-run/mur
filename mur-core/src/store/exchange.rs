@@ -267,10 +267,7 @@ pub fn export_mkef_public(pattern: &Pattern, exchange_dir: &Path) -> Result<Opti
 
 /// Get the default exchange directory.
 pub fn default_exchange_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
-        .join("exchange")
+    mur_common::home::mur_home_lossy().join("exchange")
 }
 
 #[cfg(test)]

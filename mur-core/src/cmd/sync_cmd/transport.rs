@@ -287,9 +287,7 @@ pub(super) async fn push_unsynced_workflows(
     token: &str,
     quiet: bool,
 ) -> Result<()> {
-    let mur_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur");
+    let mur_dir = mur_common::home::mur_home_or_err()?;
     let workflows_dir = mur_dir.join("workflows");
     if !workflows_dir.exists() {
         return Ok(());

@@ -132,9 +132,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     //    agent_home at the per-binary cache extraction dir, unless the
     //    operator overrides via MUR_AGENT_EXTERNAL_PROFILE.
     let embedded_override = std::env::var_os("MUR_AGENT_EXTERNAL_PROFILE").is_some();
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+    let mur_home = mur_common::home::mur_home();
     let load_path = crate::subcommand::flag_value(&argv, "--load");
     let agent_home = if let Some(path) = load_path {
         match load_muragent_and_home(&path, &mur_home) {

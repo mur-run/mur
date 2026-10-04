@@ -38,10 +38,7 @@ fn default_profile() -> String {
 impl VariableStore {
     /// Path to the variables file.
     pub fn path() -> PathBuf {
-        dirs::home_dir()
-            .expect("no home dir")
-            .join(".mur")
-            .join("variables.yaml")
+        crate::home::mur_home().join("variables.yaml")
     }
 
     /// Load from disk, or return empty store if file doesn't exist.

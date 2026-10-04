@@ -21,10 +21,10 @@ pub mod summarize;
 /// when the file is missing or the key is absent — keeping legacy behavior
 /// untouched for users who haven't opted in yet.
 pub fn is_enabled() -> anyhow::Result<bool> {
-    let Some(home) = dirs::home_dir() else {
+    let Some(mur_dir) = mur_common::home::try_mur_home() else {
         return Ok(false);
     };
-    let cfg_path = home.join(".mur").join("config.yaml");
+    let cfg_path = mur_dir.join("config.yaml");
     if !cfg_path.exists() {
         return Ok(false);
     }

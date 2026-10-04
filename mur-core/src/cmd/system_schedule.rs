@@ -113,7 +113,7 @@ fn install_launchd(workflow_name: &str, cron_expr: &str) -> Result<()> {
     let label = format!("com.mur.schedule.{}", workflow_name);
     let mur = mur_binary();
     let calendar = cron_to_calendar_interval(cron_expr);
-    let log_dir = dirs::home_dir().unwrap_or_default().join(".mur/logs");
+    let log_dir = mur_common::home::mur_home_lossy().join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let path_env = xml_escape(&scheduler_path());
 
@@ -133,7 +133,7 @@ fn install_launchd(workflow_name: &str, cron_expr: &str) -> Result<()> {
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{path_env}</string>
+    <string>{path_env}</string>{mur_home_env}
   </dict>
   <key>StartCalendarInterval</key>
 {calendar}
@@ -148,6 +148,13 @@ fn install_launchd(workflow_name: &str, cron_expr: &str) -> Result<()> {
         label = label,
         mur = mur,
         workflow_name = workflow_name,
+        mur_home_env = mur_common::home::env_override()
+            .map(|h| format!(
+                "\n    <key>{}</key>\n    <string>{}</string>",
+                mur_common::home::MUR_HOME_ENV,
+                xml_escape(&h.display().to_string())
+            ))
+            .unwrap_or_default(),
         path_env = path_env,
         calendar = calendar,
         log_dir = log_dir.display(),
@@ -226,12 +233,21 @@ fn install_crontab(workflow_name: &str, cron_expr: &str) -> Result<()> {
     // one so steps can reach Homebrew/mise binaries (see `scheduler_path`).
     // Quoted — a PATH entry containing a space would otherwise split the
     // command and cron would try to exec the wrong token.
+    // `MUR_HOME` rides along for the same reason (#1696): cron does not
+    // inherit the installing shell's environment, so without it the job and
+    // its log would resolve to `~/.mur` while the CLI uses `$MUR_HOME`.
+    let mur_home = mur_common::home::mur_home_lossy();
+    let mur_home_env = mur_common::home::env_override()
+        .map(|h| format!("{}=\"{}\" ", mur_common::home::MUR_HOME_ENV, h.display()))
+        .unwrap_or_default();
     let entry = format!(
-        "{} PATH=\"{}\" {} run {} >> ~/.mur/logs/schedule-{}.log 2>&1 {}",
+        "{} PATH=\"{}\" {}{} run {} >> \"{}/logs/schedule-{}.log\" 2>&1 {}",
         cron_expr,
         scheduler_path(),
+        mur_home_env,
         mur,
         workflow_name,
+        mur_home.display(),
         workflow_name,
         tag
     );

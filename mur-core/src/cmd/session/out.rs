@@ -418,9 +418,7 @@ async fn cmd_out_execute(action: &str, force: bool) -> anyhow::Result<()> {
 
             match recent {
                 Some(r) => {
-                    let recording_path = dirs::home_dir()
-                        .expect("no home dir")
-                        .join(".mur")
+                    let recording_path = mur_common::home::mur_home()
                         .join("session")
                         .join("recordings")
                         .join(format!("{}.jsonl", r.id));

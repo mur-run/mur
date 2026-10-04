@@ -18,9 +18,8 @@ pub struct AgentOutbox {
 impl AgentOutbox {
     /// Open the outbox for `agent_name` (creates directory if missing).
     pub fn open(agent_name: &str) -> Result<Self> {
-        let dir = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-            .join(".mur/agents")
+        let dir = mur_common::home::mur_home_or_err()?
+            .join("agents")
             .join(agent_name)
             .join("outbox");
         std::fs::create_dir_all(&dir)

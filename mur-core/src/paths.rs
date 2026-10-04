@@ -1,15 +1,8 @@
 //! Crate-level path helpers.
 //!
-//! Use `mur_root` when you need the `.mur` data directory from code outside
-//! `conversations/`. Respects `MUR_HOME` as an authoritative override — on
-//! Windows, `dirs::home_dir()` calls `SHGetKnownFolderPath` and ignores
-//! `HOME`/`USERPROFILE` env overrides, so tests that redirect via env vars
-//! need this escape hatch.
-//!
-//! Semantics are identical to `conversations::paths::mur_root`; Phase 2 of
-//! the Windows CI hardening effort will sweep the ~35
-//! `dirs::home_dir().join(".mur")` direct callers in the crate to use this
-//! one-line helper.
+//! `mur_root` is the `.mur` data directory with an optional explicit
+//! override; without one it delegates to `mur_common::home`, the single
+//! resolver every MUR surface shares (#1696).
 
 use std::path::PathBuf;
 
@@ -17,12 +10,7 @@ pub fn mur_root(override_path: Option<&str>) -> PathBuf {
     if let Some(p) = override_path {
         return PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("MUR_HOME")
-        && !p.is_empty()
-    {
-        return PathBuf::from(p);
-    }
-    dirs::home_dir().expect("no home dir").join(".mur")
+    mur_common::home::mur_home()
 }
 
 #[cfg(test)]

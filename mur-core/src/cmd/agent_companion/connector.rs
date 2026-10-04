@@ -486,9 +486,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
     mur_common::validate_agent_name(name)
         .with_context(|| format!("invalid bridge agent name {name:?}"))?;
 
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("home dir resolvable").join(".mur"));
+    let mur_home = mur_common::home::mur_home();
     let dir = mur_home.join("agents").join(name);
     if dir.exists() {
         bail!("agent dir already exists: {}", dir.display());

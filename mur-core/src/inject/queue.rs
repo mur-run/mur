@@ -6,8 +6,7 @@ use super::event::NormalizedEvent;
 
 #[allow(dead_code)] // called from cmd::hook in Task 4
 pub fn enqueue(event: &NormalizedEvent) -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    let mur_home = home.join(".mur");
+    let mur_home = mur_common::home::mur_home_or_err()?;
     let queue_dir = mur_home.join("queue");
     std::fs::create_dir_all(&queue_dir)?;
     let path = queue_dir.join("events.jsonl");

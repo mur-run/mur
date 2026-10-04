@@ -104,16 +104,14 @@ use cli::Cli;
 
 /// Load .env file from `~/.mur/.env` (preferred), `~/.mur/commander/.env`, or `./.env` (fallback).
 fn load_dotenv() {
-    let home = dirs::home_dir();
-    if let Some(path) = home.as_ref().map(|h| h.join(".mur").join(".env"))
+    let mur_dir = mur_common::home::try_mur_home();
+    if let Some(path) = mur_dir.as_ref().map(|h| h.join(".env"))
         && path.exists()
         && dotenvy::from_path(&path).is_ok()
     {
         return;
     }
-    if let Some(path) = home
-        .as_ref()
-        .map(|h| h.join(".mur").join("commander").join(".env"))
+    if let Some(path) = mur_dir.as_ref().map(|h| h.join("commander").join(".env"))
         && path.exists()
         && dotenvy::from_path(&path).is_ok()
     {

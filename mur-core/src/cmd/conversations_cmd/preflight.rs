@@ -50,7 +50,8 @@ pub async fn cmd_conversations_preflight() -> Result<()> {
             needed as f64 / 1_048_576.0
         );
     }
-    let staging = home.join(".mur/.conversations-migrating");
+    let mur = mur_common::home::mur_home_lossy();
+    let staging = mur.join(".conversations-migrating");
     if staging.exists() {
         println!(
             "  ✗ staging dir exists at {} — run migrate --resume or --discard-staging",
@@ -61,7 +62,7 @@ pub async fn cmd_conversations_preflight() -> Result<()> {
         println!("  ✓ no stale staging dir");
     }
     // Commander audit presence (not verification — different algo)
-    let cmdr_audit = home.join(".mur/commander/audit.jsonl");
+    let cmdr_audit = mur.join("commander/audit.jsonl");
     if cmdr_audit.exists() {
         println!("  ✓ commander audit present (opaque bridge target)");
     } else {
@@ -108,7 +109,7 @@ pub async fn cmd_conversations_preflight() -> Result<()> {
     }
 
     // Pattern dir readable.
-    let patterns_dir = home.join(".mur/patterns");
+    let patterns_dir = mur.join("patterns");
     if patterns_dir.exists() {
         match std::fs::read_dir(&patterns_dir) {
             Ok(_) => println!("  ✓ patterns dir readable at {}", patterns_dir.display()),

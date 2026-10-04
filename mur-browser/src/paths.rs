@@ -3,8 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// This process's MUR home: `MUR_HOME` if set, else `$HOME/.mur`. Same rule
-/// as every other MUR binary, so the runtime and `mur browser` agree on it.
+/// This process's MUR home: `MUR_HOME` if set, else `$HOME/.mur`. Local copy
+/// of `mur_common::home` (this crate does not depend on `mur-common`); keep
+/// the rule identical so the runtime and `mur browser` agree on it.
 pub fn system_mur_home() -> Option<PathBuf> {
     std::env::var_os("MUR_HOME")
         .filter(|v| !v.is_empty())

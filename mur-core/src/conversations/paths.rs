@@ -23,12 +23,7 @@ pub fn mur_root(override_path: Option<&str>) -> PathBuf {
     if let Some(p) = override_path {
         return PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("MUR_HOME")
-        && !p.is_empty()
-    {
-        return PathBuf::from(p);
-    }
-    dirs::home_dir().expect("no home dir").join(".mur")
+    mur_common::home::mur_home()
 }
 
 pub fn conversations_root(override_path: Option<&str>) -> PathBuf {

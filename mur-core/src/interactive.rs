@@ -86,8 +86,5 @@ pub fn ensure_default_templates() -> Result<PathBuf> {
 }
 
 fn templates_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".mur")
-        .join("templates")
+    mur_common::home::mur_home_lossy().join("templates")
 }

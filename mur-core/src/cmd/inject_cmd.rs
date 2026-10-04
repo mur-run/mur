@@ -19,8 +19,7 @@ pub(crate) async fn cmd_inject(query: &str) -> Result<()> {
         return Ok(());
     }
 
-    let home = dirs::home_dir().expect("no home dir");
-    let mur_home = home.join(".mur");
+    let mur_home = mur_common::home::mur_home();
     let skills_dir = mur_home.join("skills");
 
     let candidates = load_skill_candidates(&skills_dir, &mur_home)?;

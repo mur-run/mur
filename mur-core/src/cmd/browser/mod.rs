@@ -152,10 +152,7 @@ pub async fn record(
 }
 
 fn mur_home() -> Result<std::path::PathBuf> {
-    std::env::var_os("MUR_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".mur")))
-        .ok_or_else(|| anyhow::anyhow!("cannot determine MUR home (set MUR_HOME)"))
+    mur_common::home::mur_home_or_err()
 }
 
 fn fresh_broker_token() -> String {

@@ -146,10 +146,7 @@ pub async fn compact_day(
     }
 
     // Macro refs
-    let patterns_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".mur")
-        .join("patterns");
+    let patterns_dir = mur_common::home::mur_home_lossy().join("patterns");
     let mut abstractive_text = abstractive_result
         .narrative
         .clone()

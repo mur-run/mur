@@ -81,16 +81,18 @@ pub fn load_from(path: &std::path::Path) -> anyhow::Result<CapabilityIndex> {
 /// Save capability index to `~/.mur/index/capabilities.json`.
 #[allow(dead_code)]
 pub fn save(index: &CapabilityIndex) -> anyhow::Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    let path = home.join(".mur").join("index").join("capabilities.json");
+    let path = mur_common::home::mur_home_or_err()?
+        .join("index")
+        .join("capabilities.json");
     save_to(index, &path)
 }
 
 /// Load capability index from `~/.mur/index/capabilities.json`.
 #[allow(dead_code)]
 pub fn load() -> anyhow::Result<CapabilityIndex> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
-    let path = home.join(".mur").join("index").join("capabilities.json");
+    let path = mur_common::home::mur_home_or_err()?
+        .join("index")
+        .join("capabilities.json");
     load_from(&path)
 }
 

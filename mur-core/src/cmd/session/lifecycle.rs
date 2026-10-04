@@ -11,9 +11,7 @@ pub(crate) async fn cmd_session_stop(_analyze: bool, _reflect: bool) -> Result<(
         Some(id) => {
             eprintln!("Session stopped: {}", &id[..8]);
 
-            let recording_path = dirs::home_dir()
-                .expect("no home dir")
-                .join(".mur")
+            let recording_path = mur_common::home::mur_home()
                 .join("session")
                 .join("recordings")
                 .join(format!("{}.jsonl", id));

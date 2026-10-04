@@ -62,7 +62,11 @@ fn hook_async_flags(event_name: &str) -> (bool, bool) {
 pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let mur_dir = home.join(".mur");
+    let mur_dir = mur_common::home::mur_home_or_err()?;
+    // Recognises hook commands this install wrote, wherever `MUR_HOME` put
+    // them; the legacy `.mur/hooks/` marker still matches older installs.
+    let our_hooks_dir = mur_dir.join("hooks").to_string_lossy().into_owned();
+    let is_mur_hook_cmd = |c: &str| c.contains(".mur/hooks/") || c.contains(our_hooks_dir.as_str());
 
     // ─── Step A: Create directory structure ───────────────────────
     let dirs_to_create = [
@@ -196,14 +200,14 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
             arr.retain(|entry| {
                 // Check flat format: { command: "..." }
                 if let Some(cmd) = entry.get("command").and_then(|c| c.as_str()) {
-                    return !cmd.contains(mur_hook_marker) && !cmd.contains(".mur/hooks/");
+                    return !cmd.contains(mur_hook_marker) && !is_mur_hook_cmd(cmd);
                 }
                 // Check nested format: { hooks: [{ command: "..." }] }
                 if let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
                     return !hooks.iter().any(|h| {
                         h.get("command")
                             .and_then(|c| c.as_str())
-                            .map(|c| c.contains(".mur/hooks/"))
+                            .map(is_mur_hook_cmd)
                             .unwrap_or(false)
                     });
                 }
@@ -364,7 +368,6 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
             serde_json::json!({"version": 1, "hooks": {}})
         };
 
-        let mur_marker = ".mur/hooks/";
         let hook_defs = [
             ("sessionStart", format!("bash {}", prompt_script.display())),
             (
@@ -395,7 +398,7 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
                 entry
                     .get("bash")
                     .and_then(|c| c.as_str())
-                    .map(|c| !c.contains(mur_marker))
+                    .map(|c| !is_mur_hook_cmd(c))
                     .unwrap_or(true)
             });
             arr.push(serde_json::json!({
@@ -465,7 +468,7 @@ pub(crate) fn cmd_init(hooks_flag: bool, refresh_discovery: bool) -> Result<()> 
                 entry
                     .get("command")
                     .and_then(|c| c.as_str())
-                    .map(|c| !c.contains(mur_hook_marker) && !c.contains(".mur/hooks/"))
+                    .map(|c| !c.contains(mur_hook_marker) && !is_mur_hook_cmd(c))
                     .unwrap_or(true)
             });
             arr.push(serde_json::json!({

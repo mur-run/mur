@@ -2,9 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 pub fn inbox_path(session_id: &str) -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
+    mur_common::home::mur_home()
         .join("inbox")
         .join(format!("{session_id}.md"))
 }
