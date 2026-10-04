@@ -610,7 +610,7 @@ and `cargo fmt --all -- --check`.
 1. **Coding agent** builds §3–§8 against §11, including the additive `mur-channel` read API
    (P4). Done = AC1–AC15b green (including AC6a and AC11a–g), AC22 satisfied, clippy/fmt clean.
 2. **QA** runs AC1–AC21. AC16–AC21 are run manually in MURMUR, with real output recorded. For
-   AC11a–f, QA also hand-corrupts a real retained channel (truncate, flip a signature byte) and
+   AC11a–g, QA also hand-corrupts a real retained channel (truncate, flip a signature byte) and
    confirms the prompts in §8.2, including the lower-bound limits, the workspace warning, and the
    restart note on round N+1. Done = a pass/fail report per AC, with no AC skipped.
 3. **GitHub Manager** reviews the PR against this spec, checks AC23 (docs checklist), and merges.
