@@ -14,6 +14,25 @@ use super::*;
 /// exit 79 = config error, `--json=stream` shape) were verified against it.
 /// Shared by the MCP tool (resolver) and `mur code-nav setup` (installer).
 pub const AST_GREP_PINNED_VERSION: &str = "0.45.3";
+/// Managed-tools directory under mur home. Setup installs here and the
+/// resolver reads only from here.
+pub const MUR_TOOLS_DIR: &str = "tools";
+const AST_GREP_TOOL_DIR: &str = "ast-grep";
+const AST_GREP_BIN_STEM: &str = "ast-grep";
+
+/// Where the pinned ast-grep must live:
+/// `<mur_home>/tools/ast-grep/<ver>/ast-grep[.exe]`. One definition so the
+/// installer (`mur code-nav setup`) and the resolver (MCP tool) cannot drift.
+pub fn ast_grep_binary_path(mur_home: &std::path::Path) -> PathBuf {
+    mur_home
+        .join(MUR_TOOLS_DIR)
+        .join(AST_GREP_TOOL_DIR)
+        .join(AST_GREP_PINNED_VERSION)
+        .join(format!(
+            "{AST_GREP_BIN_STEM}{}",
+            std::env::consts::EXE_SUFFIX
+        ))
+}
 /// Default number of matches returned per call.
 pub const AST_GREP_DEFAULT_MAX_RESULTS: u32 = 200;
 /// Default context lines around each match (ast-grep `--context`).
