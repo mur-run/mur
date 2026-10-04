@@ -115,6 +115,15 @@ pub fn replay_with_damage(
                         );
                     }
                     NoteClassification::Review(env) => {
+                        if let Some(r) = payload_round(&env.payload)
+                            && r > round_in_progress
+                        {
+                            if round_in_progress > 0 {
+                                ledger.note_round_complete();
+                                checkpoint = Some((ledger.clone(), round_in_progress, *line));
+                            }
+                            round_in_progress = r;
+                        }
                         if unverified_seqs.contains(&event.seq) {
                             return seal_or_fatal(
                                 checkpoint,
@@ -122,15 +131,6 @@ pub fn replay_with_damage(
                                 "signature verification failed".to_string(),
                                 raw_lines,
                             );
-                        }
-                        if let Some(r) = payload_round(&env.payload)
-                            && r > round_in_progress
-                        {
-                            if round_in_progress > 0 {
-                                ledger.note_round_complete();
-                            }
-                            checkpoint = Some((ledger.clone(), round_in_progress, *line));
-                            round_in_progress = r;
                         }
                         if let Err(e) = ledger.apply(&env.payload) {
                             return seal_or_fatal(
@@ -375,8 +375,7 @@ mod tests {
         unverified.insert(bad_verdict.seq);
         let raw_refs: Vec<&str> = raw.iter().map(String::as_str).collect();
 
-        let outcome =
-            replay_with_damage(&events, &event_lines, &[], &unverified, &raw_refs);
+        let outcome = replay_with_damage(&events, &event_lines, &[], &unverified, &raw_refs);
         match outcome {
             ReplayOutcome::Partial {
                 last_good_round,
@@ -415,8 +414,7 @@ mod tests {
 
         let event_lines = line_numbers(events.len());
         let raw_refs: Vec<&str> = raw.iter().map(String::as_str).collect();
-        let outcome =
-            replay_with_damage(&events, &event_lines, &[], &HashSet::new(), &raw_refs);
+        let outcome = replay_with_damage(&events, &event_lines, &[], &HashSet::new(), &raw_refs);
         match outcome {
             ReplayOutcome::Partial {
                 last_good_round, ..
@@ -436,8 +434,7 @@ mod tests {
         let raw = vec![raw_line_for(&bad)];
         let events = vec![bad];
         let raw_refs: Vec<&str> = raw.iter().map(String::as_str).collect();
-        let outcome =
-            replay_with_damage(&events, &[1], &[], &HashSet::new(), &raw_refs);
+        let outcome = replay_with_damage(&events, &[1], &[], &HashSet::new(), &raw_refs);
         assert!(matches!(outcome, ReplayOutcome::Fatal { .. }));
     }
 
@@ -535,8 +532,7 @@ mod tests {
         unverified.insert(bad_sig_verdict.seq);
         let raw_refs: Vec<&str> = raw.iter().map(String::as_str).collect();
 
-        let outcome =
-            replay_with_damage(&events, &event_lines, &[], &unverified, &raw_refs);
+        let outcome = replay_with_damage(&events, &event_lines, &[], &unverified, &raw_refs);
         match outcome {
             ReplayOutcome::Partial {
                 ledger,
@@ -560,8 +556,7 @@ mod tests {
         let (events, raw) = build_rounds(3);
         let event_lines = line_numbers(events.len());
         let raw_refs: Vec<&str> = raw.iter().map(String::as_str).collect();
-        let outcome =
-            replay_with_damage(&events, &event_lines, &[], &HashSet::new(), &raw_refs);
+        let outcome = replay_with_damage(&events, &event_lines, &[], &HashSet::new(), &raw_refs);
         match outcome {
             ReplayOutcome::Clean(ledger) => assert_eq!(ledger.round, 3),
             other => panic!("expected Clean, got {other:?}"),
@@ -586,8 +581,7 @@ mod tests {
         events.push(bad_status);
         let event_lines = line_numbers(events.len());
         let raw_refs: Vec<&str> = raw.iter().map(String::as_str).collect();
-        let outcome =
-            replay_with_damage(&events, &event_lines, &[], &HashSet::new(), &raw_refs);
+        let outcome = replay_with_damage(&events, &event_lines, &[], &HashSet::new(), &raw_refs);
         match outcome {
             ReplayOutcome::Partial {
                 last_good_round, ..
@@ -608,7 +602,10 @@ mod tests {
             extract_readable_u64("\"exec_time_ms\":", "\"exec_time_ms\":"),
             None
         );
-        assert_eq!(extract_readable_u64("no key here", "\"exec_time_ms\":"), None);
+        assert_eq!(
+            extract_readable_u64("no key here", "\"exec_time_ms\":"),
+            None
+        );
     }
 
     #[allow(dead_code)]
