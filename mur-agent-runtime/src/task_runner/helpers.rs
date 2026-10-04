@@ -410,6 +410,9 @@ pub(crate) fn effective_tool_policy(
         None if crate::tools::recall::recall_needs_no_approval(tool_name) => ToolPolicy::Allow,
         None => ToolPolicy::default(),
     };
+    // Deliberately reuses the session-grant ceiling rather than `tier > Write`:
+    // "allow runs without asking" and "a session grant covers it" are the same
+    // line, so widening `tier_may_be_granted` must widen both together (#1600).
     if base == ToolPolicy::Allow
         && declared_tool_risk(rules, tool_name)
             .is_some_and(|tier| !mur_common::hitl::tier_may_be_granted(tier))
