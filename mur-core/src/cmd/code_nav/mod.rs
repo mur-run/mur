@@ -7,3 +7,4 @@
 
 pub mod ast_grep_install;
 pub mod plan;
+pub mod serena_install;

@@ -246,7 +246,7 @@ impl Plan {
     }
 }
 
-fn tool_dir(mur_home: &Path, name: &str, version: &str) -> PathBuf {
+pub(super) fn tool_dir(mur_home: &Path, name: &str, version: &str) -> PathBuf {
     mur_home.join(TOOLS_DIR).join(name).join(version)
 }
 
