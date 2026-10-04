@@ -638,10 +638,24 @@ Findings that change the Phase 3 design:
       uv. Verification reads uv's `direct_url.json`: dist-info version and
       resolved commit must both equal the pin; a verified re-run skips uv, a
       mismatch reinstalls. `Record` is the manifest entry; task 3.6 writes it.
-- [ ] 3.4 Config generator: full-field `serena_config.yml` from serena's
+- [x] 3.4 Config generator: full-field `serena_config.yml` from serena's
       template (no load-time "migration" rewrite, #1688), `projects`
       pre-filled, C1–C9 values, C/C++ `ls_extra_args`. Run preflight on the
       result; it must pass.
+      `mur-core/src/cmd/code_nav/serena_config.rs`. The template is read
+      from the pinned install, not vendored (serena is GPL-3.0-or-later),
+      and refused unless its sha256 equals `SERENA_CONFIG_TEMPLATE_SHA256`.
+      At the pin the template lists every field `SerenaConfig` maps. Owned
+      top-level keys (with their block lines) are dropped and MUR's values
+      appended; the rest keep serena's values and comments. `auth_secret` is
+      owned too: serena generates and re-saves one when it is empty. The
+      clangd lock-down is always written, since C8 applies whenever serena
+      may auto-detect C/C++. Written owner-only (0600, serena's own mode)
+      via temp + rename, then `preflight()` from the runtime runs on it.
+      Proof: the ignored live test loads the file with serena's own
+      `SerenaConfig.from_config_file` and requires it byte-identical
+      afterwards; with an empty `auth_secret` the same test fails
+      ("serena rewrote the file"), so it detects a re-save.
 - [ ] 3.5 Profile entry: `kind: serena`, `project:`, `command` at the pinned
       path.
 - [ ] 3.6 Consent + apply: print tables, require typed `yes` or `--yes`,
