@@ -289,6 +289,9 @@ impl StdioMcpClient {
         }
         // Last, so neither an inherited nor a policy env var can move
         // `SERENA_HOME`, and the fixed `--project` follows the entry's args.
+        for k in &serena.env_remove {
+            std_cmd.env_remove(k);
+        }
         std_cmd.envs(serena.env).args(serena.args);
         let mut child = crate::sandbox::child::spawn_sandboxed(std_cmd, policy)?;
 

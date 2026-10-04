@@ -133,6 +133,7 @@ fn launch_additions_carry_home_and_fixed_project() {
     let got = launch_additions(&fx.serena(Some(fx.repo.clone())), Some(&fx.agent_home)).unwrap();
     let paths = serena_paths(&fx.agent_home);
     assert_eq!(got.env, launch_env(&paths));
+    assert_eq!(got.env_remove, ["CLANGD_FLAGS"]);
     assert_eq!(got.args, launch_args(&fx.repo));
 }
 

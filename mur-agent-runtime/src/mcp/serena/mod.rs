@@ -59,6 +59,10 @@ pub const SERENA_PROJECTS_DIR: &str = "projects";
 /// Env var serena reads to locate its home directory.
 pub const SERENA_HOME_ENV: &str = "SERENA_HOME";
 
+/// Inherited env vars removed from the serena child. clangd prepends
+/// `CLANGD_FLAGS` to its argv, so it could add `--query-driver` past C8.
+pub const SERENA_ENV_REMOVE: [&str; 1] = ["CLANGD_FLAGS"];
+
 /// serena CLI flags MUR always passes. The dashboard defaults to on in
 /// serena (`web_dashboard: bool = True`), so both are forced off.
 const PROJECT_FLAG: &str = "--project";
@@ -170,10 +174,12 @@ fn verify_entry<'e>(
     Ok(project)
 }
 
-/// What a spawn adds to the child: env pairs and trailing args.
+/// What a spawn changes on the child: env pairs to set, inherited env
+/// vars to remove, and trailing args.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LaunchAdditions {
     pub env: Vec<(String, OsString)>,
+    pub env_remove: Vec<String>,
     pub args: Vec<OsString>,
 }
 
@@ -199,6 +205,7 @@ pub fn launch_additions(
     let project = verify_entry(entry, &paths)?;
     Ok(LaunchAdditions {
         env: launch_env(&paths),
+        env_remove: SERENA_ENV_REMOVE.iter().map(|k| (*k).to_owned()).collect(),
         args: launch_args(project),
     })
 }

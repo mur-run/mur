@@ -153,7 +153,7 @@ serena (LSP-backed code navigation, opt-in) is the first MCP entry whose risk is
 | C5 | `fixed_tools` is exactly the five allow-listed tools; `excluded_tools` and `included_optional_tools` empty or absent | serena-side tool gate |
 | C6 | `web_dashboard: false` | Absent means serena's default `true` |
 | C7 | No `ls_specific_settings.<lang>` sets `ls_path` or `ls_base_cmd` | Either one replaces the language-server executable — arbitrary exec |
-| C8 | When C/C++ may run: effective clangd args contain `--enable-config=false` and no `--query-driver*`; `compile_commands_dir` resolves under `<SERENA_HOME>/projects` | clangd reads repo `.clangd` files and can be told to run arbitrary compiler drivers |
+| C8 | When C/C++ may run: the last `enable-config` in the effective clangd args is exactly `--enable-config=false`, with no `-`/`--query-driver*` and no `@file` argument; `compile_commands_dir` resolves under `<SERENA_HOME>/projects` | clangd reads repo `.clangd` files and can be told to run arbitrary compiler drivers |
 | C9 | `projects` is present and a list (empty or null is fine) | serena's loader raises without it, and its error does not name the file; C9 refuses first with a `serena C9:` message |
 
 **Phase 2 never writes `serena_config.yml`.** A missing or incomplete config refuses (C1, C2, C3–C9); nothing is generated or repaired. This matters because serena treats *any* missing mapped field as a migration and rewrites the whole file, filling an absent `trusted_project_path_patterns` with `["**"]` (#1688). Generating a complete config is Phase 3 (install), and pre-filling `projects` there is part of the G1 v2 fix below.
@@ -161,6 +161,8 @@ serena (LSP-backed code navigation, opt-in) is the first MCP entry whose risk is
 **Why C7/C8 read only the global config.** serena ignores a project's `ls_specific_settings` for an untrusted project (upstream serena, `project.py` lines 522–530). With C3 holding, no project is trusted, so the global file is the only place those settings can come from.
 
 **C8 is conservative on purpose.** It applies when the global config has `ls_specific_settings.cpp`, when the MUR folder's `project.yml` lists `cpp`, **and** when that `project.yml` is missing or has no readable language list — because serena then auto-detects languages and C/C++ cannot be ruled out. The cost: the first start of a non-C++ repo needs either a `project.yml` that excludes `cpp` or the clangd lock-down. The C8 error names both fixes. Over-refusing is accepted; under-checking is not.
+
+**C8 follows clangd's and serena's parsing, not string equality.** LLVM lets the last occurrence of an option win, accepts `-opt` as well as `--opt`, and expands `@file` response files, so `--enable-config=false --enable-config=true` would otherwise pass. serena lowercases language names and migrates the legacy `languages` / `language` keys, and merges `project.local.yml` over `project.yml`; C8 reads the language list the same way. clangd also prepends the `CLANGD_FLAGS` env var to its argv, which C8 cannot see, so the serena child is spawned with `CLANGD_FLAGS` removed.
 
 ### The tool gate, twice
 

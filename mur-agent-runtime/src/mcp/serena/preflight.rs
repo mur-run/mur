@@ -40,13 +40,21 @@ const LS_EXEC_KEYS: [&str; 2] = ["ls_path", "ls_base_cmd"];
 const KEY_LS_ARGS: &str = "ls_args";
 const KEY_LS_EXTRA_ARGS: &str = "ls_extra_args";
 /// serena accepts both spellings for the project's language list.
-const KEY_LANGUAGES: [&str; 2] = ["language_servers", "languages"];
+/// serena's language-list key; `languages` (renamed) and the singular
+/// `language` are migrated onto it when it is absent (`_load_yaml_dict`).
+const KEY_LANGUAGE_SERVERS: &str = "language_servers";
+const KEY_LANGUAGES_OLD: &str = "languages";
+const KEY_LANGUAGE_SINGLE: &str = "language";
 
 /// serena's language-server id for clangd.
 const CPP_LS_ID: &str = "cpp";
 const CLANGD_DEFAULT_ARGS: [&str; 1] = ["--background-index"];
 const CLANGD_REQUIRED_ARG: &str = "--enable-config=false";
-const CLANGD_FORBIDDEN_ARG_PREFIX: &str = "--query-driver";
+/// LLVM option names, matched after stripping `-`/`--` (LLVM accepts both).
+const CLANGD_CONFIG_OPT: &str = "enable-config";
+const CLANGD_FORBIDDEN_OPT: &str = "query-driver";
+/// LLVM expands `@file` arguments into more arguments.
+const RESPONSE_FILE_PREFIX: char = '@';
 const KEY_COMPILE_COMMANDS_DIR: &str = "compile_commands_dir";
 const CLANGD_DEFAULT_COMPILE_COMMANDS_DIR: &str = ".serena";
 
@@ -54,6 +62,8 @@ const SERENA_DEFAULT_FOLDER: &str = "$projectDir/.serena";
 const PLACEHOLDER_PROJECT_DIR: &str = "projectDir";
 const PLACEHOLDER_PROJECT_FOLDER_NAME: &str = "projectFolderName";
 const PROJECT_FILE: &str = "project.yml";
+/// Merged over `project.yml` key by key (`serena_config.py`, `yaml_data.update`).
+const PROJECT_LOCAL_FILE: &str = "project.local.yml";
 
 const ABSENT: &str = "<absent>";
 
@@ -381,25 +391,54 @@ fn check_project_folder(
 }
 
 /// Whether clangd may run. The language list lives in the resolved
-/// folder's `project.yml`; when that file is missing serena auto-detects
-/// the languages on activation, so C/C++ cannot be ruled out and C8
-/// applies.
+/// folder's `project.yml`, overlaid by `project.local.yml`; when the list
+/// cannot be read serena auto-detects the languages on activation, so
+/// C/C++ cannot be ruled out and C8 applies. Names are compared
+/// lowercased, as serena resolves them.
 fn cpp_enabled(folder: &Path, global_cpp_settings: bool) -> Option<CppReason> {
     if global_cpp_settings {
         return Some(CppReason::GlobalSettings);
     }
-    let Ok(text) = std::fs::read_to_string(folder.join(PROJECT_FILE)) else {
+    let Some(langs) = project_languages(folder) else {
         return Some(CppReason::LanguagesUnknown);
     };
-    let Ok(doc) = serde_yaml_ng::from_str::<Value>(&text) else {
-        return Some(CppReason::LanguagesUnknown);
-    };
-    let lists_cpp = match KEY_LANGUAGES.iter().find_map(|k| doc.get(*k)) {
-        Some(Value::Sequence(langs)) => langs.iter().any(|l| l.as_str() == Some(CPP_LS_ID)),
-        Some(Value::String(l)) => l == CPP_LS_ID,
-        _ => return Some(CppReason::LanguagesUnknown),
-    };
+    let lists_cpp = langs.iter().any(|l| l.to_lowercase() == CPP_LS_ID);
     lists_cpp.then_some(CppReason::ProjectListsCpp)
+}
+
+/// serena's effective `language_servers`: `project.yml` with
+/// `project.local.yml` merged over it at the top level. `None` when either
+/// file is unreadable or the merged list is not a list of strings.
+fn project_languages(folder: &Path) -> Option<Vec<String>> {
+    let mut doc = project_yaml(&folder.join(PROJECT_FILE))?;
+    let local_path = folder.join(PROJECT_LOCAL_FILE);
+    if local_path.exists() {
+        doc.extend(project_yaml(&local_path)?);
+    }
+    match doc.get(KEY_LANGUAGE_SERVERS)? {
+        Value::Sequence(s) => s.iter().map(|x| x.as_str().map(str::to_owned)).collect(),
+        _ => None,
+    }
+}
+
+/// One project file as a mapping with serena's legacy keys migrated.
+/// A comment-only file (serena's `project.local.yml` template) is empty.
+fn project_yaml(path: &Path) -> Option<serde_yaml_ng::Mapping> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut map = match serde_yaml_ng::from_str::<Value>(&text).ok()? {
+        Value::Mapping(m) => m,
+        Value::Null => serde_yaml_ng::Mapping::new(),
+        _ => return None,
+    };
+    let has = |m: &serde_yaml_ng::Mapping, k: &str| m.contains_key(k);
+    if !has(&map, KEY_LANGUAGE_SERVERS) {
+        if let Some(v) = map.remove(KEY_LANGUAGES_OLD) {
+            map.insert(KEY_LANGUAGE_SERVERS.into(), v);
+        } else if let Some(v) = map.remove(KEY_LANGUAGE_SINGLE) {
+            map.insert(KEY_LANGUAGE_SERVERS.into(), Value::Sequence(vec![v]));
+        }
+    }
+    Some(map)
 }
 
 /// C8: effective clangd args (serena's assembly rule) and the
@@ -421,15 +460,7 @@ fn check_clangd(
     });
     args.extend(string_list(get(KEY_LS_EXTRA_ARGS)).unwrap_or_default());
     let args_key = format!("{} + {}", key(KEY_LS_ARGS), key(KEY_LS_EXTRA_ARGS));
-    if !args.iter().any(|a| a == CLANGD_REQUIRED_ARG) {
-        let expected = format!("to contain {CLANGD_REQUIRED_ARG}");
-        return clangd_fail!(cfg_file, args_key, format!("{args:?}"), expected);
-    }
-    if args
-        .iter()
-        .any(|a| a.starts_with(CLANGD_FORBIDDEN_ARG_PREFIX))
-    {
-        let expected = format!("no {CLANGD_FORBIDDEN_ARG_PREFIX}");
+    if let Some(expected) = clangd_args_violation(&args) {
         return clangd_fail!(cfg_file, args_key, format!("{args:?}"), expected);
     }
 
@@ -448,6 +479,43 @@ fn check_clangd(
         return clangd_fail!(cfg_file, key(KEY_COMPILE_COMMANDS_DIR), found, expected);
     }
     Ok(())
+}
+
+/// What is wrong with clangd's argv, if anything. LLVM lets the last
+/// `enable-config` win and takes `-opt` as well as `--opt`, so the last
+/// occurrence must be exactly the lock-down; `@file` could re-enable it
+/// out of sight.
+fn clangd_args_violation(args: &[String]) -> Option<String> {
+    let opt = |a: &str| {
+        a.strip_prefix("--")
+            .or_else(|| a.strip_prefix('-'))
+            .map(str::to_owned)
+    };
+    if args.iter().any(|a| a.starts_with(RESPONSE_FILE_PREFIX)) {
+        return Some(format!(
+            "no `{RESPONSE_FILE_PREFIX}file` response-file argument"
+        ));
+    }
+    if args
+        .iter()
+        .filter_map(|a| opt(a))
+        .any(|o| o.starts_with(CLANGD_FORBIDDEN_OPT))
+    {
+        return Some(format!(
+            "no -{CLANGD_FORBIDDEN_OPT} / --{CLANGD_FORBIDDEN_OPT}"
+        ));
+    }
+    let last_config = args.iter().rev().find(|a| {
+        opt(a).is_some_and(|o| {
+            o == CLANGD_CONFIG_OPT || o.starts_with(&format!("{CLANGD_CONFIG_OPT}="))
+        })
+    });
+    if last_config.map(String::as_str) != Some(CLANGD_REQUIRED_ARG) {
+        return Some(format!(
+            "the last {CLANGD_CONFIG_OPT} argument to be exactly {CLANGD_REQUIRED_ARG}"
+        ));
+    }
+    None
 }
 
 /// Replace serena's two placeholders; `Err(name)` for any other `$name`.

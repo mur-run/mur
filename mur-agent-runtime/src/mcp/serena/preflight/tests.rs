@@ -243,6 +243,70 @@ fn c8_clangd_violations() {
     assert_refused!(fx, C8Clangd);
 }
 
+/// clangd/LLVM argv rules that a naive "contains" check misses: the last
+/// `enable-config` wins, `-opt` equals `--opt`, `@file` expands.
+#[test]
+fn c8_clangd_argv_bypasses_are_refused() {
+    let fx = Fx::new();
+    for args in [
+        "[--enable-config=false, --enable-config=true]",
+        "[--enable-config=false, --enable-config]",
+        "[--enable-config=false, -enable-config=1]",
+        "[--enable-config=false, '@flags.rsp']",
+        "[--enable-config=false, '-query-driver=/x/*']",
+    ] {
+        cpp(
+            &fx,
+            Some(&format!(
+                "{{ls_extra_args: {args}, compile_commands_dir: '$CCD'}}"
+            )),
+        );
+        assert_refused!(fx, C8Clangd);
+    }
+    // `ls_args` replaces the defaults, then `ls_extra_args` is appended:
+    // a later `--enable-config=false` restores the lock-down.
+    cpp(
+        &fx,
+        Some(
+            "{ls_args: [--enable-config=true], ls_extra_args: [--enable-config=false], \
+             compile_commands_dir: '$CCD'}",
+        ),
+    );
+    fx.run().unwrap();
+}
+
+/// serena lowercases language names and migrates legacy keys, so neither
+/// `CPP` nor `language: cpp` may skip C8.
+#[test]
+fn c8_language_case_and_legacy_keys() {
+    let fx = Fx::new();
+    for yml in [
+        "language_servers: [CPP]\n",
+        "languages: [Cpp]\n",
+        "language: cpp\n",
+    ] {
+        fs::write(fx.folder.join("project.yml"), yml).unwrap();
+        let msg = assert_refused!(fx, C8Clangd).to_string();
+        assert!(msg.contains("lists `cpp`"), "{yml}: {msg}");
+    }
+}
+
+/// `project.local.yml` is merged over `project.yml` by serena.
+#[test]
+fn c8_reads_project_local_override() {
+    let fx = Fx::new();
+    let local = fx.folder.join("project.local.yml");
+    // serena's own template: comments only, changes nothing.
+    fs::write(&local, "# local overrides\n").unwrap();
+    fx.run().unwrap();
+    fs::write(&local, "language_servers: [rust, cpp]\n").unwrap();
+    assert_refused!(fx, C8Clangd);
+    fs::write(&local, "language_servers: [\n").unwrap();
+    assert_refused!(fx, C8Clangd);
+    fs::write(&local, "ignored_paths: []\n").unwrap();
+    fx.run().unwrap();
+}
+
 #[test]
 fn c8_applies_when_languages_unknown() {
     let fx = Fx::new();
