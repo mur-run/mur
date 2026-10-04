@@ -327,6 +327,7 @@ mod tests {
             pre: vec![],
             argv: vec!["claude".into(), "auth".into(), "login".into()],
             label: "Anthropic".into(),
+            done_note: None,
             _lock: None,
         };
         let (prog, args) = split_argv(&req).expect("non-empty argv");
@@ -340,6 +341,7 @@ mod tests {
             pre: vec![],
             argv: vec![],
             label: "x".into(),
+            done_note: None,
             _lock: None,
         };
         assert!(split_argv(&req).is_none());
