@@ -4,8 +4,10 @@
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use super::driver::{ReviewTransport, TurnOutcome, run_turn};
+use super::driver::{RetryOutcome, ReviewTransport, TurnOutcome, run_turn, run_turn_with_retry};
+use super::schema::{NoteClassification, ReviewPayload, classify_note_payload};
 
 /// Test-only transport: counts sends and returns a fixed or queued reply,
 /// never touching A2A.
@@ -125,4 +127,175 @@ fn a_transport_error_propagates() {
 
     let err = run_turn(&transport, home, "review-x", "main", &params).unwrap_err();
     assert_eq!(err.to_string(), "peer offline");
+}
+
+/// Returns a fresh `~/.mur`-shaped tempdir with a review channel created and
+/// the router's signing identity planted, so [`run_turn_with_retry`]'s
+/// `write_paused_and_revert` has somewhere real to write.
+fn setup_channel() -> (tempfile::TempDir, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    crate::channel_writer::plant_writer_identity(home);
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let channel_id = "review-ac14-channel".to_string();
+    svc.store()
+        .create(&mur_common::channel::Channel {
+            v: mur_common::channel::CHANNEL_SCHEMA_VERSION,
+            id: channel_id.clone(),
+            title: "t".into(),
+            goal: mur_common::channel::Goal::default(),
+            state: mur_common::channel::ChannelState::Working,
+            purpose: None,
+            owner: mur_common::channel::ChannelActor::System,
+            participants: vec![],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        })
+        .unwrap();
+    (tmp, channel_id)
+}
+
+/// AC14: send failure → exactly one retry (zero delay via injection, no real
+/// sleeping) → still failing → a signed `paused` event with the reason, plus
+/// mode reverted to semi-auto.
+#[test]
+fn ac14_two_failures_pause_with_reason_and_revert_to_semi_auto() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let transport = StubTransport::queue(vec![
+        Err(anyhow::anyhow!("peer offline")),
+        Err(anyhow::anyhow!("peer offline, retry also failed")),
+    ]);
+    let params = serde_json::json!({});
+
+    let outcome = run_turn_with_retry(
+        &transport,
+        home,
+        "review-x",
+        "reviewer",
+        &params,
+        &channel_id,
+        Duration::ZERO,
+    )
+    .unwrap();
+
+    assert_eq!(
+        transport.send_count(),
+        2,
+        "exactly one retry after the first failure"
+    );
+    let reason = match outcome {
+        RetryOutcome::Paused { reason } => reason,
+        other => panic!("expected Paused, got {other:?}"),
+    };
+    assert!(
+        reason.contains("peer offline, retry also failed"),
+        "reason should carry the retry's own failure text: {reason}"
+    );
+
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let events = svc.load_events(&channel_id).unwrap();
+    let mut saw_paused = false;
+    let mut saw_mode_changed = false;
+    for ev in &events {
+        if ev.kind != mur_common::channel::EventKind::Note {
+            continue;
+        }
+        if let NoteClassification::Review(env) = classify_note_payload(&ev.payload) {
+            match env.payload {
+                ReviewPayload::Paused { reason: r, .. } => {
+                    assert_eq!(r, reason);
+                    saw_paused = true;
+                }
+                ReviewPayload::ModeChanged { mode } => {
+                    assert_eq!(mode, super::schema::Mode::SemiAuto);
+                    saw_mode_changed = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        saw_paused,
+        "a paused event with the reason must be on the channel"
+    );
+    assert!(saw_mode_changed, "mode must revert to semi-auto");
+}
+
+/// AC14 (success path): the first send succeeds ⇒ no retry, no paused event.
+#[test]
+fn ac14_first_send_success_means_no_retry_and_no_pause() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let transport = StubTransport::fixed("ok");
+    let params = serde_json::json!({});
+
+    let outcome = run_turn_with_retry(
+        &transport,
+        home,
+        "review-x",
+        "reviewer",
+        &params,
+        &channel_id,
+        Duration::ZERO,
+    )
+    .unwrap();
+
+    assert_eq!(transport.send_count(), 1);
+    assert_eq!(outcome, RetryOutcome::Sent("ok".to_string()));
+}
+
+/// AC14 (recovers on retry): first send fails, the retry succeeds ⇒ no pause.
+#[test]
+fn ac14_retry_recovers_without_pausing() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let transport = StubTransport::queue(vec![
+        Err(anyhow::anyhow!("transient")),
+        Ok("recovered".to_string()),
+    ]);
+    let params = serde_json::json!({});
+
+    let outcome = run_turn_with_retry(
+        &transport,
+        home,
+        "review-x",
+        "reviewer",
+        &params,
+        &channel_id,
+        Duration::ZERO,
+    )
+    .unwrap();
+
+    assert_eq!(transport.send_count(), 2);
+    assert_eq!(outcome, RetryOutcome::Sent("recovered".to_string()));
+}
+
+/// A4 interacts with AC14: a stop observed on the retry attempt returns
+/// `Stopped`, not `Paused` — a kill-switch stop is a distinct stop path.
+#[test]
+fn ac14_stop_during_retry_wins_over_pausing() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let transport = StubTransport::queue(vec![Err(anyhow::anyhow!("first failure"))]);
+    let params = serde_json::json!({});
+
+    stop_fleet(home, "review-x");
+    let outcome = run_turn_with_retry(
+        &transport,
+        home,
+        "review-x",
+        "reviewer",
+        &params,
+        &channel_id,
+        Duration::ZERO,
+    )
+    .unwrap();
+
+    assert_eq!(outcome, RetryOutcome::Stopped);
+    assert_eq!(
+        transport.send_count(),
+        0,
+        "stopped before the first send even happens"
+    );
 }

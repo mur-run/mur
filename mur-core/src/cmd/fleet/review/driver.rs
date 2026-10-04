@@ -13,9 +13,13 @@
 //! again once a turn reports `Stopped`.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Result;
+use mur_channel::ChannelService;
+use mur_common::channel::{ChannelActor, EventKind};
 
+use super::schema::{Cumulative, Mode, ReviewPayload, to_note_payload};
 use crate::cmd::fleet::control;
 
 /// Send one A2A message to a named fleet member and return its reply text,
@@ -77,4 +81,99 @@ pub fn run_turn(
     }
     let reply = transport.send(member, params)?;
     Ok(TurnOutcome::Sent(reply))
+}
+
+/// Outcome of [`run_turn_with_retry`] (§8.1, AC14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryOutcome {
+    /// `.stopped` was observed before a send (first attempt or the retry);
+    /// no `paused` event is written — a stop is its own, separate stop path.
+    Stopped,
+    /// The first send succeeded; no retry happened.
+    Sent(String),
+    /// The first send failed, the retry (after `retry_delay`) also failed:
+    /// a signed `paused` event (with `reason`) and a `mode_changed` event
+    /// reverting to semi-auto were written to `channel_id`.
+    Paused { reason: String },
+}
+
+/// §8.1 / AC14: "A2A send failure or peer offline → one retry after a
+/// configured delay → still failing → pause, revert to semi-auto, and show
+/// the reason."
+///
+/// Each attempt goes through [`run_turn`], so `.stopped` is still checked
+/// before every send (A4) — a stop observed on either attempt returns
+/// `Stopped` immediately and writes no `paused` event, since a kill-switch
+/// stop is a distinct stop path, not a transport failure. `retry_delay` is
+/// an explicit parameter (not read from `constants::TRANSPORT_RETRY_DELAY`
+/// directly) so tests can pass `Duration::ZERO` and never sleep for real;
+/// production callers pass the named constant.
+#[allow(clippy::too_many_arguments)]
+pub fn run_turn_with_retry(
+    transport: &dyn ReviewTransport,
+    mur_home: &Path,
+    fleet_name: &str,
+    member: &str,
+    params: &serde_json::Value,
+    channel_id: &str,
+    retry_delay: Duration,
+) -> Result<RetryOutcome> {
+    match run_turn(transport, mur_home, fleet_name, member, params) {
+        Ok(TurnOutcome::Stopped) => return Ok(RetryOutcome::Stopped),
+        Ok(TurnOutcome::Sent(reply)) => return Ok(RetryOutcome::Sent(reply)),
+        Err(_first_err) => {}
+    }
+
+    std::thread::sleep(retry_delay);
+
+    match run_turn(transport, mur_home, fleet_name, member, params) {
+        Ok(TurnOutcome::Stopped) => Ok(RetryOutcome::Stopped),
+        Ok(TurnOutcome::Sent(reply)) => Ok(RetryOutcome::Sent(reply)),
+        Err(second_err) => {
+            let reason = format!("transport failure after one retry: {second_err}");
+            write_paused_and_revert(mur_home, channel_id, &reason)?;
+            Ok(RetryOutcome::Paused { reason })
+        }
+    }
+}
+
+/// Write the `paused` event (with `reason` and zeroed cumulative — the
+/// driver's caller owns the real running totals and is expected to fold
+/// them in before this point in the full loop; D2 lands the retry/pause
+/// mechanism in isolation, D3 wires it into a running session) and the
+/// `mode_changed` event reverting to semi-auto (§5, §8.1), both signed when
+/// the fleet's writer identity is available (migration-safe fallback to
+/// unsigned otherwise, same as every other channel writer in this crate).
+fn write_paused_and_revert(mur_home: &Path, channel_id: &str, reason: &str) -> Result<()> {
+    let svc = ChannelService::open(mur_home)?;
+    let zero = Cumulative {
+        exec_time_ms: 0,
+        cost_usd_micros: 0,
+    };
+    crate::channel_writer::append_as_writer(
+        &svc,
+        mur_home,
+        channel_id,
+        crate::channel_writer::ROUTER_AGENT,
+        ChannelActor::System,
+        EventKind::Note,
+        to_note_payload(&ReviewPayload::Paused {
+            reason: reason.to_string(),
+            cumulative: zero,
+        }),
+        None,
+    )?;
+    crate::channel_writer::append_as_writer(
+        &svc,
+        mur_home,
+        channel_id,
+        crate::channel_writer::ROUTER_AGENT,
+        ChannelActor::System,
+        EventKind::Note,
+        to_note_payload(&ReviewPayload::ModeChanged {
+            mode: Mode::SemiAuto,
+        }),
+        None,
+    )?;
+    Ok(())
 }
