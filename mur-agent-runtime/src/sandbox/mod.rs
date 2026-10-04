@@ -53,6 +53,25 @@ pub fn sealed_child_env(status: Option<&SandboxStatus>) -> Option<(&'static str,
     status.filter(|s| s.enforcing).map(|_| (SEALED_ENV, "1"))
 }
 
+/// True when the current process already runs under a macOS seatbelt profile.
+///
+/// macOS refuses a second `sandbox_init` inside a sandboxed process (`EPERM`),
+/// so tests that spawn a child which seals itself cannot pass from a sealed
+/// shell such as a MUR agent session (#1697). They call this to skip loudly.
+/// Asks the kernel rather than trusting an env marker: an inherited or missing
+/// variable would either hide a real failure or miss the seal. Always `false`
+/// off macOS, where nested sandboxes are permitted.
+pub fn current_process_sealed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::current_process_sealed()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// Apply the kernel sandbox derived from `entitlements` to the current process.
 /// Must be called once, early in `supervisor::entrypoint()`, after profile load.
 pub fn apply(
