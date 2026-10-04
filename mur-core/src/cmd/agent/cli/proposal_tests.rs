@@ -183,6 +183,7 @@ async fn hitl_esc_denies_and_leaves_the_chip() {
         tool_input: serde_json::json!({}),
         prompt: "approve?".into(),
         created_at: std::time::Instant::now(),
+        declared_risk: None,
     });
     handle_event(&mut a, Event::Key(press(KeyCode::Esc)), &tx).await;
     assert!(a.hitl.is_none(), "approval decided");

@@ -196,7 +196,7 @@ pub(super) fn render_hitl(
     let grant = crate::cmd::agent::cli::dest::grant_for(
         &hitl.tool_name,
         Some(&hitl.tool_input),
-        crate::cmd::agent::cli::tool_tier::classify(&hitl.tool_name, Some(&hitl.tool_input)),
+        hitl.tier(),
     );
     let mut keys: Vec<Line> = HITL_CHOICES
         .iter()
@@ -328,6 +328,7 @@ mod hitl_modal_tests {
             }),
             prompt: "Run `bash`?".into(),
             created_at: std::time::Instant::now(),
+            declared_risk: None,
         }
     }
 

@@ -83,7 +83,11 @@ pub(super) fn run_plain(
                 // asked what the call actually was. Above the ceiling there is
                 // no standing authority to lean on — a human at the keyboard
                 // may still answer, and a non-interactive run fails closed.
-                let tier = tool_tier::classify(tool, hitl.get("tool_input"));
+                // #1600: the declared `risk:` raises it, exactly as `HitlRequest::tier`.
+                let declared = hitl
+                    .get("risk")
+                    .and_then(|r| serde_json::from_value(r.clone()).ok());
+                let tier = tool_tier::effective_tier(tool, hitl.get("tool_input"), declared);
                 let within_ceiling = mur_common::hitl::tier_may_be_granted(tier);
                 let (allow, surface) = if auto && within_ceiling {
                     eprintln!(

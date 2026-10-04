@@ -224,7 +224,9 @@ pub struct ToolRule {
     pub pattern: String,
     pub policy: ToolPolicy,
     /// Intrinsic risk tier of this tool (v3c). Resolved most-restrictive-wins
-    /// against per-step risk + channel policy; gates pre-execution when not Read.
+    /// across every matching rule (see [`resolve_tool_risk`]); a tier above
+    /// `Write` turns `policy: allow` into a pre-execution approval (#1600).
+    /// `deny` still wins outright.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk: Option<crate::hitl::RiskTier>,
 }
@@ -260,6 +262,25 @@ pub fn resolve_tool_policy_opt(rules: &[ToolRule], tool_name: &str) -> Option<To
     best.map(|(rule, _)| rule.policy)
 }
 
+/// The declared `risk:` that applies to `tool_name` — the STRICTEST across
+/// every matching rule (exact or trailing-`*` glob), so the field comment's
+/// most-restrictive-wins holds even when a narrower rule decided the policy.
+/// `None` = no matching rule declares a risk; the caller's own classification
+/// stands alone.
+pub fn resolve_tool_risk(rules: &[ToolRule], tool_name: &str) -> Option<crate::hitl::RiskTier> {
+    rules
+        .iter()
+        .filter(|rule| {
+            rule.pattern == tool_name
+                || rule
+                    .pattern
+                    .strip_suffix('*')
+                    .is_some_and(|prefix| tool_name.starts_with(prefix))
+        })
+        .filter_map(|rule| rule.risk)
+        .max()
+}
+
 #[cfg(test)]
 mod tool_policy_tests {
     use super::*;
@@ -287,6 +308,42 @@ mod tool_policy_tests {
                 risk: None,
             },
         ]
+    }
+
+    fn risky(pattern: &str, policy: ToolPolicy, risk: RiskTier) -> ToolRule {
+        ToolRule {
+            pattern: pattern.into(),
+            policy,
+            risk: Some(risk),
+        }
+    }
+
+    use crate::hitl::RiskTier;
+
+    /// #1600: most-restrictive-wins across EVERY matching rule, not just the
+    /// one whose policy won — a narrow `allow` must not shed a broad rule's
+    /// `destructive`.
+    #[test]
+    fn tool_risk_is_the_strictest_matching_rule() {
+        let rules = vec![
+            risky("mcp__browser__*", ToolPolicy::Allow, RiskTier::Destructive),
+            risky("mcp__browser__click", ToolPolicy::Allow, RiskTier::Write),
+            risky("mcp__other__*", ToolPolicy::Allow, RiskTier::Privileged),
+        ];
+        assert_eq!(
+            resolve_tool_risk(&rules, "mcp__browser__click"),
+            Some(RiskTier::Destructive)
+        );
+        assert_eq!(
+            resolve_tool_risk(&rules, "mcp__browser__navigate"),
+            Some(RiskTier::Destructive)
+        );
+    }
+
+    #[test]
+    fn tool_risk_is_none_without_a_declaring_rule() {
+        assert_eq!(resolve_tool_risk(&rules(), "mcp__github__merge_pr"), None);
+        assert_eq!(resolve_tool_risk(&[], "bash"), None);
     }
 
     #[test]

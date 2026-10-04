@@ -62,7 +62,7 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             // session) answered `rm -rf`, `curl`, `sudo` and `git push
             // --force` with nobody in the loop. The ceiling gates all three
             // auto lanes at once; none of them can reach past it.
-            let tier = tool_tier::classify(&req.tool_name, Some(&req.tool_input));
+            let tier = req.tier();
             let within_ceiling = mur_common::hitl::tier_may_be_granted(tier);
             let read_auto = within_ceiling
                 && app.auto_reads

@@ -184,6 +184,17 @@ const CHAINING: &[char] = &[';', '|', '&', '`', '$', '>', '<', '\n'];
 /// The tier of one tool call. Never LLM-asserted, never read from anything
 /// the agent wrote — the same rule `mur-monitor`'s `action::risk::classify`
 /// states for its own table.
+/// #1600: the tier a gate decides on. The profile's declared `risk:` can only
+/// RAISE the classifier's answer (most-restrictive-wins) — a `risk: read` on a
+/// `rm -rf` must not drag it under the ceiling.
+pub fn effective_tier(
+    tool_name: &str,
+    tool_input: Option<&Value>,
+    declared: Option<RiskTier>,
+) -> RiskTier {
+    classify(tool_name, tool_input).max(declared.unwrap_or(RiskTier::Read))
+}
+
 pub fn classify(tool_name: &str, tool_input: Option<&Value>) -> RiskTier {
     if SPEND_TOOLS.contains(&leaf(tool_name)) {
         return RiskTier::Spend;
