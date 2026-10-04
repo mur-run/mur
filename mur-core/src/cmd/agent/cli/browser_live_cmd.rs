@@ -259,6 +259,26 @@ pub(super) fn ensure_spawn_allowed(allowed: &mut Vec<String>, command: &str) -> 
     Some(format!("allowed spawn of {command}"))
 }
 
+/// The build dir of the newest complete headless shell under `browsers`
+/// (#1639). The sealed live server execs that binary, which no allowlisted
+/// program covers, so the grant is the build dir — the same lane `perm
+/// allow-spawn-dir` opens, scoped to one Playwright revision.
+pub(super) fn live_spawn_dir(browsers: Option<&Path>) -> Option<String> {
+    let dir = browsers?;
+    let exe = mur_browser::chromium::headless_shell_exe(dir)?;
+    let build = exe.strip_prefix(dir).ok()?.components().next()?;
+    Some(dir.join(build).to_string_lossy().into_owned())
+}
+
+/// Add `dir` to the spawn-dir allowlist if absent; one note when it changed.
+pub(super) fn ensure_spawn_dir(dirs: &mut Vec<String>, dir: &str) -> Option<String> {
+    if dirs.iter().any(|d| d == dir) {
+        return None;
+    }
+    dirs.push(dir.to_string());
+    Some(format!("allowed spawn under {dir}"))
+}
+
 /// Reply when a rerun changes nothing: no restart, nothing written.
 pub(super) fn unchanged_text(hosts: &[String]) -> String {
     format!(
@@ -348,7 +368,23 @@ impl LiveOps for ProfileOps<'_> {
     fn mcp_add(&mut self, argv: &[String], network: McpServerNetwork) -> anyhow::Result<String> {
         let fs = self.prepared_fs()?;
         let command = live_command(std::env::current_exe());
-        Ok(manage::mcp_add_with_policy(self.0, LIVE_ENTRY, &command, argv, Some(network), &fs)?.0)
+        let browsers = mur_browser::chromium::system_browsers_dir();
+        let spawn_dirs: Vec<String> = live_spawn_dir(browsers.as_deref()).into_iter().collect();
+        let policy = manage::Policy {
+            fs: &fs,
+            spawn_dirs: &spawn_dirs,
+        };
+        Ok(
+            manage::mcp_add_with_policy(
+                self.0,
+                LIVE_ENTRY,
+                &command,
+                argv,
+                Some(network),
+                &policy,
+            )?
+            .0,
+        )
     }
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>> {
         let fs = self.prepared_fs()?;
@@ -374,6 +410,13 @@ impl LiveOps for ProfileOps<'_> {
                 &mut profile.entitlements.processes.spawn.allowed,
                 &command,
             ));
+            let browsers = mur_browser::chromium::system_browsers_dir();
+            if let Some(dir) = live_spawn_dir(browsers.as_deref()) {
+                notes.extend(ensure_spawn_dir(
+                    &mut profile.entitlements.processes.spawn.allowed_dirs,
+                    &dir,
+                ));
+            }
         }
         // Nothing to persist: skip the write so `updated_at` stays put and the
         // caller can tell "no change" from "saved".
