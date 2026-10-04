@@ -65,12 +65,6 @@ pub struct EscalationRecord {
     pub reason: String,
 }
 
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::SemiAuto
-    }
-}
-
 impl Ledger {
     /// §3.3: "Open set = `open` ∪ `disputed`."
     pub fn open_set(&self) -> BTreeMap<String, FindingStatus> {
