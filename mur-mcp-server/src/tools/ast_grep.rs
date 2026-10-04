@@ -19,9 +19,7 @@ use super::{Tool, ToolInputSchema, ToolParam};
 
 pub const TOOL_NAME: &str = "ast_grep_search";
 
-/// The only ast-grep version MUR runs. Phase 0 findings (flag spelling,
-/// exit 79 = config error, `--json=stream` shape) were verified against it.
-pub const AST_GREP_PINNED_VERSION: &str = "0.45.3";
+pub use mur_common::config::AST_GREP_PINNED_VERSION;
 
 /// Directory under mur home holding managed tools; setup (phase 3) installs
 /// here and the resolver reads only from here.
