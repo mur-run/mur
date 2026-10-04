@@ -62,11 +62,7 @@ pub(super) async fn prepare_and_seal(
         // carry a first-party sibling (`mur-research-gateway`) and no
         // `mur-mcp-server` at all — that is exactly the deep-research worker
         // shape that crash-looped.
-        match std::env::current_exe().ok().and_then(|e| {
-            e.canonicalize()
-                .ok()
-                .and_then(|c| c.parent().map(Path::to_path_buf))
-        }) {
+        match mur_common::mcp_first_party::current_install_dir() {
             Some(runtime_dir) => {
                 if let Err(e) = crate::mcp_repin::repin_first_party(
                     agent_home,
