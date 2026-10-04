@@ -268,26 +268,35 @@ fn apply(
     crate::cmd::agent::save_profile(&ppath, &mut profile)?;
     writeln!(out, "  ✓ profile entry `serena`: {change:?}")?;
 
+    // The quiet `grant_*` forms: the consent table above already named each
+    // grant, and the running-agent warning is printed once, below, instead
+    // of once per grant.
     for p in &plan.permissions {
         match p {
-            Permission::Spawn(b) => crate::cmd::agent::cmd_perm_allow_spawn(agent, b)?,
-            Permission::Read(d) => crate::cmd::agent::cmd_perm_allow_read(agent, path_str(d)?)?,
-            Permission::SpawnDir(d) => {
-                crate::cmd::agent::cmd_perm_allow_spawn_dir(agent, path_str(d)?)?
-            }
+            Permission::Spawn(b) => crate::cmd::agent::grant_spawn(agent, b)?,
+            Permission::Read(d) => crate::cmd::agent::grant_read(agent, path_str(d)?)?,
+            Permission::SpawnDir(d) => crate::cmd::agent::grant_spawn_dir(agent, path_str(d)?)?,
         }
         m.granted.insert(consent::grant_key(p));
     }
     // Both entry points are scripts run by a venv interpreter uv chose;
     // the seal must exec each one (requirement 3).
     let entry_points = std::iter::once(&record.bin).chain(pyright.as_ref().map(|r| &r.bin));
+    let mut lanes: Vec<PathBuf> = Vec::new();
     for bin in entry_points {
         for lane in interpreter_lanes(bin)? {
-            crate::cmd::agent::cmd_perm_allow_spawn_dir(agent, path_str(&lane)?)?;
-            m.granted.insert(format!("spawn-dir {}", lane.display()));
+            if !lanes.contains(&lane) {
+                lanes.push(lane);
+            }
         }
     }
+    for lane in &lanes {
+        crate::cmd::agent::grant_spawn_dir(agent, path_str(lane)?)?;
+        m.granted.insert(format!("spawn-dir {}", lane.display()));
+        writeln!(out, "  ✓ exec lane {}", lane.display())?;
+    }
     writeln!(out, "  ✓ permissions granted")?;
+    crate::cmd::agent::warn_if_running(agent);
 
     m.languages
         .extend(langs.iter().map(|l| l.flag().to_owned()));

@@ -27,6 +27,8 @@ const PACKAGE: &str = "pyright";
 const UV_TOOL_SUBDIR: &str = "uv-tools";
 const BIN_SUBDIR: &str = "bin";
 const PYTHON_SUBDIR: &str = "python";
+/// The venv metadata file naming the base interpreter.
+const PYVENV_CFG: &str = "pyvenv.cfg";
 /// The entry point serena launches (`ls_path`).
 const ENTRY_POINT: &str = "pyright-langserver";
 /// Dependency resolution cutoff: the serena pin's date, the environment
@@ -75,6 +77,10 @@ pub fn install_command(uv: &Path, dir: &Path, reinstall: bool) -> Command {
         .env("UV_TOOL_BIN_DIR", dir.join(BIN_SUBDIR))
         .env("UV_PYTHON_INSTALL_DIR", dir.join(PYTHON_SUBDIR))
         .args(["tool", "install", "--no-config"])
+        // Without this uv takes the first Python on PATH (a conda or system
+        // one), and setup would then grant exec of that interpreter's whole
+        // `bin` dir. A uv-managed Python lands in `<dir>/python/`.
+        .args(["--python-preference", "only-managed"])
         .args(["--exclude-newer", PYRIGHT_EXCLUDE_NEWER]);
     if reinstall {
         c.args(["--force", "--reinstall"]);
@@ -90,9 +96,24 @@ pub fn installed_state(dir: &Path) -> Installed {
     }
     match recorded_version(dir) {
         None => Installed::Missing,
-        Some(v) if v == PYRIGHT_PIN => Installed::Verified,
+        Some(v) if v == PYRIGHT_PIN && managed_interpreter(dir) => Installed::Verified,
         Some(_) => Installed::Mismatch,
     }
+}
+
+/// The venv's base interpreter (`home` in `pyvenv.cfg`) is the uv-managed
+/// one under `<dir>/python/`. An install made before `only-managed` points at
+/// whatever Python was on PATH; treating it as a mismatch makes the next run
+/// reinstall instead of granting exec of that foreign `bin` dir.
+fn managed_interpreter(dir: &Path) -> bool {
+    let cfg = dir.join(UV_TOOL_SUBDIR).join(PACKAGE).join(PYVENV_CFG);
+    let Ok(text) = std::fs::read_to_string(cfg) else {
+        return false;
+    };
+    text.lines()
+        .filter_map(|l| l.split_once('='))
+        .find(|(k, _)| k.trim() == "home")
+        .is_some_and(|(_, v)| Path::new(v.trim()).starts_with(dir.join(PYTHON_SUBDIR)))
 }
 
 /// Install (or replace a mismatched install) and verify the result.

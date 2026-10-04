@@ -14,6 +14,16 @@ fn fake_install(dir: &Path, version: &str) {
     let bin = langserver_path_in(dir);
     std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
     std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+    let home = dir
+        .join(PYTHON_SUBDIR)
+        .join("cpython-3.13.2-macos-aarch64-none/bin");
+    set_venv_home(dir, &home);
+}
+
+fn set_venv_home(dir: &Path, home: &Path) {
+    let cfg = dir.join(UV_TOOL_SUBDIR).join(PACKAGE).join(PYVENV_CFG);
+    let text = format!("home = {}\nimplementation = CPython\n", home.display());
+    std::fs::write(cfg, text).unwrap();
 }
 
 fn env_of(cmd: &Command, key: &str) -> Option<PathBuf> {
@@ -122,4 +132,25 @@ fn record_carries_the_pin_and_ls_path() {
         r.bin
             .ends_with(format!("bin/{ENTRY_POINT}{}", std::env::consts::EXE_SUFFIX))
     );
+}
+
+#[test]
+fn command_requires_a_uv_managed_python() {
+    let cmd = install_command(Path::new("uv"), Path::new("/h/p"), false);
+    let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy()).collect();
+    let at = args
+        .iter()
+        .position(|a| a == "--python-preference")
+        .unwrap();
+    assert_eq!(args[at + 1], "only-managed");
+}
+
+/// An install whose venv was built on a PATH Python (conda, system) is not
+/// verified, so the next setup reinstalls rather than granting that bin dir.
+#[test]
+fn foreign_interpreter_is_a_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_install(tmp.path(), PYRIGHT_PIN);
+    set_venv_home(tmp.path(), Path::new("/Users/x/miniconda3/bin"));
+    assert_eq!(installed_state(tmp.path()), Installed::Mismatch);
 }
