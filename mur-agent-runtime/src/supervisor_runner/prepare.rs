@@ -130,7 +130,7 @@ pub(crate) async fn prepare_runtime(
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // code-nav 2.4: `kind: serena` entries must pin an existing project and
-    // pass the C1–C8 preflight. Same fail-closed path as rules 11/6 and for
+    // pass the C1–C9 preflight. Same fail-closed path as rules 11/6 and for
     // the same reason: the hook chain below can only warn.
     crate::mcp::serena::verify_entries(&profile.inner.enabled_mcp_servers(), agent_home)
         .map_err(|e| anyhow::anyhow!(e))?;

@@ -140,7 +140,7 @@ serena (LSP-backed code navigation, opt-in) is the first MCP entry whose risk is
 - **`--project <root>`** comes from the entry's own `project:` field, which is written at setup into `profile.yaml`. That file is write-protected (`SELF_PROTECTED_WRITE_ONLY`), so the agent cannot retarget it. `project:` is never inferred from the session cwd.
 - **The dashboard is forced off**: `--enable-web-dashboard false --open-web-dashboard false`. serena defaults it to on.
 
-### The checks, C1–C8
+### The checks, C1–C9
 
 `preflight` runs at **startup** (`verify_entries`, before the agent comes up) **and at every spawn** (`launch_additions`, before the child exists). The spawn re-run is not optional: serena rewrites its own `serena_config.yml` while it runs (registering a new project calls `_save()`), so a startup-only check is stale by the next spawn. Every refusal names the file, the key, what was found and what was expected.
 
@@ -154,6 +154,9 @@ serena (LSP-backed code navigation, opt-in) is the first MCP entry whose risk is
 | C6 | `web_dashboard: false` | Absent means serena's default `true` |
 | C7 | No `ls_specific_settings.<lang>` sets `ls_path` or `ls_base_cmd` | Either one replaces the language-server executable — arbitrary exec |
 | C8 | When C/C++ may run: effective clangd args contain `--enable-config=false` and no `--query-driver*`; `compile_commands_dir` resolves under `<SERENA_HOME>/projects` | clangd reads repo `.clangd` files and can be told to run arbitrary compiler drivers |
+| C9 | `projects` is present and a list (empty or null is fine) | serena's loader raises without it, and its error does not name the file; C9 refuses first with a `serena C9:` message |
+
+**Phase 2 never writes `serena_config.yml`.** A missing or incomplete config refuses (C1, C2, C3–C9); nothing is generated or repaired. This matters because serena treats *any* missing mapped field as a migration and rewrites the whole file, filling an absent `trusted_project_path_patterns` with `["**"]` (#1688). Generating a complete config is Phase 3 (install), and pre-filling `projects` there is part of the G1 v2 fix below.
 
 **Why C7/C8 read only the global config.** serena ignores a project's `ls_specific_settings` for an untrusted project (upstream serena, `project.py` lines 522–530). With C3 holding, no project is trusted, so the global file is the only place those settings can come from.
 
@@ -183,7 +186,7 @@ The gate exists on both sides. C5 checks serena's own config. `admit_tools` filt
 
 - **The risk.** `SERENA_HOME` is under the agent home, inside the agent's write grant. The runtime's write-deny list (`SELF_PROTECTED_AGENT_FILES` in `mur-agent-runtime/src/sandbox/policy/mod.rs`) covers `profile.yaml` and the identity files only. So the agent's own file tools can edit `serena_config.yml` and the MUR-owned `project.yml` — for example, adding an `ls_path`.
 - **When it can be exploited.** Only at the **next spawn**. serena reads its global config once at startup and builds language servers from that in-memory copy. The one runtime re-read (`_persist_projects`) loads the disk copy only to write the project list back; it does not replace the running settings. A running serena is unaffected.
-- **Why v1 accepts it.** Every exploit path goes through a spawn, and every spawn re-runs C1–C8, so an edited config refuses (C3/C5/C6/C7) instead of launching. The MUR-side `admit_tools` gate holds regardless of the config.
+- **Why v1 accepts it.** Every exploit path goes through a spawn, and every spawn re-runs C1–C9, so an edited config refuses (C3/C5/C6/C7) instead of launching. The MUR-side `admit_tools` gate holds regardless of the config.
 - **The v2 fix.** Pre-register the project in `serena_config.yml` at setup, so serena never reaches `_persist_projects` → `_save()`, then add `serena_config.yml` to the write-deny list. This needs proof first that a pre-registered project never triggers a save, or the deny breaks serena.
 
 ---
@@ -215,7 +218,7 @@ The open follow-on is to connect the two: a server whose provenance cannot be ve
 | Package spec parsing / version resolution | `mur-common/src/mcp_package.rs` |
 | Which lockfile a pin covers | `mur-common/src/agent/mcp.rs` — `McpPackagePin::lockfile_path` |
 | Fleet-wide reporting | `mur-core/src/cmd/misc.rs` — `report_mcp_pins`, behind `mur doctor` |
-| serena preflight (C1–C8) | `mur-agent-runtime/src/mcp/serena/preflight.rs` — `preflight` |
+| serena preflight (C1–C9) | `mur-agent-runtime/src/mcp/serena/preflight.rs` — `preflight` |
 | serena startup gate | `mur-agent-runtime/src/mcp/serena/mod.rs` — `verify_entries`, called from `supervisor_runner/prepare.rs` |
 | serena spawn gate + launch env/args | `mur-agent-runtime/src/mcp/serena/mod.rs` — `launch_additions`, called from `protocol/mcp_client.rs` — `StdioMcpClient::spawn` |
 | serena tool allow-list | `mur-agent-runtime/src/mcp/serena/mod.rs` — `SERENA_TOOL_ALLOWLIST`, `admit_tools`, called from `mur-agent-runtime/src/tools/registry.rs` |

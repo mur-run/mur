@@ -4,7 +4,7 @@
 //! Everything here is derived from the agent home and the entry's fixed
 //! `project:` — never from the session cwd and never from the profile's
 //! free-form fields — so the spawn site, the preflight and the tool filter
-//! all see the same paths. The pure preflight (C1–C8) is in [`preflight`];
+//! all see the same paths. The pure preflight (C1–C9) is in [`preflight`];
 //! [`verify_entries`] is the startup gate (2.4); spawn wiring is 2.5–2.6.
 
 mod preflight;

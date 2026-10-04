@@ -1,7 +1,7 @@
 //! Pure preflight for a `kind: serena` MCP entry (code-nav 2.3).
 //!
 //! Reads `serena_config.yml` (and, for C8 only, the resolved project's
-//! `project.yml`) and refuses unless every check C1–C8 holds. It runs at
+//! `project.yml`) and refuses unless every check C1–C9 holds. It runs at
 //! every spawn, not only at startup, because serena rewrites its own global
 //! config at runtime.
 //!
@@ -26,6 +26,8 @@ use serde_yaml_ng::Value;
 use super::{SERENA_TOOL_ALLOWLIST, SerenaPaths};
 
 /// Keys in `serena_config.yml` / `project.yml`.
+/// serena's loader raises when this key is missing (C9).
+const KEY_PROJECTS: &str = "projects";
 const KEY_TRUSTED: &str = "trusted_project_path_patterns";
 const KEY_FOLDER: &str = "project_serena_folder_location";
 const KEY_FIXED: &str = "fixed_tools";
@@ -120,6 +122,15 @@ pub enum SerenaPreflightError {
         expected: String,
         hint: Box<str>,
     },
+    /// serena refuses to load a config without `projects` and its own error
+    /// does not say which file; this names it before serena ever starts.
+    #[error("serena C9: {file}: `{key}` is {found}, expected {expected}")]
+    C9Projects {
+        file: PathBuf,
+        key: String,
+        found: String,
+        expected: String,
+    },
 }
 
 /// Build a variant from `(file, key, found, expected)`.
@@ -134,7 +145,7 @@ macro_rules! fail {
     };
 }
 
-/// Run C1–C8 against what is on disk now.
+/// Run C1–C9 against what is on disk now.
 pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaPreflightError> {
     let cfg_file = paths.config_file.as_path();
 
@@ -238,7 +249,26 @@ pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaP
         check_clangd(cpp, cfg_file, paths, project_root)
             .map_err(|e| e.into_c8(why, &folder, paths))?;
     }
-    Ok(())
+
+    // C9: serena iterates `projects or []`, so null is its empty list; a
+    // missing key makes serena raise at load.
+    match cfg.get(KEY_PROJECTS) {
+        Some(Value::Sequence(_) | Value::Null) => Ok(()),
+        Some(v) => fail!(
+            C9Projects,
+            cfg_file,
+            KEY_PROJECTS,
+            kind(v),
+            "a list (may be empty)"
+        ),
+        None => fail!(
+            C9Projects,
+            cfg_file,
+            KEY_PROJECTS,
+            ABSENT,
+            "a list (may be empty)"
+        ),
+    }
 }
 
 /// Why C8 applies. Each reason maps to the fixes that actually help.

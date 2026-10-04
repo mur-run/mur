@@ -333,7 +333,7 @@ module, those files get call sites only).
       rewrite its own config. Test: a fake tools/list containing write tools
       and `get_diagnostics_for_file` registers exactly the five.
 - [ ] 2.7 **Docs.** `docs/architecture/mcp-supply-chain.md`: a `kind:
-      serena` section — what C1–C8 cover, what they cannot (code running
+      serena` section — what C1–C9 cover, what they cannot (code running
       *inside* an LSP the user enabled; rust-analyzer per item 16), why no
       generic `env` field (D1), why five tools (D2), and the agent-writable
       config gap (G1) with all four parts: the risk, when it can be
@@ -349,6 +349,11 @@ module, those files get call sites only).
         is not.
       - C4 also canonicalizes, so a symlink in `projects_dir` that leads
         back into the repo is refused (not in the original task text).
+      - C9 (#1688): `projects` must be present (a list, or null). serena
+        raises without it and its message does not name the file.
+      - Phase 2 never writes `serena_config.yml`; a missing or incomplete
+        config refuses. Generating a complete config is Phase 3, and
+        pre-filling `projects` is part of the G1 v2 fix (#1688 point 2).
       - Known gap, accepted for v1: `cpp_ccls` (ccls) is not checked. C7
         still blocks `ls_path` / `ls_base_cmd` for every language, and ccls
         is never serena's default; v2 reviews ccls's own config loading.
@@ -361,7 +366,7 @@ module, those files get call sites only).
 - **Layer B — end-to-end (fleet or user; serena does not run inside the MUR
   seal: `bad interpreter: Operation not permitted`, same as item 16):**
   1. Valid config ⇒ agent starts, tools/list shows exactly the five.
-  2. Each of C1–C8 broken in turn ⇒ startup refused with that check's error
+  2. Each of C1–C9 broken in turn ⇒ startup refused with that check's error
      (C8 needs a C/C++-enabled fixture with clangd installed).
   3. Hostile repo `.serena/project.yml` with `ls_path` ⇒ marker never runs.
   4. Config rewritten between two spawns to `trusted_project_path_patterns:

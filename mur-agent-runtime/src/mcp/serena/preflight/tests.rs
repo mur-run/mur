@@ -15,6 +15,7 @@ excluded_tools: []
 included_optional_tools: []
 web_dashboard: false
 ls_specific_settings: {}
+projects: []
 "#;
 
 /// Agent home + repo + MUR-owned project folder with a non-C++
@@ -310,4 +311,25 @@ fn c8_message_explains_reason_and_fix() {
         msg.contains("ls_specific_settings.cpp.ls_extra_args"),
         "{msg}"
     );
+}
+
+#[test]
+fn c9_projects_absent_or_wrong_type() {
+    let fx = Fx::new();
+    fx.patch("projects: []\n", "");
+    let msg = assert_refused!(fx, C9Projects).to_string();
+    assert!(msg.contains("serena C9"), "{msg}");
+    assert!(msg.contains("serena_config.yml"), "{msg}");
+    assert!(msg.contains("`projects` is <absent>"), "{msg}");
+    fx.patch("projects: []", "projects: nope");
+    assert_refused!(fx, C9Projects);
+}
+
+#[test]
+fn c9_null_or_listed_projects_are_fine() {
+    let fx = Fx::new();
+    fx.patch("projects: []", "projects:");
+    fx.run().unwrap();
+    fx.patch("projects: []", "projects:\n  - /some/repo");
+    fx.run().unwrap();
 }

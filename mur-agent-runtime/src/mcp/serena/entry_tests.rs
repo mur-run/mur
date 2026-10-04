@@ -28,7 +28,8 @@ impl Fx {
                 "trusted_project_path_patterns: []\n\
                  project_serena_folder_location: '{}/$projectFolderName'\n\
                  fixed_tools: [{tools}]\n\
-                 web_dashboard: false\n",
+                 web_dashboard: false\n\
+                 projects: []\n",
                 paths.projects_dir.display()
             ),
         )
