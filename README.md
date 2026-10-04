@@ -806,6 +806,14 @@ OpenClaw, OpenCode, Amp, Codex, Aider, Windsurf, Zed, Junie, Trae, Cline, and
 Amazon Q. The compression tools (`mur_compress` / `mur_retrieve`) shrink large
 payloads 40–80%, reversibly — originals stay retrievable by hash.
 
+**Code navigation for agents.** `mur code-nav setup --agent <name>` gives an
+agent structural search with ast-grep; add `--with-serena --project <repo>` for
+LSP-backed symbol lookup (definitions, references, hover). Every binary and
+Python interpreter it installs lives under `~/.mur/tools/`, the agent's sandbox
+is granted exec only there, and serena's config is checked before every launch
+so a repo can't swap in its own language server. High-risk language servers
+(Rust, TypeScript, Go, …) stay off unless you name them with `--lsp`.
+
 ---
 
 ## 🦀 Architecture
@@ -846,7 +854,7 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (34 top-level commands)</summary>
+<summary><b>Full command tree</b> (35 top-level commands)</summary>
 
 ```
 mur
@@ -874,6 +882,7 @@ mur
 │                default · fallback · smart · migrate   (connect = one key, many models)
 ├── source       external knowledge — Obsidian · Notion · Joplin
 ├── project      index · search   (semantic code search)
+├── code-nav     setup   (ast-grep + opt-in serena LSP navigation for an agent, sandboxed under ~/.mur/tools)
 ├── daemon       start · stop · restart · status · serve · sleep
 ├── dashboard    terminal dashboard
 ├── browser      record · replay · auth · broker · list · show · export · status   (browser work through Playwright MCP)
