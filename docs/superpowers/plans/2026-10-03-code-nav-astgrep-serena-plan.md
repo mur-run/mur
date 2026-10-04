@@ -612,11 +612,14 @@ Findings that change the Phase 3 design:
 
 ### Phase 3 tasks
 
-- [ ] 3.1 Planner (pure): flags + detected prerequisites → plan with three
-      tables (install, permissions, LSP risk). High (Rust, Go, Java, Swift,
-      Ruby) needs `--lsp <lang>`; Rust row states `rust` ≡ `rust-full`.
-      Missing prerequisites produce a visible "disabled: <tool> not found"
-      row (finding 4).
+- [x] 3.1 Planner (pure): flags + detected prerequisites → plan with three
+      tables (install, permissions, LSP risk). High (Rust, Kotlin,
+      TypeScript, Go, Java, Swift, Ruby) needs `--lsp <lang>`; Rust row
+      states `rust` ≡ `rust-full`. Missing prerequisites produce a visible
+      "disabled: <tool> not found" row (finding 4). Untiered languages
+      (Dart, Bash, C#, F#, Scala, Elixir) are refused by name.
+      `mur-core/src/cmd/code_nav/plan.rs`; `AST_GREP_PINNED_VERSION` moved
+      to `mur-common` so the installer and the resolver share one pin.
 - [ ] 3.2 ast-grep install: download 0.45.3, verify sha256 (per-platform
       constants), place at `binary_path()` under `<mur_home>/tools/ast-grep/`.
 - [ ] 3.3 serena install per P3-D2; pin recorded in the setup manifest.

@@ -10,6 +10,10 @@
 
 use super::*;
 
+/// The only ast-grep version MUR runs. Phase 0 findings (flag spelling,
+/// exit 79 = config error, `--json=stream` shape) were verified against it.
+/// Shared by the MCP tool (resolver) and `mur code-nav setup` (installer).
+pub const AST_GREP_PINNED_VERSION: &str = "0.45.3";
 /// Default number of matches returned per call.
 pub const AST_GREP_DEFAULT_MAX_RESULTS: u32 = 200;
 /// Default context lines around each match (ast-grep `--context`).
