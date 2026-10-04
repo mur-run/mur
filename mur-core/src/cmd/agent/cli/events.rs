@@ -158,12 +158,14 @@ pub(super) async fn event_loop(
             events = EventStream::new();
             match outcome {
                 Ok(s) if s.success() => {
-                    app.push_system(format!(
-                        "{}: logged in ✓ — no restart needed, the gateway re-reads per request",
-                        req.label
-                    ));
+                    app.push_system(req.done_note.clone().unwrap_or_else(|| {
+                        format!(
+                            "{}: logged in ✓ — no restart needed, the gateway re-reads per request",
+                            req.label
+                        )
+                    }))
                 }
-                Ok(s) => app.push_error(format!("{}: login exited with {s}", req.label)),
+                Ok(s) => app.push_error(format!("{}: exited with {s}", req.label)),
                 Err(e) => app.push_error(format!("{}: handover failed: {e:#}", req.label)),
             }
             app.needs_full_redraw = true;

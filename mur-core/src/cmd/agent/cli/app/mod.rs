@@ -123,6 +123,10 @@ pub struct HandoverRequest {
     pub argv: Vec<String>,
     /// What to name in the before/after system messages.
     pub label: String,
+    /// The success line. `None` keeps `/login`'s wording; a `!command` that
+    /// needed the terminal sets its own, since "logged in" would be a lie for
+    /// anything but a login.
+    pub done_note: Option<String>,
     /// Held for the child's lifetime; dropped with the request.
     pub _lock: Option<crate::cmd::agent::cli::login::LoginLock>,
 }

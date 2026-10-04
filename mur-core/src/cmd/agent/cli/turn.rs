@@ -68,6 +68,22 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             app.push_system("a `!command` is already running — Ctrl-C to stop it");
             return;
         }
+        // A command that waits on the user's own keystrokes cannot run on
+        // the piped path: its stdin is null, so the first read is EOF and
+        // `mur browser auth` dies with "stdin closed" before the person has
+        // finished signing in. Hand it the real terminal instead, the way
+        // `/login` does. Its output goes straight to the terminal, so there
+        // is no card and nothing is forwarded to the agent.
+        if shell::needs_terminal(cmd) {
+            app.pending_handover = Some(super::app::HandoverRequest {
+                pre: vec![],
+                argv: shell::handover_argv(cmd),
+                label: format!("!{cmd}"),
+                done_note: Some(format!("!{cmd}: finished ✓")),
+                _lock: None,
+            });
+            return;
+        }
         let (child, pid) = match shell::spawn(cmd).await {
             Ok(v) => v,
             Err(e) => {

@@ -705,6 +705,7 @@ fn request_login_handover(app: &mut crate::cmd::agent::cli::app::App, p: Provide
         pre: steps,
         argv,
         label: p.label().to_string(),
+        done_note: None,
         _lock: lock,
     });
 }
