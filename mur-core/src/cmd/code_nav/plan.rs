@@ -22,9 +22,9 @@ pub const SERENA: &str = "serena";
 pub const SERENA_PIN: &str = "2.0.0.dev0";
 /// Install-time prerequisite for serena (P3-D2). MUR does not install uv.
 pub const UV: &str = "uv";
-/// `<mur_home>/tools/<name>/<version>/` — the managed-tools root, shared
-/// with the ast-grep resolver in `mur-mcp-server`.
-const TOOLS_DIR: &str = "tools";
+// `<mur_home>/tools/<name>/<version>/` — the managed-tools root, shared
+// with the ast-grep resolver in `mur-mcp-server`.
+use mur_common::config::MUR_TOOLS_DIR as TOOLS_DIR;
 
 /// Languages serena may run, but setup refuses until each one has been
 /// probed against a hostile repo (item 17: not yet tiered).

@@ -5,4 +5,5 @@
 //! config generator, the profile entry and the consent flow (3.2–3.6) build
 //! on [`plan::Plan`].
 
+pub mod ast_grep_install;
 pub mod plan;
