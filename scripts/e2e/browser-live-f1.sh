@@ -27,6 +27,12 @@
 #   --keep                 leave the agent and the fixture running for a
 #                          manual look (prints the cleanup commands)
 #
+# Env:
+#   F1_EVIDENCE_DIR        where a failed run (without --keep) copies the
+#                          agent's conversations, telemetry, logs, the reply,
+#                          and the fixture log before cleanup removes the
+#                          agent (default: a new directory under $TMPDIR)
+#
 # Everything it creates is namespaced `e2e_browser_live` and removed on exit.
 
 set -euo pipefail
@@ -34,6 +40,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 AGENT="e2e_browser_live"
+FIXTURE_LOG="/tmp/browser-live-f1-fixture.log"
+AGENT_CREATED=0
 MODEL_ARGS=()
 KEEP=0
 while [[ $# -gt 0 ]]; do
@@ -41,7 +49,7 @@ while [[ $# -gt 0 ]]; do
     --model)    MODEL_ARGS+=(--model "$2"); shift 2 ;;
     --provider) MODEL_ARGS+=(--provider "$2"); shift 2 ;;
     --keep)     KEEP=1; shift ;;
-    -h|--help)  sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
@@ -84,7 +92,33 @@ cleanup() {
   fi
   [[ -n "$FIXTURE_PID" ]] && kill "$FIXTURE_PID" 2>/dev/null || true
   "$MUR" agent stop "$AGENT" >/dev/null 2>&1 || true
+  # Stop before copying so the runtime has flushed its logs; copy before
+  # `remove --purge`, which deletes the only record of the turn's tool calls.
+  # Only once this run created the agent: an earlier exit would copy a
+  # previous run's leftover directory and pass it off as this failure.
+  [[ $rc -ne 0 && $AGENT_CREATED -eq 1 ]] && save_evidence "$rc"
   "$MUR" agent remove "$AGENT" --purge --force >/dev/null 2>&1 || true
+}
+
+# A failed run without --keep used to lose the agent directory to cleanup(),
+# so an intermittent failure (#1685) left nothing to diagnose. Copy what
+# explains a turn — conversation, tool-call ledger, runtime logs, the reply,
+# and the fixture's request log — to F1_EVIDENCE_DIR (default: a fresh
+# directory under $TMPDIR).
+save_evidence() {
+  local rc=$1 agent_dir="$MUR_HOME_DIR/agents/$AGENT" dest item
+  # Runs inside the EXIT trap under `set -e`: never fail here, or the
+  # `remove` after it is skipped.
+  dest="${F1_EVIDENCE_DIR:-}"
+  [[ -n "$dest" ]] || dest="$(mktemp -d "${TMPDIR:-/tmp}/browser-live-f1-evidence.XXXXXX" 2>/dev/null)" || true
+  [[ -n "$dest" ]] && mkdir -p "$dest" 2>/dev/null || { echo "evidence: cannot create a directory; nothing saved" >&2; return 0; }
+  for item in conversations telemetry actions stderr.log stdout.log profile.yaml; do
+    [[ -e "$agent_dir/$item" ]] && cp -R "$agent_dir/$item" "$dest/" 2>/dev/null
+  done
+  [[ -f "$FIXTURE_LOG" ]] && cp "$FIXTURE_LOG" "$dest/fixture.log"
+  [[ -n "${REPLY:-}" ]] && printf '%s\n' "$REPLY" >"$dest/reply.txt"
+  echo "exit $rc" >"$dest/exit-code"
+  echo "evidence from the failed run (exit $rc) saved to: $dest" >&2
 }
 trap cleanup EXIT
 
@@ -93,7 +127,7 @@ MUR_BROWSER_E2E=1 cargo test -p mur-core --test browser_live_f1 --quiet
 
 echo "==> 1/5 fixture: two HTTPS shops on 127.0.0.1"
 FIXTURE_OUT="$(mktemp)"
-python3 scripts/e2e/browser-live-fixture.py --parent-pid $$ >"$FIXTURE_OUT" 2>/tmp/browser-live-f1-fixture.log &
+python3 scripts/e2e/browser-live-fixture.py --parent-pid $$ >"$FIXTURE_OUT" 2>"$FIXTURE_LOG" &
 FIXTURE_PID=$!
 for _ in $(seq 1 50); do
   [[ -s "$FIXTURE_OUT" ]] && break
@@ -118,6 +152,7 @@ echo "==> 2/5 agent with a Restricted live-mode browser entry"
 "$MUR" agent stop "$AGENT" >/dev/null 2>&1 || true
 "$MUR" agent remove "$AGENT" --purge --force >/dev/null 2>&1 || true
 "$MUR" agent create "$AGENT" --no-interactive ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} >/dev/null
+AGENT_CREATED=1
 # The entry: `mur browser record --mode live`. Trailing args reach
 # @playwright/mcp verbatim; the fixture's cert is self-signed.
 "$MUR" agent mcp add "$AGENT" browser --no-probe --force </dev/null \
@@ -196,8 +231,8 @@ for want in "$PRICE_A" "$PRICE_B" "$CHEAPER_NAME"; do
   fi
 done
 echo "    fixture saw:"
-sed 's/^/      /' /tmp/browser-live-f1-fixture.log
-if grep -q 'host=localhost' /tmp/browser-live-f1-fixture.log; then
+sed 's/^/      /' "$FIXTURE_LOG"
+if grep -q 'host=localhost' "$FIXTURE_LOG"; then
   echo "    ✗ a request reached the fixture as 'localhost' — the proxy allowlist was bypassed"
   fail=1
 fi
