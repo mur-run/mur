@@ -16,6 +16,10 @@
 //! report for exactly what has run through `cargo build`/`cargo test` and
 //! what has not.
 
+// TEMPORARY: nothing outside this module calls into it until the driver is
+// wired into `mur fleet review` (AC12+). Remove this allow in that change.
+#![allow(dead_code)]
+
 pub mod constants;
 pub mod driver;
 pub mod ledger;
