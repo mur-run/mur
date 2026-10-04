@@ -58,7 +58,7 @@ mod restart;
 mod restart_confirm;
 mod routing;
 mod scratch_check;
-mod secret;
+pub(crate) mod secret;
 mod service;
 pub mod skill;
 pub mod skill_bundle;

@@ -172,12 +172,11 @@ fn keychain_secret_count() -> usize {
     n
 }
 
-/// Per-agent Keychain credentials, counted by asking the Keychain.
+/// Per-agent Keychain credentials, counted by asking the Keychain whether the
+/// item exists (attribute-only; the value is never read).
 ///
-/// A lookup that fails for ANY reason counts as absent. That is deliberate: a
-/// denied read here is indistinguishable from "no such item" without inspecting
-/// the error, and the caller only needs to know whether there is something to
-/// lose. Under-counting makes the warning quieter, never louder — the safe
+/// A lookup that fails for ANY reason counts as absent: the caller only needs
+/// to know whether there is something to lose. Under-counting makes the warning quieter, never louder — the safe
 /// direction for a check whose false positives would get it ignored.
 fn agent_keychain_credential_count(mur_home: &std::path::Path) -> usize {
     const KEYS: [&str; 1] = ["ANTHROPIC_API_KEY"];
@@ -191,13 +190,13 @@ fn agent_keychain_credential_count(mur_home: &std::path::Path) -> usize {
         .map(|agent| {
             KEYS.iter()
                 .filter(|k| {
-                    let account = format!("{agent}/{k}");
-                    mur_common::secret::SecretRef::Keychain {
-                        service: "mur-agent".to_string(),
-                        account,
-                    }
-                    .resolve_to_string_blocking()
-                    .is_some()
+                    // Presence only — reading the value would trip the very
+                    // ACL prompt this check warns about, stall, and then miscount.
+                    mur_common::secret::keychain_item_exists(
+                        crate::cmd::agent::secret::SECRET_SERVICE,
+                        &format!("{agent}/{k}"),
+                    )
+                    .unwrap_or(false)
                 })
                 .count()
         })
