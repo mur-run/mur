@@ -184,7 +184,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q "AST_GREP_PINNED_VERSION: &str = \"$AST_GREP_VERSION\"" \
-            mur-mcp-server/src/tools/ast_grep.rs \
+            mur-common/src/config/search.rs \
             || { echo "::error::AST_GREP_VERSION drifted from AST_GREP_PINNED_VERSION"; exit 1; }
           case "$RUNNER_OS" in
             Linux)   t=x86_64-unknown-linux-gnu; exe=ast-grep
