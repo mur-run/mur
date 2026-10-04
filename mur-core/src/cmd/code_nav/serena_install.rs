@@ -1,7 +1,9 @@
 //! Task 3.3: install the pinned serena-agent (decision P3-D2).
 //!
-//! `uv tool install` with `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` confined to
-//! `<mur_home>/tools/serena/<pin>/`. `serena-agent` `2.0.0.dev0` is not on
+//! `uv tool install` with `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` /
+//! `UV_PYTHON_INSTALL_DIR` confined to `<mur_home>/tools/serena/<pin>/`,
+//! with `--python-preference only-managed` so the venv's interpreter is a
+//! uv-managed one under that dir rather than whatever Python is on PATH. `serena-agent` `2.0.0.dev0` is not on
 //! PyPI (latest there is 1.x), so the pin is the exact upstream commit every
 //! Phase 0/2 finding and the item 17 matrix ran against, plus a dependency
 //! resolution cutoff at that commit's date so transitive versions cannot
@@ -29,6 +31,10 @@ pub const SERENA_EXCLUDE_NEWER: &str = "2026-09-29T10:49:50Z";
 /// Under the managed dir: uv's tool environments, and its entry-point links.
 const UV_TOOL_SUBDIR: &str = "uv-tools";
 const BIN_SUBDIR: &str = "bin";
+/// Where uv puts the Python it fetches for the tool env.
+pub(super) const PYTHON_SUBDIR: &str = "python";
+/// The venv metadata file naming the base interpreter.
+pub(super) const PYVENV_CFG: &str = "pyvenv.cfg";
 const ENTRY_POINT: &str = "serena";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +89,11 @@ pub fn install_command(uv: &Path, dir: &Path, reinstall: bool) -> Command {
     c.current_dir(dir)
         .env("UV_TOOL_DIR", dir.join(UV_TOOL_SUBDIR))
         .env("UV_TOOL_BIN_DIR", dir.join(BIN_SUBDIR))
+        .env("UV_PYTHON_INSTALL_DIR", dir.join(PYTHON_SUBDIR))
         .args(["tool", "install", "--no-config"])
+        // Without this uv reuses its global managed Python (or the first one
+        // on PATH), and setup would then grant exec of that shared `bin` dir.
+        .args(["--python-preference", "only-managed"])
         .args(["--exclude-newer", SERENA_EXCLUDE_NEWER]);
     if reinstall {
         c.args(["--force", "--reinstall"]);
@@ -100,11 +110,29 @@ pub fn installed_state(dir: &Path) -> Installed {
     let Some((version, commit)) = recorded_pin(dir) else {
         return Installed::Missing;
     };
-    if version == SERENA_PIN && commit.as_deref() == Some(SERENA_GIT_REV) {
+    if version == SERENA_PIN
+        && commit.as_deref() == Some(SERENA_GIT_REV)
+        && managed_interpreter(&dir.join(UV_TOOL_SUBDIR).join(PACKAGE), dir)
+    {
         Installed::Verified
     } else {
         Installed::Mismatch
     }
+}
+
+/// The tool venv at `env`'s base interpreter (`home` in `pyvenv.cfg`) is the
+/// uv-managed one under `<dir>/python/`. An install made before
+/// `only-managed` points elsewhere; treating it as a mismatch makes the next
+/// run reinstall instead of granting exec of that foreign `bin` dir. Shared
+/// with the pyright install.
+pub(super) fn managed_interpreter(env: &Path, dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(env.join(PYVENV_CFG)) else {
+        return false;
+    };
+    text.lines()
+        .filter_map(|l| l.split_once('='))
+        .find(|(k, _)| k.trim() == "home")
+        .is_some_and(|(_, v)| Path::new(v.trim()).starts_with(dir.join(PYTHON_SUBDIR)))
 }
 
 /// Install (or replace a mismatched install) and verify the result.

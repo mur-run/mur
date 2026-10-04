@@ -6,6 +6,14 @@ use super::super::{load_profile_for_edit, save_profile};
 use super::warn_if_running;
 
 pub fn cmd_perm_allow_spawn(name: &str, binary: &str) -> Result<()> {
+    grant_spawn(name, binary)?;
+    warn_if_running(name);
+    Ok(())
+}
+
+/// [`cmd_perm_allow_spawn`] without the running-agent warning, for callers
+/// that apply several grants and warn once at the end.
+pub fn grant_spawn(name: &str, binary: &str) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile
         .entitlements
@@ -22,9 +30,7 @@ pub fn cmd_perm_allow_spawn(name: &str, binary: &str) -> Result<()> {
             .allowed
             .push(binary.to_string());
     }
-    save_profile(&path, &mut profile)?;
-    warn_if_running(name);
-    Ok(())
+    save_profile(&path, &mut profile)
 }
 
 pub fn cmd_perm_deny_spawn(name: &str, binary: &str) -> Result<()> {
@@ -72,12 +78,7 @@ fn remove_spawn(allowed: &mut Vec<String>, binary: &str) -> Result<(), Vec<Strin
 /// grant means rather than accepting it silently: this is a wider door than
 /// naming one binary, and the operator should see that in the terminal.
 pub fn cmd_perm_allow_spawn_dir(name: &str, dir: &str) -> Result<()> {
-    let (path, mut profile) = load_profile_for_edit(name)?;
-    let dirs = &mut profile.entitlements.processes.spawn.allowed_dirs;
-    if !dirs.iter().any(|d| d == dir) {
-        dirs.push(dir.to_string());
-    }
-    save_profile(&path, &mut profile)?;
+    grant_spawn_dir(name, dir)?;
     println!("build lane: '{name}' may now exec anything under {dir}");
     println!(
         "  filesystem and network entitlements still bound what that code can reach — \
@@ -85,6 +86,18 @@ pub fn cmd_perm_allow_spawn_dir(name: &str, dir: &str) -> Result<()> {
     );
     warn_if_running(name);
     Ok(())
+}
+
+/// [`cmd_perm_allow_spawn_dir`] without the build-lane notice or the
+/// running-agent warning: for a caller whose consent screen already named
+/// the directory, and which warns once after its last grant.
+pub fn grant_spawn_dir(name: &str, dir: &str) -> Result<()> {
+    let (path, mut profile) = load_profile_for_edit(name)?;
+    let dirs = &mut profile.entitlements.processes.spawn.allowed_dirs;
+    if !dirs.iter().any(|d| d == dir) {
+        dirs.push(dir.to_string());
+    }
+    save_profile(&path, &mut profile)
 }
 
 pub fn cmd_perm_deny_spawn_dir(name: &str, dir: &str) -> Result<()> {

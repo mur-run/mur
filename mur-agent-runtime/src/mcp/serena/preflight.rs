@@ -35,8 +35,10 @@ const KEY_EXCLUDED: &str = "excluded_tools";
 const KEY_OPTIONAL: &str = "included_optional_tools";
 const KEY_DASHBOARD: &str = "web_dashboard";
 const KEY_LS_SETTINGS: &str = "ls_specific_settings";
-/// Settings that replace the language-server executable (arbitrary exec).
-const LS_EXEC_KEYS: [&str; 2] = ["ls_path", "ls_base_cmd"];
+/// Replaces the whole launch command (arbitrary exec): always refused.
+const KEY_LS_BASE_CMD: &str = "ls_base_cmd";
+/// Replaces the executable: allowed only inside MUR's tools root (3.6b).
+const KEY_LS_PATH: &str = "ls_path";
 const KEY_LS_ARGS: &str = "ls_args";
 const KEY_LS_EXTRA_ARGS: &str = "ls_extra_args";
 /// serena accepts both spellings for the project's language list.
@@ -238,18 +240,24 @@ pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaP
         }
     }
 
-    // C7
+    // C7: the global config, then the MUR folder's project files. serena
+    // ignores those while C3 holds (`project.py:522-530`); they are read
+    // anyway as defense in depth, since a trusted one overrides the global.
     let ls = match cfg.get(KEY_LS_SETTINGS) {
         None | Some(Value::Null) => None,
         Some(Value::Mapping(m)) => Some(m),
         Some(v) => return fail!(C7LsExec, cfg_file, KEY_LS_SETTINGS, kind(v), "a mapping"),
     };
-    for (lang, settings) in ls.into_iter().flatten() {
-        for exec in LS_EXEC_KEYS {
-            if let Some(v) = settings.get(exec) {
-                let key = format!("{KEY_LS_SETTINGS}.{}.{exec}", show(lang));
-                return fail!(C7LsExec, cfg_file, key, show(v), ABSENT);
-            }
+    check_ls_exec(ls, cfg_file, &paths.tools_dir)?;
+    for name in [PROJECT_FILE, PROJECT_LOCAL_FILE] {
+        let file = folder.join(name);
+        let Some(doc) = project_yaml(&file) else {
+            continue;
+        };
+        match doc.get(KEY_LS_SETTINGS) {
+            None | Some(Value::Null) => {}
+            Some(Value::Mapping(m)) => check_ls_exec(Some(m), &file, &paths.tools_dir)?,
+            Some(v) => return fail!(C7LsExec, file, KEY_LS_SETTINGS, kind(v), "a mapping"),
         }
     }
 
@@ -279,6 +287,49 @@ pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaP
             "a list (may be empty)"
         ),
     }
+}
+
+/// C7 over one `ls_specific_settings` mapping: no `ls_base_cmd`, and an
+/// `ls_path` must canonicalize under `tools_dir` (symlinks resolved, so one
+/// pointing out of the tools root is refused). A missing target is refused
+/// too: serena would otherwise fail later with a less useful error.
+fn check_ls_exec(
+    ls: Option<&serde_yaml_ng::Mapping>,
+    file: &Path,
+    tools_dir: &Path,
+) -> Result<(), SerenaPreflightError> {
+    let expected = format!("an absolute path under {}", tools_dir.display());
+    for (lang, settings) in ls.into_iter().flatten() {
+        let key = |k: &str| format!("{KEY_LS_SETTINGS}.{}.{k}", show(lang));
+        if let Some(v) = settings.get(KEY_LS_BASE_CMD) {
+            return fail!(C7LsExec, file, key(KEY_LS_BASE_CMD), show(v), ABSENT);
+        }
+        let Some(v) = settings.get(KEY_LS_PATH) else {
+            continue;
+        };
+        // Relative paths are refused: serena would resolve them against its
+        // own cwd, not ours, so what we checked would not be what it runs.
+        let raw = match v {
+            Value::String(raw) if Path::new(raw).is_absolute() => raw,
+            _ => return fail!(C7LsExec, file, key(KEY_LS_PATH), show(v), expected),
+        };
+        match (Path::new(raw).canonicalize(), tools_dir.canonicalize()) {
+            (Ok(real), Ok(base)) if real.starts_with(&base) => {}
+            (Ok(real), Ok(_)) => {
+                let found = format!("{raw:?} -> {}", real.display());
+                return fail!(C7LsExec, file, key(KEY_LS_PATH), found, expected);
+            }
+            (Err(e), _) => {
+                let found = format!("{raw:?} ({e})");
+                return fail!(C7LsExec, file, key(KEY_LS_PATH), found, expected);
+            }
+            (_, Err(e)) => {
+                let found = format!("{raw:?} (tools root: {e})");
+                return fail!(C7LsExec, file, key(KEY_LS_PATH), found, expected);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Why C8 applies. Each reason maps to the fixes that actually help.

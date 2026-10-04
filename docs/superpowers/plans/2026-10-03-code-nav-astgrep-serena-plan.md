@@ -378,7 +378,10 @@ module, those files get call sites only).
       - C6 `web_dashboard` is `false`.
       - C7 no `ls_base_cmd` in any `ls_specific_settings` language;
         `ls_path`, if set, canonicalizes under `<mur_home>/tools/` (3.6b),
-        else refuse (item 16). Checks global config and MUR `project.yml`.
+        else refuse (item 16); a symlink leading out is refused. Checks
+        global config and MUR `project.yml`. The same canonical-under-tools
+        rule binds setup's exec lanes (3.6c): C7 covers what serena launches,
+        3.6c covers what the seal lets run.
       - C8 if C/C++ is enabled: clangd args contain `--enable-config=false`,
         contain no `--query-driver`, and `compile_commands_dir` resolves
         under `paths.projects_dir` (item 14). Exact settings key names are
@@ -438,6 +441,12 @@ module, those files get call sites only).
       - Known gap, accepted for v1: `cpp_ccls` (ccls) is not checked. C7
         still confines `ls_path` / blocks `ls_base_cmd` for every language, and ccls
         is never serena's default; v2 reviews ccls's own config loading.
+      - Exec lanes (follow-up from 3.6b / 3.6c): every directory setup grants
+        exec on lies under `<mur_home>/tools/` after `canonicalize` —
+        serena's venv and Python, pyright's venv and Python. The doc states
+        that scope, not "serena's venv Python lives in uv's global dir"; it
+        also updates the C7 row from "no `ls_path`" to "`ls_path`
+        canonicalizes under `<mur_home>/tools/`" (3.6b).
 
 ### Phase 2 acceptance (two layers)
 
@@ -715,6 +724,18 @@ real agent through serena; end-to-end is task 3.6b's acceptance.
       uv. Verification reads uv's `direct_url.json`: dist-info version and
       resolved commit must both equal the pin; a verified re-run skips uv, a
       mismatch reinstalls. `Record` is the manifest entry; task 3.6 writes it.
+      **One isolation pattern for every uv-installed tool (serena and
+      pyright, 3.6b):** `uv tool install` into `<mur_home>/tools/<tool>/<pin>/`
+      with `--python-preference only-managed` and `UV_PYTHON_INSTALL_DIR` =
+      `<mur_home>/tools/<tool>/<pin>/python/`, so each tool's interpreter is a
+      uv-managed Python inside its own dir — never a conda / system Python on
+      PATH, never uv's shared `~/.local/share/uv/python/`. Each tool keeps its
+      own copy (a duplicated ~tens-of-MB CPython per tool): accepted, because
+      sharing one managed Python would widen every tool's exec grant to it.
+      Verification also reads `pyvenv.cfg`: a venv whose `home` is not under
+      the tool's `python/` dir is `Mismatch`, so an install made before this
+      rule is rebuilt by the next setup rather than granted. Serena half:
+      task 3.6c.
 - [x] 3.4 Config generator: full-field `serena_config.yml` from serena's
       template (no load-time "migration" rewrite, #1688), `projects`
       pre-filled, C1–C9 values, C/C++ `ls_extra_args`. Run preflight on the
@@ -760,13 +781,48 @@ real agent through serena; end-to-end is task 3.6b's acceptance.
       asks nothing and rewrites both serena files byte-identically. Setup
       runs on `spawn_blocking` (blocking HTTP in the async dispatcher
       panicked).
-- [ ] 3.6b Pre-install pyright, launch via `ls_path` (see `### 3.6b`). To
+- [x] 3.6b Pre-install pyright, launch via `ls_path` (see `### 3.6b`). To
       build: install row, `ls_path` in `serena_config.yml`, new C7, seal
-      exec grant. **Acceptance:** offline `initialize` proven by LSP script
-      (row 4); **pending:** same inside a real agent through serena.
+      exec grant. **Built** (install row, `ls_path`, C7, seal grant).
+      **Acceptance:** offline `initialize` proven by LSP script against the
+      pyright that `mur code-nav setup` installed (bundled `dist/`, no npm,
+      nothing written to `$HOME`); serena's own provider resolves the launch
+      command to `[ls_path, --stdio]`. **Proven in a real agent seal:**
+      serena's log shows `Starting language server process via command:
+      ['<mur_home>/tools/pyright/1.1.403/bin/pyright-langserver', '--stdio']`,
+      `Pyright language server 1.1.403 starting`, no npm activity, and a
+      `find_symbol --include-info` call returns pyright hover text.
+- [x] 3.6c serena's own Python under `<mur_home>/tools/` (3.3's isolation
+      pattern, applied to serena; pyright already has it). To build:
+      - serena's install command adds `--python-preference only-managed` and
+        `UV_PYTHON_INSTALL_DIR=<mur_home>/tools/serena/<pin>/python`;
+        `installed_state` treats a venv `home` outside that dir as
+        `Mismatch` (one `pyvenv.cfg` check shared with pyright).
+      - Setup refuses, not grants, an exec lane that does not canonicalize
+        under `<mur_home>/tools/`: `interpreter_lanes` (3.6) runs
+        `canonicalize`, so a symlink leading out of the tools dir is refused
+        by name. With 3.6b that makes four lanes, all under
+        `<mur_home>/tools/`: serena's venv `bin` and its Python's `bin`,
+        pyright's venv `bin` and its Python's `bin`.
+      - Runtime env: none added. The runtime never calls uv for serena or
+        pyright (3.6b), the venv shebangs are absolute, and D1 rules out a
+        generic `env` field; `UV_PYTHON_INSTALL_DIR` is install-time only.
+      **Acceptance:** on a machine whose serena venv uses uv's shared
+      Python, re-running setup rebuilds the venv (uv prints "requested Python
+      interpreter does not match"), the summary's exec lanes contain no
+      `~/.local/share/uv/python/` entry and do contain
+      `<mur_home>/tools/serena/<pin>/python/<cpython-…>/bin`, the profile's
+      `kind: serena` / `project:` are unchanged, and a serena symbol query
+      still answers. Stale manifest `granted` lines (e.g. an earlier conda
+      lane) are history, not grants; clearing them is optional.
 - [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
       rewrite.
-- [ ] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
+- [x] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
+      README: command tree (35) and an integrations paragraph.
+      `mcp-supply-chain.md`: C7 row rewritten, exec-lane scope added.
+      mur-server branch `docs/code-nav`: `commands.md` index row and
+      subcommand row (35), product-page card. A dedicated docs-site page is
+      deferred until code-nav has more than `setup`.
 
 ## Open questions
 

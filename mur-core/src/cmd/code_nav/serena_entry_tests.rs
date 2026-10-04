@@ -140,6 +140,30 @@ fn upsert_never_overwrites_a_users_own_server() {
     assert_eq!(p.mcp_servers[0].kind, None);
 }
 
+/// The pre-install gate (`setup::run` calls it before any uv run or write)
+/// refuses exactly what `upsert` would, and passes a free or own slot.
+#[test]
+fn check_slot_matches_upserts_refusal() {
+    let f = fx();
+    let mut p = profile();
+    assert!(check_slot(&p, ENTRY_NAME).is_ok(), "free slot");
+    upsert(&mut p, build(&f.record, &f.repo).unwrap()).unwrap();
+    assert!(
+        check_slot(&p, ENTRY_NAME).is_ok(),
+        "our own kind: serena slot"
+    );
+
+    let mut q = profile();
+    q.mcp_servers.push(McpServerEntry {
+        name: "serena".into(),
+        command: "uvx".into(),
+        ..Default::default()
+    });
+    let err = check_slot(&q, ENTRY_NAME).unwrap_err().to_string();
+    assert!(err.contains("not kind: serena"), "{err}");
+    assert!(err.contains("mur agent mcp remove"), "{err}");
+}
+
 #[test]
 fn entry_round_trips_through_profile_yaml() {
     let f = fx();
