@@ -627,7 +627,17 @@ Findings that change the Phase 3 design:
       extracted binary, so a re-run verifies what is on disk without a
       download. Only the exact `ast-grep[.exe]` entry is placed (not `sg`).
       `ast_grep_binary_path()` moved to `mur-common`; the resolver delegates.
-- [ ] 3.3 serena install per P3-D2; pin recorded in the setup manifest.
+- [x] 3.3 serena install per P3-D2; pin recorded in the setup manifest.
+      `mur-core/src/cmd/code_nav/serena_install.rs`. `serena-agent
+      2.0.0.dev0` is not on PyPI (latest there is 1.x), so the pin is the
+      upstream commit the Phase 0/2 findings and the item 17 matrix ran
+      against (`SERENA_GIT_REV`), plus `--exclude-newer` at that commit's
+      date so transitive versions cannot drift. `uv tool install` runs with
+      `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` confined to
+      `<mur_home>/tools/serena/<pin>/` and `--no-config`; MUR does not install
+      uv. Verification reads uv's `direct_url.json`: dist-info version and
+      resolved commit must both equal the pin; a verified re-run skips uv, a
+      mismatch reinstalls. `Record` is the manifest entry; task 3.6 writes it.
 - [ ] 3.4 Config generator: full-field `serena_config.yml` from serena's
       template (no load-time "migration" rewrite, #1688), `projects`
       pre-filled, C1–C9 values, C/C++ `ls_extra_args`. Run preflight on the
