@@ -120,7 +120,10 @@ impl Ledger {
                 self.adopt_cumulative(cumulative);
             }
             ReviewPayload::FindingIssued {
-                id, severity, issue, round,
+                id,
+                severity,
+                issue,
+                round,
             } => {
                 let expected = format!("F{}", self.next_finding_seq + 1);
                 if *id != expected {
@@ -229,10 +232,7 @@ impl Ledger {
             self.round_open_set_history.remove(0);
         }
         self.round_stuck = self.round_open_set_history.len() == window
-            && self
-                .round_open_set_history
-                .windows(2)
-                .all(|w| w[0] == w[1]);
+            && self.round_open_set_history.windows(2).all(|w| w[0] == w[1]);
     }
 
     /// Who the next finding issuance must address (`F<n>`), for a driver
