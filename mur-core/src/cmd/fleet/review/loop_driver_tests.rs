@@ -15,7 +15,7 @@ use mur_common::limits::Stuck;
 use super::driver::ReviewTransport;
 use super::ledger::fold_rounds;
 use super::loop_driver::{LoopDriverStop, run_review_loop};
-use super::schema::{NoteClassification, ReviewPayload, classify_note_payload};
+use super::schema::{Mode, NoteClassification, ReviewPayload, Role, classify_note_payload};
 use crate::cmd::fleet::loop_run::LoopStop;
 
 /// Test-only transport: counts sends PER MEMBER and returns the next queued
@@ -188,6 +188,7 @@ fn ac12_full_loop_runs_to_approve() {
         &channel_id,
         "main",
         "reviewer",
+        Mode::SemiAuto,
         &identity,
         kv,
         Duration::ZERO,
@@ -244,6 +245,7 @@ fn long_turn_that_returns_is_not_stuck() {
         &channel_id,
         "main",
         "reviewer",
+        Mode::SemiAuto,
         &identity,
         kv,
         Duration::ZERO,
@@ -289,6 +291,7 @@ fn stuck_off_never_trips() {
         &channel_id,
         "main",
         "reviewer",
+        Mode::SemiAuto,
         &identity,
         kv,
         Duration::ZERO,
@@ -378,6 +381,7 @@ fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
         &channel_id,
         "main",
         "reviewer",
+        Mode::SemiAuto,
         &identity,
         kv,
         Duration::ZERO,
@@ -437,6 +441,7 @@ fn ac13_limit_stop_lists_open_and_disputed_findings() {
         &channel_id,
         "main",
         "reviewer",
+        Mode::SemiAuto,
         &identity,
         kv,
         Duration::ZERO,
@@ -506,6 +511,7 @@ fn main_receives_open_findings_from_round_two() {
         &channel_id,
         "main",
         "reviewer",
+        Mode::SemiAuto,
         &identity,
         kv,
         Duration::ZERO,
@@ -547,6 +553,7 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         &channel_id,
         "main",
         "reviewer",
+        Mode::SemiAuto,
         &identity,
         kv,
         Duration::ZERO,
@@ -563,6 +570,147 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
             .iter()
             .all(|p| !matches!(p, ReviewPayload::FindingStatus { .. })),
         "the illegal finding_status must never reach the channel"
+    );
+    assert_eq!(fold_rounds(&payloads).unwrap(), ledger);
+}
+
+/// §4: the channel opens with `session_started` (members, mode), and every
+/// delivered turn leaves a `turn_sent` before the round's verdict.
+#[test]
+fn channel_records_session_started_and_turn_sent() {
+    let (tmp, channel_id, identity, kv) = setup_channel();
+    let home = tmp.path();
+    let revise = serde_json::json!({
+        "verdict": "revise",
+        "findings": [{"severity": "low", "issue": "needs a doc comment"}],
+    })
+    .to_string();
+    let approve = serde_json::json!({
+        "verdict": "approve",
+        "prior": [{"id": "F1", "status": "resolved"}],
+    })
+    .to_string();
+    let transport = StubLoopTransport::new(vec![], vec![&revise, &approve]);
+
+    let (ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        Mode::Auto,
+        &identity,
+        kv,
+        Duration::ZERO,
+        Duration::from_secs(3600),
+        Stuck::Off,
+        &Instant::now,
+    )
+    .unwrap();
+    assert_eq!(stop, LoopDriverStop::Approve);
+
+    let payloads = read_payloads(home, &channel_id);
+    assert_eq!(
+        payloads[0],
+        ReviewPayload::SessionStarted {
+            members: ["main".into(), "reviewer".into()],
+            mode: Mode::Auto,
+        }
+    );
+    let turns: Vec<(u32, Role)> = payloads
+        .iter()
+        .filter_map(|p| match p {
+            ReviewPayload::TurnSent { round, to, .. } => Some((*round, *to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        vec![
+            (1, Role::Main),
+            (1, Role::Reviewer),
+            (2, Role::Main),
+            (2, Role::Reviewer),
+        ]
+    );
+    // Each round's reviewer `turn_sent` precedes that round's verdict.
+    for r in 1..=2 {
+        let sent = payloads
+            .iter()
+            .position(|p| matches!(p, ReviewPayload::TurnSent { round, to: Role::Reviewer, .. } if *round == r))
+            .unwrap();
+        let verdict = payloads
+            .iter()
+            .position(|p| matches!(p, ReviewPayload::Verdict { round, .. } if *round == r))
+            .unwrap();
+        assert!(sent < verdict, "round {r}: turn_sent must precede verdict");
+    }
+    assert_eq!(ledger.mode, Mode::Auto);
+    assert_eq!(fold_rounds(&payloads).unwrap(), ledger);
+}
+
+/// A round cut short after `turn_sent` (deadline hit once main's reply is
+/// back) has no verdict. Replay must not seal it, or `fold_rounds` would
+/// push an extra open-set snapshot the live loop never took.
+#[test]
+fn round_cut_after_turn_sent_replays_to_live_ledger() {
+    let (tmp, channel_id, identity, kv) = setup_channel();
+    let home = tmp.path();
+    let revise = serde_json::json!({
+        "verdict": "revise",
+        "findings": [{"severity": "low", "issue": "needs a doc comment"}],
+    })
+    .to_string();
+    // Round 1 reviewer jumps the clock 6 min; deadline is 10 min, so round 2
+    // starts, and round 2's reviewer jump crosses the deadline after its
+    // `turn_sent` is already signed.
+    let clock = Rc::new(Cell::new(Instant::now()));
+    let transport = StubClockTransport {
+        clock: Rc::clone(&clock),
+        jump: Duration::from_secs(6 * 60),
+        main_reply: "main output".to_string(),
+        reviewer_reply: revise,
+    };
+
+    let (ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        Mode::SemiAuto,
+        &identity,
+        kv,
+        Duration::ZERO,
+        Duration::from_secs(10 * 60),
+        Stuck::Off,
+        &|| clock.get(),
+    )
+    .unwrap();
+    assert!(
+        matches!(stop, LoopDriverStop::Guard(LoopStop::Deadline)),
+        "{stop:?}"
+    );
+
+    let payloads = read_payloads(home, &channel_id);
+    assert!(
+        payloads.iter().any(|p| matches!(
+            p,
+            ReviewPayload::TurnSent {
+                round: 2,
+                to: Role::Reviewer,
+                ..
+            }
+        )),
+        "round 2's reviewer send happened and must be recorded"
+    );
+    assert!(
+        !payloads
+            .iter()
+            .any(|p| matches!(p, ReviewPayload::Verdict { round: 2, .. })),
+        "the late round-2 verdict must be discarded"
     );
     assert_eq!(fold_rounds(&payloads).unwrap(), ledger);
 }

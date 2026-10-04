@@ -271,6 +271,11 @@ pub fn fold(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
 pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
     let mut ledger = Ledger::default();
     let mut in_progress: u32 = 0;
+    // The trailing round is sealed only once its verdict landed: a round
+    // cut short after `turn_sent` (stop/pause/deadline) was never sealed by
+    // the live driver either, so sealing it here would push an extra
+    // open-set snapshot and could flip `round_stuck` on replay.
+    let mut trailing_has_verdict = false;
     for p in payloads {
         if let Some(r) = super::schema::payload_round(p)
             && r > in_progress
@@ -279,10 +284,14 @@ pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
                 ledger.note_round_complete();
             }
             in_progress = r;
+            trailing_has_verdict = false;
+        }
+        if matches!(p, ReviewPayload::Verdict { .. }) {
+            trailing_has_verdict = true;
         }
         ledger.apply(p)?;
     }
-    if in_progress > 0 {
+    if in_progress > 0 && trailing_has_verdict {
         ledger.note_round_complete();
     }
     Ok(ledger)

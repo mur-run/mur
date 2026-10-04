@@ -29,7 +29,8 @@ use serde::Deserialize;
 use super::driver::{RetryOutcome, ReviewTransport, run_turn_with_retry};
 use super::ledger::Ledger;
 use super::schema::{
-    Cumulative, NewFindingDto, PriorUpdateDto, ReviewPayload, VerdictKind, to_note_payload,
+    Cumulative, Mode, NewFindingDto, PriorUpdateDto, ReviewPayload, Role, VerdictKind,
+    to_note_payload,
 };
 use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
 
@@ -118,6 +119,7 @@ pub fn run_review_loop(
     channel_id: &str,
     main: &str,
     reviewer: &str,
+    mode: Mode,
     identity: &AgentIdentity,
     kv: u32,
     retry_delay: Duration,
@@ -127,6 +129,14 @@ pub fn run_review_loop(
 ) -> Result<(Ledger, LoopDriverStop)> {
     let svc = ChannelService::open(mur_home)?;
     let mut ledger = Ledger::default();
+    // §4: the session opens with `session_started` (members, mode). It
+    // carries no round, so it never moves a round boundary on replay.
+    let started = ReviewPayload::SessionStarted {
+        members: [main.to_string(), reviewer.to_string()],
+        mode,
+    };
+    ledger.apply(&started)?;
+    append(&svc, identity, kv, channel_id, &started)?;
     let start = now();
     // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
     // defines stuck as "no agent-authored channel event for the window", so
@@ -170,6 +180,7 @@ pub fn run_review_loop(
                 return Ok((ledger, LoopDriverStop::Paused { reason }));
             }
             RetryOutcome::Sent(reply) => {
+                append_turn_sent(&svc, identity, kv, channel_id, round, Role::Main)?;
                 if let Some(stop) = check_guards(
                     round,
                     now().saturating_duration_since(start),
@@ -199,6 +210,7 @@ pub fn run_review_loop(
                 return Ok((ledger, LoopDriverStop::Paused { reason }));
             }
             RetryOutcome::Sent(reply) => {
+                append_turn_sent(&svc, identity, kv, channel_id, round, Role::Reviewer)?;
                 if let Some(stop) = check_guards(
                     round,
                     now().saturating_duration_since(start),
@@ -262,6 +274,27 @@ pub fn run_review_loop(
 
 /// Params for main's turn: the round number plus, once the reviewer has
 /// spoken, every finding still in the open set with its current status.
+/// §4 `turn_sent`, written once a send to `to` has actually gone out
+/// (`RetryOutcome::Sent`). Written after the send rather than before, so a
+/// `.stopped` observed inside `run_turn_with_retry` never leaves a
+/// `turn_sent` for a message that was never delivered. Driver-authored, so
+/// it is safe to sign directly (unlike the reviewer's untrusted verdict).
+fn append_turn_sent(
+    svc: &ChannelService,
+    identity: &AgentIdentity,
+    kv: u32,
+    channel_id: &str,
+    round: u32,
+    to: Role,
+) -> Result<()> {
+    let payload = ReviewPayload::TurnSent {
+        round,
+        to,
+        restart_note: None,
+    };
+    append(svc, identity, kv, channel_id, &payload)
+}
+
 fn main_turn_params(round: u32, ledger: &Ledger) -> serde_json::Value {
     let open: Vec<serde_json::Value> = ledger
         .stop_screen_findings(false)
