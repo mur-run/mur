@@ -1,5 +1,6 @@
 use super::*;
 use crate::cmd::code_nav::plan::{self, Detected, Flags};
+use crate::cmd::code_nav::serena_install::PYVENV_CFG;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 

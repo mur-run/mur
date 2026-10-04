@@ -53,8 +53,11 @@ fn detect() -> Detected {
 
 /// serena's entry point is a script whose shebang is the venv interpreter,
 /// a symlink to the Python uv chose. The seal must exec both (Layer B
-/// granted the same two lanes). Returns the directories to grant.
-pub fn interpreter_lanes(serena_bin: &Path) -> Result<Vec<PathBuf>> {
+/// granted the same two lanes). Returns the directories to grant; each must
+/// canonicalize under `tools_root` (`<mur_home>/tools`), so a venv whose
+/// Python lives elsewhere — or a symlink leading out — is refused, not
+/// granted (plan 3.6c).
+pub fn interpreter_lanes(serena_bin: &Path, tools_root: &Path) -> Result<Vec<PathBuf>> {
     let text =
         std::fs::read(serena_bin).with_context(|| format!("read {}", serena_bin.display()))?;
     let first = text.split(|b| *b == b'\n').next().unwrap_or_default();
@@ -75,6 +78,21 @@ pub fn interpreter_lanes(serena_bin: &Path) -> Result<Vec<PathBuf>> {
         && !lanes.iter().any(|l| l == d)
     {
         lanes.push(d.to_path_buf());
+    }
+    let root = std::fs::canonicalize(tools_root)
+        .with_context(|| format!("resolve {}", tools_root.display()))?;
+    for lane in &lanes {
+        let canon = std::fs::canonicalize(lane)
+            .with_context(|| format!("resolve exec lane {}", lane.display()))?;
+        if !canon.starts_with(&root) {
+            bail!(
+                "exec lane {} (for {}) resolves outside {}; refusing to grant it. \
+                 Re-run setup to reinstall with a MUR-managed Python",
+                canon.display(),
+                serena_bin.display(),
+                root.display()
+            );
+        }
     }
     Ok(lanes)
 }
@@ -263,6 +281,20 @@ fn apply(
     let cfg = serena_config::write_config(&paths, project, &tpl, &secret, python_ls)?;
     writeln!(out, "  ✓ wrote {} (preflight passed)", cfg.display())?;
 
+    // Both entry points are scripts run by a venv interpreter uv chose;
+    // the seal must exec each one (requirement 3). Resolved before anything
+    // is written, so a lane outside the tools dir refuses with no half-applied
+    // profile or grants.
+    let entry_points = std::iter::once(&record.bin).chain(pyright.as_ref().map(|r| &r.bin));
+    let tools_root = mur_home.join(mur_common::config::MUR_TOOLS_DIR);
+    let mut lanes: Vec<PathBuf> = Vec::new();
+    for bin in entry_points {
+        for lane in interpreter_lanes(bin, &tools_root)? {
+            if !lanes.contains(&lane) {
+                lanes.push(lane);
+            }
+        }
+    }
     let (ppath, mut profile) = crate::cmd::agent::load_profile_for_edit(agent)?;
     let change = serena_entry::upsert(&mut profile, serena_entry::build(&record, project)?)?;
     crate::cmd::agent::save_profile(&ppath, &mut profile)?;
@@ -278,17 +310,6 @@ fn apply(
             Permission::SpawnDir(d) => crate::cmd::agent::grant_spawn_dir(agent, path_str(d)?)?,
         }
         m.granted.insert(consent::grant_key(p));
-    }
-    // Both entry points are scripts run by a venv interpreter uv chose;
-    // the seal must exec each one (requirement 3).
-    let entry_points = std::iter::once(&record.bin).chain(pyright.as_ref().map(|r| &r.bin));
-    let mut lanes: Vec<PathBuf> = Vec::new();
-    for bin in entry_points {
-        for lane in interpreter_lanes(bin)? {
-            if !lanes.contains(&lane) {
-                lanes.push(lane);
-            }
-        }
     }
     for lane in &lanes {
         crate::cmd::agent::grant_spawn_dir(agent, path_str(lane)?)?;
@@ -344,9 +365,44 @@ mod tests {
             format!("#!{}\nimport x\n", venv_bin.join("python").display()),
         )
         .unwrap();
-        let lanes = interpreter_lanes(&bin).unwrap();
+        let lanes = interpreter_lanes(&bin, tmp.path()).unwrap();
         assert_eq!(lanes[0], venv_bin);
         assert_eq!(lanes[1], std::fs::canonicalize(&real_dir).unwrap());
+    }
+
+    /// The pre-3.6c layout: venv under tools, its Python in uv's shared dir.
+    #[cfg(unix)]
+    #[test]
+    fn interpreter_outside_tools_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tools = tmp.path().join("tools");
+        let foreign = tmp.path().join("uv/python/cpython-3.13.2/bin");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("python3.13"), b"").unwrap();
+        let venv_bin = tools.join("serena/v/venv/bin");
+        std::fs::create_dir_all(&venv_bin).unwrap();
+        std::os::unix::fs::symlink(foreign.join("python3.13"), venv_bin.join("python")).unwrap();
+        let bin = venv_bin.join("serena");
+        std::fs::write(&bin, format!("#!{}\n", venv_bin.join("python").display())).unwrap();
+        let e = interpreter_lanes(&bin, &tools).unwrap_err();
+        assert!(e.to_string().contains("outside"), "{e:#}");
+    }
+
+    /// A lane dir that is itself a symlink out of tools is refused too.
+    #[cfg(unix)]
+    #[test]
+    fn venv_bin_symlinked_out_of_tools_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tools = tmp.path().join("tools");
+        let outside = tmp.path().join("elsewhere/bin");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("python"), b"").unwrap();
+        std::fs::create_dir_all(tools.join("serena/v")).unwrap();
+        let venv_bin = tools.join("serena/v/bin");
+        std::os::unix::fs::symlink(&outside, &venv_bin).unwrap();
+        let bin = outside.join("serena");
+        std::fs::write(&bin, format!("#!{}\n", venv_bin.join("python").display())).unwrap();
+        assert!(interpreter_lanes(&bin, &tools).is_err());
     }
 
     #[test]
@@ -354,7 +410,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let bin = tmp.path().join("serena");
         std::fs::write(&bin, b"\x7fELF").unwrap();
-        assert!(interpreter_lanes(&bin).is_err());
+        assert!(interpreter_lanes(&bin, tmp.path()).is_err());
     }
 
     #[test]

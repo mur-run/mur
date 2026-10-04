@@ -14,7 +14,9 @@
 //! and download, which the plan disables Python for instead.
 
 use super::plan::{PYRIGHT, PYRIGHT_PIN, tool_dir};
-use super::serena_install::{Installed, Outcome, SERENA_EXCLUDE_NEWER};
+use super::serena_install::{
+    Installed, Outcome, PYTHON_SUBDIR, SERENA_EXCLUDE_NEWER, managed_interpreter,
+};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -22,13 +24,10 @@ use std::process::Command;
 
 /// PyPI / dist name uv records the tool under.
 const PACKAGE: &str = "pyright";
-/// Under the managed dir: uv's tool environments, entry-point links, and any
-/// Python uv has to fetch for them.
+/// Under the managed dir: uv's tool environments and entry-point links (the
+/// fetched Python goes to `PYTHON_SUBDIR`, shared with the serena install).
 const UV_TOOL_SUBDIR: &str = "uv-tools";
 const BIN_SUBDIR: &str = "bin";
-const PYTHON_SUBDIR: &str = "python";
-/// The venv metadata file naming the base interpreter.
-const PYVENV_CFG: &str = "pyvenv.cfg";
 /// The entry point serena launches (`ls_path`).
 const ENTRY_POINT: &str = "pyright-langserver";
 /// Dependency resolution cutoff: the serena pin's date, the environment
@@ -96,24 +95,16 @@ pub fn installed_state(dir: &Path) -> Installed {
     }
     match recorded_version(dir) {
         None => Installed::Missing,
-        Some(v) if v == PYRIGHT_PIN && managed_interpreter(dir) => Installed::Verified,
+        Some(v) if v == PYRIGHT_PIN && managed_interpreter(&env_dir(dir), dir) => {
+            Installed::Verified
+        }
         Some(_) => Installed::Mismatch,
     }
 }
 
-/// The venv's base interpreter (`home` in `pyvenv.cfg`) is the uv-managed
-/// one under `<dir>/python/`. An install made before `only-managed` points at
-/// whatever Python was on PATH; treating it as a mismatch makes the next run
-/// reinstall instead of granting exec of that foreign `bin` dir.
-fn managed_interpreter(dir: &Path) -> bool {
-    let cfg = dir.join(UV_TOOL_SUBDIR).join(PACKAGE).join(PYVENV_CFG);
-    let Ok(text) = std::fs::read_to_string(cfg) else {
-        return false;
-    };
-    text.lines()
-        .filter_map(|l| l.split_once('='))
-        .find(|(k, _)| k.trim() == "home")
-        .is_some_and(|(_, v)| Path::new(v.trim()).starts_with(dir.join(PYTHON_SUBDIR)))
+/// uv's tool env for pyright.
+fn env_dir(dir: &Path) -> PathBuf {
+    dir.join(UV_TOOL_SUBDIR).join(PACKAGE)
 }
 
 /// Install (or replace a mismatched install) and verify the result.
