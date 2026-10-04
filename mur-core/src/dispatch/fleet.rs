@@ -68,6 +68,27 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                     .await?
                 }
             }
+            FleetAction::Review {
+                main,
+                reviewer,
+                task,
+                deadline,
+                budget_usd,
+            } => {
+                let args = cmd::fleet::review::session::ReviewArgs {
+                    main,
+                    reviewer,
+                    task,
+                    deadline,
+                    budget_usd,
+                };
+                // The driver blocks on A2A sockets and stdin; keep it off
+                // the async runtime's worker threads.
+                tokio::task::spawn_blocking(move || {
+                    cmd::fleet::review::session::cmd_fleet_review(&mur_home, args)
+                })
+                .await??
+            }
             FleetAction::Limits {
                 name,
                 json,

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use super::constants::ROUND_STUCK_AFTER_UNCHANGED_ROUNDS;
-use super::schema::{FindingStatus, Mode, ReviewPayload, Role, Severity, VerdictKind};
+use super::schema::{FindingStatus, Mode, ReviewPayload, Severity};
 
 /// One finding, as the ledger tracks it (§3.3).
 #[derive(Debug, Clone, PartialEq)]
@@ -90,6 +90,7 @@ impl Ledger {
         out
     }
 
+    #[allow(dead_code)] // not wired yet: §6 /rule and §3.4 rebuttal
     pub fn finding(&self, id: &str) -> Option<&Finding> {
         self.findings.iter().find(|f| f.id == id)
     }
@@ -97,6 +98,7 @@ impl Ledger {
     /// §3.3: "`approve` is rejected by the system while any high-severity
     /// finding is `disputed`." Returns the disputed IDs blocking approval
     /// when non-empty.
+    #[allow(dead_code)] // not wired yet: §3.3 approve gate
     pub fn disputed_high_severity(&self) -> Vec<&Finding> {
         self.findings
             .iter()
@@ -107,6 +109,7 @@ impl Ledger {
     /// §3.3: "A medium/low `disputed` finding does not block `approve`, but
     /// it is listed first in the human summary." Used by the stop screen
     /// (§8.3, AC10, AC13).
+    #[allow(dead_code)] // not wired yet: §3.3 approve gate
     pub fn disputed_medium_low(&self) -> Vec<&Finding> {
         self.findings
             .iter()
@@ -255,6 +258,7 @@ impl Ledger {
 /// the AC11 replay property test and by any caller that does not need
 /// incremental round-boundary tracking (round-stuck is computed only where
 /// the caller calls [`Ledger::note_round_complete`]).
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub fn fold(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
     let mut ledger = Ledger::default();
     for p in payloads {
@@ -268,6 +272,7 @@ pub fn fold(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
 /// last round seen. This mirrors the live loop, which notes every round it
 /// fully folds, so a replay of the loop's own channel reproduces its ledger
 /// including round-stuck state (AC9 + AC11).
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
     let mut ledger = Ledger::default();
     let mut in_progress: u32 = 0;
@@ -297,17 +302,10 @@ pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
     Ok(ledger)
 }
 
-/// Which side a `TurnSent` targets — re-exported for driver convenience so
-/// callers of this module don't need a separate import of `schema::Role`.
-pub type Target = Role;
-
-/// The verdict kind currently recorded by the most recent `Verdict` payload,
-/// re-exported for `stop.rs` convenience.
-pub type Verdict = VerdictKind;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd::fleet::review::schema::VerdictKind;
     use std::time::Duration;
 
     use mur_common::limits::Stuck;

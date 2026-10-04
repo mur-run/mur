@@ -1,0 +1,323 @@
+//! `mur fleet review` — one attended, semi-auto review session (§3, §5, §7).
+//!
+//! Lifecycle: resolve limits (§9: a session whose limits cannot resolve does
+//! not start) → create the ephemeral `review-<id>` fleet and its channel →
+//! run [`run_review_loop`] with a terminal gate before every send (§5
+//! semi-auto) → write `session_stopped` → remove the fleet definition but
+//! keep the channel as the audit record (§7.1, A1) → print the stop screen
+//! (§8.3).
+//!
+//! Auto mode needs a MURMUR session attached (§7), which this terminal entry
+//! point is not, so it only runs semi-auto, and refuses to start without a
+//! TTY rather than silently sending unattended.
+
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::Path;
+use std::time::Instant;
+
+use anyhow::{Result, bail};
+use mur_channel::ChannelService;
+use mur_common::fleet::Fleet;
+use mur_common::limits::Stuck;
+
+use super::constants::{REVIEW_FLEET_PREFIX, TRANSPORT_RETRY_DELAY};
+use super::driver::{A2aTransport, ReviewTransport};
+use super::ledger::Ledger;
+use super::loop_driver::{LoopDriverStop, run_review_loop};
+use super::schema::{Cumulative, Mode, ReviewPayload, SessionLimits, to_note_payload};
+use super::wire::message_text;
+use crate::cmd::fleet::loop_run::{LoopStop, fleet_bounds};
+use crate::cmd::fleet::store;
+
+/// Characters of the session id appended after [`REVIEW_FLEET_PREFIX`].
+const SESSION_ID_LEN: usize = 8;
+
+/// What the caller asked for (the clap args, minus parsing).
+pub struct ReviewArgs {
+    pub main: String,
+    pub reviewer: String,
+    pub task: String,
+    pub deadline: Option<String>,
+    pub budget_usd: Option<f64>,
+}
+
+/// §8.3: the stop reason as one word, also recorded in `session_stopped`.
+pub fn stop_reason(stop: &LoopDriverStop) -> String {
+    match stop {
+        LoopDriverStop::Approve => "approve".into(),
+        LoopDriverStop::Blocked => "blocked (malformed verdict)".into(),
+        LoopDriverStop::ReviewerBlocked => "blocked".into(),
+        LoopDriverStop::Stopped => "stopped".into(),
+        LoopDriverStop::Paused { reason } => format!("transport failure: {reason}"),
+        LoopDriverStop::RoundStuck => "stuck (round: open findings unchanged)".into(),
+        LoopDriverStop::Guard(LoopStop::Deadline) => "limit: deadline".into(),
+        LoopDriverStop::Guard(LoopStop::Stuck) => "limit: stuck (no activity)".into(),
+        LoopDriverStop::Guard(LoopStop::Budget) => "limit: cost_usd".into(),
+        LoopDriverStop::Guard(other) => format!("limit: {other:?}").to_lowercase(),
+    }
+}
+
+/// A fresh, valid fleet name with the reserved review prefix (§7.1).
+fn new_session_name() -> String {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    format!("{REVIEW_FLEET_PREFIX}{}", &id[..SESSION_ID_LEN])
+}
+
+/// The session fleet's definition: two members, no limits of its own (they
+/// come from the session flags and the global config via `fleet_bounds`).
+fn session_fleet(name: &str, members: Vec<String>, channel_id: String) -> Fleet {
+    Fleet {
+        name: name.to_string(),
+        display_name: String::new(),
+        goal: String::new(),
+        router: None,
+        team_id: None,
+        members,
+        channel_id,
+        procedure: vec![],
+        rules: vec![],
+        skills: vec![],
+        loop_cfg: None,
+        parallel: None,
+        hitl: None,
+        requires_programs: vec![],
+        limits: None,
+        needs: vec![],
+    }
+}
+
+/// Create the ephemeral two-member fleet and its channel. Bypasses
+/// `cmd_fleet_create` because that command will refuse the reserved
+/// `review-` prefix for user-created fleets (§7.1).
+pub(super) fn create_session_fleet(
+    mur_home: &Path,
+    name: &str,
+    main: &str,
+    reviewer: &str,
+) -> Result<Fleet> {
+    let members = vec![main.to_string(), reviewer.to_string()];
+    let svc = ChannelService::open(mur_home)?;
+    let ch = svc.create_for_fleet(name, crate::channel_writer::ROUTER_AGENT, &members)?;
+    let fleet = session_fleet(name, members, ch.id);
+    store::save_fleet(mur_home, &fleet)?;
+    Ok(fleet)
+}
+
+/// §7.1 / A1: remove the fleet definition and run state; the channel stays.
+fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
+    for dir in [
+        store::state_dir(mur_home, name),
+        store::fleet_dir(mur_home, name),
+    ] {
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)?;
+        }
+    }
+    Ok(())
+}
+
+/// §4 `session_stopped`, signed by the same writer as every other event.
+fn append_session_stopped(
+    mur_home: &Path,
+    channel_id: &str,
+    reason: &str,
+    ledger: &Ledger,
+) -> Result<()> {
+    let payload = ReviewPayload::SessionStopped {
+        reason: reason.to_string(),
+        unresolved: ledger
+            .stop_screen_findings(false)
+            .into_iter()
+            .map(|f| f.id.clone())
+            .collect(),
+        cumulative: Cumulative {
+            exec_time_ms: ledger.exec_time_ms,
+            cost_usd_micros: ledger.cost_usd_micros,
+        },
+    };
+    let svc = ChannelService::open(mur_home)?;
+    crate::channel_writer::append_as_writer(
+        &svc,
+        mur_home,
+        channel_id,
+        crate::channel_writer::ROUTER_AGENT,
+        mur_common::channel::ChannelActor::System,
+        mur_common::channel::EventKind::Note,
+        to_note_payload(&payload),
+        None,
+    )?;
+    Ok(())
+}
+
+/// §8.3 stop screen: reason plus every unresolved finding; after an approve,
+/// disputed medium/low findings come first.
+pub fn render_stop_screen(stop: &LoopDriverStop, ledger: &Ledger, channel_id: &str) -> String {
+    let mut out = format!("Review stopped: {}\n", stop_reason(stop));
+    let after_approve = matches!(stop, LoopDriverStop::Approve);
+    let findings = ledger.stop_screen_findings(after_approve);
+    if findings.is_empty() {
+        out.push_str("No unresolved findings.\n");
+    } else {
+        out.push_str("Unresolved findings:\n");
+        for f in findings {
+            let severity = serde_json::to_value(f.severity).unwrap_or_default();
+            let status = serde_json::to_value(f.status).unwrap_or_default();
+            out.push_str(&format!(
+                "  {} [{}, {}] {}\n",
+                f.id,
+                severity.as_str().unwrap_or_default(),
+                status.as_str().unwrap_or_default(),
+                f.issue
+            ));
+        }
+    }
+    out.push_str(&format!("Channel kept for audit: {channel_id}\n"));
+    out
+}
+
+/// §5 semi-auto over a terminal: show each outgoing message and send it
+/// only when the human presses Enter; `q` declines (ends the session).
+struct TerminalGate<T> {
+    inner: T,
+}
+
+impl<T: ReviewTransport> ReviewTransport for TerminalGate<T> {
+    fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
+        let reply = self.inner.send(member, params)?;
+        println!("\n--- reply from {member} ---\n{reply}\n");
+        Ok(reply)
+    }
+
+    fn confirm_send(&self, member: &str, params: &serde_json::Value) -> Result<bool> {
+        let text = message_text(params).unwrap_or_default();
+        println!("\n--- next message to {member} ---\n{text}\n");
+        print!("Send to {member}? [Enter = send, q = stop] ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        Ok(is_send_answer(&line))
+    }
+}
+
+/// Enter (empty line) or `y`/`yes` sends; anything else, including EOF,
+/// declines — an unreadable answer never sends.
+fn is_send_answer(line: &str) -> bool {
+    if line.is_empty() {
+        return false; // EOF
+    }
+    matches!(line.trim().to_lowercase().as_str(), "" | "y" | "yes")
+}
+
+/// `mur fleet review --main <a> --reviewer <b> "<task>"`.
+pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
+    if !std::io::stdin().is_terminal() {
+        bail!(
+            "mur fleet review is attended: it asks before every send and needs a terminal. \
+             Run it from an interactive shell."
+        );
+    }
+    let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(mur_home, n);
+    let (main, reviewer) = (canon(&args.main), canon(&args.reviewer));
+    if main == reviewer {
+        bail!("--main and --reviewer must be different agents (got '{main}' for both)");
+    }
+    if args.task.trim().is_empty() {
+        bail!("the review task is empty: say what the main agent should do");
+    }
+
+    let name = new_session_name();
+    // §9: resolve limits BEFORE anything is created, so an unresolvable
+    // session leaves nothing behind. `fleet_bounds` needs only the fleet's
+    // own (empty) limits block, so a stand-in with the final name is exact.
+    let probe = session_fleet(&name, vec![], String::new());
+    let bounds = fleet_bounds(mur_home, &probe, args.deadline.as_deref(), args.budget_usd)?;
+    let limits = SessionLimits::new(bounds.deadline, bounds.stuck, bounds.cost_usd);
+
+    let fleet = create_session_fleet(mur_home, &name, &main, &reviewer)?;
+    println!(
+        "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}.\n\
+         Stop any time with `mur fleet stop {name}` or by answering q.",
+        humantime_like(bounds.deadline),
+        match bounds.stuck {
+            Stuck::Off => "off".to_string(),
+            Stuck::After(d) => humantime_like(d),
+        },
+    );
+
+    let transport = TerminalGate {
+        inner: A2aTransport { mur_home },
+    };
+    let (ledger, stop) = run_session(
+        &transport,
+        mur_home,
+        &fleet,
+        &args.task,
+        limits,
+        TRANSPORT_RETRY_DELAY,
+    )?;
+    print!(
+        "\n{}",
+        render_stop_screen(&stop, &ledger, &fleet.channel_id)
+    );
+    Ok(())
+}
+
+/// Run the loop on an already-created session fleet, then end the session
+/// whatever happened: record `session_stopped`, drop the fleet definition,
+/// keep the channel (§7.1, A1). Split out so tests can inject a transport.
+pub(super) fn run_session(
+    transport: &dyn ReviewTransport,
+    mur_home: &Path,
+    fleet: &Fleet,
+    task: &str,
+    limits: SessionLimits,
+    retry_delay: std::time::Duration,
+) -> Result<(Ledger, LoopDriverStop)> {
+    let [main, reviewer] = [&fleet.members[0], &fleet.members[1]];
+    let run = run_review_loop(
+        transport,
+        mur_home,
+        &fleet.name,
+        &fleet.channel_id,
+        main,
+        reviewer,
+        task,
+        Mode::SemiAuto,
+        retry_delay,
+        limits,
+        &Instant::now,
+    );
+    let (ledger, stop) = match run {
+        Ok(pair) => pair,
+        Err(e) => {
+            let _ = append_session_stopped(
+                mur_home,
+                &fleet.channel_id,
+                &format!("error: {e}"),
+                &Ledger::default(),
+            );
+            let _ = remove_session_fleet(mur_home, &fleet.name);
+            return Err(e);
+        }
+    };
+    append_session_stopped(mur_home, &fleet.channel_id, &stop_reason(&stop), &ledger)?;
+    remove_session_fleet(mur_home, &fleet.name)?;
+    Ok((ledger, stop))
+}
+
+/// `1h 30m`-style rendering for the session banner.
+fn humantime_like(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    let (h, m, sec) = (s / 3600, (s % 3600) / 60, s % 60);
+    match (h, m, sec) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, 0) => format!("{m}m"),
+        (h, 0, 0) => format!("{h}h"),
+        (h, m, _) if h > 0 => format!("{h}h {m}m"),
+        (_, m, s) => format!("{m}m {s}s"),
+    }
+}
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod session_tests;

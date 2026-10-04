@@ -299,3 +299,31 @@ fn ac14_stop_during_retry_wins_over_pausing() {
         "stopped before the first send even happens"
     );
 }
+
+/// §5 semi-auto: a human who declines the send gate ends the turn as
+/// `Stopped`, and nothing reaches the transport.
+#[test]
+fn declined_gate_sends_nothing() {
+    struct Declining(AtomicUsize);
+    impl ReviewTransport for Declining {
+        fn send(&self, _m: &str, _p: &serde_json::Value) -> anyhow::Result<String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok("reply".into())
+        }
+        fn confirm_send(&self, _m: &str, _p: &serde_json::Value) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let transport = Declining(AtomicUsize::new(0));
+    let out = run_turn(
+        &transport,
+        tmp.path(),
+        "review-x",
+        "main",
+        &serde_json::json!({}),
+    )
+    .unwrap();
+    assert_eq!(out, TurnOutcome::Stopped);
+    assert_eq!(transport.0.load(Ordering::SeqCst), 0);
+}

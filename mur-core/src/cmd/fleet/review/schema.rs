@@ -72,6 +72,7 @@ impl FindingStatus {
     }
 
     /// §3.3: "Closed states: `withdrawn`, `resolved`, closed by `/rule`."
+    #[allow(dead_code)] // not wired yet: §6 /rule
     pub fn is_closed(self) -> bool {
         !self.is_open_set()
     }
@@ -311,6 +312,7 @@ pub struct ReviewEnvelope {
 /// The round a payload belongs to, for payloads that carry one. Round
 /// boundaries are derived from this (§4 has no explicit "round complete"
 /// event), by both the replay fold and the live loop.
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub fn payload_round(p: &ReviewPayload) -> Option<u32> {
     match p {
         ReviewPayload::TurnSent { round, .. }
@@ -333,6 +335,7 @@ pub fn to_note_payload(payload: &ReviewPayload) -> serde_json::Value {
 
 /// What a `Note`'s payload is, for the review fold's purposes.
 #[derive(Debug)]
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub enum NoteClassification {
     /// No `"review"` key at all — an ordinary note, ignored (§4).
     NotReview,
@@ -343,6 +346,7 @@ pub enum NoteClassification {
 }
 
 /// Classify a `Note`'s raw JSON payload per §4's rule.
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub fn classify_note_payload(payload: &serde_json::Value) -> NoteClassification {
     let Some(review) = payload.get(REVIEW_PAYLOAD_KEY) else {
         return NoteClassification::NotReview;

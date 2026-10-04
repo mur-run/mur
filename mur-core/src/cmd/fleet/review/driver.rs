@@ -27,6 +27,15 @@ use crate::cmd::fleet::control;
 /// ([`A2aTransport`]) and once as a stub for tests (`driver_tests.rs`).
 pub trait ReviewTransport {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String>;
+
+    /// §5 semi-auto: the human gate before a send. Called after the
+    /// `.stopped` check and before [`ReviewTransport::send`]; `false` means
+    /// the human declined, and the turn ends as `Stopped` with nothing sent.
+    /// The default lets every send through (tests, and any caller that has
+    /// already gated elsewhere).
+    fn confirm_send(&self, _member: &str, _params: &serde_json::Value) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 /// Real transport: wraps [`crate::a2a_dial::dial_message_streaming`]
@@ -84,6 +93,9 @@ pub fn run_turn(
     params: &serde_json::Value,
 ) -> Result<TurnOutcome> {
     if control::is_stopped(mur_home, fleet_name) {
+        return Ok(TurnOutcome::Stopped);
+    }
+    if !transport.confirm_send(member, params)? {
         return Ok(TurnOutcome::Stopped);
     }
     let reply = transport.send(member, params)?;

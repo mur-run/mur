@@ -8,24 +8,23 @@
 //! only dependencies per Q5 (§4) so it can be lifted into its own crate if a
 //! second crate ever needs to read it.
 //!
-//! WORK IN PROGRESS: the async two-party turn driver (§3.1, A2), the A2A
-//! transport wiring, the `mur fleet review` CLI surface, and the MURMUR
-//! integration (§5–§7, AC12–AC21) are NOT in this module yet. This file lands
-//! only the deterministic core: event schema, ledger fold, verdict/rebuttal
-//! state machine, and rollback-on-replay arithmetic. See the coding agent's
-//! report for exactly what has run through `cargo build`/`cargo test` and
-//! what has not.
-
-// TEMPORARY: nothing outside this module calls into it until the driver is
-// wired into `mur fleet review` (AC12+). Remove this allow in that change.
-#![allow(dead_code)]
+//! Status: `mur fleet review` (`session.rs`) runs the semi-auto loop over a
+//! terminal — main and reviewer turns over A2A (`wire.rs`), a gate before
+//! every send, `session_stopped`, fleet removed and channel kept. Not wired
+//! yet: §5 auto mode and MURMUR (§6–§7), §3.4 rebuttal/escalation, the §3.2
+//! validation-hint retry, and §8.2 resume (`rollback.rs`). Items waiting on
+//! those carry an `#[allow(dead_code)]` naming the section.
 
 pub mod constants;
 pub mod driver;
 pub mod ledger;
 pub mod loop_driver;
+// §8.2 replay/resume is not wired into `mur fleet review` yet; until it
+// is, only its tests call into this module.
+#[allow(dead_code)]
 pub mod rollback;
 pub mod schema;
+pub mod session;
 pub mod wire;
 
 #[cfg(test)]

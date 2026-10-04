@@ -68,6 +68,25 @@ pub enum FleetAction {
         #[arg(long, requires = "cwd")]
         cwd_inferred: bool,
     },
+    /// Run an attended review session: `--main` does the task, `--reviewer`
+    /// reviews it, round after round, until approve / blocked / a limit.
+    /// Semi-auto: every message is shown and sent only when you press Enter.
+    Review {
+        /// The agent that does the work
+        #[arg(long)]
+        main: String,
+        /// The agent that reviews it
+        #[arg(long)]
+        reviewer: String,
+        /// What the main agent should do
+        task: String,
+        /// Wall-clock deadline for the session, e.g. 30m/2h
+        #[arg(long)]
+        deadline: Option<String>,
+        /// Cost cap in USD for the session
+        #[arg(long)]
+        budget_usd: Option<f64>,
+    },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
     /// deadline, done-when policy). Only the flags you pass are changed —
     /// everything else already set is preserved.

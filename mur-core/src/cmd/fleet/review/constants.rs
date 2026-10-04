@@ -11,9 +11,11 @@ pub const REVIEW_FLEET_PREFIX: &str = "review-";
 
 /// §5: default countdown before an auto-mode send goes out. Any key during
 /// the countdown drops back to semi-auto.
+#[allow(dead_code)] // not wired yet: §5 auto mode (MURMUR)
 pub const AUTO_COUNTDOWN_DEFAULT: Duration = Duration::from_secs(3);
 /// §5: the countdown is never shorter than this, even if configured lower.
 /// A configured value below this is clamped to it with a warning (§5).
+#[allow(dead_code)] // not wired yet: §5 auto mode (MURMUR)
 pub const AUTO_COUNTDOWN_MIN: Duration = Duration::from_millis(1500);
 
 /// §8.1: one retry after this delay on A2A send failure / peer offline,
@@ -26,29 +28,35 @@ pub const ROUND_STUCK_AFTER_UNCHANGED_ROUNDS: u32 = 2;
 
 /// §3.4: a finding rejected this many times by the main agent triggers
 /// automatic escalation to the human.
+#[allow(dead_code)] // not wired yet: §3.4 rebuttal/escalation
 pub const REJECT_ESCALATION_THRESHOLD: u32 = 2;
 
 /// §3.2 / §3.4: a malformed verdict or rebuttal gets this many retries
 /// (with a validation hint) before the system treats it as `blocked`.
+#[allow(dead_code)] // not wired yet: §3.2 validation-hint retry
 pub const MALFORMED_RESPONSE_RETRIES: u32 = 1;
 
 /// §8.2 "Restarting round N+1" — the fixed plain-text note prepended to
 /// every A2A request of the restarted round, verbatim (AC11e: a grep must
 /// find this text in exactly one non-test source location). Do NOT
 /// reformat this string; AC11e pins it byte-for-byte.
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub const REVIEW_ROUND_RESTART_NOTE: &str = "This round was interrupted and restarted. A previous attempt may have reached you. Re-read the current workspace state before responding; do not assume your last-seen state is current.";
 
 /// §8.2 fatal case — the fixed marker filename inside a channel's own
 /// directory (`<MUR_HOME>/channels/<channel id>/corrupted.json`), next to
 /// `events.jsonl`. The builder does not choose this path.
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub const REVIEW_CORRUPTED_MARKER_FILE: &str = "corrupted.json";
 
 /// §8.2 — the fixed reason string stamped into the corrupted marker and
 /// into the `session_stopped` event when a session can never be resumed.
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub const REVIEW_STOP_REASON_CORRUPTED: &str = "corrupted";
 
 /// §8.2 Continue path — the `session_stopped` reason when a human chooses
 /// Abandon instead of Continue after a partial-damage replay.
+#[allow(dead_code)] // not wired yet: §8.2 resume
 pub const REVIEW_STOP_REASON_REPLAY_FAILED: &str = "replay_failed";
 
 /// §3.1: main's turn prompt. Placeholders: `{task}`, `{round}`,
