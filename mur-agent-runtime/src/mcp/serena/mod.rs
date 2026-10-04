@@ -8,6 +8,7 @@
 //! [`verify_entries`] is the startup gate (2.4); spawn wiring is 2.5–2.6.
 
 mod preflight;
+pub mod rewrite;
 
 pub use preflight::{SerenaPreflightError, preflight};
 
