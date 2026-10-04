@@ -20,3 +20,7 @@ pub mod constants;
 pub mod ledger;
 pub mod rollback;
 pub mod schema;
+
+#[cfg(test)]
+#[path = "no_tampering_tests.rs"]
+mod no_tampering_tests;
