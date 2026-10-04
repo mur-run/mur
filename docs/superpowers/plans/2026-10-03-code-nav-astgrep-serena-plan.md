@@ -762,8 +762,12 @@ real agent through serena; end-to-end is task 3.6b's acceptance.
       panicked).
 - [ ] 3.6b Pre-install pyright, launch via `ls_path` (see `### 3.6b`). To
       build: install row, `ls_path` in `serena_config.yml`, new C7, seal
-      exec grant. **Acceptance:** offline `initialize` proven by LSP script
-      (row 4); **pending:** same inside a real agent through serena.
+      exec grant. **Built** (install row, `ls_path`, C7, seal grant).
+      **Acceptance:** offline `initialize` proven by LSP script against the
+      pyright that `mur code-nav setup` installed (bundled `dist/`, no npm,
+      nothing written to `$HOME`); serena's own provider resolves the launch
+      command to `[ls_path, --stdio]`. **Pending:** the same inside a real
+      agent seal through serena.
 - [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
       rewrite.
 - [ ] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
