@@ -1,7 +1,8 @@
 # Agent review loop — Phase 1 design
 
-- **Status:** Draft rev 3. **§2.3 A1–A4 and P1–P4 approved (direction).** AC0 stays **open**
-  until the human has read the final §8.2 line by line. Do not start implementation.
+- **Status:** Approved rev 3. **§2.3 A1–A4 and P1–P4 approved.** The human read the final §8.2
+  (including the corrupted-marker addition and AC11g) on 2026-10-04. **AC0 is satisfied;**
+  implementation may start per §15.
 - **Rev 2 (2026-10-04):** §14 Q1–Q7 answered by the human and folded into the body. A4 scope made
   explicit (ordinary fleets unchanged). Replay-failure degradation added (§8.2, AC11a–AC11c).
 - **Rev 3 (2026-10-04):** P1–P4 decided (§14.2). §8.2 gains monotonic clock/cost on rollback and
