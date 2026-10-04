@@ -128,15 +128,15 @@ pub fn run_review_loop(
     let svc = ChannelService::open(mur_home)?;
     let mut ledger = Ledger::default();
     let start = now();
-    // Activity = a turn that returned `RetryOutcome::Sent(_)`. The loop
-    // start itself counts as activity, so a `Stuck::After` window begins
-    // ticking only once a round has actually gone by without a successful
-    // send. `stuck_for` is checked (a) once per round, before main's turn,
-    // and (b) right after EACH send returns, before that reply is used or
-    // folded into the ledger — so a turn that itself blows the stuck window
-    // is discarded rather than applied. Note: a send that never returns at
-    // all is not preempted by this (the transport call is blocking) — that
-    // is a known limit, not fixed here.
+    // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
+    // defines stuck as "no agent-authored channel event for the window", so
+    // a long turn that DOES come back with a reply is activity, not a stall:
+    // a main coding turn can legitimately run past the stuck window. Stuck
+    // is therefore checked only once per round, before main's turn. After
+    // each send only the deadline is re-checked (a reply that lands past the
+    // user's deadline is discarded). Known limit: a send that never returns
+    // is not preempted (the transport call is blocking); catching that needs
+    // a watchdog around the transport, not a post-hoc duration check.
     let mut last_activity = now();
     let mut round: u32 = 1;
 
@@ -170,17 +170,15 @@ pub fn run_review_loop(
                 return Ok((ledger, LoopDriverStop::Paused { reason }));
             }
             RetryOutcome::Sent(reply) => {
-                let stuck_for = now().saturating_duration_since(last_activity);
                 if let Some(stop) = check_guards(
                     round,
                     now().saturating_duration_since(start),
                     deadline,
-                    stuck_for,
-                    stuck,
+                    Duration::ZERO,
+                    Stuck::Off,
                 ) {
                     return Ok((ledger, LoopDriverStop::Guard(stop)));
                 }
-                last_activity = now();
                 reply
             }
         };
@@ -201,13 +199,12 @@ pub fn run_review_loop(
                 return Ok((ledger, LoopDriverStop::Paused { reason }));
             }
             RetryOutcome::Sent(reply) => {
-                let stuck_for = now().saturating_duration_since(last_activity);
                 if let Some(stop) = check_guards(
                     round,
                     now().saturating_duration_since(start),
                     deadline,
-                    stuck_for,
-                    stuck,
+                    Duration::ZERO,
+                    Stuck::Off,
                 ) {
                     return Ok((ledger, LoopDriverStop::Guard(stop)));
                 }

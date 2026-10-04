@@ -219,15 +219,13 @@ fn ac12_full_loop_runs_to_approve() {
     assert!(ledger.open_set().is_empty());
 }
 
-/// S1: a turn that itself blows the stuck window must trip the guard
-/// (b)-check right after `run_turn_with_retry` returns `Sent`, BEFORE that
-/// reply is folded into the ledger or appended to the channel. The fake
-/// clock jumps 6 minutes inside the reviewer's `send`; `Stuck::After(5
-/// min)` must therefore fire on the reviewer's own turn, and the late
-/// reviewer reply (an `approve`, which would otherwise end the loop
-/// cleanly) must never reach the ledger or the channel.
+/// S1 (revised): a turn that takes longer than the stuck window but DOES
+/// return is activity, not a stall (§3.5: stuck = no agent-authored event
+/// for the window). The fake clock jumps 6 minutes inside the reviewer's
+/// `send` with `Stuck::After(5 min)`; the late `approve` must still be
+/// folded, signed, and end the loop cleanly.
 #[test]
-fn stuck_trips_when_a_turn_exceeds_window() {
+fn long_turn_that_returns_is_not_stuck() {
     let (tmp, channel_id, identity, kv) = setup_channel();
     let home = tmp.path();
 
@@ -257,17 +255,14 @@ fn stuck_trips_when_a_turn_exceeds_window() {
 
     assert_eq!(
         stop,
-        LoopDriverStop::Guard(LoopStop::Stuck),
-        "a reviewer turn that itself exceeds the stuck window must trip the guard"
+        LoopDriverStop::Approve,
+        "a slow reviewer turn that returns must not trip the stuck guard"
     );
-    assert!(
-        ledger.findings.is_empty() && ledger.round == 0,
-        "the late reviewer reply must not be folded into the ledger"
-    );
+    assert_eq!(ledger.round, 1, "the late approve must be folded");
     let payloads = read_payloads(home, &channel_id);
     assert!(
-        payloads.is_empty(),
-        "the late reviewer reply must not be appended to the channel"
+        !payloads.is_empty(),
+        "the late approve must be appended to the channel"
     );
 }
 
