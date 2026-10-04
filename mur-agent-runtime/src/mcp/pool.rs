@@ -45,8 +45,14 @@ impl McpPool {
         let entry = self.entries.get(server).ok_or_else(|| {
             McpError::Server(format!("no MCP server named `{server}` on this agent"))
         })?;
+        // serena loads (and may migrate) its config before answering
+        // `initialize`, so hash before spawn and compare after (#1688).
+        let serena_cfg = crate::mcp::serena::rewrite::fingerprint(entry, self.policy.agent_home());
         let mut client = McpClient::connect(entry, &self.policy, self.proxy.as_ref()).await?;
         client.initialize().await?;
+        if let Some(warning) = serena_cfg.and_then(|fp| fp.rewritten()) {
+            tracing::warn!(server = %server, "{warning}");
+        }
 
         // Drain child stderr in a background thread so the pipe never fills.
         if let Some(stderr) = client.take_stderr().await {
