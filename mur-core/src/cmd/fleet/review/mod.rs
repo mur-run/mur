@@ -19,12 +19,17 @@
 pub mod constants;
 pub mod driver;
 pub mod ledger;
+pub mod loop_driver;
 pub mod rollback;
 pub mod schema;
 
 #[cfg(test)]
 #[path = "driver_tests.rs"]
 mod driver_tests;
+
+#[cfg(test)]
+#[path = "loop_driver_tests.rs"]
+mod loop_driver_tests;
 
 #[cfg(test)]
 #[path = "no_tampering_tests.rs"]
