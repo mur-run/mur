@@ -50,12 +50,19 @@ pub enum State {
     Done,
     Failed,
     Stopped,
+    /// Step-only: the step reported success without doing its work — a
+    /// `delegate_to` step run without a channel only prints (#1613). Never a
+    /// run's state; terminal so it is not shown as outstanding.
+    Skipped,
 }
 
 impl State {
     /// True when the run has finished and no process is expected to remain.
     pub fn is_terminal(self) -> bool {
-        matches!(self, State::Done | State::Failed | State::Stopped)
+        matches!(
+            self,
+            State::Done | State::Failed | State::Stopped | State::Skipped
+        )
     }
 }
 

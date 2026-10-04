@@ -143,8 +143,18 @@ pub(super) async fn execute_step_inner(
         }
     } else {
         // ── Intent-mode (no command) ──
+        // A delegate step lands here only without a channel; say so on the
+        // line itself so the output does not read as if the member ran.
+        let not_delegated = if is_undelegated(step, opts) {
+            format!(
+                " [not delegated to {}: no channel]",
+                step.delegate_to.as_deref().unwrap_or_default()
+            )
+        } else {
+            String::new()
+        };
         eprintln!(
-            "  Step {}: {} {}",
+            "  Step {}: {} {}{not_delegated}",
             step.id.as_deref().unwrap_or(&step_index.to_string()),
             step.description,
             step.tool
@@ -552,15 +562,32 @@ pub(super) async fn execute_step(
         });
     }
 
-    emit(
-        if result.success {
-            StepEventKind::Done
-        } else {
-            StepEventKind::Failed
-        },
-        result.tokens_used,
-        step_failure_reason(&result),
-    );
+    if result.success && is_undelegated(step, opts) {
+        emit(StepEventKind::Skipped, 0, Some(UNDELEGATED_REASON.into()));
+    } else {
+        emit(
+            if result.success {
+                StepEventKind::Done
+            } else {
+                StepEventKind::Failed
+            },
+            result.tokens_used,
+            step_failure_reason(&result),
+        );
+    }
 
     result
+}
+
+/// Recorded on a step that [`is_undelegated`]: the reason `mur job status`
+/// and `mur_job_status` print under its `skipped` row.
+pub(super) const UNDELEGATED_REASON: &str =
+    "not delegated: run has no channel (re-run with --channel-new or --channel <id>)";
+
+/// A `delegate_to` step with no command, run without a channel: it falls
+/// through to intent mode, prints its description and calls no member. It
+/// still reports success (a preview is legitimate), but the record must not
+/// say `done` for work nobody did (#1613).
+pub(super) fn is_undelegated(step: &ProcedureStep, opts: &DagExecOptions<'_>) -> bool {
+    step.delegate_to.is_some() && opts.channel_id.is_none() && step.command.is_none()
 }
