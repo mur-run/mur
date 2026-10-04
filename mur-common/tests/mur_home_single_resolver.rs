@@ -73,6 +73,9 @@ fn no_hand_rolled_mur_home() {
             let Ok(text) = std::fs::read_to_string(&f) else {
                 continue;
             };
+            // Windows checkouts may carry CRLF; normalise so the test-module
+            // boundary below matches on every platform.
+            let text = text.replace("\r\n", "\n");
             // Unit tests live in a trailing `#[cfg(test)] mod tests` and build
             // fixture trees under a tempdir; stop scanning there. Split on the
             // module, not the bare attribute, so production code that follows
@@ -94,6 +97,17 @@ fn no_hand_rolled_mur_home() {
         "resolve MUR's data root with `mur_common::home` (honours MUR_HOME), \
          not by joining `.mur` onto a home dir (#1696):\n{}",
         offenders.join("\n")
+    );
+}
+
+#[test]
+fn test_module_boundary_survives_crlf() {
+    let text = "fn a() {}\r\n#[cfg(test)]\r\nmod tests {\r\n    x.join(\".mur\")\r\n}\r\n"
+        .replace("\r\n", "\n");
+    let body = text.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
+    assert!(
+        !joins_dot_mur(body),
+        "test module must be excluded: {body:?}"
     );
 }
 
