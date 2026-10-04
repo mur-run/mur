@@ -149,10 +149,9 @@ fn running_binary_is_adhoc() -> Option<bool> {
 ///    file — the account name is derived from the agent's name at resolve
 ///    time, so the only way to count them is to ask the Keychain per agent.
 fn keychain_secret_count() -> usize {
-    let Some(home) = dirs::home_dir() else {
+    let Ok(mur) = super::agent::resolve_mur_home() else {
         return 0;
     };
-    let mur = home.join(".mur");
     let mut n = 0usize;
 
     if let Ok(reg) = mur_common::model::ModelRegistry::load_from(&mur.join("models.yaml")) {
@@ -267,7 +266,9 @@ pub(crate) fn cmd_doctor(fix: bool) -> Result<()> {
     println!("🩺 MUR Doctor\n");
 
     // Check MUR directory
-    let mur_dir = dirs::home_dir().map(|h| h.join(".mur")).unwrap_or_default();
+    // Honors `$MUR_HOME` like every other surface (#1692); the old
+    // `$HOME/.mur` hardcode made doctor report a missing directory.
+    let mur_dir = super::agent::resolve_mur_home().unwrap_or_default();
     if mur_dir.exists() {
         println!("✅ MUR directory: {}", mur_dir.display());
     } else {
