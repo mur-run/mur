@@ -9,6 +9,9 @@
 //! fold (§4). A `Note` that HAS the key but fails to deserialize as
 //! [`ReviewEnvelope`] is damage (§8.2), not an ignorable note.
 
+use std::time::Duration;
+
+use mur_common::limits::Stuck;
 use serde::{Deserialize, Serialize};
 
 /// The top-level key inside `Note.payload` that marks a review event.
@@ -129,6 +132,64 @@ pub struct Cumulative {
     pub cost_usd_micros: u64,
 }
 
+/// Micro-dollars per US dollar: the unit of every cost field in this schema.
+pub const MICROS_PER_USD: f64 = 1_000_000.0;
+
+/// §4: the limits a session resolved at start, recorded in
+/// `session_started`. Same units as [`Cumulative`] (ms, micro-dollars) so a
+/// reader compares spend against cap like for like. The loop enforces the
+/// values read back out of this struct, so what is recorded is exactly what
+/// is enforced.
+///
+/// Converting to these units only ever rounds DOWN (floor). A cap that has to
+/// lose precision may become stricter, never looser (same rule as §8.2's
+/// rollback limits).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionLimits {
+    pub deadline_ms: u64,
+    /// `None` = the duration stuck detector is off (`limits.stuck: off`).
+    pub stuck_ms: Option<u64>,
+    /// `None` = no cost cap.
+    pub cost_usd_micros: Option<u64>,
+}
+
+impl SessionLimits {
+    /// Build from resolved limits (production: `loop_run::fleet_bounds`).
+    pub fn new(deadline: Duration, stuck: Stuck, cost_usd: Option<f64>) -> Self {
+        Self {
+            deadline_ms: duration_ms(deadline),
+            stuck_ms: match stuck {
+                Stuck::Off => None,
+                Stuck::After(d) => Some(duration_ms(d)),
+            },
+            cost_usd_micros: cost_usd.map(usd_to_micros),
+        }
+    }
+
+    pub fn deadline(&self) -> Duration {
+        Duration::from_millis(self.deadline_ms)
+    }
+
+    pub fn stuck(&self) -> Stuck {
+        match self.stuck_ms {
+            None => Stuck::Off,
+            Some(ms) => Stuck::After(Duration::from_millis(ms)),
+        }
+    }
+}
+
+/// Whole milliseconds, truncated (floor); saturates at `u64::MAX`.
+fn duration_ms(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Floor to whole micro-dollars. `as u64` saturates: negative and NaN become
+/// 0 (the strictest cap) and overflow becomes `u64::MAX`. `limits::validate`
+/// already rejects non-finite and negative caps before they get here.
+fn usd_to_micros(usd: f64) -> u64 {
+    (usd * MICROS_PER_USD).floor() as u64
+}
+
 /// One logical review event (§4), the payload half of a `Note` event.
 /// `#[serde(tag = "type")]` makes the wire shape `{"type": "verdict", ...}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,6 +198,7 @@ pub enum ReviewPayload {
     SessionStarted {
         members: [String; 2],
         mode: Mode,
+        limits: SessionLimits,
     },
     TurnSent {
         round: u32,
@@ -294,6 +356,36 @@ pub fn classify_note_payload(payload: &serde_json::Value) -> NoteClassification 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// §4: `session_started` carries the resolved limits; "off" and "no cap"
+    /// are explicit nulls, and lossy conversion only rounds a cap down.
+    #[test]
+    fn session_limits_record_resolved_values() {
+        let l = SessionLimits::new(
+            Duration::from_secs(90 * 60),
+            Stuck::After(Duration::from_secs(600)),
+            Some(1.234_567_9),
+        );
+        assert_eq!(l.deadline_ms, 5_400_000);
+        assert_eq!(l.stuck_ms, Some(600_000));
+        assert_eq!(l.cost_usd_micros, Some(1_234_567));
+        assert_eq!(l.deadline(), Duration::from_secs(90 * 60));
+        assert_eq!(l.stuck(), Stuck::After(Duration::from_secs(600)));
+
+        let off = SessionLimits::new(Duration::from_secs(60), Stuck::Off, None);
+        assert_eq!(off.stuck(), Stuck::Off);
+        let p = ReviewPayload::SessionStarted {
+            members: ["m".into(), "r".into()],
+            mode: Mode::Auto,
+            limits: off,
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            v["limits"],
+            serde_json::json!({"deadline_ms": 60_000, "stuck_ms": null, "cost_usd_micros": null})
+        );
+        assert_eq!(serde_json::from_value::<ReviewPayload>(v).unwrap(), p);
+    }
 
     #[test]
     fn round_trips_through_note_payload() {

@@ -15,7 +15,9 @@ use mur_common::limits::Stuck;
 use super::driver::ReviewTransport;
 use super::ledger::fold_rounds;
 use super::loop_driver::{LoopDriverStop, run_review_loop};
-use super::schema::{Mode, NoteClassification, ReviewPayload, Role, classify_note_payload};
+use super::schema::{
+    Mode, NoteClassification, ReviewPayload, Role, SessionLimits, classify_note_payload,
+};
 use crate::cmd::fleet::loop_run::LoopStop;
 
 /// Test-only transport: counts sends PER MEMBER and returns the next queued
@@ -185,8 +187,7 @@ fn ac12_full_loop_runs_to_approve() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
     )
     .unwrap();
@@ -240,8 +241,11 @@ fn long_turn_that_returns_is_not_stuck() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::After(Duration::from_secs(5 * 60)),
+        SessionLimits::new(
+            Duration::from_secs(3600),
+            Stuck::After(Duration::from_secs(5 * 60)),
+            None,
+        ),
         &|| clock.get(),
     )
     .unwrap();
@@ -284,8 +288,7 @@ fn stuck_off_never_trips() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &|| clock.get(),
     )
     .unwrap();
@@ -372,8 +375,7 @@ fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &|| clock.get(),
     )
     .unwrap();
@@ -430,8 +432,7 @@ fn ac13_limit_stop_lists_open_and_disputed_findings() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(55),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(55), Stuck::Off, None),
         &|| clock.get(),
     )
     .unwrap();
@@ -498,8 +499,7 @@ fn main_receives_open_findings_from_round_two() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
     )
     .unwrap();
@@ -538,8 +538,7 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
     )
     .unwrap();
@@ -572,6 +571,11 @@ fn channel_records_session_started_and_turn_sent() {
     })
     .to_string();
     let transport = StubLoopTransport::new(vec![], vec![&revise, &approve]);
+    let limits = SessionLimits::new(
+        Duration::from_secs(3600),
+        Stuck::After(Duration::from_secs(10 * 60)),
+        Some(2.5),
+    );
 
     let (ledger, stop) = run_review_loop(
         &transport,
@@ -582,8 +586,7 @@ fn channel_records_session_started_and_turn_sent() {
         "reviewer",
         Mode::Auto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::Off,
+        limits,
         &Instant::now,
     )
     .unwrap();
@@ -595,6 +598,11 @@ fn channel_records_session_started_and_turn_sent() {
         ReviewPayload::SessionStarted {
             members: ["main".into(), "reviewer".into()],
             mode: Mode::Auto,
+            limits: SessionLimits {
+                deadline_ms: 3_600_000,
+                stuck_ms: Some(600_000),
+                cost_usd_micros: Some(2_500_000),
+            },
         }
     );
     let turns: Vec<(u32, Role)> = payloads
@@ -661,8 +669,7 @@ fn round_cut_after_turn_sent_replays_to_live_ledger() {
         "reviewer",
         Mode::SemiAuto,
         Duration::ZERO,
-        Duration::from_secs(10 * 60),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(10 * 60), Stuck::Off, None),
         &|| clock.get(),
     )
     .unwrap();
@@ -723,8 +730,7 @@ fn every_session_event_verifies_under_one_writer() {
         "reviewer",
         Mode::Auto,
         Duration::ZERO,
-        Duration::from_secs(3600),
-        Stuck::Off,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
     )
     .unwrap();

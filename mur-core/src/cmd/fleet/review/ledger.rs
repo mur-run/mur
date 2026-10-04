@@ -308,7 +308,13 @@ pub type Verdict = VerdictKind;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cmd::fleet::review::schema::{Cumulative, RebuttalAnswer, RebuttalResponseDto};
+    use std::time::Duration;
+
+    use mur_common::limits::Stuck;
+
+    use crate::cmd::fleet::review::schema::{
+        Cumulative, RebuttalAnswer, RebuttalResponseDto, SessionLimits,
+    };
 
     fn cum(ms: u64, micros: u64) -> Cumulative {
         Cumulative {
@@ -464,6 +470,7 @@ mod tests {
                 .apply(&ReviewPayload::SessionStarted {
                     members: ["main".into(), "reviewer".into()],
                     mode: Mode::SemiAuto,
+                    limits: SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
                 })
                 .unwrap();
             let f1 = issue(&mut ledger, Severity::Medium, "x", 1);

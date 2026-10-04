@@ -28,8 +28,8 @@ use serde::Deserialize;
 use super::driver::{RetryOutcome, ReviewTransport, run_turn_with_retry};
 use super::ledger::Ledger;
 use super::schema::{
-    Cumulative, Mode, NewFindingDto, PriorUpdateDto, ReviewPayload, Role, VerdictKind,
-    to_note_payload,
+    Cumulative, Mode, NewFindingDto, PriorUpdateDto, ReviewPayload, Role, SessionLimits,
+    VerdictKind, to_note_payload,
 };
 use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
 
@@ -123,17 +123,21 @@ pub fn run_review_loop(
     reviewer: &str,
     mode: Mode,
     retry_delay: Duration,
-    deadline: Duration,
-    stuck: Stuck,
+    limits: SessionLimits,
     now: &dyn Fn() -> Instant,
 ) -> Result<(Ledger, LoopDriverStop)> {
     let svc = ChannelService::open(mur_home)?;
     let mut ledger = Ledger::default();
-    // §4: the session opens with `session_started` (members, mode). It
-    // carries no round, so it never moves a round boundary on replay.
+    // §4: the session opens with `session_started` (members, mode, resolved
+    // limits). It carries no round, so it never moves a round boundary on
+    // replay. The guards below read deadline/stuck back out of `limits`, so
+    // the recorded limits are exactly the enforced ones.
+    let deadline = limits.deadline();
+    let stuck = limits.stuck();
     let started = ReviewPayload::SessionStarted {
         members: [main.to_string(), reviewer.to_string()],
         mode,
+        limits,
     };
     ledger.apply(&started)?;
     append(&svc, mur_home, channel_id, &started)?;
