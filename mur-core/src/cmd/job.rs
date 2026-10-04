@@ -67,6 +67,7 @@ fn state_label(s: State) -> &'static str {
         State::Done => "done",
         State::Failed => "failed",
         State::Stopped => "stopped",
+        State::Skipped => "skipped",
     }
 }
 
