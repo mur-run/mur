@@ -573,12 +573,12 @@ language; that run has to happen outside the MUR seal, like Layer B.
 
 | Language | Server | How serena gets it | Pin | Integrity check | Runtime prerequisite |
 |---|---|---|---|---|---|
-| Python | pyright | `uvx pyright==<pin>` on first start (`LanguageServerDependencyProviderUvx`) | 1.1.403 | uv's resolver (PyPI), no sha in serena | uv / uvx on PATH; **node on PATH** (else pyright's `nodeenv` downloads node at runtime); CPython 3.13 in the pinned `UV_PYTHON_INSTALL_DIR` |
+| Python | pyright | `uvx pyright==<pin>` on first start (`LanguageServerDependencyProviderUvx`) | 1.1.403 | uv's resolver (PyPI), no sha in serena | uv at setup only (MUR pre-installs, launches via `ls_path`, 3.6b); **node on PATH** (else pyright's `nodeenv` downloads node at runtime) |
 | TypeScript | typescript-language-server + typescript | `npm install --prefix ./ pkg@pin` in the serena-managed dir | 5.1.3 / 5.9.3 | none (npm registry); no `--ignore-scripts` | node + npm on PATH |
 | PHP | intelephense | same npm path | 1.14.4 | none; no `--ignore-scripts` | node + npm |
 | Lua | lua-language-server | PATH first, else GitHub release download | 3.15.0 | sha256 per asset, host allow-list | none |
 | C/C++ | clangd | GitHub release download | 19.1.2 | sha256 (`d3b329b3…` osx-arm64) | none |
-| Ruby | ruby-lsp | **see below** | 0.26.8 | none | ruby; bundler / gem. Pre-warm cannot contain it: `gem install` writes to the user's **global** gem dir, outside the agent home |
+| Ruby | ruby-lsp | **see below** | 0.26.8 | none | ruby; bundler / gem. Pre-install cannot contain it: `gem install` writes to the user's **global** gem dir, outside the agent home |
 | Rust | rust-analyzer | PATH or `~/.cargo/bin` only; never downloaded | user's | n/a | user-installed |
 | Go | gopls | PATH only (`cmd="gopls"`) | user's | n/a | go + gopls |
 | Swift | sourcekit-lsp | PATH only | user's | n/a | Xcode / toolchain |
