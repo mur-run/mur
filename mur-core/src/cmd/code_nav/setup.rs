@@ -97,6 +97,13 @@ pub fn run(
         (Some(_), false) => bail!("--project only applies with --with-serena"),
         (None, false) => None,
     };
+    // A same-named server the user owns would only be refused at the final
+    // profile save, after uv downloads and config writes. Refuse it here,
+    // before the plan is even printed, so nothing changes on disk.
+    if project.is_some() {
+        let (_, profile) = crate::cmd::agent::load_profile_for_edit(&agent)?;
+        serena_entry::check_slot(&profile, serena_entry::ENTRY_NAME)?;
+    }
 
     let plan = plan::plan(&mur_home, &args.flags, &detect())?;
     let mut permissions = plan.permissions.clone();
