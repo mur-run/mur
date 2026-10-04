@@ -427,9 +427,9 @@ LSP risk tiers:
 
 | Tier | Languages | Default |
 |---|---|---|
-| Low | Python, TypeScript, PHP, Lua, Ruby | listed, enabled |
+| Low | Python, TypeScript, PHP, Lua | listed, enabled |
 | Medium, contained | C/C++ (`--enable-config=false` via `ls_extra_args`, no `--query-driver`, MUR-owned `compile_commands_dir`) | listed, enabled |
-| High | Rust (`--lsp rust` ≡ `--lsp rust-full` in v1), Go, Java, Swift | needs explicit `--lsp <lang>` |
+| High | Rust (`--lsp rust` ≡ `--lsp rust-full` in v1), Go, Java, Swift, Ruby (Phase 3 finding 1) | needs explicit `--lsp <lang>` |
 
 In v1 `rust` and `rust-full` behave identically: serena hardcodes
 `buildScripts`, `procMacro` and `checkOnSave` on and sends `didSave` before
@@ -447,6 +447,98 @@ a repo dylib, C/C++ moves to High.
 Output: three tables (install, permissions, LSP risk — skipped languages
 listed with the flag that enables them), then one confirmation. Applied plan
 written to a setup manifest; re-runs prompt only for the diff.
+
+### Phase 3 decisions
+
+- **P3-D1 Command:** a standalone `mur code-nav setup --agent <name>`, the
+  same shape as `mur browser setup`, so existing agents can be set up later.
+  Not a `mur agent create` flag.
+- **P3-D2 serena install:** `uv tool install serena-agent==<pin>` with
+  `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` pointed at a MUR-owned directory under
+  `<mur_home>/tools/serena/<pin>/`. uv is listed as a prerequisite in the
+  install table (it is needed at runtime anyway: serena launches pyright via
+  `uvx`, see item 17). MUR does not install uv itself.
+- **P3-D3 LSP acquisition:** verify per language what serena fetches before
+  writing the install table (item 17 below).
+
+### Item 17 — how serena obtains each v1 language server
+
+Static source read of serena-agent 2.0.0.dev0 (the copy Layer B ran,
+installed by `uv tool` from git). Not yet confirmed by launching serena per
+language; that run has to happen outside the MUR seal, like Layer B.
+
+`SERENA_HOME` redirects serena's LS cache: `ls_manager.py:66` passes
+`solidlsp_dir=serena_user_home_dir`, so downloads land in
+`<agent_home>/serena/language_servers/static/`, not `~/.solidlsp`.
+
+| Language | Server | How serena gets it | Pin | Integrity check | Runtime prerequisite |
+|---|---|---|---|---|---|
+| Python | pyright | `uvx pyright==<pin>` on first start (`LanguageServerDependencyProviderUvx`) | 1.1.403 | uv's resolver (PyPI), no sha in serena | uv / uvx on PATH |
+| TypeScript | typescript-language-server + typescript | `npm install --prefix ./ pkg@pin` in the serena-managed dir | 5.1.3 / 5.9.3 | none (npm registry); no `--ignore-scripts` | node + npm on PATH |
+| PHP | intelephense | same npm path | 1.14.4 | none; no `--ignore-scripts` | node + npm |
+| Lua | lua-language-server | PATH first, else GitHub release download | 3.15.0 | sha256 per asset, host allow-list | none |
+| C/C++ | clangd | GitHub release download | 19.1.2 | sha256 (`d3b329b3…` osx-arm64) | none |
+| Ruby | ruby-lsp | **see below** | 0.26.8 | none | ruby; bundler / gem |
+| Rust | rust-analyzer | PATH or `~/.cargo/bin` only; never downloaded | user's | n/a | user-installed |
+| Go | gopls | PATH only (`cmd="gopls"`) | user's | n/a | go + gopls |
+| Swift | sourcekit-lsp | PATH only | user's | n/a | Xcode / toolchain |
+| Java | jdtls | downloads jdtls, a JRE (21.0.x) and Gradle | serena's | not checked here | none |
+
+Findings that change the Phase 3 design:
+
+1. **Ruby is not Low.** `ruby_lsp.py:199` treats any repo with a `Gemfile`
+   as a Bundler project; if `Gemfile.lock` mentions `ruby-lsp` it launches
+   `bundle exec ruby-lsp` (`:235`), which evaluates the repo's Gemfile
+   (Ruby code) and loads the repo's bundle. If `bundle` is not on PATH it
+   falls back to the repo's own `bin/bundle` (`:208`), a repo-controlled
+   executable. It also picks rbenv / mise / asdf / rvm from repo files
+   (`.ruby-version`, `.tool-versions`). Otherwise `gem install ruby-lsp -v
+   <pin>` writes to the user's global gem dir (`:252`). **Decision: Ruby
+   is High** (explicit `--lsp ruby`), signed off. Same class as Rust's
+   `build.rs`: a repo with a `Gemfile` makes serena run repo-controlled
+   code. The tier table above is updated.
+2. **npm installs run lifecycle scripts.** TypeScript and PHP install without
+   `--ignore-scripts`. The packages are pinned and come from the registry,
+   not the repo, and the cwd is serena's own dir, so this is a supply-chain
+   risk, not a repo-controlled one. Keep Low; name it in the install table.
+   **Known gap, not blocking:** adding `--ignore-scripts` is deferred until
+   TS / PHP support is actually exercised in Phase 3 testing.
+3. **First-start network.** Python / TS / PHP / Lua / C/C++ / Java fetch on
+   the first LS start, from inside the running agent. Either setup pre-warms
+   the cache (start serena once per enabled language during setup) or the
+   agent's seal must allow that egress. Open: pick one in 3.6. Leaning
+   pre-warm, consistent with "setup prepares on the host, the agent stays
+   offline".
+4. **Runtime PATH prerequisites** (uv, node/npm, go, sourcekit-lsp,
+   rust-analyzer) are checked by setup and shown in the install table; a
+   missing one disables that language with a reason, it does not fail setup.
+   **Disabling is never silent:** setup prints one line per disabled
+   language naming the language and the missing tool (e.g. `python
+   disabled: uv not found on PATH`), and the setup manifest records it, so a
+   user never believes a language is on when it is off.
+
+### Phase 3 tasks
+
+- [ ] 3.1 Planner (pure): flags + detected prerequisites → plan with three
+      tables (install, permissions, LSP risk). High (Rust, Go, Java, Swift,
+      Ruby) needs `--lsp <lang>`; Rust row states `rust` ≡ `rust-full`.
+      Missing prerequisites produce a visible "disabled: <tool> not found"
+      row (finding 4).
+- [ ] 3.2 ast-grep install: download 0.45.3, verify sha256 (per-platform
+      constants), place at `binary_path()` under `<mur_home>/tools/ast-grep/`.
+- [ ] 3.3 serena install per P3-D2; pin recorded in the setup manifest.
+- [ ] 3.4 Config generator: full-field `serena_config.yml` from serena's
+      template (no load-time "migration" rewrite, #1688), `projects`
+      pre-filled, C1–C9 values, C/C++ `ls_extra_args`. Run preflight on the
+      result; it must pass.
+- [ ] 3.5 Profile entry: `kind: serena`, `project:`, `command` at the pinned
+      path.
+- [ ] 3.6 Consent + apply: print tables, require typed `yes` or `--yes`,
+      write the setup manifest; re-runs prompt only for the diff. Decide
+      pre-warm vs egress (finding 3).
+- [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
+      rewrite.
+- [ ] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
 
 ## Open questions
 
