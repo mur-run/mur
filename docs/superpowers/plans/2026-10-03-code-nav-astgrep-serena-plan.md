@@ -204,7 +204,12 @@ per-match cap that `text` / `lines` truncation uses).
 - Tests: hostile sgconfig in repo and in cwd ancestor; minified-line blowup;
   malformed pattern; unsupported lang.
 
-## Phase 2 — serena integration (opt-in)
+## Phase 2 — serena integration (opt-in) — done
+
+**Status:** done. Tasks 2.1–2.7 plus the C9 follow-up landed in #1669
+(`860cb98d`..`59f5b567`). Layer A: serena tests 36 passed, clippy
+`--all-targets -D warnings` and fmt clean. Layer B: 15/15 PASS
+(2026-10-04T01:35:27Z, C1–C9 incl. C9 missing-key and wrong-type cases).
 
 - Pre-start checks (refuse startup if any fails; item 16):
   - MUR-owned serena config dir exists and is used as `SERENA_HOME`.
@@ -263,7 +268,7 @@ Branch from `origin/main`. Files touched are listed per task; no file may
 pass 800 lines (`mcp_client.rs` is 651, `b0.rs` 751 — logic goes in a new
 module, those files get call sites only).
 
-- [ ] 2.1 **Type.** `mur-common/src/agent/mcp.rs`: add
+- [x] 2.1 **Type.** `mur-common/src/agent/mcp.rs`: add
       `pub kind: Option<McpServerKind>` to `McpServerEntry`
       (`#[serde(default, skip_serializing_if = "Option::is_none")]`), and
       `enum McpServerKind { Serena }` (`rename_all = "snake_case"`), and
@@ -272,7 +277,7 @@ module, those files get call sites only).
       Absent ⇒ today's behaviour, byte-identical serialization.
       Tests: round-trip with and without `kind` / `project`; unknown kind is
       a parse error, not silently ignored.
-- [ ] 2.2 **Module + paths.** New `mur-agent-runtime/src/mcp/serena.rs`
+- [x] 2.2 **Module + paths.** New `mur-agent-runtime/src/mcp/serena.rs`
       (registered in `mur-agent-runtime/src/mcp/mod.rs`):
       - `pub const SERENA_TOOL_ALLOWLIST: [&str; 5] = ["get_symbols_overview",
         "find_symbol", "find_referencing_symbols", "find_implementations",
@@ -284,7 +289,7 @@ module, those files get call sites only).
         `SERENA_HOME` only.
       - `pub fn launch_args(project_root: &Path) -> Vec<String>` →
         `--project <root>`, both dashboard flags `false`.
-- [ ] 2.3 **Preflight (pure).** `pub fn preflight(paths: &SerenaPaths,
+- [x] 2.3 **Preflight (pure).** `pub fn preflight(paths: &SerenaPaths,
       project_root: &Path) -> Result<(), SerenaPreflightError>` in
       `serena.rs`; parses `config_file` with `serde_yaml_ng` (already a
       dependency). One error variant per check, each naming the file, key,
@@ -309,7 +314,7 @@ module, those files get call sites only).
       Tests: one passing fixture; one failing fixture per check; a hostile
       repo with `.serena/project.yml` setting `ls_path` while C4's folder is
       missing ⇒ C4 refuses.
-- [ ] 2.4 **Hook: refuse startup.** `mur-agent-runtime/src/supervisor_runner/prepare.rs`, right
+- [x] 2.4 **Hook: refuse startup.** `mur-agent-runtime/src/supervisor_runner/prepare.rs`, right
       after the `verify_mcp_supply_chain` call (~line 129), add
       `crate::mcp::serena::verify_entries(&profile.inner.enabled_mcp_servers(),
       agent_home).map_err(|e| anyhow::anyhow!(e))?;` — for every enabled
@@ -318,7 +323,7 @@ module, those files get call sites only).
       `preflight(&serena_paths(agent_home), project)`; same
       fail-closed path as rules 11/6, before the hook chain (which only
       warns).
-- [ ] 2.5 **Hook: every spawn.** `mur-agent-runtime/src/protocol/mcp_client.rs`,
+- [x] 2.5 **Hook: every spawn.** `mur-agent-runtime/src/protocol/mcp_client.rs`,
       `StdioMcpClient::spawn` (~lines 262-283): when `entry.kind ==
       Some(Serena)`, re-run `preflight` with `entry.project` (serena
       rewrites its own config — see facts), then `std_cmd.envs(serena::launch_env(..))` and append
@@ -326,13 +331,13 @@ module, those files get call sites only).
       nothing is spawned. `spawn` needs the agent home: expose it read-only
       from `SandboxPolicy` (its `launch_chain` already holds it) rather than
       adding a parameter through `McpPool`.
-- [ ] 2.6 **Hook: tool allow-list.** `mur-agent-runtime/src/tools/registry.rs`, the discovery
+- [x] 2.6 **Hook: tool allow-list.** `mur-agent-runtime/src/tools/registry.rs`, the discovery
       loop (~line 129, next to the `ToolPolicy::Deny` skip): for a serena
       entry, skip any `t.name` not in `SERENA_TOOL_ALLOWLIST`. This is the
       MUR-side gate; C5 is the serena-side one. Both, because the child can
       rewrite its own config. Test: a fake tools/list containing write tools
       and `get_diagnostics_for_file` registers exactly the five.
-- [ ] 2.7 **Docs.** `docs/architecture/mcp-supply-chain.md`: a `kind:
+- [x] 2.7 **Docs.** `docs/architecture/mcp-supply-chain.md`: a `kind:
       serena` section — what C1–C9 cover, what they cannot (code running
       *inside* an LSP the user enabled; rust-analyzer per item 16), why no
       generic `env` field (D1), why five tools (D2), and the agent-writable
