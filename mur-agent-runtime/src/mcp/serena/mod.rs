@@ -80,15 +80,19 @@ pub struct SerenaPaths {
     pub config_file: PathBuf,
     /// `<home>/projects`.
     pub projects_dir: PathBuf,
+    /// `<mur_home>/tools`: the only place C7 lets `ls_path` point (3.6b).
+    pub tools_dir: PathBuf,
 }
 
-/// Derive the serena paths from the agent home alone. No I/O, no
+/// Derive the serena paths from the agent home, plus MUR's tools root
+/// (resolved like the supervisor's `MUR_HOME`). No filesystem I/O, no
 /// canonicalization: the preflight checks what is actually on disk.
 pub fn serena_paths(agent_home: &Path) -> SerenaPaths {
     let home = agent_home.join(SERENA_HOME_DIR);
     SerenaPaths {
         config_file: home.join(SERENA_CONFIG_FILE),
         projects_dir: home.join(SERENA_PROJECTS_DIR),
+        tools_dir: mur_common::home::mur_home_lossy().join(mur_common::config::MUR_TOOLS_DIR),
         home,
     }
 }
