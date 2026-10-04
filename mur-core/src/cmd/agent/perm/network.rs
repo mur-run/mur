@@ -140,7 +140,7 @@ pub fn cmd_perm_deny_port(name: &str, port: u16) -> Result<()> {
 
 /// Insert `port`, deduped and sorted. Sorted so the profile diff is stable
 /// across grants and two agents with the same grants produce the same file.
-fn add_port(ports: &mut Vec<u16>, port: u16) {
+pub(crate) fn add_port(ports: &mut Vec<u16>, port: u16) {
     if !ports.contains(&port) {
         ports.push(port);
         ports.sort_unstable();
@@ -157,7 +157,7 @@ fn remove_port(ports: &mut Vec<u16>, port: u16) -> bool {
 
 /// Whether `port` is part of the built-in web set, which `restricted` opens
 /// unconditionally and `deny-port` therefore cannot take back.
-fn is_base_port(port: u16) -> bool {
+pub(crate) fn is_base_port(port: u16) -> bool {
     mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS.contains(&port)
 }
 
