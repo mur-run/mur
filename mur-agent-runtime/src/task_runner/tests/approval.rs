@@ -686,3 +686,25 @@ fn missing_tools_reads_the_same_inventory_the_gate_reads() {
         vec!["bash".to_string(), "edit_file".to_string()]
     );
 }
+
+/// #1685: a call refused without asking leaves no step event and no
+/// conversation record, so the log line is the only trace of its arguments.
+/// The preview must keep the path (the evidence), hide secrets, and stay short.
+#[test]
+fn denied_args_preview_keeps_the_path_and_hides_secrets() {
+    let key = format!("sk-{}", "a".repeat(32));
+    let p = crate::task_runner::denied_args_preview(
+        &serde_json::json!({ "path": "/tmp/snap.yml", "token": key }),
+    );
+    assert!(p.contains("/tmp/snap.yml"), "path is the evidence: {p}");
+    assert!(!p.contains(&key), "secret leaked into the log: {p}");
+}
+
+#[test]
+fn denied_args_preview_is_capped_on_a_char_boundary() {
+    let big = serde_json::json!({ "content": "鳥".repeat(1000) });
+    let p = crate::task_runner::denied_args_preview(&big);
+    let cap = crate::task_runner::DENIED_ARGS_LOG_MAX_BYTES;
+    assert!(p.len() < cap + 40, "not capped: {} bytes", p.len());
+    assert!(p.contains("bytes total)"), "must say it was cut: {p}");
+}
