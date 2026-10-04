@@ -13,7 +13,7 @@
 
 use super::plan::{SERENA, SERENA_PIN, tool_dir};
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -45,7 +45,7 @@ pub enum Outcome {
 }
 
 /// What task 3.6 writes into the setup manifest for serena.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub version: String,
     pub git_rev: String,

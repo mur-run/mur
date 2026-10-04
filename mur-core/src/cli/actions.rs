@@ -6,11 +6,13 @@ use clap::Subcommand;
 
 mod browser;
 mod chat;
+mod code_nav;
 mod fleet;
 mod workflow;
 
 pub use browser::*;
 pub use chat::*;
+pub use code_nav::*;
 pub use fleet::*;
 pub use workflow::*;
 

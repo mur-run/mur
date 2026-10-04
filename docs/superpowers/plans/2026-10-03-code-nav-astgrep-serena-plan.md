@@ -665,9 +665,29 @@ Findings that change the Phase 3 design:
       `binary_sha256` pins the entry point; `command` is added to the spawn
       allow-list. Re-runs are idempotent (`installed_at` ignored); a
       same-named entry without `kind: serena` is refused, never overwritten.
-- [ ] 3.6 Consent + apply: print tables, require typed `yes` or `--yes`,
-      write the setup manifest; re-runs prompt only for the diff. Decide
-      pre-warm vs egress (finding 3).
+- [x] 3.6 Consent + apply: print tables, require typed `yes` or `--yes`,
+      write the setup manifest; re-runs prompt only for the diff.
+      `mur code-nav setup --agent <a> [--with-serena --project <dir>]
+      [--lsp <lang>]… [--no-ast-grep] [--yes]`; `cmd/code_nav/{setup,
+      consent,serena_project}.rs`. `--project` is required with serena (no
+      cwd guess). Apply order: ast-grep, serena, MUR-owned `project.yml`
+      (from the pinned `project.template.yml`, sha-checked; must precede the
+      config because C8 reads its language list), `serena_config.yml`
+      (`auth_secret` kept across re-runs), profile entry, grants. Grants
+      include read on the project and spawn-dir on serena's venv `bin` and
+      the real interpreter dir (Layer B's two lanes, derived from the
+      entry point's shebang). Manifest: `<mur_home>/setup/code-nav/<agent>.json`,
+      outside every agent's write grant; a corrupt one is an error, never
+      "nothing consented". Re-runs never revoke: a dropped language stays in
+      `project.yml` and is reported as still enabled. An identical re-run
+      asks nothing and rewrites both serena files byte-identically. Setup
+      runs on `spawn_blocking` (blocking HTTP in the async dispatcher
+      panicked).
+- [ ] 3.6b Pre-warm vs egress (finding 3). Not decided in 3.6. Pre-warm is
+      not just "start serena once": pyright comes via `uvx`, whose cache is
+      uv's, not `SERENA_HOME`, so the seal would still need read on uv's
+      cache; npm (TS/PHP) installs into the serena-managed dir. Needs a
+      per-language list of where each first-start download lands.
 - [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
       rewrite.
 - [ ] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
