@@ -656,8 +656,15 @@ Findings that change the Phase 3 design:
       `SerenaConfig.from_config_file` and requires it byte-identical
       afterwards; with an empty `auth_secret` the same test fails
       ("serena rewrote the file"), so it detects a re-save.
-- [ ] 3.5 Profile entry: `kind: serena`, `project:`, `command` at the pinned
-      path.
+- [x] 3.5 Profile entry: `kind: serena`, `project:`, `command` at the pinned
+      path. `mur-core/src/cmd/code_nav/serena_entry.rs`, pure (3.6 saves the
+      profile after consent). Shape is Layer B's: `args` =
+      `start-mcp-server --transport stdio`; `--project` and the dashboard
+      flags are not written (the runtime appends them at every spawn).
+      `project` is canonicalized and must be an existing directory;
+      `binary_sha256` pins the entry point; `command` is added to the spawn
+      allow-list. Re-runs are idempotent (`installed_at` ignored); a
+      same-named entry without `kind: serena` is refused, never overwritten.
 - [ ] 3.6 Consent + apply: print tables, require typed `yes` or `--yes`,
       write the setup manifest; re-runs prompt only for the diff. Decide
       pre-warm vs egress (finding 3).
