@@ -13,6 +13,7 @@ fn gate(app: &mut App) {
         tool_input: serde_json::json!({}),
         prompt: "approve?".into(),
         created_at: std::time::Instant::now(),
+        declared_risk: None,
     });
 }
 
@@ -97,6 +98,7 @@ fn gate_via_stream(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         tool_input: serde_json::json!({}),
         prompt: "approve?".into(),
         created_at: std::time::Instant::now(),
+        declared_risk: None,
     };
     handle_stream(app, StreamMsg::Hitl { req, task_id }, tx);
     assert!(app.hitl.is_some(), "the gate opened");

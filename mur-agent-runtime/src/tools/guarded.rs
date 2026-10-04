@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::task_runner::{
-    cap_step_output, decide_without_asking, denied_args_preview, deny_message,
+    cap_step_output, decide_without_asking, declared_tool_risk, denied_args_preview, deny_message,
     effective_tool_policy, step_notification, task_error,
 };
 use mur_common::a2a::TaskError;
@@ -137,7 +137,12 @@ impl GuardedToolCall {
             }
             let step_id = uuid::Uuid::now_v7().to_string();
             step_ids.insert(call.call_id.clone(), step_id.clone());
-            pending.push(crate::hitl::batch::pending(&self.agent_name, step_id, call));
+            pending.push(crate::hitl::batch::pending(
+                &self.agent_name,
+                step_id,
+                call,
+                declared_tool_risk(&self.tools_policy, &call.tool_name),
+            ));
         }
         if pending.is_empty() {
             return (out, step_ids);

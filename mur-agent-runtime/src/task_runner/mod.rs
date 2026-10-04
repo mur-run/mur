@@ -483,6 +483,66 @@ mod tool_policy_tests {
             ToolPolicy::Allow
         );
     }
+
+    fn risky(pattern: &str, policy: ToolPolicy, risk: RiskTier) -> ToolRule {
+        ToolRule {
+            pattern: pattern.into(),
+            policy,
+            risk: Some(risk),
+        }
+    }
+
+    use mur_common::hitl::RiskTier;
+
+    /// #1600: `allow` + a declared tier above Write asks first.
+    #[test]
+    fn allow_with_destructive_risk_asks() {
+        let rules = [risky("drop_db", ToolPolicy::Allow, RiskTier::Destructive)];
+        assert_eq!(effective_tool_policy(&rules, "drop_db"), ToolPolicy::Ask);
+    }
+
+    #[test]
+    fn allow_with_risk_at_or_below_write_still_runs() {
+        for tier in [RiskTier::Read, RiskTier::Write] {
+            let rules = [risky("edit_file", ToolPolicy::Allow, tier)];
+            assert_eq!(
+                effective_tool_policy(&rules, "edit_file"),
+                ToolPolicy::Allow,
+                "{tier:?} must not add a prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn deny_still_wins_over_a_low_risk() {
+        let rules = [risky("bash", ToolPolicy::Deny, RiskTier::Read)];
+        assert_eq!(effective_tool_policy(&rules, "bash"), ToolPolicy::Deny);
+    }
+
+    /// The #1599 detour: a wildcard `allow` cannot carry a destructive tool
+    /// past the gate, and a narrower `allow` without `risk:` does not shed it.
+    #[test]
+    fn wildcard_allow_with_destructive_risk_asks() {
+        let rules = [
+            risky("mcp__browser__*", ToolPolicy::Allow, RiskTier::Destructive),
+            rule("mcp__browser__evaluate", ToolPolicy::Allow),
+        ];
+        for name in ["mcp__browser__navigate", "mcp__browser__evaluate"] {
+            assert_eq!(
+                effective_tool_policy(&rules, name),
+                ToolPolicy::Ask,
+                "{name}"
+            );
+        }
+    }
+
+    /// An exemption only fills in for a missing rule; a risk-declaring rule
+    /// is explicit, so it lifts an exempt tool too.
+    #[test]
+    fn declared_risk_lifts_an_exempt_tool() {
+        let rules = [risky("recall", ToolPolicy::Allow, RiskTier::Privileged)];
+        assert_eq!(effective_tool_policy(&rules, "recall"), ToolPolicy::Ask);
+    }
 }
 
 #[cfg(test)]

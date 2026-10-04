@@ -23,6 +23,7 @@ fn req(tool: &str, input: serde_json::Value) -> stream::HitlRequest {
         tool_input: input,
         prompt: "approve?".into(),
         created_at: std::time::Instant::now(),
+        declared_risk: None,
     }
 }
 
@@ -304,4 +305,52 @@ fn auto_mode_alone_still_stops_on_a_push() {
     assert!(!mur_common::hitl::tier_may_be_granted(
         RiskTier::NetworkEgress
     ));
+}
+
+/// #1600: the runtime ships the profile's declared `risk:` on the approval
+/// request. A session grant (`/auto`, the default session) must not answer a
+/// call whose DECLARED tier is above the ceiling, even when the classifier
+/// alone would have called it a Write.
+#[test]
+fn auto_session_does_not_answer_a_declared_destructive_call() {
+    let mut app = App::test_fixture();
+    app.auto_approve = true;
+    let (tx, _rx) = mpsc::channel(16);
+    app.current_task_id = Some("t1".into());
+    let mut r = req("drop_db", serde_json::json!({}));
+    r.declared_risk = Some(RiskTier::Destructive);
+    handle_stream(
+        &mut app,
+        StreamMsg::Hitl {
+            req: r,
+            task_id: "t1".into(),
+        },
+        &tx,
+    );
+    assert!(
+        app.hitl.is_some(),
+        "a declared Destructive tier must still ask"
+    );
+}
+
+/// The declared tier only RAISES: a low `risk:` cannot pull a classified
+/// Destructive call under the ceiling.
+#[test]
+fn a_declared_low_risk_cannot_lower_the_classified_tier() {
+    let mut r = req("bash", bash("rm -rf /tmp/mur-scratch"));
+    r.declared_risk = Some(RiskTier::Read);
+    assert_eq!(r.tier(), RiskTier::Destructive);
+}
+
+#[test]
+fn the_wire_risk_field_is_parsed() {
+    let reqs = stream::HitlRequest::from_params(serde_json::json!({
+        "calls": [{"hitl_id": "h", "tool_name": "drop_db", "tool_input": {}, "risk": "destructive"}]
+    }));
+    assert_eq!(reqs[0].declared_risk, Some(RiskTier::Destructive));
+    assert_eq!(reqs[0].tier(), RiskTier::Destructive);
+    let legacy = stream::HitlRequest::from_params(serde_json::json!({
+        "hitl_id": "h", "tool_name": "drop_db", "tool_input": {}
+    }));
+    assert_eq!(legacy[0].declared_risk, None, "older runtimes send no risk");
 }
