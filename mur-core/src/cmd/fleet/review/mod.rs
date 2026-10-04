@@ -17,9 +17,14 @@
 //! what has not.
 
 pub mod constants;
+pub mod driver;
 pub mod ledger;
 pub mod rollback;
 pub mod schema;
+
+#[cfg(test)]
+#[path = "driver_tests.rs"]
+mod driver_tests;
 
 #[cfg(test)]
 #[path = "no_tampering_tests.rs"]
