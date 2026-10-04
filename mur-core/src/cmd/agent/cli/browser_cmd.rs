@@ -19,10 +19,23 @@ const SKILL_NAME: &str = "browser";
 /// `--yes` because there is no TTY inside murmur to type it on. Consent is
 /// not skipped, it moves: the user approves this exact command as a chip,
 /// and the spawn itself still passes the HITL gate.
-const SETUP_CMD: &str = "mur browser setup --yes";
-const SETUP_HINT: &str = "next: run `mur browser setup --yes` — it installs Chromium (~96 MiB) \
-     and grants the spawn permissions a browser run needs. Approving the command below is the \
-     consent for both.";
+///
+/// `--agent` is load-bearing: the chip runs in a plain shell where
+/// `MUR_AGENT` is unset, so without it `grant_perms` skips the grants and
+/// the session agent never gets the spawn permissions. Agent names are
+/// already `[A-Za-z0-9_-]` (`validate_agent_name`), so no shell quoting.
+fn setup_cmd(agent: &str) -> String {
+    format!("mur browser setup --yes --agent {agent}")
+}
+
+fn setup_hint(agent: &str) -> String {
+    format!(
+        "next: run `{}` — it installs Chromium (~96 MiB) and grants the spawn \
+         permissions a browser run needs. Approving the command below is the \
+         consent for both.",
+        setup_cmd(agent)
+    )
+}
 
 pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<StreamMsg>) {
     use super::browser_live_cmd::{self as live, Route};
@@ -55,12 +68,13 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
         // behind the literal `yes` in `mur browser setup`. Point there
         // instead of granting silently — and offer it as a chip, so the
         // whole flow stays inside murmur.
-        app.push_system(SETUP_HINT);
+        app.push_system(setup_hint(&app.agent));
+        let cmd = setup_cmd(&app.agent);
         proposal::offer(
             app,
             Proposal {
                 label: "install the browser and grant its permissions".into(),
-                kind: ProposalKind::Shell(SETUP_CMD.into()),
+                kind: ProposalKind::Shell(cmd),
             },
         );
         return;
@@ -89,13 +103,23 @@ mod tests {
         // The chip is the consent for both the download and the grants, so the
         // hint must name the same command the chip runs, and that command must
         // survive the same vet an agent's proposal does (no `<placeholder>`).
-        assert!(SETUP_HINT.contains(SETUP_CMD), "{SETUP_HINT}");
-        assert!(!SETUP_HINT.contains('<'), "{SETUP_HINT}");
+        let cmd = setup_cmd("mur");
+        let hint = setup_hint("mur");
+        assert!(hint.contains(&cmd), "{hint}");
+        assert!(!hint.contains('<'), "{hint}");
         let args = serde_json::json!({
             "label": "install the browser and grant its permissions",
             "kind": "shell",
-            "command": SETUP_CMD,
+            "command": cmd,
         });
         assert!(mur_common::proposal::vet(&args).is_ok());
+    }
+
+    #[test]
+    fn setup_cmd_names_the_session_agent() {
+        // Regression: the chip runs in a plain shell with no MUR_AGENT, so
+        // without `--agent` `grant_perms` printed "no agent given … skipping"
+        // and the spawn grants never landed on the agent that ran `--add`.
+        assert_eq!(setup_cmd("mur"), "mur browser setup --yes --agent mur");
     }
 }
