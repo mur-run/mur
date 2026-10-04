@@ -392,6 +392,9 @@ pub(super) fn user_message(input: &Message) -> crate::llm::RichMessage {
 /// 4. Everything else falls to `ToolPolicy::default()` — `Ask`, fail-closed.
 ///    Dispatch/spend tools (`parallel_jobs`, `fleet_run`, `delegate_to`) must
 ///    ask BEFORE executing, which is what makes `Ask` real spend protection.
+/// 5. #1600: an `Allow` from steps 2–3 becomes `Ask` when a matching rule
+///    declares `risk:` above `Write` — `allow` means "policy does not refuse",
+///    not "skip the risk gate". `Deny` is never loosened.
 pub(crate) fn effective_tool_policy(
     rules: &[mur_common::agent::ToolRule],
     tool_name: &str,
@@ -400,13 +403,31 @@ pub(crate) fn effective_tool_policy(
     if crate::tools::suggest::suggest_replies_allowed(tool_name) {
         return ToolPolicy::Allow;
     }
-    match resolve_tool_policy_opt(rules, tool_name)
+    let base = match resolve_tool_policy_opt(rules, tool_name)
         .or_else(|| resolve_tool_policy_opt(rules, policy_name(tool_name)))
     {
         Some(explicit) => explicit,
         None if crate::tools::recall::recall_needs_no_approval(tool_name) => ToolPolicy::Allow,
         None => ToolPolicy::default(),
+    };
+    if base == ToolPolicy::Allow
+        && declared_tool_risk(rules, tool_name)
+            .is_some_and(|tier| !mur_common::hitl::tier_may_be_granted(tier))
+    {
+        return ToolPolicy::Ask;
     }
+    base
+}
+
+/// The strictest `risk:` declared for `tool_name`, looked up under the same
+/// two names the policy uses (D11: the control tools also answer as `bash`).
+/// Shipped on the approval request so the CLI gates on the same tier.
+pub(crate) fn declared_tool_risk(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+) -> Option<mur_common::hitl::RiskTier> {
+    use mur_common::agent::resolve_tool_risk;
+    resolve_tool_risk(rules, tool_name).max(resolve_tool_risk(rules, policy_name(tool_name)))
 }
 
 /// D11: the control tools resolve as themselves first, then as `bash`.

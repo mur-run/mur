@@ -111,6 +111,7 @@ async fn rig_with(trust: crate::hitl::shim_ticket::ShimTrust) -> Rig {
             tool_name: "bash".into(),
             tool_input: json!({"command": "rm -rf ~/important"}),
             action_hash: "h1".into(),
+            risk: None,
         }])
         .await
     });

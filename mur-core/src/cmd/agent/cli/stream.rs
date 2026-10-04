@@ -145,9 +145,24 @@ pub struct HitlRequest {
     /// When the CLI first saw this approval request; used to show the
     /// auto-deny countdown against the gate's DEFAULT_TIMEOUT.
     pub created_at: std::time::Instant,
+    /// #1600: the strictest `risk:` the agent's profile declares for this
+    /// tool, shipped by the runtime. `None` = no rule declares one, or a
+    /// runtime predating the field. Only ever RAISES the tier — see [`Self::tier`].
+    pub declared_risk: Option<mur_common::hitl::RiskTier>,
 }
 
 impl HitlRequest {
+    /// The tier every CLI gate decides on: `max(classify, declared_risk)`.
+    /// One function so the auto lanes, the grant row and the plain-mode
+    /// approver cannot disagree about what a call is worth.
+    pub fn tier(&self) -> mur_common::hitl::RiskTier {
+        super::tool_tier::effective_tier(
+            &self.tool_name,
+            Some(&self.tool_input),
+            self.declared_risk,
+        )
+    }
+
     fn from_value(v: Value) -> Self {
         let tool_name = v
             .get("tool_name")
@@ -169,6 +184,9 @@ impl HitlRequest {
             tool_input: v.get("tool_input").cloned().unwrap_or(Value::Null),
             tool_name,
             created_at: std::time::Instant::now(),
+            declared_risk: v
+                .get("risk")
+                .and_then(|r| serde_json::from_value(r.clone()).ok()),
         }
     }
 

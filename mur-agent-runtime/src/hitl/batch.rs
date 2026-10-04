@@ -18,6 +18,9 @@ pub struct PendingCall {
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub action_hash: String,
+    /// #1600: the strictest `risk:` the profile declares for this tool, sent
+    /// so the CLI's session lanes gate on the same tier. `None` = undeclared.
+    pub risk: Option<mur_common::hitl::RiskTier>,
 }
 
 pub struct BatchGate<'a> {
@@ -76,6 +79,11 @@ impl BatchGate<'_> {
                     "tool_input": c.tool_input,
                     "action_hash": c.action_hash,
                 }));
+                if let Some(risk) = c.risk
+                    && let Some(obj) = wire.last_mut().and_then(|w| w.as_object_mut())
+                {
+                    obj.insert("risk".into(), serde_json::json!(risk));
+                }
                 waiting.push((c, hitl_id, rx));
             }
         }
@@ -97,6 +105,10 @@ impl BatchGate<'_> {
                 "calls": wire,
             }
         });
+        let mut notification = notification;
+        if let Some(risk) = first.get("risk").cloned() {
+            notification["params"]["risk"] = risk;
+        }
         let _ = self.notifier.send(notification).await;
 
         // One deadline for the whole batch; each oneshot is awaited in turn
@@ -151,8 +163,14 @@ fn remembered(allow: bool) -> HitlDecision {
 
 /// Build the pending entry for one call. Separate so `task_runner` never
 /// spells the hash itself.
-pub fn pending(agent: &str, step_id: String, call: &crate::llm::ToolCallResult) -> PendingCall {
+pub fn pending(
+    agent: &str,
+    step_id: String,
+    call: &crate::llm::ToolCallResult,
+    risk: Option<mur_common::hitl::RiskTier>,
+) -> PendingCall {
     PendingCall {
+        risk,
         call_id: call.call_id.clone(),
         step_id,
         action_hash: chat_action_hash(&call.tool_name, &call.input, agent),
@@ -172,6 +190,7 @@ mod tests {
             tool_name: "bash".into(),
             tool_input: serde_json::json!({ "command": id }),
             action_hash: format!("hash-{id}"),
+            risk: None,
         }
     }
 
@@ -255,5 +274,29 @@ mod tests {
             approvals.lock().await.is_empty(),
             "every hitl_id should be consumed; a leak here grows unboundedly"
         );
+    }
+
+    /// #1600: the declared tier rides the wire — per call, and on the legacy
+    /// top-level fields that plain mode reads — so every CLI gate decides on
+    /// the same tier the runtime gated on. Absent = no rule declared one.
+    #[tokio::test]
+    async fn declared_risk_is_on_the_approval_request() {
+        let approvals: HitlApprovals = Default::default();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<serde_json::Value>(8);
+        let gate = BatchGate {
+            task_id: "t",
+            timeout: Duration::from_millis(50),
+            approvals: &approvals,
+            notifier: &tx,
+            store: None,
+            shim_trust: None,
+        };
+        let mut risky = call("a");
+        risky.risk = Some(mur_common::hitl::RiskTier::Destructive);
+        let _ = gate.resolve(vec![risky, call("b")]).await;
+        let n = rx.recv().await.expect("notification");
+        assert_eq!(n["params"]["calls"][0]["risk"], "destructive");
+        assert_eq!(n["params"]["risk"], "destructive", "legacy top-level field");
+        assert!(n["params"]["calls"][1].get("risk").is_none());
     }
 }

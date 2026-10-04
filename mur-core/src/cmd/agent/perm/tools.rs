@@ -38,12 +38,69 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
         println!("(no tool rules — all tools use default policy: ask)");
     } else {
         for r in rules {
-            println!(
-                "{:10}  {}",
-                format!("{:?}", r.policy).to_lowercase(),
-                r.pattern
-            );
+            println!("{}", rule_line(r));
         }
     }
     Ok(())
+}
+
+/// One rule as `perm list-tools` prints it. #1600: a `risk:` above `write`
+/// turns `allow` into a prompt, so the line names the EFFECTIVE gate and why
+/// — an operator debugging "why does it ask?" reads it here, not in the code.
+fn rule_line(r: &mur_common::agent::ToolRule) -> String {
+    use mur_common::agent::ToolPolicy;
+    let policy = format!("{:?}", r.policy).to_lowercase();
+    let Some(risk) = r.risk else {
+        return format!("{policy:10}  {}", r.pattern);
+    };
+    let risk_name = serde_json::to_value(risk)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{risk:?}"));
+    let note = if r.policy == ToolPolicy::Allow && !mur_common::hitl::tier_may_be_granted(risk) {
+        "  → asks (risk above write)"
+    } else {
+        ""
+    };
+    format!("{policy:10}  {}  risk={risk_name}{note}", r.pattern)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rule_line;
+    use mur_common::agent::{ToolPolicy, ToolRule};
+    use mur_common::hitl::RiskTier;
+
+    fn r(policy: ToolPolicy, risk: Option<RiskTier>) -> ToolRule {
+        ToolRule {
+            pattern: "mcp__browser__*".into(),
+            policy,
+            risk,
+        }
+    }
+
+    #[test]
+    fn allow_with_high_risk_says_it_asks() {
+        assert_eq!(
+            rule_line(&r(ToolPolicy::Allow, Some(RiskTier::Destructive))),
+            "allow       mcp__browser__*  risk=destructive  → asks (risk above write)"
+        );
+    }
+
+    #[test]
+    fn low_risk_and_no_risk_add_no_note() {
+        assert_eq!(
+            rule_line(&r(ToolPolicy::Allow, Some(RiskTier::Write))),
+            "allow       mcp__browser__*  risk=write"
+        );
+        assert_eq!(
+            rule_line(&r(ToolPolicy::Deny, None)),
+            "deny        mcp__browser__*"
+        );
+        assert_eq!(
+            rule_line(&r(ToolPolicy::Deny, Some(RiskTier::Destructive))),
+            "deny        mcp__browser__*  risk=destructive",
+            "deny already refuses; no note"
+        );
+    }
 }
