@@ -815,8 +815,11 @@ real agent through serena; end-to-end is task 3.6b's acceptance.
       `kind: serena` / `project:` are unchanged, and a serena symbol query
       still answers. Stale manifest `granted` lines (e.g. an earlier conda
       lane) are history, not grants; clearing them is optional.
-- [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
-      rewrite.
+- [x] 3.7 (optional, #1688) Hash the config before/after launch; warn on
+      rewrite. `mcp/serena/rewrite.rs`: hashed before spawn, compared once
+      `initialize` returns (serena loads and migrates its config first).
+      Warn-only; the spawn gate already re-checks C1–C9 on the next spawn.
+      The rest of #1688 was closed by C9 (`projects`) and the 3.4 generator.
 - [x] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
       README: command tree (35) and an integrations paragraph.
       `mcp-supply-chain.md`: C7 row rewritten, exec-lane scope added.
