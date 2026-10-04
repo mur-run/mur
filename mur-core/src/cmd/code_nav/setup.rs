@@ -280,6 +280,9 @@ fn existing_auth_secret(config: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    // A shebang whose target is a venv symlink is a unix layout; a Windows
+    // venv has `Scripts\serena.exe` and no shebang to follow.
+    #[cfg(unix)]
     #[test]
     fn lanes_are_venv_bin_and_real_interpreter_dir() {
         let tmp = tempfile::tempdir().unwrap();
@@ -288,7 +291,6 @@ mod tests {
         std::fs::write(real_dir.join("python3.12"), b"").unwrap();
         let venv_bin = tmp.path().join("venv/bin");
         std::fs::create_dir_all(&venv_bin).unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink(real_dir.join("python3.12"), venv_bin.join("python")).unwrap();
         let bin = venv_bin.join("serena");
         std::fs::write(
@@ -298,7 +300,6 @@ mod tests {
         .unwrap();
         let lanes = interpreter_lanes(&bin).unwrap();
         assert_eq!(lanes[0], venv_bin);
-        #[cfg(unix)]
         assert_eq!(lanes[1], std::fs::canonicalize(&real_dir).unwrap());
     }
 
