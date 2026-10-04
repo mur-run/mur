@@ -376,8 +376,9 @@ module, those files get call sites only).
       - C5 `fixed_tools` equals `SERENA_TOOL_ALLOWLIST` (as a set);
         `excluded_tools` and `included_optional_tools` are empty.
       - C6 `web_dashboard` is `false`.
-      - C7 no `ls_path` / `ls_base_cmd` under any `ls_specific_settings`
-        language (arbitrary exec, item 16).
+      - C7 no `ls_base_cmd` in any `ls_specific_settings` language;
+        `ls_path`, if set, canonicalizes under `<mur_home>/tools/` (3.6b),
+        else refuse (item 16). Checks global config and MUR `project.yml`.
       - C8 if C/C++ is enabled: clangd args contain `--enable-config=false`,
         contain no `--query-driver`, and `compile_commands_dir` resolves
         under `paths.projects_dir` (item 14). Exact settings key names are
@@ -414,9 +415,13 @@ module, those files get call sites only).
       generic `env` field (D1), why five tools (D2), and the agent-writable
       config gap (G1) with all four parts: the risk, when it can be
       exploited, why v1 accepts it, the v2 fix. Also, found during 2.3/2.4:
-      - Why C7/C8 read only the global config: serena ignores a project's
-        `ls_specific_settings` for untrusted projects
-        (`serena/project.py:522-530`), so C3 holding narrows them.
+      - C3 is the real guard for C7: serena ignores an untrusted project's
+        `ls_specific_settings` (`serena/project.py:522-530`), so an
+        agent-written `ls_path` in `project.yml` is ignored, and breaking C3
+        refuses startup. C7 mainly catches a wrong or drifted global config
+        (G1); it reads `project.yml` too as defense in depth, since a
+        trusted one overrides the global (`project.py:523-525`). C8 reads
+        only the global config.
       - C8 is conservative on purpose: it also applies when the MUR
         folder's `project.yml` is missing or has no readable language list,
         because serena then auto-detects languages. Cost: a first start of a
@@ -431,7 +436,7 @@ module, those files get call sites only).
         config refuses. Generating a complete config is Phase 3, and
         pre-filling `projects` is part of the G1 v2 fix (#1688 point 2).
       - Known gap, accepted for v1: `cpp_ccls` (ccls) is not checked. C7
-        still blocks `ls_path` / `ls_base_cmd` for every language, and ccls
+        still confines `ls_path` / blocks `ls_base_cmd` for every language, and ccls
         is never serena's default; v2 reviews ccls's own config loading.
 
 ### Phase 2 acceptance (two layers)
@@ -481,6 +486,8 @@ merge as a PR, but the checkbox for Phase 2 stays open.
     the disk copy only to write the project list back; it does not replace
     the running settings. A running serena is unaffected; the next spawn
     runs 2.5's preflight, which refuses (C3/C5/C6/C7).
+  - *`ls_path` (3.6b).* An agent-written `ls_path` in `project.yml` is
+    ignored while C3 holds; in the global config, C7 refuses it.
   - *Why v1 accepts it.* Every exploit path goes through a spawn, and every
     spawn is preflighted; the 2.6 MUR-side allow-list holds regardless of
     the config. Same treatment as the shim deferred to v2.
@@ -599,8 +606,8 @@ Findings that change the Phase 3 design:
 3. **First-start network.** Python / TS / PHP / Lua / C/C++ / Java fetch on
    the first LS start, from inside the running agent. Either setup pre-warms
    the cache (start serena once per enabled language during setup) or the
-   agent's seal must allow that egress. **Decision: pre-warm** (3.6b,
-   below). The agent seal grants no egress for language servers.
+   agent's seal must allow that egress. **Decision: pre-install with a
+   pinned version, launched through `ls_path`** (3.6b, below). The agent seal grants no egress for language servers.
 4. **Runtime PATH prerequisites** (uv, node/npm, go, sourcekit-lsp,
    rust-analyzer) are checked by setup and shown in the install table; a
    missing one disables that language with a reason, it does not fail setup.
@@ -609,79 +616,76 @@ Findings that change the Phase 3 design:
    disabled: uv not found on PATH`), and the setup manifest records it, so a
    user never believes a language is on when it is off.
 
-### 3.6b — pre-warm decision (finding 3)
+### 3.6b — pre-install decision (finding 3)
 
-**Decision: setup pre-warms; the agent stays offline.** No egress is added to
-the agent seal for language servers. Consent covers the downloads (they
-happen during the `yes` in 3.6), failures surface at setup, and the
-unverified fetches (pyright via PyPI, TS / PHP via npm) run once, under
-consent, instead of whenever a cache goes missing.
+**Decision: setup installs each LSP, pinned, into a MUR-managed dir;
+serena launches it via `ls_specific_settings.<lang>.ls_path`; the agent
+never runs uv and gets no egress.** Consent covers the downloads (3.6's
+`yes`); failures surface at setup. First language: Python (pyright). An
+earlier draft chose "pre-warm the uv cache + `UV_OFFLINE=1`"; rejected
+below. serena supports `ls_path` (`solidlsp/dependency_provider.py:187`):
+"...launched directly, bypassing uv entirely."
 
-**Measured (uv 0.x on macOS, network blocked with a dead proxy
-`127.0.0.1:9`, `uvx -p 3.13 --from pyright==1.1.403 pyright-langserver`):**
+**Measured** (uv 0.6.8, macOS arm64, network blocked via dead proxy
+`127.0.0.1:9`, LSP `initialize` sent by a script):
 
-| Case | Result |
-|---|---|
-| Control: empty cache, blocked | `Connection refused (os error 61)` — the block is real |
-| Warm cache < 10 min old, blocked | `Found fresh response`; resolves offline |
-| Warm cache > 10 min old, blocked, no `UV_OFFLINE` | **fails**: `error sending request for url (https://pypi.org/simple/pyright/)` … `Request failed after 3 retries` |
-| Warm cache > 10 min old, blocked, `UV_OFFLINE=1` | `Found stale (but allowed) response`; resolves offline |
-| `UV_OFFLINE=1`, pin not in cache (`1.1.404`) | loud error: `the network is disabled, registry packages may only be read from the cache.` |
+| # | Route | Result |
+|---|---|---|
+| 1 | `uvx -p 3.13 --from pyright==1.1.403 pyright-langserver`, warm cache, `UV_OFFLINE=1` | `initialize OK` |
+| 2 | Same, cache made read-only | **fails**: `failed to open file .../cache/sdists-v9/.git: Permission denied (os error 13)` |
+| 3 | uvx warm-up with only `UV_CACHE_DIR` + `UV_PYTHON_INSTALL_DIR` pinned | **fails**: `Operation not permitted ... "~/.local/share/uv/tools/.tmp…"` |
+| 4 | `uv tool install pyright==1.1.403` into a fixed dir, whole dir read-only, no `UV_*` env | `initialize OK` |
+| 5 | Route 4, no node on PATH | **fails**: `nodeenv failed; for more reliable node.js binaries try ...` |
 
-uv's PyPI index entries are fresh for ~10 minutes; after that uv
-revalidates against `pypi.org` even when every wheel is local.
+**Why not uvx + `UV_OFFLINE=1`:** uvx writes its cache at every start
+(row 2), so G2's read-only requirement cannot hold on that route; it also
+needs four pinned env vars per language (row 3 adds `UV_TOOL_DIR`). And
+uv's index entries go stale after ~10 minutes, after which an offline start
+without `UV_OFFLINE=1` fails (`error sending request for url
+(https://pypi.org/simple/pyright/)`). With `ls_path` the runtime never
+calls uv, so that failure mode is gone by construction.
 
 **Hard requirements (same weight as C1–C9: not met → refuse to start, not
 a warning):**
 
-1. **The runtime `launch_env` MUST set `UV_OFFLINE=1`.** Without it the
-   agent works for ~10 minutes after setup and then every pyright start
-   fails. It MUST also set the same `UV_CACHE_DIR` and
-   `UV_PYTHON_INSTALL_DIR` that setup used; a mismatch is a cold cache.
-2. **The agent seal MUST allow exec from the uv cache and the uv Python
-   install dir.** Pre-warm alone is not enough: without this grant the
-   warmed pyright cannot run (observed: MUR's own seal refused exec under
-   `$TMPDIR` with `Operation not permitted`). This grant is a second
-   condition of "the agent is offline and works", not a footnote.
-3. **Pre-warm installs CPython 3.13** into the pinned
-   `UV_PYTHON_INSTALL_DIR` (serena passes `-p 3.13`; on a cold machine uv
-   downloaded `cpython-3.13.2`, 14.9 MiB, at first start).
-4. **Python requires node on PATH.** `uvx` installs only `pyright`,
-   `nodeenv`, `typing-extensions` (no `nodejs-wheel`); with no node on PATH,
-   pyright downloads node via `nodeenv` at runtime. Missing node disables
-   Python with a reason (finding 4), it does not fall back to a download.
-5. **Pre-warm runs against an empty scratch project, never the user's
-   repo.** Opening the repo at setup would run repo-controlled code
-   (Gemfile, `build.rs`) with host privileges — worse than in the agent.
-6. **A missing cache fails loudly in the agent.** No silent re-fetch: report
-   e.g. `python LSP cache missing — re-run mur code-nav setup`. Same rule as
-   finding 4. `UV_OFFLINE=1` already gives this for pyright.
+1. **Pinned install, launched via `ls_path`.** `uv tool install
+   pyright==<pin>` with `UV_TOOL_DIR` / `UV_TOOL_BIN_DIR` /
+   `UV_PYTHON_INSTALL_DIR` under `<mur_home>/tools/pyright/<pin>/` (3.3's
+   pattern; `<pin>` = serena's `PYRIGHT_VERSION`, `1.1.403`). Setup writes
+   its `pyright-langserver` as `ls_specific_settings.python.ls_path` in
+   `serena_config.yml`; verification reads uv's install record (as 3.3).
+2. **Preflight confines `ls_path`** (C7, rewritten): canonical path under
+   `<mur_home>/tools/`, checked in the global config and the MUR folder's
+   `project.yml`. Rationale and the C3 relationship: 2.7, G1.
+3. **The agent seal allows exec (read-only) from the install dir** and its
+   Python dir; without it the server cannot run (MUR's seal refused exec
+   under `$TMPDIR`: `Operation not permitted`).
+4. **Python requires node on PATH** (row 5). The pyright wheel has no
+   `nodejs-wheel`; with no node it calls `nodeenv` (network). Missing node
+   disables Python with a reason (finding 4); no download fallback.
+5. **Install never opens the user's repo.**
+6. **Missing install fails loudly:** `python LSP not installed — re-run setup`.
 
 **From source reading, not run:**
 
 - pyright does not run npm: the `pyright==1.1.403` wheel bundles
-  `<wheel>/pyright/dist/langserver.index.js`; `_utils.py` uses it when versions match
-  (`using bundled pyright`), and the langserver path passes `quiet=True`,
-  so the PyPI JSON "newer version" check is skipped.
+  `<wheel>/pyright/dist/langserver.index.js`; `_utils.py` uses it when
+  versions match (`using bundled pyright`), and the langserver path passes
+  `quiet=True`, so the PyPI JSON "newer version" check is skipped.
 - TS / PHP: serena runs `npm install` only when
-  `os.path.exists(executable)` is false, so a pre-warmed install is not
-  re-fetched and npm's own cache / `--offline` never comes into play.
-  `initializationOptions` sets `"disableAutomaticTypingAcquisition": True`,
-  so tsserver does not fetch `@types/*` in the background.
+  `os.path.exists(executable)` is false, so a pre-installed server is not
+  re-fetched; `"disableAutomaticTypingAcquisition": True` stops tsserver
+  fetching `@types/*`. Whether TS / PHP move to `ls_path` is decided when
+  they are implemented.
 
-**Known gap G2 (inference, not tested): executable cache dirs must be
-read-only to the agent.** Requirement 2 makes the uv cache and the Python
-install dir places the agent can exec from. If they sit inside the agent's
-write grant (as `SERENA_HOME` does, see G1), the agent can swap a cached
-wheel or the Python binary and have it run on the next start. Same class as
-`<agent_home>/serena/language_servers/` needing to be read-only. The uv cache, the uv Python
-dir and `<agent_home>/serena/language_servers/` all go on the read-only
-list; until that list exists (G1's v2 fix), this is an accepted gap and
-must be named in `mcp-supply-chain.md`.
+**G2 (exec dirs read-only to the agent): closed for Python by this
+route** — `<mur_home>/tools/` is outside every agent's write grant and row 4
+runs from a read-only dir. Still open for
+`<agent_home>/serena/language_servers/` (servers serena installs itself):
+an accepted gap, named in `mcp-supply-chain.md`, until G1's v2 list.
 
-**Not proven yet:** pyright-langserver actually starting with a warmed,
-offline cache. Every probe stopped at the seal exec denial above. This is a
-Phase 3 acceptance item (3.6 below), not a precondition of the decision.
+**Proven vs. not:** rows 1–5 ran as a script in MUR's own seal, not in a
+real agent through serena; end-to-end is task 3.6b's acceptance.
 
 ### Phase 3 tasks
 
@@ -756,12 +760,10 @@ Phase 3 acceptance item (3.6 below), not a precondition of the decision.
       asks nothing and rewrites both serena files byte-identically. Setup
       runs on `spawn_blocking` (blocking HTTP in the async dispatcher
       panicked).
-- [ ] 3.6b Pre-warm (decided; see `### 3.6b — pre-warm decision`). Not
-      implemented: 3.6 installs serena but does not pre-warm the language
-      servers, and `launch_env` does not yet set `UV_OFFLINE=1`.
-      **Acceptance (not yet proven):** after pre-warm, start pyright LSP once
-      inside a real agent with the network blocked and `UV_OFFLINE=1`, and
-      get a successful `initialize`.
+- [ ] 3.6b Pre-install pyright, launch via `ls_path` (see `### 3.6b`). To
+      build: install row, `ls_path` in `serena_config.yml`, new C7, seal
+      exec grant. **Acceptance:** offline `initialize` proven by LSP script
+      (row 4); **pending:** same inside a real agent through serena.
 - [ ] 3.7 (optional, #1688) Hash the config before/after launch; warn on
       rewrite.
 - [ ] 3.8 Docs: README, docs site, product page, `mcp-supply-chain.md`.
