@@ -36,3 +36,15 @@ async fn delete_missing_is_idempotent() {
     // No prior set — must still return Ok.
     keychain_delete("mur-test", "never-set").await.unwrap();
 }
+
+#[tokio::test]
+async fn keychain_item_exists_is_false_when_keychain_disabled() {
+    // The blocked path must short-circuit before touching any backend, so
+    // doctor under MUR_KEYCHAIN_DISABLED (and every test run) stays instant.
+    let _l = super::keychain_test_fixture::env_lock().await;
+    let mut env = crate::test_env::EnvGuard::hold();
+    env.set_var(ENV_KEYCHAIN_DISABLED, "1")
+        .unset_var(ENV_KEYCHAIN_ALLOW);
+    let r = keychain_item_exists("mur-agent", "nobody/ANTHROPIC_API_KEY");
+    assert!(matches!(r, Ok(false)), "{r:?}");
+}
