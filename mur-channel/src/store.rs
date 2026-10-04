@@ -26,6 +26,13 @@ pub struct DamageReport {
     /// Still included in the `events` this call returns — this is a report,
     /// not a filter (see the method doc for why).
     pub unverified: Vec<ChannelEvent>,
+    /// 1-based source line number of each entry in the `events` vector
+    /// `load_events_with_damage` returns, same length and order. Lets a
+    /// caller (the review driver's replay fold) interleave "this event came
+    /// from line N" with `unparseable_lines` to find exactly where in the
+    /// file the first damage sits relative to the parsed events — needed to
+    /// decide a round boundary (§8.2) without re-parsing the file itself.
+    pub event_lines: Vec<usize>,
 }
 
 impl DamageReport {
@@ -234,6 +241,8 @@ impl ChannelStore {
                         report.unverified.push(ev.clone());
                     }
                     events.push(ev);
+                    // 1-based, matching `unparseable_lines` below.
+                    report.event_lines.push(idx + 1);
                 }
                 // 1-based: matches what an editor or `sed -n` shows, and
                 // matches `load_events`'s own `lines` field.
