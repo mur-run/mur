@@ -296,7 +296,9 @@ impl Downstream {
                 .await
                 .context("wait for login confirmation task")??;
         if read == 0 {
-            bail!("login confirmation cancelled: stdin closed");
+            bail!(
+                "login confirmation cancelled: stdin closed — `mur browser auth` needs an interactive terminal to wait for Enter"
+            );
         }
 
         let code = storage_state_export_code(state_path)?;
