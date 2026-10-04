@@ -32,7 +32,7 @@ pub mod schema;
 mod driver_tests;
 
 #[cfg(test)]
-#[path = "loop_driver_tests.rs"]
+#[path = "loop_driver_tests/mod.rs"]
 mod loop_driver_tests;
 
 #[cfg(test)]
