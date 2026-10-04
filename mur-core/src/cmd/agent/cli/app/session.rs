@@ -207,7 +207,11 @@ impl App {
         let Some(m) = self.streaming_shell_mut() else {
             return; // no live card (a teardown cleared it); drop the chunk
         };
-        if !m.text.is_empty() && !m.text.ends_with('\n') {
+        // A chunk is one pipe read: the kernel picks its boundary, not the
+        // child, so it can end mid-line. Concatenate verbatim. The only
+        // separator we own is the one after the `$ cmd` header line;
+        // joining every chunk with `\n` shredded uv's progress output.
+        if !m.text.contains('\n') {
             m.text.push('\n');
         }
         m.text.push_str(chunk);

@@ -223,8 +223,8 @@ fn shell_card_opens_accumulates_and_stamps_exit() {
     assert_eq!(card.text, "$ cargo test");
     assert!(card.streaming, "the card is live");
 
-    a.append_shell_output("running 3 tests");
-    a.append_shell_output("test result: FAILED");
+    a.append_shell_output("running 3 tests\n");
+    a.append_shell_output("test result: FAILED\n");
     let body = a.finish_shell(&ShellEnd::Exited(1));
     let card = a.messages.last().expect("card");
     assert!(!card.streaming, "the card is finalised");
@@ -239,6 +239,28 @@ fn shell_card_opens_accumulates_and_stamps_exit() {
     b.append_shell_output("ok");
     b.finish_shell(&ShellEnd::Exited(0));
     assert_eq!(b.messages.last().unwrap().text, "$ true\nok");
+}
+
+/// A pipe read ends wherever the kernel cut it, often mid-line. The card
+/// must join reads verbatim, not invent a line break at every boundary
+/// (uv's `+ annotated-types==0.8.0` arrived shredded across lines).
+#[test]
+fn shell_chunks_split_mid_line_are_joined_verbatim() {
+    let mut a = app();
+    a.begin_shell("uv tool install");
+    for c in [
+        " +",
+        " annotated-types",
+        "==",
+        "0.8.0\n + anyio",
+        "==4.15.1\n",
+    ] {
+        a.append_shell_output(c);
+    }
+    assert_eq!(
+        a.messages.last().unwrap().text,
+        "$ uv tool install\n + annotated-types==0.8.0\n + anyio==4.15.1\n"
+    );
 }
 
 /// Test 15 — D2: a silent command still has a live card, immediately.

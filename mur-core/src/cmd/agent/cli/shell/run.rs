@@ -386,7 +386,8 @@ pub async fn run(
         let _ = tx
             .send(StreamMsg::ShellOutput {
                 gen_id,
-                chunk: DRAIN_INCOMPLETE_NOTE.to_string(),
+                // Chunks are joined verbatim; the note owns its line break.
+                chunk: format!("\n{DRAIN_INCOMPLETE_NOTE}"),
             })
             .await;
     }
