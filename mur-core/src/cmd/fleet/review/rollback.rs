@@ -1,7 +1,7 @@
 //! §8.2: replay-with-damage and the rollback math on Continue. Bridges
 //! `mur-channel`'s `load_events_with_damage` (P4) — which reports damage at
 //! the `ChannelEvent`/signature level — with the pure `ledger` fold, which
-//! only understands [`ReviewPayload`]s. This module decides round
+//! only understands [`ReviewPayload`](super::schema::ReviewPayload)s. This module decides round
 //! boundaries, classifies damage as Partial/Fatal (P1: never mid-round),
 //! and computes the monotonic clock/cost adopted on Continue (AC11d).
 
@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use mur_common::channel::{ChannelEvent, EventKind};
 
 use super::ledger::{FoldError, Ledger};
-use super::schema::{Cumulative, NoteClassification, ReviewPayload, classify_note_payload};
+use super::schema::{Cumulative, NoteClassification, classify_note_payload, payload_round};
 
 /// Outcome of replaying a session's events with damage detection (§8.2).
 #[derive(Debug, Clone, PartialEq)]
@@ -152,17 +152,6 @@ fn fold_error_reason(e: &FoldError) -> String {
     format!("illegal state transition: {e}")
 }
 
-fn payload_round(p: &ReviewPayload) -> Option<u32> {
-    match p {
-        ReviewPayload::TurnSent { round, .. }
-        | ReviewPayload::Verdict { round, .. }
-        | ReviewPayload::FindingIssued { round, .. }
-        | ReviewPayload::FindingStatus { round, .. }
-        | ReviewPayload::Rebuttal { round, .. } => Some(*round),
-        _ => None,
-    }
-}
-
 /// Build the final outcome once damage is hit: `Partial` from the last
 /// sealed checkpoint (if any), raising its cumulative fields to the AC11d
 /// lower bound; `Fatal` when nothing was ever sealed.
@@ -243,7 +232,7 @@ impl Ledger {
 mod tests {
     use super::*;
     use crate::cmd::fleet::review::schema::{
-        Mode, PriorUpdateDto, Role, Severity, VerdictKind, to_note_payload,
+        Mode, PriorUpdateDto, ReviewPayload, Role, Severity, VerdictKind, to_note_payload,
     };
     use mur_common::channel::ChannelActor;
 
@@ -431,7 +420,7 @@ mod tests {
             1,
             serde_json::json!({"review": {"v": 1, "type": "nonsense"}}),
         );
-        let raw = vec![raw_line_for(&bad)];
+        let raw = [raw_line_for(&bad)];
         let events = vec![bad];
         let raw_refs: Vec<&str> = raw.iter().map(String::as_str).collect();
         let outcome = replay_with_damage(&events, &[1], &[], &HashSet::new(), &raw_refs);

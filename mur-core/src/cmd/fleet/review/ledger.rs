@@ -75,6 +75,21 @@ impl Ledger {
             .collect()
     }
 
+    /// §8.3 stop screen: every unresolved finding (`open` and `disputed`),
+    /// in issue order. After an `approve`, disputed findings (necessarily
+    /// medium/low, §3.3) are listed first (AC13).
+    pub fn stop_screen_findings(&self, after_approve: bool) -> Vec<&Finding> {
+        let mut out: Vec<&Finding> = self
+            .findings
+            .iter()
+            .filter(|f| f.status.is_open_set())
+            .collect();
+        if after_approve {
+            out.sort_by_key(|f| f.status != FindingStatus::Disputed);
+        }
+        out
+    }
+
     pub fn finding(&self, id: &str) -> Option<&Finding> {
         self.findings.iter().find(|f| f.id == id)
     }
@@ -248,6 +263,31 @@ pub fn fold(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
     Ok(ledger)
 }
 
+/// Fold with round-boundary tracking: [`Ledger::note_round_complete`] is
+/// called whenever a payload opens a later round, and once more after the
+/// last round seen. This mirrors the live loop, which notes every round it
+/// fully folds, so a replay of the loop's own channel reproduces its ledger
+/// including round-stuck state (AC9 + AC11).
+pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
+    let mut ledger = Ledger::default();
+    let mut in_progress: u32 = 0;
+    for p in payloads {
+        if let Some(r) = super::schema::payload_round(p)
+            && r > in_progress
+        {
+            if in_progress > 0 {
+                ledger.note_round_complete();
+            }
+            in_progress = r;
+        }
+        ledger.apply(p)?;
+    }
+    if in_progress > 0 {
+        ledger.note_round_complete();
+    }
+    Ok(ledger)
+}
+
 /// Which side a `TurnSent` targets — re-exported for driver convenience so
 /// callers of this module don't need a separate import of `schema::Role`.
 pub type Target = Role;
@@ -389,7 +429,7 @@ mod tests {
 
         // Now dispute only the low finding instead.
         let mut ledger2 = Ledger::default();
-        let high2 = issue(&mut ledger2, Severity::High, "sec bug", 1);
+        let _high2 = issue(&mut ledger2, Severity::High, "sec bug", 1);
         let low2 = issue(&mut ledger2, Severity::Low, "style nit", 1);
         ledger2
             .apply(&ReviewPayload::FindingStatus {
@@ -409,7 +449,7 @@ mod tests {
     /// byte-for-byte (here: structurally) identical ledgers.
     #[test]
     fn folding_is_deterministic_and_replayable() {
-        let mut build = |note_after_each_round: bool| {
+        let build = |note_after_each_round: bool| {
             let mut ledger = Ledger::default();
             ledger
                 .apply(&ReviewPayload::SessionStarted {

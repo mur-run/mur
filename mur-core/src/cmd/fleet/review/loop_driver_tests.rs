@@ -13,7 +13,7 @@ use mur_common::channel::EventKind;
 use mur_common::limits::Stuck;
 
 use super::driver::ReviewTransport;
-use super::ledger::fold;
+use super::ledger::fold_rounds;
 use super::loop_driver::{LoopDriverStop, run_review_loop};
 use super::schema::{NoteClassification, ReviewPayload, classify_note_payload};
 use crate::cmd::fleet::loop_run::LoopStop;
@@ -207,7 +207,7 @@ fn ac12_full_loop_runs_to_approve() {
     );
 
     let payloads = read_payloads(home, &channel_id);
-    let replayed = fold(&payloads).unwrap();
+    let replayed = fold_rounds(&payloads).unwrap();
     assert_eq!(
         replayed, ledger,
         "folding the payloads read back from the channel must equal the in-memory ledger"
@@ -304,4 +304,166 @@ fn stuck_off_never_trips() {
     .unwrap();
 
     assert_eq!(stop, LoopDriverStop::Approve, "Stuck::Off must never trip");
+}
+
+/// Scripted per-member replies plus a fake clock that advances by `main_jump`
+/// inside every `main` send — lets a test land a limit at a chosen round.
+struct ScriptedClockTransport {
+    clock: Rc<Cell<Instant>>,
+    main_jump: Duration,
+    main_replies: Mutex<Vec<String>>,
+    reviewer_replies: Mutex<Vec<String>>,
+}
+
+impl ScriptedClockTransport {
+    fn new(clock: Rc<Cell<Instant>>, main_jump: Duration, reviewer: Vec<String>) -> Self {
+        let mut reviewer = reviewer;
+        reviewer.reverse();
+        Self {
+            clock,
+            main_jump,
+            main_replies: Mutex::new(Vec::new()),
+            reviewer_replies: Mutex::new(reviewer),
+        }
+    }
+}
+
+impl ReviewTransport for ScriptedClockTransport {
+    fn send(&self, member: &str, _params: &serde_json::Value) -> anyhow::Result<String> {
+        match member {
+            "main" => {
+                self.clock.set(self.clock.get() + self.main_jump);
+                Ok(self
+                    .main_replies
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .unwrap_or_else(|| "main output".to_string()))
+            }
+            "reviewer" => Ok(self
+                .reviewer_replies
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("reviewer asked for more rounds than scripted")),
+            other => panic!("unexpected member {other:?}"),
+        }
+    }
+}
+
+/// AC9: round-stuck fires after exactly two consecutive rounds with an
+/// unchanged open set — the loop stops after round 2 (no round 3 send), and
+/// a channel replay through `fold_rounds` reproduces the stuck ledger.
+#[test]
+fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
+    let (tmp, channel_id, identity, kv) = setup_channel();
+    let home = tmp.path();
+    let clock = Rc::new(Cell::new(Instant::now()));
+    let transport = ScriptedClockTransport::new(
+        Rc::clone(&clock),
+        Duration::ZERO,
+        vec![
+            serde_json::json!({
+                "verdict": "revise",
+                "findings": [{"severity": "medium", "issue": "missing error path"}],
+            })
+            .to_string(),
+            serde_json::json!({
+                "verdict": "revise",
+                "prior": [{"id": "F1", "status": "open"}],
+            })
+            .to_string(),
+        ],
+    );
+
+    let (ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        &identity,
+        kv,
+        Duration::ZERO,
+        Duration::from_secs(3600),
+        Stuck::Off,
+        &|| clock.get(),
+    )
+    .unwrap();
+
+    assert_eq!(stop, LoopDriverStop::RoundStuck);
+    assert_eq!(ledger.round, 2, "stops after round 2, never starts round 3");
+    assert!(ledger.round_stuck);
+    let replayed = fold_rounds(&read_payloads(home, &channel_id)).unwrap();
+    assert_eq!(replayed, ledger, "replay reproduces round-stuck state");
+}
+
+/// AC13: the loop is stopped by a limit (deadline, landed at the start of
+/// round 3), and the stop-screen data lists every open + disputed finding —
+/// in issue order normally, disputed first after an approve (§8.3).
+#[test]
+fn ac13_limit_stop_lists_open_and_disputed_findings() {
+    let (tmp, channel_id, identity, kv) = setup_channel();
+    let home = tmp.path();
+    let clock = Rc::new(Cell::new(Instant::now()));
+    // 25 s per main turn, deadline 55 s: rounds 1–2 complete (t=25, t=50),
+    // round 3's main turn returns at t=75 and trips the deadline before
+    // anything from round 3 is folded.
+    let transport = ScriptedClockTransport::new(
+        Rc::clone(&clock),
+        Duration::from_secs(25),
+        vec![
+            serde_json::json!({
+                "verdict": "revise",
+                "findings": [
+                    {"severity": "high", "issue": "unchecked unwrap"},
+                    {"severity": "medium", "issue": "no timeout"},
+                    {"severity": "low", "issue": "naming"},
+                ],
+            })
+            .to_string(),
+            serde_json::json!({
+                "verdict": "revise",
+                "prior": [
+                    {"id": "F1", "status": "open"},
+                    {"id": "F2", "status": "resolved"},
+                    {"id": "F3", "status": "disputed"},
+                ],
+            })
+            .to_string(),
+        ],
+    );
+
+    let (ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        &identity,
+        kv,
+        Duration::ZERO,
+        Duration::from_secs(55),
+        Stuck::Off,
+        &|| clock.get(),
+    )
+    .unwrap();
+
+    assert_eq!(stop, LoopDriverStop::Guard(LoopStop::Deadline));
+    assert_eq!(ledger.round, 2);
+    let ids = |after_approve: bool| -> Vec<String> {
+        ledger
+            .stop_screen_findings(after_approve)
+            .into_iter()
+            .map(|f| f.id.clone())
+            .collect()
+    };
+    assert_eq!(
+        ids(false),
+        ["F1", "F3"],
+        "open + disputed, resolved F2 omitted"
+    );
+    assert_eq!(ids(true), ["F3", "F1"], "after approve, disputed first");
 }

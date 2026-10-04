@@ -66,6 +66,10 @@ pub enum LoopDriverStop {
     Paused { reason: String },
     /// One of the three existing limits tripped (§3.5), via `check_guards`.
     Guard(LoopStop),
+    /// §3.3 round-stuck: the open set (IDs + statuses) was unchanged across
+    /// two consecutive rounds (AC9). Runs alongside the duration `stuck`
+    /// guard; whichever trips first stops the session (§3.5, Q1).
+    RoundStuck,
 }
 
 /// Zero cumulative (§4 requires every turn-ending event to carry one; D3
@@ -220,6 +224,7 @@ pub fn run_review_loop(
                 };
                 append(&svc, identity, kv, channel_id, &payload)?;
                 ledger.apply(&payload)?;
+                ledger.note_round_complete();
                 return Ok((ledger, LoopDriverStop::Blocked));
             }
         };
@@ -255,17 +260,17 @@ pub fn run_review_loop(
             ledger.apply(&payload)?;
         }
 
-        // `fold()` (used by the AC12 test to replay the channel's own
-        // payloads) is a pure `apply`-only fold with no `note_round_complete`
-        // call of its own (§3.3's round-stuck detector, AC9, is out of this
-        // loop's scope) — so the in-memory ledger stays comparable to a
-        // replay only by NOT calling it here either. A caller that also
-        // needs round-stuck tracking calls `note_round_complete` itself on
-        // the returned ledger at its own round boundaries.
+        // The round is fully folded: snapshot its open set (§3.3, AC9).
+        // `ledger::fold_rounds` notes the same boundaries on replay, so the
+        // in-memory ledger stays byte-comparable to the channel (AC11).
+        ledger.note_round_complete();
 
         match parsed.verdict {
             VerdictKind::Approve => return Ok((ledger, LoopDriverStop::Approve)),
             VerdictKind::Blocked => return Ok((ledger, LoopDriverStop::ReviewerBlocked)),
+            VerdictKind::Revise if ledger.round_stuck => {
+                return Ok((ledger, LoopDriverStop::RoundStuck));
+            }
             VerdictKind::Revise => {}
         }
 

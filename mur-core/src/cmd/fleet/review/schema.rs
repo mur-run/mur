@@ -246,6 +246,20 @@ pub struct ReviewEnvelope {
     pub payload: ReviewPayload,
 }
 
+/// The round a payload belongs to, for payloads that carry one. Round
+/// boundaries are derived from this (§4 has no explicit "round complete"
+/// event), by both the replay fold and the live loop.
+pub fn payload_round(p: &ReviewPayload) -> Option<u32> {
+    match p {
+        ReviewPayload::TurnSent { round, .. }
+        | ReviewPayload::Verdict { round, .. }
+        | ReviewPayload::FindingIssued { round, .. }
+        | ReviewPayload::FindingStatus { round, .. }
+        | ReviewPayload::Rebuttal { round, .. } => Some(*round),
+        _ => None,
+    }
+}
+
 /// Wrap a payload into the `Note.payload` JSON value this module writes.
 pub fn to_note_payload(payload: &ReviewPayload) -> serde_json::Value {
     let envelope = ReviewEnvelope {
