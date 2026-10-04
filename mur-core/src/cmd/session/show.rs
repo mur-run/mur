@@ -39,9 +39,7 @@ pub(crate) fn cmd_session_record(
 pub(crate) fn cmd_session_exit() -> Result<()> {
     match session::stop()? {
         Some(id) => {
-            let recordings_dir = dirs::home_dir()
-                .expect("no home dir")
-                .join(".mur")
+            let recordings_dir = mur_common::home::mur_home()
                 .join("session")
                 .join("recordings");
             let recording = recordings_dir.join(format!("{}.jsonl", id));
@@ -69,9 +67,7 @@ pub(crate) fn cmd_session_status() -> Result<()> {
             println!("  Source:  {}", session.source);
 
             // Count events in the recording
-            let recording_path = dirs::home_dir()
-                .expect("no home dir")
-                .join(".mur")
+            let recording_path = mur_common::home::mur_home()
                 .join("session")
                 .join("recordings")
                 .join(format!("{}.jsonl", session.id));

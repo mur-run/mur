@@ -16,7 +16,6 @@ use crate::tools::bash::BashTool;
 use crate::tools::registry::build_tools;
 use mur_common::config::SkillsConfig;
 use mur_common::model::ModelEntry;
-use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -104,9 +103,7 @@ pub async fn build_provider_runner(
     // MUR_HOME-aware home dir — same expression as `prepare_runtime`/`supervisor/mod.rs`
     // (the old inline "local"-arm recompute below ignored MUR_HOME; unifying on
     // this shared value is a disclosed, intentional bug-fix — see task-7-report.md).
-    let mur_home = std::env::var_os("MUR_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().expect("no home").join(".mur"));
+    let mur_home = mur_common::home::mur_home();
 
     // Issue #591 / runtime-file-tools-cwd: bash and the three file tools share
     // ONE session cwd (initial value = agent_home). The bash tool's `cwd`

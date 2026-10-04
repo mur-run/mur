@@ -21,7 +21,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 pub mod addon;
@@ -151,12 +151,7 @@ pub use trash::{cmd_trash_empty, cmd_trash_list, cmd_trash_now, cmd_trash_restor
 // ─── Shared helpers used across submodules ─────────────────────────
 
 pub fn resolve_mur_home() -> Result<PathBuf> {
-    if let Some(v) = std::env::var_os("MUR_HOME") {
-        return Ok(PathBuf::from(v));
-    }
-    Ok(dirs::home_dir()
-        .ok_or_else(|| anyhow!("no home dir"))?
-        .join(".mur"))
+    mur_common::home::mur_home_or_err()
 }
 
 pub(super) fn resolve_bin_dir() -> Result<PathBuf> {

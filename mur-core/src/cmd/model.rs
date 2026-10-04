@@ -463,9 +463,7 @@ fn cmd_prices(
 }
 
 fn cmd_migrate(dry_run: bool) -> anyhow::Result<()> {
-    let agents_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no HOME"))?
-        .join(".mur/agents");
+    let agents_dir = mur_common::home::mur_home_or_err()?.join("agents");
     let registry_path = ModelRegistry::default_path()?;
     let mut reg = ModelRegistry::load_from(&registry_path)?;
     let mut migrated_agents: Vec<String> = Vec::new();

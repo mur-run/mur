@@ -7,9 +7,8 @@ use mur_common::Signal;
 /// into `~/.mur/inbox/`, applies them via `Inbox::apply_all`, then marks
 /// each successfully-ingested file as flushed.
 pub fn cmd_agent_reconnect(name: &str) -> Result<()> {
-    let outbox_dir = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur/agents")
+    let outbox_dir = mur_common::home::mur_home_or_err()?
+        .join("agents")
         .join(name)
         .join("outbox");
 

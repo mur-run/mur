@@ -660,15 +660,14 @@ pub async fn fetch_source_hits_for_query(query: &str, k: usize) -> Vec<crate::st
         return vec![];
     };
     let emb_cfg = EmbeddingConfig::from_config(&cfg);
-    let Some(home) = dirs::home_dir() else {
+    let Some(mur_dir) = mur_common::home::try_mur_home() else {
         return vec![];
     };
-    let index_path = home.join(".mur").join("index");
+    let index_path = mur_dir.join("index");
     let Ok(vs) = get_vector_store(&cfg, &index_path).await else {
         return vec![];
     };
-    let Ok(tantivy) = crate::sources::tantivy::TantivyIndex::open_or_create(&home.join(".mur"))
-    else {
+    let Ok(tantivy) = crate::sources::tantivy::TantivyIndex::open_or_create(&mur_dir) else {
         return vec![];
     };
     let weights: std::collections::HashMap<String, f32> =

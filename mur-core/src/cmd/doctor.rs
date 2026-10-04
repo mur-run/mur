@@ -70,13 +70,7 @@ pub fn run(format: &str, json: bool) -> Result<()> {
     // mode (export-format-specific runs aren't interested in
     // bridge liveness diagnostics).
     if matches!(format, "all" | "") {
-        let mur_home = std::env::var("MUR_HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs::home_dir()
-                    .expect("home directory required to locate ~/.mur")
-                    .join(".mur")
-            });
+        let mur_home = mur_common::home::mur_home();
         let bridges = collect_bridge_statuses(&mur_home);
         if !bridges.is_empty() {
             if json {

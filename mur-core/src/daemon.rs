@@ -5,9 +5,7 @@
 use std::path::{Path, PathBuf};
 
 pub fn inbox_path(session_id: &str) -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
+    mur_common::home::mur_home()
         .join("inbox")
         .join(format!("{session_id}.md"))
 }
@@ -35,8 +33,8 @@ pub fn read_inbox(path: &Path, max_age_secs: u64) -> Option<String> {
 ///
 /// Returns false on any IO or parse error.
 pub fn is_daemon_healthy() -> bool {
-    let lock_path = dirs::home_dir()
-        .map(|h| h.join(".mur").join("murmurd.lock"))
+    let lock_path = mur_common::home::try_mur_home()
+        .map(|h| h.join("murmurd.lock"))
         .unwrap_or_default();
     daemon_healthy_for_lock(&lock_path)
 }

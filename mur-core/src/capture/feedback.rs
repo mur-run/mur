@@ -318,10 +318,7 @@ pub fn read_injection_record() -> anyhow::Result<InjectionRecord> {
 }
 
 fn injection_record_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("last_injection.json")
+    mur_common::home::mur_home().join("last_injection.json")
 }
 
 #[cfg(test)]

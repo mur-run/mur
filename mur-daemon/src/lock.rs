@@ -14,10 +14,7 @@ pub struct LockState {
 }
 
 pub fn lock_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home dir")
-        .join(".mur")
-        .join("murmurd.lock")
+    mur_common::home::mur_home().join("murmurd.lock")
 }
 
 /// The flock sentinel beside `murmurd.lock`.

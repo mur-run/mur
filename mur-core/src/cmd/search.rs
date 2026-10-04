@@ -12,7 +12,6 @@ pub async fn cmd_search_unified(
     json: bool,
 ) -> anyhow::Result<()> {
     use crate::{retrieve, sources, store};
-    use anyhow::Context;
 
     let want_patterns =
         !only_sources && (only_patterns || result_type == "patterns" || result_type == "all");
@@ -24,14 +23,10 @@ pub async fn cmd_search_unified(
     if want_sources {
         let cfg = store::config::load_config()?;
         let emb_cfg = store::embedding::EmbeddingConfig::from_config(&cfg);
-        let index_path = dirs::home_dir()
-            .context("no home dir")?
-            .join(".mur")
-            .join("index");
+        let index_path = mur_common::home::mur_home_or_err()?.join("index");
         let vector_store = store::vector::factory::get_vector_store(&cfg, &index_path).await?;
-        let tantivy = sources::tantivy::TantivyIndex::open_or_create(
-            &dirs::home_dir().context("no home dir")?.join(".mur"),
-        )?;
+        let tantivy =
+            sources::tantivy::TantivyIndex::open_or_create(&mur_common::home::mur_home_or_err()?)?;
         let source_weights: std::collections::HashMap<String, f32> = {
             let store = sources::instance::SourceInstanceStore::default_store()?;
             store

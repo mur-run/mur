@@ -9,9 +9,7 @@ use crate::schedule::{Schedule, ScheduleExecutor, SchedulesFile};
 
 /// Default Commander PID file path.
 pub fn commander_pid_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".mur")
+    crate::home::mur_home_lossy()
         .join("commander")
         .join("commander.pid")
 }
@@ -43,10 +41,7 @@ pub fn is_commander_running_at(pid_path: &Path) -> bool {
 
 /// Default schedules.yaml path.
 pub fn schedules_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".mur")
-        .join("schedules.yaml")
+    crate::home::mur_home_lossy().join("schedules.yaml")
 }
 
 /// Load schedules from the default path.

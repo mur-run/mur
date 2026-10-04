@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mur_compress::{AutoCfg, CompressConfig, CompressEngine};
 use std::io::Read;
 
@@ -515,8 +515,9 @@ pub(crate) async fn cmd_hook_session_start(tool: &str) -> Result<()> {
 }
 
 pub(crate) fn cmd_hook_stats() -> Result<()> {
-    let home = dirs::home_dir().context("could not determine home directory")?;
-    let queue_path = home.join(".mur").join("queue").join("events.jsonl");
+    let queue_path = mur_common::home::mur_home_or_err()?
+        .join("queue")
+        .join("events.jsonl");
     // Records, not events: the write-time metadata is what lets the report say
     // which window it covers (#979).
     let records = crate::inject::queue::read_all_records(&queue_path);

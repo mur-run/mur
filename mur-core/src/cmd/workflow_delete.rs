@@ -66,9 +66,7 @@ async fn resolve_id(client: &reqwest::Client, name: &str) -> Result<String> {
 
 /// `mur workflow delete <name> [--yes] [--local-only]`
 pub async fn cmd_workflow_delete(name: &str, yes: bool, local_only: bool) -> Result<()> {
-    let local_path = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".mur")
+    let local_path = mur_common::home::mur_home_or_err()?
         .join("workflows")
         .join(format!("{name}.yaml"));
 

@@ -2,7 +2,7 @@
 //!
 //! See spec: docs/superpowers/specs/2026-04-24-murmur-agent-rekey-design.md
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use mur_common::agent::AgentProfile;
 use mur_common::identity::{AgentIdentity, RotationAttestation, RotationReason};
 use std::fs;
@@ -279,12 +279,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn resolve_mur_home() -> Result<PathBuf> {
-    if let Some(v) = std::env::var_os("MUR_HOME") {
-        return Ok(PathBuf::from(v));
-    }
-    Ok(dirs::home_dir()
-        .ok_or_else(|| anyhow!("no home dir"))?
-        .join(".mur"))
+    mur_common::home::mur_home_or_err()
 }
 
 fn read_running_pid(agent_dir: &Path) -> Option<u32> {

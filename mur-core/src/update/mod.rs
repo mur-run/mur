@@ -229,9 +229,7 @@ fn refresh_siblings(asset_name: &str, bin_bytes: &[u8], target: &std::path::Path
 /// The Hub owns its own update — we only inform, never touch the `.app`.
 /// Any error (no Hub, unreadable file, unparseable version) → `None`.
 fn hub_staleness_nudge(cli_version: &str) -> Option<String> {
-    let home = std::env::var_os("MUR_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".mur")))?;
+    let home = mur_common::home::try_mur_home()?;
     let contents = std::fs::read_to_string(home.join("host_path")).ok()?;
     stale_hub_nudge_from(&contents, cli_version)
 }

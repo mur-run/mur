@@ -31,6 +31,7 @@ pub mod fleet;
 pub mod fleet_bundle;
 pub mod guard;
 pub mod hitl;
+pub mod home;
 pub mod hooks_config;
 pub mod hub;
 pub mod identity;

@@ -35,8 +35,7 @@ impl CursorStore {
 
     /// Default location at `$HOME/.mur/sync/cursor.json`.
     pub fn default_location() -> Result<Self> {
-        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no HOME directory"))?;
-        let p = home.join(".mur/sync/cursor.json");
+        let p = mur_common::home::mur_home_or_err()?.join("sync/cursor.json");
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }

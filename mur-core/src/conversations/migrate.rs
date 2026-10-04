@@ -34,10 +34,14 @@ pub struct MigrationReport {
     pub duration_ms: u64,
 }
 
-fn home_root(home_override: Option<&str>) -> PathBuf {
-    home_override
-        .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::home_dir().unwrap())
+/// MUR data root for a migration. `home_override` is a *user home* (tests
+/// pass a tempdir and expect `<it>/.mur`); without it the root comes from
+/// `mur_common::home`, so `$MUR_HOME` is honoured (#1696).
+fn mur_dir(home_override: Option<&str>) -> PathBuf {
+    match home_override {
+        Some(h) => PathBuf::from(h).join(mur_common::home::MUR_DIR_NAME),
+        None => mur_common::home::mur_home(),
+    }
 }
 
 fn count_jsonl_lines(p: &std::path::Path) -> u64 {
@@ -51,8 +55,7 @@ fn count_jsonl_lines(p: &std::path::Path) -> u64 {
 }
 
 pub fn dry_run(home_override: Option<&str>) -> Result<MigrationPlan> {
-    let home = home_root(home_override);
-    let mur = home.join(".mur");
+    let mur = mur_dir(home_override);
 
     let lt = mur.join("commander/memory/long_term.jsonl");
     let long_term_lines = count_jsonl_lines(&lt);
@@ -118,8 +121,7 @@ fn dir_size_bytes(p: &std::path::Path) -> Result<u64> {
 /// unreliable — stale PID files persist after crashes.
 pub fn daemon_running(home_override: Option<&str>) -> bool {
     use fs2::FileExt;
-    let home = home_root(home_override);
-    let pid_path = home.join(".mur/commander/commander.pid");
+    let pid_path = mur_dir(home_override).join("commander/commander.pid");
     if !pid_path.exists() {
         return false;
     }
@@ -162,14 +164,13 @@ pub fn render_plan(p: &MigrationPlan) -> String {
 
 pub async fn run(home_override: Option<&str>) -> Result<MigrationReport> {
     let start = std::time::Instant::now();
-    let home = home_root(home_override);
-    let mur = home.join(".mur");
+    let mur = mur_dir(home_override);
 
     if daemon_running(home_override) {
         bail!(
             "refusing to migrate: mur-commander daemon appears to be running. \
-             Stop it with `murc stop` (or release the flock on {}/.mur/commander/commander.pid).",
-            home.display()
+             Stop it with `murc stop` (or release the flock on {}).",
+            mur.join("commander/commander.pid").display()
         );
     }
 
@@ -301,8 +302,7 @@ pub async fn run(home_override: Option<&str>) -> Result<MigrationReport> {
 
 pub async fn rollback(home_override: Option<&str>) -> Result<MigrationReport> {
     let start = std::time::Instant::now();
-    let home = home_root(home_override);
-    let mur = home.join(".mur");
+    let mur = mur_dir(home_override);
     let conv = mur.join("conversations");
     let cmdr_mem = mur.join("commander/memory");
     std::fs::create_dir_all(&cmdr_mem)?;
@@ -359,8 +359,7 @@ pub async fn rollback(home_override: Option<&str>) -> Result<MigrationReport> {
 
 pub async fn resume(home_override: Option<&str>) -> Result<MigrationReport> {
     let start = std::time::Instant::now();
-    let home = home_root(home_override);
-    let mur = home.join(".mur");
+    let mur = mur_dir(home_override);
     let staging = mur.join(".conversations-migrating");
     if !staging.exists() {
         bail!(
@@ -394,8 +393,7 @@ pub async fn resume(home_override: Option<&str>) -> Result<MigrationReport> {
 }
 
 pub async fn discard_staging(home_override: Option<&str>) -> Result<()> {
-    let home = home_root(home_override);
-    let staging = home.join(".mur/.conversations-migrating");
+    let staging = mur_dir(home_override).join(".conversations-migrating");
     if staging.exists() {
         std::fs::remove_dir_all(&staging)?;
     }

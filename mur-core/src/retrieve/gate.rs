@@ -386,14 +386,13 @@ pub fn evaluate_query_v2(query: &str, inputs: &GateInputs) -> GateOutcome {
 /// Evaluate whether a query should trigger pattern retrieval.
 /// Reads tool history from disk; degrades gracefully if unavailable.
 pub fn evaluate_query(query: &str) -> GateOutcome {
-    let Some(home) = dirs::home_dir() else {
+    let Some(mur_dir) = mur_common::home::try_mur_home() else {
         return GateOutcome {
             tier: Tier::Skip,
             score: 0.0,
             reasons: vec!["no home dir"],
         };
     };
-    let mur_dir = home.join(".mur");
     let inputs = GateInputs {
         tool_history: read_recent_tool_history(&mur_dir, 5),
         session_state: SessionStateInput {
