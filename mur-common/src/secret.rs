@@ -341,6 +341,54 @@ pub async fn keychain_get(
     .map(|opt| opt.map(SecretString::from))
 }
 
+/// `errSecItemNotFound` — the one `SecItemCopyMatching` status that means
+/// "absent" rather than "failed".
+#[cfg(target_os = "macos")]
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+/// Does a keychain item exist? Never reads the secret value.
+///
+/// For callers that only need presence (e.g. `mur doctor` counting what an
+/// upgrade would lose). On macOS this is an attribute-only query: reading item
+/// DATA is ACL-gated, and an ad-hoc binary whose hash changed on upgrade is no
+/// longer on the ACL — `keychain_get` then blocks on an authorization prompt
+/// nobody answers and fails as if absent. Attribute reads are not gated, so
+/// this neither prompts nor stalls, and the answer is correct.
+///
+/// Other platforms' backends do not prompt, so they fall back to a value read.
+pub fn keychain_item_exists(service: &str, account: &str) -> Result<bool, SecretError> {
+    if keychain_blocked() {
+        return Ok(false);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        let found = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(account)
+            .load_attributes(true)
+            .load_data(false)
+            .limit(Limit::Max(1))
+            .search();
+        match found {
+            Ok(items) => Ok(!items.is_empty()),
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(false),
+            Err(e) => Err(SecretError::KeychainBackend(e.to_string())),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let entry = keyring::Entry::new(service, account)
+            .map_err(|e| SecretError::KeychainBackend(e.to_string()))?;
+        match entry.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(SecretError::KeychainBackend(e.to_string())),
+        }
+    }
+}
+
 /// Write a secret to the OS keychain. Used by `mur agent secret set` and the
 /// GUI's `set_secret` command.
 pub async fn keychain_set(service: &str, account: &str, value: &str) -> Result<(), SecretError> {

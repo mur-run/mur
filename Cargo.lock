@@ -6557,6 +6557,7 @@ dependencies = [
  "regex-lite",
  "schemars 1.2.1",
  "secrecy",
+ "security-framework 3.7.0",
  "semver",
  "serde",
  "serde_bytes",
