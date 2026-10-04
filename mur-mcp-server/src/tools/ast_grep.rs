@@ -21,13 +21,9 @@ pub const TOOL_NAME: &str = "ast_grep_search";
 
 pub use mur_common::config::AST_GREP_PINNED_VERSION;
 
-/// Directory under mur home holding managed tools; setup (phase 3) installs
-/// here and the resolver reads only from here.
-const TOOLS_DIR: &str = "tools";
-const AST_GREP_DIR: &str = "ast-grep";
-const AST_GREP_BIN_STEM: &str = "ast-grep";
 /// MUR-owned run directory (cwd + empty sgconfig) under mur home.
 const RUNTIME_DIR: &str = "runtime";
+const AST_GREP_DIR: &str = "ast-grep";
 const SGCONFIG_FILE: &str = "sgconfig.yml";
 /// MUR's config file under mur home (holds `search.ast_grep`).
 const CONFIG_FILE: &str = "config.yaml";
@@ -43,15 +39,9 @@ pub const MAX_LANG_BYTES: usize = 32;
 pub const STRICTNESS_VALUES: &[&str] = &["cst", "smart", "ast", "relaxed", "signature", "template"];
 
 /// Where the pinned binary must live: `<mur_home>/tools/ast-grep/<ver>/ast-grep[.exe]`.
+/// Defined in `mur-common` so `mur code-nav setup` installs to the same path.
 pub fn binary_path(mur_home: &Path) -> PathBuf {
-    mur_home
-        .join(TOOLS_DIR)
-        .join(AST_GREP_DIR)
-        .join(AST_GREP_PINNED_VERSION)
-        .join(format!(
-            "{AST_GREP_BIN_STEM}{}",
-            std::env::consts::EXE_SUFFIX
-        ))
+    mur_common::config::ast_grep_binary_path(mur_home)
 }
 
 /// The pinned binary, or `None` ⇒ the tool is not registered. Never falls

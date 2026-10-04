@@ -620,8 +620,13 @@ Findings that change the Phase 3 design:
       (Dart, Bash, C#, F#, Scala, Elixir) are refused by name.
       `mur-core/src/cmd/code_nav/plan.rs`; `AST_GREP_PINNED_VERSION` moved
       to `mur-common` so the installer and the resolver share one pin.
-- [ ] 3.2 ast-grep install: download 0.45.3, verify sha256 (per-platform
+- [x] 3.2 ast-grep install: download 0.45.3, verify sha256 (per-platform
       constants), place at `binary_path()` under `<mur_home>/tools/ast-grep/`.
+      `mur-core/src/cmd/code_nav/ast_grep_install.rs`. Two pins per platform:
+      the release zip (must equal CI's table; a test enforces it) and the
+      extracted binary, so a re-run verifies what is on disk without a
+      download. Only the exact `ast-grep[.exe]` entry is placed (not `sg`).
+      `ast_grep_binary_path()` moved to `mur-common`; the resolver delegates.
 - [ ] 3.3 serena install per P3-D2; pin recorded in the setup manifest.
 - [ ] 3.4 Config generator: full-field `serena_config.yml` from serena's
       template (no load-time "migration" rewrite, #1688), `projects`
