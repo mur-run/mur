@@ -165,6 +165,8 @@ pub fn mcp_add_with_policy(
         requires_programs: Vec::new(),
         state_paths: Vec::new(),
         package: None,
+        kind: None,
+        project: None,
     });
     if !profile
         .entitlements
