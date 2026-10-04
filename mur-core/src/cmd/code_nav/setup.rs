@@ -17,7 +17,9 @@ use serde_yaml_ng::Value;
 
 use super::consent::{self, Manifest};
 use super::plan::{self, Detected, Flags, Lang, LspStatus, Permission, UV};
-use super::{ast_grep_install, serena_config, serena_entry, serena_install, serena_project};
+use super::{
+    ast_grep_install, pyright_install, serena_config, serena_entry, serena_install, serena_project,
+};
 use crate::cmd::browser::setup::Consent;
 
 pub struct Args {
@@ -117,8 +119,8 @@ pub fn run(
         writeln!(out, "\nserena project: {}", p.display())?;
         writeln!(
             out,
-            "    also granted after install: exec of serena's own Python (its venv bin dir and \
-             the interpreter uv chose)"
+            "    also granted after install: exec of serena's (and pyright's) own Python \
+             (each venv bin dir and the interpreter uv chose)"
         )?;
     }
 
@@ -213,6 +215,24 @@ fn apply(
     m.installed
         .insert(consent::install_key(plan::SERENA, &record.version));
 
+    // 3.6b: pyright is installed only when Python is enabled in this plan.
+    // An earlier run's install stays recorded (setup never revokes) and its
+    // `ls_path` is kept, so a re-run without Python does not fall back to uvx.
+    let pyright = if plan.install.iter().any(|r| r.name == plan::PYRIGHT) {
+        let (o, r) = pyright_install::install_with(&uv, &pyright_install::pyright_dir(mur_home))?;
+        writeln!(
+            out,
+            "  ✓ pyright {} ({o:?}) at {}",
+            r.version,
+            r.bin.display()
+        )?;
+        m.installed
+            .insert(consent::install_key(plan::PYRIGHT, &r.version));
+        Some(r)
+    } else {
+        m.pyright.clone()
+    };
+
     // Union with earlier runs: setup never revokes, so a language the user
     // consented to before stays in serena's list until they remove it.
     let langs: Vec<Lang> = Lang::ALL
@@ -232,7 +252,8 @@ fn apply(
     let tpl = serena_config::read_pinned_template(&dir)?;
     let secret =
         existing_auth_secret(&paths.config_file).unwrap_or_else(serena_config::new_auth_secret);
-    let cfg = serena_config::write_config(&paths, project, &tpl, &secret)?;
+    let python_ls = pyright.as_ref().map(|r| r.bin.as_path());
+    let cfg = serena_config::write_config(&paths, project, &tpl, &secret, python_ls)?;
     writeln!(out, "  ✓ wrote {} (preflight passed)", cfg.display())?;
 
     let (ppath, mut profile) = crate::cmd::agent::load_profile_for_edit(agent)?;
@@ -244,12 +265,20 @@ fn apply(
         match p {
             Permission::Spawn(b) => crate::cmd::agent::cmd_perm_allow_spawn(agent, b)?,
             Permission::Read(d) => crate::cmd::agent::cmd_perm_allow_read(agent, path_str(d)?)?,
+            Permission::SpawnDir(d) => {
+                crate::cmd::agent::cmd_perm_allow_spawn_dir(agent, path_str(d)?)?
+            }
         }
         m.granted.insert(consent::grant_key(p));
     }
-    for lane in interpreter_lanes(&record.bin)? {
-        crate::cmd::agent::cmd_perm_allow_spawn_dir(agent, path_str(&lane)?)?;
-        m.granted.insert(format!("spawn-dir {}", lane.display()));
+    // Both entry points are scripts run by a venv interpreter uv chose;
+    // the seal must exec each one (requirement 3).
+    let entry_points = std::iter::once(&record.bin).chain(pyright.as_ref().map(|r| &r.bin));
+    for bin in entry_points {
+        for lane in interpreter_lanes(bin)? {
+            crate::cmd::agent::cmd_perm_allow_spawn_dir(agent, path_str(&lane)?)?;
+            m.granted.insert(format!("spawn-dir {}", lane.display()));
+        }
     }
     writeln!(out, "  ✓ permissions granted")?;
 
@@ -257,6 +286,7 @@ fn apply(
         .extend(langs.iter().map(|l| l.flag().to_owned()));
     m.project = Some(project.to_path_buf());
     m.serena = Some(record);
+    m.pyright = pyright;
     Ok(m)
 }
 

@@ -58,7 +58,7 @@ fn top(text: &str) -> Mapping {
 }
 
 fn owned(f: &Fx) -> Mapping {
-    owned_values(&f.paths, &f.project, SECRET).unwrap()
+    owned_values(&f.paths, &f.project, SECRET, None).unwrap()
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn values_meet_the_preflight_contract() {
 #[test]
 fn written_config_passes_the_runtime_preflight() {
     let f = fx();
-    let path = write_config(&f.paths, &f.project, FIXTURE, SECRET).unwrap();
+    let path = write_config(&f.paths, &f.project, FIXTURE, SECRET, None).unwrap();
     assert_eq!(path, f.paths.config_file);
     assert!(project_folder(&f.paths, &f.project).unwrap().is_dir());
     preflight(&f.paths, &f.project).unwrap();
@@ -143,9 +143,9 @@ fn written_config_passes_the_runtime_preflight() {
 #[test]
 fn rewrite_replaces_the_previous_config() {
     let f = fx();
-    write_config(&f.paths, &f.project, FIXTURE, SECRET).unwrap();
+    write_config(&f.paths, &f.project, FIXTURE, SECRET, None).unwrap();
     let other = "11111111-1111-4111-8111-111111111111";
-    write_config(&f.paths, &f.project, FIXTURE, other).unwrap();
+    write_config(&f.paths, &f.project, FIXTURE, other, None).unwrap();
     let text = std::fs::read_to_string(&f.paths.config_file).unwrap();
     assert_eq!(top(&text)["auth_secret"].as_str(), Some(other));
 }
@@ -155,7 +155,7 @@ fn rewrite_replaces_the_previous_config() {
 fn config_is_owner_only() {
     use std::os::unix::fs::PermissionsExt;
     let f = fx();
-    let path = write_config(&f.paths, &f.project, FIXTURE, SECRET).unwrap();
+    let path = write_config(&f.paths, &f.project, FIXTURE, SECRET, None).unwrap();
     let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
 }
@@ -170,7 +170,7 @@ fn a_preflight_failure_is_reported_not_swallowed() {
     std::os::unix::fs::symlink(&f.project, &folder).unwrap();
     let err = format!(
         "{:#}",
-        write_config(&f.paths, &f.project, FIXTURE, SECRET).unwrap_err()
+        write_config(&f.paths, &f.project, FIXTURE, SECRET, None).unwrap_err()
     );
     assert!(err.contains("preflight") && err.contains("C4"), "{err}");
 }
@@ -217,7 +217,7 @@ fn real_template_renders_passes_preflight_and_is_not_rewritten() {
         PathBuf::from(std::env::var_os("MUR_SERENA_INSTALL_DIR").expect("MUR_SERENA_INSTALL_DIR"));
     let tpl = read_pinned_template(&dir).unwrap();
     let f = fx();
-    write_config(&f.paths, &f.project, &tpl, SECRET).unwrap();
+    write_config(&f.paths, &f.project, &tpl, SECRET, None).unwrap();
     preflight(&f.paths, &f.project).unwrap();
 
     let python = walkdir::WalkDir::new(&dir)
@@ -245,4 +245,52 @@ fn real_template_renders_passes_preflight_and_is_not_rewritten() {
         before,
         "serena rewrote the file"
     );
+}
+
+/// A `pyright-langserver` stand-in inside a tools root the test owns.
+fn fake_ls(f: &mut Fx) -> PathBuf {
+    let tools = f._tmp.path().join("mur").join("tools");
+    let bin = tools.join("pyright/1.1.403/bin/pyright-langserver");
+    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+    f.paths.tools_dir = tools;
+    bin
+}
+
+#[test]
+fn python_ls_path_is_written_only_when_given() {
+    let mut f = fx();
+    assert!(
+        owned(&f)["ls_specific_settings"]
+            .get(PYTHON_LS_ID)
+            .is_none()
+    );
+    let bin = fake_ls(&mut f);
+    let o = owned_values(&f.paths, &f.project, SECRET, Some(&bin)).unwrap();
+    let py = &o["ls_specific_settings"][PYTHON_LS_ID];
+    assert_eq!(py[LS_PATH].as_str(), bin.to_str());
+    assert!(py.get("ls_base_cmd").is_none());
+    // The clangd lock-down is unaffected.
+    assert_eq!(
+        o["ls_specific_settings"][CPP_LS_ID]["ls_extra_args"][0].as_str(),
+        Some(CLANGD_LOCKDOWN)
+    );
+}
+
+#[test]
+fn config_with_python_ls_path_passes_the_runtime_preflight() {
+    let mut f = fx();
+    let bin = fake_ls(&mut f);
+    write_config(&f.paths, &f.project, FIXTURE, SECRET, Some(&bin)).unwrap();
+    preflight(&f.paths, &f.project).unwrap();
+}
+
+#[test]
+fn python_ls_path_outside_the_tools_root_fails_preflight() {
+    let mut f = fx();
+    fake_ls(&mut f);
+    let stray = f._tmp.path().join("pyright-langserver");
+    std::fs::write(&stray, b"").unwrap();
+    let e = write_config(&f.paths, &f.project, FIXTURE, SECRET, Some(&stray)).unwrap_err();
+    assert!(format!("{e:#}").contains("ls_path"), "{e:#}");
 }

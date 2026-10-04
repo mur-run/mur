@@ -36,6 +36,10 @@ pub struct Manifest {
     /// Project serena serves, if serena was set up.
     pub project: Option<PathBuf>,
     pub serena: Option<Record>,
+    /// The pyright serena launches via `ls_path` (3.6b). Absent in
+    /// manifests written before it existed.
+    #[serde(default)]
+    pub pyright: Option<super::pyright_install::Record>,
     /// Finding 4: every disabled line, so "off" is never silent.
     pub disabled: Vec<String>,
 }
@@ -73,6 +77,7 @@ pub fn grant_key(p: &Permission) -> String {
     match p {
         Permission::Spawn(b) => format!("spawn {b}"),
         Permission::Read(d) => format!("read {}", d.display()),
+        Permission::SpawnDir(d) => format!("spawn-dir {}", d.display()),
     }
 }
 
