@@ -153,7 +153,9 @@ pub fn run_review_loop(
         // Main's turn: produce or revise (§3.1). The content is free text
         // (§3.1 says nothing about its shape) — only the reviewer's reply is
         // a structured verdict (§3.2).
-        let main_params = serde_json::json!({ "round": round });
+        // From round 2 on, main must see what to answer (§3.3: "For each
+        // open finding the main agent answers accept | reject | partial").
+        let main_params = main_turn_params(round, &ledger);
         let main_reply = match run_turn_with_retry(
             transport,
             mur_home,
@@ -214,58 +216,41 @@ pub fn run_review_loop(
             }
         };
 
-        let parsed: VerdictReply = match serde_json::from_str(&reviewer_reply) {
-            Ok(v) => v,
-            Err(_) => {
-                let payload = ReviewPayload::Verdict {
-                    round,
-                    kind: VerdictKind::Blocked,
-                    cumulative: zero_cumulative(),
-                };
-                append(&svc, identity, kv, channel_id, &payload)?;
-                ledger.apply(&payload)?;
-                ledger.note_round_complete();
-                return Ok((ledger, LoopDriverStop::Blocked));
-            }
-        };
-
-        let verdict_payload = ReviewPayload::Verdict {
-            round,
-            kind: parsed.verdict,
-            cumulative: zero_cumulative(),
-        };
-        append(&svc, identity, kv, channel_id, &verdict_payload)?;
-        ledger.apply(&verdict_payload)?;
-
-        for f in &parsed.findings {
-            let id = ledger.next_finding_id();
-            let payload = ReviewPayload::FindingIssued {
+        // Model output is untrusted: build the round's payloads, fold them
+        // into a scratch ledger first, and only sign them into the channel
+        // once the whole round folds cleanly. A reply that cannot be parsed
+        // or that names an unissued finding (§8.2 illegal transition) is
+        // treated as `blocked` instead of poisoning the channel for replay.
+        let staged = serde_json::from_str::<VerdictReply>(&reviewer_reply)
+            .ok()
+            .and_then(|parsed| {
+                let mut scratch = ledger.clone();
+                let payloads = stage_round(&mut scratch, round, &parsed)?;
+                Some((parsed.verdict, scratch, payloads))
+            });
+        let Some((verdict, scratch, payloads)) = staged else {
+            let payload = ReviewPayload::Verdict {
                 round,
-                id,
-                severity: f.severity,
-                issue: f.issue.clone(),
+                kind: VerdictKind::Blocked,
+                cumulative: zero_cumulative(),
             };
-            append(&svc, identity, kv, channel_id, &payload)?;
             ledger.apply(&payload)?;
-        }
-
-        for p in &parsed.prior {
-            let payload = ReviewPayload::FindingStatus {
-                round,
-                id: p.id.clone(),
-                status: p.status,
-                reason: p.reason.clone(),
-            };
             append(&svc, identity, kv, channel_id, &payload)?;
-            ledger.apply(&payload)?;
+            ledger.note_round_complete();
+            return Ok((ledger, LoopDriverStop::Blocked));
+        };
+        for payload in &payloads {
+            append(&svc, identity, kv, channel_id, payload)?;
         }
+        ledger = scratch;
+        let parsed_verdict = verdict;
 
         // The round is fully folded: snapshot its open set (§3.3, AC9).
         // `ledger::fold_rounds` notes the same boundaries on replay, so the
         // in-memory ledger stays byte-comparable to the channel (AC11).
         ledger.note_round_complete();
 
-        match parsed.verdict {
+        match parsed_verdict {
             VerdictKind::Approve => return Ok((ledger, LoopDriverStop::Approve)),
             VerdictKind::Blocked => return Ok((ledger, LoopDriverStop::ReviewerBlocked)),
             VerdictKind::Revise if ledger.round_stuck => {
@@ -276,4 +261,60 @@ pub fn run_review_loop(
 
         round += 1;
     }
+}
+
+/// Params for main's turn: the round number plus, once the reviewer has
+/// spoken, every finding still in the open set with its current status.
+fn main_turn_params(round: u32, ledger: &Ledger) -> serde_json::Value {
+    let open: Vec<serde_json::Value> = ledger
+        .stop_screen_findings(false)
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({
+                "id": f.id,
+                "severity": f.severity,
+                "issue": f.issue,
+                "status": f.status,
+            })
+        })
+        .collect();
+    serde_json::json!({ "round": round, "open_findings": open })
+}
+
+/// Fold one reviewer reply into `scratch`, returning the payloads in channel
+/// order, or `None` if any of them is an illegal transition.
+fn stage_round(
+    scratch: &mut Ledger,
+    round: u32,
+    parsed: &VerdictReply,
+) -> Option<Vec<ReviewPayload>> {
+    let mut out = Vec::new();
+    let verdict = ReviewPayload::Verdict {
+        round,
+        kind: parsed.verdict,
+        cumulative: zero_cumulative(),
+    };
+    scratch.apply(&verdict).ok()?;
+    out.push(verdict);
+    for f in &parsed.findings {
+        let payload = ReviewPayload::FindingIssued {
+            round,
+            id: scratch.next_finding_id(),
+            severity: f.severity,
+            issue: f.issue.clone(),
+        };
+        scratch.apply(&payload).ok()?;
+        out.push(payload);
+    }
+    for p in &parsed.prior {
+        let payload = ReviewPayload::FindingStatus {
+            round,
+            id: p.id.clone(),
+            status: p.status,
+            reason: p.reason.clone(),
+        };
+        scratch.apply(&payload).ok()?;
+        out.push(payload);
+    }
+    Some(out)
 }

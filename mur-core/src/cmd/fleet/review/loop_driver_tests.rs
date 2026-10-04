@@ -467,3 +467,107 @@ fn ac13_limit_stop_lists_open_and_disputed_findings() {
     );
     assert_eq!(ids(true), ["F3", "F1"], "after approve, disputed first");
 }
+
+/// Records the params main receives each turn, then delegates to the
+/// scripted `StubLoopTransport`.
+struct RecordingTransport {
+    inner: StubLoopTransport,
+    main_params: Mutex<Vec<serde_json::Value>>,
+}
+
+impl ReviewTransport for RecordingTransport {
+    fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
+        if member == "main" {
+            self.main_params.lock().unwrap().push(params.clone());
+        }
+        self.inner.send(member, params)
+    }
+}
+
+/// §3.3: from round 2 on, main must receive the open findings it has to
+/// answer — not just the round number.
+#[test]
+fn main_receives_open_findings_from_round_two() {
+    let (tmp, channel_id, identity, kv) = setup_channel();
+    let round1 = serde_json::json!({
+        "verdict": "revise",
+        "findings": [{"severity": "high", "issue": "unchecked unwrap"}],
+    })
+    .to_string();
+    let round2 = serde_json::json!({
+        "verdict": "approve",
+        "prior": [{"id": "F1", "status": "resolved"}],
+    })
+    .to_string();
+    let transport = RecordingTransport {
+        inner: StubLoopTransport::new(vec![], vec![&round1, &round2]),
+        main_params: Mutex::new(vec![]),
+    };
+
+    let (_, stop) = run_review_loop(
+        &transport,
+        tmp.path(),
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        &identity,
+        kv,
+        Duration::ZERO,
+        Duration::from_secs(3600),
+        Stuck::Off,
+        &Instant::now,
+    )
+    .unwrap();
+    assert_eq!(stop, LoopDriverStop::Approve);
+
+    let seen = transport.main_params.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0]["open_findings"], serde_json::json!([]));
+    let open = seen[1]["open_findings"].as_array().unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0]["id"], "F1");
+    assert_eq!(open[0]["issue"], "unchecked unwrap");
+    assert_eq!(open[0]["status"], "open");
+}
+
+/// §8.2: a reviewer reply naming an unissued finding must not be signed
+/// into the channel. The loop stops `Blocked`, and the channel still
+/// replays cleanly to the in-memory ledger.
+#[test]
+fn unissued_finding_id_blocks_without_poisoning_channel() {
+    let (tmp, channel_id, identity, kv) = setup_channel();
+    let home = tmp.path();
+    let bad = serde_json::json!({
+        "verdict": "approve",
+        "prior": [{"id": "F99", "status": "resolved"}],
+    })
+    .to_string();
+    let transport = StubLoopTransport::new(vec![], vec![&bad]);
+
+    let (ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        &identity,
+        kv,
+        Duration::ZERO,
+        Duration::from_secs(3600),
+        Stuck::Off,
+        &Instant::now,
+    )
+    .unwrap();
+    assert_eq!(stop, LoopDriverStop::Blocked);
+
+    let payloads = read_payloads(home, &channel_id);
+    assert!(
+        payloads
+            .iter()
+            .all(|p| !matches!(p, ReviewPayload::FindingStatus { .. })),
+        "the illegal finding_status must never reach the channel"
+    );
+    assert_eq!(fold_rounds(&payloads).unwrap(), ledger);
+}
