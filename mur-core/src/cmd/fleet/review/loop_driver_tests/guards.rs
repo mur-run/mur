@@ -109,16 +109,17 @@ impl ScriptedClockTransport {
 }
 
 impl ReviewTransport for ScriptedClockTransport {
-    fn send(&self, member: &str, _params: &serde_json::Value) -> anyhow::Result<String> {
+    fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
         match member {
             "main" => {
                 self.clock.set(self.clock.get() + self.main_jump);
-                Ok(self
+                let text = self
                     .main_replies
                     .lock()
                     .unwrap()
                     .pop()
-                    .unwrap_or_else(|| "main output".to_string()))
+                    .unwrap_or_else(|| "main output".to_string());
+                Ok(with_accept_all(&text, params))
             }
             "reviewer" => Ok(self
                 .reviewer_replies

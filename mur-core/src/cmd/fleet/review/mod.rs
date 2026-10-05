@@ -10,9 +10,11 @@
 //!
 //! Status: `mur fleet review` (`session.rs`) runs the semi-auto loop over a
 //! terminal — main and reviewer turns over A2A (`wire.rs`), a gate before
-//! every send, `session_stopped`, fleet removed and channel kept. Not wired
-//! yet: §5 auto mode and MURMUR (§6–§7), §3.4 rebuttal/escalation, the §3.2
-//! validation-hint retry, and §8.2 resume (`rollback.rs`). Items waiting on
+//! every send, `session_stopped`, fleet removed and channel kept. Malformed
+//! verdicts and rebuttals are validated in `verdict.rs` and retried once
+//! with a hint (§3.2/§3.4). Not wired yet: §5 auto mode and MURMUR
+//! (§6–§7), §3.4 reviewer withdraw/insist on a reject, and §8.2 resume
+//! (`rollback.rs`). Items waiting on
 //! those carry an `#[allow(dead_code)]` naming the section.
 
 pub mod constants;
@@ -25,6 +27,7 @@ pub mod loop_driver;
 pub mod rollback;
 pub mod schema;
 pub mod session;
+pub mod verdict;
 pub mod wire;
 
 #[cfg(test)]

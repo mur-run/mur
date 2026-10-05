@@ -24,7 +24,7 @@ use super::constants::{REVIEW_FLEET_PREFIX, RUNNING_LOCK, TRANSPORT_RETRY_DELAY}
 use super::driver::{A2aTransport, ReviewTransport};
 use super::ledger::Ledger;
 use super::loop_driver::{LoopDriverStop, run_review_loop};
-use super::schema::{Cumulative, Mode, ReviewPayload, SessionLimits, to_note_payload};
+use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
 use super::wire::message_text;
 use crate::cmd::fleet::loop_run::{LoopStop, fleet_bounds};
 use crate::cmd::fleet::store;
@@ -45,11 +45,17 @@ pub struct ReviewArgs {
 pub fn stop_reason(stop: &LoopDriverStop) -> String {
     match stop {
         LoopDriverStop::Approve => "approve".into(),
-        LoopDriverStop::Blocked => "blocked (malformed verdict)".into(),
+        LoopDriverStop::Blocked {
+            role: Role::Reviewer,
+        } => "blocked (malformed verdict)".into(),
+        LoopDriverStop::Blocked { role: Role::Main } => "blocked (malformed rebuttal)".into(),
         LoopDriverStop::ReviewerBlocked => "blocked".into(),
         LoopDriverStop::Stopped => "stopped".into(),
         // driver.rs already phrases this as "transport failure after one retry: …".
         LoopDriverStop::Paused { reason } => reason.clone(),
+        LoopDriverStop::TaskFailed { member, cause } => {
+            format!("{member} task failed: {cause}")
+        }
         LoopDriverStop::RoundStuck => "stuck (round: open findings unchanged)".into(),
         LoopDriverStop::Guard(LoopStop::Deadline) => "limit: deadline".into(),
         LoopDriverStop::Guard(LoopStop::Stuck) => "limit: stuck (no activity)".into(),
@@ -200,6 +206,29 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<T> {
     }
 }
 
+/// A tool-approval request from inside a member's turn, asked at this
+/// session's terminal (the session already refuses to start without a TTY).
+/// Same tier rule as `murmur`'s plain mode: the prompt names the tier when
+/// the call is above the auto ceiling, and only an explicit yes allows.
+fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
+    use crate::cmd::agent::cli::stream::tool_tier_and_summary;
+    let (tier, within_ceiling, summary) = tool_tier_and_summary(hitl);
+    println!("\n--- {member} asks to run a tool ---");
+    if !within_ceiling {
+        println!("  [{tier:?} — above the auto ceiling]");
+    }
+    println!("  {summary}");
+    print!("Allow? [y = allow, anything else = deny] ");
+    if std::io::stdout().flush().is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
 /// Enter (empty line) or `y`/`yes` sends; anything else, including EOF,
 /// declines — an unreadable answer never sends.
 fn is_send_answer(line: &str) -> bool {
@@ -272,7 +301,10 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     );
 
     let transport = TerminalGate {
-        inner: A2aTransport { mur_home },
+        inner: A2aTransport {
+            mur_home,
+            decide: &ask_hitl,
+        },
     };
     let (ledger, stop) = run_session(
         &transport,

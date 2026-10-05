@@ -11,52 +11,35 @@
 //! and every payload is appended to the channel with
 //! `ChannelService::append_signed`.
 //!
-//! Scope: only what AC12's happy path needs. §3.4 rebuttal, §3.3 disputes
-//! and escalation, §5 auto mode, and §8.2 replay/resume are out of scope
-//! here — see `review/mod.rs`'s work-in-progress note and D1/D2/the other
-//! modules in this directory for those.
+//! Both structured replies (the reviewer's verdict, main's rebuttal once
+//! findings are open) are validated by `verdict.rs` and retried once with a
+//! validation hint (§3.2/§3.4, AC5). §5 auto mode and the reviewer's
+//! withdraw/insist answer to a reject are out of scope here — see
+//! `review/mod.rs`'s work-in-progress note.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use super::constants::{MALFORMED_RESPONSE_RETRIES, REVIEW_VALIDATION_HINT};
+use super::driver::{RetryOutcome, ReviewTransport, run_turn_with_retry};
+use super::ledger::Ledger;
+use super::schema::{Mode, ReviewPayload, Role, SessionLimits, VerdictKind, to_note_payload};
+use super::verdict::{parse_rebuttal, parse_verdict, zero_cumulative};
+use super::wire::{main_turn_params, message_text, reviewer_turn_params, text_message_params};
+use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
 use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::limits::Stuck;
-use serde::Deserialize;
-
-use super::driver::{RetryOutcome, ReviewTransport, run_turn_with_retry};
-use super::ledger::Ledger;
-use super::schema::{
-    Cumulative, Mode, NewFindingDto, PriorUpdateDto, ReviewPayload, Role, SessionLimits,
-    VerdictKind, to_note_payload,
-};
-use super::wire::{extract_verdict_json, main_turn_params, reviewer_turn_params};
-use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
-
-/// The reviewer's wire reply (§3.2): `verdict: approve | revise | blocked`,
-/// `findings:` (new findings only — the system assigns IDs, never the
-/// model, per `NewFindingDto` having no `id` field at all), `prior:` (one
-/// entry per previously-issued finding ID not yet closed).
-#[derive(Debug, Clone, Deserialize)]
-struct VerdictReply {
-    verdict: VerdictKind,
-    #[serde(default)]
-    findings: Vec<NewFindingDto>,
-    #[serde(default)]
-    prior: Vec<PriorUpdateDto>,
-}
 
 /// Why [`run_review_loop`] stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoopDriverStop {
     /// §3.2/§3.5: the reviewer returned `approve`.
     Approve,
-    /// §3.2: "Malformed verdict → retry once with a validation hint → still
-    /// malformed → treat as `blocked`." This module does not yet implement
-    /// the validation-hint retry (out of AC12 scope); an unparseable reply
-    /// is treated as `blocked` directly.
-    Blocked,
+    /// §3.2 / §3.4 (AC5): `role`'s reply was malformed, was re-sent once
+    /// with a validation hint, and was malformed again.
+    Blocked { role: Role },
     /// §3.2: the reviewer returned `blocked` itself.
     ReviewerBlocked,
     /// `.stopped` observed before a send (A4) — see `run_turn_with_retry`.
@@ -67,21 +50,14 @@ pub enum LoopDriverStop {
     Paused { reason: String },
     /// One of the three existing limits tripped (§3.5), via `check_guards`.
     Guard(LoopStop),
+    /// A member's task ended `failed`/`cancelled` (e.g. a tool call the
+    /// HITL gate denied). Reported as itself, never as a malformed verdict:
+    /// the reply was not bad, there was no reply.
+    TaskFailed { member: String, cause: String },
     /// §3.3 round-stuck: the open set (IDs + statuses) was unchanged across
     /// two consecutive rounds (AC9). Runs alongside the duration `stuck`
     /// guard; whichever trips first stops the session (§3.5, Q1).
     RoundStuck,
-}
-
-/// Zero cumulative (§4 requires every turn-ending event to carry one; D3
-/// does not yet wire real execution-time/cost accounting — that is a
-/// separate concern from AC12's own scope, same note as `driver.rs`'s
-/// `write_paused_and_revert`).
-fn zero_cumulative() -> Cumulative {
-    Cumulative {
-        exec_time_ms: 0,
-        cost_usd_micros: 0,
-    }
 }
 
 /// Append one review payload to `channel_id` as the router writer — the
@@ -134,8 +110,6 @@ pub fn run_review_loop(
     // limits). It carries no round, so it never moves a round boundary on
     // replay. The guards below read deadline/stuck back out of `limits`, so
     // the recorded limits are exactly the enforced ones.
-    let deadline = limits.deadline();
-    let stuck = limits.stuck();
     let started = ReviewPayload::SessionStarted {
         members: [main.to_string(), reviewer.to_string()],
         mode,
@@ -143,7 +117,41 @@ pub fn run_review_loop(
     };
     ledger.apply(&started)?;
     append(&svc, mur_home, channel_id, &started)?;
-    let start = now();
+    let mut run = LoopRun {
+        transport,
+        svc,
+        mur_home,
+        fleet_name,
+        channel_id,
+        main,
+        reviewer,
+        task,
+        retry_delay,
+        deadline: limits.deadline(),
+        stuck: limits.stuck(),
+        now,
+        start: now(),
+        last_activity: now(),
+    };
+    run.drive(ledger, 1)
+}
+
+/// One running loop: everything a turn needs, so the per-turn helper does
+/// not take a dozen arguments.
+struct LoopRun<'a> {
+    transport: &'a dyn ReviewTransport,
+    svc: ChannelService,
+    mur_home: &'a Path,
+    fleet_name: &'a str,
+    channel_id: &'a str,
+    main: &'a str,
+    reviewer: &'a str,
+    task: &'a str,
+    retry_delay: Duration,
+    deadline: Duration,
+    stuck: Stuck,
+    now: &'a dyn Fn() -> Instant,
+    start: Instant,
     // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
     // defines stuck as "no agent-authored channel event for the window", so
     // a long turn that DOES come back with a reply is activity, not a stall:
@@ -153,128 +161,169 @@ pub fn run_review_loop(
     // user's deadline is discarded). Known limit: a send that never returns
     // is not preempted (the transport call is blocking); catching that needs
     // a watchdog around the transport, not a post-hoc duration check.
-    let mut last_activity = now();
-    let mut round: u32 = 1;
+    last_activity: Instant,
+}
 
-    loop {
-        // §3.5 limits: deadline/stuck passed in by the caller (production
-        // gets them from `loop_run::fleet_bounds`); checked once per round,
-        // same cadence `loop_run`'s own guarded loop uses.
-        let elapsed = now().saturating_duration_since(start);
-        let stuck_for = now().saturating_duration_since(last_activity);
-        if let Some(stop) = check_guards(round - 1, elapsed, deadline, stuck_for, stuck) {
-            return Ok((ledger, LoopDriverStop::Guard(stop)));
-        }
+/// How one validated turn ended.
+enum Turn<T> {
+    /// The reply validated; `value` is what the validator produced.
+    Accepted { reply: String, value: T },
+    /// The loop must stop here.
+    Stop(LoopDriverStop),
+}
 
-        // Main's turn: produce or revise (§3.1). The content is free text
-        // (§3.1 says nothing about its shape) — only the reviewer's reply is
-        // a structured verdict (§3.2).
-        // From round 2 on, main must see what to answer (§3.3: "For each
-        // open finding the main agent answers accept | reject | partial").
-        let main_params = main_turn_params(task, round, &ledger);
-        let main_reply = match run_turn_with_retry(
-            transport,
-            mur_home,
-            fleet_name,
-            main,
-            &main_params,
-            channel_id,
-            retry_delay,
-        )? {
-            RetryOutcome::Stopped => return Ok((ledger, LoopDriverStop::Stopped)),
-            RetryOutcome::Paused { reason } => {
-                return Ok((ledger, LoopDriverStop::Paused { reason }));
+impl LoopRun<'_> {
+    fn elapsed(&self) -> Duration {
+        (self.now)().saturating_duration_since(self.start)
+    }
+
+    /// The round loop, from `round` on, over an already-folded `ledger`.
+    fn drive(&mut self, mut ledger: Ledger, mut round: u32) -> Result<(Ledger, LoopDriverStop)> {
+        loop {
+            // §3.5 limits, checked once per round — same cadence
+            // `loop_run`'s own guarded loop uses.
+            let stuck_for = (self.now)().saturating_duration_since(self.last_activity);
+            if let Some(stop) = check_guards(
+                round - 1,
+                self.elapsed(),
+                self.deadline,
+                stuck_for,
+                self.stuck,
+            ) {
+                return Ok((ledger, LoopDriverStop::Guard(stop)));
             }
-            RetryOutcome::Sent(reply) => {
-                append_turn_sent(&svc, mur_home, channel_id, round, Role::Main)?;
-                if let Some(stop) = check_guards(
-                    round,
-                    now().saturating_duration_since(start),
-                    deadline,
-                    Duration::ZERO,
-                    Stuck::Off,
-                ) {
-                    return Ok((ledger, LoopDriverStop::Guard(stop)));
+
+            // Main's turn: produce or revise (§3.1). With findings open it
+            // must also answer each one (§3.4), machine-validated like the
+            // verdict; with none open its reply is free text.
+            let params = main_turn_params(self.task, round, &ledger);
+            let open = !ledger.open_set().is_empty();
+            let main_reply = match self.turn(self.main, Role::Main, round, &params, |reply| {
+                if open {
+                    parse_rebuttal(&ledger, round, reply).map(Some)
+                } else {
+                    Ok(None)
                 }
-                reply
-            }
-        };
-
-        // Reviewer's turn, fed main's output.
-        let reviewer_params = reviewer_turn_params(task, round, &main_reply, &ledger);
-        let reviewer_reply = match run_turn_with_retry(
-            transport,
-            mur_home,
-            fleet_name,
-            reviewer,
-            &reviewer_params,
-            channel_id,
-            retry_delay,
-        )? {
-            RetryOutcome::Stopped => return Ok((ledger, LoopDriverStop::Stopped)),
-            RetryOutcome::Paused { reason } => {
-                return Ok((ledger, LoopDriverStop::Paused { reason }));
-            }
-            RetryOutcome::Sent(reply) => {
-                append_turn_sent(&svc, mur_home, channel_id, round, Role::Reviewer)?;
-                if let Some(stop) = check_guards(
-                    round,
-                    now().saturating_duration_since(start),
-                    deadline,
-                    Duration::ZERO,
-                    Stuck::Off,
-                ) {
-                    return Ok((ledger, LoopDriverStop::Guard(stop)));
+            })? {
+                Turn::Stop(stop) => return Ok((ledger, stop)),
+                Turn::Accepted { reply, value } => {
+                    if let Some(rebuttal) = value {
+                        ledger.apply(&rebuttal)?;
+                        self.append(&rebuttal)?;
+                    }
+                    reply
                 }
-                last_activity = now();
-                reply
-            }
-        };
-
-        // Model output is untrusted: build the round's payloads, fold them
-        // into a scratch ledger first, and only sign them into the channel
-        // once the whole round folds cleanly. A reply that cannot be parsed
-        // or that names an unissued finding (§8.2 illegal transition) is
-        // treated as `blocked` instead of poisoning the channel for replay.
-        let staged = extract_verdict_json(&reviewer_reply)
-            .and_then(|json| serde_json::from_str::<VerdictReply>(json).ok())
-            .and_then(|parsed| {
-                let mut scratch = ledger.clone();
-                let payloads = stage_round(&mut scratch, round, &parsed)?;
-                Some((parsed.verdict, scratch, payloads))
-            });
-        let Some((verdict, scratch, payloads)) = staged else {
-            let payload = ReviewPayload::Verdict {
-                round,
-                kind: VerdictKind::Blocked,
-                cumulative: zero_cumulative(),
             };
-            ledger.apply(&payload)?;
-            append(&svc, mur_home, channel_id, &payload)?;
-            ledger.note_round_complete();
-            return Ok((ledger, LoopDriverStop::Blocked));
-        };
-        for payload in &payloads {
-            append(&svc, mur_home, channel_id, payload)?;
-        }
-        ledger = scratch;
-        let parsed_verdict = verdict;
 
-        // The round is fully folded: snapshot its open set (§3.3, AC9).
-        // `ledger::fold_rounds` notes the same boundaries on replay, so the
-        // in-memory ledger stays byte-comparable to the channel (AC11).
-        ledger.note_round_complete();
-
-        match parsed_verdict {
-            VerdictKind::Approve => return Ok((ledger, LoopDriverStop::Approve)),
-            VerdictKind::Blocked => return Ok((ledger, LoopDriverStop::ReviewerBlocked)),
-            VerdictKind::Revise if ledger.round_stuck => {
-                return Ok((ledger, LoopDriverStop::RoundStuck));
+            // Reviewer's turn, fed main's output. Model output is untrusted:
+            // the verdict is folded into a scratch ledger first and signed
+            // only once the whole round folds cleanly, so a bad reply never
+            // poisons the channel for replay.
+            let params = reviewer_turn_params(self.task, round, &main_reply, &ledger);
+            let staged =
+                match self.turn(self.reviewer, Role::Reviewer, round, &params, |reply| {
+                    parse_verdict(&ledger, round, reply)
+                })? {
+                    Turn::Stop(stop) => {
+                        if matches!(stop, LoopDriverStop::Blocked { .. }) {
+                            // §3.2: still malformed → treat as `blocked`.
+                            let payload = ReviewPayload::Verdict {
+                                round,
+                                kind: VerdictKind::Blocked,
+                                cumulative: zero_cumulative(),
+                            };
+                            ledger.apply(&payload)?;
+                            self.append(&payload)?;
+                            ledger.note_round_complete();
+                        }
+                        return Ok((ledger, stop));
+                    }
+                    Turn::Accepted { value, .. } => value,
+                };
+            for payload in &staged.payloads {
+                self.append(payload)?;
             }
-            VerdictKind::Revise => {}
-        }
+            ledger = staged.ledger;
+            // The round is fully folded: snapshot its open set (§3.3, AC9).
+            // `ledger::fold_rounds` notes the same boundaries on replay, so
+            // the in-memory ledger stays byte-comparable to the channel (AC11).
+            ledger.note_round_complete();
 
-        round += 1;
+            match staged.kind {
+                VerdictKind::Approve => return Ok((ledger, LoopDriverStop::Approve)),
+                VerdictKind::Blocked => return Ok((ledger, LoopDriverStop::ReviewerBlocked)),
+                VerdictKind::Revise if ledger.round_stuck => {
+                    return Ok((ledger, LoopDriverStop::RoundStuck));
+                }
+                VerdictKind::Revise => {}
+            }
+            round += 1;
+        }
+    }
+
+    /// Send one turn to `member` and validate the reply. §3.2 / §3.4 (AC5):
+    /// a malformed reply is re-sent [`MALFORMED_RESPONSE_RETRIES`] time(s)
+    /// with a validation hint naming the problem; still malformed →
+    /// [`LoopDriverStop::Blocked`]. Every send goes through
+    /// `run_turn_with_retry`, so the kill-switch check (A4) and the
+    /// transport retry/pause (§8.1) cover the re-send too.
+    fn turn<T>(
+        &mut self,
+        member: &str,
+        role: Role,
+        round: u32,
+        params: &serde_json::Value,
+        validate: impl Fn(&str) -> std::result::Result<T, String>,
+    ) -> Result<Turn<T>> {
+        let base = message_text(params).unwrap_or_default().to_string();
+        let mut outgoing = params.clone();
+        for attempt in 0..=MALFORMED_RESPONSE_RETRIES {
+            let reply = match run_turn_with_retry(
+                self.transport,
+                self.mur_home,
+                self.fleet_name,
+                member,
+                &outgoing,
+                self.channel_id,
+                self.retry_delay,
+            )? {
+                RetryOutcome::Stopped => return Ok(Turn::Stop(LoopDriverStop::Stopped)),
+                RetryOutcome::Paused { reason } => {
+                    return Ok(Turn::Stop(LoopDriverStop::Paused { reason }));
+                }
+                RetryOutcome::TaskFailed(f) => {
+                    return Ok(Turn::Stop(LoopDriverStop::TaskFailed {
+                        member: f.member,
+                        cause: f.cause,
+                    }));
+                }
+                RetryOutcome::Sent(reply) => reply,
+            };
+            append_turn_sent(&self.svc, self.mur_home, self.channel_id, round, role)?;
+            if let Some(stop) = check_guards(
+                round,
+                self.elapsed(),
+                self.deadline,
+                Duration::ZERO,
+                Stuck::Off,
+            ) {
+                return Ok(Turn::Stop(LoopDriverStop::Guard(stop)));
+            }
+            self.last_activity = (self.now)();
+            match validate(&reply) {
+                Ok(value) => return Ok(Turn::Accepted { reply, value }),
+                Err(problem) if attempt < MALFORMED_RESPONSE_RETRIES => {
+                    let hint = REVIEW_VALIDATION_HINT.replace("{problem}", &problem);
+                    outgoing = text_message_params(&format!("{base}{hint}"));
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(Turn::Stop(LoopDriverStop::Blocked { role }))
+    }
+
+    fn append(&self, payload: &ReviewPayload) -> Result<()> {
+        append(&self.svc, self.mur_home, self.channel_id, payload)
     }
 }
 
@@ -296,42 +345,4 @@ fn append_turn_sent(
         restart_note: None,
     };
     append(svc, mur_home, channel_id, &payload)
-}
-
-/// Fold one reviewer reply into `scratch`, returning the payloads in channel
-/// order, or `None` if any of them is an illegal transition.
-fn stage_round(
-    scratch: &mut Ledger,
-    round: u32,
-    parsed: &VerdictReply,
-) -> Option<Vec<ReviewPayload>> {
-    let mut out = Vec::new();
-    let verdict = ReviewPayload::Verdict {
-        round,
-        kind: parsed.verdict,
-        cumulative: zero_cumulative(),
-    };
-    scratch.apply(&verdict).ok()?;
-    out.push(verdict);
-    for f in &parsed.findings {
-        let payload = ReviewPayload::FindingIssued {
-            round,
-            id: scratch.next_finding_id(),
-            severity: f.severity,
-            issue: f.issue.clone(),
-        };
-        scratch.apply(&payload).ok()?;
-        out.push(payload);
-    }
-    for p in &parsed.prior {
-        let payload = ReviewPayload::FindingStatus {
-            round,
-            id: p.id.clone(),
-            status: p.status,
-            reason: p.reason.clone(),
-        };
-        scratch.apply(&payload).ok()?;
-        out.push(payload);
-    }
-    Some(out)
 }

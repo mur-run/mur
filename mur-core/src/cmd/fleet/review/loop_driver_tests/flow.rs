@@ -140,7 +140,8 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         "prior": [{"id": "F99", "status": "resolved"}],
     })
     .to_string();
-    let transport = StubLoopTransport::new(vec![], vec![&bad]);
+    // §3.2: malformed twice (retry once with a hint) → blocked.
+    let transport = StubLoopTransport::new(vec![], vec![&bad, &bad]);
 
     let (ledger, stop) = run_review_loop(
         &transport,
@@ -156,7 +157,12 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         &Instant::now,
     )
     .unwrap();
-    assert_eq!(stop, LoopDriverStop::Blocked);
+    assert_eq!(
+        stop,
+        LoopDriverStop::Blocked {
+            role: Role::Reviewer
+        }
+    );
 
     let payloads = read_payloads(home, &channel_id);
     assert!(
@@ -191,4 +197,52 @@ fn fenced_verdict_inside_prose_is_accepted() {
     )
     .unwrap();
     assert_eq!(stop, LoopDriverStop::Approve);
+}
+
+/// A reviewer whose task fails ends the loop as `TaskFailed`, not
+/// `Blocked` — and no verdict is signed for a reply that never existed.
+#[test]
+fn reviewer_task_failure_stops_as_task_failed_not_blocked() {
+    struct FailingReviewer;
+    impl ReviewTransport for FailingReviewer {
+        fn send(&self, member: &str, _p: &serde_json::Value) -> anyhow::Result<String> {
+            match member {
+                "main" => Ok("draft".into()),
+                _ => Err(crate::cmd::fleet::review::driver::TaskFailed {
+                    member: member.into(),
+                    cause: "tool call denied: timed out".into(),
+                }
+                .into()),
+            }
+        }
+    }
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let (_ledger, stop) = run_review_loop(
+        &FailingReviewer,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        "task",
+        Mode::SemiAuto,
+        Duration::ZERO,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        &Instant::now,
+    )
+    .unwrap();
+    assert_eq!(
+        stop,
+        LoopDriverStop::TaskFailed {
+            member: "reviewer".into(),
+            cause: "tool call denied: timed out".into(),
+        }
+    );
+    assert!(
+        read_payloads(home, &channel_id)
+            .iter()
+            .all(|p| !matches!(p, ReviewPayload::Verdict { .. })),
+        "no verdict may be recorded for a turn that produced none"
+    );
 }

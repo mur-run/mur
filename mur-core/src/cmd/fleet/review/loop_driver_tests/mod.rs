@@ -6,6 +6,7 @@
 mod channel;
 mod flow;
 mod guards;
+mod malformed;
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -23,6 +24,28 @@ use super::schema::{
     Mode, NoteClassification, ReviewPayload, Role, SessionLimits, classify_note_payload,
 };
 use crate::cmd::fleet::loop_run::LoopStop;
+
+/// A main reply as a well-behaved main agent would send it: `text`, plus —
+/// when the prompt lists open findings (`- F<n> [...`) — a §3.4 rebuttal
+/// accepting every one of them.
+fn with_accept_all(text: &str, params: &serde_json::Value) -> String {
+    let prompt = super::wire::message_text(params).unwrap_or_default();
+    let responses: Vec<serde_json::Value> = prompt
+        .lines()
+        .filter_map(|l| l.strip_prefix("- "))
+        .filter_map(|l| l.split_once(" ["))
+        .map(|(id, _)| id)
+        .filter(|id| id.starts_with('F'))
+        .map(|id| serde_json::json!({"id": id, "answer": "accept"}))
+        .collect();
+    if responses.is_empty() {
+        return text.to_string();
+    }
+    format!(
+        "{text}\n```json\n{}\n```",
+        serde_json::json!({ "responses": responses })
+    )
+}
 
 /// Test-only transport: counts sends PER MEMBER and returns the next queued
 /// reply for that member. Mirrors `driver_tests.rs`'s `StubTransport`, but
@@ -65,16 +88,17 @@ impl StubLoopTransport {
 }
 
 impl ReviewTransport for StubLoopTransport {
-    fn send(&self, member: &str, _params: &serde_json::Value) -> anyhow::Result<String> {
+    fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
         match member {
             "main" => {
                 self.main_sends.fetch_add(1, Ordering::SeqCst);
-                Ok(self
+                let text = self
                     .main_replies
                     .lock()
                     .unwrap()
                     .pop()
-                    .unwrap_or_else(|| "ok".to_string()))
+                    .unwrap_or_else(|| "ok".to_string());
+                Ok(with_accept_all(&text, params))
             }
             "reviewer" => {
                 self.reviewer_sends.fetch_add(1, Ordering::SeqCst);
@@ -103,9 +127,9 @@ struct StubClockTransport {
 }
 
 impl ReviewTransport for StubClockTransport {
-    fn send(&self, member: &str, _params: &serde_json::Value) -> anyhow::Result<String> {
+    fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
         match member {
-            "main" => Ok(self.main_reply.clone()),
+            "main" => Ok(with_accept_all(&self.main_reply, params)),
             "reviewer" => {
                 self.clock.set(self.clock.get() + self.jump);
                 Ok(self.reviewer_reply.clone())

@@ -33,8 +33,13 @@ pub const REJECT_ESCALATION_THRESHOLD: u32 = 2;
 
 /// §3.2 / §3.4: a malformed verdict or rebuttal gets this many retries
 /// (with a validation hint) before the system treats it as `blocked`.
-#[allow(dead_code)] // not wired yet: §3.2 validation-hint retry
 pub const MALFORMED_RESPONSE_RETRIES: u32 = 1;
+
+/// §3.2 / §3.4: the validation hint appended to a re-sent turn after a
+/// malformed reply. Placeholder: `{problem}` (the validator's one-line reason).
+pub const REVIEW_VALIDATION_HINT: &str = "
+
+Your previous reply could not be accepted: {problem}. Reply again, ending with exactly one fenced ```json block of the required shape.";
 
 /// §8.2 "Restarting round N+1" — the fixed plain-text note prepended to
 /// every A2A request of the restarted round, verbatim (AC11e: a grep must
@@ -69,7 +74,9 @@ Task:
 Open review findings from the reviewer:
 {open_findings}
 
-Do the task, or revise your previous work to address the open findings. For each open finding, say whether you accept, reject, or partially accept it, and give a reason for reject or partial. Then summarise what you changed.";
+Do the task, or revise your previous work to address the open findings, then summarise what you changed. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
+{\"responses\": [{\"id\": \"F1\", \"answer\": \"accept\" | \"reject\" | \"partial\", \"reason\": \"...\"}]}
+A reason is required for reject and partial.";
 
 /// §3.2: the reviewer's turn prompt. Placeholders: `{task}`, `{round}`,
 /// `{main_reply}`, `{open_findings}`. It pins the verdict wire shape and

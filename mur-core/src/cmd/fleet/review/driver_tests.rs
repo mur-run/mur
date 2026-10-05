@@ -327,3 +327,77 @@ fn declined_gate_sends_nothing() {
     assert_eq!(out, TurnOutcome::Stopped);
     assert_eq!(transport.0.load(Ordering::SeqCst), 0);
 }
+
+/// A failed task (the runtime's `hitl_denied` arrives this way: a
+/// successful JSON-RPC result whose task `state` is `failed`) is an error
+/// carrying the cause — never an empty reply that later parses as a
+/// malformed verdict.
+#[test]
+fn a_failed_task_is_task_failed_not_an_empty_reply() {
+    let task = serde_json::json!({
+        "id": "t",
+        "state": "failed",
+        "error": {"code": "hitl_denied", "message": "tool call denied: timed out"},
+        "messages": [],
+    });
+    let err = super::driver::task_reply("qa", &task, String::new()).unwrap_err();
+    let failed = err
+        .downcast_ref::<super::driver::TaskFailed>()
+        .expect("typed TaskFailed");
+    assert_eq!(failed.member, "qa");
+    assert_eq!(failed.cause, "tool call denied: timed out");
+}
+
+/// A completed task still yields its reply (no regression on the happy path).
+#[test]
+fn a_completed_task_yields_its_reply() {
+    let task = serde_json::json!({
+        "id": "t",
+        "state": "completed",
+        "messages": [{"role": "agent", "parts": [{"text": "verdict here"}]}],
+    });
+    let reply = super::driver::task_reply("qa", &task, String::new()).unwrap();
+    assert_eq!(reply, "verdict here");
+}
+
+/// A failed task is an answer from a live agent, not a transport fault: it
+/// is NOT retried (one send) and writes no `paused` event.
+#[test]
+fn a_failed_task_is_not_retried_and_does_not_pause() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let transport = StubTransport::queue(vec![Err(super::driver::TaskFailed {
+        member: "reviewer".into(),
+        cause: "tool call denied: timed out".into(),
+    }
+    .into())]);
+
+    let outcome = run_turn_with_retry(
+        &transport,
+        home,
+        "review-x",
+        "reviewer",
+        &serde_json::json!({}),
+        &channel_id,
+        Duration::ZERO,
+    )
+    .unwrap();
+
+    assert_eq!(
+        transport.send_count(),
+        1,
+        "a failed task must not be re-sent"
+    );
+    assert!(
+        matches!(&outcome, RetryOutcome::TaskFailed(f) if f.cause.contains("denied")),
+        "got {outcome:?}"
+    );
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let paused = svc.load_events(&channel_id).unwrap().iter().any(|ev| {
+        matches!(
+            classify_note_payload(&ev.payload),
+            NoteClassification::Review(env) if matches!(env.payload, ReviewPayload::Paused { .. })
+        )
+    });
+    assert!(!paused, "a failed task is not a transport pause");
+}

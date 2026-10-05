@@ -38,13 +38,48 @@ pub trait ReviewTransport {
     }
 }
 
+/// A member's turn ended with its task `failed` or `cancelled` — a real
+/// answer from a live agent, not a transport fault. Distinct from a send
+/// error so [`run_turn_with_retry`] does not re-run the whole turn (and so
+/// the stop screen does not report it as a malformed verdict). The runtime
+/// returns such a task as a *successful* JSON-RPC result; this is where it
+/// becomes an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskFailed {
+    pub member: String,
+    pub cause: String,
+}
+
+impl std::fmt::Display for TaskFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} task failed: {}", self.member, self.cause)
+    }
+}
+
+impl std::error::Error for TaskFailed {}
+
+/// Answers a tool-approval (HITL) request raised inside a member's turn:
+/// `(member, request) -> allow`. The request is the runtime's raw
+/// `tool/hitl_request` params (`hitl_id`, `tool_name`, `tool_input`, …).
+pub type HitlDecider<'a> = &'a dyn Fn(&str, &serde_json::Value) -> bool;
+
 /// Real transport: wraps [`crate::a2a_dial::dial_message_streaming`]
 /// unchanged (A2). Accumulates only non-thinking deltas as the reply text,
 /// the same pattern `loop_run::synth::ask_router_done` already uses for a
 /// one-shot streamed reply.
+///
+/// Every HITL request is answered through `decide` (§9: "the HITL gate
+/// inside each member's turn is unchanged" — it still gates; this only
+/// makes sure the question reaches someone). Dropping the request, as this
+/// transport once did, left the runtime waiting until its own timeout and
+/// denied every gated tool call.
 pub struct A2aTransport<'a> {
     pub mur_home: &'a Path,
+    pub decide: HitlDecider<'a>,
 }
+
+/// Audit attribution for an answer given at the review session's terminal.
+const HITL_SURFACE: &str = "cli";
 
 impl ReviewTransport for A2aTransport<'_> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
@@ -58,18 +93,54 @@ impl ReviewTransport for A2aTransport<'_> {
                     streamed.push_str(delta);
                 }
             },
-            |_hitl| {},
+            |hitl| {
+                let id = hitl
+                    .get("hitl_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let allow = (self.decide)(member, &hitl);
+                if let Err(e) = crate::a2a_dial::dial_method(
+                    self.mur_home,
+                    member,
+                    "tool/hitl_respond",
+                    crate::cmd::agent::cli::stream::hitl_respond_params(
+                        self.mur_home,
+                        id,
+                        allow,
+                        HITL_SURFACE,
+                    ),
+                    crate::a2a_dial::DialMode::RequireRunning,
+                ) {
+                    tracing::warn!(member, error = %e, "could not deliver the HITL answer");
+                }
+            },
             |_step| {},
         )?;
-        // Same fallback `loop_run::synth` uses: prefer the task's final
-        // reply, and use the streamed deltas only when it is empty.
-        let final_reply = crate::cmd::fleet::loop_run::synth::extract_task_reply(&task);
-        Ok(if final_reply.trim().is_empty() {
-            streamed
-        } else {
-            final_reply
-        })
+        task_reply(member, &task, streamed)
     }
+}
+
+/// A failed/cancelled task becomes [`TaskFailed`]; otherwise the task's
+/// final reply, falling back to the streamed deltas when it is empty (the
+/// same fallback `loop_run::synth` uses).
+pub(super) fn task_reply(
+    member: &str,
+    task: &serde_json::Value,
+    streamed: String,
+) -> Result<String> {
+    if let Err(cause) = crate::cmd::agent::cli::stream::task_outcome(task) {
+        return Err(TaskFailed {
+            member: member.to_string(),
+            cause,
+        }
+        .into());
+    }
+    let final_reply = crate::cmd::fleet::loop_run::synth::extract_task_reply(task);
+    Ok(if final_reply.trim().is_empty() {
+        streamed
+    } else {
+        final_reply
+    })
 }
 
 /// Outcome of one [`run_turn`] call.
@@ -114,6 +185,9 @@ pub enum RetryOutcome {
     /// a signed `paused` event (with `reason`) and a `mode_changed` event
     /// reverting to semi-auto were written to `channel_id`.
     Paused { reason: String },
+    /// The member answered, but its task ended `failed`/`cancelled`. Not
+    /// retried: the send worked, and re-running a turn is not free.
+    TaskFailed(TaskFailed),
 }
 
 /// §8.1 / AC14: "A2A send failure or peer offline → one retry after a
@@ -140,7 +214,11 @@ pub fn run_turn_with_retry(
     match run_turn(transport, mur_home, fleet_name, member, params) {
         Ok(TurnOutcome::Stopped) => return Ok(RetryOutcome::Stopped),
         Ok(TurnOutcome::Sent(reply)) => return Ok(RetryOutcome::Sent(reply)),
-        Err(_first_err) => {}
+        Err(first_err) => {
+            if let Some(failed) = first_err.downcast_ref::<TaskFailed>() {
+                return Ok(RetryOutcome::TaskFailed(failed.clone()));
+            }
+        }
     }
 
     std::thread::sleep(retry_delay);
@@ -149,6 +227,9 @@ pub fn run_turn_with_retry(
         Ok(TurnOutcome::Stopped) => Ok(RetryOutcome::Stopped),
         Ok(TurnOutcome::Sent(reply)) => Ok(RetryOutcome::Sent(reply)),
         Err(second_err) => {
+            if let Some(failed) = second_err.downcast_ref::<TaskFailed>() {
+                return Ok(RetryOutcome::TaskFailed(failed.clone()));
+            }
             let reason = format!("transport failure after one retry: {second_err}");
             write_paused_and_revert(mur_home, channel_id, &reason)?;
             Ok(RetryOutcome::Paused { reason })

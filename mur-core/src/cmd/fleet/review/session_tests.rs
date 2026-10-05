@@ -195,3 +195,16 @@ fn preflight_names_every_member_that_is_not_running() {
     assert!(!err.contains("'main'"), "{err}");
     assert!(err.contains("mur agent start qa"), "{err}");
 }
+
+/// The stop screen names a failed member task as such, not as a
+/// malformed verdict (the run-3 symptom: `blocked (malformed verdict)`
+/// over an empty reviewer reply after `hitl_denied`).
+#[test]
+fn task_failed_stop_reason_names_member_and_cause() {
+    let got = stop_reason(&LoopDriverStop::TaskFailed {
+        member: "qa".into(),
+        cause: "tool call denied: timed out".into(),
+    });
+    assert_eq!(got, "qa task failed: tool call denied: timed out");
+    assert!(!got.contains("malformed"));
+}
