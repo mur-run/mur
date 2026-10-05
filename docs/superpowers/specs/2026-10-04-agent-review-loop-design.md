@@ -166,6 +166,26 @@ The wire encoding (fenced JSON vs. tool call vs. A2A data part) is left to the b
   finding does not block `approve`, but it is listed first in the human summary.
 - Every ledger mutation is a signed channel event (§4). The ledger is a pure fold over those events.
 
+### 3.3.1 Round sealing (round 3 decided)
+
+A round is written as **several signed events, appended one at a time**. There is no batch append,
+and the round is **not** one atomic channel entry. Crash safety therefore comes from the replay
+rule, not from the write:
+
+- **Append order is fixed:** `rebuttal` (if any) → every `finding_issued` → every
+  `finding_status` → `verdict` **last**. The `verdict` event is the round's **seal**. (Before
+  round 3 the driver appended `verdict` *before* the findings. That order is changed here. The
+  branch is unreleased, so no retained channel uses the old order.)
+- **Replay rule:** a round counts only if its `verdict` is present. When the log ends inside an
+  unsealed round, every event of that trailing round (`rebuttal`, `finding_issued`,
+  `finding_status`) is **dropped from the ledger fold**. In particular, a dropped `rebuttal` does
+  not increment `reject_count`, so a crash between appends can never count one reject twice
+  (AC8). On resume the driver re-runs that round from the main turn.
+- **Limits stay monotonic:** dropping an unsealed round's events drops their *ledger* effect only.
+  The `cumulative` execution time and cost they carry are still adopted as a lower bound, the
+  same fail-closed rule as §8.2 *Limits on rollback*.
+- `turn_sent` events are informational and never affect the fold, sealed or not.
+
 ### 3.4 Main-agent rebuttal
 
 - For each open finding the main agent answers `accept | reject | partial`, and a `reason` is
@@ -264,6 +284,66 @@ If the second Esc arrives within the window, the abort supersedes the pause requ
 - On reopen, MURMUR shows `Paused — continue?` and resumes only on explicit confirmation. Resume
   rebuilds state from the channel, and paused time does not count toward `deadline`. If the rebuild
   is incomplete, MURMUR shows the §8.2 prompt instead.
+- **Resume command:** `mur fleet review-resume <session>` resumes a paused or crashed session from
+  a terminal. It needs a TTY, like `mur fleet review`.
+
+### 7.0 Session states (round 3 decided)
+
+**Concurrency.** Every `mur fleet review` starts an **independent** session named
+`review-<id>`. A paused session does not queue, block, or absorb a later review. Session B can run
+while session A is paused, and resuming A continues only A's round.
+
+**Pause is not stop.** Their outcomes differ, not only who triggered them:
+
+| Ends by | `session_stopped` written | Fleet definition | Resumable | Stop screen prints `Resume with:` |
+|---|---|---|---|---|
+| **Pause:** transport failure after retry (§8.1), `q` at the pause prompt, MURMUR closed/disconnected | no | kept | yes | yes |
+| **Stop:** `approve`, `blocked`, escalation, a limit, `mur fleet stop`, `replay_failed`, a driver error | yes | removed | no | no |
+| **Crash:** process killed (SIGKILL, power loss) with no `paused` event | no | kept | yes (see *Crashed*) | — |
+
+**Run lock.** While a driver runs a session it holds an **exclusive OS advisory lock**
+(`flock`, via the existing `fs2` dependency) on `driver.lock` in the session's channel directory,
+for the whole life of the driver. The kernel releases the lock when the process exits for any
+reason, including SIGKILL. Liveness is decided **only** by whether the lock can be acquired, never
+by a stored pid:
+
+- This makes pid reuse irrelevant. A new process that happens to get the dead driver's pid does
+  not hold the lock, so the session is correctly seen as not running.
+- The file body records `pid`, the process start time, and the host name. These are **for display
+  only** (e.g. "running in pid 4123 since 10:02"). They are never used to decide liveness.
+- The name `driver.lock` is distinct from the per-agent `running.lock` (`RUNNING_LOCK`), which
+  means something else.
+- Limitation: advisory locks are unreliable on some network filesystems. `~/.mur` is assumed to be
+  local, as elsewhere in MUR.
+
+**Derived state.** State is derived, never stored as a flag:
+
+| State | Lock | Fleet definition | Last review event |
+|---|---|---|---|
+| running | held | present | any |
+| paused | free | present | `paused` |
+| crashed | free | present | anything except `paused` / `session_stopped` |
+| stopped | free | absent | `session_stopped` |
+| corrupted | free | either | `corrupted` marker (§8.2) |
+| orphaned | free | absent | anything except `session_stopped` / marker |
+
+`orphaned` only arises from sessions removed by `mur fleet delete` in pre-release builds before round 3 (see §7.1). It is kept so the classification is exhaustive: without it, "definition gone, no `session_stopped`, no marker" would fall through to Keep and never be collected. The cost is one row here and one in §7.1.
+
+**Crashed → resume.** `review-resume` treats a crashed session like a paused one, with these
+differences. **Depends on §3.3.1**, so the two must not be built separately or in the other
+order: without the sealing rule, resuming a crash can count a reject twice.
+
+- It resumes at the round after the **last sealed round** (§3.3.1). The unsealed trailing round is
+  re-run from the main turn.
+- It first appends a signed `paused` event with reason `crashed`, then `resumed`, so the channel
+  records the crash.
+- Execution time counts up to the **last readable event** before the crash. The gap from that event
+  to the resume is not counted. The time and cost of a turn that was in flight when the process
+  died were never recorded and cannot be recovered. The resume screen says so in one line.
+  This is not a fail-open exception to §8.2: the crash gap is known to contain no work, not
+  unverified data. A lock-file mtime is not used as a bound, because `flock` does not touch it and
+  the file is written once at driver start.
+- Mode reverts to semi-auto. Auto needs fresh consent.
 
 ### 7.1 Naming, visibility, retention (Q6 decided)
 
@@ -271,7 +351,11 @@ If the second Esc arrives within the window, the abort supersedes the pause requ
   prefix reliably identifies a review session.
 - **Visibility:** review-session fleets are **hidden from `mur fleet list` by default**. A flag
   (name left to the builder, e.g. `--all` / `--include-review`) shows them.
-- **Fleet definition:** removed at session end (A1).
+- **Fleet definition:** removed at session **stop** (A1). It is kept on pause and on crash so the
+  session can be resumed (§7.0).
+- **`mur fleet delete review-…`:** refused while the run lock is held. Otherwise it first appends
+  a signed `session_stopped` with reason `deleted`, then removes the definition. The session then
+  becomes an ordinary `stopped` prune candidate.
 - **Channel:** retained as an audit record. **No automatic GC.** This follows the repo convention
   for monitors (CLAUDE.md: "There is no automatic GC: `prune --older-than` only takes stopped
   monitors"; `cmd/monitor/prune.rs`).
@@ -279,9 +363,29 @@ If the second Esc arrives within the window, the abort supersedes the pause requ
   review channels whose last activity is older than `--older-than <DURATION>`, parsed with the
   existing `limits::parse_duration`. **`--older-than` is required (P2 decided)**, with no default,
   matching `mur monitor prune`. `30d` appears only as an example in the help text. Either
-  way, **it never runs on a timer.** It **never** prunes a session that is running or paused.
-  Only sessions with a `session_stopped` event, or sessions marked corrupted (§8.2), are
-  candidates. It supports `--dry-run`, as `monitor prune` does.
+  way, **it never runs on a timer.** It supports `--dry-run`, as `monitor prune` does.
+  Command: `mur fleet prune-reviews --older-than <DURATION> [--include-paused] [--dry-run]`.
+- **Candidates** (states from §7.0; age = last readable channel event, or the marker's
+  `detected_at` for corrupted, whichever is later):
+
+  | State | Default | `--include-paused` |
+  |---|---|---|
+  | running (lock held) | never | never |
+  | stopped | candidate | candidate |
+  | corrupted, marker readable | candidate | candidate |
+  | corrupted, marker unreadable | listed by path, skipped | listed by path, skipped |
+  | orphaned | candidate | candidate |
+  | paused | kept | candidate |
+  | crashed | kept | candidate |
+
+  Paused and crashed sessions are excluded by default because a paused session may be kept on
+  purpose. `--include-paused` together with `--older-than` is the only way to clear them, and is
+  the exit for dead sessions whose definition would otherwise never go away. There is no
+  per-name `--force`: removing one named session is `mur fleet delete`.
+- **Removal order is crash-safe.** For a paused or crashed candidate, prune takes the run lock,
+  appends `session_stopped` with reason `pruned`, removes the definition, then erases the channel.
+  If prune itself dies midway, the session is left `stopped`, which the next default prune removes.
+  If the run lock cannot be taken, the session is running and is skipped.
 
 ## 8. Error handling
 
@@ -409,6 +513,22 @@ Outcomes:
   available for investigation. A corrupted session is not resumable, and it can only be removed by
   the manual prune (§7.1).
 
+**Interim behaviour until the §8.2 prompt ships (AC11a–g).** In the current build,
+`mur fleet review-resume` on a damaged channel refuses and names the first damaged line number
+and the reason. It offers no Continue/Abandon choice. The way out, which the refusal message
+states, is:
+
+```
+Channel damaged at line <N>: <reason>. This session cannot be resumed yet
+(Continue/Abandon is not built). Remove it with: mur fleet delete <name>
+Then start a new session with: mur fleet review ...
+```
+
+**Depends on §7.1** (`fleet delete` writes `session_stopped` with reason `deleted`). Without it
+the deleted session would be `orphaned`, which prune only takes because of the §7.0 orphaned rule,
+and the message must not be shipped before that delete behaviour exists. User docs (README, docs
+site) carry the same two lines.
+
 ### 8.3 Stop screen
 
 - The **stop screen** shows the stop reason (`approve` / `blocked` / `escalation` / which limit,
@@ -442,6 +562,14 @@ Outcomes:
 **State machine (unit, fake transport)**
 - AC1: approve path terminates with reason `approve`. Revise path loops. Blocked terminates with `blocked`.
 - AC2: paused → resumed continues at the same round with the same ledger.
+- AC2a (unsealed round, §3.3.1): given a log whose last round has `rebuttal` with `reject` for F1
+  appended but no `verdict`, replay yields `reject_count(F1)` equal to the value before that round,
+  and no `escalation`. Resuming re-runs that round from the main turn. After a second `reject` of
+  F1 is sealed, exactly one `escalation` exists (AC8 counted once, not twice). The same holds when
+  the log ends after some `finding_issued` / `finding_status` events but before `verdict`: none of
+  them is in the ledger. A test also asserts the live append order ends with `verdict`.
+- AC2b (unsealed round, limits): in the AC2a log, the execution time and cost carried by the
+  dropped events are still adopted as a lower bound (they never decrease on resume).
 - AC3: each of `deadline`, `cost_usd`, `stuck: no activity` (duration), and `stuck: open set
   unchanged` (round) trips and stops with that limit and detector named. When both stuck conditions
   are armed, the first to trip wins, and setting `limits.stuck` to off disables only the duration
@@ -517,6 +645,23 @@ Outcomes:
 - AC15b: prune with `--older-than` removes only stopped or corrupted review channels older than the
   cutoff. A running or paused session older than the cutoff is **not** removed. `--dry-run` erases
   nothing. No background or timed prune exists.
+- AC15c (crashed, §7.0): a driver killed with SIGKILL mid-round leaves the session `crashed`
+  (lock free, definition present, no `paused`). `review-resume` accepts it, appends `paused`
+  (reason `crashed`) then `resumed`, continues at the round after the last sealed round, and starts
+  in semi-auto. While a driver holds the lock, `review-resume` refuses with "running". A test
+  holds the lock from another process with a different pid and shows the decision does not read
+  the stored pid (pid reuse cannot fake liveness).
+- AC15d (`--include-paused`, §7.1): with sessions in every §7.0 state, all older than the cutoff,
+  default prune removes exactly stopped, readable-marker corrupted and orphaned. With
+  `--include-paused` it also removes paused and crashed, each first gaining `session_stopped`
+  (reason `pruned`). A running session (lock held) is removed in neither case. A paused session
+  newer than the cutoff is kept with the flag. `--dry-run` lists the same set and erases nothing.
+- AC15e (`fleet delete`, §7.1): `mur fleet delete review-x` on a paused session appends
+  `session_stopped` (reason `deleted`) before removing the definition, and the next default prune
+  removes it. With the lock held it refuses. Deleting a non-review fleet is unchanged.
+- AC15f (damaged channel, interim §8.2): `review-resume` on a damaged channel refuses, names the
+  line and reason, and prints the `mur fleet delete` exit. Following it, then running default
+  prune past the cutoff, removes the session.
 
 **Manual (MURMUR) — QA script**
 - AC16: the countdown shows the configured value and refuses < 1.5 s. Any key reverts to semi-auto.
@@ -540,7 +685,7 @@ Outcomes:
 ## 12. Verification plan
 
 As in the approved summary. It maps to AC1–AC11c (unit, including AC6a as a regression),
-AC12–AC15b (integration) and AC16–AC21
+AC2a–AC2b (unit), AC12–AC15f (integration) and AC16–AC21
 (manual). Lint per CLAUDE.md: `cargo clippy --all --all-targets --no-deps --locked -- -D warnings`
 and `cargo fmt --all -- --check`.
 
@@ -605,10 +750,27 @@ and `cargo fmt --all -- --check`.
   - *Restart of round N+1 with no new protocol fields.* A fixed restart note is stored as a named
     constant, and the prompt warns about the workspace. → AC11e.
 
+### 14.3 Decided in round 3 (human, after QA round 1)
+
+- **Round sealing: replay rule, not schema.** Option (a), a single `round_closed` event, was
+  rejected because it changes the event schema. Option (b) was chosen: `verdict` is appended last
+  and seals the round, and an unsealed trailing round is dropped from the fold. → §3.3.1, AC2a–b.
+- **Pause ≠ stop.** Pause keeps the definition and writes no `session_stopped`. Stop removes it and
+  writes one. Each `mur fleet review` is an independent session, so there is no queue. → §7.0.
+- **Liveness by OS lock, not pid.** This rules out pid-reuse false positives. → §7.0, AC15c.
+- **Crashed sessions are resumable.** This depends on §3.3.1. → §7.0, AC15c.
+- **Prune exit for dead sessions: `--include-paused`, gated by `--older-than`.** `--force <name>`
+  was rejected because it duplicates `mur fleet delete`. → §7.1, AC15d.
+- **`fleet delete review-…` writes `session_stopped`.** → §7.1, AC15e.
+- **Interim exit for a damaged channel until AC11.** → §8.2, AC15f.
+- **Crash gap is not charged to the deadline.** Time counts to the last readable event; the
+  gap holds no work. Lock-file mtime and a heartbeat were rejected. → §7.0.
+- **`orphaned` stays** so prune's classification is exhaustive. → §7.0, §7.1.
+
 ## 15. Hand-off (after AC0)
 
 1. **Coding agent** builds §3–§8 against §11, including the additive `mur-channel` read API
-   (P4). Done = AC1–AC15b green (including AC6a and AC11a–g), AC22 satisfied, clippy/fmt clean.
+   (P4). Done = AC1–AC15f green (including AC2a–b, AC6a and AC11a–g), AC22 satisfied, clippy/fmt clean.
 2. **QA** runs AC1–AC21. AC16–AC21 are run manually in MURMUR, with real output recorded. For
    AC11a–g, QA also hand-corrupts a real retained channel (truncate, flip a signature byte) and
    confirms the prompts in §8.2, including the lower-bound limits, the workspace warning, and the
