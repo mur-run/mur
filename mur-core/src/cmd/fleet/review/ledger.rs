@@ -105,6 +105,15 @@ impl Ledger {
             .collect()
     }
 
+    /// High-severity findings still `open` (not disputed). They do not
+    /// block `approve` (§3.3) but are called out on the stop screen (#1721).
+    pub fn open_high_severity(&self) -> Vec<&Finding> {
+        self.findings
+            .iter()
+            .filter(|f| f.status == FindingStatus::Open && f.severity == Severity::High)
+            .collect()
+    }
+
     /// §3.3: "A medium/low `disputed` finding does not block `approve`, but
     /// it is listed first in the human summary." Used by the stop screen
     /// (§8.3, AC10, AC13).

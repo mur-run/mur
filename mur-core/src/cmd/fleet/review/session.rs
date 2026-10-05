@@ -21,7 +21,8 @@ use mur_common::fleet::Fleet;
 use mur_common::limits::Stuck;
 
 use super::constants::{
-    FLEET_CHANNEL_PREFIX, REVIEW_FLEET_PREFIX, RUNNING_LOCK, TRANSPORT_RETRY_DELAY,
+    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX, RUNNING_LOCK,
+    TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport};
 use super::ledger::Ledger;
@@ -161,10 +162,24 @@ pub(super) fn append_session_stopped(
 }
 
 /// §8.3 stop screen: reason plus every unresolved finding; after an approve,
-/// disputed medium/low findings come first.
+/// open high findings are warned about first (#1721) and disputed
+/// medium/low findings come first in the list.
 pub fn render_stop_screen(stop: &LoopDriverStop, ledger: &Ledger, channel_id: &str) -> String {
     let mut out = format!("Review stopped: {}\n", stop_reason(stop));
     let after_approve = matches!(stop, LoopDriverStop::Approve);
+    if after_approve {
+        let open_high: Vec<&str> = ledger
+            .open_high_severity()
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect();
+        if !open_high.is_empty() {
+            out.push_str(&format!(
+                "{OPEN_HIGH_APPROVE_WARNING} {}\n",
+                open_high.join(", ")
+            ));
+        }
+    }
     let findings = ledger.stop_screen_findings(after_approve);
     if findings.is_empty() {
         out.push_str("No unresolved findings.\n");

@@ -155,6 +155,63 @@ fn stop_screen_lists_reason_and_unresolved_findings() {
     assert!(screen.contains("Channel kept for audit: ch-1"));
 }
 
+/// Ledger with F1 (high, open) and F2 (low, open), both issued in round 1.
+fn ledger_with_open_high() -> Ledger {
+    use crate::cmd::fleet::review::schema::Severity;
+    let mut ledger = Ledger::default();
+    for (id, severity) in [("F1", Severity::High), ("F2", Severity::Low)] {
+        ledger
+            .apply(&ReviewPayload::FindingIssued {
+                round: 1,
+                id: id.into(),
+                severity,
+                issue: format!("{id} issue"),
+            })
+            .unwrap();
+    }
+    ledger
+}
+
+/// #1721 default (option B): an approve over an open high finding leads
+/// the stop screen with a warning naming those IDs.
+#[test]
+fn approve_with_open_high_finding_leads_with_a_warning() {
+    let screen = render_stop_screen(&LoopDriverStop::Approve, &ledger_with_open_high(), "ch-1");
+    let warn = screen
+        .find(OPEN_HIGH_APPROVE_WARNING)
+        .unwrap_or_else(|| panic!("missing warning:\n{screen}"));
+    let warn_line = screen[warn..].lines().next().unwrap();
+    assert!(warn_line.contains("F1"), "{warn_line}");
+    assert!(!warn_line.contains("F2"), "low finding named: {warn_line}");
+    assert!(
+        warn < screen.find("Unresolved findings:").unwrap(),
+        "warning must precede the list:\n{screen}"
+    );
+}
+
+#[test]
+fn open_high_warning_only_on_approve() {
+    let ledger = ledger_with_open_high();
+    let screen = render_stop_screen(&LoopDriverStop::Guard(LoopStop::Deadline), &ledger, "ch-1");
+    assert!(!screen.contains(OPEN_HIGH_APPROVE_WARNING), "{screen}");
+}
+
+#[test]
+fn approve_without_open_high_has_no_warning() {
+    use crate::cmd::fleet::review::schema::Severity;
+    let mut ledger = Ledger::default();
+    ledger
+        .apply(&ReviewPayload::FindingIssued {
+            round: 1,
+            id: "F1".into(),
+            severity: Severity::Medium,
+            issue: "medium".into(),
+        })
+        .unwrap();
+    let screen = render_stop_screen(&LoopDriverStop::Approve, &ledger, "ch-1");
+    assert!(!screen.contains(OPEN_HIGH_APPROVE_WARNING), "{screen}");
+}
+
 #[test]
 fn stop_reasons_name_the_limit() {
     assert_eq!(

@@ -9,6 +9,10 @@ use std::time::Duration;
 /// reliably distinguishes a review session from an ordinary one.
 pub const REVIEW_FLEET_PREFIX: &str = "review-";
 
+/// Stop-screen warning prefix when `approve` ends a session while a high
+/// finding is still `open` (#1721, option B: warn, do not block).
+pub const OPEN_HIGH_APPROVE_WARNING: &str = "WARNING: approved with open high-severity findings:";
+
 /// §5: default countdown before an auto-mode send goes out. Any key during
 /// the countdown drops back to semi-auto.
 #[allow(dead_code)] // not wired yet: §5 auto mode (MURMUR)

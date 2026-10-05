@@ -166,7 +166,9 @@ The wire encoding (fenced JSON vs. tool call vs. A2A data part) is left to the b
   finding does not block `approve`, but it is listed first in the human summary. A refused
   `approve` is a malformed verdict (§3.2): it is re-sent once with the blocking IDs as the
   validation hint, and a second refusal stops the loop `blocked`. An `open` (not disputed) high
-  finding does not block `approve`; the stop screen still lists it (§8.3).
+  finding does not block `approve`; after an `approve` the stop screen leads with a warning
+  naming every open high finding, before the unresolved list (§8.3). Whether open high findings
+  should block `approve` instead is an open decision (#1721).
 - Every ledger mutation is a signed channel event (§4). The ledger is a pure fold over those events.
 
 ### 3.3.1 Round sealing (round 3 decided)
