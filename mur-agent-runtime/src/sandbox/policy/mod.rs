@@ -287,6 +287,11 @@ fn is_executable_file(path: &Path) -> bool {
 /// `/opt`, `/opt/homebrew`, the user's home directory, or a top-level
 /// `/Volumes/<name>` mount (depth <= 2) — granting exec over any of those
 /// wholesale would be far broader than the "one toolchain" intent.
+///
+/// A direct child of home (`~/.local`, `~/.cargo`) is also refused as a
+/// DERIVED prefix: it is a shared tree, not one toolchain — `~/.local/bin/mur`
+/// widening to `~/.local` made uv-managed Pythons under `~/.local/share`
+/// executable. Explicit `allowed_dirs` grants are not affected.
 fn compute_spawn_prefix(literal: &Path, home: &Path) -> PathBuf {
     let parent = literal.parent().unwrap_or(literal);
     let candidate = if parent.file_name().is_some_and(|n| n == "bin") {
@@ -295,7 +300,7 @@ fn compute_spawn_prefix(literal: &Path, home: &Path) -> PathBuf {
         parent
     };
 
-    if is_guarded_prefix(candidate, home) {
+    if is_guarded_prefix(candidate, home) || candidate.parent() == Some(home) {
         parent.to_path_buf()
     } else {
         candidate.to_path_buf()
