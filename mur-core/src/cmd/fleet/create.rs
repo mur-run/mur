@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use mur_common::fleet::{CONCIERGE_AGENT, Fleet, valid_fleet_name};
 use mur_common::parallel::ParallelConfig;
 
+use super::review::constants::REVIEW_FLEET_PREFIX;
 use super::store;
 
 pub fn cmd_fleet_create(
@@ -18,6 +19,12 @@ pub fn cmd_fleet_create(
 ) -> Result<()> {
     if !valid_fleet_name(name) {
         bail!("invalid fleet name '{name}': use lowercase letters, digits, '-' or '_'");
+    }
+    if name.starts_with(REVIEW_FLEET_PREFIX) {
+        bail!(
+            "fleet name '{name}' uses the reserved '{REVIEW_FLEET_PREFIX}' prefix \
+             (review sessions only; start one with `mur fleet review`)"
+        );
     }
     if store::fleet_path(mur_home, name).exists() {
         bail!("fleet '{name}' already exists");
@@ -88,5 +95,15 @@ mod tests {
         assert_eq!(f.router_or_concierge(), mur_common::fleet::CONCIERGE_AGENT);
         // second create errors (already exists)
         assert!(cmd_fleet_create(home, "dev", vec![], None, None, None).is_err());
+    }
+
+    /// AC15a / P3: the `review-` prefix is reserved for review sessions.
+    #[test]
+    fn create_refuses_reserved_review_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let err = cmd_fleet_create(home, "review-x", vec![], None, None, None).unwrap_err();
+        assert!(err.to_string().contains("reserved"), "got: {err}");
+        assert!(!super::super::store::fleet_path(home, "review-x").exists());
     }
 }

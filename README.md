@@ -627,6 +627,16 @@ Agent** wizard offers the same catalog as a source.
   fleet runs exactly that graph instead of asking the router to plan. A typo'd
   member, a missing dependency or a cycle is rejected when the fleet loads or
   runs — never quietly turned into a broadcast to everyone.
+- **One agent works, another reviews it** — `mur fleet review --main <agent>
+  --reviewer <agent> "<task>"` runs round after round until the reviewer
+  approves, blocks, or a limit trips. Findings get IDs from the system, not
+  the model, and a malformed reply gets one retry before the session stops as
+  `blocked`. You see every message and press Enter to send it. A crash or an
+  agent that stops answering leaves it paused, and `mur fleet review-resume
+  review-…` picks it up after the last finished round. Sessions are hidden
+  from `mur fleet list` unless you pass `--include-review`, and their channels
+  stay as an audit record until `mur fleet prune-reviews --older-than <age>`
+  clears the finished ones.
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
@@ -864,7 +874,7 @@ mur
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret ·
 │                fallback · smart · routing · effort · trash · rollback … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
-├── fleet        create · list · show · status · run [--run-id] · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
+├── fleet        create · list · show · status · run [--run-id] · review · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source)
 ├── monitor      add · list · show · cancel · retry   (durable monitors for work that outlives the turn: CI runs, MUR runs, subprocesses)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)

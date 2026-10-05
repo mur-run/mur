@@ -8,6 +8,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use super::review::constants::{REVIEW_FLEET_PREFIX, REVIEW_STOP_REASON_DELETED};
+use super::review::state;
 use super::{labels, store};
 
 /// Delete a fleet: removes `~/.mur/fleets/<name>/` and the shared channel
@@ -23,8 +25,12 @@ pub fn cmd_fleet_delete(mur_home: &Path, name: &str, yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Remove channel first (audit history goes with it).
     let svc = mur_channel::ChannelService::open(mur_home)?;
+    if name.starts_with(REVIEW_FLEET_PREFIX) {
+        return delete_review_session(&svc, mur_home, name, &fleet.channel_id);
+    }
+
+    // Remove channel first (audit history goes with it).
     svc.delete_channel(&fleet.channel_id)?;
 
     // Remove the fleet's run state (jobs/, progress, event log, tracks) and
@@ -51,6 +57,48 @@ pub fn cmd_fleet_delete(mur_home: &Path, name: &str, yes: bool) -> Result<()> {
     println!(
         "Fleet '{name}' deleted (channel '{}' removed; member agents left intact).",
         fleet.channel_id
+    );
+    Ok(())
+}
+
+/// §7.1: a review session keeps its channel as the audit record. Refused
+/// while its driver holds the run lock; otherwise `session_stopped` (reason
+/// `deleted`) is appended before the definition goes, so the session becomes
+/// an ordinary `stopped` prune candidate.
+fn delete_review_session(
+    svc: &mur_channel::ChannelService,
+    mur_home: &Path,
+    name: &str,
+    channel_id: &str,
+) -> Result<()> {
+    let observed = state::observe(svc, mur_home, channel_id, name)?;
+    if let state::SessionState::Running(who) = &observed.state {
+        anyhow::bail!(
+            "review session '{name}' is running{}; stop it first with `mur fleet stop {name}`",
+            who.as_deref()
+                .map(|w| format!(" ({w})"))
+                .unwrap_or_default()
+        );
+    }
+    let lock = observed
+        .lock
+        .as_ref()
+        .expect("observe holds the lock for every non-running state");
+    state::stop_from_outside(
+        svc,
+        mur_home,
+        name,
+        channel_id,
+        &observed.state,
+        REVIEW_STOP_REASON_DELETED,
+        lock,
+    )?;
+    if let Err(e) = labels::prune(mur_home) {
+        tracing::warn!("label prune after deleting fleet '{name}' failed (ignored): {e}");
+    }
+    println!(
+        "Review session '{name}' deleted (channel '{channel_id}' kept as the audit record; \
+         remove it later with `mur fleet prune-reviews`)."
     );
     Ok(())
 }

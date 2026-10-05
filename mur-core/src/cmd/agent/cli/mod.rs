@@ -48,7 +48,7 @@ mod shell;
 mod shell_complete;
 mod slash_cmds;
 mod step;
-mod stream;
+pub(crate) mod stream;
 mod stream_handler;
 mod suggest;
 mod term;

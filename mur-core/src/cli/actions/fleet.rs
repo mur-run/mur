@@ -17,7 +17,11 @@ pub enum FleetAction {
         goal: Option<String>,
     },
     /// List all fleets
-    List,
+    List {
+        /// Also show review-session fleets (`review-…`), hidden by default
+        #[arg(long)]
+        include_review: bool,
+    },
     /// Show a fleet's roster + goal
     Show {
         /// Fleet name
@@ -67,6 +71,45 @@ pub enum FleetAction {
         /// agent's session directory. Marks the routing note as a guess.
         #[arg(long, requires = "cwd")]
         cwd_inferred: bool,
+    },
+    /// Run an attended review session: `--main` does the task, `--reviewer`
+    /// reviews it, round after round, until approve / blocked / a limit.
+    /// Semi-auto: every message is shown and sent only when you press Enter.
+    Review {
+        /// The agent that does the work
+        #[arg(long)]
+        main: String,
+        /// The agent that reviews it
+        #[arg(long)]
+        reviewer: String,
+        /// What the main agent should do
+        task: String,
+        /// Wall-clock deadline for the session, e.g. 30m/2h
+        #[arg(long)]
+        deadline: Option<String>,
+        /// Cost cap in USD for the session
+        #[arg(long)]
+        budget_usd: Option<f64>,
+    },
+    /// Resume a paused review session at the same round (semi-auto).
+    ReviewResume {
+        /// The review session name (`review-…`)
+        name: String,
+    },
+    /// Erase retained review-session channels that ended (stopped, marked
+    /// corrupted, or orphaned) longer ago than --older-than. Never touches a
+    /// running session, and never runs on its own.
+    PruneReviews {
+        /// Only sessions idle longer than this, e.g. 30d / 36h (required)
+        #[arg(long)]
+        older_than: String,
+        /// Also take paused and crashed sessions past the cutoff (each is
+        /// recorded as stopped first)
+        #[arg(long)]
+        include_paused: bool,
+        /// List what would be erased without erasing anything
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
     /// deadline, done-when policy). Only the flags you pass are changed —
