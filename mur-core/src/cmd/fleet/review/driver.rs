@@ -49,9 +49,14 @@ pub trait ReviewTransport {
     /// P2-§5.1 step 3: show `pending` with both sides' last positions and
     /// read one raw line (unparsed, so the kill-switch check runs first).
     /// Default (tests, non-terminal): EOF, which leaves the session paused.
-    #[allow(dead_code)] // wired in PR 3 (Task 7)
     fn ask_ruling(&self, _pending: &EscalationRecord, _ledger: &Ledger) -> Result<String> {
         Ok(String::new())
+    }
+
+    /// P2-§5: print one line or block to the human (ruling notices, the
+    /// rebuilt message, an inline hint). Default: nowhere.
+    fn show(&self, _text: &str) -> Result<()> {
+        Ok(())
     }
 
     /// §3.5 human-input wait: time spent waiting on the human since the

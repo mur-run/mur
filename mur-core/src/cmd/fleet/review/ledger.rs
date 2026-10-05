@@ -127,7 +127,6 @@ impl Ledger {
     /// P2-§4 "Single definition": the escalations still owed a ruling.
     /// The stop check, the resume decision, and the stop/resume screens
     /// all call this one function.
-    #[allow(dead_code)] // wired in PR 3 (Task 6–7)
     pub fn pending_ruling(&self) -> Vec<&EscalationRecord> {
         self.escalations.iter().filter(|e| !e.handled).collect()
     }

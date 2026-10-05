@@ -20,12 +20,23 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use super::constants::{MALFORMED_RESPONSE_RETRIES, REVIEW_VALIDATION_HINT};
+use super::constants::{
+    MALFORMED_RESPONSE_RETRIES, REVIEW_PAUSE_REASON_ESCALATION, REVIEW_VALIDATION_HINT,
+    RULING_REGENERATED_BANNER, RULING_SESSION_END_APPROVE, RULING_SESSION_END_BLOCKED,
+};
 use super::driver::{RetryOutcome, ReviewTransport, SendGate, run_turn_with_retry};
 use super::ledger::Ledger;
-use super::schema::{Mode, ReviewPayload, Role, SessionLimits, VerdictKind, to_note_payload};
+use super::ruling::RulingInput;
+use super::schema::{
+    Cumulative, Mode, ReviewPayload, Role, SessionLimits, VerdictKind, to_note_payload,
+};
+use super::settle::{
+    RulingCtx, RulingOutcome, apply_held_rulings, discard_held_rulings, settle_rulings,
+    write_ruling,
+};
 use super::verdict::{parse_rebuttal, parse_verdict, zero_cumulative};
 use super::wire::{main_turn_params, message_text, reviewer_turn_params, text_message_params};
+use crate::cmd::fleet::control;
 use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
 use anyhow::Result;
 use mur_channel::ChannelService;
@@ -58,9 +69,8 @@ pub enum LoopDriverStop {
     /// two consecutive rounds (AC9). Runs alongside the duration `stuck`
     /// guard; whichever trips first stops the session (§3.5, Q1).
     RoundStuck,
-    /// §3.4 & AC8: a finding rejected twice by the main agent triggers an
-    /// automatic escalation event. The loop stops so the human can decide
-    /// (§3.5: "The loop stops on: … escalation, …").
+    /// The human typed `/abandon` at the ruling prompt (P2-§5.1). An
+    /// escalation itself no longer stops the loop: it waits for a ruling.
     Escalation,
 }
 
@@ -71,7 +81,7 @@ pub enum LoopDriverStop {
 /// caller-chosen key here would write events that fail verification and
 /// seal replay at the first one. One writer per session channel, resolved
 /// in one place (`channel_writer::writer_key`, incl. the sandbox handoff).
-fn append(
+pub(super) fn append(
     svc: &ChannelService,
     mur_home: &Path,
     channel_id: &str,
@@ -184,6 +194,8 @@ pub fn continue_review_loop(
         active_before,
         human_wait: Duration::ZERO,
         round_sent: Vec::new(),
+        held: Vec::new(),
+        carried_wait: Duration::ZERO,
         last_activity: start,
     };
     run.drive(ledger, round)
@@ -216,6 +228,12 @@ struct LoopRun<'a> {
     /// `ledger::fold_rounds` does on replay (AC-P2-10): a round cut short
     /// never counts a binding-note delivery.
     round_sent: Vec<ReviewPayload>,
+    /// Rulings typed at the reviewer's send prompt this round, applied
+    /// after the seal (P2-§5.3, AC-P2-18/19).
+    held: Vec<RulingInput>,
+    /// Human wait at the ruling prompt, not yet recorded on a `turn_sent`:
+    /// the next send carries it in `human_wait_ms` (P2-§5.1, AC-P2-7).
+    carried_wait: Duration,
     // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
     // defines stuck as "no agent-authored channel event for the window", so
     // a long turn that DOES come back with a reply is activity, not a stall:
@@ -228,12 +246,22 @@ struct LoopRun<'a> {
     last_activity: Instant,
 }
 
+/// The send-gate inputs a turn carries: the open set a `/rule` is checked
+/// against, and whether the human already consented (main's message rebuilt
+/// after a boundary ruling, P2-§5.3).
+struct TurnGate<'a> {
+    open: &'a std::collections::BTreeSet<String>,
+    pre_confirmed: bool,
+}
+
 /// How one validated turn ended.
 enum Turn<T> {
     /// The reply validated; `value` is what the validator produced.
     Accepted { reply: String, value: T },
     /// The loop must stop here.
     Stop(LoopDriverStop),
+    /// `/rule` at main's send prompt: nothing sent (P2-§5.3).
+    RuleFirst(RulingInput),
 }
 
 impl LoopRun<'_> {
@@ -262,20 +290,49 @@ impl LoopRun<'_> {
             // Main's turn: produce or revise (§3.1). With findings open it
             // must also answer each one (§3.4), machine-validated like the
             // verdict; with none open its reply is free text.
-            let params = main_turn_params(self.task, round, &ledger);
-            let main_open = open_ids(&ledger);
-            let open = !main_open.is_empty();
-            let (main_reply, rebuttal) =
-                match self.turn(self.main, Role::Main, round, &params, &main_open, |reply| {
-                    if open {
-                        parse_rebuttal(&ledger, round, reply).map(Some)
-                    } else {
-                        Ok(None)
-                    }
-                })? {
+            let mut params = main_turn_params(self.task, round, &ledger);
+            let mut pre_confirmed = false;
+            let (main_reply, rebuttal) = loop {
+                let main_open = open_ids(&ledger);
+                let open = !main_open.is_empty();
+                let turn = self.turn(
+                    self.main,
+                    Role::Main,
+                    round,
+                    &params,
+                    TurnGate {
+                        open: &main_open,
+                        pre_confirmed,
+                    },
+                    |reply| {
+                        if open {
+                            parse_rebuttal(&ledger, round, reply).map(Some)
+                        } else {
+                            Ok(None)
+                        }
+                    },
+                )?;
+                match turn {
                     Turn::Stop(stop) => return Ok((ledger, stop)),
-                    Turn::Accepted { reply, value } => (reply, value),
-                };
+                    Turn::Accepted { reply, value } => break (reply, value),
+                    Turn::RuleFirst(r) => {
+                        // P2-§5.3: main's prompt is the round boundary. The
+                        // kill-switch first; then write, rebuild from the new
+                        // ledger (deterministic: a template, no model call),
+                        // show it in full, and send without asking again.
+                        if control::is_stopped(self.mur_home, self.fleet_name) {
+                            return Ok((ledger, LoopDriverStop::Stopped));
+                        }
+                        write_ruling(&self.ruling_ctx(false), &mut ledger, &r)?;
+                        self.last_activity = (self.now)();
+                        params = main_turn_params(self.task, round, &ledger);
+                        let text = message_text(&params).unwrap_or_default();
+                        self.transport
+                            .show(&format!("{RULING_REGENERATED_BANNER}\n{text}"))?;
+                        pre_confirmed = true;
+                    }
+                }
+            };
             // The rebuttal is signed together with the verdict at round end,
             // never on its own: a round cut short (pause, stop, deadline)
             // then leaves only stateless `turn_sent` events, so resuming it
@@ -297,10 +354,18 @@ impl LoopRun<'_> {
                 Role::Reviewer,
                 round,
                 &params,
-                &reviewer_open,
+                TurnGate {
+                    open: &reviewer_open,
+                    pre_confirmed: false,
+                },
                 |reply| parse_verdict(&round_ledger, round, reply),
             )? {
                 Turn::Stop(LoopDriverStop::Blocked { role }) => {
+                    discard_held_rulings(
+                        self.transport,
+                        &mut self.held,
+                        RULING_SESSION_END_BLOCKED,
+                    )?;
                     // §3.2: still malformed → treat as `blocked`.
                     if let Some(r) = &rebuttal {
                         self.append(r)?;
@@ -317,6 +382,8 @@ impl LoopRun<'_> {
                     return Ok((round_ledger, LoopDriverStop::Blocked { role }));
                 }
                 Turn::Stop(stop) => return Ok((ledger, stop)),
+                // Never: the reviewer's prompt is not a round boundary.
+                Turn::RuleFirst(_) => unreachable!("reviewer turn is not a boundary"),
                 Turn::Accepted { value, .. } => value,
             };
             if let Some(r) = &rebuttal {
@@ -335,18 +402,44 @@ impl LoopRun<'_> {
             ledger.note_round_complete();
 
             match staged.kind {
-                VerdictKind::Approve => return Ok((ledger, LoopDriverStop::Approve)),
-                VerdictKind::Blocked => return Ok((ledger, LoopDriverStop::ReviewerBlocked)),
-                VerdictKind::Revise if !ledger.escalations.is_empty() => {
-                    // §3.4 & AC8: a finding rejected twice triggers escalation.
-                    // The loop stops so the human can decide (§3.5: "The loop
-                    // stops on: approve, blocked, escalation, …").
-                    return Ok((ledger, LoopDriverStop::Escalation));
+                VerdictKind::Approve => {
+                    discard_held_rulings(
+                        self.transport,
+                        &mut self.held,
+                        RULING_SESSION_END_APPROVE,
+                    )?;
+                    return Ok((ledger, LoopDriverStop::Approve));
                 }
-                VerdictKind::Revise if ledger.round_stuck => {
-                    return Ok((ledger, LoopDriverStop::RoundStuck));
+                VerdictKind::Blocked => {
+                    discard_held_rulings(
+                        self.transport,
+                        &mut self.held,
+                        RULING_SESSION_END_BLOCKED,
+                    )?;
+                    return Ok((ledger, LoopDriverStop::ReviewerBlocked));
                 }
                 VerdictKind::Revise => {}
+            }
+            // P2-§5.3: rulings held from the reviewer's prompt land after
+            // the seal, before the next round's main `turn_sent`.
+            let mut held = std::mem::take(&mut self.held);
+            let mut ruled =
+                apply_held_rulings(&self.ruling_ctx(false), &mut ledger, &mut held)? > 0;
+            // §3.4 / P2-§5.1: an escalation waits for the human's ruling.
+            if !ledger.pending_ruling().is_empty() {
+                if let Some(stop) = self.settle(&mut ledger)? {
+                    return Ok((ledger, stop));
+                }
+                ruled = true;
+            }
+            if ruled {
+                self.last_activity = (self.now)();
+            }
+            // Round-stuck (§3.3) guards agents going in circles. A ruling is
+            // the human moving the open set, so the snapshot this round
+            // sealed with no longer describes it; the next seal re-judges.
+            if ledger.round_stuck && !ruled {
+                return Ok((ledger, LoopDriverStop::RoundStuck));
             }
             round += 1;
         }
@@ -364,17 +457,20 @@ impl LoopRun<'_> {
         role: Role,
         round: u32,
         params: &serde_json::Value,
-        open: &std::collections::BTreeSet<String>,
+        gate: TurnGate<'_>,
         validate: impl Fn(&str) -> std::result::Result<T, String>,
     ) -> Result<Turn<T>> {
-        let gate = SendGate {
-            boundary: role == Role::Main,
-            pre_confirmed: false,
-            open,
-        };
         let base = message_text(params).unwrap_or_default().to_string();
         let mut outgoing = params.clone();
         for attempt in 0..=MALFORMED_RESPONSE_RETRIES {
+            // Only main's first send is the round boundary. A `/rule` at a
+            // validation re-send prompt is held like the reviewer's: main's
+            // `turn_sent` for this round is already on the channel.
+            let gate = SendGate {
+                boundary: role == Role::Main && attempt == 0,
+                pre_confirmed: gate.pre_confirmed && attempt == 0,
+                open: gate.open,
+            };
             let outcome = run_turn_with_retry(
                 self.transport,
                 self.mur_home,
@@ -387,6 +483,7 @@ impl LoopRun<'_> {
             );
             let waited = self.transport.take_human_wait();
             self.human_wait += waited;
+            let recorded = waited + std::mem::take(&mut self.carried_wait);
             let reply = match outcome? {
                 RetryOutcome::Stopped => return Ok(Turn::Stop(LoopDriverStop::Stopped)),
                 RetryOutcome::Paused { reason } => {
@@ -398,11 +495,14 @@ impl LoopRun<'_> {
                         cause: f.cause,
                     }));
                 }
-                // P2 Task 7 applies rulings typed at the send prompt; until
-                // then a boundary `/rule` ends the turn like `q` and a held
-                // one is not applied. Unreleased: PR 3 lands both together.
-                RetryOutcome::RuleFirst(_) => return Ok(Turn::Stop(LoopDriverStop::Stopped)),
-                RetryOutcome::Sent { reply, held: _ } => reply,
+                RetryOutcome::RuleFirst(r) => {
+                    self.carried_wait += recorded;
+                    return Ok(Turn::RuleFirst(r));
+                }
+                RetryOutcome::Sent { reply, held } => {
+                    self.held.extend(held);
+                    reply
+                }
             };
             let sent = append_turn_sent(
                 &self.svc,
@@ -410,7 +510,7 @@ impl LoopRun<'_> {
                 self.channel_id,
                 round,
                 role,
-                waited,
+                recorded,
             )?;
             self.round_sent.push(sent);
             if let Some(stop) = check_guards(
@@ -445,6 +545,39 @@ impl LoopRun<'_> {
 
     fn append(&self, payload: &ReviewPayload) -> Result<()> {
         append(&self.svc, self.mur_home, self.channel_id, payload)
+    }
+
+    fn ruling_ctx(&self, already_paused: bool) -> RulingCtx<'_> {
+        RulingCtx {
+            transport: self.transport,
+            svc: &self.svc,
+            mur_home: self.mur_home,
+            fleet_name: self.fleet_name,
+            channel_id: self.channel_id,
+            already_paused,
+        }
+    }
+
+    /// Ask for every owed ruling (P2-§5.1). `None` → settled, continue.
+    /// Prompt time is human wait: out of execution time, carried onto the
+    /// next `turn_sent` (AC-P2-7).
+    fn settle(&mut self, ledger: &mut Ledger) -> Result<Option<LoopDriverStop>> {
+        let cumulative = Cumulative {
+            exec_time_ms: u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX),
+            cost_usd_micros: ledger.cost_usd_micros,
+        };
+        let outcome = settle_rulings(&self.ruling_ctx(false), ledger, cumulative)?;
+        let waited = self.transport.take_human_wait();
+        self.human_wait += waited;
+        self.carried_wait += waited;
+        Ok(match outcome {
+            RulingOutcome::Settled => None,
+            RulingOutcome::LeftPaused => Some(LoopDriverStop::Paused {
+                reason: REVIEW_PAUSE_REASON_ESCALATION.to_string(),
+            }),
+            RulingOutcome::Abandoned => Some(LoopDriverStop::Escalation),
+            RulingOutcome::KillSwitch => Some(LoopDriverStop::Stopped),
+        })
     }
 }
 

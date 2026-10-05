@@ -22,8 +22,9 @@ use mur_common::fleet::Fleet;
 use mur_common::limits::Stuck;
 
 use super::constants::{
-    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX, RULING_NO_MAIN_REASON,
-    RULING_POSITIONS, RULING_PROMPT, RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
+    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
+    REVIEW_STOP_REASON_ESCALATION, RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT,
+    RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
@@ -62,7 +63,7 @@ pub fn stop_reason(stop: &LoopDriverStop) -> String {
             format!("{member} task failed: {cause}")
         }
         LoopDriverStop::RoundStuck => "stuck (round: open findings unchanged)".into(),
-        LoopDriverStop::Escalation => "escalation".into(),
+        LoopDriverStop::Escalation => REVIEW_STOP_REASON_ESCALATION.into(),
         LoopDriverStop::Guard(LoopStop::Deadline) => "limit: deadline".into(),
         LoopDriverStop::Guard(LoopStop::Stuck) => "limit: stuck (no activity)".into(),
         LoopDriverStop::Guard(LoopStop::Budget) => "limit: cost_usd".into(),
@@ -302,6 +303,10 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
             );
         (self.output)(&format!("{positions}{}", RULING_PROMPT.replace("{id}", id)))?;
         Ok(self.wait.time(|| (self.input)())?)
+    }
+
+    fn show(&self, text: &str) -> Result<()> {
+        Ok((self.output)(&format!("{text}\n"))?)
     }
 
     fn take_human_wait(&self) -> std::time::Duration {

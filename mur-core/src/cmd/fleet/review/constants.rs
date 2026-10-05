@@ -66,20 +66,35 @@ pub const RULE_NOT_OPEN_HINT: &str = "{id} is not an open finding";
 pub const RULING_PROMPT_HINT: &str =
     "type /rule drop|fix F<n> <text>, /abandon, or q to leave the session paused";
 /// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
-pub const SEND_PROMPT: &str =
-    "Send to {member}? [Enter = send, q = stop, /rule … = record a ruling] ";
+/// The `/rule` hint says the line also sends this turn, so the human knows
+/// before typing it (the line is the send consent).
+pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop, /rule drop|fix F<n> <text> = record a ruling and send this turn] ";
+/// P2-§5.3: printed before main's message rebuilt after a `/rule` at its
+/// send prompt; the full rebuilt message follows.
+pub const RULING_REGENERATED_BANNER: &str = "[ruling applied; message regenerated]";
+/// P2-§5.3 / AC-P2-18: a held ruling whose finding left the open set.
+/// `{id}` = the finding, `{status}` = its status now.
+pub const RULING_DISCARDED_CLOSED_NOTICE: &str =
+    "Ruling on {id} discarded: finding is already {status}.";
+/// P2-§5.3 / AC-P2-19: a held ruling with no round left to govern.
+/// `{verdict}` ∈ [`RULING_SESSION_END_APPROVE`], [`RULING_SESSION_END_BLOCKED`].
+pub const RULING_DISCARDED_SESSION_END_NOTICE: &str =
+    "Ruling on {id} discarded: session ended with {verdict}.";
+pub const RULING_SESSION_END_APPROVE: &str = "approve";
+pub const RULING_SESSION_END_BLOCKED: &str = "blocked";
+/// P2-§5.2: the `paused { kind: escalation }` reason.
+pub const REVIEW_PAUSE_REASON_ESCALATION: &str = "awaiting a ruling";
+/// P2-§5.1 `/abandon`: the `session_stopped` reason (P1 wire value).
+pub const REVIEW_STOP_REASON_ESCALATION: &str = "escalation";
 /// P2-§5.1 step 3: the ruling prompt; `{id}` is replaced with the finding.
-#[allow(dead_code)] // wired in PR 3 (Task 7)
 pub const RULING_PROMPT: &str =
     "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused ";
 /// P2-§5.1 step 3: both sides' last positions, shown above
 /// [`RULING_PROMPT`]. `{id}`, `{reason}` (why it escalated), `{issue}` (the
 /// reviewer's finding) and `{main}` (main's last reject reason).
-#[allow(dead_code)] // wired in PR 3 (Task 7)
 pub const RULING_POSITIONS: &str =
     "\n--- {id} awaits your ruling ({reason}) ---\n  reviewer: {issue}\n  main: {main}\n";
 /// Stands in for `{main}` when main's reject carried no reason.
-#[allow(dead_code)] // wired in PR 3 (Task 7)
 pub const RULING_NO_MAIN_REASON: &str = "(no reason given)";
 /// P2-§5.3: rebuttal retry hint when main rejects a finding ruled `fix`.
 /// `{id}` is replaced with the finding ID.
