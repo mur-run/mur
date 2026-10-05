@@ -268,7 +268,7 @@ again for the retry (the first answer stands, including any `held` ruling).
 `ask_ruling` returns the **raw line**, not a parsed answer, so the kill-switch check in Task 7
 runs before parsing (P2-§5.1 step 4).
 
-- [ ] Tests in `session_tests.rs` with an injected reader (refactor `TerminalGate` to hold
+- [x] Tests in `session_tests.rs` with an injected reader (refactor `TerminalGate` to hold
   `input: &dyn Fn() -> io::Result<String>`, defaulting to stdin; the pure refactor is its own
   commit):
   - `ask_ruling_prints_both_positions_and_prompt` — output contains the finding issue, main's last
@@ -283,12 +283,12 @@ runs before parsing (P2-§5.1 step 4).
   - `run_turn_boundary_rule_sends_nothing` / `run_turn_reviewer_rule_is_held` (`driver_tests.rs`)
     — scripted transport; send count 0 and `RuleFirst`, resp. send count 1 and
     `Sent { held: Some(_) }`.
-- [ ] Constants: `RULING_PROMPT = "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused "`,
+- [x] Constants: `RULING_PROMPT = "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused "`,
   and extend the send prompt text to `[Enter = send, q = stop, /rule … = record a ruling]`.
-- [ ] "Both sides' last positions" needs main's last reason for the finding: add
+- [x] "Both sides' last positions" needs main's last reason for the finding: add
   `Finding.last_reject_reason: Option<String>` set in the `Rebuttal` fold (derived, replay-safe)
   and a ledger test for it.
-- [ ] Fail → implement → green → lint → commit.
+- [x] Fail → implement → green → lint → commit.
 
 ## Task 7 — `settle_rulings` and the live loop
 
@@ -347,7 +347,7 @@ Loop changes (`loop_driver.rs`):
   `stop_reason` → `REVIEW_STOP_REASON_ESCALATION` (`"escalation"`, unchanged wire value).
 - Keep `loop_driver.rs` ≤ 800 lines; `apply_ruling` and `apply_held_rulings` live in `ruling.rs`.
 
-- [ ] Tests (scripted transport in `loop_driver_tests/`, new file `rulings.rs`):
+- [x] Tests (scripted transport in `loop_driver_tests/`, new file `rulings.rs`):
   - AC-P2-1 `escalation_waits_for_ruling` — scripted ask returns EOF; assert no
     `session_stopped`, no `escalation` type on the channel, `paused{kind: escalation}` last.
     (Fleet-definition and lock parts are asserted in Task 8 via `run_session`.)
@@ -383,7 +383,7 @@ Loop changes (`loop_driver.rs`):
   - `invalid_rule_reprompts_without_writing` — `/rule drop F9 x` then `q`; one `paused`, zero
     `ruling`.
   - Update the existing P1 test `flow.rs:337` (escalation stops the loop) to the new behaviour.
-- [ ] Fail → implement → green → lint → commit `feat(review): wait for a ruling on escalation`.
+- [x] Fail → implement → green → lint → commit `feat(review): wait for a ruling on escalation`.
 
 ## Task 8 — Session end and stop screen
 
