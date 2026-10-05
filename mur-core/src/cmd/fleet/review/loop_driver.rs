@@ -183,6 +183,7 @@ pub fn continue_review_loop(
         start,
         active_before,
         human_wait: Duration::ZERO,
+        round_sent: Vec::new(),
         last_activity: start,
     };
     run.drive(ledger, round)
@@ -210,6 +211,11 @@ struct LoopRun<'a> {
     /// prompts). Not execution time, so [`LoopRun::elapsed`] subtracts it.
     /// Distinct from a §7.0 pause: the driver is alive, blocked on a human.
     human_wait: Duration,
+    /// `turn_sent` events signed in the current round, not yet folded. They
+    /// fold into the round ledger only when the round seals, as
+    /// `ledger::fold_rounds` does on replay (AC-P2-10): a round cut short
+    /// never counts a binding-note delivery.
+    round_sent: Vec<ReviewPayload>,
     // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
     // defines stuck as "no agent-authored channel event for the window", so
     // a long turn that DOES come back with a reply is activity, not a stall:
@@ -241,6 +247,7 @@ impl LoopRun<'_> {
         loop {
             // §3.5 limits, checked once per round — same cadence
             // `loop_run`'s own guarded loop uses.
+            self.round_sent.clear();
             let stuck_for = (self.now)().saturating_duration_since(self.last_activity);
             if let Some(stop) = check_guards(
                 round - 1,
@@ -273,6 +280,7 @@ impl LoopRun<'_> {
             // then leaves only stateless `turn_sent` events, so resuming it
             // from main's turn (AC2) cannot count a reject twice.
             let mut round_ledger = ledger.clone();
+            self.fold_round_sent(&mut round_ledger)?;
             if let Some(r) = &rebuttal {
                 round_ledger.apply(r)?;
             }
@@ -296,6 +304,7 @@ impl LoopRun<'_> {
                             kind: VerdictKind::Blocked,
                             cumulative: zero_cumulative(),
                         };
+                        self.fold_round_sent(&mut round_ledger)?;
                         round_ledger.apply(&payload)?;
                         self.append(&payload)?;
                         round_ledger.note_round_complete();
@@ -311,6 +320,9 @@ impl LoopRun<'_> {
                 self.append(payload)?;
             }
             ledger = staged.ledger;
+            // Reviewer `turn_sent` only clears that role's binding notes, so
+            // folding it after the verdict payloads equals replay's order.
+            self.fold_round_sent(&mut ledger)?;
             // The round is fully folded: snapshot its open set (§3.3, AC9).
             // `ledger::fold_rounds` notes the same boundaries on replay, so
             // the in-memory ledger stays byte-comparable to the channel (AC11).
@@ -375,7 +387,7 @@ impl LoopRun<'_> {
                 }
                 RetryOutcome::Sent(reply) => reply,
             };
-            append_turn_sent(
+            let sent = append_turn_sent(
                 &self.svc,
                 self.mur_home,
                 self.channel_id,
@@ -383,6 +395,7 @@ impl LoopRun<'_> {
                 role,
                 waited,
             )?;
+            self.round_sent.push(sent);
             if let Some(stop) = check_guards(
                 round,
                 self.elapsed(),
@@ -405,6 +418,14 @@ impl LoopRun<'_> {
         Ok(Turn::Stop(LoopDriverStop::Blocked { role }))
     }
 
+    /// Fold this round's buffered `turn_sent` events into `ledger`.
+    fn fold_round_sent(&mut self, ledger: &mut Ledger) -> Result<()> {
+        for sent in self.round_sent.drain(..) {
+            ledger.apply(&sent)?;
+        }
+        Ok(())
+    }
+
     fn append(&self, payload: &ReviewPayload) -> Result<()> {
         append(&self.svc, self.mur_home, self.channel_id, payload)
     }
@@ -422,12 +443,13 @@ fn append_turn_sent(
     round: u32,
     to: Role,
     human_wait: Duration,
-) -> Result<()> {
+) -> Result<ReviewPayload> {
     let payload = ReviewPayload::TurnSent {
         round,
         to,
         restart_note: None,
         human_wait_ms: u64::try_from(human_wait.as_millis()).unwrap_or(u64::MAX),
     };
-    append(svc, mur_home, channel_id, &payload)
+    append(svc, mur_home, channel_id, &payload)?;
+    Ok(payload)
 }
