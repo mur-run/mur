@@ -78,6 +78,16 @@ pub async fn record(
     // These flags are intentionally merely forwarded. `@playwright/mcp`
     // owns their validation, keeping this proxy compatible with new releases.
     args.extend(extra.iter().cloned());
+    // Without this, test/automation recording fell through to
+    // `@playwright/mcp`'s default — the branded Google Chrome application,
+    // carrying the person's real profile and needing a spawn grant on
+    // `/Applications`. Live mode already asks for Chromium, and `--browser`
+    // in `extra` still wins, so this only fills the gap.
+    args.extend(mur_browser::engines::default_engine_arg(
+        &args,
+        &mur_browser::server::install_dir(&mur_home()?),
+        mur_browser::chromium::system_browsers_dir().as_deref(),
+    ));
     if trace {
         args.push("--save-trace".into());
     }

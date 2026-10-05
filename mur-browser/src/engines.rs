@@ -63,6 +63,50 @@ pub fn own_build_ready(install_dir: &Path, browsers: Option<&Path>, engine: &str
     Some(build_dir(browsers, engine, &revision).is_some())
 }
 
+/// Engine MUR picks for launches it starts itself. `@playwright/mcp` defaults
+/// to the branded Google Chrome *application*, which is a different browser
+/// from the one `mur browser setup` installs: it carries the person's real
+/// profile, is often absent, and needs a spawn grant on `/Applications`.
+/// Playwright's own Chromium build is the one MUR provisions and seals.
+pub const DEFAULT_ENGINE: &str = "chromium";
+
+/// `--browser=<DEFAULT_ENGINE>`, ready to push onto an argv.
+pub const DEFAULT_ENGINE_ARG: &str = "--browser=chromium";
+
+/// Flags through which a caller already picked the browser, so MUR must not
+/// also push its default. `--cdp-endpoint`/`--connect-to` attach to a browser
+/// that is already running, where an engine name is meaningless.
+const ENGINE_FLAGS: [&str; 4] = ["--browser", "--cdp-endpoint", "--connect-to", "--device"];
+
+/// Did the caller already choose an engine (or an attach target) in `args`?
+/// Matches both `--browser x` and `--browser=x`.
+pub fn engine_already_chosen(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        ENGINE_FLAGS
+            .iter()
+            .any(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))
+    })
+}
+
+/// The engine argument to add to `args`, if any: MUR's default Chromium,
+/// unless the caller already chose one or the pinned Chromium build is known
+/// to be missing. "Cannot tell" (no manifest, no cache) still defaults, same
+/// rule as [`own_build_ready`] — a present build is not required to *ask* for
+/// it, and Playwright's own error is clearer than a silent fallback to Chrome.
+pub fn default_engine_arg(
+    args: &[String],
+    install_dir: &Path,
+    browsers: Option<&Path>,
+) -> Option<String> {
+    if engine_already_chosen(args) {
+        return None;
+    }
+    if own_build_ready(install_dir, browsers, DEFAULT_ENGINE) == Some(false) {
+        return None;
+    }
+    Some(DEFAULT_ENGINE_ARG.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +186,55 @@ mod tests {
         assert!(uses_own_build("chromium"));
         assert!(!uses_own_build("chrome"));
         assert!(!uses_own_build("msedge"));
+    }
+
+    fn s(items: &[&str]) -> Vec<String> {
+        items.iter().map(|i| (*i).to_owned()).collect()
+    }
+
+    #[test]
+    fn an_explicit_engine_is_never_overridden() {
+        assert!(engine_already_chosen(&s(&["--browser=firefox"])));
+        assert!(engine_already_chosen(&s(&["--browser", "firefox"])));
+        assert!(engine_already_chosen(&s(&["--cdp-endpoint=ws://x"])));
+        assert!(engine_already_chosen(&s(&["--device", "iPhone 15"])));
+        assert!(!engine_already_chosen(&s(&["--headless", "--isolated"])));
+    }
+
+    /// Live mode already asks for Chromium, so nothing is added twice.
+    #[test]
+    fn no_duplicate_when_caller_already_asked_for_chromium() {
+        let install = tempfile::tempdir().unwrap();
+        assert_eq!(
+            default_engine_arg(&s(&[DEFAULT_ENGINE_ARG]), install.path(), None),
+            None
+        );
+    }
+
+    /// No manifest is "cannot tell": still ask for Chromium rather than
+    /// silently falling back to the branded Chrome application.
+    #[test]
+    fn defaults_to_chromium_when_the_cache_is_unknown() {
+        let install = tempfile::tempdir().unwrap();
+        assert_eq!(
+            default_engine_arg(&s(&["--headless"]), install.path(), None),
+            Some(DEFAULT_ENGINE_ARG.to_owned())
+        );
+    }
+
+    /// A pinned build that is definitely absent: say nothing and let
+    /// Playwright report it, rather than asking for a build we know is gone.
+    #[test]
+    fn no_engine_when_the_pinned_build_is_missing() {
+        let install = tempfile::tempdir().unwrap();
+        pinned(
+            install.path(),
+            r#"{"browsers":[{"name":"chromium","revision":"1100"}]}"#,
+        );
+        let cache = tempfile::tempdir().unwrap();
+        assert_eq!(
+            default_engine_arg(&s(&["--headless"]), install.path(), Some(cache.path())),
+            None
+        );
     }
 }
