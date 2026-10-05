@@ -249,3 +249,33 @@ fn host_case_is_normalised() {
         Some("ssh:karajan@people.example.edu:ro")
     );
 }
+
+/// A quoted argument is DATA, not shell syntax. `tokenize` already strips the
+/// quotes, so the metacharacters inside one must not push the segment out of
+/// the read lane — otherwise the commonest read shape in a review session
+/// (`gh pr view … | jq -r '"m=\(.mergeable)"'`) prompts every single time.
+#[test]
+fn quoted_metachars_stay_in_the_read_lane() {
+    for cmd in [
+        r#"gh pr view 1719 --json mergeable | jq -r '"m=\(.mergeable)"'"#,
+        r#"gh pr view 1719 --json state | jq -r '.state + "!"'"#,
+        r#"git log --oneline -5 | awk '{print $1}'"#,
+        r#"grep -rn 'fn foo(' src/"#,
+    ] {
+        assert_eq!(
+            scope(cmd).as_deref(),
+            Some("local:ro"),
+            "should read: {cmd}"
+        );
+    }
+}
+
+/// The guard the fix must not relax: an UNQUOTED operator still means more
+/// than one simple command, and a quoted string that the shell would expand
+/// is still refused by `tokenize` itself.
+#[test]
+fn unquoted_metachars_still_refused() {
+    for cmd in ["cat a > b", "ls $(whoami)", r#"echo "$(rm -rf /)""#, "ls &"] {
+        assert_eq!(scope(cmd), None, "must not be grantable: {cmd}");
+    }
+}

@@ -212,10 +212,34 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
     if cmd.is_empty() {
         return false;
     }
+    // Raw text: nothing has been parsed, so a metacharacter anywhere could be
+    // live shell syntax. Refuse and let the caller prompt.
     if cmd.contains(SHELL_META) {
         return false; // not a single simple command — fail-safe
     }
-    let mut toks = cmd.split_whitespace();
+    let words: Vec<(&str, bool)> = cmd.split_whitespace().map(|w| (w, false)).collect();
+    is_readonly_words(&words)
+}
+
+/// The same decision for ONE simple command a real tokenizer already split and
+/// unquoted, each word paired with whether it came from quotes.
+///
+/// Why this exists: a quoted argument is DATA, not syntax. `jq -r '"m=\(.x)"'`
+/// never hands the shell a `(` to interpret, so re-running the raw-text
+/// metacharacter guard over the re-joined words rejects the commonest read
+/// shape in a review session. Only UNQUOTED words get that guard here; the
+/// caller's tokenizer has already refused the expansions a quoted string can
+/// still trigger (`$(…)`, backticks) and split on every real operator.
+pub(super) fn is_readonly_words(words: &[(&str, bool)]) -> bool {
+    if words
+        .iter()
+        .any(|(t, quoted)| !quoted && t.contains(SHELL_META))
+    {
+        return false; // an operator the tokenizer handed through — fail-safe
+    }
+    let whole = words.iter().map(|(t, _)| *t).collect::<Vec<_>>().join(" ");
+    let cmd = whole.as_str();
+    let mut toks = words.iter().map(|(t, _)| *t);
     let Some(head) = toks.next() else {
         return false;
     };

@@ -415,10 +415,13 @@ pub(super) fn segment_is_readonly(seg: &[Word]) -> bool {
             if EXTRA_READONLY_HEADS.contains(&other) {
                 return true;
             }
-            // Delegate to the audited list. `is_readonly_bash` re-runs its own
-            // metacharacter guard, which is harmless here: this segment has
-            // already been split on every operator that guard rejects.
-            bash_class::is_readonly_bash(&whole)
+            // Delegate to the audited list, carrying the quoting through: a
+            // metacharacter inside a quoted word is data this pass already
+            // unquoted, not an operator, and re-checking the re-joined text
+            // would reject it.
+            let words: Vec<(&str, bool)> =
+                seg.iter().map(|w| (w.text.as_str(), w.quoted)).collect();
+            bash_class::is_readonly_words(&words)
         }
     }
 }
