@@ -5,21 +5,22 @@
 //! drops the lock when the holder exits for any reason, SIGKILL included,
 //! so a dead driver never looks alive, and a recycled pid cannot fake
 //! liveness because the pid written in the file is never consulted. The body
-//! (`pid`, start time, host) exists for messages like "running in pid 4123".
+//! (`pid`, start time, host) exists for messages like "running in pid 4123"
+//! and lives in a separate `driver.owner` file: Windows locks are mandatory,
+//! so a held `driver.lock` cannot be read by anyone else.
 //!
 //! `fs2`, not `libc::flock`, for the reasons in `cmd/agent/cli/login.rs`
 //! (`acquire_login_lock`): Windows CI, existing dependency, same contention
 //! test via `fs2::lock_contended_error`.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use fs2::FileExt;
 use mur_channel::ChannelService;
 
-use super::constants::DRIVER_LOCK_FILE;
+use super::constants::{DRIVER_LOCK_FILE, DRIVER_OWNER_FILE};
 
 /// A held run lock. Dropping it releases the lock.
 #[derive(Debug)]
@@ -52,15 +53,14 @@ pub fn lock_path(svc: &ChannelService, channel_id: &str) -> PathBuf {
         .with_file_name(DRIVER_LOCK_FILE)
 }
 
-/// Try to take the run lock without blocking. On success the file body is
+/// Try to take the run lock without blocking. On success the owner file is
 /// rewritten with this process's pid, start time and host (display only).
 pub fn try_acquire(svc: &ChannelService, channel_id: &str) -> Result<DriverLock, LockDenied> {
     acquire_at(&lock_path(svc, channel_id))
 }
 
 fn acquire_at(path: &Path) -> Result<DriverLock, LockDenied> {
-    // No truncate on open: the body belongs to whoever holds the lock.
-    let mut f = std::fs::OpenOptions::new()
+    let f = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
@@ -78,23 +78,24 @@ fn acquire_at(path: &Path) -> Result<DriverLock, LockDenied> {
                 "started_at": Utc::now(),
                 "host": host,
             });
-            let _ = f
-                .set_len(0)
-                .and_then(|()| f.seek(SeekFrom::Start(0)).map(|_| ()))
-                .and_then(|()| f.write_all(body.to_string().as_bytes()));
+            let _ = std::fs::write(owner_path(path), body.to_string());
             Ok(DriverLock(f))
         }
         Err(e) if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
-            Err(LockDenied::Running(describe(&mut f)))
+            Err(LockDenied::Running(describe(path)))
         }
         Err(e) => Err(LockDenied::Unavailable(e)),
     }
 }
 
-/// "pid 4123 on host since …", from the holder's body. Display only.
-fn describe(f: &mut File) -> Option<String> {
-    let mut text = String::new();
-    f.read_to_string(&mut text).ok()?;
+/// The owner file that sits next to a lock file.
+fn owner_path(lock: &Path) -> PathBuf {
+    lock.with_file_name(DRIVER_OWNER_FILE)
+}
+
+/// "pid 4123 on host since …", from the holder's owner file. Display only.
+fn describe(lock: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(owner_path(lock)).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     Some(format!(
         "pid {} on {} since {}",
@@ -116,7 +117,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(DRIVER_LOCK_FILE);
 
-        std::fs::write(&path, format!(r#"{{"pid":{}}}"#, std::process::id())).unwrap();
+        std::fs::write(
+            owner_path(&path),
+            format!(r#"{{"pid":{}}}"#, std::process::id()),
+        )
+        .unwrap();
         let held = acquire_at(&path).expect("a live pid in the body must not block");
 
         // A second, independent open is a separate lock owner (flock is per
@@ -128,7 +133,7 @@ mod tests {
         }
         drop(held);
 
-        std::fs::write(&path, r#"{"pid":4294967295}"#).unwrap();
+        std::fs::write(owner_path(&path), r#"{"pid":4294967295}"#).unwrap();
         let other = File::open(&path).unwrap();
         other.try_lock_exclusive().unwrap();
         assert!(matches!(acquire_at(&path), Err(LockDenied::Running(_))));

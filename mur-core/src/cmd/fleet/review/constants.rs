@@ -114,6 +114,12 @@ pub const FLEET_CHANNEL_PREFIX: &str = "fleet-";
 /// taken", never the pid written in it (display only).
 pub const DRIVER_LOCK_FILE: &str = "driver.lock";
 
+/// §7.0 — the lock holder's self-description (pid, start time, host), a
+/// sibling of [`DRIVER_LOCK_FILE`]. Kept out of the lock file because
+/// Windows `LockFileEx` is mandatory: while held, no other handle can read
+/// the locked file's bytes. Display only, never consulted for liveness.
+pub const DRIVER_OWNER_FILE: &str = "driver.owner";
+
 /// §7.0 — the `paused` reason resume records before continuing a session
 /// whose driver died without pausing.
 pub const REVIEW_PAUSE_REASON_CRASHED: &str = "crashed";

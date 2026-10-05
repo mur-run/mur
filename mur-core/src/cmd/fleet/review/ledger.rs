@@ -117,7 +117,7 @@ impl Ledger {
     /// §3.3: "A medium/low `disputed` finding does not block `approve`, but
     /// it is listed first in the human summary." Used by the stop screen
     /// (§8.3, AC10, AC13).
-    #[allow(dead_code)] // not wired yet: §3.3 approve gate
+    #[allow(dead_code)] // not wired yet: stop-screen summary
     pub fn disputed_medium_low(&self) -> Vec<&Finding> {
         self.findings
             .iter()
