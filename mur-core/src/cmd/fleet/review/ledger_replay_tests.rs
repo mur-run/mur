@@ -7,8 +7,8 @@ use mur_common::limits::Stuck;
 
 use super::ledger::{Ledger, fold_rounds};
 use super::schema::{
-    Cumulative, FindingStatus, Mode, RebuttalAnswer, RebuttalResponseDto, ReviewPayload, Role,
-    SessionLimits, Severity, VerdictKind,
+    Cumulative, FindingStatus, Mode, PauseKind, RebuttalAnswer, RebuttalResponseDto, ReviewPayload,
+    Role, SessionLimits, Severity, VerdictKind,
 };
 use super::verdict::parse_verdict;
 
@@ -104,6 +104,7 @@ fn a_rerun_round_counts_a_reject_once_and_escalates_exactly_once() {
         reject_f1(2, cum(500, 7)),
         // crash; resume appends paused(crashed) + resumed, then re-runs round 2
         ReviewPayload::Paused {
+            kind: PauseKind::Other,
             reason: "crashed".into(),
             cumulative: cum(500, 7),
         },

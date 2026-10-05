@@ -195,6 +195,29 @@ fn usd_to_micros(usd: f64) -> u64 {
     (usd * MICROS_PER_USD).floor() as u64
 }
 
+/// A human ruling's decision (P2-§2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RulingDecision {
+    /// The finding is withdrawn as not worth fixing: it becomes `resolved`.
+    Drop,
+    /// The finding must be fixed: it reopens and main may no longer reject it.
+    Fix,
+}
+
+/// Why a session paused (P2-§2). Phase 1 `paused` events carry no kind and
+/// read as [`PauseKind::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseKind {
+    Escalation,
+    Transport,
+    Detached,
+    User,
+    #[default]
+    Other,
+}
+
 /// One logical review event (§4), the payload half of a `Note` event.
 /// `#[serde(tag = "type")]` makes the wire shape `{"type": "verdict", ...}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -265,19 +288,19 @@ pub enum ReviewPayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<Role>,
     },
+    /// The human's decision on one finding (P2-§2, `/rule drop|fix`).
+    /// There is no `escalation` event: escalation is derived by the fold
+    /// from the rejection count (P2 R3), so an `escalation` payload on the
+    /// channel no longer parses and is damage.
     Ruling {
+        finding: String,
+        decision: RulingDecision,
         text: String,
-        /// Finding IDs this ruling closes (§6 `/rule`).
-        closes: Vec<String>,
-    },
-    Escalation {
-        /// The finding ID whose second rejection triggered this (§3.4,
-        /// AC8), or empty when escalation came from elsewhere (e.g. the
-        /// human forcing a ruling-to-escalation path is out of scope here).
-        finding_id: String,
-        reason: String,
     },
     Paused {
+        /// Absent on Phase 1 channels → [`PauseKind::Other`] (AC-P2-11).
+        #[serde(default)]
+        kind: PauseKind,
         reason: String,
         #[serde(flatten)]
         cumulative: Cumulative,
@@ -433,6 +456,56 @@ mod tests {
     #[test]
     fn a_review_key_that_fails_to_parse_is_malformed() {
         let payload = serde_json::json!({"review": {"v": 1, "type": "not_a_real_kind"}});
+        assert!(matches!(
+            classify_note_payload(&payload),
+            NoteClassification::Malformed
+        ));
+    }
+
+    /// AC-P2-11: a Phase 1 `paused` (no `kind`) still parses, as `Other`.
+    #[test]
+    fn phase1_paused_without_kind_parses_as_other() {
+        let payload = serde_json::json!({"review": {
+            "v": REVIEW_SCHEMA_VERSION,
+            "type": "paused",
+            "reason": "x",
+            "exec_time_ms": 0,
+            "cost_usd_micros": 0
+        }});
+        match classify_note_payload(&payload) {
+            NoteClassification::Review(env) => match env.payload {
+                ReviewPayload::Paused { kind, reason, .. } => {
+                    assert_eq!(kind, PauseKind::Other);
+                    assert_eq!(reason, "x");
+                }
+                other => panic!("expected Paused, got {other:?}"),
+            },
+            other => panic!("expected Review, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ruling_round_trips() {
+        let payload = ReviewPayload::Ruling {
+            finding: "F1".into(),
+            decision: RulingDecision::Fix,
+            text: "use the cache".into(),
+        };
+        match classify_note_payload(&to_note_payload(&payload)) {
+            NoteClassification::Review(env) => assert_eq!(env.payload, payload),
+            other => panic!("expected Review, got {other:?}"),
+        }
+    }
+
+    /// P2-§2: the `escalation` event is gone; one on the channel is damage.
+    #[test]
+    fn escalation_payload_no_longer_parses() {
+        let payload = serde_json::json!({"review": {
+            "v": REVIEW_SCHEMA_VERSION,
+            "type": "escalation",
+            "finding_id": "F1",
+            "reason": "x"
+        }});
         assert!(matches!(
             classify_note_payload(&payload),
             NoteClassification::Malformed

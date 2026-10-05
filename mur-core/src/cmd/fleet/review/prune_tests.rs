@@ -11,7 +11,7 @@ use mur_common::channel::{ChannelActor, EventKind};
 
 use super::prune_reviews;
 use crate::cmd::fleet::review::constants::REVIEW_CORRUPTED_MARKER_FILE;
-use crate::cmd::fleet::review::schema::{ReviewPayload, to_note_payload};
+use crate::cmd::fleet::review::schema::{PauseKind, ReviewPayload, to_note_payload};
 use crate::cmd::fleet::review::verdict::zero_cumulative;
 use crate::cmd::fleet::store;
 
@@ -50,6 +50,7 @@ fn stopped() -> ReviewPayload {
 
 fn paused() -> ReviewPayload {
     ReviewPayload::Paused {
+        kind: PauseKind::Other,
         reason: "detached".into(),
         cumulative: zero_cumulative(),
     }

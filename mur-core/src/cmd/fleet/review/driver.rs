@@ -19,7 +19,7 @@ use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
 
-use super::schema::{Cumulative, Mode, ReviewPayload, to_note_payload};
+use super::schema::{Cumulative, Mode, PauseKind, ReviewPayload, to_note_payload};
 use crate::cmd::fleet::control;
 
 /// Send one A2A message to a named fleet member and return its reply text,
@@ -265,6 +265,7 @@ fn write_paused_and_revert(mur_home: &Path, channel_id: &str, reason: &str) -> R
         ChannelActor::System,
         EventKind::Note,
         to_note_payload(&ReviewPayload::Paused {
+            kind: PauseKind::Transport,
             reason: reason.to_string(),
             cumulative: zero,
         }),

@@ -196,19 +196,8 @@ impl Ledger {
                 }
             }
             ReviewPayload::HumanNote { .. } => {}
-            ReviewPayload::Ruling { closes, .. } => {
-                for id in closes {
-                    if let Some(f) = self.findings.iter_mut().find(|f| &f.id == id) {
-                        f.status = FindingStatus::Resolved;
-                    }
-                }
-            }
-            ReviewPayload::Escalation { finding_id, reason } => {
-                self.escalations.push(EscalationRecord {
-                    finding_id: finding_id.clone(),
-                    reason: reason.clone(),
-                });
-            }
+            // Phase 2 fold rules land in the next commit (P2-§4).
+            ReviewPayload::Ruling { .. } => {}
             ReviewPayload::Paused { cumulative, .. } => {
                 self.adopt_cumulative(cumulative);
                 self.paused = true;
