@@ -224,28 +224,48 @@ impl HumanWait {
     }
 }
 
+/// Reads one line from the human; `Ok("")` is EOF.
+pub(super) type LineReader<'a> = &'a dyn Fn() -> std::io::Result<String>;
+/// Writes prompt text to the human, without a trailing newline of its own.
+pub(super) type TextWriter<'a> = &'a dyn Fn(&str) -> std::io::Result<()>;
+
+/// Production [`LineReader`]: one line from stdin.
+pub(super) fn stdin_line() -> std::io::Result<String> {
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(line)
+}
+
+/// Production [`TextWriter`]: stdout, flushed so a prompt shows before a read.
+pub(super) fn stdout_text(text: &str) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())?;
+    out.flush()
+}
+
 /// §5 semi-auto over a terminal: show each outgoing message and send it
 /// only when the human presses Enter; `q` declines (ends the session).
+/// `input`/`output` are the terminal; tests inject their own.
 pub(super) struct TerminalGate<'a, T> {
     pub(super) inner: T,
     pub(super) wait: &'a HumanWait,
+    pub(super) input: LineReader<'a>,
+    pub(super) output: TextWriter<'a>,
 }
 
 impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
         let reply = self.inner.send(member, params)?;
-        println!("\n--- reply from {member} ---\n{reply}\n");
+        (self.output)(&format!("\n--- reply from {member} ---\n{reply}\n\n"))?;
         Ok(reply)
     }
 
     fn confirm_send(&self, member: &str, params: &serde_json::Value) -> Result<bool> {
         let text = message_text(params).unwrap_or_default();
-        println!("\n--- next message to {member} ---\n{text}\n");
-        print!("Send to {member}? [Enter = send, q = stop] ");
-        std::io::stdout().flush()?;
-        let mut line = String::new();
-        self.wait
-            .time(|| std::io::stdin().lock().read_line(&mut line))?;
+        (self.output)(&format!(
+            "\n--- next message to {member} ---\n{text}\n\nSend to {member}? [Enter = send, q = stop] "
+        ))?;
+        let line = self.wait.time(|| (self.input)())?;
         Ok(is_send_answer(&line))
     }
 
@@ -356,6 +376,8 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
             decide: &decide,
         },
         wait: &wait,
+        input: &stdin_line,
+        output: &stdout_text,
     };
     let (ledger, stop) = run_session(
         &transport,
@@ -411,6 +433,8 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
             decide: &decide,
         },
         wait: &wait,
+        input: &stdin_line,
+        output: &stdout_text,
     };
     let (ledger, stop) =
         super::resume::resume_session(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)?;

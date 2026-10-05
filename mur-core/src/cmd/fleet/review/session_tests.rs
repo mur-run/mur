@@ -283,6 +283,8 @@ fn terminal_gate_reports_prompt_time_once() {
     let gate = TerminalGate {
         inner: Nop,
         wait: &wait,
+        input: &|| Ok(String::new()),
+        output: &|_| Ok(()),
     };
     assert!(gate.take_human_wait() >= std::time::Duration::from_millis(20));
     assert_eq!(gate.take_human_wait(), std::time::Duration::ZERO);
