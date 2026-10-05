@@ -210,7 +210,9 @@ fn ruling(id: &str, decision: RulingDecision) -> ReviewPayload {
 }
 
 /// The live driver's view of a fully sealed log: every event applied in
-/// order, the open set snapshotted at each verdict (`loop_driver.rs`).
+/// order, the open set snapshotted at each verdict. This models the driver
+/// once PR 3 folds `turn_sent` into the per-round ledger; today's
+/// `loop_driver.rs` appends `turn_sent` without applying it.
 fn live(log: &[ReviewPayload]) -> Ledger {
     let mut l = Ledger::default();
     for p in log {
