@@ -93,6 +93,10 @@ Rules: `findings` lists NEW findings only; never invent IDs, the system assigns 
 /// Rendered in place of `{open_findings}` when the open set is empty.
 pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";
 
+/// The file whose presence `a2a_dial` treats as "the agent is up". The
+/// session preflight checks the same file so it agrees with the first send.
+pub const RUNNING_LOCK: &str = "running.lock";
+
 #[cfg(test)]
 mod tests {
     use super::*;

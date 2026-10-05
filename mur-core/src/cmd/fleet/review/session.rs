@@ -20,7 +20,7 @@ use mur_channel::ChannelService;
 use mur_common::fleet::Fleet;
 use mur_common::limits::Stuck;
 
-use super::constants::{REVIEW_FLEET_PREFIX, TRANSPORT_RETRY_DELAY};
+use super::constants::{REVIEW_FLEET_PREFIX, RUNNING_LOCK, TRANSPORT_RETRY_DELAY};
 use super::driver::{A2aTransport, ReviewTransport};
 use super::ledger::Ledger;
 use super::loop_driver::{LoopDriverStop, run_review_loop};
@@ -48,7 +48,8 @@ pub fn stop_reason(stop: &LoopDriverStop) -> String {
         LoopDriverStop::Blocked => "blocked (malformed verdict)".into(),
         LoopDriverStop::ReviewerBlocked => "blocked".into(),
         LoopDriverStop::Stopped => "stopped".into(),
-        LoopDriverStop::Paused { reason } => format!("transport failure: {reason}"),
+        // driver.rs already phrases this as "transport failure after one retry: …".
+        LoopDriverStop::Paused { reason } => reason.clone(),
         LoopDriverStop::RoundStuck => "stuck (round: open findings unchanged)".into(),
         LoopDriverStop::Guard(LoopStop::Deadline) => "limit: deadline".into(),
         LoopDriverStop::Guard(LoopStop::Stuck) => "limit: stuck (no activity)".into(),
@@ -208,6 +209,31 @@ fn is_send_answer(line: &str) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "" | "y" | "yes")
 }
 
+/// Refuse to start when a member is down, before main spends a turn only for
+/// the reviewer's send to fail. Same liveness test as `a2a_dial`'s
+/// `RequireRunning` (the lock file exists), so the two never disagree.
+pub(super) fn require_running(mur_home: &Path, members: &[&str]) -> Result<()> {
+    let down: Vec<&str> = members
+        .iter()
+        .copied()
+        .filter(|m| !mur_home.join("agents").join(m).join(RUNNING_LOCK).exists())
+        .collect();
+    if down.is_empty() {
+        return Ok(());
+    }
+    let names = down
+        .iter()
+        .map(|m| format!("'{m}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let starts = down
+        .iter()
+        .map(|m| format!("mur agent start {m}"))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    bail!("cannot start the review: {names} not running. Start with: {starts}");
+}
+
 /// `mur fleet review --main <a> --reviewer <b> "<task>"`.
 pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     if !std::io::stdin().is_terminal() {
@@ -224,6 +250,7 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     if args.task.trim().is_empty() {
         bail!("the review task is empty: say what the main agent should do");
     }
+    require_running(mur_home, &[&main, &reviewer])?;
 
     let name = new_session_name();
     // §9: resolve limits BEFORE anything is created, so an unresolvable

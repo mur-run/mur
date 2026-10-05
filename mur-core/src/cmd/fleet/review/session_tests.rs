@@ -166,3 +166,32 @@ fn stop_reasons_name_the_limit() {
         "limit: cost_usd"
     );
 }
+
+#[test]
+fn transport_pause_reason_is_not_prefixed_twice() {
+    // driver.rs already writes "transport failure after one retry: …".
+    let reason = "transport failure after one retry: agent 'qa' is not running".to_string();
+    let got = stop_reason(&LoopDriverStop::Paused {
+        reason: reason.clone(),
+    });
+    assert_eq!(got, reason);
+    assert_eq!(got.matches("transport failure").count(), 1);
+}
+
+#[test]
+fn preflight_names_every_member_that_is_not_running() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    let up = home.join("agents").join("main");
+    std::fs::create_dir_all(&up).unwrap();
+    std::fs::write(up.join(RUNNING_LOCK), "{}").unwrap();
+
+    assert!(require_running(home, &["main"]).is_ok());
+
+    let err = require_running(home, &["main", "qa", "other"])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("qa") && err.contains("other"), "{err}");
+    assert!(!err.contains("'main'"), "{err}");
+    assert!(err.contains("mur agent start qa"), "{err}");
+}
