@@ -5,3 +5,13 @@
 # "ignoring unknown configuration key"), so it lives here.
 [env]
 RUST_MIN_STACK = "33554432"
+
+# Local dev overrides for the CI-tuned [profile.dev] in Cargo.toml
+# (debug = 0, incremental = false). Profile keys here take precedence
+# over Cargo.toml; CI still forces them off via CARGO_INCREMENTAL=0 and
+# CARGO_PROFILE_DEV_DEBUG=0, since env vars beat config files.
+# Note: setting CARGO_PROFILE_DEV_INCREMENTAL under [env] would NOT work —
+# [env] only reaches processes cargo spawns, not cargo's own config.
+[profile.dev]
+debug = 2
+incremental = true
