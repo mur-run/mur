@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use super::constants::{REJECT_ESCALATION_THRESHOLD, ROUND_STUCK_AFTER_UNCHANGED_ROUNDS};
-use super::schema::{FindingStatus, Mode, ReviewPayload, Severity};
+use super::schema::{FindingStatus, Mode, ReviewPayload, Role, RulingDecision, Severity};
 
 /// One finding, as the ledger tracks it (§3.3).
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +18,10 @@ pub struct Finding {
     /// §3.4: how many times the main agent has rejected this finding. The
     /// second rejection escalates automatically (AC8).
     pub reject_count: u32,
+    /// P2-§4: the latest human ruling on this finding, if any. `Fix`
+    /// freezes `reject_count` (rule 1) and forbids `disputed` (rule 4);
+    /// `Drop` forbids any status but `resolved` (rule 3).
+    pub ruled: Option<RulingDecision>,
 }
 
 /// Why a fold step was rejected as an illegal transition (§8.2: "an illegal
@@ -34,6 +38,12 @@ pub enum FoldError {
     DuplicateFindingId(String),
     #[error("rebuttal references finding {0:?}, which was never issued")]
     RebuttalForUnissuedFinding(String),
+    #[error("ruling references finding {0:?}, which was never issued")]
+    RulingForUnissuedFinding(String),
+    #[error("finding_status reopens finding {0:?}, which a ruling dropped")]
+    ReopenAfterDrop(String),
+    #[error("finding_status marks finding {0:?} disputed after a fix ruling")]
+    DisputedAfterFix(String),
 }
 
 /// The ledger's fold state (§3.3, §3.5). A pure value: everything here is
@@ -57,12 +67,33 @@ pub struct Ledger {
     pub paused: bool,
     pub exec_time_ms: u64,
     pub cost_usd_micros: u64,
+    /// Rulings each role has not yet been sent, indexed by [`role_slot`].
+    /// A `ruling` pushes to both; a `turn_sent { to }` clears that role's
+    /// list (P2-§5.3 binding note). Event-derived, so replay matches.
+    unseen_rulings: [Vec<RulingRecord>; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscalationRecord {
     pub finding_id: String,
     pub reason: String,
+    /// P2-§4: set when a ruling on `finding_id` folds.
+    pub handled: bool,
+}
+
+/// One folded ruling, as a binding note carries it (P2-§5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulingRecord {
+    pub finding: String,
+    pub decision: RulingDecision,
+    pub text: String,
+}
+
+fn role_slot(role: Role) -> usize {
+    match role {
+        Role::Main => 0,
+        Role::Reviewer => 1,
+    }
 }
 
 impl Ledger {
@@ -88,6 +119,20 @@ impl Ledger {
             out.sort_by_key(|f| f.status != FindingStatus::Disputed);
         }
         out
+    }
+
+    /// P2-§4 "Single definition": the escalations still owed a ruling.
+    /// The stop check, the resume decision, and the stop/resume screens
+    /// all call this one function.
+    #[allow(dead_code)] // wired in PR 3 (Task 6–7)
+    pub fn pending_ruling(&self) -> Vec<&EscalationRecord> {
+        self.escalations.iter().filter(|e| !e.handled).collect()
+    }
+
+    /// Rulings not yet delivered to `role` (P2-§5.3 binding note).
+    #[allow(dead_code)] // wired in PR 3 (Task 6–7)
+    pub fn binding_rulings(&self, role: Role) -> &[RulingRecord] {
+        &self.unseen_rulings[role_slot(role)]
     }
 
     #[allow(dead_code)] // not wired yet: §6 /rule and §3.4 rebuttal
@@ -132,7 +177,9 @@ impl Ledger {
             ReviewPayload::SessionStarted { mode, .. } => {
                 self.mode = *mode;
             }
-            ReviewPayload::TurnSent { .. } => {}
+            ReviewPayload::TurnSent { to, .. } => {
+                self.unseen_rulings[role_slot(*to)].clear();
+            }
             ReviewPayload::Verdict {
                 round, cumulative, ..
             } => {
@@ -163,12 +210,23 @@ impl Ledger {
                     status: FindingStatus::Open,
                     round_issued: *round,
                     reject_count: 0,
+                    ruled: None,
                 });
             }
             ReviewPayload::FindingStatus { id, status, .. } => {
                 let Some(f) = self.findings.iter_mut().find(|f| &f.id == id) else {
                     return Err(FoldError::StatusForUnissuedFinding(id.clone()));
                 };
+                // P2-§4 rules 3 and 4.
+                match (f.ruled, *status) {
+                    (Some(RulingDecision::Drop), s) if s != FindingStatus::Resolved => {
+                        return Err(FoldError::ReopenAfterDrop(id.clone()));
+                    }
+                    (Some(RulingDecision::Fix), FindingStatus::Disputed) => {
+                        return Err(FoldError::DisputedAfterFix(id.clone()));
+                    }
+                    _ => {}
+                }
                 f.status = *status;
             }
             ReviewPayload::Rebuttal {
@@ -181,7 +239,11 @@ impl Ledger {
                     let Some(f) = self.findings.iter_mut().find(|f| f.id == r.id) else {
                         return Err(FoldError::RebuttalForUnissuedFinding(r.id.clone()));
                     };
-                    if r.answer == super::schema::RebuttalAnswer::Reject {
+                    // P2-§4 rule 1: after `fix` a reject is malformed at the
+                    // driver; the fold ignores it as defence in depth.
+                    if r.answer == super::schema::RebuttalAnswer::Reject
+                        && f.ruled != Some(RulingDecision::Fix)
+                    {
                         f.reject_count += 1;
                         // AC8: the SAME finding rejected
                         // REJECT_ESCALATION_THRESHOLD times escalates
@@ -190,24 +252,43 @@ impl Ledger {
                             self.escalations.push(EscalationRecord {
                                 finding_id: r.id.clone(),
                                 reason: "rejected twice by the main agent".to_string(),
+                                handled: false,
                             });
                         }
                     }
                 }
             }
             ReviewPayload::HumanNote { .. } => {}
-            ReviewPayload::Ruling { closes, .. } => {
-                for id in closes {
-                    if let Some(f) = self.findings.iter_mut().find(|f| &f.id == id) {
-                        f.status = FindingStatus::Resolved;
-                    }
+            ReviewPayload::Ruling {
+                finding,
+                decision,
+                text,
+            } => {
+                // P2-§4 rule 2.
+                let Some(f) = self.findings.iter_mut().find(|f| &f.id == finding) else {
+                    return Err(FoldError::RulingForUnissuedFinding(finding.clone()));
+                };
+                f.reject_count = 0;
+                f.ruled = Some(*decision);
+                f.status = match decision {
+                    RulingDecision::Drop => FindingStatus::Resolved,
+                    RulingDecision::Fix => FindingStatus::Open,
+                };
+                for e in self
+                    .escalations
+                    .iter_mut()
+                    .filter(|e| &e.finding_id == finding && !e.handled)
+                {
+                    e.handled = true;
                 }
-            }
-            ReviewPayload::Escalation { finding_id, reason } => {
-                self.escalations.push(EscalationRecord {
-                    finding_id: finding_id.clone(),
-                    reason: reason.clone(),
-                });
+                let record = RulingRecord {
+                    finding: finding.clone(),
+                    decision: *decision,
+                    text: text.clone(),
+                };
+                for unseen in &mut self.unseen_rulings {
+                    unseen.push(record.clone());
+                }
             }
             ReviewPayload::Paused { cumulative, .. } => {
                 self.adopt_cumulative(cumulative);
@@ -305,7 +386,9 @@ pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
             sealed.adopt_limits_from(&dropped);
         }
         match (p, round) {
-            (ReviewPayload::TurnSent { .. }, _) => {}
+            // A `turn_sent` folds into its round's attempt, so a delivery
+            // (P2-§5.3 binding note) counts only once that round seals; a
+            // dropped trailing round re-sends the note on re-run (P2-§2).
             (_, Some(r)) => {
                 let (_, scratch) = attempt.get_or_insert_with(|| (r, sealed.clone()));
                 scratch.apply(p)?;
@@ -330,243 +413,5 @@ pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cmd::fleet::review::schema::VerdictKind;
-    use std::time::Duration;
-
-    use mur_common::limits::Stuck;
-
-    use crate::cmd::fleet::review::schema::{
-        Cumulative, RebuttalAnswer, RebuttalResponseDto, SessionLimits,
-    };
-
-    fn cum(ms: u64, micros: u64) -> Cumulative {
-        Cumulative {
-            exec_time_ms: ms,
-            cost_usd_micros: micros,
-        }
-    }
-
-    fn issue(ledger: &mut Ledger, severity: Severity, issue: &str, round: u32) -> String {
-        let id = ledger.next_finding_id();
-        ledger
-            .apply(&ReviewPayload::FindingIssued {
-                round,
-                id: id.clone(),
-                severity,
-                issue: issue.to_string(),
-            })
-            .unwrap();
-        id
-    }
-
-    /// AC7: IDs are system-assigned and sequential. Model-supplied IDs are
-    /// ignored — there is no field for the model to supply one through
-    /// (schema.rs's `NewFindingDto` has no `id`), and an out-of-sequence id
-    /// written to the ledger is a hard error, never silently accepted.
-    #[test]
-    fn finding_ids_are_sequential_and_out_of_sequence_ids_are_rejected() {
-        let mut ledger = Ledger::default();
-        let f1 = issue(&mut ledger, Severity::Low, "a", 1);
-        assert_eq!(f1, "F1");
-        let f2 = issue(&mut ledger, Severity::Medium, "b", 1);
-        assert_eq!(f2, "F2");
-
-        let mut bad = ledger.clone();
-        let err = bad
-            .apply(&ReviewPayload::FindingIssued {
-                round: 1,
-                id: "F99".to_string(),
-                severity: Severity::Low,
-                issue: "c".to_string(),
-            })
-            .unwrap_err();
-        assert_eq!(
-            err,
-            FoldError::OutOfSequenceFindingId {
-                got: "F99".into(),
-                expected: "F3".into(),
-            }
-        );
-    }
-
-    /// AC8: the same finding rejected twice produces an escalation record.
-    #[test]
-    fn rejecting_the_same_finding_twice_escalates() {
-        let mut ledger = Ledger::default();
-        let f1 = issue(&mut ledger, Severity::High, "x", 1);
-        let reject = |id: &str| RebuttalResponseDto {
-            id: id.to_string(),
-            answer: RebuttalAnswer::Reject,
-            reason: Some("disagree".to_string()),
-        };
-        ledger
-            .apply(&ReviewPayload::Rebuttal {
-                round: 1,
-                responses: vec![reject(&f1)],
-                cumulative: cum(0, 0),
-            })
-            .unwrap();
-        assert!(ledger.escalations.is_empty(), "first rejection ≠ escalate");
-
-        ledger
-            .apply(&ReviewPayload::Rebuttal {
-                round: 2,
-                responses: vec![reject(&f1)],
-                cumulative: cum(0, 0),
-            })
-            .unwrap();
-        assert_eq!(ledger.escalations.len(), 1);
-        assert_eq!(ledger.escalations[0].finding_id, f1);
-    }
-
-    /// AC9: round-stuck fires after EXACTLY two consecutive rounds with an
-    /// unchanged open set — not one, not three.
-    #[test]
-    fn round_stuck_fires_after_exactly_two_unchanged_rounds() {
-        let mut ledger = Ledger::default();
-        let f1 = issue(&mut ledger, Severity::Low, "x", 1);
-        ledger.note_round_complete(); // round 1 snapshot: {F1: open}
-        assert!(!ledger.round_stuck, "only one snapshot so far");
-
-        // Round 2: nothing changes.
-        ledger.note_round_complete(); // round 2 snapshot: {F1: open} — same as round 1
-        assert!(
-            ledger.round_stuck,
-            "two consecutive rounds with the same open set must trip"
-        );
-
-        // A change resets it.
-        ledger
-            .apply(&ReviewPayload::FindingStatus {
-                round: 3,
-                id: f1.clone(),
-                status: FindingStatus::Resolved,
-                reason: None,
-            })
-            .unwrap();
-        ledger.note_round_complete();
-        assert!(!ledger.round_stuck, "the open set changed, so not stuck");
-    }
-
-    /// AC10: `approve` with a disputed HIGH finding is refused; with only a
-    /// disputed medium/low it is accepted, and those are listed first.
-    #[test]
-    fn approve_is_blocked_only_by_a_disputed_high_finding() {
-        let mut ledger = Ledger::default();
-        let high = issue(&mut ledger, Severity::High, "sec bug", 1);
-        let low = issue(&mut ledger, Severity::Low, "style nit", 1);
-        ledger
-            .apply(&ReviewPayload::FindingStatus {
-                round: 1,
-                id: high.clone(),
-                status: FindingStatus::Disputed,
-                reason: Some("still think it's a bug".into()),
-            })
-            .unwrap();
-        assert_eq!(ledger.disputed_high_severity().len(), 1);
-
-        // Now dispute only the low finding instead.
-        let mut ledger2 = Ledger::default();
-        let _high2 = issue(&mut ledger2, Severity::High, "sec bug", 1);
-        let low2 = issue(&mut ledger2, Severity::Low, "style nit", 1);
-        ledger2
-            .apply(&ReviewPayload::FindingStatus {
-                round: 1,
-                id: low2.clone(),
-                status: FindingStatus::Disputed,
-                reason: Some("still a nit".into()),
-            })
-            .unwrap();
-        assert!(ledger2.disputed_high_severity().is_empty());
-        assert_eq!(ledger2.disputed_medium_low().len(), 1);
-        assert_eq!(ledger2.disputed_medium_low()[0].id, low2);
-        let _ = (high, low); // silence unused in the first scenario
-    }
-
-    /// AC11 (replay half): folding the SAME event sequence twice produces
-    /// byte-for-byte (here: structurally) identical ledgers.
-    #[test]
-    fn folding_is_deterministic_and_replayable() {
-        let build = |note_after_each_round: bool| {
-            let mut ledger = Ledger::default();
-            ledger
-                .apply(&ReviewPayload::SessionStarted {
-                    members: ["main".into(), "reviewer".into()],
-                    mode: Mode::SemiAuto,
-                    limits: SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
-                })
-                .unwrap();
-            let f1 = issue(&mut ledger, Severity::Medium, "x", 1);
-            if note_after_each_round {
-                ledger.note_round_complete();
-            }
-            ledger
-                .apply(&ReviewPayload::FindingStatus {
-                    round: 2,
-                    id: f1,
-                    status: FindingStatus::Resolved,
-                    reason: None,
-                })
-                .unwrap();
-            if note_after_each_round {
-                ledger.note_round_complete();
-            }
-            ledger
-        };
-        let a = build(true);
-        let b = build(true);
-        assert_eq!(a, b);
-    }
-
-    /// §8.2: "an illegal state transition (e.g. a `finding_status` for an ID
-    /// never issued)" is an error, not a silent no-op.
-    #[test]
-    fn a_status_for_an_unissued_finding_is_an_error() {
-        let mut ledger = Ledger::default();
-        let err = ledger
-            .apply(&ReviewPayload::FindingStatus {
-                round: 1,
-                id: "F1".to_string(),
-                status: FindingStatus::Resolved,
-                reason: None,
-            })
-            .unwrap_err();
-        assert_eq!(err, FoldError::StatusForUnissuedFinding("F1".to_string()));
-    }
-
-    /// §8.2 "Limits on rollback — clock and cost are monotonic": a later
-    /// event reporting a LOWER value never lowers the ledger's total.
-    #[test]
-    fn cumulative_totals_never_decrease() {
-        let mut ledger = Ledger::default();
-        ledger
-            .apply(&ReviewPayload::Verdict {
-                round: 1,
-                kind: VerdictKind::Revise,
-                cumulative: cum(5000, 800),
-            })
-            .unwrap();
-        assert_eq!(ledger.exec_time_ms, 5000);
-        assert_eq!(ledger.cost_usd_micros, 800);
-
-        // A later event reports LOWER numbers (e.g. forged/garbled) — must
-        // not move the totals down.
-        ledger
-            .apply(&ReviewPayload::Verdict {
-                round: 2,
-                kind: VerdictKind::Revise,
-                cumulative: cum(100, 1),
-            })
-            .unwrap();
-        assert_eq!(ledger.exec_time_ms, 5000, "never decreases");
-        assert_eq!(ledger.cost_usd_micros, 800, "never decreases");
-    }
-
-    #[test]
-    fn round_stuck_ignores_ties_at_the_start() {
-        let ledger = Ledger::default();
-        assert!(!ledger.round_stuck);
-    }
-}
+#[path = "ledger_tests.rs"]
+mod ledger_tests;

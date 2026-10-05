@@ -92,7 +92,6 @@ pub fn observe(
                 // Notes and rulings do not move the lifecycle.
                 ReviewPayload::HumanNote { .. }
                 | ReviewPayload::Ruling { .. }
-                | ReviewPayload::Escalation { .. }
                 | ReviewPayload::ModeChanged { .. } => tail,
                 _ => None,
             };

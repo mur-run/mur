@@ -30,7 +30,7 @@ use super::loop_driver::{LoopDriverStop, Members, continue_review_loop};
 use super::rollback::{ReplayOutcome, replay_with_damage};
 use super::run_lock::DriverLock;
 use super::schema::{
-    Cumulative, NoteClassification, ReviewPayload, SessionLimits, classify_note_payload,
+    Cumulative, NoteClassification, PauseKind, ReviewPayload, SessionLimits, classify_note_payload,
     to_note_payload,
 };
 use super::state::{SessionState, observe};
@@ -230,6 +230,7 @@ pub fn resume_session(
     let mut lifecycle = Vec::new();
     if crashed {
         lifecycle.push(ReviewPayload::Paused {
+            kind: PauseKind::Other,
             reason: REVIEW_PAUSE_REASON_CRASHED.to_string(),
             cumulative,
         });
