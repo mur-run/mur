@@ -51,7 +51,7 @@ Three PRs, cut at the Task 5 / Task 6 line:
 
 PR 2's items with no non-test caller (`pending_ruling()`, `binding_rulings`, `ruling.rs` parse
 entry points) carry `#[allow(dead_code)] // wired in PR 3 (Task 6–7)`; PR 3 removes every one of
-those attributes (`git grep 'wired in PR 3'` must be empty before it merges). Open PR 3 right
+those attributes (`git grep 'wired in PR 3' -- '*.rs'` must be empty before it merges). Open PR 3 right
 after PR 2 merges.
 
 ## File structure
