@@ -82,6 +82,9 @@ pub(super) async fn run_browser(action: BrowserAction) -> Result<()> {
                 &mut out,
             )?;
             cmd::browser::doctor::live_check(&mut out).await?;
+            // After the live test: the entry is only useful once rendering
+            // was proven, and the probe it runs needs the grants above.
+            cmd::browser::setup::register_entry(agent.as_deref(), &mut out)?;
             println!("mur browser is ready.");
         }
         BrowserAction::Prune {

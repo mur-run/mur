@@ -1,6 +1,8 @@
 //! `mur browser` command handlers. Heavy implementation lives in `mur-browser`.
 
 pub mod doctor;
+pub mod engine_check;
+pub mod live_state;
 pub mod perms;
 mod replay;
 pub mod server_install;
@@ -65,6 +67,14 @@ pub async fn record(
         Some(config) => mur_browser::live_proxy::launch_args(config),
         None => Vec::new(),
     };
+    // Live mode honours `--profile` the same way replay does. Without this the
+    // launch had no cookies and every authenticated page bounced to its login
+    // form, which no browser-app grant can fix: the state was never passed.
+    let injected = match mode {
+        Mode::Live => live_state::prepare(&mur_home()?, profile)?,
+        _ => None,
+    };
+    args.extend(live_state::args(injected.as_ref()));
     // These flags are intentionally merely forwarded. `@playwright/mcp`
     // owns their validation, keeping this proxy compatible with new releases.
     args.extend(extra.iter().cloned());
@@ -109,8 +119,10 @@ pub async fn record(
         "browser record started"
     );
     let result = run_stdio(server, hook).await;
-    // Removes the token-bearing config directory (no-op for test/automation).
+    // Removes the token-bearing config directory (no-op for test/automation)
+    // and the decrypted session file.
     drop(live_config);
+    drop(injected);
     tracing::info!(run, ok = result.is_ok(), "browser record finished");
     // The child has ended; kill the broker and unlink its private endpoint
     // even when Playwright exited with an error.
@@ -772,6 +784,13 @@ pub async fn auth(
     allow_domain: &[String],
 ) -> Result<()> {
     let browser = select_browser(requested_browser)?;
+    // Before anything is created: the app-bundle scan above cannot tell
+    // whether Playwright has the build it will actually launch.
+    engine_check::preflight(
+        browser.playwright_name(),
+        &mur_browser::server::install_dir(&mur_home()?),
+        mur_browser::chromium::system_browsers_dir().as_deref(),
+    )?;
     paths::validate_name(site)?;
     let parsed =
         url::Url::parse(url).map_err(|error| anyhow::anyhow!("invalid --url {url:?}: {error}"))?;

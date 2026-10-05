@@ -12,6 +12,15 @@
 //!   write grant. The probe binary is written at run time and then exec'd;
 //!   `~/.mur` is outside the exec lane, so a write entitlement alone leaves
 //!   the exec failing with `Operation not permitted`.
+//! * Playwright's browsers cache (`ms-playwright`) — both an exec lane and a
+//!   write grant, and both on the cache *root*, not on one revision's build
+//!   dir: allowlisting `chrome-headless-shell` by name is not enough once the
+//!   seal is on (the exec is by absolute path under the cache), and the
+//!   server writes its `browser@<hash>` registry locks there on every launch.
+//!   Scoping to a build dir would break on the next `install-browser`, so a
+//!   working replay after an upgrade needs the root. Skipped when the cache
+//!   cannot be located (`PLAYWRIGHT_BROWSERS_PATH=0`, no `HOME`), so nothing
+//!   is guessed — the live test then reports the denial.
 //!
 //! [`plan`] is pure over the profile it is handed, so tests need no agent on
 //! disk and nothing is granted without a literal `yes` (`cmd::consent`).
@@ -38,45 +47,63 @@ pub fn probe_dir(mur_home: &Path, agent: &str) -> PathBuf {
 pub struct Plan {
     /// Binaries absent from `entitlements.processes.spawn.allowed`.
     pub binaries: Vec<String>,
-    /// Probe dir, when absent from `spawn.allowed_dirs`.
-    pub dir: Option<String>,
+    /// Exec lanes absent from `spawn.allowed_dirs`: the probe dir, and the
+    /// browsers cache when it is locatable.
+    pub dirs: Vec<String>,
     /// MCP server install dir, when absent from `filesystem.read`.
     pub read: Option<String>,
+    /// Browsers cache, when absent from `filesystem.write`.
+    pub write: Option<String>,
 }
 
 impl Plan {
     pub fn is_empty(&self) -> bool {
-        self.binaries.is_empty() && self.dir.is_none() && self.read.is_none()
+        self.binaries.is_empty()
+            && self.dirs.is_empty()
+            && self.read.is_none()
+            && self.write.is_none()
     }
 }
 
 /// Diff the required grants against what the profile already allows.
 ///
-/// Pure: `allowed` / `allowed_dirs` / `reads` come from the caller, so this
+/// Pure: `allowed` / `allowed_dirs` / `reads` / `writes` come from the caller,
+/// as does `browsers` (the Playwright cache, `None` when unlocatable), so this
 /// never reads or writes a profile. Matching is exact, like `perm deny-spawn`'s —
 /// a near match must show up as missing rather than be silently accepted.
 pub fn plan(
     mur_home: &Path,
     agent: &str,
+    browsers: Option<&Path>,
     allowed: &[String],
     allowed_dirs: &[String],
     reads: &[String],
+    writes: &[String],
 ) -> Plan {
     let binaries = REQUIRED_BINARIES
         .iter()
         .filter(|b| !allowed.iter().any(|a| a == *b))
         .map(|b| (*b).to_string())
         .collect();
-    let want = probe_dir(mur_home, agent).to_string_lossy().into_owned();
-    let dir = (!allowed_dirs.contains(&want)).then_some(want);
+    let cache = browsers.map(|d| d.to_string_lossy().into_owned());
+    let dirs = [
+        Some(probe_dir(mur_home, agent).to_string_lossy().into_owned()),
+        cache.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|want| !allowed_dirs.contains(want))
+    .collect();
     let server = mur_browser::server::install_dir(mur_home)
         .to_string_lossy()
         .into_owned();
     let read = (!reads.contains(&server)).then_some(server);
+    let write = cache.filter(|c| !writes.contains(c));
     Plan {
         binaries,
-        dir,
+        dirs,
         read,
+        write,
     }
 }
 
@@ -87,17 +114,19 @@ pub enum Grant {
     Binary(String),
     Dir(String),
     Read(String),
+    Write(String),
 }
 
 impl Plan {
     /// The missing grants, binaries first, in the order they are applied.
     pub fn grants(&self) -> Vec<Grant> {
         let mut out: Vec<Grant> = self.binaries.iter().cloned().map(Grant::Binary).collect();
-        if let Some(d) = &self.dir {
-            out.push(Grant::Dir(d.clone()));
-        }
+        out.extend(self.dirs.iter().cloned().map(Grant::Dir));
         if let Some(r) = &self.read {
             out.push(Grant::Read(r.clone()));
+        }
+        if let Some(w) = &self.write {
+            out.push(Grant::Write(w.clone()));
         }
         out
     }
@@ -110,6 +139,7 @@ pub fn command_for(agent: &str, grant: &Grant) -> String {
         Grant::Binary(b) => format!("mur agent perm allow-spawn {agent} {b}"),
         Grant::Dir(d) => format!("mur agent perm allow-spawn-dir {agent} {d}"),
         Grant::Read(r) => format!("mur agent perm allow-read {agent} {r}"),
+        Grant::Write(w) => format!("mur agent perm allow-write {agent} {w}"),
     }
 }
 
@@ -154,7 +184,7 @@ pub fn confirm_and_apply(
     for c in &cmds {
         writeln!(output, "    {c}")?;
     }
-    if plan.dir.is_some() {
+    if !plan.dirs.is_empty() {
         writeln!(
             output,
             "    note      the directory grant is an exec lane, not a write grant"
@@ -189,6 +219,16 @@ mod tests {
         v.iter().map(|x| (*x).to_string()).collect()
     }
 
+    /// The cache a mac/Linux install resolves; tests pass it explicitly so
+    /// they do not depend on the host's `HOME` or `PLAYWRIGHT_BROWSERS_PATH`.
+    fn cache() -> PathBuf {
+        home().join("ms-playwright")
+    }
+
+    fn cache_s() -> String {
+        cache().to_string_lossy().into_owned()
+    }
+
     fn server() -> String {
         mur_browser::server::install_dir(&home())
             .to_string_lossy()
@@ -197,22 +237,25 @@ mod tests {
 
     #[test]
     fn empty_profile_needs_every_grant() {
-        let p = plan(&home(), "mur", &[], &[], &[]);
+        let p = plan(&home(), "mur", Some(&cache()), &[], &[], &[], &[]);
         assert_eq!(p.binaries, s(&["node", "chrome-headless-shell"]));
-        assert_eq!(p.dir, Some(probe("mur")));
+        assert_eq!(p.dirs, vec![probe("mur"), cache_s()]);
         assert_eq!(p.read, Some(server()));
+        assert_eq!(p.write, Some(cache_s()));
         assert!(!p.is_empty());
     }
 
     #[test]
     fn fully_granted_profile_is_a_no_op() {
-        let dirs = vec![probe("mur")];
+        let dirs = vec![probe("mur"), cache_s()];
         let p = plan(
             &home(),
             "mur",
+            Some(&cache()),
             &s(&["node", "chrome-headless-shell"]),
             &dirs,
             &[server()],
+            &[cache_s()],
         );
         assert!(p.is_empty(), "{p:?}");
     }
@@ -220,14 +263,30 @@ mod tests {
     /// The probe dir is per-agent: another agent's grant must not count.
     #[test]
     fn dir_grant_is_not_shared_between_agents() {
-        let dirs = vec![probe("other")];
-        let p = plan(&home(), "mur", &[], &dirs, &[server()]);
-        assert_eq!(p.dir, Some(probe("mur")));
+        let dirs = vec![probe("other"), cache_s()];
+        let p = plan(
+            &home(),
+            "mur",
+            Some(&cache()),
+            &[],
+            &dirs,
+            &[server()],
+            &[cache_s()],
+        );
+        assert_eq!(p.dirs, vec![probe("mur")]);
     }
 
     #[test]
     fn partial_profile_only_lists_what_is_missing() {
-        let p = plan(&home(), "mur", &s(&["node"]), &[], &[server()]);
+        let p = plan(
+            &home(),
+            "mur",
+            Some(&cache()),
+            &s(&["node"]),
+            &[cache_s()],
+            &[server()],
+            &[cache_s()],
+        );
         assert_eq!(p.binaries, s(&["chrome-headless-shell"]));
         let cmds = commands("mur", &p);
         assert_eq!(cmds.len(), 2, "{cmds:?}");
@@ -235,11 +294,60 @@ mod tests {
         assert!(cmds[1].contains(&format!("allow-spawn-dir mur {}", probe("mur"))));
     }
 
+    /// The seal execs the shell by absolute path under the cache and the
+    /// server writes its registry locks there, so both lanes are required
+    /// even when every binary is already allowlisted by name.
+    #[test]
+    fn browsers_cache_needs_both_exec_and_write() {
+        let p = plan(
+            &home(),
+            "mur",
+            Some(&cache()),
+            &s(&["node", "chrome-headless-shell"]),
+            &[probe("mur")],
+            &[server()],
+            &[],
+        );
+        let cmds = commands("mur", &p);
+        assert!(
+            cmds.contains(&format!("mur agent perm allow-spawn-dir mur {}", cache_s())),
+            "{cmds:?}"
+        );
+        assert!(
+            cmds.contains(&format!("mur agent perm allow-write mur {}", cache_s())),
+            "{cmds:?}"
+        );
+    }
+
+    /// `PLAYWRIGHT_BROWSERS_PATH=0` (or no `HOME`) leaves the cache
+    /// unlocatable: nothing about it is planned rather than a path guessed.
+    #[test]
+    fn unlocatable_cache_is_skipped_not_guessed() {
+        let p = plan(
+            &home(),
+            "mur",
+            None,
+            &s(&["node", "chrome-headless-shell"]),
+            &[probe("mur")],
+            &[server()],
+            &[],
+        );
+        assert!(p.is_empty(), "{p:?}");
+    }
+
     /// The launch chain is `node <install>/…`; the npx-era bare name
     /// `playwright-mcp` never resolves to an executable and must not count.
     #[test]
     fn grants_match_the_vendored_launch_chain() {
-        let p = plan(&home(), "mur", &s(&["playwright-mcp"]), &[], &[]);
+        let p = plan(
+            &home(),
+            "mur",
+            Some(&cache()),
+            &s(&["playwright-mcp"]),
+            &[],
+            &[],
+            &[],
+        );
         assert!(p.binaries.contains(&"node".to_string()), "{p:?}");
         let cmds = commands("mur", &p);
         assert!(
@@ -270,7 +378,15 @@ mod tests {
 
     #[test]
     fn nothing_is_granted_without_a_literal_yes() {
-        let p = plan(&home(), "mur", &[], &[], &[]);
+        let p = plan(
+            &home(),
+            "mur",
+            Some(Path::new("/tmp/ms-playwright")),
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         for a in ["y\n", "YES\n", "\n", "", "no\n"] {
             let (ok, out, applied) = run(a, &p);
             assert!(!ok, "{a:?} must not consent");
@@ -281,7 +397,15 @@ mod tests {
 
     #[test]
     fn a_literal_yes_applies_every_missing_grant() {
-        let p = plan(&home(), "mur", &[], &[], &[]);
+        let p = plan(
+            &home(),
+            "mur",
+            Some(Path::new("/tmp/ms-playwright")),
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         let (ok, out, applied) = run("yes\n", &p);
         assert!(ok);
         assert_eq!(applied, commands("mur", &p));
