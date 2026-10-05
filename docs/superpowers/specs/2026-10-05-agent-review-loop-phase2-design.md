@@ -1,8 +1,11 @@
 # Agent review loop — Phase 2 design: escalation → ruling
 
-- **Status:** Draft rev 2. Decisions R1–R9 were taken in brainstorm (human, 2026-10-05). R7
+- **Status:** Draft rev 4. Decisions R1–R9 were taken in brainstorm (human, 2026-10-05). R7
   (proactive `/rule`) was recommended and taken as a flagged assumption under autonomous
-  continuation. No open questions remain; accepted limitations are in §9.
+  continuation. Rev 4 applies the plan review rulings D1–D3 (human, 2026-10-05): `/rule`
+  timing at the send prompts (§5.3), one resume column for paused and crashed sessions (§6),
+  and no plain-text notes in Phase 2 (§0, R7, §9). No open questions remain; accepted
+  limitations are in §9.
 - **Date:** 2026-10-05
 - **Base:** Phase 1 spec `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md` (Approved
   rev 3), implemented on `main` by #1722 (`400b1354`). Section numbers `P1-§x` refer to it.
@@ -18,7 +21,11 @@ written by any code path. Phase 2 makes escalation a **wait for a human ruling**
 real semantics.
 
 Out of scope: `cost_usd` work for auto mode (Phase 3 blocker), reviewer appeals, multi-finding
-rulings, Hub GUI, and **MURMUR integration**. Phase 2's human surface is the terminal (stdin)
+rulings, Hub GUI, **MURMUR integration**, and the other P1-§6 human inputs: plain-text
+`human_note`, `@<agent>` / `@主` / `@審查` addressed notes, the `@<unknown>` hint, and the
+repeated-note `/rule` suggestion. None of these has an input path or a writer on `main`
+(`HumanNote` folds as a no-op, `ledger.rs:198`); they move to Phase 3 together with MURMUR.
+`/rule` is Phase 2's only way for a human to intervene. Phase 2's human surface is the terminal (stdin)
 driver that Phase 1 already ships (`session.rs`: `Send to …? [Enter = send, q = stop]`,
 `Paused — continue? [Enter = continue, q = leave paused]`). Wiring `/rule` into MURMUR's slash
 table comes later and must reuse the event and fold rules here unchanged.
@@ -33,7 +40,7 @@ table comes later and must reuse the event and fold rules here unchanged.
 | R4 | One ruling addresses exactly one finding: `Ruling { finding, decision: drop \| fix, text }`. |
 | R5 | `drop` = the main agent is right; the finding closes. `fix` = the reviewer is right; the finding stays open and the main agent may no longer reject it. |
 | R6 | An escalation is handled iff a ruling **names its finding** and appears after it in channel order. It does not depend on whether the ruling closes the finding. |
-| R7 | *(assumption, flagged)* `/rule` is accepted for **any open finding**, not only escalated ones. A proactive ruling folds identically; there is just no escalation to mark handled. Reason: P1-§6 already prompts `Make this a formal ruling with /rule?` when a plain-text note repeats, which is normally before any escalation. |
+| R7 | *(assumption, flagged)* `/rule` is accepted for **any open finding**, not only escalated ones. A proactive ruling folds identically; there is just no escalation to mark handled. Reason: Phase 2 has no plain-text note (§0), so `/rule` is the only way a human can intervene before an issue reaches escalation. |
 | R8 | At the ruling prompt — the single prompt shown both live (§5.1) and by `review-resume` (§6); there is no second variant — `q` means **leave paused**, as at the P1-§7.0 pause prompt. Abandon is the explicit `/abandon`, never a single key, because it is destructive (`session_stopped`, fleet definition removed, no resume). |
 | R9 | Re-raising a dropped issue under a **new** finding ID is not detected in Phase 2 (accepted limitation, §9). |
 
@@ -166,8 +173,10 @@ activity` the moment the loop continues.
 
 `q` at the ruling prompt, or stdin EOF (the terminal closed; `is_send_answer` already treats an
 empty read as EOF) → append `paused { kind: escalation }`, release the lock, keep the fleet
-definition. Standard P1-§7.0 pause. Exception: at the `review-resume` prompt of a session that
-is already `paused { kind: escalation }`, nothing is written (§6, AC-P2-17).
+definition. Standard P1-§7.0 pause. Exception: at the `review-resume` prompt nothing is written,
+because the session is already paused there — by its own `paused` event, or by the
+`paused { kind: other, reason: "crashed" }` that resume writes before the prompt (§6,
+AC-P2-17).
 
 A process killed without reaching EOF (SIGKILL, SIGHUP without a clean read) writes nothing and is
 classified `crashed`; §6 still finds the pending ruling (R2).
@@ -175,17 +184,43 @@ classified `crashed`; §6 still finds the pending ruling (R2).
 ### 5.3 Turns after a ruling
 
 - The ruling text is injected as a **binding note** into the next turn of **both** sides, ranked
-  above findings and ordinary `human_note`.
+  above findings.
 - `fix` on F: in its rebuttal the main agent may answer F only with `accept` or `partial` (reason
   required). `reject` → malformed → retry once → `blocked` (P1-§3.4 rule).
-- `/rule` typed while a turn is in flight is queued and appended **only at the next turn
-  boundary**, before the next `turn_sent`. A turn always runs under the rules that were on the
-  channel when it was sent.
+- **`/rule` outside the ruling prompt is read only at a send prompt** (`Send to …?`). The
+  stdin driver does not read input while a turn is in flight; a line typed then is read by the
+  next prompt like any other input. Input at a send prompt:
+
+  | Input | Effect |
+  |---|---|
+  | Enter (`y`, `yes`) | send (P1) |
+  | valid `/rule …` | **send and record a ruling**; this turn is still sent |
+  | invalid `/rule …` (§5.4) | inline hint, re-prompt; nothing recorded or sent |
+  | anything else, or EOF | unchanged from P1 (stop) |
+
+- **A ruling is applied only at a round boundary**: before main's `turn_sent`, so on the channel
+  every `ruling` precedes the main `turn_sent` of the round it governs. Reason: the reviewer's
+  turn is mid-round — main's rebuttal is folded in memory but written only at the seal — so a
+  ruling written then would replay before the rebuttal while the live ledger applied it after
+  (AC-P2-10).
+  - At **main's** send prompt the prompt *is* the round boundary. The kill-switch is checked
+    first (§5.1 step 4); then the `ruling` is written and folded at once, main's message is
+    **rebuilt from the new ledger** (binding note, changed open set, post-`fix` restriction) and
+    printed, and it is sent without asking again — the `/rule` line was the send consent.
+    Sending the message built before the ruling would make main answer under the old rules.
+  - At the **reviewer's** send prompt the reviewer turn is sent; the ruling is held and written
+    after this round's seal, before the next round's main `turn_sent`.
+- **A held ruling is re-validated when applied**: if its finding is still in the open set
+  (`open` ∪ `disputed`, P1-§3.3) it is written and folded — a finding the reviewer moved to
+  `disputed` meanwhile is still ruled, which is what the ruling is for. If the finding left the
+  open set (`resolved` or `withdrawn`) the ruling is discarded, one line is printed
+  (`Ruling on F3 not recorded: F3 is now withdrawn.`), and nothing is written. A reviewer
+  closing a finding first is a normal race, not a failure; the loop continues.
 
 ### 5.4 Proactive `/rule` (R7)
 
-Same parsing and fold as §4. Valid for any finding in the open set; a ruling on a resolved or
-unknown finding is refused at input with an inline hint and never written.
+Same parsing and fold as §4. Valid for any finding in the open set; a ruling on a closed (`resolved`,
+`withdrawn`) or unknown finding is refused at input with an inline hint and never written.
 
 ## 6. Resume
 
@@ -203,16 +238,22 @@ A crash while awaiting a ruling leaves no `paused` event and is classified `cras
 Because escalation is re-derived from sealed `rebuttal` events (R3), the crashed path still finds
 the pending ruling and **cannot skip it**.
 
+For a crashed session, resume writes `paused { kind: other, reason: "crashed" }` **after taking
+the run lock and before showing the prompt** — the same event the P1 crashed path writes
+(`resume.rs:231`), only earlier. Writing it after the prompt would close the execution-time
+segment at the end of the human's wait, so `active_time` would count that wait. Once written,
+a crashed session is an already-paused session and one table covers both.
+
 At the ruling prompt reached through `review-resume`, §5.1 steps 4–5 apply unchanged, with these
 resume-specific effects (the run lock is taken before the prompt is shown):
 
-| Input | Already `paused { kind: escalation }` | Crashed (no `paused` event) |
-|---|---|---|
-| kill-switch set | P1 kill-switch stop | P1 kill-switch stop |
-| valid `/rule` | append `ruling`; on continue append `resumed` | append `ruling`; continue (no `resumed`, P1-§7.0 crashed path) |
-| `/abandon` | `session_stopped { reason: escalation }`, fleet definition removed | same |
-| `q` or EOF | **write nothing**, release the lock; the session is already paused and a second `paused` would be a duplicate | append `paused { kind: escalation }`, release the lock |
-| anything else | re-prompt, nothing written | same |
+| Input | Effect (paused, or crashed after the pre-prompt `paused`) |
+|---|---|
+| kill-switch set | P1 kill-switch stop |
+| valid `/rule` | append `ruling`; when none is pending append `resumed` and continue |
+| `/abandon` | `session_stopped { reason: escalation }`, fleet definition removed |
+| `q` or EOF | **write nothing**, release the lock; a second `paused` would be a duplicate |
+| anything else | re-prompt, nothing written |
 
 `/abandon` is legal on both the live and the resume path; a builder must not wire it to the live
 driver only.
@@ -225,7 +266,7 @@ driver only.
 | §3.5 | Remove `escalation` from "The loop stops on". |
 | §4 | Remove `escalation` from the event list; add the note "escalation is derived by the fold, never written". Change `ruling` fields. Add `kind` to `paused`. |
 | §5 | "Forced back to semi-auto **and stop** on: `blocked`, escalation, …" → "Forced back to semi-auto on escalation **and await a ruling**; forced back and stop on `blocked`, a limit trip, transport failure." |
-| §6 | `/rule` row → `/rule drop\|fix F<n> <text>`, one finding per ruling, any open finding. |
+| §6 | `/rule` row → `/rule drop\|fix F<n> <text>`, one finding per ruling, any open finding; outside the ruling prompt, read at the send prompts (P2-§5.3). Plain-text, `@<agent>`, `@<unknown>` and repeated-note rows: mark *not built; Phase 3* (P2-§0). |
 | §7 / §7.0 | *Pause is not stop* table: move escalation out of **Stop**. Escalation now ends in Pause (`q` or EOF, §5.2) or in Stop only by explicit `/abandon` or the kill-switch (§5.1). State table unchanged. Resume branches per §6 above. |
 | §8.3 | Stop screen no longer lists `escalation` as a stop reason (only `/abandon` at the ruling prompt, §5.1). |
 | AC8 | "produces an `escalation` event" → "produces a pending escalation in the folded ledger; no `escalation` event is written". |
@@ -241,13 +282,17 @@ driver only.
   damage.
 - **AC-P2-4:** `/rule fix F` → F `open`, `reject_count == 0`, escalation handled; a main `reject`
   of F is malformed → retry → `blocked`; `partial` with reason is accepted and does not count.
-- **AC-P2-5:** SIGKILL while awaiting a ruling → `review-resume` shows the ruling prompt, not the
-  crashed continue path.
+- **AC-P2-5:** SIGKILL while awaiting a ruling → `review-resume` writes `paused { kind: other,
+  reason: "crashed" }`, then shows the ruling prompt, not the crashed continue path; time at
+  that prompt is not counted in `active_time`.
 - **AC-P2-6:** detach while awaiting → `paused { kind: escalation }` → `mur fleet review-resume` shows the ruling
   prompt → `/rule` → `resumed` → next round.
 - **AC-P2-7:** 15 min at the ruling prompt with `stuck = 10m`, `deadline = 5m` → neither trips.
-- **AC-P2-8:** `/rule` typed during an in-flight turn is appended after that turn's events and
-  before the next `turn_sent`.
+- **AC-P2-8:** `/rule` at a send prompt. (a) At main's prompt: `ruling` is on the channel before
+  that round's main `turn_sent`, and the message sent to main is the one rebuilt after the
+  ruling (it contains the binding note). (b) At the reviewer's prompt: the reviewer turn is
+  sent; `ruling` lands after that round's `verdict` and before the next round's main
+  `turn_sent`. (c) In both, the `/rule` line also counts as send consent.
 - **AC-P2-9:** proactive `/rule fix F` with no escalation folds identically to AC-P2-4.
 - **AC-P2-10:** replay equals live ledger byte-for-byte across rulings (extends P1 AC11 property
   test with `Ruling` events and the new derived fields).
@@ -262,8 +307,14 @@ driver only.
 - **AC-P2-16:** `/abandon` at the ruling prompt reached through `review-resume` (from both a
   paused and a crashed session) → `session_stopped { reason: escalation }`, fleet definition
   removed.
-- **AC-P2-17:** `q` at the `review-resume` ruling prompt of an already-paused session writes no
-  event; the channel tail is unchanged.
+- **AC-P2-17:** `q` at the `review-resume` ruling prompt writes no event after the prompt: for a
+  paused session the channel tail is unchanged; for a crashed one the only new event is the
+  pre-prompt `paused`.
+- **AC-P2-18:** a ruling held from the reviewer's send prompt is re-validated when applied. The
+  reviewer's turn in that round moves its finding to (a) `resolved` → ruling discarded, notice
+  printed, no `ruling` on the channel, loop continues; (b) `withdrawn` → same as (a);
+  (c) `disputed` → `ruling` written before the next main `turn_sent` and folded (`fix` →
+  `open`, `drop` → `resolved`).
 
 ## 9. Accepted limitations
 
@@ -271,7 +322,8 @@ These were decided, not deferred. Builders must not add handling for them; QA do
 
 - **Re-raise after drop (R9).** Fold rule 3 stops the reviewer reopening a dropped **finding ID**,
   but cannot stop it issuing a **new** finding that restates the same issue. Detecting that needs
-  semantic comparison. Phase 2 relies on the binding note, the existing repeated-note prompt
-  (P1-§6), and the human's ability to `/rule drop` the new ID. Revisit in Phase 3 only if real use
+  semantic comparison. Phase 2 relies on the binding note and the human's ability to
+  `/rule drop` the new ID (proactive `/rule`, R7). There is no repeated-note prompt in Phase 2
+  (§0). Revisit in Phase 3 only if real use
   shows it is a problem.
 - **No MURMUR surface.** Phase 2 is stdin only (§0). A detach in Phase 2 means stdin EOF.
