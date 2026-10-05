@@ -51,6 +51,21 @@ Your previous reply could not be accepted: {problem}. Reply again, ending with e
 #[allow(dead_code)] // not wired yet: §8.2 resume
 pub const REVIEW_ROUND_RESTART_NOTE: &str = "This round was interrupted and restarted. A previous attempt may have reached you. Re-read the current workspace state before responding; do not assume your last-seen state is current.";
 
+/// P2-§5 `/rule` grammar: `/rule drop|fix F<n> <text>`.
+pub const RULE_COMMAND: &str = "/rule";
+pub const RULE_DECISION_DROP: &str = "drop";
+pub const RULE_DECISION_FIX: &str = "fix";
+/// P2-§5.2 / R8: abandon is an explicit command, never a single key.
+pub const ABANDON_COMMAND: &str = "/abandon";
+/// P2-§5.2: `q` (case-insensitive) leaves the session paused.
+pub const LEAVE_PAUSED_KEY: &str = "q";
+pub const RULE_USAGE_HINT: &str = "usage: /rule drop|fix F<n> <text>";
+/// P2-§5.4; `{id}` is replaced with the finding the human named.
+pub const RULE_NOT_OPEN_HINT: &str = "{id} is not an open finding";
+/// Shown at the ruling prompt for any other input (including bare Enter).
+pub const RULING_PROMPT_HINT: &str =
+    "type /rule drop|fix F<n> <text>, /abandon, or q to leave the session paused";
+
 /// §8.2 fatal case — the fixed marker filename inside a channel's own
 /// directory (`<MUR_HOME>/channels/<channel id>/corrupted.json`), next to
 /// `events.jsonl`. The builder does not choose this path.
