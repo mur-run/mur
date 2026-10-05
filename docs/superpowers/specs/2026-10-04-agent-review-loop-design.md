@@ -163,7 +163,10 @@ The wire encoding (fenced JSON vs. tool call vs. A2A data part) is left to the b
   Q1 decided).
 - `approve` is rejected by the system while any **high**-severity finding is `disputed`. The
   reviewer's only options then are `revise`, `blocked`, or escalation. A medium/low `disputed`
-  finding does not block `approve`, but it is listed first in the human summary.
+  finding does not block `approve`, but it is listed first in the human summary. A refused
+  `approve` is a malformed verdict (§3.2): it is re-sent once with the blocking IDs as the
+  validation hint, and a second refusal stops the loop `blocked`. An `open` (not disputed) high
+  finding does not block `approve`; the stop screen still lists it (§8.3).
 - Every ledger mutation is a signed channel event (§4). The ledger is a pure fold over those events.
 
 ### 3.3.1 Round sealing (round 3 decided)

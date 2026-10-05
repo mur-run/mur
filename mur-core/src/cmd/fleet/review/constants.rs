@@ -94,7 +94,7 @@ Previously issued findings that are still open:
 Review the work. End your reply with exactly one fenced ```json block of this shape:
 {\"verdict\": \"approve\" | \"revise\" | \"blocked\", \"findings\": [{\"severity\": \"high\" | \"medium\" | \"low\", \"issue\": \"...\"}], \"prior\": [{\"id\": \"F1\", \"status\": \"open\" | \"withdrawn\" | \"resolved\" | \"disputed\", \"reason\": \"...\"}]}
 
-Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. If you are uncertain, return \"blocked\" rather than guess.";
+Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return \"blocked\" rather than guess.";
 
 /// Rendered in place of `{open_findings}` when the open set is empty.
 pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";

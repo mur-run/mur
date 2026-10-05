@@ -84,6 +84,25 @@ pub fn parse_verdict(ledger: &Ledger, round: u32, reply: &str) -> Result<StagedV
     }
     let mut scratch = ledger.clone();
     let payloads = stage_round(&mut scratch, round, &parsed).map_err(|e| e.to_string())?;
+    // §3.3 / AC10: `approve` is refused while any high finding is disputed.
+    // Checked on the post-fold ledger, so a reply that resolves the finding
+    // in the same round may approve, and one that disputes it may not. A
+    // refusal is a malformed verdict: re-sent once with this reason as the
+    // hint, then `blocked` (§3.2) — the reviewer's legal moves are
+    // `revise`, `blocked`, or escalation.
+    if parsed.verdict == VerdictKind::Approve {
+        let blocking: Vec<&str> = scratch
+            .disputed_high_severity()
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect();
+        if !blocking.is_empty() {
+            return Err(format!(
+                "`approve` is refused while a high-severity finding is disputed ({}); return `revise` or `blocked` instead",
+                blocking.join(", ")
+            ));
+        }
+    }
     Ok(StagedVerdict {
         kind: parsed.verdict,
         ledger: scratch,
@@ -197,6 +216,44 @@ mod tests {
         let reply = r#"{"verdict":"approve","prior":[{"id":"F1","status":"resolved"},{"id":"F9","status":"resolved"}]}"#;
         let err = parse_verdict(&one_open(), 2, reply).unwrap_err();
         assert!(err.contains("F9"), "{err}");
+    }
+
+    /// A ledger with F1 (open) of the given severity, issued in round 1.
+    fn one_open_with(severity: &str) -> Ledger {
+        let reply = format!(
+            r#"{{"verdict":"revise","findings":[{{"severity":"{severity}","issue":"x"}}]}}"#
+        );
+        parse_verdict(&Ledger::default(), 1, &reply).unwrap().ledger
+    }
+
+    /// AC10: approving while disputing a HIGH finding is refused, and the
+    /// reason names the blocking ID (it becomes the retry hint, §3.2).
+    #[test]
+    fn ac10_approve_with_a_disputed_high_finding_is_refused() {
+        let reply =
+            r#"{"verdict":"approve","prior":[{"id":"F1","status":"disputed","reason":"r"}]}"#;
+        let err = parse_verdict(&one_open_with("high"), 2, reply).unwrap_err();
+        assert!(err.contains("F1") && err.contains("refused"), "{err}");
+    }
+
+    /// AC10: a disputed medium/low finding does not block `approve`.
+    #[test]
+    fn ac10_approve_with_only_a_disputed_low_finding_is_accepted() {
+        let reply =
+            r#"{"verdict":"approve","prior":[{"id":"F1","status":"disputed","reason":"r"}]}"#;
+        let staged = parse_verdict(&one_open_with("low"), 2, reply).unwrap();
+        assert_eq!(staged.kind, VerdictKind::Approve);
+    }
+
+    /// §3.3 says *disputed*, not *open*: an `open` high finding does not
+    /// trip the gate, and `revise` with a disputed high is always legal.
+    #[test]
+    fn ac10_gate_applies_only_to_disputed_high_on_approve() {
+        let open = r#"{"verdict":"approve","prior":[{"id":"F1","status":"open"}]}"#;
+        assert!(parse_verdict(&one_open_with("high"), 2, open).is_ok());
+        let revise =
+            r#"{"verdict":"revise","prior":[{"id":"F1","status":"disputed","reason":"r"}]}"#;
+        assert!(parse_verdict(&one_open_with("high"), 2, revise).is_ok());
     }
 
     #[test]

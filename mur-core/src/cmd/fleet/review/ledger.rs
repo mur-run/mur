@@ -98,7 +98,6 @@ impl Ledger {
     /// §3.3: "`approve` is rejected by the system while any high-severity
     /// finding is `disputed`." Returns the disputed IDs blocking approval
     /// when non-empty.
-    #[allow(dead_code)] // not wired yet: §3.3 approve gate
     pub fn disputed_high_severity(&self) -> Vec<&Finding> {
         self.findings
             .iter()

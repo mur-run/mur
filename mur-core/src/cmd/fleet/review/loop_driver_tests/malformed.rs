@@ -176,3 +176,41 @@ fn second_malformed_rebuttal_is_blocked() {
     assert_eq!(t.prompts_to("reviewer").len(), 1);
     assert!(t.prompts_to("main")[2].contains("a reason is required"));
 }
+
+/// AC10 through the driver: an `approve` that disputes a HIGH finding is
+/// re-sent with the refusal as the hint; a second one ends `blocked`, and
+/// no `approve` verdict is ever signed.
+#[test]
+fn ac10_approve_over_disputed_high_is_hinted_then_blocked() {
+    let revise_high =
+        r#"{"verdict":"revise","findings":[{"severity":"high","issue":"panics on input"}]}"#;
+    let approve_disputed = r#"{"verdict":"approve","prior":[{"id":"F1","status":"disputed","reason":"still panics"}]}"#;
+    let reject_f1 = "no\n```json\n{\"responses\":[{\"id\":\"F1\",\"answer\":\"reject\",\"reason\":\"by design\"}]}\n```";
+    let t = Scripted::new(
+        &["draft", reject_f1],
+        &[revise_high, approve_disputed, approve_disputed],
+    );
+    let (tmp, channel_id, ledger, stop) = run(&t);
+    assert_eq!(
+        stop,
+        LoopDriverStop::Blocked {
+            role: Role::Reviewer
+        }
+    );
+    let prompts = t.prompts_to("reviewer");
+    assert_eq!(prompts.len(), 3);
+    assert!(
+        prompts[2].contains("`approve` is refused while a high-severity finding is disputed (F1)"),
+        "{}",
+        prompts[2]
+    );
+    let payloads = read_payloads(tmp.path(), &channel_id);
+    assert!(!payloads.iter().any(|p| matches!(
+        p,
+        ReviewPayload::Verdict {
+            kind: super::super::schema::VerdictKind::Approve,
+            ..
+        }
+    )));
+    assert_eq!(fold_rounds(&payloads).unwrap(), ledger);
+}
