@@ -32,7 +32,6 @@ pub const ROUND_STUCK_AFTER_UNCHANGED_ROUNDS: u32 = 2;
 
 /// §3.4: a finding rejected this many times by the main agent triggers
 /// automatic escalation to the human.
-#[allow(dead_code)] // not wired yet: §3.4 rebuttal/escalation
 pub const REJECT_ESCALATION_THRESHOLD: u32 = 2;
 
 /// §3.2 / §3.4: a malformed verdict or rebuttal gets this many retries

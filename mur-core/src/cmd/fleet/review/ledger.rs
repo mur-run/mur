@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::constants::ROUND_STUCK_AFTER_UNCHANGED_ROUNDS;
+use super::constants::{REJECT_ESCALATION_THRESHOLD, ROUND_STUCK_AFTER_UNCHANGED_ROUNDS};
 use super::schema::{FindingStatus, Mode, ReviewPayload, Severity};
 
 /// One finding, as the ledger tracks it (§3.3).
@@ -183,9 +183,10 @@ impl Ledger {
                     };
                     if r.answer == super::schema::RebuttalAnswer::Reject {
                         f.reject_count += 1;
-                        // AC8: the SAME finding rejected twice escalates
-                        // automatically.
-                        if f.reject_count == 2 {
+                        // AC8: the SAME finding rejected
+                        // REJECT_ESCALATION_THRESHOLD times escalates
+                        // automatically. `==` (not `>=`) so it escalates once.
+                        if f.reject_count == REJECT_ESCALATION_THRESHOLD {
                             self.escalations.push(EscalationRecord {
                                 finding_id: r.id.clone(),
                                 reason: "rejected twice by the main agent".to_string(),
