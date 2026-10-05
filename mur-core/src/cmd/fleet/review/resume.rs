@@ -65,12 +65,17 @@ fn review_events(events: &[ChannelEvent]) -> Vec<(DateTime<Utc>, ReviewPayload)>
 }
 
 /// Execution time from the channel: the sum of every running segment, from
-/// `session_started`/`resumed` to the next `paused`. Paused spans never count.
+/// `session_started`/`resumed` to the next `paused`, less the human-input
+/// wait each `turn_sent` recorded (§3.5). Paused spans never count.
 fn active_time(events: &[(DateTime<Utc>, ReviewPayload)]) -> Duration {
     let mut total = chrono::Duration::zero();
     let mut running_since: Option<DateTime<Utc>> = None;
+    let mut human_wait = Duration::ZERO;
     for (ts, p) in events {
         match p {
+            ReviewPayload::TurnSent { human_wait_ms, .. } if running_since.is_some() => {
+                human_wait += Duration::from_millis(*human_wait_ms);
+            }
             ReviewPayload::SessionStarted { .. }
             | ReviewPayload::Resumed { .. }
             | ReviewPayload::ResumedFromCheckpoint { .. } => {
@@ -89,7 +94,10 @@ fn active_time(events: &[(DateTime<Utc>, ReviewPayload)]) -> Duration {
     if let (Some(since), Some((last, _))) = (running_since, events.last()) {
         total += *last - since;
     }
-    total.to_std().unwrap_or_default()
+    total
+        .to_std()
+        .unwrap_or_default()
+        .saturating_sub(human_wait)
 }
 
 /// Rebuild a paused session from its channel, refusing anything that is not

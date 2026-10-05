@@ -32,6 +32,7 @@ fn sent(round: u32, to: Role) -> ReviewPayload {
         round,
         to,
         restart_note: None,
+        human_wait_ms: 0,
     }
 }
 

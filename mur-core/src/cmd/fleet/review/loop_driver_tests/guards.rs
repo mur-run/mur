@@ -246,3 +246,108 @@ fn ac13_limit_stop_lists_open_and_disputed_findings() {
     );
     assert_eq!(ids(true), ["F3", "F1"], "after approve, disputed first");
 }
+
+/// Semi-auto stub: every send first waits at the human gate for `gate_wait`
+/// (fake clock advanced, and reported back as human-input wait, the way
+/// `TerminalGate` does), then the member itself runs for `exec`.
+struct HumanGateTransport {
+    clock: Rc<Cell<Instant>>,
+    gate_wait: Duration,
+    exec: Duration,
+    waited: Cell<Duration>,
+}
+
+impl ReviewTransport for HumanGateTransport {
+    fn confirm_send(&self, _member: &str, _params: &serde_json::Value) -> anyhow::Result<bool> {
+        self.clock.set(self.clock.get() + self.gate_wait);
+        self.waited.set(self.waited.get() + self.gate_wait);
+        Ok(true)
+    }
+
+    fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
+        self.clock.set(self.clock.get() + self.exec);
+        match member {
+            "main" => Ok(with_accept_all("main output", params)),
+            "reviewer" => Ok(serde_json::json!({ "verdict": "approve" }).to_string()),
+            other => panic!("unexpected member {other:?}"),
+        }
+    }
+
+    fn take_human_wait(&self) -> Duration {
+        self.waited.take()
+    }
+}
+
+/// AC4a: time spent waiting on human input (the semi-auto send prompt, a
+/// tool-approval prompt) is not execution time. Deadline 10 s, 60 s at each
+/// prompt plus 2.5 s of execution per turn: the loop reaches `approve`, and
+/// each `turn_sent` records its wait so replay can rebuild the same clock.
+#[test]
+fn ac4a_human_input_wait_does_not_count_toward_deadline() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let clock = Rc::new(Cell::new(Instant::now()));
+    let transport = HumanGateTransport {
+        clock: Rc::clone(&clock),
+        gate_wait: Duration::from_secs(60),
+        exec: Duration::from_millis(2500),
+        waited: Cell::new(Duration::ZERO),
+    };
+
+    let (_ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        "task",
+        Mode::SemiAuto,
+        Duration::ZERO,
+        SessionLimits::new(Duration::from_secs(10), Stuck::Off, None),
+        &|| clock.get(),
+    )
+    .unwrap();
+
+    assert_eq!(stop, LoopDriverStop::Approve);
+    let waits: Vec<u64> = read_payloads(home, &channel_id)
+        .iter()
+        .filter_map(|p| match p {
+            ReviewPayload::TurnSent { human_wait_ms, .. } => Some(*human_wait_ms),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(waits, [60_000, 60_000]);
+}
+
+/// AC4a, the other half: human wait is still bounded by real execution. The
+/// same 60 s prompts with 6 s of execution per turn (12 s > 10 s) trip.
+#[test]
+fn ac4a_execution_past_the_deadline_still_trips() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let clock = Rc::new(Cell::new(Instant::now()));
+    let transport = HumanGateTransport {
+        clock: Rc::clone(&clock),
+        gate_wait: Duration::from_secs(60),
+        exec: Duration::from_secs(6),
+        waited: Cell::new(Duration::ZERO),
+    };
+
+    let (_ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        "task",
+        Mode::SemiAuto,
+        Duration::ZERO,
+        SessionLimits::new(Duration::from_secs(10), Stuck::Off, None),
+        &|| clock.get(),
+    )
+    .unwrap();
+
+    assert_eq!(stop, LoopDriverStop::Guard(LoopStop::Deadline));
+}

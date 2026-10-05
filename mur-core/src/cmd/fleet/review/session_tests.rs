@@ -208,3 +208,25 @@ fn task_failed_stop_reason_names_member_and_cause() {
     assert_eq!(got, "qa task failed: tool call denied: timed out");
     assert!(!got.contains("malformed"));
 }
+
+/// AC4a wiring: the terminal gate reports the time spent at its prompts
+/// (send prompt and tool-approval prompt share one counter) exactly once.
+#[test]
+fn terminal_gate_reports_prompt_time_once() {
+    use super::{HumanWait, TerminalGate};
+    use crate::cmd::fleet::review::driver::ReviewTransport;
+    struct Nop;
+    impl ReviewTransport for Nop {
+        fn send(&self, _: &str, _: &serde_json::Value) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+    let wait = HumanWait::default();
+    wait.time(|| std::thread::sleep(std::time::Duration::from_millis(20)));
+    let gate = TerminalGate {
+        inner: Nop,
+        wait: &wait,
+    };
+    assert!(gate.take_human_wait() >= std::time::Duration::from_millis(20));
+    assert_eq!(gate.take_human_wait(), std::time::Duration::ZERO);
+}

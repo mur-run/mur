@@ -201,7 +201,7 @@ retry (§8), or one of the **three existing limits**:
 
 | Limit | Phase 1 meaning |
 |---|---|
-| `deadline` | **Execution time only.** Time spent paused is excluded. Wall-clock is logged and never used to stop. |
+| `deadline` | **Execution time only.** Time spent paused is excluded, and so is human-input wait: time the live driver spends blocked on the human (the semi-auto send prompt, tool-approval prompts inside a member's turn). Each `turn_sent` records its `human_wait_ms` so replay rebuilds the same clock. Human-input wait is not a §7.0 pause: no `paused` event is written and the session state does not change. Wall-clock is logged and never used to stop. |
 | `stuck` | **Both detectors run; whichever trips first stops the session** (Q1 decided). (a) The existing `limits.stuck` duration: no agent-authored channel event for the resolved window (`Stuck::After`, default `DEFAULT_STUCK` = 10 min), resolved through the normal resolver and unchanged. `Stuck::Off` disables only this detector. (b) Round-stuck (§3.3). The stop reason names which one tripped (`stuck: no activity` vs `stuck: open set unchanged`). |
 | `cost_usd` | Sum across **both** members, using the existing cost accounting. |
 
@@ -576,6 +576,9 @@ site) carry the same two lines.
   detector.
 - AC4: `deadline` does not trip from time spent paused. Given deadline 10 s and 60 s paused plus
   5 s executing, the loop has not stopped.
+- AC4a: `deadline` does not trip from human-input wait. Given deadline 10 s and 60 s at each send
+  prompt plus 5 s executing, the loop has not stopped; replay subtracts the recorded
+  `human_wait_ms` from execution time.
 - AC5: a malformed verdict is retried once. A second malformed verdict yields `blocked`. Same for
   the main-agent response.
 - AC6: `.stopped` set during a turn → that turn's A2A call is **not** cancelled. After it returns,

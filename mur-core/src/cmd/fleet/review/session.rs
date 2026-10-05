@@ -193,13 +193,29 @@ pub fn render_stop_screen(stop: &LoopDriverStop, ledger: &Ledger, channel_id: &s
     out
 }
 
-/// §5 semi-auto over a terminal: show each outgoing message and send it
-/// only when the human presses Enter; `q` declines (ends the session).
-pub(super) struct TerminalGate<T> {
-    pub(super) inner: T,
+/// §3.5 human-input wait accumulated at this session's terminal, shared by
+/// the send prompt and the tool-approval prompt; drained by the loop.
+#[derive(Default)]
+pub(super) struct HumanWait(std::cell::Cell<std::time::Duration>);
+
+impl HumanWait {
+    /// Run `ask` (a blocking terminal prompt) and count its time as wait.
+    pub(super) fn time<R>(&self, ask: impl FnOnce() -> R) -> R {
+        let t = Instant::now();
+        let r = ask();
+        self.0.set(self.0.get() + t.elapsed());
+        r
+    }
 }
 
-impl<T: ReviewTransport> ReviewTransport for TerminalGate<T> {
+/// §5 semi-auto over a terminal: show each outgoing message and send it
+/// only when the human presses Enter; `q` declines (ends the session).
+pub(super) struct TerminalGate<'a, T> {
+    pub(super) inner: T,
+    pub(super) wait: &'a HumanWait,
+}
+
+impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
         let reply = self.inner.send(member, params)?;
         println!("\n--- reply from {member} ---\n{reply}\n");
@@ -212,8 +228,13 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<T> {
         print!("Send to {member}? [Enter = send, q = stop] ");
         std::io::stdout().flush()?;
         let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line)?;
+        self.wait
+            .time(|| std::io::stdin().lock().read_line(&mut line))?;
         Ok(is_send_answer(&line))
+    }
+
+    fn take_human_wait(&self) -> std::time::Duration {
+        self.wait.0.take() + self.inner.take_human_wait()
     }
 }
 
@@ -311,11 +332,14 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
         },
     );
 
+    let wait = HumanWait::default();
+    let decide = |member: &str, hitl: &serde_json::Value| wait.time(|| ask_hitl(member, hitl));
     let transport = TerminalGate {
         inner: A2aTransport {
             mur_home,
-            decide: &ask_hitl,
+            decide: &decide,
         },
+        wait: &wait,
     };
     let (ledger, stop) = run_session(
         &transport,
@@ -363,11 +387,14 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
         return Ok(());
     }
     let channel_id = r.fleet.channel_id.clone();
+    let wait = HumanWait::default();
+    let decide = |member: &str, hitl: &serde_json::Value| wait.time(|| ask_hitl(member, hitl));
     let transport = TerminalGate {
         inner: A2aTransport {
             mur_home,
-            decide: &ask_hitl,
+            decide: &decide,
         },
+        wait: &wait,
     };
     let (ledger, stop) =
         super::resume::resume_session(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)?;

@@ -229,6 +229,7 @@ fn crashed_in_round_two() -> (tempfile::TempDir, String) {
         round,
         to,
         restart_note: None,
+        human_wait_ms: 0,
     };
     let log = vec![
         started,
@@ -409,4 +410,33 @@ fn a_damaged_channel_has_a_working_exit() {
     let report = String::from_utf8(out).unwrap();
     assert!(report.contains(&format!("pruned {name}")), "{report}");
     assert!(!path.parent().unwrap().exists());
+}
+
+/// AC4a on replay: a running segment's recorded human-input wait is taken
+/// out of the execution time rebuilt from the channel.
+#[test]
+fn replayed_active_time_excludes_human_input_wait() {
+    use crate::cmd::fleet::review::schema::Role;
+    let t0 = chrono::Utc::now();
+    let at = |s: i64| t0 + chrono::Duration::seconds(s);
+    let events = vec![
+        (
+            at(0),
+            ReviewPayload::SessionStarted {
+                members: ["main".into(), "reviewer".into()],
+                mode: crate::cmd::fleet::review::schema::Mode::SemiAuto,
+                limits: limits(),
+            },
+        ),
+        (
+            at(100),
+            ReviewPayload::TurnSent {
+                round: 1,
+                to: Role::Main,
+                restart_note: None,
+                human_wait_ms: 60_000,
+            },
+        ),
+    ];
+    assert_eq!(super::active_time(&events), Duration::from_secs(40));
 }

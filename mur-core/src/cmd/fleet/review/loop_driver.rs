@@ -178,6 +178,7 @@ pub fn continue_review_loop(
         now,
         start,
         active_before,
+        human_wait: Duration::ZERO,
         last_activity: start,
     };
     run.drive(ledger, round)
@@ -201,6 +202,10 @@ struct LoopRun<'a> {
     start: Instant,
     /// Execution time spent before this run (a resumed session).
     active_before: Duration,
+    /// §3.5 human-input wait in this run so far (send and tool-approval
+    /// prompts). Not execution time, so [`LoopRun::elapsed`] subtracts it.
+    /// Distinct from a §7.0 pause: the driver is alive, blocked on a human.
+    human_wait: Duration,
     // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
     // defines stuck as "no agent-authored channel event for the window", so
     // a long turn that DOES come back with a reply is activity, not a stall:
@@ -223,7 +228,8 @@ enum Turn<T> {
 
 impl LoopRun<'_> {
     fn elapsed(&self) -> Duration {
-        self.active_before + (self.now)().saturating_duration_since(self.start)
+        let wall = (self.now)().saturating_duration_since(self.start);
+        self.active_before + wall.saturating_sub(self.human_wait)
     }
 
     /// The round loop, from `round` on, over an already-folded `ledger`.
@@ -335,7 +341,7 @@ impl LoopRun<'_> {
         let base = message_text(params).unwrap_or_default().to_string();
         let mut outgoing = params.clone();
         for attempt in 0..=MALFORMED_RESPONSE_RETRIES {
-            let reply = match run_turn_with_retry(
+            let outcome = run_turn_with_retry(
                 self.transport,
                 self.mur_home,
                 self.fleet_name,
@@ -343,7 +349,10 @@ impl LoopRun<'_> {
                 &outgoing,
                 self.channel_id,
                 self.retry_delay,
-            )? {
+            );
+            let waited = self.transport.take_human_wait();
+            self.human_wait += waited;
+            let reply = match outcome? {
                 RetryOutcome::Stopped => return Ok(Turn::Stop(LoopDriverStop::Stopped)),
                 RetryOutcome::Paused { reason } => {
                     return Ok(Turn::Stop(LoopDriverStop::Paused { reason }));
@@ -356,7 +365,14 @@ impl LoopRun<'_> {
                 }
                 RetryOutcome::Sent(reply) => reply,
             };
-            append_turn_sent(&self.svc, self.mur_home, self.channel_id, round, role)?;
+            append_turn_sent(
+                &self.svc,
+                self.mur_home,
+                self.channel_id,
+                round,
+                role,
+                waited,
+            )?;
             if let Some(stop) = check_guards(
                 round,
                 self.elapsed(),
@@ -395,11 +411,13 @@ fn append_turn_sent(
     channel_id: &str,
     round: u32,
     to: Role,
+    human_wait: Duration,
 ) -> Result<()> {
     let payload = ReviewPayload::TurnSent {
         round,
         to,
         restart_note: None,
+        human_wait_ms: u64::try_from(human_wait.as_millis()).unwrap_or(u64::MAX),
     };
     append(svc, mur_home, channel_id, &payload)
 }

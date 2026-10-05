@@ -62,6 +62,7 @@ pub(crate) fn mid_round() -> ReviewPayload {
         round: 1,
         to: Role::Main,
         restart_note: None,
+        human_wait_ms: 0,
     }
 }
 

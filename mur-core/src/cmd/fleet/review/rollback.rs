@@ -267,6 +267,7 @@ mod tests {
                     round,
                     to: Role::Main,
                     restart_note: None,
+                    human_wait_ms: 0,
                 }),
             );
             raw.push(raw_line_for(&turn));
@@ -306,6 +307,7 @@ mod tests {
                 round: 4,
                 to: Role::Main,
                 restart_note: None,
+                human_wait_ms: 0,
             }),
         );
         raw.push(raw_line_for(&turn4));
@@ -390,6 +392,7 @@ mod tests {
                 round: 4,
                 to: Role::Main,
                 restart_note: None,
+                human_wait_ms: 0,
             }),
         );
         raw.push(raw_line_for(&turn4));
@@ -437,6 +440,7 @@ mod tests {
                 round: 1,
                 to: Role::Main,
                 restart_note: None,
+                human_wait_ms: 0,
             }),
         );
         let mut raw = vec![raw_line_for(&turn1)];
@@ -462,6 +466,7 @@ mod tests {
                 round: 4,
                 to: Role::Main,
                 restart_note: None,
+                human_wait_ms: 0,
             }),
         );
         raw.push(raw_line_for(&turn4));

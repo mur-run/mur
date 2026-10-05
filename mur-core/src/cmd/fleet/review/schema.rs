@@ -133,6 +133,10 @@ pub struct Cumulative {
     pub cost_usd_micros: u64,
 }
 
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
 /// Micro-dollars per US dollar: the unit of every cost field in this schema.
 pub const MICROS_PER_USD: f64 = 1_000_000.0;
 
@@ -208,6 +212,12 @@ pub enum ReviewPayload {
         /// [`super::constants::REVIEW_ROUND_RESTART_NOTE`] verbatim.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         restart_note: Option<String>,
+        /// §3.5 human-input wait: time this send spent waiting on the
+        /// human (the semi-auto send prompt, tool-approval prompts inside
+        /// the turn). Excluded from `deadline`; recorded so replay rebuilds
+        /// the same execution clock. Absent in older channels = 0.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        human_wait_ms: u64,
     },
     /// §4 lists `verdict` as its own event, separate from `finding_issued`/
     /// `finding_status`: the driver appends zero or more `FindingIssued`

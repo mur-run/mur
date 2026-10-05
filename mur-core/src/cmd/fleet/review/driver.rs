@@ -36,6 +36,13 @@ pub trait ReviewTransport {
     fn confirm_send(&self, _member: &str, _params: &serde_json::Value) -> Result<bool> {
         Ok(true)
     }
+
+    /// §3.5 human-input wait: time spent waiting on the human since the
+    /// last call (send prompts, tool-approval prompts), then reset. The
+    /// loop takes it out of execution time. Default: no human, no wait.
+    fn take_human_wait(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
 }
 
 /// A member's turn ended with its task `failed` or `cancelled` — a real

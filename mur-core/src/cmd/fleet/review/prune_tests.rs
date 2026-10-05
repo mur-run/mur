@@ -220,6 +220,7 @@ fn include_paused_takes_paused_and_crashed_and_never_running() {
         round: 1,
         to: Role::Main,
         restart_note: None,
+        human_wait_ms: 0,
     };
     let stop = session(h, "review-stop0009", &[stopped()], false);
     let orph = session(h, "review-orph0009", &[paused()], false);
