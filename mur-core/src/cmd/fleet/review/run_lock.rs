@@ -150,7 +150,18 @@ mod tests {
         let Some(path) = std::env::var_os(HOLD_ENV) else {
             return;
         };
-        let _held = acquire_at(Path::new(&path)).expect("child takes the lock");
+        // The parent polls with `acquire_at` too, so it briefly holds the
+        // lock on every probe; retry instead of dying on that collision.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let _held = loop {
+            match acquire_at(Path::new(&path)) {
+                Ok(l) => break l,
+                Err(LockDenied::Running(_)) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => panic!("child takes the lock: {e}"),
+            }
+        };
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
@@ -176,17 +187,25 @@ mod tests {
             .unwrap();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let who = loop {
+        // The child writes its owner body only AFTER it takes the lock, and
+        // every successful probe here rewrites that body with OUR pid, so a
+        // `Running` can briefly carry a stale or empty body. Wait for the
+        // child's own body rather than trusting the first `Running`.
+        let child_pid = format!("pid {}", child.id());
+        let mut last = None;
+        loop {
             match acquire_at(&path) {
-                Err(LockDenied::Running(who)) => break who,
+                Err(LockDenied::Running(Some(who))) if who.contains(&child_pid) => break,
+                Err(LockDenied::Running(who)) => last = who,
                 Ok(l) => drop(l),
                 Err(e) => panic!("{e}"),
             }
-            assert!(std::time::Instant::now() < deadline, "child never locked");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never locked with its own body (last: {last:?})"
+            );
             std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-        let who = who.expect("holder body is readable");
-        assert!(who.contains(&format!("pid {}", child.id())), "{who}");
+        }
         assert_ne!(child.id(), std::process::id());
 
         child.kill().unwrap(); // SIGKILL on Unix, TerminateProcess on Windows
