@@ -148,6 +148,31 @@ pub fn prepare(
     }
 }
 
+/// The agent these steps act on: `--agent`, else `MUR_AGENT`, else none (the
+/// step is skipped and says so under `label`). Case-insensitive like every
+/// other CLI agent lookup (rule 10), so the write lands on the profile the
+/// runtime's exact-match spoof check will compare against.
+fn resolve_agent(
+    agent: Option<&str>,
+    mur_home: &Path,
+    label: &str,
+    output: &mut dyn Write,
+) -> Result<Option<String>> {
+    let Some(name) = agent
+        .map(str::to_owned)
+        .or_else(|| std::env::var("MUR_AGENT").ok())
+    else {
+        writeln!(
+            output,
+            "\n{label}: no agent given (pass --agent <name> or set MUR_AGENT); skipping."
+        )?;
+        return Ok(None);
+    };
+    Ok(Some(crate::a2a_dial::canonicalize_agent_name(
+        mur_home, &name,
+    )))
+}
+
 /// Step 6: grant the spawn permissions a browser run needs.
 ///
 /// The impure edge over [`perms`]: it resolves the agent, reads the profile
@@ -162,35 +187,63 @@ pub fn grant_perms(
     output: &mut dyn Write,
 ) -> Result<()> {
     let mur_home = crate::cmd::agent::resolve_mur_home()?;
-    let Some(agent) = agent
-        .map(str::to_owned)
-        .or_else(|| std::env::var("MUR_AGENT").ok())
-    else {
-        writeln!(
-            output,
-            "\nPermissions: no agent given (pass --agent <name> or set MUR_AGENT); skipping."
-        )?;
+    let Some(agent) = resolve_agent(agent, &mur_home, "Permissions", output)? else {
         return Ok(());
     };
-    // Case-insensitive like every other CLI agent lookup (rule 10), so the
-    // grant lands on the profile the spoof check will compare against.
-    let agent = crate::a2a_dial::canonicalize_agent_name(&mur_home, &agent);
 
     let (_, profile) = crate::cmd::agent::load_profile_for_edit(&agent)?;
     let spawn = &profile.entitlements.processes.spawn;
+    let browsers = mur_browser::chromium::system_browsers_dir();
     let plan = perms::plan(
         &mur_home,
         &agent,
+        browsers.as_deref(),
         &spawn.allowed,
         &spawn.allowed_dirs,
         &profile.entitlements.filesystem.read,
+        &profile.entitlements.filesystem.write,
     );
     let mut grant = |g: &perms::Grant| match g {
         perms::Grant::Binary(b) => crate::cmd::agent::cmd_perm_allow_spawn(&agent, b),
         perms::Grant::Dir(d) => crate::cmd::agent::cmd_perm_allow_spawn_dir(&agent, d),
         perms::Grant::Read(r) => crate::cmd::agent::cmd_perm_allow_read(&agent, r),
+        perms::Grant::Write(w) => crate::cmd::agent::cmd_perm_allow_write(&agent, w),
     };
     perms::confirm_and_apply(&agent, &plan, consent.given(), input, output, &mut grant)?;
+    Ok(())
+}
+
+/// Step 7: make the browser tools VISIBLE to the agent.
+///
+/// Installing Chromium and granting the sandbox lanes leaves the model with no
+/// `browser` MCP entry at all, so it reports the tools as nonexistent — the
+/// install silently did nothing from its point of view. The entry is created
+/// `Restricted` with an empty allowlist: it can reach nothing until
+/// `/browser live <host>...` names the sites, so this never widens egress.
+///
+/// Best-effort by design: the install and the live test already happened, and
+/// a failure here (no agent, probe refusal) must not turn a working install
+/// into a non-zero exit. The reason is printed and setup carries on.
+pub fn register_entry(agent: Option<&str>, output: &mut dyn Write) -> Result<()> {
+    let mur_home = crate::cmd::agent::resolve_mur_home()?;
+    let Some(agent) = resolve_agent(agent, &mur_home, "Browser tools", output)? else {
+        return Ok(());
+    };
+    match crate::cmd::agent::cli::browser_live_cmd::ensure_entry(&agent) {
+        Ok(None) => writeln!(output, "\n  \u{2713} browser tools already on '{agent}'")?,
+        Ok(Some(note)) => {
+            writeln!(output, "\n{note}")?;
+            writeln!(
+                output,
+                "  restart '{agent}' to load the tools, then name the sites it may reach \
+                 with `/browser live <host>...` (until then it can reach nothing)"
+            )?;
+        }
+        Err(e) => writeln!(
+            output,
+            "\n  \u{2717} could not add the browser tools to '{agent}': {e:#}\n                 add them yourself with `/browser live <host>...` inside the agent"
+        )?,
+    }
     Ok(())
 }
 
