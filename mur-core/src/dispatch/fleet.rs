@@ -13,7 +13,9 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
             } => {
                 cmd::fleet::create::cmd_fleet_create(&mur_home, &name, members, router, goal, None)?
             }
-            FleetAction::List => cmd::fleet::list::cmd_fleet_list(&mur_home)?,
+            FleetAction::List { include_review } => {
+                cmd::fleet::list::cmd_fleet_list(&mur_home, include_review)?
+            }
             FleetAction::Show { name } => cmd::fleet::show::cmd_fleet_show(&mur_home, &name)?,
             FleetAction::Run {
                 name,

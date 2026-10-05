@@ -17,7 +17,11 @@ pub enum FleetAction {
         goal: Option<String>,
     },
     /// List all fleets
-    List,
+    List {
+        /// Also show review-session fleets (`review-…`), hidden by default
+        #[arg(long)]
+        include_review: bool,
+    },
     /// Show a fleet's roster + goal
     Show {
         /// Fleet name
