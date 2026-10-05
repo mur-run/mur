@@ -51,7 +51,6 @@ pub const REVIEW_ROUND_RESTART_NOTE: &str = "This round was interrupted and rest
 /// §8.2 fatal case — the fixed marker filename inside a channel's own
 /// directory (`<MUR_HOME>/channels/<channel id>/corrupted.json`), next to
 /// `events.jsonl`. The builder does not choose this path.
-#[allow(dead_code)] // not wired yet: §8.2 resume
 pub const REVIEW_CORRUPTED_MARKER_FILE: &str = "corrupted.json";
 
 /// §8.2 — the fixed reason string stamped into the corrupted marker and

@@ -21,6 +21,7 @@ pub mod constants;
 pub mod driver;
 pub mod ledger;
 pub mod loop_driver;
+pub mod prune;
 // §8.2 replay/resume is not wired into `mur fleet review` yet; until it
 // is, only its tests call into this module.
 #[allow(dead_code)]

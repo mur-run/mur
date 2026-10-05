@@ -91,6 +91,17 @@ pub enum FleetAction {
         #[arg(long)]
         budget_usd: Option<f64>,
     },
+    /// Erase retained review-session channels that ended (stopped, or marked
+    /// corrupted) longer ago than --older-than. Never touches a running or
+    /// paused session, and never runs on its own.
+    PruneReviews {
+        /// Only sessions idle longer than this, e.g. 30d / 36h (required)
+        #[arg(long)]
+        older_than: String,
+        /// List what would be erased without erasing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Update a fleet's loop/auto-run config (trigger, budget, iteration cap,
     /// deadline, done-when policy). Only the flags you pass are changed —
     /// everything else already set is preserved.

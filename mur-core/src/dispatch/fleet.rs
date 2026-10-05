@@ -70,6 +70,16 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                     .await?
                 }
             }
+            FleetAction::PruneReviews {
+                older_than,
+                dry_run,
+            } => cmd::fleet::review::prune::prune_reviews(
+                &mur_home,
+                &older_than,
+                dry_run,
+                &mut std::io::stdout(),
+                chrono::Utc::now(),
+            )?,
             FleetAction::Review {
                 main,
                 reviewer,
