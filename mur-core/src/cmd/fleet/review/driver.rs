@@ -12,6 +12,7 @@
 //! the pre-send check; the caller is responsible for not calling `run_turn`
 //! again once a turn reports `Stopped`.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -19,6 +20,8 @@ use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
 
+use super::ledger::{EscalationRecord, Ledger};
+use super::ruling::RulingInput;
 use super::schema::{Cumulative, Mode, PauseKind, ReviewPayload, to_note_payload};
 use crate::cmd::fleet::control;
 
@@ -28,13 +31,27 @@ use crate::cmd::fleet::control;
 pub trait ReviewTransport {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String>;
 
-    /// §5 semi-auto: the human gate before a send. Called after the
-    /// `.stopped` check and before [`ReviewTransport::send`]; `false` means
-    /// the human declined, and the turn ends as `Stopped` with nothing sent.
-    /// The default lets every send through (tests, and any caller that has
-    /// already gated elsewhere).
-    fn confirm_send(&self, _member: &str, _params: &serde_json::Value) -> Result<bool> {
-        Ok(true)
+    /// §5 semi-auto / P2-§5.3: the human gate before a send. Called after
+    /// the `.stopped` check and before [`ReviewTransport::send`]. `Stop`
+    /// ends the turn as `Stopped` with nothing sent; `SendWithRuling`
+    /// carries a `/rule` line validated against `open`. The default lets
+    /// every send through (tests, and any caller that has already gated
+    /// elsewhere).
+    fn confirm_send(
+        &self,
+        _member: &str,
+        _params: &serde_json::Value,
+        _open: &BTreeSet<String>,
+    ) -> Result<SendAnswer> {
+        Ok(SendAnswer::Send)
+    }
+
+    /// P2-§5.1 step 3: show `pending` with both sides' last positions and
+    /// read one raw line (unparsed, so the kill-switch check runs first).
+    /// Default (tests, non-terminal): EOF, which leaves the session paused.
+    #[allow(dead_code)] // wired in PR 3 (Task 7)
+    fn ask_ruling(&self, _pending: &EscalationRecord, _ledger: &Ledger) -> Result<String> {
+        Ok(String::new())
     }
 
     /// §3.5 human-input wait: time spent waiting on the human since the
@@ -43,6 +60,28 @@ pub trait ReviewTransport {
     fn take_human_wait(&self) -> std::time::Duration {
         std::time::Duration::ZERO
     }
+}
+
+/// The human's answer at the send prompt (P2-§5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendAnswer {
+    Send,
+    Stop,
+    /// A `/rule` line typed instead of Enter: it is the send consent too.
+    SendWithRuling(RulingInput),
+}
+
+/// How one turn is gated. `open` is the open set a `/rule` line is
+/// validated against.
+#[derive(Debug, Clone, Copy)]
+pub struct SendGate<'a> {
+    /// True only for main's turn: a ruling typed there is applied before
+    /// the send (P2-§5.3), so nothing is sent this call.
+    pub boundary: bool,
+    /// Skip `confirm_send`: the human already consented (the rebuilt main
+    /// send after a boundary ruling).
+    pub pre_confirmed: bool,
+    pub open: &'a BTreeSet<String>,
 }
 
 /// A member's turn ended with its task `failed` or `cancelled` — a real
@@ -153,41 +192,83 @@ pub(super) fn task_reply(
 /// Outcome of one [`run_turn`] call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnOutcome {
-    /// The kill-switch was engaged before the send; nothing was sent.
+    /// The kill-switch was engaged before the send, or the human declined;
+    /// nothing was sent.
     Stopped,
-    /// Exactly one send happened; this is its reply text.
-    Sent(String),
+    /// Exactly one send happened; `held` is a ruling typed at a
+    /// non-boundary (reviewer) prompt, applied after the round seals.
+    Sent {
+        reply: String,
+        held: Option<RulingInput>,
+    },
+    /// `/rule` at a boundary (main) prompt: nothing sent; the loop applies
+    /// the ruling and re-sends the rebuilt message.
+    RuleFirst(RulingInput),
+}
+
+/// What the send gate decided, before any send.
+enum Gated {
+    Stop,
+    RuleFirst(RulingInput),
+    Go(Option<RulingInput>),
+}
+
+fn gate(
+    transport: &dyn ReviewTransport,
+    member: &str,
+    params: &serde_json::Value,
+    g: SendGate,
+) -> Result<Gated> {
+    if g.pre_confirmed {
+        return Ok(Gated::Go(None));
+    }
+    Ok(match transport.confirm_send(member, params, g.open)? {
+        SendAnswer::Stop => Gated::Stop,
+        SendAnswer::Send => Gated::Go(None),
+        SendAnswer::SendWithRuling(r) if g.boundary => Gated::RuleFirst(r),
+        SendAnswer::SendWithRuling(r) => Gated::Go(Some(r)),
+    })
 }
 
 /// One turn of the two-party protocol (§3.1): checks `.stopped` for
-/// `fleet_name` BEFORE sending (A4) and, only if clear, sends exactly one
-/// A2A message to `member` via `transport`. Never sends after observing a
-/// stop.
+/// `fleet_name` BEFORE sending (A4) and, only if clear and the gate lets
+/// it through, sends exactly one A2A message to `member` via `transport`.
+/// Never sends after observing a stop.
 pub fn run_turn(
     transport: &dyn ReviewTransport,
     mur_home: &Path,
     fleet_name: &str,
     member: &str,
     params: &serde_json::Value,
+    g: SendGate,
 ) -> Result<TurnOutcome> {
     if control::is_stopped(mur_home, fleet_name) {
         return Ok(TurnOutcome::Stopped);
     }
-    if !transport.confirm_send(member, params)? {
-        return Ok(TurnOutcome::Stopped);
-    }
+    let held = match gate(transport, member, params, g)? {
+        Gated::Stop => return Ok(TurnOutcome::Stopped),
+        Gated::RuleFirst(r) => return Ok(TurnOutcome::RuleFirst(r)),
+        Gated::Go(held) => held,
+    };
     let reply = transport.send(member, params)?;
-    Ok(TurnOutcome::Sent(reply))
+    Ok(TurnOutcome::Sent { reply, held })
 }
 
 /// Outcome of [`run_turn_with_retry`] (§8.1, AC14).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryOutcome {
-    /// `.stopped` was observed before a send (first attempt or the retry);
-    /// no `paused` event is written — a stop is its own, separate stop path.
+    /// `.stopped` was observed before a send (first attempt or the retry),
+    /// or the human declined; no `paused` event is written — a stop is its
+    /// own, separate stop path.
     Stopped,
-    /// The first send succeeded; no retry happened.
-    Sent(String),
+    /// A send succeeded (first attempt or the retry). See
+    /// [`TurnOutcome::Sent`] for `held`.
+    Sent {
+        reply: String,
+        held: Option<RulingInput>,
+    },
+    /// See [`TurnOutcome::RuleFirst`].
+    RuleFirst(RulingInput),
     /// The first send failed, the retry (after `retry_delay`) also failed:
     /// a signed `paused` event (with `reason`) and a `mode_changed` event
     /// reverting to semi-auto were written to `channel_id`.
@@ -201,13 +282,15 @@ pub enum RetryOutcome {
 /// configured delay → still failing → pause, revert to semi-auto, and show
 /// the reason."
 ///
-/// Each attempt goes through [`run_turn`], so `.stopped` is still checked
-/// before every send (A4) — a stop observed on either attempt returns
-/// `Stopped` immediately and writes no `paused` event, since a kill-switch
-/// stop is a distinct stop path, not a transport failure. `retry_delay` is
-/// an explicit parameter (not read from `constants::TRANSPORT_RETRY_DELAY`
-/// directly) so tests can pass `Duration::ZERO` and never sleep for real;
-/// production callers pass the named constant.
+/// `.stopped` is checked before every send, the retry included (A4) — a
+/// stop observed on either attempt returns `Stopped` immediately and writes
+/// no `paused` event, since a kill-switch stop is a distinct stop path, not
+/// a transport failure. The send gate is asked once: the retry re-sends
+/// under the first answer, including any `held` ruling (P2 Task 6).
+/// `retry_delay` is an explicit parameter (not read from
+/// `constants::TRANSPORT_RETRY_DELAY` directly) so tests can pass
+/// `Duration::ZERO` and never sleep for real; production callers pass the
+/// named constant.
 #[allow(clippy::too_many_arguments)]
 pub fn run_turn_with_retry(
     transport: &dyn ReviewTransport,
@@ -215,12 +298,33 @@ pub fn run_turn_with_retry(
     fleet_name: &str,
     member: &str,
     params: &serde_json::Value,
+    g: SendGate,
     channel_id: &str,
     retry_delay: Duration,
 ) -> Result<RetryOutcome> {
-    match run_turn(transport, mur_home, fleet_name, member, params) {
-        Ok(TurnOutcome::Stopped) => return Ok(RetryOutcome::Stopped),
-        Ok(TurnOutcome::Sent(reply)) => return Ok(RetryOutcome::Sent(reply)),
+    if control::is_stopped(mur_home, fleet_name) {
+        return Ok(RetryOutcome::Stopped);
+    }
+    let held = match gate(transport, member, params, g)? {
+        Gated::Stop => return Ok(RetryOutcome::Stopped),
+        Gated::RuleFirst(r) => return Ok(RetryOutcome::RuleFirst(r)),
+        Gated::Go(held) => held,
+    };
+    // Consent is given; each attempt still re-checks `.stopped` (A4).
+    let confirmed = SendGate {
+        pre_confirmed: true,
+        ..g
+    };
+    let attempt = || run_turn(transport, mur_home, fleet_name, member, params, confirmed);
+    let sent = |outcome| match outcome {
+        TurnOutcome::Sent { reply, .. } => RetryOutcome::Sent {
+            reply,
+            held: held.clone(),
+        },
+        _ => RetryOutcome::Stopped,
+    };
+    match attempt() {
+        Ok(outcome) => return Ok(sent(outcome)),
         Err(first_err) => {
             if let Some(failed) = first_err.downcast_ref::<TaskFailed>() {
                 return Ok(RetryOutcome::TaskFailed(failed.clone()));
@@ -230,9 +334,8 @@ pub fn run_turn_with_retry(
 
     std::thread::sleep(retry_delay);
 
-    match run_turn(transport, mur_home, fleet_name, member, params) {
-        Ok(TurnOutcome::Stopped) => Ok(RetryOutcome::Stopped),
-        Ok(TurnOutcome::Sent(reply)) => Ok(RetryOutcome::Sent(reply)),
+    match attempt() {
+        Ok(outcome) => Ok(sent(outcome)),
         Err(second_err) => {
             if let Some(failed) = second_err.downcast_ref::<TaskFailed>() {
                 return Ok(RetryOutcome::TaskFailed(failed.clone()));

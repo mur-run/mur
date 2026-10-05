@@ -21,7 +21,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::constants::{MALFORMED_RESPONSE_RETRIES, REVIEW_VALIDATION_HINT};
-use super::driver::{RetryOutcome, ReviewTransport, run_turn_with_retry};
+use super::driver::{RetryOutcome, ReviewTransport, SendGate, run_turn_with_retry};
 use super::ledger::Ledger;
 use super::schema::{Mode, ReviewPayload, Role, SessionLimits, VerdictKind, to_note_payload};
 use super::verdict::{parse_rebuttal, parse_verdict, zero_cumulative};
@@ -263,9 +263,10 @@ impl LoopRun<'_> {
             // must also answer each one (§3.4), machine-validated like the
             // verdict; with none open its reply is free text.
             let params = main_turn_params(self.task, round, &ledger);
-            let open = !ledger.open_set().is_empty();
+            let main_open = open_ids(&ledger);
+            let open = !main_open.is_empty();
             let (main_reply, rebuttal) =
-                match self.turn(self.main, Role::Main, round, &params, |reply| {
+                match self.turn(self.main, Role::Main, round, &params, &main_open, |reply| {
                     if open {
                         parse_rebuttal(&ledger, round, reply).map(Some)
                     } else {
@@ -290,29 +291,34 @@ impl LoopRun<'_> {
             // only once the whole round folds cleanly, so a bad reply never
             // poisons the channel for replay.
             let params = reviewer_turn_params(self.task, round, &main_reply, &round_ledger);
-            let staged =
-                match self.turn(self.reviewer, Role::Reviewer, round, &params, |reply| {
-                    parse_verdict(&round_ledger, round, reply)
-                })? {
-                    Turn::Stop(LoopDriverStop::Blocked { role }) => {
-                        // §3.2: still malformed → treat as `blocked`.
-                        if let Some(r) = &rebuttal {
-                            self.append(r)?;
-                        }
-                        let payload = ReviewPayload::Verdict {
-                            round,
-                            kind: VerdictKind::Blocked,
-                            cumulative: zero_cumulative(),
-                        };
-                        self.fold_round_sent(&mut round_ledger)?;
-                        round_ledger.apply(&payload)?;
-                        self.append(&payload)?;
-                        round_ledger.note_round_complete();
-                        return Ok((round_ledger, LoopDriverStop::Blocked { role }));
+            let reviewer_open = open_ids(&round_ledger);
+            let staged = match self.turn(
+                self.reviewer,
+                Role::Reviewer,
+                round,
+                &params,
+                &reviewer_open,
+                |reply| parse_verdict(&round_ledger, round, reply),
+            )? {
+                Turn::Stop(LoopDriverStop::Blocked { role }) => {
+                    // §3.2: still malformed → treat as `blocked`.
+                    if let Some(r) = &rebuttal {
+                        self.append(r)?;
                     }
-                    Turn::Stop(stop) => return Ok((ledger, stop)),
-                    Turn::Accepted { value, .. } => value,
-                };
+                    let payload = ReviewPayload::Verdict {
+                        round,
+                        kind: VerdictKind::Blocked,
+                        cumulative: zero_cumulative(),
+                    };
+                    self.fold_round_sent(&mut round_ledger)?;
+                    round_ledger.apply(&payload)?;
+                    self.append(&payload)?;
+                    round_ledger.note_round_complete();
+                    return Ok((round_ledger, LoopDriverStop::Blocked { role }));
+                }
+                Turn::Stop(stop) => return Ok((ledger, stop)),
+                Turn::Accepted { value, .. } => value,
+            };
             if let Some(r) = &rebuttal {
                 self.append(r)?;
             }
@@ -358,8 +364,14 @@ impl LoopRun<'_> {
         role: Role,
         round: u32,
         params: &serde_json::Value,
+        open: &std::collections::BTreeSet<String>,
         validate: impl Fn(&str) -> std::result::Result<T, String>,
     ) -> Result<Turn<T>> {
+        let gate = SendGate {
+            boundary: role == Role::Main,
+            pre_confirmed: false,
+            open,
+        };
         let base = message_text(params).unwrap_or_default().to_string();
         let mut outgoing = params.clone();
         for attempt in 0..=MALFORMED_RESPONSE_RETRIES {
@@ -369,6 +381,7 @@ impl LoopRun<'_> {
                 self.fleet_name,
                 member,
                 &outgoing,
+                gate,
                 self.channel_id,
                 self.retry_delay,
             );
@@ -385,7 +398,11 @@ impl LoopRun<'_> {
                         cause: f.cause,
                     }));
                 }
-                RetryOutcome::Sent(reply) => reply,
+                // P2 Task 7 applies rulings typed at the send prompt; until
+                // then a boundary `/rule` ends the turn like `q` and a held
+                // one is not applied. Unreleased: PR 3 lands both together.
+                RetryOutcome::RuleFirst(_) => return Ok(Turn::Stop(LoopDriverStop::Stopped)),
+                RetryOutcome::Sent { reply, held: _ } => reply,
             };
             let sent = append_turn_sent(
                 &self.svc,
@@ -429,6 +446,11 @@ impl LoopRun<'_> {
     fn append(&self, payload: &ReviewPayload) -> Result<()> {
         append(&self.svc, self.mur_home, self.channel_id, payload)
     }
+}
+
+/// The open set's IDs: what a `/rule` line is validated against (P2-§5.4).
+fn open_ids(ledger: &Ledger) -> std::collections::BTreeSet<String> {
+    ledger.open_set().into_keys().collect()
 }
 
 /// §4 `turn_sent`, written once a send to `to` has actually gone out

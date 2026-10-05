@@ -94,8 +94,13 @@ fn declining_the_first_send_stops_and_cleans_up() {
         fn send(&self, _m: &str, _p: &serde_json::Value) -> Result<String> {
             panic!("must not send after a declined gate");
         }
-        fn confirm_send(&self, _m: &str, _p: &serde_json::Value) -> Result<bool> {
-            Ok(false)
+        fn confirm_send(
+            &self,
+            _m: &str,
+            _p: &serde_json::Value,
+            _o: &std::collections::BTreeSet<String>,
+        ) -> Result<crate::cmd::fleet::review::driver::SendAnswer> {
+            Ok(crate::cmd::fleet::review::driver::SendAnswer::Stop)
         }
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -288,4 +293,183 @@ fn terminal_gate_reports_prompt_time_once() {
     };
     assert!(gate.take_human_wait() >= std::time::Duration::from_millis(20));
     assert_eq!(gate.take_human_wait(), std::time::Duration::ZERO);
+}
+
+// ---- P2 Task 6: the send prompt and the ruling prompt ----
+
+mod prompts {
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+
+    use super::super::{HumanWait, TerminalGate};
+    use crate::cmd::fleet::review::constants::RULING_PROMPT;
+    use crate::cmd::fleet::review::driver::{ReviewTransport, SendAnswer};
+    use crate::cmd::fleet::review::ledger::Ledger;
+    use crate::cmd::fleet::review::ruling::RulingInput;
+    use crate::cmd::fleet::review::schema::{
+        Cumulative, FindingStatus, RebuttalAnswer, RebuttalResponseDto, ReviewPayload,
+        RulingDecision, Severity,
+    };
+
+    struct Nop;
+    impl ReviewTransport for Nop {
+        fn send(&self, _: &str, _: &serde_json::Value) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    /// A terminal that answers from `lines` (front first) and records output.
+    struct Term {
+        lines: RefCell<Vec<String>>,
+        reads: RefCell<usize>,
+        out: RefCell<String>,
+    }
+
+    impl Term {
+        fn new(lines: &[&str]) -> Self {
+            Self {
+                lines: RefCell::new(lines.iter().rev().map(|l| l.to_string()).collect()),
+                reads: RefCell::new(0),
+                out: RefCell::new(String::new()),
+            }
+        }
+        fn read(&self) -> std::io::Result<String> {
+            *self.reads.borrow_mut() += 1;
+            Ok(self.lines.borrow_mut().pop().unwrap_or_default())
+        }
+        fn write(&self, s: &str) -> std::io::Result<()> {
+            self.out.borrow_mut().push_str(s);
+            Ok(())
+        }
+    }
+
+    fn confirm(lines: &[&str], open: &[&str]) -> (SendAnswer, Term) {
+        let term = Term::new(lines);
+        let wait = HumanWait::default();
+        let input = || term.read();
+        let output = |s: &str| term.write(s);
+        let gate = TerminalGate {
+            inner: Nop,
+            wait: &wait,
+            input: &input,
+            output: &output,
+        };
+        let open: BTreeSet<String> = open.iter().map(|s| s.to_string()).collect();
+        let answer = gate
+            .confirm_send("main", &serde_json::json!({}), &open)
+            .unwrap();
+        (answer, term)
+    }
+
+    #[test]
+    fn send_prompt_rule_is_send_with_ruling() {
+        let (answer, term) = confirm(&["/rule drop F1 x\n"], &["F1"]);
+        assert_eq!(
+            answer,
+            SendAnswer::SendWithRuling(RulingInput {
+                finding: "F1".into(),
+                decision: RulingDecision::Drop,
+                text: "x".into(),
+            })
+        );
+        assert_eq!(*term.reads.borrow(), 1, "no second prompt");
+    }
+
+    #[test]
+    fn send_prompt_rejects_rule_on_closed_finding() {
+        let (answer, term) = confirm(&["/rule drop F1 x\n", "\n"], &[]);
+        assert_eq!(answer, SendAnswer::Send);
+        assert_eq!(*term.reads.borrow(), 2, "re-prompted");
+        assert!(term.out.borrow().contains("F1 is not an open finding"));
+    }
+
+    #[test]
+    fn send_prompt_p1_answers_unchanged() {
+        for line in ["\n", "y\n", "yes\n"] {
+            assert_eq!(confirm(&[line], &[]).0, SendAnswer::Send, "{line:?}");
+        }
+        for line in ["q\n", "nope\n", ""] {
+            assert_eq!(confirm(&[line], &[]).0, SendAnswer::Stop, "{line:?}");
+        }
+    }
+
+    /// F1 issued, disputed, rejected twice by main ("still wrong" last).
+    fn escalated() -> Ledger {
+        let mut l = Ledger::default();
+        let id = l.next_finding_id();
+        let zero = || Cumulative {
+            exec_time_ms: 0,
+            cost_usd_micros: 0,
+        };
+        l.apply(&ReviewPayload::FindingIssued {
+            round: 1,
+            id: id.clone(),
+            severity: Severity::High,
+            issue: "null deref in parse".into(),
+        })
+        .unwrap();
+        l.apply(&ReviewPayload::FindingStatus {
+            round: 1,
+            id: id.clone(),
+            status: FindingStatus::Disputed,
+            reason: None,
+        })
+        .unwrap();
+        for (round, reason) in [(1, "not reachable"), (2, "still wrong")] {
+            l.apply(&ReviewPayload::Rebuttal {
+                round,
+                responses: vec![RebuttalResponseDto {
+                    id: id.clone(),
+                    answer: RebuttalAnswer::Reject,
+                    reason: Some(reason.into()),
+                }],
+                cumulative: zero(),
+            })
+            .unwrap();
+        }
+        assert_eq!(l.pending_ruling().len(), 1);
+        l
+    }
+
+    #[test]
+    fn ask_ruling_prints_both_positions_and_prompt() {
+        let ledger = escalated();
+        let term = Term::new(&["q\n"]);
+        let wait = HumanWait::default();
+        let input = || term.read();
+        let output = |s: &str| term.write(s);
+        let gate = TerminalGate {
+            inner: Nop,
+            wait: &wait,
+            input: &input,
+            output: &output,
+        };
+        let line = gate
+            .ask_ruling(ledger.pending_ruling()[0], &ledger)
+            .unwrap();
+        assert_eq!(line, "q\n", "raw line, unparsed");
+        let out = term.out.borrow();
+        assert!(out.contains("null deref in parse"), "{out}");
+        assert!(out.contains("still wrong"), "{out}");
+        assert!(out.contains(&RULING_PROMPT.replace("{id}", "F1")), "{out}");
+    }
+
+    #[test]
+    fn ask_ruling_time_counts_as_human_wait() {
+        let ledger = escalated();
+        let wait = HumanWait::default();
+        let input = || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            Ok(String::new())
+        };
+        let gate = TerminalGate {
+            inner: Nop,
+            wait: &wait,
+            input: &input,
+            output: &|_| Ok(()),
+        };
+        gate.ask_ruling(ledger.pending_ruling()[0], &ledger)
+            .unwrap();
+        assert!(gate.take_human_wait() >= std::time::Duration::from_millis(20));
+    }
 }

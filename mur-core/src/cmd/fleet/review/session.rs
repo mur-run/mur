@@ -11,6 +11,7 @@
 //! point is not, so it only runs semi-auto, and refuses to start without a
 //! TTY rather than silently sending unattended.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::time::Instant;
@@ -21,12 +22,13 @@ use mur_common::fleet::Fleet;
 use mur_common::limits::Stuck;
 
 use super::constants::{
-    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX, RUNNING_LOCK,
-    TRANSPORT_RETRY_DELAY,
+    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX, RULING_NO_MAIN_REASON,
+    RULING_POSITIONS, RULING_PROMPT, RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
-use super::driver::{A2aTransport, ReviewTransport};
-use super::ledger::Ledger;
+use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
+use super::ledger::{EscalationRecord, Ledger};
 use super::loop_driver::{LoopDriverStop, run_review_loop};
+use super::ruling::{is_rule_command, parse_rule_command};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
 use super::wire::message_text;
 use crate::cmd::fleet::loop_run::{LoopStop, fleet_bounds};
@@ -260,13 +262,46 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
         Ok(reply)
     }
 
-    fn confirm_send(&self, member: &str, params: &serde_json::Value) -> Result<bool> {
+    fn confirm_send(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        open: &BTreeSet<String>,
+    ) -> Result<SendAnswer> {
         let text = message_text(params).unwrap_or_default();
-        (self.output)(&format!(
-            "\n--- next message to {member} ---\n{text}\n\nSend to {member}? [Enter = send, q = stop] "
-        ))?;
-        let line = self.wait.time(|| (self.input)())?;
-        Ok(is_send_answer(&line))
+        (self.output)(&format!("\n--- next message to {member} ---\n{text}\n"))?;
+        loop {
+            (self.output)(&format!("\n{}", SEND_PROMPT.replace("{member}", member)))?;
+            let line = self.wait.time(|| (self.input)())?;
+            if !is_rule_command(line.trim()) {
+                return Ok(if is_send_answer(&line) {
+                    SendAnswer::Send
+                } else {
+                    SendAnswer::Stop
+                });
+            }
+            match parse_rule_command(&line, open) {
+                Ok(input) => return Ok(SendAnswer::SendWithRuling(input)),
+                Err(hint) => (self.output)(&format!("{hint}\n"))?,
+            }
+        }
+    }
+
+    fn ask_ruling(&self, pending: &EscalationRecord, ledger: &Ledger) -> Result<String> {
+        let id = pending.finding_id.as_str();
+        let finding = ledger.finding(id);
+        let positions = RULING_POSITIONS
+            .replace("{id}", id)
+            .replace("{reason}", &pending.reason)
+            .replace("{issue}", finding.map_or("", |f| f.issue.as_str()))
+            .replace(
+                "{main}",
+                finding
+                    .and_then(|f| f.last_reject_reason.as_deref())
+                    .unwrap_or(RULING_NO_MAIN_REASON),
+            );
+        (self.output)(&format!("{positions}{}", RULING_PROMPT.replace("{id}", id)))?;
+        Ok(self.wait.time(|| (self.input)())?)
     }
 
     fn take_human_wait(&self) -> std::time::Duration {

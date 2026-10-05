@@ -22,6 +22,9 @@ pub struct Finding {
     /// freezes `reject_count` (rule 1) and forbids `disputed` (rule 4);
     /// `Drop` forbids any status but `resolved` (rule 3).
     pub ruled: Option<RulingDecision>,
+    /// P2-§5.1 step 3: main's reason on its latest `reject` of this
+    /// finding, shown at the ruling prompt. Derived from `rebuttal` events.
+    pub last_reject_reason: Option<String>,
 }
 
 /// Why a fold step was rejected as an illegal transition (§8.2: "an illegal
@@ -211,6 +214,7 @@ impl Ledger {
                     round_issued: *round,
                     reject_count: 0,
                     ruled: None,
+                    last_reject_reason: None,
                 });
             }
             ReviewPayload::FindingStatus { id, status, .. } => {
@@ -239,6 +243,9 @@ impl Ledger {
                     let Some(f) = self.findings.iter_mut().find(|f| f.id == r.id) else {
                         return Err(FoldError::RebuttalForUnissuedFinding(r.id.clone()));
                     };
+                    if r.answer == super::schema::RebuttalAnswer::Reject {
+                        f.last_reject_reason.clone_from(&r.reason);
+                    }
                     // P2-§4 rule 1: after `fix` a reject is malformed at the
                     // driver; the fold ignores it as defence in depth.
                     if r.answer == super::schema::RebuttalAnswer::Reject

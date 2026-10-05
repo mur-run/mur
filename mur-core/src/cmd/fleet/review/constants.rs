@@ -65,6 +65,22 @@ pub const RULE_NOT_OPEN_HINT: &str = "{id} is not an open finding";
 /// Shown at the ruling prompt for any other input (including bare Enter).
 pub const RULING_PROMPT_HINT: &str =
     "type /rule drop|fix F<n> <text>, /abandon, or q to leave the session paused";
+/// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
+pub const SEND_PROMPT: &str =
+    "Send to {member}? [Enter = send, q = stop, /rule … = record a ruling] ";
+/// P2-§5.1 step 3: the ruling prompt; `{id}` is replaced with the finding.
+#[allow(dead_code)] // wired in PR 3 (Task 7)
+pub const RULING_PROMPT: &str =
+    "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused ";
+/// P2-§5.1 step 3: both sides' last positions, shown above
+/// [`RULING_PROMPT`]. `{id}`, `{reason}` (why it escalated), `{issue}` (the
+/// reviewer's finding) and `{main}` (main's last reject reason).
+#[allow(dead_code)] // wired in PR 3 (Task 7)
+pub const RULING_POSITIONS: &str =
+    "\n--- {id} awaits your ruling ({reason}) ---\n  reviewer: {issue}\n  main: {main}\n";
+/// Stands in for `{main}` when main's reject carried no reason.
+#[allow(dead_code)] // wired in PR 3 (Task 7)
+pub const RULING_NO_MAIN_REASON: &str = "(no reason given)";
 /// P2-§5.3: rebuttal retry hint when main rejects a finding ruled `fix`.
 /// `{id}` is replaced with the finding ID.
 pub const REVIEW_FIX_RULED_REJECT_HINT: &str =
