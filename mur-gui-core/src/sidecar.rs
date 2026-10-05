@@ -236,13 +236,8 @@ fn spawn_runtime(slug: &str, mur_home: &Path) -> Result<Child, String> {
              is available, or run build.sh to install it."
         )
     })?;
-    mur_common::binary_attestation::verify_runtime_signature(&runtime_bin).map_err(|e| {
-        format!(
-            "{e} — the runtime binary may have been swapped (launch-chain \
-             protection covers writes, attestation covers swaps). Fix: mur \
-             update --restart-agents, or reinstall MUR."
-        )
-    })?;
+    mur_common::binary_attestation::verify_runtime_signature(&runtime_bin)
+        .map_err(|e| e.mount_failure_message())?;
     // Clear any stale lock/socket a previously crashed runtime left behind so
     // the new one binds cleanly.
     clear_runtime_state(mur_home, slug);
