@@ -4,7 +4,8 @@
   (proactive `/rule`) was recommended and taken as a flagged assumption under autonomous
   continuation. Rev 4 applies the plan review rulings D1–D3 (human, 2026-10-05): `/rule`
   timing at the send prompts (§5.3), one resume column for paused and crashed sessions (§6),
-  and no plain-text notes in Phase 2 (§0, R7, §9). No open questions remain; accepted
+  and no plain-text notes in Phase 2 (§0, R7, §9); a regenerated main message is printed before
+  it is sent, and the two discard notices are distinct (§5.3, AC-P2-19). No open questions remain; accepted
   limitations are in §9.
 - **Date:** 2026-10-05
 - **Base:** Phase 1 spec `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md` (Approved
@@ -205,17 +206,27 @@ classified `crashed`; §6 still finds the pending ruling (R2).
   (AC-P2-10).
   - At **main's** send prompt the prompt *is* the round boundary. The kill-switch is checked
     first (§5.1 step 4); then the `ruling` is written and folded at once, main's message is
-    **rebuilt from the new ledger** (binding note, changed open set, post-`fix` restriction) and
-    printed, and it is sent without asking again — the `/rule` line was the send consent.
-    Sending the message built before the ruling would make main answer under the old rules.
+    **rebuilt from the new ledger** (binding note, changed open set, post-`fix` restriction),
+    and sent without asking again — the `/rule` line was the send consent. Sending the message
+    built before the ruling would make main answer under the old rules.
+  - Before that send, the rebuilt message is **printed in full**, preceded by the line
+    `[ruling applied; message regenerated]`. This is required, not cosmetic: semi-auto's contract
+    is that the human sees the exact bytes before they go, and the `/rule` line consented to
+    "apply the ruling and send", not to a message the human never saw. It is printed even when
+    the rebuilt text equals the pre-filled one (no diffing).
   - At the **reviewer's** send prompt the reviewer turn is sent; the ruling is held and written
     after this round's seal, before the next round's main `turn_sent`.
 - **A held ruling is re-validated when applied**: if its finding is still in the open set
   (`open` ∪ `disputed`, P1-§3.3) it is written and folded — a finding the reviewer moved to
   `disputed` meanwhile is still ruled, which is what the ruling is for. If the finding left the
   open set (`resolved` or `withdrawn`) the ruling is discarded, one line is printed
-  (`Ruling on F3 not recorded: F3 is now withdrawn.`), and nothing is written. A reviewer
+  (`Ruling on F3 discarded: finding is already withdrawn.`), and nothing is written. A reviewer
   closing a finding first is a normal race, not a failure; the loop continues.
+- **A held ruling dies with the session**: if the round that held it seals with `approve` or
+  `blocked`, there is no next round to apply it to. It is discarded, nothing is written, and a
+  line distinct from the re-validation notice is printed
+  (`Ruling on F3 discarded: session ended with approve.`). The two notices differ because the
+  causes differ: one ruling became moot, the other had no turn left to govern.
 
 ### 5.4 Proactive `/rule` (R7)
 
@@ -290,7 +301,8 @@ driver only.
 - **AC-P2-7:** 15 min at the ruling prompt with `stuck = 10m`, `deadline = 5m` → neither trips.
 - **AC-P2-8:** `/rule` at a send prompt. (a) At main's prompt: `ruling` is on the channel before
   that round's main `turn_sent`, and the message sent to main is the one rebuilt after the
-  ruling (it contains the binding note). (b) At the reviewer's prompt: the reviewer turn is
+  ruling (it contains the binding note); that exact message is printed, after the line
+  `[ruling applied; message regenerated]`, before it is sent. (b) At the reviewer's prompt: the reviewer turn is
   sent; `ruling` lands after that round's `verdict` and before the next round's main
   `turn_sent`. (c) In both, the `/rule` line also counts as send consent.
 - **AC-P2-9:** proactive `/rule fix F` with no escalation folds identically to AC-P2-4.
@@ -312,9 +324,14 @@ driver only.
   pre-prompt `paused`.
 - **AC-P2-18:** a ruling held from the reviewer's send prompt is re-validated when applied. The
   reviewer's turn in that round moves its finding to (a) `resolved` → ruling discarded, notice
-  printed, no `ruling` on the channel, loop continues; (b) `withdrawn` → same as (a);
+  printed (`… discarded: finding is already resolved.`), no `ruling` on the channel, loop
+  continues; (b) `withdrawn` → same as (a);
   (c) `disputed` → `ruling` written before the next main `turn_sent` and folded (`fix` →
   `open`, `drop` → `resolved`).
+- **AC-P2-19:** a ruling held from the reviewer's send prompt, in a round whose reviewer verdict
+  is (a) `approve` or (b) `blocked`: the session ends as it would without the ruling, no
+  `ruling` is on the channel, and the printed notice is the session-end one
+  (`… discarded: session ended with approve|blocked.`), not the AC-P2-18 one.
 
 ## 9. Accepted limitations
 
