@@ -246,3 +246,110 @@ fn reviewer_task_failure_stops_as_task_failed_not_blocked() {
         "no verdict may be recorded for a turn that produced none"
     );
 }
+
+/// AC8 through the live driver: the same finding rejected twice escalates,
+/// and the loop stops on escalation (§3.4; §3.5 "The loop stops on: approve,
+/// blocked, escalation, ..."). The reviewer insists in round 2 (`disputed`),
+/// so the open set changes between rounds and round-stuck (AC9) cannot fire
+/// first.
+#[test]
+fn ac8_second_rejection_escalates_and_stops_loop() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+
+    // R1: reviewer issues F1. R2: main rejects F1 (1st), reviewer insists.
+    // R3: main rejects F1 again (2nd) -> escalation, loop stops.
+    let round1_reviewer =
+        r#"{"verdict":"revise","findings":[{"severity":"high","issue":"unchecked unwrap"}]}"#;
+    let round2_reviewer =
+        r#"{"verdict":"revise","prior":[{"id":"F1","status":"disputed","reason":"still panics"}]}"#;
+    let round3_reviewer =
+        r#"{"verdict":"revise","prior":[{"id":"F1","status":"disputed","reason":"still panics"}]}"#;
+    // Never sent: the loop must stop after round 3.
+    let round4_reviewer = r#"{"verdict":"approve","prior":[{"id":"F1","status":"resolved"}]}"#;
+
+    // Custom transport that rejects all findings instead of accepting them.
+    struct RejectAllTransport {
+        inner: StubLoopTransport,
+    }
+    impl ReviewTransport for RejectAllTransport {
+        fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
+            match member {
+                "main" => {
+                    let prompt = message_text(params).unwrap_or_default();
+                    let responses: Vec<serde_json::Value> = prompt
+                        .lines()
+                        .filter_map(|l| l.strip_prefix("- "))
+                        .filter_map(|l| l.split_once(" ["))
+                        .map(|(id, _)| id)
+                        .filter(|id| id.starts_with('F'))
+                        .map(|id| serde_json::json!({"id": id, "answer": "reject", "reason": "I disagree"}))
+                        .collect();
+                    let text = self
+                        .inner
+                        .main_replies
+                        .lock()
+                        .unwrap()
+                        .pop()
+                        .unwrap_or_else(|| "rebuttal".to_string());
+                    if responses.is_empty() {
+                        return Ok(text);
+                    }
+                    Ok(format!(
+                        "{text}\n```json\n{}\n```",
+                        serde_json::json!({ "responses": responses })
+                    ))
+                }
+                _ => self.inner.send(member, params),
+            }
+        }
+    }
+
+    let transport = RejectAllTransport {
+        inner: StubLoopTransport::new(
+            vec!["main round 1"],
+            vec![
+                round1_reviewer,
+                round2_reviewer,
+                round3_reviewer,
+                round4_reviewer,
+            ],
+        ),
+    };
+
+    let (ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        "task",
+        Mode::SemiAuto,
+        Duration::ZERO,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        &Instant::now,
+    )
+    .unwrap();
+
+    // The escalation MUST be recorded in the ledger.
+    assert_eq!(
+        ledger.escalations.len(),
+        1,
+        "AC8: second rejection escalates"
+    );
+    assert_eq!(ledger.escalations[0].finding_id, "F1");
+    assert_eq!(ledger.findings[0].reject_count, 2, "F1 was rejected twice");
+
+    // The loop stops on escalation, not round-stuck or a later approve.
+    assert!(
+        matches!(stop, LoopDriverStop::Escalation),
+        "AC8 & §3.5: loop MUST stop on escalation, got {:?}",
+        stop
+    );
+    assert_eq!(
+        transport.inner.reviewer_send_count(),
+        3,
+        "no reviewer turn after the escalating round"
+    );
+}

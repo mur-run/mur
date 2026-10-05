@@ -58,6 +58,10 @@ pub enum LoopDriverStop {
     /// two consecutive rounds (AC9). Runs alongside the duration `stuck`
     /// guard; whichever trips first stops the session (§3.5, Q1).
     RoundStuck,
+    /// §3.4 & AC8: a finding rejected twice by the main agent triggers an
+    /// automatic escalation event. The loop stops so the human can decide
+    /// (§3.5: "The loop stops on: … escalation, …").
+    Escalation,
 }
 
 /// Append one review payload to `channel_id` as the router writer — the
@@ -315,6 +319,12 @@ impl LoopRun<'_> {
             match staged.kind {
                 VerdictKind::Approve => return Ok((ledger, LoopDriverStop::Approve)),
                 VerdictKind::Blocked => return Ok((ledger, LoopDriverStop::ReviewerBlocked)),
+                VerdictKind::Revise if !ledger.escalations.is_empty() => {
+                    // §3.4 & AC8: a finding rejected twice triggers escalation.
+                    // The loop stops so the human can decide (§3.5: "The loop
+                    // stops on: approve, blocked, escalation, …").
+                    return Ok((ledger, LoopDriverStop::Escalation));
+                }
                 VerdictKind::Revise if ledger.round_stuck => {
                     return Ok((ledger, LoopDriverStop::RoundStuck));
                 }

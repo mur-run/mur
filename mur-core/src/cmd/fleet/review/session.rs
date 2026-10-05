@@ -60,6 +60,7 @@ pub fn stop_reason(stop: &LoopDriverStop) -> String {
             format!("{member} task failed: {cause}")
         }
         LoopDriverStop::RoundStuck => "stuck (round: open findings unchanged)".into(),
+        LoopDriverStop::Escalation => "escalation".into(),
         LoopDriverStop::Guard(LoopStop::Deadline) => "limit: deadline".into(),
         LoopDriverStop::Guard(LoopStop::Stuck) => "limit: stuck (no activity)".into(),
         LoopDriverStop::Guard(LoopStop::Budget) => "limit: cost_usd".into(),
