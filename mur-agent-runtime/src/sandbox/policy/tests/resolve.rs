@@ -591,3 +591,32 @@ fn both_path_forms_kept_for_symlinked_ancestor() {
         policy.spawn_allowed_paths
     );
 }
+
+/// A `<home>/<dir>/bin/<tool>` binary must not widen to `<home>/<dir>`:
+/// `~/.local/bin/mur` granting all of `~/.local` made every interpreter
+/// under `~/.local/share` (uv-managed Pythons, pipx venvs) executable.
+#[test]
+fn spawn_prefix_does_not_widen_to_a_direct_child_of_home() {
+    let home = PathBuf::from("/Users/someone");
+    for tool in [".local/bin/mur", ".cargo/bin/cargo"] {
+        let literal = home.join(tool);
+        let bin_dir = literal.parent().unwrap().to_path_buf();
+        assert_eq!(
+            compute_spawn_prefix(&literal, &home),
+            bin_dir,
+            "{tool} must be confined to its own bin/ dir"
+        );
+    }
+}
+
+/// Toolchains one level deeper under home still get their package prefix,
+/// so sibling `lib`/`libexec` dirs keep working.
+#[test]
+fn spawn_prefix_still_widens_below_a_home_child() {
+    let home = PathBuf::from("/Users/someone");
+    let literal = home.join(".mur/tools/serena/2.0.0/bin/serena");
+    assert_eq!(
+        compute_spawn_prefix(&literal, &home),
+        home.join(".mur/tools/serena/2.0.0")
+    );
+}
