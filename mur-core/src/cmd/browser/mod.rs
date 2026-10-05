@@ -67,17 +67,20 @@ pub async fn record(
         Some(config) => mur_browser::live_proxy::launch_args(config),
         None => Vec::new(),
     };
-    // Live mode honours `--profile` the same way replay does. Without this the
-    // launch had no cookies and every authenticated page bounced to its login
-    // form, which no browser-app grant can fix: the state was never passed.
-    let injected = match mode {
-        Mode::Live => live_state::prepare(&mur_home()?, profile)?,
-        _ => None,
-    };
-    args.extend(live_state::args(injected.as_ref()));
     // These flags are intentionally merely forwarded. `@playwright/mcp`
     // owns their validation, keeping this proxy compatible with new releases.
+    // They go on before the derived args below so an explicit `--browser` or
+    // `--user-data-dir` is visible to them and wins.
     args.extend(extra.iter().cloned());
+    // Every mode honours `--profile` the same way replay does. Without this the
+    // launch had no cookies and every authenticated page bounced to its login
+    // form, which no browser-app grant can fix: the state was never passed.
+    // This is not live-only: recording a test or automation run against an
+    // admin area is exactly the case that needs a session, and asking the
+    // person to log in by hand inside each recording defeats `browser auth`.
+    let injected = live_state::prepare(&mur_home()?, profile)?;
+    let state_args = live_state::args(injected.as_ref(), &args);
+    args.extend(state_args);
     // Without this, test/automation recording fell through to
     // `@playwright/mcp`'s default — the branded Google Chrome application,
     // carrying the person's real profile and needing a spawn grant on
