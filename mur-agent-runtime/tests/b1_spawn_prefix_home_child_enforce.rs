@@ -87,9 +87,8 @@ fn home_child_bin_grant_does_not_expose_sibling_share_interpreters() {
     plant_executable(&tool);
     plant_executable(&python);
 
-    // SAFETY: this binary contains exactly one test (see module docs), so no
-    // other thread reads the environment while it changes.
-    unsafe { std::env::set_var("HOME", &home) };
+    // Serialized and restored on unwind by the guard.
+    let _env = mur_common::test_env::EnvGuard::set([("HOME", &home)]);
 
     let agent_home = home.join(".mur/agents/probe");
     std::fs::create_dir_all(&agent_home).expect("agent home");
