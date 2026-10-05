@@ -236,3 +236,181 @@ fn round_stuck_ignores_ties_at_the_start() {
     let ledger = Ledger::default();
     assert!(!ledger.round_stuck);
 }
+
+// ---- Phase 2 fold rules (P2-§4) ----
+
+use crate::cmd::fleet::review::schema::{Role, RulingDecision};
+
+fn rebut(ledger: &mut Ledger, id: &str, answer: RebuttalAnswer, round: u32) {
+    ledger
+        .apply(&ReviewPayload::Rebuttal {
+            round,
+            responses: vec![RebuttalResponseDto {
+                id: id.to_string(),
+                answer,
+                reason: Some("disagree".to_string()),
+            }],
+            cumulative: cum(0, 0),
+        })
+        .unwrap();
+}
+
+fn set_status(ledger: &mut Ledger, id: &str, status: FindingStatus) -> Result<(), FoldError> {
+    ledger.apply(&ReviewPayload::FindingStatus {
+        round: 1,
+        id: id.to_string(),
+        status,
+        reason: None,
+    })
+}
+
+fn rule(ledger: &mut Ledger, id: &str, decision: RulingDecision) -> Result<(), FoldError> {
+    ledger.apply(&ReviewPayload::Ruling {
+        finding: id.to_string(),
+        decision,
+        text: "human says so".to_string(),
+    })
+}
+
+/// Issue F1, mark it disputed, and reject it twice so it escalates.
+fn escalated_f1(ledger: &mut Ledger) -> String {
+    let f1 = issue(ledger, Severity::High, "x", 1);
+    set_status(ledger, &f1, FindingStatus::Disputed).unwrap();
+    rebut(ledger, &f1, RebuttalAnswer::Reject, 1);
+    rebut(ledger, &f1, RebuttalAnswer::Reject, 2);
+    assert_eq!(ledger.pending_ruling().len(), 1, "precondition: escalated");
+    f1
+}
+
+#[test]
+fn ruling_drop_resolves_and_handles_escalation() {
+    let mut ledger = Ledger::default();
+    let f1 = escalated_f1(&mut ledger);
+    rule(&mut ledger, &f1, RulingDecision::Drop).unwrap();
+    let f = ledger.finding(&f1).unwrap();
+    assert_eq!(f.status, FindingStatus::Resolved);
+    assert_eq!(f.ruled, Some(RulingDecision::Drop));
+    assert!(ledger.pending_ruling().is_empty());
+    assert_eq!(ledger.escalations.len(), 1);
+    assert!(ledger.escalations[0].handled);
+}
+
+/// AC-P2-4, fold half.
+#[test]
+fn ruling_fix_reopens_and_resets_rejects() {
+    let mut ledger = Ledger::default();
+    let f1 = escalated_f1(&mut ledger);
+    rule(&mut ledger, &f1, RulingDecision::Fix).unwrap();
+    let f = ledger.finding(&f1).unwrap();
+    assert_eq!(f.status, FindingStatus::Open);
+    assert_eq!(f.reject_count, 0);
+    assert!(ledger.pending_ruling().is_empty());
+}
+
+/// P2-§4 rule 1.
+#[test]
+fn reject_after_fix_is_ignored_by_fold() {
+    let mut ledger = Ledger::default();
+    let f1 = escalated_f1(&mut ledger);
+    rule(&mut ledger, &f1, RulingDecision::Fix).unwrap();
+    rebut(&mut ledger, &f1, RebuttalAnswer::Reject, 3);
+    rebut(&mut ledger, &f1, RebuttalAnswer::Reject, 4);
+    assert_eq!(ledger.finding(&f1).unwrap().reject_count, 0);
+    assert_eq!(ledger.escalations.len(), 1, "no new escalation");
+}
+
+/// P2-§4 rule 3, AC-P2-3.
+#[test]
+fn reviewer_reopening_dropped_finding_is_damage() {
+    let mut ledger = Ledger::default();
+    let f1 = escalated_f1(&mut ledger);
+    rule(&mut ledger, &f1, RulingDecision::Drop).unwrap();
+    assert_eq!(
+        set_status(&mut ledger, &f1, FindingStatus::Open),
+        Err(FoldError::ReopenAfterDrop(f1.clone()))
+    );
+    assert_eq!(
+        set_status(&mut ledger, &f1, FindingStatus::Disputed),
+        Err(FoldError::ReopenAfterDrop(f1.clone()))
+    );
+    assert_eq!(
+        set_status(&mut ledger, &f1, FindingStatus::Resolved),
+        Ok(())
+    );
+}
+
+/// P2-§4 rule 4.
+#[test]
+fn disputed_after_fix_is_damage() {
+    let mut ledger = Ledger::default();
+    let f1 = escalated_f1(&mut ledger);
+    rule(&mut ledger, &f1, RulingDecision::Fix).unwrap();
+    assert_eq!(
+        set_status(&mut ledger, &f1, FindingStatus::Disputed),
+        Err(FoldError::DisputedAfterFix(f1.clone()))
+    );
+    assert_eq!(set_status(&mut ledger, &f1, FindingStatus::Open), Ok(()));
+    assert_eq!(
+        set_status(&mut ledger, &f1, FindingStatus::Resolved),
+        Ok(())
+    );
+}
+
+#[test]
+fn ruling_on_unissued_finding_is_damage() {
+    let mut ledger = Ledger::default();
+    assert_eq!(
+        rule(&mut ledger, "F9", RulingDecision::Drop),
+        Err(FoldError::RulingForUnissuedFinding("F9".to_string()))
+    );
+}
+
+/// AC-P2-9: a proactive `fix` (no escalation) folds like AC-P2-4.
+#[test]
+fn proactive_fix_without_escalation_folds_like_ac4() {
+    let mut escalated = Ledger::default();
+    let f1 = escalated_f1(&mut escalated);
+    rule(&mut escalated, &f1, RulingDecision::Fix).unwrap();
+
+    let mut proactive = Ledger::default();
+    let p1 = issue(&mut proactive, Severity::High, "x", 1);
+    set_status(&mut proactive, &p1, FindingStatus::Disputed).unwrap();
+    rebut(&mut proactive, &p1, RebuttalAnswer::Reject, 1);
+    rule(&mut proactive, &p1, RulingDecision::Fix).unwrap();
+
+    assert_eq!(proactive.finding(&p1), escalated.finding(&f1));
+    assert!(proactive.escalations.is_empty());
+    assert!(proactive.pending_ruling().is_empty());
+}
+
+#[test]
+fn second_ruling_wins() {
+    let mut ledger = Ledger::default();
+    let f1 = escalated_f1(&mut ledger);
+    rule(&mut ledger, &f1, RulingDecision::Fix).unwrap();
+    rule(&mut ledger, &f1, RulingDecision::Drop).unwrap();
+    let f = ledger.finding(&f1).unwrap();
+    assert_eq!(f.ruled, Some(RulingDecision::Drop));
+    assert_eq!(f.status, FindingStatus::Resolved);
+}
+
+#[test]
+fn binding_rulings_clear_per_role_on_turn_sent() {
+    let mut ledger = Ledger::default();
+    let f1 = escalated_f1(&mut ledger);
+    rule(&mut ledger, &f1, RulingDecision::Drop).unwrap();
+    assert_eq!(ledger.binding_rulings(Role::Main).len(), 1);
+    assert_eq!(ledger.binding_rulings(Role::Reviewer).len(), 1);
+    assert_eq!(ledger.binding_rulings(Role::Main)[0].finding, f1);
+
+    ledger
+        .apply(&ReviewPayload::TurnSent {
+            round: 3,
+            to: Role::Main,
+            restart_note: None,
+            human_wait_ms: 0,
+        })
+        .unwrap();
+    assert!(ledger.binding_rulings(Role::Main).is_empty());
+    assert_eq!(ledger.binding_rulings(Role::Reviewer).len(), 1);
+}

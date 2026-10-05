@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use super::constants::{REJECT_ESCALATION_THRESHOLD, ROUND_STUCK_AFTER_UNCHANGED_ROUNDS};
-use super::schema::{FindingStatus, Mode, ReviewPayload, Severity};
+use super::schema::{FindingStatus, Mode, ReviewPayload, Role, RulingDecision, Severity};
 
 /// One finding, as the ledger tracks it (§3.3).
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +18,10 @@ pub struct Finding {
     /// §3.4: how many times the main agent has rejected this finding. The
     /// second rejection escalates automatically (AC8).
     pub reject_count: u32,
+    /// P2-§4: the latest human ruling on this finding, if any. `Fix`
+    /// freezes `reject_count` (rule 1) and forbids `disputed` (rule 4);
+    /// `Drop` forbids any status but `resolved` (rule 3).
+    pub ruled: Option<RulingDecision>,
 }
 
 /// Why a fold step was rejected as an illegal transition (§8.2: "an illegal
@@ -34,6 +38,12 @@ pub enum FoldError {
     DuplicateFindingId(String),
     #[error("rebuttal references finding {0:?}, which was never issued")]
     RebuttalForUnissuedFinding(String),
+    #[error("ruling references finding {0:?}, which was never issued")]
+    RulingForUnissuedFinding(String),
+    #[error("finding_status reopens finding {0:?}, which a ruling dropped")]
+    ReopenAfterDrop(String),
+    #[error("finding_status marks finding {0:?} disputed after a fix ruling")]
+    DisputedAfterFix(String),
 }
 
 /// The ledger's fold state (§3.3, §3.5). A pure value: everything here is
@@ -57,12 +67,33 @@ pub struct Ledger {
     pub paused: bool,
     pub exec_time_ms: u64,
     pub cost_usd_micros: u64,
+    /// Rulings each role has not yet been sent, indexed by [`role_slot`].
+    /// A `ruling` pushes to both; a `turn_sent { to }` clears that role's
+    /// list (P2-§5.3 binding note). Event-derived, so replay matches.
+    unseen_rulings: [Vec<RulingRecord>; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscalationRecord {
     pub finding_id: String,
     pub reason: String,
+    /// P2-§4: set when a ruling on `finding_id` folds.
+    pub handled: bool,
+}
+
+/// One folded ruling, as a binding note carries it (P2-§5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulingRecord {
+    pub finding: String,
+    pub decision: RulingDecision,
+    pub text: String,
+}
+
+fn role_slot(role: Role) -> usize {
+    match role {
+        Role::Main => 0,
+        Role::Reviewer => 1,
+    }
 }
 
 impl Ledger {
@@ -88,6 +119,20 @@ impl Ledger {
             out.sort_by_key(|f| f.status != FindingStatus::Disputed);
         }
         out
+    }
+
+    /// P2-§4 "Single definition": the escalations still owed a ruling.
+    /// The stop check, the resume decision, and the stop/resume screens
+    /// all call this one function.
+    #[allow(dead_code)] // wired in PR 3 (Task 6–7)
+    pub fn pending_ruling(&self) -> Vec<&EscalationRecord> {
+        self.escalations.iter().filter(|e| !e.handled).collect()
+    }
+
+    /// Rulings not yet delivered to `role` (P2-§5.3 binding note).
+    #[allow(dead_code)] // wired in PR 3 (Task 6–7)
+    pub fn binding_rulings(&self, role: Role) -> &[RulingRecord] {
+        &self.unseen_rulings[role_slot(role)]
     }
 
     #[allow(dead_code)] // not wired yet: §6 /rule and §3.4 rebuttal
@@ -132,7 +177,9 @@ impl Ledger {
             ReviewPayload::SessionStarted { mode, .. } => {
                 self.mode = *mode;
             }
-            ReviewPayload::TurnSent { .. } => {}
+            ReviewPayload::TurnSent { to, .. } => {
+                self.unseen_rulings[role_slot(*to)].clear();
+            }
             ReviewPayload::Verdict {
                 round, cumulative, ..
             } => {
@@ -163,12 +210,23 @@ impl Ledger {
                     status: FindingStatus::Open,
                     round_issued: *round,
                     reject_count: 0,
+                    ruled: None,
                 });
             }
             ReviewPayload::FindingStatus { id, status, .. } => {
                 let Some(f) = self.findings.iter_mut().find(|f| &f.id == id) else {
                     return Err(FoldError::StatusForUnissuedFinding(id.clone()));
                 };
+                // P2-§4 rules 3 and 4.
+                match (f.ruled, *status) {
+                    (Some(RulingDecision::Drop), s) if s != FindingStatus::Resolved => {
+                        return Err(FoldError::ReopenAfterDrop(id.clone()));
+                    }
+                    (Some(RulingDecision::Fix), FindingStatus::Disputed) => {
+                        return Err(FoldError::DisputedAfterFix(id.clone()));
+                    }
+                    _ => {}
+                }
                 f.status = *status;
             }
             ReviewPayload::Rebuttal {
@@ -181,7 +239,11 @@ impl Ledger {
                     let Some(f) = self.findings.iter_mut().find(|f| f.id == r.id) else {
                         return Err(FoldError::RebuttalForUnissuedFinding(r.id.clone()));
                     };
-                    if r.answer == super::schema::RebuttalAnswer::Reject {
+                    // P2-§4 rule 1: after `fix` a reject is malformed at the
+                    // driver; the fold ignores it as defence in depth.
+                    if r.answer == super::schema::RebuttalAnswer::Reject
+                        && f.ruled != Some(RulingDecision::Fix)
+                    {
                         f.reject_count += 1;
                         // AC8: the SAME finding rejected
                         // REJECT_ESCALATION_THRESHOLD times escalates
@@ -190,14 +252,44 @@ impl Ledger {
                             self.escalations.push(EscalationRecord {
                                 finding_id: r.id.clone(),
                                 reason: "rejected twice by the main agent".to_string(),
+                                handled: false,
                             });
                         }
                     }
                 }
             }
             ReviewPayload::HumanNote { .. } => {}
-            // Phase 2 fold rules land in the next commit (P2-§4).
-            ReviewPayload::Ruling { .. } => {}
+            ReviewPayload::Ruling {
+                finding,
+                decision,
+                text,
+            } => {
+                // P2-§4 rule 2.
+                let Some(f) = self.findings.iter_mut().find(|f| &f.id == finding) else {
+                    return Err(FoldError::RulingForUnissuedFinding(finding.clone()));
+                };
+                f.reject_count = 0;
+                f.ruled = Some(*decision);
+                f.status = match decision {
+                    RulingDecision::Drop => FindingStatus::Resolved,
+                    RulingDecision::Fix => FindingStatus::Open,
+                };
+                for e in self
+                    .escalations
+                    .iter_mut()
+                    .filter(|e| &e.finding_id == finding && !e.handled)
+                {
+                    e.handled = true;
+                }
+                let record = RulingRecord {
+                    finding: finding.clone(),
+                    decision: *decision,
+                    text: text.clone(),
+                };
+                for unseen in &mut self.unseen_rulings {
+                    unseen.push(record.clone());
+                }
+            }
             ReviewPayload::Paused { cumulative, .. } => {
                 self.adopt_cumulative(cumulative);
                 self.paused = true;
