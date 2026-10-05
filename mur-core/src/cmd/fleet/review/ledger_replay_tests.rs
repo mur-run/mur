@@ -7,8 +7,8 @@ use mur_common::limits::Stuck;
 
 use super::ledger::{Ledger, fold_rounds};
 use super::schema::{
-    Cumulative, FindingStatus, Mode, RebuttalAnswer, RebuttalResponseDto, ReviewPayload, Role,
-    SessionLimits, Severity, VerdictKind,
+    Cumulative, FindingStatus, Mode, PauseKind, RebuttalAnswer, RebuttalResponseDto, ReviewPayload,
+    Role, RulingDecision, SessionLimits, Severity, VerdictKind,
 };
 use super::verdict::parse_verdict;
 
@@ -104,6 +104,7 @@ fn a_rerun_round_counts_a_reject_once_and_escalates_exactly_once() {
         reject_f1(2, cum(500, 7)),
         // crash; resume appends paused(crashed) + resumed, then re-runs round 2
         ReviewPayload::Paused {
+            kind: PauseKind::Other,
             reason: "crashed".into(),
             cumulative: cum(500, 7),
         },
@@ -196,4 +197,97 @@ fn the_live_append_order_ends_with_the_verdict() {
         })
         .collect();
     assert_eq!(kinds, ["issued", "status", "verdict"]);
+}
+
+// ---- Phase 2: replay across rulings (AC-P2-10) ----
+
+fn ruling(id: &str, decision: RulingDecision) -> ReviewPayload {
+    ReviewPayload::Ruling {
+        finding: id.into(),
+        decision,
+        text: "human says so".into(),
+    }
+}
+
+/// The live driver's view of a fully sealed log: every event applied in
+/// order, the open set snapshotted at each verdict. This models the driver
+/// once PR 3 folds `turn_sent` into the per-round ledger; today's
+/// `loop_driver.rs` appends `turn_sent` without applying it.
+fn live(log: &[ReviewPayload]) -> Ledger {
+    let mut l = Ledger::default();
+    for p in log {
+        l.apply(p).unwrap();
+        if matches!(p, ReviewPayload::Verdict { .. }) {
+            l.note_round_complete();
+        }
+    }
+    l
+}
+
+/// Round 1 sealed, F1 escalated in round 2 (two rejects across rounds 1–2).
+fn escalated_log() -> Vec<ReviewPayload> {
+    let mut log = sealed_round_one();
+    log.extend([
+        sent(2, Role::Main),
+        sent(2, Role::Reviewer),
+        reject_f1(2, cum(200, 2)),
+        verdict(2, cum(200, 2)),
+        sent(3, Role::Main),
+        sent(3, Role::Reviewer),
+        reject_f1(3, cum(300, 3)),
+        verdict(3, cum(300, 3)),
+    ]);
+    log
+}
+
+/// AC-P2-10: for every sealed log, replay equals the live ledger, rulings,
+/// `handled`, and per-role binding state included. Rulings sit at each
+/// position the driver can write them: after a seal (reviewer prompt, held
+/// ruling) and before main's `turn_sent` (main prompt).
+#[test]
+fn sealed_logs_with_rulings_replay_equal_to_live() {
+    for decision in [RulingDecision::Drop, RulingDecision::Fix] {
+        // Held ruling: written after round 3's seal, read by round 4.
+        let mut held = escalated_log();
+        held.push(ruling("F1", decision));
+        // Main-prompt ruling, then round 4 sent to main only so far.
+        let mut main_prompt = held.clone();
+        main_prompt.push(sent(4, Role::Main));
+        // ... and round 4 sealed.
+        let mut sealed = main_prompt.clone();
+        sealed.extend([sent(4, Role::Reviewer), verdict(4, cum(400, 4))]);
+
+        for (name, log) in [("held", &held), ("sealed", &sealed)] {
+            assert_eq!(fold_rounds(log).unwrap(), live(log), "{name} {decision:?}");
+        }
+        let l = fold_rounds(&sealed).unwrap();
+        assert!(l.pending_ruling().is_empty());
+        assert!(l.escalations.iter().all(|e| e.handled));
+        assert_eq!(l.finding("F1").unwrap().ruled, Some(decision));
+        assert!(l.binding_rulings(Role::Main).is_empty(), "{decision:?}");
+        assert!(l.binding_rulings(Role::Reviewer).is_empty(), "{decision:?}");
+    }
+}
+
+/// P2-§2: a ruling carries no round, so it survives the drop of an
+/// unsealed trailing round — and the dropped round's `turn_sent` does not
+/// count as delivery, so the re-run round gets the binding note again.
+#[test]
+fn a_ruling_survives_a_dropped_trailing_round_and_stays_binding() {
+    let mut log = escalated_log();
+    log.extend([
+        ruling("F1", RulingDecision::Fix),
+        sent(4, Role::Main),
+        sent(4, Role::Reviewer),
+        reject_f1(4, cum(450, 5)),
+    ]);
+    let l = fold_rounds(&log).unwrap();
+    assert_eq!(l.round, 3, "round 4 is re-run");
+    let f = l.finding("F1").unwrap();
+    assert_eq!(f.ruled, Some(RulingDecision::Fix));
+    assert_eq!((f.status, f.reject_count), (FindingStatus::Open, 0));
+    assert!(l.pending_ruling().is_empty());
+    assert_eq!(l.binding_rulings(Role::Main).len(), 1);
+    assert_eq!(l.binding_rulings(Role::Reviewer).len(), 1);
+    assert_eq!((l.exec_time_ms, l.cost_usd_micros), (450, 5));
 }

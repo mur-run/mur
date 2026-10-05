@@ -28,6 +28,9 @@ pub mod resume;
 // helpers (§8.2 Partial) are not yet, so they stay test-only.
 #[allow(dead_code)]
 pub mod rollback;
+// P2-§5 `/rule` input; wired in PR 3 (Task 6–7).
+#[allow(dead_code)]
+pub mod ruling;
 pub mod run_lock;
 pub mod schema;
 pub mod session;
@@ -50,3 +53,7 @@ mod loop_driver_tests;
 #[cfg(test)]
 #[path = "no_tampering_tests.rs"]
 mod no_tampering_tests;
+
+#[cfg(test)]
+#[path = "ruling_tests.rs"]
+mod ruling_tests;
