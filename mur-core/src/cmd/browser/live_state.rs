@@ -34,6 +34,15 @@ pub fn prepare(mur_home: &Path, site: Option<&str>) -> Result<Option<InjectedSta
         return Ok(None);
     };
     let path = paths::profile_state(mur_home, site);
+    // Check for the file before touching the Keychain: a profile that was never
+    // saved is the common case, and decrypting first would make it an opaque
+    // key-access failure (and, on a locked/headless Keychain, a hang).
+    if !path.exists() {
+        anyhow::bail!(
+            "no saved browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
+            path.display()
+        );
+    }
     let state = read_state(&path, &KeychainStateKeyStore).with_context(|| {
         format!(
             "decrypt browser profile {site:?} for live mode ({}) — run `mur browser auth {site} --url <login url>` first",
