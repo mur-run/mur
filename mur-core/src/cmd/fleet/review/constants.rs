@@ -65,6 +65,10 @@ pub const RULE_NOT_OPEN_HINT: &str = "{id} is not an open finding";
 /// Shown at the ruling prompt for any other input (including bare Enter).
 pub const RULING_PROMPT_HINT: &str =
     "type /rule drop|fix F<n> <text>, /abandon, or q to leave the session paused";
+/// P2-§5.3: rebuttal retry hint when main rejects a finding ruled `fix`.
+/// `{id}` is replaced with the finding ID.
+pub const REVIEW_FIX_RULED_REJECT_HINT: &str =
+    "finding {id} was ruled `fix` by the human; answer accept or partial, not reject";
 
 /// §8.2 fatal case — the fixed marker filename inside a channel's own
 /// directory (`<MUR_HOME>/channels/<channel id>/corrupted.json`), next to

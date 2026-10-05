@@ -9,10 +9,11 @@
 
 use serde::Deserialize;
 
+use super::constants::REVIEW_FIX_RULED_REJECT_HINT;
 use super::ledger::{FoldError, Ledger};
 use super::schema::{
     Cumulative, NewFindingDto, PriorUpdateDto, RebuttalAnswer, RebuttalResponseDto, ReviewPayload,
-    VerdictKind,
+    RulingDecision, VerdictKind,
 };
 use super::wire::extract_verdict_json;
 
@@ -127,6 +128,15 @@ pub fn parse_rebuttal(ledger: &Ledger, round: u32, reply: &str) -> Result<Review
                 "finding {}: a reason is required for reject and partial",
                 r.id
             ));
+        }
+        // P2-§5.3: a `fix` ruling forbids rejecting the finding; the
+        // retry-once → `blocked` path handles the rest.
+        if r.answer == RebuttalAnswer::Reject
+            && ledger
+                .finding(&r.id)
+                .is_some_and(|f| f.ruled == Some(RulingDecision::Fix))
+        {
+            return Err(REVIEW_FIX_RULED_REJECT_HINT.replace("{id}", &r.id));
         }
     }
     let missing = missing_open_ids(ledger, parsed.responses.iter().map(|r| r.id.as_str()));
@@ -274,5 +284,25 @@ mod tests {
     fn rebuttal_missing_an_open_finding_is_malformed() {
         let err = parse_rebuttal(&one_open(), 2, r#"{"responses":[]}"#).unwrap_err();
         assert!(err.contains("F1"), "{err}");
+    }
+    /// P2-§5.3: after a `fix` ruling on F1, `reject` is malformed (retry
+    /// once, then `blocked`); `accept` and `partial` with a reason are fine.
+    #[test]
+    fn rebuttal_reject_after_fix_ruling_is_malformed() {
+        let mut ledger = one_open();
+        ledger
+            .apply(&ReviewPayload::Ruling {
+                finding: "F1".into(),
+                decision: RulingDecision::Fix,
+                text: "fix it".into(),
+            })
+            .unwrap();
+        let answer =
+            |a: &str| format!(r#"{{"responses":[{{"id":"F1","answer":"{a}","reason":"r"}}]}}"#);
+        let err = parse_rebuttal(&ledger, 2, &answer("reject")).unwrap_err();
+        let hint = REVIEW_FIX_RULED_REJECT_HINT.replace("{id}", "F1");
+        assert!(err.contains(&hint), "{err}");
+        assert!(parse_rebuttal(&ledger, 2, &answer("partial")).is_ok());
+        assert!(parse_rebuttal(&ledger, 2, &answer("accept")).is_ok());
     }
 }
