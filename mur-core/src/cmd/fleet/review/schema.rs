@@ -210,10 +210,10 @@ pub enum ReviewPayload {
         restart_note: Option<String>,
     },
     /// §4 lists `verdict` as its own event, separate from `finding_issued`/
-    /// `finding_status`: the driver follows one `Verdict` event with zero or
-    /// more `FindingIssued` (new findings, system-assigned IDs written one
-    /// at a time — AC7) and `FindingStatus` events (prior-finding updates)
-    /// for the SAME round. The ledger fold treats all of them as one
+    /// `finding_status`: the driver appends zero or more `FindingIssued`
+    /// (new findings, system-assigned IDs written one at a time — AC7) and
+    /// `FindingStatus` events (prior-finding updates) for the SAME round,
+    /// then one `Verdict` LAST, which seals the round on replay (§3.3.1). The ledger fold treats all of them as one
     /// logical turn tagged by `round`.
     Verdict {
         round: u32,

@@ -232,6 +232,13 @@ impl Ledger {
         self.cost_usd_micros = self.cost_usd_micros.max(c.cost_usd_micros);
     }
 
+    /// §3.3.1 AC2b: an unsealed round's ledger effect is dropped, but the
+    /// time and cost it carried still count as a lower bound.
+    fn adopt_limits_from(&mut self, other: &Ledger) {
+        self.exec_time_ms = self.exec_time_ms.max(other.exec_time_ms);
+        self.cost_usd_micros = self.cost_usd_micros.max(other.cost_usd_micros);
+    }
+
     /// Call once a round's events (verdict + finding updates) are fully
     /// folded, to update round-stuck tracking (§3.3, AC9). The caller (the
     /// driver, or a test) decides where a round ends — the ledger itself
@@ -267,39 +274,50 @@ pub fn fold(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
     Ok(ledger)
 }
 
-/// Fold with round-boundary tracking: [`Ledger::note_round_complete`] is
-/// called whenever a payload opens a later round, and once more after the
-/// last round seen. This mirrors the live loop, which notes every round it
-/// fully folds, so a replay of the loop's own channel reproduces its ledger
-/// including round-stuck state (AC9 + AC11).
-#[allow(dead_code)] // not wired yet: §8.2 resume
+/// Fold with round sealing (§3.3.1). A round's `rebuttal`, `finding_issued`
+/// and `finding_status` events are staged on a scratch copy and only enter
+/// the ledger when that round's `verdict` (always appended last) seals it;
+/// [`Ledger::note_round_complete`] is called at that seal, as the live loop
+/// does (AC9 + AC11). A new main `turn_sent` starts a new attempt and
+/// discards an unsealed one, so a round re-run after a crash never counts a
+/// reject twice (AC2a). Discarded events still raise the cumulative limits
+/// (AC2b). Staged events are still validated, so an illegal transition in an
+/// unsealed round remains an error.
 pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
-    let mut ledger = Ledger::default();
-    let mut in_progress: u32 = 0;
-    // The trailing round is sealed only once its verdict landed: a round
-    // cut short after `turn_sent` (stop/pause/deadline) was never sealed by
-    // the live driver either, so sealing it here would push an extra
-    // open-set snapshot and could flip `round_stuck` on replay.
-    let mut trailing_has_verdict = false;
+    let mut sealed = Ledger::default();
+    let mut attempt: Option<(u32, Ledger)> = None;
     for p in payloads {
-        if let Some(r) = super::schema::payload_round(p)
-            && r > in_progress
-        {
-            if in_progress > 0 {
-                ledger.note_round_complete();
+        let round = super::schema::payload_round(p);
+        let new_attempt = match p {
+            ReviewPayload::TurnSent { to, .. } => *to == super::schema::Role::Main,
+            _ => false,
+        } || matches!((round, &attempt), (Some(r), Some((a, _))) if r != *a);
+        if new_attempt && let Some((_, dropped)) = attempt.take() {
+            sealed.adopt_limits_from(&dropped);
+        }
+        match (p, round) {
+            (ReviewPayload::TurnSent { .. }, _) => {}
+            (_, Some(r)) => {
+                let (_, scratch) = attempt.get_or_insert_with(|| (r, sealed.clone()));
+                scratch.apply(p)?;
+                if matches!(p, ReviewPayload::Verdict { .. }) {
+                    let (_, mut done) = attempt.take().expect("attempt was just set");
+                    done.note_round_complete();
+                    sealed = done;
+                }
             }
-            in_progress = r;
-            trailing_has_verdict = false;
+            (_, None) => {
+                sealed.apply(p)?;
+                if let Some((_, scratch)) = attempt.as_mut() {
+                    scratch.apply(p)?;
+                }
+            }
         }
-        if matches!(p, ReviewPayload::Verdict { .. }) {
-            trailing_has_verdict = true;
-        }
-        ledger.apply(p)?;
     }
-    if in_progress > 0 && trailing_has_verdict {
-        ledger.note_round_complete();
+    if let Some((_, dropped)) = attempt {
+        sealed.adopt_limits_from(&dropped);
     }
-    Ok(ledger)
+    Ok(sealed)
 }
 
 #[cfg(test)]

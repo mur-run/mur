@@ -127,20 +127,14 @@ pub fn parse_rebuttal(ledger: &Ledger, round: u32, reply: &str) -> Result<Review
 }
 
 /// Fold one reviewer reply into `scratch`, returning the payloads in channel
-/// order, or the first illegal transition.
+/// order (§3.3.1: `verdict` last), or the first illegal transition.
 fn stage_round(
     scratch: &mut Ledger,
     round: u32,
     parsed: &VerdictReply,
 ) -> Result<Vec<ReviewPayload>, FoldError> {
+    // §3.3.1: findings first, `verdict` LAST — it seals the round on replay.
     let mut out = Vec::new();
-    let verdict = ReviewPayload::Verdict {
-        round,
-        kind: parsed.verdict,
-        cumulative: zero_cumulative(),
-    };
-    scratch.apply(&verdict)?;
-    out.push(verdict);
     for f in &parsed.findings {
         let payload = ReviewPayload::FindingIssued {
             round,
@@ -161,6 +155,13 @@ fn stage_round(
         scratch.apply(&payload)?;
         out.push(payload);
     }
+    let verdict = ReviewPayload::Verdict {
+        round,
+        kind: parsed.verdict,
+        cumulative: zero_cumulative(),
+    };
+    scratch.apply(&verdict)?;
+    out.push(verdict);
     Ok(out)
 }
 

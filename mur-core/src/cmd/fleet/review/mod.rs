@@ -38,6 +38,10 @@ pub mod wire;
 mod driver_tests;
 
 #[cfg(test)]
+#[path = "ledger_replay_tests.rs"]
+mod ledger_replay_tests;
+
+#[cfg(test)]
 #[path = "loop_driver_tests/mod.rs"]
 mod loop_driver_tests;
 
