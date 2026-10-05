@@ -96,13 +96,17 @@ pub enum FleetAction {
         /// The review session name (`review-…`)
         name: String,
     },
-    /// Erase retained review-session channels that ended (stopped, or marked
-    /// corrupted) longer ago than --older-than. Never touches a running or
-    /// paused session, and never runs on its own.
+    /// Erase retained review-session channels that ended (stopped, marked
+    /// corrupted, or orphaned) longer ago than --older-than. Never touches a
+    /// running session, and never runs on its own.
     PruneReviews {
         /// Only sessions idle longer than this, e.g. 30d / 36h (required)
         #[arg(long)]
         older_than: String,
+        /// Also take paused and crashed sessions past the cutoff (each is
+        /// recorded as stopped first)
+        #[arg(long)]
+        include_paused: bool,
         /// List what would be erased without erasing anything
         #[arg(long)]
         dry_run: bool,

@@ -28,8 +28,10 @@ pub mod resume;
 // helpers (§8.2 Partial) are not yet, so they stay test-only.
 #[allow(dead_code)]
 pub mod rollback;
+pub mod run_lock;
 pub mod schema;
 pub mod session;
+pub mod state;
 pub mod verdict;
 pub mod wire;
 

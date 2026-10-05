@@ -104,6 +104,23 @@ pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";
 /// through this prefix.
 pub const FLEET_CHANNEL_PREFIX: &str = "fleet-";
 
+/// §7.0 run lock: the file a review driver holds an exclusive advisory lock
+/// on for its whole life, inside the session's channel directory. Distinct
+/// from the per-agent [`RUNNING_LOCK`]. Liveness is "can the lock be
+/// taken", never the pid written in it (display only).
+pub const DRIVER_LOCK_FILE: &str = "driver.lock";
+
+/// §7.0 — the `paused` reason resume records before continuing a session
+/// whose driver died without pausing.
+pub const REVIEW_PAUSE_REASON_CRASHED: &str = "crashed";
+
+/// §7.1 — the `session_stopped` reason written by `mur fleet delete review-…`.
+pub const REVIEW_STOP_REASON_DELETED: &str = "deleted";
+
+/// §7.1 — the `session_stopped` reason prune writes before removing a paused
+/// or crashed session.
+pub const REVIEW_STOP_REASON_PRUNED: &str = "pruned";
+
 /// The file whose presence `a2a_dial` treats as "the agent is up". The
 /// session preflight checks the same file so it agrees with the first send.
 pub const RUNNING_LOCK: &str = "running.lock";

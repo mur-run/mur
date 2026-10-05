@@ -115,7 +115,7 @@ pub(super) fn create_session_fleet(
 }
 
 /// §7.1 / A1: remove the fleet definition and run state; the channel stays.
-fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
+pub(super) fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
     for dir in [
         store::state_dir(mur_home, name),
         store::fleet_dir(mur_home, name),
@@ -128,7 +128,7 @@ fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
 }
 
 /// §4 `session_stopped`, signed by the same writer as every other event.
-fn append_session_stopped(
+pub(super) fn append_session_stopped(
     mur_home: &Path,
     channel_id: &str,
     reason: &str,
@@ -340,8 +340,15 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
     }
     let r = super::resume::prepare_resume(mur_home, name)?;
     require_running(mur_home, &[&r.fleet.members[0], &r.fleet.members[1]])?;
+    if r.crashed {
+        println!(
+            "The previous driver stopped without pausing. Time counts up to its last recorded \
+             event; a turn in flight then was not recorded and is re-run."
+        );
+    }
     println!(
-        "Paused at round {} with {} open finding(s); {} of {} used.",
+        "{} at round {} with {} open finding(s); {} of {} used.",
+        if r.crashed { "Crashed" } else { "Paused" },
         r.round,
         r.ledger.open_set().len(),
         humantime_like(r.active),
@@ -380,6 +387,11 @@ pub(super) fn run_session(
     retry_delay: std::time::Duration,
 ) -> Result<(Ledger, LoopDriverStop)> {
     let [main, reviewer] = [&fleet.members[0], &fleet.members[1]];
+    // §7.0: the run lock is held for the driver's whole life; the kernel
+    // releases it however this process ends.
+    let svc = ChannelService::open(mur_home)?;
+    let _lock = super::run_lock::try_acquire(&svc, &fleet.channel_id)
+        .map_err(|e| anyhow::anyhow!("review session '{}': {e}", fleet.name))?;
     let run = run_review_loop(
         transport,
         mur_home,

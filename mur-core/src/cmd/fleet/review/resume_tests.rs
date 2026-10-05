@@ -169,10 +169,7 @@ fn resume_refuses_a_session_that_is_not_paused() {
     crate::channel_writer::plant_writer_identity(home);
     let fleet = create_session_fleet(home, "review-live0001", "main", "reviewer", "t").unwrap();
     let err = prepare_resume(home, &fleet.name).unwrap_err().to_string();
-    assert!(
-        err.contains("not paused") || err.contains("session_started"),
-        "{err}"
-    );
+    assert!(err.contains("session_started"), "{err}");
 }
 
 #[test]
@@ -208,4 +205,208 @@ fn resume_refuses_a_damaged_channel_and_names_the_line() {
     let err = prepare_resume(home, &name).unwrap_err().to_string();
     assert!(err.contains("cannot be resumed"), "{err}");
     assert!(err.contains("line"), "{err}");
+}
+
+/// Append the payloads a SIGKILLed driver would have left: round 2 started
+/// and main's rebuttal (a reject of F1) signed, but no verdict, no `paused`.
+fn crashed_in_round_two() -> (tempfile::TempDir, String) {
+    use crate::cmd::fleet::review::schema::{
+        RebuttalAnswer, RebuttalResponseDto, Role, to_note_payload,
+    };
+    use crate::cmd::fleet::review::verdict::zero_cumulative;
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    crate::channel_writer::plant_writer_identity(home);
+    let fleet =
+        create_session_fleet(home, "review-crsh0001", "main", "reviewer", "the task").unwrap();
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let started = ReviewPayload::SessionStarted {
+        members: ["main".into(), "reviewer".into()],
+        mode: crate::cmd::fleet::review::schema::Mode::Auto,
+        limits: limits(),
+    };
+    let sent = |round, to| ReviewPayload::TurnSent {
+        round,
+        to,
+        restart_note: None,
+    };
+    let log = vec![
+        started,
+        sent(1, Role::Main),
+        sent(1, Role::Reviewer),
+        ReviewPayload::FindingIssued {
+            round: 1,
+            id: "F1".into(),
+            severity: crate::cmd::fleet::review::schema::Severity::High,
+            issue: "unchecked unwrap".into(),
+        },
+        ReviewPayload::Verdict {
+            round: 1,
+            kind: crate::cmd::fleet::review::schema::VerdictKind::Revise,
+            cumulative: zero_cumulative(),
+        },
+        sent(2, Role::Main),
+        sent(2, Role::Reviewer),
+        ReviewPayload::Rebuttal {
+            round: 2,
+            responses: vec![RebuttalResponseDto {
+                id: "F1".into(),
+                answer: RebuttalAnswer::Reject,
+                reason: Some("disagree".into()),
+            }],
+            cumulative: zero_cumulative(),
+        },
+    ];
+    for p in &log {
+        crate::channel_writer::append_as_writer(
+            &svc,
+            home,
+            &fleet.channel_id,
+            crate::channel_writer::ROUTER_AGENT,
+            mur_common::channel::ChannelActor::System,
+            EventKind::Note,
+            to_note_payload(p),
+            None,
+        )
+        .unwrap();
+    }
+    (tmp, fleet.name)
+}
+
+/// AC15c: a crashed session resumes at the round after the last SEALED
+/// round, records `paused`(crashed) then `resumed`, and the reject from the
+/// unsealed attempt is not counted.
+#[test]
+fn a_crashed_session_resumes_after_the_last_sealed_round() {
+    use crate::cmd::fleet::review::constants::REVIEW_PAUSE_REASON_CRASHED;
+    let (tmp, name) = crashed_in_round_two();
+    let home = tmp.path();
+    let r = prepare_resume(home, &name).unwrap();
+    assert!(r.crashed);
+    assert_eq!(r.round, 2);
+    assert_eq!(
+        r.ledger.findings[0].reject_count, 0,
+        "unsealed reject dropped"
+    );
+
+    let t = Scripted::new(vec![Ok(ACCEPT_F1)], vec![Ok(APPROVE_F1)]);
+    let (ledger, stop) = resume_session(&t, home, r, Duration::ZERO).unwrap();
+    assert_eq!(stop, LoopDriverStop::Approve);
+    assert_eq!(ledger.findings[0].reject_count, 0);
+    assert!(ledger.escalations.is_empty());
+    assert_eq!(
+        t.seen.lock().unwrap()[0].0,
+        "main",
+        "re-run from main's turn"
+    );
+
+    let all = payloads(home, &format!("fleet-{name}"));
+    let i_paused = all
+        .iter()
+        .position(|p| matches!(p, ReviewPayload::Paused { reason, .. } if reason == REVIEW_PAUSE_REASON_CRASHED))
+        .expect("paused(crashed) recorded");
+    assert!(matches!(all[i_paused + 1], ReviewPayload::Resumed { .. }));
+}
+
+/// AC15c: semi-auto after a crash — the resumed run sends nothing without
+/// the gate; the loop is driven in semi-auto (`Mode` from the original
+/// `session_started` was Auto). Checked via the session banner: resume
+/// never writes `mode_changed` to auto.
+#[test]
+fn a_crashed_resume_never_restores_auto() {
+    let (tmp, name) = crashed_in_round_two();
+    let home = tmp.path();
+    let r = prepare_resume(home, &name).unwrap();
+    let t = Scripted::new(vec![Ok(ACCEPT_F1)], vec![Ok(APPROVE_F1)]);
+    resume_session(&t, home, r, Duration::ZERO).unwrap();
+    let all = payloads(home, &format!("fleet-{name}"));
+    assert!(!all.iter().any(|p| matches!(
+        p,
+        ReviewPayload::ModeChanged {
+            mode: crate::cmd::fleet::review::schema::Mode::Auto
+        }
+    )));
+}
+
+/// AC15c: while another owner holds the run lock, resume refuses with
+/// "running" — even though the channel looks paused.
+#[test]
+fn resume_refuses_while_the_run_lock_is_held() {
+    let (tmp, name) = paused_in_round_two();
+    let home = tmp.path();
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let _held =
+        crate::cmd::fleet::review::run_lock::try_acquire(&svc, &format!("fleet-{name}")).unwrap();
+    let err = prepare_resume(home, &name).unwrap_err().to_string();
+    assert!(err.contains("is running"), "{err}");
+}
+
+/// AC15e: `fleet delete` on a paused review session appends
+/// `session_stopped` (reason `deleted`), keeps the channel, and the next
+/// default prune removes it. With the lock held it refuses.
+#[test]
+fn fleet_delete_on_a_review_session_records_stopped_and_prune_takes_it() {
+    use crate::cmd::fleet::review::constants::REVIEW_STOP_REASON_DELETED;
+    let (tmp, name) = paused_in_round_two();
+    let home = tmp.path();
+    let channel = format!("fleet-{name}");
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+
+    let held = crate::cmd::fleet::review::run_lock::try_acquire(&svc, &channel).unwrap();
+    let err = crate::cmd::fleet::delete::cmd_fleet_delete(home, &name, true)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("is running"), "{err}");
+    assert!(store::fleet_path(home, &name).exists());
+    drop(held);
+
+    crate::cmd::fleet::delete::cmd_fleet_delete(home, &name, true).unwrap();
+    assert!(!store::fleet_path(home, &name).exists());
+    let all = payloads(home, &channel);
+    assert!(matches!(
+        all.last(),
+        Some(ReviewPayload::SessionStopped { reason, .. }) if reason == REVIEW_STOP_REASON_DELETED
+    ));
+
+    let mut out = Vec::new();
+    let later = chrono::Utc::now() + chrono::Duration::days(2);
+    crate::cmd::fleet::review::prune::prune_reviews(home, "1d", false, false, &mut out, later)
+        .unwrap();
+    let report = String::from_utf8(out).unwrap();
+    assert!(
+        report.contains(&format!("pruned {name} (stopped")),
+        "{report}"
+    );
+}
+
+/// AC15f: damaged channel → refusal names the line and the delete exit →
+/// following it, default prune past the cutoff removes the session.
+#[test]
+fn a_damaged_channel_has_a_working_exit() {
+    let (tmp, name) = paused_in_round_two();
+    let home = tmp.path();
+    let channel = format!("fleet-{name}");
+    let path = mur_channel::ChannelService::open(home)
+        .unwrap()
+        .store()
+        .events_path(&channel);
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    text.push_str("{truncated\n");
+    std::fs::write(&path, text).unwrap();
+
+    let err = prepare_resume(home, &name).unwrap_err().to_string();
+    assert!(err.contains("Channel damaged at line"), "{err}");
+    assert!(
+        err.contains(&format!("Remove it with: mur fleet delete {name}")),
+        "{err}"
+    );
+
+    crate::cmd::fleet::delete::cmd_fleet_delete(home, &name, true).unwrap();
+    let mut out = Vec::new();
+    let later = chrono::Utc::now() + chrono::Duration::days(2);
+    crate::cmd::fleet::review::prune::prune_reviews(home, "1d", false, false, &mut out, later)
+        .unwrap();
+    let report = String::from_utf8(out).unwrap();
+    assert!(report.contains(&format!("pruned {name}")), "{report}");
+    assert!(!path.parent().unwrap().exists());
 }

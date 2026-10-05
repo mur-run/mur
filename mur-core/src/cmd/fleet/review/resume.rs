@@ -8,10 +8,10 @@
 //! reason (§8.2: "never continue silently from a corrupted or partially
 //! rebuilt state"); the §8.2 Continue/Abandon choice is a separate path.
 //!
-//! The round to continue is the one after the last verdict: a round cut
-//! short by the pause left only stateless `turn_sent` events (its rebuttal
-//! is signed with its verdict, `loop_driver.rs`), so it restarts from
-//! main's turn without double-counting anything.
+//! The round to continue is the one after the last SEALED round (§3.3.1):
+//! `fold_rounds` drops an unsealed trailing round, so it restarts from
+//! main's turn without double-counting anything. That is also what makes a
+//! crashed session (§7.0: run lock free, no `paused`) safe to resume.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -23,21 +23,28 @@ use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::fleet::Fleet;
 
-use super::constants::REVIEW_FLEET_PREFIX;
+use super::constants::{REVIEW_FLEET_PREFIX, REVIEW_PAUSE_REASON_CRASHED};
 use super::driver::ReviewTransport;
 use super::ledger::{Ledger, fold_rounds};
 use super::loop_driver::{LoopDriverStop, Members, continue_review_loop};
 use super::rollback::{ReplayOutcome, replay_with_damage};
+use super::run_lock::DriverLock;
 use super::schema::{
     Cumulative, NoteClassification, ReviewPayload, SessionLimits, classify_note_payload,
     to_note_payload,
 };
+use super::state::{SessionState, observe};
 use crate::cmd::fleet::store;
 
-/// Everything needed to continue a paused session.
+/// Everything needed to continue a paused or crashed session. Holds the run
+/// lock (§7.0) from the check until the resumed driver ends.
 #[derive(Debug)]
 pub struct Resumable {
     pub fleet: Fleet,
+    /// §7.0: the driver died without pausing; resume records `paused`
+    /// (reason `crashed`) before `resumed`.
+    pub crashed: bool,
+    pub lock: DriverLock,
     pub ledger: Ledger,
     pub round: u32,
     pub limits: SessionLimits,
@@ -77,6 +84,11 @@ fn active_time(events: &[(DateTime<Utc>, ReviewPayload)]) -> Duration {
             _ => {}
         }
     }
+    // §7.0 crashed: the last segment never got its `paused`. It counts up to
+    // the last readable event; the gap after it held no work.
+    if let (Some(since), Some((last, _))) = (running_since, events.last()) {
+        total += *last - since;
+    }
     total.to_std().unwrap_or_default()
 }
 
@@ -97,6 +109,21 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
     }
 
     let svc = ChannelService::open(mur_home)?;
+    // §7.0: liveness is the run lock alone, taken here and held through the
+    // resumed run so no second driver can start on this session.
+    let observed = observe(&svc, mur_home, &fleet.channel_id, name)?;
+    if let SessionState::Running(who) = &observed.state {
+        bail!(
+            "review session '{name}' is running{}; it cannot be resumed until it pauses or stops",
+            who.as_deref()
+                .map(|w| format!(" ({w})"))
+                .unwrap_or_default()
+        );
+    }
+    let state = observed.state;
+    let lock = observed
+        .lock
+        .context("observe holds the lock for every non-running state")?;
     let pubkey = crate::channel_verify::actor_pubkey(mur_home, &ChannelActor::System, None)
         .context("cannot read the review writer's key, so the channel cannot be verified")?;
     let (events, report) =
@@ -128,8 +155,11 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
             damage_line,
             damage_reason,
         } => bail!(
-            "review session '{name}' cannot be resumed: channel damaged at line {damage_line} \
-             ({damage_reason}). Channel: {}",
+            "Channel damaged at line {damage_line}: {damage_reason}. Review session '{name}' \
+             cannot be resumed yet (Continue/Abandon is not built).\n\
+             Remove it with: mur fleet delete {name}\n\
+             Then start a new session with: mur fleet review ...\n\
+             Channel: {}",
             svc.store().events_path(&fleet.channel_id).display()
         ),
     }
@@ -150,13 +180,19 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
         })
         .context("the channel has no session_started event")?;
     let ledger = fold_rounds(&payloads)?;
-    if !ledger.paused {
-        bail!("review session '{name}' is not paused (is it still running?)");
-    }
+    let crashed = match state {
+        SessionState::Paused => false,
+        // Crashed needs §3.3.1 sealing: the fold above already dropped the
+        // unsealed trailing round, so it is re-run from main's turn.
+        SessionState::Crashed => true,
+        other => bail!("review session '{name}' cannot be resumed (state: {other:?})"),
+    };
     let active = active_time(&timed).max(Duration::from_millis(ledger.exec_time_ms));
     Ok(Resumable {
         round: ledger.round + 1,
         fleet,
+        crashed,
+        lock,
         ledger,
         limits,
         active,
@@ -172,29 +208,39 @@ pub fn resume_session(
 ) -> Result<(Ledger, LoopDriverStop)> {
     let Resumable {
         fleet,
+        crashed,
+        lock: _lock,
         mut ledger,
         round,
         limits,
         active,
     } = r;
-    let resumed = ReviewPayload::Resumed {
-        cumulative: Cumulative {
-            exec_time_ms: u64::try_from(active.as_millis()).unwrap_or(u64::MAX),
-            cost_usd_micros: ledger.cost_usd_micros,
-        },
+    let cumulative = Cumulative {
+        exec_time_ms: u64::try_from(active.as_millis()).unwrap_or(u64::MAX),
+        cost_usd_micros: ledger.cost_usd_micros,
     };
-    ledger.apply(&resumed)?;
+    let mut lifecycle = Vec::new();
+    if crashed {
+        lifecycle.push(ReviewPayload::Paused {
+            reason: REVIEW_PAUSE_REASON_CRASHED.to_string(),
+            cumulative,
+        });
+    }
+    lifecycle.push(ReviewPayload::Resumed { cumulative });
     let svc = ChannelService::open(mur_home)?;
-    crate::channel_writer::append_as_writer(
-        &svc,
-        mur_home,
-        &fleet.channel_id,
-        crate::channel_writer::ROUTER_AGENT,
-        ChannelActor::System,
-        EventKind::Note,
-        to_note_payload(&resumed),
-        None,
-    )?;
+    for payload in &lifecycle {
+        ledger.apply(payload)?;
+        crate::channel_writer::append_as_writer(
+            &svc,
+            mur_home,
+            &fleet.channel_id,
+            crate::channel_writer::ROUTER_AGENT,
+            ChannelActor::System,
+            EventKind::Note,
+            to_note_payload(payload),
+            None,
+        )?;
+    }
     let members = Members {
         fleet_name: &fleet.name,
         channel_id: &fleet.channel_id,
