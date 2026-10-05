@@ -13,19 +13,14 @@ use anyhow::{Context, Result};
 /// Dev builds verify nothing but still resolve, so a broken target always
 /// errors.
 ///
-/// When verification fails, the error carries the spec's canonical guidance
+/// When verification fails, the error carries the shared remediation hint
 /// so every CLI-side mount site surfaces the same fix message.
 pub(crate) fn verify_runtime_at(path: &Path) -> Result<()> {
     let real = path
         .canonicalize()
         .with_context(|| format!("resolve {}", path.display()))?;
-    mur_common::binary_attestation::verify_runtime_signature(&real).map_err(|e| {
-        anyhow::anyhow!(
-            "{e} — the runtime binary may have been swapped (launch-chain \
-             protection covers writes, attestation covers swaps). Fix: mur \
-             update --restart-agents, or reinstall MUR."
-        )
-    })
+    mur_common::binary_attestation::verify_runtime_signature(&real)
+        .map_err(|e| anyhow::anyhow!(e.mount_failure_message()))
 }
 
 #[cfg(test)]

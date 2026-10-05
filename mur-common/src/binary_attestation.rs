@@ -103,15 +103,127 @@ impl std::error::Error for AttestError {
     }
 }
 
+/// `codesign` stderr marker for a binary that carries no signature at all.
+const STDERR_UNSIGNED: &str = "not signed at all";
+/// `codesign` stderr marker for a valid signature from the wrong signer
+/// (ad-hoc dev builds, a local re-sign identity, another team).
+const STDERR_REQUIREMENT_UNMET: &str = "failed to satisfy specified code requirement";
+
+/// Why attestation failed, as far as the error lets us tell. Drives the
+/// remediation hint so a dev setup is not reported like a security event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttestFailureKind {
+    /// Intact binary, but not signed by MUR's Developer ID team — in
+    /// practice a locally built runtime next to a release CLI.
+    NotMurSigned,
+    /// The signature no longer matches the bytes: modified after signing.
+    Tampered,
+    /// Could not read the binary or run `codesign`.
+    Unverifiable,
+}
+
+impl AttestError {
+    pub fn kind(&self) -> AttestFailureKind {
+        match self {
+            Self::Io { .. } => AttestFailureKind::Unverifiable,
+            Self::VerificationFailed { stderr, .. } => {
+                // codesign checks integrity before the requirement, so a
+                // requirement miss means the bytes themselves are intact.
+                if stderr.contains(STDERR_UNSIGNED) || stderr.contains(STDERR_REQUIREMENT_UNMET) {
+                    AttestFailureKind::NotMurSigned
+                } else {
+                    AttestFailureKind::Tampered
+                }
+            }
+        }
+    }
+
+    /// The remediation sentence for this failure. Shared by every mount site
+    /// (CLI and Hub) so the guidance cannot drift between them.
+    pub fn fix_hint(&self) -> &'static str {
+        match self.kind() {
+            AttestFailureKind::NotMurSigned => {
+                "the runtime is not signed by MUR's Developer ID, which usually \
+                 means a locally built (dev) mur-agent-runtime is installed next \
+                 to a release mur. Fix: reinstall MUR to restore the release \
+                 runtime, or use a dev build of mur together with the dev \
+                 runtime. If you did not build it yourself, treat the binary as \
+                 swapped and reinstall MUR."
+            }
+            AttestFailureKind::Tampered => {
+                "the runtime binary was modified after it was signed \
+                 (launch-chain protection covers writes, attestation covers \
+                 swaps). Fix: reinstall MUR."
+            }
+            AttestFailureKind::Unverifiable => {
+                "the runtime binary could not be checked. Fix: confirm the \
+                 file exists and is readable, or reinstall MUR."
+            }
+        }
+    }
+
+    /// Full user-facing message for a refused runtime mount.
+    pub fn mount_failure_message(&self) -> String {
+        format!("{self} — {}", self.fix_hint())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use std::path::PathBuf;
 
     // Compile-time gates: this binary is built without the release marker in
     // CI, so IS_EMBEDDED_RELEASE is false here — the skip behavior is the
     // negative control for every behavioral test below.
+    // ── Remediation hint (#1716) ──────────────────────────────────────────
+    // stderr strings are verbatim `codesign --verify --strict -R` output.
+    fn failed(stderr: &str) -> AttestError {
+        AttestError::VerificationFailed {
+            path: PathBuf::from("/x/mur-agent-runtime"),
+            stderr: stderr.to_string(),
+        }
+    }
+
+    #[test]
+    fn adhoc_dev_runtime_hint_names_dev_build_not_restart() {
+        let e = failed("test-requirement: code failed to satisfy specified code requirement(s)");
+        assert_eq!(e.kind(), AttestFailureKind::NotMurSigned);
+        let msg = e.mount_failure_message();
+        assert!(msg.contains("not signed by MUR's Developer ID"), "{msg}");
+        assert!(msg.contains("dev build of mur"), "{msg}");
+        assert!(msg.contains("reinstall MUR"), "{msg}");
+        assert!(!msg.contains("--restart-agents"), "{msg}");
+    }
+
+    #[test]
+    fn unsigned_runtime_is_not_mur_signed() {
+        let e = failed("/x/mur-agent-runtime: code object is not signed at all");
+        assert_eq!(e.kind(), AttestFailureKind::NotMurSigned);
+    }
+
+    #[test]
+    fn modified_after_signing_is_tampered() {
+        let e = failed("/x/mur-agent-runtime: main executable failed strict validation");
+        assert_eq!(e.kind(), AttestFailureKind::Tampered);
+        let msg = e.mount_failure_message();
+        assert!(msg.contains("modified after it was signed"), "{msg}");
+        assert!(!msg.contains("--restart-agents"), "{msg}");
+    }
+
+    #[test]
+    fn io_failure_is_unverifiable() {
+        let e = AttestError::Io {
+            path: PathBuf::from("/x/mur-agent-runtime"),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        assert_eq!(e.kind(), AttestFailureKind::Unverifiable);
+        assert!(
+            e.mount_failure_message()
+                .starts_with("cannot verify runtime binary at /x/mur-agent-runtime")
+        );
+    }
+
     #[test]
     #[allow(clippy::assertions_on_constants)] // runtime negative control on a compile-time const
     fn dev_build_never_verifies() {
