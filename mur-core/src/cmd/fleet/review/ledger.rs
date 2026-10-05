@@ -386,7 +386,9 @@ pub fn fold_rounds(payloads: &[ReviewPayload]) -> Result<Ledger, FoldError> {
             sealed.adopt_limits_from(&dropped);
         }
         match (p, round) {
-            (ReviewPayload::TurnSent { .. }, _) => {}
+            // A `turn_sent` folds into its round's attempt, so a delivery
+            // (P2-§5.3 binding note) counts only once that round seals; a
+            // dropped trailing round re-sends the note on re-run (P2-§2).
             (_, Some(r)) => {
                 let (_, scratch) = attempt.get_or_insert_with(|| (r, sealed.clone()));
                 scratch.apply(p)?;
