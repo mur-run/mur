@@ -1,6 +1,8 @@
 //! `mur browser` command handlers. Heavy implementation lives in `mur-browser`.
 
 pub mod doctor;
+pub mod engine_check;
+pub mod live_state;
 pub mod perms;
 mod replay;
 pub mod server_install;
@@ -67,7 +69,28 @@ pub async fn record(
     };
     // These flags are intentionally merely forwarded. `@playwright/mcp`
     // owns their validation, keeping this proxy compatible with new releases.
+    // They go on before the derived args below so an explicit `--browser` or
+    // `--user-data-dir` is visible to them and wins.
     args.extend(extra.iter().cloned());
+    // Every mode honours `--profile` the same way replay does. Without this the
+    // launch had no cookies and every authenticated page bounced to its login
+    // form, which no browser-app grant can fix: the state was never passed.
+    // This is not live-only: recording a test or automation run against an
+    // admin area is exactly the case that needs a session, and asking the
+    // person to log in by hand inside each recording defeats `browser auth`.
+    let injected = live_state::prepare(&mur_home()?, profile)?;
+    let state_args = live_state::args(injected.as_ref(), &args);
+    args.extend(state_args);
+    // Without this, test/automation recording fell through to
+    // `@playwright/mcp`'s default — the branded Google Chrome application,
+    // carrying the person's real profile and needing a spawn grant on
+    // `/Applications`. Live mode already asks for Chromium, and `--browser`
+    // in `extra` still wins, so this only fills the gap.
+    args.extend(mur_browser::engines::default_engine_arg(
+        &args,
+        &mur_browser::server::install_dir(&mur_home()?),
+        mur_browser::chromium::system_browsers_dir().as_deref(),
+    ));
     if trace {
         args.push("--save-trace".into());
     }
@@ -109,8 +132,10 @@ pub async fn record(
         "browser record started"
     );
     let result = run_stdio(server, hook).await;
-    // Removes the token-bearing config directory (no-op for test/automation).
+    // Removes the token-bearing config directory (no-op for test/automation)
+    // and the decrypted session file.
     drop(live_config);
+    drop(injected);
     tracing::info!(run, ok = result.is_ok(), "browser record finished");
     // The child has ended; kill the broker and unlink its private endpoint
     // even when Playwright exited with an error.
@@ -772,6 +797,13 @@ pub async fn auth(
     allow_domain: &[String],
 ) -> Result<()> {
     let browser = select_browser(requested_browser)?;
+    // Before anything is created: the app-bundle scan above cannot tell
+    // whether Playwright has the build it will actually launch.
+    engine_check::preflight(
+        browser.playwright_name(),
+        &mur_browser::server::install_dir(&mur_home()?),
+        mur_browser::chromium::system_browsers_dir().as_deref(),
+    )?;
     paths::validate_name(site)?;
     let parsed =
         url::Url::parse(url).map_err(|error| anyhow::anyhow!("invalid --url {url:?}: {error}"))?;
