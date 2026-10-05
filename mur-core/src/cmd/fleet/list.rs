@@ -5,7 +5,18 @@ use std::path::Path;
 use anyhow::Result;
 use mur_common::fleet::JobStatus;
 
+use super::review::constants::REVIEW_FLEET_PREFIX;
 use super::{control, jobs, store};
+
+/// §7.1 / AC15a: review-session fleets (`review-…`) are hidden unless
+/// `include_review` is set.
+fn visible_fleets(names: &[String], include_review: bool) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| include_review || !n.starts_with(REVIEW_FLEET_PREFIX))
+        .cloned()
+        .collect()
+}
 
 fn status_symbol(stopped: bool, running: bool) -> &'static str {
     if stopped {
@@ -41,8 +52,8 @@ fn terminal_width() -> usize {
         .unwrap_or(80)
 }
 
-pub fn cmd_fleet_list(mur_home: &Path) -> Result<()> {
-    let names = store::list_fleets(mur_home)?;
+pub fn cmd_fleet_list(mur_home: &Path, include_review: bool) -> Result<()> {
+    let names = visible_fleets(&store::list_fleets(mur_home)?, include_review);
     if names.is_empty() {
         println!("No fleets. Create one: mur fleet create <name> --members a,b,c --goal \"...\"");
         return Ok(());
@@ -136,6 +147,14 @@ pub fn cmd_fleet_list(mur_home: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AC15a: review sessions are hidden by default and shown with the flag.
+    #[test]
+    fn review_fleets_hidden_by_default_and_shown_with_flag() {
+        let names = vec!["dev".to_string(), "review-ab12cd34".to_string()];
+        assert_eq!(visible_fleets(&names, false), vec!["dev".to_string()]);
+        assert_eq!(visible_fleets(&names, true), names);
+    }
 
     #[test]
     fn status_symbol_precedence() {

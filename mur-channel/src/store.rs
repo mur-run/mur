@@ -12,6 +12,36 @@ pub struct ChannelStore {
     root: PathBuf,
 }
 
+/// The damage [`ChannelStore::load_events_with_damage`] found in a log — the
+/// additive P4 read API §8.2 depends on. Both fields are empty for a clean
+/// log, which is the only case `load_events_with_damage` and `load_events`
+/// agree is undamaged.
+#[derive(Debug, Clone, Default)]
+pub struct DamageReport {
+    /// 1-based line numbers of lines that failed to parse as a
+    /// [`ChannelEvent`] at all (unparseable or truncated), in file order.
+    pub unparseable_lines: Vec<usize>,
+    /// Events that parsed but whose signature failed verification (present
+    /// and invalid, or missing while `require_sig` is set), in file order.
+    /// Still included in the `events` this call returns — this is a report,
+    /// not a filter (see the method doc for why).
+    pub unverified: Vec<ChannelEvent>,
+    /// 1-based source line number of each entry in the `events` vector
+    /// `load_events_with_damage` returns, same length and order. Lets a
+    /// caller (the review driver's replay fold) interleave "this event came
+    /// from line N" with `unparseable_lines` to find exactly where in the
+    /// file the first damage sits relative to the parsed events — needed to
+    /// decide a round boundary (§8.2) without re-parsing the file itself.
+    pub event_lines: Vec<usize>,
+}
+
+impl DamageReport {
+    /// No unparseable lines and no verification failures.
+    pub fn is_clean(&self) -> bool {
+        self.unparseable_lines.is_empty() && self.unverified.is_empty()
+    }
+}
+
 /// What a `NotFound` on a channel's event log actually means.
 ///
 /// Normally: genuine absence — no such channel, or a channel with no events
@@ -115,21 +145,9 @@ impl ChannelStore {
     /// `HitlResponse` silently makes an approved gate read as still waiting.
     pub fn load_events(&self, id: &str) -> Result<Vec<ChannelEvent>> {
         let path = self.events_path(id);
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            // `NotFound` normally means genuine absence: no such channel, or a
-            // channel with no events yet. But it ALSO covers a broken path on
-            // Windows, which maps "a component of the path is not a directory"
-            // to `NotFound` where Unix reports `ENOTDIR`. Without this check a
-            // corrupted channel directory reads as an error on Unix and as
-            // "no such run" on Windows — the same defect this module exists to
-            // remove, reintroduced per-platform. Only reached on the miss path,
-            // so it costs one `stat` on a read that already failed.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                check_absence_is_not_corruption(&self.channel_dir(id))?;
-                return Ok(Vec::new());
-            }
-            Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+        let content = match Self::read_events_file(&path, &self.channel_dir(id))? {
+            Some(c) => c,
+            None => return Ok(Vec::new()),
         };
         let mut events = Vec::new();
         let mut damaged = Vec::new();
@@ -153,6 +171,85 @@ impl ChannelStore {
             );
         }
         Ok(events)
+    }
+
+    /// Shared miss-path handling for the events file: `Ok(None)` means
+    /// genuine absence (no such channel, or none with events yet — the
+    /// caller returns an empty log); `Ok(Some(content))` is the file's raw
+    /// text for the caller to parse its own way. Factored out so
+    /// [`load_events`] and [`load_events_with_damage`] (§8.2 P4) agree on
+    /// what "absent" means without duplicating the Windows `ENOTDIR`
+    /// handling (see [`check_absence_is_not_corruption`]).
+    fn read_events_file(path: &Path, channel_dir: &Path) -> Result<Option<String>> {
+        match fs::read_to_string(path) {
+            Ok(c) => Ok(Some(c)),
+            // `NotFound` normally means genuine absence: no such channel, or a
+            // channel with no events yet. But it ALSO covers a broken path on
+            // Windows, which maps "a component of the path is not a directory"
+            // to `NotFound` where Unix reports `ENOTDIR`. Without this check a
+            // corrupted channel directory reads as an error on Unix and as
+            // "no such run" on Windows — the same defect this module exists to
+            // remove, reintroduced per-platform. Only reached on the miss path,
+            // so it costs one `stat` on a read that already failed.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                check_absence_is_not_corruption(channel_dir)?;
+                Ok(None)
+            }
+            Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
+        }
+    }
+
+    /// [`load_events`] plus a damage report (§8.2, P4 decided): the 1-based
+    /// line numbers of unparseable/truncated lines, and every PARSED event
+    /// whose signature fails verification against `writer_pubkey` (via
+    /// [`crate::sign::verify_one`], same `require_sig` semantics it
+    /// documents).
+    ///
+    /// Additive only. `load_events` is NOT changed by this: same signature,
+    /// same skip-and-`warn!` behaviour, same return value for every existing
+    /// caller (AC11f). This is a new, separate path used only by the review
+    /// driver, which — unlike every other reader — must not silently
+    /// continue from a damaged or unverifiable log (§8.2: "never continue
+    /// silently from a corrupted or partially rebuilt state").
+    ///
+    /// This is a REPORT, not a filter: a signature-failing event is still
+    /// present in `events` (same contents `load_events` would return, minus
+    /// the lines that fail to parse at all) — the caller decides what the
+    /// damage means for its own fold, which is the whole point of keeping
+    /// `verify_log`'s drop-on-fail policy out of the read path (§12
+    /// non-goals).
+    pub fn load_events_with_damage(
+        &self,
+        id: &str,
+        writer_pubkey: &[u8; 32],
+        require_sig: bool,
+    ) -> Result<(Vec<ChannelEvent>, DamageReport)> {
+        let path = self.events_path(id);
+        let content = match Self::read_events_file(&path, &self.channel_dir(id))? {
+            Some(c) => c,
+            None => return Ok((Vec::new(), DamageReport::default())),
+        };
+        let mut events = Vec::new();
+        let mut report = DamageReport::default();
+        for (idx, line) in content.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<ChannelEvent>(line) {
+                Ok(ev) => {
+                    if !crate::sign::verify_one(id, &ev, writer_pubkey, require_sig) {
+                        report.unverified.push(ev.clone());
+                    }
+                    events.push(ev);
+                    // 1-based, matching `unparseable_lines` below.
+                    report.event_lines.push(idx + 1);
+                }
+                // 1-based: matches what an editor or `sed -n` shows, and
+                // matches `load_events`'s own `lines` field.
+                Err(_) => report.unparseable_lines.push(idx + 1),
+            }
+        }
+        Ok((events, report))
     }
 
     /// Append one event under an advisory lock so `seq` stays monotonic across
@@ -467,6 +564,203 @@ mod tests {
             logged.contains("[2]"),
             "the warning must name the damaged line number: {logged}"
         );
+    }
+
+    /// P4: `load_events` is UNCHANGED by the additive read API — same
+    /// signature, same skip-and-`warn!` behaviour, same events, for a log
+    /// that carries both an unparseable line and a badly-signed one
+    /// (AC11f). This is the non-regression half; the next test checks what
+    /// the new path reports for the SAME log.
+    #[test]
+    fn load_events_is_unchanged_by_the_additive_read_api() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        store.create(&sample_channel("c1")).unwrap();
+        let id = mur_common::identity::AgentIdentity::generate();
+        let ev1 = store
+            .append_event(
+                "c1",
+                ChannelActor::System,
+                EventKind::Message,
+                serde_json::json!({"n": 1}),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        // A garbled line, exactly like the existing damaged-line test.
+        {
+            let path = store.events_path("c1");
+            let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+            f.write_all(b"{not json at all").unwrap();
+            f.write_all(b"\n").unwrap();
+        }
+        // A well-formed but badly-SIGNED event (parses fine; signature fails).
+        let payload = serde_json::json!({"n": 2});
+        let bad_sig = crate::sign::sign_event(
+            &mur_common::identity::AgentIdentity::generate(), // wrong key
+            "c1",
+            &ChannelActor::System,
+            EventKind::Message,
+            &payload,
+            None,
+        );
+        let ev3 = store
+            .append_event(
+                "c1",
+                ChannelActor::System,
+                EventKind::Message,
+                payload,
+                None,
+                Some(bad_sig),
+                Some(0),
+            )
+            .unwrap();
+
+        let before = store.load_events("c1").unwrap();
+        assert_eq!(before.len(), 2, "the garbled line is skipped, as today");
+        assert_eq!(before[0].seq, ev1.seq);
+        assert_eq!(before[1].seq, ev3.seq);
+
+        let (after, _report) = store
+            .load_events_with_damage("c1", &id.verifying_key_bytes(), false)
+            .unwrap();
+        assert_eq!(
+            after.len(),
+            before.len(),
+            "the new path must return the SAME events for the same log"
+        );
+        assert_eq!(after[0].seq, before[0].seq);
+        assert_eq!(after[1].seq, before[1].seq);
+    }
+
+    /// P4: the new path reports the garbled line's number and the
+    /// badly-signed event, for the log `load_events` silently tolerates
+    /// (AC11f). The damaged event is still RETURNED (report, not filter).
+    #[test]
+    fn load_events_with_damage_reports_unparseable_lines_and_bad_signatures() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        store.create(&sample_channel("c1")).unwrap();
+        let writer = mur_common::identity::AgentIdentity::generate();
+        let good_sig_ev = store
+            .append_event(
+                "c1",
+                ChannelActor::System,
+                EventKind::Message,
+                serde_json::json!({"n": 1}),
+                None,
+                Some(crate::sign::sign_event(
+                    &writer,
+                    "c1",
+                    &ChannelActor::System,
+                    EventKind::Message,
+                    &serde_json::json!({"n": 1}),
+                    None,
+                )),
+                Some(0),
+            )
+            .unwrap();
+        // Line 2: unparseable.
+        {
+            let path = store.events_path("c1");
+            let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+            f.write_all(b"not even json").unwrap();
+            f.write_all(b"\n").unwrap();
+        }
+        // Line 3: parses, but signed by the WRONG key.
+        let bad_payload = serde_json::json!({"n": 3});
+        let forged_sig = crate::sign::sign_event(
+            &mur_common::identity::AgentIdentity::generate(),
+            "c1",
+            &ChannelActor::System,
+            EventKind::Message,
+            &bad_payload,
+            None,
+        );
+        let forged_ev = store
+            .append_event(
+                "c1",
+                ChannelActor::System,
+                EventKind::Message,
+                bad_payload,
+                None,
+                Some(forged_sig),
+                Some(0),
+            )
+            .unwrap();
+
+        let (events, report) = store
+            .load_events_with_damage("c1", &writer.verifying_key_bytes(), false)
+            .unwrap();
+
+        assert_eq!(
+            events.len(),
+            2,
+            "the garbled line is skipped; the two parseable events are returned"
+        );
+        assert_eq!(report.unparseable_lines, vec![2], "1-based line number");
+        assert_eq!(
+            report.unverified.len(),
+            1,
+            "exactly the forged event is reported"
+        );
+        assert_eq!(report.unverified[0].seq, forged_ev.seq);
+        assert!(!report.is_clean());
+
+        // The good event is untouched and still present in `events`.
+        assert!(events.iter().any(|e| e.seq == good_sig_ev.seq));
+        assert!(events.iter().any(|e| e.seq == forged_ev.seq));
+    }
+
+    /// A clean, fully-signed log reports no damage at all.
+    #[test]
+    fn load_events_with_damage_is_clean_for_a_healthy_signed_log() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        store.create(&sample_channel("c1")).unwrap();
+        let writer = mur_common::identity::AgentIdentity::generate();
+        for n in 0..3 {
+            let payload = serde_json::json!({"n": n});
+            let sig = crate::sign::sign_event(
+                &writer,
+                "c1",
+                &ChannelActor::System,
+                EventKind::Message,
+                &payload,
+                None,
+            );
+            store
+                .append_event(
+                    "c1",
+                    ChannelActor::System,
+                    EventKind::Message,
+                    payload,
+                    None,
+                    Some(sig),
+                    Some(0),
+                )
+                .unwrap();
+        }
+        let (events, report) = store
+            .load_events_with_damage("c1", &writer.verifying_key_bytes(), true)
+            .unwrap();
+        assert_eq!(events.len(), 3);
+        assert!(report.is_clean());
+    }
+
+    /// An absent channel is genuine absence for the new path too — same
+    /// `Ok((vec![], clean))` shape `load_events` returns `Ok(vec![])` for.
+    #[test]
+    fn load_events_with_damage_on_an_absent_channel_is_a_clean_empty_log() {
+        let tmp = TempDir::new().unwrap();
+        let store = ChannelStore::new(tmp.path());
+        let id = mur_common::identity::AgentIdentity::generate();
+        let (events, report) = store
+            .load_events_with_damage("ghost", &id.verifying_key_bytes(), false)
+            .unwrap();
+        assert!(events.is_empty());
+        assert!(report.is_clean());
     }
 
     /// The decision Windows depends on, tested directly. An end-to-end test

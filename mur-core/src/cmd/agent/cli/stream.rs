@@ -373,6 +373,37 @@ pub(crate) fn hitl_respond_params(
     p
 }
 
+/// What a tool-approval prompt outside the TUI needs to show: the effective
+/// tier (#1600: the declared `risk:` only raises it), whether that tier is
+/// within the auto ceiling, and the same one-line summary plain mode prints.
+/// One place, so `mur fleet review`'s prompt cannot drift from `murmur`'s.
+pub(crate) fn tool_tier_and_summary(
+    hitl: &serde_json::Value,
+) -> (mur_common::hitl::RiskTier, bool, String) {
+    let tool = hitl
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("tool");
+    let declared = hitl
+        .get("risk")
+        .and_then(|r| serde_json::from_value(r.clone()).ok());
+    let tier = super::tool_tier::effective_tier(tool, hitl.get("tool_input"), declared);
+    let width = crossterm::terminal::size()
+        .map(|(w, _)| w)
+        .unwrap_or(super::call_summary::ASSUMED_WIDTH);
+    let summary = super::call_summary::approval_summary(
+        tool,
+        hitl.get("tool_input").unwrap_or(&serde_json::Value::Null),
+        width,
+        super::call_summary::ApprovalFrame::Transcript,
+    );
+    (
+        tier,
+        mur_common::hitl::tier_may_be_granted(tier),
+        super::scrub::scrub_str(&summary).into_owned(),
+    )
+}
+
 /// Answer a pending HITL request on a fresh connection. Does not block the
 /// streaming worker; the agent resumes once the runtime receives this.
 pub async fn respond_hitl(

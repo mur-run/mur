@@ -22,7 +22,7 @@ pub(super) fn finalize_synthesis(reply: &str, marker: &str) -> String {
     }
 }
 
-pub(super) fn extract_task_reply(task: &serde_json::Value) -> String {
+pub(crate) fn extract_task_reply(task: &serde_json::Value) -> String {
     task.get("messages")
         .and_then(|m| m.as_array())
         .and_then(|messages| {

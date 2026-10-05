@@ -18,6 +18,7 @@ pub mod loop_run;
 pub mod partition_cmd;
 pub mod plan;
 pub mod progress;
+pub mod review;
 pub mod roster;
 pub mod run;
 pub mod run_monitor;
