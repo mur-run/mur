@@ -13,8 +13,9 @@
 //! every send, `session_stopped`, fleet removed and channel kept. Malformed
 //! verdicts and rebuttals are validated in `verdict.rs` and retried once
 //! with a hint (§3.2/§3.4). Not wired yet: §5 auto mode and MURMUR
-//! (§6–§7), §3.4 reviewer withdraw/insist on a reject, and §8.2 resume
-//! (`rollback.rs`). Items waiting on
+//! (§6–§7), §3.4 reviewer withdraw/insist on a reject, and the §8.2
+//! Continue/Abandon path for a damaged channel (`rollback.rs`). A paused
+//! session with a clean channel resumes via `resume.rs`. Items waiting on
 //! those carry an `#[allow(dead_code)]` naming the section.
 
 pub mod constants;
@@ -22,8 +23,9 @@ pub mod driver;
 pub mod ledger;
 pub mod loop_driver;
 pub mod prune;
-// §8.2 replay/resume is not wired into `mur fleet review` yet; until it
-// is, only its tests call into this module.
+pub mod resume;
+// `replay_with_damage` is wired into resume; the Continue-from-checkpoint
+// helpers (§8.2 Partial) are not yet, so they stay test-only.
 #[allow(dead_code)]
 pub mod rollback;
 pub mod schema;

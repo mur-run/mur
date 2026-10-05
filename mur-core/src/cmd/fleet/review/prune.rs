@@ -25,12 +25,9 @@ use chrono::{DateTime, Utc};
 use mur_channel::ChannelService;
 use serde::Deserialize;
 
-use super::constants::{REVIEW_CORRUPTED_MARKER_FILE, REVIEW_FLEET_PREFIX};
+use super::constants::{FLEET_CHANNEL_PREFIX, REVIEW_CORRUPTED_MARKER_FILE, REVIEW_FLEET_PREFIX};
 use super::schema::{NoteClassification, ReviewPayload, classify_note_payload};
 use crate::cmd::fleet::store;
-
-/// `create_for_fleet` names a fleet's channel `fleet-<fleet name>`.
-const FLEET_CHANNEL_PREFIX: &str = "fleet-";
 
 /// The §8.2 marker, read-only here. Only the fields prune needs are
 /// required; a marker missing them is unreadable evidence.

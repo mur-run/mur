@@ -48,7 +48,7 @@ fn session_end_removes_fleet_keeps_channel_and_records_stop() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     crate::channel_writer::plant_writer_identity(home);
-    let fleet = create_session_fleet(home, "review-test0001", "main", "reviewer").unwrap();
+    let fleet = create_session_fleet(home, "review-test0001", "main", "reviewer", "task").unwrap();
     assert!(store::fleet_dir(home, &fleet.name).exists());
 
     let transport = Scripted {
@@ -101,7 +101,7 @@ fn declining_the_first_send_stops_and_cleans_up() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     crate::channel_writer::plant_writer_identity(home);
-    let fleet = create_session_fleet(home, "review-test0002", "main", "reviewer").unwrap();
+    let fleet = create_session_fleet(home, "review-test0002", "main", "reviewer", "task").unwrap();
     let (_, stop) = run_session(&Declines, home, &fleet, "t", limits(), Duration::ZERO).unwrap();
     assert_eq!(stop, LoopDriverStop::Stopped);
     assert!(!store::fleet_dir(home, &fleet.name).exists());

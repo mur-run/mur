@@ -99,6 +99,11 @@ Rules: `findings` lists NEW findings only; never invent IDs, the system assigns 
 /// Rendered in place of `{open_findings}` when the open set is empty.
 pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";
 
+/// `ChannelService::create_for_fleet` names a fleet's channel
+/// `fleet-<fleet name>`; review code maps a channel back to its session
+/// through this prefix.
+pub const FLEET_CHANNEL_PREFIX: &str = "fleet-";
+
 /// The file whose presence `a2a_dial` treats as "the agent is up". The
 /// session preflight checks the same file so it agrees with the first send.
 pub const RUNNING_LOCK: &str = "running.lock";

@@ -18,8 +18,8 @@ use crate::cmd::fleet::store;
 /// A review session's channel, with `payloads` appended. `keep_fleet`
 /// leaves the fleet definition in place, as a running/paused session has.
 fn session(home: &Path, name: &str, payloads: &[ReviewPayload], keep_fleet: bool) -> String {
-    let fleet =
-        super::super::session::create_session_fleet(home, name, "main", "reviewer").unwrap();
+    let fleet = super::super::session::create_session_fleet(home, name, "main", "reviewer", "task")
+        .unwrap();
     let svc = ChannelService::open(home).unwrap();
     for p in payloads {
         crate::channel_writer::append_as_writer(

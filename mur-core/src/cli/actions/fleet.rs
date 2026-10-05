@@ -91,6 +91,11 @@ pub enum FleetAction {
         #[arg(long)]
         budget_usd: Option<f64>,
     },
+    /// Resume a paused review session at the same round (semi-auto).
+    ReviewResume {
+        /// The review session name (`review-…`)
+        name: String,
+    },
     /// Erase retained review-session channels that ended (stopped, or marked
     /// corrupted) longer ago than --older-than. Never touches a running or
     /// paused session, and never runs on its own.

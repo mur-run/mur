@@ -20,7 +20,9 @@ use mur_channel::ChannelService;
 use mur_common::fleet::Fleet;
 use mur_common::limits::Stuck;
 
-use super::constants::{REVIEW_FLEET_PREFIX, RUNNING_LOCK, TRANSPORT_RETRY_DELAY};
+use super::constants::{
+    FLEET_CHANNEL_PREFIX, REVIEW_FLEET_PREFIX, RUNNING_LOCK, TRANSPORT_RETRY_DELAY,
+};
 use super::driver::{A2aTransport, ReviewTransport};
 use super::ledger::Ledger;
 use super::loop_driver::{LoopDriverStop, run_review_loop};
@@ -72,11 +74,12 @@ fn new_session_name() -> String {
 
 /// The session fleet's definition: two members, no limits of its own (they
 /// come from the session flags and the global config via `fleet_bounds`).
-fn session_fleet(name: &str, members: Vec<String>, channel_id: String) -> Fleet {
+/// The task is kept in `goal` so a paused session can be resumed (AC2).
+fn session_fleet(name: &str, members: Vec<String>, channel_id: String, task: &str) -> Fleet {
     Fleet {
         name: name.to_string(),
         display_name: String::new(),
-        goal: String::new(),
+        goal: task.to_string(),
         router: None,
         team_id: None,
         members,
@@ -101,11 +104,12 @@ pub(super) fn create_session_fleet(
     name: &str,
     main: &str,
     reviewer: &str,
+    task: &str,
 ) -> Result<Fleet> {
     let members = vec![main.to_string(), reviewer.to_string()];
     let svc = ChannelService::open(mur_home)?;
     let ch = svc.create_for_fleet(name, crate::channel_writer::ROUTER_AGENT, &members)?;
-    let fleet = session_fleet(name, members, ch.id);
+    let fleet = session_fleet(name, members, ch.id, task);
     store::save_fleet(mur_home, &fleet)?;
     Ok(fleet)
 }
@@ -178,14 +182,21 @@ pub fn render_stop_screen(stop: &LoopDriverStop, ledger: &Ledger, channel_id: &s
             ));
         }
     }
+    if matches!(stop, LoopDriverStop::Paused { .. })
+        && let Some(name) = channel_id.strip_prefix(FLEET_CHANNEL_PREFIX)
+    {
+        out.push_str(&format!(
+            "Session paused. Resume with: mur fleet review-resume {name}\n"
+        ));
+    }
     out.push_str(&format!("Channel kept for audit: {channel_id}\n"));
     out
 }
 
 /// §5 semi-auto over a terminal: show each outgoing message and send it
 /// only when the human presses Enter; `q` declines (ends the session).
-struct TerminalGate<T> {
-    inner: T,
+pub(super) struct TerminalGate<T> {
+    pub(super) inner: T,
 }
 
 impl<T: ReviewTransport> ReviewTransport for TerminalGate<T> {
@@ -210,7 +221,7 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<T> {
 /// session's terminal (the session already refuses to start without a TTY).
 /// Same tier rule as `murmur`'s plain mode: the prompt names the tier when
 /// the call is above the auto ceiling, and only an explicit yes allows.
-fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
+pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
     use crate::cmd::agent::cli::stream::tool_tier_and_summary;
     let (tier, within_ceiling, summary) = tool_tier_and_summary(hitl);
     println!("\n--- {member} asks to run a tool ---");
@@ -285,11 +296,11 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     // §9: resolve limits BEFORE anything is created, so an unresolvable
     // session leaves nothing behind. `fleet_bounds` needs only the fleet's
     // own (empty) limits block, so a stand-in with the final name is exact.
-    let probe = session_fleet(&name, vec![], String::new());
+    let probe = session_fleet(&name, vec![], String::new(), "");
     let bounds = fleet_bounds(mur_home, &probe, args.deadline.as_deref(), args.budget_usd)?;
     let limits = SessionLimits::new(bounds.deadline, bounds.stuck, bounds.cost_usd);
 
-    let fleet = create_session_fleet(mur_home, &name, &main, &reviewer)?;
+    let fleet = create_session_fleet(mur_home, &name, &main, &reviewer, &args.task)?;
     println!(
         "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}.\n\
          Stop any time with `mur fleet stop {name}` or by answering q.",
@@ -321,6 +332,42 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     Ok(())
 }
 
+/// `mur fleet review-resume <session>` (AC2): rebuild a paused session from
+/// its channel and continue at the same round, semi-auto, asking first.
+pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
+    if !std::io::stdin().is_terminal() {
+        bail!("mur fleet review-resume is attended and needs a terminal.");
+    }
+    let r = super::resume::prepare_resume(mur_home, name)?;
+    require_running(mur_home, &[&r.fleet.members[0], &r.fleet.members[1]])?;
+    println!(
+        "Paused at round {} with {} open finding(s); {} of {} used.",
+        r.round,
+        r.ledger.open_set().len(),
+        humantime_like(r.active),
+        humantime_like(r.limits.deadline()),
+    );
+    print!("Paused — continue? [Enter = continue, q = leave paused] ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    if !is_send_answer(&line) {
+        println!("Left paused.");
+        return Ok(());
+    }
+    let channel_id = r.fleet.channel_id.clone();
+    let transport = TerminalGate {
+        inner: A2aTransport {
+            mur_home,
+            decide: &ask_hitl,
+        },
+    };
+    let (ledger, stop) =
+        super::resume::resume_session(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)?;
+    print!("\n{}", render_stop_screen(&stop, &ledger, &channel_id));
+    Ok(())
+}
+
 /// Run the loop on an already-created session fleet, then end the session
 /// whatever happened: record `session_stopped`, drop the fleet definition,
 /// keep the channel (§7.1, A1). Split out so tests can inject a transport.
@@ -346,6 +393,18 @@ pub(super) fn run_session(
         limits,
         &Instant::now,
     );
+    end_session(mur_home, fleet, run)
+}
+
+/// End a session the loop returned from. A pause is NOT an end (§7, AC2):
+/// the fleet definition and channel stay so `mur fleet review-resume` can
+/// pick it up, and no `session_stopped` is written. Anything else records
+/// `session_stopped`, drops the fleet definition, and keeps the channel.
+pub(super) fn end_session(
+    mur_home: &Path,
+    fleet: &Fleet,
+    run: Result<(Ledger, LoopDriverStop)>,
+) -> Result<(Ledger, LoopDriverStop)> {
     let (ledger, stop) = match run {
         Ok(pair) => pair,
         Err(e) => {
@@ -359,6 +418,9 @@ pub(super) fn run_session(
             return Err(e);
         }
     };
+    if matches!(stop, LoopDriverStop::Paused { .. }) {
+        return Ok((ledger, stop));
+    }
     append_session_stopped(mur_home, &fleet.channel_id, &stop_reason(&stop), &ledger)?;
     remove_session_fleet(mur_home, &fleet.name)?;
     Ok((ledger, stop))

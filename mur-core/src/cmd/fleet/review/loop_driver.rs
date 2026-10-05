@@ -117,23 +117,70 @@ pub fn run_review_loop(
     };
     ledger.apply(&started)?;
     append(&svc, mur_home, channel_id, &started)?;
-    let mut run = LoopRun {
-        transport,
-        svc,
-        mur_home,
+    let members = Members {
         fleet_name,
         channel_id,
         main,
         reviewer,
         task,
+    };
+    continue_review_loop(
+        transport,
+        mur_home,
+        &members,
+        ledger,
+        1,
+        limits,
+        Duration::ZERO,
+        retry_delay,
+        now,
+    )
+}
+
+/// Who and what a session is about — the fixed part of every turn.
+pub struct Members<'a> {
+    pub fleet_name: &'a str,
+    pub channel_id: &'a str,
+    pub main: &'a str,
+    pub reviewer: &'a str,
+    pub task: &'a str,
+}
+
+/// Drive the loop from `round` on over an already-folded `ledger` (a fresh
+/// session, or one rebuilt by replay on resume, AC2). `active_before` is
+/// the execution time already spent; the deadline counts only that plus
+/// time from now, never time spent paused (AC4).
+#[allow(clippy::too_many_arguments)]
+pub fn continue_review_loop(
+    transport: &dyn ReviewTransport,
+    mur_home: &Path,
+    m: &Members<'_>,
+    ledger: Ledger,
+    round: u32,
+    limits: SessionLimits,
+    active_before: Duration,
+    retry_delay: Duration,
+    now: &dyn Fn() -> Instant,
+) -> Result<(Ledger, LoopDriverStop)> {
+    let start = now();
+    let mut run = LoopRun {
+        transport,
+        svc: ChannelService::open(mur_home)?,
+        mur_home,
+        fleet_name: m.fleet_name,
+        channel_id: m.channel_id,
+        main: m.main,
+        reviewer: m.reviewer,
+        task: m.task,
         retry_delay,
         deadline: limits.deadline(),
         stuck: limits.stuck(),
         now,
-        start: now(),
-        last_activity: now(),
+        start,
+        active_before,
+        last_activity: start,
     };
-    run.drive(ledger, 1)
+    run.drive(ledger, round)
 }
 
 /// One running loop: everything a turn needs, so the per-turn helper does
@@ -152,6 +199,8 @@ struct LoopRun<'a> {
     stuck: Stuck,
     now: &'a dyn Fn() -> Instant,
     start: Instant,
+    /// Execution time spent before this run (a resumed session).
+    active_before: Duration,
     // Activity = a turn that returned `RetryOutcome::Sent(_)`. Spec §3.5
     // defines stuck as "no agent-authored channel event for the window", so
     // a long turn that DOES come back with a reply is activity, not a stall:
@@ -174,7 +223,7 @@ enum Turn<T> {
 
 impl LoopRun<'_> {
     fn elapsed(&self) -> Duration {
-        (self.now)().saturating_duration_since(self.start)
+        self.active_before + (self.now)().saturating_duration_since(self.start)
     }
 
     /// The round loop, from `round` on, over an already-folded `ledger`.
@@ -198,48 +247,56 @@ impl LoopRun<'_> {
             // verdict; with none open its reply is free text.
             let params = main_turn_params(self.task, round, &ledger);
             let open = !ledger.open_set().is_empty();
-            let main_reply = match self.turn(self.main, Role::Main, round, &params, |reply| {
-                if open {
-                    parse_rebuttal(&ledger, round, reply).map(Some)
-                } else {
-                    Ok(None)
-                }
-            })? {
-                Turn::Stop(stop) => return Ok((ledger, stop)),
-                Turn::Accepted { reply, value } => {
-                    if let Some(rebuttal) = value {
-                        ledger.apply(&rebuttal)?;
-                        self.append(&rebuttal)?;
+            let (main_reply, rebuttal) =
+                match self.turn(self.main, Role::Main, round, &params, |reply| {
+                    if open {
+                        parse_rebuttal(&ledger, round, reply).map(Some)
+                    } else {
+                        Ok(None)
                     }
-                    reply
-                }
-            };
+                })? {
+                    Turn::Stop(stop) => return Ok((ledger, stop)),
+                    Turn::Accepted { reply, value } => (reply, value),
+                };
+            // The rebuttal is signed together with the verdict at round end,
+            // never on its own: a round cut short (pause, stop, deadline)
+            // then leaves only stateless `turn_sent` events, so resuming it
+            // from main's turn (AC2) cannot count a reject twice.
+            let mut round_ledger = ledger.clone();
+            if let Some(r) = &rebuttal {
+                round_ledger.apply(r)?;
+            }
 
             // Reviewer's turn, fed main's output. Model output is untrusted:
             // the verdict is folded into a scratch ledger first and signed
             // only once the whole round folds cleanly, so a bad reply never
             // poisons the channel for replay.
-            let params = reviewer_turn_params(self.task, round, &main_reply, &ledger);
+            let params = reviewer_turn_params(self.task, round, &main_reply, &round_ledger);
             let staged =
                 match self.turn(self.reviewer, Role::Reviewer, round, &params, |reply| {
-                    parse_verdict(&ledger, round, reply)
+                    parse_verdict(&round_ledger, round, reply)
                 })? {
-                    Turn::Stop(stop) => {
-                        if matches!(stop, LoopDriverStop::Blocked { .. }) {
-                            // §3.2: still malformed → treat as `blocked`.
-                            let payload = ReviewPayload::Verdict {
-                                round,
-                                kind: VerdictKind::Blocked,
-                                cumulative: zero_cumulative(),
-                            };
-                            ledger.apply(&payload)?;
-                            self.append(&payload)?;
-                            ledger.note_round_complete();
+                    Turn::Stop(LoopDriverStop::Blocked { role }) => {
+                        // §3.2: still malformed → treat as `blocked`.
+                        if let Some(r) = &rebuttal {
+                            self.append(r)?;
                         }
-                        return Ok((ledger, stop));
+                        let payload = ReviewPayload::Verdict {
+                            round,
+                            kind: VerdictKind::Blocked,
+                            cumulative: zero_cumulative(),
+                        };
+                        round_ledger.apply(&payload)?;
+                        self.append(&payload)?;
+                        round_ledger.note_round_complete();
+                        return Ok((round_ledger, LoopDriverStop::Blocked { role }));
                     }
+                    Turn::Stop(stop) => return Ok((ledger, stop)),
                     Turn::Accepted { value, .. } => value,
                 };
+            if let Some(r) = &rebuttal {
+                self.append(r)?;
+            }
             for payload in &staged.payloads {
                 self.append(payload)?;
             }

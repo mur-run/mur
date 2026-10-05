@@ -70,6 +70,12 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                     .await?
                 }
             }
+            FleetAction::ReviewResume { name } => {
+                tokio::task::spawn_blocking(move || {
+                    cmd::fleet::review::session::cmd_fleet_review_resume(&mur_home, &name)
+                })
+                .await??
+            }
             FleetAction::PruneReviews {
                 older_than,
                 dry_run,
