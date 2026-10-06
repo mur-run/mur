@@ -1,3 +1,4 @@
+pub(crate) mod atomic_write;
 pub mod bash;
 pub mod bash_control;
 pub mod bash_jobs;

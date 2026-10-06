@@ -43,6 +43,11 @@ const MAX_TURN_CWDS: usize = 1_024;
 #[derive(Default)]
 struct TurnCwds {
     by_turn: std::collections::HashMap<String, PathBuf>,
+    /// Turns currently inside a turn track: project root → track root. An
+    /// explicit `bash` cwd under the project is redirected to the same
+    /// place under the track ([`SessionCwd::set`]), so the model cannot
+    /// step out of the track by naming the project's absolute path.
+    tracks: std::collections::HashMap<String, (PathBuf, PathBuf)>,
     /// Insertion order, for eviction past [`MAX_TURN_CWDS`].
     order: std::collections::VecDeque<String>,
     /// A tool called outside any turn (direct tool tests, tooling): kept apart
@@ -68,6 +73,21 @@ impl SessionCwd {
             .or_else(|| parent.and_then(|p| self.lookup(p)))
             .unwrap_or_else(|| self.home.as_ref().clone());
         self.insert(id, dir);
+    }
+
+    /// Move turn `id` into its track: the turn's cwd becomes `track`, and
+    /// until [`Self::leave_track`] any explicit cwd under `project` is
+    /// redirected under `track`. Runtime-only; never reached by a tool.
+    pub(crate) fn enter_track(&self, id: &str, project: PathBuf, track: PathBuf) {
+        self.insert(id, track.clone());
+        self.write().tracks.insert(id.to_string(), (project, track));
+    }
+
+    /// Undo [`Self::enter_track`]: the turn's cwd goes back to `original`
+    /// and the redirect is dropped.
+    pub(crate) fn leave_track(&self, id: &str, original: PathBuf) {
+        self.write().tracks.remove(id);
+        self.insert(id, original);
     }
 
     /// The directory every conversation starts in (the agent home).
@@ -96,10 +116,40 @@ impl SessionCwd {
 
     /// Move the calling tool's directory (`bash` with an explicit `cwd`).
     /// Only this conversation moves; later turns of it inherit the change.
-    pub fn set(&self, dir: PathBuf) {
+    /// Inside a track, a cwd under the project lands under the track
+    /// instead: a track whose diff misses a write is a false settlement,
+    /// and the project's absolute path is exactly what the model is most
+    /// likely to type from memory.
+    /// Returns the directory actually adopted, which the caller must run in:
+    /// inside a track it is not the one it passed.
+    #[must_use = "inside a track the adopted directory differs from the requested one"]
+    pub fn set(&self, dir: PathBuf) -> PathBuf {
         match crate::tools::bash_jobs::current_task_id() {
-            Some(id) => self.insert(&id, dir),
-            None => self.write().unscoped = Some(dir),
+            Some(id) => {
+                let dir = self.rerooted_onto_track(&id, dir);
+                self.insert(&id, dir.clone());
+                dir
+            }
+            None => {
+                self.write().unscoped = Some(dir.clone());
+                dir
+            }
+        }
+    }
+
+    /// `dir` re-rooted from the turn's project onto its track, when the
+    /// turn is in one and `dir` is under the project (and not already
+    /// under the track — the track lives inside the project).
+    fn rerooted_onto_track(&self, id: &str, dir: PathBuf) -> PathBuf {
+        let Some((project, track)) = self.read().tracks.get(id).cloned() else {
+            return dir;
+        };
+        if dir.starts_with(&track) {
+            return dir;
+        }
+        match dir.strip_prefix(&project) {
+            Ok(rest) => track.join(rest),
+            Err(_) => dir,
         }
     }
 
@@ -115,6 +165,7 @@ impl SessionCwd {
         while t.order.len() > MAX_TURN_CWDS {
             if let Some(old) = t.order.pop_front() {
                 t.by_turn.remove(&old);
+                t.tracks.remove(&old);
             }
         }
     }
@@ -294,10 +345,15 @@ pub(crate) fn for_file_tools(
 /// live grant matches; a grant naming a missing path fails closed — and
 /// `mur agent perm` rejects those up front (`reject_dead_grant`).
 pub(crate) fn under_any(roots: &[String], canonical: &Path) -> bool {
+    // Both sides go through `strip_verbatim`: callers hand in paths from
+    // either `std::fs::canonicalize` (`\\?\C:\...` on Windows) or
+    // `mur_track::turn::canonicalize` (prefix-free), and `starts_with`
+    // treats those prefixes as different roots.
+    let canonical = mur_track::turn::strip_verbatim(canonical.to_path_buf());
     roots.iter().any(|r| {
         let expanded = crate::sandbox::policy::expand_entitlement_path(r);
         let root = std::fs::canonicalize(&expanded).unwrap_or(expanded);
-        canonical.starts_with(&root)
+        canonical.starts_with(mur_track::turn::strip_verbatim(root))
     })
 }
 
@@ -367,12 +423,13 @@ fn self_protected_write_only(agent_home: &Path) -> Vec<PathBuf> {
 pub(crate) fn under_any_read_deny(roots: &[String], canonical: &Path, agent_home: &Path) -> bool {
     let carved: Vec<PathBuf> = self_protected_write_only(agent_home)
         .into_iter()
-        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .map(|p| mur_track::turn::strip_verbatim(std::fs::canonicalize(&p).unwrap_or(p)))
         .collect();
-    if carved.iter().any(|p| p == canonical) {
+    let canonical = mur_track::turn::strip_verbatim(canonical.to_path_buf());
+    if carved.contains(&canonical) {
         return false;
     }
-    under_any(roots, canonical)
+    under_any(roots, &canonical)
 }
 
 pub(crate) fn check_write_entitlement(

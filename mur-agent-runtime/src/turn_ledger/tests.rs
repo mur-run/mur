@@ -588,3 +588,27 @@ fn a_live_stop_keeps_its_own_remedy_and_not_the_retired_boilerplate() {
         "{max_tokens}"
     );
 }
+
+/// Only a track-backed count is a measured count. A turn that got no track
+/// (cwd not at a repo root, tracks opted out) falls back to what the tools
+/// said about themselves — a `bash` redirect is invisible there — and the
+/// card must say so on the line itself, or every card looks equally
+/// trustworthy and the reader cannot tell which turns the diff vouched for.
+#[test]
+fn render_marks_a_changed_count_that_no_diff_backs() {
+    let mut l = TurnLedger::default();
+    l.record(act("edit_file", "src/a.rs", Outcome::Ok));
+    let card = render(&l);
+    assert!(
+        card.contains("~ changed    1 file(s) (tool-reported)"),
+        "{card}"
+    );
+
+    let backed = TurnLedger {
+        files_changed: Some(vec!["src/a.rs".into()]),
+        ..TurnLedger::default()
+    };
+    let card = render(&backed);
+    assert!(card.contains("~ changed    1 file(s)\n"), "{card}");
+    assert!(!card.contains("tool-reported"), "{card}");
+}

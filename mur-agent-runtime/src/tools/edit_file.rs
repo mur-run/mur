@@ -116,11 +116,13 @@ impl ToolExecutor for EditFileTool {
             _ => {}
         }
         let updated = text.replace(old, new);
-        std::fs::write(&canonical, &updated).map_err(|e| {
-            ToolError::Execution(crate::tools::fs_policy::format_io_error(
-                "write", &canonical, &base, &e,
-            ))
-        })?;
+        crate::tools::atomic_write::replace_contents(&canonical, updated.as_bytes()).map_err(
+            |e| {
+                ToolError::Execution(crate::tools::fs_policy::format_io_error(
+                    "write", &canonical, &base, &e,
+                ))
+            },
+        )?;
         Ok(format!("replaced {found} occurrence(s) in {}", canonical.display()).into())
     }
 }

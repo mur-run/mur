@@ -47,7 +47,7 @@ fn saved_memory_reaches_the_system_prompt() {
 #[tokio::test]
 async fn working_directory_reaches_the_system_prompt_every_turn() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = mur_track::turn::canonicalize(tmp.path()).unwrap();
     // The project differs from the home, so the path can only reach the
     // prompt through this conversation's cwd, never the home fallback.
     let project = root.join("project");
@@ -81,7 +81,7 @@ async fn working_directory_reaches_the_system_prompt_every_turn() {
 #[tokio::test]
 async fn turn_cwd_moves_the_session_cwd_only_within_entitlements() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = mur_track::turn::canonicalize(tmp.path()).unwrap();
     let project = root.join("project");
     let outside = root.join("outside");
     std::fs::create_dir_all(&project).unwrap();
@@ -119,7 +119,7 @@ async fn turn_cwd_moves_the_session_cwd_only_within_entitlements() {
 #[tokio::test]
 async fn each_session_keeps_its_own_cwd() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = mur_track::turn::canonicalize(tmp.path()).unwrap();
     let gateway = root.join("gateway");
     let mur = root.join("mur");
     std::fs::create_dir_all(&gateway).unwrap();
@@ -156,7 +156,7 @@ async fn each_session_keeps_its_own_cwd() {
 
 fn prompt_with_project_agents_md() -> String {
     let tmp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = mur_track::turn::canonicalize(tmp.path()).unwrap();
     std::fs::create_dir(root.join(".git")).unwrap();
     std::fs::write(root.join("AGENTS.md"), "PROJECT-RULE: run cargo fmt").unwrap();
     let grant = root.to_string_lossy().into_owned();
@@ -260,7 +260,7 @@ fn pinned_runner(
     Arc<TaskRunner>,
 ) {
     let tmp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = mur_track::turn::canonicalize(tmp.path()).unwrap();
     std::fs::create_dir(root.join(".git")).unwrap();
     let agents = root.join("AGENTS.md");
     std::fs::write(&agents, "RULE-A").unwrap();
@@ -574,7 +574,7 @@ mod refused_cwd {
         crate::tools::fs_policy::SessionCwd,
     ) {
         let tmp = tempfile::tempdir().unwrap();
-        let home = std::fs::canonicalize(tmp.path()).unwrap();
+        let home = mur_track::turn::canonicalize(tmp.path()).unwrap();
         let project = home.join("project");
         let outside = home.join("outside");
         std::fs::create_dir_all(&project).unwrap();

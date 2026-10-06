@@ -706,7 +706,7 @@ mod tests {
         let project = home.join("the-project");
         std::fs::create_dir_all(&project).unwrap();
         let session_cwd = crate::tools::fs_policy::SessionCwd::new(home.to_path_buf());
-        session_cwd.set(project.clone());
+        let _ = session_cwd.set(project.clone());
         let tool = FleetRunTool {
             mur_home: home.to_path_buf(),
             agent_name: "mur".into(),

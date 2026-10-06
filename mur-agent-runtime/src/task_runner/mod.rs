@@ -26,6 +26,7 @@ mod helpers;
 mod run;
 mod step;
 mod system_prompt;
+mod turn_track;
 
 use conversation::*;
 pub(crate) use helpers::*;
@@ -269,6 +270,10 @@ pub struct TaskRunner {
     /// caller-supplied `TaskSpec.cwd` may move it to. `None` for runners built
     /// without tools (stubs, most tests): no cwd line in the prompt.
     session_cwd: Option<(crate::tools::fs_policy::SessionCwd, Vec<String>)>,
+    /// Open per-turn tracks keyed by turn id (`turn_track.rs`). Opened before
+    /// the prompt is assembled, closed by `settle_turn` — or swept by the
+    /// run wrapper when the turn ends any other way.
+    turn_tracks: Mutex<HashMap<String, turn_track::OpenTrack>>,
     /// Turns whose caller-supplied cwd was refused, with why. Read by the
     /// system prompt (so the model knows it is NOT in the user's project) and
     /// by the reply footer (so the user sees the command that fixes it).
