@@ -42,6 +42,8 @@ const APPROVE: &str = r#"{"verdict":"approve"}"#;
 struct Scripted {
     home: PathBuf,
     main_answer: &'static str,
+    /// Main's answer once a binding ruling is in its prompt (default: same).
+    main_answer_ruled: Option<&'static str>,
     reviewer: RefCell<Vec<String>>,
     confirms: RefCell<HashMap<(&'static str, usize), SendAnswer>>,
     confirm_seen: RefCell<HashMap<String, usize>>,
@@ -62,6 +64,7 @@ impl Scripted {
         Self {
             home: home.to_path_buf(),
             main_answer,
+            main_answer_ruled: None,
             reviewer: RefCell::new(reviewer.iter().rev().map(|s| s.to_string()).collect()),
             confirms: RefCell::default(),
             confirm_seen: RefCell::default(),
@@ -75,6 +78,11 @@ impl Scripted {
             main_texts: RefCell::default(),
             log: RefCell::default(),
         }
+    }
+
+    fn main_answer_after_ruling(mut self, answer: &'static str) -> Self {
+        self.main_answer_ruled = Some(answer);
+        self
     }
 
     fn asks(self, lines: &[&str]) -> Self {
@@ -131,13 +139,17 @@ impl ReviewTransport for Scripted {
                 .unwrap_or_else(|| APPROVE.to_string()));
         }
         self.main_texts.borrow_mut().push(prompt.clone());
+        let answer = match self.main_answer_ruled {
+            Some(a) if prompt.contains(REVIEW_BINDING_RULINGS_HEADER) => a,
+            _ => self.main_answer,
+        };
         let responses: Vec<serde_json::Value> = prompt
             .lines()
             .filter_map(|l| l.strip_prefix("- "))
             .filter_map(|l| l.split_once(" ["))
             .map(|(id, _)| id)
             .filter(|id| id.starts_with('F'))
-            .map(|id| serde_json::json!({"id": id, "answer": self.main_answer, "reason": "I disagree"}))
+            .map(|id| serde_json::json!({"id": id, "answer": answer, "reason": "I disagree"}))
             .collect();
         if responses.is_empty() {
             return Ok("done".into());
@@ -320,6 +332,32 @@ fn reject_after_fix_blocks_main() {
     let t = escalating(tmp.path()).asks(&["/rule fix F1 do it\n"]);
     let (_, stop) = run(&t, tmp.path(), &ch);
     assert_eq!(stop, LoopDriverStop::Blocked { role: Role::Main });
+}
+
+/// QA P2 / P2-§4 rule 4: after a `fix` ruling the reviewer may not close
+/// the finding by withdrawal — malformed, retried once, then `blocked`.
+#[test]
+fn withdraw_after_fix_blocks_reviewer() {
+    const WITHDRAW_F1: &str = r#"{"verdict":"approve","prior":[{"id":"F1","status":"withdrawn"}]}"#;
+    let (tmp, ch) = setup_channel();
+    let t = Scripted::new(
+        tmp.path(),
+        "reject",
+        &[ISSUE_F1, DISPUTE_F1, DISPUTE_F1, WITHDRAW_F1, WITHDRAW_F1],
+    )
+    .asks(&["/rule fix F1 do it\n"])
+    .main_answer_after_ruling("accept");
+    let (ledger, stop) = run(&t, tmp.path(), &ch);
+    assert_eq!(
+        stop,
+        LoopDriverStop::Blocked {
+            role: Role::Reviewer
+        }
+    );
+    assert_ne!(
+        ledger.finding("F1").unwrap().status,
+        FindingStatus::Withdrawn
+    );
 }
 
 #[test]

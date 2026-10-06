@@ -70,28 +70,41 @@ fn review_events(events: &[ChannelEvent]) -> Vec<(DateTime<Utc>, ReviewPayload)>
 
 /// Execution time from the channel: the sum of every running segment, from
 /// `session_started`/`resumed` to the next `paused`, less the human-input
-/// wait each `turn_sent` recorded (§3.5). Paused spans never count.
+/// wait each `turn_sent` or `paused` recorded (§3.5). Paused spans never
+/// count. A `paused{crashed}` is written at resume time, long after the
+/// crash, so its segment ends at the last event before it instead (QA P1).
 fn active_time(events: &[(DateTime<Utc>, ReviewPayload)]) -> Duration {
     let mut total = chrono::Duration::zero();
     let mut running_since: Option<DateTime<Utc>> = None;
     let mut human_wait = Duration::ZERO;
+    let mut prev_ts: Option<DateTime<Utc>> = None;
     for (ts, p) in events {
         match p {
             ReviewPayload::TurnSent { human_wait_ms, .. } if running_since.is_some() => {
                 human_wait += Duration::from_millis(*human_wait_ms);
+            }
+            ReviewPayload::Paused {
+                reason,
+                human_wait_ms,
+                ..
+            } => {
+                if let Some(since) = running_since.take() {
+                    let end = match prev_ts {
+                        Some(prev) if reason == REVIEW_PAUSE_REASON_CRASHED => prev,
+                        _ => *ts,
+                    };
+                    total += end.max(since) - since;
+                    human_wait += Duration::from_millis(*human_wait_ms);
+                }
             }
             ReviewPayload::SessionStarted { .. }
             | ReviewPayload::Resumed { .. }
             | ReviewPayload::ResumedFromCheckpoint { .. } => {
                 running_since.get_or_insert(*ts);
             }
-            ReviewPayload::Paused { .. } => {
-                if let Some(since) = running_since.take() {
-                    total += *ts - since;
-                }
-            }
             _ => {}
         }
+        prev_ts = Some(*ts);
     }
     // §7.0 crashed: the last segment never got its `paused`. It counts up to
     // the last readable event; the gap after it held no work.
@@ -211,6 +224,7 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
             kind: PauseKind::Other,
             reason: REVIEW_PAUSE_REASON_CRASHED.to_string(),
             cumulative: cumulative_at(&ledger, active),
+            human_wait_ms: 0,
         };
         ledger.apply(&paused)?;
         super::loop_driver::append(&svc, mur_home, &fleet.channel_id, &paused)?;
@@ -266,7 +280,7 @@ pub fn settle_then_resume(
         already_paused: true,
     };
     let cumulative = cumulative_at(&r.ledger, r.active);
-    let outcome = settle_rulings(&ctx, &mut r.ledger, cumulative)?;
+    let outcome = settle_rulings(&ctx, &mut r.ledger, cumulative, Duration::ZERO)?;
     // The wait at this prompt fell between `paused` and `resumed`, which
     // never counts: drop it so the resumed loop does not subtract it again.
     let _ = transport.take_human_wait();

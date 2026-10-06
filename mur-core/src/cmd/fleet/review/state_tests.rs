@@ -55,6 +55,7 @@ pub(crate) fn paused() -> ReviewPayload {
         kind: PauseKind::Other,
         reason: "detached".into(),
         cumulative: zero_cumulative(),
+        human_wait_ms: 0,
     }
 }
 

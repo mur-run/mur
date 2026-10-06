@@ -91,7 +91,8 @@ pub const RULING_PROMPT: &str =
     "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused ";
 /// P2-§5.1 step 3: both sides' last positions, shown above
 /// [`RULING_PROMPT`]. `{id}`, `{reason}` (why it escalated), `{issue}` (the
-/// reviewer's finding) and `{main}` (main's last reject reason).
+/// reviewer's latest reason, falling back to its finding) and `{main}`
+/// (main's last reject reason).
 pub const RULING_POSITIONS: &str =
     "\n--- {id} awaits your ruling ({reason}) ---\n  reviewer: {issue}\n  main: {main}\n";
 /// Stands in for `{main}` when main's reject carried no reason.

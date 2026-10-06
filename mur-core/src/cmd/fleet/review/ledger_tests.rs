@@ -347,7 +347,18 @@ fn disputed_after_fix_is_damage() {
     rule(&mut ledger, &f1, RulingDecision::Fix).unwrap();
     assert_eq!(
         set_status(&mut ledger, &f1, FindingStatus::Disputed),
-        Err(FoldError::DisputedAfterFix(f1.clone()))
+        Err(FoldError::IllegalStatusAfterFix {
+            id: f1.clone(),
+            status: FindingStatus::Disputed,
+        })
+    );
+    // QA P2: "only `open` or `resolved` is legal" — withdrawal included.
+    assert_eq!(
+        set_status(&mut ledger, &f1, FindingStatus::Withdrawn),
+        Err(FoldError::IllegalStatusAfterFix {
+            id: f1.clone(),
+            status: FindingStatus::Withdrawn,
+        })
     );
     assert_eq!(set_status(&mut ledger, &f1, FindingStatus::Open), Ok(()));
     assert_eq!(
