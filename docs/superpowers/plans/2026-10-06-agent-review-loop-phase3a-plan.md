@@ -161,6 +161,8 @@ any other `/<word>` → `unknown command: /<word>`; everything else → `NotNote
   `MUR_BLESS_WIRE_GOLDEN=1 cargo test -p mur-core --lib -- --ignored bless_wire_golden`
   (an ignored test, a no-op without the env var), then review the `.txt` diff in the PR. The same
   rule is in the doc comment on `GOLDEN` in `wire.rs`.
+  `testdata/wire_golden/.gitattributes` sets `* -text` so Windows `autocrlf` checkouts keep the
+  LF bytes (CI on `windows-latest` failed on CRLF before it).
 - [x] Add `{human_notes}` slot to both templates in `constants.rs`, `REVIEW_HUMAN_NOTES_HEADER`,
   extend `main_turn_params(task, round, ledger, pending)` and
   `reviewer_turn_params(task, round, main_reply, ledger, pending)`; existing callers pass `&[]`.
