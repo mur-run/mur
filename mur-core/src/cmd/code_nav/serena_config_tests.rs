@@ -325,3 +325,35 @@ fn write_private_replaces_a_stale_world_readable_tmp() {
     assert_eq!(mode, PRIVATE_MODE);
     assert!(!tmp.exists());
 }
+
+#[test]
+fn dropped_block_spans_blank_lines_and_comments() {
+    let template = "\
+keep: 1
+auth_secret:
+  - a
+
+# inside the dropped block
+  - b
+
+# leads the next key
+next: 2
+";
+    let mut keys = Mapping::new();
+    keys.insert("auth_secret".into(), "x".into());
+    let out = render_owned(template, &["auth_secret"], &keys, "# owned\n", "fixture").unwrap();
+    assert!(!out.contains("- b"), "{out}");
+    assert!(out.contains("# leads the next key\nnext: 2\n"), "{out}");
+    let m = top(&out);
+    assert_eq!(m.get("next"), Some(&Value::from(2)));
+    assert_eq!(m.get("auth_secret"), Some(&Value::from("x")));
+}
+
+#[test]
+fn trailing_blank_lines_after_a_dropped_block_are_kept() {
+    let template = "auth_secret: old\n\n";
+    let mut keys = Mapping::new();
+    keys.insert("auth_secret".into(), "x".into());
+    let out = render_owned(template, &["auth_secret"], &keys, "", "fixture").unwrap();
+    assert_eq!(top(&out).get("auth_secret"), Some(&Value::from("x")));
+}

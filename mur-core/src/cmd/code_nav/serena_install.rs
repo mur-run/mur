@@ -141,8 +141,12 @@ pub fn installed_state(dir: &Path) -> Installed {
     if !serena_binary_path_in(dir).is_file() {
         return Installed::Missing;
     }
-    let Some((version, commit)) = recorded_pin(dir) else {
-        return Installed::Missing;
+    let (version, commit) = match recorded_pins(dir).as_slice() {
+        [] => return Installed::Missing,
+        [one] => one.clone(),
+        // Leftovers of an earlier install: which one wins would depend on
+        // walk order, so judge none of them and let `--force` rebuild.
+        _ => return Installed::Mismatch,
     };
     if version == SERENA_PIN
         && commit.as_deref() == Some(SERENA_GIT_REV)
@@ -192,15 +196,16 @@ pub fn install_with(uv: &Path, dir: &Path) -> Result<(Outcome, Record)> {
     }
 }
 
-/// (version from the dist-info dir name, git commit from `direct_url.json`).
-fn recorded_pin(dir: &Path) -> Option<(String, Option<String>)> {
+/// Every serena dist-info in the tool env: (version from the dir name, git
+/// commit from `direct_url.json`). More than one means a dirty env.
+fn recorded_pins(dir: &Path) -> Vec<(String, Option<String>)> {
     let prefix = format!("{}-", PACKAGE.replace('-', "_"));
     let env = dir.join(UV_TOOL_SUBDIR).join(PACKAGE);
     walkdir::WalkDir::new(env)
         .max_depth(5)
         .into_iter()
         .filter_map(|e| e.ok())
-        .find_map(|e| {
+        .filter_map(|e| {
             let name = e.file_name().to_str()?;
             let version = name.strip_prefix(&prefix)?.strip_suffix(".dist-info")?;
             if !e.file_type().is_dir() {
@@ -212,6 +217,7 @@ fn recorded_pin(dir: &Path) -> Option<(String, Option<String>)> {
                 .and_then(|v| v["vcs_info"]["commit_id"].as_str().map(String::from));
             Some((version.to_string(), commit))
         })
+        .collect()
 }
 
 #[cfg(test)]

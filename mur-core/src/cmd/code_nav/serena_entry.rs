@@ -107,6 +107,7 @@ pub fn check_slot(profile: &AgentProfile, name: &str) -> Result<()> {
 /// the user's own server and is refused, never overwritten.
 pub fn upsert(profile: &mut AgentProfile, entry: McpServerEntry) -> Result<Change> {
     check_slot(profile, &entry.name)?;
+    retire_replaced_command(profile, &entry);
     let spawn = &mut profile.entitlements.processes.spawn.allowed;
     if !spawn.iter().any(|a| a == &entry.command) {
         spawn.push(entry.command.clone());
@@ -124,6 +125,35 @@ pub fn upsert(profile: &mut AgentProfile, entry: McpServerEntry) -> Result<Chang
     }
     *slot = entry;
     Ok(Change::Updated)
+}
+
+/// When a new pin moves `command`, drop the old pin's entry point from the
+/// spawn allow-list — this setup added it for this slot, and nothing runs
+/// it once the slot points elsewhere. Kept if any other MCP entry still
+/// uses it. Not a revocation of consent: the same grant moves to the new
+/// path, so stale grants do not pile up across upgrades.
+fn retire_replaced_command(profile: &mut AgentProfile, entry: &McpServerEntry) {
+    let Some(old) = profile
+        .mcp_servers
+        .iter()
+        .find(|m| m.name == entry.name)
+        .map(|m| m.command.clone())
+    else {
+        return;
+    };
+    let still_used = profile
+        .mcp_servers
+        .iter()
+        .any(|m| m.name != entry.name && m.command == old);
+    if old == entry.command || still_used {
+        return;
+    }
+    profile
+        .entitlements
+        .processes
+        .spawn
+        .allowed
+        .retain(|a| *a != old);
 }
 
 #[cfg(test)]

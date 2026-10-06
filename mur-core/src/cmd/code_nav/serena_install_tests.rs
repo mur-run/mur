@@ -259,3 +259,17 @@ fn command_pins_python_and_drops_steering_env() {
         }
     }
 }
+
+#[test]
+fn leftover_dist_infos_are_a_mismatch_whatever_the_walk_order() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().join("pin");
+    fake_install(&dir, SERENA_PIN, SERENA_GIT_REV);
+    let stale = dir
+        .join(UV_TOOL_SUBDIR)
+        .join(PACKAGE)
+        .join("lib/python3.12/site-packages")
+        .join("serena_agent-0.0.1.dist-info");
+    std::fs::create_dir_all(&stale).unwrap();
+    assert_eq!(installed_state(&dir), Installed::Mismatch);
+}

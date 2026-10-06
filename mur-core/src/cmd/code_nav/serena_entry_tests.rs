@@ -174,3 +174,44 @@ fn entry_round_trips_through_profile_yaml() {
     let back: AgentProfile = serde_yaml_ng::from_str(&y).unwrap();
     assert_eq!(back.mcp_servers, p.mcp_servers);
 }
+
+#[test]
+fn a_moved_command_retires_the_old_spawn_grant() {
+    let f = fx();
+    let mut p = profile();
+    let old = build(&f.record, &f.repo).unwrap();
+    upsert(&mut p, old.clone()).unwrap();
+    let moved = McpServerEntry {
+        command: format!("{}-next", old.command),
+        ..old.clone()
+    };
+    assert_eq!(upsert(&mut p, moved.clone()).unwrap(), Change::Updated);
+    let spawn = &p.entitlements.processes.spawn.allowed;
+    assert!(!spawn.contains(&old.command), "{spawn:?}");
+    assert!(spawn.contains(&moved.command));
+}
+
+#[test]
+fn an_old_command_another_server_uses_keeps_its_grant() {
+    let f = fx();
+    let mut p = profile();
+    let old = build(&f.record, &f.repo).unwrap();
+    upsert(&mut p, old.clone()).unwrap();
+    p.mcp_servers.push(McpServerEntry {
+        name: "mine".into(),
+        kind: None,
+        ..old.clone()
+    });
+    let moved = McpServerEntry {
+        command: format!("{}-next", old.command),
+        ..old.clone()
+    };
+    upsert(&mut p, moved).unwrap();
+    assert!(
+        p.entitlements
+            .processes
+            .spawn
+            .allowed
+            .contains(&old.command)
+    );
+}
