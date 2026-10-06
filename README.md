@@ -636,7 +636,9 @@ Agent** wizard offers the same catalog as a source.
   instead of stopping: `/rule drop F3 <why>` closes it, `/rule fix F3 <how>`
   makes it binding (main can no longer reject it), `/abandon` ends the
   session, and `q` leaves it paused. A ruling is shown to both agents in
-  their next turn, and you can also type `/rule` at any send prompt. A crash
+  their next turn, and you can also type `/rule` at any send prompt. The
+  reviewer can't `approve` while a high-severity finding is still disputed,
+  and an approval that leaves one open prints a warning first. A crash
   or an agent that stops answering leaves it paused, and `mur fleet
   review-resume review-…` picks it up after the last finished round — at the
   ruling prompt, if one is still owed. Sessions are hidden
