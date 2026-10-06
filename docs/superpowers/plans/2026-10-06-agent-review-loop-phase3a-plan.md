@@ -202,21 +202,21 @@ pub fn run_turn_with_retry(
 
 ## Task 6 — Loop wiring (P3a-§5, two-ledger rule)
 
-- [ ] `LoopRun::turn` takes `build: impl Fn(&Ledger, &[HumanNote]) -> Value` and
+- [x] `LoopRun::turn` takes `build: impl Fn(&Ledger, &[HumanNote]) -> Value` and
   `validate: impl Fn(&Ledger, &str) -> Result<T, String>` (validate gets the ledger as an
   argument so it no longer borrows `round_ledger` while the flush mutates it). Resend prompt =
   `build(...)` + hint, every attempt.
-- [ ] Pending queue lives on `LoopRun` (one per turn; cleared on `Stop`, kept across `RuleFirst`).
-- [ ] Flush callback appends each note in order via `self.append`, then applies it per the
+- [x] Pending queue lives on `LoopRun` (one per turn; cleared on `Stop`, kept across `RuleFirst`).
+- [x] Flush callback appends each note in order via `self.append`, then applies it per the
   two-ledger rule. Main side: `ledger`. Reviewer side: `ledger` and `round_ledger`.
-- [ ] `RuleFirst` path (`loop_driver.rs:318-333`): keep the kill-switch check, `write_ruling`,
+- [x] `RuleFirst` path (`loop_driver.rs:318-333`): keep the kill-switch check, `write_ruling`,
   banner + full reprint; replace the hand-written `main_turn_params` with the generator; set
   `pre_confirmed = true`; no prompt (D1).
-- [ ] Tests in new `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`: AC-P3a-1, 2, 3, 6, 7, 8, 9 (assert channel order
+- [x] Tests in new `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`: AC-P3a-1, 2, 3, 6, 7, 8, 9 (assert channel order
   `ruling`, `human_note(A)`, `turn_sent`; sent bytes == reprinted; `confirm:main` count equals the
   P2 test's), 10, 11 (+ `review-resume` path shows A again), 14 for 1/3/9/10/11 **and** the
   reviewer-side stop case from the two-ledger rule.
-- [ ] Two-ledger tests, named (implementation without these is not done):
+- [x] Two-ledger tests, named (implementation without these is not done):
   - `reviewer_side_note_then_stop_replays_equal_to_live`: note flushed at the reviewer's prompt,
     send fails twice → `Turn::Stop` (`loop_driver.rs:384`) returns `ledger`; assert
     `fold_rounds(channel) == ` that ledger, and the note is in it. Mutation check: drop the
@@ -224,8 +224,8 @@ pub fn run_turn_with_retry(
   - `reviewer_side_note_survives_verdict_seal`: note flushed at the reviewer's prompt, verdict
     accepted; the sealed ledger (adopted from `round_ledger`) equals replay. Mutation check: drop
     the `round_ledger.apply` → fails.
-- [ ] Unchanged: `mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437 still asserts 2. Do not edit it.
-- [ ] Green, lint, check `loop_driver.rs` ≤ 800 (split the turn helper into
+- [x] Unchanged: `mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437 still asserts 2. Do not edit it.
+- [x] Green, lint, check `loop_driver.rs` ≤ 800 (split the turn helper into
   `loop_driver/turn.rs` if needed — pure move, separate commit), commit
   `feat(review): pending notes in the review loop`.
 

@@ -24,11 +24,11 @@ use super::constants::{
     MALFORMED_RESPONSE_RETRIES, REVIEW_PAUSE_REASON_ESCALATION, REVIEW_VALIDATION_HINT,
     RULING_REGENERATED_BANNER, RULING_SESSION_END_APPROVE, RULING_SESSION_END_BLOCKED,
 };
-use super::driver::{RetryOutcome, ReviewTransport, SendGate, run_turn_with_retry};
+use super::driver::{FlushFailed, RetryOutcome, ReviewTransport, SendGate, run_turn_with_retry};
 use super::ledger::Ledger;
 use super::ruling::RulingInput;
 use super::schema::{
-    Cumulative, Mode, ReviewPayload, Role, SessionLimits, VerdictKind, to_note_payload,
+    Cumulative, HumanNote, Mode, ReviewPayload, Role, SessionLimits, VerdictKind, to_note_payload,
 };
 use super::settle::{
     RulingCtx, RulingOutcome, apply_held_rulings, discard_held_rulings, settle_rulings,
@@ -195,6 +195,7 @@ pub fn continue_review_loop(
         human_wait: Duration::ZERO,
         round_sent: Vec::new(),
         held: Vec::new(),
+        pending: Vec::new(),
         carried_wait: Duration::ZERO,
         last_activity: start,
     };
@@ -231,6 +232,10 @@ struct LoopRun<'a> {
     /// Rulings typed at the reviewer's send prompt this round, applied
     /// after the seal (P2-§5.3, AC-P2-18/19).
     held: Vec<RulingInput>,
+    /// P3a-§5: notes typed at the current turn's send prompt, not yet on
+    /// the channel. Kept across a boundary `/rule` (the rebuilt message
+    /// carries them); dropped when the turn stops before consent.
+    pending: Vec<HumanNote>,
     /// Human wait at the ruling prompt, not yet recorded on a `turn_sent`:
     /// the next send carries it in `human_wait_ms` (P2-§5.1, AC-P2-7).
     carried_wait: Duration,
@@ -252,6 +257,15 @@ struct LoopRun<'a> {
 struct TurnGate<'a> {
     open: &'a std::collections::BTreeSet<String>,
     pre_confirmed: bool,
+}
+
+/// The ledgers a turn reads and a note flush writes (the two-ledger rule).
+/// `primary` is what the message generator and the validator read; `also`
+/// is the sealed ledger on the reviewer's side, so a session that stops
+/// mid-reviewer-turn returns a ledger replay can reproduce.
+struct Side<'l> {
+    primary: &'l mut Ledger,
+    also: Option<&'l mut Ledger>,
 }
 
 /// How one validated turn ended.
@@ -290,23 +304,26 @@ impl LoopRun<'_> {
             // Main's turn: produce or revise (§3.1). With findings open it
             // must also answer each one (§3.4), machine-validated like the
             // verdict; with none open its reply is free text.
-            let mut params = main_turn_params(self.task, round, &ledger, &[]);
+            let task = self.task;
             let mut pre_confirmed = false;
             let (main_reply, rebuttal) = loop {
                 let main_open = open_ids(&ledger);
                 let open = !main_open.is_empty();
                 let turn = self.turn(
-                    self.main,
                     Role::Main,
                     round,
-                    &params,
+                    Side {
+                        primary: &mut ledger,
+                        also: None,
+                    },
+                    |l, notes| main_turn_params(task, round, l, notes),
                     TurnGate {
                         open: &main_open,
                         pre_confirmed,
                     },
-                    |reply| {
+                    |l, reply| {
                         if open {
-                            parse_rebuttal(&ledger, round, reply).map(Some)
+                            parse_rebuttal(l, round, reply).map(Some)
                         } else {
                             Ok(None)
                         }
@@ -325,7 +342,9 @@ impl LoopRun<'_> {
                         }
                         write_ruling(&self.ruling_ctx(false), &mut ledger, &r)?;
                         self.last_activity = (self.now)();
-                        params = main_turn_params(self.task, round, &ledger, &[]);
+                        // P3a-§5.2: the rebuilt message carries the pending
+                        // notes; the send that follows flushes them.
+                        let params = main_turn_params(task, round, &ledger, &self.pending);
                         let text = message_text(&params).unwrap_or_default();
                         self.transport
                             .show(&format!("{RULING_REGENERATED_BANNER}\n{text}"))?;
@@ -347,18 +366,20 @@ impl LoopRun<'_> {
             // the verdict is folded into a scratch ledger first and signed
             // only once the whole round folds cleanly, so a bad reply never
             // poisons the channel for replay.
-            let params = reviewer_turn_params(self.task, round, &main_reply, &round_ledger, &[]);
             let reviewer_open = open_ids(&round_ledger);
             let staged = match self.turn(
-                self.reviewer,
                 Role::Reviewer,
                 round,
-                &params,
+                Side {
+                    primary: &mut round_ledger,
+                    also: Some(&mut ledger),
+                },
+                |l, notes| reviewer_turn_params(task, round, &main_reply, l, notes),
                 TurnGate {
                     open: &reviewer_open,
                     pre_confirmed: false,
                 },
-                |reply| parse_verdict(&round_ledger, round, reply),
+                |l, reply| parse_verdict(l, round, reply),
             )? {
                 Turn::Stop(LoopDriverStop::Blocked { role }) => {
                     discard_held_rulings(
@@ -453,15 +474,21 @@ impl LoopRun<'_> {
     /// transport retry/pause (§8.1) cover the re-send too.
     fn turn<T>(
         &mut self,
-        member: &str,
         role: Role,
         round: u32,
-        params: &serde_json::Value,
+        side: Side<'_>,
+        build: impl Fn(&Ledger, &[HumanNote]) -> serde_json::Value,
         gate: TurnGate<'_>,
-        validate: impl Fn(&str) -> std::result::Result<T, String>,
+        validate: impl Fn(&Ledger, &str) -> std::result::Result<T, String>,
     ) -> Result<Turn<T>> {
-        let base = message_text(params).unwrap_or_default().to_string();
-        let mut outgoing = params.clone();
+        let member = match role {
+            Role::Main => self.main,
+            Role::Reviewer => self.reviewer,
+        };
+        let side = std::cell::RefCell::new(side);
+        // Taken for the turn; put back only on `RuleFirst` (P3a-§5.2).
+        let mut pending = std::mem::take(&mut self.pending);
+        let mut hint: Option<String> = None;
         for attempt in 0..=MALFORMED_RESPONSE_RETRIES {
             // Only main's first send is the round boundary. A `/rule` at a
             // validation re-send prompt is held like the reviewer's: main's
@@ -471,16 +498,29 @@ impl LoopRun<'_> {
                 pre_confirmed: gate.pre_confirmed && attempt == 0,
                 open: gate.open,
             };
-            // Task 6 wires the note queue; until then no note reaches here.
-            let build = |_: &[_]| outgoing.clone();
+            // Every prompt, resends included, is rebuilt from the ledger and
+            // the pending notes (P3a-§4), plus the format hint on a resend.
+            let message = |notes: &[HumanNote]| {
+                let params = build(&*side.borrow().primary, notes);
+                match &hint {
+                    None => params,
+                    Some(h) => text_message_params(&format!(
+                        "{}{h}",
+                        message_text(&params).unwrap_or_default()
+                    )),
+                }
+            };
+            let (svc, mur_home, channel_id) = (&self.svc, self.mur_home, self.channel_id);
+            let mut flush =
+                |notes: &[HumanNote]| flush_notes(svc, mur_home, channel_id, &side, notes);
             let outcome = run_turn_with_retry(
                 self.transport,
                 self.mur_home,
                 self.fleet_name,
                 member,
-                &build,
-                &mut Vec::new(),
-                &mut |_| Ok(()),
+                &message,
+                &mut pending,
+                &mut flush,
                 gate,
                 self.channel_id,
                 self.retry_delay,
@@ -500,6 +540,7 @@ impl LoopRun<'_> {
                     }));
                 }
                 RetryOutcome::RuleFirst(r) => {
+                    self.pending = pending;
                     self.carried_wait += recorded;
                     return Ok(Turn::RuleFirst(r));
                 }
@@ -527,11 +568,11 @@ impl LoopRun<'_> {
                 return Ok(Turn::Stop(LoopDriverStop::Guard(stop)));
             }
             self.last_activity = (self.now)();
-            match validate(&reply) {
+            let checked = validate(&*side.borrow().primary, &reply);
+            match checked {
                 Ok(value) => return Ok(Turn::Accepted { reply, value }),
                 Err(problem) if attempt < MALFORMED_RESPONSE_RETRIES => {
-                    let hint = REVIEW_VALIDATION_HINT.replace("{problem}", &problem);
-                    outgoing = text_message_params(&format!("{base}{hint}"));
+                    hint = Some(REVIEW_VALIDATION_HINT.replace("{problem}", &problem));
                 }
                 Err(_) => {}
             }
@@ -588,6 +629,35 @@ impl LoopRun<'_> {
             RulingOutcome::KillSwitch => Some(LoopDriverStop::Stopped),
         })
     }
+}
+
+/// P3a-§5.3: append each consented note in queue order, then fold it per
+/// the two-ledger rule. An append failure stops the flush there and
+/// reports how many notes made it ([`FlushFailed`]); the driver pauses.
+fn flush_notes(
+    svc: &ChannelService,
+    mur_home: &Path,
+    channel_id: &str,
+    side: &std::cell::RefCell<Side<'_>>,
+    notes: &[HumanNote],
+) -> Result<()> {
+    for (recorded, note) in notes.iter().enumerate() {
+        let payload = ReviewPayload::from(note.clone());
+        if let Err(e) = append(svc, mur_home, channel_id, &payload) {
+            return Err(FlushFailed {
+                recorded,
+                total: notes.len(),
+                cause: e.to_string(),
+            }
+            .into());
+        }
+        let mut side = side.borrow_mut();
+        side.primary.apply(&payload)?;
+        if let Some(also) = side.also.as_deref_mut() {
+            also.apply(&payload)?;
+        }
+    }
+    Ok(())
 }
 
 /// The open set's IDs: what a `/rule` line is validated against (P2-§5.4).
