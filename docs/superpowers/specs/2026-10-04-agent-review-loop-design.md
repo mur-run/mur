@@ -7,6 +7,9 @@
   explicit (ordinary fleets unchanged). Replay-failure degradation added (§8.2, AC11a–AC11c).
 - **Rev 3 (2026-10-04):** P1–P4 decided (§14.2). §8.2 gains monotonic clock/cost on rollback and
   the restart of round N+1 with a fixed restart note. AC11d–AC11f added.
+- **Phase 2 (2026-10-05):** escalation now waits for a human ruling instead of stopping. The
+  sections it changes (§3.3, §3.4, §3.5, §4, §5, §6, §7/§7.0, §8.3, AC8, AC18) are edited in place
+  and marked *(Phase 2)*; the full design is `2026-10-05-agent-review-loop-phase2-design.md` (P2-§7 lists every edit).
 - **Date:** 2026-10-04
 - **Source:** design summary approved in brainstorm (Mode A, architecture decision A).
 - **Owner (spec):** PM. **Build:** coding agent. **Verify:** QA. **Ship:** GitHub Manager.
@@ -157,10 +160,11 @@ The wire encoding (fenced JSON vs. tool call vs. A2A data part) is left to the b
   invents is ignored, and the finding counts as new.
 - Each round the reviewer must give a status for **every** prior finding not yet closed. A missing
   status counts as a malformed verdict (§3.2).
-- Closed states: `withdrawn`, `resolved`, closed by `/rule` (§6). Open set = `open` ∪ `disputed`.
+- Closed states: `withdrawn`, `resolved`, and `resolved` by a `/rule drop` (§6, *Phase 2*). Open set = `open` ∪ `disputed`.
 - **Round-stuck** = open set (IDs + statuses) unchanged across two consecutive rounds. This is a
   review-loop condition **in addition to** the existing `limits.stuck` duration detector (§3.5,
-  Q1 decided).
+  Q1 decided). *(Phase 2)* Round-stuck is not judged at a seal where a `ruling` was written
+  (P2-§5.3).
 - `approve` is rejected by the system while any **high**-severity finding is `disputed`. The
   reviewer's only options then are `revise`, `blocked`, or escalation. A medium/low `disputed`
   finding does not block `approve`, but it is listed first in the human summary. A refused
@@ -197,12 +201,16 @@ rule, not from the write:
   required for `reject` and `partial`.
 - Malformed response → retry once → still malformed → `blocked`.
 - On `reject`, the reviewer chooses to withdraw, insist (→ `disputed`), or escalate.
-- When the same finding is rejected **twice**, the system escalates to the human automatically.
+- When the same finding is rejected **twice**, the system escalates; the loop waits for a ruling
+  (Phase 2 §5). *(Phase 2)*
+- *(Phase 2)* After a `fix` ruling on F, main may answer F only with `accept` or `partial` (reason
+  required). A `reject` is malformed → retry once → `blocked` (the rule above).
 
 ### 3.5 Stop conditions
 
-The loop stops on: `approve`, `blocked`, escalation, `mur fleet stop`, transport failure after
-retry (§8), or one of the **three existing limits**:
+The loop stops on: `approve`, `blocked`, `mur fleet stop`, transport failure after retry (§8), or
+one of the **three existing limits**. *(Phase 2)* Escalation is not a stop: the loop waits for a
+ruling (P2-§5).
 
 | Limit | Phase 1 meaning |
 |---|---|
@@ -219,8 +227,11 @@ All loop state is recorded as signed events on the session channel (`ChannelEven
 `mur-common/src/channel.rs`). Logical event types:
 
 `session_started` (members, mode, resolved limits) · `turn_sent` · `verdict` · `finding_issued` ·
-`finding_status` · `rebuttal` · `human_note` · `ruling` · `escalation` · `paused` / `resumed`
-(reason, execution-time-so-far) · `mode_changed` · `session_stopped` (reason, unresolved findings).
+`finding_status` · `rebuttal` · `human_note` · `ruling` (`finding`, `decision` = `drop | fix`,
+`text`) · `paused` / `resumed` (reason, execution-time-so-far; `paused` also carries `kind` =
+`escalation | transport | other`) · `mode_changed` · `session_stopped` (reason, unresolved findings).
+*(Phase 2)* Escalation is derived by the fold from sealed `rebuttal` events and is **never
+written**; there is no `escalation` event (P2-§2, §4).
 Turn-ending events (`verdict`, `rebuttal`, `paused`, `resumed`, `session_stopped`) also carry
 cumulative execution time and cumulative cost-so-far, which §8.2 rollback depends on.
 `resumed_from_checkpoint` (§8.2) records N, the damage, and the adopted time and cost.
@@ -252,7 +263,8 @@ crate starts reading it. Reaching into `mur-core` from that crate is not an acce
   - Countdown default 3 s, minimum 1.5 s, never 0. These are configured values, not hardcoded
     literals (CLAUDE.md rule 2). A configured value below the minimum is clamped to the minimum
     with a warning.
-- **Forced back to semi-auto and stop** on: `blocked`, escalation, any limit trip, transport failure.
+- **Forced back to semi-auto on escalation and await a ruling** *(Phase 2)*; **forced back to
+  semi-auto and stop** on `blocked`, any limit trip, transport failure.
 - **Cost gate (Q2 decided):** a member is **cost-computable** iff (a) its A2A task returns token
   usage **and** (b) its model resolves to a price. A member whose billing mode is `Local` or
   `Subscription` (`fleet/billing.rs`) is cost-computable at **$0** and qualifies for auto. If
@@ -266,11 +278,11 @@ crate starts reading it. Reaching into `mur-core` from that crate is not an acce
 
 | Input | Effect |
 |---|---|
-| plain text | `human_note` injected into the **next** turn of **both** sides. It outranks findings and does **not** close any finding. If the reviewer does not adopt it, the reviewer must give a reason. |
-| `/rule <text>` | `ruling`. The findings it relates to are closed, and both sides must comply in later turns. (`/rule` is currently unused: the MURMUR slash table in `app/slash.rs` has no `rule` entry.) |
-| `@<agent> <text>` | Note to that side only. `<agent>` is resolved via `canonicalize_agent_name` (case-insensitive). `@主` = main and `@審查` = reviewer are kept as aliases. |
-| `@<unknown> …` | An inline hint next to the input reads: `agent <name> not found; this will be sent as a general note`. It is **never** broadcast silently. Note: `canonicalize_agent_name` returns the input unchanged when nothing matches, so the caller must check existence itself. |
-| same finding raised twice in plain text, reviewer still insists | Prompt: `Make this a formal ruling with /rule?` |
+| plain text *(not built; Phase 3, P2-§0)* | `human_note` injected into the **next** turn of **both** sides. It outranks findings and does **not** close any finding. If the reviewer does not adopt it, the reviewer must give a reason. |
+| `/rule drop\|fix F<n> <text>` *(Phase 2)* | `ruling` on one finding, any finding in the open set. `drop` → `resolved`; `fix` → `open`, and main may no longer `reject` it. The text is a binding note in the next turn of both sides. Read at the ruling prompt, or at a send prompt where it is also the send consent (P2-§5.3). |
+| `@<agent> <text>` *(not built; Phase 3)* | Note to that side only. `<agent>` is resolved via `canonicalize_agent_name` (case-insensitive). `@主` = main and `@審查` = reviewer are kept as aliases. |
+| `@<unknown> …` *(not built; Phase 3)* | An inline hint next to the input reads: `agent <name> not found; this will be sent as a general note`. It is **never** broadcast silently. Note: `canonicalize_agent_name` returns the input unchanged when nothing matches, so the caller must check existence itself. |
+| same finding raised twice in plain text, reviewer still insists *(not built; Phase 3)* | Prompt: `Make this a formal ruling with /rule?` |
 | Esc ×1 (**review session only**) | Pause after the current turn completes. The in-flight turn is not aborted (Q3 decided). |
 | Esc ×2 within `ESC_DOUBLE_WINDOW` (**review session only**) | Abort generation now. The partial output stays on screen marked `discarded, not sent`. |
 
@@ -303,7 +315,7 @@ while session A is paused, and resuming A continues only A's round.
 | Ends by | `session_stopped` written | Fleet definition | Resumable | Stop screen prints `Resume with:` |
 |---|---|---|---|---|
 | **Pause:** transport failure after retry (§8.1), `q` at the pause prompt, MURMUR closed/disconnected | no | kept | yes | yes |
-| **Stop:** `approve`, `blocked`, escalation, a limit, `mur fleet stop`, `replay_failed`, a driver error | yes | removed | no | no |
+| **Stop:** `approve`, `blocked`, `/abandon` at the ruling prompt (reason `escalation`, *Phase 2*), a limit, `mur fleet stop`, `replay_failed`, a driver error | yes | removed | no | no |
 | **Crash:** process killed (SIGKILL, power loss) with no `paused` event | no | kept | yes (see *Crashed*) | — |
 
 **Run lock.** While a driver runs a session it holds an **exclusive OS advisory lock**
@@ -340,8 +352,12 @@ order: without the sealing rule, resuming a crash can count a reject twice.
 
 - It resumes at the round after the **last sealed round** (§3.3.1). The unsealed trailing round is
   re-run from the main turn.
-- It first appends a signed `paused` event with reason `crashed`, then `resumed`, so the channel
-  records the crash.
+- It appends a signed `paused` event with reason `crashed` **after taking the run lock and before
+  any prompt**, then `resumed` when the run continues, so the channel records the crash and the
+  human's wait at the prompt is never execution time. *(Phase 2, P2-§6 D2)*
+- *(Phase 2)* `review-resume` branches on the folded ledger: a pending ruling (paused or crashed)
+  goes to the ruling prompt; a last event `ruling` asks `Ruling recorded — continue?`; otherwise the
+  prompts above (P2-§6).
 - Execution time counts up to the **last readable event** before the crash. The gap from that event
   to the resume is not counted. The time and cost of a turn that was in flight when the process
   died were never recorded and cannot be recovered. The resume screen says so in one line.
@@ -536,7 +552,8 @@ site) carry the same two lines.
 
 ### 8.3 Stop screen
 
-- The **stop screen** shows the stop reason (`approve` / `blocked` / `escalation` / which limit,
+- The **stop screen** shows the stop reason (`approve` / `blocked` / `escalation` — only after
+  `/abandon` at the ruling prompt, *Phase 2* / which limit,
   including which `stuck` detector / `stopped` / transport failure / `replay_failed` / `corrupted`)
   and **all** unresolved findings (`open` and `disputed`). After an approve, disputed medium/low
   findings are listed first.
@@ -594,7 +611,8 @@ site) carry the same two lines.
 
 **Ledger (unit)**
 - AC7: IDs are system-assigned and sequential. Model-supplied IDs are ignored.
-- AC8: the same finding rejected twice produces an `escalation` event.
+- AC8: the same finding rejected twice produces a pending escalation in the folded ledger; no
+  `escalation` event is written. *(Phase 2)*
 - AC9: stuck fires after exactly two consecutive rounds with an unchanged open set.
 - AC10: `approve` with a `disputed` high finding is refused. With only a disputed medium/low it is
   accepted, and those findings are listed first.
@@ -677,7 +695,7 @@ site) carry the same two lines.
   `discarded, not sent`. The footer hint is visible throughout the session, not only after first
   use. Outside a review session, Esc behaviour is unchanged (existing `esc_action_tests` pass, and a
   manual check confirms that a single Esc only arms).
-- AC18: `/rule` closes the related findings, and the next turns comply.
+- AC18: *(replaced in Phase 2 by AC-P2-3 and AC-P2-4.)*
 - AC19: `@pmm` shows the not-found hint and sends a general note. `@QA` resolves to `qa`.
 - AC20: close MURMUR mid-session → reopen → `Paused — continue?` → continue. State is restored and
   the paused time is not counted.

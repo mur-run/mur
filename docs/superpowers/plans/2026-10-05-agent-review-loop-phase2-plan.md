@@ -453,14 +453,16 @@ pub fn resume_session(transport, mur_home, r: Resumable, retry_delay) -> Result<
 
 ## Task 11 — Specs and docs
 
-- [ ] Apply the P2-§7 table to `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md`.
-- [ ] Phase 2 spec: already amended to rev 4 before implementation (D1–D3). Re-check that the
+- [x] Apply the P2-§7 table to `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md`.
+- [x] Phase 2 spec: already amended to rev 4 before implementation (D1–D3). Re-check that the
   constants' final texts match the prompts quoted in P2-§5.1 and §5.3.
-- [ ] P1 spec §6: mark the plain-text / `@<agent>` / `@<unknown>` / repeated-note rows *not
+- [x] P1 spec §6: mark the plain-text / `@<agent>` / `@<unknown>` / repeated-note rows *not
   built; Phase 3* (P2-§7 row for §6).
 - [ ] User-facing docs: run the `update-docs` skill for README, docs site, product page (new
-  ruling prompt, `/rule`, `/abandon`).
-- [ ] `mur verify --file` on both specs.
+  ruling prompt, `/rule`, `/abandon`). README done in PR 3. The docs site and product page
+  live in `mur-server` and deploy on merge, so they ship after PR 3 merges — not before, or
+  app.mur.run would document behaviour the released binary does not have.
+- [x] `mur verify --file` on both specs.
 
 ## Self-review
 
