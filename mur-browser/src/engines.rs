@@ -125,6 +125,44 @@ pub fn default_engine_args(
     out
 }
 
+/// `--headless` to add so a record run can start on a cache that holds only
+/// the headless shell, or nothing when it must not be added.
+///
+/// `mur browser setup --only-shell` installs the shell and NOT the ~180 MiB
+/// full build, so "setup succeeded, the browser downloaded" and "record
+/// cannot launch" were both true at once — the user's report. For a run that
+/// never needs a visible window (test / automation) the shell IS the browser,
+/// so the launch is turned headless instead of refused.
+///
+/// Returns nothing — leaving the caller to refuse or let Playwright speak —
+/// when any of these holds: the caller chose the engine, an attach target or
+/// an `--executable-path`; `--headless` is already there; a window is
+/// required (`headed_required`, i.e. live mode, where a human logs in by
+/// hand); the full build IS present; or the cache state is unknown.
+pub fn auto_headless_args(
+    args: &[String],
+    install_dir: &Path,
+    browsers: Option<&Path>,
+    headed_required: bool,
+) -> Vec<String> {
+    if headed_required
+        || engine_already_chosen(args)
+        || has_flag(args, EXECUTABLE_FLAG)
+        || has_flag(args, HEADLESS_FLAG)
+    {
+        return Vec::new();
+    }
+    if own_build_ready(install_dir, browsers, DEFAULT_ENGINE) != Some(false) {
+        return Vec::new();
+    }
+    // Only when a shell is actually there to serve the launch; otherwise this
+    // would swap a clear "install the build" error for a confusing one.
+    match browsers.and_then(crate::chromium::headless_shell_exe) {
+        Some(_) => vec![HEADLESS_FLAG.to_owned()],
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +347,63 @@ mod tests {
             default_engine_args(&s(&["--headless"]), install.path(), Some(cache.path())),
             [DEFAULT_ENGINE_ARG.to_owned()]
         );
+    }
+
+    /// The reported bug: `mur browser setup` succeeds and the browser
+    /// downloads (the headless shell), then `mur browser record` refuses with
+    /// "Playwright has no `chromium-1246` build". A test/automation run needs
+    /// no window, so the launch goes headless and the shell serves it.
+    #[test]
+    fn shell_only_cache_turns_a_record_run_headless() {
+        let (install, cache, _) = shell_only_cache();
+        assert_eq!(
+            auto_headless_args(&[], install.path(), Some(cache.path()), false),
+            [HEADLESS_FLAG.to_owned()]
+        );
+    }
+
+    /// Live mode needs a visible window for a human to log in; never silently
+    /// hide it.
+    #[test]
+    fn a_run_that_needs_a_window_is_never_turned_headless() {
+        let (install, cache, _) = shell_only_cache();
+        assert!(auto_headless_args(&[], install.path(), Some(cache.path()), true).is_empty());
+    }
+
+    /// Nothing to fix, nothing to add: full build present, caller already
+    /// headless, caller chose the engine / an executable, unknown cache.
+    #[test]
+    fn auto_headless_adds_nothing_when_there_is_no_problem() {
+        let (install, cache, _) = shell_only_cache();
+        let i = install.path();
+        let c = Some(cache.path());
+        for args in [
+            s(&[HEADLESS_FLAG]),
+            s(&["--browser=chrome"]),
+            s(&["--cdp-endpoint", "ws://x"]),
+            s(&["--executable-path=/x"]),
+        ] {
+            assert!(
+                auto_headless_args(&args, i, c, false).is_empty(),
+                "{args:?}"
+            );
+        }
+        // Unknown cache state: let the launch speak.
+        assert!(auto_headless_args(&[], i, None, false).is_empty());
+        // Full build present: a headed run is fine as-is.
+        let full = cache.path().join("chromium-1246");
+        std::fs::create_dir_all(&full).unwrap();
+        std::fs::write(full.join("INSTALLATION_COMPLETE"), "").unwrap();
+        assert!(auto_headless_args(&[], i, c, false).is_empty());
+    }
+
+    /// Neither build present is a real "install it" case: do not swap that
+    /// clear error for a headless launch that has no browser either.
+    #[test]
+    fn an_empty_cache_is_left_to_fail_loudly() {
+        let install = tempfile::tempdir().unwrap();
+        pinned(install.path(), JSON);
+        let cache = tempfile::tempdir().unwrap();
+        assert!(auto_headless_args(&[], install.path(), Some(cache.path()), false).is_empty());
     }
 }
