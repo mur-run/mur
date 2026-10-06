@@ -343,3 +343,36 @@ fn agent_doctor_is_silent_about_scope_without_mcp_servers() {
 
     assert!(report.iter().all(|c| c.name != "sandbox_scope"));
 }
+
+fn fs_with_deny(deny: &[&str]) -> mur_common::agent::FilesystemEntitlement {
+    mur_common::agent::FilesystemEntitlement {
+        deny: deny.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
+/// #1748: an empty deny list is advisory, never a failure — the launch chain
+/// hard-denies the defaults regardless — and the note says how to fix it.
+#[test]
+fn empty_deny_list_is_an_advisory_pass_naming_the_fix() {
+    let c = check_deny_list(&fs_with_deny(&[]), "alice");
+    assert_eq!(c.name, "deny_list");
+    assert!(c.ok, "empty deny must not fail the doctor: {}", c.detail);
+    assert!(c.detail.contains("advisory"), "{}", c.detail);
+    assert!(c.detail.contains("hard deny"), "{}", c.detail);
+    for d in mur_common::agent::DEFAULT_DENY_PATHS {
+        assert!(
+            c.detail
+                .contains(&format!("mur agent perm deny-path alice {d}")),
+            "missing fix for {d}: {}",
+            c.detail
+        );
+    }
+}
+
+#[test]
+fn populated_deny_list_is_a_quiet_pass() {
+    let c = check_deny_list(&fs_with_deny(&["~/.ssh"]), "alice");
+    assert!(c.ok);
+    assert!(!c.detail.contains("advisory"), "{}", c.detail);
+}

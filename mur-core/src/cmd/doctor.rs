@@ -563,6 +563,39 @@ fn check_filesystem_entitlements(fs: &mur_common::agent::FilesystemEntitlement) 
     )
 }
 
+/// Advisory note for a profile with no `filesystem.deny` entries (#1748).
+///
+/// Not a security gap: the launch chain hard-denies
+/// [`mur_common::agent::DEFAULT_DENY_PATHS`] for every agent regardless of the
+/// profile (#1747). But an empty list means nothing beyond those defaults is
+/// fenced off, and the profile no longer documents what the sandbox actually
+/// refuses. `ok: true` on purpose, same reasoning as `sandbox_scope`: nothing
+/// is broken, and a permanent red would train users to skip the report.
+fn check_deny_list(fs: &mur_common::agent::FilesystemEntitlement, name: &str) -> Check {
+    if !fs.deny.is_empty() {
+        return Check::new(
+            "deny_list",
+            true,
+            format!("{} filesystem deny entr(ies)", fs.deny.len()),
+        );
+    }
+    let defaults = mur_common::agent::DEFAULT_DENY_PATHS;
+    Check::new(
+        "deny_list",
+        true,
+        format!(
+            "advisory: filesystem.deny is empty. {} stay denied anyway (launch-chain hard \
+             deny), but nothing else is fenced off. To record them in the profile: {}",
+            defaults.join(", "),
+            defaults
+                .iter()
+                .map(|d| format!("mur agent perm deny-path {name} {d}"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+    )
+}
+
 pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>> {
     let (_path, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
     let mut out = Vec::new();
@@ -634,6 +667,8 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
     out.push(check_filesystem_entitlements(
         &profile.entitlements.filesystem,
     ));
+
+    out.push(check_deny_list(&profile.entitlements.filesystem, name));
 
     if !profile.mcp_servers.is_empty() {
         // Not a fault in this agent — a granularity limit that the entitlement
