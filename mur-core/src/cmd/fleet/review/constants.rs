@@ -65,6 +65,22 @@ pub const RULE_NOT_OPEN_HINT: &str = "{id} is not an open finding";
 /// Shown at the ruling prompt for any other input (including bare Enter).
 pub const RULING_PROMPT_HINT: &str =
     "type /rule drop|fix F<n> <text>, /abandon, or q to leave the session paused";
+/// P3a-§3 `/note <text>`: a note to both sides.
+pub const NOTE_COMMAND: &str = "/note";
+pub const NOTE_USAGE_HINT: &str = "usage: /note <text>";
+/// P3a-§3 `@<agent> <text>`: a note to one side.
+pub const TARGET_NOTE_PREFIX: char = '@';
+pub const TARGET_NOTE_USAGE_HINT: &str = "usage: @<agent> <text>";
+/// P3a N11: fixed aliases, checked before any name lookup.
+pub const TARGET_ALIAS_MAIN: &str = "主";
+pub const TARGET_ALIAS_REVIEWER: &str = "審查";
+/// P3a N3; `{name}` is the agent as typed. Never broadcast instead.
+pub const TARGET_NOT_FOUND_HINT: &str =
+    "agent {name} not found; use /note <text> to send it to both sides";
+/// P3a N10; `{command}` is the slash word as typed. Never a stop.
+pub const UNKNOWN_COMMAND_HINT: &str = "unknown command: {command}";
+/// Every send-prompt command starts with this (P3a N10).
+pub const COMMAND_PREFIX: char = '/';
 /// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
 /// The `/rule` hint says the line also sends this turn, so the human knows
 /// before typing it (the line is the send consent).
