@@ -125,3 +125,64 @@ async fn no_write_tool_means_no_track() {
     assert!(!project.join(".worktrees").exists());
     assert_eq!(cwd.for_turn("t-chat"), project);
 }
+
+/// The model names the project's absolute path as `bash`'s `cwd` — the one
+/// deliberate way out of the track that the eager cwd rebind does not
+/// cover. The write must still land in the track (so the diff counts it
+/// and promote carries it), never straight into the project.
+#[tokio::test]
+async fn explicit_project_cwd_in_bash_stays_in_the_track() {
+    let (_td, project) = git_repo();
+    let cwd = crate::tools::fs_policy::SessionCwd::new(project.clone());
+    let bash: Arc<dyn crate::tools::ToolExecutor> = Arc::new(crate::tools::bash::BashTool::new(
+        project.clone(),
+        cwd.clone(),
+    ));
+    let mut call = tool_call_response("c1", "pwd > where.txt");
+    call.tool_calls[0].input["cwd"] =
+        serde_json::Value::String(project.to_string_lossy().into_owned());
+    let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(vec![
+        call,
+        end_turn_response("done"),
+    ])))
+    .with_tools(vec![bash])
+    .with_tools_policy(vec![mur_common::agent::ToolRule {
+        pattern: "bash".into(),
+        policy: mur_common::agent::ToolPolicy::Allow,
+        risk: None,
+    }])
+    .with_sandbox_enforcing(true)
+    .with_pending_approvals(empty_pending_approvals())
+    .with_notifier(tokio::sync::mpsc::channel(16).0)
+    .with_session_cwd(cwd.clone(), vec![project.to_string_lossy().into_owned()]);
+    let mut spec = loop_spec("edit");
+    spec.task_id = Some("turn-cwd".into());
+    spec.cwd = Some(project.clone());
+
+    let TaskOutcome::Completed(task) = runner.run_sync(spec).await else {
+        panic!("turn did not complete");
+    };
+    let where_ = std::fs::read_to_string(project.join("where.txt")).unwrap();
+    assert!(
+        where_.contains("/.worktrees/turn-"),
+        "explicit project cwd was redirected into the track: {where_}"
+    );
+    let text = task
+        .messages
+        .last()
+        .map(|m| {
+            m.parts
+                .iter()
+                .filter_map(|p| match p {
+                    MessagePart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    assert!(
+        text.contains("~ changed    1 file(s)\n"),
+        "counted by the diff: {text}"
+    );
+    assert!(!text.contains("tool-reported"), "{text}");
+}

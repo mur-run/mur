@@ -595,7 +595,7 @@ mod tests {
         std::fs::create_dir_all(&agent_home).unwrap();
 
         let session = crate::tools::fs_policy::SessionCwd::new(agent_home);
-        session.set(repo.clone());
+        let _ = session.set(repo.clone());
         let t = RememberTool {
             active_project: crate::tools::remember::session_project_resolver(session),
             ..tool(home)

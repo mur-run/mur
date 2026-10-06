@@ -629,7 +629,15 @@ pub fn render(ledger: &TurnLedger) -> String {
         ));
     }
     if !files.is_empty() {
-        out.push_str(&format!("  ~ changed    {} file(s)\n", files.len()));
+        // A count the track's diff did not measure is the tools' own word
+        // for it, and the card says so inline: without the marker a
+        // trackless turn is indistinguishable from a vouched-for one.
+        let basis = if ledger.files_changed.is_some() {
+            ""
+        } else {
+            " (tool-reported)"
+        };
+        out.push_str(&format!("  ~ changed    {} file(s){basis}\n", files.len()));
         for t in files.iter().take(CHANGED_SHOWN) {
             out.push_str(&format!("      {t}\n"));
         }

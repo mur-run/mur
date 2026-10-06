@@ -96,9 +96,16 @@ store and refs are shared with the project.
    result.** Only the settlement card speaks project-relative paths (`src/foo.rs`),
    taken from the track's diff. Rewriting tool results to project paths was tried
    on paper and rejected: a model that reads `/project/src/foo.rs` in a result
-   starts using it in `bash`, and that path bypasses the track. Known P0 limit:
-   `bash`'s explicit `cwd` argument can still move the turn out of the track —
-   the registry decision closes the *default* path, not a deliberate one.
+   starts using it in `bash`, and that path bypasses the track. The one
+   deliberate way out — `bash`'s explicit `cwd` argument naming the project's
+   absolute path — is closed in `SessionCwd`: while a turn is in a track, a cwd
+   under the project is re-rooted to the same place under the track (the tool
+   runs in the adopted directory, not the literal one); a cwd outside the project
+   is untouched. The alternative, removing the `cwd` parameter, was rejected: the
+   agent legitimately works across repos in one session, and the write-tool
+   policy still gates where it may land. *Why close it rather than document it:*
+   a write that escapes the track is not a missed safety net, it is a settlement
+   card that says the turn changed nothing — a false ledger.
 3. Turn end → `diff_files(track)` → settlement `~ changed`. Then, by policy:
    - **direct** (default, interactive): `promote(track, project)`; track destroyed.
      Promote is **last-write-wins** over the project working tree; conflict detection
@@ -108,6 +115,13 @@ store and refs are shared with the project.
      review and emit `settlement.blocked` with the failing command.
 4. `mur agent turn undo` = `destroy(track)` (`git worktree remove --force`) before
    promote, or inverse-apply the turn's events after promote (§5).
+5. **A turn without a track says so on the card.** Only a cwd at a repository root
+   gets a track (a cwd inside a repo but not at its root is not guessed at; a
+   non-repo directory has nothing to diff against); `MUR_TURN_TRACK=0` opts out. Such
+   a turn falls back to the per-action list the tools report about themselves, which
+   cannot see a `bash` redirect, and the card renders `~ changed N file(s)
+   (tool-reported)` — the marker is on the line, not in a log, because a reader
+   comparing two cards must be able to tell which count the diff vouched for.
 
 **Git inside a track.** Commits land in the shared object store; a branch the agent
 creates in the track (`checkout -b`) survives `destroy`, so branch → commit → push →

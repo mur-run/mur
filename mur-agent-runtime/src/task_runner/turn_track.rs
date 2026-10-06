@@ -74,7 +74,11 @@ impl TaskRunner {
 
     fn park_track(&self, turn: &str, track: TurnTrack, original_cwd: PathBuf) {
         if let Some((session, _)) = self.session_cwd.as_ref() {
-            session.rebind_turn(turn, track.path().to_path_buf());
+            session.enter_track(
+                turn,
+                track.project().to_path_buf(),
+                track.path().to_path_buf(),
+            );
         }
         tracing::info!(turn, track = %track.path().display(), "turn track open");
         self.turn_tracks
@@ -167,7 +171,7 @@ impl TaskRunner {
         ledger: &mut crate::turn_ledger::TurnLedger,
     ) {
         if let Some((session, _)) = self.session_cwd.as_ref() {
-            session.rebind_turn(turn, open.original_cwd.clone());
+            session.leave_track(turn, open.original_cwd.clone());
         }
         let id = turn.to_string();
         let closed = tokio::task::spawn_blocking(move || {
@@ -195,7 +199,7 @@ impl TaskRunner {
         ledger: &mut crate::turn_ledger::TurnLedger,
     ) {
         if let Some((session, _)) = self.session_cwd.as_ref() {
-            session.rebind_turn(turn, open.original_cwd.clone());
+            session.leave_track(turn, open.original_cwd.clone());
         }
         close_track(turn, open.track, ledger);
     }
