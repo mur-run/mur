@@ -4,13 +4,12 @@ Operational guidance for Claude Code working in this repository. Anything a task
 does not need is in `docs/architecture/runtime-overview.md` — read it only when
 the task touches that subsystem.
 
-## Lint
+## Build, Test & Lint
 
-```bash
-# CI's own invocation; --all-targets is load-bearing
-cargo clippy --all --all-targets --no-deps --locked -- -D warnings
-cargo fmt --all -- --check
-```
+All compile / lint / test mechanics — CI's exact clippy + fmt invocation,
+nextest, build profiles, the workspace-excluded Tauri apps, and sandbox
+troubleshooting (e.g. sccache's cache dir under `~/Library/Caches` being
+unwritable) — live in **`docs/BUILD.md`**. Read it before building.
 
 ## Architecture
 
@@ -26,7 +25,7 @@ Cargo workspace of small crates plus two workspace-excluded Tauri apps. The load
 
 **Shared state with its own file format gets its own crate** — `mur-channel`, `mur-compress`, `mur-open-items`, `mur-mcp-proto`. The rule exists because `mur-agent-runtime` must not depend on `mur-core` (that pulls LanceDB + Arrow into every agent process), so anything both of them read or write has to live below both. Reach for this before adding I/O to `mur-common`.
 
-Workspace-excluded Tauri 2 GUI apps (built via their own manifests so `cargo build --workspace` does not pull WebKitGTK / Cocoa / WebView2):
+Workspace-excluded Tauri 2 GUI apps (built via their own manifests — see `docs/BUILD.md`):
 
 - **`mur-agent-gui`** — Per-agent `.app` shell (legacy; deprecated in M-h8).
 - **`mur-hub-gui`** — MUR Hub cross-agent desktop app (in development; replaces `mur-agent-gui` in v1).
@@ -58,7 +57,7 @@ Before changing anything that pins, verifies, or launches an MCP server, read `d
 
 ## Development Notes
 
-- Rust edition 2024 — `let` chains stable (`if let … && let …`)
+- Build/toolchain notes (edition 2024, profiles, nextest stack size): `docs/BUILD.md`
 - `Pattern` implements `Deref<Target = KnowledgeBase>` — access fields directly
 - YAML writes use temp file + rename for atomicity (`store/yaml.rs`)
 - `tracing` for structured logging; enable with `RUST_LOG=debug`
