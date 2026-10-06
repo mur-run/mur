@@ -473,3 +473,127 @@ mod prompts {
         assert!(gate.take_human_wait() >= std::time::Duration::from_millis(20));
     }
 }
+
+/// P2 Task 8: what `run_session` does around an escalation the loop now
+/// waits on (AC-P2-1, AC-P2-13 session halves).
+mod escalation {
+    use super::*;
+    use crate::cmd::fleet::review::ledger::EscalationRecord;
+    use crate::cmd::fleet::review::resume::prepare_resume;
+    use crate::cmd::fleet::review::wire::message_text;
+
+    const ISSUE_F1: &str =
+        r#"{"verdict":"revise","findings":[{"severity":"high","issue":"unchecked unwrap"}]}"#;
+    const DISPUTE_F1: &str =
+        r#"{"verdict":"revise","prior":[{"id":"F1","status":"disputed","reason":"still panics"}]}"#;
+
+    /// Main rejects every listed finding, so F1 escalates at the round-3
+    /// seal; the ruling prompt answers `ask`.
+    struct Escalating {
+        reviewer: std::sync::Mutex<Vec<String>>,
+        ask: &'static str,
+    }
+
+    impl Escalating {
+        fn new(ask: &'static str) -> Self {
+            let script = [DISPUTE_F1, DISPUTE_F1, ISSUE_F1]
+                .map(String::from)
+                .to_vec();
+            Self {
+                reviewer: std::sync::Mutex::new(script),
+                ask,
+            }
+        }
+    }
+
+    impl ReviewTransport for Escalating {
+        fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
+            if member == "reviewer" {
+                return Ok(self.reviewer.lock().unwrap().pop().expect("script"));
+            }
+            let prompt = message_text(params).unwrap_or_default();
+            let responses: Vec<serde_json::Value> = prompt
+                .lines()
+                .filter_map(|l| l.strip_prefix("- "))
+                .filter_map(|l| l.split_once(" ["))
+                .map(|(id, _)| id)
+                .filter(|id| id.starts_with('F'))
+                .map(|id| serde_json::json!({"id": id, "answer": "reject", "reason": "no"}))
+                .collect();
+            Ok(format!(
+                "done\n```json\n{}\n```",
+                serde_json::json!({ "responses": responses })
+            ))
+        }
+
+        fn ask_ruling(&self, _p: &EscalationRecord, _l: &Ledger) -> Result<String> {
+            Ok(self.ask.to_string())
+        }
+    }
+
+    fn run(ask: &'static str, name: &str) -> (tempfile::TempDir, Fleet, LoopDriverStop) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        crate::channel_writer::plant_writer_identity(home);
+        let fleet = create_session_fleet(home, name, "main", "reviewer", "task").unwrap();
+        let (_, stop) = run_session(
+            &Escalating::new(ask),
+            home,
+            &fleet,
+            "t",
+            limits(),
+            Duration::ZERO,
+        )
+        .unwrap();
+        (tmp, fleet, stop)
+    }
+
+    /// AC-P2-1: EOF at the ruling prompt leaves the session paused — the
+    /// definition stays and nothing records a stop.
+    #[test]
+    fn eof_at_ruling_prompt_keeps_the_session() {
+        let (tmp, fleet, stop) = run("", "review-test0101");
+        assert!(matches!(stop, LoopDriverStop::Paused { .. }), "{stop:?}");
+        assert!(store::fleet_dir(tmp.path(), &fleet.name).exists());
+        let events = payloads(tmp.path(), &fleet.channel_id);
+        assert!(
+            !events
+                .iter()
+                .any(|p| matches!(p, ReviewPayload::SessionStopped { .. })),
+            "no session_stopped: {events:?}"
+        );
+    }
+
+    /// AC-P2-13: `/abandon` ends the session as `escalation`, removes the
+    /// definition, and `review-resume` refuses (on the missing definition,
+    /// before it would reach the `session_stopped` check).
+    #[test]
+    fn abandon_stops_and_cannot_resume() {
+        let (tmp, fleet, stop) = run("/abandon\n", "review-test0102");
+        assert_eq!(stop, LoopDriverStop::Escalation);
+        assert!(!store::fleet_dir(tmp.path(), &fleet.name).exists());
+        match payloads(tmp.path(), &fleet.channel_id).last() {
+            Some(ReviewPayload::SessionStopped { reason, .. }) => {
+                assert_eq!(reason, "escalation")
+            }
+            other => panic!("last event must be session_stopped, got {other:?}"),
+        }
+        let err = prepare_resume(tmp.path(), &fleet.name)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("has ended"), "{err}");
+    }
+
+    /// A pause for a ruling shows the same resume hint as any pause.
+    #[test]
+    fn stop_screen_for_escalation_pause() {
+        let stop = LoopDriverStop::Paused {
+            reason: crate::cmd::fleet::review::constants::REVIEW_PAUSE_REASON_ESCALATION.into(),
+        };
+        let screen = render_stop_screen(&stop, &Ledger::default(), "fleet-review-test0103");
+        assert!(
+            screen.contains("mur fleet review-resume review-test0103"),
+            "{screen}"
+        );
+    }
+}

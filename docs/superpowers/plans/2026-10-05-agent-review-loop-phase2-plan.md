@@ -389,14 +389,15 @@ Loop changes (`loop_driver.rs`):
 
 **Interfaces.** Consumes: Task 7. Produces: no new names.
 
-- [ ] Tests (`session_tests.rs`):
+- [x] Tests (`session_tests.rs`):
   - AC-P2-1 remainder: `run_session` with EOF at the ruling prompt → fleet definition still
     present, channel has no `session_stopped`.
   - AC-P2-13 remainder: `/abandon` → `session_stopped { reason: "escalation" }`, fleet definition
-    removed, `prepare_resume` errors `has already stopped`.
+    removed, `prepare_resume` refuses (`has ended` — the missing definition is checked before
+    `session_stopped`).
   - `stop_screen_for_escalation_pause` — `render_stop_screen(Paused{..})` prints the
     `review-resume` hint (it already does for any `Paused`; assert it, no code change expected).
-- [ ] `end_session` needs no change (Paused → keep fleet; others → stop). Green, lint, commit.
+- [x] `end_session` needs no change (Paused → keep fleet; others → stop). Green, lint, commit.
 
 ## Task 9 — Binding notes in turn prompts (P2-§5.3)
 
