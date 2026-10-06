@@ -344,12 +344,15 @@ fn kill_switch_at_resume_prompt() {
 /// D2 regression: the human's wait at the resume ruling prompt of a
 /// crashed session is not execution time. Had `paused{crashed}` been
 /// written after the prompt, the crashed segment would run through the
-/// wait. The scripted run is otherwise instant, so the whole channel's
-/// active time stays well under the wait.
+/// wait. Runner speed varies (slow CI runners spend well over the wait on
+/// the scripted run itself), so the bound is relative to wall-clock: with
+/// the wait excluded, active time is at most `wall - WAIT`; with it leaked,
+/// active time tracks `wall`.
 #[test]
 fn active_time_excludes_ruling_wait_on_crashed() {
     const WAIT: Duration = Duration::from_millis(600);
     let name = "review-rsrl0008";
+    let started = std::time::Instant::now();
     let tmp = escalated(Fixture::Crashed, name);
     let home = tmp.path();
     let r = prepare_resume(home, name).unwrap();
@@ -357,6 +360,7 @@ fn active_time_excludes_ruling_wait_on_crashed() {
         .asks(&["/rule fix F1 bounds-check it\n"]);
     t.ask_sleep = WAIT;
     let end = settle_then_resume(&t, home, r, Duration::ZERO).unwrap();
+    let wall = started.elapsed();
     assert!(
         matches!(end, ResumeEnd::Ran(_, LoopDriverStop::Approve)),
         "{end:?}"
@@ -368,7 +372,7 @@ fn active_time_excludes_ruling_wait_on_crashed() {
         .unwrap();
     let active = super::active_time(&super::review_events(&events));
     assert!(
-        active < WAIT / 2,
-        "wait leaked into active time: {active:?}"
+        active + WAIT / 2 < wall,
+        "wait leaked into active time: active {active:?}, wall {wall:?}"
     );
 }
