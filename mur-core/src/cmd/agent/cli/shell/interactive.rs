@@ -9,7 +9,14 @@
 ///
 /// `mur browser auth` waits for Enter after a human signs in, and asks which
 /// engine to use when `--browser` is omitted; both reads need a real tty.
-const INTERACTIVE_PREFIXES: &[&[&str]] = &[&["mur", "browser", "auth"]];
+///
+/// `mur deep-research secret` prompts for an API key without echo and refuses
+/// to take it as an argument (so it never lands in shell history); with a
+/// null stdin it exits with "no key on stdin".
+const INTERACTIVE_PREFIXES: &[&[&str]] = &[
+    &["mur", "browser", "auth"],
+    &["mur", "deep-research", "secret"],
+];
 
 /// Whether `cmd` must be run with the terminal handed over.
 ///
@@ -52,6 +59,13 @@ mod tests {
         assert!(needs_terminal(
             "  mur   browser  auth x --url https://e.com"
         ));
+    }
+
+    #[test]
+    fn deep_research_secret_needs_the_terminal() {
+        assert!(needs_terminal("mur deep-research secret --brave"));
+        assert!(!needs_terminal("mur deep-research \"some question\""));
+        assert!(!needs_terminal("mur deep-research"));
     }
 
     #[test]
