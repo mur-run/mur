@@ -1,5 +1,6 @@
-//! Preflight for `mur browser auth --browser <engine>`: refuse with the exact
-//! install command when Playwright cannot launch the chosen engine.
+//! Preflight for `mur browser auth --browser <engine>` and headed
+//! `mur browser record`: refuse with the exact install command when
+//! Playwright cannot launch the chosen engine.
 //!
 //! Before this, two different "no firefox" messages chased each other. The
 //! app-bundle scan (`select_browser`) sees `/Applications/Firefox.app` and says
@@ -54,6 +55,52 @@ pub fn preflight(engine: &str, install_dir: &Path, browsers: Option<&Path>) -> a
     if engines::own_build_ready(install_dir, browsers, engine) == Some(false) {
         anyhow::bail!(missing_text(
             engine,
+            engines::required_revision(install_dir, engine).as_deref(),
+            browsers,
+        ));
+    }
+    Ok(())
+}
+
+/// Did the caller pass `flag`, as `--flag` or `--flag=value`?
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter()
+        .any(|a| a == flag || a.starts_with(&format!("{flag}=")))
+}
+
+/// Message for a headed record on a cache without the full Chromium build.
+/// `mur browser setup` installs only the headless shell, so this is the
+/// common case, and Playwright's bare "Executable doesn't exist" says
+/// neither why nor what to do. Both fixes are named: install the full build,
+/// or record headless so the shell serves it.
+fn headed_text(run: &str, revision: Option<&str>, browsers: Option<&Path>) -> String {
+    let engine = engines::DEFAULT_ENGINE;
+    format!(
+        "{}\n\n`mur browser setup` installs only the headless shell, which cannot open a \
+         visible window. Or record headless instead:\n  mur browser record --run {run} -- --headless",
+        missing_text(engine, revision, browsers)
+    )
+}
+
+/// Preflight for `mur browser record`, given the argv about to reach
+/// `@playwright/mcp`. Refuses only a headed launch of MUR's default Chromium
+/// whose full build is known absent. A headless launch (the shell serves it),
+/// a caller-chosen engine, attach target or `--executable-path`, and an
+/// unknown cache state all pass and let the launch speak.
+pub fn record_preflight(
+    run: &str,
+    args: &[String],
+    install_dir: &Path,
+    browsers: Option<&Path>,
+) -> anyhow::Result<()> {
+    let ours = !engines::engine_already_chosen(args) && !has_flag(args, "--executable-path");
+    if !ours || has_flag(args, "--headless") {
+        return Ok(());
+    }
+    let engine = engines::DEFAULT_ENGINE;
+    if engines::own_build_ready(install_dir, browsers, engine) == Some(false) {
+        anyhow::bail!(headed_text(
+            run,
             engines::required_revision(install_dir, engine).as_deref(),
             browsers,
         ));
@@ -121,6 +168,55 @@ mod tests {
         let install = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         preflight("firefox", install.path(), Some(cache.path())).unwrap();
+    }
+
+    const CHROMIUM_JSON: &str = r#"{"browsers":[{"name":"chromium","revision":"1200"}]}"#;
+
+    fn chromium_install(dir: &Path) {
+        let p = dir.join("node_modules/playwright-core/browsers.json");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, CHROMIUM_JSON).unwrap();
+    }
+
+    fn argv(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// #1731 follow-up: a headed record on a shell-only cache must say why
+    /// and name both fixes, instead of surfacing Playwright's bare
+    /// "Executable doesn't exist".
+    #[test]
+    fn headed_record_on_shell_only_cache_names_both_fixes() {
+        let install = tempfile::tempdir().unwrap();
+        chromium_install(install.path());
+        let cache = tempfile::tempdir().unwrap();
+        complete(cache.path(), "chromium_headless_shell-1200");
+        let err = record_preflight("demo", &[], install.path(), Some(cache.path())).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("chromium-1200"), "{text}");
+        assert!(text.contains("headless shell"), "{text}");
+        assert!(text.contains("install-browser chromium"), "{text}");
+        assert!(!text.contains("--only-shell"), "{text}");
+        assert!(text.contains("--run demo -- --headless"), "{text}");
+    }
+
+    #[test]
+    fn record_preflight_passes_when_headless_chosen_or_ready() {
+        let install = tempfile::tempdir().unwrap();
+        chromium_install(install.path());
+        let cache = tempfile::tempdir().unwrap();
+        let p = Some(cache.path());
+        // Headless: the shell serves it.
+        record_preflight("r", &argv(&["--headless"]), install.path(), p).unwrap();
+        // Caller picked the engine or an attach target: theirs to answer for.
+        record_preflight("r", &argv(&["--browser=chrome"]), install.path(), p).unwrap();
+        record_preflight("r", &argv(&["--cdp-endpoint", "x"]), install.path(), p).unwrap();
+        // Unknown state: let the launch speak.
+        let empty = tempfile::tempdir().unwrap();
+        record_preflight("r", &[], empty.path(), p).unwrap();
+        // Full build present.
+        complete(cache.path(), "chromium-1200");
+        record_preflight("r", &[], install.path(), p).unwrap();
     }
 
     /// Headed auth needs the full build, so `--only-shell` must not leak in.

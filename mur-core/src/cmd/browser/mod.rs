@@ -72,6 +72,13 @@ pub async fn record(
     // They go on before the derived args below so an explicit `--browser` or
     // `--user-data-dir` is visible to them and wins.
     args.extend(extra.iter().cloned());
+    // A headed launch on a shell-only cache fails here with both fixes named,
+    // before the profile is decrypted, instead of at launch with Playwright's
+    // bare "Executable doesn't exist". Checked before the engine default is
+    // added, so "did the caller choose" reads only the caller's own flags.
+    let install_dir = mur_browser::server::install_dir(&mur_home()?);
+    let browsers = mur_browser::chromium::system_browsers_dir();
+    engine_check::record_preflight(run, &args, &install_dir, browsers.as_deref())?;
     // Every mode honours `--profile` the same way replay does. Without this the
     // launch had no cookies and every authenticated page bounced to its login
     // form, which no browser-app grant can fix: the state was never passed.
@@ -88,8 +95,8 @@ pub async fn record(
     // in `extra` still wins, so this only fills the gap.
     args.extend(mur_browser::engines::default_engine_args(
         &args,
-        &mur_browser::server::install_dir(&mur_home()?),
-        mur_browser::chromium::system_browsers_dir().as_deref(),
+        &install_dir,
+        browsers.as_deref(),
     ));
     if trace {
         args.push("--save-trace".into());
