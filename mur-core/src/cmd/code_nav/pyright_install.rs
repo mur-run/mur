@@ -15,7 +15,7 @@
 
 use super::plan::{PYRIGHT, PYRIGHT_PIN, tool_dir};
 use super::serena_install::{
-    Installed, Outcome, PYTHON_SUBDIR, SERENA_EXCLUDE_NEWER, managed_interpreter,
+    Installed, Outcome, PYTHON_SUBDIR, SERENA_EXCLUDE_NEWER, managed_interpreter, pin_uv,
 };
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ pub fn langserver_path_in(dir: &Path) -> PathBuf {
 }
 
 /// The exact uv invocation. `--no-config` keeps a stray `uv.toml` from
-/// redirecting the index.
+/// redirecting the index; `pin_uv` does the same for inherited env.
 pub fn install_command(uv: &Path, dir: &Path, reinstall: bool) -> Command {
     let mut c = Command::new(uv);
     c.current_dir(dir)
@@ -81,6 +81,7 @@ pub fn install_command(uv: &Path, dir: &Path, reinstall: bool) -> Command {
         // `bin` dir. A uv-managed Python lands in `<dir>/python/`.
         .args(["--python-preference", "only-managed"])
         .args(["--exclude-newer", PYRIGHT_EXCLUDE_NEWER]);
+    pin_uv(&mut c);
     if reinstall {
         c.args(["--force", "--reinstall"]);
     }

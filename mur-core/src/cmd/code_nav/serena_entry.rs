@@ -105,6 +105,10 @@ pub fn check_slot(profile: &AgentProfile, name: &str) -> Result<()> {
 /// differs only in `installed_at` is left alone, so a re-run reports
 /// [`Change::Unchanged`]. A same-named entry that is not `kind: serena` is
 /// the user's own server and is refused, never overwritten.
+///
+/// Setup never revokes: when a new pin moves `command`, the old entry
+/// point stays in `spawn.allowed`. Removing a grant is the user's call
+/// (`mur agent perm`), not a side effect of re-running setup.
 pub fn upsert(profile: &mut AgentProfile, entry: McpServerEntry) -> Result<Change> {
     check_slot(profile, &entry.name)?;
     let spawn = &mut profile.entitlements.processes.spawn.allowed;

@@ -192,11 +192,20 @@ pub(super) fn render_owned(
     let mut out = String::with_capacity(template.len());
     let mut seen: Vec<&str> = Vec::new();
     let mut skipping = false;
+    // Blank lines and column-0 comments met while skipping: inside the
+    // dropped block if more of it follows, else they lead the next key.
+    let mut held = String::new();
     for line in template.split_inclusive('\n') {
+        if skipping && is_interstitial(line) {
+            held.push_str(line);
+            continue;
+        }
         if skipping && is_block_continuation(line) {
+            held.clear();
             continue;
         }
         skipping = false;
+        out.push_str(&std::mem::take(&mut held));
         if let Some(key) = keys
             .iter()
             .find(|k| line.strip_prefix(**k).is_some_and(|r| r.starts_with(':')))
@@ -207,6 +216,7 @@ pub(super) fn render_owned(
         }
         out.push_str(line);
     }
+    out.push_str(&held);
     if let Some(missing) = keys.iter().find(|k| !seen.contains(k)) {
         bail!("{what} has no top-level `{missing}`; refusing to generate");
     }
@@ -229,6 +239,12 @@ pub(super) fn render_owned(
 /// indented, or a column-0 sequence item (`key:\n- x` is valid YAML).
 fn is_block_continuation(line: &str) -> bool {
     line.starts_with([' ', '\t']) || line.starts_with("- ") || line.trim_end() == "-"
+}
+
+/// A line that neither continues nor ends a block: blank, or a column-0
+/// comment.
+fn is_interstitial(line: &str) -> bool {
+    line.trim().is_empty() || line.starts_with('#')
 }
 
 /// A fresh value for `auth_secret` (serena's own format: a v4 UUID).
@@ -264,8 +280,17 @@ pub fn write_config(
 pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("yml.tmp");
+    // The dir is one the sandboxed serena child can write. A leftover tmp
+    // (or a planted symlink) is removed, never opened: `create_new` refuses
+    // to follow a link and guarantees `mode` applies at creation, so the
+    // secret is never readable by others even for an instant.
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("remove stale {}", tmp.display())),
+    }
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, PRIVATE_MODE);
     let mut f = opts
