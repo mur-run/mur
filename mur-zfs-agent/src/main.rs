@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use mur_common::zfs_protocol::{ZfsRequest, ZfsResponse};
+use mur_track::zfs_protocol::{ZfsRequest, ZfsResponse};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;

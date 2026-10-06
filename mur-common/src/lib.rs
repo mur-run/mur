@@ -75,7 +75,6 @@ pub mod scope;
 pub mod secret;
 pub mod signal;
 pub mod skill;
-pub mod snapshot_request;
 pub mod sync_types;
 pub mod telemetry;
 pub mod test_env;
@@ -83,7 +82,6 @@ pub mod trust;
 pub mod variable;
 pub mod workflow;
 pub mod worktree;
-pub mod zfs_protocol;
 
 pub use actor::{Actor, ActorSource};
 pub use conversation::{CONVERSATION_SCHEMA_VERSION, Content, Message, Role, Source};

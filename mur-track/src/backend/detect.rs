@@ -1,9 +1,11 @@
-use super::{
-    GitWorktreeBackend, ParallelBackend,
-    git_worktree::find_git_root,
-    zfs_native::{ZfsNativeBackend, is_on_zfs_pool, zfs_cli_available},
-    zfs_socket::{ZfsSocketBackend, connect_lima_socket, connect_orbstack_socket},
-};
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use super::zfs_native::{ZfsNativeBackend, is_on_zfs_pool, zfs_cli_available};
+use super::zfs_socket::ZfsSocketBackend;
+#[cfg(not(windows))]
+use super::zfs_socket::connect_lima_socket;
+#[cfg(target_os = "macos")]
+use super::zfs_socket::connect_orbstack_socket;
+use super::{GitWorktreeBackend, ParallelBackend, git_worktree::find_git_root};
 use std::path::Path;
 
 /// Returns the best available `ParallelBackend` for `project`.
@@ -56,7 +58,7 @@ mod tests {
 
     /// Gate 4 latency benchmark. Run manually on ZFS-equipped Linux machine:
     /// ORT_STRATEGY=download cargo test -p mur-core \
-    /// "parallel::backend::detect::tests::bench_create_track" \
+    /// "backend::detect::tests::bench_create_track" \
     /// -- --ignored --nocapture
     #[test]
     #[ignore]
