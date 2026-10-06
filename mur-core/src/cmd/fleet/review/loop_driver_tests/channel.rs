@@ -219,3 +219,91 @@ fn every_session_event_verifies_under_one_writer() {
         );
     }
 }
+
+/// AC-P2-10 at driver level: a resumed loop that delivers a ruling's binding
+/// note must clear it in the live ledger exactly as replay does. The live
+/// loop folds each `turn_sent` into its round ledger, so live == replay on
+/// `binding_rulings` once the round seals.
+#[test]
+fn live_ledger_clears_binding_rulings_like_replay() {
+    use super::super::loop_driver::{Members, continue_review_loop};
+    use super::super::schema::{RulingDecision, Severity, VerdictKind, to_note_payload};
+    use super::super::verdict::zero_cumulative;
+
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    let sent = |round, to| ReviewPayload::TurnSent {
+        round,
+        to,
+        restart_note: None,
+        human_wait_ms: 0,
+    };
+    let log = vec![
+        ReviewPayload::SessionStarted {
+            members: ["main".into(), "reviewer".into()],
+            mode: Mode::Auto,
+            limits: SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        },
+        sent(1, Role::Main),
+        sent(1, Role::Reviewer),
+        ReviewPayload::FindingIssued {
+            round: 1,
+            id: "F1".into(),
+            severity: Severity::Low,
+            issue: "needs a doc comment".into(),
+        },
+        ReviewPayload::Verdict {
+            round: 1,
+            kind: VerdictKind::Revise,
+            cumulative: zero_cumulative(),
+        },
+        ReviewPayload::Ruling {
+            finding: "F1".into(),
+            decision: RulingDecision::Drop,
+            text: "out of scope".into(),
+        },
+    ];
+    for p in &log {
+        crate::channel_writer::append_as_writer(
+            &svc,
+            home,
+            &channel_id,
+            crate::channel_writer::ROUTER_AGENT,
+            mur_common::channel::ChannelActor::System,
+            EventKind::Note,
+            to_note_payload(p),
+            None,
+        )
+        .unwrap();
+    }
+    let resumed = fold_rounds(&log).unwrap();
+    assert_eq!(resumed.binding_rulings(Role::Main).len(), 1);
+
+    let transport = StubLoopTransport::new(vec![], vec![]);
+    let members = Members {
+        fleet_name: "review-x",
+        channel_id: &channel_id,
+        main: "main",
+        reviewer: "reviewer",
+        task: "task",
+    };
+    let (live, stop) = continue_review_loop(
+        &transport,
+        home,
+        &members,
+        resumed,
+        2,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        Duration::ZERO,
+        Duration::ZERO,
+        &Instant::now,
+    )
+    .unwrap();
+    assert_eq!(stop, LoopDriverStop::Approve);
+
+    let replay = fold_rounds(&read_payloads(home, &channel_id)).unwrap();
+    assert!(replay.binding_rulings(Role::Main).is_empty());
+    assert!(replay.binding_rulings(Role::Reviewer).is_empty());
+    assert_eq!(live, replay, "live ledger must equal replay");
+}

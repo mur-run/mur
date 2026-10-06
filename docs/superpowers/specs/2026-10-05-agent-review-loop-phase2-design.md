@@ -1,11 +1,13 @@
 # Agent review loop — Phase 2 design: escalation → ruling
 
-- **Status:** Draft rev 4. Decisions R1–R9 were taken in brainstorm (human, 2026-10-05). R7
+- **Status:** Draft rev 5. Decisions R1–R9 were taken in brainstorm (human, 2026-10-05). R7
   (proactive `/rule`) was recommended and taken as a flagged assumption under autonomous
   continuation. Rev 4 applies the plan review rulings D1–D3 (human, 2026-10-05): `/rule`
   timing at the send prompts (§5.3), one resume column for paused and crashed sessions (§6),
   and no plain-text notes in Phase 2 (§0, R7, §9); a regenerated main message is printed before
-  it is sent, and the two discard notices are distinct (§5.3, AC-P2-19). No open questions remain; accepted
+  it is sent, and the two discard notices are distinct (§5.3, AC-P2-19). Rev 5 records a rule
+  found during implementation (human-approved, 2026-10-05): round-stuck is not judged at a seal
+  where a ruling was written (§5.3, AC-P2-20). No open questions remain; accepted
   limitations are in §9.
 - **Date:** 2026-10-05
 - **Base:** Phase 1 spec `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md` (Approved
@@ -227,6 +229,20 @@ classified `crashed`; §6 still finds the pending ruling (R2).
   line distinct from the re-validation notice is printed
   (`Ruling on F3 discarded: session ended with approve.`). The two notices differ because the
   causes differ: one ruling became moot, the other had no turn left to govern.
+- **Round-stuck is not judged at a seal where a ruling was written.** If at least one `ruling`
+  is written at a round's seal (from the ruling prompt, §5.1, or a held ruling, above), the
+  P1-§3.3 round-stuck check is skipped for that seal only. Reason: a `fix` usually leaves the
+  open set unchanged (F `disputed` → `open`, or `open` → `open`), so without the skip the loop
+  would stop with `stuck: open set unchanged` immediately after the human ruled, before
+  either agent had a turn under the ruling. A ruling is the human moving the loop, not the
+  agents circling.
+  - The snapshot history is not rewritten: the snapshot recorded at that seal is the pre-ruling
+    open set, and the next seal is judged against it as usual. The skip therefore covers only
+    the seal the ruling was written at; a round with no ruling after it is judged normally.
+  - A `/rule` at **main's** send prompt is written at the start of the round, not at a seal.
+    Both agents then take a turn under it, so that round's seal is judged normally.
+  - The duration-stuck detector is separate and unaffected beyond the activity-clock reset in
+    §5.1.
 
 ### 5.4 Proactive `/rule` (R7)
 
@@ -274,6 +290,7 @@ driver only.
 | P1 section | Change |
 |---|---|
 | §3.4 | "the system escalates to the human automatically" → "…escalates; the loop waits for a ruling (Phase 2 §5)". Add the post-`fix` answer restriction. |
+| §3.3 | Add: round-stuck is not judged at a seal where a `ruling` was written (P2-§5.3). |
 | §3.5 | Remove `escalation` from "The loop stops on". |
 | §4 | Remove `escalation` from the event list; add the note "escalation is derived by the fold, never written". Change `ruling` fields. Add `kind` to `paused`. |
 | §5 | "Forced back to semi-auto **and stop** on: `blocked`, escalation, …" → "Forced back to semi-auto on escalation **and await a ruling**; forced back and stop on `blocked`, a limit trip, transport failure." |
@@ -332,6 +349,10 @@ driver only.
   is (a) `approve` or (b) `blocked`: the session ends as it would without the ruling, no
   `ruling` is on the channel, and the printed notice is the session-end one
   (`… discarded: session ended with approve|blocked.`), not the AC-P2-18 one.
+- **AC-P2-20:** a `fix` ruling written at a seal whose open set equals the previous seal's
+  (two consecutive unchanged rounds) does not stop the session with `stuck: open set
+  unchanged`; the next round is sent. Covered by AC-P2-2, AC-P2-4, AC-P2-7 and AC-P2-8b, which
+  each fail without the skip.
 
 ## 9. Accepted limitations
 

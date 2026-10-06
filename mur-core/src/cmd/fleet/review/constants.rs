@@ -65,6 +65,37 @@ pub const RULE_NOT_OPEN_HINT: &str = "{id} is not an open finding";
 /// Shown at the ruling prompt for any other input (including bare Enter).
 pub const RULING_PROMPT_HINT: &str =
     "type /rule drop|fix F<n> <text>, /abandon, or q to leave the session paused";
+/// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
+/// The `/rule` hint says the line also sends this turn, so the human knows
+/// before typing it (the line is the send consent).
+pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop, /rule drop|fix F<n> <text> = record a ruling and send this turn] ";
+/// P2-§5.3: printed before main's message rebuilt after a `/rule` at its
+/// send prompt; the full rebuilt message follows.
+pub const RULING_REGENERATED_BANNER: &str = "[ruling applied; message regenerated]";
+/// P2-§5.3 / AC-P2-18: a held ruling whose finding left the open set.
+/// `{id}` = the finding, `{status}` = its status now.
+pub const RULING_DISCARDED_CLOSED_NOTICE: &str =
+    "Ruling on {id} discarded: finding is already {status}.";
+/// P2-§5.3 / AC-P2-19: a held ruling with no round left to govern.
+/// `{verdict}` ∈ [`RULING_SESSION_END_APPROVE`], [`RULING_SESSION_END_BLOCKED`].
+pub const RULING_DISCARDED_SESSION_END_NOTICE: &str =
+    "Ruling on {id} discarded: session ended with {verdict}.";
+pub const RULING_SESSION_END_APPROVE: &str = "approve";
+pub const RULING_SESSION_END_BLOCKED: &str = "blocked";
+/// P2-§5.2: the `paused { kind: escalation }` reason.
+pub const REVIEW_PAUSE_REASON_ESCALATION: &str = "awaiting a ruling";
+/// P2-§5.1 `/abandon`: the `session_stopped` reason (P1 wire value).
+pub const REVIEW_STOP_REASON_ESCALATION: &str = "escalation";
+/// P2-§5.1 step 3: the ruling prompt; `{id}` is replaced with the finding.
+pub const RULING_PROMPT: &str =
+    "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused ";
+/// P2-§5.1 step 3: both sides' last positions, shown above
+/// [`RULING_PROMPT`]. `{id}`, `{reason}` (why it escalated), `{issue}` (the
+/// reviewer's finding) and `{main}` (main's last reject reason).
+pub const RULING_POSITIONS: &str =
+    "\n--- {id} awaits your ruling ({reason}) ---\n  reviewer: {issue}\n  main: {main}\n";
+/// Stands in for `{main}` when main's reject carried no reason.
+pub const RULING_NO_MAIN_REASON: &str = "(no reason given)";
 /// P2-§5.3: rebuttal retry hint when main rejects a finding ruled `fix`.
 /// `{id}` is replaced with the finding ID.
 pub const REVIEW_FIX_RULED_REJECT_HINT: &str =
@@ -86,13 +117,15 @@ pub const REVIEW_STOP_REASON_CORRUPTED: &str = "corrupted";
 pub const REVIEW_STOP_REASON_REPLAY_FAILED: &str = "replay_failed";
 
 /// §3.1: main's turn prompt. Placeholders: `{task}`, `{round}`,
-/// `{open_findings}` (a rendered list, or [`REVIEW_NO_OPEN_FINDINGS`]).
+/// `{open_findings}` (a rendered list, or [`REVIEW_NO_OPEN_FINDINGS`]),
+/// `{binding_rulings}` (P2-§5.3; a [`REVIEW_BINDING_RULINGS_HEADER`] block
+/// ending in a blank line, or empty).
 pub const REVIEW_MAIN_PROMPT: &str = "You are the main agent in a review loop (round {round}).
 
 Task:
 {task}
 
-Open review findings from the reviewer:
+{binding_rulings}Open review findings from the reviewer:
 {open_findings}
 
 Do the task, or revise your previous work to address the open findings, then summarise what you changed. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
@@ -100,7 +133,8 @@ Do the task, or revise your previous work to address the open findings, then sum
 A reason is required for reject and partial.";
 
 /// §3.2: the reviewer's turn prompt. Placeholders: `{task}`, `{round}`,
-/// `{main_reply}`, `{open_findings}`. It pins the verdict wire shape and
+/// `{main_reply}`, `{open_findings}`, `{binding_rulings}` (as in
+/// [`REVIEW_MAIN_PROMPT`]). It pins the verdict wire shape and
 /// tells the reviewer to return `blocked` when uncertain (§3.2).
 pub const REVIEW_REVIEWER_PROMPT: &str = "You are the reviewer in a review loop (round {round}).
 
@@ -110,13 +144,17 @@ Task the main agent is working on:
 The main agent's latest reply:
 {main_reply}
 
-Previously issued findings that are still open:
+{binding_rulings}Previously issued findings that are still open:
 {open_findings}
 
 Review the work. End your reply with exactly one fenced ```json block of this shape:
 {\"verdict\": \"approve\" | \"revise\" | \"blocked\", \"findings\": [{\"severity\": \"high\" | \"medium\" | \"low\", \"issue\": \"...\"}], \"prior\": [{\"id\": \"F1\", \"status\": \"open\" | \"withdrawn\" | \"resolved\" | \"disputed\", \"reason\": \"...\"}]}
 
 Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return \"blocked\" rather than guess.";
+
+/// P2-§5.3: heads the binding-ruling block, ranked above the findings.
+pub const REVIEW_BINDING_RULINGS_HEADER: &str =
+    "Binding rulings from the human (these override any finding below; do not argue them):";
 
 /// Rendered in place of `{open_findings}` when the open set is empty.
 pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";
@@ -141,6 +179,17 @@ pub const DRIVER_OWNER_FILE: &str = "driver.owner";
 /// §7.0 — the `paused` reason resume records before continuing a session
 /// whose driver died without pausing.
 pub const REVIEW_PAUSE_REASON_CRASHED: &str = "crashed";
+
+/// P2-§6 row 3 / P1 §7: the continue prompt of a plain paused session.
+pub const REVIEW_PAUSED_CONTINUE_PROMPT: &str =
+    "Paused — continue? [Enter = continue, q = leave paused] ";
+
+/// P2-§6 row 2: a ruling is the last thing recorded and nothing is owed.
+pub const RULING_RECORDED_CONTINUE_PROMPT: &str =
+    "Ruling recorded — continue? [Enter = continue, q = leave paused] ";
+
+/// Printed when the human leaves a session paused at a resume prompt.
+pub const REVIEW_LEFT_PAUSED_NOTICE: &str = "Left paused.";
 
 /// §7.1 — the `session_stopped` reason written by `mur fleet delete review-…`.
 pub const REVIEW_STOP_REASON_DELETED: &str = "deleted";

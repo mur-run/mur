@@ -275,16 +275,25 @@ fn crashed_in_round_two() -> (tempfile::TempDir, String) {
 }
 
 /// AC15c: a crashed session resumes at the round after the last SEALED
-/// round, records `paused`(crashed) then `resumed`, and the reject from the
+/// round, records `paused`(crashed) at prepare and `resumed` at resume, and the reject from the
 /// unsealed attempt is not counted.
 #[test]
 fn a_crashed_session_resumes_after_the_last_sealed_round() {
     use crate::cmd::fleet::review::constants::REVIEW_PAUSE_REASON_CRASHED;
     let (tmp, name) = crashed_in_round_two();
     let home = tmp.path();
+    let before = payloads(home, &format!("fleet-{name}")).len();
     let r = prepare_resume(home, &name).unwrap();
     assert!(r.crashed);
     assert_eq!(r.round, 2);
+    // P2-§6 / D2: the crashed `paused` is written by prepare_resume, under
+    // the lock and before any prompt — not later by resume_session.
+    let at_prepare = payloads(home, &format!("fleet-{name}"));
+    assert_eq!(at_prepare.len(), before + 1);
+    assert!(matches!(
+        at_prepare.last(),
+        Some(ReviewPayload::Paused { reason, .. }) if reason == REVIEW_PAUSE_REASON_CRASHED
+    ));
     assert_eq!(
         r.ledger.findings[0].reject_count, 0,
         "unsealed reject dropped"

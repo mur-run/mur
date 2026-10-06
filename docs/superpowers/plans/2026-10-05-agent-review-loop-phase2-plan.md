@@ -51,7 +51,7 @@ Three PRs, cut at the Task 5 / Task 6 line:
 
 PR 2's items with no non-test caller (`pending_ruling()`, `binding_rulings`, `ruling.rs` parse
 entry points) carry `#[allow(dead_code)] // wired in PR 3 (Task 6–7)`; PR 3 removes every one of
-those attributes (`git grep 'wired in PR 3'` must be empty before it merges). Open PR 3 right
+those attributes (`git grep 'wired in PR 3' -- '*.rs'` must be empty before it merges). Open PR 3 right
 after PR 2 merges.
 
 ## File structure
@@ -268,7 +268,7 @@ again for the retry (the first answer stands, including any `held` ruling).
 `ask_ruling` returns the **raw line**, not a parsed answer, so the kill-switch check in Task 7
 runs before parsing (P2-§5.1 step 4).
 
-- [ ] Tests in `session_tests.rs` with an injected reader (refactor `TerminalGate` to hold
+- [x] Tests in `session_tests.rs` with an injected reader (refactor `TerminalGate` to hold
   `input: &dyn Fn() -> io::Result<String>`, defaulting to stdin; the pure refactor is its own
   commit):
   - `ask_ruling_prints_both_positions_and_prompt` — output contains the finding issue, main's last
@@ -283,12 +283,12 @@ runs before parsing (P2-§5.1 step 4).
   - `run_turn_boundary_rule_sends_nothing` / `run_turn_reviewer_rule_is_held` (`driver_tests.rs`)
     — scripted transport; send count 0 and `RuleFirst`, resp. send count 1 and
     `Sent { held: Some(_) }`.
-- [ ] Constants: `RULING_PROMPT = "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused "`,
+- [x] Constants: `RULING_PROMPT = "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused "`,
   and extend the send prompt text to `[Enter = send, q = stop, /rule … = record a ruling]`.
-- [ ] "Both sides' last positions" needs main's last reason for the finding: add
+- [x] "Both sides' last positions" needs main's last reason for the finding: add
   `Finding.last_reject_reason: Option<String>` set in the `Rebuttal` fold (derived, replay-safe)
   and a ledger test for it.
-- [ ] Fail → implement → green → lint → commit.
+- [x] Fail → implement → green → lint → commit.
 
 ## Task 7 — `settle_rulings` and the live loop
 
@@ -347,7 +347,7 @@ Loop changes (`loop_driver.rs`):
   `stop_reason` → `REVIEW_STOP_REASON_ESCALATION` (`"escalation"`, unchanged wire value).
 - Keep `loop_driver.rs` ≤ 800 lines; `apply_ruling` and `apply_held_rulings` live in `ruling.rs`.
 
-- [ ] Tests (scripted transport in `loop_driver_tests/`, new file `rulings.rs`):
+- [x] Tests (scripted transport in `loop_driver_tests/`, new file `rulings.rs`):
   - AC-P2-1 `escalation_waits_for_ruling` — scripted ask returns EOF; assert no
     `session_stopped`, no `escalation` type on the channel, `paused{kind: escalation}` last.
     (Fleet-definition and lock parts are asserted in Task 8 via `run_session`.)
@@ -383,32 +383,33 @@ Loop changes (`loop_driver.rs`):
   - `invalid_rule_reprompts_without_writing` — `/rule drop F9 x` then `q`; one `paused`, zero
     `ruling`.
   - Update the existing P1 test `flow.rs:337` (escalation stops the loop) to the new behaviour.
-- [ ] Fail → implement → green → lint → commit `feat(review): wait for a ruling on escalation`.
+- [x] Fail → implement → green → lint → commit `feat(review): wait for a ruling on escalation`.
 
 ## Task 8 — Session end and stop screen
 
 **Interfaces.** Consumes: Task 7. Produces: no new names.
 
-- [ ] Tests (`session_tests.rs`):
+- [x] Tests (`session_tests.rs`):
   - AC-P2-1 remainder: `run_session` with EOF at the ruling prompt → fleet definition still
     present, channel has no `session_stopped`.
   - AC-P2-13 remainder: `/abandon` → `session_stopped { reason: "escalation" }`, fleet definition
-    removed, `prepare_resume` errors `has already stopped`.
+    removed, `prepare_resume` refuses (`has ended` — the missing definition is checked before
+    `session_stopped`).
   - `stop_screen_for_escalation_pause` — `render_stop_screen(Paused{..})` prints the
     `review-resume` hint (it already does for any `Paused`; assert it, no code change expected).
-- [ ] `end_session` needs no change (Paused → keep fleet; others → stop). Green, lint, commit.
+- [x] `end_session` needs no change (Paused → keep fleet; others → stop). Green, lint, commit.
 
 ## Task 9 — Binding notes in turn prompts (P2-§5.3)
 
 **Interfaces.** Consumes: Task 2 `binding_rulings(role)`. Produces: no new names.
 
-- [ ] Tests (`wire.rs` tests): after a ruling, `main_turn_params` and `reviewer_turn_params` text
+- [x] Tests (`wire.rs` tests): after a ruling, `main_turn_params` and `reviewer_turn_params` text
   both contain `REVIEW_BINDING_RULINGS_HEADER` and the ruling text, and the block appears **before**
   the open-findings list; with no rulings the header is absent.
-- [ ] Add `{binding_rulings}` to `REVIEW_MAIN_PROMPT` and `REVIEW_REVIEWER_PROMPT`, placed above
+- [x] Add `{binding_rulings}` to `REVIEW_MAIN_PROMPT` and `REVIEW_REVIEWER_PROMPT`, placed above
   `{open_findings}`; render `"- {id} {decision}: {text}"` per record; substitute **before** `{task}`
   and `{main_reply}` (the existing placeholder-injection rule in `wire.rs`).
-- [ ] Green, lint, commit.
+- [x] Green, lint, commit.
 
 ## Task 10 — Resume (P2-§6)
 
@@ -431,7 +432,7 @@ pub fn resume_session(transport, mur_home, r: Resumable, retry_delay) -> Result<
    (`"Ruling recorded — continue? [Enter = continue, q = leave paused] "`).
 3. otherwise the unchanged P1 paused/crashed prompt.
 
-- [ ] Tests (`resume_tests.rs`):
+- [x] Tests (`resume_tests.rs`):
   - AC-P2-5 `sigkill_while_awaiting_resumes_at_ruling_prompt` — channel ends at a sealed `revise`
     round with a pending escalation, lock free, no `paused` → resume asks the ruling prompt, not
     the crashed continue prompt; a `paused{crashed}` precedes any ruling.
@@ -448,18 +449,20 @@ pub fn resume_session(transport, mur_home, r: Resumable, retry_delay) -> Result<
     ask does not raise `active`.
   - Update the P1 crashed test (`resume_tests.rs:307`) to expect `paused{crashed}` written by
     `prepare_resume`.
-- [ ] Fail → implement → green → lint → commit `feat(review): resume at the ruling prompt`.
+- [x] Fail → implement → green → lint → commit `feat(review): resume at the ruling prompt`.
 
 ## Task 11 — Specs and docs
 
-- [ ] Apply the P2-§7 table to `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md`.
-- [ ] Phase 2 spec: already amended to rev 4 before implementation (D1–D3). Re-check that the
+- [x] Apply the P2-§7 table to `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md`.
+- [x] Phase 2 spec: already amended to rev 4 before implementation (D1–D3). Re-check that the
   constants' final texts match the prompts quoted in P2-§5.1 and §5.3.
-- [ ] P1 spec §6: mark the plain-text / `@<agent>` / `@<unknown>` / repeated-note rows *not
+- [x] P1 spec §6: mark the plain-text / `@<agent>` / `@<unknown>` / repeated-note rows *not
   built; Phase 3* (P2-§7 row for §6).
 - [ ] User-facing docs: run the `update-docs` skill for README, docs site, product page (new
-  ruling prompt, `/rule`, `/abandon`).
-- [ ] `mur verify --file` on both specs.
+  ruling prompt, `/rule`, `/abandon`). README done in PR 3. The docs site and product page
+  live in `mur-server` and deploy on merge, so they ship after PR 3 merges — not before, or
+  app.mur.run would document behaviour the released binary does not have.
+- [x] `mur verify --file` on both specs.
 
 ## Self-review
 

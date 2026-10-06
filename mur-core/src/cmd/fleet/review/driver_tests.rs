@@ -6,8 +6,22 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use super::driver::{RetryOutcome, ReviewTransport, TurnOutcome, run_turn, run_turn_with_retry};
+use std::collections::BTreeSet;
+
+use super::driver::{
+    RetryOutcome, ReviewTransport, SendAnswer, SendGate, TurnOutcome, run_turn, run_turn_with_retry,
+};
+use super::ruling::RulingInput;
+use super::schema::RulingDecision;
 use super::schema::{NoteClassification, ReviewPayload, classify_note_payload};
+
+/// The P1 gate: a reviewer turn with nothing open.
+const GATE: SendGate<'static> = SendGate {
+    boundary: false,
+    pre_confirmed: false,
+    open: &EMPTY,
+};
+static EMPTY: BTreeSet<String> = BTreeSet::new();
 
 /// Test-only transport: counts sends and returns a fixed or queued reply,
 /// never touching A2A.
@@ -70,7 +84,7 @@ fn stopped_before_the_turn_sends_nothing() {
     let transport = StubTransport::fixed("reply");
     let params = serde_json::json!({});
 
-    let outcome = run_turn(&transport, home, "review-x", "reviewer", &params).unwrap();
+    let outcome = run_turn(&transport, home, "review-x", "reviewer", &params, GATE).unwrap();
 
     assert_eq!(outcome, TurnOutcome::Stopped);
     assert_eq!(
@@ -88,11 +102,14 @@ fn not_stopped_sends_exactly_once() {
     let transport = StubTransport::fixed("hello from reviewer");
     let params = serde_json::json!({"message": "x"});
 
-    let outcome = run_turn(&transport, home, "review-x", "reviewer", &params).unwrap();
+    let outcome = run_turn(&transport, home, "review-x", "reviewer", &params, GATE).unwrap();
 
     assert_eq!(
         outcome,
-        TurnOutcome::Sent("hello from reviewer".to_string())
+        TurnOutcome::Sent {
+            reply: "hello from reviewer".to_string(),
+            held: None
+        }
     );
     assert_eq!(transport.send_count(), 1);
 }
@@ -107,11 +124,17 @@ fn stopping_between_two_calls_blocks_only_the_later_one() {
     let transport = StubTransport::queue(vec![Ok("first".to_string()), Ok("second".to_string())]);
     let params = serde_json::json!({});
 
-    let first = run_turn(&transport, home, "review-x", "main", &params).unwrap();
-    assert_eq!(first, TurnOutcome::Sent("first".to_string()));
+    let first = run_turn(&transport, home, "review-x", "main", &params, GATE).unwrap();
+    assert_eq!(
+        first,
+        TurnOutcome::Sent {
+            reply: "first".to_string(),
+            held: None
+        }
+    );
 
     stop_fleet(home, "review-x");
-    let second = run_turn(&transport, home, "review-x", "main", &params).unwrap();
+    let second = run_turn(&transport, home, "review-x", "main", &params, GATE).unwrap();
     assert_eq!(second, TurnOutcome::Stopped);
     assert_eq!(transport.send_count(), 1, "only the first call sent");
 }
@@ -125,7 +148,7 @@ fn a_transport_error_propagates() {
     let transport = StubTransport::queue(vec![Err(anyhow::anyhow!("peer offline"))]);
     let params = serde_json::json!({});
 
-    let err = run_turn(&transport, home, "review-x", "main", &params).unwrap_err();
+    let err = run_turn(&transport, home, "review-x", "main", &params, GATE).unwrap_err();
     assert_eq!(err.to_string(), "peer offline");
 }
 
@@ -174,6 +197,7 @@ fn ac14_two_failures_pause_with_reason_and_revert_to_semi_auto() {
         "review-x",
         "reviewer",
         &params,
+        GATE,
         &channel_id,
         Duration::ZERO,
     )
@@ -236,13 +260,20 @@ fn ac14_first_send_success_means_no_retry_and_no_pause() {
         "review-x",
         "reviewer",
         &params,
+        GATE,
         &channel_id,
         Duration::ZERO,
     )
     .unwrap();
 
     assert_eq!(transport.send_count(), 1);
-    assert_eq!(outcome, RetryOutcome::Sent("ok".to_string()));
+    assert_eq!(
+        outcome,
+        RetryOutcome::Sent {
+            reply: "ok".to_string(),
+            held: None
+        }
+    );
 }
 
 /// AC14 (recovers on retry): first send fails, the retry succeeds ⇒ no pause.
@@ -262,13 +293,20 @@ fn ac14_retry_recovers_without_pausing() {
         "review-x",
         "reviewer",
         &params,
+        GATE,
         &channel_id,
         Duration::ZERO,
     )
     .unwrap();
 
     assert_eq!(transport.send_count(), 2);
-    assert_eq!(outcome, RetryOutcome::Sent("recovered".to_string()));
+    assert_eq!(
+        outcome,
+        RetryOutcome::Sent {
+            reply: "recovered".to_string(),
+            held: None
+        }
+    );
 }
 
 /// A4 interacts with AC14: a stop observed on the retry attempt returns
@@ -287,6 +325,7 @@ fn ac14_stop_during_retry_wins_over_pausing() {
         "review-x",
         "reviewer",
         &params,
+        GATE,
         &channel_id,
         Duration::ZERO,
     )
@@ -310,8 +349,13 @@ fn declined_gate_sends_nothing() {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok("reply".into())
         }
-        fn confirm_send(&self, _m: &str, _p: &serde_json::Value) -> anyhow::Result<bool> {
-            Ok(false)
+        fn confirm_send(
+            &self,
+            _m: &str,
+            _p: &serde_json::Value,
+            _o: &BTreeSet<String>,
+        ) -> anyhow::Result<SendAnswer> {
+            Ok(SendAnswer::Stop)
         }
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -322,6 +366,7 @@ fn declined_gate_sends_nothing() {
         "review-x",
         "main",
         &serde_json::json!({}),
+        GATE,
     )
     .unwrap();
     assert_eq!(out, TurnOutcome::Stopped);
@@ -378,6 +423,7 @@ fn a_failed_task_is_not_retried_and_does_not_pause() {
         "review-x",
         "reviewer",
         &serde_json::json!({}),
+        GATE,
         &channel_id,
         Duration::ZERO,
     )
@@ -400,4 +446,163 @@ fn a_failed_task_is_not_retried_and_does_not_pause() {
         )
     });
     assert!(!paused, "a failed task is not a transport pause");
+}
+
+/// Scripted gate for P2 Task 6: answers every send prompt with `answer`,
+/// counting prompts and sends.
+struct RuleGate {
+    answer: SendAnswer,
+    prompts: AtomicUsize,
+    sends: AtomicUsize,
+    replies: Mutex<Vec<anyhow::Result<String>>>,
+}
+
+impl RuleGate {
+    fn new(answer: SendAnswer, replies: Vec<anyhow::Result<String>>) -> Self {
+        let mut r = replies;
+        r.reverse();
+        Self {
+            answer,
+            prompts: AtomicUsize::new(0),
+            sends: AtomicUsize::new(0),
+            replies: Mutex::new(r),
+        }
+    }
+}
+
+impl ReviewTransport for RuleGate {
+    fn send(&self, _m: &str, _p: &serde_json::Value) -> anyhow::Result<String> {
+        self.sends.fetch_add(1, Ordering::SeqCst);
+        self.replies
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap_or_else(|| Ok(String::new()))
+    }
+    fn confirm_send(
+        &self,
+        _m: &str,
+        _p: &serde_json::Value,
+        _o: &BTreeSet<String>,
+    ) -> anyhow::Result<SendAnswer> {
+        self.prompts.fetch_add(1, Ordering::SeqCst);
+        Ok(self.answer.clone())
+    }
+}
+
+fn drop_f1() -> RulingInput {
+    RulingInput {
+        finding: "F1".into(),
+        decision: RulingDecision::Drop,
+        text: "x".into(),
+    }
+}
+
+fn gate_for(boundary: bool, open: &BTreeSet<String>) -> SendGate<'_> {
+    SendGate {
+        boundary,
+        pre_confirmed: false,
+        open,
+    }
+}
+
+/// P2-§5.3: `/rule` at main's (boundary) prompt sends nothing — the loop
+/// applies the ruling first and re-sends the rebuilt message.
+#[test]
+fn run_turn_boundary_rule_sends_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let open = BTreeSet::from(["F1".to_string()]);
+    let t = RuleGate::new(SendAnswer::SendWithRuling(drop_f1()), vec![]);
+    let out = run_turn(
+        &t,
+        tmp.path(),
+        "review-x",
+        "main",
+        &serde_json::json!({}),
+        gate_for(true, &open),
+    )
+    .unwrap();
+    assert_eq!(out, TurnOutcome::RuleFirst(drop_f1()));
+    assert_eq!(t.sends.load(Ordering::SeqCst), 0);
+}
+
+/// P2-§5.3: `/rule` at the reviewer's prompt is the send consent; the
+/// ruling is held for after the seal.
+#[test]
+fn run_turn_reviewer_rule_is_held() {
+    let tmp = tempfile::tempdir().unwrap();
+    let open = BTreeSet::from(["F1".to_string()]);
+    let t = RuleGate::new(SendAnswer::SendWithRuling(drop_f1()), vec![Ok("r".into())]);
+    let out = run_turn(
+        &t,
+        tmp.path(),
+        "review-x",
+        "reviewer",
+        &serde_json::json!({}),
+        gate_for(false, &open),
+    )
+    .unwrap();
+    assert_eq!(
+        out,
+        TurnOutcome::Sent {
+            reply: "r".into(),
+            held: Some(drop_f1())
+        }
+    );
+    assert_eq!(t.sends.load(Ordering::SeqCst), 1);
+}
+
+/// `pre_confirmed` skips the prompt (the rebuilt main send after a ruling).
+#[test]
+fn pre_confirmed_send_is_not_asked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let t = RuleGate::new(SendAnswer::Stop, vec![Ok("r".into())]);
+    let g = SendGate {
+        pre_confirmed: true,
+        ..GATE
+    };
+    let out = run_turn(
+        &t,
+        tmp.path(),
+        "review-x",
+        "main",
+        &serde_json::json!({}),
+        g,
+    )
+    .unwrap();
+    assert!(matches!(out, TurnOutcome::Sent { .. }));
+    assert_eq!(t.prompts.load(Ordering::SeqCst), 0);
+}
+
+/// P2 Task 6: a transport retry does not ask the gate again, and the held
+/// ruling from the first answer survives the retry.
+#[test]
+fn retry_keeps_the_first_answer() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path().to_path_buf();
+    let open = BTreeSet::from(["F1".to_string()]);
+    let t = RuleGate::new(
+        SendAnswer::SendWithRuling(drop_f1()),
+        vec![Err(anyhow::anyhow!("peer offline")), Ok("recovered".into())],
+    );
+    let out = run_turn_with_retry(
+        &t,
+        &home,
+        "review-x",
+        "reviewer",
+        &serde_json::json!({}),
+        gate_for(false, &open),
+        &channel_id,
+        Duration::ZERO,
+    )
+    .unwrap();
+    assert_eq!(
+        out,
+        RetryOutcome::Sent {
+            reply: "recovered".into(),
+            held: Some(drop_f1())
+        }
+    );
+    assert_eq!(t.prompts.load(Ordering::SeqCst), 1);
+    assert_eq!(t.sends.load(Ordering::SeqCst), 2);
 }

@@ -247,13 +247,13 @@ fn reviewer_task_failure_stops_as_task_failed_not_blocked() {
     );
 }
 
-/// AC8 through the live driver: the same finding rejected twice escalates,
-/// and the loop stops on escalation (§3.4; §3.5 "The loop stops on: approve,
-/// blocked, escalation, ..."). The reviewer insists in round 2 (`disputed`),
+/// AC8 through the live driver: the same finding rejected twice escalates
+/// (§3.4). Since P2-§5.1 the loop then waits for a ruling rather than
+/// stopping; with no terminal it is left paused. The reviewer insists in round 2 (`disputed`),
 /// so the open set changes between rounds and round-stuck (AC9) cannot fire
 /// first.
 #[test]
-fn ac8_second_rejection_escalates_and_stops_loop() {
+fn ac8_second_rejection_escalates_and_waits() {
     let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
 
@@ -341,11 +341,14 @@ fn ac8_second_rejection_escalates_and_stops_loop() {
     assert_eq!(ledger.escalations[0].finding_id, "F1");
     assert_eq!(ledger.findings[0].reject_count, 2, "F1 was rejected twice");
 
-    // The loop stops on escalation, not round-stuck or a later approve.
-    assert!(
-        matches!(stop, LoopDriverStop::Escalation),
-        "AC8 & §3.5: loop MUST stop on escalation, got {:?}",
-        stop
+    // P2-§5.1: the escalation waits for a ruling; with no terminal (the
+    // default `ask_ruling` reads EOF) the session is left paused.
+    assert_eq!(
+        stop,
+        LoopDriverStop::Paused {
+            reason: super::super::constants::REVIEW_PAUSE_REASON_ESCALATION.to_string()
+        },
+        "AC-P2-1: an escalation pauses, it does not stop"
     );
     assert_eq!(
         transport.inner.reviewer_send_count(),
