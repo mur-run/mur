@@ -1,8 +1,8 @@
 # mur-compress auto-wiring — architecture & use-vs-no-use report
 
 **Date:** 2026-06-14 · **Branch:** `feat/compress-autowire`
-**Spec:** [`docs/superpowers/specs/2026-06-14-mur-compress-autowire-design.md`](superpowers/specs/2026-06-14-mur-compress-autowire-design.md) ·
-**Plan:** [`docs/superpowers/plans/2026-06-14-mur-compress-autowire.md`](superpowers/plans/2026-06-14-mur-compress-autowire.md)
+**Spec:** `docs/superpowers/specs/2026-06-14-mur-compress-autowire-design.md` (internal, mur-docs) ·
+**Plan:** `docs/superpowers/plans/2026-06-14-mur-compress-autowire.md` (internal, mur-docs)
 
 ![architecture + savings](mur-compress-autowire.svg)
 
