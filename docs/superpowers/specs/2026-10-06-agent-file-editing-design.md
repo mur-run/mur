@@ -1,8 +1,10 @@
 # Agent file editing — edits as events, files as views
 
-- **Status:** Draft rev 2. Rev 1 (journal-only) was superseded before commit: it treated
-  editing as a tool feature; this revision treats it as an **event source** that feeds
-  the workspace substrate, the signed channel, and the memory pipeline MUR already has.
+- **Status:** Draft rev 3. Rev 3 fixes the track shape (§4: git worktree pointer +
+  CoW working tree, one shape on every host, eager per-turn creation). Rev 2 treated
+  editing as an **event source** that feeds the workspace substrate, the signed channel,
+  and the memory pipeline MUR already has; rev 1 (journal-only) treated it as a tool
+  feature and was superseded before commit.
 - **Research input:** deep-research run of 2026-10-06
   (`~/.mur/artifacts/deep-research/20261006-055037-state-of-the-art-for-ai-coding-agent-file-editin.md`,
   7 claims, all CONFIRMED). The industry baseline is summarised in §1; this design
@@ -76,25 +78,68 @@ truth about what changed, undo is **per tool call**, and no edit survives as
 
 ### 4.1 Turn lifecycle
 
-1. First write-capable tool call of a turn → `create_track("turn-<seq>")`, then
-   `base_snapshot`. Read-only turns never create a track (zero cost for chat).
-2. Tool writes go to the track path; the agent's cwd is rebound for the turn.
-3. Turn end → `diff_files(track, base)` → settlement `~ changed`. Then, by policy:
+One shape on every host: **a track is a git worktree whose working tree is a CoW
+clone of the project working tree (including uncommitted state).** `.git` is never
+cloned and never excluded — it is the usual worktree pointer file, so the object
+store and refs are shared with the project.
+
+1. **Eager creation, decided statically.** At turn start the runtime checks the
+   agent's tool registry: if any write-capable tool (`bash`, `write_file`,
+   `edit_file`) is bound, `create_track("turn-<seq>")` runs *before* the model sees
+   the prompt. The decision never looks at the user message or waits for the first
+   tool call — a wrong guess there is an undo hole. Agents with no write-capable
+   tool never create a track (zero cost for chat).
+   *Why eager:* the model is handed an absolute working directory and uses absolute
+   paths, including inside bash commands. Rebinding `session_cwd` lazily only
+   redirects relative paths; absolute ones would still land in the project.
+2. **The prompt's `## Working directory` is the track path.** Tool results and the
+   settlement card map track paths back to the project path for display, so the user
+   sees `src/foo.rs`, not `.worktrees/turn-7/src/foo.rs`.
+3. Turn end → `diff_files(track)` → settlement `~ changed`. Then, by policy:
    - **direct** (default, interactive): `promote(track, project)`; track destroyed.
+     Promote is **last-write-wins** over the project working tree; conflict detection
+     against concurrent user edits is P1.
    - **shadow** (fleet unattended, opt-in `edits.shadow: true` in `limits:`): verify
      commands run *on the track*; promote only on green, else keep the track for
      review and emit `settlement.blocked` with the failing command.
-4. `mur agent turn undo` = `destroy(track)` before promote, or inverse-apply the turn's
-   events after promote (§4).
+4. `mur agent turn undo` = `destroy(track)` (`git worktree remove --force`) before
+   promote, or inverse-apply the turn's events after promote (§5).
+
+**Git inside a track.** Commits land in the shared object store; a branch the agent
+creates in the track (`checkout -b`) survives `destroy`, so branch → commit → push →
+PR works unchanged. Two known limits, accepted for P0: (a) commits made on the
+track's detached `HEAD` without a branch are orphaned when the worktree is removed
+(its HEAD reflog goes with it); (b) the track cannot check out a branch the project
+already has checked out — git refuses — so agents must branch, which matches the
+intended workflow.
 
 ### 4.2 Backend selection (reuses `detect_backend`, order unchanged)
 
-| Host | Substrate | Notes |
-|------|-----------|-------|
-| Linux/FreeBSD on ZFS, `zfs` CLI | ZFS clone per turn | True volume snapshot; `diff_files` = `zfs diff`. |
+The backends differ **only** in how the working tree is cloned. `create_track` is
+always: `git worktree add --detach --no-checkout <dir>` (writes the `.git` pointer),
+then overlay the clone of the project working tree, skipping `.git`, `target/`,
+`node_modules/` and `.worktrees/`. `destroy` = `git worktree remove --force`.
+`diff_files` = `git status --porcelain` in the track compared against the project's
+`git status` at creation (the base), so files already dirty at turn start are not
+reported as changed by the turn.
+
+| Host | Working-tree clone | Notes |
+|------|--------------------|-------|
+| Linux/FreeBSD on ZFS, `zfs` CLI | ZFS clone, mounted at the track dir | True volume snapshot. |
 | macOS with Lima/OrbStack ZFS socket | ZFS over socket | Daemon owns the socket; runtime drops `SnapshotRequest` files. |
-| macOS APFS (no VM) | **per-file clonefile shadow** | Volume snapshots (`tmutil`) are Time Machine-bound and read-only when mounted — not usable. Shadow = `cp -c` of each file before first write; `diff_files` = hash compare against shadow set + mtime walk for files the tools never touched. |
-| anything else | git worktree | Always available; `diff_files` = `git status --porcelain` in the worktree. |
+| macOS APFS (no VM) | `cp -cR` (clonefile) | Metadata-only; measured ≈130 µs/file, ≈1.5 s for a 12k-file repo. **Track dir and project must be on the same APFS volume** — cross-volume `cp -c` silently degrades to a full copy; `.worktrees/` under the project guarantees this. Volume snapshots (`tmutil`) are Time Machine-bound and read-only when mounted — not usable. |
+| anything else | `cp -a` (full copy) | Always available; slow on large repos but correct. |
+
+Per-turn clone cost is the accepted P0 trade-off: `~2 s` on this repo for every
+tool-capable turn, including turns that end up making no tool call. P1 reuses one
+track per session and re-syncs between turns to amortise it. The previous rev's
+per-file clonefile shadow was rejected: files written by `bash` bypass the shadow,
+so `~ changed` would report edits that `undo` could not revert.
+
+**Write atomicity is a precondition of this layer.** `diff_files` compares on-disk
+state, so a half-written file must never be observable: `write_file` and
+`edit_file` write to a temp file in the target's directory and `rename` into place
+(one helper, used by both) before any diff logic lands.
 
 ### 4.3 Crate extraction (`mur-track`)
 
@@ -249,7 +294,7 @@ rendering.
 
 | Phase | Deliverable | Risk | Visible result |
 |-------|-------------|------|----------------|
-| P0 | `mur-track` extraction (pure move); turn tracks; settlement from `diff_files`; `mur agent turn undo`; `edit_file`/`write_file` switch to temp + rename | low — no model-facing change | honest `~ changed`, whole-turn undo |
+| P0 | `mur-track` extraction (pure move); eager turn tracks (worktree + CoW tree); settlement from `diff_files`; `mur agent turn undo`; `edit_file`/`write_file` switch to temp + rename | low — no model-facing change | honest `~ changed`, whole-turn undo |
 | P1 | `edit.applied/observed/reverted` events + CAS; `undo_edit`; `before_hash` rejection; `mur agent edits` | medium — new channel kinds | per-edit undo, legible fleet conflicts |
 | P2 | daemon semantic lift; provenance in `retrieve`; evolve signals (revert cluster, near-miss streak, coupling); §7 feedback | medium — pipeline touch | agents stop repeating reverted edits |
 | P3 | shadow verify-then-promote; memory writes on the ledger; Hub timeline view | medium — fleet policy | unattended fleets gated by green |
