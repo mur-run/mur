@@ -9,6 +9,8 @@
 //! pulling LanceDB + Arrow into every agent process.
 
 pub mod backend;
+pub mod snapshot_request;
+pub mod zfs_protocol;
 
 pub use backend::{
     GitWorktreeBackend, ParallelBackend, ZfsNativeBackend, ZfsSocketBackend, detect_backend,

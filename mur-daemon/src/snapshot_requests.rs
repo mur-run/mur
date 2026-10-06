@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use mur_common::config::Config;
 use mur_common::identity::AgentIdentity;
-use mur_common::snapshot_request::{SNAPSHOT_REQUEST_DIR, SnapshotRequest};
+use mur_track::snapshot_request::{SNAPSHOT_REQUEST_DIR, SnapshotRequest};
 
 pub fn spawn(mur_dir: PathBuf) {
     tokio::spawn(async move {

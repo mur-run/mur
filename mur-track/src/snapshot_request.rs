@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::identity::{AgentIdentity, verify_bytes};
+use mur_common::identity::{AgentIdentity, verify_bytes};
 
 /// File-drop directory, relative to the MUR home.
 pub const SNAPSHOT_REQUEST_DIR: &str = "inbox/snapshot-requests";

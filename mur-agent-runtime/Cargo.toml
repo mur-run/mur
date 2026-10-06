@@ -39,6 +39,7 @@ mur-mcp-proto = { path = "../mur-mcp-proto" }
 mur-compress = { path = "../mur-compress" }
 mur-channel = { path = "../mur-channel" }
 mur-open-items = { path = "../mur-open-items" }
+mur-track = { path = "../mur-track" }
 tokio = { workspace = true, features = ["net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -6457,6 +6457,7 @@ dependencies = [
  "mur-compress",
  "mur-mcp-proto",
  "mur-open-items",
+ "mur-track",
  "ndarray 0.17.2",
  "ort",
  "rand 0.8.6",
@@ -6726,6 +6727,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-core",
+ "mur-track",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6854,10 +6856,12 @@ name = "mur-track"
 version = "2.91.10"
 dependencies = [
  "anyhow",
+ "chrono",
  "dirs 6.0.0",
  "mur-common",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "tempfile",
 ]
 
@@ -6866,7 +6870,7 @@ name = "mur-zfs-agent"
 version = "2.91.10"
 dependencies = [
  "anyhow",
- "mur-common",
+ "mur-track",
  "serde_json",
 ]
 

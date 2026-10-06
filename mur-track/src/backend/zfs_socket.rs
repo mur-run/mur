@@ -1,6 +1,6 @@
 use super::ParallelBackend;
+use crate::zfs_protocol::{ZfsRequest, ZfsResponse};
 use anyhow::{Context, Result, bail};
-use mur_common::zfs_protocol::{ZfsRequest, ZfsResponse};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
@@ -158,7 +158,7 @@ pub fn connect_wsl2_socket() -> Result<PathBuf> {
 #[cfg(unix)]
 mod tests {
     use super::*;
-    use mur_common::zfs_protocol::ZfsResponse;
+    use crate::zfs_protocol::ZfsResponse;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 

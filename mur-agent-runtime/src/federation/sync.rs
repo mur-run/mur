@@ -125,7 +125,7 @@ fn write_snapshot_request_at(
     agent_name: &str,
     identity: &mur_common::identity::AgentIdentity,
 ) -> Result<()> {
-    use mur_common::snapshot_request::{SNAPSHOT_REQUEST_DIR, SnapshotRequest};
+    use mur_track::snapshot_request::{SNAPSHOT_REQUEST_DIR, SnapshotRequest};
     let req = SnapshotRequest::create(agent_name, identity, chrono::Utc::now());
     let dir = mur_home.join(SNAPSHOT_REQUEST_DIR);
     std::fs::create_dir_all(&dir)?;
@@ -172,7 +172,7 @@ mod tests {
         write_snapshot_request_at(home, "w1", &id).unwrap();
 
         let p = home.join("inbox/snapshot-requests/w1.yaml");
-        let req: mur_common::snapshot_request::SnapshotRequest =
+        let req: mur_track::snapshot_request::SnapshotRequest =
             serde_yaml_ng::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
         assert!(req.verify(&id.verifying_key_bytes()));
         assert_eq!(req.agent, "w1");
