@@ -527,3 +527,161 @@ fn runner_scratch_dir_reaches_the_system_prompt() {
     let (sys, _) = runner.assemble_system_prompt(None, "hi", None, None);
     assert!(sys.contains("go in `/x/tmp/a`"));
 }
+
+/// Dogfood bug (channel 01a11025): murmur sent `cwd = ~/APP/<project>` every
+/// turn, the runtime refused it (granted after the sandbox sealed) and fell
+/// back to the agent home with only a `tracing::warn!` — so the agent asked
+/// the user "where is your project?" and nothing on screen said why. A
+/// refused cwd must be stated in the reply, with the command that fixes it,
+/// exactly as a refused write already is.
+mod refused_cwd {
+    use super::*;
+
+    fn reply_text(outcome: &TaskOutcome) -> String {
+        let TaskOutcome::Completed(task) = outcome else {
+            panic!("expected Completed, got {outcome:?}")
+        };
+        task.messages
+            .last()
+            .unwrap()
+            .parts
+            .iter()
+            .filter_map(|p| match p {
+                MessagePart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn stamp(p: &std::path::Path, ago: u64) {
+        std::fs::write(p, "x").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(ago))
+            .unwrap();
+    }
+
+    /// `home` plays the agent dir (`~/.mur/agents/<name>`): that is where
+    /// `running.lock` and `profile.yaml` live in production.
+    fn fixture() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        TaskRunner,
+        crate::tools::fs_policy::SessionCwd,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(tmp.path()).unwrap();
+        let project = home.join("project");
+        let outside = home.join("outside");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let cwd = crate::tools::fs_policy::SessionCwd::new(home.clone());
+        let runner = TaskRunner::new_stub_echo()
+            .with_agent_name("mur")
+            .with_session_cwd(cwd.clone(), vec![project.to_string_lossy().into_owned()]);
+        (tmp, home, outside, runner, cwd)
+    }
+
+    #[tokio::test]
+    async fn unentitled_cwd_is_explained_in_the_reply_with_the_grant_command() {
+        let (_tmp, home, outside, runner, _cwd) = fixture();
+        // Profile sealed after its last edit: nothing new to pick up, so the
+        // fix is a grant, not a restart alone.
+        stamp(&home.join("profile.yaml"), 600);
+        stamp(&home.join("running.lock"), 1);
+
+        let mut spec = user_turn("hi", "t1", None);
+        spec.cwd = Some(outside.clone());
+        let text = reply_text(&runner.run_sync(spec).await);
+
+        assert!(text.contains("[cwd]"), "{text}");
+        assert!(
+            text.contains(&outside.to_string_lossy().into_owned()),
+            "names the refused directory: {text}"
+        );
+        assert!(
+            text.contains(&home.to_string_lossy().into_owned()),
+            "names where the turn actually ran: {text}"
+        );
+        assert!(text.contains("mur agent perm allow-read mur "), "{text}");
+        assert!(text.contains("mur agent restart mur"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn cwd_granted_after_the_seal_says_restart_not_grant() {
+        let (_tmp, home, outside, runner, _cwd) = fixture();
+        stamp(&home.join("running.lock"), 600); // sealed ten minutes ago
+        stamp(&home.join("profile.yaml"), 1); // granted a second ago
+
+        let mut spec = user_turn("hi", "t1", None);
+        spec.cwd = Some(outside.clone());
+        let text = reply_text(&runner.run_sync(spec).await);
+
+        assert!(text.contains("[cwd]"), "{text}");
+        assert!(text.contains("mur agent restart mur"), "{text}");
+        assert!(
+            !text.contains("allow-read"),
+            "the grant may already be there; do not tell the user to add it again: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_cwd_is_explained() {
+        let (_tmp, home, _outside, runner, _cwd) = fixture();
+        let gone = home.join("project").join("does-not-exist");
+
+        let mut spec = user_turn("hi", "t1", None);
+        spec.cwd = Some(gone.clone());
+        let text = reply_text(&runner.run_sync(spec).await);
+
+        assert!(text.contains("[cwd]"), "{text}");
+        assert!(text.contains("does not exist"), "{text}");
+        assert!(
+            text.contains(&gone.to_string_lossy().into_owned()),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn entitled_or_absent_cwd_leaves_the_reply_alone() {
+        let (_tmp, home, _outside, runner, _cwd) = fixture();
+
+        let mut spec = user_turn("hi", "t1", None);
+        spec.cwd = Some(home.join("project"));
+        let text = reply_text(&runner.run_sync(spec).await);
+        assert!(!text.contains("[cwd]"), "{text}");
+
+        let text = reply_text(&runner.run_sync(user_turn("hi", "t2", Some("t1"))).await);
+        assert!(
+            !text.contains("[cwd]"),
+            "absent cwd is not a refusal: {text}"
+        );
+    }
+
+    /// The model must know too, or it hunts for the project on its own —
+    /// which is exactly what happened in the field.
+    #[tokio::test]
+    async fn refused_cwd_reaches_the_system_prompt_of_that_turn() {
+        let (_tmp, home, outside, runner, _cwd) = fixture();
+        stamp(&home.join("profile.yaml"), 600);
+        stamp(&home.join("running.lock"), 1);
+
+        runner.adopt_cwd("t1", None, Some(&outside));
+        let (sys, _) = runner.assemble_system_prompt(Some("t1"), "hello", None, None);
+
+        assert!(sys.contains("## Working directory"), "{sys}");
+        assert!(
+            sys.contains(&outside.to_string_lossy().into_owned()),
+            "names the refused directory: {sys}"
+        );
+        assert!(sys.contains("mur agent restart mur"), "{sys}");
+        // Another turn of another conversation is untouched.
+        runner.adopt_cwd("u1", None, None);
+        let (sys, _) = runner.assemble_system_prompt(Some("u1"), "hello", None, None);
+        assert!(!sys.contains("[cwd]"), "{sys}");
+    }
+}

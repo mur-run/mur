@@ -91,6 +91,7 @@ impl TaskRunner {
             conversations: Mutex::new(ConversationStore::default()),
             session_cwd: None,
             turn_tracks: Mutex::new(HashMap::new()),
+            refused_cwd: Mutex::new(HashMap::new()),
             project_instructions: None,
             draining: Arc::new(AtomicBool::new(false)),
         }

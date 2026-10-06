@@ -145,6 +145,14 @@ const DEFAULT_CONV_BUDGET_TOKENS: u64 = 8_000;
 /// a murmur TUI with a human watching.
 pub(crate) type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bool);
 
+/// A caller's `TaskSpec.cwd` the runtime could not adopt for one turn.
+#[derive(Debug, Clone)]
+pub(super) struct RefusedCwd {
+    pub requested: std::path::PathBuf,
+    pub actual: std::path::PathBuf,
+    pub why: crate::tools::denial::CwdDenial,
+}
+
 pub struct TaskRunner {
     backend: RunnerBackend,
     registry: Arc<Mutex<HashMap<String, TaskState>>>,
@@ -266,6 +274,11 @@ pub struct TaskRunner {
     /// the prompt is assembled, closed by `settle_turn` — or swept by the
     /// run wrapper when the turn ends any other way.
     turn_tracks: Mutex<HashMap<String, turn_track::OpenTrack>>,
+    /// Turns whose caller-supplied cwd was refused, with why. Read by the
+    /// system prompt (so the model knows it is NOT in the user's project) and
+    /// by the reply footer (so the user sees the command that fixes it).
+    /// Cleared when the turn's reply is built; bounded by turn lifetime.
+    refused_cwd: Mutex<HashMap<String, RefusedCwd>>,
     /// Reads the working project's `AGENTS.md` / `CLAUDE.md` into the prompt,
     /// through the same entitlement gate as `read_file`. `None` (stubs, tests)
     /// or no `session_cwd` means no block.

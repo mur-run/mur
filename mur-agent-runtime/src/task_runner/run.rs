@@ -290,6 +290,13 @@ impl TaskRunner {
                 // so callers read the file byte-by-byte instead of re-typing
                 // content through another LLM.
                 let artifacts = output_artifact_path.and_then(|p| detect_artifact(&p));
+                // A refused `TaskSpec.cwd` is the user's problem to fix (grant
+                // or restart), so it goes in the reply they read — same
+                // footer discipline as a refused write in bash's output.
+                let reply = match self.take_refused_cwd_hint(&id) {
+                    Some(note) => append_note(reply, &note),
+                    None => reply,
+                };
                 let reply = if let Some(ref arts) = artifacts {
                     Message {
                         role: reply.role.clone(),
@@ -483,4 +490,21 @@ impl TaskRunner {
     pub fn last_activity_at(&self) -> i64 {
         self.last_activity_at.load(Ordering::Relaxed)
     }
+}
+
+/// Append a runtime note to the reply's last text part (or as a new part).
+fn append_note(mut reply: Message, note: &str) -> Message {
+    match reply.parts.iter_mut().rev().find_map(|p| match p {
+        MessagePart::Text { text } => Some(text),
+        _ => None,
+    }) {
+        Some(text) => {
+            text.push_str("\n\n");
+            text.push_str(note);
+        }
+        None => reply.parts.push(MessagePart::Text {
+            text: note.to_string(),
+        }),
+    }
+    reply
 }
