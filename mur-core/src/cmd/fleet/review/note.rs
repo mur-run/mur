@@ -86,7 +86,14 @@ fn target_note(
 /// exact comparison alone would call a member `<unknown>`.
 fn member_role(canonical: &str, members: &[String; 2]) -> Option<Role> {
     let roles = || [Role::Main, Role::Reviewer].into_iter().zip(members);
-    roles()
-        .find_map(|(role, m)| (m == canonical).then_some(role))
-        .or_else(|| roles().find_map(|(role, m)| m.eq_ignore_ascii_case(canonical).then_some(role)))
+    if let Some(role) = roles().find_map(|(role, m)| (m == canonical).then_some(role)) {
+        return Some(role);
+    }
+    // Case-insensitive fallback only when it is unambiguous: members that
+    // differ only in case must not resolve by list order.
+    let mut folded = roles().filter(|(_, m)| m.eq_ignore_ascii_case(canonical));
+    match (folded.next(), folded.next()) {
+        (Some((role, _)), None) => Some(role),
+        _ => None,
+    }
 }

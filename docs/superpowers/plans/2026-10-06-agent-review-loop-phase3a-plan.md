@@ -251,11 +251,13 @@ pub fn run_turn_with_retry(
 - [x] Tests (`session_tests.rs`): each row of P3a-§3 through a scripted `TerminalGate`;
   `send_prompt_p1_answers_unchanged` passes **unchanged**; AC-P3a-16 `/riule` re-asks.
 - [x] Remove every `wired in PR 3` attribute. Green, lint, commit `feat(review): /note and @agent at the send prompt`.
+- [x] Follow-up: the case-insensitive fallback in `member_role` resolves only when exactly one member folds to the typed name; two members differing only in case are refused (N3 hint) instead of resolved by list order. Test: `case_only_member_collision_is_deterministic`.
 
 ## Task 8 — End-to-end check
 
-- [ ] Full review-module test run plus `cargo nextest run -p mur-core review` (see `docs/BUILD.md`).
-- [ ] `git grep 'wired in PR 3' -- '*.rs'` empty.
+- [x] Full review-module test run plus `cargo nextest run -p mur-core review` (see `docs/BUILD.md`).
+- [x] `git grep 'wired in PR 3' -- '*.rs'` empty.
+- [x] Result: `nextest -p mur-core review` 503/503. Full `nextest -p mur-core`: 8398 run, 8389 passed, 9 failed, none in `review::`. 8 are the pre-existing `serena_install::with_fake_uv` failures (4 tests, lib + bin), red on `main` too; 1 is `agent_start_without_symlink`, an environment denial (`spawn $TMPDIR/.../mur-agent-runtime: Operation not permitted`) from running under the MUR agent seal; `main` (d8bf20f4) fails the same test with the identical error in the same sandbox. No new failures.
 
 ## Task 9 — Docs
 
