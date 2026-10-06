@@ -271,8 +271,10 @@ pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
     std::fs::canonicalize(path).map(strip_verbatim)
 }
 
+/// Drop a Windows `\\?\` verbatim prefix so canonical paths from different
+/// sources compare equal; identity elsewhere.
 #[cfg(windows)]
-fn strip_verbatim(p: PathBuf) -> PathBuf {
+pub fn strip_verbatim(p: PathBuf) -> PathBuf {
     use std::path::Prefix;
     let mut comps = p.components();
     let Some(Component::Prefix(pre)) = comps.next() else {
@@ -296,8 +298,9 @@ fn strip_verbatim(p: PathBuf) -> PathBuf {
     out
 }
 
+/// See the Windows variant; identity on every other platform.
 #[cfg(not(windows))]
-fn strip_verbatim(p: PathBuf) -> PathBuf {
+pub fn strip_verbatim(p: PathBuf) -> PathBuf {
     p
 }
 

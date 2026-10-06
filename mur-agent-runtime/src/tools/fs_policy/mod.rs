@@ -345,10 +345,15 @@ pub(crate) fn for_file_tools(
 /// live grant matches; a grant naming a missing path fails closed — and
 /// `mur agent perm` rejects those up front (`reject_dead_grant`).
 pub(crate) fn under_any(roots: &[String], canonical: &Path) -> bool {
+    // Both sides go through `strip_verbatim`: callers hand in paths from
+    // either `std::fs::canonicalize` (`\\?\C:\...` on Windows) or
+    // `mur_track::turn::canonicalize` (prefix-free), and `starts_with`
+    // treats those prefixes as different roots.
+    let canonical = mur_track::turn::strip_verbatim(canonical.to_path_buf());
     roots.iter().any(|r| {
         let expanded = crate::sandbox::policy::expand_entitlement_path(r);
         let root = std::fs::canonicalize(&expanded).unwrap_or(expanded);
-        canonical.starts_with(&root)
+        canonical.starts_with(mur_track::turn::strip_verbatim(root))
     })
 }
 
@@ -418,12 +423,13 @@ fn self_protected_write_only(agent_home: &Path) -> Vec<PathBuf> {
 pub(crate) fn under_any_read_deny(roots: &[String], canonical: &Path, agent_home: &Path) -> bool {
     let carved: Vec<PathBuf> = self_protected_write_only(agent_home)
         .into_iter()
-        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .map(|p| mur_track::turn::strip_verbatim(std::fs::canonicalize(&p).unwrap_or(p)))
         .collect();
-    if carved.iter().any(|p| p == canonical) {
+    let canonical = mur_track::turn::strip_verbatim(canonical.to_path_buf());
+    if carved.iter().any(|p| *p == canonical) {
         return false;
     }
-    under_any(roots, canonical)
+    under_any(roots, &canonical)
 }
 
 pub(crate) fn check_write_entitlement(
