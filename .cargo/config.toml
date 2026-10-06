@@ -21,9 +21,3 @@ RUST_MIN_STACK = "33554432"
 debug = 1
 incremental = true
 
-# Cargo.toml's [profile.test] spells out `debug = 0, incremental = false`
-# explicitly, and explicit keys don't inherit from dev — so without this
-# block every `cargo nextest` rebuilds mur-core from scratch.
-[profile.test]
-debug = 1
-incremental = true
