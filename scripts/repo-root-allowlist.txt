@@ -36,7 +36,6 @@ mur-core
 mur-daemon
 mur-gui-core
 mur-hub-gui
-mur-hub-mascot-demo.html
 mur-mcp-proto
 mur-mcp-server
 mur-mobile-app
@@ -48,7 +47,6 @@ mur-track
 mur-zfs-agent
 package-lock.json
 package.json
-registry-work
 release
 scripts
 spike-e1-versioned-store
