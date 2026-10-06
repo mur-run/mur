@@ -290,7 +290,7 @@ impl LoopRun<'_> {
             // Main's turn: produce or revise (§3.1). With findings open it
             // must also answer each one (§3.4), machine-validated like the
             // verdict; with none open its reply is free text.
-            let mut params = main_turn_params(self.task, round, &ledger);
+            let mut params = main_turn_params(self.task, round, &ledger, &[]);
             let mut pre_confirmed = false;
             let (main_reply, rebuttal) = loop {
                 let main_open = open_ids(&ledger);
@@ -325,7 +325,7 @@ impl LoopRun<'_> {
                         }
                         write_ruling(&self.ruling_ctx(false), &mut ledger, &r)?;
                         self.last_activity = (self.now)();
-                        params = main_turn_params(self.task, round, &ledger);
+                        params = main_turn_params(self.task, round, &ledger, &[]);
                         let text = message_text(&params).unwrap_or_default();
                         self.transport
                             .show(&format!("{RULING_REGENERATED_BANNER}\n{text}"))?;
@@ -347,7 +347,7 @@ impl LoopRun<'_> {
             // the verdict is folded into a scratch ledger first and signed
             // only once the whole round folds cleanly, so a bad reply never
             // poisons the channel for replay.
-            let params = reviewer_turn_params(self.task, round, &main_reply, &round_ledger);
+            let params = reviewer_turn_params(self.task, round, &main_reply, &round_ledger, &[]);
             let reviewer_open = open_ids(&round_ledger);
             let staged = match self.turn(
                 self.reviewer,

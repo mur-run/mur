@@ -136,13 +136,14 @@ pub const REVIEW_STOP_REASON_REPLAY_FAILED: &str = "replay_failed";
 /// §3.1: main's turn prompt. Placeholders: `{task}`, `{round}`,
 /// `{open_findings}` (a rendered list, or [`REVIEW_NO_OPEN_FINDINGS`]),
 /// `{binding_rulings}` (P2-§5.3; a [`REVIEW_BINDING_RULINGS_HEADER`] block
-/// ending in a blank line, or empty).
+/// ending in a blank line, or empty), `{human_notes}` (P3a-§6.2; a
+/// [`REVIEW_HUMAN_NOTES_HEADER`] block ending in a blank line, or empty).
 pub const REVIEW_MAIN_PROMPT: &str = "You are the main agent in a review loop (round {round}).
 
 Task:
 {task}
 
-{binding_rulings}Open review findings from the reviewer:
+{binding_rulings}{human_notes}Open review findings from the reviewer:
 {open_findings}
 
 Do the task, or revise your previous work to address the open findings, then summarise what you changed. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
@@ -150,7 +151,7 @@ Do the task, or revise your previous work to address the open findings, then sum
 A reason is required for reject and partial.";
 
 /// §3.2: the reviewer's turn prompt. Placeholders: `{task}`, `{round}`,
-/// `{main_reply}`, `{open_findings}`, `{binding_rulings}` (as in
+/// `{main_reply}`, `{open_findings}`, `{binding_rulings}`, `{human_notes}` (as in
 /// [`REVIEW_MAIN_PROMPT`]). It pins the verdict wire shape and
 /// tells the reviewer to return `blocked` when uncertain (§3.2).
 pub const REVIEW_REVIEWER_PROMPT: &str = "You are the reviewer in a review loop (round {round}).
@@ -161,7 +162,7 @@ Task the main agent is working on:
 The main agent's latest reply:
 {main_reply}
 
-{binding_rulings}Previously issued findings that are still open:
+{binding_rulings}{human_notes}Previously issued findings that are still open:
 {open_findings}
 
 Review the work. End your reply with exactly one fenced ```json block of this shape:
@@ -172,6 +173,10 @@ Rules: `findings` lists NEW findings only; never invent IDs, the system assigns 
 /// P2-§5.3: heads the binding-ruling block, ranked above the findings.
 pub const REVIEW_BINDING_RULINGS_HEADER: &str =
     "Binding rulings from the human (these override any finding below; do not argue them):";
+/// P3a-§6.2: heads the human-note block. Notes outrank findings (P1-§6)
+/// but are guidance, not rulings: no instruction to justify non-adoption.
+pub const REVIEW_HUMAN_NOTES_HEADER: &str =
+    "Notes from the human (these take priority over the findings below):";
 
 /// Rendered in place of `{open_findings}` when the open set is empty.
 pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";

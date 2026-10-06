@@ -8,11 +8,11 @@
 //! must be machine-validated").
 
 use super::constants::{
-    REVIEW_BINDING_RULINGS_HEADER, REVIEW_MAIN_PROMPT, REVIEW_NO_OPEN_FINDINGS,
-    REVIEW_REVIEWER_PROMPT,
+    REVIEW_BINDING_RULINGS_HEADER, REVIEW_HUMAN_NOTES_HEADER, REVIEW_MAIN_PROMPT,
+    REVIEW_NO_OPEN_FINDINGS, REVIEW_REVIEWER_PROMPT,
 };
 use super::ledger::Ledger;
-use super::schema::Role;
+use super::schema::{HumanNote, Role};
 
 /// Wrap `text` as A2A `message/send` params: one user message, one text part.
 pub fn text_message_params(text: &str) -> serde_json::Value {
@@ -76,6 +76,26 @@ fn render_binding_rulings(ledger: &Ledger, role: Role) -> String {
     out
 }
 
+/// P3a-§6.2: notes for `to` — the ledger's unseen ones, then the pending
+/// ones aimed at `to` or broadcast, in that order. Empty when there are
+/// none, so the slot vanishes and the message is unchanged.
+fn render_human_notes(ledger: &Ledger, pending: &[HumanNote], to: Role) -> String {
+    let notes: Vec<&HumanNote> = ledger
+        .unseen_notes(to)
+        .iter()
+        .chain(pending.iter().filter(|n| n.target.is_none_or(|t| t == to)))
+        .collect();
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("{REVIEW_HUMAN_NOTES_HEADER}\n");
+    for n in notes {
+        out.push_str(&format!("- {}\n", n.text));
+    }
+    out.push('\n');
+    out
+}
+
 /// Fill `{name}` slots in `template` in ONE left-to-right pass. Substituted
 /// values are never rescanned, so human and model text (task, rulings, main's
 /// reply) reaches the agent byte-for-byte even when it contains a literal
@@ -109,7 +129,13 @@ fn render_template(template: &str, slots: &[(&str, &str)]) -> String {
 }
 
 /// Main's turn (§3.1, §3.4): the task plus every finding still open.
-pub fn main_turn_params(task: &str, round: u32, ledger: &Ledger) -> serde_json::Value {
+/// `pending` are notes typed at this prompt and not yet flushed (P3a-§6.2).
+pub fn main_turn_params(
+    task: &str,
+    round: u32,
+    ledger: &Ledger,
+    pending: &[HumanNote],
+) -> serde_json::Value {
     let text = render_template(
         REVIEW_MAIN_PROMPT,
         &[
@@ -118,6 +144,10 @@ pub fn main_turn_params(task: &str, round: u32, ledger: &Ledger) -> serde_json::
             (
                 "binding_rulings",
                 &render_binding_rulings(ledger, Role::Main),
+            ),
+            (
+                "human_notes",
+                &render_human_notes(ledger, pending, Role::Main),
             ),
             ("task", task),
         ],
@@ -132,6 +162,7 @@ pub fn reviewer_turn_params(
     round: u32,
     main_reply: &str,
     ledger: &Ledger,
+    pending: &[HumanNote],
 ) -> serde_json::Value {
     let text = render_template(
         REVIEW_REVIEWER_PROMPT,
@@ -141,6 +172,10 @@ pub fn reviewer_turn_params(
             (
                 "binding_rulings",
                 &render_binding_rulings(ledger, Role::Reviewer),
+            ),
+            (
+                "human_notes",
+                &render_human_notes(ledger, pending, Role::Reviewer),
             ),
             ("task", task),
             ("main_reply", main_reply),
@@ -195,7 +230,7 @@ mod tests {
 
     #[test]
     fn main_prompt_includes_task_and_no_findings_marker() {
-        let p = main_turn_params("fix the bug", 1, &Ledger::default());
+        let p = main_turn_params("fix the bug", 1, &Ledger::default(), &[]);
         let text = message_text(&p).unwrap();
         assert!(text.contains("fix the bug"));
         assert!(text.contains("round 1"));
@@ -254,8 +289,8 @@ mod tests {
     fn both_prompts_carry_binding_rulings_above_the_findings() {
         let l = ruled_ledger();
         for p in [
-            main_turn_params("t", 4, &l),
-            reviewer_turn_params("t", 4, "reply", &l),
+            main_turn_params("t", 4, &l, &[]),
+            reviewer_turn_params("t", 4, "reply", &l, &[]),
         ] {
             let text = message_text(&p).unwrap();
             let header = text.find(REVIEW_BINDING_RULINGS_HEADER).expect(text);
@@ -268,8 +303,8 @@ mod tests {
     #[test]
     fn no_rulings_no_header() {
         for p in [
-            main_turn_params("t", 1, &Ledger::default()),
-            reviewer_turn_params("t", 1, "reply", &Ledger::default()),
+            main_turn_params("t", 1, &Ledger::default(), &[]),
+            reviewer_turn_params("t", 1, "reply", &Ledger::default(), &[]),
         ] {
             let text = message_text(&p).unwrap();
             assert!(!text.contains(REVIEW_BINDING_RULINGS_HEADER), "{text}");
@@ -279,7 +314,7 @@ mod tests {
 
     #[test]
     fn reviewer_prompt_does_not_expand_placeholders_inside_main_reply() {
-        let p = reviewer_turn_params("t", 2, "literal {task} here", &Ledger::default());
+        let p = reviewer_turn_params("t", 2, "literal {task} here", &Ledger::default(), &[]);
         assert!(message_text(&p).unwrap().contains("literal {task} here"));
     }
 
@@ -303,8 +338,8 @@ mod tests {
         let ruling = "keep literal {task} and {main_reply} and {round} and {open_findings}";
         let l = ledger_with_ruling_text(ruling);
         for p in [
-            main_turn_params("THE-TASK", 4, &l),
-            reviewer_turn_params("THE-TASK", 4, "THE-REPLY", &l),
+            main_turn_params("THE-TASK", 4, &l, &[]),
+            reviewer_turn_params("THE-TASK", 4, "THE-REPLY", &l, &[]),
         ] {
             let text = message_text(&p).unwrap();
             assert!(text.contains(&format!("- F1 fix: {ruling}")), "{text}");
@@ -314,7 +349,7 @@ mod tests {
     #[test]
     fn task_placeholders_survive_reviewer_prompt() {
         let task = "document the {main_reply} and {binding_rulings} tokens";
-        let p = reviewer_turn_params(task, 1, "THE-REPLY", &Ledger::default());
+        let p = reviewer_turn_params(task, 1, "THE-REPLY", &Ledger::default(), &[]);
         assert!(message_text(&p).unwrap().contains(task));
     }
 
@@ -351,5 +386,146 @@ mod tests {
             Some("{\"verdict\":\"approve\"}")
         );
         assert_eq!(extract_verdict_json("looks good to me"), None);
+    }
+
+    // ---- P3a-§6.2: human notes ----
+
+    fn hn(text: &str, target: Option<Role>) -> HumanNote {
+        HumanNote {
+            text: text.into(),
+            target,
+        }
+    }
+
+    /// Messages rendered by `main` @ d60f20a7, before the note slot existed.
+    const GOLDEN: [(&str, &str); 4] = [
+        (
+            "main_empty",
+            include_str!("testdata/wire_golden/main_empty.txt"),
+        ),
+        (
+            "main_ruled",
+            include_str!("testdata/wire_golden/main_ruled.txt"),
+        ),
+        (
+            "reviewer_empty",
+            include_str!("testdata/wire_golden/reviewer_empty.txt"),
+        ),
+        (
+            "reviewer_ruled",
+            include_str!("testdata/wire_golden/reviewer_ruled.txt"),
+        ),
+    ];
+
+    /// With no unseen and no pending notes the message is byte-identical to
+    /// the pre-3a one: no header, no blank line, no shifted separator.
+    #[test]
+    fn no_notes_message_is_byte_identical_to_before() {
+        let task = "fix the {main_reply} bug";
+        let reply = "done; see {open_findings}";
+        let empty = Ledger::default();
+        let ruled = ruled_ledger();
+        let rendered = [
+            main_turn_params(task, 1, &empty, &[]),
+            main_turn_params(task, 4, &ruled, &[]),
+            reviewer_turn_params(task, 1, reply, &empty, &[]),
+            reviewer_turn_params(task, 4, reply, &ruled, &[]),
+        ];
+        for ((name, golden), p) in GOLDEN.iter().zip(&rendered) {
+            assert_eq!(message_text(p).unwrap(), *golden, "{name}");
+        }
+        // Pending notes for the other side only must not produce a block.
+        let main_only = [hn("m", Some(Role::Main))];
+        let rev_only = [hn("r", Some(Role::Reviewer))];
+        assert_eq!(
+            message_text(&main_turn_params(task, 1, &empty, &rev_only)).unwrap(),
+            GOLDEN[0].1
+        );
+        assert_eq!(
+            message_text(&reviewer_turn_params(task, 1, reply, &empty, &main_only)).unwrap(),
+            GOLDEN[2].1
+        );
+    }
+
+    /// Unseen first, then pending for `to` (broadcast or targeted), in
+    /// order; other-side-only notes absent.
+    #[test]
+    fn notes_render_unseen_then_pending_for_the_recipient() {
+        let mut l = Ledger::default();
+        l.apply(&hn("u-both", None).into()).unwrap();
+        l.apply(&hn("u-rev", Some(Role::Reviewer)).into()).unwrap();
+        let pending = [
+            hn("p-main", Some(Role::Main)),
+            hn("p-both", None),
+            hn("p-rev", Some(Role::Reviewer)),
+        ];
+        let main = main_turn_params("t", 1, &l, &pending);
+        let main = message_text(&main).unwrap();
+        let rev = reviewer_turn_params("t", 1, "reply", &l, &pending);
+        let rev = message_text(&rev).unwrap();
+        for (text, want, absent) in [
+            (main, ["u-both", "p-main", "p-both"], "rev"),
+            (rev, ["u-both", "u-rev", "p-both"], "main"),
+        ] {
+            let at: Vec<usize> = want
+                .iter()
+                .map(|w| text.find(&format!("- {w}\n")).expect(text))
+                .collect();
+            assert!(at.windows(2).all(|w| w[0] < w[1]), "{text}");
+            assert!(!text.contains(&format!("p-{absent}")), "{text}");
+            assert!(!text.contains(&format!("u-{absent}")), "{text}");
+            assert!(text.contains(REVIEW_HUMAN_NOTES_HEADER), "{text}");
+        }
+    }
+
+    /// The note block sits after the binding rulings, before the findings.
+    #[test]
+    fn note_block_sits_between_rulings_and_findings() {
+        let l = ruled_ledger();
+        let pending = [hn("keep it small", None)];
+        for p in [
+            main_turn_params("t", 4, &l, &pending),
+            reviewer_turn_params("t", 4, "reply", &l, &pending),
+        ] {
+            let text = message_text(&p).unwrap();
+            let ruling = text.find("- F1 fix: use the cache").expect(text);
+            let header = text.find(REVIEW_HUMAN_NOTES_HEADER).expect(text);
+            let note = text.find("- keep it small").expect(text);
+            let finding = text.find("- F1 [high, open]").expect(text);
+            assert!(ruling < header && header < note && note < finding, "{text}");
+        }
+    }
+
+    /// AC-P3a-18: neither turn message asks the agent to justify not
+    /// adopting a note (§0).
+    #[test]
+    fn no_justify_non_adoption_instruction() {
+        let pending = [hn("n", None)];
+        for p in [
+            main_turn_params("t", 1, &Ledger::default(), &pending),
+            reviewer_turn_params("t", 1, "r", &Ledger::default(), &pending),
+        ] {
+            let text = message_text(&p).unwrap().to_lowercase();
+            for banned in [
+                "justify",
+                "explain why",
+                "if you do not adopt",
+                "if you don't",
+            ] {
+                assert!(!text.contains(banned), "{banned}: {text}");
+            }
+        }
+    }
+
+    /// Note text reaches the agent byte-for-byte, placeholder tokens too.
+    #[test]
+    fn note_text_placeholders_survive() {
+        let pending = [hn("see {open_findings} and {task}", None)];
+        let p = reviewer_turn_params("t", 1, "r", &Ledger::default(), &pending);
+        assert!(
+            message_text(&p)
+                .unwrap()
+                .contains("- see {open_findings} and {task}\n")
+        );
     }
 }
