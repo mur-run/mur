@@ -88,6 +88,9 @@ impl TaskRunner {
 
         let output_artifact_path = spec.output_artifact_path.clone();
         self.adopt_cwd(&id, spec.context_task_id.as_deref(), spec.cwd.as_deref());
+        // Eager, before the prompt names the working directory: the model
+        // must be handed the track path, never the project (spec §4.1).
+        self.begin_turn_track(&id).await;
         let generation = async {
             match &self.backend {
                 RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
@@ -196,6 +199,9 @@ impl TaskRunner {
             r = generation => Some(r),
             _ = &mut rx_cancel => None,
         };
+
+        // Whatever way the turn ended, its track must not outlive it.
+        self.sweep_turn_track(&id).await;
 
         // Always remove the cancel entry (success, failure, or cancel) to avoid
         // leaking senders in `cancel_signals`.

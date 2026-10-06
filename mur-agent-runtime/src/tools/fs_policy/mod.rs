@@ -70,6 +70,13 @@ impl SessionCwd {
         self.insert(id, dir);
     }
 
+    /// Point turn `id` at `dir` without the entitlement check `begin_turn`
+    /// applies: the runtime uses it to move a turn into its track and back.
+    /// Never reached by a tool.
+    pub(crate) fn rebind_turn(&self, id: &str, dir: PathBuf) {
+        self.insert(id, dir);
+    }
+
     /// Turn `id`'s directory, or the home when it has none.
     pub fn for_turn(&self, id: &str) -> PathBuf {
         self.lookup(id)

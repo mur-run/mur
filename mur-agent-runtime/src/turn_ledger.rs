@@ -250,6 +250,15 @@ pub struct TurnLedger {
     /// ledgers written before it existed.
     #[serde(default, skip_serializing_if = "is_false")]
     pub claims_external_state: bool,
+    /// What the turn's track found changed when it was promoted, relative to
+    /// the project root — the ground truth for `~ changed`, independent of
+    /// which tool did the writing (a `bash` redirect counts). `None` when
+    /// the turn ran without a track; the per-action list is used instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_changed: Option<Vec<String>>,
+    /// Promote failed, so the track was left on disk for review. The path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_kept: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -266,6 +275,8 @@ impl Default for TurnLedger {
             output_tokens: 0,
             agent: String::new(),
             claims_external_state: false,
+            files_changed: None,
+            track_kept: None,
         }
     }
 }
@@ -396,7 +407,9 @@ impl TurnLedger {
     /// alone what actually happened. And (2026-09-19) when nothing ran yet the
     /// reply names external state: a report with no evidence behind it.
     pub fn warrants_settlement(&self) -> bool {
-        !self.changed().is_empty()
+        self.files_changed.as_ref().is_some_and(|f| !f.is_empty())
+            || self.track_kept.is_some()
+            || !self.changed().is_empty()
             || !self.blocked().is_empty()
             || !self.running().is_empty()
             || !self.stop.is_clean()
@@ -593,18 +606,29 @@ pub fn render(ledger: &TurnLedger) -> String {
     }
 
     let changed = ledger.changed();
-    if !changed.is_empty() {
+    let mut files: Vec<&str> = Vec::new();
+    if let Some(promoted) = &ledger.files_changed {
+        // The track's diff is authoritative: it sees a `bash` redirect the
+        // per-action list cannot, and never counts a no-op rewrite.
+        files.extend(promoted.iter().map(String::as_str));
+    } else {
         // Deduped by target: the ledger holds one action per edit, so an agent
         // that touched one file four times used to be reported as four changed
         // files — over a list that visibly repeated the same path. An inflated
         // count is the one thing this card cannot afford.
         // ponytail: linear scan, a turn's worth of actions is tiny.
-        let mut files: Vec<&str> = Vec::new();
         for a in &changed {
             if !files.contains(&a.target.as_str()) {
                 files.push(&a.target);
             }
         }
+    }
+    if let Some(kept) = &ledger.track_kept {
+        out.push_str(&format!(
+            "  ✘ promote    edits NOT applied to the project — track kept at {kept}\n"
+        ));
+    }
+    if !files.is_empty() {
         out.push_str(&format!("  ~ changed    {} file(s)\n", files.len()));
         for t in files.iter().take(CHANGED_SHOWN) {
             out.push_str(&format!("      {t}\n"));
