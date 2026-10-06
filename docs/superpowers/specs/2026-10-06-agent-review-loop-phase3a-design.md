@@ -3,7 +3,9 @@
 - **Status:** Draft rev 3. Decisions N1–N11 were taken in brainstorm (human, 2026-10-06).
   Rev 2 drops the reviewer "say why" instruction (§0), makes unknown slash commands ask again
   instead of stopping (N10), pins where `@<agent>` is resolved (N11), and names the
-  partial-flush pause text (§5.3). Rev 3 applies §7 to the P1 and P2 specs in place. Two
+  partial-flush pause text (§5.3). Rev 3 applies §7 to the P1 and P2 specs in place. Rev 4
+  (plan decision D1, 2026-10-06) keeps P2-§5.3's boundary `/rule` contract: the rebuilt
+  message is printed and sent with no further prompt (§5.2, §5.3 retry, AC-P3a-9). Two
   flagged assumptions remain (§0); no open questions.
 - **Date:** 2026-10-06
 - **Base:** Phase 1 spec `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md` and
@@ -127,8 +129,8 @@ build: Fn(&Ledger, &[HumanNote]) -> serde_json::Value
 ```
 
 - The driver calls `build(&ledger, &pending)` **before every prompt**: the first prompt, each
-  malformed-reply resend prompt (base from the generator, then append `hint`), and after a
-  `RuleFirst` rebuild.
+  malformed-reply resend prompt (base from the generator, then append `hint`), and for the
+  `RuleFirst` rebuild (printed in full, then sent with no prompt; §5.2).
 - Main uses `main_turn_params`, the reviewer uses `reviewer_turn_params`, both extended to take
   the pending slice. The hand-written rebuild in the `RuleFirst` path is replaced by the same
   generator; there is one way to build a turn message.
@@ -160,10 +162,11 @@ one extra round trip; no retry cap is needed.
 |---|---|---|
 | `Go` | Enter, `y`, non-boundary `/rule` | flushed (§5.3), then sent with this message |
 | `Stop` | `q`; text without a prefix; `.stopped`; stdin EOF | discarded; never reach the channel |
-| `RuleFirst` | boundary `/rule` | **kept**. The driver writes the ruling, rebuilds the message from `(ledger, pending)`, and prompts again. The next `Go` flushes them. |
+| `RuleFirst` | boundary `/rule` | **kept**. The driver writes the ruling, rebuilds the message from `(ledger, pending)`, prints it, and sends it. No further prompt (P2-§5.3: the `/rule` line was the send consent). Pending notes are flushed before that send. |
 
-`RuleFirst` does **not** flush. The rebuilt message carries the pending notes because the
-generator reads `pending`, not because they were appended.
+`RuleFirst` itself does **not** flush; the send that follows it does. The rebuilt message
+carries the pending notes because the generator reads `pending`, not because they were
+appended. Channel order is therefore `ruling`, then the notes, then `turn_sent`.
 
 ### 5.3 Flush (N8, N9)
 
@@ -188,7 +191,9 @@ The driver's callback, for each pending note in queue order: `append_event(Human
   it, a human who sees the recorded notes again on resume would think they typed them twice.
   Notes already appended stay on the channel. No rollback, no deletion. This is the normal
   at-least-once state (§5.4).
-- **Retry:** the transport retry (`pre_confirmed: true`) does not call `on_consented`. Even if
+- **Retry:** `on_consented` runs once per consented send, in `run_turn_with_retry` after the
+  gate returns `Go`. The send after `RuleFirst` (`pre_confirmed: true`) is a consented send and
+  does flush. The transport retry inside `run_turn_with_retry` does not call it again. Even if
   it did, the queue is already empty (N9).
 
 ### 5.4 Abort after consent
@@ -274,7 +279,9 @@ pointing back here; edited rows are marked *(Phase 3a)*.*
   message carries both.
 - **AC-P3a-9 (RuleFirst, boundary `/rule`):** `/note A` then `/rule` at a boundary prompt →
   `ruling` written, **no** `human_note` yet; the reprinted rebuilt message contains A and the
-  ruling; Enter → `human_note(A)` then `turn_sent`.
+  ruling; no further prompt; channel order is `ruling`, `human_note(A)`, `turn_sent`; the sent
+  bytes equal the reprinted bytes. `confirm:main` count is unchanged from P2
+  (`mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437).
 - **AC-P3a-10 (resend):** malformed reply → resend prompt → `/note A` → reprint contains A and
   the format hint; Enter → the sent bytes contain A.
 - **AC-P3a-11 (at-least-once):** `/note A`, Enter, transport fails twice → `human_note(A)` on
@@ -285,8 +292,9 @@ pointing back here; edited rows are marked *(Phase 3a)*.*
 - **AC-P3a-13 (partial flush):** two pending notes, the second append fails → first
   `human_note` on the channel, second not, no send, `paused { kind: other }` whose `reason`
   states 1 of 2 notes recorded (§5.3).
-- **AC-P3a-14 (live == replay):** for AC-P3a-1, 3, 9 and 11, folding the channel from scratch
-  gives the same `unseen_notes` as the live ledger.
+- **AC-P3a-14 (live == replay):** for AC-P3a-1, 3, 9, 10 and 11, and for a note flushed at the
+  reviewer's prompt whose send then fails (the session stops mid-reviewer-turn), folding the
+  channel from scratch gives the same `unseen_notes` as the live ledger.
 - **AC-P3a-15:** `/note` with empty text → usage hint, prompt again, nothing returned to the
   driver.
 - **AC-P3a-16 (unknown slash):** `/foo` and a typo `/riule drop F1 x` → `unknown command: …`,
