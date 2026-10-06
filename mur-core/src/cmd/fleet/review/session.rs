@@ -11,6 +11,7 @@
 //! point is not, so it only runs semi-auto, and refuses to start without a
 //! TTY rather than silently sending unattended.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::time::Instant;
@@ -21,12 +22,16 @@ use mur_common::fleet::Fleet;
 use mur_common::limits::Stuck;
 
 use super::constants::{
-    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX, RUNNING_LOCK,
-    TRANSPORT_RETRY_DELAY,
+    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
+    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_STOP_REASON_ESCALATION,
+    RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT, RULING_RECORDED_CONTINUE_PROMPT,
+    RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
-use super::driver::{A2aTransport, ReviewTransport};
-use super::ledger::Ledger;
+use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
+use super::ledger::{EscalationRecord, Ledger};
 use super::loop_driver::{LoopDriverStop, run_review_loop};
+use super::resume::ResumeEnd;
+use super::ruling::{is_rule_command, parse_rule_command};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
 use super::wire::message_text;
 use crate::cmd::fleet::loop_run::{LoopStop, fleet_bounds};
@@ -60,7 +65,7 @@ pub fn stop_reason(stop: &LoopDriverStop) -> String {
             format!("{member} task failed: {cause}")
         }
         LoopDriverStop::RoundStuck => "stuck (round: open findings unchanged)".into(),
-        LoopDriverStop::Escalation => "escalation".into(),
+        LoopDriverStop::Escalation => REVIEW_STOP_REASON_ESCALATION.into(),
         LoopDriverStop::Guard(LoopStop::Deadline) => "limit: deadline".into(),
         LoopDriverStop::Guard(LoopStop::Stuck) => "limit: stuck (no activity)".into(),
         LoopDriverStop::Guard(LoopStop::Budget) => "limit: cost_usd".into(),
@@ -224,29 +229,86 @@ impl HumanWait {
     }
 }
 
+/// Reads one line from the human; `Ok("")` is EOF.
+pub(super) type LineReader<'a> = &'a dyn Fn() -> std::io::Result<String>;
+/// Writes prompt text to the human, without a trailing newline of its own.
+pub(super) type TextWriter<'a> = &'a dyn Fn(&str) -> std::io::Result<()>;
+
+/// Production [`LineReader`]: one line from stdin.
+pub(super) fn stdin_line() -> std::io::Result<String> {
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(line)
+}
+
+/// Production [`TextWriter`]: stdout, flushed so a prompt shows before a read.
+pub(super) fn stdout_text(text: &str) -> std::io::Result<()> {
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes())?;
+    out.flush()
+}
+
 /// §5 semi-auto over a terminal: show each outgoing message and send it
 /// only when the human presses Enter; `q` declines (ends the session).
+/// `input`/`output` are the terminal; tests inject their own.
 pub(super) struct TerminalGate<'a, T> {
     pub(super) inner: T,
     pub(super) wait: &'a HumanWait,
+    pub(super) input: LineReader<'a>,
+    pub(super) output: TextWriter<'a>,
 }
 
 impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
         let reply = self.inner.send(member, params)?;
-        println!("\n--- reply from {member} ---\n{reply}\n");
+        (self.output)(&format!("\n--- reply from {member} ---\n{reply}\n\n"))?;
         Ok(reply)
     }
 
-    fn confirm_send(&self, member: &str, params: &serde_json::Value) -> Result<bool> {
+    fn confirm_send(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        open: &BTreeSet<String>,
+    ) -> Result<SendAnswer> {
         let text = message_text(params).unwrap_or_default();
-        println!("\n--- next message to {member} ---\n{text}\n");
-        print!("Send to {member}? [Enter = send, q = stop] ");
-        std::io::stdout().flush()?;
-        let mut line = String::new();
-        self.wait
-            .time(|| std::io::stdin().lock().read_line(&mut line))?;
-        Ok(is_send_answer(&line))
+        (self.output)(&format!("\n--- next message to {member} ---\n{text}\n"))?;
+        loop {
+            (self.output)(&format!("\n{}", SEND_PROMPT.replace("{member}", member)))?;
+            let line = self.wait.time(|| (self.input)())?;
+            if !is_rule_command(line.trim()) {
+                return Ok(if is_send_answer(&line) {
+                    SendAnswer::Send
+                } else {
+                    SendAnswer::Stop
+                });
+            }
+            match parse_rule_command(&line, open) {
+                Ok(input) => return Ok(SendAnswer::SendWithRuling(input)),
+                Err(hint) => (self.output)(&format!("{hint}\n"))?,
+            }
+        }
+    }
+
+    fn ask_ruling(&self, pending: &EscalationRecord, ledger: &Ledger) -> Result<String> {
+        let id = pending.finding_id.as_str();
+        let finding = ledger.finding(id);
+        let positions = RULING_POSITIONS
+            .replace("{id}", id)
+            .replace("{reason}", &pending.reason)
+            .replace("{issue}", finding.map_or("", |f| f.issue.as_str()))
+            .replace(
+                "{main}",
+                finding
+                    .and_then(|f| f.last_reject_reason.as_deref())
+                    .unwrap_or(RULING_NO_MAIN_REASON),
+            );
+        (self.output)(&format!("{positions}{}", RULING_PROMPT.replace("{id}", id)))?;
+        Ok(self.wait.time(|| (self.input)())?)
+    }
+
+    fn show(&self, text: &str) -> Result<()> {
+        Ok((self.output)(&format!("{text}\n"))?)
     }
 
     fn take_human_wait(&self) -> std::time::Duration {
@@ -356,6 +418,8 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
             decide: &decide,
         },
         wait: &wait,
+        input: &stdin_line,
+        output: &stdout_text,
     };
     let (ledger, stop) = run_session(
         &transport,
@@ -394,13 +458,25 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
         humantime_like(r.active),
         humantime_like(r.limits.deadline()),
     );
-    print!("Paused — continue? [Enter = continue, q = leave paused] ");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    if !is_send_answer(&line) {
-        println!("Left paused.");
-        return Ok(());
+    // P2-§6: branch on the ledger. A session that owes a ruling goes
+    // straight to the ruling prompt (inside `settle_then_resume`); any
+    // other asks to continue first.
+    if r.ledger.pending_ruling().is_empty() {
+        print!(
+            "{}",
+            if r.ruling_recorded {
+                RULING_RECORDED_CONTINUE_PROMPT
+            } else {
+                REVIEW_PAUSED_CONTINUE_PROMPT
+            }
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        if !is_send_answer(&line) {
+            println!("{REVIEW_LEFT_PAUSED_NOTICE}");
+            return Ok(());
+        }
     }
     let channel_id = r.fleet.channel_id.clone();
     let wait = HumanWait::default();
@@ -411,10 +487,15 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
             decide: &decide,
         },
         wait: &wait,
+        input: &stdin_line,
+        output: &stdout_text,
     };
-    let (ledger, stop) =
-        super::resume::resume_session(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)?;
-    print!("\n{}", render_stop_screen(&stop, &ledger, &channel_id));
+    match super::resume::settle_then_resume(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)? {
+        ResumeEnd::LeftPaused => println!("{REVIEW_LEFT_PAUSED_NOTICE}"),
+        ResumeEnd::Ran(ledger, stop) => {
+            print!("\n{}", render_stop_screen(&stop, &ledger, &channel_id));
+        }
+    }
     Ok(())
 }
 

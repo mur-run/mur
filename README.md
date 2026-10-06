@@ -631,9 +631,15 @@ Agent** wizard offers the same catalog as a source.
   --reviewer <agent> "<task>"` runs round after round until the reviewer
   approves, blocks, or a limit trips. Findings get IDs from the system, not
   the model, and a malformed reply gets one retry before the session stops as
-  `blocked`. You see every message and press Enter to send it. A crash or an
-  agent that stops answering leaves it paused, and `mur fleet review-resume
-  review-…` picks it up after the last finished round. Sessions are hidden
+  `blocked`. You see every message and press Enter to send it. When the main
+  agent rejects the same finding twice, the session waits for your ruling
+  instead of stopping: `/rule drop F3 <why>` closes it, `/rule fix F3 <how>`
+  makes it binding (main can no longer reject it), `/abandon` ends the
+  session, and `q` leaves it paused. A ruling is shown to both agents in
+  their next turn, and you can also type `/rule` at any send prompt. A crash
+  or an agent that stops answering leaves it paused, and `mur fleet
+  review-resume review-…` picks it up after the last finished round — at the
+  ruling prompt, if one is still owed. Sessions are hidden
   from `mur fleet list` unless you pass `--include-review`, and their channels
   stay as an audit record until `mur fleet prune-reviews --older-than <age>`
   clears the finished ones.

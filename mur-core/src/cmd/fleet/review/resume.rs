@@ -31,8 +31,8 @@ use super::rollback::{ReplayOutcome, replay_with_damage};
 use super::run_lock::DriverLock;
 use super::schema::{
     Cumulative, NoteClassification, PauseKind, ReviewPayload, SessionLimits, classify_note_payload,
-    to_note_payload,
 };
+use super::settle::{RulingCtx, RulingOutcome, settle_rulings};
 use super::state::{SessionState, observe};
 use crate::cmd::fleet::store;
 
@@ -41,9 +41,13 @@ use crate::cmd::fleet::store;
 #[derive(Debug)]
 pub struct Resumable {
     pub fleet: Fleet,
-    /// §7.0: the driver died without pausing; resume records `paused`
-    /// (reason `crashed`) before `resumed`.
+    /// §7.0: the driver died without pausing. `prepare_resume` has already
+    /// recorded `paused` (reason `crashed`) under the lock, before any
+    /// prompt (P2-§6, D2); the flag only picks the banner.
     pub crashed: bool,
+    /// P2-§6 row 2: the last review event was a `ruling` with no later
+    /// `resumed`, so the continue prompt says the ruling is recorded.
+    pub ruling_recorded: bool,
     pub lock: DriverLock,
     pub ledger: Ledger,
     pub round: u32,
@@ -196,10 +200,26 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
         other => bail!("review session '{name}' cannot be resumed (state: {other:?})"),
     };
     let active = active_time(&timed).max(Duration::from_millis(ledger.exec_time_ms));
+    let ruling_recorded = matches!(payloads.last(), Some(ReviewPayload::Ruling { .. }));
+    let mut ledger = ledger;
+    if crashed {
+        // P2-§6 / D2: written now, under the lock and before any prompt, so
+        // the running segment ends here and the human's wait at the prompt
+        // is never counted as execution time. From here on a crashed
+        // session is an already-paused one.
+        let paused = ReviewPayload::Paused {
+            kind: PauseKind::Other,
+            reason: REVIEW_PAUSE_REASON_CRASHED.to_string(),
+            cumulative: cumulative_at(&ledger, active),
+        };
+        ledger.apply(&paused)?;
+        super::loop_driver::append(&svc, mur_home, &fleet.channel_id, &paused)?;
+    }
     Ok(Resumable {
         round: ledger.round + 1,
         fleet,
         crashed,
+        ruling_recorded,
         lock,
         ledger,
         limits,
@@ -207,7 +227,65 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
     })
 }
 
+fn cumulative_at(ledger: &Ledger, active: Duration) -> Cumulative {
+    Cumulative {
+        exec_time_ms: u64::try_from(active.as_millis()).unwrap_or(u64::MAX),
+        cost_usd_micros: ledger.cost_usd_micros,
+    }
+}
+
+/// How [`settle_then_resume`] ended.
+#[derive(Debug)]
+pub enum ResumeEnd {
+    /// `q` or EOF at the ruling prompt: nothing written, lock released.
+    LeftPaused,
+    /// The session ran (or was ended at the prompt) and is now past it.
+    Ran(Ledger, LoopDriverStop),
+}
+
+/// P2-§6 row 1: a session that owes a ruling resumes AT the ruling prompt,
+/// paused or crashed alike (the crashed `paused` is already written). With
+/// nothing owed this is [`resume_session`].
+pub fn settle_then_resume(
+    transport: &dyn ReviewTransport,
+    mur_home: &Path,
+    mut r: Resumable,
+    retry_delay: Duration,
+) -> Result<ResumeEnd> {
+    if r.ledger.pending_ruling().is_empty() {
+        let (ledger, stop) = resume_session(transport, mur_home, r, retry_delay)?;
+        return Ok(ResumeEnd::Ran(ledger, stop));
+    }
+    let svc = ChannelService::open(mur_home)?;
+    let ctx = RulingCtx {
+        transport,
+        svc: &svc,
+        mur_home,
+        fleet_name: &r.fleet.name,
+        channel_id: &r.fleet.channel_id,
+        already_paused: true,
+    };
+    let cumulative = cumulative_at(&r.ledger, r.active);
+    let outcome = settle_rulings(&ctx, &mut r.ledger, cumulative)?;
+    // The wait at this prompt fell between `paused` and `resumed`, which
+    // never counts: drop it so the resumed loop does not subtract it again.
+    let _ = transport.take_human_wait();
+    let stop = match outcome {
+        RulingOutcome::Settled => {
+            let (ledger, stop) = resume_session(transport, mur_home, r, retry_delay)?;
+            return Ok(ResumeEnd::Ran(ledger, stop));
+        }
+        RulingOutcome::LeftPaused => return Ok(ResumeEnd::LeftPaused),
+        RulingOutcome::Abandoned => LoopDriverStop::Escalation,
+        RulingOutcome::KillSwitch => LoopDriverStop::Stopped,
+    };
+    let Resumable { fleet, ledger, .. } = r;
+    let (ledger, stop) = super::session::end_session(mur_home, &fleet, Ok((ledger, stop)))?;
+    Ok(ResumeEnd::Ran(ledger, stop))
+}
+
 /// Write the signed `resumed` event and continue the loop at the same round.
+/// A crashed session's `paused` was already written by [`prepare_resume`].
 pub fn resume_session(
     transport: &dyn ReviewTransport,
     mur_home: &Path,
@@ -216,40 +294,19 @@ pub fn resume_session(
 ) -> Result<(Ledger, LoopDriverStop)> {
     let Resumable {
         fleet,
-        crashed,
         lock: _lock,
         mut ledger,
         round,
         limits,
         active,
+        ..
     } = r;
-    let cumulative = Cumulative {
-        exec_time_ms: u64::try_from(active.as_millis()).unwrap_or(u64::MAX),
-        cost_usd_micros: ledger.cost_usd_micros,
+    let resumed = ReviewPayload::Resumed {
+        cumulative: cumulative_at(&ledger, active),
     };
-    let mut lifecycle = Vec::new();
-    if crashed {
-        lifecycle.push(ReviewPayload::Paused {
-            kind: PauseKind::Other,
-            reason: REVIEW_PAUSE_REASON_CRASHED.to_string(),
-            cumulative,
-        });
-    }
-    lifecycle.push(ReviewPayload::Resumed { cumulative });
     let svc = ChannelService::open(mur_home)?;
-    for payload in &lifecycle {
-        ledger.apply(payload)?;
-        crate::channel_writer::append_as_writer(
-            &svc,
-            mur_home,
-            &fleet.channel_id,
-            crate::channel_writer::ROUTER_AGENT,
-            ChannelActor::System,
-            EventKind::Note,
-            to_note_payload(payload),
-            None,
-        )?;
-    }
+    ledger.apply(&resumed)?;
+    super::loop_driver::append(&svc, mur_home, &fleet.channel_id, &resumed)?;
     let members = Members {
         fleet_name: &fleet.name,
         channel_id: &fleet.channel_id,
@@ -274,3 +331,7 @@ pub fn resume_session(
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;
+
+#[cfg(test)]
+#[path = "resume_ruling_tests.rs"]
+mod resume_ruling_tests;

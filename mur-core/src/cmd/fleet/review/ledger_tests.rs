@@ -414,3 +414,29 @@ fn binding_rulings_clear_per_role_on_turn_sent() {
     assert!(ledger.binding_rulings(Role::Main).is_empty());
     assert_eq!(ledger.binding_rulings(Role::Reviewer).len(), 1);
 }
+
+/// P2-§5.1 step 3: the ruling prompt shows main's last position, so the
+/// fold keeps the reason from the latest `reject` (derived, replay-safe).
+#[test]
+fn rebuttal_reject_records_last_reason() {
+    let mut ledger = Ledger::default();
+    let f1 = issue(&mut ledger, Severity::High, "x", 1);
+    assert_eq!(ledger.finding(&f1).unwrap().last_reject_reason, None);
+    for (round, reason) in [(1, "first"), (2, "second")] {
+        ledger
+            .apply(&ReviewPayload::Rebuttal {
+                round,
+                responses: vec![RebuttalResponseDto {
+                    id: f1.clone(),
+                    answer: RebuttalAnswer::Reject,
+                    reason: Some(reason.to_string()),
+                }],
+                cumulative: cum(0, 0),
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        ledger.finding(&f1).unwrap().last_reject_reason.as_deref(),
+        Some("second")
+    );
+}

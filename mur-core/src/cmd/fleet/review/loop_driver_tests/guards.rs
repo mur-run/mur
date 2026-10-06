@@ -258,10 +258,15 @@ struct HumanGateTransport {
 }
 
 impl ReviewTransport for HumanGateTransport {
-    fn confirm_send(&self, _member: &str, _params: &serde_json::Value) -> anyhow::Result<bool> {
+    fn confirm_send(
+        &self,
+        _member: &str,
+        _params: &serde_json::Value,
+        _open: &std::collections::BTreeSet<String>,
+    ) -> anyhow::Result<crate::cmd::fleet::review::driver::SendAnswer> {
         self.clock.set(self.clock.get() + self.gate_wait);
         self.waited.set(self.waited.get() + self.gate_wait);
-        Ok(true)
+        Ok(crate::cmd::fleet::review::driver::SendAnswer::Send)
     }
 
     fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
