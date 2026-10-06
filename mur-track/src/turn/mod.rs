@@ -40,11 +40,20 @@ pub const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", WORKTREES_DIR
 pub enum TreeClone {
     /// Plain recursive copy. Always available; cost is linear in bytes.
     Copy,
+    /// macOS APFS `clonefile(2)` per entry: metadata-only, blocks are shared
+    /// until written. Requires track and project on one APFS volume —
+    /// `.worktrees/` under the project guarantees that. Falls back to a byte
+    /// copy per file when the kernel refuses (non-APFS volume, special file).
+    #[cfg(target_os = "macos")]
+    ApfsClone,
 }
 
 impl TreeClone {
     /// The best clone method for this host.
     pub fn detect() -> Self {
+        #[cfg(target_os = "macos")]
+        return TreeClone::ApfsClone;
+        #[cfg(not(target_os = "macos"))]
         TreeClone::Copy
     }
 }
@@ -348,12 +357,18 @@ fn fingerprint_path(p: &Path) -> Result<Option<String>> {
 /// Clone `src`'s working tree into `dst` (which already holds the `.git`
 /// pointer), skipping [`SKIP_DIRS`] at every depth.
 fn clone_tree(src: &Path, dst: &Path, method: TreeClone) -> Result<()> {
-    match method {
-        TreeClone::Copy => copy_tree(src, dst),
-    }
+    let leaf: &dyn Fn(&Path, &Path) -> Result<()> = match method {
+        TreeClone::Copy => &copy_entry,
+        #[cfg(target_os = "macos")]
+        TreeClone::ApfsClone => &apfs::clone_entry,
+    };
+    walk_tree(src, dst, leaf)
 }
 
-fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+/// Recreate `src`'s directory structure under `dst`, calling `leaf` for every
+/// non-directory entry and skipping [`SKIP_DIRS`] at every depth. Directories
+/// are walked rather than cloned whole so a nested `target/` is skipped too.
+fn walk_tree(src: &Path, dst: &Path, leaf: &dyn Fn(&Path, &Path) -> Result<()>) -> Result<()> {
     for entry in std::fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
@@ -362,15 +377,67 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
         }
         let from = entry.path();
         let to = dst.join(&name);
-        let ft = entry.file_type()?;
-        if ft.is_dir() {
+        if entry.file_type()?.is_dir() {
             std::fs::create_dir_all(&to)?;
-            copy_tree(&from, &to)?;
+            walk_tree(&from, &to, leaf)?;
         } else {
-            copy_entry(&from, &to)?;
+            leaf(&from, &to)?;
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+mod apfs {
+    use super::copy_entry;
+    use anyhow::Result;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    /// `CLONE_NOFOLLOW` from `<sys/clonefile.h>`; `libc` does not export it.
+    const CLONE_NOFOLLOW: u32 = 0x0001;
+
+    /// `clonefile(2)` one entry; a symlink is cloned as a symlink
+    /// (`CLONE_NOFOLLOW`). Any refusal degrades to a byte copy of that one
+    /// entry, so a stray non-APFS mount or special file never fails the turn.
+    pub(super) fn clone_entry(from: &Path, to: &Path) -> Result<()> {
+        if try_clonefile(from, to) {
+            return Ok(());
+        }
+        copy_entry(from, to)
+    }
+
+    /// True when the kernel cloned `from` to `to`; false means the caller
+    /// must copy bytes.
+    pub(super) fn try_clonefile(from: &Path, to: &Path) -> bool {
+        let (Ok(src), Ok(dst)) = (
+            CString::new(from.as_os_str().as_bytes()),
+            CString::new(to.as_os_str().as_bytes()),
+        ) else {
+            return false;
+        };
+        // SAFETY: both pointers are valid NUL-terminated paths for the call.
+        unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), CLONE_NOFOLLOW) == 0 }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn clonefile_is_really_used_on_this_volume() {
+            let td = tempfile::tempdir().unwrap();
+            let from = td.path().join("a");
+            std::fs::write(&from, "bytes").unwrap();
+            assert!(
+                super::try_clonefile(&from, &td.path().join("b")),
+                "clonefile(2) refused on the temp volume — the fast path is dead here"
+            );
+            assert_eq!(
+                std::fs::read_to_string(td.path().join("b")).unwrap(),
+                "bytes"
+            );
+        }
+    }
 }
 
 /// Copy one non-directory entry, preserving symlinks as symlinks.

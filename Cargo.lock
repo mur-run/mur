@@ -6858,6 +6858,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 6.0.0",
+ "libc",
  "mur-common",
  "serde",
  "serde_json",

@@ -192,3 +192,64 @@ fn display_path_maps_track_paths_back_to_the_project() {
     let outside = PathBuf::from("/elsewhere/x");
     assert_eq!(track.display_path(&outside), outside);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn apfs_clone_produces_the_same_tree_as_copy() {
+    let td = dirty_repo();
+    let project = root(&td);
+    // A symlink and a nested dir, the two shapes `cp -c` handles differently
+    // from a naive copy.
+    std::fs::create_dir_all(project.join("src/deep")).unwrap();
+    std::fs::write(project.join("src/deep/x.rs"), "x").unwrap();
+    std::os::unix::fs::symlink("keep.txt", project.join("link.txt")).unwrap();
+
+    let track = TurnTrack::create(&project, "turn-apfs", TreeClone::ApfsClone).unwrap();
+    let p = track.path();
+    assert_eq!(read(&p.join("keep.txt")), "keep-dirty");
+    assert_eq!(read(&p.join("untracked.txt")), "new");
+    assert_eq!(read(&p.join("src/deep/x.rs")), "x");
+    assert!(
+        p.join("link.txt").is_symlink(),
+        "symlink preserved as symlink"
+    );
+    assert!(
+        p.join(".git").is_file(),
+        "worktree pointer kept, not overwritten"
+    );
+    assert!(!p.join("target").exists(), "skip dirs honoured");
+    assert!(track.diff_files().unwrap().is_empty());
+    // Still copy-on-write: editing the track must not touch the project.
+    std::fs::write(p.join("keep.txt"), "track-side").unwrap();
+    assert_eq!(read(&project.join("keep.txt")), "keep-dirty");
+    assert_eq!(track.diff_files().unwrap(), vec![PathBuf::from("keep.txt")]);
+}
+
+#[test]
+fn detect_picks_a_method_that_works_here() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-detect", TreeClone::detect()).unwrap();
+    assert_eq!(read(&track.path().join("keep.txt")), "keep-dirty");
+}
+
+/// Manual: `cargo test -p mur-track --lib bench_turn_track -- --ignored --nocapture`
+/// from inside a real checkout. Prints create / diff / destroy wall time.
+#[test]
+#[ignore]
+fn bench_turn_track() {
+    use std::time::Instant;
+    let project = std::fs::canonicalize(std::env::var("MUR_BENCH_PROJECT").unwrap()).unwrap();
+    for method in [TreeClone::detect(), TreeClone::Copy] {
+        let t0 = Instant::now();
+        let track = TurnTrack::create(&project, "bench-turn", method).unwrap();
+        let create = t0.elapsed();
+        let t1 = Instant::now();
+        let n = track.diff_files().unwrap().len();
+        let diff = t1.elapsed();
+        let t2 = Instant::now();
+        track.destroy().unwrap();
+        let destroy = t2.elapsed();
+        eprintln!("{method:?}: create {create:?}  diff {diff:?} ({n} files)  destroy {destroy:?}");
+    }
+}
