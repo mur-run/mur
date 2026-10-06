@@ -78,33 +78,51 @@ pub const DEFAULT_ENGINE_ARG: &str = "--browser=chromium";
 /// that is already running, where an engine name is meaningless.
 const ENGINE_FLAGS: [&str; 4] = ["--browser", "--cdp-endpoint", "--connect-to", "--device"];
 
+/// Is `flag` present in `args`, as `--flag` or `--flag=value`?
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter()
+        .any(|arg| arg == flag || arg.starts_with(&format!("{flag}=")))
+}
+
 /// Did the caller already choose an engine (or an attach target) in `args`?
 /// Matches both `--browser x` and `--browser=x`.
 pub fn engine_already_chosen(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        ENGINE_FLAGS
-            .iter()
-            .any(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))
-    })
+    ENGINE_FLAGS.iter().any(|flag| has_flag(args, flag))
 }
 
-/// The engine argument to add to `args`, if any: MUR's default Chromium,
-/// unless the caller already chose one or the pinned Chromium build is known
-/// to be missing. "Cannot tell" (no manifest, no cache) still defaults, same
-/// rule as [`own_build_ready`] — a present build is not required to *ask* for
-/// it, and Playwright's own error is clearer than a silent fallback to Chrome.
-pub fn default_engine_arg(
+/// `@playwright/mcp`'s headless switch.
+const HEADLESS_FLAG: &str = "--headless";
+
+/// `@playwright/mcp`'s explicit browser binary.
+const EXECUTABLE_FLAG: &str = "--executable-path";
+
+/// The engine arguments to add to `args`: MUR's default Chromium unless the
+/// caller already chose an engine or attach target. Chromium is named even
+/// when its pinned build is known missing — leaving the engine unset is what
+/// made `@playwright/mcp` fall back to the branded Chrome application, while
+/// naming it makes Playwright report the missing build.
+///
+/// `mur browser setup` installs only the headless shell, so a cache without
+/// the full build is the normal case, not an error: a headless launch is
+/// then pointed at the shell, the way live and replay already launch. A
+/// headed launch cannot use the shell, and an explicit `--executable-path`
+/// is the caller's pick, so neither gets one.
+pub fn default_engine_args(
     args: &[String],
     install_dir: &Path,
     browsers: Option<&Path>,
-) -> Option<String> {
+) -> Vec<String> {
     if engine_already_chosen(args) {
-        return None;
+        return Vec::new();
     }
-    if own_build_ready(install_dir, browsers, DEFAULT_ENGINE) == Some(false) {
-        return None;
+    let mut out = vec![DEFAULT_ENGINE_ARG.to_owned()];
+    let needs_shell = has_flag(args, HEADLESS_FLAG)
+        && !has_flag(args, EXECUTABLE_FLAG)
+        && own_build_ready(install_dir, browsers, DEFAULT_ENGINE) == Some(false);
+    if needs_shell {
+        out.extend(crate::chromium::headless_exe_args(browsers));
     }
-    Some(DEFAULT_ENGINE_ARG.to_owned())
+    out
 }
 
 #[cfg(test)]
@@ -206,8 +224,8 @@ mod tests {
     fn no_duplicate_when_caller_already_asked_for_chromium() {
         let install = tempfile::tempdir().unwrap();
         assert_eq!(
-            default_engine_arg(&s(&[DEFAULT_ENGINE_ARG]), install.path(), None),
-            None
+            default_engine_args(&s(&[DEFAULT_ENGINE_ARG]), install.path(), None),
+            Vec::<String>::new()
         );
     }
 
@@ -217,15 +235,70 @@ mod tests {
     fn defaults_to_chromium_when_the_cache_is_unknown() {
         let install = tempfile::tempdir().unwrap();
         assert_eq!(
-            default_engine_arg(&s(&["--headless"]), install.path(), None),
-            Some(DEFAULT_ENGINE_ARG.to_owned())
+            default_engine_args(&s(&["--headless"]), install.path(), None),
+            [DEFAULT_ENGINE_ARG.to_owned()]
         );
     }
 
-    /// A pinned build that is definitely absent: say nothing and let
-    /// Playwright report it, rather than asking for a build we know is gone.
+    fn shell_only_cache() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
+        let install = tempfile::tempdir().unwrap();
+        pinned(install.path(), JSON);
+        let cache = tempfile::tempdir().unwrap();
+        let shell = cache.path().join("chromium_headless_shell-1246");
+        let exe = shell.join("chrome-headless-shell-mac-arm64/chrome-headless-shell");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(shell.join("INSTALLATION_COMPLETE"), "").unwrap();
+        std::fs::write(&exe, "").unwrap();
+        (install, cache, exe)
+    }
+
+    /// #1731: `mur browser setup` installs `--only-shell`, so the cache holds
+    /// the headless shell but no full `chromium-<rev>`. A headless launch must
+    /// still name Chromium AND point at the shell, the way live and replay do;
+    /// naming the engine alone would look for the absent full build.
     #[test]
-    fn no_engine_when_the_pinned_build_is_missing() {
+    fn shell_only_headless_selects_chromium_on_the_shell() {
+        let (install, cache, exe) = shell_only_cache();
+        assert_eq!(
+            default_engine_args(&s(&["--headless"]), install.path(), Some(cache.path())),
+            [
+                DEFAULT_ENGINE_ARG.to_owned(),
+                format!("--executable-path={}", exe.display())
+            ]
+        );
+    }
+
+    /// A headed launch cannot run on the headless shell, so no executable is
+    /// substituted — but the engine is still named, so Playwright reports the
+    /// missing full build instead of quietly launching branded Chrome.
+    #[test]
+    fn shell_only_headed_names_chromium_without_the_shell() {
+        let (install, cache, _) = shell_only_cache();
+        assert_eq!(
+            default_engine_args(&[], install.path(), Some(cache.path())),
+            [DEFAULT_ENGINE_ARG.to_owned()]
+        );
+    }
+
+    /// An explicit executable is the caller's pick; never add a second one.
+    #[test]
+    fn an_explicit_executable_is_kept() {
+        let (install, cache, _) = shell_only_cache();
+        assert_eq!(
+            default_engine_args(
+                &s(&["--headless", "--executable-path=/x"]),
+                install.path(),
+                Some(cache.path())
+            ),
+            [DEFAULT_ENGINE_ARG.to_owned()]
+        );
+    }
+
+    /// A pinned build that is definitely absent still names Chromium. Leaving
+    /// the engine unset is what made `@playwright/mcp` fall back to branded
+    /// Chrome; with Chromium named, Playwright reports the missing build.
+    #[test]
+    fn a_missing_pinned_build_still_names_chromium() {
         let install = tempfile::tempdir().unwrap();
         pinned(
             install.path(),
@@ -233,8 +306,8 @@ mod tests {
         );
         let cache = tempfile::tempdir().unwrap();
         assert_eq!(
-            default_engine_arg(&s(&["--headless"]), install.path(), Some(cache.path())),
-            None
+            default_engine_args(&s(&["--headless"]), install.path(), Some(cache.path())),
+            [DEFAULT_ENGINE_ARG.to_owned()]
         );
     }
 }

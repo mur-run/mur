@@ -86,7 +86,7 @@ pub async fn record(
     // carrying the person's real profile and needing a spawn grant on
     // `/Applications`. Live mode already asks for Chromium, and `--browser`
     // in `extra` still wins, so this only fills the gap.
-    args.extend(mur_browser::engines::default_engine_arg(
+    args.extend(mur_browser::engines::default_engine_args(
         &args,
         &mur_browser::server::install_dir(&mur_home()?),
         mur_browser::chromium::system_browsers_dir().as_deref(),
