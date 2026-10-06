@@ -331,3 +331,49 @@ fn overbroad_roots_are_rejected_and_normal_project_dirs_are_not() {
         &home
     ));
 }
+
+/// The user's own credential dirs are refused by the chain itself, so a
+/// profile whose `filesystem.deny` is empty — every concierge seeded before
+/// the template carried `DEFAULT_DENY_PATHS` — is still covered. No grant can
+/// lift it: the chain sits before the allow/deny lists.
+#[test]
+fn user_credential_dirs_are_refused_even_with_an_empty_deny_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let mur = home.join(".mur");
+    let chain = LaunchChain::for_test(&mur.join("agents").join("mur"), &mur.join("bin"), &home);
+    for d in mur_common::agent::DEFAULT_DENY_PATHS {
+        let dir = home.join(d.trim_start_matches("~/"));
+        for p in [dir.clone(), dir.join("id_ed25519")] {
+            assert!(chain.protects_read(&p).is_some(), "read of {}", p.display());
+            assert!(
+                chain.protects_write(&p).is_some(),
+                "write of {}",
+                p.display()
+            );
+        }
+        // The kernel side: macOS emits `credential_paths()` as deny clauses.
+        assert!(chain.credential_paths().contains(&dir), "{}", dir.display());
+    }
+    // A broad read grant over the whole home would hand them out on Landlock,
+    // which cannot carve — so it is dropped whole, like one over `~/.mur`.
+    let (kept, dropped) = chain.partition_read_grants(std::slice::from_ref(&home));
+    assert!(kept.is_empty() && dropped == vec![home.clone()]);
+}
+
+/// ...and only those: neighbours that merely share a prefix stay readable.
+#[test]
+fn user_credential_dirs_do_not_swallow_their_neighbours() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let mur = home.join(".mur");
+    let chain = LaunchChain::for_test(&mur.join("agents").join("mur"), &mur.join("bin"), &home);
+    for p in [
+        home.join(".ssh-notes"),
+        home.join(".awsome/x"),
+        home.join("Projects/app/.ssh-config.example"),
+        home.join(".config/gh"),
+    ] {
+        assert!(chain.protects_read(&p).is_none(), "{}", p.display());
+    }
+}

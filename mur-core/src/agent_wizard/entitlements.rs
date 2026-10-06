@@ -7,7 +7,10 @@ use crate::agent_wizard::draft::{EntitlementPlan, RiskLevel, RoleSpec};
 pub fn preset_for(role: &RoleSpec, workspace: &str) -> EntitlementPlan {
     let mut p = EntitlementPlan {
         allow_read: vec![workspace.to_string()],
-        deny_path: vec!["~/.ssh".into(), "~/.aws".into(), "~/.gnupg".into()],
+        deny_path: mur_common::agent::DEFAULT_DENY_PATHS
+            .iter()
+            .map(|d| (*d).to_string())
+            .collect(),
         tool_allow: vec!["bash".into()],
         allow_host: vec!["127.0.0.1".into(), "localhost".into()],
         ..Default::default()
@@ -43,7 +46,9 @@ mod tests {
     fn all_presets_deny_sensitive_paths() {
         for r in [RiskLevel::Low, RiskLevel::Medium, RiskLevel::High] {
             let p = preset_for(&role(r), "/repo");
-            assert!(p.deny_path.iter().any(|d| d.contains(".ssh")));
+            for d in mur_common::agent::DEFAULT_DENY_PATHS {
+                assert!(p.deny_path.iter().any(|x| x == d), "{d} missing");
+            }
             assert!(p.tool_allow.contains(&"bash".to_string()));
         }
     }

@@ -126,6 +126,17 @@ fn default_dns_mode() -> String {
 /// the grant costs the concierge nothing it needs to *use* a fleet.
 pub const AUTHORING_DIRS: [&str; 3] = ["skills", "workflows", "artifacts"];
 
+/// The user's own credential directories, denied in every profile MUR writes.
+///
+/// SSH keys, cloud credentials and the GPG keyring: an agent has no reason to
+/// read any of them, and holding one is acting as the user on every host it
+/// unlocks. The agent wizard presets and the seeded concierge template both
+/// start from this list, so a new agent never ships with an empty deny.
+///
+/// `~`-relative on purpose — the CLI expands it at write time, and this list
+/// must mean the same thing on every install.
+pub const DEFAULT_DENY_PATHS: [&str; 3] = ["~/.ssh", "~/.aws", "~/.gnupg"];
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FilesystemEntitlement {
     #[serde(default)]
