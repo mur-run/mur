@@ -296,7 +296,14 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
         let positions = RULING_POSITIONS
             .replace("{id}", id)
             .replace("{reason}", &pending.reason)
-            .replace("{issue}", finding.map_or("", |f| f.issue.as_str()))
+            .replace(
+                "{issue}",
+                finding.map_or("", |f| {
+                    f.last_reviewer_reason
+                        .as_deref()
+                        .unwrap_or(f.issue.as_str())
+                }),
+            )
             .replace(
                 "{main}",
                 finding

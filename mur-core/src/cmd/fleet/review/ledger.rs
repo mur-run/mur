@@ -25,6 +25,10 @@ pub struct Finding {
     /// P2-§5.1 step 3: main's reason on its latest `reject` of this
     /// finding, shown at the ruling prompt. Derived from `rebuttal` events.
     pub last_reject_reason: Option<String>,
+    /// P2-§5.1 step 3 (QA P3): the reviewer's reason on its latest
+    /// `finding_status` for this finding, shown at the ruling prompt in
+    /// place of the original issue. Derived from `finding_status` events.
+    pub last_reviewer_reason: Option<String>,
 }
 
 /// Why a fold step was rejected as an illegal transition (§8.2: "an illegal
@@ -45,8 +49,14 @@ pub enum FoldError {
     RulingForUnissuedFinding(String),
     #[error("finding_status reopens finding {0:?}, which a ruling dropped")]
     ReopenAfterDrop(String),
-    #[error("finding_status marks finding {0:?} disputed after a fix ruling")]
-    DisputedAfterFix(String),
+    /// P2-§4 rule 4: after a `fix` ruling only `open` or `resolved` is legal.
+    #[error(
+        "finding_status marks finding {id:?} {status:?} after a fix ruling; only open or resolved is legal"
+    )]
+    IllegalStatusAfterFix {
+        id: String,
+        status: super::schema::FindingStatus,
+    },
 }
 
 /// The ledger's fold state (§3.3, §3.5). A pure value: everything here is
@@ -213,23 +223,36 @@ impl Ledger {
                     reject_count: 0,
                     ruled: None,
                     last_reject_reason: None,
+                    last_reviewer_reason: None,
                 });
             }
-            ReviewPayload::FindingStatus { id, status, .. } => {
+            ReviewPayload::FindingStatus {
+                id, status, reason, ..
+            } => {
                 let Some(f) = self.findings.iter_mut().find(|f| &f.id == id) else {
                     return Err(FoldError::StatusForUnissuedFinding(id.clone()));
                 };
-                // P2-§4 rules 3 and 4.
+                // P2-§4 rules 3 and 4. Rule 4 is an allowlist ("only `open` or
+                // `resolved` is legal"); the match is exhaustive over the rest.
                 match (f.ruled, *status) {
                     (Some(RulingDecision::Drop), s) if s != FindingStatus::Resolved => {
                         return Err(FoldError::ReopenAfterDrop(id.clone()));
                     }
-                    (Some(RulingDecision::Fix), FindingStatus::Disputed) => {
-                        return Err(FoldError::DisputedAfterFix(id.clone()));
+                    (
+                        Some(RulingDecision::Fix),
+                        FindingStatus::Disputed | FindingStatus::Withdrawn,
+                    ) => {
+                        return Err(FoldError::IllegalStatusAfterFix {
+                            id: id.clone(),
+                            status: *status,
+                        });
                     }
                     _ => {}
                 }
                 f.status = *status;
+                if let Some(r) = reason.as_deref().filter(|r| !r.trim().is_empty()) {
+                    f.last_reviewer_reason = Some(r.to_string());
+                }
             }
             ReviewPayload::Rebuttal {
                 responses,

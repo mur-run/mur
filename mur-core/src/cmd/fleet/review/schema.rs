@@ -304,6 +304,12 @@ pub enum ReviewPayload {
         reason: String,
         #[serde(flatten)]
         cumulative: Cumulative,
+        /// §3.5 human-input wait in the running segment this `paused` ends
+        /// that no `turn_sent` recorded (e.g. the ruling prompt left with
+        /// `q`, P2-§5.2). Replay subtracts it exactly like
+        /// `turn_sent.human_wait_ms`. Absent in older channels = 0.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        human_wait_ms: u64,
     },
     Resumed {
         #[serde(flatten)]

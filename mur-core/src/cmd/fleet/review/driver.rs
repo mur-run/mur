@@ -376,6 +376,7 @@ fn write_paused_and_revert(mur_home: &Path, channel_id: &str, reason: &str) -> R
             kind: PauseKind::Transport,
             reason: reason.to_string(),
             cumulative: zero,
+            human_wait_ms: 0,
         }),
         None,
     )?;

@@ -566,7 +566,12 @@ impl LoopRun<'_> {
             exec_time_ms: u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX),
             cost_usd_micros: ledger.cost_usd_micros,
         };
-        let outcome = settle_rulings(&self.ruling_ctx(false), ledger, cumulative)?;
+        let outcome = settle_rulings(
+            &self.ruling_ctx(false),
+            ledger,
+            cumulative,
+            self.carried_wait,
+        )?;
         let waited = self.transport.take_human_wait();
         self.human_wait += waited;
         self.carried_wait += waited;

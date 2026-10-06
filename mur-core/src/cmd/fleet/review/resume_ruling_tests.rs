@@ -42,6 +42,9 @@ struct Scripted<'a> {
     stop_on_ask: bool,
     panic_on_ask: bool,
     main_sent: Cell<usize>,
+    /// Time slept at the ruling prompt, reported as human wait the way
+    /// `TerminalGate::ask_ruling` times its prompt.
+    waited: Cell<Duration>,
 }
 
 impl<'a> Scripted<'a> {
@@ -57,6 +60,7 @@ impl<'a> Scripted<'a> {
             stop_on_ask: false,
             panic_on_ask: false,
             main_sent: Cell::new(0),
+            waited: Cell::new(Duration::ZERO),
         }
     }
 
@@ -92,10 +96,15 @@ impl ReviewTransport for Scripted<'_> {
         ))
     }
 
+    fn take_human_wait(&self) -> Duration {
+        self.waited.take()
+    }
+
     fn ask_ruling(&self, _p: &EscalationRecord, _l: &Ledger) -> anyhow::Result<String> {
         self.ask_count.set(self.ask_count.get() + 1);
         assert!(!self.panic_on_ask, "driver killed at the ruling prompt");
         std::thread::sleep(self.ask_sleep);
+        self.waited.set(self.waited.get() + self.ask_sleep);
         if self.stop_on_ask {
             let path = control::stopped_path(self.home, &self.fleet);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -374,5 +383,57 @@ fn active_time_excludes_ruling_wait_on_crashed() {
     assert!(
         active + WAIT / 2 < wall,
         "wait leaked into active time: active {active:?}, wall {wall:?}"
+    );
+}
+
+/// QA P1, live path: the human waits at the live ruling prompt, then `q`.
+/// That wait ended in `paused`, never in a `turn_sent`, so replay must still
+/// take it out of execution time (P2-§5.1: "human-input wait ... excluded
+/// from `deadline`"). Bound relative to wall-clock, as above.
+#[test]
+fn live_ruling_wait_then_q_is_not_execution_time_on_resume() {
+    const WAIT: Duration = Duration::from_millis(600);
+    let name = "review-rsrl0009";
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    crate::channel_writer::plant_writer_identity(home);
+    let fleet = create_session_fleet(home, name, "main", "reviewer", "t").unwrap();
+    let started = std::time::Instant::now();
+    let mut t =
+        Scripted::new(home, name, "reject", &[ISSUE_F1, DISPUTE_F1, DISPUTE_F1]).asks(&["q\n"]);
+    t.ask_sleep = WAIT;
+    let (_, stop) = run_session(&t, home, &fleet, "t", limits(), Duration::ZERO).unwrap();
+    let wall = started.elapsed();
+    assert!(matches!(stop, LoopDriverStop::Paused { .. }), "{stop:?}");
+
+    let r = prepare_resume(home, name).unwrap();
+    assert!(
+        r.active + WAIT / 2 < wall,
+        "ruling wait leaked into active time: active {:?}, wall {wall:?}",
+        r.active
+    );
+}
+
+/// QA P1, crashed path: `paused{crashed}` is written at resume time, so the
+/// offline gap between the crash and that resume must not become execution
+/// time on a second resume.
+#[test]
+fn crashed_q_then_second_resume_excludes_offline_gap() {
+    const OFFLINE: Duration = Duration::from_millis(600);
+    let name = "review-rsrl0010";
+    let tmp = escalated(Fixture::Crashed, name);
+    let home = tmp.path();
+    std::thread::sleep(OFFLINE);
+    let first = prepare_resume(home, name).unwrap();
+    let first_active = first.active;
+    let t = Scripted::new(home, name, "accept", &[]).asks(&["q\n"]);
+    let end = settle_then_resume(&t, home, first, Duration::ZERO).unwrap();
+    assert!(matches!(end, ResumeEnd::LeftPaused), "{end:?}");
+
+    let second = prepare_resume(home, name).unwrap();
+    assert!(
+        second.active < first_active + OFFLINE / 2,
+        "offline gap leaked: first {first_active:?}, second {:?}",
+        second.active
     );
 }
