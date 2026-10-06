@@ -92,9 +92,13 @@ store and refs are shared with the project.
    *Why eager:* the model is handed an absolute working directory and uses absolute
    paths, including inside bash commands. Rebinding `session_cwd` lazily only
    redirects relative paths; absolute ones would still land in the project.
-2. **The prompt's `## Working directory` is the track path.** Tool results and the
-   settlement card map track paths back to the project path for display, so the user
-   sees `src/foo.rs`, not `.worktrees/turn-7/src/foo.rs`.
+2. **The prompt's `## Working directory` is the track path, and so is every tool
+   result.** Only the settlement card speaks project-relative paths (`src/foo.rs`),
+   taken from the track's diff. Rewriting tool results to project paths was tried
+   on paper and rejected: a model that reads `/project/src/foo.rs` in a result
+   starts using it in `bash`, and that path bypasses the track. Known P0 limit:
+   `bash`'s explicit `cwd` argument can still move the turn out of the track —
+   the registry decision closes the *default* path, not a deliberate one.
 3. Turn end → `diff_files(track)` → settlement `~ changed`. Then, by policy:
    - **direct** (default, interactive): `promote(track, project)`; track destroyed.
      Promote is **last-write-wins** over the project working tree; conflict detection
@@ -119,19 +123,26 @@ The backends differ **only** in how the working tree is cloned. `create_track` i
 always: `git worktree add --detach --no-checkout <dir>` (writes the `.git` pointer),
 then overlay the clone of the project working tree, skipping `.git`, `target/`,
 `node_modules/` and `.worktrees/`. `destroy` = `git worktree remove --force`.
-`diff_files` = `git status --porcelain` in the track compared against the project's
-`git status` at creation (the base), so files already dirty at turn start are not
-reported as changed by the turn.
+`diff_files` = content fingerprints (SHA-256) of every dirty or untracked path in the
+track, compared against the same fingerprints taken on the project at creation (the
+base, kept in the worktree's private git dir), so files already dirty at turn start
+are not reported unless the turn changed them further, and a turn that reverts a
+file to clean *is* reported so `promote` carries the reversal. The skip list is
+applied to the base too: a project that does not ignore `target/` must not look
+like the turn deleted it. `.worktrees/` is added to `.git/info/exclude`, never to
+the user's `.gitignore`.
 
 | Host | Working-tree clone | Notes |
 |------|--------------------|-------|
 | Linux/FreeBSD on ZFS, `zfs` CLI | ZFS clone, mounted at the track dir | True volume snapshot. |
 | macOS with Lima/OrbStack ZFS socket | ZFS over socket | Daemon owns the socket; runtime drops `SnapshotRequest` files. |
-| macOS APFS (no VM) | `cp -cR` (clonefile) | Metadata-only; measured ≈130 µs/file, ≈1.5 s for a 12k-file repo. **Track dir and project must be on the same APFS volume** — cross-volume `cp -c` silently degrades to a full copy; `.worktrees/` under the project guarantees this. Volume snapshots (`tmutil`) are Time Machine-bound and read-only when mounted — not usable. |
+| macOS APFS (no VM) | `clonefile(2)` per entry, `CLONE_NOFOLLOW` | Metadata-only; measured ≈130 µs/file, ≈1.5 s for a 12k-file repo. **Track dir and project must be on the same APFS volume** — cross-volume `cp -c` silently degrades to a full copy; `.worktrees/` under the project guarantees this. Volume snapshots (`tmutil`) are Time Machine-bound and read-only when mounted — not usable. |
 | anything else | `cp -a` (full copy) | Always available; slow on large repos but correct. |
 
-Per-turn clone cost is the accepted P0 trade-off: `~2 s` on this repo for every
-tool-capable turn, including turns that end up making no tool call. P1 reuses one
+Per-turn clone cost is the accepted P0 trade-off, measured on this repo (3.2k
+tracked files): create ≈0.7 s, diff ≈1.0–1.3 s, destroy ≈0.5 s — the `git status`
+walk dominates, not the clone. Paid on every tool-capable turn, including turns
+that end up making no tool call. `MUR_TURN_TRACK=0` opts an agent out. P1 reuses one
 track per session and re-syncs between turns to amortise it. The previous rev's
 per-file clonefile shadow was rejected: files written by `bash` bypass the shadow,
 so `~ changed` would report edits that `undo` could not revert.
