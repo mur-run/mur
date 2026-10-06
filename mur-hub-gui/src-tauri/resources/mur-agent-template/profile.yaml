@@ -70,7 +70,11 @@ entitlements:
       - "~/.mur/skills"
       - "~/.mur/workflows"
       - "~/.mur/artifacts"
-    deny: []
+    # Keep in sync with mur_common::agent::DEFAULT_DENY_PATHS (pinned by a test).
+    deny:
+      - "~/.ssh"
+      - "~/.aws"
+      - "~/.gnupg"
   processes:
     spawn:
       mode: "none"

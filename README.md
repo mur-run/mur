@@ -80,7 +80,8 @@ never heard of MUR.
   voice stay under `~/.mur/`. One redaction chokepoint sits in front of disk —
   the same code for the runtime's telemetry and for the CLI's hook capture log,
   so a credential that appears on a command line is `[REDACTED:…]` in both.
-  Agents cannot read the credential store or the capture logs at all: those are
+  Agents cannot read the credential store, the capture logs, or your
+  `~/.ssh` / `~/.aws` / `~/.gnupg` at all: those are
   refused at the grant gate and denied in the kernel sandbox, not merely absent
   from a grant. And a compile-time test forbids the companion module from
   importing network clients.
@@ -583,9 +584,10 @@ Agent** wizard offers the same catalog as a source.
   every filesystem grant against what the sandbox actually installed, so a
   grant the kernel discarded is visible as `✗ dropped` rather than as an
   entry in a config file that quietly does nothing. Some paths can never be granted at all — another agent's signing key,
-  the runtime binary, an autostart directory, and your credential store
-  (`~/.mur/secrets`, `auth.json`, a `.env`) — because they decide what starts
-  next or are the keys themselves; `allow-read` / `allow-write` refuse them,
+  the runtime binary, an autostart directory, your credential store
+  (`~/.mur/secrets`, `auth.json`, a `.env`), and your own `~/.ssh`, `~/.aws`
+  and `~/.gnupg` — because they decide what starts next or are the keys
+  themselves; `allow-read` / `allow-write` refuse them,
   and the runtime binary itself is signed by MUR's Developer ID in release
   builds — a swapped binary is refused at spawn, never run. A grant written with
   `~` now holds at every layer: the kernel policy always expanded it, the
