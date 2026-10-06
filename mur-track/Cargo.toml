@@ -1,0 +1,18 @@
+[package]
+name = "mur-track"
+version.workspace = true
+edition.workspace = true
+# Internal to the workspace: consumed only via path deps, never from crates.io.
+publish = false
+
+[dependencies]
+mur-common = { path = "../mur-common" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
+serde_yaml_ng = "0.10"

@@ -12,6 +12,6 @@ name = "mur-zfs-agent"
 path = "src/main.rs"
 
 [dependencies]
-mur-common = { path = "../mur-common" }
+mur-track = { path = "../mur-track" }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

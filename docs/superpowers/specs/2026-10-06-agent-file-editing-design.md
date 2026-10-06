@@ -37,8 +37,8 @@ truth about what changed, undo is **per tool call**, and no edit survives as
 
 | Mechanism | Where | Reused for |
 |-----------|-------|------------|
-| `ParallelBackend` trait — `create_track` / `base_snapshot` / `diff_files` / `promote` / `destroy`; backends ZFS native, ZFS-over-socket (Lima/OrbStack), git worktree; APFS/Btrfs `cp -c`/`--reflink` clone helper | `mur-core/src/parallel/backend/` | Per-turn CoW tracks (§3) |
-| Daemon-side ZFS protocol (`ZfsRequest` / `ZfsResponse`) and `SnapshotRequest` drop files — sandboxed runtime asks, daemon acts | `mur-common/src/zfs_protocol.rs`, `snapshot_request.rs`, `mur-daemon/src/snapshot_requests.rs` | Runtime never shells out to `zfs` (§3.3) |
+| `ParallelBackend` trait — `create_track` / `base_snapshot` / `diff_files` / `promote` / `destroy`; backends ZFS native, ZFS-over-socket (Lima/OrbStack), git worktree; APFS/Btrfs `cp -c`/`--reflink` clone helper | `mur-track/src/backend/` | Per-turn CoW tracks (§3) |
+| Daemon-side ZFS protocol (`ZfsRequest` / `ZfsResponse`) and `SnapshotRequest` drop files — sandboxed runtime asks, daemon acts | `mur-track/src/zfs_protocol.rs`, `mur-track/src/snapshot_request.rs`, `mur-daemon/src/snapshot_requests.rs` | Runtime never shells out to `zfs` (§3.3) |
 | Signed, append-only channel; `load_events_with_damage`; fleet review rollback math | `mur-channel/src/store.rs`, `mur-core/src/cmd/fleet/review/rollback.rs` | Edit ledger (§4) |
 | `action_hash`-matched HITL gate; deferred (never timed-out) unattended approvals | fleet safety triad | Approving exact bytes (§4.4) |
 | tree-sitter semantic units with content-addressed identity; region partition; N-way hunk merge | `mur-core/src/parallel/{semantic,partition,concurrent}` | Promoting byte ranges to semantic provenance (§5.1) |
@@ -98,8 +98,9 @@ truth about what changed, undo is **per tool call**, and no edit survives as
 
 ### 4.3 Crate extraction (`mur-track`)
 
-Pure code movement of `mur-core/src/parallel/backend/{mod,detect,zfs_native,zfs_socket,git_worktree,cow}.rs`
-plus `mur-common/src/{zfs_protocol,snapshot_request}.rs` into `mur-track`, depending on
+Pure code movement of the parallel backends (previously under `mur-core`'s
+`parallel` module) plus the `zfs_protocol` / `snapshot_request` modules
+(previously in `mur-common`) into `mur-track/src/`, depending on
 std + anyhow + serde only. `mur-core` re-exports; no behaviour change in that PR.
 Runtime gains the dependency; sandbox policy allows the per-agent track dir
 (`~/.mur/agents/<name>/tracks/`) and nothing more.

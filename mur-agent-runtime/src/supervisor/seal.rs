@@ -123,7 +123,7 @@ pub(super) async fn prepare_and_seal(
     {
         let inbox_dir = mur_home.join("inbox");
         let _ = std::fs::create_dir_all(
-            mur_home.join(mur_common::snapshot_request::SNAPSHOT_REQUEST_DIR),
+            mur_home.join(mur_track::snapshot_request::SNAPSHOT_REQUEST_DIR),
         );
         extra_write_paths.push(inbox_dir);
     }

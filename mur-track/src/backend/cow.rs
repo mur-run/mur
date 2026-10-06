@@ -12,6 +12,7 @@
 use anyhow::Result;
 use std::path::Path;
 use std::process::Command;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 /// Directories (relative to project root) that are worth COW-copying.

@@ -118,7 +118,7 @@ run the user started themselves.
 | 120 s | `mur-agent-runtime/src/tools/mcp.rs:17` (`DEFAULT_MCP_TOOL_TIMEOUT_SECS`) | Stops waiting; outcome explicitly unknown |
 | 300 s | `mur-core/src/hitl/gate.rs:44` (`DEFAULT_TIMEOUT`), `mur-agent-runtime/src/task_runner.rs:320` | Expiry **= denial** → step FAILS |
 | 600 s | `mur-core/src/a2a_dial.rs:43` (`DEFAULT_DIAL_IO_TIMEOUT`) | Socket idle disconnect |
-| 30 s | `mur-core/src/parallel/backend/zfs_socket.rs:11` (`AGENT_IO_TIMEOUT`) | zfs agent IO |
+| 30 s | `mur-track/src/backend/zfs_socket.rs` (`AGENT_IO_TIMEOUT`) | zfs agent IO |
 
 **Eight fleet stop reasons** — `LoopStop`, `mur-core/src/cmd/fleet/loop_run.rs:41-61`:
 `Converged`, `QueueDrained` (completion); `MaxIterations`, `Deadline`, `Stuck`,
