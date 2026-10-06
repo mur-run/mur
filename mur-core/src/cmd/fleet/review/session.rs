@@ -23,12 +23,14 @@ use mur_common::limits::Stuck;
 
 use super::constants::{
     FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
-    REVIEW_STOP_REASON_ESCALATION, RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT,
+    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_STOP_REASON_ESCALATION,
+    RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT, RULING_RECORDED_CONTINUE_PROMPT,
     RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
 use super::loop_driver::{LoopDriverStop, run_review_loop};
+use super::resume::ResumeEnd;
 use super::ruling::{is_rule_command, parse_rule_command};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
 use super::wire::message_text;
@@ -456,13 +458,25 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
         humantime_like(r.active),
         humantime_like(r.limits.deadline()),
     );
-    print!("Paused — continue? [Enter = continue, q = leave paused] ");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    if !is_send_answer(&line) {
-        println!("Left paused.");
-        return Ok(());
+    // P2-§6: branch on the ledger. A session that owes a ruling goes
+    // straight to the ruling prompt (inside `settle_then_resume`); any
+    // other asks to continue first.
+    if r.ledger.pending_ruling().is_empty() {
+        print!(
+            "{}",
+            if r.ruling_recorded {
+                RULING_RECORDED_CONTINUE_PROMPT
+            } else {
+                REVIEW_PAUSED_CONTINUE_PROMPT
+            }
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        if !is_send_answer(&line) {
+            println!("{REVIEW_LEFT_PAUSED_NOTICE}");
+            return Ok(());
+        }
     }
     let channel_id = r.fleet.channel_id.clone();
     let wait = HumanWait::default();
@@ -476,9 +490,12 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
         input: &stdin_line,
         output: &stdout_text,
     };
-    let (ledger, stop) =
-        super::resume::resume_session(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)?;
-    print!("\n{}", render_stop_screen(&stop, &ledger, &channel_id));
+    match super::resume::settle_then_resume(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)? {
+        ResumeEnd::LeftPaused => println!("{REVIEW_LEFT_PAUSED_NOTICE}"),
+        ResumeEnd::Ran(ledger, stop) => {
+            print!("\n{}", render_stop_screen(&stop, &ledger, &channel_id));
+        }
+    }
     Ok(())
 }
 

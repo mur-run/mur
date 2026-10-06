@@ -432,7 +432,7 @@ pub fn resume_session(transport, mur_home, r: Resumable, retry_delay) -> Result<
    (`"Ruling recorded — continue? [Enter = continue, q = leave paused] "`).
 3. otherwise the unchanged P1 paused/crashed prompt.
 
-- [ ] Tests (`resume_tests.rs`):
+- [x] Tests (`resume_tests.rs`):
   - AC-P2-5 `sigkill_while_awaiting_resumes_at_ruling_prompt` — channel ends at a sealed `revise`
     round with a pending escalation, lock free, no `paused` → resume asks the ruling prompt, not
     the crashed continue prompt; a `paused{crashed}` precedes any ruling.
@@ -449,7 +449,7 @@ pub fn resume_session(transport, mur_home, r: Resumable, retry_delay) -> Result<
     ask does not raise `active`.
   - Update the P1 crashed test (`resume_tests.rs:307`) to expect `paused{crashed}` written by
     `prepare_resume`.
-- [ ] Fail → implement → green → lint → commit `feat(review): resume at the ruling prompt`.
+- [x] Fail → implement → green → lint → commit `feat(review): resume at the ruling prompt`.
 
 ## Task 11 — Specs and docs
 

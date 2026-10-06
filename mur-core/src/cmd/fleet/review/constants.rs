@@ -180,6 +180,17 @@ pub const DRIVER_OWNER_FILE: &str = "driver.owner";
 /// whose driver died without pausing.
 pub const REVIEW_PAUSE_REASON_CRASHED: &str = "crashed";
 
+/// P2-§6 row 3 / P1 §7: the continue prompt of a plain paused session.
+pub const REVIEW_PAUSED_CONTINUE_PROMPT: &str =
+    "Paused — continue? [Enter = continue, q = leave paused] ";
+
+/// P2-§6 row 2: a ruling is the last thing recorded and nothing is owed.
+pub const RULING_RECORDED_CONTINUE_PROMPT: &str =
+    "Ruling recorded — continue? [Enter = continue, q = leave paused] ";
+
+/// Printed when the human leaves a session paused at a resume prompt.
+pub const REVIEW_LEFT_PAUSED_NOTICE: &str = "Left paused.";
+
 /// §7.1 — the `session_stopped` reason written by `mur fleet delete review-…`.
 pub const REVIEW_STOP_REASON_DELETED: &str = "deleted";
 
