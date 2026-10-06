@@ -451,3 +451,103 @@ fn rebuttal_reject_records_last_reason() {
         Some("second")
     );
 }
+
+// ---- P3a-§6.1: human notes ----
+
+use crate::cmd::fleet::review::schema::HumanNote;
+
+fn note(ledger: &mut Ledger, text: &str, target: Option<Role>) {
+    let n = HumanNote {
+        text: text.into(),
+        target,
+    };
+    ledger.apply(&n.into()).unwrap();
+}
+
+fn sent_to(ledger: &mut Ledger, to: Role) {
+    ledger
+        .apply(&ReviewPayload::TurnSent {
+            round: 1,
+            to,
+            restart_note: None,
+            human_wait_ms: 0,
+        })
+        .unwrap();
+}
+
+fn texts(ledger: &Ledger, role: Role) -> Vec<&str> {
+    ledger
+        .unseen_notes(role)
+        .iter()
+        .map(|n| n.text.as_str())
+        .collect()
+}
+
+#[test]
+fn broadcast_note_queues_for_both_sides() {
+    let mut ledger = Ledger::default();
+    note(&mut ledger, "a", None);
+    assert_eq!(texts(&ledger, Role::Main), ["a"]);
+    assert_eq!(texts(&ledger, Role::Reviewer), ["a"]);
+}
+
+#[test]
+fn targeted_note_queues_only_for_its_side() {
+    let mut ledger = Ledger::default();
+    note(&mut ledger, "m", Some(Role::Main));
+    note(&mut ledger, "r", Some(Role::Reviewer));
+    assert_eq!(texts(&ledger, Role::Main), ["m"]);
+    assert_eq!(texts(&ledger, Role::Reviewer), ["r"]);
+}
+
+#[test]
+fn turn_sent_clears_only_that_sides_notes() {
+    let mut ledger = Ledger::default();
+    note(&mut ledger, "a", None);
+    note(&mut ledger, "b", Some(Role::Reviewer));
+    sent_to(&mut ledger, Role::Main);
+    assert!(ledger.unseen_notes(Role::Main).is_empty());
+    assert_eq!(texts(&ledger, Role::Reviewer), ["a", "b"]);
+}
+
+#[test]
+fn note_never_touches_findings_or_round() {
+    let mut ledger = Ledger::default();
+    issue(&mut ledger, Severity::High, "x", 1);
+    let before = (
+        ledger.findings.clone(),
+        ledger.round,
+        ledger.escalations.clone(),
+    );
+    note(&mut ledger, "a", None);
+    assert_eq!(
+        (
+            ledger.findings.clone(),
+            ledger.round,
+            ledger.escalations.clone()
+        ),
+        before
+    );
+}
+
+#[test]
+fn notes_and_rulings_keep_independent_queues() {
+    for note_first in [true, false] {
+        let mut ledger = Ledger::default();
+        let f1 = escalated_f1(&mut ledger);
+        if note_first {
+            note(&mut ledger, "n", None);
+            rule(&mut ledger, &f1, RulingDecision::Drop).unwrap();
+        } else {
+            rule(&mut ledger, &f1, RulingDecision::Drop).unwrap();
+            note(&mut ledger, "n", None);
+        }
+        assert_eq!(ledger.binding_rulings(Role::Main).len(), 1);
+        assert_eq!(texts(&ledger, Role::Main), ["n"]);
+        sent_to(&mut ledger, Role::Main);
+        assert!(ledger.binding_rulings(Role::Main).is_empty());
+        assert!(ledger.unseen_notes(Role::Main).is_empty());
+        assert_eq!(ledger.binding_rulings(Role::Reviewer).len(), 1);
+        assert_eq!(texts(&ledger, Role::Reviewer), ["n"]);
+    }
+}
