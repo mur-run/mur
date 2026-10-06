@@ -159,3 +159,34 @@ fn test_summary() {
     assert_eq!(summary.valid, 1);
     assert_eq!(summary.invalid, 1);
 }
+
+#[test]
+fn test_extract_file_paths_strips_line_suffix() {
+    let paths =
+        extract_file_paths("See `mur-core/src/verify.rs:446`, `a/b.rs:318-322` and `c/d.rs:12:5`.");
+    assert_eq!(
+        paths,
+        vec![
+            "mur-core/src/verify.rs".to_string(),
+            "a/b.rs".to_string(),
+            "c/d.rs".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn test_verify_path_with_line_suffix_is_valid() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let claims = parse_claims("See `mur-core/src/verify.rs:446-530`.", "x.md");
+    let path_claims: Vec<_> = claims
+        .iter()
+        .filter(|c| matches!(c.kind, ClaimKind::FilePath(_)))
+        .collect();
+    assert_eq!(path_claims.len(), 1);
+    assert!(matches!(
+        verify_claim(path_claims[0], root),
+        VerifyResult::Valid
+    ));
+}
