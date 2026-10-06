@@ -1148,7 +1148,7 @@ iOS app builds with `mur-mobile-app/build-ios.sh`.
 Want to teach an agent something new? See
 [Authoring Skills](docs/authoring-skills.md).
 
-Design history lives in [`docs/superpowers/specs/`](docs/superpowers/specs) and
+Architecture lives in
 [`docs/architecture/runtime-overview.md`](docs/architecture/runtime-overview.md).
 
 ---

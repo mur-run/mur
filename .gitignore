@@ -43,3 +43,11 @@ AGENTS.md
 
 # Playwright MCP snapshots/console logs written into the cwd
 .playwright-mcp/
+
+# Internal design history (specs, plans, validation runs, competitive notes)
+# lives in the private mur-run/mur-docs repository. Keep a clone of it at
+# docs/superpowers/ so tooling that writes plans/specs there keeps working;
+# none of it is part of the public source tree.
+/docs/superpowers/
+/docs/plans/
+/docs/mur-函數清單與競品分析.md
