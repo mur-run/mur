@@ -431,6 +431,36 @@ mod prompts {
         l
     }
 
+    /// QA P3 / P2-§5.1 step 3: "both sides' last positions" — the reviewer's
+    /// latest `finding_status` reason, not only the original issue.
+    #[test]
+    fn ask_ruling_prints_reviewers_latest_reason() {
+        let mut ledger = escalated();
+        ledger
+            .apply(&ReviewPayload::FindingStatus {
+                round: 2,
+                id: "F1".into(),
+                status: FindingStatus::Disputed,
+                reason: Some("crashes on empty input".into()),
+            })
+            .unwrap();
+        let term = Term::new(&["q\n"]);
+        let wait = HumanWait::default();
+        let input = || term.read();
+        let output = |s: &str| term.write(s);
+        let gate = TerminalGate {
+            inner: Nop,
+            wait: &wait,
+            input: &input,
+            output: &output,
+        };
+        gate.ask_ruling(ledger.pending_ruling()[0], &ledger)
+            .unwrap();
+        let out = term.out.borrow();
+        assert!(out.contains("crashes on empty input"), "{out}");
+        assert!(out.contains("still wrong"), "{out}");
+    }
+
     #[test]
     fn ask_ruling_prints_both_positions_and_prompt() {
         let ledger = escalated();

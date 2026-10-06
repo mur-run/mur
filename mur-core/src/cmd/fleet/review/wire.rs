@@ -76,18 +76,52 @@ fn render_binding_rulings(ledger: &Ledger, role: Role) -> String {
     out
 }
 
+/// Fill `{name}` slots in `template` in ONE left-to-right pass. Substituted
+/// values are never rescanned, so human and model text (task, rulings, main's
+/// reply) reaches the agent byte-for-byte even when it contains a literal
+/// placeholder token. An unknown `{...}` is copied through untouched.
+fn render_template(template: &str, slots: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open..];
+        let hit = slots.iter().find_map(|(name, value)| {
+            let token_len = name.len() + 2;
+            (tail.len() >= token_len
+                && tail[1..].starts_with(name)
+                && tail.as_bytes()[token_len - 1] == b'}')
+                .then_some((token_len, *value))
+        });
+        match hit {
+            Some((token_len, value)) => {
+                out.push_str(value);
+                rest = &tail[token_len..];
+            }
+            None => {
+                out.push('{');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Main's turn (§3.1, §3.4): the task plus every finding still open.
 pub fn main_turn_params(task: &str, round: u32, ledger: &Ledger) -> serde_json::Value {
-    // Rulings and `{task}` are human text: substituted after the fixed
-    // placeholders so a literal `{...}` inside them is never expanded.
-    let text = REVIEW_MAIN_PROMPT
-        .replace("{round}", &round.to_string())
-        .replace("{open_findings}", &render_open_findings(ledger))
-        .replace(
-            "{binding_rulings}",
-            &render_binding_rulings(ledger, Role::Main),
-        )
-        .replace("{task}", task);
+    let text = render_template(
+        REVIEW_MAIN_PROMPT,
+        &[
+            ("round", &round.to_string()),
+            ("open_findings", &render_open_findings(ledger)),
+            (
+                "binding_rulings",
+                &render_binding_rulings(ledger, Role::Main),
+            ),
+            ("task", task),
+        ],
+    );
     text_message_params(&text)
 }
 
@@ -99,18 +133,19 @@ pub fn reviewer_turn_params(
     main_reply: &str,
     ledger: &Ledger,
 ) -> serde_json::Value {
-    // Rulings, `{task}` and `{main_reply}` are substituted last: human and
-    // model text may itself contain a literal `{...}` placeholder and must
-    // not be expanded.
-    let text = REVIEW_REVIEWER_PROMPT
-        .replace("{round}", &round.to_string())
-        .replace("{open_findings}", &render_open_findings(ledger))
-        .replace(
-            "{binding_rulings}",
-            &render_binding_rulings(ledger, Role::Reviewer),
-        )
-        .replace("{task}", task)
-        .replace("{main_reply}", main_reply);
+    let text = render_template(
+        REVIEW_REVIEWER_PROMPT,
+        &[
+            ("round", &round.to_string()),
+            ("open_findings", &render_open_findings(ledger)),
+            (
+                "binding_rulings",
+                &render_binding_rulings(ledger, Role::Reviewer),
+            ),
+            ("task", task),
+            ("main_reply", main_reply),
+        ],
+    );
     text_message_params(&text)
 }
 
@@ -246,6 +281,49 @@ mod tests {
     fn reviewer_prompt_does_not_expand_placeholders_inside_main_reply() {
         let p = reviewer_turn_params("t", 2, "literal {task} here", &Ledger::default());
         assert!(message_text(&p).unwrap().contains("literal {task} here"));
+    }
+
+    /// QA S1: a human ruling is binding text and must reach the agent
+    /// byte-for-byte, even when it names a template placeholder.
+    fn ledger_with_ruling_text(text: &str) -> Ledger {
+        use super::super::schema::{ReviewPayload, RulingDecision};
+        let mut l = ruled_ledger();
+        // A proactive ruling on the same finding replaces the earlier one.
+        l.apply(&ReviewPayload::Ruling {
+            finding: "F1".into(),
+            decision: RulingDecision::Fix,
+            text: text.into(),
+        })
+        .unwrap();
+        l
+    }
+
+    #[test]
+    fn ruling_text_placeholders_survive_both_roles() {
+        let ruling = "keep literal {task} and {main_reply} and {round} and {open_findings}";
+        let l = ledger_with_ruling_text(ruling);
+        for p in [
+            main_turn_params("THE-TASK", 4, &l),
+            reviewer_turn_params("THE-TASK", 4, "THE-REPLY", &l),
+        ] {
+            let text = message_text(&p).unwrap();
+            assert!(text.contains(&format!("- F1 fix: {ruling}")), "{text}");
+        }
+    }
+
+    #[test]
+    fn task_placeholders_survive_reviewer_prompt() {
+        let task = "document the {main_reply} and {binding_rulings} tokens";
+        let p = reviewer_turn_params(task, 1, "THE-REPLY", &Ledger::default());
+        assert!(message_text(&p).unwrap().contains(task));
+    }
+
+    #[test]
+    fn render_template_is_single_pass_and_keeps_unknown_braces() {
+        assert_eq!(
+            render_template("{a}|{b}|{c}|{", &[("a", "{b}"), ("b", "x")]),
+            "{b}|x|{c}|{"
+        );
     }
 
     #[test]

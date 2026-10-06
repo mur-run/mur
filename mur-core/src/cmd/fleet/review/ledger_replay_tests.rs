@@ -107,6 +107,7 @@ fn a_rerun_round_counts_a_reject_once_and_escalates_exactly_once() {
             kind: PauseKind::Other,
             reason: "crashed".into(),
             cumulative: cum(500, 7),
+            human_wait_ms: 0,
         },
         ReviewPayload::Resumed {
             cumulative: cum(500, 7),

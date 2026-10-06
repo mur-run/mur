@@ -4,6 +4,7 @@
 //! replay equals the live ledger (AC-P2-10).
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Result;
 use mur_channel::ChannelService;
@@ -47,10 +48,15 @@ pub struct RulingCtx<'a> {
 /// P2-§5.1 steps 3–5 and §5.2, for every pending escalation in order.
 /// Appends `ruling` (folded into `ledger`) or `paused { kind: escalation }`;
 /// never `session_stopped` — the caller maps `Abandoned`/`KillSwitch`.
+///
+/// `unrecorded_wait` is human wait already taken from the transport that no
+/// `turn_sent` carries yet. On `q`/EOF it and the prompt's own wait go onto
+/// the `paused` event, because no later `turn_sent` will (QA P1).
 pub fn settle_rulings(
     ctx: &RulingCtx,
     ledger: &mut Ledger,
     cumulative: Cumulative,
+    unrecorded_wait: Duration,
 ) -> Result<RulingOutcome> {
     while let Some(pending) = ledger.pending_ruling().first().map(|e| (*e).clone()) {
         let line = ctx.transport.ask_ruling(&pending, ledger)?;
@@ -64,10 +70,12 @@ pub fn settle_rulings(
             PromptLine::Abandon => return Ok(RulingOutcome::Abandoned),
             PromptLine::Leave => {
                 if !ctx.already_paused {
+                    let waited = unrecorded_wait + ctx.transport.take_human_wait();
                     let paused = ReviewPayload::Paused {
                         kind: PauseKind::Escalation,
                         reason: REVIEW_PAUSE_REASON_ESCALATION.to_string(),
                         cumulative,
+                        human_wait_ms: u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
                     };
                     ledger.apply(&paused)?;
                     append(ctx.svc, ctx.mur_home, ctx.channel_id, &paused)?;
