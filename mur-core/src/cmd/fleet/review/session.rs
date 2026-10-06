@@ -30,6 +30,7 @@ use super::constants::{
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
 use super::loop_driver::{LoopDriverStop, run_review_loop};
+use super::note::{NoteLine, parse_note_line};
 use super::resume::ResumeEnd;
 use super::ruling::{is_rule_command, parse_rule_command};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
@@ -256,6 +257,10 @@ pub(super) struct TerminalGate<'a, T> {
     pub(super) wait: &'a HumanWait,
     pub(super) input: LineReader<'a>,
     pub(super) output: TextWriter<'a>,
+    /// `[main, reviewer]` — what `@<agent>` must resolve to (P3a-§3, N11).
+    pub(super) members: [String; 2],
+    /// Where `@<agent>` names are canonicalized.
+    pub(super) mur_home: &'a Path,
 }
 
 impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
@@ -276,16 +281,24 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
         loop {
             (self.output)(&format!("\n{}", SEND_PROMPT.replace("{member}", member)))?;
             let line = self.wait.time(|| (self.input)())?;
-            if !is_rule_command(line.trim()) {
-                return Ok(if is_send_answer(&line) {
-                    SendAnswer::Send
-                } else {
-                    SendAnswer::Stop
-                });
+            if is_rule_command(line.trim()) {
+                match parse_rule_command(&line, open) {
+                    Ok(input) => return Ok(SendAnswer::SendWithRuling(input)),
+                    Err(hint) => (self.output)(&format!("{hint}\n"))?,
+                }
+                continue;
             }
-            match parse_rule_command(&line, open) {
-                Ok(input) => return Ok(SendAnswer::SendWithRuling(input)),
-                Err(hint) => (self.output)(&format!("{hint}\n"))?,
+            let resolve = |n: &str| crate::a2a_dial::canonicalize_agent_name(self.mur_home, n);
+            match parse_note_line(&line, &self.members, resolve) {
+                NoteLine::Note(note) => return Ok(SendAnswer::Note(note)),
+                NoteLine::Hint(hint) => (self.output)(&format!("{hint}\n"))?,
+                NoteLine::NotNote => {
+                    return Ok(if is_send_answer(&line) {
+                        SendAnswer::Send
+                    } else {
+                        SendAnswer::Stop
+                    });
+                }
             }
         }
     }
@@ -427,6 +440,8 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
         wait: &wait,
         input: &stdin_line,
         output: &stdout_text,
+        members: [fleet.members[0].clone(), fleet.members[1].clone()],
+        mur_home,
     };
     let (ledger, stop) = run_session(
         &transport,
@@ -496,6 +511,8 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
         wait: &wait,
         input: &stdin_line,
         output: &stdout_text,
+        members: [r.fleet.members[0].clone(), r.fleet.members[1].clone()],
+        mur_home,
     };
     match super::resume::settle_then_resume(&transport, mur_home, r, TRANSPORT_RETRY_DELAY)? {
         ResumeEnd::LeftPaused => println!("{REVIEW_LEFT_PAUSED_NOTICE}"),

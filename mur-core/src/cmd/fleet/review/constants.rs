@@ -79,12 +79,15 @@ pub const TARGET_NOT_FOUND_HINT: &str =
     "agent {name} not found; use /note <text> to send it to both sides";
 /// P3a N10; `{command}` is the slash word as typed. Never a stop.
 pub const UNKNOWN_COMMAND_HINT: &str = "unknown command: {command}";
+/// P3a-§5.3: `paused { kind: other }` reason when appending pending note
+/// `recorded + 1` of `total` fails. `{recorded}`, `{total}`, `{cause}`.
+pub const NOTE_FLUSH_FAILED_REASON: &str = "note flush failed after {recorded} of {total} notes; the {recorded} already recorded will be sent on resume, the rest were not recorded: {cause}";
 /// Every send-prompt command starts with this (P3a N10).
 pub const COMMAND_PREFIX: char = '/';
 /// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
 /// The `/rule` hint says the line also sends this turn, so the human knows
 /// before typing it (the line is the send consent).
-pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop, /rule drop|fix F<n> <text> = record a ruling and send this turn] ";
+pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop, /rule drop|fix F<n> <text> = record a ruling and send this turn, /note <text> = note to both, @<agent> <text> = note to one] ";
 /// P2-§5.3: printed before main's message rebuilt after a `/rule` at its
 /// send prompt; the full rebuilt message follows.
 pub const RULING_REGENERATED_BANNER: &str = "[ruling applied; message regenerated]";

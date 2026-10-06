@@ -23,6 +23,32 @@ const GATE: SendGate<'static> = SendGate {
 };
 static EMPTY: BTreeSet<String> = BTreeSet::new();
 
+/// The pre-P3a call shape: fixed `params`, no note queue, no-op flush.
+#[allow(clippy::too_many_arguments)]
+fn retry_fixed(
+    t: &dyn ReviewTransport,
+    home: &std::path::Path,
+    fleet: &str,
+    member: &str,
+    params: &serde_json::Value,
+    g: SendGate,
+    channel_id: &str,
+    delay: Duration,
+) -> anyhow::Result<RetryOutcome> {
+    run_turn_with_retry(
+        t,
+        home,
+        fleet,
+        member,
+        &|_| params.clone(),
+        &mut Vec::new(),
+        &mut |_| Ok(()),
+        g,
+        channel_id,
+        delay,
+    )
+}
+
 /// Test-only transport: counts sends and returns a fixed or queued reply,
 /// never touching A2A.
 struct StubTransport {
@@ -155,7 +181,7 @@ fn a_transport_error_propagates() {
 /// Returns a fresh `~/.mur`-shaped tempdir with a review channel created and
 /// the router's signing identity planted, so [`run_turn_with_retry`]'s
 /// `write_paused_and_revert` has somewhere real to write.
-fn setup_channel() -> (tempfile::TempDir, String) {
+pub(super) fn setup_channel() -> (tempfile::TempDir, String) {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     crate::channel_writer::plant_writer_identity(home);
@@ -191,7 +217,7 @@ fn ac14_two_failures_pause_with_reason_and_revert_to_semi_auto() {
     ]);
     let params = serde_json::json!({});
 
-    let outcome = run_turn_with_retry(
+    let outcome = retry_fixed(
         &transport,
         home,
         "review-x",
@@ -254,7 +280,7 @@ fn ac14_first_send_success_means_no_retry_and_no_pause() {
     let transport = StubTransport::fixed("ok");
     let params = serde_json::json!({});
 
-    let outcome = run_turn_with_retry(
+    let outcome = retry_fixed(
         &transport,
         home,
         "review-x",
@@ -287,7 +313,7 @@ fn ac14_retry_recovers_without_pausing() {
     ]);
     let params = serde_json::json!({});
 
-    let outcome = run_turn_with_retry(
+    let outcome = retry_fixed(
         &transport,
         home,
         "review-x",
@@ -319,7 +345,7 @@ fn ac14_stop_during_retry_wins_over_pausing() {
     let params = serde_json::json!({});
 
     stop_fleet(home, "review-x");
-    let outcome = run_turn_with_retry(
+    let outcome = retry_fixed(
         &transport,
         home,
         "review-x",
@@ -417,7 +443,7 @@ fn a_failed_task_is_not_retried_and_does_not_pause() {
     }
     .into())]);
 
-    let outcome = run_turn_with_retry(
+    let outcome = retry_fixed(
         &transport,
         home,
         "review-x",
@@ -585,7 +611,7 @@ fn retry_keeps_the_first_answer() {
         SendAnswer::SendWithRuling(drop_f1()),
         vec![Err(anyhow::anyhow!("peer offline")), Ok("recovered".into())],
     );
-    let out = run_turn_with_retry(
+    let out = retry_fixed(
         &t,
         &home,
         "review-x",

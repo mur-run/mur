@@ -7,6 +7,7 @@ mod channel;
 mod flow;
 mod guards;
 mod malformed;
+mod notes;
 mod rulings;
 
 use std::cell::Cell;

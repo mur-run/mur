@@ -74,6 +74,48 @@ fn member_name_in_another_case_resolves_through_the_resolver() {
     );
 }
 
+/// AC-P3a-4, name path on a case-insensitive filesystem: the resolver
+/// returns the name as typed (its exact-match branch hit), and the member
+/// check still finds it.
+#[test]
+fn member_name_as_typed_still_matches_on_case_insensitive_disks() {
+    assert_eq!(
+        parse_note_line("@REV-AGENT look at F2", &members(), identity),
+        note("look at F2", Some(Role::Reviewer))
+    );
+}
+
+/// Members that differ only in case: an exact hit picks its own member
+/// regardless of list order; a case-folded hit on both is refused rather
+/// than resolved by order.
+#[test]
+fn case_only_member_collision_is_deterministic() {
+    for members in [
+        ["foo".to_string(), "Foo".to_string()],
+        ["Foo".to_string(), "foo".to_string()],
+    ] {
+        let role_of = |name: &str| {
+            if members[0] == name {
+                Role::Main
+            } else {
+                Role::Reviewer
+            }
+        };
+        for typed in ["foo", "Foo"] {
+            assert_eq!(
+                parse_note_line(&format!("@{typed} W"), &members, identity),
+                note("W", Some(role_of(typed))),
+                "exact hit {typed} in {members:?}"
+            );
+        }
+        assert_eq!(
+            parse_note_line("@FOO W", &members, identity),
+            NoteLine::Hint("agent FOO not found; use /note <text> to send it to both sides".into()),
+            "ambiguous fold in {members:?}"
+        );
+    }
+}
+
 /// AC-P3a-5.
 #[test]
 fn unknown_agent_is_the_n3_hint() {
