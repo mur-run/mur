@@ -22,6 +22,7 @@ pub mod constants;
 pub mod driver;
 pub mod ledger;
 pub mod loop_driver;
+pub mod note;
 pub mod prune;
 pub mod resume;
 // `replay_with_damage` is wired into resume; the Continue-from-checkpoint
@@ -48,6 +49,10 @@ mod ledger_replay_tests;
 #[cfg(test)]
 #[path = "loop_driver_tests/mod.rs"]
 mod loop_driver_tests;
+
+#[cfg(test)]
+#[path = "note_tests.rs"]
+mod note_tests;
 
 #[cfg(test)]
 #[path = "no_tampering_tests.rs"]

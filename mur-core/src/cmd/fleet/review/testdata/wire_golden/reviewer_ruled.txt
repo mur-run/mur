@@ -1,0 +1,18 @@
+You are the reviewer in a review loop (round 4).
+
+Task the main agent is working on:
+fix the {main_reply} bug
+
+The main agent's latest reply:
+done; see {open_findings}
+
+Binding rulings from the human (these override any finding below; do not argue them):
+- F1 fix: use the cache
+
+Previously issued findings that are still open:
+- F1 [high, open]: unchecked unwrap
+
+Review the work. End your reply with exactly one fenced ```json block of this shape:
+{"verdict": "approve" | "revise" | "blocked", "findings": [{"severity": "high" | "medium" | "low", "issue": "..."}], "prior": [{"id": "F1", "status": "open" | "withdrawn" | "resolved" | "disputed", "reason": "..."}]}
+
+Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return "blocked" rather than guess.

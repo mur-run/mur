@@ -51,8 +51,9 @@ trap).
 - A note flushed at the **reviewer's** prompt (first send or resend): `ledger.apply(note)` **and**
   `round_ledger.apply(note)`. `ledger` is what `Turn::Stop` returns mid-reviewer-turn
   (`loop_driver.rs:384`); `round_ledger` is what the verdict seal adopts.
-- Tested in Task 6 (AC-P3a-14 extended case): reviewer-side note, then the send fails twice →
-  paused; `fold_rounds(channel) == live ledger`.
+- Tested in Task 6 (AC-P3a-14 extended case) by
+  `reviewer_side_note_then_stop_replays_equal_to_live` in `loop_driver_tests/notes.rs`:
+  reviewer-side note, then the send fails twice → paused; `fold_rounds(channel) == live ledger`.
 
 ## PR slicing
 
@@ -100,24 +101,24 @@ pub struct HumanNote {
 impl From<HumanNote> for ReviewPayload { /* ReviewPayload::HumanNote { text, target } */ }
 ```
 
-- [ ] Test `human_note_wire_bytes_unchanged`: serialize `ReviewPayload::HumanNote` built via
+- [x] Test `human_note_wire_bytes_unchanged`: serialize `ReviewPayload::HumanNote` built via
   `From<HumanNote>` for `target: None` and `Some(Role::Reviewer)`; assert the JSON **string**
   equals the literal bytes produced on `main` today (capture them first from the existing
   variant, paste as literals — `{"type":"human_note","text":"x"}` and
   `{"type":"human_note","text":"x","target":"reviewer"}`).
-- [ ] Test `phase1_human_note_parses`: the two literals deserialize to the expected variant.
-- [ ] Watch fail (struct missing), implement, green, lint, commit `feat(review): HumanNote struct`.
+- [x] Test `phase1_human_note_parses`: the two literals deserialize to the expected variant.
+- [x] Watch fail (struct missing), implement, green, lint, commit `feat(review): HumanNote struct`.
 
 ## Task 2 — Ledger fold (P3a-§6.1)
 
-- [ ] Tests in `ledger_tests.rs`: broadcast note → both slots; `Some(Main)` → main slot only;
+- [x] Tests in `ledger_tests.rs`: broadcast note → both slots; `Some(Main)` → main slot only;
   `TurnSent { to: Main }` clears main slot, reviewer slot kept; note never touches findings or
   round; `Ruling` + note in either order keep independent queues.
-- [ ] Implement `unseen_notes` next to `unseen_rulings` (`ledger.rs:86`), replace the no-op arm
+- [x] Implement `unseen_notes` next to `unseen_rulings` (`ledger.rs:86`), replace the no-op arm
   `ledger.rs:289`, add the clear beside `ledger.rs:192`, accessor `unseen_notes(role) -> &[HumanNote]`.
-- [ ] `ledger_replay_tests.rs`: extend the generator so notes (both targets) appear between
+- [x] `ledger_replay_tests.rs`: extend the generator so notes (both targets) appear between
   turns, including between a main `turn_sent` and its verdict; assert live fold == `fold_rounds`.
-- [ ] Green, lint, commit `feat(review): fold human notes`.
+- [x] Green, lint, commit `feat(review): fold human notes`.
 
 ## Task 3 — `note.rs` parsing (P3a-§3, N3, N10, N11)
 
@@ -134,24 +135,38 @@ pub fn parse_note_line(line: &str, members: &[String; 2], resolve: impl Fn(&str)
 `members[0]` or `members[1]`, else N3 hint; `@`/`@x` with no text → `usage: @<agent> <text>`;
 any other `/<word>` → `unknown command: /<word>`; everything else → `NotNote`.
 
-- [ ] Tests (`note_tests.rs`): AC-P3a-15 empty `/note`; AC-P3a-4 alias path and name path as
+- [x] Tests (`note_tests.rs`): AC-P3a-15 empty `/note`; AC-P3a-4 alias path and name path as
   separate tests (name path with a `resolve` that changes case); AC-P3a-5 `@nobody`; AC-P3a-17
   `resolve` returns a real but non-member name → N3 hint; AC-P3a-16 `/foo` and `/riule drop F1 x`;
   `q`, `nope`, `""` → `NotNote`; `/rule …` → `NotNote`.
-- [ ] Implement; strings in `constants.rs`. `#[allow(dead_code)] // wired in PR 3 (Task 5–7)`.
-- [ ] Green, lint, commit `feat(review): note line parser`.
+- [x] Implement; strings in `constants.rs`. `#[allow(dead_code)] // wired in PR 3 (Task 5–7)`.
+- [x] Green, lint, commit `feat(review): note line parser`.
 
 ## Task 4 — Note rendering (P3a-§6.2)
 
-- [ ] Tests in `wire` tests: for `to`, block = `ledger.unseen_notes(to)` then pending with target
+- [x] Tests in `wire` tests: for `to`, block = `ledger.unseen_notes(to)` then pending with target
   `None` or `to`, in that order; other-side-only pending notes absent; empty → no block and the
   message is byte-identical to today's; block appears before the findings section (and after the
   binding-rulings block); AC-P3a-18 — neither template contains a justify-non-adoption
   instruction.
-- [ ] Add `{human_notes}` slot to both templates in `constants.rs`, `REVIEW_HUMAN_NOTES_HEADER`,
+- [x] Golden test `no_notes_message_is_byte_identical_to_before`: with no unseen and no pending
+  notes (and with other-side-only pending notes), both messages, with and without binding rulings,
+  equal byte-for-byte the text `main` rendered before the slot existed
+  (`review/testdata/wire_golden/*.txt`, captured from `d60f20a7`). Same guarantee as Task 1's wire
+  bytes, at the message instead of the channel. Mutation-checked: an extra `\n` from an empty
+  block fails it; the older `no_rulings_no_header` does not catch that.
+- [x] Golden maintenance. The files are versioned and frozen: a red golden test means the
+  no-note path changed the message, so fix the template, not the file. Regenerate only for an
+  intentional template or constant change:
+  `MUR_BLESS_WIRE_GOLDEN=1 cargo test -p mur-core --lib -- --ignored bless_wire_golden`
+  (an ignored test, a no-op without the env var), then review the `.txt` diff in the PR. The same
+  rule is in the doc comment on `GOLDEN` in `wire.rs`.
+  `testdata/wire_golden/.gitattributes` sets `* -text` so Windows `autocrlf` checkouts keep the
+  LF bytes (CI on `windows-latest` failed on CRLF before it).
+- [x] Add `{human_notes}` slot to both templates in `constants.rs`, `REVIEW_HUMAN_NOTES_HEADER`,
   extend `main_turn_params(task, round, ledger, pending)` and
   `reviewer_turn_params(task, round, main_reply, ledger, pending)`; existing callers pass `&[]`.
-- [ ] Green, lint, commit `feat(review): render human notes`. **End of PR 2.**
+- [x] Green, lint, commit `feat(review): render human notes`. **End of PR 2.**
 
 ## Task 5 — Driver: generator and `on_consented` (P3a-§4, §5.3)
 
@@ -201,6 +216,14 @@ pub fn run_turn_with_retry(
   `ruling`, `human_note(A)`, `turn_sent`; sent bytes == reprinted; `confirm:main` count equals the
   P2 test's), 10, 11 (+ `review-resume` path shows A again), 14 for 1/3/9/10/11 **and** the
   reviewer-side stop case from the two-ledger rule.
+- [ ] Two-ledger tests, named (implementation without these is not done):
+  - `reviewer_side_note_then_stop_replays_equal_to_live`: note flushed at the reviewer's prompt,
+    send fails twice → `Turn::Stop` (`loop_driver.rs:384`) returns `ledger`; assert
+    `fold_rounds(channel) == ` that ledger, and the note is in it. Mutation check: drop the
+    `ledger.apply` on the reviewer side → fails.
+  - `reviewer_side_note_survives_verdict_seal`: note flushed at the reviewer's prompt, verdict
+    accepted; the sealed ledger (adopted from `round_ledger`) equals replay. Mutation check: drop
+    the `round_ledger.apply` → fails.
 - [ ] Unchanged: `mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437 still asserts 2. Do not edit it.
 - [ ] Green, lint, check `loop_driver.rs` ≤ 800 (split the turn helper into
   `loop_driver/turn.rs` if needed — pure move, separate commit), commit

@@ -254,7 +254,7 @@ pub enum ResumeEnd {
     /// `q` or EOF at the ruling prompt: nothing written, lock released.
     LeftPaused,
     /// The session ran (or was ended at the prompt) and is now past it.
-    Ran(Ledger, LoopDriverStop),
+    Ran(Box<Ledger>, LoopDriverStop),
 }
 
 /// P2-§6 row 1: a session that owes a ruling resumes AT the ruling prompt,
@@ -268,7 +268,7 @@ pub fn settle_then_resume(
 ) -> Result<ResumeEnd> {
     if r.ledger.pending_ruling().is_empty() {
         let (ledger, stop) = resume_session(transport, mur_home, r, retry_delay)?;
-        return Ok(ResumeEnd::Ran(ledger, stop));
+        return Ok(ResumeEnd::Ran(Box::new(ledger), stop));
     }
     let svc = ChannelService::open(mur_home)?;
     let ctx = RulingCtx {
@@ -287,7 +287,7 @@ pub fn settle_then_resume(
     let stop = match outcome {
         RulingOutcome::Settled => {
             let (ledger, stop) = resume_session(transport, mur_home, r, retry_delay)?;
-            return Ok(ResumeEnd::Ran(ledger, stop));
+            return Ok(ResumeEnd::Ran(Box::new(ledger), stop));
         }
         RulingOutcome::LeftPaused => return Ok(ResumeEnd::LeftPaused),
         RulingOutcome::Abandoned => LoopDriverStop::Escalation,
@@ -295,7 +295,7 @@ pub fn settle_then_resume(
     };
     let Resumable { fleet, ledger, .. } = r;
     let (ledger, stop) = super::session::end_session(mur_home, &fleet, Ok((ledger, stop)))?;
-    Ok(ResumeEnd::Ran(ledger, stop))
+    Ok(ResumeEnd::Ran(Box::new(ledger), stop))
 }
 
 /// Write the signed `resumed` event and continue the loop at the same round.
