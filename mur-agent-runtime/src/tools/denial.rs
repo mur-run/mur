@@ -108,6 +108,72 @@ pub(crate) fn allow_write_commands(path: &Path, agent: &str, sep: &str) -> Strin
     )
 }
 
+/// Why a caller-supplied turn cwd (`TaskSpec.cwd`, what murmur sends from the
+/// directory it was started in) was refused and the conversation stayed where
+/// it was.
+///
+/// Dogfood bug (channel 01a11025): the user ran murmur in a project granted
+/// to the agent *after* the agent started. The runtime refused the cwd with a
+/// `tracing::warn!` nobody reads and the agent asked "where is your project?"
+/// turn after turn. A write refused for the same reason already comes back
+/// with the grant + restart pair ([`WriteDenial`]); the cwd path must too.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CwdDenial {
+    /// The directory does not exist (or cannot be canonicalized).
+    Missing,
+    /// No read or write grant covers it.
+    NotGranted,
+    /// Covered by nothing the sealed sandbox knows, but the profile changed
+    /// since this agent sealed — the grant is probably there and inert.
+    NeedsRestart,
+}
+
+/// Classify a refused cwd. `agent_dir` is `~/.mur/agents/<name>`, where
+/// `running.lock` (seal time) and `profile.yaml` (last grant) live. The caller
+/// has already established that no live root covers `path`.
+pub(crate) fn classify_cwd_denial(path: &Path, agent_dir: &Path) -> CwdDenial {
+    if std::fs::canonicalize(path).is_err() {
+        return CwdDenial::Missing;
+    }
+    let sealed = std::fs::metadata(agent_dir.join("running.lock")).and_then(|m| m.modified());
+    let edited = std::fs::metadata(agent_dir.join("profile.yaml")).and_then(|m| m.modified());
+    match (sealed, edited) {
+        (Ok(s), Ok(e)) if e > s => CwdDenial::NeedsRestart,
+        _ => CwdDenial::NotGranted,
+    }
+}
+
+/// The user-facing note for a refused cwd: the directory asked for, the one
+/// the turn actually ran in, and the command that changes that. Same shape on
+/// every surface (system prompt, reply footer) so the two never disagree.
+pub(crate) fn cwd_denied_hint(
+    requested: &Path,
+    actual: &Path,
+    agent: &str,
+    d: &CwdDenial,
+) -> String {
+    let req = requested.display();
+    let act = actual.display();
+    match d {
+        CwdDenial::Missing => {
+            format!("[cwd] {req} does not exist, so this turn runs in {act} instead.")
+        }
+        CwdDenial::NotGranted => format!(
+            "[cwd] {req} is not under any filesystem grant for agent '{agent}', so this turn \
+             runs in {act} instead. To work there:\n    \
+             mur agent perm allow-read {agent} {req}\n    \
+             mur agent restart {agent}"
+        ),
+        CwdDenial::NeedsRestart => format!(
+            "[cwd] {req} is not covered by the sandbox agent '{agent}' sealed at startup, but \
+             its profile has changed since. A sandbox cannot be widened after startup, so a \
+             grant added since then is inert until:\n    \
+             mur agent restart {agent}\n\
+             Until then this turn runs in {act} instead."
+        ),
+    }
+}
+
 /// State a fact and name the command that acts on it — never assert the cause.
 ///
 /// "This path is not under a write grant" is checkable. "That is why the
