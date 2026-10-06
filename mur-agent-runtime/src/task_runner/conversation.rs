@@ -394,7 +394,10 @@ impl TaskRunner {
             return;
         };
         let mut refused: Option<std::path::PathBuf> = None;
-        let entitled = requested.and_then(|req| match std::fs::canonicalize(req) {
+        // `mur_track::turn::canonicalize`, not `std::fs`: on Windows the latter
+        // yields a `\\?\` verbatim path that git refuses in `worktree add`
+        // and that never equals the project path the track was opened from.
+        let entitled = requested.and_then(|req| match mur_track::turn::canonicalize(req) {
             Ok(c) if crate::tools::fs_policy::under_any_or_worktree(roots, &c) => Some(c),
             Ok(_) => {
                 tracing::warn!(cwd = %req.display(), "turn cwd outside entitlements; keeping conversation cwd");
