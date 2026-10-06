@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn open_edit_close_promotes_and_records_project_paths() {
         let td = tempfile::tempdir().unwrap();
-        let project = std::fs::canonicalize(td.path()).unwrap();
+        let project = mur_track::turn::canonicalize(td.path()).unwrap();
         let git = |args: &[&str]| {
             let st = std::process::Command::new("git")
                 .args(["-c", "user.email=t@t", "-c", "user.name=t"])
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn no_track_outside_a_repo_root() {
         let td = tempfile::tempdir().unwrap();
-        let dir = std::fs::canonicalize(td.path()).unwrap();
+        let dir = mur_track::turn::canonicalize(td.path()).unwrap();
         let cwd = crate::tools::fs_policy::SessionCwd::new(dir.clone());
         let runner = TaskRunner::new_stub_echo()
             .with_tools(vec![Arc::new(

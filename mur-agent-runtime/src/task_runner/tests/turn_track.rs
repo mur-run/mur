@@ -3,7 +3,7 @@ use crate::llm::stub::SequenceLlm;
 
 fn git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     let td = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(td.path()).unwrap();
+    let root = mur_track::turn::canonicalize(td.path()).unwrap();
     let git = |args: &[&str]| {
         let st = std::process::Command::new("git")
             .args(["-c", "user.email=t@t", "-c", "user.name=t"])

@@ -262,6 +262,45 @@ fn ensure_excluded(project: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `std::fs::canonicalize` minus the Windows verbatim prefix. On Windows the
+/// std call yields `\\?\C:\...`; git refuses that shape (`could not create
+/// leading directories of '//?/C:/...'`) and the shell never shows it to the
+/// model, so every path a track hands out or compares goes through here.
+/// Elsewhere it is exactly `std::fs::canonicalize`.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path).map(strip_verbatim)
+}
+
+#[cfg(windows)]
+fn strip_verbatim(p: PathBuf) -> PathBuf {
+    use std::path::Prefix;
+    let mut comps = p.components();
+    let Some(Component::Prefix(pre)) = comps.next() else {
+        return p;
+    };
+    let head = match pre.kind() {
+        Prefix::VerbatimDisk(d) => format!("{}:\\", d as char),
+        Prefix::VerbatimUNC(server, share) => format!(
+            "\\\\{}\\{}\\",
+            server.to_string_lossy(),
+            share.to_string_lossy()
+        ),
+        _ => return p,
+    };
+    let mut out = PathBuf::from(head);
+    for c in comps {
+        if let Component::Normal(n) = c {
+            out.push(n);
+        }
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim(p: PathBuf) -> PathBuf {
+    p
+}
+
 /// Canonical repository root of `dir`, or an error naming the problem.
 fn repo_root(dir: &Path) -> Result<PathBuf> {
     let out = Command::new("git")
@@ -273,8 +312,8 @@ fn repo_root(dir: &Path) -> Result<PathBuf> {
         bail!("not a git repository: {}", dir.display());
     }
     let top = PathBuf::from(String::from_utf8(out.stdout)?.trim());
-    let top = std::fs::canonicalize(&top).unwrap_or(top);
-    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let top = canonicalize(&top).unwrap_or(top);
+    let dir = canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     if top != dir {
         bail!(
             "turn tracks are created at the repository root ({}), not {}",

@@ -49,7 +49,7 @@ fn dirty_repo() -> tempfile::TempDir {
 /// `tempdir` on macOS lives under /var → /private/var; canonicalize so paths
 /// compare equal with what git reports.
 fn root(td: &tempfile::TempDir) -> PathBuf {
-    std::fs::canonicalize(td.path()).unwrap()
+    super::canonicalize(td.path()).unwrap()
 }
 
 #[test]
@@ -239,7 +239,8 @@ fn detect_picks_a_method_that_works_here() {
 #[ignore]
 fn bench_turn_track() {
     use std::time::Instant;
-    let project = std::fs::canonicalize(std::env::var("MUR_BENCH_PROJECT").unwrap()).unwrap();
+    let project =
+        super::canonicalize(Path::new(&std::env::var("MUR_BENCH_PROJECT").unwrap())).unwrap();
     for method in [TreeClone::detect(), TreeClone::Copy] {
         let t0 = Instant::now();
         let track = TurnTrack::create(&project, "bench-turn", method).unwrap();
@@ -285,4 +286,20 @@ fn skipped_dirs_in_the_project_are_never_reported_or_deleted() {
     let st = git_out(&project, &["status", "--porcelain"]);
     assert!(!st.contains(".worktrees"), "{st}");
     assert!(!project.join(".gitignore").exists());
+}
+
+/// Windows: `std::fs::canonicalize` returns `\\?\C:\...`, which git rejects
+/// in `worktree add` and which never matches the shell's view of a path.
+#[cfg(windows)]
+#[test]
+fn canonicalize_strips_the_verbatim_prefix() {
+    let td = tempfile::tempdir().unwrap();
+    let p = super::canonicalize(td.path()).unwrap();
+    assert!(!p.to_string_lossy().starts_with(r"\\?\"), "{}", p.display());
+    assert_eq!(
+        p,
+        std::fs::canonicalize(&p)
+            .map(super::strip_verbatim)
+            .unwrap()
+    );
 }
