@@ -112,6 +112,7 @@ impl TaskRunner {
                 self.kill_jobs_of(task_id).await;
                 let msg = self
                     .graceful_exit(
+                        task_id,
                         client,
                         &history,
                         LoopStop::Deadline,
@@ -148,6 +149,7 @@ impl TaskRunner {
                     self.kill_jobs_of(task_id).await;
                     let msg = self
                         .graceful_exit(
+                            task_id,
                             client,
                             &history,
                             LoopStop::Stuck,
@@ -217,7 +219,11 @@ impl TaskRunner {
                             );
                             ledger.iterations = iteration;
                             ledger.stop = crate::turn_ledger::StopKind::EndTurn;
-                            return Ok((settle(shown.join(SEGMENT_SEP), &ledger), None));
+                            return Ok((
+                                self.settle_turn(task_id, shown.join(SEGMENT_SEP), &ledger)
+                                    .await,
+                                None,
+                            ));
                         }
                         Err(LlmError::InvalidResponse(ref msg))
                             if attempt == 0 && msg.contains("empty streamed response") =>
@@ -276,7 +282,7 @@ impl TaskRunner {
                             };
                             let mut text = shown.join(SEGMENT_SEP);
                             text.push_str(crate::llm::LLM_FAILED_TRUNCATION_MARKER);
-                            return Ok((settle(text, &ledger), None));
+                            return Ok((self.settle_turn(task_id, text, &ledger).await, None));
                         }
                         Err(e) => {
                             return Err(task_error("llm_error", format!("{e}"), true));
@@ -469,7 +475,7 @@ impl TaskRunner {
                     carried.retain(|t| !t.is_empty());
                     carried.join(SEGMENT_SEP)
                 };
-                return Ok((settle(reply, &ledger), None));
+                return Ok((self.settle_turn(task_id, reply, &ledger).await, None));
             }
 
             // P3: gate the whole response first — one notification, N decisions.
@@ -605,6 +611,7 @@ impl TaskRunner {
                     history.push(RichMessage::ToolResults { results });
                     let msg = self
                         .graceful_exit(
+                            task_id,
                             client,
                             &history,
                             LoopStop::LoopDetected,
@@ -631,6 +638,7 @@ impl TaskRunner {
                 history.push(RichMessage::ToolResults { results });
                 let msg = self
                     .graceful_exit(
+                        task_id,
                         client,
                         &history,
                         LoopStop::ToolWithdrawn,
@@ -686,6 +694,7 @@ impl TaskRunner {
 
         let msg = self
             .graceful_exit(
+                task_id,
                 client,
                 &history,
                 LoopStop::IterationCeiling,

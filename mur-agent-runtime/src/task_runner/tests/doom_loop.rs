@@ -546,6 +546,7 @@ async fn graceful_exit_sanitizes_dangling_tool_use() {
 
     let msg = runner
         .graceful_exit(
+            "t-test",
             client.as_ref(),
             &history,
             LoopStop::LoopDetected,
@@ -620,6 +621,7 @@ async fn graceful_exit_names_the_stop_reason_in_the_settlement() {
 
     let capped = runner
         .graceful_exit(
+            "t-test",
             client.as_ref(),
             &history,
             LoopStop::IterationCeiling,
@@ -637,6 +639,7 @@ async fn graceful_exit_names_the_stop_reason_in_the_settlement() {
 
     let other = runner
         .graceful_exit(
+            "t-test",
             client.as_ref(),
             &history,
             LoopStop::LoopDetected,

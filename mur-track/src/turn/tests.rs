@@ -1,0 +1,305 @@
+use super::*;
+use std::process::Command;
+
+fn git(dir: &Path, args: &[&str]) {
+    let st = Command::new("git")
+        .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(st.success(), "git {args:?} failed in {}", dir.display());
+}
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+fn read(p: &Path) -> String {
+    std::fs::read_to_string(p).unwrap()
+}
+
+/// A repo with one commit, then a dirty tracked file and an untracked one —
+/// the state a user's checkout is usually in when a turn starts.
+fn dirty_repo() -> tempfile::TempDir {
+    let td = tempfile::tempdir().unwrap();
+    git(td.path(), &["init", "-q"]);
+    std::fs::write(td.path().join(".gitignore"), "target/\n.worktrees/\n").unwrap();
+    std::fs::write(td.path().join("keep.txt"), "keep").unwrap();
+    std::fs::write(td.path().join("gone.txt"), "gone").unwrap();
+    std::fs::create_dir(td.path().join("src")).unwrap();
+    std::fs::write(td.path().join("src/lib.rs"), "fn a() {}").unwrap();
+    git(td.path(), &["add", "."]);
+    git(td.path(), &["commit", "-q", "-m", "init"]);
+    // Dirty state the turn must inherit but never report.
+    std::fs::write(td.path().join("keep.txt"), "keep-dirty").unwrap();
+    std::fs::write(td.path().join("untracked.txt"), "new").unwrap();
+    // Ignored build output must not be part of the tree clone.
+    std::fs::create_dir(td.path().join("target")).unwrap();
+    std::fs::write(td.path().join("target/big.o"), "bin").unwrap();
+    td
+}
+
+/// `tempdir` on macOS lives under /var → /private/var; canonicalize so paths
+/// compare equal with what git reports.
+fn root(td: &tempfile::TempDir) -> PathBuf {
+    super::canonicalize(td.path()).unwrap()
+}
+
+#[test]
+fn create_clones_dirty_tree_and_shares_git() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-a", TreeClone::Copy).unwrap();
+    let p = track.path();
+    assert_eq!(p, project.join(WORKTREES_DIR).join("turn-a"));
+    assert_eq!(
+        read(&p.join("keep.txt")),
+        "keep-dirty",
+        "dirty state inherited"
+    );
+    assert_eq!(read(&p.join("untracked.txt")), "new", "untracked inherited");
+    assert!(
+        p.join(".git").is_file(),
+        ".git is a worktree pointer, not a clone"
+    );
+    assert!(
+        !p.join("target").exists(),
+        "ignored build output is not cloned by the tree copy"
+    );
+    // Shared object store: the track resolves the same HEAD as the project.
+    assert_eq!(
+        git_out(p, &["rev-parse", "HEAD"]),
+        git_out(&project, &["rev-parse", "HEAD"])
+    );
+    assert!(
+        track.diff_files().unwrap().is_empty(),
+        "nothing changed yet, so nothing is reported — including pre-existing dirt"
+    );
+}
+
+#[test]
+fn diff_reports_only_the_turns_edits_relative_to_project() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-b", TreeClone::Copy).unwrap();
+    let p = track.path().to_path_buf();
+    std::fs::write(p.join("src/lib.rs"), "fn a() { changed }").unwrap();
+    std::fs::write(p.join("brand-new.txt"), "hi").unwrap();
+    std::fs::remove_file(p.join("gone.txt")).unwrap();
+    // Touching ignored output must stay invisible.
+    std::fs::create_dir_all(p.join("target")).unwrap();
+    std::fs::write(p.join("target/x.o"), "x").unwrap();
+
+    let mut got = track.diff_files().unwrap();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            PathBuf::from("brand-new.txt"),
+            PathBuf::from("gone.txt"),
+            PathBuf::from("src/lib.rs"),
+        ]
+    );
+}
+
+#[test]
+fn promote_is_last_write_wins_and_propagates_deletions() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-c", TreeClone::Copy).unwrap();
+    let p = track.path().to_path_buf();
+    std::fs::write(p.join("src/lib.rs"), "fn a() { changed }").unwrap();
+    std::fs::write(p.join("brand-new.txt"), "hi").unwrap();
+    std::fs::remove_file(p.join("gone.txt")).unwrap();
+    // The user edits the same file meanwhile — P0 policy: the turn wins.
+    std::fs::write(project.join("src/lib.rs"), "fn a() { user }").unwrap();
+
+    let promoted = track.promote().unwrap();
+    assert_eq!(promoted.len(), 3);
+    assert_eq!(read(&project.join("src/lib.rs")), "fn a() { changed }");
+    assert_eq!(read(&project.join("brand-new.txt")), "hi");
+    assert!(!project.join("gone.txt").exists(), "deletion propagated");
+    // Untouched dirt is left exactly as the user had it.
+    assert_eq!(read(&project.join("keep.txt")), "keep-dirty");
+    assert_eq!(read(&project.join("untracked.txt")), "new");
+}
+
+#[test]
+fn destroy_removes_dir_and_registration_but_keeps_branch_commits() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-d", TreeClone::Copy).unwrap();
+    let p = track.path().to_path_buf();
+    // The agent's intended workflow: branch → commit inside the track.
+    git(&p, &["checkout", "-q", "-b", "feat/from-track"]);
+    std::fs::write(p.join("src/lib.rs"), "fn a() { committed }").unwrap();
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-q", "-m", "from track"]);
+
+    track.destroy().unwrap();
+    assert!(!p.exists());
+    assert!(
+        !git_out(&project, &["worktree", "list"]).contains("turn-d"),
+        "worktree registration removed"
+    );
+    let msg = git_out(&project, &["log", "-1", "--format=%s", "feat/from-track"]);
+    assert_eq!(msg.trim(), "from track", "branch survives the worktree");
+}
+
+#[test]
+fn create_refuses_unsafe_names_and_non_repos() {
+    let td = tempfile::tempdir().unwrap();
+    let err = TurnTrack::create(td.path(), "turn-x", TreeClone::Copy).unwrap_err();
+    assert!(err.to_string().contains("not a git repository"), "{err}");
+
+    let td = dirty_repo();
+    for evil in ["../up", "a/b", "UPPER", ""] {
+        let err = TurnTrack::create(&root(&td), evil, TreeClone::Copy).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid track name"),
+            "{evil}: {err}"
+        );
+    }
+}
+
+#[test]
+fn open_resumes_an_existing_track_with_its_base() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-e", TreeClone::Copy).unwrap();
+    std::fs::write(track.path().join("brand-new.txt"), "hi").unwrap();
+    let reopened = TurnTrack::open(&project, "turn-e").unwrap();
+    assert_eq!(
+        reopened.diff_files().unwrap(),
+        vec![PathBuf::from("brand-new.txt")]
+    );
+}
+
+#[test]
+fn display_path_maps_track_paths_back_to_the_project() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-f", TreeClone::Copy).unwrap();
+    let inside = track.path().join("src/lib.rs");
+    assert_eq!(track.display_path(&inside), project.join("src/lib.rs"));
+    let outside = PathBuf::from("/elsewhere/x");
+    assert_eq!(track.display_path(&outside), outside);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn apfs_clone_produces_the_same_tree_as_copy() {
+    let td = dirty_repo();
+    let project = root(&td);
+    // A symlink and a nested dir, the two shapes `cp -c` handles differently
+    // from a naive copy.
+    std::fs::create_dir_all(project.join("src/deep")).unwrap();
+    std::fs::write(project.join("src/deep/x.rs"), "x").unwrap();
+    std::os::unix::fs::symlink("keep.txt", project.join("link.txt")).unwrap();
+
+    let track = TurnTrack::create(&project, "turn-apfs", TreeClone::ApfsClone).unwrap();
+    let p = track.path();
+    assert_eq!(read(&p.join("keep.txt")), "keep-dirty");
+    assert_eq!(read(&p.join("untracked.txt")), "new");
+    assert_eq!(read(&p.join("src/deep/x.rs")), "x");
+    assert!(
+        p.join("link.txt").is_symlink(),
+        "symlink preserved as symlink"
+    );
+    assert!(
+        p.join(".git").is_file(),
+        "worktree pointer kept, not overwritten"
+    );
+    assert!(!p.join("target").exists(), "skip dirs honoured");
+    assert!(track.diff_files().unwrap().is_empty());
+    // Still copy-on-write: editing the track must not touch the project.
+    std::fs::write(p.join("keep.txt"), "track-side").unwrap();
+    assert_eq!(read(&project.join("keep.txt")), "keep-dirty");
+    assert_eq!(track.diff_files().unwrap(), vec![PathBuf::from("keep.txt")]);
+}
+
+#[test]
+fn detect_picks_a_method_that_works_here() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-detect", TreeClone::detect()).unwrap();
+    assert_eq!(read(&track.path().join("keep.txt")), "keep-dirty");
+}
+
+/// Manual: `cargo test -p mur-track --lib bench_turn_track -- --ignored --nocapture`
+/// from inside a real checkout. Prints create / diff / destroy wall time.
+#[test]
+#[ignore]
+fn bench_turn_track() {
+    use std::time::Instant;
+    let project =
+        super::canonicalize(Path::new(&std::env::var("MUR_BENCH_PROJECT").unwrap())).unwrap();
+    for method in [TreeClone::detect(), TreeClone::Copy] {
+        let t0 = Instant::now();
+        let track = TurnTrack::create(&project, "bench-turn", method).unwrap();
+        let create = t0.elapsed();
+        let t1 = Instant::now();
+        let n = track.diff_files().unwrap().len();
+        let diff = t1.elapsed();
+        let t2 = Instant::now();
+        track.destroy().unwrap();
+        let destroy = t2.elapsed();
+        eprintln!("{method:?}: create {create:?}  diff {diff:?} ({n} files)  destroy {destroy:?}");
+    }
+}
+
+/// A project that does NOT ignore `.worktrees/` or `target/` (no .gitignore
+/// at all) lists them as untracked. They are skipped by the clone, so they
+/// must be skipped by the base too — or the turn would look like it deleted
+/// them, and `promote` would make that real.
+#[test]
+fn skipped_dirs_in_the_project_are_never_reported_or_deleted() {
+    let td = tempfile::tempdir().unwrap();
+    git(td.path(), &["init", "-q"]);
+    std::fs::write(td.path().join("a.txt"), "a").unwrap();
+    git(td.path(), &["add", "."]);
+    git(td.path(), &["commit", "-q", "-m", "init"]);
+    let project = root(&td);
+    std::fs::create_dir_all(project.join("target/debug")).unwrap();
+    std::fs::write(project.join("target/debug/bin"), "bin").unwrap();
+    std::fs::create_dir_all(project.join("sub/node_modules/x")).unwrap();
+    std::fs::write(project.join("sub/node_modules/x/i.js"), "js").unwrap();
+    // A track from an earlier turn, kept for review.
+    std::fs::create_dir_all(project.join(".worktrees/turn-old")).unwrap();
+    std::fs::write(project.join(".worktrees/turn-old/a.txt"), "old").unwrap();
+
+    let track = TurnTrack::create(&project, "turn-g", TreeClone::Copy).unwrap();
+    assert!(track.diff_files().unwrap().is_empty());
+    assert!(track.promote().unwrap().is_empty());
+    assert!(project.join("target/debug/bin").exists());
+    assert!(project.join("sub/node_modules/x/i.js").exists());
+    assert!(project.join(".worktrees/turn-old/a.txt").exists());
+    // And the project's own status no longer lists tracks as untracked —
+    // the repo-local exclude was written, the user's .gitignore untouched.
+    let st = git_out(&project, &["status", "--porcelain"]);
+    assert!(!st.contains(".worktrees"), "{st}");
+    assert!(!project.join(".gitignore").exists());
+}
+
+/// Windows: `std::fs::canonicalize` returns `\\?\C:\...`, which git rejects
+/// in `worktree add` and which never matches the shell's view of a path.
+#[cfg(windows)]
+#[test]
+fn canonicalize_strips_the_verbatim_prefix() {
+    let td = tempfile::tempdir().unwrap();
+    let p = super::canonicalize(td.path()).unwrap();
+    assert!(!p.to_string_lossy().starts_with(r"\\?\"), "{}", p.display());
+    assert_eq!(
+        p,
+        std::fs::canonicalize(&p)
+            .map(super::strip_verbatim)
+            .unwrap()
+    );
+}

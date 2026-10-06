@@ -211,6 +211,7 @@ mod drain_and_retry;
 mod limits;
 mod system_prompt;
 mod truncation;
+mod turn_track;
 
 /// Lives in `task_runner/tests/` so this file stops growing.
 mod sandbox_gate;

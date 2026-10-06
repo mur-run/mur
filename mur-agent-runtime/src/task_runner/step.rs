@@ -410,8 +410,10 @@ impl TaskRunner {
     /// completed, the current build/test state, and the remaining steps. If that
     /// call fails, fall back to the last assistant text already in `history` so
     /// accumulated work is never lost.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn graceful_exit(
         &self,
+        task_id: &str,
         client: &dyn crate::llm::LlmClient,
         history: &[crate::llm::RichMessage],
         reason: LoopStop,
@@ -504,7 +506,7 @@ impl TaskRunner {
             iterations,
             ..ledger.clone()
         };
-        settle(text, &ledger)
+        self.settle_turn(task_id, text, &ledger).await
     }
 }
 

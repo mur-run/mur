@@ -653,3 +653,67 @@ fn file_tool_scratch_grant_is_skipped_when_helper_errs() {
         fs.write
     );
 }
+
+/// A turn inside a track hands the model a track path, but the model can
+/// still name the project's absolute path in `bash`'s `cwd` — from memory,
+/// from an instruction file, from habit. Left alone that cwd writes into
+/// the project behind the track's back, and the settlement card (fed by the
+/// track's diff) reports a clean turn: a false ledger, worse than no track.
+/// So an explicit cwd under the project is redirected to the same place
+/// under the track. A cwd already in the track, or outside the project,
+/// is left alone.
+#[test]
+fn explicit_bash_cwd_inside_the_project_is_redirected_into_the_track() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = std::fs::canonicalize(tmp.path()).unwrap();
+    let track = project.join(".worktrees/turn-1");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let cwd = SessionCwd::new(project.clone());
+    cwd.begin_turn("t1", None, Some(project.clone()));
+    cwd.enter_track("t1", project.clone(), track.clone());
+    assert_eq!(cwd.for_turn("t1"), track);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let set_and_read = |dir: PathBuf| {
+        let cwd = cwd.clone();
+        rt.block_on(
+            crate::tools::bash_jobs::CURRENT_TASK_ID.scope("t1".to_string(), async move {
+                let adopted = cwd.set(dir);
+                assert_eq!(adopted, cwd.current(), "set returns what it stored");
+                adopted
+            }),
+        )
+    };
+
+    assert_eq!(
+        set_and_read(project.clone()),
+        track,
+        "project root → track root"
+    );
+    assert_eq!(
+        set_and_read(project.join("src")),
+        track.join("src"),
+        "subdir keeps its tail"
+    );
+    assert_eq!(
+        set_and_read(track.join("src")),
+        track.join("src"),
+        "already in the track"
+    );
+    let elsewhere = std::fs::canonicalize(tempfile::tempdir().unwrap().keep()).unwrap();
+    assert_eq!(
+        set_and_read(elsewhere.clone()),
+        elsewhere,
+        "outside the project is not ours"
+    );
+
+    cwd.leave_track("t1", project.clone());
+    assert_eq!(cwd.for_turn("t1"), project);
+    assert_eq!(
+        set_and_read(project.join("src")),
+        project.join("src"),
+        "no track, no redirect"
+    );
+}

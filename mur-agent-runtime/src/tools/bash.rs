@@ -216,11 +216,9 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             // Explicit cwd: use it AND update the shared session base so a
             // subsequent read_file/write_file/edit_file resolves relative
             // paths against the same directory.
-            Some(cwd) => {
-                let dir = PathBuf::from(cwd);
-                self.session_cwd.set(dir.clone());
-                dir
-            }
+            // Inside a turn track the adopted directory is the track's
+            // counterpart, not the literal argument — run there.
+            Some(cwd) => self.session_cwd.set(PathBuf::from(cwd)),
             // No explicit cwd: fall back to the current session base (which
             // starts at the agent home and only moves on an explicit cwd).
             None => self.session_cwd.current(),

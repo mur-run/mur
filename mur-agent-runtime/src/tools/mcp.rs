@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn injects_session_cwd_only_when_absent() {
         let session = SessionCwd::new(std::path::PathBuf::from("/home"));
-        session.set(std::path::PathBuf::from("/proj"));
+        let _ = session.set(std::path::PathBuf::from("/proj"));
 
         let mut absent = json!({"jobs": [{"description": "x"}]});
         inject_session_cwd("parallel_jobs", &mut absent, Some(&session));
