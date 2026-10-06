@@ -284,7 +284,9 @@ fn apply(
     // Both entry points are scripts run by a venv interpreter uv chose;
     // the seal must exec each one (requirement 3). Resolved before anything
     // is written, so a lane outside the tools dir refuses with no half-applied
-    // profile or grants.
+    // profile or grants. A grant that fails *after* `save_profile` does leave
+    // the serena entry with partial grants; re-running setup completes them
+    // (the manifest records only what succeeded).
     let entry_points = std::iter::once(&record.bin).chain(pyright.as_ref().map(|r| &r.bin));
     let tools_root = mur_home.join(mur_common::config::MUR_TOOLS_DIR);
     let mut lanes: Vec<PathBuf> = Vec::new();

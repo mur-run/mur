@@ -294,3 +294,34 @@ fn python_ls_path_outside_the_tools_root_fails_preflight() {
     let e = write_config(&f.paths, &f.project, FIXTURE, SECRET, Some(&stray)).unwrap_err();
     assert!(format!("{e:#}").contains("ls_path"), "{e:#}");
 }
+
+#[cfg(unix)]
+#[test]
+fn write_private_never_follows_a_planted_tmp_symlink() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let victim = t.path().join("victim");
+    std::fs::write(&victim, b"keep me").unwrap();
+    let path = t.path().join("serena_config.yml");
+    std::os::unix::fs::symlink(&victim, path.with_extension("yml.tmp")).unwrap();
+    write_private(&path, b"secret: x\n").unwrap();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+    assert_eq!(std::fs::read(&path).unwrap(), b"secret: x\n");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, PRIVATE_MODE);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_private_replaces_a_stale_world_readable_tmp() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("serena_config.yml");
+    let tmp = path.with_extension("yml.tmp");
+    std::fs::write(&tmp, b"old").unwrap();
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+    write_private(&path, b"new").unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, PRIVATE_MODE);
+    assert!(!tmp.exists());
+}

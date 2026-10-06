@@ -36,6 +36,29 @@ pub(super) const PYTHON_SUBDIR: &str = "python";
 /// The venv metadata file naming the base interpreter.
 pub(super) const PYVENV_CFG: &str = "pyvenv.cfg";
 const ENTRY_POINT: &str = "serena";
+/// The managed CPython every tool env is built on: the interpreter the
+/// Phase 0/2 findings and the item 17 matrix ran under. `--exclude-newer`
+/// does not reach Python downloads, so without this uv picks whatever newest
+/// managed Python satisfies `requires-python` on the day setup runs.
+pub(super) const UV_PYTHON_PIN: &str = "3.13.2";
+/// uv env vars that would steer resolution away from what the pins name.
+/// `--no-config` only drops config *files*; these are inherited from the
+/// caller's shell, so they are cleared on the child explicitly.
+pub(super) const UV_STEERING_ENV: &[&str] = &[
+    "UV_INDEX",
+    "UV_INDEX_URL",
+    "UV_DEFAULT_INDEX",
+    "UV_EXTRA_INDEX_URL",
+    "UV_FIND_LINKS",
+    "UV_NO_INDEX",
+    "UV_INDEX_STRATEGY",
+    "UV_INSECURE_HOST",
+    "UV_CONSTRAINT",
+    "UV_OVERRIDE",
+    "UV_PYTHON",
+    "UV_PYTHON_INSTALL_MIRROR",
+    "UV_PYTHON_DOWNLOADS_JSON_URL",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Installed {
@@ -81,9 +104,19 @@ pub fn serena_binary_path_in(dir: &Path) -> PathBuf {
     dir.join(BIN_SUBDIR).join(name)
 }
 
+/// Clear `UV_STEERING_ENV` from `c` and pin the managed Python. Shared by
+/// every `uv tool install` code-nav runs.
+pub(super) fn pin_uv(c: &mut Command) {
+    for k in UV_STEERING_ENV {
+        c.env_remove(k);
+    }
+    c.args(["--python", UV_PYTHON_PIN]);
+}
+
 /// The exact uv invocation. `--no-config` keeps a stray `uv.toml` from
-/// redirecting the index; cwd is the managed dir so no repo
-/// `pyproject.toml` is in scope.
+/// redirecting the index and `pin_uv` does the same for inherited env;
+/// cwd is the managed dir so no repo `pyproject.toml` is in scope.
+/// Dependencies are bounded by `--exclude-newer`, not hash-verified.
 pub fn install_command(uv: &Path, dir: &Path, reinstall: bool) -> Command {
     let mut c = Command::new(uv);
     c.current_dir(dir)
@@ -95,6 +128,7 @@ pub fn install_command(uv: &Path, dir: &Path, reinstall: bool) -> Command {
         // on PATH), and setup would then grant exec of that shared `bin` dir.
         .args(["--python-preference", "only-managed"])
         .args(["--exclude-newer", SERENA_EXCLUDE_NEWER]);
+    pin_uv(&mut c);
     if reinstall {
         c.args(["--force", "--reinstall"]);
     }

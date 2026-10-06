@@ -264,8 +264,17 @@ pub fn write_config(
 pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("yml.tmp");
+    // The dir is one the sandboxed serena child can write. A leftover tmp
+    // (or a planted symlink) is removed, never opened: `create_new` refuses
+    // to follow a link and guarantees `mode` applies at creation, so the
+    // secret is never readable by others even for an instant.
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("remove stale {}", tmp.display())),
+    }
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, PRIVATE_MODE);
     let mut f = opts
