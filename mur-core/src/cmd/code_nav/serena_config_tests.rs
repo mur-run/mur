@@ -294,3 +294,66 @@ fn python_ls_path_outside_the_tools_root_fails_preflight() {
     let e = write_config(&f.paths, &f.project, FIXTURE, SECRET, Some(&stray)).unwrap_err();
     assert!(format!("{e:#}").contains("ls_path"), "{e:#}");
 }
+
+#[cfg(unix)]
+#[test]
+fn write_private_never_follows_a_planted_tmp_symlink() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let victim = t.path().join("victim");
+    std::fs::write(&victim, b"keep me").unwrap();
+    let path = t.path().join("serena_config.yml");
+    std::os::unix::fs::symlink(&victim, path.with_extension("yml.tmp")).unwrap();
+    write_private(&path, b"secret: x\n").unwrap();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+    assert_eq!(std::fs::read(&path).unwrap(), b"secret: x\n");
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, PRIVATE_MODE);
+}
+
+#[cfg(unix)]
+#[test]
+fn write_private_replaces_a_stale_world_readable_tmp() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("serena_config.yml");
+    let tmp = path.with_extension("yml.tmp");
+    std::fs::write(&tmp, b"old").unwrap();
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+    write_private(&path, b"new").unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, PRIVATE_MODE);
+    assert!(!tmp.exists());
+}
+
+#[test]
+fn dropped_block_spans_blank_lines_and_comments() {
+    let template = "\
+keep: 1
+auth_secret:
+  - a
+
+# inside the dropped block
+  - b
+
+# leads the next key
+next: 2
+";
+    let mut keys = Mapping::new();
+    keys.insert("auth_secret".into(), "x".into());
+    let out = render_owned(template, &["auth_secret"], &keys, "# owned\n", "fixture").unwrap();
+    assert!(!out.contains("- b"), "{out}");
+    assert!(out.contains("# leads the next key\nnext: 2\n"), "{out}");
+    let m = top(&out);
+    assert_eq!(m.get("next"), Some(&Value::from(2)));
+    assert_eq!(m.get("auth_secret"), Some(&Value::from("x")));
+}
+
+#[test]
+fn trailing_blank_lines_after_a_dropped_block_are_kept() {
+    let template = "auth_secret: old\n\n";
+    let mut keys = Mapping::new();
+    keys.insert("auth_secret".into(), "x".into());
+    let out = render_owned(template, &["auth_secret"], &keys, "", "fixture").unwrap();
+    assert_eq!(top(&out).get("auth_secret"), Some(&Value::from("x")));
+}

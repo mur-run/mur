@@ -237,3 +237,39 @@ fn missing_uv_names_the_prerequisite() {
     let e = install_with(&t.path().join("no-such-uv"), &t.path().join("s")).unwrap_err();
     assert!(format!("{e:#}").contains("uv"), "{e:#}");
 }
+
+#[test]
+fn command_pins_python_and_drops_steering_env() {
+    for cmd in [
+        install_command(Path::new("uv"), Path::new("/d"), false),
+        crate::cmd::code_nav::pyright_install::install_command(
+            Path::new("uv"),
+            Path::new("/d"),
+            false,
+        ),
+    ] {
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy()).collect();
+        let at = args.iter().position(|a| a == "--python").expect("--python");
+        assert_eq!(args[at + 1], UV_PYTHON_PIN);
+        for k in UV_STEERING_ENV {
+            let removed = cmd
+                .get_envs()
+                .any(|(name, v)| name == OsStr::new(k) && v.is_none());
+            assert!(removed, "{k} must be cleared on the child");
+        }
+    }
+}
+
+#[test]
+fn leftover_dist_infos_are_a_mismatch_whatever_the_walk_order() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().join("pin");
+    fake_install(&dir, SERENA_PIN, SERENA_GIT_REV);
+    let stale = dir
+        .join(UV_TOOL_SUBDIR)
+        .join(PACKAGE)
+        .join("lib/python3.12/site-packages")
+        .join("serena_agent-0.0.1.dist-info");
+    std::fs::create_dir_all(&stale).unwrap();
+    assert_eq!(installed_state(&dir), Installed::Mismatch);
+}
