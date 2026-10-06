@@ -458,8 +458,11 @@ pub fn resume_session(transport, mur_home, r: Resumable, retry_delay) -> Result<
   constants' final texts match the prompts quoted in P2-§5.1 and §5.3.
 - [x] P1 spec §6: mark the plain-text / `@<agent>` / `@<unknown>` / repeated-note rows *not
   built; Phase 3* (P2-§7 row for §6).
-- [ ] User-facing docs: run the `update-docs` skill for README, docs site, product page (new
-  ruling prompt, `/rule`, `/abandon`). README done in PR 3. The docs site and product page
+- [x] User-facing docs: run the `update-docs` skill for README, docs site, product page (new
+  ruling prompt, `/rule`, `/abandon`). README done in PR 3 (#1723); docs site page, nav,
+  command index and product card shipped in mur-server#124 (merged 2026-10-06, live on
+  app.mur.run/docs/core/fleet-review). Note: #124 deployed before any release carried Phase 2
+  (latest tag v2.91.10 predates #1722/#1728), against the ordering below. The docs site and product page
   live in `mur-server` and deploy on merge, so they ship after PR 3 merges — not before, or
   app.mur.run would document behaviour the released binary does not have.
 - [x] `mur verify --file` on both specs.
