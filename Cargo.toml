@@ -102,12 +102,3 @@ incremental = false
 # saves 5-12% on heavy-derive workspaces (mur uses serde_derive on
 # hundreds of types). corrode + cargo#10481 reference this win.
 opt-level = 3
-
-[profile.test]
-# Inherit from dev so the test profile picks up the same tweaks. Without
-# this, test builds use cargo's default (debug=2, incremental=true on dev).
-debug = 0
-incremental = false
-
-[profile.test.build-override]
-opt-level = 3
