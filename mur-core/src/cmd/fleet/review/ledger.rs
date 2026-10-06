@@ -132,7 +132,6 @@ impl Ledger {
     }
 
     /// Rulings not yet delivered to `role` (P2-§5.3 binding note).
-    #[allow(dead_code)] // wired in PR 3 (Task 6–7)
     pub fn binding_rulings(&self, role: Role) -> &[RulingRecord] {
         &self.unseen_rulings[role_slot(role)]
     }

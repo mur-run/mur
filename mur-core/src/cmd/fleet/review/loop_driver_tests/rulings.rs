@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use mur_common::limits::Stuck;
 
 use super::super::constants::{
-    REVIEW_PAUSE_REASON_ESCALATION, RULE_NOT_OPEN_HINT, RULING_REGENERATED_BANNER,
+    REVIEW_BINDING_RULINGS_HEADER, REVIEW_PAUSE_REASON_ESCALATION, RULE_NOT_OPEN_HINT,
+    RULING_REGENERATED_BANNER,
 };
 use super::super::driver::{ReviewTransport, SendAnswer};
 use super::super::ledger::{EscalationRecord, Ledger};
@@ -409,7 +410,10 @@ fn main_prompt_rule_applies_before_send() {
         "send:main",
         "nothing between showing and sending"
     );
-    // TODO(Task 9): also assert REVIEW_BINDING_RULINGS_HEADER in `received`.
+    assert!(
+        received.contains(REVIEW_BINDING_RULINGS_HEADER),
+        "the rebuilt message carries the ruling: {received}"
+    );
 }
 
 #[test]

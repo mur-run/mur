@@ -117,13 +117,15 @@ pub const REVIEW_STOP_REASON_CORRUPTED: &str = "corrupted";
 pub const REVIEW_STOP_REASON_REPLAY_FAILED: &str = "replay_failed";
 
 /// §3.1: main's turn prompt. Placeholders: `{task}`, `{round}`,
-/// `{open_findings}` (a rendered list, or [`REVIEW_NO_OPEN_FINDINGS`]).
+/// `{open_findings}` (a rendered list, or [`REVIEW_NO_OPEN_FINDINGS`]),
+/// `{binding_rulings}` (P2-§5.3; a [`REVIEW_BINDING_RULINGS_HEADER`] block
+/// ending in a blank line, or empty).
 pub const REVIEW_MAIN_PROMPT: &str = "You are the main agent in a review loop (round {round}).
 
 Task:
 {task}
 
-Open review findings from the reviewer:
+{binding_rulings}Open review findings from the reviewer:
 {open_findings}
 
 Do the task, or revise your previous work to address the open findings, then summarise what you changed. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
@@ -131,7 +133,8 @@ Do the task, or revise your previous work to address the open findings, then sum
 A reason is required for reject and partial.";
 
 /// §3.2: the reviewer's turn prompt. Placeholders: `{task}`, `{round}`,
-/// `{main_reply}`, `{open_findings}`. It pins the verdict wire shape and
+/// `{main_reply}`, `{open_findings}`, `{binding_rulings}` (as in
+/// [`REVIEW_MAIN_PROMPT`]). It pins the verdict wire shape and
 /// tells the reviewer to return `blocked` when uncertain (§3.2).
 pub const REVIEW_REVIEWER_PROMPT: &str = "You are the reviewer in a review loop (round {round}).
 
@@ -141,13 +144,17 @@ Task the main agent is working on:
 The main agent's latest reply:
 {main_reply}
 
-Previously issued findings that are still open:
+{binding_rulings}Previously issued findings that are still open:
 {open_findings}
 
 Review the work. End your reply with exactly one fenced ```json block of this shape:
 {\"verdict\": \"approve\" | \"revise\" | \"blocked\", \"findings\": [{\"severity\": \"high\" | \"medium\" | \"low\", \"issue\": \"...\"}], \"prior\": [{\"id\": \"F1\", \"status\": \"open\" | \"withdrawn\" | \"resolved\" | \"disputed\", \"reason\": \"...\"}]}
 
 Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return \"blocked\" rather than guess.";
+
+/// P2-§5.3: heads the binding-ruling block, ranked above the findings.
+pub const REVIEW_BINDING_RULINGS_HEADER: &str =
+    "Binding rulings from the human (these override any finding below; do not argue them):";
 
 /// Rendered in place of `{open_findings}` when the open set is empty.
 pub const REVIEW_NO_OPEN_FINDINGS: &str = "(none)";

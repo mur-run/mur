@@ -403,13 +403,13 @@ Loop changes (`loop_driver.rs`):
 
 **Interfaces.** Consumes: Task 2 `binding_rulings(role)`. Produces: no new names.
 
-- [ ] Tests (`wire.rs` tests): after a ruling, `main_turn_params` and `reviewer_turn_params` text
+- [x] Tests (`wire.rs` tests): after a ruling, `main_turn_params` and `reviewer_turn_params` text
   both contain `REVIEW_BINDING_RULINGS_HEADER` and the ruling text, and the block appears **before**
   the open-findings list; with no rulings the header is absent.
-- [ ] Add `{binding_rulings}` to `REVIEW_MAIN_PROMPT` and `REVIEW_REVIEWER_PROMPT`, placed above
+- [x] Add `{binding_rulings}` to `REVIEW_MAIN_PROMPT` and `REVIEW_REVIEWER_PROMPT`, placed above
   `{open_findings}`; render `"- {id} {decision}: {text}"` per record; substitute **before** `{task}`
   and `{main_reply}` (the existing placeholder-injection rule in `wire.rs`).
-- [ ] Green, lint, commit.
+- [x] Green, lint, commit.
 
 ## Task 10 — Resume (P2-§6)
 
