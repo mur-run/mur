@@ -478,6 +478,28 @@ mod tests {
         }
     }
 
+    /// The concierge is the one agent every install has, and it holds bash.
+    /// Its template must not ship with an empty deny list; this pins it to the
+    /// same `DEFAULT_DENY_PATHS` the agent wizard uses.
+    #[test]
+    fn template_denies_the_default_credential_dirs() {
+        let tpl = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/mur-agent-template/profile.yaml");
+        let yaml = std::fs::read_to_string(&tpl).unwrap();
+        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).unwrap();
+        let deny: Vec<String> = v["entitlements"]["filesystem"]["deny"]
+            .as_sequence()
+            .expect("template must declare filesystem.deny")
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect();
+        let want: Vec<String> = mur_common::agent::DEFAULT_DENY_PATHS
+            .iter()
+            .map(|d| (*d).to_string())
+            .collect();
+        assert_eq!(deny, want);
+    }
+
     /// The template is YAML and `AUTHORING_DIRS` is Rust; nothing but this test
     /// stops them drifting into "granted but never created" (the original bug).
     #[test]

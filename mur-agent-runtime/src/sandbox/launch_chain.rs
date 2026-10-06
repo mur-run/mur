@@ -27,6 +27,8 @@ pub struct LaunchChain {
     agent_home: PathBuf,
     bin_dir: PathBuf,
     autostart: Vec<PathBuf>,
+    /// The user's home, for [`mur_common::agent::DEFAULT_DENY_PATHS`].
+    user_home: PathBuf,
 }
 
 impl LaunchChain {
@@ -66,6 +68,7 @@ impl LaunchChain {
             agent_home: agent_home.to_path_buf(),
             bin_dir: bin_dir.to_path_buf(),
             autostart: autostart_dirs(home),
+            user_home: home.to_path_buf(),
         }
     }
 
@@ -209,7 +212,31 @@ impl LaunchChain {
         if let Some(reason) = self.protects_capture_store(path) {
             return Some(reason);
         }
+        if self
+            .user_credential_dirs()
+            .iter()
+            .any(|d| path.starts_with(d))
+        {
+            return Some(
+                "the user's own credentials (SSH keys, cloud credentials, GPG \
+                 keyring) — holding them is acting as the user on every host \
+                 they unlock",
+            );
+        }
         None
+    }
+
+    /// [`mur_common::agent::DEFAULT_DENY_PATHS`] resolved against `$HOME`.
+    ///
+    /// The same list new profiles are written with, enforced here as well so
+    /// an install whose profile predates it — or whose deny list was emptied —
+    /// is still covered. Like the rest of this chain it sits before the
+    /// allow/deny lists: no grant reaches them.
+    fn user_credential_dirs(&self) -> Vec<PathBuf> {
+        mur_common::agent::DEFAULT_DENY_PATHS
+            .iter()
+            .map(|d| self.user_home.join(d.trim_start_matches("~/")))
+            .collect()
     }
 
     /// The capture stores, which record what was DONE rather than what was
@@ -310,6 +337,9 @@ impl LaunchChain {
             self.mur_home.join("commander").join(".env"),
             self.mur_home.join("runtime").join("vlc.json"),
         ]
+        .into_iter()
+        .chain(self.user_credential_dirs())
+        .collect()
     }
 
     /// Split write grants into those the sandbox can install and those it must
