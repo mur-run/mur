@@ -209,10 +209,13 @@ fn extract_file_paths(line: &str) -> Vec<String> {
 
     // Match paths inside backticks: `some/path.rs` or `~/.mur/config.yaml`
     let backtick_re = Regex::new(r"`([^`]+)`").unwrap();
+    // A `file:line` reference (`a.rs:12`, `a.rs:12-30`, `a.rs:12:5`) names
+    // the file; the location suffix is not part of the path.
+    let line_suffix_re = Regex::new(r":\d+(?:[-:]\d+)?$").unwrap();
     for cap in backtick_re.captures_iter(line) {
-        let text = &cap[1];
-        if looks_like_path(text) {
-            paths.push(text.to_string());
+        let text = line_suffix_re.replace(&cap[1], "");
+        if looks_like_path(&text) && !paths.iter().any(|p| p == text.as_ref()) {
+            paths.push(text.into_owned());
         }
     }
 
