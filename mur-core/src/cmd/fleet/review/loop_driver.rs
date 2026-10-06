@@ -471,12 +471,16 @@ impl LoopRun<'_> {
                 pre_confirmed: gate.pre_confirmed && attempt == 0,
                 open: gate.open,
             };
+            // Task 6 wires the note queue; until then no note reaches here.
+            let build = |_: &[_]| outgoing.clone();
             let outcome = run_turn_with_retry(
                 self.transport,
                 self.mur_home,
                 self.fleet_name,
                 member,
-                &outgoing,
+                &build,
+                &mut Vec::new(),
+                &mut |_| Ok(()),
                 gate,
                 self.channel_id,
                 self.retry_delay,

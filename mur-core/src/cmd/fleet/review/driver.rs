@@ -20,9 +20,10 @@ use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, EventKind};
 
+use super::constants::NOTE_FLUSH_FAILED_REASON;
 use super::ledger::{EscalationRecord, Ledger};
 use super::ruling::RulingInput;
-use super::schema::{Cumulative, Mode, PauseKind, ReviewPayload, to_note_payload};
+use super::schema::{Cumulative, HumanNote, Mode, PauseKind, ReviewPayload, to_note_payload};
 use crate::cmd::fleet::control;
 
 /// Send one A2A message to a named fleet member and return its reply text,
@@ -74,7 +75,34 @@ pub enum SendAnswer {
     Stop,
     /// A `/rule` line typed instead of Enter: it is the send consent too.
     SendWithRuling(RulingInput),
+    /// P3a-§5.1: `/note` or `@<agent>` — queued, never send consent (N2).
+    /// The driver rebuilds the message with it and asks again.
+    #[allow(dead_code)] // wired in PR 3 (Task 5–7)
+    Note(HumanNote),
 }
+
+/// P3a-§5.3: the flush callback could only append `recorded` of `total`
+/// pending notes. The driver turns this into a `paused { kind: other }`
+/// with [`NOTE_FLUSH_FAILED_REASON`]; any other callback error propagates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlushFailed {
+    pub recorded: usize,
+    pub total: usize,
+    pub cause: String,
+}
+
+impl std::fmt::Display for FlushFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            &NOTE_FLUSH_FAILED_REASON
+                .replace("{recorded}", &self.recorded.to_string())
+                .replace("{total}", &self.total.to_string())
+                .replace("{cause}", &self.cause),
+        )
+    }
+}
+
+impl std::error::Error for FlushFailed {}
 
 /// How one turn is gated. `open` is the open set a `/rule` line is
 /// validated against.
@@ -216,6 +244,7 @@ enum Gated {
     Stop,
     RuleFirst(RulingInput),
     Go(Option<RulingInput>),
+    Note(HumanNote),
 }
 
 fn gate(
@@ -232,13 +261,17 @@ fn gate(
         SendAnswer::Send => Gated::Go(None),
         SendAnswer::SendWithRuling(r) if g.boundary => Gated::RuleFirst(r),
         SendAnswer::SendWithRuling(r) => Gated::Go(Some(r)),
+        SendAnswer::Note(n) => Gated::Note(n),
     })
 }
 
 /// One turn of the two-party protocol (§3.1): checks `.stopped` for
 /// `fleet_name` BEFORE sending (A4) and, only if clear and the gate lets
 /// it through, sends exactly one A2A message to `member` via `transport`.
-/// Never sends after observing a stop.
+/// Never sends after observing a stop. The inner step of
+/// [`run_turn_with_retry`]: `params` are fixed, so it has no note queue —
+/// a `Note` answer here is an error (callers that prompt use the retry
+/// form, which rebuilds the message).
 pub fn run_turn(
     transport: &dyn ReviewTransport,
     mur_home: &Path,
@@ -254,6 +287,7 @@ pub fn run_turn(
         Gated::Stop => return Ok(TurnOutcome::Stopped),
         Gated::RuleFirst(r) => return Ok(TurnOutcome::RuleFirst(r)),
         Gated::Go(held) => held,
+        Gated::Note(_) => anyhow::bail!("run_turn has no note queue; use run_turn_with_retry"),
     };
     let reply = transport.send(member, params)?;
     Ok(TurnOutcome::Sent { reply, held })
@@ -287,10 +321,20 @@ pub enum RetryOutcome {
 /// configured delay → still failing → pause, revert to semi-auto, and show
 /// the reason."
 ///
+/// P3a-§4/§5: the message is `build(pending)`, rebuilt on every prompt so a
+/// `Note` answer is queued and shown before the human is asked again (N5:
+/// the reprinted and the sent message are one generator call). On consent
+/// (`Go`, or `pre_confirmed` — the send after a boundary `/rule`, D1)
+/// `on_consented(pending)` flushes the queue, which is then cleared (N9),
+/// and the same `params` are sent. `Stop` leaves `pending` for the caller
+/// to discard; `RuleFirst` keeps it. A [`FlushFailed`] from the callback
+/// pauses with `kind: other` and sends nothing (§5.3).
+///
 /// `.stopped` is checked before every send, the retry included (A4) — a
 /// stop observed on either attempt returns `Stopped` immediately and writes
 /// no `paused` event, since a kill-switch stop is a distinct stop path, not
-/// a transport failure. The send gate is asked once: the retry re-sends
+/// a transport failure. The gate is not asked again, and `on_consented` is
+/// not called again, on the transport retry: it re-sends the same `params`
 /// under the first answer, including any `held` ruling (P2 Task 6).
 /// `retry_delay` is an explicit parameter (not read from
 /// `constants::TRANSPORT_RETRY_DELAY` directly) so tests can pass
@@ -302,25 +346,41 @@ pub fn run_turn_with_retry(
     mur_home: &Path,
     fleet_name: &str,
     member: &str,
-    params: &serde_json::Value,
+    build: &dyn Fn(&[HumanNote]) -> serde_json::Value,
+    pending: &mut Vec<HumanNote>,
+    on_consented: &mut dyn FnMut(&[HumanNote]) -> Result<()>,
     g: SendGate,
     channel_id: &str,
     retry_delay: Duration,
 ) -> Result<RetryOutcome> {
-    if control::is_stopped(mur_home, fleet_name) {
-        return Ok(RetryOutcome::Stopped);
-    }
-    let held = match gate(transport, member, params, g)? {
-        Gated::Stop => return Ok(RetryOutcome::Stopped),
-        Gated::RuleFirst(r) => return Ok(RetryOutcome::RuleFirst(r)),
-        Gated::Go(held) => held,
+    let (params, held) = loop {
+        if control::is_stopped(mur_home, fleet_name) {
+            return Ok(RetryOutcome::Stopped);
+        }
+        let params = build(pending);
+        match gate(transport, member, &params, g)? {
+            Gated::Stop => return Ok(RetryOutcome::Stopped),
+            Gated::RuleFirst(r) => return Ok(RetryOutcome::RuleFirst(r)),
+            Gated::Note(n) => pending.push(n),
+            Gated::Go(held) => break (params, held),
+        }
     };
+    if let Err(e) = on_consented(pending) {
+        let Some(failed) = e.downcast_ref::<FlushFailed>() else {
+            return Err(e);
+        };
+        let reason = failed.to_string();
+        write_paused_and_revert(mur_home, channel_id, PauseKind::Other, &reason)?;
+        transport.show(&reason)?;
+        return Ok(RetryOutcome::Paused { reason });
+    }
+    pending.clear();
     // Consent is given; each attempt still re-checks `.stopped` (A4).
     let confirmed = SendGate {
         pre_confirmed: true,
         ..g
     };
-    let attempt = || run_turn(transport, mur_home, fleet_name, member, params, confirmed);
+    let attempt = || run_turn(transport, mur_home, fleet_name, member, &params, confirmed);
     let sent = |outcome| match outcome {
         TurnOutcome::Sent { reply, .. } => RetryOutcome::Sent {
             reply,
@@ -346,7 +406,7 @@ pub fn run_turn_with_retry(
                 return Ok(RetryOutcome::TaskFailed(failed.clone()));
             }
             let reason = format!("transport failure after one retry: {second_err}");
-            write_paused_and_revert(mur_home, channel_id, &reason)?;
+            write_paused_and_revert(mur_home, channel_id, PauseKind::Transport, &reason)?;
             Ok(RetryOutcome::Paused { reason })
         }
     }
@@ -359,7 +419,12 @@ pub fn run_turn_with_retry(
 /// `mode_changed` event reverting to semi-auto (§5, §8.1), both signed when
 /// the fleet's writer identity is available (migration-safe fallback to
 /// unsigned otherwise, same as every other channel writer in this crate).
-fn write_paused_and_revert(mur_home: &Path, channel_id: &str, reason: &str) -> Result<()> {
+fn write_paused_and_revert(
+    mur_home: &Path,
+    channel_id: &str,
+    kind: PauseKind,
+    reason: &str,
+) -> Result<()> {
     let svc = ChannelService::open(mur_home)?;
     let zero = Cumulative {
         exec_time_ms: 0,
@@ -373,7 +438,7 @@ fn write_paused_and_revert(mur_home: &Path, channel_id: &str, reason: &str) -> R
         ChannelActor::System,
         EventKind::Note,
         to_note_payload(&ReviewPayload::Paused {
-            kind: PauseKind::Transport,
+            kind,
             reason: reason.to_string(),
             cumulative: zero,
             human_wait_ms: 0,

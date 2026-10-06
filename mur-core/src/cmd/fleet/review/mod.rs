@@ -43,6 +43,10 @@ pub mod wire;
 mod driver_tests;
 
 #[cfg(test)]
+#[path = "driver_note_tests.rs"]
+mod driver_note_tests;
+
+#[cfg(test)]
 #[path = "ledger_replay_tests.rs"]
 mod ledger_replay_tests;
 

@@ -79,6 +79,9 @@ pub const TARGET_NOT_FOUND_HINT: &str =
     "agent {name} not found; use /note <text> to send it to both sides";
 /// P3a N10; `{command}` is the slash word as typed. Never a stop.
 pub const UNKNOWN_COMMAND_HINT: &str = "unknown command: {command}";
+/// P3a-§5.3: `paused { kind: other }` reason when appending pending note
+/// `recorded + 1` of `total` fails. `{recorded}`, `{total}`, `{cause}`.
+pub const NOTE_FLUSH_FAILED_REASON: &str = "note flush failed after {recorded} of {total} notes; the {recorded} already recorded will be sent on resume, the rest were not recorded: {cause}";
 /// Every send-prompt command starts with this (P3a N10).
 pub const COMMAND_PREFIX: char = '/';
 /// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
