@@ -88,7 +88,7 @@ impl ToolExecutor for WriteFileTool {
             .ok_or_else(|| ToolError::InvalidInput("path has no file name".into()))?;
         let target = canonical_parent.join(file_name);
         check_write_entitlement(&self.agent, &self.fs, &target, &self.chain)?;
-        std::fs::write(&target, content).map_err(|e| {
+        crate::tools::atomic_write::replace_contents(&target, content.as_bytes()).map_err(|e| {
             ToolError::Execution(crate::tools::fs_policy::format_io_error(
                 "write", &target, &base, &e,
             ))
