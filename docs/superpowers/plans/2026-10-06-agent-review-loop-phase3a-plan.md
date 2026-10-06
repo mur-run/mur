@@ -51,8 +51,9 @@ trap).
 - A note flushed at the **reviewer's** prompt (first send or resend): `ledger.apply(note)` **and**
   `round_ledger.apply(note)`. `ledger` is what `Turn::Stop` returns mid-reviewer-turn
   (`loop_driver.rs:384`); `round_ledger` is what the verdict seal adopts.
-- Tested in Task 6 (AC-P3a-14 extended case): reviewer-side note, then the send fails twice →
-  paused; `fold_rounds(channel) == live ledger`.
+- Tested in Task 6 (AC-P3a-14 extended case) by
+  `reviewer_side_note_then_stop_replays_equal_to_live` in `loop_driver_tests/notes.rs`:
+  reviewer-side note, then the send fails twice → paused; `fold_rounds(channel) == live ledger`.
 
 ## PR slicing
 
@@ -154,6 +155,12 @@ any other `/<word>` → `unknown command: /<word>`; everything else → `NotNote
   (`review/testdata/wire_golden/*.txt`, captured from `d60f20a7`). Same guarantee as Task 1's wire
   bytes, at the message instead of the channel. Mutation-checked: an extra `\n` from an empty
   block fails it; the older `no_rulings_no_header` does not catch that.
+- [x] Golden maintenance. The files are versioned and frozen: a red golden test means the
+  no-note path changed the message, so fix the template, not the file. Regenerate only for an
+  intentional template or constant change:
+  `MUR_BLESS_WIRE_GOLDEN=1 cargo test -p mur-core --lib -- --ignored bless_wire_golden`
+  (an ignored test, a no-op without the env var), then review the `.txt` diff in the PR. The same
+  rule is in the doc comment on `GOLDEN` in `wire.rs`.
 - [x] Add `{human_notes}` slot to both templates in `constants.rs`, `REVIEW_HUMAN_NOTES_HEADER`,
   extend `main_turn_params(task, round, ledger, pending)` and
   `reviewer_turn_params(task, round, main_reply, ledger, pending)`; existing callers pass `&[]`.
@@ -207,6 +214,14 @@ pub fn run_turn_with_retry(
   `ruling`, `human_note(A)`, `turn_sent`; sent bytes == reprinted; `confirm:main` count equals the
   P2 test's), 10, 11 (+ `review-resume` path shows A again), 14 for 1/3/9/10/11 **and** the
   reviewer-side stop case from the two-ledger rule.
+- [ ] Two-ledger tests, named (implementation without these is not done):
+  - `reviewer_side_note_then_stop_replays_equal_to_live`: note flushed at the reviewer's prompt,
+    send fails twice → `Turn::Stop` (`loop_driver.rs:384`) returns `ledger`; assert
+    `fold_rounds(channel) == ` that ledger, and the note is in it. Mutation check: drop the
+    `ledger.apply` on the reviewer side → fails.
+  - `reviewer_side_note_survives_verdict_seal`: note flushed at the reviewer's prompt, verdict
+    accepted; the sealed ledger (adopted from `round_ledger`) equals replay. Mutation check: drop
+    the `round_ledger.apply` → fails.
 - [ ] Unchanged: `mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437 still asserts 2. Do not edit it.
 - [ ] Green, lint, check `loop_driver.rs` ≤ 800 (split the turn helper into
   `loop_driver/turn.rs` if needed — pure move, separate commit), commit

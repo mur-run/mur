@@ -398,6 +398,13 @@ mod tests {
     }
 
     /// Messages rendered by `main` @ d60f20a7, before the note slot existed.
+    ///
+    /// Maintenance: these files are the frozen "no notes" output. A red
+    /// golden test means the empty-note path changed the message — fix the
+    /// template, not the file. Regenerate only when a template or constant
+    /// change is intentional:
+    /// `MUR_BLESS_WIRE_GOLDEN=1 cargo test -p mur-core --lib -- --ignored bless_wire_golden`
+    /// then review the `.txt` diff in the PR. The files are versioned.
     const GOLDEN: [(&str, &str); 4] = [
         (
             "main_empty",
@@ -417,20 +424,44 @@ mod tests {
         ),
     ];
 
-    /// With no unseen and no pending notes the message is byte-identical to
-    /// the pre-3a one: no header, no blank line, no shifted separator.
-    #[test]
-    fn no_notes_message_is_byte_identical_to_before() {
-        let task = "fix the {main_reply} bug";
-        let reply = "done; see {open_findings}";
-        let empty = Ledger::default();
-        let ruled = ruled_ledger();
-        let rendered = [
+    const GOLDEN_TASK: &str = "fix the {main_reply} bug";
+    const GOLDEN_REPLY: &str = "done; see {open_findings}";
+
+    /// The four no-note renders, in `GOLDEN` order.
+    fn golden_cases() -> [serde_json::Value; 4] {
+        let (task, reply) = (GOLDEN_TASK, GOLDEN_REPLY);
+        let (empty, ruled) = (Ledger::default(), ruled_ledger());
+        [
             main_turn_params(task, 1, &empty, &[]),
             main_turn_params(task, 4, &ruled, &[]),
             reviewer_turn_params(task, 1, reply, &empty, &[]),
             reviewer_turn_params(task, 4, reply, &ruled, &[]),
-        ];
+        ]
+    }
+
+    /// Rewrites `testdata/wire_golden/*.txt` from the current templates.
+    /// Ignored, and a no-op unless `MUR_BLESS_WIRE_GOLDEN=1`, so a plain
+    /// `--ignored` run cannot silently re-bless. See `GOLDEN` for when.
+    #[test]
+    #[ignore]
+    fn bless_wire_golden() {
+        if std::env::var("MUR_BLESS_WIRE_GOLDEN").as_deref() != Ok("1") {
+            return;
+        }
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/cmd/fleet/review/testdata/wire_golden");
+        for ((name, _), p) in GOLDEN.iter().zip(&golden_cases()) {
+            std::fs::write(dir.join(format!("{name}.txt")), message_text(p).unwrap()).unwrap();
+        }
+    }
+
+    /// With no unseen and no pending notes the message is byte-identical to
+    /// the pre-3a one: no header, no blank line, no shifted separator.
+    #[test]
+    fn no_notes_message_is_byte_identical_to_before() {
+        let (task, reply) = (GOLDEN_TASK, GOLDEN_REPLY);
+        let empty = Ledger::default();
+        let rendered = golden_cases();
         for ((name, golden), p) in GOLDEN.iter().zip(&rendered) {
             assert_eq!(message_text(p).unwrap(), *golden, "{name}");
         }
