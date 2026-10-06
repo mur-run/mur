@@ -426,7 +426,7 @@ pub(crate) fn under_any_read_deny(roots: &[String], canonical: &Path, agent_home
         .map(|p| mur_track::turn::strip_verbatim(std::fs::canonicalize(&p).unwrap_or(p)))
         .collect();
     let canonical = mur_track::turn::strip_verbatim(canonical.to_path_buf());
-    if carved.iter().any(|p| *p == canonical) {
+    if carved.contains(&canonical) {
         return false;
     }
     under_any(roots, &canonical)
