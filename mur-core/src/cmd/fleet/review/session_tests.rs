@@ -290,6 +290,8 @@ fn terminal_gate_reports_prompt_time_once() {
         wait: &wait,
         input: &|| Ok(String::new()),
         output: &|_| Ok(()),
+        members: ["main".into(), "reviewer".into()],
+        mur_home: Path::new(""),
     };
     assert!(gate.take_human_wait() >= std::time::Duration::from_millis(20));
     assert_eq!(gate.take_human_wait(), std::time::Duration::ZERO);
@@ -302,13 +304,16 @@ mod prompts {
     use std::collections::BTreeSet;
 
     use super::super::{HumanWait, TerminalGate};
-    use crate::cmd::fleet::review::constants::RULING_PROMPT;
+    use crate::cmd::fleet::review::constants::{
+        NOTE_COMMAND, NOTE_USAGE_HINT, RULING_PROMPT, SEND_PROMPT, TARGET_ALIAS_MAIN,
+        TARGET_ALIAS_REVIEWER, TARGET_NOT_FOUND_HINT, TARGET_NOTE_USAGE_HINT, UNKNOWN_COMMAND_HINT,
+    };
     use crate::cmd::fleet::review::driver::{ReviewTransport, SendAnswer};
     use crate::cmd::fleet::review::ledger::Ledger;
     use crate::cmd::fleet::review::ruling::RulingInput;
     use crate::cmd::fleet::review::schema::{
-        Cumulative, FindingStatus, RebuttalAnswer, RebuttalResponseDto, ReviewPayload,
-        RulingDecision, Severity,
+        Cumulative, FindingStatus, HumanNote, RebuttalAnswer, RebuttalResponseDto, ReviewPayload,
+        Role, RulingDecision, Severity,
     };
 
     struct Nop;
@@ -343,7 +348,16 @@ mod prompts {
         }
     }
 
+    fn members() -> [String; 2] {
+        ["main".into(), "reviewer".into()]
+    }
+
     fn confirm(lines: &[&str], open: &[&str]) -> (SendAnswer, Term) {
+        confirm_in(std::path::Path::new(""), lines, open)
+    }
+
+    /// `confirm` with a real `mur_home`, for the `@<agent>` name path.
+    fn confirm_in(home: &std::path::Path, lines: &[&str], open: &[&str]) -> (SendAnswer, Term) {
         let term = Term::new(lines);
         let wait = HumanWait::default();
         let input = || term.read();
@@ -353,6 +367,8 @@ mod prompts {
             wait: &wait,
             input: &input,
             output: &output,
+            members: members(),
+            mur_home: home,
         };
         let open: BTreeSet<String> = open.iter().map(|s| s.to_string()).collect();
         let answer = gate
@@ -391,6 +407,136 @@ mod prompts {
         for line in ["q\n", "nope\n", ""] {
             assert_eq!(confirm(&[line], &[]).0, SendAnswer::Stop, "{line:?}");
         }
+    }
+
+    // ---- P3a Task 7: /note and @<agent> at the send prompt (P3a-§3) ----
+
+    fn note(text: &str, target: Option<Role>) -> SendAnswer {
+        SendAnswer::Note(HumanNote {
+            text: text.into(),
+            target,
+        })
+    }
+
+    /// A `mur_home` holding agents `main`, `reviewer` and `outsider`.
+    fn home_with_agents() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["main", "reviewer", "outsider"] {
+            let dir = tmp.path().join("agents").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("profile.yaml"), "").unwrap();
+        }
+        tmp
+    }
+
+    #[test]
+    fn send_prompt_names_note_and_at_agent() {
+        let (_, term) = confirm(&["\n"], &[]);
+        let out = term.out.borrow();
+        assert!(
+            out.contains(&SEND_PROMPT.replace("{member}", "main")),
+            "{out}"
+        );
+        assert!(SEND_PROMPT.contains(NOTE_COMMAND), "{SEND_PROMPT}");
+        assert!(SEND_PROMPT.contains("@<agent>"), "{SEND_PROMPT}");
+    }
+
+    #[test]
+    fn send_prompt_note_is_a_broadcast_note() {
+        let (answer, term) = confirm(&["/note NOTE-A\n"], &[]);
+        assert_eq!(answer, note("NOTE-A", None));
+        assert_eq!(
+            *term.reads.borrow(),
+            1,
+            "returned to the driver, not re-asked here"
+        );
+    }
+
+    /// AC-P3a-15.
+    #[test]
+    fn send_prompt_empty_note_hints_and_reasks() {
+        let (answer, term) = confirm(&["/note\n", "\n"], &[]);
+        assert_eq!(answer, SendAnswer::Send);
+        assert_eq!(*term.reads.borrow(), 2, "re-prompted");
+        assert!(term.out.borrow().contains(NOTE_USAGE_HINT));
+    }
+
+    /// AC-P3a-4, alias path.
+    #[test]
+    fn send_prompt_aliases_target_one_side() {
+        let alias_main = format!("@{TARGET_ALIAS_MAIN} NOTE-M\n");
+        let alias_rev = format!("@{TARGET_ALIAS_REVIEWER} NOTE-R\n");
+        assert_eq!(
+            confirm(&[&alias_main], &[]).0,
+            note("NOTE-M", Some(Role::Main))
+        );
+        assert_eq!(
+            confirm(&[&alias_rev], &[]).0,
+            note("NOTE-R", Some(Role::Reviewer))
+        );
+    }
+
+    /// AC-P3a-4, name path: canonicalized against the real `mur_home`.
+    #[test]
+    fn send_prompt_member_name_resolves_through_mur_home() {
+        let home = home_with_agents();
+        let (answer, _) = confirm_in(home.path(), &["@Reviewer NOTE-R\n"], &[]);
+        assert_eq!(answer, note("NOTE-R", Some(Role::Reviewer)));
+        let (answer, _) = confirm_in(home.path(), &["@main NOTE-M\n"], &[]);
+        assert_eq!(answer, note("NOTE-M", Some(Role::Main)));
+    }
+
+    /// AC-P3a-5 and AC-P3a-17: unknown, and real-but-not-a-member.
+    #[test]
+    fn send_prompt_non_member_hints_and_reasks() {
+        let home = home_with_agents();
+        for name in ["nobody", "outsider"] {
+            let line = format!("@{name} NOTE-W\n");
+            let (answer, term) = confirm_in(home.path(), &[&line, "\n"], &[]);
+            assert_eq!(answer, SendAnswer::Send, "{name}");
+            assert_eq!(*term.reads.borrow(), 2, "{name}: re-prompted");
+            let hint = TARGET_NOT_FOUND_HINT.replace("{name}", name);
+            assert!(term.out.borrow().contains(&hint), "{name}");
+        }
+    }
+
+    #[test]
+    fn send_prompt_at_without_name_or_text_hints_and_reasks() {
+        for line in ["@\n", "@main\n"] {
+            let (answer, term) = confirm(&[line, "\n"], &[]);
+            assert_eq!(answer, SendAnswer::Send, "{line:?}");
+            assert_eq!(*term.reads.borrow(), 2, "{line:?}");
+            assert!(
+                term.out.borrow().contains(TARGET_NOTE_USAGE_HINT),
+                "{line:?}"
+            );
+        }
+    }
+
+    /// AC-P3a-16: unknown slash words, typos of `/rule` included, re-ask —
+    /// never Stop, never Send.
+    #[test]
+    fn send_prompt_unknown_slash_hints_and_reasks() {
+        for (line, word) in [("/foo\n", "/foo"), ("/riule drop F1 x\n", "/riule")] {
+            let (answer, term) = confirm(&[line, "q\n"], &["F1"]);
+            assert_eq!(
+                answer,
+                SendAnswer::Stop,
+                "{line:?}: the second line decides"
+            );
+            assert_eq!(*term.reads.borrow(), 2, "{line:?}: re-prompted");
+            let hint = UNKNOWN_COMMAND_HINT.replace("{command}", word);
+            assert!(term.out.borrow().contains(&hint), "{line:?}");
+        }
+    }
+
+    /// `/rule` is still checked first: a note parser never sees it.
+    #[test]
+    fn send_prompt_invalid_rule_keeps_its_own_hint() {
+        let (answer, term) = confirm(&["/rule drop F9 x\n", "\n"], &["F1"]);
+        assert_eq!(answer, SendAnswer::Send);
+        let out = term.out.borrow();
+        assert!(!out.contains("unknown command"), "{out}");
     }
 
     /// F1 issued, disputed, rejected twice by main ("still wrong" last).
@@ -453,6 +599,8 @@ mod prompts {
             wait: &wait,
             input: &input,
             output: &output,
+            members: members(),
+            mur_home: std::path::Path::new(""),
         };
         gate.ask_ruling(ledger.pending_ruling()[0], &ledger)
             .unwrap();
@@ -473,6 +621,8 @@ mod prompts {
             wait: &wait,
             input: &input,
             output: &output,
+            members: members(),
+            mur_home: std::path::Path::new(""),
         };
         let line = gate
             .ask_ruling(ledger.pending_ruling()[0], &ledger)
@@ -497,6 +647,8 @@ mod prompts {
             wait: &wait,
             input: &input,
             output: &|_| Ok(()),
+            members: members(),
+            mur_home: std::path::Path::new(""),
         };
         gate.ask_ruling(ledger.pending_ruling()[0], &ledger)
             .unwrap();

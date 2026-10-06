@@ -152,7 +152,6 @@ impl Ledger {
     }
 
     /// Human notes not yet delivered to `role` (P3a-§6.1).
-    #[allow(dead_code)] // wired in PR 3 (Task 5–7)
     pub fn unseen_notes(&self, role: Role) -> &[HumanNote] {
         &self.unseen_notes[role_slot(role)]
     }

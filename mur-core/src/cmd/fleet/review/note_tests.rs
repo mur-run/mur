@@ -74,6 +74,17 @@ fn member_name_in_another_case_resolves_through_the_resolver() {
     );
 }
 
+/// AC-P3a-4, name path on a case-insensitive filesystem: the resolver
+/// returns the name as typed (its exact-match branch hit), and the member
+/// check still finds it.
+#[test]
+fn member_name_as_typed_still_matches_on_case_insensitive_disks() {
+    assert_eq!(
+        parse_note_line("@REV-AGENT look at F2", &members(), identity),
+        note("look at F2", Some(Role::Reviewer))
+    );
+}
+
 /// AC-P3a-5.
 #[test]
 fn unknown_agent_is_the_n3_hint() {

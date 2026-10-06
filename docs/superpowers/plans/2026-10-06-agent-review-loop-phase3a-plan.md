@@ -234,15 +234,23 @@ pub fn run_turn_with_retry(
 
 ## Task 7 — Session prompt (P3a-§3, N4, N10, N11)
 
-- [ ] `TerminalGate` gains `members: [String; 2]` and `mur_home: &Path`, set at
+- [x] `TerminalGate` gains `members: [String; 2]` and `mur_home: &Path`, set at
   `session.rs:422` and `:491` from `fleet.members`. Test constructors updated.
-- [ ] `confirm_send`: valid/invalid `/rule` unchanged first; then `parse_note_line` →
+- [x] `confirm_send`: valid/invalid `/rule` unchanged first; then `parse_note_line` →
   `Note` returns `SendAnswer::Note`, `Hint` prints and re-asks, `NotNote` falls through to the
   existing Send/Stop logic.
-- [ ] `SEND_PROMPT` mentions `/note` and `@<agent>`; update its pinned test.
-- [ ] Tests (`session_tests.rs`): each row of P3a-§3 through a scripted `TerminalGate`;
+- [x] `SEND_PROMPT` mentions `/note` and `@<agent>`. There was no pinned test on `main`; added
+  `send_prompt_names_note_and_at_agent`.
+- [x] Found in Task 7: on a case-insensitive filesystem (default macOS APFS)
+  `canonicalize_agent_name` hits its exact-match branch for `@Reviewer` and returns the name as
+  typed, so the N11 "equals a member" check failed for a real member. `note.rs::member_role` now
+  compares exactly first, then ASCII case-insensitively — the resolver's own rule. Membership is
+  still required (AC-P3a-17 unchanged); pinned by
+  `member_name_as_typed_still_matches_on_case_insensitive_disks` and
+  `send_prompt_member_name_resolves_through_mur_home`.
+- [x] Tests (`session_tests.rs`): each row of P3a-§3 through a scripted `TerminalGate`;
   `send_prompt_p1_answers_unchanged` passes **unchanged**; AC-P3a-16 `/riule` re-asks.
-- [ ] Remove every `wired in PR 3` attribute. Green, lint, commit `feat(review): /note and @agent at the send prompt`.
+- [x] Remove every `wired in PR 3` attribute. Green, lint, commit `feat(review): /note and @agent at the send prompt`.
 
 ## Task 8 — End-to-end check
 

@@ -87,7 +87,7 @@ pub const COMMAND_PREFIX: char = '/';
 /// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
 /// The `/rule` hint says the line also sends this turn, so the human knows
 /// before typing it (the line is the send consent).
-pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop, /rule drop|fix F<n> <text> = record a ruling and send this turn] ";
+pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop, /rule drop|fix F<n> <text> = record a ruling and send this turn, /note <text> = note to both, @<agent> <text> = note to one] ";
 /// P2-§5.3: printed before main's message rebuilt after a `/rule` at its
 /// send prompt; the full rebuilt message follows.
 pub const RULING_REGENERATED_BANNER: &str = "[ruling applied; message regenerated]";

@@ -77,7 +77,6 @@ pub enum SendAnswer {
     SendWithRuling(RulingInput),
     /// P3a-§5.1: `/note` or `@<agent>` — queued, never send consent (N2).
     /// The driver rebuilds the message with it and asks again.
-    #[allow(dead_code)] // wired in PR 3 (Task 5–7)
     Note(HumanNote),
 }
 
