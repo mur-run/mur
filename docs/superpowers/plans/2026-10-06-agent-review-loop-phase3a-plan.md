@@ -55,7 +55,7 @@ trap).
   `round_ledger.apply(note)`. `ledger` is what `Turn::Stop` returns mid-reviewer-turn
   (`loop_driver.rs:384`); `round_ledger` is what the verdict seal adopts.
 - Tested in Task 6 (AC-P3a-14 extended case) by
-  `reviewer_side_note_then_stop_replays_equal_to_live` in `loop_driver_tests/notes.rs`:
+  `reviewer_side_note_then_stop_replays_equal_to_live` in `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`:
   reviewer-side note, then the send fails twice → paused; `fold_rounds(channel) == live ledger`.
 
 ## PR slicing
@@ -73,7 +73,7 @@ removes every one (`git grep 'wired in PR 3' -- '*.rs'` must be empty before it 
 
 | File | Change | Responsibility |
 |---|---|---|
-| `mur-core/src/cmd/fleet/review/schema.rs` | modify | `HumanNote` struct, `HumanNote::into_payload` / `From` |
+| `mur-core/src/cmd/fleet/review/schema.rs` | modify | `HumanNote` struct, `From<HumanNote> for ReviewPayload` (no separate `into_payload`; `From` was enough) |
 | `mur-core/src/cmd/fleet/review/ledger.rs` | modify | `unseen_notes: [Vec<HumanNote>; 2]`, fold arms, `unseen_notes(role)` |
 | `mur-core/src/cmd/fleet/review/ledger_tests.rs` | modify | fold tests |
 | `mur-core/src/cmd/fleet/review/ledger_replay_tests.rs` | modify | property: notes interleaved with turns, live == replay |
@@ -164,7 +164,7 @@ any other `/<word>` → `unknown command: /<word>`; everything else → `NotNote
   `MUR_BLESS_WIRE_GOLDEN=1 cargo test -p mur-core --lib -- --ignored bless_wire_golden`
   (an ignored test, a no-op without the env var), then review the `.txt` diff in the PR. The same
   rule is in the doc comment on `GOLDEN` in `wire.rs`.
-  `testdata/wire_golden/.gitattributes` sets `* -text` so Windows `autocrlf` checkouts keep the
+  `mur-core/src/cmd/fleet/review/testdata/wire_golden/.gitattributes` sets `* -text` so Windows `autocrlf` checkouts keep the
   LF bytes (CI on `windows-latest` failed on CRLF before it).
 - [x] Add `{human_notes}` slot to both templates in `constants.rs`, `REVIEW_HUMAN_NOTES_HEADER`,
   extend `main_turn_params(task, round, ledger, pending)` and
@@ -228,8 +228,8 @@ pub fn run_turn_with_retry(
     accepted; the sealed ledger (adopted from `round_ledger`) equals replay. Mutation check: drop
     the `round_ledger.apply` → fails.
 - [x] Unchanged: `mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437 still asserts 2. Do not edit it.
-- [x] Green, lint, check `loop_driver.rs` ≤ 800 (split the turn helper into
-  `loop_driver/turn.rs` if needed — pure move, separate commit), commit
+- [x] Green, lint, check `loop_driver.rs` ≤ 800 (689 lines; the planned turn-helper split was
+  not needed), commit
   `feat(review): pending notes in the review loop`.
 
 ## Task 7 — Session prompt (P3a-§3, N4, N10, N11)
@@ -261,10 +261,19 @@ pub fn run_turn_with_retry(
 
 ## Task 9 — Docs
 
-- [ ] `mur verify --file` on the P3a spec and this plan.
-- [ ] `update-docs` skill: README (send-prompt grammar), docs site `fleet-review` page, product
-  page. Docs site and product page deploy on merge in `mur-server`; merge them after a release
-  carries PR 3, not before.
+- [x] `mur verify --file` on the P3a spec (11/11) and this plan (33/33 after fixing four stale
+  paths: two short-form test paths, a planned `into_payload` method → the `From` impl that was built,
+  and the planned turn-helper split that was not needed at 689 lines).
+- [x] Spec rev 6: N11 and §3 add the exact-then-ASCII-case-insensitive member match; AC-P3a-4
+  names it. Task 7's pinned-test line already reads "no pinned test on `main`; added
+  `send_prompt_names_note_and_at_agent`".
+- [x] README: `/note` and `@<agent>` in the fleet review bullet. `mur verify` on README reports
+  one stale claim, the fleet review subcommand at L630; it is the same on the unmodified README, because
+  the installed `mur` predates the subcommand. Not from this PR.
+- [x] `mur-server` branch `docs/fleet-review-notes`: a `## Notes` section on the `fleet-review`
+  page (prompt grammar, lifecycle, hints with the exact strings from `constants.rs`) and one
+  sentence on the product card. Tutorials do not mention the send prompt; untouched. Open that
+  PR only after a release carries PR 3; it deploys on merge and is human-merged.
 
 ## Self-review
 

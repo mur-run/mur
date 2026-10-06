@@ -636,7 +636,11 @@ Agent** wizard offers the same catalog as a source.
   instead of stopping: `/rule drop F3 <why>` closes it, `/rule fix F3 <how>`
   makes it binding (main can no longer reject it), `/abandon` ends the
   session, and `q` leaves it paused. A ruling is shown to both agents in
-  their next turn, and you can also type `/rule` at any send prompt. The
+  their next turn, and you can also type `/rule` at any send prompt. To steer
+  without ruling, type `/note <text>` at a send prompt to tell both agents, or
+  `@<agent> <text>` to tell one; the message is rebuilt and shown again with
+  the note in it, so what you send is what you saw. Notes are recorded only
+  when you press Enter; `q` drops them. The
   reviewer can't `approve` while a high-severity finding is still disputed,
   and an approval that leaves one open prints a warning first. A crash
   or an agent that stops answering leaves it paused, and `mur fleet
