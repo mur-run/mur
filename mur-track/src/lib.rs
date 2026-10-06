@@ -16,4 +16,6 @@ pub mod zfs_protocol;
 pub use backend::{
     GitWorktreeBackend, ParallelBackend, ZfsNativeBackend, ZfsSocketBackend, detect_backend,
 };
+pub mod undo;
 pub use turn::{TreeClone, TurnTrack};
+pub use undo::{Drift, EntryKind, TurnManifest, UndoStore};

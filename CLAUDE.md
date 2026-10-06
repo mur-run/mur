@@ -64,7 +64,7 @@ Before changing anything that pins, verifies, or launches an MCP server, read `d
 - `tracing` for structured logging; enable with `RUST_LOG=debug`
 - Plans and specs live in `docs/superpowers/` — a gitignored local clone of the private mur-docs repository; commit them there, never here. OpenSpec change specs in `openspec/changes/`.
 - Unified Channel v3a–v4a (signed events, HITL gate, mobile sync): runtime-overview.md.
-- murmur runs `!command` with stdin = null, so any command that reads stdin (prompts, "press Enter") gets EOF and fails. A command that needs the real terminal must be added to `INTERACTIVE_PREFIXES` in `mur-core/src/cmd/agent/cli/shell/interactive.rs`; matches are routed through the `/login` terminal handover instead. Currently `mur browser auth` and `mur deep-research secret`.
+- murmur runs `!command` with stdin = null, so any command that reads stdin (prompts, "press Enter") gets EOF and fails. A command that needs the real terminal must be added to `INTERACTIVE_PREFIXES` in `mur-core/src/cmd/agent/cli/shell/interactive.rs`; matches are routed through the `/login` terminal handover instead. Currently `mur browser auth`, `mur deep-research secret`, and `mur agent turn undo`.
 
 ## Release Process
 

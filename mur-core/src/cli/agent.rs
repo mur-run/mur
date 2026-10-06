@@ -438,6 +438,12 @@ pub enum AgentAction {
         #[command(subcommand)]
         action: VoiceAction,
     },
+    /// Per-turn undo: list promoted turns or put the project back to a
+    /// turn's before-state (spec §4.1 step 4)
+    Turn {
+        #[command(subcommand)]
+        action: AgentTurnAction,
+    },
     /// Manage lifecycle cron schedule entries (C4)
     Schedule {
         #[command(subcommand)]
@@ -551,6 +557,32 @@ pub enum AgentAction {
         /// Skip the eval stage even when an LLM is present.
         #[arg(long = "no-eval")]
         no_eval: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AgentTurnAction {
+    /// Promoted turns that still have an undo snapshot, newest first
+    List {
+        /// Agent name
+        name: String,
+        /// Emit JSON instead of the table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore every file the turn changed. Lists paths that changed after
+    /// the promote and asks before overwriting them — undo is last-write-wins.
+    Undo {
+        /// Agent name
+        name: String,
+        /// Turn id (see `mur agent turn list`)
+        turn: String,
+        /// Only show what would be restored / removed / overwritten
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 

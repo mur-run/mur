@@ -12,7 +12,7 @@
 //! bypasses the track.
 
 use super::*;
-use mur_track::{TreeClone, TurnTrack};
+use mur_track::{TreeClone, TurnTrack, UndoStore};
 use std::path::{Path, PathBuf};
 
 /// Tools whose presence makes a turn write-capable. `bash` is here because
@@ -174,9 +174,10 @@ impl TaskRunner {
             session.leave_track(turn, open.original_cwd.clone());
         }
         let id = turn.to_string();
+        let undo = self.undo_store();
         let closed = tokio::task::spawn_blocking(move || {
             let mut l = crate::turn_ledger::TurnLedger::default();
-            close_track(&id, open.track, &mut l);
+            close_track(&id, open.track, undo.as_ref(), &mut l);
             l
         })
         .await;
@@ -201,15 +202,43 @@ impl TaskRunner {
         if let Some((session, _)) = self.session_cwd.as_ref() {
             session.leave_track(turn, open.original_cwd.clone());
         }
-        close_track(turn, open.track, ledger);
+        close_track(turn, open.track, self.undo_store().as_ref(), ledger);
+    }
+
+    /// The per-agent undo store (spec §4.1 step 4), rooted at the session
+    /// home — the agent dir, where `profile.yaml` lives. `None` on runners
+    /// without a session cwd (tests, stubs): their turns have no track
+    /// anyway.
+    fn undo_store(&self) -> Option<UndoStore> {
+        self.session_cwd
+            .as_ref()
+            .map(|(session, _)| UndoStore::new(session.home()))
     }
 }
 
-/// Promote the track to the project, record what moved (project-relative)
-/// in the ledger, destroy the track. A failed promote keeps the track on
-/// disk and says so in the ledger rather than losing work; a failed destroy
-/// after a good promote is only logged — the edits are already home.
-fn close_track(turn: &str, track: TurnTrack, ledger: &mut crate::turn_ledger::TurnLedger) {
+/// Snapshot the before-bytes, promote the track to the project, record what
+/// moved (project-relative) in the ledger, destroy the track. A failed
+/// promote keeps the track on disk and says so in the ledger rather than
+/// losing work; a failed destroy after a good promote is only logged — the
+/// edits are already home. A failed snapshot is logged and the promote goes
+/// ahead: the turn's edits are the deliverable, the undo is the safety net,
+/// and a net that blocks the deliverable would get switched off.
+fn close_track(
+    turn: &str,
+    track: TurnTrack,
+    undo: Option<&UndoStore>,
+    ledger: &mut crate::turn_ledger::TurnLedger,
+) {
+    if let Some(store) = undo {
+        match track.diff_files() {
+            Ok(files) => {
+                if let Err(e) = store.snapshot(turn, track.project(), track.path(), &files) {
+                    tracing::warn!(turn, error = %e, "undo snapshot failed; promoting without it");
+                }
+            }
+            Err(e) => tracing::warn!(turn, error = %e, "undo snapshot skipped: diff failed"),
+        }
+    }
     match track.promote() {
         Ok(files) => {
             ledger.files_changed = Some(
@@ -337,6 +366,15 @@ mod tests {
         assert_eq!(cwd.for_turn("t1"), project, "cwd restored");
         assert!(!track_dir.exists(), "track destroyed");
         assert!(ledger.track_kept.is_none());
+
+        // §4.1 step 4: the promote left an undo snapshot in the agent home
+        // (the session home), and undoing it restores the before bytes.
+        let store = UndoStore::new(&project);
+        let mut m = store.load("t1").unwrap().expect("manifest written");
+        assert_eq!(m.entries.len(), 1);
+        assert_eq!(m.entries[0].kind, mur_track::EntryKind::Modified);
+        store.undo(&mut m).unwrap();
+        assert_eq!(std::fs::read_to_string(project.join("a.txt")).unwrap(), "a");
     }
 
     #[test]
