@@ -12,6 +12,18 @@ RUST_MIN_STACK = "33554432"
 # CARGO_PROFILE_DEV_DEBUG=0, since env vars beat config files.
 # Note: setting CARGO_PROFILE_DEV_INCREMENTAL under [env] would NOT work —
 # [env] only reaches processes cargo spawns, not cargo's own config.
+#
+# debug = 1 keeps line tables (readable backtraces) without full variable
+# debuginfo: debug = 2 costs ~30-40% more per incremental rebuild and ~3x
+# the artifact size (see the Cargo.toml comment), which on a 16 GB box pushes
+# parallel rustc into swap. Bump to 2 locally when you need lldb variables.
 [profile.dev]
-debug = 2
+debug = 1
+incremental = true
+
+# Cargo.toml's [profile.test] spells out `debug = 0, incremental = false`
+# explicitly, and explicit keys don't inherit from dev — so without this
+# block every `cargo nextest` rebuilds mur-core from scratch.
+[profile.test]
+debug = 1
 incremental = true
