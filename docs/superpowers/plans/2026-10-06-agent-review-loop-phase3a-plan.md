@@ -29,6 +29,9 @@
 - Source files ≤ 800 lines (CLAUDE.md rule 5). Current sizes: `loop_driver.rs` 615,
   `session.rs` 587, `schema.rs` 529, `ledger.rs` 445, `driver.rs` 396, `wire.rs` 355. Note
   parsing goes in a new `note.rs`, not `session.rs`.
+- Test strings asserted with `contains` are distinctive tokens (`NOTE-A`, `RULING-TXT`), never
+  a single letter or common word: a fixed prompt or header containing `Y` makes
+  `contains("Y")` pass or fail for the wrong reason (found in Task 6).
 - Lint gate after every task:
   `cargo clippy --all --all-targets --no-deps --locked -- -D warnings && cargo fmt --all -- --check`
 
@@ -212,7 +215,7 @@ pub fn run_turn_with_retry(
 - [x] `RuleFirst` path (`loop_driver.rs:318-333`): keep the kill-switch check, `write_ruling`,
   banner + full reprint; replace the hand-written `main_turn_params` with the generator; set
   `pre_confirmed = true`; no prompt (D1).
-- [x] Tests in new `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`: AC-P3a-1, 2, 3, 6, 7, 8, 9 (assert channel order
+- [x] Tests in new `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`: AC-P3a-1, 2, 3, 6, 7, 8 (rev 5: note before `turn_sent` and in the message; ruling held — absent before that `turn_sent` and from the message, lands after the round's verdict and before main's next `turn_sent`; mutation: writing held rulings before `turn_sent` fails it), 9 (assert channel order
   `ruling`, `human_note(A)`, `turn_sent`; sent bytes == reprinted; `confirm:main` count equals the
   P2 test's), 10, 11 (+ `review-resume` path shows A again), 14 for 1/3/9/10/11 **and** the
   reviewer-side stop case from the two-ledger rule.

@@ -22,6 +22,7 @@ const ISSUE_F1: &str =
 const RESOLVE_F1_APPROVE: &str =
     r#"{"verdict":"approve","prior":[{"id":"F1","status":"resolved"}]}"#;
 const APPROVE: &str = r#"{"verdict":"approve"}"#;
+const KEEP_F1_OPEN: &str = r#"{"verdict":"revise","prior":[{"id":"F1","status":"open"}]}"#;
 
 /// Scripted human + agents. Each member's send prompts pop `answers` in
 /// order (then `Send`); `fail` makes that many sends to the member error.
@@ -222,26 +223,52 @@ fn stop_discards_notes() {
     assert!(shape(&read_payloads(tmp.path(), &ch)).is_empty());
 }
 
-/// AC-P3a-8, note half: a note then a `/rule` at the reviewer's prompt is
-/// flushed before that `turn_sent` and carried by the message. Where the
-/// ruling lands is P2-§5.3's held-ruling rule, not asserted here.
+/// AC-P3a-8 (rev 5): a note then a `/rule` at the reviewer's (non-boundary)
+/// prompt — the note is flushed before that `turn_sent` and carried by the
+/// message; the ruling is held per P2-§5.3 and lands only after the round's
+/// seal, so it is neither on the channel before that `turn_sent` nor in it.
 #[test]
 fn note_then_rule_at_reviewer_prompt_flushes() {
     let (tmp, ch) = setup_channel();
     let rule = SendAnswer::SendWithRuling(RulingInput {
         finding: "F1".into(),
         decision: RulingDecision::Fix,
-        text: "ruled".into(),
+        text: "RULING-TXT".into(),
     });
-    let t = Notes::new(&[ISSUE_F1, RESOLVE_F1_APPROVE]).answers(
+    let t = Notes::new(&[ISSUE_F1, KEEP_F1_OPEN, RESOLVE_F1_APPROVE]).answers(
         "reviewer",
         vec![SendAnswer::Send, note("NOTE-A", None), rule],
     );
-    run(&t, tmp.path(), &ch);
-    let s = shape(&read_payloads(tmp.path(), &ch));
+    let (live, stop) = run(&t, tmp.path(), &ch);
+    assert_eq!(stop, LoopDriverStop::Approve);
+    let p = read_payloads(tmp.path(), &ch);
+    let s = shape(&p);
     let at = s.iter().position(|x| x == "note:NOTE-A").unwrap();
-    assert_eq!(s[at + 1], "sent:Reviewer:2");
-    assert!(t.lines("send:reviewer:")[1].contains("NOTE-A"));
+    let sent = at + 1;
+    assert_eq!(s[sent], "sent:Reviewer:2");
+    // Held, not written before the reviewer's send.
+    assert!(!s[..sent].contains(&"ruling".to_string()), "{s:?}");
+    // Lands after the round-2 seal, before main's round-3 `turn_sent`.
+    let idx = |f: &dyn Fn(&ReviewPayload) -> bool| p.iter().position(f).unwrap();
+    let verdict2 = idx(&|x| matches!(x, ReviewPayload::Verdict { round: 2, .. }));
+    let ruling = idx(&|x| matches!(x, ReviewPayload::Ruling { .. }));
+    let main3 = idx(&|x| {
+        matches!(
+            x,
+            ReviewPayload::TurnSent {
+                round: 3,
+                to: Role::Main,
+                ..
+            }
+        )
+    });
+    assert!(verdict2 < ruling && ruling < main3, "{s:?}");
+    // The reviewer's round-2 message carries the note, not the ruling.
+    let msg = &t.lines("send:reviewer:")[1];
+    assert!(msg.contains("NOTE-A"));
+    assert!(!msg.contains("RULING-TXT"), "{msg}");
+    assert!(!msg.contains(REVIEW_BINDING_RULINGS_HEADER), "{msg}");
+    assert_replay(tmp.path(), &ch, &live);
 }
 
 /// AC-P3a-9, 14: boundary `/rule` keeps the note; no further prompt.

@@ -5,8 +5,9 @@
   instead of stopping (N10), pins where `@<agent>` is resolved (N11), and names the
   partial-flush pause text (§5.3). Rev 3 applies §7 to the P1 and P2 specs in place. Rev 4
   (plan decision D1, 2026-10-06) keeps P2-§5.3's boundary `/rule` contract: the rebuilt
-  message is printed and sent with no further prompt (§5.2, §5.3 retry, AC-P3a-9). Two
-  flagged assumptions remain (§0); no open questions.
+  message is printed and sent with no further prompt (§5.2, §5.3 retry, AC-P3a-9). Rev 5
+  (2026-10-06) corrects AC-P3a-8 to P2-§5.3's held-ruling contract (§7). Two flagged
+  assumptions remain (§0); no open questions.
 - **Date:** 2026-10-06
 - **Base:** Phase 1 spec `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md` and
   Phase 2 spec `docs/superpowers/specs/2026-10-05-agent-review-loop-phase2-design.md`.
@@ -254,6 +255,12 @@ pointing back here; edited rows are marked *(Phase 3a)*.*
   that only this session's two members match.
 - **P2-§5.3** also lists the meaningful send-prompt prefixes explicitly (`/rule`, `/note`,
   `@<agent>`), so the grammar is not inferred from P3a.
+- **AC-P3a-8 corrected (rev 5, found in plan Task 6):** rev 1–4 required the ruling from a
+  non-boundary `/rule` to be on the channel before that `turn_sent`. That contradicts P2-§5.3
+  (a `/rule` at the reviewer's send prompt is held and written after the round's seal) and
+  AC-P2-18/19. P3a does not change ruling timing, for the same reason as D1: a ruling written
+  before `turn_sent` would make the live message differ from the one replay rebuilds. P2 is
+  unchanged; AC-P3a-8 now asserts the note half and the held ruling.
 
 ## 8. Acceptance criteria
 
@@ -274,9 +281,10 @@ pointing back here; edited rows are marked *(Phase 3a)*.*
   `turn_sent`; each reprint shows all notes so far.
 - **AC-P3a-7 (Stop):** `/note A` then `q` → no `human_note` on the channel. Same for `/note A`
   then text without a prefix.
-- **AC-P3a-8 (Go, non-boundary `/rule`):** `/note A` then a valid `/rule` at a non-boundary
-  prompt → `human_note(A)` and `ruling` both on the channel before that `turn_sent`; the sent
-  message carries both.
+- **AC-P3a-8 (Go, non-boundary `/rule`) *(rev 5)*:** `/note A` then a valid `/rule` at a
+  non-boundary prompt → `human_note(A)` is on the channel before that `turn_sent`, and the sent
+  message carries A. The ruling is held per P2-§5.3 and written after the round's seal: it is
+  not on the channel before that `turn_sent` and not in that message.
 - **AC-P3a-9 (RuleFirst, boundary `/rule`):** `/note A` then `/rule` at a boundary prompt →
   `ruling` written, **no** `human_note` yet; the reprinted rebuilt message contains A and the
   ruling; no further prompt; channel order is `ruling`, `human_note(A)`, `turn_sent`; the sent
