@@ -9,6 +9,9 @@
   found during implementation (human-approved, 2026-10-05): round-stuck is not judged at a seal
   where a ruling was written (§5.3, AC-P2-20). No open questions remain; accepted
   limitations are in §9.
+- **Phase 3a (2026-10-06):** §0 and the §5.3 send-prompt table are edited in place for stdin
+  notes and unknown slash commands; the full design is
+  `2026-10-06-agent-review-loop-phase3a-design.md` (P3a-§7 lists every edit).
 - **Date:** 2026-10-05
 - **Base:** Phase 1 spec `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md` (Approved
   rev 3), implemented on `main` by #1722 (`400b1354`). Section numbers `P1-§x` refer to it.
@@ -26,8 +29,12 @@ real semantics.
 Out of scope: `cost_usd` work for auto mode (Phase 3 blocker), reviewer appeals, multi-finding
 rulings, Hub GUI, **MURMUR integration**, and the other P1-§6 human inputs: plain-text
 `human_note`, `@<agent>` / `@主` / `@審查` addressed notes, the `@<unknown>` hint, and the
-repeated-note `/rule` suggestion. None of these has an input path or a writer on `main`
-(`HumanNote` folds as a no-op, `ledger.rs:198`); they move to Phase 3 together with MURMUR.
+repeated-note `/rule` suggestion. None of these has an input path or a writer in Phase 2
+(`HumanNote` folds as a no-op). *(Phase 3a: notes at the **stdin** send prompt — `/note <text>`,
+`@<agent>` / `@主` / `@審查`, and the stdin `@<unknown>` hint — are built in
+`2026-10-06-agent-review-loop-phase3a-design.md`. Still deferred: the repeated-note `/rule`
+suggestion, the reviewer's non-adoption reason, and everything MURMUR, including plain text as a
+note.)*
 `/rule` is Phase 2's only way for a human to intervene. Phase 2's human surface is the terminal (stdin)
 driver that Phase 1 already ships (`session.rs`: `Send to …? [Enter = send, q = stop]`,
 `Paused — continue? [Enter = continue, q = leave paused]`). Wiring `/rule` into MURMUR's slash
@@ -199,7 +206,14 @@ classified `crashed`; §6 still finds the pending ruling (R2).
   | Enter (`y`, `yes`) | send (P1) |
   | valid `/rule …` | **send and record a ruling**; this turn is still sent |
   | invalid `/rule …` (§5.4) | inline hint, re-prompt; nothing recorded or sent |
-  | anything else, or EOF | unchanged from P1 (stop) |
+  | `/note <text>` *(Phase 3a)* | queue a broadcast note, reprint the rebuilt message, ask again (P3a-§3) |
+  | `@<agent> <text>` *(Phase 3a)* | queue a note to that session member, reprint, ask again; `@<unknown>` → hint, ask again (P3a N3, N11) |
+  | `/<word>` not listed above *(Phase 3a)* | `unknown command: <word>`, ask again; never stops (P3a N10) |
+  | `q`, text not starting with `/` or `@`, or EOF | unchanged from P1 (stop) |
+
+  Meaningful prefixes at a send prompt are exactly `/rule`, `/note`, `@<agent>`; any other `/`
+  line asks again *(Phase 3a)*. Before Phase 3a, every line that was not Enter or a `/rule …`
+  stopped.
 
 - **A ruling is applied only at a round boundary**: before main's `turn_sent`, so on the channel
   every `ruling` precedes the main `turn_sent` of the round it governs. Reason: the reviewer's

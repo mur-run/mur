@@ -10,6 +10,10 @@
 - **Phase 2 (2026-10-05):** escalation now waits for a human ruling instead of stopping. The
   sections it changes (§3.3, §3.4, §3.5, §4, §5, §6, §7/§7.0, §8.3, AC8, AC18) are edited in place
   and marked *(Phase 2)*; the full design is `2026-10-05-agent-review-loop-phase2-design.md` (P2-§7 lists every edit).
+- **Phase 3a (2026-10-06):** human notes at the stdin send prompt (`/note`, `@<agent>`,
+  `@<unknown>`). §6 is edited in place: stdin and MURMUR rows are now separate, because the two
+  surfaces use different syntax on purpose. Full design:
+  `2026-10-06-agent-review-loop-phase3a-design.md` (P3a-§7 lists every edit).
 - **Date:** 2026-10-04
 - **Source:** design summary approved in brainstorm (Mode A, architecture decision A).
 - **Owner (spec):** PM. **Build:** coding agent. **Verify:** QA. **Ship:** GitHub Manager.
@@ -278,11 +282,13 @@ crate starts reading it. Reaching into `mur-core` from that crate is not an acce
 
 | Input | Effect |
 |---|---|
-| plain text *(not built; Phase 3, P2-§0)* | `human_note` injected into the **next** turn of **both** sides. It outranks findings and does **not** close any finding. If the reviewer does not adopt it, the reviewer must give a reason. |
+| plain text **in MURMUR** *(not built; later MURMUR phase, 3b)* | `human_note` injected into the **next** turn of **both** sides. It outranks findings and does **not** close any finding. If the reviewer does not adopt it, the reviewer must give a reason *(not built: needs note ids in the verdict schema, P3a-§0)*. **stdin differs (P3a N1):** plain text at the stdin send prompt still means Stop. |
+| `/note <text>` **at the stdin send prompt** *(Phase 3a)* | Broadcast `human_note`, same semantics as the MURMUR plain-text row. The note is pending until the send is consented, then appended before `turn_sent` (P3a-§5). Empty text → `usage: /note <text>`, ask again. |
 | `/rule drop\|fix F<n> <text>` *(Phase 2)* | `ruling` on one finding, any finding in the open set. `drop` → `resolved`; `fix` → `open`, and main may no longer `reject` it. The text is a binding note in the next turn of both sides. Read at the ruling prompt, or at a send prompt where it is also the send consent (P2-§5.3). |
-| `@<agent> <text>` *(not built; Phase 3)* | Note to that side only. `<agent>` is resolved via `canonicalize_agent_name` (case-insensitive). `@主` = main and `@審查` = reviewer are kept as aliases. |
-| `@<unknown> …` *(not built; Phase 3)* | An inline hint next to the input reads: `agent <name> not found; this will be sent as a general note`. It is **never** broadcast silently. Note: `canonicalize_agent_name` returns the input unchanged when nothing matches, so the caller must check existence itself. |
-| same finding raised twice in plain text, reviewer still insists *(not built; Phase 3)* | Prompt: `Make this a formal ruling with /rule?` |
+| `@<agent> <text>` *(stdin: Phase 3a; MURMUR: 3b)* | Note to that side only. `<agent>` must be one of **this session's two members**, matched via `canonicalize_agent_name` (case-insensitive). `@主` = main and `@審查` = reviewer are aliases resolved through a **fixed map** to `Role::Main` / `Role::Reviewer`, checked first and never passed to `canonicalize_agent_name` (P3a N11). |
+| `@<unknown> …` **in MURMUR** *(not built; 3b)* | An inline hint next to the input reads: `agent <name> not found; this will be sent as a general note`. It is **never** broadcast silently. Note: `canonicalize_agent_name` returns the input unchanged when nothing matches, so the caller must check existence itself. |
+| `@<unknown> …` **at the stdin send prompt** *(Phase 3a)* | Prints `agent <name> not found; use /note <text> to send it to both sides` and asks again. Never broadcast, not even with a hint (P3a N3). An agent that exists on the machine but is not in this session counts as unknown. |
+| same finding raised twice in plain text, reviewer still insists *(not built; no matching rule yet, P3a-§0)* | Prompt: `Make this a formal ruling with /rule?` |
 | Esc ×1 (**review session only**) | Pause after the current turn completes. The in-flight turn is not aborted (Q3 decided). |
 | Esc ×2 within `ESC_DOUBLE_WINDOW` (**review session only**) | Abort generation now. The partial output stays on screen marked `discarded, not sent`. |
 
