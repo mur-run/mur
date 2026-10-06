@@ -1,12 +1,15 @@
 # Agent review loop — Phase 3a design: human notes at the stdin send prompt
 
-- **Status:** Draft rev 3. Decisions N1–N11 were taken in brainstorm (human, 2026-10-06).
+- **Status:** Draft rev 6. Decisions N1–N11 were taken in brainstorm (human, 2026-10-06).
   Rev 2 drops the reviewer "say why" instruction (§0), makes unknown slash commands ask again
   instead of stopping (N10), pins where `@<agent>` is resolved (N11), and names the
   partial-flush pause text (§5.3). Rev 3 applies §7 to the P1 and P2 specs in place. Rev 4
   (plan decision D1, 2026-10-06) keeps P2-§5.3's boundary `/rule` contract: the rebuilt
-  message is printed and sent with no further prompt (§5.2, §5.3 retry, AC-P3a-9). Two
-  flagged assumptions remain (§0); no open questions.
+  message is printed and sent with no further prompt (§5.2, §5.3 retry, AC-P3a-9). Rev 5
+  (2026-10-06) corrects AC-P3a-8 to P2-§5.3's held-ruling contract (§7). Rev 6 (2026-10-06,
+  found in plan Task 7) makes the N11 member match exact-first, then ASCII case-insensitive
+  (§3, AC-P3a-4). Two flagged
+  assumptions remain (§0); no open questions.
 - **Date:** 2026-10-06
 - **Base:** Phase 1 spec `docs/superpowers/specs/2026-10-04-agent-review-loop-design.md` and
   Phase 2 spec `docs/superpowers/specs/2026-10-05-agent-review-loop-phase2-design.md`.
@@ -59,7 +62,7 @@ Hub GUI, auto-mode `cost_usd`.
 | N8 | Flush is **at-least-once**: pending notes are appended to the channel after consent and **before** `transport.send`. Same delivery shape as rulings (`ledger.rs:419`). |
 | N9 | Flush empties the queue. There is no "already appended" flag. |
 | N10 | A line starting with `/` that is not a command of the send prompt prints `unknown command: <word>` and asks again. It never stops. Stopping stays `q`, plain text, or EOF. Today such a line stops, because `is_rule_command` is false and `is_send_answer` is false (`session.rs:351`). |
-| N11 | `@<agent>` is resolved **in the session** (`TerminalGate`), not in the driver. The gate is given the two member names when it is built. `@主` / `@審查` are a fixed alias map to `Role::Main` / `Role::Reviewer` and never go through `canonicalize_agent_name`. |
+| N11 | `@<agent>` is resolved **in the session** (`TerminalGate`), not in the driver. The gate is given the two member names when it is built. `@主` / `@審查` are a fixed alias map to `Role::Main` / `Role::Reviewer` and never go through `canonicalize_agent_name`. The gate does its own member match on the resolver's result, because that result is not proof of membership (it is the input unchanged when nothing matches, and on a case-insensitive filesystem the exact branch returns `Reviewer` as typed). The match borrows only the resolver's order: exact first, then ASCII case-insensitive. |
 
 ## 2. Code facts this design relies on (`main` @ `731ce9fc`)
 
@@ -107,9 +110,10 @@ two member names (`fleet.members[0]` = main, `[1]` = reviewer), passed where it 
 (`session.rs:422`, `session.rs:491`). Two separate paths, tested separately:
 
 1. **Alias:** `@主` → `Main`, `@審查` → `Reviewer`. A fixed map, checked first; no name lookup.
-2. **Name:** call `canonicalize_agent_name`, then the gate checks that the result equals one of
-   the two member names. The function's return value alone is not proof of existence (it
-   returns its input unchanged when nothing matches). An agent that exists on the machine but
+2. **Name:** call `canonicalize_agent_name`, but do not trust its result: it returns its input
+   unchanged when nothing matches, so the return value alone is not proof of existence. The gate
+   therefore matches the result against the two member names itself, borrowing only the
+   resolver's order: exact first, then ASCII case-insensitive. An agent that exists on the machine but
    is not in this session is `<unknown>` here.
 
 `@` with no name, or `@<agent>` with no text, prints `usage: @<agent> <text>` and asks again.
@@ -254,6 +258,12 @@ pointing back here; edited rows are marked *(Phase 3a)*.*
   that only this session's two members match.
 - **P2-§5.3** also lists the meaningful send-prompt prefixes explicitly (`/rule`, `/note`,
   `@<agent>`), so the grammar is not inferred from P3a.
+- **AC-P3a-8 corrected (rev 5, found in plan Task 6):** rev 1–4 required the ruling from a
+  non-boundary `/rule` to be on the channel before that `turn_sent`. That contradicts P2-§5.3
+  (a `/rule` at the reviewer's send prompt is held and written after the round's seal) and
+  AC-P2-18/19. P3a does not change ruling timing, for the same reason as D1: a ruling written
+  before `turn_sent` would make the live message differ from the one replay rebuilds. P2 is
+  unchanged; AC-P3a-8 now asserts the note half and the held ruling.
 
 ## 8. Acceptance criteria
 
@@ -265,7 +275,8 @@ pointing back here; edited rows are marked *(Phase 3a)*.*
   contain Y; after Enter the channel has `human_note(Y, Reviewer)`; the reviewer's next message
   contains Y.
 - **AC-P3a-4:** `@主 Z` and `@審查 Z` resolve to `Main` / `Reviewer` through the alias map;
-  `@<NAME>` in a different case resolves through `canonicalize_agent_name`. Separate tests for
+  `@<NAME>` in a different case resolves through `canonicalize_agent_name` and the
+  exact-then-case-insensitive member match. Separate tests for
   the alias path and the name path.
 - **AC-P3a-5:** `@nobody W` → hint `agent nobody not found; use /note <text> to send it to both
   sides`, prompt again, nothing on the channel. An agent that exists on the machine but is not
@@ -274,9 +285,10 @@ pointing back here; edited rows are marked *(Phase 3a)*.*
   `turn_sent`; each reprint shows all notes so far.
 - **AC-P3a-7 (Stop):** `/note A` then `q` → no `human_note` on the channel. Same for `/note A`
   then text without a prefix.
-- **AC-P3a-8 (Go, non-boundary `/rule`):** `/note A` then a valid `/rule` at a non-boundary
-  prompt → `human_note(A)` and `ruling` both on the channel before that `turn_sent`; the sent
-  message carries both.
+- **AC-P3a-8 (Go, non-boundary `/rule`) *(rev 5)*:** `/note A` then a valid `/rule` at a
+  non-boundary prompt → `human_note(A)` is on the channel before that `turn_sent`, and the sent
+  message carries A. The ruling is held per P2-§5.3 and written after the round's seal: it is
+  not on the channel before that `turn_sent` and not in that message.
 - **AC-P3a-9 (RuleFirst, boundary `/rule`):** `/note A` then `/rule` at a boundary prompt →
   `ruling` written, **no** `human_note` yet; the reprinted rebuilt message contains A and the
   ruling; no further prompt; channel order is `ruling`, `human_note(A)`, `turn_sent`; the sent

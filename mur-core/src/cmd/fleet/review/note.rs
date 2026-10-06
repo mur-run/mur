@@ -17,7 +17,6 @@ use super::schema::{HumanNote, Role};
 
 /// What one send-prompt line means for notes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // wired in PR 3 (Task 5–7)
 pub enum NoteLine {
     /// A note to queue; the prompt asks again.
     Note(HumanNote),
@@ -29,7 +28,6 @@ pub enum NoteLine {
 
 /// Parse one send-prompt line. `members` is `[main, reviewer]`; `resolve`
 /// is `canonicalize_agent_name(mur_home, _)` in production.
-#[allow(dead_code)] // wired in PR 3 (Task 5–7)
 pub fn parse_note_line(
     line: &str,
     members: &[String; 2],
@@ -70,13 +68,7 @@ fn target_note(
     let target = match name {
         TARGET_ALIAS_MAIN => Some(Role::Main),
         TARGET_ALIAS_REVIEWER => Some(Role::Reviewer),
-        _ => {
-            let canonical = resolve(name);
-            [Role::Main, Role::Reviewer]
-                .into_iter()
-                .zip(members)
-                .find_map(|(role, member)| (*member == canonical).then_some(role))
-        }
+        _ => member_role(&resolve(name), members),
     };
     match target {
         Some(role) => NoteLine::Note(HumanNote {
@@ -84,5 +76,24 @@ fn target_note(
             target: Some(role),
         }),
         None => NoteLine::Hint(TARGET_NOT_FOUND_HINT.replace("{name}", name)),
+    }
+}
+
+/// The role whose member name is `canonical`. Exact match first; then
+/// ASCII case-insensitively, the same rule `canonicalize_agent_name` uses —
+/// on a case-insensitive filesystem (default macOS APFS) its exact-match
+/// branch succeeds for `Reviewer` and returns the input as typed, so an
+/// exact comparison alone would call a member `<unknown>`.
+fn member_role(canonical: &str, members: &[String; 2]) -> Option<Role> {
+    let roles = || [Role::Main, Role::Reviewer].into_iter().zip(members);
+    if let Some(role) = roles().find_map(|(role, m)| (m == canonical).then_some(role)) {
+        return Some(role);
+    }
+    // Case-insensitive fallback only when it is unambiguous: members that
+    // differ only in case must not resolve by list order.
+    let mut folded = roles().filter(|(_, m)| m.eq_ignore_ascii_case(canonical));
+    match (folded.next(), folded.next()) {
+        (Some((role, _)), None) => Some(role),
+        _ => None,
     }
 }

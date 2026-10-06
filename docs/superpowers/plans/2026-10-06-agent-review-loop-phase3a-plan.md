@@ -29,6 +29,9 @@
 - Source files ≤ 800 lines (CLAUDE.md rule 5). Current sizes: `loop_driver.rs` 615,
   `session.rs` 587, `schema.rs` 529, `ledger.rs` 445, `driver.rs` 396, `wire.rs` 355. Note
   parsing goes in a new `note.rs`, not `session.rs`.
+- Test strings asserted with `contains` are distinctive tokens (`NOTE-A`, `RULING-TXT`), never
+  a single letter or common word: a fixed prompt or header containing `Y` makes
+  `contains("Y")` pass or fail for the wrong reason (found in Task 6).
 - Lint gate after every task:
   `cargo clippy --all --all-targets --no-deps --locked -- -D warnings && cargo fmt --all -- --check`
 
@@ -52,7 +55,7 @@ trap).
   `round_ledger.apply(note)`. `ledger` is what `Turn::Stop` returns mid-reviewer-turn
   (`loop_driver.rs:384`); `round_ledger` is what the verdict seal adopts.
 - Tested in Task 6 (AC-P3a-14 extended case) by
-  `reviewer_side_note_then_stop_replays_equal_to_live` in `loop_driver_tests/notes.rs`:
+  `reviewer_side_note_then_stop_replays_equal_to_live` in `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`:
   reviewer-side note, then the send fails twice → paused; `fold_rounds(channel) == live ledger`.
 
 ## PR slicing
@@ -70,7 +73,7 @@ removes every one (`git grep 'wired in PR 3' -- '*.rs'` must be empty before it 
 
 | File | Change | Responsibility |
 |---|---|---|
-| `mur-core/src/cmd/fleet/review/schema.rs` | modify | `HumanNote` struct, `HumanNote::into_payload` / `From` |
+| `mur-core/src/cmd/fleet/review/schema.rs` | modify | `HumanNote` struct, `From<HumanNote> for ReviewPayload` (no separate `into_payload`; `From` was enough) |
 | `mur-core/src/cmd/fleet/review/ledger.rs` | modify | `unseen_notes: [Vec<HumanNote>; 2]`, fold arms, `unseen_notes(role)` |
 | `mur-core/src/cmd/fleet/review/ledger_tests.rs` | modify | fold tests |
 | `mur-core/src/cmd/fleet/review/ledger_replay_tests.rs` | modify | property: notes interleaved with turns, live == replay |
@@ -161,7 +164,7 @@ any other `/<word>` → `unknown command: /<word>`; everything else → `NotNote
   `MUR_BLESS_WIRE_GOLDEN=1 cargo test -p mur-core --lib -- --ignored bless_wire_golden`
   (an ignored test, a no-op without the env var), then review the `.txt` diff in the PR. The same
   rule is in the doc comment on `GOLDEN` in `wire.rs`.
-  `testdata/wire_golden/.gitattributes` sets `* -text` so Windows `autocrlf` checkouts keep the
+  `mur-core/src/cmd/fleet/review/testdata/wire_golden/.gitattributes` sets `* -text` so Windows `autocrlf` checkouts keep the
   LF bytes (CI on `windows-latest` failed on CRLF before it).
 - [x] Add `{human_notes}` slot to both templates in `constants.rs`, `REVIEW_HUMAN_NOTES_HEADER`,
   extend `main_turn_params(task, round, ledger, pending)` and
@@ -202,21 +205,21 @@ pub fn run_turn_with_retry(
 
 ## Task 6 — Loop wiring (P3a-§5, two-ledger rule)
 
-- [ ] `LoopRun::turn` takes `build: impl Fn(&Ledger, &[HumanNote]) -> Value` and
+- [x] `LoopRun::turn` takes `build: impl Fn(&Ledger, &[HumanNote]) -> Value` and
   `validate: impl Fn(&Ledger, &str) -> Result<T, String>` (validate gets the ledger as an
   argument so it no longer borrows `round_ledger` while the flush mutates it). Resend prompt =
   `build(...)` + hint, every attempt.
-- [ ] Pending queue lives on `LoopRun` (one per turn; cleared on `Stop`, kept across `RuleFirst`).
-- [ ] Flush callback appends each note in order via `self.append`, then applies it per the
+- [x] Pending queue lives on `LoopRun` (one per turn; cleared on `Stop`, kept across `RuleFirst`).
+- [x] Flush callback appends each note in order via `self.append`, then applies it per the
   two-ledger rule. Main side: `ledger`. Reviewer side: `ledger` and `round_ledger`.
-- [ ] `RuleFirst` path (`loop_driver.rs:318-333`): keep the kill-switch check, `write_ruling`,
+- [x] `RuleFirst` path (`loop_driver.rs:318-333`): keep the kill-switch check, `write_ruling`,
   banner + full reprint; replace the hand-written `main_turn_params` with the generator; set
   `pre_confirmed = true`; no prompt (D1).
-- [ ] Tests in new `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`: AC-P3a-1, 2, 3, 6, 7, 8, 9 (assert channel order
+- [x] Tests in new `mur-core/src/cmd/fleet/review/loop_driver_tests/notes.rs`: AC-P3a-1, 2, 3, 6, 7, 8 (rev 5: note before `turn_sent` and in the message; ruling held — absent before that `turn_sent` and from the message, lands after the round's verdict and before main's next `turn_sent`; mutation: writing held rulings before `turn_sent` fails it), 9 (assert channel order
   `ruling`, `human_note(A)`, `turn_sent`; sent bytes == reprinted; `confirm:main` count equals the
   P2 test's), 10, 11 (+ `review-resume` path shows A again), 14 for 1/3/9/10/11 **and** the
   reviewer-side stop case from the two-ledger rule.
-- [ ] Two-ledger tests, named (implementation without these is not done):
+- [x] Two-ledger tests, named (implementation without these is not done):
   - `reviewer_side_note_then_stop_replays_equal_to_live`: note flushed at the reviewer's prompt,
     send fails twice → `Turn::Stop` (`loop_driver.rs:384`) returns `ledger`; assert
     `fold_rounds(channel) == ` that ledger, and the note is in it. Mutation check: drop the
@@ -224,34 +227,53 @@ pub fn run_turn_with_retry(
   - `reviewer_side_note_survives_verdict_seal`: note flushed at the reviewer's prompt, verdict
     accepted; the sealed ledger (adopted from `round_ledger`) equals replay. Mutation check: drop
     the `round_ledger.apply` → fails.
-- [ ] Unchanged: `mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437 still asserts 2. Do not edit it.
-- [ ] Green, lint, check `loop_driver.rs` ≤ 800 (split the turn helper into
-  `loop_driver/turn.rs` if needed — pure move, separate commit), commit
+- [x] Unchanged: `mur-core/src/cmd/fleet/review/loop_driver_tests/rulings.rs` line 437 still asserts 2. Do not edit it.
+- [x] Green, lint, check `loop_driver.rs` ≤ 800 (689 lines; the planned turn-helper split was
+  not needed), commit
   `feat(review): pending notes in the review loop`.
 
 ## Task 7 — Session prompt (P3a-§3, N4, N10, N11)
 
-- [ ] `TerminalGate` gains `members: [String; 2]` and `mur_home: &Path`, set at
+- [x] `TerminalGate` gains `members: [String; 2]` and `mur_home: &Path`, set at
   `session.rs:422` and `:491` from `fleet.members`. Test constructors updated.
-- [ ] `confirm_send`: valid/invalid `/rule` unchanged first; then `parse_note_line` →
+- [x] `confirm_send`: valid/invalid `/rule` unchanged first; then `parse_note_line` →
   `Note` returns `SendAnswer::Note`, `Hint` prints and re-asks, `NotNote` falls through to the
   existing Send/Stop logic.
-- [ ] `SEND_PROMPT` mentions `/note` and `@<agent>`; update its pinned test.
-- [ ] Tests (`session_tests.rs`): each row of P3a-§3 through a scripted `TerminalGate`;
+- [x] `SEND_PROMPT` mentions `/note` and `@<agent>`. There was no pinned test on `main`; added
+  `send_prompt_names_note_and_at_agent`.
+- [x] Found in Task 7: on a case-insensitive filesystem (default macOS APFS)
+  `canonicalize_agent_name` hits its exact-match branch for `@Reviewer` and returns the name as
+  typed, so the N11 "equals a member" check failed for a real member. `note.rs::member_role` now
+  compares exactly first, then ASCII case-insensitively — the resolver's own rule. Membership is
+  still required (AC-P3a-17 unchanged); pinned by
+  `member_name_as_typed_still_matches_on_case_insensitive_disks` and
+  `send_prompt_member_name_resolves_through_mur_home`.
+- [x] Tests (`session_tests.rs`): each row of P3a-§3 through a scripted `TerminalGate`;
   `send_prompt_p1_answers_unchanged` passes **unchanged**; AC-P3a-16 `/riule` re-asks.
-- [ ] Remove every `wired in PR 3` attribute. Green, lint, commit `feat(review): /note and @agent at the send prompt`.
+- [x] Remove every `wired in PR 3` attribute. Green, lint, commit `feat(review): /note and @agent at the send prompt`.
+- [x] Follow-up: the case-insensitive fallback in `member_role` resolves only when exactly one member folds to the typed name; two members differing only in case are refused (N3 hint) instead of resolved by list order. Test: `case_only_member_collision_is_deterministic`.
 
 ## Task 8 — End-to-end check
 
-- [ ] Full review-module test run plus `cargo nextest run -p mur-core review` (see `docs/BUILD.md`).
-- [ ] `git grep 'wired in PR 3' -- '*.rs'` empty.
+- [x] Full review-module test run plus `cargo nextest run -p mur-core review` (see `docs/BUILD.md`).
+- [x] `git grep 'wired in PR 3' -- '*.rs'` empty.
+- [x] Result: `nextest -p mur-core review` 503/503. Full `nextest -p mur-core`: 8398 run, 8389 passed, 9 failed, none in `review::`. 8 are the pre-existing `serena_install::with_fake_uv` failures (4 tests, lib + bin), red on `main` too; 1 is `agent_start_without_symlink`, an environment denial (`spawn $TMPDIR/.../mur-agent-runtime: Operation not permitted`) from running under the MUR agent seal; `main` (d8bf20f4) fails the same test with the identical error in the same sandbox. No new failures.
 
 ## Task 9 — Docs
 
-- [ ] `mur verify --file` on the P3a spec and this plan.
-- [ ] `update-docs` skill: README (send-prompt grammar), docs site `fleet-review` page, product
-  page. Docs site and product page deploy on merge in `mur-server`; merge them after a release
-  carries PR 3, not before.
+- [x] `mur verify --file` on the P3a spec (11/11) and this plan (33/33 after fixing four stale
+  paths: two short-form test paths, a planned `into_payload` method → the `From` impl that was built,
+  and the planned turn-helper split that was not needed at 689 lines).
+- [x] Spec rev 6: N11 and §3 add the exact-then-ASCII-case-insensitive member match; AC-P3a-4
+  names it. Task 7's pinned-test line already reads "no pinned test on `main`; added
+  `send_prompt_names_note_and_at_agent`".
+- [x] README: `/note` and `@<agent>` in the fleet review bullet. `mur verify` on README reports
+  one stale claim, the fleet review subcommand at L630; it is the same on the unmodified README, because
+  the installed `mur` predates the subcommand. Not from this PR.
+- [x] `mur-server` branch `docs/fleet-review-notes`: a `## Notes` section on the `fleet-review`
+  page (prompt grammar, lifecycle, hints with the exact strings from `constants.rs`) and one
+  sentence on the product card. Tutorials do not mention the send prompt; untouched. Open that
+  PR only after a release carries PR 3; it deploys on merge and is human-merged.
 
 ## Self-review
 
