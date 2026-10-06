@@ -93,6 +93,7 @@ impl TurnTrack {
         if path.exists() {
             bail!("track already exists: {}", path.display());
         }
+        ensure_excluded(&project)?;
         // The base is captured BEFORE the clone so a file the user saves
         // between the two is seen as the turn's change (and promoted back),
         // never silently dropped.
@@ -239,6 +240,28 @@ impl TurnTrack {
     }
 }
 
+/// Make git ignore `.worktrees/` for this repository without touching the
+/// user's `.gitignore`: `.git/info/exclude` is repo-local and never
+/// committed. Idempotent.
+fn ensure_excluded(project: &Path) -> Result<()> {
+    let info = absolute_git_dir(project)?.join("info");
+    let exclude = info.join("exclude");
+    let line = format!("/{WORKTREES_DIR}/");
+    let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == line) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&info)?;
+    let mut text = existing;
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&line);
+    text.push('\n');
+    std::fs::write(&exclude, text).context("write .git/info/exclude")?;
+    Ok(())
+}
+
 /// Canonical repository root of `dir`, or an error naming the problem.
 fn repo_root(dir: &Path) -> Result<PathBuf> {
     let out = Command::new("git")
@@ -326,6 +349,14 @@ fn fingerprint_dirty(root: &Path) -> Result<BaseState> {
         }
         let rel = PathBuf::from(String::from_utf8_lossy(&entry[3..]).into_owned());
         if rel.components().any(|c| matches!(c, Component::ParentDir)) {
+            continue;
+        }
+        // Never cloned, so never part of the turn: a project that does not
+        // ignore `target/` would otherwise look like the turn deleted it.
+        if rel.components().any(|c| match c {
+            Component::Normal(n) => SKIP_DIRS.iter().any(|s| n == *s),
+            _ => false,
+        }) {
             continue;
         }
         let hash = fingerprint_path(&root.join(&rel))?;

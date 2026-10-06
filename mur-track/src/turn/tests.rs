@@ -253,3 +253,36 @@ fn bench_turn_track() {
         eprintln!("{method:?}: create {create:?}  diff {diff:?} ({n} files)  destroy {destroy:?}");
     }
 }
+
+/// A project that does NOT ignore `.worktrees/` or `target/` (no .gitignore
+/// at all) lists them as untracked. They are skipped by the clone, so they
+/// must be skipped by the base too — or the turn would look like it deleted
+/// them, and `promote` would make that real.
+#[test]
+fn skipped_dirs_in_the_project_are_never_reported_or_deleted() {
+    let td = tempfile::tempdir().unwrap();
+    git(td.path(), &["init", "-q"]);
+    std::fs::write(td.path().join("a.txt"), "a").unwrap();
+    git(td.path(), &["add", "."]);
+    git(td.path(), &["commit", "-q", "-m", "init"]);
+    let project = root(&td);
+    std::fs::create_dir_all(project.join("target/debug")).unwrap();
+    std::fs::write(project.join("target/debug/bin"), "bin").unwrap();
+    std::fs::create_dir_all(project.join("sub/node_modules/x")).unwrap();
+    std::fs::write(project.join("sub/node_modules/x/i.js"), "js").unwrap();
+    // A track from an earlier turn, kept for review.
+    std::fs::create_dir_all(project.join(".worktrees/turn-old")).unwrap();
+    std::fs::write(project.join(".worktrees/turn-old/a.txt"), "old").unwrap();
+
+    let track = TurnTrack::create(&project, "turn-g", TreeClone::Copy).unwrap();
+    assert!(track.diff_files().unwrap().is_empty());
+    assert!(track.promote().unwrap().is_empty());
+    assert!(project.join("target/debug/bin").exists());
+    assert!(project.join("sub/node_modules/x/i.js").exists());
+    assert!(project.join(".worktrees/turn-old/a.txt").exists());
+    // And the project's own status no longer lists tracks as untracked —
+    // the repo-local exclude was written, the user's .gitignore untouched.
+    let st = git_out(&project, &["status", "--porcelain"]);
+    assert!(!st.contains(".worktrees"), "{st}");
+    assert!(!project.join(".gitignore").exists());
+}
