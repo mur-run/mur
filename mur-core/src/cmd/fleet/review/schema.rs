@@ -218,6 +218,26 @@ pub enum PauseKind {
     Other,
 }
 
+/// A human note (P3a-§2, D2): the value the session gate hands back and the
+/// fold queues per side. Converts to [`ReviewPayload::HumanNote`], whose
+/// inline fields keep the Phase 1/2 wire bytes unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanNote {
+    pub text: String,
+    /// `None` = broadcast to both sides; `Some(role)` = `@<agent>` note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<Role>,
+}
+
+impl From<HumanNote> for ReviewPayload {
+    fn from(n: HumanNote) -> Self {
+        ReviewPayload::HumanNote {
+            text: n.text,
+            target: n.target,
+        }
+    }
+}
+
 /// One logical review event (§4), the payload half of a `Note` event.
 /// `#[serde(tag = "type")]` makes the wire shape `{"type": "verdict", ...}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -525,5 +545,63 @@ mod tests {
         let json = serde_json::json!({"severity": "low", "issue": "x", "id": "F99"});
         let dto: NewFindingDto = serde_json::from_value(json).unwrap();
         assert_eq!(dto.issue, "x");
+    }
+
+    /// P3a D2: the `HumanNote` struct must not change the wire bytes of
+    /// `ReviewPayload::HumanNote` — Phase 1/2 channels replay unchanged.
+    const NOTE_BROADCAST_BYTES: &str = r#"{"type":"human_note","text":"x"}"#;
+    const NOTE_TARGETED_BYTES: &str = r#"{"type":"human_note","text":"x","target":"reviewer"}"#;
+
+    #[test]
+    fn human_note_wire_bytes_unchanged() {
+        // The variant as it exists today pins the literals...
+        let legacy = ReviewPayload::HumanNote {
+            text: "x".into(),
+            target: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&legacy).unwrap(),
+            NOTE_BROADCAST_BYTES
+        );
+        let legacy = ReviewPayload::HumanNote {
+            text: "x".into(),
+            target: Some(Role::Reviewer),
+        };
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), NOTE_TARGETED_BYTES);
+        // ...and the struct conversion must produce exactly the same bytes.
+        let b: ReviewPayload = HumanNote {
+            text: "x".into(),
+            target: None,
+        }
+        .into();
+        assert_eq!(serde_json::to_string(&b).unwrap(), NOTE_BROADCAST_BYTES);
+        let t: ReviewPayload = HumanNote {
+            text: "x".into(),
+            target: Some(Role::Reviewer),
+        }
+        .into();
+        assert_eq!(serde_json::to_string(&t).unwrap(), NOTE_TARGETED_BYTES);
+    }
+
+    #[test]
+    fn phase1_human_note_parses() {
+        let b: ReviewPayload = serde_json::from_str(NOTE_BROADCAST_BYTES).unwrap();
+        assert_eq!(
+            b,
+            HumanNote {
+                text: "x".into(),
+                target: None
+            }
+            .into()
+        );
+        let t: ReviewPayload = serde_json::from_str(NOTE_TARGETED_BYTES).unwrap();
+        assert_eq!(
+            t,
+            HumanNote {
+                text: "x".into(),
+                target: Some(Role::Reviewer)
+            }
+            .into()
+        );
     }
 }

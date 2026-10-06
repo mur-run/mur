@@ -7,8 +7,8 @@ use mur_common::limits::Stuck;
 
 use super::ledger::{Ledger, fold_rounds};
 use super::schema::{
-    Cumulative, FindingStatus, Mode, PauseKind, RebuttalAnswer, RebuttalResponseDto, ReviewPayload,
-    Role, RulingDecision, SessionLimits, Severity, VerdictKind,
+    Cumulative, FindingStatus, HumanNote, Mode, PauseKind, RebuttalAnswer, RebuttalResponseDto,
+    ReviewPayload, Role, RulingDecision, SessionLimits, Severity, VerdictKind,
 };
 use super::verdict::parse_verdict;
 
@@ -290,4 +290,79 @@ fn a_ruling_survives_a_dropped_trailing_round_and_stays_binding() {
     assert_eq!(l.binding_rulings(Role::Main).len(), 1);
     assert_eq!(l.binding_rulings(Role::Reviewer).len(), 1);
     assert_eq!((l.exec_time_ms, l.cost_usd_micros), (450, 5));
+}
+
+// ---- Phase 3a: replay across human notes (AC-P3a-14) ----
+
+fn note(text: &str, target: Option<Role>) -> ReviewPayload {
+    HumanNote {
+        text: text.into(),
+        target,
+    }
+    .into()
+}
+
+/// Insert `n` before the event at `at`. The driver writes a note just
+/// before the `turn_sent` it rides on, so these are every legal position.
+fn with_note_at(log: &[ReviewPayload], at: usize, n: ReviewPayload) -> Vec<ReviewPayload> {
+    let mut out = log.to_vec();
+    out.insert(at, n);
+    out
+}
+
+/// AC-P3a-14: notes (broadcast and each target) placed before main's
+/// `turn_sent`, between main's and the reviewer's `turn_sent` (a
+/// reviewer-prompt note), and after the seal — replay equals live, and
+/// the per-side unseen queues match.
+#[test]
+fn sealed_logs_with_notes_replay_equal_to_live() {
+    let log = escalated_log();
+    let positions: Vec<usize> = (0..=log.len())
+        .filter(|&i| i == log.len() || matches!(log[i], ReviewPayload::TurnSent { .. }))
+        .collect();
+    assert!(positions.len() >= 7, "covers main and reviewer prompts");
+    for target in [None, Some(Role::Main), Some(Role::Reviewer)] {
+        for &at in &positions {
+            let l = with_note_at(&log, at, note("n", target));
+            assert_eq!(fold_rounds(&l).unwrap(), live(&l), "at {at} {target:?}");
+        }
+    }
+    // Two notes on one log, mixed with a held ruling, still replay equal.
+    let mut mixed = with_note_at(&log, 1, note("a", None));
+    mixed.push(ruling("F1", RulingDecision::Drop));
+    mixed.push(note("b", Some(Role::Reviewer)));
+    assert_eq!(fold_rounds(&mixed).unwrap(), live(&mixed));
+    let l = fold_rounds(&mixed).unwrap();
+    assert!(l.unseen_notes(Role::Main).is_empty(), "a was delivered");
+    let texts: Vec<_> = l
+        .unseen_notes(Role::Reviewer)
+        .iter()
+        .map(|n| &n.text)
+        .collect();
+    assert_eq!(texts, ["b"]);
+}
+
+/// A note carries no round: it survives the drop of an unsealed trailing
+/// round, and that round's `turn_sent` does not count as delivery, so the
+/// re-run round carries it again (mirror of the ruling case above).
+#[test]
+fn a_note_survives_a_dropped_trailing_round_and_stays_unseen() {
+    let mut log = escalated_log();
+    log.extend([
+        note("main-side", None),
+        sent(4, Role::Main),
+        note("reviewer-side", Some(Role::Reviewer)),
+        sent(4, Role::Reviewer),
+        reject_f1(4, cum(450, 5)),
+    ]);
+    let l = fold_rounds(&log).unwrap();
+    assert_eq!(l.round, 3, "round 4 is re-run");
+    let main: Vec<_> = l.unseen_notes(Role::Main).iter().map(|n| &n.text).collect();
+    let rev: Vec<_> = l
+        .unseen_notes(Role::Reviewer)
+        .iter()
+        .map(|n| &n.text)
+        .collect();
+    assert_eq!(main, ["main-side"]);
+    assert_eq!(rev, ["main-side", "reviewer-side"]);
 }

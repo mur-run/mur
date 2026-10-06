@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use super::constants::{REJECT_ESCALATION_THRESHOLD, ROUND_STUCK_AFTER_UNCHANGED_ROUNDS};
-use super::schema::{FindingStatus, Mode, ReviewPayload, Role, RulingDecision, Severity};
+use super::schema::{
+    FindingStatus, HumanNote, Mode, ReviewPayload, Role, RulingDecision, Severity,
+};
 
 /// One finding, as the ledger tracks it (§3.3).
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +86,9 @@ pub struct Ledger {
     /// A `ruling` pushes to both; a `turn_sent { to }` clears that role's
     /// list (P2-§5.3 binding note). Event-derived, so replay matches.
     unseen_rulings: [Vec<RulingRecord>; 2],
+    /// Human notes each role has not yet been sent, indexed by
+    /// [`role_slot`] (P3a-§6.1). Same clear rule as `unseen_rulings`.
+    unseen_notes: [Vec<HumanNote>; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +151,12 @@ impl Ledger {
         &self.unseen_rulings[role_slot(role)]
     }
 
+    /// Human notes not yet delivered to `role` (P3a-§6.1).
+    #[allow(dead_code)] // wired in PR 3 (Task 5–7)
+    pub fn unseen_notes(&self, role: Role) -> &[HumanNote] {
+        &self.unseen_notes[role_slot(role)]
+    }
+
     #[allow(dead_code)] // not wired yet: §6 /rule and §3.4 rebuttal
     pub fn finding(&self, id: &str) -> Option<&Finding> {
         self.findings.iter().find(|f| f.id == id)
@@ -190,6 +201,7 @@ impl Ledger {
             }
             ReviewPayload::TurnSent { to, .. } => {
                 self.unseen_rulings[role_slot(*to)].clear();
+                self.unseen_notes[role_slot(*to)].clear();
             }
             ReviewPayload::Verdict {
                 round, cumulative, ..
@@ -286,7 +298,21 @@ impl Ledger {
                     }
                 }
             }
-            ReviewPayload::HumanNote { .. } => {}
+            ReviewPayload::HumanNote { text, target } => {
+                // P3a-§6.1: broadcast queues for both sides, `@` for one.
+                let note = HumanNote {
+                    text: text.clone(),
+                    target: *target,
+                };
+                match target {
+                    Some(role) => self.unseen_notes[role_slot(*role)].push(note),
+                    None => {
+                        for unseen in &mut self.unseen_notes {
+                            unseen.push(note.clone());
+                        }
+                    }
+                }
+            }
             ReviewPayload::Ruling {
                 finding,
                 decision,
