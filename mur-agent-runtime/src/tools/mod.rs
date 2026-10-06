@@ -1,7 +1,7 @@
 pub mod bash;
 pub mod bash_control;
 pub mod bash_jobs;
-mod denial;
+pub(crate) mod denial;
 pub mod edit_file;
 pub mod fleet_run;
 pub(crate) mod fs_policy;

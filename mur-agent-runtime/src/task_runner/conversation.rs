@@ -393,18 +393,62 @@ impl TaskRunner {
         let Some((session, roots)) = &self.session_cwd else {
             return;
         };
+        let mut refused: Option<std::path::PathBuf> = None;
         let entitled = requested.and_then(|req| match std::fs::canonicalize(req) {
             Ok(c) if crate::tools::fs_policy::under_any_or_worktree(roots, &c) => Some(c),
             Ok(_) => {
                 tracing::warn!(cwd = %req.display(), "turn cwd outside entitlements; keeping conversation cwd");
+                refused = Some(req.to_path_buf());
                 None
             }
             Err(_) => {
                 tracing::warn!(cwd = %req.display(), "turn cwd does not exist; keeping conversation cwd");
+                refused = Some(req.to_path_buf());
                 None
             }
         });
         session.begin_turn(turn, parent, entitled);
+        // Record the refusal where the prompt and the reply can both see it.
+        // Silent fallback is the bug: the agent then works in the wrong
+        // directory and asks the user where their project is (channel
+        // 01a11025). The agent dir is the session home (`SessionCwd::new`
+        // is given `agent_home` in production); that is where `running.lock`
+        // and `profile.yaml` live.
+        let mut table = self.refused_cwd.lock().unwrap_or_else(|e| e.into_inner());
+        match refused {
+            Some(requested) => {
+                let actual = session.for_turn(turn);
+                let why = crate::tools::denial::classify_cwd_denial(&requested, session.home());
+                table.insert(
+                    turn.to_string(),
+                    super::RefusedCwd {
+                        requested,
+                        actual,
+                        why,
+                    },
+                );
+            }
+            None => {
+                table.remove(turn);
+            }
+        }
+    }
+
+    /// The note explaining turn `turn`'s refused cwd, if it had one. Peeks
+    /// (prompt assembly); [`Self::take_refused_cwd_hint`] consumes.
+    pub(super) fn refused_cwd_hint(&self, turn: &str) -> Option<String> {
+        let table = self.refused_cwd.lock().unwrap_or_else(|e| e.into_inner());
+        table.get(turn).map(|r| self.render_refused_cwd(r))
+    }
+
+    /// Remove and render turn `turn`'s refused-cwd note for the reply footer.
+    pub(super) fn take_refused_cwd_hint(&self, turn: &str) -> Option<String> {
+        let mut table = self.refused_cwd.lock().unwrap_or_else(|e| e.into_inner());
+        table.remove(turn).map(|r| self.render_refused_cwd(&r))
+    }
+
+    fn render_refused_cwd(&self, r: &super::RefusedCwd) -> String {
+        crate::tools::denial::cwd_denied_hint(&r.requested, &r.actual, &self.agent_name, &r.why)
     }
 
     /// Turn `turn`'s working directory (`None` outside a turn: the home).

@@ -70,6 +70,11 @@ impl SessionCwd {
         self.insert(id, dir);
     }
 
+    /// The directory every conversation starts in (the agent home).
+    pub fn home(&self) -> &Path {
+        self.home.as_ref()
+    }
+
     /// Turn `id`'s directory, or the home when it has none.
     pub fn for_turn(&self, id: &str) -> PathBuf {
         self.lookup(id)
