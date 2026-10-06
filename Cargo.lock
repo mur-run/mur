@@ -6658,6 +6658,7 @@ dependencies = [
  "mur-compress",
  "mur-monitor",
  "mur-open-items",
+ "mur-track",
  "notify",
  "oauth2",
  "open",
@@ -6846,6 +6847,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "mur-track"
+version = "2.91.10"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "mur-common",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

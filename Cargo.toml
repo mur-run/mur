@@ -16,6 +16,7 @@ members = [
     "mur-monitor",
     "mur-mobile-sdk",
     "mur-zfs-agent",
+    "mur-track",
     "mur-browser",
     # "mur-commander",  # separate crate — v0.2.0 released
 ]
