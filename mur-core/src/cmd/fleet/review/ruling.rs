@@ -5,8 +5,10 @@ use std::collections::BTreeSet;
 
 use super::constants::{
     ABANDON_COMMAND, LEAVE_PAUSED_KEY, RULE_COMMAND, RULE_DECISION_DROP, RULE_DECISION_FIX,
-    RULE_NOT_OPEN_HINT, RULE_USAGE_HINT, RULING_PROMPT_HINT,
+    RULE_NOT_OPEN_HINT, RULE_USAGE_HINT, RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT,
+    RULING_PROMPT_HINT,
 };
+use super::ledger::{EscalationRecord, Ledger};
 use super::schema::RulingDecision;
 
 /// A parsed `/rule` line, validated against the open set.
@@ -97,4 +99,30 @@ fn split_word(s: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some(s.split_once(char::is_whitespace).unwrap_or((s, "")))
+}
+
+/// P2-§5.1 step 3: the block shown before a ruling is read — both sides'
+/// last positions on `pending`, then the prompt. Shared by the stdin gate
+/// and the MURMUR transport so the two print the same words.
+pub(super) fn ruling_prompt_text(pending: &EscalationRecord, ledger: &Ledger) -> String {
+    let id = pending.finding_id.as_str();
+    let finding = ledger.finding(id);
+    let positions = RULING_POSITIONS
+        .replace("{id}", id)
+        .replace("{reason}", &pending.reason)
+        .replace(
+            "{issue}",
+            finding.map_or("", |f| {
+                f.last_reviewer_reason
+                    .as_deref()
+                    .unwrap_or(f.issue.as_str())
+            }),
+        )
+        .replace(
+            "{main}",
+            finding
+                .and_then(|f| f.last_reject_reason.as_deref())
+                .unwrap_or(RULING_NO_MAIN_REASON),
+        );
+    format!("{positions}{}", RULING_PROMPT.replace("{id}", id))
 }

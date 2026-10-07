@@ -138,7 +138,7 @@ fn member_role(canonical: &str, members: &[String; 2]) -> Option<Role> {
 /// print before asking again. The UI thread calls this with `Murmur`; `Stdin`
 /// decides exactly as `TerminalGate::confirm_send` does, but that gate is not
 /// refactored onto it in 3b (stdin stays byte-identical).
-#[allow(dead_code)] // wired in PR 3 (Task 5)
+#[allow(dead_code)] // wired in PR 3 (Task 7): the UI thread answers the send gate
 pub(super) fn send_answer_for(
     line: &str,
     members: &[String; 2],

@@ -24,15 +24,15 @@ use mur_common::limits::Stuck;
 use super::constants::{
     FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
     REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_RESUME_RESTARTS_ROUND,
-    REVIEW_STOP_REASON_ESCALATION, RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT,
-    RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
+    REVIEW_STOP_REASON_ESCALATION, RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT,
+    TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
 use super::loop_driver::{LoopDriverStop, run_review_loop};
 use super::note::{NoteLine, parse_note_line};
 use super::resume::{Resumable, ResumeEnd};
-use super::ruling::{is_rule_command, parse_rule_command};
+use super::ruling::{is_rule_command, parse_rule_command, ruling_prompt_text};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
 use super::wire::message_text;
 use crate::cmd::fleet::loop_run::{LoopStop, fleet_bounds};
@@ -304,26 +304,7 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
     }
 
     fn ask_ruling(&self, pending: &EscalationRecord, ledger: &Ledger) -> Result<String> {
-        let id = pending.finding_id.as_str();
-        let finding = ledger.finding(id);
-        let positions = RULING_POSITIONS
-            .replace("{id}", id)
-            .replace("{reason}", &pending.reason)
-            .replace(
-                "{issue}",
-                finding.map_or("", |f| {
-                    f.last_reviewer_reason
-                        .as_deref()
-                        .unwrap_or(f.issue.as_str())
-                }),
-            )
-            .replace(
-                "{main}",
-                finding
-                    .and_then(|f| f.last_reject_reason.as_deref())
-                    .unwrap_or(RULING_NO_MAIN_REASON),
-            );
-        (self.output)(&format!("{positions}{}", RULING_PROMPT.replace("{id}", id)))?;
+        (self.output)(&ruling_prompt_text(pending, ledger))?;
         Ok(self.wait.time(|| (self.input)())?)
     }
 

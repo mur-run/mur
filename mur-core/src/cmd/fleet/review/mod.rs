@@ -22,6 +22,8 @@ pub mod constants;
 pub mod driver;
 pub mod ledger;
 pub mod loop_driver;
+#[allow(dead_code)] // wired in PR 3 (Task 6): the worker thread constructs the transport
+pub mod murmur;
 pub mod note;
 pub mod prune;
 pub mod resume;
@@ -35,7 +37,7 @@ pub mod schema;
 pub mod session;
 pub mod settle;
 pub mod state;
-#[allow(dead_code)] // wired in PR 3 (Task 5): the MURMUR transport commits, the UI aborts
+#[allow(dead_code)] // wired in PR 4 (Task 8): the transport commits (PR 3); the UI's Esc×2 aborts
 pub mod turn_cell;
 pub mod verdict;
 pub mod wire;
