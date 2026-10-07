@@ -171,3 +171,24 @@ fn every_command_is_parsed_documented_and_offered() {
         );
     }
 }
+
+/// `/help`'s `/browser` row lists the modes, and it drifted: `live` shipped
+/// as a route while the row still read `[--add|auth|testing|automation]`.
+/// `every_command_is_parsed_documented_and_offered` cannot catch this — it
+/// only asks whether `/browser` appears at all.
+#[test]
+fn help_lists_every_browser_mode() {
+    let help = help_text();
+    // The whole help text contains `auth` elsewhere (`mur auth login`), so
+    // scope the check to the row that documents `/browser`.
+    let row = help
+        .lines()
+        .find(|l| l.contains("/browser"))
+        .expect("/help has no /browser row");
+    for mode in ["--add", "auth", "testing", "automation", "live"] {
+        assert!(
+            row.contains(mode),
+            "/help's /browser row never mentions {mode}: {row}"
+        );
+    }
+}
