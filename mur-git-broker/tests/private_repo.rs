@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // tests/private_repo.rs — real git. `T` = Duration::from_secs(DEFAULT_GIT_TIMEOUT_SECS).
 mod common;
 use mur_git_broker::{constants::*, error::BrokerError, oid::ObjectFormat, repo::PrivateRepo};

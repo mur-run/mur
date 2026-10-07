@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // tests/ancestry.rs — real git.
 use mur_git_broker::{
     ancestry::judge, error::BrokerError, oid::*, policy::BrokerLimits, repo::PrivateRepo,

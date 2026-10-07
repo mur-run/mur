@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // tests/prefetch.rs — real git; remote is a local bare repo.
 use mur_git_broker::{error::BrokerError, oid::*, policy::*, prefetch::*, repo::PrivateRepo};
 use std::{

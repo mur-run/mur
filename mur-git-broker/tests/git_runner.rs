@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use mur_git_broker::{constants::*, git::*};
 use std::time::Duration;
 mod common;

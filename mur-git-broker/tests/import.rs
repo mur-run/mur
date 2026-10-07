@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // tests/import.rs — real git.
 use mur_git_broker::{
     constants::*,
