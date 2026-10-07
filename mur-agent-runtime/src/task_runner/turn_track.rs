@@ -377,6 +377,64 @@ mod tests {
         assert_eq!(std::fs::read_to_string(project.join("a.txt")).unwrap(), "a");
     }
 
+    /// The undo is the safety net, the edits are the deliverable: when the
+    /// snapshot cannot be written (here a plain file squats on the store's
+    /// `edits/` dir), the promote still lands and the track is still
+    /// destroyed — only the undo manifest is missing.
+    #[test]
+    fn failed_snapshot_does_not_block_promote() {
+        let td = tempfile::tempdir().unwrap();
+        let project = mur_track::turn::canonicalize(td.path()).unwrap();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&project)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        git(&["init", "-q"]);
+        std::fs::write(project.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        // Untracked, so the track (cut from HEAD) never sees it; it only
+        // blocks `create_dir_all(<home>/edits/cas)`.
+        std::fs::write(project.join(mur_track::undo::EDITS_DIR), "squat").unwrap();
+
+        let cwd = crate::tools::fs_policy::SessionCwd::new(project.clone());
+        let runner = TaskRunner::new_stub_echo()
+            .with_tools(vec![Arc::new(
+                crate::tools::write_file::WriteFileTool::new_for_test(
+                    cwd.clone(),
+                    mur_common::agent::FilesystemEntitlement::default(),
+                ),
+            )])
+            .with_session_cwd(cwd.clone(), vec![project.to_string_lossy().into_owned()]);
+        cwd.begin_turn("t1", None, Some(project.clone()));
+        let open = runner.open_turn_track("t1").expect("track at a repo root");
+        let track_dir = open.track.path().to_path_buf();
+        std::fs::write(track_dir.join("a.txt"), "edited").unwrap();
+        let mut ledger = crate::turn_ledger::TurnLedger::default();
+        runner.close_turn_track("t1", open, &mut ledger);
+
+        assert_eq!(
+            std::fs::read_to_string(project.join("a.txt")).unwrap(),
+            "edited",
+            "promote landed despite the failed snapshot"
+        );
+        assert_eq!(
+            ledger.files_changed.as_deref(),
+            Some(&["a.txt".to_string()][..])
+        );
+        assert!(ledger.track_kept.is_none());
+        assert!(!track_dir.exists(), "track destroyed");
+        assert!(
+            project.join(mur_track::undo::EDITS_DIR).is_file(),
+            "the squatter is untouched: no store, no manifest"
+        );
+    }
+
     #[test]
     fn no_track_outside_a_repo_root() {
         let td = tempfile::tempdir().unwrap();
