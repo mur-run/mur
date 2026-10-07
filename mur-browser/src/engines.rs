@@ -128,9 +128,11 @@ pub fn default_engine_args(
 /// `--headless` to add so a record run can start on a cache that holds only
 /// the headless shell, or nothing when it must not be added.
 ///
-/// `mur browser setup --only-shell` installs the shell and NOT the ~180 MiB
-/// full build, so "setup succeeded, the browser downloaded" and "record
-/// cannot launch" were both true at once — the user's report. For a run that
+/// A cache populated by an older `mur browser setup` (which passed
+/// `--only-shell`) holds the shell and NOT the ~180 MiB full build, so
+/// "setup succeeded, the browser downloaded" and "record cannot launch" were
+/// both true at once — the user's report. Current setup installs both, but
+/// such caches still exist in the wild. For a run that
 /// never needs a visible window (test / automation) the shell IS the browser,
 /// so the launch is turned headless instead of refused.
 ///

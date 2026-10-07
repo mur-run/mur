@@ -57,15 +57,16 @@ pub fn version_line(stdout: &[u8]) -> Option<String> {
 /// Browser-install command for the pinned MCP package. `install-browser` is
 /// the package's own alias for `playwright install` against the
 /// playwright-core it bundles, so it fetches the exact revision it wants.
-/// `--only-shell` skips full Chrome for Testing (~180 MiB): headless launches
-/// run the shell via `--executable-path` (see `mur_browser::chromium`).
+/// No `--only-shell`: bare `chromium` fetches both the headless shell
+/// (replay, launched via `--executable-path`, see `mur_browser::chromium`)
+/// and the full Chrome for Testing build a headed `mur browser auth` window
+/// needs. Shell-only left auth refusing right after a successful setup.
 pub fn install_argv() -> Vec<String> {
     [
         "npx",
         "-y",
         mur_browser::PLAYWRIGHT_MCP_PKG,
         "install-browser",
-        "--only-shell",
         "chromium",
     ]
     .map(str::to_owned)
@@ -221,6 +222,15 @@ pub fn l1_check(
     })
 }
 
+/// Newest completed full Chromium build, the one a headed `auth` / `record`
+/// window launches. The headless shell cannot open a window.
+pub fn full_build(dir: &Path) -> Option<String> {
+    installed_builds(dir, mur_browser::chromium::FULL_PREFIX)
+        .into_iter()
+        .next()
+        .map(|(_, name)| name)
+}
+
 /// The build headless replay will launch: the newest headless shell with its
 /// binary present (passed via `--executable-path`), else full Chromium (the
 /// package default). A shell folder whose binary cannot be found does not
@@ -233,10 +243,7 @@ pub fn usable_build(dir: &Path) -> Option<String> {
             .and_then(|rel| rel.components().next())
             .map(|c| c.as_os_str().to_string_lossy().into_owned());
     }
-    installed_builds(dir, mur_browser::chromium::FULL_PREFIX)
-        .into_iter()
-        .next()
-        .map(|(_, name)| name)
+    full_build(dir)
 }
 
 /// Concatenate the `text` parts of an MCP tool result.
@@ -480,7 +487,6 @@ mod tests {
                 "-y",
                 mur_browser::PLAYWRIGHT_MCP_PKG,
                 "install-browser",
-                "--only-shell",
                 "chromium"
             ]
         );
@@ -564,8 +570,8 @@ mod tests {
     }
 
     #[test]
-    fn install_is_shell_only() {
-        assert!(install_argv().contains(&"--only-shell".to_owned()));
+    fn install_includes_the_full_build() {
+        assert!(!install_argv().contains(&"--only-shell".to_owned()));
         assert_eq!(install_argv().last().map(String::as_str), Some("chromium"));
     }
 
