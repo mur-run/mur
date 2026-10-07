@@ -68,6 +68,10 @@ mod loop_driver_tests;
 mod note_tests;
 
 #[cfg(test)]
+#[path = "note_murmur_tests.rs"]
+mod note_murmur_tests;
+
+#[cfg(test)]
 #[path = "no_tampering_tests.rs"]
 mod no_tampering_tests;
 

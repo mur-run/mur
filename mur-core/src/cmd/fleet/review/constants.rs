@@ -227,6 +227,10 @@ pub const REVIEW_STOP_REASON_DELETED: &str = "deleted";
 /// or crashed session.
 pub const REVIEW_STOP_REASON_PRUNED: &str = "pruned";
 
+/// P3b-§5.2: the only way to stop at the MURMUR send prompt. Bare `q` is a
+/// note there; on stdin `q` stops and this word is an unknown command.
+pub const MURMUR_STOP_COMMAND: &str = "/stop";
+
 /// The file whose presence `a2a_dial` treats as "the agent is up". The
 /// session preflight checks the same file so it agrees with the first send.
 pub const RUNNING_LOCK: &str = "running.lock";

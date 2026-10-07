@@ -8,12 +8,26 @@
 //! session members — a resolver returns its input unchanged when nothing
 //! matches, so its answer alone is not proof of membership.
 
+use std::collections::BTreeSet;
+
 use super::constants::{
-    COMMAND_PREFIX, NOTE_COMMAND, NOTE_USAGE_HINT, RULE_COMMAND, TARGET_ALIAS_MAIN,
-    TARGET_ALIAS_REVIEWER, TARGET_NOT_FOUND_HINT, TARGET_NOTE_PREFIX, TARGET_NOTE_USAGE_HINT,
-    UNKNOWN_COMMAND_HINT,
+    COMMAND_PREFIX, MURMUR_STOP_COMMAND, NOTE_COMMAND, NOTE_USAGE_HINT, RULE_COMMAND,
+    TARGET_ALIAS_MAIN, TARGET_ALIAS_REVIEWER, TARGET_NOT_FOUND_HINT, TARGET_NOTE_PREFIX,
+    TARGET_NOTE_USAGE_HINT, UNKNOWN_COMMAND_HINT,
 };
+use super::driver::SendAnswer;
+use super::ruling::{is_rule_command, parse_rule_command};
 use super::schema::{HumanNote, Role};
+use super::session::is_send_answer;
+
+/// Where the send-prompt line came from (P3b-§5.3). `Stdin` is the terminal
+/// session and is byte-for-byte what P3a shipped; `Murmur` is the in-app
+/// review, whose input box has no way to "ask again" for an unknown name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineMode {
+    Stdin,
+    Murmur,
+}
 
 /// What one send-prompt line means for notes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,13 +47,35 @@ pub fn parse_note_line(
     members: &[String; 2],
     resolve: impl Fn(&str) -> String,
 ) -> NoteLine {
+    parse_note_line_mode(line, members, LineMode::Stdin, resolve)
+}
+
+/// [`parse_note_line`] for either input surface. The only difference:
+/// `@<unknown> <text>` is an N3 hint on `Stdin` and a broadcast note of the
+/// whole typed line on `Murmur` (P3b-§5.2, Q11).
+pub fn parse_note_line_mode(
+    line: &str,
+    members: &[String; 2],
+    mode: LineMode,
+    resolve: impl Fn(&str) -> String,
+) -> NoteLine {
     let line = line.trim();
     let (head, rest) = match line.split_once(char::is_whitespace) {
         Some((head, rest)) => (head, rest.trim()),
         None => (line, ""),
     };
     if let Some(name) = head.strip_prefix(TARGET_NOTE_PREFIX) {
-        return target_note(name, rest, members, resolve);
+        return match target_note(name, rest, members, resolve) {
+            NoteLine::Hint(_)
+                if mode == LineMode::Murmur && !name.is_empty() && !rest.is_empty() =>
+            {
+                NoteLine::Note(HumanNote {
+                    text: line.to_string(),
+                    target: None,
+                })
+            }
+            other => other,
+        };
     }
     if !head.starts_with(COMMAND_PREFIX) || head == RULE_COMMAND {
         return NoteLine::NotNote;
@@ -96,4 +132,43 @@ fn member_role(canonical: &str, members: &[String; 2]) -> Option<Role> {
         (Some((role, _)), None) => Some(role),
         _ => None,
     }
+}
+
+/// One send-prompt line → the driver's answer (P3b-§5.2, D2), or the hint to
+/// print before asking again. The UI thread calls this with `Murmur`; `Stdin`
+/// decides exactly as `TerminalGate::confirm_send` does, but that gate is not
+/// refactored onto it in 3b (stdin stays byte-identical).
+#[allow(dead_code)] // wired in PR 3 (Task 5)
+pub(super) fn send_answer_for(
+    line: &str,
+    members: &[String; 2],
+    open: &BTreeSet<String>,
+    mode: LineMode,
+    resolve: impl Fn(&str) -> String,
+) -> Result<SendAnswer, String> {
+    if is_rule_command(line.trim()) {
+        return parse_rule_command(line, open).map(SendAnswer::SendWithRuling);
+    }
+    if mode == LineMode::Murmur && line.trim() == MURMUR_STOP_COMMAND {
+        return Ok(SendAnswer::Stop);
+    }
+    match parse_note_line_mode(line, members, mode, resolve) {
+        NoteLine::Note(note) => Ok(SendAnswer::Note(note)),
+        NoteLine::Hint(hint) => Err(hint),
+        NoteLine::NotNote => Ok(match mode {
+            LineMode::Stdin if is_send_answer(line) => SendAnswer::Send,
+            LineMode::Stdin => SendAnswer::Stop,
+            LineMode::Murmur if is_murmur_send(line) => SendAnswer::Send,
+            LineMode::Murmur => SendAnswer::Note(HumanNote {
+                text: line.trim().to_string(),
+                target: None,
+            }),
+        }),
+    }
+}
+
+/// MURMUR's Enter / `y` / `yes`. There is no EOF in an input box, so an
+/// empty line is consent here (it is the Enter key) and never on stdin.
+fn is_murmur_send(line: &str) -> bool {
+    matches!(line.trim().to_lowercase().as_str(), "" | "y" | "yes")
 }

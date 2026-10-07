@@ -361,7 +361,7 @@ pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
 
 /// Enter (empty line) or `y`/`yes` sends; anything else, including EOF,
 /// declines — an unreadable answer never sends.
-fn is_send_answer(line: &str) -> bool {
+pub(super) fn is_send_answer(line: &str) -> bool {
     if line.is_empty() {
         return false; // EOF
     }
