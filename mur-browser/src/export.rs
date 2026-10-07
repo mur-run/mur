@@ -178,6 +178,10 @@ mod tests {
             mode,
             profile: None,
             recorded_at: chrono::Utc::now(),
+            description: None,
+            tags: vec![],
+            replayed_at: None,
+            replay_count: 0,
             steps,
         }
     }

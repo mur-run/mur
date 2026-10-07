@@ -29,6 +29,10 @@ fn recorded() -> Run {
         mode: Mode::Test,
         profile: None,
         recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: Vec::new(),
+        replayed_at: None,
+        replay_count: 0,
         steps: vec![
             step(1, &["role:button[name=\"Old\"]"]),
             step(2, &["role:link[name=\"Next\"]"]),
@@ -139,12 +143,26 @@ fn only_verified_heals_are_written_back() {
 }
 
 #[test]
-fn unverified_only_leaves_actions_yaml_byte_identical() {
-    let (temp, before) = home();
+fn unverified_only_bumps_stats_but_keeps_steps_identical() {
+    let (temp, _) = home();
     let heals = vec![event(3, HealStatus::Unverified)];
     finish(temp.path(), RUN, recorded(), report(heals, false)).unwrap();
-    assert_eq!(actions(temp.path()), before);
+    let saved = from_yaml(&actions(temp.path())).unwrap();
+    assert_eq!(saved.steps, recorded().steps, "no heal applied");
+    assert_eq!(saved.replay_count, 1);
+    assert!(saved.replayed_at.is_some());
     assert_eq!(saved_report(temp.path()).written_back, 0);
+}
+
+#[test]
+fn green_replay_bumps_count_and_sets_replayed_at() {
+    let (temp, _) = home();
+    let mut run = recorded();
+    run.replay_count = 2;
+    finish(temp.path(), RUN, run, report(vec![], false)).unwrap();
+    let saved = from_yaml(&actions(temp.path())).unwrap();
+    assert_eq!(saved.replay_count, 3);
+    assert!(saved.replayed_at.is_some());
 }
 
 #[test]

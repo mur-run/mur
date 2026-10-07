@@ -137,6 +137,10 @@ fn locator_for_verify_visible_uses_role_and_accessible_name() {
         mode: Mode::Test,
         profile: None,
         recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: vec![],
+        replayed_at: None,
+        replay_count: 0,
         steps: vec![],
     });
     let req = tools_call(
@@ -161,6 +165,10 @@ fn locator_for_verify_visible_keeps_snapshot_fallbacks() {
         mode: Mode::Test,
         profile: None,
         recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: vec![],
+        replayed_at: None,
+        replay_count: 0,
         steps: vec![],
     });
     hook.snapshot =
@@ -184,6 +192,10 @@ fn locator_for_accepts_target_as_ref() {
         mode: Mode::Automation,
         profile: None,
         recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: vec![],
+        replayed_at: None,
+        replay_count: 0,
         steps: vec![],
     });
     hook.snapshot = crate::locator::parse_snapshot("- button \"Add to cart\" [ref=e5]");
@@ -269,6 +281,10 @@ fn yaml_round_trip_matches_spec_shape() {
         recorded_at: chrono::DateTime::parse_from_rfc3339("2026-09-10T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc),
+        description: None,
+        tags: vec![],
+        replayed_at: None,
+        replay_count: 0,
         steps: vec![step(
             Action::Fill,
             &["role:searchbox[name=\"搜尋\"]", "testid:search-input"],
@@ -297,6 +313,10 @@ fn record_hook_persists_successful_navigation_as_first_step() {
         mode: Mode::Test,
         profile: None,
         recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: vec![],
+        replayed_at: None,
+        replay_count: 0,
         steps: vec![],
     });
     assert!(hook.run().steps.is_empty());
@@ -340,6 +360,10 @@ async fn proxy_does_not_record_mcp_tool_failures() {
             mode: Mode::Test,
             profile: None,
             recorded_at: chrono::Utc::now(),
+            description: None,
+            tags: vec![],
+            replayed_at: None,
+            replay_count: 0,
             steps: vec![],
         },
         actions.clone(),
@@ -398,6 +422,10 @@ async fn proxy_records_intent_and_successful_navigation_to_yaml() {
             mode: Mode::Test,
             profile: None,
             recorded_at: chrono::Utc::now(),
+            description: None,
+            tags: vec![],
+            replayed_at: None,
+            replay_count: 0,
             steps: vec![],
         },
         actions.clone(),
@@ -477,6 +505,10 @@ async fn proxy_snapshot_then_click_records_stable_locator_candidates() {
             mode: Mode::Test,
             profile: None,
             recorded_at: chrono::Utc::now(),
+            description: None,
+            tags: vec![],
+            replayed_at: None,
+            replay_count: 0,
             steps: vec![],
         },
         actions.clone(),
@@ -522,4 +554,51 @@ async fn proxy_snapshot_then_click_records_stable_locator_candidates() {
         ]
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+const LEGACY_RUN_YAML: &str = "\
+name: legacy
+mode: test
+recorded_at: 2026-10-01T08:00:00Z
+steps: []
+";
+
+#[test]
+fn legacy_yaml_without_new_fields_round_trips_byte_identical() {
+    let run = from_yaml(LEGACY_RUN_YAML).unwrap();
+    assert_eq!(to_yaml(&run).unwrap(), LEGACY_RUN_YAML);
+}
+
+#[test]
+fn new_fields_parse_and_default() {
+    let bare = from_yaml(LEGACY_RUN_YAML).unwrap();
+    assert_eq!(bare.description, None);
+    assert!(bare.tags.is_empty());
+    assert_eq!(bare.replayed_at, None);
+    assert_eq!(bare.replay_count, 0);
+
+    let full = from_yaml(
+        "\
+name: full
+mode: automation
+recorded_at: 2026-10-01T08:00:00Z
+description: 每日登入
+tags:
+- daily
+- shop
+replayed_at: 2026-10-05T09:30:00Z
+replay_count: 7
+steps: []
+",
+    )
+    .unwrap();
+    assert_eq!(full.description.as_deref(), Some("每日登入"));
+    assert_eq!(full.tags, ["daily", "shop"]);
+    assert_eq!(
+        full.replayed_at.unwrap().to_rfc3339(),
+        "2026-10-05T09:30:00+00:00"
+    );
+    assert_eq!(full.replay_count, 7);
+    // And it survives a round trip.
+    assert_eq!(from_yaml(&to_yaml(&full).unwrap()).unwrap(), full);
 }

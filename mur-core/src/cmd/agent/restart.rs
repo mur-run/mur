@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 use super::attest::verify_runtime_at;
+use super::start::tail_of;
 use super::{pid_alive, resolve_bin_dir, resolve_mur_home, restart_confirm, stale};
 
 /// Extra grace period added on top of the runtime's `stop_timeout_secs` before
@@ -274,7 +275,75 @@ fn report_unexamined(agents_dir: &Path) {
             "not running, service still installed: {} — each starts again at your next login; `mur agent start <name>` to bring one up now",
             should_be_running.join(", ")
         );
+        // …unless it is not "stopped" at all. A service-managed agent whose
+        // runtime dies at startup is respawned by launchd every few seconds
+        // and never writes a `running.lock`, so the bulk selectors never see
+        // it and the line above actively misleads: the agent will NOT come
+        // back at the next login, it is already failing. The runtime's own
+        // error only lands in the service log, which the user is not told
+        // about — the field report behind this is `mur update
+        // --restart-agents` reporting nothing while the concierge crash-looped
+        // on an MCP pin drift. Quote the error here; it is the only place a
+        // lock-less agent's failure can surface.
+        // Only macOS routes the unit's stderr to a file we can tail; on Linux
+        // it goes to the journal, which `mur agent start` already points at.
+        #[cfg(target_os = "macos")]
+        for name in &should_be_running {
+            let log = super::service::service_stderr_log(name);
+            if let Some(report) = service_failure_report(name, &log) {
+                println!("{report}");
+            }
+        }
     }
+}
+
+/// The user-facing explanation for a service-managed agent that is crash-looping
+/// rather than stopped, or `None` when its log holds no failure.
+///
+/// Reads only the tail: the log is append-forever and the fatal line is the
+/// last thing the dying runtime wrote. `tail` is injected as a path (not a
+/// name) so this is testable without `/tmp`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn service_failure_report(name: &str, log: &Path) -> Option<String> {
+    let last_error = last_error_line(&tail_of(log, 16_384))?;
+    Some(format!(
+        "  ✗ '{name}' is NOT merely stopped — its runtime is failing at startup \
+         (launchd keeps respawning it):\n      {last_error}\n      full log: tail {}",
+        log.display()
+    ))
+}
+
+/// The last hard `Error:` line in a log tail, stripped of ANSI colour codes.
+///
+/// Matches the runtime's own fatal shape (`anyhow` prints `Error: …` on exit),
+/// not `WARN`/`ERROR`-level tracing lines — a sealed agent logs several
+/// warnings on every healthy start, and reporting one of those as the cause
+/// would send the user after the wrong thing.
+fn last_error_line(tail: &str) -> Option<String> {
+    tail.lines()
+        .map(strip_ansi)
+        .rfind(|l| l.trim_start().starts_with("Error:"))
+        .map(|l| l.trim().to_string())
+}
+
+/// Drop ANSI escape sequences — the runtime writes coloured output and the
+/// service log keeps the escapes verbatim.
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // CSI sequence: ESC '[' … final byte in @-~
+        for c in chars.by_ref() {
+            if ('@'..='~').contains(&c) && c != '[' {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Split the lock-less agents into `(stopped, should_be_running)`.
