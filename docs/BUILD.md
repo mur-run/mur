@@ -81,6 +81,27 @@ Alternatives: take sccache off `PATH` for the build, or pass
 `GGML_CCACHE=OFF` through the CMake environment. Outside a sandbox nothing
 needs changing.
 
+### `ort-sys` build script fails inside a sandbox (ONNX Runtime cache dir)
+
+**Symptom** — `cargo build` / `clippy` fails in `ort-sys`'s build script while
+extracting the prebuilt ONNX Runtime archive. A half-written leftover from an
+earlier interrupted download can make a retry fail the same way.
+
+**Cause** — `ort-sys` unpacks the download into `~/Library/Caches/ort.pyke.io`
+on macOS, which a sandboxed shell may not write.
+
+**Fix** — point it at a writable directory (MUR agents should use `$TMPDIR`):
+
+```bash
+mkdir -p "$TMPDIR/ort-cache"
+ORT_CACHE_DIR="$TMPDIR/ort-cache" cargo clippy --all --all-targets --no-deps --locked -- -D warnings
+```
+
+`ORT_CACHE_DIR` is read first by `ort-sys` (`src/internal/dirs.rs`), ahead of
+the platform default. If a previous run was interrupted, delete the partial
+directory it left under that cache before retrying. Outside a sandbox nothing
+needs changing.
+
 ### Stale crate after switching branches (`cannot find function … in module`)
 
 An `E0425` on a symbol that plainly exists in the source usually means stale
