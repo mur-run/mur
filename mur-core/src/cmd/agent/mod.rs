@@ -138,6 +138,9 @@ pub use stats::{cmd_logs, cmd_stats};
 pub use who::cmd_who;
 mod pending;
 mod queue_cmd;
+mod turn;
+#[allow(unused_imports)]
+pub use turn::{cmd_turn_list, cmd_turn_undo};
 pub mod wizard;
 #[allow(unused_imports)]
 pub use pending::{cmd_pending_act, cmd_pending_list};

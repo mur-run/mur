@@ -672,6 +672,17 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_snapshot_show(&name)?
             }
         },
+        AgentAction::Turn { action } => match action {
+            crate::cli::agent::AgentTurnAction::List { name, json } => {
+                cmd::agent::cmd_turn_list(&name, json)?
+            }
+            crate::cli::agent::AgentTurnAction::Undo {
+                name,
+                turn,
+                dry_run,
+                yes,
+            } => cmd::agent::cmd_turn_undo(&name, &turn, dry_run, yes)?,
+        },
         AgentAction::Reconnect { name } => cmd::agent::cmd_agent_reconnect(&name)?,
         AgentAction::Apply { file } => cmd::agent::cmd_agent_apply(&file)?,
         AgentAction::Pending { name, action } => match action {

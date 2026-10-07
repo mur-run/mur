@@ -69,20 +69,70 @@ pub fn installed_entry(install_dir: &Path) -> Option<PathBuf> {
     entry.is_file().then_some(entry)
 }
 
+/// Directories a bare `node` is resolved against, in order, BEFORE the
+/// inherited `PATH`. Deliberately the same fixed list the agent seal searches
+/// to turn `allow-spawn node` into an exec grant
+/// (`mur-agent-runtime`'s `exec_dirs::standard_exec_dirs`) — the two must
+/// answer the same question or the grant names one binary and the spawn runs
+/// another.
+///
+/// That drift is the bug this exists for: a version-manager shim dir early on
+/// the user's own `PATH` (nvm, volta, BitL, …) owns `node`, the seal never
+/// granted that copy, and `mur browser record --headless` died with
+/// `Operation not permitted (os error 1)` under a profile that plainly lists
+/// `node` as allowed.
+///
+/// Trade-off, same as the runtime's: under a seal the MCP server runs the
+/// `node` from these fixed dirs, not the version a shim dir selected.
+/// The interpreter's file name: Windows needs the `.exe` suffix to find it.
+const NODE_BIN: &str = if cfg!(windows) { "node.exe" } else { "node" };
+
+const NODE_SEARCH_DIRS: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+
 /// Program and argv for the server. Pure, so the choice is testable without
 /// Node or an install on disk.
 ///
 /// `node <script>`, not the script itself: its `#!/usr/bin/env node` would
-/// consult PATH for the interpreter. `node` here is still a bare name, so it
-/// resolves through the child PATH the runtime builds from the seal's spawn
-/// search dirs (#1611), the same `node` the seal allows.
+/// consult PATH for the interpreter. The interpreter is resolved through
+/// [`node_program`], so the path spawned is the one the seal granted.
 pub fn launch_argv(entry: &Path, extra_args: &[String]) -> (String, Vec<String>) {
     (
-        "node".to_owned(),
+        node_program(&NODE_SEARCH_DIRS.map(PathBuf::from), &|p| {
+            is_executable_file(p)
+        }),
         std::iter::once(entry.display().to_string())
             .chain(extra_args.iter().cloned())
             .collect(),
     )
+}
+
+/// The `node` to exec: the first executable `node` in `search_dirs`, else the
+/// bare name so a machine that keeps Node somewhere else still works through
+/// `PATH` (unsealed runs, Windows, a custom prefix).
+///
+/// Pure over `search_dirs` and `is_exec` so the ordering contract is testable
+/// without a real Node install.
+fn node_program(search_dirs: &[PathBuf], is_exec: &dyn Fn(&Path) -> bool) -> String {
+    search_dirs
+        .iter()
+        .map(|d| d.join(NODE_BIN))
+        .find(|p| is_exec(p))
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| NODE_BIN.to_owned())
+}
+
+/// Is `p` a regular file with an execute bit? (Existence alone is not enough:
+/// a Homebrew keg can leave a non-executable stub behind.)
+fn is_executable_file(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
 }
 
 /// The installed entry under `mur_home`, or an error that says how to fix it.
@@ -179,9 +229,51 @@ mod tests {
     #[test]
     fn installed_launch_is_node_on_the_script_with_no_npx() {
         let (prog, args) = launch_argv(Path::new("/i/cli.js"), &s(&["--headless"]));
-        assert_eq!(prog, "node");
+        assert!(
+            prog == NODE_BIN || Path::new(&prog).file_name().unwrap() == NODE_BIN,
+            "{prog}"
+        );
         assert_eq!(args, s(&["/i/cli.js", "--headless"]));
         assert!(!args.iter().any(|a| a == "-y" || a.contains('@')));
+    }
+
+    /// The node-spawn bug: resolving `node` through the inherited `PATH` let a
+    /// version-manager shim dir win, and the seal had granted the fixed-dir
+    /// copy instead — `Operation not permitted (os error 1)` under a profile
+    /// that allows `node`. The program must come from the fixed search dirs,
+    /// in their order, regardless of what `PATH` says.
+    #[test]
+    fn node_comes_from_the_seal_search_dirs_in_order() {
+        let dirs = [
+            PathBuf::from("/shim/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/bin"),
+        ];
+        // Only the two non-shim dirs hold an executable node.
+        let is_exec = |p: &Path| p.starts_with("/opt/homebrew") || p.starts_with("/usr/bin");
+        let node_in = |d: &Path| d.join(NODE_BIN).display().to_string();
+        assert_eq!(node_program(&dirs, &is_exec), node_in(&dirs[1]));
+        // Earlier dirs win when they do have one.
+        assert_eq!(node_program(&dirs, &|_: &Path| true), node_in(&dirs[0]));
+    }
+
+    /// No `node` in any fixed dir is not a failure: fall back to the bare
+    /// name so an unsealed run resolves it through `PATH` as before.
+    #[test]
+    fn no_node_in_the_search_dirs_falls_back_to_the_bare_name() {
+        let dirs = [PathBuf::from("/nowhere")];
+        assert_eq!(node_program(&dirs, &|_: &Path| false), NODE_BIN);
+    }
+
+    /// A non-executable stub must not be picked: it would exec-fail at spawn.
+    /// Unix-only: Windows has no exec bit, so any file there counts.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_executable_node_is_skipped() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join(NODE_BIN), "").unwrap();
+        let dirs = [t.path().to_path_buf()];
+        assert_eq!(node_program(&dirs, &|p| is_executable_file(p)), NODE_BIN);
     }
 
     #[test]
