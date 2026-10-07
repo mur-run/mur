@@ -888,7 +888,7 @@ mur
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret ·
-│                fallback · smart · routing · effort · trash · rollback … (40+)
+│                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source)
