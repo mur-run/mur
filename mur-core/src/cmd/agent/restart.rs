@@ -322,8 +322,7 @@ fn service_failure_report(name: &str, log: &Path) -> Option<String> {
 fn last_error_line(tail: &str) -> Option<String> {
     tail.lines()
         .map(strip_ansi)
-        .filter(|l| l.trim_start().starts_with("Error:"))
-        .next_back()
+        .rfind(|l| l.trim_start().starts_with("Error:"))
         .map(|l| l.trim().to_string())
 }
 
