@@ -20,6 +20,8 @@ pub enum GitError {
     Spawn(String),
     Timeout,
     Signal,
+    /// The caller's watcher asked for the process to be killed (a budget was exceeded).
+    Tripped,
 }
 
 pub struct GitRunner {
@@ -93,7 +95,18 @@ fn drain<R: Read + Send + 'static>(mut r: R) -> std::thread::JoinHandle<Vec<u8>>
 
 /// Spawn with null stdin; drain both pipes on threads (a full pipe must not deadlock the wait);
 /// poll until the deadline, then kill.
-pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<GitOutput, GitError> {
+pub fn run_with_timeout(cmd: Command, timeout: Duration) -> Result<GitOutput, GitError> {
+    run_watched(cmd, timeout, timeout, &mut || false)
+}
+
+/// Like [`run_with_timeout`], plus `watch` is polled every `every` while the child runs; the
+/// first `true` kills the child and returns [`GitError::Tripped`].
+pub fn run_watched(
+    mut cmd: Command,
+    timeout: Duration,
+    every: Duration,
+    watch: &mut dyn FnMut() -> bool,
+) -> Result<GitOutput, GitError> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -103,6 +116,7 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<GitOutput
     let out = drain(child.stdout.take().expect("piped"));
     let err = drain(child.stderr.take().expect("piped"));
     let deadline = Instant::now() + timeout;
+    let mut next_watch = Instant::now() + every;
     let status = loop {
         match child
             .try_wait()
@@ -113,6 +127,14 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<GitOutput
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(GitError::Timeout);
+            }
+            None if Instant::now() >= next_watch => {
+                next_watch = Instant::now() + every;
+                if watch() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(GitError::Tripped);
+                }
             }
             None => std::thread::sleep(Duration::from_millis(10)),
         }

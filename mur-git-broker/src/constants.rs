@@ -43,3 +43,9 @@ pub const DEFAULT_GIT_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_PUSH_TIMEOUT_SECS: u64 = 120;
 /// Directory name of the private repo under the root the caller hands to `PrivateRepo::create`.
 pub const PRIVATE_REPO_DIR: &str = "private.git";
+/// How often a running prefetch is checked against its byte budget.
+pub const PREFETCH_WATCH_INTERVAL_MS: u64 = 100;
+/// Where an update's current remote tip is fetched to.
+pub const PREFETCH_OLD_REF: &str = "refs/prefetch/old";
+/// Prefix for the creation-base refs fetched when a push creates a new branch.
+pub const PREFETCH_BASE_REF_PREFIX: &str = "refs/prefetch/base/";
