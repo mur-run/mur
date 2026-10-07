@@ -606,8 +606,12 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                     }
                 }
                 KeyCode::Esc => {
-                    let action =
-                        esc_action(app.last_esc_at, app.streaming, app.input_text().is_empty());
+                    let action = esc_action(
+                        app.last_esc_at,
+                        app.streaming,
+                        app.input_text().is_empty(),
+                        ReviewEsc::Detached, // wired in PR 4 (Task 8)
+                    );
                     match action {
                         EscAction::Arm => {
                             app.last_esc_at = Some(std::time::Instant::now());
@@ -636,7 +640,8 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                             app.last_esc_at = None;
                             app.esc_hint = false;
                         }
-                        EscAction::Nothing => {
+                        // wired in PR 4 (Task 8): `Detached` never yields these.
+                        EscAction::Nothing | EscAction::RequestPause | EscAction::AbortTurn => {
                             app.last_esc_at = None;
                             app.esc_hint = false;
                         }
