@@ -80,6 +80,24 @@ pub async fn record(
     // added, so "did the caller choose" reads only the caller's own flags.
     let install_dir = mur_browser::server::install_dir(&mur_home()?);
     let browsers = mur_browser::chromium::system_browsers_dir();
+    // `setup --only-shell` installs the headless shell and NOT the ~180 MiB
+    // full build, so "setup succeeded, the browser downloaded" and "record
+    // cannot launch" were both true at once. A run that needs no window goes
+    // headless and the shell serves it; live mode (a human logging in) still
+    // needs the window, so it falls through to the refusal below.
+    let auto_headless = mur_browser::engines::auto_headless_args(
+        &args,
+        &install_dir,
+        browsers.as_deref(),
+        mode == Mode::Live,
+    );
+    if !auto_headless.is_empty() {
+        tracing::info!(
+            run,
+            "no full Chromium build; recording headless on the installed shell"
+        );
+        args.extend(auto_headless);
+    }
     engine_check::record_preflight(run, &args, &install_dir, browsers.as_deref())?;
     // Every mode honours `--profile` the same way replay does. Without this the
     // launch had no cookies and every authenticated page bounced to its login

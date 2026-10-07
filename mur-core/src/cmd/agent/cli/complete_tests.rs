@@ -450,3 +450,28 @@ fn channels_menu_hides_follows_the_handler_refuses() {
         "stop row names what it stops"
     );
 }
+
+/// `/browser live` is a real route in `browser_live_cmd::route`, yet the menu
+/// listed only `--add`/`auth`/`testing`/`automation` — so the one mode that
+/// persists an MCP entry was the one mode a user could not discover. The
+/// top-level guard test only checks that `/browser` itself is offered; it
+/// cannot see a missing sub-argument, which is why this names `live`
+/// explicitly.
+#[test]
+fn browser_menu_offers_live() {
+    let st = compute("/browser ", &[], &ctx(), &cur()).unwrap();
+    let words: Vec<&str> = st.items.iter().map(|i| i.display.as_str()).collect();
+    for mode in ["--add", "auth", "testing", "automation", "live"] {
+        assert!(
+            words.contains(&mode),
+            "/browser menu is missing {mode}: {words:?}"
+        );
+    }
+    let live = st.items.iter().find(|i| i.display == "live").unwrap();
+    assert_eq!(live.insert, "/browser live ");
+    assert!(
+        live.desc.contains("host"),
+        "live row must teach that it takes hosts: {:?}",
+        live.desc
+    );
+}

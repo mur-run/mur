@@ -209,6 +209,10 @@ const BROWSER_MODES: &[(&str, &str)] = &[
     ("auth", "log in once, keep an encrypted profile"),
     ("testing", "record/replay an end-to-end test"),
     ("automation", "run a repeatable browser task"),
+    (
+        "live",
+        "allow this agent these hosts, e.g. live shop.example.com",
+    ),
 ];
 /// `/search` takes free text, so the menu can only teach the flags — the
 /// query itself is typed, not completed.
@@ -258,7 +262,7 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     ("auto", "session-wide auto-approval", Args::Fixed(ON_OFF)),
     (
         "browser",
-        "browser skill hub — auth, testing, automation",
+        "browser skill hub — auth, testing, automation, live",
         Args::Fixed(BROWSER_MODES),
     ),
     ("card", "show this agent's card", Args::None),
