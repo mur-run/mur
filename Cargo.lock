@@ -6741,6 +6741,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-git-broker"
+version = "2.92.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mur-gui-core"
 version = "2.92.0"
 dependencies = [
