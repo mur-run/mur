@@ -54,6 +54,18 @@ pub struct Resumable {
     pub limits: SessionLimits,
     /// Execution time already spent, paused time excluded (AC4).
     pub active: Duration,
+    /// P3b-§8.7 / D10: the round being resumed already had a `turn_sent`
+    /// that no verdict sealed, so `fold_rounds` dropped it and main's turn
+    /// is sent again (at-least-once; no partial-round persistence).
+    pub restarts_round: bool,
+}
+
+/// True when `payloads` hold a `turn_sent` for the round after the last
+/// sealed one (`sealed_round` is `ledger.round`).
+pub(super) fn restarts_round(payloads: &[ReviewPayload], sealed_round: u32) -> bool {
+    payloads
+        .iter()
+        .any(|p| matches!(p, ReviewPayload::TurnSent { round, .. } if *round == sealed_round + 1))
 }
 
 /// Review payloads in channel order, each with its event timestamp.
@@ -229,6 +241,7 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
         ledger.apply(&paused)?;
         super::loop_driver::append(&svc, mur_home, &fleet.channel_id, &paused)?;
     }
+    let restarts = restarts_round(&payloads, ledger.round);
     Ok(Resumable {
         round: ledger.round + 1,
         fleet,
@@ -238,6 +251,7 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
         ledger,
         limits,
         active,
+        restarts_round: restarts,
     })
 }
 

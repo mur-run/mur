@@ -485,3 +485,89 @@ fn abort_after_long_hitl_wait_does_not_exhaust_deadline() {
         "nine minutes at the gate are not execution time"
     );
 }
+
+/// P3b-§8.7 / D10: a `turn_sent` of the round after the last sealed one is
+/// an unsealed turn; resume re-runs that round from main.
+#[test]
+fn restarts_round_true_after_unsealed_turn_sent() {
+    let (tmp, name) = paused_in_round_two();
+    // Round 1 sealed; the round-2 main turn was sent and then the session
+    // paused (the reviewer was offline): round 2 restarts from main.
+    let r = prepare_resume(tmp.path(), &name).unwrap();
+    assert_eq!(r.round, 2);
+    assert!(r.restarts_round, "round 2's main turn_sent is unsealed");
+}
+
+#[test]
+fn restarts_round_false_after_a_sealed_round() {
+    use crate::cmd::fleet::review::schema::{Role, VerdictKind};
+    let sealed = vec![
+        ReviewPayload::TurnSent {
+            round: 1,
+            to: Role::Main,
+            restart_note: None,
+            human_wait_ms: 0,
+        },
+        ReviewPayload::TurnSent {
+            round: 1,
+            to: Role::Reviewer,
+            restart_note: None,
+            human_wait_ms: 0,
+        },
+        ReviewPayload::Verdict {
+            round: 1,
+            kind: VerdictKind::Revise,
+            cumulative: crate::cmd::fleet::review::schema::Cumulative {
+                exec_time_ms: 0,
+                cost_usd_micros: 0,
+            },
+        },
+    ];
+    assert!(!super::restarts_round(&sealed, 1));
+    let mut with_next = sealed;
+    with_next.push(ReviewPayload::TurnSent {
+        round: 2,
+        to: Role::Main,
+        restart_note: None,
+        human_wait_ms: 0,
+    });
+    assert!(super::restarts_round(&with_next, 1));
+}
+
+/// AC-P3b-30: the summary is one function; its stdin bytes are the
+/// pre-3b `println!`s.
+fn summary_fixture(crashed: bool) -> super::Resumable {
+    let (tmp, name) = paused_in_round_two();
+    let home = tmp.keep();
+    let mut r = prepare_resume(&home, &name).unwrap();
+    r.active = Duration::from_secs(90);
+    r.crashed = crashed;
+    r.restarts_round = false;
+    r
+}
+
+#[test]
+fn resume_summary_matches_pre_3b_stdin_bytes() {
+    use crate::cmd::fleet::review::session::render_resume_summary;
+    assert_eq!(
+        render_resume_summary(&summary_fixture(false)),
+        "Paused at round 2 with 1 open finding(s); 1m 30s of 1h used.\n"
+    );
+    assert_eq!(
+        render_resume_summary(&summary_fixture(true)),
+        "The previous driver stopped without pausing. Time counts up to its last recorded \
+         event; a turn in flight then was not recorded and is re-run.\n\
+         Crashed at round 2 with 1 open finding(s); 1m 30s of 1h used.\n"
+    );
+}
+
+#[test]
+fn resume_summary_adds_one_line_when_round_restarts() {
+    use crate::cmd::fleet::review::constants::REVIEW_RESUME_RESTARTS_ROUND;
+    use crate::cmd::fleet::review::session::render_resume_summary;
+    let mut r = summary_fixture(false);
+    let before = render_resume_summary(&r);
+    r.restarts_round = true;
+    let line = REVIEW_RESUME_RESTARTS_ROUND.replace("{n}", "2");
+    assert_eq!(render_resume_summary(&r), format!("{before}{line}\n"));
+}

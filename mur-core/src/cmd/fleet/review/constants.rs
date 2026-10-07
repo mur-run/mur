@@ -209,6 +209,11 @@ pub const REVIEW_PAUSE_REASON_CRASHED: &str = "crashed";
 /// (P3b-§6.3).
 pub const REVIEW_PAUSE_REASON_ABORTED: &str = "turn aborted by the human (Esc Esc)";
 
+/// P3b-§8.7 / D10: one line on the resume summary when the round being
+/// resumed already had a turn sent. `{n}` is the round.
+pub const REVIEW_RESUME_RESTARTS_ROUND: &str =
+    "Round {n} restarts from main; main's turn is sent again.";
+
 /// P2-§6 row 3 / P1 §7: the continue prompt of a plain paused session.
 pub const REVIEW_PAUSED_CONTINUE_PROMPT: &str =
     "Paused — continue? [Enter = continue, q = leave paused] ";

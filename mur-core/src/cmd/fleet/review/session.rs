@@ -23,15 +23,15 @@ use mur_common::limits::Stuck;
 
 use super::constants::{
     FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
-    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_STOP_REASON_ESCALATION,
-    RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT, RULING_RECORDED_CONTINUE_PROMPT,
-    RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
+    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_RESUME_RESTARTS_ROUND,
+    REVIEW_STOP_REASON_ESCALATION, RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT,
+    RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
 use super::loop_driver::{LoopDriverStop, run_review_loop};
 use super::note::{NoteLine, parse_note_line};
-use super::resume::ResumeEnd;
+use super::resume::{Resumable, ResumeEnd};
 use super::ruling::{is_rule_command, parse_rule_command};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
 use super::wire::message_text;
@@ -393,6 +393,18 @@ pub(super) fn require_running(mur_home: &Path, members: &[&str]) -> Result<()> {
     bail!("cannot start the review: {names} not running. Start with: {starts}");
 }
 
+/// The pre-flight checks `mur fleet review` and `/review` share (P3b-§3):
+/// two different agents and a non-empty task.
+pub(super) fn validate_pair(main: &str, reviewer: &str, task: &str) -> Result<()> {
+    if main == reviewer {
+        bail!("--main and --reviewer must be different agents (got '{main}' for both)");
+    }
+    if task.trim().is_empty() {
+        bail!("the review task is empty: say what the main agent should do");
+    }
+    Ok(())
+}
+
 /// `mur fleet review --main <a> --reviewer <b> "<task>"`.
 pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     if !std::io::stdin().is_terminal() {
@@ -403,12 +415,7 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     }
     let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(mur_home, n);
     let (main, reviewer) = (canon(&args.main), canon(&args.reviewer));
-    if main == reviewer {
-        bail!("--main and --reviewer must be different agents (got '{main}' for both)");
-    }
-    if args.task.trim().is_empty() {
-        bail!("the review task is empty: say what the main agent should do");
-    }
+    validate_pair(&main, &reviewer, &args.task)?;
     require_running(mur_home, &[&main, &reviewer])?;
 
     let name = new_session_name();
@@ -458,6 +465,33 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     Ok(())
 }
 
+/// What `mur fleet review-resume` prints before it asks anything, as one
+/// string so MURMUR can show the same text (P3b-§8 step 3). Newline-terminated
+/// lines. Byte-identical to the pre-3b `println!`s unless the round restarts,
+/// which adds one line (D10).
+pub fn render_resume_summary(r: &Resumable) -> String {
+    let mut out = String::new();
+    if r.crashed {
+        out.push_str(
+            "The previous driver stopped without pausing. Time counts up to its last recorded \
+             event; a turn in flight then was not recorded and is re-run.\n",
+        );
+    }
+    out.push_str(&format!(
+        "{} at round {} with {} open finding(s); {} of {} used.\n",
+        if r.crashed { "Crashed" } else { "Paused" },
+        r.round,
+        r.ledger.open_set().len(),
+        humantime_like(r.active),
+        humantime_like(r.limits.deadline()),
+    ));
+    if r.restarts_round {
+        out.push_str(&REVIEW_RESUME_RESTARTS_ROUND.replace("{n}", &r.round.to_string()));
+        out.push('\n');
+    }
+    out
+}
+
 /// `mur fleet review-resume <session>` (AC2): rebuild a paused session from
 /// its channel and continue at the same round, semi-auto, asking first.
 pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
@@ -466,20 +500,7 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
     }
     let r = super::resume::prepare_resume(mur_home, name)?;
     require_running(mur_home, &[&r.fleet.members[0], &r.fleet.members[1]])?;
-    if r.crashed {
-        println!(
-            "The previous driver stopped without pausing. Time counts up to its last recorded \
-             event; a turn in flight then was not recorded and is re-run."
-        );
-    }
-    println!(
-        "{} at round {} with {} open finding(s); {} of {} used.",
-        if r.crashed { "Crashed" } else { "Paused" },
-        r.round,
-        r.ledger.open_set().len(),
-        humantime_like(r.active),
-        humantime_like(r.limits.deadline()),
-    );
+    print!("{}", render_resume_summary(&r));
     // P2-§6: branch on the ledger. A session that owes a ruling goes
     // straight to the ruling prompt (inside `settle_then_resume`); any
     // other asks to continue first.
