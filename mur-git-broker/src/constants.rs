@@ -49,3 +49,12 @@ pub const PREFETCH_WATCH_INTERVAL_MS: u64 = 100;
 pub const PREFETCH_OLD_REF: &str = "refs/prefetch/old";
 /// Prefix for the creation-base refs fetched when a push creates a new branch.
 pub const PREFETCH_BASE_REF_PREFIX: &str = "refs/prefetch/base/";
+/// Hard CPU and address-space caps applied to the pack parser child (F13). The wall-clock cap is
+/// `BrokerLimits::max_index_wall_secs`.
+pub const PARSER_CPU_SECS: u64 = 60;
+#[cfg(target_os = "linux")]
+pub const PARSER_ADDRESS_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Mode of the scratch dir the parser writes into.
+pub const PARSER_OUT_DIR_MODE: u32 = 0o700;
+/// The only files the broker moves out of the parser's scratch dir into `objects/pack/`.
+pub const IMPORTED_PACK_FILES: [&str; 3] = ["pack.pack", "pack.idx", "pack.rev"];
