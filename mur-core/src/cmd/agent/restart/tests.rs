@@ -308,3 +308,40 @@ fn restart_one_with_not_running_emits_no_notes() {
     assert!(format!("{err:#}").contains("is not running"));
     assert!(notes.is_empty(), "unexpected notes: {notes:?}");
 }
+
+/// A service-managed agent with no `running.lock` whose service log ends in a
+/// hard `Error:` is crash-looping, not "stopped on purpose". The bulk
+/// selectors cannot see it (no lock), so this is the ONLY place the real
+/// reason can reach the user — `mur update --restart-agents` printed
+/// "starts again at your next login" while launchd respawned a dying runtime
+/// every 10 seconds.
+#[test]
+fn service_failure_report_surfaces_the_last_error_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("mur-agent-mur.err.log");
+    fs::write(
+        &log,
+        "INFO starting\n\u{1b}[31mError\u{1b}[0m: B0 rule 6: MCP `browser` changed since install\nINFO bye\n",
+    )
+    .unwrap();
+
+    let report = service_failure_report("mur", &log).expect("crash evidence must be reported");
+    assert!(
+        report.contains("B0 rule 6"),
+        "must quote the runtime's own error: {report}"
+    );
+    assert!(
+        report.contains(log.to_string_lossy().as_ref()),
+        "must name the log to read: {report}"
+    );
+}
+
+/// No error in the log = genuinely stopped. Do not invent a failure.
+#[test]
+fn service_failure_report_silent_without_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("quiet.err.log");
+    fs::write(&log, "INFO started\nINFO draining\n").unwrap();
+    assert!(service_failure_report("mur", &log).is_none());
+    assert!(service_failure_report("mur", &tmp.path().join("missing.log")).is_none());
+}
