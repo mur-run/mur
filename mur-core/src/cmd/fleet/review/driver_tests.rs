@@ -632,3 +632,55 @@ fn retry_keeps_the_first_answer() {
     assert_eq!(t.prompts.load(Ordering::SeqCst), 1);
     assert_eq!(t.sends.load(Ordering::SeqCst), 2);
 }
+
+/// A runtime that gates several tool calls in one step sends ONE
+/// notification whose top-level fields mirror only `calls[0]`; every entry
+/// carries its own `hitl_id` and is awaited separately. Answering only the
+/// top-level id left the rest to time out, so the member's task failed with
+/// "tool call denied: timed out" although the human had allowed.
+#[test]
+fn a_batched_approval_answers_every_call() {
+    use super::driver::answer_hitl;
+    let hitl = serde_json::json!({
+        "batch_id": "b1",
+        "hitl_id": "h1",
+        "tool_name": "read_file",
+        "tool_input": {"path": "a.rs"},
+        "calls": [
+            {"hitl_id": "h1", "tool_name": "read_file", "tool_input": {"path": "a.rs"}},
+            {"hitl_id": "h2", "tool_name": "bash", "tool_input": {"command": "ls"}},
+        ],
+    });
+    let asked = Mutex::new(Vec::<String>::new());
+    let decide = |_m: &str, call: &serde_json::Value| {
+        let tool = call["tool_name"].as_str().unwrap_or_default().to_string();
+        asked.lock().unwrap().push(tool.clone());
+        tool == "read_file"
+    };
+    let mut answered = Vec::new();
+    answer_hitl("reviewer", &hitl, &decide, |id, allow| {
+        answered.push((id.to_string(), allow));
+    });
+    assert_eq!(*asked.lock().unwrap(), vec!["read_file", "bash"]);
+    assert_eq!(
+        answered,
+        vec![("h1".to_string(), true), ("h2".to_string(), false)]
+    );
+}
+
+/// A runtime that predates `calls` sends only the single-call fields.
+#[test]
+fn a_legacy_single_call_approval_is_answered_once() {
+    use super::driver::answer_hitl;
+    let hitl = serde_json::json!({
+        "hitl_id": "h1",
+        "tool_name": "bash",
+        "tool_input": {"command": "ls"},
+    });
+    let decide = |_m: &str, _c: &serde_json::Value| true;
+    let mut answered = Vec::new();
+    answer_hitl("reviewer", &hitl, &decide, |id, allow| {
+        answered.push((id.to_string(), allow));
+    });
+    assert_eq!(answered, vec![("h1".to_string(), true)]);
+}
