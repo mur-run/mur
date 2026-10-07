@@ -16,6 +16,8 @@
 const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     &["mur", "browser", "auth"],
     &["mur", "deep-research", "secret"],
+    // Confirms before overwriting paths changed since the promote.
+    &["mur", "agent", "turn", "undo"],
 ];
 
 /// Whether `cmd` must be run with the terminal handed over.
@@ -64,6 +66,8 @@ mod tests {
     #[test]
     fn deep_research_secret_needs_the_terminal() {
         assert!(needs_terminal("mur deep-research secret --brave"));
+        assert!(needs_terminal("mur agent turn undo mur t1"));
+        assert!(!needs_terminal("mur agent turn list mur"));
         assert!(!needs_terminal("mur deep-research \"some question\""));
         assert!(!needs_terminal("mur deep-research"));
     }

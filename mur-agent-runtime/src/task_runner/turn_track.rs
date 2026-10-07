@@ -12,7 +12,7 @@
 //! bypasses the track.
 
 use super::*;
-use mur_track::{TreeClone, TurnTrack};
+use mur_track::{TreeClone, TurnTrack, UndoStore};
 use std::path::{Path, PathBuf};
 
 /// Tools whose presence makes a turn write-capable. `bash` is here because
@@ -174,9 +174,10 @@ impl TaskRunner {
             session.leave_track(turn, open.original_cwd.clone());
         }
         let id = turn.to_string();
+        let undo = self.undo_store();
         let closed = tokio::task::spawn_blocking(move || {
             let mut l = crate::turn_ledger::TurnLedger::default();
-            close_track(&id, open.track, &mut l);
+            close_track(&id, open.track, undo.as_ref(), &mut l);
             l
         })
         .await;
@@ -201,15 +202,43 @@ impl TaskRunner {
         if let Some((session, _)) = self.session_cwd.as_ref() {
             session.leave_track(turn, open.original_cwd.clone());
         }
-        close_track(turn, open.track, ledger);
+        close_track(turn, open.track, self.undo_store().as_ref(), ledger);
+    }
+
+    /// The per-agent undo store (spec §4.1 step 4), rooted at the session
+    /// home — the agent dir, where `profile.yaml` lives. `None` on runners
+    /// without a session cwd (tests, stubs): their turns have no track
+    /// anyway.
+    fn undo_store(&self) -> Option<UndoStore> {
+        self.session_cwd
+            .as_ref()
+            .map(|(session, _)| UndoStore::new(session.home()))
     }
 }
 
-/// Promote the track to the project, record what moved (project-relative)
-/// in the ledger, destroy the track. A failed promote keeps the track on
-/// disk and says so in the ledger rather than losing work; a failed destroy
-/// after a good promote is only logged — the edits are already home.
-fn close_track(turn: &str, track: TurnTrack, ledger: &mut crate::turn_ledger::TurnLedger) {
+/// Snapshot the before-bytes, promote the track to the project, record what
+/// moved (project-relative) in the ledger, destroy the track. A failed
+/// promote keeps the track on disk and says so in the ledger rather than
+/// losing work; a failed destroy after a good promote is only logged — the
+/// edits are already home. A failed snapshot is logged and the promote goes
+/// ahead: the turn's edits are the deliverable, the undo is the safety net,
+/// and a net that blocks the deliverable would get switched off.
+fn close_track(
+    turn: &str,
+    track: TurnTrack,
+    undo: Option<&UndoStore>,
+    ledger: &mut crate::turn_ledger::TurnLedger,
+) {
+    if let Some(store) = undo {
+        match track.diff_files() {
+            Ok(files) => {
+                if let Err(e) = store.snapshot(turn, track.project(), track.path(), &files) {
+                    tracing::warn!(turn, error = %e, "undo snapshot failed; promoting without it");
+                }
+            }
+            Err(e) => tracing::warn!(turn, error = %e, "undo snapshot skipped: diff failed"),
+        }
+    }
     match track.promote() {
         Ok(files) => {
             ledger.files_changed = Some(
@@ -337,6 +366,73 @@ mod tests {
         assert_eq!(cwd.for_turn("t1"), project, "cwd restored");
         assert!(!track_dir.exists(), "track destroyed");
         assert!(ledger.track_kept.is_none());
+
+        // §4.1 step 4: the promote left an undo snapshot in the agent home
+        // (the session home), and undoing it restores the before bytes.
+        let store = UndoStore::new(&project);
+        let mut m = store.load("t1").unwrap().expect("manifest written");
+        assert_eq!(m.entries.len(), 1);
+        assert_eq!(m.entries[0].kind, mur_track::EntryKind::Modified);
+        store.undo(&mut m).unwrap();
+        assert_eq!(std::fs::read_to_string(project.join("a.txt")).unwrap(), "a");
+    }
+
+    /// The undo is the safety net, the edits are the deliverable: when the
+    /// snapshot cannot be written (here a plain file squats on the store's
+    /// `edits/` dir), the promote still lands and the track is still
+    /// destroyed — only the undo manifest is missing.
+    #[test]
+    fn failed_snapshot_does_not_block_promote() {
+        let td = tempfile::tempdir().unwrap();
+        let project = mur_track::turn::canonicalize(td.path()).unwrap();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&project)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        git(&["init", "-q"]);
+        std::fs::write(project.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        // Untracked, so the track (cut from HEAD) never sees it; it only
+        // blocks `create_dir_all(<home>/edits/cas)`.
+        std::fs::write(project.join(mur_track::undo::EDITS_DIR), "squat").unwrap();
+
+        let cwd = crate::tools::fs_policy::SessionCwd::new(project.clone());
+        let runner = TaskRunner::new_stub_echo()
+            .with_tools(vec![Arc::new(
+                crate::tools::write_file::WriteFileTool::new_for_test(
+                    cwd.clone(),
+                    mur_common::agent::FilesystemEntitlement::default(),
+                ),
+            )])
+            .with_session_cwd(cwd.clone(), vec![project.to_string_lossy().into_owned()]);
+        cwd.begin_turn("t1", None, Some(project.clone()));
+        let open = runner.open_turn_track("t1").expect("track at a repo root");
+        let track_dir = open.track.path().to_path_buf();
+        std::fs::write(track_dir.join("a.txt"), "edited").unwrap();
+        let mut ledger = crate::turn_ledger::TurnLedger::default();
+        runner.close_turn_track("t1", open, &mut ledger);
+
+        assert_eq!(
+            std::fs::read_to_string(project.join("a.txt")).unwrap(),
+            "edited",
+            "promote landed despite the failed snapshot"
+        );
+        assert_eq!(
+            ledger.files_changed.as_deref(),
+            Some(&["a.txt".to_string()][..])
+        );
+        assert!(ledger.track_kept.is_none());
+        assert!(!track_dir.exists(), "track destroyed");
+        assert!(
+            project.join(mur_track::undo::EDITS_DIR).is_file(),
+            "the squatter is untouched: no store, no manifest"
+        );
     }
 
     #[test]

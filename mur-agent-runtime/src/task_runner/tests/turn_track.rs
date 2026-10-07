@@ -109,6 +109,28 @@ async fn bash_write_in_a_turn_lands_via_promote_and_is_counted() {
         ledger.files_changed.as_deref(),
         Some(&["a.txt".to_string(), "where.txt".to_string()][..])
     );
+
+    // §4.1 step 4 on the production close path (`close_turn_track_blocking`,
+    // the one `run_sync` takes): the promote left an undo snapshot in the
+    // session home, and undoing it restores the before state — the edited
+    // file gets its old bytes back and the file the shell created is gone.
+    let store = mur_track::UndoStore::new(&project);
+    let mut m = store.load("turn-e2e").unwrap().expect("manifest written");
+    let mut kinds: Vec<_> = m.entries.iter().map(|e| (e.path.clone(), e.kind)).collect();
+    kinds.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        kinds,
+        vec![
+            ("a.txt".into(), mur_track::EntryKind::Modified),
+            ("where.txt".into(), mur_track::EntryKind::Added),
+        ]
+    );
+    store.undo(&mut m).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join("a.txt")).unwrap(),
+        "a\n"
+    );
+    assert!(!project.join("where.txt").exists(), "added file removed");
 }
 
 /// Chat-only agents pay nothing: no write-capable tool, no track, and the
