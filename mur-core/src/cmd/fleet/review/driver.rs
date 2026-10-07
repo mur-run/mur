@@ -136,9 +136,10 @@ impl std::fmt::Display for TaskFailed {
 
 impl std::error::Error for TaskFailed {}
 
-/// Answers a tool-approval (HITL) request raised inside a member's turn:
-/// `(member, request) -> allow`. The request is the runtime's raw
-/// `tool/hitl_request` params (`hitl_id`, `tool_name`, `tool_input`, …).
+/// Answers one gated tool call raised inside a member's turn:
+/// `(member, call) -> allow`. The call is one entry of the runtime's
+/// approval notification (`hitl_id`, `tool_name`, `tool_input`, `risk`, …);
+/// a batched notification is split by [`answer_hitl`] first.
 pub type HitlDecider<'a> = &'a dyn Fn(&str, &serde_json::Value) -> bool;
 
 /// Real transport: wraps [`crate::a2a_dial::dial_message_streaming`]
@@ -154,6 +155,34 @@ pub type HitlDecider<'a> = &'a dyn Fn(&str, &serde_json::Value) -> bool;
 pub struct A2aTransport<'a> {
     pub mur_home: &'a Path,
     pub decide: HitlDecider<'a>,
+}
+
+/// Answer one `tool/approval_needed` notification: ask `decide` once per
+/// gated call and hand each `(hitl_id, allow)` to `respond`.
+///
+/// A runtime that gates several calls in one step sends them as `calls`,
+/// each with its own `hitl_id`; the top-level single-call fields mirror only
+/// `calls[0]` for older clients. Answering just the top-level id leaves the
+/// rest to the runtime's approval timeout, which denies them and fails the
+/// member's task. Same split as murmur's `HitlRequest::from_params`.
+pub(super) fn answer_hitl(
+    member: &str,
+    hitl: &serde_json::Value,
+    decide: HitlDecider<'_>,
+    mut respond: impl FnMut(&str, bool),
+) {
+    let calls: Vec<&serde_json::Value> =
+        match hitl.get("calls").and_then(serde_json::Value::as_array) {
+            Some(calls) if !calls.is_empty() => calls.iter().collect(),
+            _ => vec![hitl],
+        };
+    for call in calls {
+        let id = call
+            .get("hitl_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        respond(id, decide(member, call));
+    }
 }
 
 /// Audit attribution for an answer given at the review session's terminal.
@@ -172,25 +201,22 @@ impl ReviewTransport for A2aTransport<'_> {
                 }
             },
             |hitl| {
-                let id = hitl
-                    .get("hitl_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default();
-                let allow = (self.decide)(member, &hitl);
-                if let Err(e) = crate::a2a_dial::dial_method(
-                    self.mur_home,
-                    member,
-                    "tool/hitl_respond",
-                    crate::cmd::agent::cli::stream::hitl_respond_params(
+                answer_hitl(member, &hitl, self.decide, |id, allow| {
+                    if let Err(e) = crate::a2a_dial::dial_method(
                         self.mur_home,
-                        id,
-                        allow,
-                        HITL_SURFACE,
-                    ),
-                    crate::a2a_dial::DialMode::RequireRunning,
-                ) {
-                    tracing::warn!(member, error = %e, "could not deliver the HITL answer");
-                }
+                        member,
+                        "tool/hitl_respond",
+                        crate::cmd::agent::cli::stream::hitl_respond_params(
+                            self.mur_home,
+                            id,
+                            allow,
+                            HITL_SURFACE,
+                        ),
+                        crate::a2a_dial::DialMode::RequireRunning,
+                    ) {
+                        tracing::warn!(member, error = %e, "could not deliver the HITL answer");
+                    }
+                });
             },
             |_step| {},
         )?;
