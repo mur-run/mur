@@ -5,6 +5,12 @@ use std::{
     process::Command,
 };
 
+/// Opt-in switch that downgrades "this environment cannot exec hook scripts" from a test failure
+/// to a loud skip. CI must NOT set it; a developer sandbox that blocks shebang exec may.
+pub const ALLOW_HOOK_SKIP_ENV: &str = "MUR_GIT_BROKER_ALLOW_HOOK_SKIP";
+pub fn hook_skip_allowed() -> bool {
+    std::env::var(ALLOW_HOOK_SKIP_ENV).is_ok_and(|v| v == "1")
+}
 /// Absolute path of the system git. The runner clears the environment, so it needs an absolute
 /// binary path (a bare "git" would be resolved against an empty PATH and fail to spawn).
 pub fn git_bin() -> PathBuf {

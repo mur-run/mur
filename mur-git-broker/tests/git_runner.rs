@@ -65,8 +65,16 @@ fn hooks_never_run() {
         .unwrap_or(false)
         && marker.exists();
     if !ran {
-        println!("SKIP hooks_never_run: cannot exec hooks in this environment");
-        return;
+        // A "marker absent" check proves nothing when hooks cannot run here, so fail loudly
+        // instead of reporting a silent pass. Opting out is explicit and visible.
+        if hook_skip_allowed() {
+            eprintln!("SKIP hooks_never_run ({ALLOW_HOOK_SKIP_ENV}=1): cannot exec hooks here");
+            return;
+        }
+        panic!(
+            "hooks_never_run cannot verify hook isolation: this environment cannot exec hook \
+             scripts. Fix the environment, or set {ALLOW_HOOK_SKIP_ENV}=1 to skip explicitly."
+        );
     }
     std::fs::remove_file(&marker).unwrap();
     git(
