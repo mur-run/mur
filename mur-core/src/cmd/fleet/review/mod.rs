@@ -35,12 +35,22 @@ pub mod schema;
 pub mod session;
 pub mod settle;
 pub mod state;
+#[allow(dead_code)] // wired in PR 3 (Task 5): the MURMUR transport commits, the UI aborts
+pub mod turn_cell;
 pub mod verdict;
 pub mod wire;
 
 #[cfg(test)]
 #[path = "driver_tests.rs"]
 mod driver_tests;
+
+#[cfg(test)]
+#[path = "driver_abort_tests.rs"]
+mod driver_abort_tests;
+
+#[cfg(test)]
+#[path = "turn_cell_tests.rs"]
+mod turn_cell_tests;
 
 #[cfg(test)]
 mod tests;

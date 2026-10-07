@@ -205,6 +205,10 @@ pub const DRIVER_OWNER_FILE: &str = "driver.owner";
 /// whose driver died without pausing.
 pub const REVIEW_PAUSE_REASON_CRASHED: &str = "crashed";
 
+/// `paused.reason` when the human aborts an in-flight turn with Esc×2
+/// (P3b-§6.3).
+pub const REVIEW_PAUSE_REASON_ABORTED: &str = "turn aborted by the human (Esc Esc)";
+
 /// P2-§6 row 3 / P1 §7: the continue prompt of a plain paused session.
 pub const REVIEW_PAUSED_CONTINUE_PROMPT: &str =
     "Paused — continue? [Enter = continue, q = leave paused] ";

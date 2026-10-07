@@ -449,3 +449,39 @@ fn replayed_active_time_excludes_human_input_wait() {
     ];
     assert_eq!(super::active_time(&events), Duration::from_secs(40));
 }
+
+/// AC-P3b-20b / D8: an abort after a long gate wait records that wait on
+/// `paused`, so the resume does not count it against the deadline.
+#[test]
+fn abort_after_long_hitl_wait_does_not_exhaust_deadline() {
+    use crate::cmd::fleet::review::constants::REVIEW_PAUSE_REASON_ABORTED;
+    use crate::cmd::fleet::review::schema::{Cumulative, Mode, PauseKind};
+    const WAITED: Duration = Duration::from_secs(9 * 60);
+    let t0 = chrono::Utc::now();
+    let events = vec![
+        (
+            t0,
+            ReviewPayload::SessionStarted {
+                members: ["main".into(), "reviewer".into()],
+                mode: Mode::SemiAuto,
+                limits: SessionLimits::new(Duration::from_secs(10 * 60), Stuck::Off, None),
+            },
+        ),
+        (
+            t0 + chrono::Duration::seconds(WAITED.as_secs() as i64),
+            ReviewPayload::Paused {
+                kind: PauseKind::Other,
+                reason: REVIEW_PAUSE_REASON_ABORTED.into(),
+                cumulative: Cumulative {
+                    exec_time_ms: 0,
+                    cost_usd_micros: 0,
+                },
+                human_wait_ms: u64::try_from(WAITED.as_millis()).unwrap(),
+            },
+        ),
+    ];
+    assert!(
+        super::active_time(&events) <= Duration::from_secs(60),
+        "nine minutes at the gate are not execution time"
+    );
+}

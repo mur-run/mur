@@ -3,6 +3,7 @@
 //! ledger (`fold`, `apply`, `note_round_complete`) rather than inventing a
 //! second way to send or fold.
 
+mod abort;
 mod channel;
 mod flow;
 mod guards;
