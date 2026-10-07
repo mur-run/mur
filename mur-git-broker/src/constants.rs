@@ -41,3 +41,5 @@ pub const DEFAULT_MAX_NEW_REQUESTS_PER_WINDOW: usize = 10;
 pub const DEFAULT_REQUEST_WINDOW_SECS: i64 = 3600;
 pub const DEFAULT_GIT_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_PUSH_TIMEOUT_SECS: u64 = 120;
+/// Directory name of the private repo under the root the caller hands to `PrivateRepo::create`.
+pub const PRIVATE_REPO_DIR: &str = "private.git";
