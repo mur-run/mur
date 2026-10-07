@@ -84,6 +84,9 @@ pub fn installed_entry(install_dir: &Path) -> Option<PathBuf> {
 ///
 /// Trade-off, same as the runtime's: under a seal the MCP server runs the
 /// `node` from these fixed dirs, not the version a shim dir selected.
+/// The interpreter's file name: Windows needs the `.exe` suffix to find it.
+const NODE_BIN: &str = if cfg!(windows) { "node.exe" } else { "node" };
+
 const NODE_SEARCH_DIRS: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 
 /// Program and argv for the server. Pure, so the choice is testable without
@@ -110,13 +113,12 @@ pub fn launch_argv(entry: &Path, extra_args: &[String]) -> (String, Vec<String>)
 /// Pure over `search_dirs` and `is_exec` so the ordering contract is testable
 /// without a real Node install.
 fn node_program(search_dirs: &[PathBuf], is_exec: &dyn Fn(&Path) -> bool) -> String {
-    let name = if cfg!(windows) { "node.exe" } else { "node" };
     search_dirs
         .iter()
-        .map(|d| d.join(name))
+        .map(|d| d.join(NODE_BIN))
         .find(|p| is_exec(p))
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| name.to_owned())
+        .unwrap_or_else(|| NODE_BIN.to_owned())
 }
 
 /// Is `p` a regular file with an execute bit? (Existence alone is not enough:
@@ -228,7 +230,7 @@ mod tests {
     fn installed_launch_is_node_on_the_script_with_no_npx() {
         let (prog, args) = launch_argv(Path::new("/i/cli.js"), &s(&["--headless"]));
         assert!(
-            prog == "node" || Path::new(&prog).file_name().unwrap() == "node",
+            prog == NODE_BIN || Path::new(&prog).file_name().unwrap() == NODE_BIN,
             "{prog}"
         );
         assert_eq!(args, s(&["/i/cli.js", "--headless"]));
@@ -249,9 +251,10 @@ mod tests {
         ];
         // Only the two non-shim dirs hold an executable node.
         let is_exec = |p: &Path| p.starts_with("/opt/homebrew") || p.starts_with("/usr/bin");
-        assert_eq!(node_program(&dirs, &is_exec), "/opt/homebrew/bin/node");
+        let node_in = |d: &Path| d.join(NODE_BIN).display().to_string();
+        assert_eq!(node_program(&dirs, &is_exec), node_in(&dirs[1]));
         // Earlier dirs win when they do have one.
-        assert_eq!(node_program(&dirs, &|_: &Path| true), "/shim/bin/node");
+        assert_eq!(node_program(&dirs, &|_: &Path| true), node_in(&dirs[0]));
     }
 
     /// No `node` in any fixed dir is not a failure: fall back to the bare
@@ -259,16 +262,18 @@ mod tests {
     #[test]
     fn no_node_in_the_search_dirs_falls_back_to_the_bare_name() {
         let dirs = [PathBuf::from("/nowhere")];
-        assert_eq!(node_program(&dirs, &|_: &Path| false), "node");
+        assert_eq!(node_program(&dirs, &|_: &Path| false), NODE_BIN);
     }
 
     /// A non-executable stub must not be picked: it would exec-fail at spawn.
+    /// Unix-only: Windows has no exec bit, so any file there counts.
+    #[cfg(unix)]
     #[test]
     fn a_non_executable_node_is_skipped() {
         let t = tempfile::tempdir().unwrap();
-        std::fs::write(t.path().join("node"), "").unwrap();
+        std::fs::write(t.path().join(NODE_BIN), "").unwrap();
         let dirs = [t.path().to_path_buf()];
-        assert_eq!(node_program(&dirs, &|p| is_executable_file(p)), "node");
+        assert_eq!(node_program(&dirs, &|p| is_executable_file(p)), NODE_BIN);
     }
 
     #[test]
