@@ -107,6 +107,12 @@ pub enum StreamMsg {
         step_id: String,
         tokens: usize,
     },
+    /// The attached `/review` worker asks the UI something (P3b-§4.1).
+    #[allow(dead_code)] // wired in PR 3 (Task 7): stream_handler answers it
+    ReviewReq(crate::cmd::fleet::review::murmur::bridge::DriverReq),
+    /// The attached `/review` worker ended; sent once, last (P3b-§7.2).
+    #[allow(dead_code)] // wired in PR 3 (Task 7): stream_handler renders and joins
+    ReviewFinished(crate::cmd::fleet::review::murmur::bridge::Outcome),
 }
 
 impl StreamMsg {
@@ -126,7 +132,9 @@ impl StreamMsg {
             | StreamMsg::Expired { .. }
             | StreamMsg::ShellOutput { .. }
             | StreamMsg::ShellDone { .. }
-            | StreamMsg::ShellCardDone { .. } => None,
+            | StreamMsg::ShellCardDone { .. }
+            | StreamMsg::ReviewReq(_)
+            | StreamMsg::ReviewFinished(_) => None,
         }
     }
 }

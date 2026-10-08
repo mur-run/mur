@@ -4,14 +4,12 @@
 use std::path::Path;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-use tokio::sync::mpsc;
 
+use super::test_fixtures::{app_at, home, system_lines, tx};
 use super::{ReviewSession, handle};
+use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::events::handle_event;
-use crate::cmd::agent::cli::persist::Session;
-use crate::cmd::agent::cli::stream::StreamMsg;
-use crate::cmd::agent::cli::{ReviewEsc, Role};
 use crate::cmd::fleet::review::constants::REVIEW_ALREADY_ATTACHED;
 use crate::cmd::fleet::review::schema::{
     Cumulative, MICROS_PER_USD, ReviewPayload, Role as Member, VerdictKind,
@@ -20,24 +18,6 @@ use crate::cmd::fleet::review::state::state_tests::{paused, session};
 
 const ATTACHED: &str = "review-ab120001";
 const OTHER_PAUSED: &str = "review-cd340002";
-
-/// A home that outlives the test body (`app/tests/state.rs::app()` drops its
-/// tempdir, which is fine for it but would delete the channel we need).
-fn home() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    crate::channel_writer::plant_writer_identity(tmp.path());
-    tmp
-}
-
-fn app_at(home: &Path) -> App {
-    let session = Session::create(home, "a").unwrap();
-    App::new(
-        home.to_path_buf(),
-        "a".into(),
-        session,
-        &crate::cmd::agent::cli::theme::ANSI,
-    )
-}
 
 /// An attached session whose channel shows one send to `main` and $1.50 spent.
 fn attach(app: &mut App, home: &Path, esc: ReviewEsc) {
@@ -65,14 +45,6 @@ fn attach(app: &mut App, home: &Path, esc: ReviewEsc) {
     });
 }
 
-fn system_lines(app: &App) -> Vec<&str> {
-    app.messages
-        .iter()
-        .filter(|m| m.role == Role::System)
-        .map(|m| m.text.as_str())
-        .collect()
-}
-
 fn key(c: char) -> Event {
     Event::Key(KeyEvent {
         code: KeyCode::Char(c),
@@ -80,10 +52,6 @@ fn key(c: char) -> Event {
         kind: KeyEventKind::Press,
         state: KeyEventState::NONE,
     })
-}
-
-fn tx() -> mpsc::Sender<StreamMsg> {
-    mpsc::channel(8).0
 }
 
 /// AC-P3b-4: a second start is refused, names the attached session, starts nothing.

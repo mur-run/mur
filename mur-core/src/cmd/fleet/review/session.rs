@@ -124,7 +124,7 @@ pub(super) fn create_session_fleet(
 }
 
 /// §7.1 / A1: remove the fleet definition and run state; the channel stays.
-pub(super) fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
+pub(crate) fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
     for dir in [
         store::state_dir(mur_home, name),
         store::fleet_dir(mur_home, name),
@@ -387,14 +387,14 @@ pub(super) fn validate_pair(main: &str, reviewer: &str, task: &str) -> Result<()
     Ok(())
 }
 
-/// `mur fleet review --main <a> --reviewer <b> "<task>"`.
-pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
-    if !std::io::stdin().is_terminal() {
-        bail!(
-            "mur fleet review is attended: it asks before every send and needs a terminal. \
-             Run it from an interactive shell."
-        );
-    }
+/// Everything `mur fleet review` and `/review` do before the driver runs
+/// (P3b-§3): canonical names, the pre-flight checks, limits, then the session
+/// fleet. Returns the fleet, its limits and the one-line banner. Nothing is
+/// created when a check fails.
+pub(crate) fn prepare_session(
+    mur_home: &Path,
+    args: &ReviewArgs,
+) -> Result<(Fleet, SessionLimits, String)> {
     let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(mur_home, n);
     let (main, reviewer) = (canon(&args.main), canon(&args.reviewer));
     validate_pair(&main, &reviewer, &args.task)?;
@@ -409,15 +409,28 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     let limits = SessionLimits::new(bounds.deadline, bounds.stuck, bounds.cost_usd);
 
     let fleet = create_session_fleet(mur_home, &name, &main, &reviewer, &args.task)?;
-    println!(
-        "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}.\n\
-         Stop any time with `mur fleet stop {name}` or by answering q.",
+    let banner = format!(
+        "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}.",
         humantime_like(bounds.deadline),
         match bounds.stuck {
             Stuck::Off => "off".to_string(),
             Stuck::After(d) => humantime_like(d),
         },
     );
+    Ok((fleet, limits, banner))
+}
+
+/// `mur fleet review --main <a> --reviewer <b> "<task>"`.
+pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
+    if !std::io::stdin().is_terminal() {
+        bail!(
+            "mur fleet review is attended: it asks before every send and needs a terminal. \
+             Run it from an interactive shell."
+        );
+    }
+    let (fleet, limits, banner) = prepare_session(mur_home, &args)?;
+    let name = &fleet.name;
+    println!("{banner}\nStop any time with `mur fleet stop {name}` or by answering q.");
 
     let wait = HumanWait::default();
     let decide = |member: &str, hitl: &serde_json::Value| wait.time(|| ask_hitl(member, hitl));

@@ -255,7 +255,6 @@ pub const RUNNING_LOCK: &str = "running.lock";
 pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] <task…>\n/review resume <session>";
 
 /// P3b-§9 / AC-P3b-6: `--auto` on `/review`, refused with this fixed text.
-#[allow(dead_code)] // wired in PR 3 (Task 7): `handle` shows it
 pub const REVIEW_AUTO_REFUSED: &str =
     "--auto is not available in MURMUR yet (Phase 3c); run without it for semi-auto";
 
@@ -273,6 +272,8 @@ pub const REVIEW_SYNTAX_RESUME_ARGS: &str = "resume takes exactly one session na
 
 /// `/review` words. Flags come before the task; `--` ends them.
 pub const REVIEW_WORD_RESUME: &str = "resume";
+/// The slash word itself, for putting a refused line back in the composer.
+pub const REVIEW_SLASH: &str = "review";
 pub const REVIEW_FLAG_MAIN: &str = "--main";
 pub const REVIEW_FLAG_REVIEWER: &str = "--reviewer";
 pub const REVIEW_FLAG_DEADLINE: &str = "--deadline";

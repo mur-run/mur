@@ -3,6 +3,7 @@
 
 mod args;
 mod render;
+mod start;
 mod state;
 
 pub use state::ReviewSession;
@@ -13,5 +14,11 @@ pub use state::handle;
 #[path = "args_tests.rs"]
 mod args_tests;
 #[cfg(test)]
+#[path = "start_tests.rs"]
+mod start_tests;
+#[cfg(test)]
 #[path = "state_tests.rs"]
 mod state_tests;
+#[cfg(test)]
+#[path = "test_fixtures.rs"]
+mod test_fixtures;

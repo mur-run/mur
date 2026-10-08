@@ -250,6 +250,8 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
         StreamMsg::StepTokens {
             step_id, tokens, ..
         } => app.update_step_tokens(&step_id, tokens),
+        // wired in PR 3 (Task 7): confirm / show / finish arms
+        StreamMsg::ReviewReq(_) | StreamMsg::ReviewFinished(_) => {}
     }
 }
 
