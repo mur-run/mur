@@ -42,6 +42,7 @@ use crate::cmd::fleet::store;
 const SESSION_ID_LEN: usize = 8;
 
 /// What the caller asked for (the clap args, minus parsing).
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReviewArgs {
     pub main: String,
     pub reviewer: String,

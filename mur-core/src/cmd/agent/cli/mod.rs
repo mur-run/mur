@@ -40,6 +40,8 @@ mod plain;
 mod proposal;
 mod recover;
 mod render_card;
+#[allow(dead_code)] // wired in PR 3 (Task 7): `handle` calls the parser
+mod review;
 mod scrub;
 mod search;
 mod secret_cmd;

@@ -275,3 +275,29 @@ mod tests {
         assert_eq!(REVIEW_FLEET_PREFIX, "review-");
     }
 }
+
+/// P3b-§3.1 / §3.3: the `/review` grammar, appended to every syntax error.
+pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] <task…>\n/review resume <session>";
+
+/// P3b-§9 / AC-P3b-6: `--auto` on `/review`, refused with this fixed text.
+#[allow(dead_code)] // wired in PR 3 (Task 7): `handle` shows it
+pub const REVIEW_AUTO_REFUSED: &str =
+    "--auto is not available in MURMUR yet (Phase 3c); run without it for semi-auto";
+
+/// P3b-§3.3 syntax errors for `/review`; each is followed by
+/// [`REVIEW_USAGE_MURMUR`] on its own lines. `{what}` is a flag or "task".
+pub const REVIEW_SYNTAX_MISSING: &str = "missing {what}";
+pub const REVIEW_SYNTAX_NEEDS_VALUE: &str = "{flag} needs a value";
+pub const REVIEW_SYNTAX_UNKNOWN_FLAG: &str =
+    "unknown flag {flag} (type a task that starts with '-' after --)";
+pub const REVIEW_SYNTAX_BAD_BUDGET: &str = "--budget-usd needs a finite number, got '{value}'";
+pub const REVIEW_SYNTAX_RESUME_ARGS: &str = "resume takes exactly one session name";
+
+/// `/review` words. Flags come before the task; `--` ends them.
+pub const REVIEW_WORD_RESUME: &str = "resume";
+pub const REVIEW_FLAG_MAIN: &str = "--main";
+pub const REVIEW_FLAG_REVIEWER: &str = "--reviewer";
+pub const REVIEW_FLAG_DEADLINE: &str = "--deadline";
+pub const REVIEW_FLAG_BUDGET: &str = "--budget-usd";
+pub const REVIEW_FLAG_AUTO: &str = "--auto";
+pub const REVIEW_FLAGS_END: &str = "--";
