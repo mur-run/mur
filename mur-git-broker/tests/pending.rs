@@ -264,3 +264,65 @@ fn explicit_events_are_the_only_way_out_of_pending() {
                 || l.contains("ApprovalExpired") && l.contains("PendingApproval"))
     );
 }
+
+/// Behavioral guard for the only two DELETE sites: whatever the SQL text looks like, a row that
+/// reached `pending_approval` (or later) must survive both of them.
+#[test]
+fn deletes_touch_validated_rows_and_nothing_else() {
+    use State::*;
+    let (_t, s) = store();
+    let l = BrokerLimits::default();
+    let mk = |req: &str, path: &[(State, State)]| {
+        let k = key("alice", req);
+        submit(&s, "alice", req, &"b".repeat(40), t0(), &l).unwrap();
+        for (from, to) in path {
+            ok(&s, &k, *from, *to);
+        }
+        k
+    };
+    let validated = mk("v", &[]);
+    let pending = mk("p", &[(Validated, PendingApproval)]);
+    let approved = mk(
+        "a",
+        &[(Validated, PendingApproval), (PendingApproval, Approved)],
+    );
+    let denied = mk(
+        "d",
+        &[(Validated, PendingApproval), (PendingApproval, Denied)],
+    );
+
+    // discard_validated: removes only its own validated row, and is a no-op on every other state.
+    s.discard_validated(&pending).unwrap();
+    s.discard_validated(&approved).unwrap();
+    s.discard_validated(&denied).unwrap();
+    assert_eq!(s.get(&pending).unwrap().unwrap().state, PendingApproval);
+    assert_eq!(s.get(&approved).unwrap().unwrap().state, Approved);
+    assert_eq!(s.get(&denied).unwrap().unwrap().state, Denied);
+    s.discard_validated(&validated).unwrap();
+    assert!(s.get(&validated).unwrap().is_none());
+
+    // recover: same boundary, and running it again changes nothing.
+    let validated2 = mk("v2", &[]);
+    s.recover().unwrap();
+    assert!(s.get(&validated2).unwrap().is_none());
+    s.recover().unwrap();
+    assert_eq!(s.get(&pending).unwrap().unwrap().state, PendingApproval);
+    assert_eq!(s.get(&approved).unwrap().unwrap().state, Approved);
+    assert_eq!(s.get(&denied).unwrap().unwrap().state, Denied);
+}
+
+#[test]
+fn recover_marks_executing_rows_outcome_unknown_and_is_idempotent() {
+    use State::*;
+    let (_t, s) = store();
+    let l = BrokerLimits::default();
+    let k = key("alice", "r1");
+    submit(&s, "alice", "r1", &"b".repeat(40), t0(), &l).unwrap();
+    ok(&s, &k, Validated, PendingApproval);
+    ok(&s, &k, PendingApproval, Approved);
+    ok(&s, &k, Approved, Executing);
+    s.recover().unwrap();
+    assert_eq!(s.get(&k).unwrap().unwrap().state, OutcomeUnknown);
+    s.recover().unwrap();
+    assert_eq!(s.get(&k).unwrap().unwrap().state, OutcomeUnknown);
+}
