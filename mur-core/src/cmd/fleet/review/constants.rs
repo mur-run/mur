@@ -251,31 +251,6 @@ pub const MURMUR_STOP_COMMAND: &str = "/stop";
 /// session preflight checks the same file so it agrees with the first send.
 pub const RUNNING_LOCK: &str = "running.lock";
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn restart_note_matches_the_spec_text_byte_for_byte() {
-        // §8.2 "Restart note text (normative; must match byte-for-byte)".
-        assert_eq!(
-            REVIEW_ROUND_RESTART_NOTE,
-            "This round was interrupted and restarted. A previous attempt may have reached you. Re-read the current workspace state before responding; do not assume your last-seen state is current."
-        );
-    }
-
-    #[test]
-    fn countdown_min_is_never_zero_and_default_is_above_min() {
-        assert!(AUTO_COUNTDOWN_MIN > Duration::ZERO);
-        assert!(AUTO_COUNTDOWN_DEFAULT >= AUTO_COUNTDOWN_MIN);
-    }
-
-    #[test]
-    fn review_prefix_is_fixed() {
-        assert_eq!(REVIEW_FLEET_PREFIX, "review-");
-    }
-}
-
 /// P3b-§3.1 / §3.3: the `/review` grammar, appended to every syntax error.
 pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] <task…>\n/review resume <session>";
 
@@ -301,3 +276,28 @@ pub const REVIEW_FLAG_DEADLINE: &str = "--deadline";
 pub const REVIEW_FLAG_BUDGET: &str = "--budget-usd";
 pub const REVIEW_FLAG_AUTO: &str = "--auto";
 pub const REVIEW_FLAGS_END: &str = "--";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restart_note_matches_the_spec_text_byte_for_byte() {
+        // §8.2 "Restart note text (normative; must match byte-for-byte)".
+        assert_eq!(
+            REVIEW_ROUND_RESTART_NOTE,
+            "This round was interrupted and restarted. A previous attempt may have reached you. Re-read the current workspace state before responding; do not assume your last-seen state is current."
+        );
+    }
+
+    #[test]
+    fn countdown_min_is_never_zero_and_default_is_above_min() {
+        assert!(AUTO_COUNTDOWN_MIN > Duration::ZERO);
+        assert!(AUTO_COUNTDOWN_DEFAULT >= AUTO_COUNTDOWN_MIN);
+    }
+
+    #[test]
+    fn review_prefix_is_fixed() {
+        assert_eq!(REVIEW_FLEET_PREFIX, "review-");
+    }
+}
