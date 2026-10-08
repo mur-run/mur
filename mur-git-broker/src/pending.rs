@@ -188,6 +188,11 @@ impl PendingStore {
                  PRIMARY KEY (agent_id, task_id, request_id)
              );
              CREATE INDEX IF NOT EXISTS requests_by_agent ON requests (agent_id, created_at);
+             CREATE TABLE IF NOT EXISTS tombstones (
+                 event_id   TEXT PRIMARY KEY,
+                 request_id TEXT NOT NULL,
+                 ts         INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS audit (
                  id       INTEGER PRIMARY KEY AUTOINCREMENT,
                  kind     TEXT NOT NULL,
@@ -322,6 +327,59 @@ impl PendingStore {
         if changed == 0 {
             return Err(BrokerError::NotPending);
         }
+        Ok(())
+    }
+
+    /// Atomically consume one approval event: the row must be `pending_approval` with exactly
+    /// this `request_id` and `action_hash`, and the event id must never have been used. On success
+    /// the row becomes `approved`, `accepted_at = now`, and the event is tombstoned. Any other
+    /// outcome changes nothing.
+    pub fn accept(
+        &self,
+        key: &RequestKey,
+        event_id: &str,
+        request_id: &str,
+        action_hash: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), BrokerError> {
+        let mut guard = self.lock()?;
+        let tx = guard
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let used: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM tombstones WHERE event_id=?1",
+                params![event_id],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if used > 0 || request_id != key.request_id {
+            return Err(BrokerError::NotPending);
+        }
+        let changed = tx
+            .execute(
+                "UPDATE requests SET state=?1, accepted_at=?2 \
+                 WHERE agent_id=?3 AND task_id=?4 AND request_id=?5 AND state=?6 AND action_hash=?7",
+                params![
+                    State::Approved.as_str(),
+                    now.timestamp_millis(),
+                    key.agent_id,
+                    key.task_id,
+                    key.request_id,
+                    State::PendingApproval.as_str(),
+                    action_hash
+                ],
+            )
+            .map_err(storage)?;
+        if changed == 0 {
+            return Err(BrokerError::NotPending);
+        }
+        tx.execute(
+            "INSERT INTO tombstones (event_id, request_id, ts) VALUES (?1, ?2, ?3)",
+            params![event_id, request_id, now.timestamp_millis()],
+        )
+        .map_err(storage)?;
+        tx.commit().map_err(storage)?;
         Ok(())
     }
 
