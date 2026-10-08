@@ -217,7 +217,8 @@ pub const REVIEW_PAUSE_REASON_DETACHED: &str = "MURMUR closed";
 
 /// P3b-§8 / AC-P3b-29: shown first when a resumed session was recorded in
 /// auto mode. 3b reviews run semi-auto only.
-pub const REVIEW_AUTO_DEGRADED_NOTICE: &str = "This session was recorded in auto mode. MURMUR runs reviews in semi-auto, so it resumes asking before every send.";
+pub const REVIEW_AUTO_DEGRADED_NOTICE: &str =
+    "auto mode is not available in Phase 3b; this session runs as semi-auto.";
 
 /// P3b-§8.7 / D10: one line on the resume summary when the round being
 /// resumed already had a turn sent. `{n}` is the round.
