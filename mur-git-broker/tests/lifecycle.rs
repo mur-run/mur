@@ -351,7 +351,7 @@ fn git_killed_mid_push_is_outcome_unknown_and_never_retried() {
     use std::os::unix::fs::PermissionsExt;
     let f = fx();
     let hang = f.t.path().join("hang.sh");
-    std::fs::write(&hang, "#!/bin/sh\nsleep 30\n").unwrap();
+    std::fs::write(&hang, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
     std::fs::set_permissions(&hang, std::fs::Permissions::from_mode(0o755)).unwrap();
     let can_exec = Command::new(&hang)
         .arg("--version")
