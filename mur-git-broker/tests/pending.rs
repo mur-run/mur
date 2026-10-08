@@ -1,3 +1,4 @@
+#![cfg(unix)]
 // tests/pending.rs — real SQLite in a tempdir.
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use mur_git_broker::{error::BrokerError, pending::*, policy::BrokerLimits};
