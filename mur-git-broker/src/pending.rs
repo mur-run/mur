@@ -193,6 +193,13 @@ impl PendingStore {
                  request_id TEXT NOT NULL,
                  ts         INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS frozen (
+                 agent_id       TEXT NOT NULL,
+                 task_id        TEXT NOT NULL,
+                 request_id     TEXT NOT NULL,
+                 control_digest TEXT NOT NULL,
+                 PRIMARY KEY (agent_id, task_id, request_id)
+             );
              CREATE TABLE IF NOT EXISTS audit (
                  id       INTEGER PRIMARY KEY AUTOINCREMENT,
                  kind     TEXT NOT NULL,
@@ -380,6 +387,87 @@ impl PendingStore {
         )
         .map_err(storage)?;
         tx.commit().map_err(storage)?;
+        Ok(())
+    }
+
+    /// `validated → pending_approval`, recording the control digest the private repo was frozen
+    /// at, in one transaction.
+    pub fn to_pending(&self, key: &RequestKey, control_digest: &str) -> Result<(), BrokerError> {
+        let mut guard = self.lock()?;
+        let tx = guard
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let changed = tx
+            .execute(
+                "UPDATE requests SET state=?1 WHERE agent_id=?2 AND task_id=?3 AND request_id=?4 AND state=?5",
+                params![
+                    State::PendingApproval.as_str(),
+                    key.agent_id,
+                    key.task_id,
+                    key.request_id,
+                    State::Validated.as_str()
+                ],
+            )
+            .map_err(storage)?;
+        if changed == 0 {
+            return Err(BrokerError::NotPending);
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO frozen (agent_id, task_id, request_id, control_digest) VALUES (?1, ?2, ?3, ?4)",
+            params![key.agent_id, key.task_id, key.request_id, control_digest],
+        )
+        .map_err(storage)?;
+        tx.commit().map_err(storage)
+    }
+
+    pub fn frozen_digest(&self, key: &RequestKey) -> Result<Option<String>, BrokerError> {
+        self.lock()?
+            .query_row(
+                "SELECT control_digest FROM frozen WHERE agent_id=?1 AND task_id=?2 AND request_id=?3",
+                params![key.agent_id, key.task_id, key.request_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)
+    }
+
+    /// Drop a row that never got past `validated` (its git work failed). Any other state is
+    /// left alone.
+    pub fn discard_validated(&self, key: &RequestKey) -> Result<(), BrokerError> {
+        self.lock()?
+            .execute(
+                "DELETE FROM requests WHERE agent_id=?1 AND task_id=?2 AND request_id=?3 AND state='validated'",
+                params![key.agent_id, key.task_id, key.request_id],
+            )
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    /// Startup recovery. A `validated` row has no durable git state worth keeping, so it goes. A
+    /// row still `executing` means the process died around the push: nobody knows whether the ref
+    /// moved, so it is `outcome_unknown` (the approval stays consumed, never retried).
+    pub fn recover(&self) -> Result<(), BrokerError> {
+        let guard = self.lock()?;
+        guard
+            .execute("DELETE FROM requests WHERE state='validated'", [])
+            .map_err(storage)?;
+        guard
+            .execute(
+                "UPDATE requests SET state=?1 WHERE state=?2",
+                params![State::OutcomeUnknown.as_str(), State::Executing.as_str()],
+            )
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    /// Record a refused or failed request in the audit table.
+    pub fn audit(&self, agent: &str, kind: &str, now: DateTime<Utc>) -> Result<(), BrokerError> {
+        self.lock()?
+            .execute(
+                "INSERT INTO audit (kind, agent_id, ts) VALUES (?1, ?2, ?3)",
+                params![kind, agent, now.timestamp_millis()],
+            )
+            .map_err(storage)?;
         Ok(())
     }
 

@@ -34,7 +34,7 @@ impl From<&BrokerLimits> for PrefetchBudget {
 
 /// Reads refs from the remote into the private repo. A trait so tests (and the push executor's
 /// own fetch-free paths) never need a network.
-pub trait RemoteReader {
+pub trait RemoteReader: Send + Sync {
     fn fetch(
         &self,
         repo: &PrivateRepo,

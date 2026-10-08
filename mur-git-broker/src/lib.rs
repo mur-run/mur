@@ -6,6 +6,7 @@
 pub mod action;
 pub mod ancestry;
 pub mod approval;
+pub mod broker;
 pub mod constants;
 pub mod error;
 pub mod git;

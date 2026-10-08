@@ -23,7 +23,7 @@ use std::{
 
 /// How the parser child is launched. The daemon wraps this in an OS sandbox (T12); tests swap in
 /// doubles that misbehave.
-pub trait ParserSpawn {
+pub trait ParserSpawn: Send + Sync {
     fn spawn(
         &self,
         cmd: Command,

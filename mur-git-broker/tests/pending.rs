@@ -259,7 +259,8 @@ fn explicit_events_are_the_only_way_out_of_pending() {
         !include_str!("../src/pending.rs")
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
-            .any(|l| l.contains("DELETE")
+            // a DELETE may only ever name the `validated` state (a request whose git work failed)
+            .any(|l| l.contains("DELETE") && !l.contains("state='validated'")
                 || l.contains("ApprovalExpired") && l.contains("PendingApproval"))
     );
 }

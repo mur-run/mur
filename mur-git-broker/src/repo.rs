@@ -62,6 +62,17 @@ impl PrivateRepo {
         Ok(PrivateRepo { path, runner })
     }
 
+    /// Re-attach to a repo `create` made earlier (a pending request surviving a restart). Nothing
+    /// is trusted from disk: the caller compares `control_digest` against the stored one.
+    pub fn open(root: &Path, git_bin: &Path) -> Result<PrivateRepo, BrokerError> {
+        let path = root.join(PRIVATE_REPO_DIR);
+        if !path.is_dir() {
+            return Err(storage("private repo is missing"));
+        }
+        let runner = GitRunner::new(git_bin.to_path_buf(), path.clone());
+        Ok(PrivateRepo { path, runner })
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
