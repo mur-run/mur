@@ -14,4 +14,5 @@ pub mod oid;
 pub mod pending;
 pub mod policy;
 pub mod prefetch;
+pub mod push;
 pub mod repo;
