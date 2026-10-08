@@ -341,6 +341,27 @@ impl SandboxPolicy {
             }
         }
 
+        // Git push broker, agent-READ side (config-gated, off by default): the
+        // registry the `git_push_request` tool resolves `repo_id` from, and this
+        // agent's own status dir. Exactly these two — the rest of
+        // `<mur_home>/git-push/` is broker-private. Writes stay denied by the
+        // launch chain regardless. macOS is allow-default for reads; this is the
+        // Landlock half. Existence-checked (Issue 16).
+        if let (Some(mur_home), Some(agent_name)) = (
+            agent_home.parent().and_then(|p| p.parent()),
+            agent_home.file_name().and_then(|n| n.to_str()),
+        ) && crate::tools::git_push::enabled(mur_home)
+        {
+            for p in [
+                mur_common::git_push::registry_path(mur_home),
+                mur_common::git_push::status_dir(mur_home, agent_name),
+            ] {
+                if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
+                    fs_read.push(p);
+                }
+            }
+        }
+
         // Peer PUBLIC key material (`identity.pub` + `rotations.jsonl`), so a
         // sandboxed process can verify signed channel events. macOS already
         // allows these (allow-default, and the launch chain denies only

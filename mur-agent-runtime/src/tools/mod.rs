@@ -6,6 +6,7 @@ pub(crate) mod denial;
 pub mod edit_file;
 pub mod fleet_run;
 pub(crate) mod fs_policy;
+pub mod git_push;
 pub mod guarded;
 pub mod mcp;
 pub mod naming;

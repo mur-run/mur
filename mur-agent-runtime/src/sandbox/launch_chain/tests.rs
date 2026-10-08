@@ -174,6 +174,47 @@ fn entitlement_pins_are_write_protected() {
     assert!(kept.is_empty() && dropped == vec![mur]);
 }
 
+/// Git-push registry decision, premise 1: `<mur_home>/git-push/` is written by
+/// the daemon only. An agent that could write `registry.yaml` could remap a
+/// `repo_id` to a repo of its choosing and turn a human approval into a push
+/// of something else, so the tools refuse it, the kernel denies it, and on
+/// Landlock a grant covering it (`~/.mur`, or the dir itself) is dropped whole.
+#[test]
+fn git_push_broker_dir_is_write_protected_and_grants_over_it_are_dropped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur = tmp.path().to_path_buf();
+    let chain = LaunchChain::for_test(&mur.join("agents").join("alice"), &mur.join("bin"), &mur);
+    let broker = mur_common::git_push::broker_dir(&mur);
+    for p in [
+        broker.clone(),
+        mur_common::git_push::registry_path(&mur),
+        mur_common::git_push::status_dir(&mur, "alice"),
+        mur_common::git_push::private_dir(&mur),
+    ] {
+        assert!(
+            chain.protects_write(&p).is_some(),
+            "write not refused: {}",
+            p.display()
+        );
+        assert!(
+            chain.protects_read(&p).is_none(),
+            "the registry must stay readable: {}",
+            p.display()
+        );
+    }
+    assert!(chain.deny_paths().contains(&broker));
+    let (kept, dropped) =
+        chain.partition_grants(&[mur.clone(), broker.clone(), broker.join("status")]);
+    assert!(kept.is_empty(), "{kept:?}");
+    assert_eq!(
+        dropped,
+        vec![mur.clone(), broker.clone(), broker.join("status")]
+    );
+    // Negative control: the agent's own inbox, where it drops requests, stays writable.
+    let inbox = mur_common::git_push::inbox_dir(&mur.join("agents").join("alice"));
+    assert!(chain.protects_write(&inbox).is_none());
+}
+
 /// A read grant wide enough to contain the credential store is dropped
 /// whole, exactly as the write side already drops it. Before #850 the two
 /// diverged: `fs_write: [~/.mur]` was refused and `fs_read: [~/.mur]` was

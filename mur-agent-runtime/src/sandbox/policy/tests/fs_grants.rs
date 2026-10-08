@@ -71,6 +71,45 @@ fn the_runtimes_own_central_store_reads_are_granted() {
     }
 }
 
+/// Git-push, Landlock read side: with `git_push.enabled` the agent gets exactly
+/// the registry and its OWN status dir — not the broker dir, not broker-private
+/// state, not a sibling's status. Off (the default) it gets nothing there.
+#[test]
+fn git_push_reads_are_exactly_registry_and_own_status_and_only_when_enabled() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("mur");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let reg = mur_common::git_push::registry_path(mur_home);
+    let own = mur_common::git_push::status_dir(mur_home, "mur");
+    let sibling = mur_common::git_push::status_dir(mur_home, "pm");
+    let private = mur_common::git_push::private_dir(mur_home);
+    for d in [&own, &sibling, &private] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(&reg, "repos: {}\n").unwrap();
+    let broker = mur_common::git_push::broker_dir(mur_home);
+    let reaches =
+        |p: &SandboxPolicy, x: &std::path::Path| p.fs_read.iter().any(|r| x.starts_with(r));
+
+    let off = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(
+        !reaches(&off, &reg) && !reaches(&off, &own),
+        "default off: {:?}",
+        off.fs_read
+    );
+
+    std::fs::write(mur_home.join("config.yaml"), "git_push:\n  enabled: true\n").unwrap();
+    let on = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(reaches(&on, &reg) && reaches(&on, &own), "{:?}", on.fs_read);
+    assert!(!on.fs_read.contains(&broker), "never the whole broker dir");
+    assert!(
+        !reaches(&on, &private) && !reaches(&on, &sibling),
+        "{:?}",
+        on.fs_read
+    );
+}
+
 /// ...and the grant is existence-checked like every other one (Issue 16):
 /// a rule on a path that does not exist destabilizes the profile, so an
 /// absent `compress.yaml` must not be emitted.

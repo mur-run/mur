@@ -256,6 +256,17 @@ pub struct FleetRunConfig {
     pub fleets: Vec<String>,
 }
 
+/// Gate for the git push broker (`git_push:` in `~/.mur/config.yaml`). Off by
+/// default: with it off no agent sees `git_push_request` / `git_push_status` /
+/// `git_push_cancel`, the sandbox grants no read into `<mur_home>/git-push/`, and
+/// the daemon sweeper does not run. Global config, not the agent profile, for the
+/// same reason as [`FleetRunConfig`]: a prompt-injected agent must not widen it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GitPushConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 /// Display policy for `mur open`.
 ///
 /// Lives in `config.yaml` rather than in `open-items.jsonl` because that log
@@ -384,6 +395,14 @@ mod fleet_config_tests {
                 .unwrap();
         assert_eq!(cfg2.fleet_run.agents, vec!["mur"]);
         assert_eq!(cfg2.fleet_run.fleets, vec!["deep-research"]);
+    }
+
+    #[test]
+    fn git_push_config_defaults_off_and_roundtrips() {
+        let cfg: Config = serde_yaml_ng::from_str("{}").unwrap();
+        assert!(!cfg.git_push.enabled);
+        let cfg2: Config = serde_yaml_ng::from_str("git_push:\n  enabled: true\n").unwrap();
+        assert!(cfg2.git_push.enabled);
     }
 }
 

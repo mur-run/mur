@@ -17,3 +17,4 @@ pub mod policy;
 pub mod prefetch;
 pub mod push;
 pub mod repo;
+pub mod request_file;

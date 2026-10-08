@@ -224,6 +224,47 @@ pub async fn build_provider_runner(
             );
         }
     }
+    // Built-in git push broker tools: registered ONLY when `git_push.enabled`
+    // in the global config (default off). An explicit Deny in the profile still
+    // wins. No profile rule can approve a push — the tool only queues it; the
+    // human approval happens daemon-side on the exact (ref, old, new).
+    #[cfg(unix)]
+    if crate::tools::git_push::enabled(&mur_home) {
+        use crate::tools::git_push::*;
+        use mur_common::agent::{ToolPolicy, resolve_tool_policy};
+        let agent = profile.inner.name.clone();
+        let tools: [(&str, Arc<dyn crate::tools::ToolExecutor>); 3] = [
+            (
+                GIT_PUSH_REQUEST,
+                Arc::new(GitPushRequestTool::new(GitPushCtx {
+                    agent: agent.clone(),
+                    task_id: None,
+                    inbox: mur_common::git_push::inbox_dir(agent_home),
+                    registry_path: mur_common::git_push::registry_path(&mur_home),
+                    identity: identity.clone(),
+                    key_version: profile.inner.identity.key_version,
+                    now: Arc::new(chrono::Utc::now),
+                })),
+            ),
+            (
+                GIT_PUSH_STATUS,
+                Arc::new(GitPushStatusTool::new(mur_common::git_push::status_dir(
+                    &mur_home, &agent,
+                ))),
+            ),
+            (
+                GIT_PUSH_CANCEL,
+                Arc::new(GitPushCancelTool::new(mur_common::git_push::cancel_dir(
+                    agent_home,
+                ))),
+            ),
+        ];
+        for (name, exec) in tools {
+            if resolve_tool_policy(&tools_policy, name) != ToolPolicy::Deny {
+                tool_map.insert(name.to_string(), exec);
+            }
+        }
+    }
     // Built-in open_item: available to every agent, unlike fleet_run. Writing
     // a line into a log the user reads is not a capability worth gating, and
     // the display already marks everything it produces as unverified. An

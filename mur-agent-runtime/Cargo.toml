@@ -128,6 +128,8 @@ birdcage = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# Unix-only like the crate itself (it is an empty lib on Windows).
+mur-git-broker = { path = "../mur-git-broker" }
 
 # ───── B1 sandbox ─────
 [target.'cfg(target_os = "linux")'.dependencies]
