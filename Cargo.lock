@@ -6747,6 +6747,7 @@ dependencies = [
  "chrono",
  "hex",
  "libc",
+ "mur-git-broker",
  "rusqlite",
  "serde",
  "serde_jcs",

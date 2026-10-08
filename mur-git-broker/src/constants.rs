@@ -58,3 +58,8 @@ pub const PARSER_ADDRESS_SPACE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const PARSER_OUT_DIR_MODE: u32 = 0o700;
 /// The only files the broker moves out of the parser's scratch dir into `objects/pack/`.
 pub const IMPORTED_PACK_FILES: [&str; 3] = ["pack.pack", "pack.idx", "pack.rev"];
+
+/// Owner-only: the pending table holds full action documents.
+pub const PENDING_DB_MODE: u32 = 0o600;
+/// How long a second writer waits on the SQLite lock before giving up with `Storage`.
+pub const PENDING_DB_BUSY_WAIT_MS: u64 = 5_000;

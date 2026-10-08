@@ -10,6 +10,7 @@ pub mod error;
 pub mod git;
 pub mod import;
 pub mod oid;
+pub mod pending;
 pub mod policy;
 pub mod prefetch;
 pub mod repo;

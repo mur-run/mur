@@ -15,5 +15,10 @@ thiserror = { workspace = true }
 rusqlite = { workspace = true }
 libc = "0.2"
 
+[features]
+# Exposes `PendingStore::force_state_for_test`, which bypasses the edge table.
+test-support = []
+
 [dev-dependencies]
 tempfile = "3"
+mur-git-broker = { path = ".", features = ["test-support"] }
