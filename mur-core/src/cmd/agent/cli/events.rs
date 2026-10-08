@@ -328,6 +328,12 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
     match ev {
         Event::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            // §3.4 / AC-P3b-4a: closing with the worker still finishing its turn
+            // closes the input. Only Esc and the Ctrl combos (the second Ctrl+D)
+            // are read; nothing else may reach the composer.
+            if app.review.as_ref().is_some_and(|r| r.closing) && !ctrl && key.code != KeyCode::Esc {
+                return;
+            }
             // The transcript overlay (Ctrl+O) is a full-screen view drawn over
             // everything else, including the HITL modal. It stays in raw mode
             // and routes every key through the pure `overlay_key_action`

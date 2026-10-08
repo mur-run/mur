@@ -431,6 +431,8 @@ pub struct App {
     /// show a full chunk without re-running the query. Replaced by each new
     /// search; never consulted for anything but expansion.
     pub search_snapshot: Option<super::search::SearchSnapshot>,
+    /// The attached `/review` session, if any (spec §3.4). `None` = detached.
+    pub review: Option<super::review::ReviewSession>,
 }
 
 impl App {
@@ -534,6 +536,7 @@ impl App {
             monitor_conditions: 0,
             last_monitor_refresh: None,
             search_snapshot: None,
+            review: None,
         }
     }
 

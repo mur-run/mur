@@ -259,6 +259,9 @@ pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent>
 pub const REVIEW_AUTO_REFUSED: &str =
     "--auto is not available in MURMUR yet (Phase 3c); run without it for semi-auto";
 
+/// P3b-§3.4: a second `/review` while one is attached. `{session}` is its name.
+pub const REVIEW_ALREADY_ATTACHED: &str = "a review session is already attached: {session}";
+
 /// P3b-§3.3 syntax errors for `/review`; each is followed by
 /// [`REVIEW_USAGE_MURMUR`] on its own lines. `{what}` is a flag or "task".
 pub const REVIEW_SYNTAX_MISSING: &str = "missing {what}";
