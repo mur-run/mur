@@ -187,4 +187,4 @@ pub fn stop_from_outside(
 
 #[cfg(test)]
 #[path = "state_tests.rs"]
-mod state_tests;
+pub(super) mod state_tests;

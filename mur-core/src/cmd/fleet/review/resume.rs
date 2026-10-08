@@ -357,6 +357,42 @@ pub fn resume_session(
     super::session::end_session(mur_home, &fleet, run)
 }
 
+/// One line of bare `/review`'s list (spec §3.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PausedRow {
+    pub name: String,
+    pub state: SessionState,
+    pub last: Option<DateTime<Utc>>,
+}
+
+/// Review sessions MURMUR can show in bare `/review`: paused and crashed
+/// (offered for resume) and running in another process (listed, not offered).
+pub fn list_paused(mur_home: &Path) -> Result<Vec<PausedRow>> {
+    let svc = ChannelService::open(mur_home)?;
+    let mut ids = svc.store().list_ids()?;
+    ids.sort();
+    let mut rows = Vec::new();
+    for id in &ids {
+        let Some(session) = super::prune::review_session_of(id) else {
+            continue;
+        };
+        // `observe` takes the run lock for every non-running state; the
+        // `Observed` is dropped each iteration, so listing holds nothing.
+        let observed = observe(&svc, mur_home, id, session)?;
+        if matches!(
+            observed.state,
+            SessionState::Paused | SessionState::Crashed | SessionState::Running(_)
+        ) {
+            rows.push(PausedRow {
+                name: session.to_string(),
+                state: observed.state,
+                last: observed.last,
+            });
+        }
+    }
+    Ok(rows)
+}
+
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;
@@ -364,3 +400,7 @@ mod resume_tests;
 #[cfg(test)]
 #[path = "resume_ruling_tests.rs"]
 mod resume_ruling_tests;
+
+#[cfg(test)]
+#[path = "paused_list_tests.rs"]
+mod paused_list_tests;
