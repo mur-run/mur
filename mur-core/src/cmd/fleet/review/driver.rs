@@ -75,6 +75,23 @@ pub trait ReviewTransport {
     fn turn_committed(&self) -> bool {
         true
     }
+
+    /// P3b-§4.4: when the last `Stop` was a pause this transport asked for
+    /// (Esc×1, or the UI side gone) rather than the kill-switch, say so:
+    /// the session then records `paused` instead of `session_stopped`.
+    /// Default `None`; only the MURMUR transport overrides it.
+    fn take_requested_pause(&self) -> Option<RequestedPause> {
+        None
+    }
+}
+
+/// A pause the transport asked for (see [`ReviewTransport::take_requested_pause`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestedPause {
+    pub kind: PauseKind,
+    pub reason: &'static str,
+    /// Human wait not yet recorded on any event (P3b-D8).
+    pub human_wait: Duration,
 }
 
 /// The human's answer at the send prompt (P2-§5.3).

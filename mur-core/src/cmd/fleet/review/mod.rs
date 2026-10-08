@@ -22,7 +22,7 @@ pub mod constants;
 pub mod driver;
 pub mod ledger;
 pub mod loop_driver;
-#[allow(dead_code)] // wired in PR 3 (Task 6): the worker thread constructs the transport
+#[allow(dead_code)] // wired in PR 3 (Task 7): `/review` spawns the worker
 pub mod murmur;
 pub mod note;
 pub mod prune;

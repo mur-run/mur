@@ -353,6 +353,7 @@ pub fn resume_session(
         retry_delay,
         &Instant::now,
     );
+    let run = super::session::apply_requested_pause(transport, mur_home, &fleet.channel_id, run);
     super::session::end_session(mur_home, &fleet, run)
 }
 

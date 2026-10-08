@@ -558,6 +558,32 @@ pub(super) fn run_session(
     end_session(mur_home, fleet, run)
 }
 
+/// P3b-§4.4: a `Stopped` the transport asked for (Esc×1, UI gone) is a
+/// pause, not a stop. Write `paused` (carrying the gate wait) and report it
+/// as `Paused`, so [`end_session`] keeps the fleet and writes no
+/// `session_stopped`. Any other outcome passes through untouched.
+pub(super) fn apply_requested_pause(
+    transport: &dyn ReviewTransport,
+    mur_home: &Path,
+    channel_id: &str,
+    run: Result<(Ledger, LoopDriverStop)>,
+) -> Result<(Ledger, LoopDriverStop)> {
+    let (ledger, stop) = run?;
+    if stop != LoopDriverStop::Stopped {
+        return Ok((ledger, stop));
+    }
+    let Some(p) = transport.take_requested_pause() else {
+        return Ok((ledger, stop));
+    };
+    super::driver::write_paused_and_revert(mur_home, channel_id, p.kind, p.reason, p.human_wait)?;
+    Ok((
+        ledger,
+        LoopDriverStop::Paused {
+            reason: p.reason.to_string(),
+        },
+    ))
+}
+
 /// End a session the loop returned from. A pause is NOT an end (§7, AC2):
 /// the fleet definition and channel stay so `mur fleet review-resume` can
 /// pick it up, and no `session_stopped` is written. Anything else records

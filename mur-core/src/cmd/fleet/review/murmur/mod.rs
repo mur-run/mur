@@ -3,7 +3,12 @@
 
 pub mod bridge;
 pub mod transport;
+pub mod worker;
 
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod transport_tests;
+
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod worker_tests;

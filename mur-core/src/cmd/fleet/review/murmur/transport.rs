@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use super::super::driver::{ReviewTransport, SendAnswer, answer_hitl, task_reply};
+use super::super::constants::{REVIEW_PAUSE_REASON_DETACHED, REVIEW_PAUSE_REASON_USER};
+use super::super::driver::{RequestedPause, ReviewTransport, SendAnswer, answer_hitl, task_reply};
 use super::super::ledger::{EscalationRecord, Ledger};
 use super::super::ruling::ruling_prompt_text;
 use super::super::schema::PauseKind;
@@ -39,6 +40,26 @@ pub type DialFn = Arc<
 /// Delivers one approval answer: `(member, hitl_id, allow)`.
 pub type RespondFn = Arc<dyn Fn(&str, &str, bool) + Send + Sync>;
 
+/// The real network edges: A2A streaming dial, and the HITL answer call.
+pub fn real_io(mur_home: &Path) -> (DialFn, RespondFn) {
+    let dial: DialFn = Arc::new(|home, member, params, on_delta, on_hitl| {
+        crate::a2a_dial::dial_message_streaming(home, member, params, on_delta, on_hitl, |_| {})
+    });
+    let home = mur_home.to_path_buf();
+    let respond: RespondFn = Arc::new(move |member, id, allow| {
+        if let Err(e) = crate::a2a_dial::dial_method(
+            &home,
+            member,
+            "tool/hitl_respond",
+            crate::cmd::agent::cli::stream::hitl_respond_params(&home, id, allow, HITL_SURFACE),
+            crate::a2a_dial::DialMode::RequireRunning,
+        ) {
+            tracing::warn!(member, error = %e, "could not deliver the HITL answer");
+        }
+    });
+    (dial, respond)
+}
+
 pub struct MurmurTransport {
     pub mur_home: PathBuf,
     pub req: Sender<DriverReq>,
@@ -49,6 +70,9 @@ pub struct MurmurTransport {
     last_committed: AtomicBool,
     pause: Mutex<Option<PauseKind>>,
     human_wait: Mutex<Duration>,
+    /// Wait the loop drained via `take_human_wait` after a gate that asked
+    /// to stop. The loop drops it on `Stopped`; the pause must still carry it.
+    stopped_wait: Mutex<Duration>,
 }
 
 impl MurmurTransport {
@@ -59,21 +83,7 @@ impl MurmurTransport {
         flags: ReviewFlags,
         members: [String; 2],
     ) -> Self {
-        let dial: DialFn = Arc::new(|home, member, params, on_delta, on_hitl| {
-            crate::a2a_dial::dial_message_streaming(home, member, params, on_delta, on_hitl, |_| {})
-        });
-        let home = mur_home.clone();
-        let respond: RespondFn = Arc::new(move |member, id, allow| {
-            if let Err(e) = crate::a2a_dial::dial_method(
-                &home,
-                member,
-                "tool/hitl_respond",
-                crate::cmd::agent::cli::stream::hitl_respond_params(&home, id, allow, HITL_SURFACE),
-                crate::a2a_dial::DialMode::RequireRunning,
-            ) {
-                tracing::warn!(member, error = %e, "could not deliver the HITL answer");
-            }
-        });
+        let (dial, respond) = real_io(&mur_home);
         Self::with_io(mur_home, req, flags, members, dial, respond)
     }
 
@@ -96,6 +106,7 @@ impl MurmurTransport {
             last_committed: AtomicBool::new(true),
             pause: Mutex::new(None),
             human_wait: Mutex::new(Duration::ZERO),
+            stopped_wait: Mutex::new(Duration::ZERO),
         }
     }
 
@@ -207,7 +218,27 @@ impl ReviewTransport for MurmurTransport {
     }
 
     fn take_human_wait(&self) -> Duration {
-        std::mem::take(&mut *self.human_wait.lock().unwrap_or_else(|e| e.into_inner()))
+        let taken = std::mem::take(&mut *self.human_wait.lock().unwrap_or_else(|e| e.into_inner()));
+        if self.pause_kind().is_some() {
+            *self.stopped_wait.lock().unwrap_or_else(|e| e.into_inner()) += taken;
+        }
+        taken
+    }
+
+    fn take_requested_pause(&self) -> Option<RequestedPause> {
+        let kind = self.pause_kind()?;
+        let reason = match kind {
+            PauseKind::Detached => REVIEW_PAUSE_REASON_DETACHED,
+            _ => REVIEW_PAUSE_REASON_USER,
+        };
+        let drained = self.take_human_wait();
+        let stopped =
+            std::mem::take(&mut *self.stopped_wait.lock().unwrap_or_else(|e| e.into_inner()));
+        Some(RequestedPause {
+            kind,
+            reason,
+            human_wait: stopped + drained,
+        })
     }
 
     fn turn_committed(&self) -> bool {
