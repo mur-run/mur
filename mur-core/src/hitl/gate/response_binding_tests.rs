@@ -169,7 +169,7 @@ async fn an_answer_to_no_request_does_not_settle() {
 /// An answer that precedes its request answers nothing: nobody had been
 /// asked yet.
 #[tokio::test]
-#[ignore = "needs signed time/order: #1764 decision A/B/C pending"]
+#[ignore = "needs signed issued_at in the HITL payload: #1764 option C, not yet implemented"]
 async fn an_answer_before_its_request_does_not_settle() {
     let (tmp, ch) = setup();
     let a = action("rm -rf build");
@@ -219,7 +219,7 @@ async fn a_reissued_hitl_id_voids_its_answers() {
 
 /// An answer that lands after its request expired does not count.
 #[tokio::test]
-#[ignore = "needs signed time/order: #1764 decision A/B/C pending"]
+#[ignore = "needs signed issued_at in the HITL payload: #1764 option C, not yet implemented"]
 async fn an_answer_after_the_request_expired_does_not_settle() {
     let (tmp, ch) = setup();
     let a = action("rm -rf build");
