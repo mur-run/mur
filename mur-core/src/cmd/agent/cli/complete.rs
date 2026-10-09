@@ -312,6 +312,7 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     ("pin", "make a memory a permanent instruction", Args::Note),
     ("quit", "exit the chat", Args::None),
     ("remember", "save an agent-local memory", Args::None),
+    ("review", "main/reviewer loop in this pane", Args::None),
     (
         "secret",
         "hand the agent a credential (hidden input)",

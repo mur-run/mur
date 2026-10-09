@@ -507,3 +507,23 @@ fn start_new_session_clears_last_sent() {
     assert!(a.last_esc_at.is_none());
     assert!(!a.esc_hint);
 }
+
+/// P3b-§3.1: `/review` keeps the raw rest of the line — the `/review`
+/// grammar (`--`, quoted task words) is `review/args.rs`'s, not this parser's.
+#[test]
+fn parse_slash_review_keeps_the_raw_rest() {
+    assert_eq!(
+        parse_slash("/review"),
+        Some(SlashCmd::Review(String::new()))
+    );
+    assert_eq!(
+        parse_slash("/review --main a --reviewer b -- fix  the   bug"),
+        Some(SlashCmd::Review(
+            "--main a --reviewer b -- fix  the   bug".into()
+        ))
+    );
+    assert_eq!(
+        parse_slash("/review resume review-cd340002"),
+        Some(SlashCmd::Review("resume review-cd340002".into()))
+    );
+}

@@ -64,6 +64,9 @@ pub struct MurmurTransport {
     pub mur_home: PathBuf,
     pub req: Sender<DriverReq>,
     pub flags: ReviewFlags,
+    // No reader in this crate and none in the plan's Tasks 8–12; the UI side
+    // takes members from `WorkerHandle`. Remove or give it a reader in T12.
+    #[allow(dead_code)]
     pub members: [String; 2],
     dial: DialFn,
     respond: RespondFn,
@@ -77,6 +80,9 @@ pub struct MurmurTransport {
 
 impl MurmurTransport {
     /// The real transport: A2A over `mur_home`.
+    // Unused: `spawn_review_worker` builds the real edges itself and calls
+    // `with_io`. Remove or route the worker through it in T12.
+    #[allow(dead_code)]
     pub fn new(
         mur_home: PathBuf,
         req: Sender<DriverReq>,
@@ -117,6 +123,8 @@ impl MurmurTransport {
     }
 
     /// The UI side dropped its receiver: pause as `detached` (P3b-§4.4).
+    /// Test probe: the worker reads `pause_kind` directly.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn detached(&self) -> bool {
         self.pause_kind() == Some(PauseKind::Detached)
     }

@@ -9,7 +9,6 @@ mod state;
 
 pub use confirm::{answer_confirm, on_finished, on_request};
 pub use start::answer_resume;
-#[allow(unused_imports)] // wired in PR 3 (Task 7): slash.rs dispatches `/review` here
 pub use state::handle;
 pub use state::{ReviewSession, is_send_gate};
 
@@ -22,6 +21,9 @@ mod confirm_tests;
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;
+#[cfg(test)]
+#[path = "slash_tests.rs"]
+mod slash_tests;
 #[cfg(test)]
 #[path = "start_tests.rs"]
 mod start_tests;

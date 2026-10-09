@@ -41,7 +41,11 @@ pub enum StartKind {
 pub struct WorkerHandle {
     /// Join before taking the run lock again: the lock drops as the thread ends.
     pub join: JoinHandle<()>,
+    #[allow(dead_code)] // wired in PR 4 (Task 8): Esc×1 sets `pause_requested`
     pub flags: ReviewFlags,
+    // No reader: `ReviewSession::name` is what the UI shows. Remove in T12
+    // unless a task gives it one.
+    #[allow(dead_code)]
     pub name: String,
     pub members: [String; 2],
 }
