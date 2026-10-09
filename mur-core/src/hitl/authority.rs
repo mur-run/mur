@@ -14,20 +14,35 @@ use anyhow::{Result, bail};
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::hitl::HitlRequest;
 
-/// True if `ev` carries the router's authority: a Human or System actor (an
-/// agent never speaks for the human), a signature, and that signature
-/// verifying against the router's key.
+/// True if the router wrote `ev`: a Human or System actor (an agent never
+/// speaks for the human), a signature, and that signature verifying against
+/// the router's key.
+///
+/// This proves MUR asked a question or recorded an answer. It does NOT prove a
+/// human decided anything: the gate's own `--yes` / tier-grant audit record is
+/// router-signed too, as `System`. Use [`is_human_authority`] for that.
 ///
 /// No `require_sig` fallback, on purpose. An unsigned event is exactly what a
 /// sandboxed `mur channel approve` writes — it cannot read the router key — so
 /// tolerating unsigned approvals is tolerating agent-written ones. The cost: a
 /// home with no router identity cannot approve anything.
-pub fn is_router_authority(mur_home: &Path, channel_id: &str, ev: &ChannelEvent) -> bool {
+pub fn is_router_signed(mur_home: &Path, channel_id: &str, ev: &ChannelEvent) -> bool {
     if matches!(ev.actor, ChannelActor::Agent { .. }) || ev.sig.is_none() {
         return false;
     }
     crate::channel_verify::actor_pubkey(mur_home, &ev.actor, ev.key_version)
         .is_some_and(|pk| mur_channel::sign::verify_one(channel_id, ev, &pk, true))
+}
+
+/// True if `ev` is the human's decision: router-signed AND spoken as `Human`
+/// (`mur channel approve`, the phone).
+///
+/// A `System` answer is the gate recording what it did on its own — `--yes`
+/// or a pre-approved tier. That record is audit, not consent: counting it
+/// would let one `--yes` run approve every later run of the same action for
+/// the whole approval TTL, with or without `--yes` (#1764).
+pub fn is_human_authority(mur_home: &Path, channel_id: &str, ev: &ChannelEvent) -> bool {
+    matches!(ev.actor, ChannelActor::Human { .. }) && is_router_signed(mur_home, channel_id, ev)
 }
 
 /// The request `hitl_id` names, if the router asked it.
@@ -54,7 +69,7 @@ pub fn request_to_answer(
         if r.hitl_id != hitl_id {
             continue;
         }
-        if is_router_authority(mur_home, channel_id, e) {
+        if is_router_signed(mur_home, channel_id, e) {
             return Ok(r);
         }
         unsigned_match = true;
@@ -90,27 +105,36 @@ mod tests {
         })
     }
 
-    /// The router answers as the human (`mur channel approve`, the phone) or
-    /// as the system (the gate's own `--yes` / tier-grant audit record).
+    /// The router writes as the human (`mur channel approve`, the phone) or as
+    /// the system (the gate's own `--yes` / tier-grant audit record). Both are
+    /// the router's; only the human's is a decision.
     #[test]
-    fn router_signed_human_and_system_answers_carry_authority() {
+    fn only_the_routers_human_answer_is_the_humans_decision() {
         let tmp = TempDir::new().unwrap();
         let router = crate::channel_writer::plant_writer_identity(tmp.path());
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
-        for actor in [ChannelActor::local_human(), ChannelActor::System] {
+        for (actor, human) in [
+            (ChannelActor::local_human(), true),
+            (ChannelActor::System, false),
+        ] {
             let ev = svc
                 .append_signed(
                     &ch.id,
                     &router,
                     0,
-                    actor,
+                    actor.clone(),
                     EventKind::HitlResponse,
                     response("h1"),
                     None,
                 )
                 .unwrap();
-            assert!(is_router_authority(tmp.path(), &ch.id, &ev));
+            assert!(is_router_signed(tmp.path(), &ch.id, &ev), "{actor:?}");
+            assert_eq!(
+                is_human_authority(tmp.path(), &ch.id, &ev),
+                human,
+                "{actor:?}"
+            );
         }
     }
 
@@ -186,7 +210,8 @@ mod tests {
             ("wrong key as human", &wrong_key),
         ] {
             assert!(
-                !is_router_authority(tmp.path(), &ch.id, ev),
+                !is_router_signed(tmp.path(), &ch.id, ev)
+                    && !is_human_authority(tmp.path(), &ch.id, ev),
                 "{what} must not carry the router's authority"
             );
         }

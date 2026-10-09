@@ -26,7 +26,7 @@ pub const RESTRICTED_GENERAL_PORTS: [u16; 4] = [80, 443, 8080, 8443];
 /// agent against (`mur_channel::sign::resolve_writer_pubkey` reads the chain
 /// first, then falls back to the pubkey). For the router agent that key is the
 /// human's authority: a HITL answer releases a gate only if it verifies against
-/// it (`hitl::authority::is_router_authority`). Replacing either file with a
+/// it (`hitl::authority::is_human_authority`). Replacing either file with a
 /// key the agent generated itself lets it sign its own approvals, and
 /// `verify_chain` has no trust anchor, so a planted chain passes. Nothing in
 /// the runtime writes either file after the seal — `mur agent create` and

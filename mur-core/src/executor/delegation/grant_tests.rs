@@ -121,7 +121,7 @@ impl Fixture {
             self.home(),
             &self.channel_id,
             ROUTER_AGENT,
-            ChannelActor::System,
+            ChannelActor::local_human(),
             EventKind::HitlResponse,
             serde_json::to_value(HitlResponse {
                 hitl_id: req.hitl_id,

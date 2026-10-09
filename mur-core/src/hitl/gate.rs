@@ -293,7 +293,7 @@ pub async fn gate(
 
 /// What the channel already knows about one specific action.
 enum Prior {
-    /// A human (or `--yes`) settled this exact action, recently enough to count.
+    /// A human settled this exact action, recently enough to count.
     Settled(GateDecision),
     /// A request for this exact action is parked and unanswered.
     Pending(String),
@@ -311,9 +311,12 @@ enum Prior {
 /// the action's input changes the hash, so no approval is ever replayed
 /// against bytes a human did not see.
 ///
-/// Only router-signed responses count (`authority::is_router_authority`),
-/// exactly as in the wait loop, and only a router-signed request is reported
-/// as pending. A response outside
+/// A response settles the action only if it is the human's
+/// (`authority::is_human_authority`), exactly as in the wait loop. The gate's
+/// own `--yes` / tier-grant record is router-signed but `System`: it marks its
+/// request answered — that request is not pending, and every listing already
+/// shows it as answered — yet approves nothing, so a later run asks afresh
+/// (#1764). Only a router-signed request is reported as pending. A response outside
 /// the TTL leaves the action `None` (ask again), not `Pending` — its request is
 /// answered, just too long ago to act on.
 fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
@@ -332,13 +335,19 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 let Ok(r) = serde_json::from_value::<HitlResponse>(e.payload.clone()) else {
                     continue;
                 };
-                // Only the router answers for the human — see `authority`.
-                if !super::authority::is_router_authority(mur_home, channel_id, e) {
+                // Only the router writes answers — see `authority`.
+                if !super::authority::is_router_signed(mur_home, channel_id, e) {
                     continue;
                 }
-                // Answered — even if it later fails the TTL check, so the
-                // request it answers is not re-reported as still pending.
+                // Answered — even if it later fails the TTL check or is only
+                // the gate's own audit record, so the request it answers is
+                // not re-reported as still pending.
                 responded.insert(r.hitl_id.clone());
+                // Only the human's answer decides. Audit records are skipped,
+                // not counted as "no": a human's earlier answer still stands.
+                if !super::authority::is_human_authority(mur_home, channel_id, e) {
+                    continue;
+                }
                 if r.action_hash == hash && within_approval_ttl(e.ts, now) {
                     // Later events overwrite earlier ones: the newest decision
                     // for an action is the one that counts.
@@ -360,7 +369,7 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                     continue;
                 };
                 if q.action_hash == hash
-                    && super::authority::is_router_authority(mur_home, channel_id, e)
+                    && super::authority::is_router_signed(mur_home, channel_id, e)
                 {
                     pending_id = Some(q.hitl_id);
                 }
@@ -395,8 +404,8 @@ async fn wait_for_response(
     let start = Instant::now();
     loop {
         // Open, read, drop — then await the sleep. A response releases the
-        // gate only if the router signed it as the human or the system (see
-        // `authority::is_router_authority`). An agent's own correctly-signed
+        // gate only if the router signed it as the human (see
+        // `authority::is_human_authority`). An agent's own correctly-signed
         // reply is a verified statement by that agent, not an approval; it is
         // filtered out and the loop keeps waiting.
         let found = {
@@ -408,7 +417,7 @@ async fn wait_for_response(
                 {
                     return false;
                 }
-                if !super::authority::is_router_authority(mur_home, channel_id, e) {
+                if !super::authority::is_human_authority(mur_home, channel_id, e) {
                     tracing::warn!(
                         channel_id,
                         hitl_id,
@@ -465,5 +474,7 @@ async fn wait_for_response(
     }
 }
 
+#[cfg(test)]
+mod human_authority_tests;
 #[cfg(test)]
 mod tests;

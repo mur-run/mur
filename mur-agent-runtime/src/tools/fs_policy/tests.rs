@@ -286,7 +286,7 @@ fn self_protected_denies_own_profile_despite_write_grant() {
 }
 
 /// The router's public key decides whether a HITL answer came from the human
-/// (`hitl::authority::is_router_authority`), and it is read from the router
+/// (`hitl::authority::is_human_authority`), and it is read from the router
 /// agent's own home. If that agent could replace `identity.pub`, or plant a
 /// `rotations.jsonl` (checked first, and it need not exist yet), it could sign
 /// its own approvals. Both stay READABLE: peers verify this agent from them.

@@ -197,7 +197,7 @@ mod tests {
             home,
             channel_id,
             crate::channel_writer::ROUTER_AGENT,
-            ChannelActor::System,
+            ChannelActor::local_human(),
             EventKind::HitlResponse,
             serde_json::to_value(&resp).unwrap(),
             None,
