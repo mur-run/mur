@@ -11,6 +11,15 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         return;
     }
     app.clear_suggestion_ghost();
+    // §8 step 4: a resume waiting on `Paused — continue?` owns the next line,
+    // the empty one included (Enter is the answer), so this precedes the
+    // empty-line return and slash parsing.
+    if app.review.as_ref().is_some_and(|r| r.awaiting.is_some()) {
+        let line = app.input_text();
+        app.clear_input();
+        review::answer_resume(app, &line, tx);
+        return;
+    }
     let mut trimmed = app.input_text().trim().to_string();
     // Allow an image-only send (caption optional) when a screenshot is staged.
     if trimmed.is_empty() && app.pending_image.is_none() {

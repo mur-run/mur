@@ -353,7 +353,7 @@ pub(super) fn is_send_answer(line: &str) -> bool {
 /// Refuse to start when a member is down, before main spends a turn only for
 /// the reviewer's send to fail. Same liveness test as `a2a_dial`'s
 /// `RequireRunning` (the lock file exists), so the two never disagree.
-pub(super) fn require_running(mur_home: &Path, members: &[&str]) -> Result<()> {
+pub(crate) fn require_running(mur_home: &Path, members: &[&str]) -> Result<()> {
     let down: Vec<&str> = members
         .iter()
         .copied()

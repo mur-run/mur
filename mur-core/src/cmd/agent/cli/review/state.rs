@@ -4,8 +4,8 @@ use mur_channel::ChannelService;
 use tokio::sync::mpsc::Sender;
 
 use super::args::{ReviewLine, parse_review_line};
-use super::render::status_line;
-use super::start::start;
+use super::render::{paused_list, status_line};
+use super::start::{resume, start};
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::StreamMsg;
@@ -13,6 +13,15 @@ use crate::cmd::fleet::review::constants::{
     REVIEW_ALREADY_ATTACHED, REVIEW_AUTO_REFUSED, REVIEW_SLASH,
 };
 use crate::cmd::fleet::review::murmur::worker::WorkerHandle;
+use crate::cmd::fleet::review::resume::{Resumable, list_paused};
+
+/// What the attached session is waiting on the human for.
+#[derive(Debug)]
+pub enum Awaiting {
+    /// §8 step 4: `prepare_resume` succeeded and holds the lock; the next
+    /// line answers `Paused — continue?`. Dropping it releases the lock.
+    ResumeConfirm(Box<Resumable>),
+}
 
 /// What MURMUR holds while a review is attached (spec §3.4, §4).
 pub struct ReviewSession {
@@ -20,6 +29,7 @@ pub struct ReviewSession {
     pub channel_id: String,
     pub handle: Option<WorkerHandle>,
     pub esc: ReviewEsc,
+    pub awaiting: Option<Awaiting>,
     /// Set by Ctrl+D while the worker is still finishing its turn (§4.4).
     pub closing: bool,
 }
@@ -35,22 +45,29 @@ pub async fn handle(app: &mut App, raw: &str, tx: &Sender<StreamMsg>) {
         app.push_system(text);
         return;
     }
-    let refused = match parse_review_line(raw) {
-        Err(syntax) => syntax,
-        Ok(ReviewLine::AutoRefused) => REVIEW_AUTO_REFUSED.to_string(),
-        Ok(ReviewLine::Start(args)) => match start(&app.home, &args, tx) {
-            Ok((session, banner)) => {
-                app.push_system(banner);
-                app.review = Some(session);
-                return;
+    let started = match parse_review_line(raw) {
+        Err(syntax) => Err(syntax),
+        Ok(ReviewLine::AutoRefused) => Err(REVIEW_AUTO_REFUSED.to_string()),
+        Ok(ReviewLine::Bare) => {
+            match list_paused(&app.home) {
+                Ok(rows) => app.push_system(paused_list(&rows)),
+                Err(e) => app.push_error(format!("{e:#}")),
             }
-            Err(e) => format!("{e:#}"),
-        },
-        // wired in PR 3 (Task 7): bare list and resume come next
-        Ok(ReviewLine::Bare | ReviewLine::Resume(_)) => return,
+            return;
+        }
+        Ok(ReviewLine::Start(args)) => start(&app.home, &args, tx).map_err(|e| format!("{e:#}")),
+        Ok(ReviewLine::Resume(name)) => resume(&app.home, &name, tx).map_err(|e| format!("{e:#}")),
     };
-    app.push_error(refused);
-    app.set_input(&format!("/{REVIEW_SLASH} {}", raw.trim()));
+    match started {
+        Ok((session, text)) => {
+            app.push_system(text);
+            app.review = Some(session);
+        }
+        Err(refused) => {
+            app.push_error(refused);
+            app.set_input(&format!("/{REVIEW_SLASH} {}", raw.trim()));
+        }
+    }
 }
 
 /// The status line from the channel as it stands now; the name alone if the

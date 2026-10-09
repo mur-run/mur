@@ -6,6 +6,7 @@ mod render;
 mod start;
 mod state;
 
+pub use start::answer_resume;
 pub use state::ReviewSession;
 #[allow(unused_imports)] // wired in PR 3 (Task 7): slash.rs dispatches `/review` here
 pub use state::handle;
@@ -13,6 +14,9 @@ pub use state::handle;
 #[cfg(test)]
 #[path = "args_tests.rs"]
 mod args_tests;
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod resume_tests;
 #[cfg(test)]
 #[path = "start_tests.rs"]
 mod start_tests;

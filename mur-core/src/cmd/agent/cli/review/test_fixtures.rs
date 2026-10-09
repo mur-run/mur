@@ -1,14 +1,19 @@
 //! Fixtures shared by the `/review` UI tests (`state_tests`, `start_tests`).
 
 use std::path::Path;
+use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Receiver};
 
 use crate::cmd::agent::cli::Role;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::persist::Session;
 use crate::cmd::agent::cli::stream::{STREAM_CHANNEL_CAP, StreamMsg};
 use crate::cmd::fleet::review::constants::RUNNING_LOCK;
+use crate::cmd::fleet::review::murmur::bridge::DriverReq;
+
+/// Long enough for a loaded CI box; the worker answers in milliseconds.
+const WAIT: Duration = Duration::from_secs(20);
 
 /// A home that outlives the test body (`app/tests/state.rs::app()` drops its
 /// tempdir, which is fine for it but would delete the channel we need).
@@ -55,4 +60,21 @@ pub(super) fn tx() -> mpsc::Sender<StreamMsg> {
 /// A sender and the receiver the test reads the worker's requests from.
 pub(super) fn stream() -> (mpsc::Sender<StreamMsg>, mpsc::Receiver<StreamMsg>) {
     mpsc::channel(STREAM_CHANNEL_CAP)
+}
+
+pub(super) fn fleets(home: &Path) -> Vec<String> {
+    crate::cmd::fleet::store::list_fleets(home).unwrap()
+}
+
+/// The next message, skipping transcript `Show`s.
+pub(super) async fn next(rx: &mut Receiver<StreamMsg>) -> StreamMsg {
+    loop {
+        let msg = tokio::time::timeout(WAIT, rx.recv())
+            .await
+            .expect("the worker answered in time")
+            .expect("the stream stays open until Finished");
+        if !matches!(msg, StreamMsg::ReviewReq(DriverReq::Show(_))) {
+            return msg;
+        }
+    }
 }

@@ -261,6 +261,21 @@ pub const REVIEW_AUTO_REFUSED: &str =
 /// P3b-§3.4: a second `/review` while one is attached. `{session}` is its name.
 pub const REVIEW_ALREADY_ATTACHED: &str = "a review session is already attached: {session}";
 
+/// P3b-§3.4: bare `/review` with nothing attached and nothing to list.
+pub const REVIEW_NO_PAUSED: &str = "no paused review sessions";
+/// P3b-§3.4: one bare-`/review` row for a session MURMUR can resume.
+/// `{state}` is [`REVIEW_ROW_PAUSED`] or [`REVIEW_ROW_CRASHED`].
+pub const REVIEW_ROW_RESUMABLE: &str =
+    "{session}  {state}  last {last}  → /review resume {session}";
+pub const REVIEW_ROW_PAUSED: &str = "paused";
+pub const REVIEW_ROW_CRASHED: &str = "crashed";
+/// P3b-§3.4 / AC-P3b-4b: a session another process holds; never offered.
+/// `{who}` is ` (<holder>)` or empty.
+pub const REVIEW_ROW_RUNNING: &str = "{session}  running{who}  (not resumable here)";
+/// A row's `last` when the channel has no timestamp to show.
+pub const REVIEW_ROW_NO_LAST: &str = "—";
+pub const REVIEW_ROW_TIME_FORMAT: &str = "%Y-%m-%d %H:%M UTC";
+
 /// P3b-§3.3 syntax errors for `/review`; each is followed by
 /// [`REVIEW_USAGE_MURMUR`] on its own lines. `{what}` is a flag or "task".
 pub const REVIEW_SYNTAX_MISSING: &str = "missing {what}";

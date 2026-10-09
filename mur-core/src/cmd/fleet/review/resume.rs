@@ -358,7 +358,6 @@ pub fn resume_session(
 }
 
 /// One line of bare `/review`'s list (spec §3.4).
-#[allow(dead_code)] // wired in PR 3 (Task 7): bare `/review` lists these
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PausedRow {
     pub name: String,
@@ -368,7 +367,6 @@ pub struct PausedRow {
 
 /// Review sessions MURMUR can show in bare `/review`: paused and crashed
 /// (offered for resume) and running in another process (listed, not offered).
-#[allow(dead_code)] // wired in PR 3 (Task 7): bare `/review` calls it
 pub fn list_paused(mur_home: &Path) -> Result<Vec<PausedRow>> {
     let svc = ChannelService::open(mur_home)?;
     let mut ids = svc.store().list_ids()?;

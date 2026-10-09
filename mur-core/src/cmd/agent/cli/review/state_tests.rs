@@ -41,6 +41,7 @@ fn attach(app: &mut App, home: &Path, esc: ReviewEsc) {
         channel_id,
         handle: None,
         esc,
+        awaiting: None,
         closing: false,
     });
 }

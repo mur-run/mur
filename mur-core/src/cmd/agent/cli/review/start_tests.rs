@@ -5,37 +5,14 @@
 //! it at the first send gate (the reply is dropped, so the session pauses as
 //! detached) — no agent is ever dialled.
 
-use std::path::Path;
-use std::time::Duration;
-
 use tokio::sync::mpsc::Receiver;
 
 use super::handle;
-use super::test_fixtures::{agent, app_at, home, stream, system_lines, tx};
+use super::test_fixtures::{agent, app_at, fleets, home, next, stream, system_lines, tx};
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::StreamMsg;
 use crate::cmd::fleet::review::constants::{REVIEW_AUTO_REFUSED, REVIEW_FLEET_PREFIX};
 use crate::cmd::fleet::review::murmur::bridge::{DriverReq, Outcome};
-
-/// Long enough for a loaded CI box; the worker answers in milliseconds.
-const WAIT: Duration = Duration::from_secs(20);
-
-fn fleets(home: &Path) -> Vec<String> {
-    crate::cmd::fleet::store::list_fleets(home).unwrap()
-}
-
-/// The next message, skipping transcript `Show`s.
-async fn next(rx: &mut Receiver<StreamMsg>) -> StreamMsg {
-    loop {
-        let msg = tokio::time::timeout(WAIT, rx.recv())
-            .await
-            .expect("the worker answered in time")
-            .expect("the stream stays open until Finished");
-        if !matches!(msg, StreamMsg::ReviewReq(DriverReq::Show(_))) {
-            return msg;
-        }
-    }
-}
 
 /// Drop the gate's reply (the session pauses), wait for `Finished`, join.
 async fn stop_at_gate(app: &mut App, rx: &mut Receiver<StreamMsg>) {

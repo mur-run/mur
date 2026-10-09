@@ -169,6 +169,6 @@ pub(super) fn send_answer_for(
 
 /// MURMUR's Enter / `y` / `yes`. There is no EOF in an input box, so an
 /// empty line is consent here (it is the Enter key) and never on stdin.
-fn is_murmur_send(line: &str) -> bool {
+pub(crate) fn is_murmur_send(line: &str) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "" | "y" | "yes")
 }
