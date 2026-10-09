@@ -71,9 +71,10 @@ fn the_runtimes_own_central_store_reads_are_granted() {
     }
 }
 
-/// Git-push, Landlock read side: with `git_push.enabled` the agent gets exactly
-/// the registry and its OWN status dir — not the broker dir, not broker-private
-/// state, not a sibling's status. Off (the default) it gets nothing there.
+/// Git-push, Landlock read side: an allowlisted agent gets exactly the registry
+/// and its OWN status dir — not the broker dir, not broker-private state, not a
+/// sibling's status. Off (the default), or enabled but this agent unlisted, it
+/// gets nothing there.
 #[test]
 fn git_push_reads_are_exactly_registry_and_own_status_and_only_when_enabled() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -99,7 +100,23 @@ fn git_push_reads_are_exactly_registry_and_own_status_and_only_when_enabled() {
         off.fs_read
     );
 
-    std::fs::write(mur_home.join("config.yaml"), "git_push:\n  enabled: true\n").unwrap();
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "git_push:\n  enabled: true\n  agents: [pm]\n",
+    )
+    .unwrap();
+    let unlisted = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(
+        !reaches(&unlisted, &reg) && !reaches(&unlisted, &own),
+        "enabled but this agent unlisted: {:?}",
+        unlisted.fs_read
+    );
+
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "git_push:\n  enabled: true\n  agents: [mur]\n",
+    )
+    .unwrap();
     let on = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
     assert!(reaches(&on, &reg) && reaches(&on, &own), "{:?}", on.fs_read);
     assert!(!on.fs_read.contains(&broker), "never the whole broker dir");

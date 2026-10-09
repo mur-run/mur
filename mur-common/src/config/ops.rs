@@ -256,15 +256,22 @@ pub struct FleetRunConfig {
     pub fleets: Vec<String>,
 }
 
-/// Gate for the git push broker (`git_push:` in `~/.mur/config.yaml`). Off by
-/// default: with it off no agent sees `git_push_request` / `git_push_status` /
-/// `git_push_cancel`, the sandbox grants no read into `<mur_home>/git-push/`, and
-/// the daemon sweeper does not run. Global config, not the agent profile, for the
-/// same reason as [`FleetRunConfig`]: a prompt-injected agent must not widen it.
+/// Gate for the git push broker (`git_push:` in `~/.mur/config.yaml`).
+/// Deny-by-default on BOTH axes, like [`FleetRunConfig`]: `enabled` is the
+/// broker-wide switch (off: the daemon sweeper does not run and no agent gets
+/// anything), and `agents` names the only agents that see `git_push_request` /
+/// `git_push_status` / `git_push_cancel` and get the Landlock read grant on the
+/// registry. An agent not named here — a deep-research worker, say — never sees
+/// the tools, so it neither learns the registry exists nor adds requests to the
+/// human approval queue. Global config, not the agent profile, for the same
+/// reason as [`FleetRunConfig`]: a prompt-injected agent must not widen it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct GitPushConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Canonical agent names allowed the push tools. Empty = deny all.
+    #[serde(default)]
+    pub agents: Vec<String>,
 }
 
 /// Display policy for `mur open`.
@@ -401,8 +408,11 @@ mod fleet_config_tests {
     fn git_push_config_defaults_off_and_roundtrips() {
         let cfg: Config = serde_yaml_ng::from_str("{}").unwrap();
         assert!(!cfg.git_push.enabled);
-        let cfg2: Config = serde_yaml_ng::from_str("git_push:\n  enabled: true\n").unwrap();
+        assert!(cfg.git_push.agents.is_empty());
+        let cfg2: Config =
+            serde_yaml_ng::from_str("git_push:\n  enabled: true\n  agents: [mur]\n").unwrap();
         assert!(cfg2.git_push.enabled);
+        assert_eq!(cfg2.git_push.agents, vec!["mur"]);
     }
 }
 

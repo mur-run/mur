@@ -224,12 +224,13 @@ pub async fn build_provider_runner(
             );
         }
     }
-    // Built-in git push broker tools: registered ONLY when `git_push.enabled`
-    // in the global config (default off). An explicit Deny in the profile still
+    // Built-in git push broker tools: registered ONLY for agents allowlisted in
+    // the global config (`git_push.enabled` + `git_push.agents`, deny-by-default)
+    // — unauthorized agents never see them. An explicit Deny in the profile still
     // wins. No profile rule can approve a push — the tool only queues it; the
     // human approval happens daemon-side on the exact (ref, old, new).
     #[cfg(unix)]
-    if crate::tools::git_push::enabled(&mur_home) {
+    if crate::tools::git_push::agent_enabled(&mur_home, &profile.inner.name) {
         use crate::tools::git_push::*;
         use mur_common::agent::{ToolPolicy, resolve_tool_policy};
         let agent = profile.inner.name.clone();

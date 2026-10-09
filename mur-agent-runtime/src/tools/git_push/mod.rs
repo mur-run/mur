@@ -29,12 +29,20 @@ pub const GIT_PUSH_REQUEST: &str = "git_push_request";
 pub const GIT_PUSH_STATUS: &str = "git_push_status";
 pub const GIT_PUSH_CANCEL: &str = "git_push_cancel";
 
-/// `git_push.enabled` in the global config (default off). Read at tool
-/// registration and by the sandbox builder; never from the agent profile.
-pub fn enabled(mur_home: &std::path::Path) -> bool {
-    mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
-        .git_push
-        .enabled
+/// Is `agent` allowed the push tools per the global config? Deny-by-default:
+/// the broker must be `enabled` AND the agent named in `agents` (exact,
+/// canonical name — the same match `fleet_run.agents` uses).
+pub fn allowed(cfg: &mur_common::config::GitPushConfig, agent: &str) -> bool {
+    cfg.enabled && cfg.agents.iter().any(|a| a == agent)
+}
+
+/// [`allowed`] against `<mur_home>/config.yaml`. Read at tool registration and
+/// by the sandbox builder; never from the agent profile.
+pub fn agent_enabled(mur_home: &std::path::Path, agent: &str) -> bool {
+    allowed(
+        &mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).git_push,
+        agent,
+    )
 }
 
 /// Every rejection the model sees starts with a stable wire code.
@@ -45,3 +53,37 @@ fn invalid(detail: &str) -> super::ToolError {
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(test)]
+mod allow_tests {
+    use super::allowed;
+    use mur_common::config::GitPushConfig;
+
+    #[test]
+    fn allowed_is_deny_by_default_on_both_axes() {
+        assert!(!allowed(&GitPushConfig::default(), "mur"));
+        let listed_but_off = GitPushConfig {
+            enabled: false,
+            agents: vec!["mur".into()],
+        };
+        assert!(!allowed(&listed_but_off, "mur"));
+        let on_but_unlisted = GitPushConfig {
+            enabled: true,
+            agents: vec![],
+        };
+        assert!(!allowed(&on_but_unlisted, "mur"));
+        let on = GitPushConfig {
+            enabled: true,
+            agents: vec!["mur".into()],
+        };
+        assert!(allowed(&on, "mur"));
+        assert!(
+            !allowed(&on, "dr_worker_1"),
+            "a research worker is not named"
+        );
+        assert!(
+            !allowed(&on, "Mur"),
+            "exact canonical match, like fleet_run"
+        );
+    }
+}

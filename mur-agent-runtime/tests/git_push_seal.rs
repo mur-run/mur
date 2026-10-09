@@ -28,10 +28,14 @@ fn fresh_home(case: &str) -> PathBuf {
     std::fs::create_dir_all(home.join("agents").join(AGENT)).unwrap();
     std::fs::create_dir_all(mur_common::git_push::broker_dir(&home)).unwrap();
     std::fs::write(mur_common::git_push::registry_path(&home), ORIGINAL).unwrap();
-    // Enabled, as in a real enrollment: on Landlock the registry read grant is
+    // Enabled and allowlisted, as in a real enrollment: on Landlock the registry read grant is
     // config-gated, and without it the "stays readable" half fails for the
     // wrong reason.
-    std::fs::write(home.join("config.yaml"), "git_push:\n  enabled: true\n").unwrap();
+    std::fs::write(
+        home.join("config.yaml"),
+        format!("git_push:\n  enabled: true\n  agents: [{AGENT}]\n"),
+    )
+    .unwrap();
     home
 }
 
