@@ -4,13 +4,16 @@ use mur_common::channel::ChannelEvent;
 
 use super::state::ReviewSession;
 use crate::cmd::fleet::review::constants::{
-    REVIEW_NO_PAUSED, REVIEW_ROW_CRASHED, REVIEW_ROW_NO_LAST, REVIEW_ROW_PAUSED,
-    REVIEW_ROW_RESUMABLE, REVIEW_ROW_RUNNING, REVIEW_ROW_TIME_FORMAT, REVIEW_USAGE_MURMUR,
+    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_NO_PAUSED, REVIEW_ROW_CRASHED, REVIEW_ROW_NO_LAST,
+    REVIEW_ROW_PAUSED, REVIEW_ROW_RESUMABLE, REVIEW_ROW_RUNNING, REVIEW_ROW_TIME_FORMAT,
+    REVIEW_USAGE_MURMUR,
 };
+use crate::cmd::fleet::review::murmur::bridge::Outcome;
 use crate::cmd::fleet::review::resume::PausedRow;
 use crate::cmd::fleet::review::schema::{
     MICROS_PER_USD, NoteClassification, ReviewPayload, Role, classify_note_payload,
 };
+use crate::cmd::fleet::review::session::render_stop_screen;
 use crate::cmd::fleet::review::state::{SessionState, cumulative_of};
 
 /// Bare `/review` while attached: name, who the last send went to, and the
@@ -84,4 +87,13 @@ fn paused_row(r: &PausedRow) -> String {
         .replace("{session}", &r.name)
         .replace("{state}", state)
         .replace("{last}", &last)
+}
+
+/// §7.2: how the worker's end reads in the transcript, as stdin prints it.
+pub fn finished_block(o: &Outcome) -> String {
+    match o {
+        Outcome::Ran(stop, ledger, channel_id) => render_stop_screen(stop, ledger, channel_id),
+        Outcome::LeftPaused => REVIEW_LEFT_PAUSED_NOTICE.to_string(),
+        Outcome::Err(e) => e.clone(),
+    }
 }

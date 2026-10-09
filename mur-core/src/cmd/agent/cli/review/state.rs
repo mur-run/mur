@@ -1,5 +1,7 @@
 //! The attached `/review` session and the one entry point that drives it.
 
+use std::collections::BTreeSet;
+
 use mur_channel::ChannelService;
 use tokio::sync::mpsc::Sender;
 
@@ -12,6 +14,8 @@ use crate::cmd::agent::cli::stream::StreamMsg;
 use crate::cmd::fleet::review::constants::{
     REVIEW_ALREADY_ATTACHED, REVIEW_AUTO_REFUSED, REVIEW_SLASH,
 };
+use crate::cmd::fleet::review::driver::SendAnswer;
+use crate::cmd::fleet::review::murmur::bridge::Reply;
 use crate::cmd::fleet::review::murmur::worker::WorkerHandle;
 use crate::cmd::fleet::review::resume::{Resumable, list_paused};
 
@@ -21,6 +25,17 @@ pub enum Awaiting {
     /// §8 step 4: `prepare_resume` succeeded and holds the lock; the next
     /// line answers `Paused — continue?`. Dropping it releases the lock.
     ResumeConfirm(Box<Resumable>),
+    /// §5: the worker's send gate; the next line answers it. Dropping
+    /// `reply` reads as Stop on the worker side (§4.4).
+    Confirm {
+        open: BTreeSet<String>,
+        reply: Reply<SendAnswer>,
+    },
+}
+
+/// The send gate (answered by `answer_confirm`), not the resume question.
+pub fn is_send_gate(a: &Awaiting) -> bool {
+    matches!(a, Awaiting::Confirm { .. })
 }
 
 /// What MURMUR holds while a review is attached (spec §3.4, §4).

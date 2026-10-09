@@ -11,13 +11,22 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
         return;
     }
     app.clear_suggestion_ghost();
-    // §8 step 4: a resume waiting on `Paused — continue?` owns the next line,
-    // the empty one included (Enter is the answer), so this precedes the
-    // empty-line return and slash parsing.
-    if app.review.as_ref().is_some_and(|r| r.awaiting.is_some()) {
+    // §8 step 4 / §5.2: a resume waiting on `Paused — continue?` or the send
+    // gate owns the next line, the empty one included (Enter is the answer),
+    // so this precedes the empty-line return and slash parsing.
+    if let Some(confirm) = app
+        .review
+        .as_ref()
+        .and_then(|r| r.awaiting.as_ref())
+        .map(review::is_send_gate)
+    {
         let line = app.input_text();
         app.clear_input();
-        review::answer_resume(app, &line, tx);
+        if confirm {
+            review::answer_confirm(app, &line);
+        } else {
+            review::answer_resume(app, &line, tx);
+        }
         return;
     }
     let mut trimmed = app.input_text().trim().to_string();

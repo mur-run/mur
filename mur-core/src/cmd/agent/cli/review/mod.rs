@@ -2,18 +2,23 @@
 //! state, and run the review driver on a worker thread.
 
 mod args;
+mod confirm;
 mod render;
 mod start;
 mod state;
 
+pub use confirm::{answer_confirm, on_finished, on_request};
 pub use start::answer_resume;
-pub use state::ReviewSession;
 #[allow(unused_imports)] // wired in PR 3 (Task 7): slash.rs dispatches `/review` here
 pub use state::handle;
+pub use state::{ReviewSession, is_send_gate};
 
 #[cfg(test)]
 #[path = "args_tests.rs"]
 mod args_tests;
+#[cfg(test)]
+#[path = "confirm_tests.rs"]
+mod confirm_tests;
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;
