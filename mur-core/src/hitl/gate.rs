@@ -325,6 +325,7 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
     drop(svc);
 
     let now = chrono::Utc::now();
+    let requests = binding::Requests::collect(mur_home, channel_id, &events);
     let mut responded: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut settled: Option<GateDecision> = None;
     let mut pending_id: Option<String> = None;
@@ -337,6 +338,13 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 };
                 // Only the router writes answers — see `authority`.
                 if !super::authority::is_router_signed(mur_home, channel_id, e) {
+                    continue;
+                }
+                // An answer counts only for the request it names (#1764). An
+                // unbound one is ignored outright: it neither settles the
+                // action nor marks any request answered.
+                if let Err(why) = requests.bind(&r) {
+                    tracing::warn!(channel_id, hitl_id = %r.hitl_id, ?why, "HitlResponse does not answer its request — ignoring");
                     continue;
                 }
                 // Answered — even if it later fails the TTL check or is only
@@ -368,8 +376,11 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 let Ok(q) = serde_json::from_value::<HitlRequest>(e.payload.clone()) else {
                     continue;
                 };
+                // A re-issued id is never offered for answering again; the
+                // gate writes a fresh request instead.
                 if q.action_hash == hash
                     && super::authority::is_router_signed(mur_home, channel_id, e)
+                    && !requests.is_reissued(&q.hitl_id)
                 {
                     pending_id = Some(q.hitl_id);
                 }
@@ -408,10 +419,12 @@ async fn wait_for_response(
         // `authority::is_human_authority`). An agent's own correctly-signed
         // reply is a verified statement by that agent, not an approval; it is
         // filtered out and the loop keeps waiting.
-        let found = {
+        let (found, reissued) = {
             let svc = ChannelService::open(mur_home)?;
             let evs = svc.load_events(channel_id)?;
-            evs.into_iter().rev().find(|e| {
+            drop(svc);
+            let requests = binding::Requests::collect(mur_home, channel_id, &evs);
+            let found = evs.into_iter().rev().find(|e| {
                 if e.kind != EventKind::HitlResponse
                     || e.payload.get("hitl_id").and_then(|v| v.as_str()) != Some(hitl_id)
                 {
@@ -427,8 +440,21 @@ async fn wait_for_response(
                     return false;
                 }
                 true
-            })
+            });
+            (found, requests.is_reissued(hitl_id))
         };
+        // Same binding rule as `scan_prior`. Our own request was signed a
+        // second time under this id: no answer to it can be trusted, so fail
+        // closed rather than wait. A hash mismatch is caught as drift below.
+        if reissued {
+            return Ok(GateDecision {
+                allow: false,
+                deferred: false,
+                reason: "hitl_reissued: request id signed more than once".into(),
+                action_hash: expected_hash.to_string(),
+                hitl_id: None,
+            });
+        }
         if let Some(resp) = found {
             let echoed = resp
                 .payload
@@ -474,7 +500,11 @@ async fn wait_for_response(
     }
 }
 
+mod binding;
+
 #[cfg(test)]
 mod human_authority_tests;
+#[cfg(test)]
+mod response_binding_tests;
 #[cfg(test)]
 mod tests;

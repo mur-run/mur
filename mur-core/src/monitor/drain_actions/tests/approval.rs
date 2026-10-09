@@ -178,9 +178,9 @@ fn an_approval_that_lands_later_releases_the_parked_action() {
 /// hardcoded `>= 3` in the drain cannot keep this green: with a literal,
 /// two attempts never exhaust and the state assertion goes red.
 ///
-/// Three gated actions, all approved before the first tick, against a
-/// cap of 2 — exactly the shape that overshot. Phase 1 walks them in one
-/// pass from a single `store.list()` snapshot, so reading
+/// Three gated actions, parked on the first tick and all approved before
+/// the second, against a cap of 2 — exactly the shape that overshot. Phase
+/// 1 walks them in one pass from a single `store.list()` snapshot, so reading
 /// `remediation_attempts` from that snapshot gives every sibling the
 /// count as it was before any of them incremented it and all three run.
 /// Asserting the total EQUALS the cap (not `<=`) is what catches that.
@@ -199,11 +199,18 @@ fn reaching_the_remediation_cap_exhausts_the_monitor_and_stops_acting() {
             row.spec.policy.max_remediation_attempts, 2,
             "the fixture must not use the default cap"
         );
+    }
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    // Tick 1 parks all three: an answer must name a request (#1764).
+    drain_actions(&home, rt.handle(), t0()).unwrap();
+    {
+        let s = store(&home);
+        let row = s.get(&id).unwrap().unwrap();
+        assert_eq!(row.remediation_attempts, 0, "parking spends no budget");
         for index in 0..3 {
             approve(&home, &row, "rerun", index);
         }
     }
-    let rt = tokio::runtime::Runtime::new().unwrap();
     drain_actions(&home, rt.handle(), t0()).unwrap();
 
     let s = store(&home);

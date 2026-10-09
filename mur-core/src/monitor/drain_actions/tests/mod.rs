@@ -10,8 +10,8 @@
 use super::*;
 use chrono::TimeZone;
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, EventKind};
-use mur_common::hitl::HitlResponse;
+use mur_common::channel::EventKind;
+use mur_common::hitl::HitlRequest;
 use mur_monitor::adapter::{Observation, SourceAdapter};
 use mur_monitor::scheduler;
 use mur_monitor::spec::{MonitorSpec, SourceType};
@@ -110,37 +110,29 @@ fn event_kinds(s: &MonitorStore, id: &str) -> Vec<String> {
     s.events(id).unwrap().into_iter().map(|e| e.kind).collect()
 }
 
-/// Approve one action on the monitor's derived channel, keyed on
-/// `action_hash` exactly as `mur channel approve` is — and, like it, through
-/// the SIGNED `append_as_writer` path (`cmd/channel.rs`), not a bare
-/// `ChannelService::append`. The hash comes from `expected_hash`, so no
-/// `HitlRequest` need be parked first: `scan_prior` matches on the hash,
-/// never on a `hitl_id` — which is what makes a late (or standing) approval
-/// releasable at all.
+/// Approve one parked action on the monitor's derived channel through the
+/// real `mur channel approve` path (`cmd::channel::approve_in`): it answers
+/// the router-signed `HitlRequest` the gate parked for this action, by that
+/// request's `hitl_id`, and signs the answer as the human.
 ///
-/// The signature is load-bearing, not decoration: with
-/// `MUR_CHANNEL_REQUIRE_SIG=1` the gate drops an unsigned `HitlResponse`, so
-/// an unsigned fixture would test a path no real approval ever takes.
+/// The request must exist. A response that names no request settles nothing
+/// (#1764), and no real surface can write one, because `approve_in` refuses
+/// an id the router never asked. So drain once to park the action first.
 fn approve(home: &Path, row: &MonitorRow, verb: &str, index: usize) {
-    let resp = HitlResponse {
-        hitl_id: format!("hitl-test-{verb}-{index}"),
-        action_hash: expected_hash(row, verb, index, &serde_json::Map::new()),
-        allow: true,
-        reason: "test".into(),
-        surface: "cli".into(),
-    };
-    let svc = ChannelService::open(home).unwrap();
-    crate::channel_writer::append_as_writer(
-        &svc,
-        home,
-        &channel_id_for(&row.id),
-        crate::channel_writer::ROUTER_AGENT,
-        ChannelActor::local_human(),
-        EventKind::HitlResponse,
-        serde_json::to_value(&resp).unwrap(),
-        None,
-    )
-    .unwrap();
+    let hash = expected_hash(row, verb, index, &serde_json::Map::new());
+    let channel = channel_id_for(&row.id);
+    let hitl_id = ChannelService::open(home)
+        .unwrap()
+        .load_events(&channel)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .filter(|e| e.kind == EventKind::HitlRequest)
+        .filter_map(|e| serde_json::from_value::<HitlRequest>(e.payload).ok())
+        .find(|r| r.action_hash == hash)
+        .map(|r| r.hitl_id)
+        .unwrap_or_else(|| panic!("{verb}[{index}] is not parked: drain before approving"));
+    crate::cmd::channel::approve_in(home, &channel, &hitl_id, false, Some("test".into())).unwrap();
 }
 
 mod approval;
