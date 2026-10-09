@@ -68,6 +68,7 @@ fn answer_as(home: &Path, ch: &str, hitl_id: &str, actor: ChannelActor) {
         allow: true,
         reason: "test".into(),
         surface: "cli".into(),
+        issued_at: Some(chrono::Utc::now()),
     };
     crate::channel_writer::append_as_writer(
         &svc,

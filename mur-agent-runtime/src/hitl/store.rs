@@ -174,6 +174,7 @@ mod tests {
             allow,
             reason: String::new(),
             surface: "hub".into(),
+            issued_at: Some(chrono::Utc::now()),
         }
     }
 

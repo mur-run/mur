@@ -191,6 +191,7 @@ pub async fn gate(
                 agent_id: req.agent_id.clone(),
                 timeout_ms: timeout.as_millis() as u64,
                 summary: req.summary.clone(),
+                issued_at: Some(chrono::Utc::now()),
             };
             // Open, write, drop — never cross an await with the service open.
             // The router ("mur") signs the events it writes (v3d) so a reader
@@ -252,6 +253,7 @@ pub async fn gate(
                     allow: true,
                     reason: why.clone(),
                     surface: if policy.yes { "auto" } else { "policy" }.into(),
+                    issued_at: Some(chrono::Utc::now()),
                 };
                 {
                     let svc = ChannelService::open(mur_home)?;

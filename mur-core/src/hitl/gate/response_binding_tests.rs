@@ -73,12 +73,25 @@ fn append_router(
 
 /// The human approves `hitl_id` for `hash` — router-signed, `Human` actor.
 fn human_allows(home: &Path, ch: &str, hitl_id: &str, hash: &str) {
+    human_allows_at(home, ch, hitl_id, hash, Some(chrono::Utc::now()));
+}
+
+/// [`human_allows`] with an explicit signed `issued_at` (`None` = a payload
+/// written before the field existed).
+fn human_allows_at(
+    home: &Path,
+    ch: &str,
+    hitl_id: &str,
+    hash: &str,
+    issued_at: Option<chrono::DateTime<chrono::Utc>>,
+) {
     let resp = HitlResponse {
         hitl_id: hitl_id.into(),
         action_hash: hash.into(),
         allow: true,
         reason: "test".into(),
         surface: "cli".into(),
+        issued_at,
     };
     append_router(
         home,
@@ -93,6 +106,17 @@ fn human_allows(home: &Path, ch: &str, hitl_id: &str, hash: &str) {
 
 /// A router-signed `HitlRequest` for `hitl_id`, as the gate writes it.
 fn router_request(home: &Path, ch: &str, hitl_id: &str, hash: &str) {
+    router_request_at(home, ch, hitl_id, hash, Some(chrono::Utc::now()));
+}
+
+/// [`router_request`] with an explicit signed `issued_at`.
+fn router_request_at(
+    home: &Path,
+    ch: &str,
+    hitl_id: &str,
+    hash: &str,
+    issued_at: Option<chrono::DateTime<chrono::Utc>>,
+) {
     let q = HitlRequest {
         hitl_id: hitl_id.into(),
         action_hash: hash.into(),
@@ -103,6 +127,7 @@ fn router_request(home: &Path, ch: &str, hitl_id: &str, hash: &str) {
         agent_id: "mur".into(),
         timeout_ms: 0,
         summary: "x".into(),
+        issued_at,
     };
     append_router(
         home,
@@ -113,27 +138,36 @@ fn router_request(home: &Path, ch: &str, hitl_id: &str, hash: &str) {
     );
 }
 
-/// Move the `HitlRequest` for `hitl_id` back in time by `age`.
-///
-/// `ts` is store-assigned and outside the signature (`ChannelEvent::sig`), so
-/// rewriting it leaves the event verifiable — exactly the property a backdated
-/// request has in a real log that is simply old.
-fn age_request(home: &Path, ch: &str, hitl_id: &str, age: chrono::Duration) {
+/// Set every event's store-assigned `ts` to `to`, as any process that can
+/// write `channels/` can. `ts` is outside the signature, so every line still
+/// verifies afterwards — which is why no HITL decision may read it (#1764 C).
+fn rewrite_ts(home: &Path, ch: &str, to: chrono::DateTime<chrono::Utc>) {
     let svc = ChannelService::open(home).unwrap();
     let path = svc.store().events_path(ch);
     let text = std::fs::read_to_string(&path).unwrap();
     let mut out = String::new();
     for line in text.lines() {
         let mut ev: mur_common::channel::ChannelEvent = serde_json::from_str(line).unwrap();
-        if ev.kind == EventKind::HitlRequest
-            && ev.payload.get("hitl_id").and_then(|v| v.as_str()) == Some(hitl_id)
-        {
-            ev.ts -= age;
-        }
+        ev.ts = to;
         out.push_str(&serde_json::to_string(&ev).unwrap());
         out.push('\n');
     }
     std::fs::write(&path, out).unwrap();
+}
+
+fn ago(d: chrono::Duration) -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() - d
+}
+
+/// The `action_hash` the gate computes for `a` on `ch`.
+fn hash_of(ch: &str, a: &ActionRequest) -> String {
+    action_hash(
+        &a.tool_name,
+        &a.tool_input,
+        ch,
+        &a.step_or_call_id,
+        &a.agent_id,
+    )
 }
 
 fn ttl() -> chrono::Duration {
@@ -162,9 +196,15 @@ async fn a_new_run_of_an_approved_action_reuses_the_approval() {
 async fn an_answer_inside_the_request_window_counts() {
     let (tmp, ch) = setup();
     let a = action("rm -rf build");
-    let (id, hash) = park(tmp.path(), &ch, &a).await;
-    age_request(tmp.path(), &ch, &id, ttl() - chrono::Duration::hours(1));
-    human_allows(tmp.path(), &ch, &id, &hash);
+    let hash = hash_of(&ch, &a);
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-old",
+        &hash,
+        Some(ago(ttl() - chrono::Duration::hours(1))),
+    );
+    human_allows(tmp.path(), &ch, "hitl-old", &hash);
 
     let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
         .await
@@ -196,13 +236,19 @@ async fn an_answer_to_no_request_does_not_settle() {
 /// An answer that precedes its request answers nothing: nobody had been
 /// asked yet.
 #[tokio::test]
-#[ignore = "needs signed issued_at in the HITL payload: #1764 option C, not yet implemented"]
 async fn an_answer_before_its_request_does_not_settle() {
     let (tmp, ch) = setup();
     let a = action("rm -rf build");
     let (_, hash) = park(tmp.path(), &ch, &a).await;
-    human_allows(tmp.path(), &ch, "hitl-early", &hash);
+    // Signed times, not line order: line order is not signed (#1770).
     router_request(tmp.path(), &ch, "hitl-early", &hash);
+    human_allows_at(
+        tmp.path(),
+        &ch,
+        "hitl-early",
+        &hash,
+        Some(ago(chrono::Duration::hours(1))),
+    );
 
     let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
         .await
@@ -252,17 +298,108 @@ async fn a_reissued_hitl_id_voids_its_answers() {
 
 /// An answer that lands after its request expired does not count.
 #[tokio::test]
-#[ignore = "needs signed issued_at in the HITL payload: #1764 option C, not yet implemented"]
 async fn an_answer_after_the_request_expired_does_not_settle() {
     let (tmp, ch) = setup();
     let a = action("rm -rf build");
-    let (id, hash) = park(tmp.path(), &ch, &a).await;
-    age_request(tmp.path(), &ch, &id, ttl() + chrono::Duration::hours(1));
-    human_allows(tmp.path(), &ch, &id, &hash);
+    let hash = hash_of(&ch, &a);
+    let id = "hitl-expired";
+    router_request_at(
+        tmp.path(),
+        &ch,
+        id,
+        &hash,
+        Some(ago(ttl() + chrono::Duration::hours(1))),
+    );
+    human_allows(tmp.path(), &ch, id, &hash);
 
     let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
         .await
         .unwrap();
     assert!(!d.allow && d.deferred, "request had expired: {d:?}");
-    assert_ne!(d.hitl_id.as_deref(), Some(id.as_str()), "asks afresh");
+    assert_ne!(d.hitl_id.as_deref(), Some(id), "asks afresh");
+}
+
+// ── Signed time only (#1764 option C) ─────────────────────────────────
+
+/// Rewriting the unsigned `ts` cannot revive an expired approval: freshness
+/// is read from the signed `issued_at`, and every line still verifies after
+/// the rewrite, so a `ts`-based check would have been fooled.
+#[tokio::test]
+async fn rewriting_ts_does_not_revive_an_expired_approval() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    let old = ago(ttl() + chrono::Duration::days(1));
+    router_request_at(tmp.path(), &ch, "hitl-stale", &hash, Some(old));
+    human_allows_at(
+        tmp.path(),
+        &ch,
+        "hitl-stale",
+        &hash,
+        Some(old + chrono::Duration::minutes(5)),
+    );
+    rewrite_ts(tmp.path(), &ch, chrono::Utc::now());
+
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
+    assert!(!d.allow, "a week-old approval with a fresh ts: {d:?}");
+}
+
+/// A response with no signed `issued_at` predates option C. Its issue time
+/// is unknown, so it settles nothing (fail closed).
+#[tokio::test]
+async fn a_legacy_answer_without_issued_at_does_not_settle() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let (id, hash) = park(tmp.path(), &ch, &a).await;
+    human_allows_at(tmp.path(), &ch, &id, &hash, None);
+
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
+    assert!(!d.allow, "issue time unknown: {d:?}");
+}
+
+/// A legacy request (no `issued_at`) can never be validly answered, so it is
+/// never offered as the pending one: the gate asks afresh instead of parking
+/// on a question nobody can settle.
+#[tokio::test]
+async fn a_legacy_request_is_replaced_not_left_pending() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    router_request_at(tmp.path(), &ch, "hitl-legacy", &hash, None);
+
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
+    assert!(!d.allow && d.deferred, "{d:?}");
+    assert_ne!(d.hitl_id.as_deref(), Some("hitl-legacy"), "asks afresh");
+}
+
+/// `mur channel approve` / the phone refuse a request that can no longer be
+/// validly answered, rather than writing an answer the gate will ignore.
+#[tokio::test]
+async fn an_unanswerable_request_is_refused_at_approve_time() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    router_request_at(tmp.path(), &ch, "hitl-legacy", &hash, None);
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-expired",
+        &hash,
+        Some(ago(ttl() + chrono::Duration::hours(1))),
+    );
+    let evs = ChannelService::open(tmp.path())
+        .unwrap()
+        .load_events(&ch)
+        .unwrap();
+
+    for id in ["hitl-legacy", "hitl-expired"] {
+        let r = crate::hitl::authority::request_to_answer(tmp.path(), &ch, &evs, id);
+        assert!(r.is_err(), "{id} must not be answerable");
+    }
 }

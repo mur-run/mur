@@ -129,6 +129,7 @@ impl Fixture {
                 allow,
                 reason: "test".into(),
                 surface: "cli".into(),
+                issued_at: Some(chrono::Utc::now()),
             })
             .unwrap(),
             None,

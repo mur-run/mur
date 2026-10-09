@@ -201,6 +201,12 @@ pub struct HitlRequest {
     pub agent_id: String,
     pub timeout_ms: u64,
     pub summary: String,
+    /// When the router asked. Inside the payload, so inside the signature —
+    /// unlike the store-assigned `ChannelEvent::ts`, which any process that
+    /// can write the log can rewrite (#1764). `None` is a request written
+    /// before this field existed; it answers nothing (fail closed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// `EventKind::HitlResponse` payload: the human's decision, echoing the pin.
@@ -213,6 +219,10 @@ pub struct HitlResponse {
     pub reason: String,
     /// "cli" | "hub" | "ios" | "auto".
     pub surface: String,
+    /// When the answer was given; signed for the same reason as
+    /// [`HitlRequest::issued_at`]. `None` (an older writer) settles nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[cfg(test)]
@@ -239,6 +249,7 @@ mod tests {
             agent_id: "mur".into(),
             timeout_ms: 300_000,
             summary: "delete x".into(),
+            issued_at: Some(chrono::Utc::now()),
         };
         let s = serde_json::to_string(&req).unwrap();
         let back: HitlRequest = serde_json::from_str(&s).unwrap();
