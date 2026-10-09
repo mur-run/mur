@@ -475,3 +475,87 @@ fn browser_menu_offers_live() {
         live.desc
     );
 }
+
+fn review_ctx() -> MenuContext {
+    MenuContext {
+        agents: vec!["coder".into(), "mur".into(), "reviewer-bot".into()],
+        ..ctx()
+    }
+}
+
+/// P3b-§3.1: Tab completes agent names after `--main` / `--reviewer`, and
+/// accepting a row rewrites the whole line with only the value replaced.
+#[test]
+fn review_tab_offers_agents_after_main_and_reviewer() {
+    let c = review_ctx();
+    let s = compute("/review --main ", &[], &c, &cur()).unwrap();
+    assert_eq!(displays(&s), ["coder", "mur", "reviewer-bot"]);
+    assert_eq!(s.items[0].insert, "/review --main coder ");
+    assert!(s.items.iter().all(|i| !i.has_children));
+    assert_eq!(s.current, None);
+
+    let s = compute("/review --main CO", &[], &c, &cur()).unwrap();
+    assert_eq!(displays(&s), ["coder"]);
+
+    let s = compute(
+        "/review --deadline 1h --main coder --reviewer re",
+        &[],
+        &c,
+        &cur(),
+    )
+    .unwrap();
+    assert_eq!(displays(&s), ["reviewer-bot"]);
+    assert_eq!(
+        s.items[0].insert,
+        "/review --deadline 1h --main coder --reviewer reviewer-bot "
+    );
+}
+
+/// Everywhere else on a `/review` line the menu stays shut: no fixed layer
+/// 2, no session names after `resume`, nothing inside the task text.
+#[test]
+fn review_tab_offers_nothing_outside_an_agent_value() {
+    let c = review_ctx();
+    for line in [
+        "/review ",
+        "/review resume ",
+        "/review resume co",
+        "/review --main coder ",
+        "/review --deadline ",
+        "/review --budget-usd ",
+        "/review --main --r",
+        "/review --main coder fix it --reviewer ",
+        "/review --main coder -- --reviewer ",
+        "/review --auto --main ",
+        "/review --bogus --main ",
+    ] {
+        assert_eq!(compute(line, &[], &c, &cur()), None, "{line:?}");
+    }
+    let s = compute("/revi", &[], &c, &cur()).unwrap();
+    let row = s.items.iter().find(|i| i.display == "/review").unwrap();
+    assert_eq!(row.insert, "/review ");
+    assert!(!row.has_children);
+}
+
+/// The names are the agent directories that hold a `profile.yaml`, read
+/// from the `home` passed in — the same filter `mur agent list` applies.
+#[test]
+fn menu_context_lists_agents_from_the_given_home() {
+    let home = tempfile::tempdir().unwrap();
+    let agents = home.path().join("agents");
+    for (dir, real) in [
+        ("coder", true),
+        ("mur", true),
+        (".git", false),
+        ("Author", false),
+    ] {
+        std::fs::create_dir_all(agents.join(dir)).unwrap();
+        if real {
+            std::fs::write(agents.join(dir).join("profile.yaml"), "name: x\n").unwrap();
+        }
+    }
+    let ctx = MenuContext::load(home.path(), "coder");
+    assert_eq!(ctx.agents, ["coder", "mur"]);
+    let empty = tempfile::tempdir().unwrap();
+    assert!(MenuContext::load(empty.path(), "nope").agents.is_empty());
+}
