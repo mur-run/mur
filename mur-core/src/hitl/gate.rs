@@ -477,4 +477,6 @@ async fn wait_for_response(
 #[cfg(test)]
 mod human_authority_tests;
 #[cfg(test)]
+mod response_binding_tests;
+#[cfg(test)]
 mod tests;
