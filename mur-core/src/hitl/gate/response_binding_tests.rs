@@ -50,10 +50,25 @@ async fn park(home: &Path, ch: &str, a: &ActionRequest) -> (String, String) {
 }
 
 /// Append a router-signed event, as the router would.
-fn append_router(home: &Path, ch: &str, actor: ChannelActor, kind: EventKind, payload: serde_json::Value) {
+fn append_router(
+    home: &Path,
+    ch: &str,
+    actor: ChannelActor,
+    kind: EventKind,
+    payload: serde_json::Value,
+) {
     let svc = ChannelService::open(home).unwrap();
-    crate::channel_writer::append_as_writer(&svc, home, ch, ROUTER_AGENT, actor, kind, payload, None)
-        .unwrap();
+    crate::channel_writer::append_as_writer(
+        &svc,
+        home,
+        ch,
+        ROUTER_AGENT,
+        actor,
+        kind,
+        payload,
+        None,
+    )
+    .unwrap();
 }
 
 /// The human approves `hitl_id` for `hash` — router-signed, `Human` actor.
@@ -68,7 +83,9 @@ fn human_allows(home: &Path, ch: &str, hitl_id: &str, hash: &str) {
     append_router(
         home,
         ch,
-        ChannelActor::Human { name: "user".into() },
+        ChannelActor::Human {
+            name: "user".into(),
+        },
         EventKind::HitlResponse,
         serde_json::to_value(&resp).unwrap(),
     );
@@ -134,7 +151,9 @@ async fn a_new_run_of_an_approved_action_reuses_the_approval() {
     let (id, hash) = park(tmp.path(), &ch, &a).await;
     human_allows(tmp.path(), &ch, &id, &hash);
 
-    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None).await.unwrap();
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
     assert!(d.allow, "a re-run is a new instance, not a re-issue: {d:?}");
 }
 
@@ -147,7 +166,9 @@ async fn an_answer_inside_the_request_window_counts() {
     age_request(tmp.path(), &ch, &id, ttl() - chrono::Duration::hours(1));
     human_allows(tmp.path(), &ch, &id, &hash);
 
-    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None).await.unwrap();
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
     assert!(d.allow, "answered before the request expired: {d:?}");
 }
 
@@ -161,9 +182,15 @@ async fn an_answer_to_no_request_does_not_settle() {
     let (id, hash) = park(tmp.path(), &ch, &a).await;
     human_allows(tmp.path(), &ch, "hitl-ghost", &hash);
 
-    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None).await.unwrap();
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
     assert!(!d.allow, "no request named hitl-ghost: {d:?}");
-    assert_eq!(d.hitl_id.as_deref(), Some(id.as_str()), "the real request is still pending");
+    assert_eq!(
+        d.hitl_id.as_deref(),
+        Some(id.as_str()),
+        "the real request is still pending"
+    );
 }
 
 /// An answer that precedes its request answers nothing: nobody had been
@@ -177,7 +204,9 @@ async fn an_answer_before_its_request_does_not_settle() {
     human_allows(tmp.path(), &ch, "hitl-early", &hash);
     router_request(tmp.path(), &ch, "hitl-early", &hash);
 
-    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None).await.unwrap();
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
     assert!(!d.allow, "answered before it was asked: {d:?}");
 }
 
@@ -192,7 +221,9 @@ async fn an_answer_whose_hash_differs_from_its_request_does_not_settle() {
     let (_, target_hash) = park(tmp.path(), &ch, &target).await;
     human_allows(tmp.path(), &ch, &harmless_id, &target_hash);
 
-    let d = gate(tmp.path(), &ch, &target, &unattended(), None, None).await.unwrap();
+    let d = gate(tmp.path(), &ch, &target, &unattended(), None, None)
+        .await
+        .unwrap();
     assert!(!d.allow, "the human saw `ls`, not `rm`: {d:?}");
 }
 
@@ -208,7 +239,9 @@ async fn a_reissued_hitl_id_voids_its_answers() {
     human_allows(tmp.path(), &ch, &id, &hash);
     router_request(tmp.path(), &ch, &id, &hash);
 
-    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None).await.unwrap();
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
     assert!(!d.allow, "re-issued id: {d:?}");
     assert_ne!(
         d.hitl_id.as_deref(),
@@ -227,7 +260,9 @@ async fn an_answer_after_the_request_expired_does_not_settle() {
     age_request(tmp.path(), &ch, &id, ttl() + chrono::Duration::hours(1));
     human_allows(tmp.path(), &ch, &id, &hash);
 
-    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None).await.unwrap();
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
     assert!(!d.allow && d.deferred, "request had expired: {d:?}");
     assert_ne!(d.hitl_id.as_deref(), Some(id.as_str()), "asks afresh");
 }
