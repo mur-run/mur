@@ -100,6 +100,12 @@ impl LaunchChain {
                  whatever the profile says",
             );
         }
+        if path.starts_with(mur_common::git_push::broker_dir(&self.mur_home)) {
+            return Some(
+                "the git push broker's directory — its registry maps each repo_id to the \
+                 repo a push is built from, so rewriting it redirects a human-approved push",
+            );
+        }
         if self.is_launch_artifact(path) {
             return Some(
                 "MUR's runtime binary or a per-agent symlink — exec'd before \
@@ -278,6 +284,10 @@ impl LaunchChain {
         let mut out = vec![
             self.mur_home.join("agents"),
             self.mur_home.join(mur_common::entitlements_pin::PINS_DIR),
+            // Premise 1 of the git-push registry decision: the broker dir is
+            // daemon-written and agent-read-only. In this list, a Landlock write
+            // grant overlapping it is dropped whole and SBPL denies it.
+            mur_common::git_push::broker_dir(&self.mur_home),
         ];
         out.push(self.bin_dir.join(RUNTIME_BINARY));
         out.extend(self.existing_agent_symlinks());

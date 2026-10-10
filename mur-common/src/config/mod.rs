@@ -288,6 +288,10 @@ pub struct Config {
     #[serde(default)]
     pub fleet_run: FleetRunConfig,
 
+    // --- git push broker (agent-side tools + daemon sweeper) ---
+    #[serde(default)]
+    pub git_push: GitPushConfig,
+
     // --- `mur open` display policy ---
     #[serde(default)]
     pub open_items: OpenItemsConfig,

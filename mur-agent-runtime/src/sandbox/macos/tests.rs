@@ -253,6 +253,30 @@ fn deny_path_wins_over_overlapping_write_grant() {
     );
 }
 
+/// Git-push registry, premise 1 (kernel side, macOS): a write grant over all of
+/// `<mur_home>` is emitted, so the broker-dir deny must come AFTER it or SBPL's
+/// last-match-wins hands the agent the registry.
+#[test]
+fn git_push_broker_dir_deny_follows_a_mur_home_write_grant() {
+    let mut policy = policy_with_launch_chain("/data/.mur/agents/mur");
+    policy.fs_write.push(PathBuf::from("/data/.mur"));
+    let sbpl = build_sbpl_profile(&policy);
+    let allow = sbpl
+        .find(r#"(allow file-write* (subpath "/data/.mur"))"#)
+        .expect("mur_home grant missing");
+    let deny = sbpl
+        .rfind(r#"(deny file-write* (subpath "/data/.mur/git-push"))"#)
+        .expect("broker dir deny missing");
+    assert!(
+        deny > allow,
+        "broker dir deny must follow the mur_home allow:\n{sbpl}"
+    );
+    assert!(
+        !sbpl.contains(r#"(deny file-read* (subpath "/data/.mur/git-push"))"#),
+        "the registry must stay readable:\n{sbpl}"
+    );
+}
+
 #[test]
 fn agents_deny_precedes_the_self_reallow_which_precedes_the_self_file_denies() {
     let policy = policy_with_launch_chain("/data/.mur/agents/mur");

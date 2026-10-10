@@ -29,6 +29,7 @@ pub mod exec;
 pub mod expression;
 pub mod fleet;
 pub mod fleet_bundle;
+pub mod git_push;
 pub mod guard;
 pub mod hitl;
 pub mod home;
