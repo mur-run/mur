@@ -43,6 +43,7 @@ fn attach(app: &mut App) {
         closing: false,
         hint: Default::default(),
         turn: Default::default(),
+        label: Default::default(),
     });
 }
 

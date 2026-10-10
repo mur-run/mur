@@ -52,6 +52,7 @@ fn attach(app: &mut App) -> ReviewFlags {
         closing: false,
         hint: Default::default(),
         turn: Default::default(),
+        label: Default::default(),
     });
     flags
 }

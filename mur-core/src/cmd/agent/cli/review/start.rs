@@ -127,6 +127,7 @@ fn attach(
         closing: false,
         hint: Default::default(),
         turn: Default::default(),
+        label: Default::default(),
     }
 }
 

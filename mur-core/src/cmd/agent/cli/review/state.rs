@@ -3,10 +3,11 @@
 use std::collections::BTreeSet;
 
 use mur_channel::ChannelService;
+use mur_common::channel::ChannelEvent;
 use tokio::sync::mpsc::Sender;
 
 use super::args::{ReviewLine, parse_review_line};
-use super::render::{paused_list, status_line};
+use super::render::{LabelFacts, paused_list, status_line};
 use super::start::{resume, start};
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
@@ -51,6 +52,9 @@ pub struct ReviewSession {
     pub hint: super::hint::InlineHint,
     /// The member turn Esc acts on (P3b-§6.2, §6.3).
     pub turn: super::keys::LiveTurn,
+    /// §6.5: what the footer label is built from, read off the channel at
+    /// attach and turn boundaries so the status bar never reads a file.
+    pub label: super::render::LabelFacts,
 }
 
 /// `/review <rest>` typed in the composer. The composer was cleared on
@@ -81,6 +85,7 @@ pub async fn handle(app: &mut App, raw: &str, tx: &Sender<StreamMsg>) {
         Ok((session, text)) => {
             app.push_system(text);
             app.review = Some(session);
+            refresh_label(app);
         }
         Err(refused) => {
             app.push_error(refused);
@@ -92,8 +97,21 @@ pub async fn handle(app: &mut App, raw: &str, tx: &Sender<StreamMsg>) {
 /// The status line from the channel as it stands now; the name alone if the
 /// channel cannot be read (the line is informational, never a failure).
 fn attached_status(home: &std::path::Path, s: &ReviewSession) -> String {
-    let events = ChannelService::open(home)
-        .and_then(|svc| svc.store().load_events(&s.channel_id))
-        .unwrap_or_default();
-    status_line(s, &events)
+    status_line(s, &channel_events(home, &s.channel_id))
+}
+
+/// Re-read the footer label's facts (§6.5). Called at attach and at turn
+/// boundaries, so the status bar itself never touches the filesystem.
+pub(super) fn refresh_label(app: &mut App) {
+    let home = app.home.clone();
+    if let Some(s) = app.review.as_mut() {
+        s.label = LabelFacts::from_events(&channel_events(&home, &s.channel_id));
+    }
+}
+
+/// The channel as it stands; empty if unreadable (display only).
+fn channel_events(home: &std::path::Path, channel_id: &str) -> Vec<ChannelEvent> {
+    ChannelService::open(home)
+        .and_then(|svc| svc.store().load_events(channel_id))
+        .unwrap_or_default()
 }

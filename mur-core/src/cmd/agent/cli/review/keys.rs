@@ -131,6 +131,8 @@ pub fn on_request_quit(app: &mut App) -> bool {
 
 /// The worker's `TurnStarted`: Esc now acts on this turn.
 pub fn on_turn_started(app: &mut App, turn: TurnRef) {
+    // §6.5: the previous turn's usage is on the channel by now.
+    super::state::refresh_label(app);
     if let Some(s) = app.review.as_mut() {
         s.turn.current = Some(turn);
         s.esc = ReviewEsc::TurnInFlight;
@@ -157,7 +159,6 @@ pub fn on_cancel_failed(app: &mut App, err: &str) {
 }
 
 /// The footer's review hint, most urgent first. `None` = the plain hint.
-#[allow(dead_code)] // wired in T9: `ui/status.rs` right hint
 pub fn footer_hint(app: &App) -> Option<&'static str> {
     let s = app.review.as_ref()?;
     if s.closing {

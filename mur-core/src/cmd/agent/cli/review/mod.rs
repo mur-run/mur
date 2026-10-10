@@ -10,6 +10,7 @@ mod start;
 mod state;
 
 pub use confirm::{answer_confirm, on_finished, on_request};
+pub use render::{footer_label, footer_right_hint};
 pub use start::answer_resume;
 pub use state::handle;
 pub use state::{ReviewSession, is_send_gate};
@@ -21,11 +22,17 @@ mod args_tests;
 #[path = "confirm_tests.rs"]
 mod confirm_tests;
 #[cfg(test)]
+#[path = "footer_tests.rs"]
+mod footer_tests;
+#[cfg(test)]
 #[path = "hint_tests.rs"]
 mod hint_tests;
 #[cfg(test)]
 #[path = "keys_tests.rs"]
 mod keys_tests;
+#[cfg(test)]
+#[path = "render_tests.rs"]
+mod render_tests;
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;
