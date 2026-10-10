@@ -198,13 +198,38 @@ fn resp_with_hash(hitl_id: &str, hash: &str) -> HitlResponse {
     }
 }
 
-/// A correctly-signed HitlResponse from the router releases the gate.
+/// A correctly-signed HitlResponse from the router, answering the request
+/// the router signed, releases the gate.
 #[tokio::test]
 async fn router_signed_response_releases() {
     let tmp = TempDir::new().unwrap();
     let id = plant_router_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("g").unwrap();
+    // The request it answers: an answer binds only to a request the router
+    // signed (#1764), so a bare response no longer releases anything.
+    svc.append_signed(
+        &ch.id,
+        &id,
+        0,
+        ChannelActor::System,
+        EventKind::HitlRequest,
+        serde_json::to_value(HitlRequest {
+            hitl_id: "h-ok".into(),
+            action_hash: "EXPECTED".into(),
+            tier: RiskTier::Destructive,
+            tool_name: "bash".into(),
+            tool_input: serde_json::json!({}),
+            step_or_call_id: "s0".into(),
+            agent_id: "mur".into(),
+            timeout_ms: 1000,
+            summary: "x".into(),
+            issued_at: Some(chrono::Utc::now()),
+        })
+        .unwrap(),
+        None,
+    )
+    .unwrap();
     let resp = resp_with_hash("h-ok", "EXPECTED");
     svc.append_signed(
         &ch.id,
@@ -733,22 +758,6 @@ async fn deny_mode_outranks_yes() {
     .await
     .unwrap();
     assert!(!d.allow, "a floor that --yes can lift is not a floor");
-}
-
-/// The TTL bounds how long a decision keeps releasing a gate. Content
-/// staleness is the pin's job; this is the clock's half.
-#[test]
-fn approval_ttl_boundary() {
-    let now = chrono::Utc::now();
-    assert!(within_approval_ttl(now, now));
-    assert!(within_approval_ttl(
-        now - chrono::Duration::seconds(mur_common::hitl::APPROVAL_TTL_SECS - 1),
-        now
-    ));
-    assert!(!within_approval_ttl(
-        now - chrono::Duration::seconds(mur_common::hitl::APPROVAL_TTL_SECS + 1),
-        now
-    ));
 }
 
 // ── Standing tier grants (P1b) ────────────────────────────────────────

@@ -17,7 +17,7 @@ use anyhow::Result;
 use mur_channel::ChannelService;
 use mur_common::channel::{ChannelActor, ChannelState, EventKind};
 use mur_common::hitl::{
-    HitlMode, HitlRequest, HitlResponse, RiskTier, Unanswered, default_mode, within_approval_ttl,
+    HitlMode, HitlRequest, HitlResponse, RiskTier, Unanswered, check_fresh, default_mode,
 };
 
 use crate::channel_writer::ROUTER_AGENT;
@@ -329,8 +329,12 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
     let now = chrono::Utc::now();
     let requests = binding::Requests::collect(mur_home, channel_id, &events);
     let mut responded: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut settled: Option<GateDecision> = None;
-    let mut pending_id: Option<String> = None;
+    // (signed answer time, decision). Newest by signed `issued_at`, never by
+    // line order: lines are not signed, so a reordered file must not let an
+    // old allow outrank a newer deny (#1764 option C).
+    let mut settled: Option<(chrono::DateTime<chrono::Utc>, GateDecision)> = None;
+    // (signed request time, id) of the newest answerable request.
+    let mut pending: Option<(chrono::DateTime<chrono::Utc>, String)> = None;
 
     for e in &events {
         match e.kind {
@@ -342,60 +346,76 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
                 if !super::authority::is_router_signed(mur_home, channel_id, e) {
                     continue;
                 }
-                // An answer counts only for the request it names (#1764). An
-                // unbound one is ignored outright: it neither settles the
-                // action nor marks any request answered.
-                if let Err(why) = requests.bind(&r) {
-                    tracing::warn!(channel_id, hitl_id = %r.hitl_id, ?why, "HitlResponse does not answer its request — ignoring");
-                    continue;
-                }
-                // Answered — even if it later fails the TTL check or is only
-                // the gate's own audit record, so the request it answers is
-                // not re-reported as still pending.
+                // An answer counts only for the request it names, in time
+                // (#1764). An unbound one is ignored outright: it neither
+                // settles the action nor marks any request answered.
+                let answered_at = match requests.bind(&r, now) {
+                    Ok(t) => t,
+                    Err(why) => {
+                        tracing::warn!(channel_id, hitl_id = %r.hitl_id, ?why, "HitlResponse does not answer its request — ignoring");
+                        continue;
+                    }
+                };
+                // Answered — even if it is too old to reuse or is only the
+                // gate's own audit record, so the request it answers is not
+                // re-reported as still pending.
                 responded.insert(r.hitl_id.clone());
                 // Only the human's answer decides. Audit records are skipped,
                 // not counted as "no": a human's earlier answer still stands.
                 if !super::authority::is_human_authority(mur_home, channel_id, e) {
                     continue;
                 }
-                if r.action_hash == hash && within_approval_ttl(e.ts, now) {
-                    // Later events overwrite earlier ones: the newest decision
-                    // for an action is the one that counts.
-                    settled = Some(GateDecision {
-                        allow: r.allow,
-                        deferred: false,
-                        reason: if r.allow {
-                            format!("approved earlier ({})", r.hitl_id)
-                        } else {
-                            format!("denied earlier ({})", r.hitl_id)
+                if r.action_hash != hash || check_fresh(answered_at, now).is_err() {
+                    continue;
+                }
+                // Newest signed decision wins; on a tie a deny wins.
+                let newer = settled.as_ref().is_none_or(|(t, d)| {
+                    answered_at > *t || (answered_at == *t && d.allow && !r.allow)
+                });
+                if newer {
+                    settled = Some((
+                        answered_at,
+                        GateDecision {
+                            allow: r.allow,
+                            deferred: false,
+                            reason: if r.allow {
+                                format!("approved earlier ({})", r.hitl_id)
+                            } else {
+                                format!("denied earlier ({})", r.hitl_id)
+                            },
+                            action_hash: hash.to_string(),
+                            hitl_id: None,
                         },
-                        action_hash: hash.to_string(),
-                        hitl_id: None,
-                    });
+                    ));
                 }
             }
             EventKind::HitlRequest => {
                 let Ok(q) = serde_json::from_value::<HitlRequest>(e.payload.clone()) else {
                     continue;
                 };
-                // A re-issued id is never offered for answering again; the
-                // gate writes a fresh request instead.
-                if q.action_hash == hash
-                    && super::authority::is_router_signed(mur_home, channel_id, e)
-                    && !requests.is_reissued(&q.hitl_id)
+                // Only a request an answer could still settle is offered:
+                // not re-issued, signed `issued_at`, not expired. Anything
+                // else, the gate writes a fresh request instead.
+                if q.action_hash != hash
+                    || !super::authority::is_router_signed(mur_home, channel_id, e)
+                    || !requests.is_answerable(&q.hitl_id, now)
                 {
-                    pending_id = Some(q.hitl_id);
+                    continue;
+                }
+                let Some(asked) = q.issued_at else { continue };
+                if pending.as_ref().is_none_or(|(t, _)| asked >= *t) {
+                    pending = Some((asked, q.hitl_id));
                 }
             }
             _ => {}
         }
     }
 
-    if let Some(d) = settled {
+    if let Some((_, d)) = settled {
         return Ok(Prior::Settled(d));
     }
-    match pending_id {
-        Some(id) if !responded.contains(&id) => Ok(Prior::Pending(id)),
+    match pending {
+        Some((_, id)) if !responded.contains(&id) => Ok(Prior::Pending(id)),
         _ => Ok(Prior::None),
     }
 }
@@ -421,7 +441,7 @@ async fn wait_for_response(
         // `authority::is_human_authority`). An agent's own correctly-signed
         // reply is a verified statement by that agent, not an approval; it is
         // filtered out and the loop keeps waiting.
-        let (found, reissued) = {
+        let (found, requests) = {
             let svc = ChannelService::open(mur_home)?;
             let evs = svc.load_events(channel_id)?;
             drop(svc);
@@ -443,51 +463,64 @@ async fn wait_for_response(
                 }
                 true
             });
-            (found, requests.is_reissued(hitl_id))
+            (found, requests)
+        };
+        let deny = |reason: String| GateDecision {
+            allow: false,
+            deferred: false,
+            reason,
+            action_hash: expected_hash.to_string(),
+            hitl_id: None,
         };
         // Same binding rule as `scan_prior`. Our own request was signed a
         // second time under this id: no answer to it can be trusted, so fail
-        // closed rather than wait. A hash mismatch is caught as drift below.
-        if reissued {
-            return Ok(GateDecision {
-                allow: false,
-                deferred: false,
-                reason: "hitl_reissued: request id signed more than once".into(),
-                action_hash: expected_hash.to_string(),
-                hitl_id: None,
-            });
+        // closed rather than wait.
+        if requests.is_reissued(hitl_id) {
+            return Ok(deny(
+                "hitl_reissued: request id signed more than once".into(),
+            ));
         }
         if let Some(resp) = found {
-            let echoed = resp
-                .payload
-                .get("action_hash")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if echoed != expected_hash {
-                return Ok(GateDecision {
-                    allow: false,
-                    deferred: false,
-                    reason: "hitl_drift: response action_hash mismatch".into(),
-                    action_hash: expected_hash.to_string(),
-                    hitl_id: None,
-                });
+            let Ok(r) = serde_json::from_value::<HitlResponse>(resp.payload) else {
+                return Ok(deny(
+                    "hitl_malformed: response payload does not parse".into(),
+                ));
+            };
+            if r.action_hash != expected_hash {
+                return Ok(deny("hitl_drift: response action_hash mismatch".into()));
             }
-            let allow = resp
-                .payload
-                .get("allow")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            return Ok(GateDecision {
-                allow,
-                deferred: false,
-                reason: if allow {
-                    "approved".into()
-                } else {
-                    "denied".into()
-                },
-                action_hash: expected_hash.to_string(),
-                hitl_id: None,
-            });
+            match requests.bind(&r, chrono::Utc::now()) {
+                Ok(_) => {
+                    return Ok(GateDecision {
+                        allow: r.allow,
+                        deferred: false,
+                        reason: if r.allow {
+                            "approved".into()
+                        } else {
+                            "denied".into()
+                        },
+                        action_hash: expected_hash.to_string(),
+                        hitl_id: None,
+                    });
+                }
+                // No router-signed request under this id parses — the gate
+                // writes its own before waiting, so this is not an answer to
+                // anything it asked. Keep waiting; the timeout fails closed.
+                Err(binding::Unbound::NoRequest) => {}
+                Err(binding::Unbound::HashMismatch) => {
+                    return Ok(deny("hitl_drift: response action_hash mismatch".into()));
+                }
+                Err(binding::Unbound::Reissued) => {
+                    return Ok(deny(
+                        "hitl_reissued: request id signed more than once".into(),
+                    ));
+                }
+                // Fail closed and say why: e.g. a phone whose clock is days
+                // off, or an answer from a writer older than signed time.
+                Err(why @ (binding::Unbound::Legacy | binding::Unbound::Time(_))) => {
+                    return Ok(deny(format!("hitl_untimely: {why:?}")));
+                }
+            }
         }
         if start.elapsed() >= timeout {
             return Ok(GateDecision {

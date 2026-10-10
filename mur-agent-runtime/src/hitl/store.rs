@@ -1,7 +1,9 @@
 //! Gate B's memory: settled chat-gate decisions, one remembered channel per
 //! agent. `HitlResponse` events only, signed by the agent's own identity.
 //! Lookup is newest-wins inside `mur_common::hitl::APPROVAL_TTL_SECS`, and an
-//! event the agent's pubkey cannot verify is skipped, never trusted.
+//! event the agent's pubkey cannot verify is skipped, never trusted. Age and
+//! order come from the signed `issued_at`, never the store's unsigned `ts` or
+//! line order (#1764 option C); a decision without one is skipped.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,7 +12,7 @@ use anyhow::{Context, Result};
 use mur_channel::ChannelService;
 use mur_common::agent::HITL_CHANNEL_FILE;
 use mur_common::channel::{ChannelActor, EventKind};
-use mur_common::hitl::{HitlResponse, within_approval_ttl};
+use mur_common::hitl::{HitlResponse, check_fresh};
 use mur_common::identity::AgentIdentity;
 
 /// The `step_or_call_id` slot of every chat-gate hash. A per-call id would
@@ -74,7 +76,9 @@ impl ChannelDecisionStore {
         drop(svc);
         let pubkey = self.identity.verifying_key_bytes();
         let now = chrono::Utc::now();
-        let mut settled = None;
+        // (signed decision time, decision); newest signed time wins, a deny
+        // wins a tie.
+        let mut settled: Option<(chrono::DateTime<chrono::Utc>, Settled)> = None;
         for e in &events {
             if e.kind != EventKind::HitlResponse {
                 continue;
@@ -90,15 +94,23 @@ impl ChannelDecisionStore {
             if !mur_channel::sign::verify_one(&channel_id, e, &pubkey, true) {
                 continue;
             }
-            if within_approval_ttl(e.ts, now) {
-                settled = Some(if r.allow {
-                    Settled::Allow
-                } else {
-                    Settled::Deny
-                });
+            let Some(at) = r.issued_at else { continue };
+            if check_fresh(at, now).is_err() {
+                continue;
+            }
+            let this = if r.allow {
+                Settled::Allow
+            } else {
+                Settled::Deny
+            };
+            let newer = settled.as_ref().is_none_or(|(t, d)| {
+                at > *t || (at == *t && *d == Settled::Allow && this == Settled::Deny)
+            });
+            if newer {
+                settled = Some((at, this));
             }
         }
-        Ok(settled)
+        Ok(settled.map(|(_, d)| d))
     }
 
     fn append(&self, resp: &HitlResponse) -> Result<()> {
@@ -216,21 +228,69 @@ mod tests {
     async fn expired_decision_is_not_settled() {
         let tmp = tempfile::tempdir().unwrap();
         let s = store(tmp.path());
-        s.record(resp("h1", true, "a")).await;
-        // Backdate the event on disk: the store reads `ts` from the log.
-        let svc = ChannelService::open(tmp.path()).unwrap();
-        let path = svc.store().events_path(marker_id(tmp.path()).trim());
+        let mut old = resp("h1", true, "a");
+        old.issued_at = Some(chrono::Utc::now() - chrono::Duration::days(8));
+        s.record(old).await;
+        assert_eq!(s.lookup("h1").await, None);
+    }
+
+    /// Set every event's unsigned `ts` on disk to `to`; signatures still
+    /// verify afterwards.
+    fn rewrite_ts(home: &Path, to: chrono::DateTime<chrono::Utc>) {
+        let svc = ChannelService::open(home).unwrap();
+        let path = svc.store().events_path(marker_id(home).trim());
         let raw = std::fs::read_to_string(&path).unwrap();
-        let old = (chrono::Utc::now() - chrono::Duration::days(8)).to_rfc3339();
         let rewritten: Vec<String> = raw
             .lines()
             .map(|l| {
                 let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
-                v["ts"] = serde_json::Value::String(old.clone());
+                v["ts"] = serde_json::Value::String(to.to_rfc3339());
                 v.to_string()
             })
             .collect();
         std::fs::write(&path, rewritten.join("\n") + "\n").unwrap();
+    }
+
+    /// `ts` is outside the signature, so it decides nothing: an old decision
+    /// with a fresh `ts` stays expired, a fresh one with an old `ts` stands.
+    #[tokio::test]
+    async fn rewriting_ts_changes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        let mut old = resp("h-old", true, "a");
+        old.issued_at = Some(chrono::Utc::now() - chrono::Duration::days(8));
+        s.record(old).await;
+        s.record(resp("h-new", true, "b")).await;
+        rewrite_ts(tmp.path(), chrono::Utc::now());
+        assert_eq!(s.lookup("h-old").await, None, "fresh ts, stale decision");
+        rewrite_ts(tmp.path(), chrono::Utc::now() - chrono::Duration::days(30));
+        assert_eq!(
+            s.lookup("h-new").await,
+            Some(Settled::Allow),
+            "old ts, fresh decision"
+        );
+    }
+
+    /// Newest by signed time, not by line: an allow appended after a newer
+    /// deny does not outrank it.
+    #[tokio::test]
+    async fn newest_signed_time_wins_over_line_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(resp("h1", false, "deny")).await;
+        let mut older = resp("h1", true, "allow");
+        older.issued_at = Some(chrono::Utc::now() - chrono::Duration::hours(1));
+        s.record(older).await;
+        assert_eq!(s.lookup("h1").await, Some(Settled::Deny));
+    }
+
+    #[tokio::test]
+    async fn a_decision_without_issued_at_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        let mut legacy = resp("h1", true, "a");
+        legacy.issued_at = None;
+        s.record(legacy).await;
         assert_eq!(s.lookup("h1").await, None);
     }
 
