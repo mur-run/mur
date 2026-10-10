@@ -126,6 +126,7 @@ fn attach(
         awaiting,
         closing: false,
         hint: Default::default(),
+        turn: Default::default(),
     }
 }
 

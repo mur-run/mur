@@ -219,6 +219,7 @@ pub(super) async fn event_loop(
         }
         // Same ordering reason: retire a lapsed chip before painting it.
         proposal::tick(app, StdInstant::now());
+        review::keys::poll_pending_cancel(app, &review::keys::cancel_via_tokio(tx.clone()));
         if app.needs_full_redraw {
             terminal.clear()?;
             app.needs_full_redraw = false;
@@ -301,6 +302,8 @@ pub(super) async fn event_loop(
                 mur_common::panel::HubFrame::Insert { text } => app.set_input(&text),
             },
             _ = spinner.tick(), if app.streaming || app.shell.is_running() => app.tick_spinner(),
+            // P3b-§6.3 step 2: wake to fire a won abort's cancel once its id lands.
+            _ = tokio::time::sleep(Duration::from_millis(SPINNER_MS)), if review::keys::cancel_pending(app) => {}
             _ = tokio::time::sleep_until(follow_at), if follow_armed => {
                 app.poll_follow(StdInstant::now());
             }
@@ -616,7 +619,7 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                         app.last_esc_at,
                         app.streaming,
                         app.input_text().is_empty(),
-                        ReviewEsc::Detached, // wired in PR 4 (Task 8)
+                        app.review.as_ref().map_or(ReviewEsc::Detached, |r| r.esc),
                     );
                     match action {
                         EscAction::Arm => {
@@ -646,8 +649,18 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                             app.last_esc_at = None;
                             app.esc_hint = false;
                         }
-                        // wired in PR 4 (Task 8): `Detached` never yields these.
-                        EscAction::Nothing | EscAction::RequestPause | EscAction::AbortTurn => {
+                        EscAction::RequestPause => {
+                            review::keys::on_request_pause(app);
+                            app.last_esc_at = Some(std::time::Instant::now());
+                        }
+                        EscAction::AbortTurn => {
+                            review::keys::on_abort_turn(
+                                app,
+                                &review::keys::cancel_via_tokio(tx.clone()),
+                            );
+                            app.last_esc_at = None;
+                        }
+                        EscAction::Nothing => {
                             app.last_esc_at = None;
                             app.esc_hint = false;
                         }

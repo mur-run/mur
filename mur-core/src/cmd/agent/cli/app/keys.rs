@@ -25,7 +25,6 @@ pub enum ReviewEsc {
     #[default]
     Detached,
     AwaitingConfirm,
-    #[allow(dead_code)] // wired in PR 4 (Task 8)
     TurnInFlight,
 }
 

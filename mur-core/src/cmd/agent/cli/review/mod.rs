@@ -4,6 +4,7 @@
 mod args;
 mod confirm;
 pub mod hint;
+pub mod keys;
 mod render;
 mod start;
 mod state;
@@ -22,6 +23,9 @@ mod confirm_tests;
 #[cfg(test)]
 #[path = "hint_tests.rs"]
 mod hint_tests;
+#[cfg(test)]
+#[path = "keys_tests.rs"]
+mod keys_tests;
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;

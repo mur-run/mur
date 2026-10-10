@@ -480,3 +480,86 @@ fn resume_auto_mode_degrades_with_notice() {
         "{out:?}"
     );
 }
+
+/// AC-P3b-24 (A4): `mur fleet stop` mid-turn stops the loop; the UI was never
+/// asked to cancel and no `TurnStarted` cell was aborted. Only Esc×2 cancels.
+#[test]
+fn fleet_stop_sends_no_cancel() {
+    let tmp = home();
+    let script = Script::new("accept", &[ISSUE_F1]);
+    let (hold_tx, hold_rx) = channel();
+    *script.hold_main.lock().unwrap() = Some(hold_rx);
+    let (h, req_rx, done_rx, fleet) = fresh(tmp.path(), "review-wrk00006", &script);
+    let home_path = tmp.path().to_path_buf();
+    let name = fleet.name.clone();
+    let ui = std::thread::spawn(move || {
+        let mut cells = Vec::new();
+        while let Ok(r) = req_rx.recv() {
+            match r {
+                DriverReq::Confirm { reply, .. } => {
+                    let _ = reply.send(SendAnswer::Send);
+                }
+                DriverReq::TurnStarted { turn, .. } => {
+                    std::fs::write(
+                        crate::cmd::fleet::control::stopped_path(&home_path, &name),
+                        "stopped\n",
+                    )
+                    .unwrap();
+                    cells.push(turn);
+                    let _ = hold_tx.send(());
+                }
+                _ => {}
+            }
+        }
+        cells
+    });
+
+    let out = finish(h, &done_rx);
+    let cells = ui.join().unwrap();
+    assert!(
+        matches!(out, Outcome::Ran(LoopDriverStop::Stopped, ..)),
+        "got {out:?}"
+    );
+    assert_eq!(cells.len(), 1, "one turn, then the stop holds");
+    assert_eq!(
+        cells[0].state(),
+        super::super::turn_cell::TurnState::Committed,
+        "the in-flight turn ran to its reply; nothing aborted it"
+    );
+}
+
+/// AC-P3b-23a: closing (`detach_requested`) mid-turn → the turn is ledgered,
+/// then `paused { kind: detached }`, not `user`.
+#[test]
+fn closing_mid_turn_writes_paused_kind_detached_after_turn_sent() {
+    let tmp = home();
+    let script = Script::new("accept", &[APPROVE]);
+    let (hold_tx, hold_rx) = channel();
+    *script.hold_main.lock().unwrap() = Some(hold_rx);
+    let (h, req_rx, done_rx, fleet) = fresh(tmp.path(), "review-wrk00007", &script);
+    let flag = h.flags.detach_requested.clone();
+    let ui = std::thread::spawn(move || {
+        while let Ok(r) = req_rx.recv() {
+            match r {
+                DriverReq::Confirm { reply, .. } => {
+                    let _ = reply.send(SendAnswer::Send);
+                }
+                DriverReq::TurnStarted { .. } => {
+                    flag.store(true, Ordering::Release);
+                    let _ = hold_tx.send(());
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let out = finish(h, &done_rx);
+    ui.join().unwrap();
+    let Outcome::Ran(LoopDriverStop::Paused { reason }, ..) = out else {
+        panic!("expected a pause, got {out:?}");
+    };
+    assert_eq!(reason, REVIEW_PAUSE_REASON_DETACHED);
+    let all = payloads(tmp.path(), &fleet.channel_id);
+    assert_eq!(turn_sents(&all), 1, "the in-flight reply is ledgered");
+    assert_eq!(paused(&all)[0].0, PauseKind::Detached);
+}

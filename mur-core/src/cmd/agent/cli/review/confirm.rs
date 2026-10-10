@@ -29,12 +29,22 @@ pub fn on_request(app: &mut App, req: DriverReq) {
             app.push_system(format!("--- next message to {member} ---\n{text}"));
         }
         DriverReq::Show(text) => app.push_system(text),
-        // wired in PR 4 (Tasks 8, 10, 11): turn cells, the ruling prompt, the
-        // review HITL modal. Until then the dropped reply pauses / denies.
-        DriverReq::Ruling { .. }
-        | DriverReq::TurnStarted { .. }
-        | DriverReq::TurnEnded { .. }
-        | DriverReq::Hitl { .. } => {}
+        DriverReq::TurnStarted {
+            member,
+            task_id,
+            turn,
+        } => super::keys::on_turn_started(
+            app,
+            super::keys::TurnRef {
+                member,
+                cell: turn,
+                task_id,
+            },
+        ),
+        DriverReq::TurnEnded { .. } => super::keys::on_turn_ended(app),
+        // wired in PR 4 (Tasks 10, 11): the ruling prompt, the review HITL
+        // modal. Until then the dropped reply pauses / denies.
+        DriverReq::Ruling { .. } | DriverReq::Hitl { .. } => {}
     }
 }
 
@@ -65,10 +75,15 @@ pub fn answer_confirm(app: &mut App, line: &str) {
     }
 }
 
-/// §7.2: render the outcome, join the worker, release the session.
+/// §7.2: render the outcome, join the worker, release the session. A
+/// graceful close (§4.4.1) quits only now, after the turn was ledgered.
 pub fn on_finished(app: &mut App, outcome: Outcome) {
     app.push_system(finished_block(&outcome));
-    if let Some(handle) = app.review.take().and_then(|s| s.handle) {
+    let session = app.review.take();
+    if session.as_ref().is_some_and(|s| s.closing) {
+        app.should_quit = true;
+    }
+    if let Some(handle) = session.and_then(|s| s.handle) {
         // `Finished` is the worker's last statement, so this returns at once;
         // a panic in the loop was already caught into `Outcome::Err`.
         let _ = handle.join.join();

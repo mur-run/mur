@@ -41,15 +41,18 @@ pub enum DriverReq {
     Show(String),
     /// A member turn began. `task_id` is filled once the runtime names the
     /// task; `turn` is the abort / commit cell for this turn alone.
-    #[allow(dead_code)] // wired in PR 4 (Task 8): Esc×2 takes `turn`, cancels via `task_id`
     TurnStarted {
         member: String,
         task_id: Arc<OnceLock<String>>,
         turn: Arc<TurnCell>,
     },
     /// The turn's reply is back (or failed); the cell is already settled.
-    #[allow(dead_code)] // wired in PR 4 (Task 8): disarms Esc
-    TurnEnded { member: String },
+    TurnEnded {
+        // No reader: one turn is in flight at a time, so the UI clears it
+        // unconditionally. Kept so a log of `DriverReq`s names the member.
+        #[allow(dead_code)]
+        member: String,
+    },
     /// A gated tool call raised inside a member's turn: one request per call
     /// (#1759). `reply` is allow / deny.
     #[allow(dead_code)] // wired in PR 4 (Task 11): the review HITL modal
@@ -83,6 +86,8 @@ pub enum DriverEvent {
 #[derive(Clone, Default)]
 pub struct ReviewFlags {
     pub pause_requested: Arc<AtomicBool>,
+    /// MURMUR is closing (§4.4.1): pause as `detached`, not `user`.
+    pub detach_requested: Arc<AtomicBool>,
 }
 
 /// Who answers a tool approval raised during a review turn.

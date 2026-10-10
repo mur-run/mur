@@ -42,6 +42,7 @@ fn attach(app: &mut App) {
         awaiting: None,
         closing: false,
         hint: Default::default(),
+        turn: Default::default(),
     });
 }
 

@@ -49,6 +49,8 @@ pub struct ReviewSession {
     pub closing: bool,
     /// AC-P3b-13: the `@<unknown>` hint cache for the send gate.
     pub hint: super::hint::InlineHint,
+    /// The member turn Esc acts on (P3b-§6.2, §6.3).
+    pub turn: super::keys::LiveTurn,
 }
 
 /// `/review <rest>` typed in the composer. The composer was cleared on

@@ -195,6 +195,10 @@ impl ReviewTransport for MurmurTransport {
         params: &serde_json::Value,
         open: &BTreeSet<String>,
     ) -> Result<SendAnswer> {
+        if self.flags.detach_requested.load(Ordering::Acquire) {
+            self.set_pause(PauseKind::Detached);
+            return Ok(SendAnswer::Stop);
+        }
         if self.flags.pause_requested.load(Ordering::Acquire) {
             self.set_pause(PauseKind::User);
             return Ok(SendAnswer::Stop);

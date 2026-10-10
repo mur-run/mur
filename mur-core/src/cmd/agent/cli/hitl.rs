@@ -27,6 +27,9 @@ pub(super) fn cancel_in_flight(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// the runtime close the stream so the (detached) worker unblocks promptly and
 /// stops doing abandoned server-side work.
 pub(super) fn request_quit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    if !review::keys::on_request_quit(app) {
+        return;
+    }
     cancel_in_flight(app, tx);
     // Hard: the event loop is about to stop, so nothing is left to run the
     // escalation timer, and dropping the task would only `kill_on_drop` the
