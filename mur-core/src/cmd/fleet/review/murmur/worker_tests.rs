@@ -31,17 +31,17 @@ use super::bridge::{DriverEvent, DriverReq, Outcome};
 use super::transport::{DialFn, RespondFn};
 use super::worker::{StartKind, WorkerHandle, spawn_with_io};
 
-const APPROVE: &str = r#"{"verdict":"approve"}"#;
-const ISSUE_F1: &str =
+pub(super) const APPROVE: &str = r#"{"verdict":"approve"}"#;
+pub(super) const ISSUE_F1: &str =
     r#"{"verdict":"revise","findings":[{"severity":"high","issue":"unchecked unwrap"}]}"#;
 const DISPUTE_F1: &str =
     r#"{"verdict":"revise","prior":[{"id":"F1","status":"disputed","reason":"still panics"}]}"#;
 
-fn limits() -> SessionLimits {
+pub(super) fn limits() -> SessionLimits {
     SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None)
 }
 
-fn task(reply: &str) -> serde_json::Value {
+pub(super) fn task(reply: &str) -> serde_json::Value {
     json!({"state": "completed", "messages": [
         {"role": "agent", "parts": [{"text": reply}]}]})
 }
@@ -49,15 +49,15 @@ fn task(reply: &str) -> serde_json::Value {
 /// Scripted members: `main` answers every listed finding with `answer`; the
 /// reviewer pops `reviewer` (then approves). `hold_main` blocks main's turn
 /// until the UI side lets it go.
-struct Script {
-    answer: &'static str,
-    reviewer: Mutex<Vec<&'static str>>,
-    main_calls: AtomicUsize,
-    hold_main: Mutex<Option<Receiver<()>>>,
+pub(super) struct Script {
+    pub(super) answer: &'static str,
+    pub(super) reviewer: Mutex<Vec<&'static str>>,
+    pub(super) main_calls: AtomicUsize,
+    pub(super) hold_main: Mutex<Option<Receiver<()>>>,
 }
 
 impl Script {
-    fn new(answer: &'static str, reviewer: &[&'static str]) -> Arc<Self> {
+    pub(super) fn new(answer: &'static str, reviewer: &[&'static str]) -> Arc<Self> {
         Arc::new(Self {
             answer,
             reviewer: Mutex::new(reviewer.iter().rev().copied().collect()),
@@ -92,7 +92,7 @@ impl Script {
         format!("done\n```json\n{}\n```", json!({ "responses": responses }))
     }
 
-    fn dial(self: &Arc<Self>) -> DialFn {
+    pub(super) fn dial(self: &Arc<Self>) -> DialFn {
         let me = self.clone();
         Arc::new(move |_, member, params, on_delta, _| {
             on_delta("x", false, "T-1");
@@ -101,17 +101,17 @@ impl Script {
     }
 }
 
-fn no_respond() -> RespondFn {
+pub(super) fn no_respond() -> RespondFn {
     Arc::new(|_, _, _| {})
 }
 
-fn home() -> tempfile::TempDir {
+pub(super) fn home() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     tmp
 }
 
-fn payloads(home: &Path, channel_id: &str) -> Vec<ReviewPayload> {
+pub(super) fn payloads(home: &Path, channel_id: &str) -> Vec<ReviewPayload> {
     ChannelService::open(home)
         .unwrap()
         .load_events(channel_id)
@@ -125,10 +125,24 @@ fn payloads(home: &Path, channel_id: &str) -> Vec<ReviewPayload> {
         .collect()
 }
 
-fn fresh(
+pub(super) fn fresh(
     home: &Path,
     name: &str,
     script: &Arc<Script>,
+) -> (
+    WorkerHandle,
+    Receiver<DriverReq>,
+    Receiver<DriverEvent>,
+    Fleet,
+) {
+    fresh_with_dial(home, name, script.dial())
+}
+
+/// As [`fresh`], with the members' replies coming from `dial`.
+pub(super) fn fresh_with_dial(
+    home: &Path,
+    name: &str,
+    dial: DialFn,
 ) -> (
     WorkerHandle,
     Receiver<DriverReq>,
@@ -146,19 +160,11 @@ fn fresh(
         limits: limits(),
         lock,
     };
-    let h = spawn_with_io(
-        home.to_path_buf(),
-        kind,
-        req,
-        done,
-        script.dial(),
-        no_respond(),
-    )
-    .unwrap();
+    let h = spawn_with_io(home.to_path_buf(), kind, req, done, dial, no_respond()).unwrap();
     (h, req_rx, done_rx, fleet)
 }
 
-fn resumed(
+pub(super) fn resumed(
     home: &Path,
     name: &str,
     script: &Arc<Script>,
@@ -178,14 +184,14 @@ fn resumed(
     (h, req_rx, done_rx)
 }
 
-fn finish(h: WorkerHandle, done_rx: &Receiver<DriverEvent>) -> Outcome {
+pub(super) fn finish(h: WorkerHandle, done_rx: &Receiver<DriverEvent>) -> Outcome {
     let DriverEvent::Finished(out) = done_rx.recv().expect("the worker reports once");
     h.join.join().unwrap();
     out
 }
 
 /// A UI that sends every turn and rules nothing; returns what it saw.
-fn ui_send_all(rx: Receiver<DriverReq>) -> JoinHandle<Vec<&'static str>> {
+pub(super) fn ui_send_all(rx: Receiver<DriverReq>) -> JoinHandle<Vec<&'static str>> {
     std::thread::spawn(move || {
         let mut seen = Vec::new();
         while let Ok(r) = rx.recv() {
@@ -211,13 +217,13 @@ fn ui_send_all(rx: Receiver<DriverReq>) -> JoinHandle<Vec<&'static str>> {
     })
 }
 
-fn turn_sents(all: &[ReviewPayload]) -> usize {
+pub(super) fn turn_sents(all: &[ReviewPayload]) -> usize {
     all.iter()
         .filter(|p| matches!(p, ReviewPayload::TurnSent { .. }))
         .count()
 }
 
-fn paused(all: &[ReviewPayload]) -> Vec<(PauseKind, String, u64)> {
+pub(super) fn paused(all: &[ReviewPayload]) -> Vec<(PauseKind, String, u64)> {
     all.iter()
         .filter_map(|p| match p {
             ReviewPayload::Paused {

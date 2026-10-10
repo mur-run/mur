@@ -167,3 +167,21 @@ fn review_awaiting_confirm_esc_only_clears_the_note() {
         }
     }
 }
+
+/// P3b-§7.1 / §8.4: at the ruling or resume prompt nothing is in flight;
+/// Esc ×1 arms, Esc ×2 dismisses the prompt — never a cancel or a pause.
+#[test]
+fn review_awaiting_answer_esc_twice_dismisses() {
+    for (streaming, input_empty) in [(true, true), (true, false), (false, true), (false, false)] {
+        for last in [None, expired()] {
+            assert_eq!(
+                esc_action(last, streaming, input_empty, ReviewEsc::AwaitingAnswer),
+                EscAction::Arm
+            );
+        }
+        assert_eq!(
+            esc_action(recent(), streaming, input_empty, ReviewEsc::AwaitingAnswer),
+            EscAction::DismissPrompt
+        );
+    }
+}

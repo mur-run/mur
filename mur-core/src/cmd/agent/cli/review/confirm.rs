@@ -6,6 +6,7 @@ use super::render::finished_block;
 use super::state::Awaiting;
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
+use crate::cmd::fleet::review::constants::REVIEW_LEFT_PAUSED_NOTICE;
 use crate::cmd::fleet::review::murmur::bridge::{DriverReq, Outcome};
 use crate::cmd::fleet::review::note::{LineMode, send_answer_for};
 use crate::cmd::fleet::review::wire::message_text;
@@ -42,15 +43,56 @@ pub fn on_request(app: &mut App, req: DriverReq) {
             },
         ),
         DriverReq::TurnEnded { .. } => super::keys::on_turn_ended(app),
-        // wired in PR 4 (Tasks 10, 11): the ruling prompt, the review HITL
-        // modal. Until then the dropped reply pauses / denies.
-        DriverReq::Ruling { .. } | DriverReq::Hitl { .. } => {}
+        DriverReq::Ruling { text, open, reply } => {
+            let Some(s) = app.review.as_mut() else {
+                return;
+            };
+            s.awaiting = Some(Awaiting::Ruling { open, reply });
+            app.push_system(text.trim_end().to_string());
+        }
+        // wired in PR 4 (Task 11): the review HITL modal. Until then the
+        // dropped reply denies.
+        DriverReq::Hitl { .. } => {}
+    }
+}
+
+/// The line typed at the ruling prompt (§7.1), returned verbatim: the
+/// driver parses it as it parses stdin, re-asking with a hint on anything
+/// it does not take. A bare Enter is `"\n"` there, never the EOF `""`.
+pub fn answer_ruling(app: &mut App, line: &str) {
+    let Some(Awaiting::Ruling { reply, .. }) = app.review.as_mut().and_then(|s| s.awaiting.take())
+    else {
+        return;
+    };
+    let line = if line.is_empty() { "\n" } else { line };
+    // A send error means the worker already ended; `Finished` follows.
+    let _ = reply.send(line.to_string());
+}
+
+/// Esc ×2 at the ruling prompt or `Paused — continue?` (AC-P3b-25, 28): the
+/// EOF answer. Ruling → `""`, which the driver reads as leave paused; resume
+/// → drop the `Resumable`, releasing the lock.
+pub fn dismiss_prompt(app: &mut App) {
+    match app.review.as_mut().and_then(|s| s.awaiting.take()) {
+        Some(Awaiting::Ruling { reply, .. }) => {
+            let _ = reply.send(String::new());
+        }
+        Some(Awaiting::ResumeConfirm(_)) => {
+            app.review = None;
+            app.push_system(REVIEW_LEFT_PAUSED_NOTICE);
+        }
+        // §6.1: Esc never answers the send gate; put it back.
+        other => {
+            if let Some(s) = app.review.as_mut() {
+                s.awaiting = other;
+            }
+        }
     }
 }
 
 /// The line typed while `Awaiting::Confirm` (§5.2). A hint is shown and the
 /// gate stays open; any answer is sent and the gate closes.
-pub fn answer_confirm(app: &mut App, line: &str) {
+pub(super) fn answer_confirm(app: &mut App, line: &str) {
     let Some(s) = app.review.as_mut() else {
         return;
     };

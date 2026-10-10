@@ -9,11 +9,10 @@ mod render;
 mod start;
 mod state;
 
-pub use confirm::{answer_confirm, on_finished, on_request};
+pub use confirm::{dismiss_prompt, on_finished, on_request};
 pub use render::{footer_label, footer_right_hint};
-pub use start::answer_resume;
 pub use state::handle;
-pub use state::{ReviewSession, is_send_gate};
+pub use state::{ReviewSession, answer, esc_state, open_findings};
 
 #[cfg(test)]
 #[path = "args_tests.rs"]
@@ -36,6 +35,9 @@ mod render_tests;
 #[cfg(test)]
 #[path = "resume_tests.rs"]
 mod resume_tests;
+#[cfg(test)]
+#[path = "ruling_tests.rs"]
+mod ruling_tests;
 #[cfg(test)]
 #[path = "slash_tests.rs"]
 mod slash_tests;

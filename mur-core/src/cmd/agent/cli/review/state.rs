@@ -32,11 +32,45 @@ pub enum Awaiting {
         open: BTreeSet<String>,
         reply: Reply<SendAnswer>,
     },
+    /// §7.1: the ruling prompt; the next line goes back verbatim. `open`
+    /// feeds Tab completion. Dropping `reply` reads as EOF (leave paused).
+    Ruling {
+        open: BTreeSet<String>,
+        reply: Reply<String>,
+    },
 }
 
 /// The send gate (answered by `answer_confirm`), not the resume question.
 pub fn is_send_gate(a: &Awaiting) -> bool {
     matches!(a, Awaiting::Confirm { .. })
+}
+
+/// Esc's view of the session (§6.1), derived from what it waits on so the
+/// two can never disagree. A turn in flight never coexists with a prompt.
+pub fn esc_state(s: &ReviewSession) -> ReviewEsc {
+    match &s.awaiting {
+        Some(Awaiting::Confirm { .. }) => ReviewEsc::AwaitingConfirm,
+        Some(Awaiting::Ruling { .. } | Awaiting::ResumeConfirm(_)) => ReviewEsc::AwaitingAnswer,
+        None => s.esc,
+    }
+}
+
+/// The finding IDs `/rule` may name right now: only at the ruling prompt.
+pub fn open_findings(app: &App) -> Vec<String> {
+    match app.review.as_ref().and_then(|s| s.awaiting.as_ref()) {
+        Some(Awaiting::Ruling { open, .. }) => open.iter().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The line typed while the session waits on the human (§5.2, §7.1, §8.4).
+pub fn answer(app: &mut App, line: &str, tx: &Sender<StreamMsg>) {
+    match app.review.as_ref().and_then(|s| s.awaiting.as_ref()) {
+        Some(Awaiting::Confirm { .. }) => super::confirm::answer_confirm(app, line),
+        Some(Awaiting::Ruling { .. }) => super::confirm::answer_ruling(app, line),
+        Some(Awaiting::ResumeConfirm(_)) => super::start::answer_resume(app, line, tx),
+        None => {}
+    }
 }
 
 /// What MURMUR holds while a review is attached (spec §3.4, §4).

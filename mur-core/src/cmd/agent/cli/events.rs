@@ -619,7 +619,9 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                         app.last_esc_at,
                         app.streaming,
                         app.input_text().is_empty(),
-                        app.review.as_ref().map_or(ReviewEsc::Detached, |r| r.esc),
+                        app.review
+                            .as_ref()
+                            .map_or(ReviewEsc::Detached, review::esc_state),
                     );
                     match action {
                         EscAction::Arm => {
@@ -659,6 +661,11 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                                 &review::keys::cancel_via_tokio(tx.clone()),
                             );
                             app.last_esc_at = None;
+                        }
+                        EscAction::DismissPrompt => {
+                            review::dismiss_prompt(app);
+                            app.last_esc_at = None;
+                            app.esc_hint = false;
                         }
                         EscAction::Nothing => {
                             app.last_esc_at = None;
