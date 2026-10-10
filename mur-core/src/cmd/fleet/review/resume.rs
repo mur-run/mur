@@ -54,6 +54,18 @@ pub struct Resumable {
     pub limits: SessionLimits,
     /// Execution time already spent, paused time excluded (AC4).
     pub active: Duration,
+    /// P3b-§8.7 / D10: the round being resumed already had a `turn_sent`
+    /// that no verdict sealed, so `fold_rounds` dropped it and main's turn
+    /// is sent again (at-least-once; no partial-round persistence).
+    pub restarts_round: bool,
+}
+
+/// True when `payloads` hold a `turn_sent` for the round after the last
+/// sealed one (`sealed_round` is `ledger.round`).
+pub(super) fn restarts_round(payloads: &[ReviewPayload], sealed_round: u32) -> bool {
+    payloads
+        .iter()
+        .any(|p| matches!(p, ReviewPayload::TurnSent { round, .. } if *round == sealed_round + 1))
 }
 
 /// Review payloads in channel order, each with its event timestamp.
@@ -229,6 +241,7 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
         ledger.apply(&paused)?;
         super::loop_driver::append(&svc, mur_home, &fleet.channel_id, &paused)?;
     }
+    let restarts = restarts_round(&payloads, ledger.round);
     Ok(Resumable {
         round: ledger.round + 1,
         fleet,
@@ -238,6 +251,7 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
         ledger,
         limits,
         active,
+        restarts_round: restarts,
     })
 }
 
@@ -339,7 +353,44 @@ pub fn resume_session(
         retry_delay,
         &Instant::now,
     );
+    let run = super::session::apply_requested_pause(transport, mur_home, &fleet.channel_id, run);
     super::session::end_session(mur_home, &fleet, run)
+}
+
+/// One line of bare `/review`'s list (spec §3.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PausedRow {
+    pub name: String,
+    pub state: SessionState,
+    pub last: Option<DateTime<Utc>>,
+}
+
+/// Review sessions MURMUR can show in bare `/review`: paused and crashed
+/// (offered for resume) and running in another process (listed, not offered).
+pub fn list_paused(mur_home: &Path) -> Result<Vec<PausedRow>> {
+    let svc = ChannelService::open(mur_home)?;
+    let mut ids = svc.store().list_ids()?;
+    ids.sort();
+    let mut rows = Vec::new();
+    for id in &ids {
+        let Some(session) = super::prune::review_session_of(id) else {
+            continue;
+        };
+        // `observe` takes the run lock for every non-running state; the
+        // `Observed` is dropped each iteration, so listing holds nothing.
+        let observed = observe(&svc, mur_home, id, session)?;
+        if matches!(
+            observed.state,
+            SessionState::Paused | SessionState::Crashed | SessionState::Running(_)
+        ) {
+            rows.push(PausedRow {
+                name: session.to_string(),
+                state: observed.state,
+                last: observed.last,
+            });
+        }
+    }
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -349,3 +400,7 @@ mod resume_tests;
 #[cfg(test)]
 #[path = "resume_ruling_tests.rs"]
 mod resume_ruling_tests;
+
+#[cfg(test)]
+#[path = "paused_list_tests.rs"]
+mod paused_list_tests;

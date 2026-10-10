@@ -50,6 +50,7 @@ fn help_name(cmd: &SlashCmd) -> Option<&'static str> {
         SlashCmd::Effort { .. } => Some("effort"),
         SlashCmd::Login(_) => Some("login"),
         SlashCmd::Secret { .. } => Some("secret"),
+        SlashCmd::Review(_) => Some("review"),
         SlashCmd::Quit => Some("quit"),
         SlashCmd::Unknown(_) => None,
     }
@@ -102,6 +103,7 @@ fn one_of_each() -> Vec<SlashCmd> {
             key: None,
             delete: false,
         },
+        SlashCmd::Review(String::new()),
         SlashCmd::Quit,
         SlashCmd::Unknown("x".into()),
     ]

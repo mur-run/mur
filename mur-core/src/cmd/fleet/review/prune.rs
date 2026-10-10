@@ -28,7 +28,7 @@ use super::constants::{FLEET_CHANNEL_PREFIX, REVIEW_FLEET_PREFIX, REVIEW_STOP_RE
 use super::state::{SessionState, observe, stop_from_outside};
 
 /// The review fleet name a review channel belongs to, if it is one.
-fn review_session_of(channel_id: &str) -> Option<&str> {
+pub(super) fn review_session_of(channel_id: &str) -> Option<&str> {
     channel_id
         .strip_prefix(FLEET_CHANNEL_PREFIX)
         .filter(|name| name.starts_with(REVIEW_FLEET_PREFIX))

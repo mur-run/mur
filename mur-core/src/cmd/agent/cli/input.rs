@@ -90,6 +90,7 @@ pub(super) fn refresh_completion_with(app: &mut App, invited: bool) {
     } else {
         complete::compute(&input, &app.skills, &app.menu_ctx, &app.current_values())
     };
+    super::review::hint::refresh_hint(app);
 }
 
 /// The shell menu for a `!` line: commands for the first word, paths after.

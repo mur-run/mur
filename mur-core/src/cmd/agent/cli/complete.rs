@@ -64,6 +64,9 @@ pub struct MenuContext {
     pub model_ref: Option<String>,
     /// Recent channels as (handle typed at `/channels`, "id · turns · preview").
     pub channels: Vec<(String, String)>,
+    /// Agent names as their directories are named — already canonical, so
+    /// the menu never needs `canonicalize_agent_name`; that runs at send time.
+    pub agents: Vec<String>,
 }
 
 /// The session half of "what is in force": a `/effort` override or a `/skin`
@@ -162,8 +165,57 @@ impl MenuContext {
             model_id,
             model_ref,
             channels,
+            agents: agent_names(home),
         }
     }
+}
+
+/// Agent directories under `home` that hold a `profile.yaml`, sorted — the
+/// filter `lifecycle::do_list` applies. Not `do_list` itself: it resolves the
+/// MUR home on its own, and this menu reads the `home` it is given.
+fn agent_names(home: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(home.join("agents")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().join("profile.yaml").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// `/review` rows: agent names, but only while the word being typed is the
+/// value of `--main` / `--reviewer` in the flag run. `resume`, a task word,
+/// `--`, `--auto` or an unknown flag ends the run — the same grammar as
+/// `review/args.rs`, which rejects a value that looks like a flag.
+fn review_rows(input: &str, rest: &str, ctx: &MenuContext) -> Vec<Candidate> {
+    use crate::cmd::fleet::review::constants::{
+        REVIEW_FLAG_BUDGET, REVIEW_FLAG_DEADLINE, REVIEW_FLAG_MAIN, REVIEW_FLAG_REVIEWER,
+    };
+    let word = rest.rsplit(char::is_whitespace).next().unwrap_or("");
+    let head = &rest[..rest.len() - word.len()];
+    let mut value_of = None;
+    for w in head.split_whitespace() {
+        value_of = match (value_of, w) {
+            (Some(_), _) => None,
+            (None, REVIEW_FLAG_MAIN | REVIEW_FLAG_REVIEWER) => Some(true),
+            (None, REVIEW_FLAG_DEADLINE | REVIEW_FLAG_BUDGET) => Some(false),
+            _ => return Vec::new(),
+        };
+    }
+    if value_of != Some(true) || word.starts_with('-') {
+        return Vec::new();
+    }
+    let line = &input[..input.len() - word.len()];
+    let rows = ctx.agents.iter().map(|name| Candidate {
+        display: name.clone(),
+        insert: format!("{line}{name} "),
+        desc: String::new(),
+        has_children: false,
+    });
+    filter(rows.collect(), word)
 }
 
 /// Where a command's second-layer rows come from.
@@ -187,6 +239,9 @@ pub enum Args {
     Note,
     /// `list`, then `MenuContext::channels` to switch to, then `--stop` while following.
     Channels,
+    /// `MenuContext::agents`, offered only where `/review` expects an agent
+    /// name: after `--main` / `--reviewer`. Never a fixed layer 2.
+    ReviewAgents,
 }
 
 const ON_OFF: &[(&str, &str)] = &[("on", "enable"), ("off", "disable")];
@@ -313,6 +368,11 @@ const COMMANDS: &[(&str, &str, Args)] = &[
     ("quit", "exit the chat", Args::None),
     ("remember", "save an agent-local memory", Args::None),
     (
+        "review",
+        "main/reviewer loop in this pane",
+        Args::ReviewAgents,
+    ),
+    (
         "secret",
         "hand the agent a credential (hidden input)",
         Args::Secret,
@@ -356,7 +416,7 @@ fn args_for(cmd: &str) -> Option<Args> {
 /// Layer-2 candidates for a command word, resolved against `ctx`.
 fn build_args(cmd: &str, args: Args, ctx: &MenuContext, cur: &Current) -> Vec<Candidate> {
     let rows: Vec<(String, String)> = match args {
-        Args::None => return Vec::new(),
+        Args::None | Args::ReviewAgents => return Vec::new(),
         Args::Fixed(f) => f
             .iter()
             .map(|(w, d)| ((*w).to_string(), (*d).to_string()))
@@ -509,6 +569,7 @@ pub fn compute(
         // Still typing the command word.
         None => (filter(build_top_level(skills, ctx, cur), after), None),
         // Command word complete → maybe an argument layer.
+        Some(("review", rest)) => (review_rows(input, rest, ctx), None),
         Some((cmd, rest)) => {
             // A second whitespace means we're typing an arg past layer 2 —
             // only a recent channel row has a third layer.

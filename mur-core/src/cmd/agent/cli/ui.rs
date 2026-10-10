@@ -24,6 +24,12 @@ use hitl::render_hitl;
 use rail::{fleet_rail_height, render_fleet_rail};
 use status::render_status;
 
+/// The status bar alone, for tests outside `ui` that assert on the footer.
+#[cfg(test)]
+pub(super) fn render_status_for_test(f: &mut Frame, app: &App, area: Rect) {
+    render_status(f, app, area);
+}
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};

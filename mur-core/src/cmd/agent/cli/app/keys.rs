@@ -11,10 +11,56 @@ pub enum EscAction {
     ClearInput,
     CancelAndRestore,
     Nothing,
+    /// P3b-§6.1: first Esc during a review turn — pause after this turn.
+    RequestPause,
+    /// P3b-§6.1: second Esc inside the window — abort the in-flight turn.
+    AbortTurn,
+}
+
+/// Where a MURMUR-hosted review session stands, as far as Esc cares
+/// (P3b-§6.1). `Detached` is every non-review conversation and must behave
+/// exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReviewEsc {
+    #[default]
+    Detached,
+    AwaitingConfirm,
+    #[allow(dead_code)] // wired in PR 4 (Task 8)
+    TurnInFlight,
 }
 
 /// Pure function — no wall-clock calls, fully testable.
 pub fn esc_action(
+    last_esc_at: Option<std::time::Instant>,
+    streaming: bool,
+    input_empty: bool,
+    review: ReviewEsc,
+) -> EscAction {
+    match review {
+        ReviewEsc::Detached => detached_esc_action(last_esc_at, streaming, input_empty),
+        ReviewEsc::TurnInFlight => {
+            if within_window(last_esc_at) {
+                EscAction::AbortTurn
+            } else {
+                EscAction::RequestPause
+            }
+        }
+        // Nothing is in flight at the send prompt: Esc only clears the note
+        // being typed, so `streaming` is deliberately ignored.
+        ReviewEsc::AwaitingConfirm => match (within_window(last_esc_at), input_empty) {
+            (true, false) => EscAction::ClearInput,
+            (false, false) => EscAction::Arm,
+            (_, true) => EscAction::Nothing,
+        },
+    }
+}
+
+fn within_window(last_esc_at: Option<std::time::Instant>) -> bool {
+    last_esc_at.is_some_and(|t| t.elapsed() < ESC_DOUBLE_WINDOW)
+}
+
+/// Today's behaviour, verbatim, for a conversation with no review attached.
+fn detached_esc_action(
     last_esc_at: Option<std::time::Instant>,
     streaming: bool,
     input_empty: bool,

@@ -22,6 +22,7 @@ pub mod constants;
 pub mod driver;
 pub mod ledger;
 pub mod loop_driver;
+pub mod murmur;
 pub mod note;
 pub mod prune;
 pub mod resume;
@@ -35,12 +36,22 @@ pub mod schema;
 pub mod session;
 pub mod settle;
 pub mod state;
+#[allow(dead_code)] // wired in PR 4 (Task 8): the transport commits (PR 3); the UI's Esc×2 aborts
+pub mod turn_cell;
 pub mod verdict;
 pub mod wire;
 
 #[cfg(test)]
 #[path = "driver_tests.rs"]
 mod driver_tests;
+
+#[cfg(test)]
+#[path = "driver_abort_tests.rs"]
+mod driver_abort_tests;
+
+#[cfg(test)]
+#[path = "turn_cell_tests.rs"]
+mod turn_cell_tests;
 
 #[cfg(test)]
 mod tests;
@@ -56,6 +67,10 @@ mod loop_driver_tests;
 #[cfg(test)]
 #[path = "note_tests.rs"]
 mod note_tests;
+
+#[cfg(test)]
+#[path = "note_murmur_tests.rs"]
+mod note_murmur_tests;
 
 #[cfg(test)]
 #[path = "no_tampering_tests.rs"]

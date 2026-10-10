@@ -66,6 +66,32 @@ pub trait ReviewTransport {
     fn take_human_wait(&self) -> std::time::Duration {
         std::time::Duration::ZERO
     }
+
+    /// P3b-§4.2 / D7: whether the turn that just returned from
+    /// [`ReviewTransport::send`] was committed. `false` means the human's
+    /// Esc×2 won the race: the reply is dropped and the turn ends
+    /// [`RetryOutcome::Aborted`]. Default `true`; only the MURMUR transport
+    /// overrides it.
+    fn turn_committed(&self) -> bool {
+        true
+    }
+
+    /// P3b-§4.4: when the last `Stop` was a pause this transport asked for
+    /// (Esc×1, or the UI side gone) rather than the kill-switch, say so:
+    /// the session then records `paused` instead of `session_stopped`.
+    /// Default `None`; only the MURMUR transport overrides it.
+    fn take_requested_pause(&self) -> Option<RequestedPause> {
+        None
+    }
+}
+
+/// A pause the transport asked for (see [`ReviewTransport::take_requested_pause`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestedPause {
+    pub kind: PauseKind,
+    pub reason: &'static str,
+    /// Human wait not yet recorded on any event (P3b-D8).
+    pub human_wait: Duration,
 }
 
 /// The human's answer at the send prompt (P2-§5.3).
@@ -340,6 +366,10 @@ pub enum RetryOutcome {
     /// The member answered, but its task ended `failed`/`cancelled`. Not
     /// retried: the send worked, and re-running a turn is not free.
     TaskFailed(TaskFailed),
+    /// P3b-§6.3: the human's abort won before `send` returned. The reply is
+    /// dropped, nothing is ledgered, no retry. Never `TaskFailed`, never a
+    /// transport failure; the caller writes the `paused` event.
+    Aborted,
 }
 
 /// §8.1 / AC14: "A2A send failure or peer offline → one retry after a
@@ -395,7 +425,8 @@ pub fn run_turn_with_retry(
             return Err(e);
         };
         let reason = failed.to_string();
-        write_paused_and_revert(mur_home, channel_id, PauseKind::Other, &reason)?;
+        let wait = transport.take_human_wait();
+        write_paused_and_revert(mur_home, channel_id, PauseKind::Other, &reason, wait)?;
         transport.show(&reason)?;
         return Ok(RetryOutcome::Paused { reason });
     }
@@ -405,7 +436,17 @@ pub fn run_turn_with_retry(
         pre_confirmed: true,
         ..g
     };
-    let attempt = || run_turn(transport, mur_home, fleet_name, member, &params, confirmed);
+    // P3b-§4.2: `turn_committed()` is read right after `send` returns,
+    // before the `Result` is looked at — an abort that won the race turns
+    // any reply or error (a cancelled task included) into `Aborted`.
+    let attempt = || {
+        let out = run_turn(transport, mur_home, fleet_name, member, &params, confirmed);
+        if transport.turn_committed() {
+            Some(out)
+        } else {
+            None
+        }
+    };
     let sent = |outcome| match outcome {
         TurnOutcome::Sent { reply, .. } => RetryOutcome::Sent {
             reply,
@@ -414,8 +455,9 @@ pub fn run_turn_with_retry(
         _ => RetryOutcome::Stopped,
     };
     match attempt() {
-        Ok(outcome) => return Ok(sent(outcome)),
-        Err(first_err) => {
+        None => return Ok(RetryOutcome::Aborted),
+        Some(Ok(outcome)) => return Ok(sent(outcome)),
+        Some(Err(first_err)) => {
             if let Some(failed) = first_err.downcast_ref::<TaskFailed>() {
                 return Ok(RetryOutcome::TaskFailed(failed.clone()));
             }
@@ -425,13 +467,15 @@ pub fn run_turn_with_retry(
     std::thread::sleep(retry_delay);
 
     match attempt() {
-        Ok(outcome) => Ok(sent(outcome)),
-        Err(second_err) => {
+        None => Ok(RetryOutcome::Aborted),
+        Some(Ok(outcome)) => Ok(sent(outcome)),
+        Some(Err(second_err)) => {
             if let Some(failed) = second_err.downcast_ref::<TaskFailed>() {
                 return Ok(RetryOutcome::TaskFailed(failed.clone()));
             }
             let reason = format!("transport failure after one retry: {second_err}");
-            write_paused_and_revert(mur_home, channel_id, PauseKind::Transport, &reason)?;
+            let wait = transport.take_human_wait();
+            write_paused_and_revert(mur_home, channel_id, PauseKind::Transport, &reason, wait)?;
             Ok(RetryOutcome::Paused { reason })
         }
     }
@@ -444,11 +488,16 @@ pub fn run_turn_with_retry(
 /// `mode_changed` event reverting to semi-auto (§5, §8.1), both signed when
 /// the fleet's writer identity is available (migration-safe fallback to
 /// unsigned otherwise, same as every other channel writer in this crate).
-fn write_paused_and_revert(
+///
+/// `human_wait` is the gate / HITL wait not yet recorded on a `turn_sent`
+/// (P3b-D8); it lands in `paused.human_wait_ms` so a resume does not count
+/// it as execution time against the deadline.
+pub(super) fn write_paused_and_revert(
     mur_home: &Path,
     channel_id: &str,
     kind: PauseKind,
     reason: &str,
+    human_wait: Duration,
 ) -> Result<()> {
     let svc = ChannelService::open(mur_home)?;
     let zero = Cumulative {
@@ -466,7 +515,7 @@ fn write_paused_and_revert(
             kind,
             reason: reason.to_string(),
             cumulative: zero,
-            human_wait_ms: 0,
+            human_wait_ms: u64::try_from(human_wait.as_millis()).unwrap_or(u64::MAX),
         }),
         None,
     )?;

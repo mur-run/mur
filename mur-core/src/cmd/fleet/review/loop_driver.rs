@@ -21,14 +21,19 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::constants::{
-    MALFORMED_RESPONSE_RETRIES, REVIEW_PAUSE_REASON_ESCALATION, REVIEW_VALIDATION_HINT,
-    RULING_REGENERATED_BANNER, RULING_SESSION_END_APPROVE, RULING_SESSION_END_BLOCKED,
+    MALFORMED_RESPONSE_RETRIES, REVIEW_PAUSE_REASON_ABORTED, REVIEW_PAUSE_REASON_ESCALATION,
+    REVIEW_VALIDATION_HINT, RULING_REGENERATED_BANNER, RULING_SESSION_END_APPROVE,
+    RULING_SESSION_END_BLOCKED,
 };
-use super::driver::{FlushFailed, RetryOutcome, ReviewTransport, SendGate, run_turn_with_retry};
+use super::driver::{
+    FlushFailed, RetryOutcome, ReviewTransport, SendGate, run_turn_with_retry,
+    write_paused_and_revert,
+};
 use super::ledger::Ledger;
 use super::ruling::RulingInput;
 use super::schema::{
-    Cumulative, HumanNote, Mode, ReviewPayload, Role, SessionLimits, VerdictKind, to_note_payload,
+    Cumulative, HumanNote, Mode, PauseKind, ReviewPayload, Role, SessionLimits, VerdictKind,
+    to_note_payload,
 };
 use super::settle::{
     RulingCtx, RulingOutcome, apply_held_rulings, discard_held_rulings, settle_rulings,
@@ -532,6 +537,18 @@ impl LoopRun<'_> {
                 RetryOutcome::Stopped => return Ok(Turn::Stop(LoopDriverStop::Stopped)),
                 RetryOutcome::Paused { reason } => {
                     return Ok(Turn::Stop(LoopDriverStop::Paused { reason }));
+                }
+                RetryOutcome::Aborted => {
+                    write_paused_and_revert(
+                        self.mur_home,
+                        self.channel_id,
+                        PauseKind::Other,
+                        REVIEW_PAUSE_REASON_ABORTED,
+                        recorded,
+                    )?;
+                    return Ok(Turn::Stop(LoopDriverStop::Paused {
+                        reason: REVIEW_PAUSE_REASON_ABORTED.into(),
+                    }));
                 }
                 RetryOutcome::TaskFailed(f) => {
                     return Ok(Turn::Stop(LoopDriverStop::TaskFailed {

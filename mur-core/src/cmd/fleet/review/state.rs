@@ -153,7 +153,7 @@ fn ledger_for_stop(svc: &ChannelService, channel_id: &str) -> Ledger {
     })
 }
 
-fn cumulative_of(p: &ReviewPayload) -> Option<Cumulative> {
+pub(crate) fn cumulative_of(p: &ReviewPayload) -> Option<Cumulative> {
     match p {
         ReviewPayload::Verdict { cumulative, .. }
         | ReviewPayload::Rebuttal { cumulative, .. }
@@ -187,4 +187,4 @@ pub fn stop_from_outside(
 
 #[cfg(test)]
 #[path = "state_tests.rs"]
-mod state_tests;
+pub(crate) mod state_tests;

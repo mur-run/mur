@@ -779,3 +779,16 @@ mod escalation {
         );
     }
 }
+
+#[test]
+fn validate_pair_rejects_same_agent_and_empty_task() {
+    assert_eq!(
+        validate_pair("a", "a", "task").unwrap_err().to_string(),
+        "--main and --reviewer must be different agents (got 'a' for both)"
+    );
+    assert_eq!(
+        validate_pair("a", "b", "  \n").unwrap_err().to_string(),
+        "the review task is empty: say what the main agent should do"
+    );
+    assert!(validate_pair("a", "b", "task").is_ok());
+}

@@ -23,16 +23,16 @@ use mur_common::limits::Stuck;
 
 use super::constants::{
     FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
-    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_STOP_REASON_ESCALATION,
-    RULING_NO_MAIN_REASON, RULING_POSITIONS, RULING_PROMPT, RULING_RECORDED_CONTINUE_PROMPT,
-    RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
+    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_RESUME_RESTARTS_ROUND,
+    REVIEW_STOP_REASON_ESCALATION, RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT,
+    TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
 use super::loop_driver::{LoopDriverStop, run_review_loop};
 use super::note::{NoteLine, parse_note_line};
-use super::resume::ResumeEnd;
-use super::ruling::{is_rule_command, parse_rule_command};
+use super::resume::{Resumable, ResumeEnd};
+use super::ruling::{is_rule_command, parse_rule_command, ruling_prompt_text};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
 use super::wire::message_text;
 use crate::cmd::fleet::loop_run::{LoopStop, fleet_bounds};
@@ -42,6 +42,7 @@ use crate::cmd::fleet::store;
 const SESSION_ID_LEN: usize = 8;
 
 /// What the caller asked for (the clap args, minus parsing).
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReviewArgs {
     pub main: String,
     pub reviewer: String,
@@ -123,7 +124,7 @@ pub(super) fn create_session_fleet(
 }
 
 /// §7.1 / A1: remove the fleet definition and run state; the channel stays.
-pub(super) fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
+pub(crate) fn remove_session_fleet(mur_home: &Path, name: &str) -> Result<()> {
     for dir in [
         store::state_dir(mur_home, name),
         store::fleet_dir(mur_home, name),
@@ -304,26 +305,7 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
     }
 
     fn ask_ruling(&self, pending: &EscalationRecord, ledger: &Ledger) -> Result<String> {
-        let id = pending.finding_id.as_str();
-        let finding = ledger.finding(id);
-        let positions = RULING_POSITIONS
-            .replace("{id}", id)
-            .replace("{reason}", &pending.reason)
-            .replace(
-                "{issue}",
-                finding.map_or("", |f| {
-                    f.last_reviewer_reason
-                        .as_deref()
-                        .unwrap_or(f.issue.as_str())
-                }),
-            )
-            .replace(
-                "{main}",
-                finding
-                    .and_then(|f| f.last_reject_reason.as_deref())
-                    .unwrap_or(RULING_NO_MAIN_REASON),
-            );
-        (self.output)(&format!("{positions}{}", RULING_PROMPT.replace("{id}", id)))?;
+        (self.output)(&ruling_prompt_text(pending, ledger))?;
         Ok(self.wait.time(|| (self.input)())?)
     }
 
@@ -361,7 +343,7 @@ pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
 
 /// Enter (empty line) or `y`/`yes` sends; anything else, including EOF,
 /// declines — an unreadable answer never sends.
-fn is_send_answer(line: &str) -> bool {
+pub(super) fn is_send_answer(line: &str) -> bool {
     if line.is_empty() {
         return false; // EOF
     }
@@ -371,7 +353,7 @@ fn is_send_answer(line: &str) -> bool {
 /// Refuse to start when a member is down, before main spends a turn only for
 /// the reviewer's send to fail. Same liveness test as `a2a_dial`'s
 /// `RequireRunning` (the lock file exists), so the two never disagree.
-pub(super) fn require_running(mur_home: &Path, members: &[&str]) -> Result<()> {
+pub(crate) fn require_running(mur_home: &Path, members: &[&str]) -> Result<()> {
     let down: Vec<&str> = members
         .iter()
         .copied()
@@ -393,22 +375,29 @@ pub(super) fn require_running(mur_home: &Path, members: &[&str]) -> Result<()> {
     bail!("cannot start the review: {names} not running. Start with: {starts}");
 }
 
-/// `mur fleet review --main <a> --reviewer <b> "<task>"`.
-pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
-    if !std::io::stdin().is_terminal() {
-        bail!(
-            "mur fleet review is attended: it asks before every send and needs a terminal. \
-             Run it from an interactive shell."
-        );
-    }
-    let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(mur_home, n);
-    let (main, reviewer) = (canon(&args.main), canon(&args.reviewer));
+/// The pre-flight checks `mur fleet review` and `/review` share (P3b-§3):
+/// two different agents and a non-empty task.
+pub(super) fn validate_pair(main: &str, reviewer: &str, task: &str) -> Result<()> {
     if main == reviewer {
         bail!("--main and --reviewer must be different agents (got '{main}' for both)");
     }
-    if args.task.trim().is_empty() {
+    if task.trim().is_empty() {
         bail!("the review task is empty: say what the main agent should do");
     }
+    Ok(())
+}
+
+/// Everything `mur fleet review` and `/review` do before the driver runs
+/// (P3b-§3): canonical names, the pre-flight checks, limits, then the session
+/// fleet. Returns the fleet, its limits and the one-line banner. Nothing is
+/// created when a check fails.
+pub(crate) fn prepare_session(
+    mur_home: &Path,
+    args: &ReviewArgs,
+) -> Result<(Fleet, SessionLimits, String)> {
+    let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(mur_home, n);
+    let (main, reviewer) = (canon(&args.main), canon(&args.reviewer));
+    validate_pair(&main, &reviewer, &args.task)?;
     require_running(mur_home, &[&main, &reviewer])?;
 
     let name = new_session_name();
@@ -420,15 +409,28 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     let limits = SessionLimits::new(bounds.deadline, bounds.stuck, bounds.cost_usd);
 
     let fleet = create_session_fleet(mur_home, &name, &main, &reviewer, &args.task)?;
-    println!(
-        "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}.\n\
-         Stop any time with `mur fleet stop {name}` or by answering q.",
+    let banner = format!(
+        "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}.",
         humantime_like(bounds.deadline),
         match bounds.stuck {
             Stuck::Off => "off".to_string(),
             Stuck::After(d) => humantime_like(d),
         },
     );
+    Ok((fleet, limits, banner))
+}
+
+/// `mur fleet review --main <a> --reviewer <b> "<task>"`.
+pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
+    if !std::io::stdin().is_terminal() {
+        bail!(
+            "mur fleet review is attended: it asks before every send and needs a terminal. \
+             Run it from an interactive shell."
+        );
+    }
+    let (fleet, limits, banner) = prepare_session(mur_home, &args)?;
+    let name = &fleet.name;
+    println!("{banner}\nStop any time with `mur fleet stop {name}` or by answering q.");
 
     let wait = HumanWait::default();
     let decide = |member: &str, hitl: &serde_json::Value| wait.time(|| ask_hitl(member, hitl));
@@ -458,6 +460,33 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     Ok(())
 }
 
+/// What `mur fleet review-resume` prints before it asks anything, as one
+/// string so MURMUR can show the same text (P3b-§8 step 3). Newline-terminated
+/// lines. Byte-identical to the pre-3b `println!`s unless the round restarts,
+/// which adds one line (D10).
+pub fn render_resume_summary(r: &Resumable) -> String {
+    let mut out = String::new();
+    if r.crashed {
+        out.push_str(
+            "The previous driver stopped without pausing. Time counts up to its last recorded \
+             event; a turn in flight then was not recorded and is re-run.\n",
+        );
+    }
+    out.push_str(&format!(
+        "{} at round {} with {} open finding(s); {} of {} used.\n",
+        if r.crashed { "Crashed" } else { "Paused" },
+        r.round,
+        r.ledger.open_set().len(),
+        humantime_like(r.active),
+        humantime_like(r.limits.deadline()),
+    ));
+    if r.restarts_round {
+        out.push_str(&REVIEW_RESUME_RESTARTS_ROUND.replace("{n}", &r.round.to_string()));
+        out.push('\n');
+    }
+    out
+}
+
 /// `mur fleet review-resume <session>` (AC2): rebuild a paused session from
 /// its channel and continue at the same round, semi-auto, asking first.
 pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
@@ -466,20 +495,7 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
     }
     let r = super::resume::prepare_resume(mur_home, name)?;
     require_running(mur_home, &[&r.fleet.members[0], &r.fleet.members[1]])?;
-    if r.crashed {
-        println!(
-            "The previous driver stopped without pausing. Time counts up to its last recorded \
-             event; a turn in flight then was not recorded and is re-run."
-        );
-    }
-    println!(
-        "{} at round {} with {} open finding(s); {} of {} used.",
-        if r.crashed { "Crashed" } else { "Paused" },
-        r.round,
-        r.ledger.open_set().len(),
-        humantime_like(r.active),
-        humantime_like(r.limits.deadline()),
-    );
+    print!("{}", render_resume_summary(&r));
     // P2-§6: branch on the ledger. A session that owes a ruling goes
     // straight to the ruling prompt (inside `settle_then_resume`); any
     // other asks to continue first.
@@ -554,6 +570,32 @@ pub(super) fn run_session(
         &Instant::now,
     );
     end_session(mur_home, fleet, run)
+}
+
+/// P3b-§4.4: a `Stopped` the transport asked for (Esc×1, UI gone) is a
+/// pause, not a stop. Write `paused` (carrying the gate wait) and report it
+/// as `Paused`, so [`end_session`] keeps the fleet and writes no
+/// `session_stopped`. Any other outcome passes through untouched.
+pub(super) fn apply_requested_pause(
+    transport: &dyn ReviewTransport,
+    mur_home: &Path,
+    channel_id: &str,
+    run: Result<(Ledger, LoopDriverStop)>,
+) -> Result<(Ledger, LoopDriverStop)> {
+    let (ledger, stop) = run?;
+    if stop != LoopDriverStop::Stopped {
+        return Ok((ledger, stop));
+    }
+    let Some(p) = transport.take_requested_pause() else {
+        return Ok((ledger, stop));
+    };
+    super::driver::write_paused_and_revert(mur_home, channel_id, p.kind, p.reason, p.human_wait)?;
+    Ok((
+        ledger,
+        LoopDriverStop::Paused {
+            reason: p.reason.to_string(),
+        },
+    ))
 }
 
 /// End a session the loop returned from. A pause is NOT an end (§7, AC2):

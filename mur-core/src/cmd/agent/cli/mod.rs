@@ -40,6 +40,7 @@ mod plain;
 mod proposal;
 mod recover;
 mod render_card;
+mod review;
 mod scrub;
 mod search;
 mod secret_cmd;
@@ -99,8 +100,8 @@ use tokio::sync::mpsc;
 use tokio::time::Instant as TokioInstant;
 
 use self::app::{
-    App, ChannelRef, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, Role, SlashCmd,
-    arm_input_debounce, esc_action, overlay_key_action, parse_slash, take_due_input,
+    App, ChannelRef, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, ReviewEsc, Role,
+    SlashCmd, arm_input_debounce, esc_action, overlay_key_action, parse_slash, take_due_input,
 };
 use self::persist::Session;
 use self::shell::{ShellRoute, route_shell_output, shell_block};
@@ -255,6 +256,7 @@ fn help_text() -> String {
         "  agent     /mcp · /skill · /browser [--add|auth|testing|automation|live <host>...] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> (when relevant) · /instruct <text> (every turn) · /memories · /forget <name|last>",
         "            /pin <name> · /unpin <name> · /instruct-edit <name> <text>",
+        "  review    /review --main <agent> --reviewer <agent> <task…> (main/reviewer loop in this pane) · /review resume <session> · /review (paused sessions)",
         "  research  /deep-research [question|status|stop|setup]  run the research fleet (/research)",
         "  search    /search <query> [--all] [--limit N] [--lines N] [--send] · /search --expand <id>[,<id>] (full content for a hit)",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",

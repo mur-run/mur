@@ -77,6 +77,11 @@ pub const TARGET_ALIAS_REVIEWER: &str = "審查";
 /// P3a N3; `{name}` is the agent as typed. Never broadcast instead.
 pub const TARGET_NOT_FOUND_HINT: &str =
     "agent {name} not found; use /note <text> to send it to both sides";
+/// P1-§6 / P3b-§5.3: the inline MURMUR hint while typing `@<unknown> <text>`
+/// at the send gate; `{name}` is the agent as typed. On submit the line is a
+/// broadcast note, so the hint says so before it happens.
+pub const TARGET_UNKNOWN_INLINE_HINT: &str =
+    "agent {name} not found; this will be sent as a general note";
 /// P3a N10; `{command}` is the slash word as typed. Never a stop.
 pub const UNKNOWN_COMMAND_HINT: &str = "unknown command: {command}";
 /// P3a-§5.3: `paused { kind: other }` reason when appending pending note
@@ -205,6 +210,26 @@ pub const DRIVER_OWNER_FILE: &str = "driver.owner";
 /// whose driver died without pausing.
 pub const REVIEW_PAUSE_REASON_CRASHED: &str = "crashed";
 
+/// `paused.reason` when the human aborts an in-flight turn with Esc×2
+/// (P3b-§6.3).
+pub const REVIEW_PAUSE_REASON_ABORTED: &str = "turn aborted by the human (Esc Esc)";
+
+/// `paused.reason` when the human pauses with Esc×1 (P3b-§6.2).
+pub const REVIEW_PAUSE_REASON_USER: &str = "paused by the human (Esc)";
+
+/// `paused.reason` when the MURMUR side is gone (P3b-§4.4).
+pub const REVIEW_PAUSE_REASON_DETACHED: &str = "MURMUR closed";
+
+/// P3b-§8 / AC-P3b-29: shown first when a resumed session was recorded in
+/// auto mode. 3b reviews run semi-auto only.
+pub const REVIEW_AUTO_DEGRADED_NOTICE: &str =
+    "auto mode is not available in Phase 3b; this session runs as semi-auto.";
+
+/// P3b-§8.7 / D10: one line on the resume summary when the round being
+/// resumed already had a turn sent. `{n}` is the round.
+pub const REVIEW_RESUME_RESTARTS_ROUND: &str =
+    "Round {n} restarts from main; main's turn is sent again.";
+
 /// P2-§6 row 3 / P1 §7: the continue prompt of a plain paused session.
 pub const REVIEW_PAUSED_CONTINUE_PROMPT: &str =
     "Paused — continue? [Enter = continue, q = leave paused] ";
@@ -223,9 +248,58 @@ pub const REVIEW_STOP_REASON_DELETED: &str = "deleted";
 /// or crashed session.
 pub const REVIEW_STOP_REASON_PRUNED: &str = "pruned";
 
+/// P3b-§5.2: the only way to stop at the MURMUR send prompt. Bare `q` is a
+/// note there; on stdin `q` stops and this word is an unknown command.
+pub const MURMUR_STOP_COMMAND: &str = "/stop";
+
 /// The file whose presence `a2a_dial` treats as "the agent is up". The
 /// session preflight checks the same file so it agrees with the first send.
 pub const RUNNING_LOCK: &str = "running.lock";
+
+/// P3b-§3.1 / §3.3: the `/review` grammar, appended to every syntax error.
+pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] <task…>\n/review resume <session>";
+
+/// P3b-§9 / AC-P3b-6: `--auto` on `/review`, refused with this fixed text.
+pub const REVIEW_AUTO_REFUSED: &str =
+    "--auto is not available in MURMUR yet (Phase 3c); run without it for semi-auto";
+
+/// P3b-§3.4: a second `/review` while one is attached. `{session}` is its name.
+pub const REVIEW_ALREADY_ATTACHED: &str = "a review session is already attached: {session}";
+
+/// P3b-§3.4: bare `/review` with nothing attached and nothing to list.
+pub const REVIEW_NO_PAUSED: &str = "no paused review sessions";
+/// P3b-§3.4: one bare-`/review` row for a session MURMUR can resume.
+/// `{state}` is [`REVIEW_ROW_PAUSED`] or [`REVIEW_ROW_CRASHED`].
+pub const REVIEW_ROW_RESUMABLE: &str =
+    "{session}  {state}  last {last}  → /review resume {session}";
+pub const REVIEW_ROW_PAUSED: &str = "paused";
+pub const REVIEW_ROW_CRASHED: &str = "crashed";
+/// P3b-§3.4 / AC-P3b-4b: a session another process holds; never offered.
+/// `{who}` is ` (<holder>)` or empty.
+pub const REVIEW_ROW_RUNNING: &str = "{session}  running{who}  (not resumable here)";
+/// A row's `last` when the channel has no timestamp to show.
+pub const REVIEW_ROW_NO_LAST: &str = "—";
+pub const REVIEW_ROW_TIME_FORMAT: &str = "%Y-%m-%d %H:%M UTC";
+
+/// P3b-§3.3 syntax errors for `/review`; each is followed by
+/// [`REVIEW_USAGE_MURMUR`] on its own lines. `{what}` is a flag or "task".
+pub const REVIEW_SYNTAX_MISSING: &str = "missing {what}";
+pub const REVIEW_SYNTAX_NEEDS_VALUE: &str = "{flag} needs a value";
+pub const REVIEW_SYNTAX_UNKNOWN_FLAG: &str =
+    "unknown flag {flag} (type a task that starts with '-' after --)";
+pub const REVIEW_SYNTAX_BAD_BUDGET: &str = "--budget-usd needs a finite number, got '{value}'";
+pub const REVIEW_SYNTAX_RESUME_ARGS: &str = "resume takes exactly one session name";
+
+/// `/review` words. Flags come before the task; `--` ends them.
+pub const REVIEW_WORD_RESUME: &str = "resume";
+/// The slash word itself, for putting a refused line back in the composer.
+pub const REVIEW_SLASH: &str = "review";
+pub const REVIEW_FLAG_MAIN: &str = "--main";
+pub const REVIEW_FLAG_REVIEWER: &str = "--reviewer";
+pub const REVIEW_FLAG_DEADLINE: &str = "--deadline";
+pub const REVIEW_FLAG_BUDGET: &str = "--budget-usd";
+pub const REVIEW_FLAG_AUTO: &str = "--auto";
+pub const REVIEW_FLAGS_END: &str = "--";
 
 #[cfg(test)]
 mod tests {
