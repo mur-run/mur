@@ -51,3 +51,10 @@ AGENTS.md
 /docs/superpowers/
 /docs/plans/
 /docs/mur-函數清單與競品分析.md
+
+# Editor / agent backup and merge leftovers (e.g. a `keys.rs.bak` written
+# before an in-place rewrite). A bare `git add -A` would otherwise commit
+# them; nothing in this tree is meant to be tracked under these suffixes.
+*.bak
+*.orig
+*.rej
