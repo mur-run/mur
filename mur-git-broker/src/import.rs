@@ -1,0 +1,244 @@
+//! Pack import and closure check (§3 items 3–5, F13, F28, F33, F30).
+//!
+//! The pack is untrusted bytes. `git index-pack --strict` parses it inside a resource-limited
+//! child that writes only into a scratch dir; the broker alone then moves the three expected
+//! pack files into the repo, so the parser can never touch config, hooks or refs.
+use crate::{
+    action::ActionDocument,
+    constants::{IMPORTED_PACK_FILES, PARSER_CPU_SECS, PARSER_OUT_DIR_MODE},
+    error::BrokerError,
+    git::{GitError, GitOutput, run_with_timeout},
+    policy::BrokerLimits,
+    repo::PrivateRepo,
+};
+use std::{
+    fs,
+    io::Read,
+    os::unix::{fs::DirBuilderExt, process::CommandExt},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
+
+/// How the parser child is launched. The daemon wraps this in an OS sandbox (T12); tests swap in
+/// doubles that misbehave.
+pub trait ParserSpawn: Send + Sync {
+    fn spawn(
+        &self,
+        cmd: Command,
+        out_dir: &Path,
+        limits: &BrokerLimits,
+    ) -> Result<GitOutput, GitError>;
+}
+
+/// The rlimits applied to the parser child. `RLIMIT_AS` is Linux-only: Darwin rejects it with
+/// EINVAL for every value, so there the memory cap is NOT enforced by this spawner and the
+/// daemon's sandbox (T12) is the only bound on parser memory.
+#[cfg(target_os = "linux")]
+const PARSER_RLIMITS: [(libc::__rlimit_resource_t, u64); 2] = [
+    (libc::RLIMIT_CPU, PARSER_CPU_SECS),
+    (
+        libc::RLIMIT_AS,
+        crate::constants::PARSER_ADDRESS_SPACE_BYTES,
+    ),
+];
+#[cfg(not(target_os = "linux"))]
+const PARSER_RLIMITS: [(libc::c_int, u64); 1] = [(libc::RLIMIT_CPU, PARSER_CPU_SECS)];
+
+/// `setrlimit` caps (see [`PARSER_RLIMITS`]) plus the wall-clock cap. No sandbox.
+#[derive(Default)]
+pub struct RlimitSpawn;
+impl ParserSpawn for RlimitSpawn {
+    fn spawn(
+        &self,
+        mut cmd: Command,
+        out_dir: &Path,
+        limits: &BrokerLimits,
+    ) -> Result<GitOutput, GitError> {
+        cmd.current_dir(out_dir);
+        // SAFETY: the closure runs between fork and exec and only calls `setrlimit`, which is
+        // async-signal-safe; it allocates nothing and takes no locks.
+        unsafe {
+            cmd.pre_exec(|| {
+                for (res, cap) in PARSER_RLIMITS {
+                    let lim = libc::rlimit {
+                        rlim_cur: cap as libc::rlim_t,
+                        rlim_max: cap as libc::rlim_t,
+                    };
+                    if libc::setrlimit(res, &lim) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        run_with_timeout(cmd, Duration::from_secs(limits.max_index_wall_secs))
+    }
+}
+
+fn reject(why: impl Into<String>) -> BrokerError {
+    BrokerError::ImportRejected(why.into())
+}
+fn storage(e: impl std::fmt::Display) -> BrokerError {
+    BrokerError::Storage(e.to_string())
+}
+
+/// Object count from a v2 `.idx` fan-out table (its last entry is the total).
+pub fn idx_object_count(idx: &Path) -> std::io::Result<u64> {
+    let mut f = fs::File::open(idx)?;
+    let mut b = [0u8; 8 + 256 * 4];
+    f.read_exact(&mut b)?;
+    if b[..8] != [0xff, b't', b'O', b'c', 0, 0, 0, 2] {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    let last: [u8; 4] = b[8 + 255 * 4..].try_into().expect("4 bytes");
+    Ok(u64::from(u32::from_be_bytes(last)))
+}
+
+/// Distinguishes concurrent imports in one process that share a repo root.
+static SCRATCH_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Removes the scratch dir however `import_pack` exits.
+struct Scratch(PathBuf);
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+pub fn import_pack(
+    repo: &PrivateRepo,
+    pack: &Path,
+    action: &ActionDocument,
+    limits: &BrokerLimits,
+    spawn: &dyn ParserSpawn,
+) -> Result<(), BrokerError> {
+    let size = fs::metadata(pack).map_err(storage)?.len();
+    if size > limits.max_pack_bytes {
+        return Err(reject("pack too large"));
+    }
+    // The scratch dir lives beside the repo (same filesystem, so the final `rename` is atomic)
+    // but outside it, so a parser that escapes `out/` still is not inside the control paths.
+    let parent = repo.path().parent().unwrap_or(Path::new("."));
+    let n = SCRATCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let scratch = Scratch(parent.join(format!("out-{}-{n}", std::process::id())));
+    let _ = fs::remove_dir_all(&scratch.0);
+    fs::DirBuilder::new()
+        .mode(PARSER_OUT_DIR_MODE)
+        .create(&scratch.0)
+        .map_err(storage)?;
+    let out = &scratch.0;
+    fs::copy(pack, out.join("pack.pack")).map_err(storage)?;
+
+    let idx = out.join("pack.idx");
+    let fmt_arg = format!("--object-format={}", action.object_format.as_git_arg());
+    let cmd = repo.runner().command(&[
+        "index-pack",
+        "--strict",
+        &fmt_arg,
+        "-o",
+        &path_str(&idx)?,
+        &path_str(&out.join("pack.pack"))?,
+    ]);
+    match spawn.spawn(cmd, out, limits) {
+        Ok(o) if o.code == 0 => {}
+        Ok(o) => return Err(reject(format!("index-pack exited {}", o.code))),
+        Err(e) => return Err(reject(format!("index-pack failed: {e:?}"))),
+    }
+    let count = idx_object_count(&idx).map_err(|e| reject(format!("unreadable idx: {e}")))?;
+    if count > limits.max_object_count {
+        return Err(reject("too many objects"));
+    }
+
+    // Only the three expected names cross over; anything else the parser wrote stays behind.
+    let dest = repo.path().join("objects/pack");
+    fs::create_dir_all(&dest).map_err(storage)?;
+    for name in IMPORTED_PACK_FILES {
+        let src = out.join(name);
+        if src.is_file() {
+            fs::rename(&src, dest.join(name)).map_err(storage)?;
+        }
+    }
+    check_blob_sizes(repo, limits)?;
+    closure_check(repo, action)
+}
+
+fn path_str(p: &Path) -> Result<String, BrokerError> {
+    p.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| storage("non-utf8 path"))
+}
+
+fn git_ok(repo: &PrivateRepo, args: &[&str]) -> Result<GitOutput, BrokerError> {
+    run_with_timeout(
+        repo.runner().command(args),
+        Duration::from_secs(crate::constants::DEFAULT_GIT_TIMEOUT_SECS),
+    )
+    .map_err(|e| reject(format!("git failed: {e:?}")))
+}
+
+fn check_blob_sizes(repo: &PrivateRepo, limits: &BrokerLimits) -> Result<(), BrokerError> {
+    let o = git_ok(
+        repo,
+        &[
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectsize)",
+        ],
+    )?;
+    if o.code != 0 {
+        return Err(reject("cannot size objects"));
+    }
+    for line in String::from_utf8_lossy(&o.stdout).lines() {
+        let n: u64 = line.trim().parse().map_err(|_| reject("bad object size"))?;
+        if n > limits.max_blob_bytes {
+            return Err(reject("object too large"));
+        }
+    }
+    Ok(())
+}
+
+fn object_type(repo: &PrivateRepo, oid: &str) -> Result<String, BrokerError> {
+    let o = git_ok(repo, &["cat-file", "-t", oid])?;
+    if o.code != 0 {
+        return Err(reject("object missing"));
+    }
+    Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+
+/// Prove every object the new tip needs is present. Update: old and new are commits and the
+/// whole `old..new` range resolves. Creation: new is a commit and everything reachable from it
+/// resolves once the prefetched base refs are subtracted.
+pub fn closure_check(repo: &PrivateRepo, action: &ActionDocument) -> Result<(), BrokerError> {
+    let u = &action.updates[0];
+    if object_type(repo, &u.new_sha)? != "commit" {
+        return Err(reject("new is not a commit"));
+    }
+    let range: Vec<String> = if action.is_creation() {
+        vec![
+            "rev-list".into(),
+            "--objects".into(),
+            "--missing=error".into(),
+            u.new_sha.clone(),
+            "--not".into(),
+            "--glob=refs/prefetch/*".into(),
+        ]
+    } else {
+        if object_type(repo, &u.old_sha)? != "commit" {
+            return Err(reject("old is not a commit"));
+        }
+        vec![
+            "rev-list".into(),
+            "--objects".into(),
+            "--missing=error".into(),
+            format!("{}..{}", u.old_sha, u.new_sha),
+        ]
+    };
+    let args: Vec<&str> = range.iter().map(String::as_str).collect();
+    let o = git_ok(repo, &args)?;
+    if o.code != 0 {
+        return Err(reject("closure incomplete"));
+    }
+    Ok(())
+}
