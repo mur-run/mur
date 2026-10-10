@@ -69,15 +69,16 @@ fn has_flag(args: &[String], flag: &str) -> bool {
 }
 
 /// Message for a headed record on a cache without the full Chromium build.
-/// `mur browser setup` installs only the headless shell, so this is the
-/// common case, and Playwright's bare "Executable doesn't exist" says
-/// neither why nor what to do. Both fixes are named: install the full build,
+/// Setups before the full build was added left only the headless shell, so
+/// this is the common case on older caches, and Playwright's bare
+/// "Executable doesn't exist" says neither why nor what to do. Both fixes are named: install the full build,
 /// or record headless so the shell serves it.
 fn headed_text(run: &str, revision: Option<&str>, browsers: Option<&Path>) -> String {
     let engine = engines::DEFAULT_ENGINE;
     format!(
-        "{}\n\n`mur browser setup` installs only the headless shell, which cannot open a \
-         visible window. Or record headless instead:\n  mur browser record --run {run} -- --headless",
+        "{}\n\nOnly the headless shell is installed (what `mur browser setup` used to \
+         fetch), and it cannot open a visible window. Re-running `mur browser setup` \
+         adds the full build. Or record headless instead:\n  mur browser record --run {run} -- --headless",
         missing_text(engine, revision, browsers)
     )
 }

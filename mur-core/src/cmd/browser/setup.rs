@@ -23,8 +23,14 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use super::doctor::{Chromium, Probe, install_argv, install_hint, l1_check, usable_build};
+use super::doctor::{
+    Chromium, Probe, full_build, install_argv, install_hint, l1_check, usable_build,
+};
 use super::perms;
+
+/// What [`install_argv`] downloads: headless shell (~96 MiB with ffmpeg)
+/// plus full Chrome for Testing (~180 MiB). Shared with the `--add` hint.
+pub const DOWNLOAD_SIZE: &str = "~280 MiB";
 
 /// Runs the install argv. `Ok(true)` = exit 0.
 pub type Installer<'a> = &'a mut dyn FnMut(&[String]) -> Result<bool>;
@@ -93,6 +99,15 @@ pub fn prepare(
         bail!("mur browser setup needs a working npx (see above)");
     }
     let dir = match (report.chromium, browsers) {
+        // Ready only when the full build is there too: a shell-only cache
+        // (what older setups left) serves replay but refuses headed `auth`.
+        (Chromium::Found(_), Some(dir)) if full_build(dir).is_none() => {
+            writeln!(
+                output,
+                "  ! no full Chromium build: headed `mur browser auth` cannot open a window"
+            )?;
+            dir
+        }
         (Chromium::Found(_), _) => return Ok(()),
         (Chromium::Unknown, _) | (Chromium::Missing, None) => {
             writeln!(
@@ -104,12 +119,13 @@ pub fn prepare(
         (Chromium::Missing, Some(dir)) => dir,
     };
 
-    writeln!(output, "\nInstalling Chromium for replay does:")?;
+    writeln!(output, "\nInstalling Chromium for replay and auth does:")?;
     writeln!(output, "    run       {}", install_hint())?;
     writeln!(output, "    into      {}", dir.display())?;
     writeln!(
         output,
-        "    download  ~96 MiB (headless shell + ffmpeg, the revision this pinned package wants)"
+        "    download  {DOWNLOAD_SIZE} (headless shell for replay + full build for the \
+         `auth` window + ffmpeg, the revision this pinned package wants)"
     )?;
     writeln!(
         output,
@@ -132,12 +148,23 @@ pub fn prepare(
         }
     }
 
-    match usable_build(dir) {
-        Some(name) => {
+    match (usable_build(dir), full_build(dir)) {
+        (Some(name), Some(full)) => {
             writeln!(output, "  ✓ {name} in {}", dir.display())?;
+            if full != name {
+                writeln!(output, "  ✓ {full} in {}", dir.display())?;
+            }
             Ok(())
         }
-        None => {
+        (Some(_), None) => {
+            writeln!(
+                output,
+                "  ✗ no full Chromium build in {} (`mur browser auth` needs it)",
+                dir.display()
+            )?;
+            bail!("Chromium install finished but the full build did not appear");
+        }
+        (None, _) => {
             writeln!(
                 output,
                 "  ✗ still no completed Chromium build in {}",
@@ -361,6 +388,7 @@ mod tests {
         let dir = browsers.path().to_path_buf();
         let r = run_with(false, true, "", bin.path().as_os_str(), Some(&dir), &|| {
             complete(&dir, "chromium_headless_shell-1200");
+            complete(&dir, "chromium-1200");
             Ok(true)
         });
         assert!(r.result.is_ok(), "{:?} / {}", r.result, r.out);
@@ -410,6 +438,7 @@ mod tests {
         let bin = path_with_npx();
         let browsers = tempfile::tempdir().unwrap();
         complete(browsers.path(), "chromium_headless_shell-1246");
+        complete(browsers.path(), "chromium-1246");
         let r = run(
             true,
             "",
@@ -437,6 +466,7 @@ mod tests {
         let dir = browsers.path().to_owned();
         let r = run(true, "yes\n", bin.path().as_os_str(), Some(&dir), &|| {
             complete(&dir, "chromium_headless_shell-1246");
+            complete(&dir, "chromium-1246");
             Ok(true)
         });
         r.result.unwrap();
@@ -506,7 +536,7 @@ mod tests {
             &never,
         );
         let prompt = r.out.find("Type 'yes'").expect("prompted");
-        let size = r.out.find("~96 MiB").expect("size printed");
+        let size = r.out.find(DOWNLOAD_SIZE).expect("size printed");
         let warn = r.out.find("WARNING box").expect("npx warning explained");
         assert!(size < prompt && warn < prompt, "{}", r.out);
     }
@@ -546,5 +576,38 @@ mod tests {
             "{}",
             r.out
         );
+    }
+
+    /// A shell-only cache (left by setups before the full build was added)
+    /// is not ready: headed `auth` refuses on it, so setup installs again.
+    #[test]
+    fn shell_only_cache_installs_the_full_build() {
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        let dir = browsers.path().to_owned();
+        complete(&dir, "chromium_headless_shell-1246");
+        let r = run(true, "yes\n", bin.path().as_os_str(), Some(&dir), &|| {
+            complete(&dir, "chromium-1246");
+            Ok(true)
+        });
+        r.result.unwrap();
+        assert_eq!(r.installs, [install_argv()]);
+        assert!(r.out.contains("no full Chromium build"), "{}", r.out);
+        assert!(r.out.contains("✓ chromium-1246"), "{}", r.out);
+    }
+
+    /// Installer exits 0 but only the shell landed: auth would still refuse,
+    /// so setup must not report success.
+    #[test]
+    fn installer_ok_but_only_shell_fails_setup() {
+        let bin = path_with_npx();
+        let browsers = tempfile::tempdir().unwrap();
+        let dir = browsers.path().to_owned();
+        let r = run(true, "yes\n", bin.path().as_os_str(), Some(&dir), &|| {
+            complete(&dir, "chromium_headless_shell-1246");
+            Ok(true)
+        });
+        assert!(r.result.is_err());
+        assert!(r.out.contains("no full Chromium build"), "{}", r.out);
     }
 }

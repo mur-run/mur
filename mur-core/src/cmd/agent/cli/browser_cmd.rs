@@ -14,7 +14,8 @@ use super::*;
 
 const SKILL_NAME: &str = "browser";
 
-/// Step 2 of `--add`. Not run automatically: it downloads ~96 MiB and
+/// Step 2 of `--add`. Not run automatically: it downloads
+/// [`DOWNLOAD_SIZE`](crate::cmd::browser::setup::DOWNLOAD_SIZE) and
 /// widens the agent's spawn entitlements, so a human types `yes` for both.
 /// `--yes` because there is no TTY inside murmur to type it on. Consent is
 /// not skipped, it moves: the user approves this exact command as a chip,
@@ -30,10 +31,11 @@ fn setup_cmd(agent: &str) -> String {
 
 fn setup_hint(agent: &str) -> String {
     format!(
-        "next: run `{}` — it installs Chromium (~96 MiB) and grants the spawn \
+        "next: run `{}` — it installs Chromium ({}) and grants the spawn \
          permissions a browser run needs. Approving the command below is the \
          consent for both.",
-        setup_cmd(agent)
+        setup_cmd(agent),
+        crate::cmd::browser::setup::DOWNLOAD_SIZE
     )
 }
 
