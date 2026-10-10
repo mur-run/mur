@@ -134,6 +134,7 @@ pub(crate) fn approve_in(
         allow: !deny,
         reason: reason.unwrap_or_default(),
         surface: "cli".into(),
+        issued_at: Some(chrono::Utc::now()),
     };
     // The actor is the local human who approved, but the channel's WRITER signs
     // the event (v3d) so the gate can verify authority before releasing — a
@@ -231,6 +232,7 @@ mod pending_hitl_tests {
             agent_id: "buildy".into(),
             timeout_ms: 60_000,
             summary: "write config.yaml".into(),
+            issued_at: Some(chrono::Utc::now()),
         };
         ChannelEvent {
             seq,
@@ -251,6 +253,7 @@ mod pending_hitl_tests {
             allow: true,
             reason: String::new(),
             surface: "cli".into(),
+            issued_at: Some(chrono::Utc::now()),
         };
         ChannelEvent {
             seq,
@@ -396,6 +399,7 @@ mod approve_tests {
             agent_id: "monitor:m1".into(),
             timeout_ms: 60_000,
             summary: "rerun".into(),
+            issued_at: Some(chrono::Utc::now()),
         };
         // Parked the way the gate parks: signed by the router. `approve` only
         // answers a request the router asked. Planted once per home — a
@@ -522,6 +526,7 @@ mod approve_tests {
             agent_id: "qa".into(),
             timeout_ms: 60_000,
             summary: "echo hi".into(),
+            issued_at: Some(chrono::Utc::now()),
         };
         ChannelService::open(tmp.path())
             .unwrap()

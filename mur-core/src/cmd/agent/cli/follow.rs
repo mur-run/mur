@@ -383,6 +383,7 @@ mod tests {
             agent_id: "rustsmith".into(),
             timeout_ms: 1000,
             summary: "delete x".into(),
+            issued_at: Some(chrono::Utc::now()),
         };
         let ev = ChannelEvent {
             seq: 1,

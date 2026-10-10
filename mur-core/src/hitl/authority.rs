@@ -70,6 +70,22 @@ pub fn request_to_answer(
             continue;
         }
         if is_router_signed(mur_home, channel_id, e) {
+            // Refuse what the gate would ignore, rather than write an answer
+            // that silently settles nothing (#1764 option C): a request with
+            // no signed `issued_at`, or one past its TTL, is not open.
+            let Some(asked) = r.issued_at else {
+                bail!(
+                    "HitlRequest {hitl_id} in channel {channel_id} has no signed issue time \
+                     (written before MUR signed HITL times) — it can no longer be answered; \
+                     re-run the action to be asked again"
+                );
+            };
+            if let Err(why) = mur_common::hitl::check_fresh(asked, chrono::Utc::now()) {
+                bail!(
+                    "HitlRequest {hitl_id} in channel {channel_id} can no longer be answered \
+                     ({why:?}); re-run the action to be asked again"
+                );
+            }
             return Ok(r);
         }
         unsigned_match = true;
@@ -101,7 +117,8 @@ mod tests {
         serde_json::json!({
             "hitl_id": hitl_id, "action_hash": hash, "tier": "destructive",
             "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
-            "agent_id": "mur", "timeout_ms": 1000u64, "summary": "echo hi"
+            "agent_id": "mur", "timeout_ms": 1000u64, "summary": "echo hi",
+            "issued_at": chrono::Utc::now()
         })
     }
 

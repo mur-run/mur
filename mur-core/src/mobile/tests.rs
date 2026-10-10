@@ -88,7 +88,8 @@ fn respond_hitl_writes_a_hitl_response_echoing_the_request() {
         serde_json::json!({
             "hitl_id": "h1", "action_hash": "AH", "tier": "destructive",
             "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
-            "agent_id": "mur", "timeout_ms": 300000u64, "summary": "rm -rf x"
+            "agent_id": "mur", "timeout_ms": 300000u64, "summary": "rm -rf x",
+            "issued_at": chrono::Utc::now()
         }),
         None,
     )
@@ -136,7 +137,8 @@ fn respond_hitl_resolves_an_older_stacked_gate_not_just_the_newest() {
             serde_json::json!({
                 "hitl_id": hid, "action_hash": ah, "tier": "destructive",
                 "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
-                "agent_id": "mur", "timeout_ms": 300000u64, "summary": "x"
+                "agent_id": "mur", "timeout_ms": 300000u64, "summary": "x",
+            "issued_at": chrono::Utc::now()
             }),
             None,
         )
@@ -172,7 +174,8 @@ fn respond_hitl_from_params_dispatches_a_well_formed_request() {
         serde_json::json!({
             "hitl_id": "h1", "action_hash": "AH", "tier": "destructive",
             "tool_name": "bash", "tool_input": {}, "step_or_call_id": "s0",
-            "agent_id": "mur", "timeout_ms": 300000u64, "summary": "x"
+            "agent_id": "mur", "timeout_ms": 300000u64, "summary": "x",
+            "issued_at": chrono::Utc::now()
         }),
         None,
     )

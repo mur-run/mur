@@ -140,6 +140,7 @@ impl BatchGate<'_> {
                     allow: decision.allow,
                     reason: decision.reason.clone().unwrap_or_default(),
                     surface: decision.surface.clone().unwrap_or_else(|| "unknown".into()),
+                    issued_at: Some(chrono::Utc::now()),
                 })
                 .await;
             }
