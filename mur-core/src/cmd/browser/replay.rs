@@ -110,12 +110,13 @@ fn finish(home: &Path, name: &str, mut run: Run, mut report: ReplayReport) -> Re
     // Spec D3: write back only when the whole run is trustworthy.
     let may_write = report.failed == 0 && report.budget_exceeded.is_none();
     let mut write_error = None;
-    let applied = if may_write {
-        heal::apply_verified(&mut run, &report.heals)
-    } else {
-        0
-    };
-    if applied > 0 {
+    if may_write {
+        let applied = heal::apply_verified(&mut run, &report.heals);
+        // A green run is the only kind that counts as a replay: stats feed
+        // `mur browser list --sort frecency`. Concurrent replays of one
+        // recording may lose a stat update — accepted (spec "Known limitation").
+        run.replay_count = run.replay_count.saturating_add(1);
+        run.replayed_at = Some(chrono::Utc::now());
         match write_actions_atomic(&paths::run_actions(home, name), &run) {
             // Filled only after the rename landed (spec 輸出).
             Ok(()) => report.written_back = applied,

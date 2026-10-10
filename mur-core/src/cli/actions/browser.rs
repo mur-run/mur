@@ -59,8 +59,36 @@ pub enum BrowserAction {
     },
     /// Run the secret broker (needs MUR_BROWSER_BROKER_TOKEN; `record` starts its own).
     Broker,
-    /// List recorded runs.
-    List,
+    /// List recorded runs as a table (name, summary, domain, steps, mode, runs, date).
+    List {
+        /// Machine-readable JSON array (every field, nothing truncated).
+        #[arg(long, conflicts_with_all = ["tsv", "oneline"])]
+        json: bool,
+        /// Tab-separated values, one run per line.
+        #[arg(long, conflicts_with = "oneline")]
+        tsv: bool,
+        /// Names only, one per line (for scripts and shell completion).
+        #[arg(long)]
+        oneline: bool,
+        /// Omit the header line (table and --tsv).
+        #[arg(long)]
+        no_header: bool,
+        /// Only runs carrying this tag (repeat to require several).
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        /// Only runs recorded with this site profile.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Only runs whose name, description, tags, domain or any step intent matches this regex.
+        #[arg(long, value_name = "RE")]
+        grep: Option<String>,
+        /// Only runs recorded since: 7d, 24h, or YYYY-MM-DD.
+        #[arg(long, value_name = "WHEN")]
+        since: Option<String>,
+        /// Order: name (default), recent, or frecency (most-and-latest replayed first).
+        #[arg(long, value_enum, default_value = "name")]
+        sort: crate::cmd::browser::list::Sort,
+    },
     /// Show one recorded run.
     Show { name: String },
     /// Export a recorded run as a Playwright `.spec.ts` file.

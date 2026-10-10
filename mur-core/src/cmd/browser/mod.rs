@@ -3,6 +3,7 @@
 mod auth;
 pub mod doctor;
 pub mod engine_check;
+pub mod list;
 pub mod live_state;
 pub mod perms;
 mod replay;
@@ -128,6 +129,10 @@ pub async fn record(
         mode,
         profile: profile.map(ToOwned::to_owned),
         recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: Vec::new(),
+        replayed_at: None,
+        replay_count: 0,
         steps: Vec::new(),
     };
     let mur_home = mur_home()?;
@@ -261,25 +266,6 @@ pub async fn broker() -> Result<()> {
 #[cfg(not(unix))]
 pub async fn broker() -> Result<()> {
     bail!("browser secret broker requires Unix domain sockets and is unavailable on this platform")
-}
-
-/// List recorded runs under `~/.mur/browser/runs/`.
-pub fn list() -> Result<()> {
-    let runs = runs_dir()?;
-    if !runs.exists() {
-        return Ok(());
-    }
-    let mut names = fs::read_dir(&runs)?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_type().ok()?.is_dir().then(|| entry.file_name()))
-        .filter_map(|name| name.into_string().ok())
-        .filter(|name| paths::validate_name(name).is_ok())
-        .collect::<Vec<_>>();
-    names.sort();
-    for name in names {
-        println!("{name}");
-    }
-    Ok(())
 }
 
 /// Print a recorded run exactly as stored.  Parsing first avoids presenting a
@@ -536,6 +522,10 @@ fn write_test_run(mur_home: &std::path::Path, name: &str, offset_minutes: i64) {
         mode: Mode::Test,
         profile: None,
         recorded_at: chrono::Utc::now() - chrono::Duration::minutes(offset_minutes),
+        description: None,
+        tags: Vec::new(),
+        replayed_at: None,
+        replay_count: 0,
         steps: Vec::new(),
     };
     let path = paths::run_actions(mur_home, name);

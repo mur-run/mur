@@ -31,6 +31,7 @@ pub mod recorder;
 pub mod replay;
 pub mod server;
 pub mod state;
+pub mod summary;
 
 /// npm package spawned as the downstream MCP server. Pinned: each release
 /// requires a specific browser build, and 0.0.82 renamed the element

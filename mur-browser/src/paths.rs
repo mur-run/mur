@@ -42,9 +42,12 @@ pub fn run_dir(mur_home: &Path, run: &str) -> PathBuf {
     browser_root(mur_home).join("runs").join(run)
 }
 
+/// File name of a run's recording inside its `runs/<name>/` directory.
+pub const ACTIONS_FILE: &str = "actions.yaml";
+
 /// `runs/<name>/actions.yaml` — the source of truth for replay.
 pub fn run_actions(mur_home: &Path, run: &str) -> PathBuf {
-    run_dir(mur_home, run).join("actions.yaml")
+    run_dir(mur_home, run).join(ACTIONS_FILE)
 }
 
 /// `runs/<name>/hits.jsonl`

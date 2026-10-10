@@ -161,8 +161,24 @@ pub struct Run {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     pub recorded_at: chrono::DateTime<chrono::Utc>,
+    /// Optional human description; overrides the derived summary in listings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Free-form labels for `mur browser list --tag`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// When this recording was last replayed (feeds frecency).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replayed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// How many times this recording has been replayed.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub replay_count: u32,
     #[serde(default)]
     pub steps: Vec<Step>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

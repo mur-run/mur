@@ -24,7 +24,34 @@ pub(super) async fn run_browser(action: BrowserAction) -> Result<()> {
             allow_domain,
         } => cmd::browser::auth(&site, &url, reauth, browser, &allow_domain).await?,
         BrowserAction::Broker => cmd::browser::broker().await?,
-        BrowserAction::List => cmd::browser::list()?,
+        BrowserAction::List {
+            json,
+            tsv,
+            oneline,
+            no_header,
+            tags,
+            profile,
+            grep,
+            since,
+            sort,
+        } => {
+            use cmd::browser::list::{Format, ListOpts};
+            let format = match (json, tsv, oneline) {
+                (true, _, _) => Format::Json,
+                (_, true, _) => Format::Tsv,
+                (_, _, true) => Format::Oneline,
+                _ => Format::Table,
+            };
+            cmd::browser::list::list(ListOpts {
+                format,
+                no_header,
+                tags,
+                profile,
+                grep,
+                since,
+                sort,
+            })?
+        }
         BrowserAction::Show { name } => cmd::browser::show(&name)?,
         BrowserAction::Export { name, out } => cmd::browser::export(&name, out.as_deref())?,
         BrowserAction::Status => cmd::browser::status()?,
