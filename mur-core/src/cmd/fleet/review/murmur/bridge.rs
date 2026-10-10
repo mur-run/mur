@@ -31,7 +31,6 @@ pub enum DriverReq {
     },
     /// An escalation needs a ruling. `text` is the shown block; `open` is the
     /// open set. The reply is the raw line, `""` on abort.
-    #[allow(dead_code)] // wired in PR 4 (Task 10): the ruling prompt reads these
     Ruling {
         text: String,
         open: BTreeSet<String>,
@@ -55,7 +54,6 @@ pub enum DriverReq {
     },
     /// A gated tool call raised inside a member's turn: one request per call
     /// (#1759). `reply` is allow / deny.
-    #[allow(dead_code)] // wired in PR 4 (Task 11): the review HITL modal
     Hitl {
         member: String,
         req: HitlRequest,
@@ -92,7 +90,6 @@ pub struct ReviewFlags {
 
 /// Who answers a tool approval raised during a review turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // wired in PR 4 (Task 11): `app.hitl_origin`
 pub enum HitlOrigin {
     /// The attached agent's own turn.
     Own,

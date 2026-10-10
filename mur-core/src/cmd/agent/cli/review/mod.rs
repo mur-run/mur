@@ -4,12 +4,14 @@
 mod args;
 mod confirm;
 pub mod hint;
+pub mod hitl;
 pub mod keys;
 mod render;
 mod start;
 mod state;
 
 pub use confirm::{dismiss_prompt, on_finished, on_request};
+pub use hitl::ReviewGate;
 pub use render::{footer_label, footer_right_hint};
 pub use state::handle;
 pub use state::{ReviewSession, answer, esc_state, open_findings};
@@ -26,6 +28,9 @@ mod footer_tests;
 #[cfg(test)]
 #[path = "hint_tests.rs"]
 mod hint_tests;
+#[cfg(test)]
+#[path = "hitl_tests.rs"]
+mod hitl_tests;
 #[cfg(test)]
 #[path = "keys_tests.rs"]
 mod keys_tests;

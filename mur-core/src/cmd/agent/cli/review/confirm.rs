@@ -50,9 +50,7 @@ pub fn on_request(app: &mut App, req: DriverReq) {
             s.awaiting = Some(Awaiting::Ruling { open, reply });
             app.push_system(text.trim_end().to_string());
         }
-        // wired in PR 4 (Task 11): the review HITL modal. Until then the
-        // dropped reply denies.
-        DriverReq::Hitl { .. } => {}
+        DriverReq::Hitl { member, req, reply } => super::hitl::on_gate(app, member, req, reply),
     }
 }
 
@@ -121,6 +119,7 @@ pub(super) fn answer_confirm(app: &mut App, line: &str) {
 /// graceful close (§4.4.1) quits only now, after the turn was ledgered.
 pub fn on_finished(app: &mut App, outcome: Outcome) {
     app.push_system(finished_block(&outcome));
+    super::hitl::drop_all(app);
     let session = app.review.take();
     if session.as_ref().is_some_and(|s| s.closing) {
         app.should_quit = true;

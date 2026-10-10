@@ -409,11 +409,12 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                         app.hitl_selected = app.hitl_selected.saturating_sub(1);
                     }
                     KeyCode::Down => {
-                        app.hitl_selected = (app.hitl_selected + 1).min(ui::HITL_CHOICES.len() - 1);
+                        app.hitl_selected = (app.hitl_selected + 1)
+                            .min(ui::hitl_choices(app.hitl_origin).len() - 1);
                     }
                     KeyCode::Char(c @ '1'..='4') if composer_empty => {
                         let i = (c as usize) - ('1' as usize);
-                        if i < ui::HITL_CHOICES.len() {
+                        if i < ui::hitl_choices(app.hitl_origin).len() {
                             app.hitl_selected = i;
                             commit_hitl_choice(app, tx);
                         }

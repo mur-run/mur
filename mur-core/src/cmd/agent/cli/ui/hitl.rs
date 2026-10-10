@@ -95,6 +95,21 @@ pub(crate) const HITL_CHOICES: [HitlChoice; 4] = [
     HitlChoice::Deny,
 ];
 
+/// P3b-§10: a review member's gate always asks, so it offers no session
+/// grant. `Deny` stays last for the same reflex-Enter reason.
+pub(crate) const REVIEW_HITL_CHOICES: [HitlChoice; 2] = [HitlChoice::Once, HitlChoice::Deny];
+
+/// The menu for the gate in the slot. The key handler and the renderer both
+/// read it here, so a row the operator can see is a row a key can reach.
+pub(crate) fn hitl_choices(
+    origin: crate::cmd::fleet::review::murmur::bridge::HitlOrigin,
+) -> &'static [HitlChoice] {
+    match origin {
+        crate::cmd::fleet::review::murmur::bridge::HitlOrigin::Own => &HITL_CHOICES,
+        crate::cmd::fleet::review::murmur::bridge::HitlOrigin::Review => &REVIEW_HITL_CHOICES,
+    }
+}
+
 impl HitlChoice {
     /// The row label. `grant` is what a session grant would actually cover for
     /// the call being gated — the row prints that rather than a fixed promise,
@@ -133,10 +148,14 @@ pub(super) fn render_hitl(
     f: &mut Frame,
     theme: &'static crate::cmd::agent::cli::theme::Theme,
     hitl: &crate::cmd::agent::cli::stream::HitlRequest,
+    review_member: Option<&str>,
     selected: usize,
     composer_empty: bool,
     scroll: u16,
 ) -> (u16, u16) {
+    use crate::cmd::fleet::review::murmur::bridge::HitlOrigin;
+    let origin = review_member.map_or(HitlOrigin::Own, |_| HitlOrigin::Review);
+    let choices = hitl_choices(origin);
     // The menu is five rows where the old key row was one. At 50% of a short
     // terminal that would leave the body no room at all — the residue notice
     // and the scroll window would vanish — so the modal grows to guarantee the
@@ -191,14 +210,14 @@ pub(super) fn render_hitl(
     // meant the modal had a hidden mode and the operator had to learn it. A
     // menu has no mode — the row says exactly what it does, and confirming it
     // is always Enter.
-    let sel = selected.min(HITL_CHOICES.len() - 1);
+    let sel = selected.min(choices.len() - 1);
     // What a grant would cover, computed once for every row that mentions it.
     let grant = crate::cmd::agent::cli::dest::grant_for(
         &hitl.tool_name,
         Some(&hitl.tool_input),
         hitl.tier(),
     );
-    let mut keys: Vec<Line> = HITL_CHOICES
+    let mut keys: Vec<Line> = choices
         .iter()
         .enumerate()
         .map(|(i, c)| {
@@ -212,19 +231,31 @@ pub(super) fn render_hitl(
             Line::from(vec![
                 Span::styled(if on { " ❯ " } else { "   " }, num),
                 Span::styled(format!("{}. ", i + 1), num),
-                Span::styled(c.label(&grant), text),
+                Span::styled(
+                    match (origin, c) {
+                        // A member's denial has nowhere to carry composer
+                        // text: the worker only hears allow / deny.
+                        (HitlOrigin::Review, HitlChoice::Deny) => "No (Esc)".to_string(),
+                        _ => c.label(&grant),
+                    },
+                    text,
+                ),
             ])
         })
         .collect();
+    let n = choices.len();
     keys.push(Line::styled(
-        "   ↑/↓ select · Enter confirm · 1-4 pick directly · Esc deny",
+        format!("   ↑/↓ select · Enter confirm · 1-{n} pick directly · Esc deny"),
         theme.muted,
     ));
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(theme.accent)
-        .title(" approve tool call ");
+        .title(match review_member {
+            Some(m) => format!(" approve tool call · review member {m} "),
+            None => " approve tool call ".to_string(),
+        });
     let inner = block.inner(area);
     f.render_widget(Clear, area);
     f.render_widget(block, area);
@@ -244,7 +275,7 @@ pub(super) fn render_hitl(
     } else {
         let mut rows = keys;
         rows.push(Line::styled(
-            "   1-4 type while the composer has text — ↑/↓ and Enter still decide",
+            format!("   1-{n} type while the composer has text — ↑/↓ and Enter still decide"),
             Style::default().fg(Color::Yellow),
         ));
         Text::from(rows)
@@ -340,6 +371,7 @@ mod hitl_modal_tests {
                 f,
                 &crate::cmd::agent::cli::theme::ANSI,
                 &fat_request(),
+                None,
                 0,
                 true,
                 0,
@@ -367,7 +399,15 @@ mod hitl_modal_tests {
         };
         let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
         term.draw(|f| {
-            render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, 0, true, 0);
+            render_hitl(
+                f,
+                &crate::cmd::agent::cli::theme::ANSI,
+                &req,
+                None,
+                0,
+                true,
+                0,
+            );
         })
         .unwrap();
         let dump = term.backend().to_string().replace(['\n', ' '], "");
@@ -390,7 +430,15 @@ mod hitl_modal_tests {
         let hidden_at = |h: u16| -> usize {
             let mut term = Terminal::new(TestBackend::new(100, h)).unwrap();
             term.draw(|f| {
-                render_hitl(f, &crate::cmd::agent::cli::theme::ANSI, &req, 0, true, 0);
+                render_hitl(
+                    f,
+                    &crate::cmd::agent::cli::theme::ANSI,
+                    &req,
+                    None,
+                    0,
+                    true,
+                    0,
+                );
             })
             .unwrap();
             let dump = term.backend().to_string();
@@ -443,6 +491,7 @@ mod hitl_modal_tests {
                     f,
                     &crate::cmd::agent::cli::theme::ANSI,
                     &req,
+                    None,
                     0,
                     true,
                     scroll,
@@ -481,6 +530,7 @@ mod hitl_modal_tests {
                 f,
                 &crate::cmd::agent::cli::theme::ANSI,
                 &fat_request(),
+                None,
                 0,
                 false,
                 0,
