@@ -179,7 +179,8 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     } else if app.ctrl_c_hint {
         Some(("Ctrl+C again to quit".to_string(), theme.muted))
     } else {
-        None
+        // P3b-§5.3: `@<unknown>` at the send gate; cached, no filesystem here.
+        crate::cmd::agent::cli::review::hint::current_hint(app).map(|h| (h, theme.warn))
     };
 
     if let Some((hint_text, hint_style)) = right_hint {

@@ -47,6 +47,8 @@ pub struct ReviewSession {
     pub awaiting: Option<Awaiting>,
     /// Set by Ctrl+D while the worker is still finishing its turn (§4.4).
     pub closing: bool,
+    /// AC-P3b-13: the `@<unknown>` hint cache for the send gate.
+    pub hint: super::hint::InlineHint,
 }
 
 /// `/review <rest>` typed in the composer. The composer was cleared on

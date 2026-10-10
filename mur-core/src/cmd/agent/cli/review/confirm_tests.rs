@@ -41,6 +41,7 @@ fn attach(app: &mut App) {
         esc: ReviewEsc::Detached,
         awaiting: None,
         closing: false,
+        hint: Default::default(),
     });
 }
 

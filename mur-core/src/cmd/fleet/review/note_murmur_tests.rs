@@ -161,3 +161,48 @@ fn stdin_send_answers_match_the_terminal_gate() {
         "/stop is MURMUR-only"
     );
 }
+
+/// P3b-§5.3: the inline hint names exactly the lines `Murmur` broadcasts
+/// because the target is unknown — never a member, an alias, or a usage error.
+#[test]
+fn unknown_target_matches_the_murmur_broadcast_rows() {
+    use super::note::unknown_target;
+    let members = members();
+    for (line, want) in [
+        ("@ghost fix it", Some("ghost")),
+        ("  @Ghost   fix it ", Some("Ghost")),
+        ("@main-agent fix it", None),
+        ("@MAIN-AGENT fix it", None),
+        ("@主 fix it", None),
+        ("@審查 fix it", None),
+        ("@ghost", None),
+        ("@ fix it", None),
+        ("/note hi", None),
+        ("plain text", None),
+        ("", None),
+    ] {
+        let got = unknown_target(line, &members, identity);
+        assert_eq!(got.as_deref(), want, "line {line:?}");
+        let broadcast = matches!(
+            parse_note_line_mode(line, &members, LineMode::Murmur, identity),
+            NoteLine::Note(HumanNote { target: None, .. })
+        ) && line.trim_start().starts_with('@');
+        assert_eq!(got.is_some(), broadcast, "hint iff broadcast for {line:?}");
+    }
+}
+
+/// The resolver is the expensive part (it reads `agents/`); a line that is
+/// not `@<name> <text>` never reaches it.
+#[test]
+fn unknown_target_does_not_resolve_non_target_lines() {
+    use super::note::unknown_target;
+    let calls = std::cell::Cell::new(0);
+    let counting = |s: &str| {
+        calls.set(calls.get() + 1);
+        s.to_string()
+    };
+    for line in ["plain", "/note x", "", "@ghost", "@主 x"] {
+        let _ = unknown_target(line, &members(), counting);
+    }
+    assert_eq!(calls.get(), 0);
+}

@@ -125,6 +125,7 @@ fn attach(
         esc: ReviewEsc::Detached,
         awaiting,
         closing: false,
+        hint: Default::default(),
     }
 }
 

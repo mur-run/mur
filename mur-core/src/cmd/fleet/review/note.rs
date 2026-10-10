@@ -60,10 +60,7 @@ pub fn parse_note_line_mode(
     resolve: impl Fn(&str) -> String,
 ) -> NoteLine {
     let line = line.trim();
-    let (head, rest) = match line.split_once(char::is_whitespace) {
-        Some((head, rest)) => (head, rest.trim()),
-        None => (line, ""),
-    };
+    let (head, rest) = split_head(line);
     if let Some(name) = head.strip_prefix(TARGET_NOTE_PREFIX) {
         return match target_note(name, rest, members, resolve) {
             NoteLine::Hint(_)
@@ -90,6 +87,38 @@ pub fn parse_note_line_mode(
         text: rest.to_string(),
         target: None,
     })
+}
+
+/// P3b-§5.3: the name in `@<name> <text>` that MURMUR will broadcast as a
+/// general note — exactly the lines `parse_note_line_mode(Murmur)` turns from
+/// a not-found hint into a broadcast. `None` for every other line, and the
+/// resolver is not called for a line that is not `@<name> <text>`.
+pub fn unknown_target(
+    line: &str,
+    members: &[String; 2],
+    resolve: impl Fn(&str) -> String,
+) -> Option<String> {
+    let (head, rest) = split_head(line);
+    let name = head.strip_prefix(TARGET_NOTE_PREFIX)?;
+    if name.is_empty()
+        || rest.is_empty()
+        || name == TARGET_ALIAS_MAIN
+        || name == TARGET_ALIAS_REVIEWER
+    {
+        return None;
+    }
+    member_role(&resolve(name), members)
+        .is_none()
+        .then(|| name.to_string())
+}
+
+/// `(first word, the rest trimmed)` of a trimmed send-prompt line.
+fn split_head(line: &str) -> (&str, &str) {
+    let line = line.trim();
+    match line.split_once(char::is_whitespace) {
+        Some((head, rest)) => (head, rest.trim()),
+        None => (line, ""),
+    }
 }
 
 fn target_note(

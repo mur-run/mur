@@ -77,6 +77,11 @@ pub const TARGET_ALIAS_REVIEWER: &str = "審查";
 /// P3a N3; `{name}` is the agent as typed. Never broadcast instead.
 pub const TARGET_NOT_FOUND_HINT: &str =
     "agent {name} not found; use /note <text> to send it to both sides";
+/// P1-§6 / P3b-§5.3: the inline MURMUR hint while typing `@<unknown> <text>`
+/// at the send gate; `{name}` is the agent as typed. On submit the line is a
+/// broadcast note, so the hint says so before it happens.
+pub const TARGET_UNKNOWN_INLINE_HINT: &str =
+    "agent {name} not found; this will be sent as a general note";
 /// P3a N10; `{command}` is the slash word as typed. Never a stop.
 pub const UNKNOWN_COMMAND_HINT: &str = "unknown command: {command}";
 /// P3a-§5.3: `paused { kind: other }` reason when appending pending note
