@@ -79,21 +79,8 @@ pub struct MurmurTransport {
 }
 
 impl MurmurTransport {
-    /// The real transport: A2A over `mur_home`.
-    // Unused: `spawn_review_worker` builds the real edges itself and calls
-    // `with_io`. Remove or route the worker through it in T12.
-    #[allow(dead_code)]
-    pub fn new(
-        mur_home: PathBuf,
-        req: Sender<DriverReq>,
-        flags: ReviewFlags,
-        members: [String; 2],
-    ) -> Self {
-        let (dial, respond) = real_io(&mur_home);
-        Self::with_io(mur_home, req, flags, members, dial, respond)
-    }
-
-    /// Same, with the network edges injected.
+    /// Build a transport over the given network edges. The worker passes
+    /// `real_io(&mur_home)`; tests inject their own.
     pub fn with_io(
         mur_home: PathBuf,
         req: Sender<DriverReq>,
