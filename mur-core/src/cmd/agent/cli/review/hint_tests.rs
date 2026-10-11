@@ -94,6 +94,8 @@ fn attach(app: &mut App, gate: bool) {
         awaiting,
         closing: false,
         hint: InlineHint::default(),
+        turn: Default::default(),
+        label: Default::default(),
     });
 }
 

@@ -252,6 +252,7 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
         } => app.update_step_tokens(&step_id, tokens),
         StreamMsg::ReviewReq(req) => review::on_request(app, req),
         StreamMsg::ReviewFinished(outcome) => review::on_finished(app, outcome),
+        StreamMsg::ReviewCancelFailed(e) => review::keys::on_cancel_failed(app, &e),
     }
 }
 

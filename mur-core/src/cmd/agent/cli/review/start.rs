@@ -89,7 +89,7 @@ pub(super) fn resume(
 /// The line typed at `Paused — continue?` (§8 step 4). Enter / `y` / `yes`
 /// hand the held lock to a worker; anything else drops the `Resumable`,
 /// which releases the lock, and leaves the session paused.
-pub fn answer_resume(app: &mut App, line: &str, tx: &Sender<StreamMsg>) {
+pub(super) fn answer_resume(app: &mut App, line: &str, tx: &Sender<StreamMsg>) {
     let Some(Awaiting::ResumeConfirm(r)) = app.review.as_mut().and_then(|s| s.awaiting.take())
     else {
         return;
@@ -126,6 +126,8 @@ fn attach(
         awaiting,
         closing: false,
         hint: Default::default(),
+        turn: Default::default(),
+        label: Default::default(),
     }
 }
 

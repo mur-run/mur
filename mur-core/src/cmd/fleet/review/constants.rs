@@ -301,6 +301,30 @@ pub const REVIEW_FLAG_BUDGET: &str = "--budget-usd";
 pub const REVIEW_FLAG_AUTO: &str = "--auto";
 pub const REVIEW_FLAGS_END: &str = "--";
 
+/// P3b-§6.5 / AC-P3b-23: the footer's right hint for the whole attached
+/// session, unless a more urgent review hint takes its place.
+pub const REVIEW_FOOTER_HINT: &str = "Esc pause after turn · Esc Esc abort";
+
+/// P3b-§6.2: footer while Esc×1 has armed a pause after the current turn.
+pub const REVIEW_FOOTER_PAUSE_ARMED: &str = "⏸ after turn";
+
+/// P3b-§6.2: shown once on Esc×1. In semi-auto the send prompt already stops
+/// before the next send.
+pub const REVIEW_FOOTER_WILL_PAUSE: &str = "will pause before the next send";
+
+/// P3b-§6.3 step 5 / AC-P3b-21: footer when `tasks/cancel` failed.
+pub const REVIEW_CANCEL_UNSUPPORTED: &str =
+    "cancel not supported; reply will be discarded when it returns";
+
+/// P3b-§6.3 step 4: what an aborted turn's output is marked.
+pub const REVIEW_DISCARDED_MARK: &str = "discarded, not sent";
+
+/// P3b-§6.3 step 1 / AC-P3b-20a: Esc×2 lost the race to the reply.
+pub const REVIEW_REPLY_ALREADY_ARRIVED: &str = "reply already arrived";
+
+/// P3b-§4.4.1: footer while MURMUR waits for the worker to finish its turn.
+pub const REVIEW_FOOTER_CLOSING: &str = "finishing turn… · Esc Esc abort";
+
 #[cfg(test)]
 mod tests {
     use super::*;

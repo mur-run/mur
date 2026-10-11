@@ -16,7 +16,7 @@ mod theme_paint_tests;
 
 pub use band::flush_finished;
 pub(super) use hitl::hitl_scroll_step;
-pub(super) use hitl::{HITL_CHOICES, HitlChoice};
+pub(super) use hitl::{HitlChoice, hitl_choices};
 
 use band::render_transcript;
 use chooser::{chooser_band_height, render_chooser_band};
@@ -127,6 +127,7 @@ fn render_frame(f: &mut Frame, app: &mut App) {
             f,
             app.theme,
             &hitl,
+            app.review_gate.member.as_deref(),
             app.hitl_selected,
             app.input_text().is_empty(),
             app.hitl_scroll,

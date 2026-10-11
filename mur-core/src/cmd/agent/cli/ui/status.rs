@@ -127,6 +127,11 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(chip, theme.accent));
         spans.push(Span::raw("  "));
     }
+    // P3b-§6.5: the attached review session, from facts cached on App.
+    if let Some(label) = crate::cmd::agent::cli::review::footer_label(app) {
+        spans.push(Span::styled(format!(" {label} "), theme.accent));
+        spans.push(Span::raw("  "));
+    }
     spans.push(Span::styled(msg, style));
 
     // Glass Box observability: tokens · cost · ctx · timer.
@@ -180,7 +185,13 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         Some(("Ctrl+C again to quit".to_string(), theme.muted))
     } else {
         // P3b-§5.3: `@<unknown>` at the send gate; cached, no filesystem here.
-        crate::cmd::agent::cli::review::hint::current_hint(app).map(|h| (h, theme.warn))
+        crate::cmd::agent::cli::review::hint::current_hint(app)
+            .map(|h| (h, theme.warn))
+            // AC-P3b-23: the review's Esc hint for the whole attached session.
+            .or_else(|| {
+                crate::cmd::agent::cli::review::footer_right_hint(app)
+                    .map(|h| (h.to_string(), theme.muted))
+            })
     };
 
     if let Some((hint_text, hint_style)) = right_hint {

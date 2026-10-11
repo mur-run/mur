@@ -175,6 +175,11 @@ pub struct App {
     /// it so PgUp/PgDn can page by the real window instead of a fixed guess
     /// that could step over unread rows; 0 until the modal has drawn once.
     pub hitl_page: u16,
+    /// Who answers the gate in `hitl` (P3b-§10): the attached agent's own
+    /// turn, or a review member's, whose decision goes to `review_gate`.
+    pub hitl_origin: crate::cmd::fleet::review::murmur::bridge::HitlOrigin,
+    /// The review half of the approval slot: reply, member, waiting gates.
+    pub review_gate: super::review::ReviewGate,
     pub session: Session,
     /// Cached live-channel id + state for status bar. Refreshed after each
     /// persisted turn on resume/switch. `None` until first append.
@@ -454,6 +459,8 @@ impl App {
             hitl_selected: 0,
             hitl_scroll: 0,
             hitl_page: 0,
+            hitl_origin: crate::cmd::fleet::review::murmur::bridge::HitlOrigin::Own,
+            review_gate: Default::default(),
             session,
             channel: None,
             scroll_back: 0,

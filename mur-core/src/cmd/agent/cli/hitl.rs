@@ -2,6 +2,7 @@
 //! 800-line rule. Pure movement: verbatim.
 
 use super::*;
+use crate::cmd::fleet::review::murmur::bridge::HitlOrigin;
 
 /// Cancel the in-flight turn (if any) on a separate connection and mark the
 /// streaming bubble done locally. After this, `current_task_id` is `None`, so
@@ -27,6 +28,9 @@ pub(super) fn cancel_in_flight(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
 /// the runtime close the stream so the (detached) worker unblocks promptly and
 /// stops doing abandoned server-side work.
 pub(super) fn request_quit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
+    if !review::keys::on_request_quit(app) {
+        return;
+    }
     cancel_in_flight(app, tx);
     // Hard: the event loop is about to stop, so nothing is left to run the
     // escalation timer, and dropping the task would only `kill_on_drop` the
@@ -79,7 +83,7 @@ pub(super) fn decide_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>, allow: bo
 /// labelled row plus Enter, so no single reflex keystroke can widen the
 /// blast radius past the one call in front of the operator.
 pub(super) fn commit_hitl_choice(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
-    let choice = super::ui::HITL_CHOICES
+    let choice = super::ui::hitl_choices(app.hitl_origin)
         .get(app.hitl_selected)
         .copied()
         .unwrap_or(super::ui::HitlChoice::Once);
@@ -138,6 +142,7 @@ pub(super) fn expire_stale_hitl(app: &mut App) -> bool {
     let tool = req.tool_name.clone();
     let step = req.step_id.clone();
     app.hitl = None;
+    review::hitl::settle_cleared(app);
     // Same swallow window as a normal decision: a key pressed just as the gate
     // died must not land in the composer as text.
     app.hitl_resolved_at = Some(StdInstant::now());
@@ -161,6 +166,7 @@ pub(super) fn promote_queued_hitl(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     {
         handle_stream(app, StreamMsg::Hitl { task_id, req }, tx);
     }
+    review::hitl::promote(app);
 }
 
 pub(super) fn decide_hitl_with_note(
@@ -169,6 +175,10 @@ pub(super) fn decide_hitl_with_note(
     allow: bool,
     auto: bool,
 ) {
+    // P3b-§10: a member's gate is answered by the review worker, never here.
+    if app.hitl_origin == HitlOrigin::Review {
+        return review::hitl::decide(app, allow);
+    }
     if let Some(req) = app.hitl.take() {
         app.hitl_resolved_at = Some(std::time::Instant::now());
         if let Some(sid) = &req.step_id {

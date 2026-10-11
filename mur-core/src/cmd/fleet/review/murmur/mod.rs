@@ -12,3 +12,7 @@ mod transport_tests;
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod worker_tests;
+
+#[cfg(test)]
+#[path = "worker_resume_tests.rs"]
+mod worker_resume_tests;

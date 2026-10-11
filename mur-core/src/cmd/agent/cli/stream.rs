@@ -111,6 +111,8 @@ pub enum StreamMsg {
     ReviewReq(crate::cmd::fleet::review::murmur::bridge::DriverReq),
     /// The attached `/review` worker ended; sent once, last (P3b-§7.2).
     ReviewFinished(crate::cmd::fleet::review::murmur::bridge::Outcome),
+    /// Esc×2's `tasks/cancel` failed (P3b-§6.3 step 5).
+    ReviewCancelFailed(String),
 }
 
 impl StreamMsg {
@@ -132,7 +134,8 @@ impl StreamMsg {
             | StreamMsg::ShellDone { .. }
             | StreamMsg::ShellCardDone { .. }
             | StreamMsg::ReviewReq(_)
-            | StreamMsg::ReviewFinished(_) => None,
+            | StreamMsg::ReviewFinished(_)
+            | StreamMsg::ReviewCancelFailed(_) => None,
         }
     }
 }
