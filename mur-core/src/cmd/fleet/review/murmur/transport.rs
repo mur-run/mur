@@ -182,10 +182,18 @@ impl ReviewTransport for MurmurTransport {
         )
         .and_then(|task| task_reply(member, &task, streamed));
         // Settle the turn BEFORE telling the UI it ended (P3b-§6.3 step 4/6).
-        self.last_committed.store(cell.commit(), Ordering::Release);
+        let committed = cell.commit();
+        self.last_committed.store(committed, Ordering::Release);
         let _ = self.req.send(DriverReq::TurnEnded {
             member: member.to_string(),
         });
+        // Same transcript block as the stdin TerminalGate. An aborted turn's
+        // reply is discarded by the driver (P3b-§6.3), so it is not shown.
+        if let (true, Ok(reply)) = (committed, &result) {
+            let _ = self.req.send(DriverReq::Show(format!(
+                "\n--- reply from {member} ---\n{reply}\n\n"
+            )));
+        }
         result
     }
 
