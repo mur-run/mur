@@ -26,7 +26,6 @@ fn attach(app: &mut App) {
         handle: Some(WorkerHandle {
             join: std::thread::spawn(|| {}),
             flags: Default::default(),
-            name: "review-ab310001".into(),
             members: ["alpha".into(), "beta".into()],
         }),
         esc: ReviewEsc::TurnInFlight,

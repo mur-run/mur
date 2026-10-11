@@ -448,7 +448,6 @@ fn resume_auto_mode_degrades_with_notice() {
         home.to_path_buf(),
         tx,
         Default::default(),
-        ["main".into(), "reviewer".into()],
         gone.dial(),
         no_respond(),
     );

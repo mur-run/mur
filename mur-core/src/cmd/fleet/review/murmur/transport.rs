@@ -64,10 +64,6 @@ pub struct MurmurTransport {
     pub mur_home: PathBuf,
     pub req: Sender<DriverReq>,
     pub flags: ReviewFlags,
-    // No reader in this crate and none in the plan's Tasks 8–12; the UI side
-    // takes members from `WorkerHandle`. Remove or give it a reader in T12.
-    #[allow(dead_code)]
-    pub members: [String; 2],
     dial: DialFn,
     respond: RespondFn,
     last_committed: AtomicBool,
@@ -85,7 +81,6 @@ impl MurmurTransport {
         mur_home: PathBuf,
         req: Sender<DriverReq>,
         flags: ReviewFlags,
-        members: [String; 2],
         dial: DialFn,
         respond: RespondFn,
     ) -> Self {
@@ -93,7 +88,6 @@ impl MurmurTransport {
             mur_home,
             req,
             flags,
-            members,
             dial,
             respond,
             last_committed: AtomicBool::new(true),

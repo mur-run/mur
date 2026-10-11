@@ -35,7 +35,6 @@ fn attach(app: &mut App) {
         handle: Some(WorkerHandle {
             join: std::thread::spawn(|| {}),
             flags: Default::default(),
-            name: "review-ab120001".into(),
             members: [MAIN.into(), REVIEWER.into()],
         }),
         esc: ReviewEsc::Detached,

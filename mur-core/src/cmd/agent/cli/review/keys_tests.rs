@@ -44,7 +44,6 @@ fn attach(app: &mut App) -> ReviewFlags {
         handle: Some(WorkerHandle {
             join: std::thread::spawn(|| {}),
             flags: flags.clone(),
-            name: "review-ab140001".into(),
             members: [MAIN.into(), "beta".into()],
         }),
         esc: ReviewEsc::Detached,

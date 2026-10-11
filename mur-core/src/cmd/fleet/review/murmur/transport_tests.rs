@@ -15,12 +15,6 @@ use super::super::turn_cell::TurnState;
 use super::bridge::{DriverReq, ReviewFlags};
 use super::transport::{DialFn, MurmurTransport, RespondFn};
 
-const MEMBERS: [&str; 2] = ["main-x", "rev-x"];
-
-fn members() -> [String; 2] {
-    MEMBERS.map(String::from)
-}
-
 fn task(reply: &str) -> serde_json::Value {
     json!({"state": "completed", "messages": [
         {"role": "agent", "parts": [{"text": reply}]}]})
@@ -43,7 +37,6 @@ fn transport(dial: DialFn, respond: RespondFn) -> (MurmurTransport, Receiver<Dri
         std::env::temp_dir(),
         tx,
         ReviewFlags::default(),
-        members(),
         dial,
         respond,
     );
