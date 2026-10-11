@@ -662,7 +662,10 @@ Agent** wizard offers the same catalog as a source.
   `discarded, not sent`, and resuming sends that turn again. When a review
   member wants a tool, the usual approval modal opens with that member's name
   — only *once* or *deny*, never a session-wide approval, and Esc, a timeout
-  or the review ending all count as deny.
+  or the review ending all count as deny. Known limit: the member remembers
+  that answer for the same call (same tool and input) for 7 days, even in a
+  later review, and does not ask again
+  ([#1783](https://github.com/mur-run/mur/issues/1783)).
 - **Loop settings that can't quietly mean something else** — a fleet loop ends
   when its job queue drains, when a member emits an agreed marker on a line of
   its own, or when the router judges it done. `mur fleet set-loop` refuses a

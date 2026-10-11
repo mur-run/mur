@@ -26,8 +26,11 @@ pub struct ReviewGate {
     pub queue: VecDeque<(String, HitlRequest, SyncSender<bool>)>,
 }
 
-/// The worker's `Hitl`. Always asks: `auto_approve`, the read lane and session
-/// grants are the attached agent's, never a member's.
+/// The worker's `Hitl`. Every gate that reaches here is asked: `auto_approve`,
+/// the read lane and session grants are the attached agent's, never a member's.
+/// Not every member tool call reaches here: the member's runtime answers a
+/// call it already settled (same tool + input + agent, within
+/// `APPROVAL_TTL_SECS`) from its decision store before raising a gate (#1783).
 pub fn on_gate(app: &mut App, member: String, req: HitlRequest, reply: SyncSender<bool>) {
     app.review_gate.queue.push_back((member, req, reply));
     promote(app);
