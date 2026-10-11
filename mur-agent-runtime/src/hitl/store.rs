@@ -284,6 +284,58 @@ mod tests {
         assert_eq!(s.lookup("h1").await, Some(Settled::Deny));
     }
 
+    /// Two decisions for `h1`, recorded in the given line order; returns
+    /// what the store settles on.
+    async fn settle(lines: [(bool, chrono::DateTime<chrono::Utc>); 2]) -> Option<Settled> {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        for (i, (allow, at)) in lines.into_iter().enumerate() {
+            let mut r = resp("h1", allow, &format!("r{i}"));
+            r.issued_at = Some(at);
+            s.record(r).await;
+        }
+        s.lookup("h1").await
+    }
+
+    /// Newest signed decision wins whichever line it is on, for an allow as
+    /// well as a deny — not "first seen", not "last seen", not "deny always".
+    #[tokio::test]
+    async fn newest_signed_decision_wins_in_either_line_order() {
+        let older = chrono::Utc::now() - chrono::Duration::hours(2);
+        let newer = chrono::Utc::now() - chrono::Duration::hours(1);
+        assert_eq!(
+            settle([(false, newer), (true, older)]).await,
+            Some(Settled::Deny)
+        );
+        assert_eq!(
+            settle([(true, older), (false, newer)]).await,
+            Some(Settled::Deny)
+        );
+        assert_eq!(
+            settle([(true, newer), (false, older)]).await,
+            Some(Settled::Allow)
+        );
+        assert_eq!(
+            settle([(false, older), (true, newer)]).await,
+            Some(Settled::Allow)
+        );
+    }
+
+    /// Equal signed `issued_at` — one value written into both, not two clock
+    /// reads — and a deny wins, whichever line it is on.
+    #[tokio::test]
+    async fn a_deny_wins_a_tie_on_signed_time() {
+        let same = chrono::Utc::now() - chrono::Duration::hours(1);
+        assert_eq!(
+            settle([(true, same), (false, same)]).await,
+            Some(Settled::Deny)
+        );
+        assert_eq!(
+            settle([(false, same), (true, same)]).await,
+            Some(Settled::Deny)
+        );
+    }
+
     #[tokio::test]
     async fn a_decision_without_issued_at_is_skipped() {
         let tmp = tempfile::tempdir().unwrap();

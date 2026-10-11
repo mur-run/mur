@@ -85,10 +85,22 @@ fn human_allows_at(
     hash: &str,
     issued_at: Option<chrono::DateTime<chrono::Utc>>,
 ) {
+    human_decides_at(home, ch, hitl_id, hash, true, issued_at);
+}
+
+/// The human answers `hitl_id` with `allow` at signed time `issued_at`.
+fn human_decides_at(
+    home: &Path,
+    ch: &str,
+    hitl_id: &str,
+    hash: &str,
+    allow: bool,
+    issued_at: Option<chrono::DateTime<chrono::Utc>>,
+) {
     let resp = HitlResponse {
         hitl_id: hitl_id.into(),
         action_hash: hash.into(),
-        allow: true,
+        allow,
         reason: "test".into(),
         surface: "cli".into(),
         issued_at,
@@ -402,4 +414,57 @@ async fn an_unanswerable_request_is_refused_at_approve_time() {
         let r = crate::hitl::authority::request_to_answer(tmp.path(), &ch, &evs, id);
         assert!(r.is_err(), "{id} must not be answerable");
     }
+}
+
+// ── Ordering of settled decisions (#1772) ─────────────────────────────
+//
+// Settled decisions are ordered by signed `issued_at`: the newest wins, and
+// on an equal `issued_at` a deny wins. Line order is unsigned and never
+// decides, so each rule is checked with the lines both ways round.
+
+/// Two human answers to `a`, written to a fresh channel in the given line
+/// order; returns the gate's decision. Each answer has its own request,
+/// signed before either answer.
+async fn settle(lines: [(bool, chrono::DateTime<chrono::Utc>); 2]) -> GateDecision {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    let asked = ago(chrono::Duration::hours(3));
+    for (i, (allow, at)) in lines.into_iter().enumerate() {
+        let id = format!("hitl-{i}");
+        router_request_at(tmp.path(), &ch, &id, &hash, Some(asked));
+        human_decides_at(tmp.path(), &ch, &id, &hash, allow, Some(at));
+    }
+    gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap()
+}
+
+/// The newest signed decision wins whichever line it is on, and it wins
+/// for an allow as well as a deny — this is not "a deny always wins".
+#[tokio::test]
+async fn the_newest_signed_decision_wins_in_either_line_order() {
+    let older = ago(chrono::Duration::hours(2));
+    let newer = ago(chrono::Duration::hours(1));
+
+    let d = settle([(false, newer), (true, older)]).await;
+    assert!(!d.allow && !d.deferred, "newer deny listed first: {d:?}");
+    let d = settle([(true, older), (false, newer)]).await;
+    assert!(!d.allow && !d.deferred, "newer deny listed last: {d:?}");
+    let d = settle([(true, newer), (false, older)]).await;
+    assert!(d.allow, "newer allow listed first: {d:?}");
+    let d = settle([(false, older), (true, newer)]).await;
+    assert!(d.allow, "newer allow listed last: {d:?}");
+}
+
+/// Equal signed `issued_at` — one value, written into both payloads, not two
+/// clock reads that might differ — and a deny wins, whichever line it is on.
+#[tokio::test]
+async fn a_deny_wins_a_tie_on_signed_time() {
+    let same = ago(chrono::Duration::hours(1));
+
+    let d = settle([(true, same), (false, same)]).await;
+    assert!(!d.allow && !d.deferred, "allow then deny: {d:?}");
+    let d = settle([(false, same), (true, same)]).await;
+    assert!(!d.allow && !d.deferred, "deny then allow: {d:?}");
 }
