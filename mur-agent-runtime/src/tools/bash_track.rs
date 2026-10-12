@@ -8,6 +8,7 @@
 use crate::tools::fs_policy::SessionCwd;
 use mur_common::config::{Config, WarmBuildCacheConfig};
 use mur_track::turn::target::turn_target_dir;
+use mur_track::turn::warm::{SkipReason, WarmOutcome, warm_build_cache};
 use std::path::{Path, PathBuf};
 
 /// The variable Cargo reads for its target dir.
@@ -30,14 +31,73 @@ pub fn target_env(
     Some((CARGO_TARGET_DIR_ENV.to_string(), dir.display().to_string()))
 }
 
-/// [`target_env`] for the calling turn, if it is inside a track. Config comes
-/// from `<mur_home>/config.yaml` when the tool knows its agent, else defaults.
-pub(crate) fn target_env_for_current_turn(
+/// Command separators [`command_triggers`] splits on.
+const SEPARATORS: &[&str] = &["&&", "||", ";", "|", "\n"];
+
+/// True when some segment of `cmd` runs one of `triggers` (matched on the
+/// program's basename, after leading `VAR=value` tokens). Quotes are not
+/// parsed: a miss only means a cold build, never a wrong one.
+pub fn command_triggers(cmd: &str, triggers: &[String]) -> bool {
+    let mut segments = vec![cmd];
+    for sep in SEPARATORS {
+        segments = segments.iter().flat_map(|s| s.split(sep)).collect();
+    }
+    segments.iter().any(|seg| {
+        let prog = seg.split_whitespace().find(|w| !is_assignment(w));
+        prog.and_then(|p| p.rsplit('/').next())
+            .is_some_and(|base| triggers.iter().any(|t| t == base))
+    })
+}
+
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(k, _)| {
+        !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Warm the turn dir on a background thread; a one-line note for the model
+/// when it cloned or had to skip for a reason worth knowing.
+pub async fn maybe_warm(
+    project: PathBuf,
+    track_name: String,
+    cfg: WarmBuildCacheConfig,
+) -> Option<String> {
+    let out = tokio::task::spawn_blocking(move || warm_build_cache(&project, &track_name, &cfg))
+        .await
+        .unwrap_or_else(|e| WarmOutcome::Skipped(SkipReason::Failed(e.to_string())));
+    match out {
+        WarmOutcome::Warmed { elapsed } => Some(format!(
+            "[warm build cache: cloned in {:.1}s]",
+            elapsed.as_secs_f64()
+        )),
+        WarmOutcome::Skipped(SkipReason::LowDisk {
+            free_gib,
+            floor_gib,
+        }) => Some(format!(
+            "[warm build cache skipped: {free_gib} GiB free < {floor_gib} GiB floor; building cold]"
+        )),
+        WarmOutcome::Skipped(SkipReason::Failed(e)) => {
+            Some(format!("[warm build cache skipped: {e}; building cold]"))
+        }
+        _ => None,
+    }
+}
+
+/// For the calling turn, if it is inside a track: the `CARGO_TARGET_DIR`
+/// pair, plus — when `command` runs a trigger — a warm clone and its note.
+/// Config comes from `<mur_home>/config.yaml` when the tool knows its agent,
+/// else defaults.
+pub(crate) async fn prepare_current_turn(
     session_cwd: &SessionCwd,
     agent: Option<&(PathBuf, String)>,
-) -> Option<(String, String)> {
-    let id = crate::tools::bash_jobs::current_task_id()?;
-    let (project, track) = session_cwd.track_of(&id)?;
+    command: &str,
+) -> (Option<(String, String)>, Option<String>) {
+    let Some(id) = crate::tools::bash_jobs::current_task_id() else {
+        return (None, None);
+    };
+    let Some((project, track)) = session_cwd.track_of(&id) else {
+        return (None, None);
+    };
     let cfg = agent
         .map(|(home, _)| {
             Config::load_or_default(&home.join("config.yaml"))
@@ -45,8 +105,36 @@ pub(crate) fn target_env_for_current_turn(
                 .warm_build_cache
         })
         .unwrap_or_default();
-    target_env(&project, &track, &cfg)
+    let Some(pair) = target_env(&project, &track, &cfg) else {
+        return (None, None);
+    };
+    let name = track
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string);
+    let note = match name {
+        Some(name) if command_triggers(command, &cfg.triggers) => {
+            maybe_warm(project, name, cfg).await
+        }
+        _ => None,
+    };
+    (Some(pair), note)
 }
+
+/// Prepend a warm note to the tool's reply.
+pub(crate) fn with_note(
+    mut out: crate::tools::ToolOutput,
+    note: Option<String>,
+) -> crate::tools::ToolOutput {
+    if let Some(n) = note {
+        out.text.insert_str(0, &format!("{n}\n"));
+    }
+    out
+}
+
+#[cfg(test)]
+#[path = "bash_track_tests.rs"]
+mod trigger_tests;
 
 #[cfg(all(test, unix))]
 mod tests {
