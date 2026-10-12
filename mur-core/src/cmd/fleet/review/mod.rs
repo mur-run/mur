@@ -78,3 +78,7 @@ mod no_tampering_tests;
 #[cfg(test)]
 #[path = "ruling_tests.rs"]
 mod ruling_tests;
+
+#[cfg(test)]
+#[path = "wire_protocol_tests.rs"]
+mod wire_protocol_tests;

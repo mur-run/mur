@@ -32,8 +32,8 @@ struct VerdictReply {
 
 /// The main agent's wire reply once findings are open (§3.4).
 #[derive(Debug, Clone, Deserialize)]
-struct RebuttalReply {
-    responses: Vec<RebuttalResponseDto>,
+pub(super) struct RebuttalReply {
+    pub(super) responses: Vec<RebuttalResponseDto>,
 }
 
 /// A verdict that validated: the kind, the ledger with the round folded in,
