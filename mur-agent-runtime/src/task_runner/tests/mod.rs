@@ -209,6 +209,7 @@ mod conversation;
 mod doom_loop;
 mod drain_and_retry;
 mod limits;
+mod live_reload;
 mod system_prompt;
 mod truncation;
 mod turn_track;

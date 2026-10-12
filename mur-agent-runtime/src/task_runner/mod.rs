@@ -264,6 +264,10 @@ pub struct TaskRunner {
     /// `mur_common::llm::supported_effort`, whose doc records that split. A
     /// second narrowing here would be a second derivation of one rule.
     effort: std::sync::RwLock<Option<mur_common::llm::Effort>>,
+    /// Hot-reloaded `profile.yaml` / `config.yaml limits:`. Set once by the
+    /// supervisor after the runner is built; unset (tests, stubs) means the
+    /// builder's `limits` / `autonomy` are what every turn reads.
+    live: std::sync::OnceLock<Arc<crate::live_profile::LiveSettings>>,
     /// Multi-turn chat memory keyed by `context.task_id` (see `ConversationStore`).
     conversations: Mutex<ConversationStore>,
     /// The session cwd shared with bash and the file tools, plus the roots a

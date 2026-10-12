@@ -50,8 +50,9 @@ pub struct LimitsReport {
     /// billing.rs uses). Global: always true — some model under it might
     /// meter, and the row must not claim otherwise before it knows.
     pub billable: bool,
-    /// Only an agent's profile.yaml edit needs a restart to take effect;
-    /// fleet.yaml and config.yaml are read fresh on the next run.
+    /// Always false now: a running agent re-reads `limits:` from profile.yaml
+    /// at the start of each turn, and fleet.yaml / config.yaml are read fresh
+    /// on the next run. Kept in the JSON so existing consumers don't break.
     pub needs_restart: bool,
 }
 
@@ -314,7 +315,7 @@ pub fn report(mur_home: &Path, target: &Target) -> Result<LimitsReport> {
                 stale,
                 attended_note: "attended turns (murmur, Hub chat) have no hard stops; stuck only warns",
                 billable,
-                needs_restart: true,
+                needs_restart: false,
             })
         }
         Target::Global => {
@@ -644,14 +645,14 @@ mod tests {
     }
 
     #[test]
-    fn agent_target_needs_restart() {
+    fn agent_target_applies_without_restart() {
         let t = tempfile::tempdir().unwrap();
         let mut yaml = agent_profile_yaml("pm", "local");
         yaml.push_str("hitl:\n  max_iterations: 800\n");
         std::fs::create_dir_all(t.path().join("agents/pm")).unwrap();
         std::fs::write(t.path().join("agents/pm/profile.yaml"), yaml).unwrap();
         let r = report(t.path(), &Target::Agent("pm".into())).unwrap();
-        assert!(r.needs_restart);
+        assert!(!r.needs_restart, "limits are hot-reloaded on the next turn");
         assert_eq!(r.stale[0].key, "hitl.max_iterations");
         assert_eq!(r.stale[0].value, "800");
     }

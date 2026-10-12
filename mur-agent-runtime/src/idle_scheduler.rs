@@ -53,8 +53,12 @@ pub fn should_fire(
     true
 }
 
+/// Where the scheduler reads its triggers from: a fixed list, or a live read
+/// of `profile.yaml`'s `lifecycle.idle_triggers`, re-read every tick.
+pub type TriggerSource = Arc<dyn Fn() -> Vec<IdleTrigger> + Send + Sync>;
+
 pub struct IdleScheduler {
-    triggers: Vec<IdleTrigger>,
+    source: TriggerSource,
     runner: Arc<TaskRunner>,
     quiet_hours: Option<QuietHours>,
     tick_interval: Duration,
@@ -66,8 +70,17 @@ impl IdleScheduler {
         runner: Arc<TaskRunner>,
         quiet_hours: Option<QuietHours>,
     ) -> Self {
+        Self::live(Arc::new(move || triggers.clone()), runner, quiet_hours)
+    }
+
+    /// Triggers re-read from `source` on every tick.
+    pub fn live(
+        source: TriggerSource,
+        runner: Arc<TaskRunner>,
+        quiet_hours: Option<QuietHours>,
+    ) -> Self {
         Self {
-            triggers,
+            source,
             runner,
             quiet_hours,
             tick_interval: Duration::from_secs(DEFAULT_TICK_SECS),
@@ -91,7 +104,10 @@ impl IdleScheduler {
 }
 
 async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
-    let mut last_fire: Vec<i64> = vec![0; scheduler.triggers.len()];
+    // Each trigger with the time it last fired. Carried across re-reads by
+    // value, so an edit to one trigger never resets another's cooldown — a
+    // reset would let every trigger fire again on the tick after any edit.
+    let mut fired: Vec<(IdleTrigger, i64)> = Vec::new();
 
     loop {
         tokio::select! {
@@ -99,6 +115,7 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
             _ = tokio::time::sleep(scheduler.tick_interval) => {}
         }
 
+        fired = carry_last_fire(fired, (scheduler.source)());
         let now_local = Local::now();
         let now_secs = now_local.timestamp();
         let last_activity_secs = scheduler.runner.last_activity_at();
@@ -106,12 +123,12 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
             active_window_end_for_today(now_local, scheduler.quiet_hours.as_ref())
                 .map(|dt| dt.timestamp());
 
-        for (i, trigger) in scheduler.triggers.iter().enumerate() {
+        for (trigger, last_fire) in fired.iter_mut() {
             if should_fire(
                 trigger,
                 now_secs,
                 last_activity_secs,
-                last_fire[i],
+                *last_fire,
                 quiet_window_end_secs,
             ) {
                 info!(
@@ -151,10 +168,31 @@ async fn run_idle_loop(scheduler: IdleScheduler, cancel: CancellationToken) {
                     })
                     .await;
 
-                last_fire[i] = now_secs;
+                *last_fire = now_secs;
             }
         }
     }
+}
+
+/// The new trigger list, each paired with the last-fire time of an equal
+/// trigger from the previous list (0 = never). Matched one-for-one, so two
+/// identical triggers keep two cooldowns.
+fn carry_last_fire(
+    prev: Vec<(IdleTrigger, i64)>,
+    wanted: Vec<IdleTrigger>,
+) -> Vec<(IdleTrigger, i64)> {
+    let mut prev: Vec<Option<(IdleTrigger, i64)>> = prev.into_iter().map(Some).collect();
+    wanted
+        .into_iter()
+        .map(|t| {
+            let at = prev
+                .iter_mut()
+                .find(|p| p.as_ref().is_some_and(|(o, _)| *o == t))
+                .and_then(Option::take)
+                .map_or(0, |(_, at)| at);
+            (t, at)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -195,5 +233,24 @@ mod tests {
         let t = trigger(100, 0, true);
         // idle enough, but quiet window ended 1s ago
         assert!(!should_fire(&t, 1000, 800, 0, Some(999)));
+    }
+
+    #[test]
+    fn an_edit_keeps_the_untouched_triggers_cooldown() {
+        let a = trigger(100, 600, false);
+        let mut b = trigger(200, 600, false);
+        let prev = vec![(a.clone(), 900), (b.clone(), 800)];
+        b.message = "edited".into();
+        let next = carry_last_fire(prev, vec![a.clone(), b.clone(), trigger(300, 0, false)]);
+        assert_eq!(next[0], (a, 900), "unchanged keeps its cooldown");
+        assert_eq!(next[1], (b, 0), "an edited trigger is a new one");
+        assert_eq!(next[2].1, 0, "an added trigger has never fired");
+    }
+
+    #[test]
+    fn identical_triggers_keep_their_own_cooldowns() {
+        let a = trigger(100, 600, false);
+        let next = carry_last_fire(vec![(a.clone(), 1), (a.clone(), 2)], vec![a.clone(), a]);
+        assert_eq!(next.iter().map(|(_, t)| *t).collect::<Vec<_>>(), vec![1, 2]);
     }
 }

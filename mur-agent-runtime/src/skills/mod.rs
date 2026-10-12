@@ -148,6 +148,25 @@ struct ReloadSource {
     mur_home: std::path::PathBuf,
     agent: String,
     enabled: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    /// A version of whatever `enabled` reads. The tree fingerprint only sees
+    /// skill files, so an edit that only changes the gate — a skill disabled
+    /// in `profile.yaml` — would otherwise never reload the set.
+    gate_generation: Option<Box<dyn Fn() -> u64 + Send + Sync>>,
+}
+
+impl ReloadSource {
+    fn fingerprint(&self) -> u64 {
+        let tree = skills_fingerprint(&self.mur_home, &self.agent);
+        match &self.gate_generation {
+            None => tree,
+            Some(g) => {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (tree, g()).hash(&mut h);
+                h.finish()
+            }
+        }
+    }
 }
 
 /// The live skill set.
@@ -189,13 +208,24 @@ impl RuntimeSkills {
             mur_home: mur_home.into(),
             agent: agent.into(),
             enabled,
+            gate_generation: None,
         };
         // Seed it, so the first turn does not reload a set that was just built.
-        self.fingerprint.store(
-            skills_fingerprint(&src.mur_home, &src.agent),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.fingerprint
+            .store(src.fingerprint(), std::sync::atomic::Ordering::Relaxed);
         self.source = Some(src);
+        self
+    }
+
+    /// Fold a version of the gate's inputs into the change check, so a turn
+    /// after the gate changed reloads even when no skill file moved. Call
+    /// after [`RuntimeSkills::reloadable`]; a no-op on a fixed set.
+    pub fn with_gate_generation(mut self, g: impl Fn() -> u64 + Send + Sync + 'static) -> Self {
+        if let Some(src) = self.source.as_mut() {
+            src.gate_generation = Some(Box::new(g));
+            self.fingerprint
+                .store(src.fingerprint(), std::sync::atomic::Ordering::Relaxed);
+        }
         self
     }
 
@@ -214,7 +244,7 @@ impl RuntimeSkills {
         let Some(src) = &self.source else {
             return; // fixed set (tests) — nothing to compare against
         };
-        let disk = skills_fingerprint(&src.mur_home, &src.agent);
+        let disk = src.fingerprint();
         if disk == self.fingerprint.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
@@ -244,7 +274,7 @@ impl RuntimeSkills {
         // Fingerprint BEFORE loading. If the tree changes while this load is in
         // flight, the value stored is the older one, so the next turn reloads
         // again instead of the change being swallowed.
-        let fp = skills_fingerprint(&src.mur_home, &src.agent);
+        let fp = src.fingerprint();
         let loaded = load_for_agent(&src.mur_home, &src.agent, src.enabled.as_ref());
         let n = loaded.len();
         *self.current.write().unwrap_or_else(|e| e.into_inner()) =
@@ -282,6 +312,37 @@ mod reload_tests {
     fn reloadable(home: &std::path::Path) -> RuntimeSkills {
         let loaded = load_for_agent(home, "a1", &|_| true);
         RuntimeSkills::build(loaded).reloadable(home, "a1", Box::new(|_| true))
+    }
+
+    /// A gate-only change (a skill disabled in `profile.yaml`) touches no
+    /// skill file; the gate generation is what makes the next turn see it.
+    #[test]
+    fn a_gate_change_alone_reloads_the_set() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path();
+        write_note(home, "first", "one");
+        let allow = Arc::new(AtomicBool::new(true));
+        let generation = Arc::new(AtomicU64::new(0));
+        let (a, g) = (allow.clone(), generation.clone());
+        let skills = RuntimeSkills::build(load_for_agent(home, "a1", &|_| true))
+            .reloadable(home, "a1", Box::new(move |_| a.load(Ordering::Relaxed)))
+            .with_gate_generation(move || g.load(Ordering::Relaxed));
+        skills.refresh_if_changed();
+        assert_eq!(skills.snapshot().loaded.len(), 1);
+
+        allow.store(false, Ordering::Relaxed);
+        skills.refresh_if_changed();
+        assert_eq!(
+            skills.snapshot().loaded.len(),
+            1,
+            "no generation bump, no reload"
+        );
+
+        generation.store(1, Ordering::Relaxed);
+        skills.refresh_if_changed();
+        assert_eq!(skills.snapshot().loaded.len(), 0);
     }
 
     /// The whole point of #4: a memory written to disk AFTER boot is visible to

@@ -28,6 +28,7 @@ pub mod hitl;
 pub mod hooks;
 pub mod idle_scheduler;
 pub mod import;
+pub mod live_profile;
 pub mod llm;
 pub mod lock_file;
 pub mod mcp;

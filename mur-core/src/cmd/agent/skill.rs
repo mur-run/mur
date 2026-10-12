@@ -360,7 +360,7 @@ pub fn cmd_skill_set_enabled(name: &str, skill_id: &str, enabled: bool) -> Resul
     profile.set_skill_enabled(skill_name, enabled);
     save_profile(&path, &mut profile)?;
     println!(
-        "{} skill '{skill_name}' for '{name}' (restart the agent to apply)",
+        "{} skill '{skill_name}' for '{name}' (takes effect on its next turn)",
         if enabled { "Enabled" } else { "Disabled" }
     );
     Ok(())

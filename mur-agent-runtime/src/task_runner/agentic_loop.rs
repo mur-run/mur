@@ -16,6 +16,7 @@ impl TaskRunner {
         mut steer_rx: Option<tokio::sync::mpsc::Receiver<String>>,
         intent: RequestIntent,
         bounds: crate::bounds::TurnBounds,
+        autonomy: mur_common::hitl::Autonomy,
     ) -> Result<(Message, Option<LoopExit>), TaskError> {
         use crate::llm::{LlmRequest, RichMessage, StopReason};
 
@@ -420,7 +421,7 @@ impl TaskRunner {
                 // never reaches here, which is what keeps A1 true.
                 let clean_stop = resp.stop_reason == StopReason::EndTurn;
                 match mur_common::hitl::should_continue(
-                    self.autonomy,
+                    autonomy,
                     clean_stop,
                     gate_blocked,
                     continuations_used,
@@ -452,7 +453,7 @@ impl TaskRunner {
                     }
                     Err(veto) => {
                         tracing::debug!(
-                            autonomy = ?self.autonomy,
+                            autonomy = ?autonomy,
                             ?veto,
                             continuations_used,
                             "turn handed back"

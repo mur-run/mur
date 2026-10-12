@@ -159,7 +159,8 @@ impl TaskRunner {
                         }
                         // Resolved before the first LLM call so an unparsable
                         // limits: value fails the task naming the key (§4).
-                        let bounds = self.bounds_for(&spec)?;
+                        let settings = self.turn_settings();
+                        let bounds = self.bounds_for(&spec, &settings)?;
                         self.run_agentic_loop(
                             &id,
                             client.as_ref(),
@@ -170,6 +171,7 @@ impl TaskRunner {
                             steer_rx,
                             spec.intent,
                             bounds,
+                            settings.autonomy,
                         )
                         .await
                     } else {

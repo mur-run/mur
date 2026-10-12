@@ -260,6 +260,16 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         approval_token,
         sandbox_record,
     } = seal::prepare_and_seal(&profile, &agent_home, &mur_home).await?;
+    // 4. Hot-reloaded settings (profile.yaml hot fields + config.yaml limits),
+    //    read per turn. Built after the seal: both files stay readable.
+    let boot_global_limits =
+        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).limits;
+    let live = crate::live_profile::LiveSettings::new(
+        &agent_home,
+        &mur_home,
+        profile.inner.clone(),
+        boot_global_limits.clone(),
+    );
     // 4–4a. Telemetry writer, hook chain, skills — extracted to prepare_runtime.
     let socket_enabled = profile.inner.transport.socket.enabled
         && profile.inner.transport.socket.bind.starts_with("unix://");
@@ -274,7 +284,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         runtime_skills,
         skills_cfg,
         memory_cfg,
-    ) = crate::supervisor_runner::prepare_runtime(&agent_home, &profile, socket_enabled).await?;
+    ) = crate::supervisor_runner::prepare_runtime(
+        &agent_home,
+        &profile,
+        socket_enabled,
+        &live.profile,
+    )
+    .await?;
 
     // 5. Acquire running.lock
     let lock_path = agent_home.join("running.lock");
@@ -303,10 +319,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     }
     // The two scopes this process can see (spec §3.4). The fleet's clock, when
     // there is one, arrives per turn in the A2A `limits` parameter.
-    let limits = (
-        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).limits,
-        profile.inner.limits.clone(),
-    );
+    let limits = (boot_global_limits, profile.inner.limits.clone());
     let (runner, llm_for_companion, mcp_pool, model_switch) =
         crate::supervisor_runner::build_provider_runner(
             force_echo,
@@ -331,6 +344,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             sandbox_record.as_ref().is_some_and(|r| r.enforcing),
         )
         .await?;
+    runner.attach_live(live.clone());
     let dispatcher = Arc::new(build_dispatcher(
         &profile_arc,
         &runner,
@@ -548,39 +562,44 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
 
-    // 8c. C4 — cron scheduler. Spawn one loop per lifecycle.schedule entry.
-    //     Each loop selects on a shared CancellationToken so SIGTERM (which
-    //     calls t.abort() on all transport_tasks) also stops in-flight entries.
-    if !profile.inner.lifecycle.schedule.is_empty() {
-        // #1125: give the scheduler somewhere to leave each fired turn's
-        // reply. Without a sink the turn runs and its output is discarded.
-        let cs = CronScheduler::new(profile.inner.lifecycle.schedule.clone(), runner.clone())
-            .with_sink(crate::scheduler::ScheduleSink {
-                mur_home: mur_home.clone(),
-                agent: profile.inner.name.clone(),
-                identity: identity.clone(),
-                key_version: profile.inner.identity.key_version,
-                locale: profile.inner.companion.locale.clone(),
-            });
+    // 8c. C4 — cron scheduler. Always spawned, even with no entries: it
+    //     re-reads `lifecycle.schedule` from the live profile every
+    //     RECONCILE_SECS, so a reminder granted while the agent runs — idle or
+    //     not — starts without a restart. SIGTERM aborts it with the rest of
+    //     transport_tasks.
+    {
+        let src = live.profile.clone();
+        let cs = CronScheduler::live(
+            Arc::new(move || src.current().lifecycle.schedule.clone()),
+            runner.clone(),
+        )
+        .with_sink(crate::scheduler::ScheduleSink {
+            mur_home: mur_home.clone(),
+            agent: profile.inner.name.clone(),
+            identity: identity.clone(),
+            key_version: profile.inner.identity.key_version,
+            locale: profile.inner.companion.locale.clone(),
+        });
         transport_tasks.push(cs.spawn());
         info!(
             count = profile.inner.lifecycle.schedule.len(),
-            "CronScheduler started"
+            "CronScheduler started (live)"
         );
     }
 
-    // 8d. C6 — idle scheduler. Wakes every 30 s, fires triggers when the
-    //     agent has been idle for >= IdleTrigger.after_secs.
-    if !profile.inner.lifecycle.idle_triggers.is_empty() {
-        let is = IdleScheduler::new(
-            profile.inner.lifecycle.idle_triggers.clone(),
+    // 8d. C6 — idle scheduler. Wakes every 30 s, re-reads the triggers from the
+    //     live profile, fires when idle >= IdleTrigger.after_secs.
+    {
+        let src = live.profile.clone();
+        let is = IdleScheduler::live(
+            Arc::new(move || src.current().lifecycle.idle_triggers.clone()),
             runner.clone(),
             profile.inner.companion.proactive.quiet_hours.clone(),
         );
         transport_tasks.push(is.spawn());
         info!(
             count = profile.inner.lifecycle.idle_triggers.len(),
-            "IdleScheduler started"
+            "IdleScheduler started (live)"
         );
     }
 
