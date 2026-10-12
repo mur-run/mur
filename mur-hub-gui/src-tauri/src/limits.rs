@@ -371,7 +371,10 @@ mod tests {
                 .any(|r| r.knob == "stuck" && r.local && r.value == "15m")
         );
         let text = std::fs::read_to_string(t.path().join("config.yaml")).unwrap();
-        assert_eq!(text, "research_gateway:\n  key: k\n", "config.yaml is never written");
+        assert_eq!(
+            text, "research_gateway:\n  key: k\n",
+            "config.yaml is never written"
+        );
         let global =
             std::fs::read_to_string(mur_common::limits::global_limits_path(t.path())).unwrap();
         assert_eq!(global, "stuck: 15m\n");
