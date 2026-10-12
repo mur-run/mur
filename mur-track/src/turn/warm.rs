@@ -147,11 +147,30 @@ fn freshen_sources(track: &Path) -> anyhow::Result<()> {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e.into()),
         }
-        std::fs::File::open(&path)?
-            .set_modified(now)
+        open_for_mtime(&path)
+            .and_then(|f| f.set_modified(now))
             .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
     }
     Ok(())
+}
+
+/// Open a file with just enough access to change its mtime. A read-only
+/// handle works on Unix (`futimens` needs ownership, not write access), but
+/// Windows `SetFileTime` needs `FILE_WRITE_ATTRIBUTES` on the handle.
+fn open_for_mtime(path: &Path) -> io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        /// `FILE_WRITE_ATTRIBUTES` from winnt.h.
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .open(path)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(path)
+    }
 }
 
 #[cfg(test)]
