@@ -3,7 +3,7 @@
 //! The cli's session lane (`/auto`, `--auto`, the per-tool `[a]` grant, and
 //! since #1228 the DEFAULT session) is standing, unattended authority. The
 //! ceiling on that authority already exists and already has its reasoning
-//! written down — `mur_common::hitl::tier_may_be_granted`, capped at `Write`:
+//! written down — `crate::hitl::tier_may_be_granted`, capped at `Write`:
 //!
 //! > `Spend`, `Destructive` and `Privileged` are exactly the actions whose
 //! > cost a human cannot undo by noticing later, and `NetworkEgress` is how
@@ -38,7 +38,7 @@
 //! here: adding a model on top of a gate this leaky would be using it to patch
 //! static logic it cannot see.
 
-use mur_common::hitl::RiskTier;
+use crate::hitl::RiskTier;
 use serde_json::Value;
 
 use super::{bash_class, dest};
@@ -173,7 +173,7 @@ pub fn classify(tool_name: &str, tool_input: Option<&Value>) -> RiskTier {
     if SPEND_TOOLS.contains(&leaf(tool_name)) {
         return RiskTier::Spend;
     }
-    if let Some(tier) = mur_common::hitl::builtin_tier::browser_tier(tool_name) {
+    if let Some(tier) = crate::hitl::builtin_tier::browser_tier(tool_name) {
         return tier;
     }
     // Read is delegated, never guessed: `bash_class` fails safe on
@@ -321,7 +321,7 @@ mod tests {
         ] {
             let t = classify("bash", Some(&bash(cmd)));
             assert!(
-                mur_common::hitl::tier_may_be_granted(t),
+                crate::hitl::tier_may_be_granted(t),
                 "ordinary command escalated to {t:?}: {cmd}"
             );
         }
@@ -412,7 +412,7 @@ mod tests {
     /// `browser_*` tool fails closed, and only the listed observers are Read.
     #[test]
     fn browser_tools_that_act_are_above_the_ceiling() {
-        use mur_common::hitl::tier_may_be_granted;
+        use crate::hitl::tier_may_be_granted;
         for tool in [
             "mcp__browser__browser_navigate",
             "mcp__playwright__browser_click",
@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn matches_whole_tokens_not_substrings() {
         assert!(
-            mur_common::hitl::tier_may_be_granted(classify(
+            crate::hitl::tier_may_be_granted(classify(
                 "bash",
                 Some(&bash("cargo build --formidable"))
             )),

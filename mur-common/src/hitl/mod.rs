@@ -3,10 +3,13 @@
 use serde::{Deserialize, Serialize};
 
 pub mod approval_token;
+pub mod bash_class;
 pub mod builtin_tier;
+pub mod dest;
 pub mod label;
 pub mod pin;
 pub mod signed_time;
+pub mod tool_tier;
 
 pub use signed_time::{HITL_CLOCK_SKEW_SECS, TimeFault, check_answer_time, check_fresh};
 
