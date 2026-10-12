@@ -304,6 +304,14 @@ pub const REVIEW_SYNTAX_UNKNOWN_FLAG: &str =
 pub const REVIEW_SYNTAX_BAD_BUDGET: &str = "--budget-usd needs a finite number, got '{value}'";
 pub const REVIEW_SYNTAX_RESUME_ARGS: &str = "resume takes exactly one session name";
 
+/// #1779: shown when `!mur fleet review …` is typed in murmur. `{line}` is
+/// the equivalent `/review …` line, which is also put in the composer.
+pub const REVIEW_BANG_REDIRECT: &str = "`mur fleet review` needs a terminal; in MURMUR use `{line}` — it's in the input, check it and press Enter";
+
+/// #1779: the CLI refusal on a non-terminal stdin, pointing murmur users at
+/// `/review`. `{cmd}` is `review` or `review-resume`.
+pub const REVIEW_NEEDS_TERMINAL: &str = "mur fleet {cmd} is attended: it asks before every send and needs a terminal. Run it from an interactive shell, or use `/review` inside MURMUR.";
+
 /// `/review` words. Flags come before the task; `--` ends them.
 pub const REVIEW_WORD_RESUME: &str = "resume";
 /// The slash word itself, for putting a refused line back in the composer.

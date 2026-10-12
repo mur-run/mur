@@ -77,6 +77,16 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             app.push_system("a `!command` is already running — Ctrl-C to stop it");
             return;
         }
+        // #1779: `mur fleet review` is attended and fails on a null stdin.
+        // Inside murmur the same thing is `/review`, so offer that line in
+        // the composer instead of running a command that can only fail.
+        if let Some(line) = shell::review_redirect(cmd) {
+            app.push_system(
+                crate::cmd::fleet::review::constants::REVIEW_BANG_REDIRECT.replace("{line}", &line),
+            );
+            app.set_input(&line);
+            return;
+        }
         // A command that waits on the user's own keystrokes cannot run on
         // the piped path: its stdin is null, so the first read is EOF and
         // `mur browser auth` dies with "stdin closed" before the person has

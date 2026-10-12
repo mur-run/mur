@@ -23,8 +23,9 @@ use mur_common::limits::Stuck;
 
 use super::constants::{
     FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
-    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_RESUME_RESTARTS_ROUND,
-    REVIEW_STOP_BANNER, REVIEW_STOP_REASON_ESCALATION, RULING_RECORDED_CONTINUE_PROMPT,
+    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_NEEDS_TERMINAL, REVIEW_PAUSED_CONTINUE_PROMPT,
+    REVIEW_RESUME_RESTARTS_ROUND, REVIEW_STOP_BANNER, REVIEW_STOP_REASON_ESCALATION,
+    RULING_RECORDED_CONTINUE_PROMPT,
     RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
@@ -448,10 +449,7 @@ pub(crate) fn prepare_session(
 /// `mur fleet review --main <a> --reviewer <b> "<task>"`.
 pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     if !std::io::stdin().is_terminal() {
-        bail!(
-            "mur fleet review is attended: it asks before every send and needs a terminal. \
-             Run it from an interactive shell."
-        );
+        bail!(REVIEW_NEEDS_TERMINAL.replace("{cmd}", "review"));
     }
     let (fleet, limits, banner) = prepare_session(mur_home, &args)?;
     let name = &fleet.name;
@@ -518,7 +516,7 @@ pub fn render_resume_summary(r: &Resumable) -> String {
 /// its channel and continue at the same round, semi-auto, asking first.
 pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
     if !std::io::stdin().is_terminal() {
-        bail!("mur fleet review-resume is attended and needs a terminal.");
+        bail!(REVIEW_NEEDS_TERMINAL.replace("{cmd}", "review-resume"));
     }
     let r = super::resume::prepare_resume(mur_home, name)?;
     require_running(mur_home, &[&r.fleet.members[0], &r.fleet.members[1]])?;
