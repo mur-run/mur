@@ -34,6 +34,7 @@ pub struct GuardedToolCall {
         Arc<tokio::sync::Mutex<HashMap<String, crate::task_runner::ApprovalSink>>>,
     pub(crate) approval_sinks:
         Arc<tokio::sync::Mutex<HashMap<String, crate::task_runner::ApprovalSink>>>,
+    pub(crate) one_shot_approvals: crate::task_runner::OneShotApprovals,
     pub(crate) agent_name: String,
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
@@ -170,6 +171,7 @@ impl GuardedToolCall {
             notifier,
             store: self.decision_store.as_ref(),
             shim_trust: self.shim_trust.as_ref(),
+            remember: !self.one_shot_approvals.lock().await.contains(task_id),
         };
         out.extend(gate.resolve(pending).await);
         (out, step_ids)

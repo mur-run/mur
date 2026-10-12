@@ -73,6 +73,7 @@ impl TaskRunner {
             notifier: None,
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             approval_sinks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            one_shot_approvals: Default::default(),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
             // Fail closed: an unset sandbox state refuses every `Ask` tool.
@@ -428,6 +429,17 @@ impl TaskRunner {
     pub async fn unregister_client_notifier(&self, task_id: &str) {
         self.client_notifiers.lock().await.remove(task_id);
         self.approval_sinks.lock().await.remove(task_id);
+        self.one_shot_approvals.lock().await.remove(task_id);
+    }
+
+    /// Make this turn's tool approvals one-shot (#1783): the gate always asks
+    /// and the answer is not recorded as the agent's decision. Cleared by
+    /// [`Self::unregister_client_notifier`].
+    pub async fn mark_one_shot_approvals(&self, task_id: &str) {
+        self.one_shot_approvals
+            .lock()
+            .await
+            .insert(task_id.to_string());
     }
 
     /// Register a steering sender for the given task id.

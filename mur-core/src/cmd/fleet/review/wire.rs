@@ -40,6 +40,15 @@ pub fn with_working_dir(mut params: serde_json::Value, cwd: Option<&str>) -> ser
     params
 }
 
+/// #1783: mark a review turn's tool approvals one-shot. The member's runtime
+/// then asks for every gated call and does not record the answer as the
+/// agent's standing decision, so the review gate always asks and a review
+/// answer never outlives its session.
+pub fn with_one_shot_approvals(mut params: serde_json::Value) -> serde_json::Value {
+    params[mur_common::hitl::REMEMBER_DECISIONS_PARAM] = serde_json::json!(false);
+    params
+}
+
 /// The text of the first text part in params built by
 /// [`text_message_params`]. Used by tests and by the semi-auto preview.
 pub fn message_text(params: &serde_json::Value) -> Option<&str> {
@@ -303,6 +312,13 @@ pub fn extract_verdict_json(reply: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_shot_approvals_turn_remembering_off_and_keep_the_message() {
+        let p = with_one_shot_approvals(text_message_params("hi"));
+        assert_eq!(p[mur_common::hitl::REMEMBER_DECISIONS_PARAM], false);
+        assert_eq!(message_text(&p), Some("hi"));
+    }
 
     #[test]
     fn params_carry_an_a2a_message_with_one_text_part() {
