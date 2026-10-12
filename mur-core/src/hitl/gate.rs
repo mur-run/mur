@@ -20,6 +20,7 @@ use mur_common::hitl::{
     HitlMode, HitlRequest, HitlResponse, RiskTier, Unanswered, check_fresh, default_mode,
 };
 
+use super::binding;
 use crate::channel_writer::ROUTER_AGENT;
 use crate::hitl::pin::action_hash;
 
@@ -535,8 +536,6 @@ async fn wait_for_response(
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
-
-mod binding;
 
 #[cfg(test)]
 mod human_authority_tests;
