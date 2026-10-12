@@ -656,8 +656,10 @@ Agent** wizard offers the same catalog as a source.
   `/review --main <agent> --reviewer <agent> <task>` starts it in the chat
   (`--auto` is refused there for now — run it without), bare `/review` lists
   the paused and crashed sessions you can pick up, and `/review resume
-  <session>` continues one. The footer reads `Esc pause after turn · Esc Esc
-  abort`: one Esc lets the running turn finish and pauses before the next
+  <session>` continues one. While a member's turn runs, the footer reads
+  `Esc pause after turn · Esc Esc abort`; at the send prompt it reads
+  `Enter send · text adds a note · /stop stops`. One Esc lets the running
+  turn finish and pauses before the next
   send (`⏸ after turn`); a second Esc cancels the turn, its reply is marked
   `discarded, not sent`, and resuming sends that turn again. When a review
   member wants a tool, the usual approval modal opens with that member's name

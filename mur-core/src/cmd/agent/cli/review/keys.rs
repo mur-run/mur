@@ -12,12 +12,14 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Result;
 use tokio::sync::mpsc::Sender;
 
+use super::state::Awaiting;
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::{StreamMsg, cancel_task};
 use crate::cmd::fleet::review::constants::{
-    REVIEW_CANCEL_UNSUPPORTED, REVIEW_DISCARDED_MARK, REVIEW_FOOTER_CLOSING,
-    REVIEW_FOOTER_PAUSE_ARMED, REVIEW_FOOTER_WILL_PAUSE, REVIEW_REPLY_ALREADY_ARRIVED,
+    REVIEW_CANCEL_UNSUPPORTED, REVIEW_DISCARDED_MARK, REVIEW_FOOTER_CLOSING, REVIEW_FOOTER_GATE,
+    REVIEW_FOOTER_PAUSE_ARMED, REVIEW_FOOTER_RESUME, REVIEW_FOOTER_RULING,
+    REVIEW_FOOTER_WILL_PAUSE, REVIEW_REPLY_ALREADY_ARRIVED,
 };
 use crate::cmd::fleet::review::turn_cell::TurnCell;
 
@@ -159,8 +161,17 @@ pub fn on_cancel_failed(app: &mut App, err: &str) {
 }
 
 /// The footer's review hint, most urgent first. `None` = the plain hint.
+/// A prompt waiting on the human outranks the turn hints (#1787): no turn
+/// runs there, so the Esc turn hint would describe the wrong state.
 pub fn footer_hint(app: &App) -> Option<&'static str> {
     let s = app.review.as_ref()?;
+    if let Some(a) = s.awaiting.as_ref() {
+        return Some(match a {
+            Awaiting::Confirm { .. } => REVIEW_FOOTER_GATE,
+            Awaiting::Ruling { .. } => REVIEW_FOOTER_RULING,
+            Awaiting::ResumeConfirm(_) => REVIEW_FOOTER_RESUME,
+        });
+    }
     if s.closing {
         Some(REVIEW_FOOTER_CLOSING)
     } else if s.turn.cancel_unsupported {
