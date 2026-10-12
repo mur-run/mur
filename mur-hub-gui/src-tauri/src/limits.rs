@@ -147,7 +147,7 @@ pub(crate) fn set_in(
         unset: patch.unset,
     };
     match target_of(scope, name)? {
-        Target::Global => upsert_global_limits(&home.join("config.yaml"), &p),
+        Target::Global => upsert_global_limits(home, &p),
         Target::Fleet(n) => write_fleet_limits(home, &n, &p),
         Target::Agent(n) => write_agent_limits(&n, &p),
     }
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn global_scope_edits_config_yaml_as_text() {
+    fn global_scope_writes_limits_global_yaml_and_leaves_config_yaml() {
         let t = tempfile::tempdir().unwrap();
         std::fs::write(
             t.path().join("config.yaml"),
@@ -371,11 +371,13 @@ mod tests {
                 .any(|r| r.knob == "stuck" && r.local && r.value == "15m")
         );
         let text = std::fs::read_to_string(t.path().join("config.yaml")).unwrap();
-        assert!(
-            text.contains("research_gateway:\n  key: k\n")
-                && text.contains("limits:\n  stuck: 15m\n"),
-            "{text}"
+        assert_eq!(
+            text, "research_gateway:\n  key: k\n",
+            "config.yaml is never written"
         );
+        let global =
+            std::fs::read_to_string(mur_common::limits::global_limits_path(t.path())).unwrap();
+        assert_eq!(global, "stuck: 15m\n");
     }
 
     /// `remove_stale` deletes the legacy key and returns the fresh view.

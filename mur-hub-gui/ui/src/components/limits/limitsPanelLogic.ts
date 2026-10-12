@@ -30,7 +30,7 @@ export function chipLabel(
   const source = row.source;
   if (source.includes("legacy")) return t("limits.chip.legacy");
   if (source === "built-in default") return t("limits.chip.builtIn");
-  if (source === "~/.mur/config.yaml") return t("limits.chip.config");
+  if (source === "~/.mur/limits/global.yaml") return t("limits.chip.config");
   if (source === "fleet.yaml") return t(scope === "fleet" ? "limits.chip.thisFleet" : "limits.chip.fleet");
   if (source === "profile.yaml") return t(scope === "agent" ? "limits.chip.thisAgent" : "limits.chip.agent");
   if (source === "command-line flag") return t("limits.chip.flag");

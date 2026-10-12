@@ -114,6 +114,11 @@ pub(super) async fn prepare_and_seal(
     // matches the macOS SBPL subpath grant — so co-watching works on both kernels,
     // not just macOS. (We create the dir first so the Landlock rule sticks.)
     let mut extra_write_paths: Vec<std::path::PathBuf> = Vec::new();
+    // Global limits (#1794): the read grant on `<mur_home>/limits` is
+    // existence-checked, so create the directory first or a user who has not
+    // yet run `mur limits --global` would get no grant, and their first edit
+    // would be invisible until restart. Read-only to the agent; the CLI writes.
+    let _ = std::fs::create_dir_all(mur_common::limits::global_limits_dir(mur_home));
     // Memory federation (P0): the sleep cycle drops signed snapshot requests
     // and flushed outbox signals into `<mur_home>/inbox/…`. That is the ONLY
     // central-store write the runtime is granted — the daemon treats the inbox

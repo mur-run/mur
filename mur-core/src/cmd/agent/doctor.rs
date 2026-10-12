@@ -239,6 +239,9 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
         if rows.is_empty() {
             println!("No running agents found.");
         }
+        for line in super::doctor_reload::global_limits_lines(&mur_home) {
+            println!("{line}");
+        }
         // Stopped agents still hold disk: report their scratch size too.
         for line in super::scratch_check::stopped_scratch_lines(&mur_home, warn_size_mb) {
             println!("{line}");

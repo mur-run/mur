@@ -1,8 +1,7 @@
 //! Writers for the `limits:` block, one scope each (spec 2026-09-12 §3.9).
-//! Fleet and agent go through their typed stores. The GLOBAL scope is
-//! `config.yaml`, and that file is edited as text: the typed `Config` drops
-//! blocks other binaries own (`research_gateway:` is the known casualty), so
-//! load-modify-save there is a data-loss bug, not a shortcut.
+//! Fleet and agent go through their typed stores. The GLOBAL scope is its own
+//! file, `<mur_home>/limits/global.yaml` (issue #1794); the legacy
+//! `config.yaml limits:` block is read as a fallback and never written.
 
 use std::path::Path;
 
@@ -89,54 +88,49 @@ pub fn render_limits_block(l: &Limits) -> String {
     out
 }
 
-/// Textual upsert of the top-level `limits:` block in `config.yaml`. The
-/// block is the lines from `limits:` up to the next top-level key (a line
-/// that starts in column 0 and is not blank or a comment). Everything else is
-/// preserved byte-for-byte.
-pub fn upsert_global_limits(config_path: &Path, patch: &Patch) -> Result<()> {
-    let text = std::fs::read_to_string(config_path).unwrap_or_default();
-    let current = mur_common::config::Config::load_or_default(config_path).limits;
-    let next =
-        apply_patch((!current.is_empty()).then_some(current), patch).map_err(|e| anyhow!("{e}"))?;
+/// The global scope's file body: the block without its `limits:` wrapper.
+/// An empty scope is written as `{}` — the file must still exist so the
+/// legacy `config.yaml` block stays shadowed after the user unsets every key.
+pub fn render_global_file(l: Option<&Limits>) -> String {
+    match l {
+        Some(l) if !l.is_empty() => render_limits_block(l)
+            .lines()
+            .skip(1)
+            .map(|line| format!("{}\n", line.trim_start()))
+            .collect(),
+        _ => "{}\n".to_string(),
+    }
+}
 
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines
-        .iter()
-        .position(|l| l.trim_end() == "limits:" || l.starts_with("limits:"));
-    let (before, after): (Vec<&str>, Vec<&str>) = match start {
-        Some(s) => {
-            let mut e = s + 1;
-            while e < lines.len() {
-                let l = lines[e];
-                let top_level = !l.is_empty()
-                    && !l.starts_with(' ')
-                    && !l.starts_with('\t')
-                    && !l.starts_with('#');
-                if top_level {
-                    break;
-                }
-                e += 1;
-            }
-            (lines[..s].to_vec(), lines[e..].to_vec())
-        }
-        None => (lines.clone(), Vec::new()),
-    };
-    let mut out = before.join("\n");
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+/// Write the global scope to `<mur_home>/limits/global.yaml` (issue #1794),
+/// atomically. The first write seeds from the legacy `config.yaml limits:`
+/// block so the user edits what `mur limits` showed them; `config.yaml`
+/// itself is never touched — the legacy block stays where it is and stops
+/// being read once this file exists. A failed write changes nothing.
+pub fn upsert_global_limits(mur_home: &Path, patch: &Patch) -> Result<()> {
+    use mur_common::limits::{GlobalSource, global_limits_dir, global_limits_path, load_global};
+    let current = load_global(mur_home).map_err(|e| anyhow!("{e}"))?;
+    let migrating = current.source == GlobalSource::Legacy && !current.limits.is_empty();
+    let seed = (!current.limits.is_empty()).then_some(current.limits);
+    let next = apply_patch(seed, patch).map_err(|e| anyhow!("{e}"))?;
+
+    let dir = global_limits_dir(mur_home);
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = global_limits_path(mur_home);
+    let tmp = path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, render_global_file(next.as_ref()))
+        .with_context(|| format!("write {}", tmp.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("rename to {}", path.display()));
     }
-    if let Some(l) = &next {
-        out.push_str(&render_limits_block(l));
+    println!("global limits updated in {}", path.display());
+    if migrating {
+        println!(
+            "  migrated from {} — its limits: block is now ignored (left in place; delete it by hand if you like)",
+            mur_common::limits::legacy_config_path(mur_home).display()
+        );
     }
-    if !after.is_empty() {
-        out.push_str(&after.join("\n"));
-        out.push('\n');
-    }
-    let tmp = config_path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, out).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, config_path)
-        .with_context(|| format!("rename to {}", config_path.display()))?;
-    println!("global limits updated in {}", config_path.display());
     Ok(())
 }
 
@@ -244,66 +238,81 @@ mod tests {
         );
     }
 
-    /// The global writer edits config.yaml as TEXT: blocks it does not own
-    /// survive byte-for-byte, an existing limits: block is replaced in place,
-    /// and a missing one is appended.
+    fn patch(deadline: Option<&str>, stuck: Option<&str>, unset: &[&str]) -> Patch {
+        Patch {
+            deadline: deadline.map(Into::into),
+            stuck: stuck.map(Into::into),
+            cost_usd: None,
+            unset: unset.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// #1794: the global writer owns `limits/global.yaml` and nothing else.
+    /// The first write migrates the legacy values and leaves `config.yaml`
+    /// byte-for-byte as the user wrote it — comments, foreign blocks and the
+    /// old `limits:` block included.
     #[test]
-    fn global_write_is_textual_and_preserves_foreign_blocks() {
+    fn first_global_write_migrates_and_leaves_config_yaml_untouched() {
+        use mur_common::limits::{GlobalSource, global_limits_path, load_global};
         let t = tempfile::tempdir().unwrap();
-        let p = t.path().join("config.yaml");
-        std::fs::write(&p, "research_gateway:\n  brave_api_key_ref: keychain:mur/brave\nfleet_run:\n  agents: [mur]\n").unwrap();
-        upsert_global_limits(
-            &p,
-            &Patch {
-                deadline: Some("4h".into()),
-                stuck: None,
-                cost_usd: None,
-                unset: vec![],
-            },
-        )
-        .unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            text.contains("research_gateway:\n  brave_api_key_ref: keychain:mur/brave\n"),
-            "{text}"
+        let cfg = t.path().join("config.yaml");
+        let original = "# hand-kept\nresearch_gateway:\n  brave_api_key_ref: keychain:mur/brave\nlimits:\n  deadline: 4h  # why: long builds\n  cost_usd: 2\nfleet_run:\n  agents: [mur]\n";
+        std::fs::write(&cfg, original).unwrap();
+
+        upsert_global_limits(t.path(), &patch(None, Some("15m"), &[])).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&cfg).unwrap(), original);
+        let g = load_global(t.path()).unwrap();
+        assert_eq!(g.source, GlobalSource::File);
+        assert_eq!(g.limits.deadline.as_deref(), Some("4h"), "migrated");
+        assert_eq!(g.limits.cost_usd, Some(2.0), "migrated");
+        assert_eq!(g.limits.stuck.as_deref(), Some("15m"), "patched");
+        let body = std::fs::read_to_string(global_limits_path(t.path())).unwrap();
+        assert_eq!(body, "deadline: 4h\nstuck: 15m\ncost_usd: 2\n");
+    }
+
+    /// Once the new file exists, later writes edit it alone, and unsetting
+    /// every key keeps an empty file so the legacy block stays shadowed.
+    #[test]
+    fn later_writes_edit_the_new_file_and_an_empty_scope_still_shadows() {
+        use mur_common::limits::load_global;
+        let t = tempfile::tempdir().unwrap();
+        let cfg = t.path().join("config.yaml");
+        std::fs::write(&cfg, "limits:\n  deadline: 9h\n").unwrap();
+        upsert_global_limits(t.path(), &patch(Some("1h"), None, &[])).unwrap();
+        upsert_global_limits(t.path(), &patch(None, Some("off"), &[])).unwrap();
+        let g = load_global(t.path()).unwrap().limits;
+        assert_eq!(g.deadline.as_deref(), Some("1h"));
+        assert_eq!(g.stuck.as_deref(), Some("off"));
+
+        upsert_global_limits(t.path(), &patch(None, None, &["deadline", "stuck"])).unwrap();
+        assert!(load_global(t.path()).unwrap().limits.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&cfg).unwrap(),
+            "limits:\n  deadline: 9h\n"
         );
-        assert!(text.contains("fleet_run:\n  agents: [mur]\n"), "{text}");
-        assert!(text.contains("limits:\n  deadline: 4h\n"), "{text}");
-        // Replace in place, not append twice.
-        upsert_global_limits(
-            &p,
-            &Patch {
-                deadline: None,
-                stuck: Some("15m".into()),
-                cost_usd: None,
-                unset: vec![],
-            },
-        )
-        .unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
-        assert_eq!(text.matches("limits:").count(), 1, "{text}");
-        assert!(
-            text.contains("  deadline: 4h\n") && text.contains("  stuck: 15m\n"),
-            "{text}"
+    }
+
+    /// A write that cannot land changes nothing: no new file, `config.yaml`
+    /// intact, and a bad value is refused before any disk work.
+    #[test]
+    fn a_failed_global_write_changes_nothing() {
+        use mur_common::limits::{global_limits_dir, global_limits_path};
+        let t = tempfile::tempdir().unwrap();
+        let cfg = t.path().join("config.yaml");
+        std::fs::write(&cfg, "limits:\n  deadline: 9h\n").unwrap();
+
+        assert!(upsert_global_limits(t.path(), &patch(Some("soon"), None, &[])).is_err());
+        assert!(!global_limits_dir(t.path()).exists());
+
+        // A plain file where the directory must go: create_dir_all fails.
+        std::fs::write(global_limits_dir(t.path()), "not a dir").unwrap();
+        assert!(upsert_global_limits(t.path(), &patch(Some("1h"), None, &[])).is_err());
+        assert!(!global_limits_path(t.path()).exists());
+        assert_eq!(
+            std::fs::read_to_string(&cfg).unwrap(),
+            "limits:\n  deadline: 9h\n"
         );
-        // The typed loader agrees with the text.
-        let cfg = mur_common::config::Config::load_or_default(&p);
-        assert_eq!(cfg.limits.deadline.as_deref(), Some("4h"));
-        assert_eq!(cfg.limits.stuck.as_deref(), Some("15m"));
-        // Unsetting every key removes the block entirely.
-        upsert_global_limits(
-            &p,
-            &Patch {
-                deadline: None,
-                stuck: None,
-                cost_usd: None,
-                unset: vec!["deadline".into(), "stuck".into()],
-            },
-        )
-        .unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
-        assert!(!text.contains("limits:"), "{text}");
-        assert!(text.contains("research_gateway:"), "{text}");
     }
 
     fn fleet_for_test(

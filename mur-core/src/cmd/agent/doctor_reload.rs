@@ -1,7 +1,7 @@
 //! `mur agent doctor` lines for profile hot reload.
 //!
 //! A running agent records what it did with its last `profile.yaml` /
-//! `config.yaml` edit in `agent_home/reload_state.json`. Pure functions here so
+//! global limits edit in `agent_home/reload_state.json`. Pure functions here so
 //! the wording is unit-tested without a live agent.
 
 use mur_common::agent::{RELOAD_STATE_FILE, ReloadState};
@@ -83,10 +83,37 @@ pub fn error_lines(state: Option<&ReloadState>) -> Vec<String> {
     }
     if let Some(e) = &s.config_limits_error {
         out.push(format!(
-            "  config.yaml limits edit REJECTED, still using the last good value: {e}"
+            "  global limits edit REJECTED, still using the last good value: {e}"
         ));
     }
     out
+}
+
+/// Host-level note on where the global limits scope is read from (#1794).
+/// Empty when there is nothing to say: no legacy block, or only the new file.
+pub fn global_limits_lines(mur_home: &Path) -> Vec<String> {
+    use mur_common::limits::{
+        GlobalSource, global_limits_path, legacy_block_present, legacy_config_path, load_global,
+    };
+    let new = global_limits_path(mur_home);
+    let legacy = legacy_config_path(mur_home);
+    match load_global(mur_home) {
+        Err(e) => vec![format!(
+            "global limits: {} does not load ({e}) \u{2192} fix it; agents keep their last good value",
+            new.display()
+        )],
+        Ok(_) if !legacy_block_present(mur_home) => Vec::new(),
+        Ok(g) if g.source == GlobalSource::File => vec![format!(
+            "global limits: {} is in effect; the limits: block in {} is ignored (delete it by hand if you like)",
+            new.display(),
+            legacy.display()
+        )],
+        Ok(_) => vec![format!(
+            "global limits: read from the legacy limits: block in {}; on Linux a running agent cannot see edits to it \u{2192} run 'mur limits --global' once to move it to {}",
+            legacy.display(),
+            new.display()
+        )],
+    }
 }
 
 #[cfg(test)]
@@ -202,5 +229,35 @@ mod tests {
         let lines = error_lines(Some(&s));
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("bad yaml") && lines[1].contains("soon"));
+    }
+
+    #[test]
+    fn global_limits_lines_name_the_file_in_effect() {
+        let t = tempfile::tempdir().unwrap();
+        let h = t.path();
+        assert!(global_limits_lines(h).is_empty(), "nothing on disk");
+
+        std::fs::write(h.join("config.yaml"), "limits:\n  deadline: 4h\n").unwrap();
+        let legacy = global_limits_lines(h);
+        assert!(
+            legacy[0].contains("legacy") && legacy[0].contains("mur limits --global"),
+            "{legacy:?}"
+        );
+
+        std::fs::create_dir_all(mur_common::limits::global_limits_dir(h)).unwrap();
+        std::fs::write(mur_common::limits::global_limits_path(h), "deadline: 1h\n").unwrap();
+        let both = global_limits_lines(h);
+        assert!(both[0].contains("is ignored"), "{both:?}");
+        assert_eq!(
+            std::fs::read_to_string(h.join("config.yaml")).unwrap(),
+            "limits:\n  deadline: 4h\n",
+            "doctor never edits config.yaml"
+        );
+
+        std::fs::write(h.join("config.yaml"), "{}\n").unwrap();
+        assert!(global_limits_lines(h).is_empty(), "new file only");
+
+        std::fs::write(mur_common::limits::global_limits_path(h), "deadline: [\n").unwrap();
+        assert!(global_limits_lines(h)[0].contains("does not load"));
     }
 }

@@ -85,13 +85,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             let editing = patch != cmd::limits_write::Patch::default();
             let home = cmd::agent::resolve_mur_home()?;
             match (global, name) {
-                (true, _) if editing => {
-                    cmd::limits_write::upsert_global_limits(&home.join("config.yaml"), &patch)?
-                }
+                (true, _) if editing => cmd::limits_write::upsert_global_limits(&home, &patch)?,
                 (true, _) => {
-                    let cfg =
-                        mur_common::config::Config::load_or_default(&home.join("config.yaml"));
-                    print!("{}", cmd::limits_write::render_limits_block(&cfg.limits));
+                    let g = mur_common::limits::load_global(&home)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    print!("{}", cmd::limits_write::render_limits_block(&g.limits));
                 }
                 (false, Some(n)) if editing => match cmd::limits::detect_target(&home, &n)? {
                     cmd::limits::Target::Fleet(f) => {

@@ -66,7 +66,7 @@ pub enum Commands {
         /// Emit JSON instead of the table
         #[arg(long)]
         json: bool,
-        /// Edit ~/.mur/config.yaml's limits: block instead of a fleet or agent
+        /// Edit the global scope (~/.mur/limits/global.yaml) instead of a fleet or agent
         #[arg(long)]
         global: bool,
         /// Wall clock for the unit of work, e.g. 30m / 2h / 1h30m

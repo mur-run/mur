@@ -42,7 +42,7 @@ describe("row presentation (§10.1)", () => {
   it("chips name the scope in the user's words", () => {
     expect(chipLabel(row({ source: "fleet.yaml" }), "fleet", t as never)).toBe("limits.chip.thisFleet");
     expect(chipLabel(row({ source: "profile.yaml" }), "agent", t as never)).toBe("limits.chip.thisAgent");
-    expect(chipLabel(row({ source: "~/.mur/config.yaml" }), "fleet", t as never)).toBe("limits.chip.config");
+    expect(chipLabel(row({ source: "~/.mur/limits/global.yaml" }), "fleet", t as never)).toBe("limits.chip.config");
     expect(chipLabel(row({ source: "built-in default" }), "global", t as never)).toBe("limits.chip.builtIn");
     expect(chipLabel(row({ source: "fleet.yaml (legacy loop.deadline)" }), "fleet", t as never)).toBe(
       "limits.chip.legacy"

@@ -14,6 +14,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[path = "limits_global.rs"]
+mod global;
+pub use global::*;
+
 /// The block as written in YAML. Every key optional; an absent key means
 /// "inherit", never "unlimited" — `stuck: off` is the explicit opt-out.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -55,7 +59,7 @@ impl Source {
     pub fn label(self) -> &'static str {
         match self {
             Source::BuiltIn => "built-in default",
-            Source::Global => "~/.mur/config.yaml",
+            Source::Global => "~/.mur/limits/global.yaml",
             Source::Fleet => "fleet.yaml",
             Source::Agent => "profile.yaml",
             Source::Flag => "command-line flag",
@@ -169,7 +173,7 @@ pub fn resolve(
         (Some(flags), "flag"),
         (agent, "profile.yaml"),
         (fleet, "fleet.yaml"),
-        (Some(global), "config.yaml"),
+        (Some(global), "global limits"),
     ] {
         if let Some(l) = l {
             validate(l).map_err(|e| format!("{who}: {e}"))?;
