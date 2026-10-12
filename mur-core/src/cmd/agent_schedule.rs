@@ -108,7 +108,7 @@ pub fn cmd_schedule_accept(name: &str, id: &str) -> Result<()> {
     cmd_schedule_add(name, &p.cron, &p.message, None, p.not_after.clone())?;
     std::fs::remove_file(proposal_dir(name).join(format!("{id}.yaml")))
         .with_context(|| format!("remove proposal {id}"))?;
-    println!("granted. Restart the agent for it to take effect: mur agent restart {name}");
+    println!("granted — a running '{name}' picks it up within about 30 seconds, no restart needed");
     Ok(())
 }
 

@@ -229,20 +229,36 @@ async fn record_reply(sink: &ScheduleSink, task: &mur_common::a2a::Task, cron: &
     notify_inbox(sink, &task.id, &text, chrono::Utc::now()).await;
 }
 
+/// Where the scheduler reads its entries from. A fixed list (tests) or a
+/// live read of `profile.yaml`'s `lifecycle.schedule`.
+pub type EntrySource = Arc<dyn Fn() -> Vec<ScheduleEntry> + Send + Sync>;
+
+/// How often a live scheduler compares its running entries with the file —
+/// the same tick as the idle scheduler, so a `remind` granted while the agent
+/// is idle starts within half a minute, no turn needed.
+pub const RECONCILE_SECS: u64 = 30;
+
 pub struct CronScheduler {
-    entries: Vec<ScheduleEntry>,
+    source: EntrySource,
     runner: Arc<TaskRunner>,
     /// `None` leaves the pre-#1125 behaviour — a fired turn is run and its
     /// reply discarded. Only tests construct the scheduler that way.
     sink: Option<Arc<ScheduleSink>>,
+    reconcile_every: std::time::Duration,
 }
 
 impl CronScheduler {
     pub fn new(entries: Vec<ScheduleEntry>, runner: Arc<TaskRunner>) -> Self {
+        Self::live(Arc::new(move || entries.clone()), runner)
+    }
+
+    /// Entries re-read from `source` every [`RECONCILE_SECS`].
+    pub fn live(source: EntrySource, runner: Arc<TaskRunner>) -> Self {
         Self {
-            entries,
+            source,
             runner,
             sink: None,
+            reconcile_every: std::time::Duration::from_secs(RECONCILE_SECS),
         }
     }
 
@@ -252,29 +268,80 @@ impl CronScheduler {
         self
     }
 
-    /// Spawn an outer tokio task that fans out one loop per entry.
-    /// Each inner loop selects on a shared CancellationToken so aborting
-    /// the returned JoinHandle (SIGTERM path in supervisor) cancels all entries.
-    /// Push the returned handle onto `supervisor::transport_tasks`.
+    pub fn with_reconcile_interval(mut self, d: std::time::Duration) -> Self {
+        self.reconcile_every = d;
+        self
+    }
+
+    /// Spawn the outer task: one inner loop per entry, reconciled against the
+    /// source on every tick. Aborting the returned handle (SIGTERM path in
+    /// supervisor) cancels every entry. Push it onto `transport_tasks`.
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         let cancel = CancellationToken::new();
         tokio::spawn(async move {
             let _guard = cancel.clone().drop_guard(); // cancel all entries on abort
-            let mut handles = Vec::with_capacity(self.entries.len());
-            for entry in self.entries {
-                let runner = self.runner.clone();
-                let child_cancel = cancel.clone();
-                let sink = self.sink.clone();
-                handles.push(tokio::spawn(async move {
-                    run_entry(entry, runner, child_cancel, sink).await;
-                }));
-            }
-            // Wait for all inner loops — they exit when cancelled.
-            for h in handles {
-                let _ = h.await;
+            let mut running: Vec<Running<ScheduleEntry>> = Vec::new();
+            loop {
+                let wanted = (self.source)();
+                let plan = reconcile(&running, &wanted);
+                for i in plan.remove.iter().rev() {
+                    let gone = running.remove(*i);
+                    // Stops a loop waiting for its next firing. A firing in
+                    // progress is not interrupted: `run_entry` only watches the
+                    // token while it sleeps, so the turn finishes, then exits.
+                    gone.cancel.cancel();
+                    info!(cron = %gone.item.cron, "schedule entry removed; stopped");
+                }
+                for entry in plan.add {
+                    let child = cancel.child_token();
+                    let (runner, sink, c) = (self.runner.clone(), self.sink.clone(), child.clone());
+                    let e = entry.clone();
+                    tokio::spawn(async move { run_entry(e, runner, c, sink).await });
+                    info!(cron = %entry.cron, "schedule entry started");
+                    running.push(Running {
+                        item: entry,
+                        cancel: child,
+                    });
+                }
+                tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    _ = tokio::time::sleep(self.reconcile_every) => {}
+                }
             }
         })
     }
+}
+
+/// One live entry and the token that stops it.
+pub struct Running<T> {
+    pub item: T,
+    pub cancel: CancellationToken,
+}
+
+/// What to change to make `running` match `wanted`.
+#[derive(Debug, PartialEq)]
+pub struct Plan<T> {
+    /// Indexes into `running`, ascending.
+    pub remove: Vec<usize>,
+    pub add: Vec<T>,
+}
+
+/// Per-entry diff, by value. An unchanged entry keeps its task — and with it
+/// its place in the wait for the next firing — so editing one reminder never
+/// restarts the others. An edited entry is a removal plus an addition. Equal
+/// duplicates are matched one-for-one, so a list holding the same entry twice
+/// keeps two loops.
+pub fn reconcile<T: PartialEq + Clone>(running: &[Running<T>], wanted: &[T]) -> Plan<T> {
+    let mut claimed = vec![false; running.len()];
+    let mut add = Vec::new();
+    for w in wanted {
+        match (0..running.len()).find(|&i| !claimed[i] && running[i].item == *w) {
+            Some(i) => claimed[i] = true,
+            None => add.push(w.clone()),
+        }
+    }
+    let remove = (0..running.len()).filter(|&i| !claimed[i]).collect();
+    Plan { remove, add }
 }
 
 async fn run_entry(
@@ -547,5 +614,77 @@ mod tests {
             "a corrupt bound must not silently retire a reminder: a repeat is \
              visible and removable, a reminder that never fires is not"
         );
+    }
+
+    fn entry(cron: &str) -> ScheduleEntry {
+        ScheduleEntry {
+            cron: cron.into(),
+            message: "m".into(),
+            sends_to: None,
+            not_after: None,
+        }
+    }
+
+    fn running(items: &[ScheduleEntry]) -> Vec<Running<ScheduleEntry>> {
+        items
+            .iter()
+            .map(|e| Running {
+                item: e.clone(),
+                cancel: CancellationToken::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reconcile_keeps_unchanged_entries_and_swaps_edited_ones() {
+        let (a, b, c) = (entry("0 9 * * *"), entry("0 10 * * *"), entry("0 11 * * *"));
+        let plan = reconcile(&running(&[a.clone(), b.clone()]), &[a.clone(), c.clone()]);
+        assert_eq!(plan.remove, vec![1]);
+        assert_eq!(plan.add, vec![c]);
+    }
+
+    #[test]
+    fn reconcile_of_an_unchanged_list_is_a_no_op() {
+        let (a, b) = (entry("0 9 * * *"), entry("0 9 * * *"));
+        let plan = reconcile(&running(&[a.clone(), b.clone()]), &[a, b]);
+        assert!(plan.remove.is_empty() && plan.add.is_empty(), "{plan:?}");
+    }
+
+    /// A reminder granted while the agent is idle fires with no restart and no
+    /// turn: the reconcile tick alone picks it up. Paused tokio time, so the
+    /// wait for the next minute boundary is virtual.
+    #[tokio::test(start_paused = true)]
+    async fn an_entry_added_after_start_fires_without_a_restart() {
+        use std::sync::Mutex;
+        use std::time::Duration;
+        let entries: Arc<Mutex<Vec<ScheduleEntry>>> = Arc::new(Mutex::new(vec![]));
+        let src = entries.clone();
+        let runner = Arc::new(TaskRunner::new_stub_echo());
+        let handle = CronScheduler::live(
+            Arc::new(move || src.lock().unwrap().clone()),
+            runner.clone(),
+        )
+        .with_reconcile_interval(Duration::from_secs(RECONCILE_SECS))
+        .spawn();
+        tokio::time::sleep(Duration::from_secs(RECONCILE_SECS * 2)).await;
+        assert_eq!(runner.last_activity_at(), 0, "nothing scheduled yet");
+
+        entries.lock().unwrap().push(entry("* * * * *"));
+        for _ in 0..10 {
+            if runner.last_activity_at() != 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(RECONCILE_SECS)).await;
+        }
+        handle.abort();
+        assert_ne!(runner.last_activity_at(), 0, "the added entry never fired");
+    }
+
+    /// Removing an entry stops it: the token handed to its loop is cancelled.
+    #[test]
+    fn a_removed_entry_is_planned_for_cancel() {
+        let a = entry("0 9 * * *");
+        let plan = reconcile(&running(&[a]), &[]);
+        assert_eq!(plan.remove, vec![0]);
     }
 }

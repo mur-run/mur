@@ -88,6 +88,7 @@ impl TaskRunner {
             scratch_dir: None,
             bash_jobs: None,
             effort: std::sync::RwLock::new(None),
+            live: std::sync::OnceLock::new(),
             conversations: Mutex::new(ConversationStore::default()),
             session_cwd: None,
             turn_tracks: Mutex::new(HashMap::new()),
@@ -478,16 +479,47 @@ impl TaskRunner {
         self
     }
 
+    /// Attach the hot-reloaded settings. Once per runner: the supervisor
+    /// calls it right after the runner is built; a second call is ignored.
+    pub fn attach_live(&self, live: Arc<crate::live_profile::LiveSettings>) {
+        let _ = self.live.set(live);
+    }
+
+    /// The profile settings this turn runs under, read once at its start so
+    /// an edit landing mid-turn cannot give one turn two answers. With live
+    /// settings attached, an edited `profile.yaml` / `config.yaml` is picked
+    /// up here; a bad edit leaves the last good version (see `live_profile`).
+    pub(super) fn turn_settings(&self) -> TurnSettings {
+        match self.live.get() {
+            Some(live) => {
+                let p = live.profile.current();
+                TurnSettings {
+                    global_limits: (*live.global_limits.current()).clone(),
+                    agent_limits: p.limits.clone(),
+                    autonomy: p.hitl.autonomy.unwrap_or_default(),
+                }
+            }
+            None => TurnSettings {
+                global_limits: self.limits.0.clone(),
+                agent_limits: self.limits.1.clone(),
+                autonomy: self.autonomy,
+            },
+        }
+    }
+
     /// What bounds this turn. Errors only when a file carries an unparsable
-    /// value — surfaced as a failed task that names the key, per spec §4.
+    /// value — surfaced as a failed task that names the key, per spec §4. With
+    /// live settings attached that only happens at boot: a reload carrying an
+    /// unparsable value is refused and the previous one keeps serving.
     pub(super) fn bounds_for(
         &self,
         spec: &TaskSpec,
+        settings: &TurnSettings,
     ) -> Result<crate::bounds::TurnBounds, TaskError> {
         crate::bounds::resolve_bounds(
             spec.attended,
-            &self.limits.0,
-            self.limits.1.as_ref(),
+            &settings.global_limits,
+            settings.agent_limits.as_ref(),
             spec.deadline_secs,
             std::time::Instant::now(),
         )
@@ -508,4 +540,12 @@ impl TaskRunner {
         self.iteration_ceiling = n;
         self
     }
+}
+
+/// One turn's view of the hot-reloadable settings.
+#[derive(Debug, Clone)]
+pub(super) struct TurnSettings {
+    pub global_limits: mur_common::limits::Limits,
+    pub agent_limits: Option<mur_common::limits::Limits>,
+    pub autonomy: mur_common::hitl::Autonomy,
 }

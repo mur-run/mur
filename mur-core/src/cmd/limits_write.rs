@@ -65,9 +65,7 @@ pub fn write_agent_limits(name: &str, patch: &Patch) -> Result<()> {
     let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(name)?;
     profile.limits = apply_patch(profile.limits.take(), patch).map_err(|e| anyhow!("{e}"))?;
     crate::cmd::agent::save_profile(&path, &mut profile)?;
-    println!(
-        "limits for agent '{name}' updated — restart the agent to apply (mur agent restart {name})"
-    );
+    println!("limits for agent '{name}' updated — takes effect on its next turn");
     Ok(())
 }
 

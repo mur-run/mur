@@ -361,6 +361,23 @@ impl Config {
         cfg
     }
 
+    /// Like [`Config::load_or_default`], but a file that is present and does
+    /// not parse is an error rather than silently the defaults. For a reader
+    /// that already holds a good copy and must not trade it for defaults
+    /// (the agent runtime's hot reload). An absent file is still the defaults.
+    pub fn try_load(path: &std::path::Path) -> Result<Self, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        let text = crate::config_migrate::migrate_conversations_yaml(&text).unwrap_or(text);
+        let mut cfg: Self =
+            serde_yaml_ng::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        cfg.sanitize();
+        Ok(cfg)
+    }
+
     /// Clamp values that are legal YAML but illegal at runtime. Called once
     /// from [`Config::load_or_default`] — never from call sites, so every
     /// reader (CLI, executor heartbeat ticker, `status_of`'s stale

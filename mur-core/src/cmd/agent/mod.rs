@@ -31,6 +31,7 @@ pub mod channel_import;
 pub mod cli;
 mod comm;
 mod doctor;
+mod doctor_reload;
 mod effort;
 pub mod export;
 mod hub;

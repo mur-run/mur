@@ -20,6 +20,7 @@ pub(crate) async fn prepare_runtime(
     agent_home: &std::path::Path,
     profile: &Profile,
     socket_enabled: bool,
+    live_profile: &Arc<crate::live_profile::LiveProfile>,
 ) -> anyhow::Result<(
     TelemetryWriter,
     tokio::sync::mpsc::Receiver<serde_json::Value>,
@@ -196,14 +197,26 @@ pub(crate) async fn prepare_runtime(
     // The whole profile, not a hand-picked subset: `skill_enabled` reads a
     // denylist AND an add-on group's enabled flag today, and rebuilding a
     // partial `AgentProfile` here would silently stop gating on whatever it
-    // learns to read next. Boot-time snapshot, like every other profile read
-    // in the runtime — editing profile.yaml still needs a restart.
-    let gate_profile = profile.inner.clone();
+    // learns to read next. Read live: `disabled_skills` and `addons` are hot
+    // fields, so a toggle in profile.yaml reaches the next turn. The live
+    // profile's generation is folded into the skills fingerprint, because a
+    // gate-only edit moves no skill file.
+    let gate = live_profile.clone();
     let enabled: Box<dyn Fn(&str) -> bool + Send + Sync> =
-        Box::new(move |name: &str| gate_profile.skill_enabled(name));
+        Box::new(move |name: &str| gate.current().skill_enabled(name));
     let loaded: Vec<_> = loaded.into_iter().filter(|s| enabled(&s.name)).collect();
-    let runtime_skills =
-        Arc::new(RuntimeSkills::build(loaded).reloadable(&mur_home, &profile.inner.name, enabled));
+    let generation = live_profile.clone();
+    let runtime_skills = Arc::new(
+        RuntimeSkills::build(loaded)
+            .reloadable(&mur_home, &profile.inner.name, enabled)
+            // `current()` first: the skills check runs before anything else
+            // in the turn has looked at profile.yaml, and without it a gate
+            // edit would land one turn late.
+            .with_gate_generation(move || {
+                let _ = generation.current();
+                generation.generation()
+            }),
+    );
 
     Ok((
         writer,

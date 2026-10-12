@@ -201,6 +201,9 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
             .unwrap_or_default()
     };
 
+    // What each running agent did with its latest profile/config edit.
+    let reload = |name: &str| super::doctor_reload::read_state(&mur_home.join("agents").join(name));
+
     // Checked outside the rows loop on purpose: `rows` only holds agents with a
     // running.lock, and "my concierge cannot author anything" is exactly the
     // question you ask about an agent that is not up.
@@ -218,6 +221,7 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
                     "running":  true,
                     "stale":    r.stale,
                     "profile_drift": r.profile_drift,
+                    "reload": reload(&r.name),
                     "lock_sha": r.lock_sha,
                     "disk_sha": r.disk_sha,
                     "dead_grants": dead(&r.name)
@@ -270,12 +274,13 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
                     r.name, lock8, disk8, r.name
                 );
             } else if r.profile_drift {
-                println!(
-                    "{}: running, binary current but PROFILE EDITED SINCE START \u{2192} run 'mur agent restart {}'",
-                    r.name, r.name
-                );
+                let verdict = super::doctor_reload::drift_verdict(reload(&r.name).as_ref());
+                println!("{}", super::doctor_reload::drift_line(&r.name, &verdict));
             } else {
                 println!("{}: running, current", r.name);
+            }
+            for line in super::doctor_reload::error_lines(reload(&r.name).as_ref()) {
+                println!("{line}");
             }
             // A launcher into the keg is why an agent can be "current" and
             // still never upgrade: the keg copy is a path no installer
