@@ -163,6 +163,7 @@ fn folding_is_deterministic_and_replayable() {
                 members: ["main".into(), "reviewer".into()],
                 mode: Mode::SemiAuto,
                 limits: SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+                cwd: None,
             })
             .unwrap();
         let f1 = issue(&mut ledger, Severity::Medium, "x", 1);

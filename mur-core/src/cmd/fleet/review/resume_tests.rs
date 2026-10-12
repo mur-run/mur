@@ -94,7 +94,8 @@ fn paused_in_round_two() -> (tempfile::TempDir, String) {
         vec![Ok("draft"), Ok(ACCEPT_F1)],
         vec![Ok(REVISE_ONE), Err("offline"), Err("offline")],
     );
-    let (_, stop) = run_session(&t, home, &fleet, "the task", limits(), Duration::ZERO).unwrap();
+    let (_, stop) =
+        run_session(&t, home, &fleet, "the task", limits(), Duration::ZERO, None).unwrap();
     assert!(matches!(stop, LoopDriverStop::Paused { .. }), "{stop:?}");
     (tmp, fleet.name)
 }
@@ -224,6 +225,7 @@ fn crashed_in_round_two() -> (tempfile::TempDir, String) {
         members: ["main".into(), "reviewer".into()],
         mode: crate::cmd::fleet::review::schema::Mode::Auto,
         limits: limits(),
+        cwd: None,
     };
     let sent = |round, to| ReviewPayload::TurnSent {
         round,
@@ -435,6 +437,7 @@ fn replayed_active_time_excludes_human_input_wait() {
                 members: ["main".into(), "reviewer".into()],
                 mode: crate::cmd::fleet::review::schema::Mode::SemiAuto,
                 limits: limits(),
+                cwd: None,
             },
         ),
         (
@@ -465,6 +468,7 @@ fn abort_after_long_hitl_wait_does_not_exhaust_deadline() {
                 members: ["main".into(), "reviewer".into()],
                 mode: Mode::SemiAuto,
                 limits: SessionLimits::new(Duration::from_secs(10 * 60), Stuck::Off, None),
+                cwd: None,
             },
         ),
         (
@@ -570,4 +574,66 @@ fn resume_summary_adds_one_line_when_round_restarts() {
     r.restarts_round = true;
     let line = REVIEW_RESUME_RESTARTS_ROUND.replace("{n}", "2");
     assert_eq!(render_resume_summary(&r), format!("{before}{line}\n"));
+}
+
+/// #1777: the cwd of every send, wrapped around a scripted transport.
+struct CwdSeen<'a> {
+    inner: &'a Scripted,
+    cwds: Mutex<Vec<serde_json::Value>>,
+}
+
+impl ReviewTransport for CwdSeen<'_> {
+    fn send(&self, member: &str, params: &serde_json::Value) -> anyhow::Result<String> {
+        self.cwds
+            .lock()
+            .unwrap()
+            .push(params["context"]["cwd"].clone());
+        self.inner.send(member, params)
+    }
+}
+
+fn paused_with_cwd(cwd: Option<&str>) -> (tempfile::TempDir, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    crate::channel_writer::plant_writer_identity(home);
+    let fleet =
+        create_session_fleet(home, "review-cwdr0001", "main", "reviewer", "the task").unwrap();
+    let t = Scripted::new(
+        vec![Ok("draft"), Ok(ACCEPT_F1)],
+        vec![Ok(REVISE_ONE), Err("offline"), Err("offline")],
+    );
+    let (_, stop) =
+        run_session(&t, home, &fleet, "the task", limits(), Duration::ZERO, cwd).unwrap();
+    assert!(matches!(stop, LoopDriverStop::Paused { .. }), "{stop:?}");
+    (tmp, fleet.name)
+}
+
+fn resumed_cwds(cwd: Option<&str>) -> Vec<serde_json::Value> {
+    let (tmp, name) = paused_with_cwd(cwd);
+    let r = prepare_resume(tmp.path(), &name).unwrap();
+    assert_eq!(r.cwd.as_deref(), cwd);
+    let s = Scripted::new(vec![Ok(ACCEPT_F1)], vec![Ok(APPROVE_F1)]);
+    let t = CwdSeen {
+        inner: &s,
+        cwds: Mutex::new(Vec::new()),
+    };
+    let (_, stop) = resume_session(&t, tmp.path(), r, Duration::ZERO).unwrap();
+    assert_eq!(stop, LoopDriverStop::Approve);
+    t.cwds.into_inner().unwrap()
+}
+
+/// #1777: a resumed session keeps sending the directory it started in.
+#[test]
+fn resume_sends_the_recorded_cwd() {
+    let cwds = resumed_cwds(Some("/work/repo"));
+    assert_eq!(cwds.len(), 2);
+    assert!(cwds.iter().all(|c| c == "/work/repo"), "{cwds:?}");
+}
+
+/// #1777: a session recorded without a cwd resumes without one — never
+/// with the resuming shell's directory.
+#[test]
+fn a_session_without_a_recorded_cwd_resumes_without_one() {
+    let cwds = resumed_cwds(None);
+    assert!(cwds.iter().all(serde_json::Value::is_null), "{cwds:?}");
 }

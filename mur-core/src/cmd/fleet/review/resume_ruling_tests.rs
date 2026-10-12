@@ -154,13 +154,14 @@ fn escalated(fixture: Fixture, name: &str) -> tempfile::TempDir {
     let mut t = Scripted::new(home, name, "reject", &[ISSUE_F1, DISPUTE_F1, DISPUTE_F1]);
     match fixture {
         Fixture::Paused => {
-            let (_, stop) = run_session(&t, home, &fleet, "t", limits(), Duration::ZERO).unwrap();
+            let (_, stop) =
+                run_session(&t, home, &fleet, "t", limits(), Duration::ZERO, None).unwrap();
             assert!(matches!(stop, LoopDriverStop::Paused { .. }), "{stop:?}");
         }
         Fixture::Crashed => {
             t.panic_on_ask = true;
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_session(&t, home, &fleet, "t", limits(), Duration::ZERO)
+                run_session(&t, home, &fleet, "t", limits(), Duration::ZERO, None)
             }));
             assert!(run.is_err(), "the scripted kill must fire");
             assert!(
@@ -402,7 +403,7 @@ fn live_ruling_wait_then_q_is_not_execution_time_on_resume() {
     let mut t =
         Scripted::new(home, name, "reject", &[ISSUE_F1, DISPUTE_F1, DISPUTE_F1]).asks(&["q\n"]);
     t.ask_sleep = WAIT;
-    let (_, stop) = run_session(&t, home, &fleet, "t", limits(), Duration::ZERO).unwrap();
+    let (_, stop) = run_session(&t, home, &fleet, "t", limits(), Duration::ZERO, None).unwrap();
     let wall = started.elapsed();
     assert!(matches!(stop, LoopDriverStop::Paused { .. }), "{stop:?}");
 

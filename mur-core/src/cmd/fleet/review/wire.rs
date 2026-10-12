@@ -29,6 +29,17 @@ pub fn text_message_params(text: &str) -> serde_json::Value {
     })
 }
 
+/// #1777: `params` with `context.cwd` set to `cwd`, the way a murmur turn
+/// carries it (`agent/cli/stream.rs::build_params`). `None` leaves `params`
+/// untouched, so a session with no recorded directory sends what it always
+/// did.
+pub fn with_working_dir(mut params: serde_json::Value, cwd: Option<&str>) -> serde_json::Value {
+    if let Some(dir) = cwd {
+        params["context"]["cwd"] = serde_json::json!(dir);
+    }
+    params
+}
+
 /// The text of the first text part in params built by
 /// [`text_message_params`]. Used by tests and by the semi-auto preview.
 pub fn message_text(params: &serde_json::Value) -> Option<&str> {

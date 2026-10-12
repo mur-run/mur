@@ -445,6 +445,7 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
         members: [fleet.members[0].clone(), fleet.members[1].clone()],
         mur_home,
     };
+    let cwd = launch_dir();
     let (ledger, stop) = run_session(
         &transport,
         mur_home,
@@ -452,6 +453,7 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
         &args.task,
         limits,
         TRANSPORT_RETRY_DELAY,
+        cwd.as_deref(),
     )?;
     print!(
         "\n{}",
@@ -539,6 +541,15 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// #1777: the directory a fresh session is started from — the repository
+/// the members are asked to work in. `None` when the process has no usable
+/// current directory; the session then sends no `context.cwd`.
+pub(crate) fn launch_dir() -> Option<String> {
+    std::env::current_dir()
+        .ok()
+        .map(|d| d.to_string_lossy().into_owned())
+}
+
 /// Run the loop on an already-created session fleet, then end the session
 /// whatever happened: record `session_stopped`, drop the fleet definition,
 /// keep the channel (§7.1, A1). Split out so tests can inject a transport.
@@ -549,6 +560,7 @@ pub(super) fn run_session(
     task: &str,
     limits: SessionLimits,
     retry_delay: std::time::Duration,
+    cwd: Option<&str>,
 ) -> Result<(Ledger, LoopDriverStop)> {
     let [main, reviewer] = [&fleet.members[0], &fleet.members[1]];
     // §7.0: the run lock is held for the driver's whole life; the kernel
@@ -568,6 +580,7 @@ pub(super) fn run_session(
         retry_delay,
         limits,
         &Instant::now,
+        cwd,
     );
     end_session(mur_home, fleet, run)
 }

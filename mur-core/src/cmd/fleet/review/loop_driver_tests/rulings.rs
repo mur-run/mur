@@ -217,6 +217,7 @@ fn run_with(
         Duration::ZERO,
         limits,
         &move || clock.get(),
+        None,
     )
     .unwrap()
 }

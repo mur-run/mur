@@ -49,6 +49,7 @@ pub(super) fn start(
         task: args.task.clone(),
         limits,
         lock,
+        cwd: crate::cmd::fleet::review::session::launch_dir(),
     };
     let handle = spawn(home, kind, tx).map_err(undo)?;
     Ok((attach(name, channel_id, Some(handle), None), banner))

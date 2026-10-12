@@ -71,6 +71,7 @@ fn run(
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
     (tmp, channel_id, ledger, stop)
