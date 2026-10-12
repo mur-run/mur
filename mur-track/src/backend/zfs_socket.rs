@@ -1,13 +1,16 @@
 use super::ParallelBackend;
 use crate::zfs_protocol::{ZfsRequest, ZfsResponse};
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::time::Duration;
 
 /// Fail fast rather than wedge the whole parallel run if the agent hangs.
+#[cfg(unix)]
 const AGENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Backend that talks to `mur-zfs-agent` running inside a Linux VM (OrbStack / Lima / WSL2)
