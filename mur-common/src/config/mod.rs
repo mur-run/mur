@@ -8,6 +8,7 @@ mod ops;
 mod scratch;
 mod search;
 mod skills;
+mod turn_track;
 
 pub use attribution::*;
 pub use backend::*;
@@ -16,6 +17,7 @@ pub use ops::*;
 pub use scratch::*;
 pub use search::*;
 pub use skills::*;
+pub use turn_track::*;
 
 use ops::{
     default_heartbeat_interval_secs, default_heartbeat_stale_after_intervals, default_rotate_at_mb,
@@ -340,6 +342,10 @@ pub struct Config {
     /// Per-agent scratch dir retention and doctor threshold (`scratch:`).
     #[serde(default)]
     pub scratch: ScratchConfig,
+
+    /// Per-turn copy-on-write track tuning (`turn_track:`).
+    #[serde(default)]
+    pub turn_track: TurnTrackConfig,
 
     /// Code-search tool bounds (`search:`), e.g. `search.ast_grep`.
     #[serde(default)]
