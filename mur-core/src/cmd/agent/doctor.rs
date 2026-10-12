@@ -274,23 +274,8 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
                     r.name, lock8, disk8, r.name
                 );
             } else if r.profile_drift {
-                use super::doctor_reload::DriftVerdict;
-                match super::doctor_reload::drift_verdict(reload(&r.name).as_ref()) {
-                    DriftVerdict::NeedsRestart => println!(
-                        "{}: running, binary current but PROFILE EDITED SINCE START \u{2192} run 'mur agent restart {}'",
-                        r.name, r.name
-                    ),
-                    DriftVerdict::Reloaded { generation } => println!(
-                        "{}: running, current (profile edits hot-reloaded, generation {generation})",
-                        r.name
-                    ),
-                    DriftVerdict::ColdPending(fields) => println!(
-                        "{}: running, profile edits to {} need a restart \u{2192} run 'mur agent restart {}'",
-                        r.name,
-                        fields.join(", "),
-                        r.name
-                    ),
-                }
+                let verdict = super::doctor_reload::drift_verdict(reload(&r.name).as_ref());
+                println!("{}", super::doctor_reload::drift_line(&r.name, &verdict));
             } else {
                 println!("{}: running, current", r.name);
             }
