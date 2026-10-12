@@ -58,6 +58,7 @@ fn aborted_turn_pauses_kind_other_with_fixed_reason_and_wait() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
 

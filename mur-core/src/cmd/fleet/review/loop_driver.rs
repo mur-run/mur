@@ -40,7 +40,9 @@ use super::settle::{
     write_ruling,
 };
 use super::verdict::{parse_rebuttal, parse_verdict, zero_cumulative};
-use super::wire::{main_turn_params, message_text, reviewer_turn_params, text_message_params};
+use super::wire::{
+    main_turn_params, message_text, reviewer_turn_params, text_message_params, with_working_dir,
+};
 use crate::cmd::fleet::control;
 use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
 use anyhow::Result;
@@ -122,6 +124,7 @@ pub fn run_review_loop(
     retry_delay: Duration,
     limits: SessionLimits,
     now: &dyn Fn() -> Instant,
+    cwd: Option<&str>,
 ) -> Result<(Ledger, LoopDriverStop)> {
     let svc = ChannelService::open(mur_home)?;
     let mut ledger = Ledger::default();
@@ -133,6 +136,7 @@ pub fn run_review_loop(
         members: [main.to_string(), reviewer.to_string()],
         mode,
         limits,
+        cwd: cwd.map(str::to_string),
     };
     ledger.apply(&started)?;
     append(&svc, mur_home, channel_id, &started)?;
@@ -142,6 +146,7 @@ pub fn run_review_loop(
         main,
         reviewer,
         task,
+        cwd,
     };
     continue_review_loop(
         transport,
@@ -163,6 +168,8 @@ pub struct Members<'a> {
     pub main: &'a str,
     pub reviewer: &'a str,
     pub task: &'a str,
+    /// #1777: sent as `context.cwd` on every turn; `None` sends none.
+    pub cwd: Option<&'a str>,
 }
 
 /// Drive the loop from `round` on over an already-folded `ledger` (a fresh
@@ -191,6 +198,7 @@ pub fn continue_review_loop(
         main: m.main,
         reviewer: m.reviewer,
         task: m.task,
+        cwd: m.cwd,
         retry_delay,
         deadline: limits.deadline(),
         stuck: limits.stuck(),
@@ -218,6 +226,7 @@ struct LoopRun<'a> {
     main: &'a str,
     reviewer: &'a str,
     task: &'a str,
+    cwd: Option<&'a str>,
     retry_delay: Duration,
     deadline: Duration,
     stuck: Stuck,
@@ -507,13 +516,14 @@ impl LoopRun<'_> {
             // the pending notes (P3a-§4), plus the format hint on a resend.
             let message = |notes: &[HumanNote]| {
                 let params = build(&*side.borrow().primary, notes);
-                match &hint {
+                let params = match &hint {
                     None => params,
                     Some(h) => text_message_params(&format!(
                         "{}{h}",
                         message_text(&params).unwrap_or_default()
                     )),
-                }
+                };
+                with_working_dir(params, self.cwd)
             };
             let (svc, mur_home, channel_id) = (&self.svc, self.mur_home, self.channel_id);
             let mut flush =

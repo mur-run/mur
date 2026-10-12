@@ -24,6 +24,7 @@ fn started() -> ReviewPayload {
         members: ["main".into(), "reviewer".into()],
         mode: Mode::SemiAuto,
         limits: SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        cwd: None,
     }
 }
 

@@ -33,6 +33,9 @@ pub enum StartKind {
         task: String,
         limits: SessionLimits,
         lock: DriverLock,
+        /// #1777: the directory murmur runs in, recorded and sent as
+        /// `context.cwd` on every turn.
+        cwd: Option<String>,
     },
     Resume(Box<Resumable>),
 }
@@ -101,6 +104,7 @@ fn run(transport: &MurmurTransport, mur_home: &Path, kind: StartKind) -> Outcome
             task,
             limits,
             lock,
+            cwd,
         } => {
             let _lock = lock;
             let fleet = *fleet;
@@ -117,6 +121,7 @@ fn run(transport: &MurmurTransport, mur_home: &Path, kind: StartKind) -> Outcome
                 TRANSPORT_RETRY_DELAY,
                 limits,
                 &Instant::now,
+                cwd.as_deref(),
             );
             let run = apply_requested_pause(transport, mur_home, &fleet.channel_id, run);
             match end_session(mur_home, &fleet, run) {

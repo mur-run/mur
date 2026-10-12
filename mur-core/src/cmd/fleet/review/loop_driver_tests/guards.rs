@@ -36,6 +36,7 @@ fn long_turn_that_returns_is_not_stuck() {
             None,
         ),
         &|| clock.get(),
+        None,
     )
     .unwrap();
 
@@ -80,6 +81,7 @@ fn stuck_off_never_trips() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &|| clock.get(),
+        None,
     )
     .unwrap();
 
@@ -169,6 +171,7 @@ fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &|| clock.get(),
+        None,
     )
     .unwrap();
 
@@ -227,6 +230,7 @@ fn ac13_limit_stop_lists_open_and_disputed_findings() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(55), Stuck::Off, None),
         &|| clock.get(),
+        None,
     )
     .unwrap();
 
@@ -311,6 +315,7 @@ fn ac4a_human_input_wait_does_not_count_toward_deadline() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(10), Stuck::Off, None),
         &|| clock.get(),
+        None,
     )
     .unwrap();
 
@@ -351,6 +356,7 @@ fn ac4a_execution_past_the_deadline_still_trips() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(10), Stuck::Off, None),
         &|| clock.get(),
+        None,
     )
     .unwrap();
 

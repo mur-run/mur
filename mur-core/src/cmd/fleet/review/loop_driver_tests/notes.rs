@@ -135,6 +135,7 @@ fn run(t: &Notes, home: &std::path::Path, ch: &str) -> (Ledger, LoopDriverStop) 
         Duration::ZERO,
         limits(),
         &Instant::now,
+        None,
     )
     .unwrap()
 }
@@ -345,6 +346,7 @@ fn note_survives_transport_pause() {
         main: "main",
         reviewer: "reviewer",
         task: "task",
+        cwd: None,
     };
     continue_review_loop(
         &again,

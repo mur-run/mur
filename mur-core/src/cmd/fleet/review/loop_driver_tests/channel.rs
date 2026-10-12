@@ -37,6 +37,7 @@ fn channel_records_session_started_and_turn_sent() {
         Duration::ZERO,
         limits,
         &Instant::now,
+        None,
     )
     .unwrap();
     assert_eq!(stop, LoopDriverStop::Approve);
@@ -52,6 +53,7 @@ fn channel_records_session_started_and_turn_sent() {
                 stuck_ms: Some(600_000),
                 cost_usd_micros: Some(2_500_000),
             },
+            cwd: None,
         }
     );
     let turns: Vec<(u32, Role)> = payloads
@@ -121,6 +123,7 @@ fn round_cut_after_turn_sent_replays_to_live_ledger() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(10 * 60), Stuck::Off, None),
         &|| clock.get(),
+        None,
     )
     .unwrap();
     assert!(
@@ -183,6 +186,7 @@ fn every_session_event_verifies_under_one_writer() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
     assert!(
@@ -244,6 +248,7 @@ fn live_ledger_clears_binding_rulings_like_replay() {
             members: ["main".into(), "reviewer".into()],
             mode: Mode::Auto,
             limits: SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+            cwd: None,
         },
         sent(1, Role::Main),
         sent(1, Role::Reviewer),
@@ -287,6 +292,7 @@ fn live_ledger_clears_binding_rulings_like_replay() {
         main: "main",
         reviewer: "reviewer",
         task: "task",
+        cwd: None,
     };
     let (live, stop) = continue_review_loop(
         &transport,

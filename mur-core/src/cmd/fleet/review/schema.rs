@@ -247,6 +247,12 @@ pub enum ReviewPayload {
         members: [String; 2],
         mode: Mode,
         limits: SessionLimits,
+        /// #1777: the directory the session was started from, sent as
+        /// `context.cwd` on every turn so members work in that repository.
+        /// Absent on sessions recorded before it existed; those resume
+        /// without a cwd rather than guessing one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
     },
     TurnSent {
         round: u32,
@@ -422,6 +428,21 @@ mod tests {
 
     /// §4: `session_started` carries the resolved limits; "off" and "no cap"
     /// are explicit nulls, and lossy conversion only rounds a cap down.
+    /// #1777: a `session_started` written before `cwd` existed still reads,
+    /// as `None`; a `None` cwd is not written at all.
+    #[test]
+    fn session_started_without_cwd_reads_as_none() {
+        let old = serde_json::json!({
+            "type": "session_started",
+            "members": ["m", "r"],
+            "mode": "semi_auto",
+            "limits": {"deadline_ms": 60_000, "stuck_ms": null, "cost_usd_micros": null},
+        });
+        let p: ReviewPayload = serde_json::from_value(old.clone()).unwrap();
+        assert!(matches!(p, ReviewPayload::SessionStarted { cwd: None, .. }));
+        assert_eq!(serde_json::to_value(&p).unwrap(), old);
+    }
+
     #[test]
     fn session_limits_record_resolved_values() {
         let l = SessionLimits::new(
@@ -441,6 +462,7 @@ mod tests {
             members: ["m".into(), "r".into()],
             mode: Mode::Auto,
             limits: off,
+            cwd: None,
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(

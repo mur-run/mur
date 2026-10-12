@@ -52,6 +52,11 @@ pub struct Resumable {
     pub ledger: Ledger,
     pub round: u32,
     pub limits: SessionLimits,
+    /// #1777: the directory recorded in `session_started`. `None` for a
+    /// session recorded before it existed — resumed without a cwd, never
+    /// with a guessed one, so the same session behaves the same from any
+    /// shell.
+    pub cwd: Option<String>,
     /// Execution time already spent, paused time excluded (AC4).
     pub active: Duration,
     /// P3b-§8.7 / D10: the round being resumed already had a `turn_sent`
@@ -209,10 +214,10 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
     {
         bail!("review session '{name}' has already stopped");
     }
-    let limits = payloads
+    let (limits, cwd) = payloads
         .iter()
         .find_map(|p| match p {
-            ReviewPayload::SessionStarted { limits, .. } => Some(*limits),
+            ReviewPayload::SessionStarted { limits, cwd, .. } => Some((*limits, cwd.clone())),
             _ => None,
         })
         .context("the channel has no session_started event")?;
@@ -250,6 +255,7 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
         lock,
         ledger,
         limits,
+        cwd,
         active,
         restarts_round: restarts,
     })
@@ -326,6 +332,7 @@ pub fn resume_session(
         mut ledger,
         round,
         limits,
+        cwd,
         active,
         ..
     } = r;
@@ -341,6 +348,7 @@ pub fn resume_session(
         main: &fleet.members[0],
         reviewer: &fleet.members[1],
         task: &fleet.goal,
+        cwd: cwd.as_deref(),
     };
     let run = continue_review_loop(
         transport,

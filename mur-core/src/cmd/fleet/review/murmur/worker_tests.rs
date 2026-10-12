@@ -159,6 +159,7 @@ pub(super) fn fresh_with_dial(
         task: "the task".into(),
         limits: limits(),
         lock,
+        cwd: None,
     };
     let h = spawn_with_io(home.to_path_buf(), kind, req, done, dial, no_respond()).unwrap();
     (h, req_rx, done_rx, fleet)
@@ -463,6 +464,7 @@ fn resume_auto_mode_degrades_with_notice() {
         Duration::ZERO,
         limits(),
         &std::time::Instant::now,
+        None,
     )
     .unwrap();
     assert_eq!(run.1, LoopDriverStop::Stopped);

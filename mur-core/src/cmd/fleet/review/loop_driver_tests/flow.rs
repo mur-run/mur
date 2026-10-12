@@ -42,6 +42,7 @@ fn ac12_full_loop_runs_to_approve() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
 
@@ -115,6 +116,7 @@ fn main_receives_open_findings_from_round_two() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
     assert_eq!(stop, LoopDriverStop::Approve);
@@ -155,6 +157,7 @@ fn unissued_finding_id_blocks_without_poisoning_channel() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -194,6 +197,7 @@ fn fenced_verdict_inside_prose_is_accepted() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
     assert_eq!(stop, LoopDriverStop::Approve);
@@ -230,6 +234,7 @@ fn reviewer_task_failure_stops_as_task_failed_not_blocked() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -329,6 +334,7 @@ fn ac8_second_rejection_escalates_and_waits() {
         Duration::ZERO,
         SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
         &Instant::now,
+        None,
     )
     .unwrap();
 
