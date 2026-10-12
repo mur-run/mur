@@ -213,6 +213,7 @@ mod live_reload;
 mod system_prompt;
 mod truncation;
 mod turn_track;
+mod turn_track_target;
 
 /// Lives in `task_runner/tests/` so this file stops growing.
 mod sandbox_gate;

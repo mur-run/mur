@@ -90,6 +90,11 @@ impl SessionCwd {
         self.insert(id, original);
     }
 
+    /// `(project, track)` while turn `id` is inside a track, else `None`.
+    pub fn track_of(&self, id: &str) -> Option<(PathBuf, PathBuf)> {
+        self.read().tracks.get(id).cloned()
+    }
+
     /// The directory every conversation starts in (the agent home).
     pub fn home(&self) -> &Path {
         self.home.as_ref()
