@@ -145,6 +145,10 @@ impl BatchGate<'_> {
                     reason: decision.reason.clone().unwrap_or_default(),
                     surface: decision.surface.clone().unwrap_or_else(|| "unknown".into()),
                     issued_at: Some(chrono::Utc::now()),
+                    label: Some(mur_common::hitl::label::decision_label(
+                        &c.tool_name,
+                        &c.tool_input,
+                    )),
                 })
                 .await;
             }

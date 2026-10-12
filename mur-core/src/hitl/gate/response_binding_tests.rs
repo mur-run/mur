@@ -104,6 +104,7 @@ fn human_decides_at(
         reason: "test".into(),
         surface: "cli".into(),
         issued_at,
+        label: None,
     };
     append_router(
         home,

@@ -625,6 +625,7 @@ pub fn respond_hitl(
             reason: reason.to_string(),
             surface: "ios".into(),
             issued_at: Some(chrono::Utc::now()),
+            label: None,
         };
         crate::channel_writer::append_as_writer(
             &svc,

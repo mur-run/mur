@@ -3,12 +3,14 @@
 
 pub mod actions;
 pub mod agent;
+pub mod agent_hitl;
 pub mod murmur;
 pub mod notes;
 pub mod skill;
 
 pub use actions::*;
 pub use agent::*;
+pub use agent_hitl::AgentHitlAction;
 pub use skill::IntentAction;
 pub use skill::SkillAction;
 

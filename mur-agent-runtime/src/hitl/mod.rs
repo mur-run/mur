@@ -4,6 +4,7 @@
 
 pub mod authority;
 pub mod batch;
+pub mod remembered;
 pub mod shim_ticket;
 pub mod store;
 
