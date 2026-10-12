@@ -360,7 +360,6 @@ mod tests {
                 shim_trust: None,
             };
             let out = gate.resolve(vec![call("a")]).await;
-            drop(gate);
             drop(tx);
             let asked = answer.await.unwrap();
             assert_eq!(asked, !remember, "remember={remember}");
