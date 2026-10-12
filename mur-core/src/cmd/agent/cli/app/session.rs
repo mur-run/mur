@@ -4,6 +4,14 @@
 use super::*;
 
 impl App {
+    /// Empty the approval slot for a new conversation. A review member's
+    /// gate is not this conversation's: it stays up for the review.
+    fn clear_own_hitl(&mut self) {
+        if self.hitl_origin == crate::cmd::fleet::review::murmur::bridge::HitlOrigin::Own {
+            self.hitl = None;
+        }
+    }
+
     /// Reset to a brand-new conversation (drops server-side context). Any
     /// in-flight turn must already have been cancelled by the caller.
     pub fn start_new_session(&mut self, session: Session) {
@@ -17,7 +25,7 @@ impl App {
         self.context_task_id = None;
         self.current_task_id = None;
         self.streaming = false;
-        self.hitl = None;
+        self.clear_own_hitl();
         self.hitl_queue.clear();
         self.last_sent = None;
         self.last_esc_at = None;
@@ -42,7 +50,7 @@ impl App {
         self.context_task_id = None;
         self.current_task_id = None;
         self.streaming = false;
-        self.hitl = None;
+        self.clear_own_hitl();
         self.hitl_queue.clear();
         self.wants_screen_wipe = true;
         self.load_history(turns);

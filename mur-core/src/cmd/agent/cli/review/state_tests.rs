@@ -44,6 +44,8 @@ fn attach(app: &mut App, home: &Path, esc: ReviewEsc) {
         awaiting: None,
         closing: false,
         hint: Default::default(),
+        turn: Default::default(),
+        label: Default::default(),
     });
 }
 

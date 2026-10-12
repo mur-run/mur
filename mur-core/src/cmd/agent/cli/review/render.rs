@@ -1,12 +1,15 @@
 //! Text for the attached `/review` session (spec §3.4, §6.5).
 
+use chrono::{DateTime, Utc};
 use mur_common::channel::ChannelEvent;
 
 use super::state::ReviewSession;
+use crate::cmd::agent::cli::app::App;
+use crate::cmd::agent::cli::follow::fmt_elapsed;
 use crate::cmd::fleet::review::constants::{
-    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_NO_PAUSED, REVIEW_ROW_CRASHED, REVIEW_ROW_NO_LAST,
-    REVIEW_ROW_PAUSED, REVIEW_ROW_RESUMABLE, REVIEW_ROW_RUNNING, REVIEW_ROW_TIME_FORMAT,
-    REVIEW_USAGE_MURMUR,
+    REVIEW_FOOTER_HINT, REVIEW_LEFT_PAUSED_NOTICE, REVIEW_NO_PAUSED, REVIEW_ROW_CRASHED,
+    REVIEW_ROW_NO_LAST, REVIEW_ROW_PAUSED, REVIEW_ROW_RESUMABLE, REVIEW_ROW_RUNNING,
+    REVIEW_ROW_TIME_FORMAT, REVIEW_USAGE_MURMUR,
 };
 use crate::cmd::fleet::review::murmur::bridge::Outcome;
 use crate::cmd::fleet::review::resume::PausedRow;
@@ -96,4 +99,63 @@ pub fn finished_block(o: &Outcome) -> String {
         Outcome::LeftPaused => REVIEW_LEFT_PAUSED_NOTICE.to_string(),
         Outcome::Err(e) => e.clone(),
     }
+}
+
+/// §6.5: the footer label's inputs, folded from `turn_sent` and the
+/// cumulative usage already on the channel. No new event kind.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LabelFacts {
+    /// When the first `turn_sent` was ledgered; `None` before any send.
+    pub first_sent: Option<DateTime<Utc>>,
+    /// Highest cumulative cost seen. A lower bound: aborted turns are never
+    /// ledgered (§13).
+    pub cost_micros: u64,
+}
+
+impl LabelFacts {
+    pub fn from_events(events: &[ChannelEvent]) -> Self {
+        let mut facts = Self::default();
+        for ev in events {
+            let NoteClassification::Review(env) = classify_note_payload(&ev.payload) else {
+                continue;
+            };
+            if matches!(env.payload, ReviewPayload::TurnSent { .. }) {
+                facts.first_sent = Some(facts.first_sent.map_or(ev.ts, |t| t.min(ev.ts)));
+            }
+            if let Some(c) = cumulative_of(&env.payload) {
+                facts.cost_micros = facts.cost_micros.max(c.cost_usd_micros);
+            }
+        }
+        facts
+    }
+}
+
+/// `review <name> · <elapsed> · ≥ $x`; the elapsed part only once a turn
+/// has been sent.
+pub fn review_label(name: &str, facts: &LabelFacts, now: DateTime<Utc>) -> String {
+    let mut out = format!("review {name}");
+    if let Some(t0) = facts.first_sent {
+        out.push_str(&format!(
+            " · {}",
+            fmt_elapsed(now.signed_duration_since(t0))
+        ));
+    }
+    out.push_str(&format!(
+        " · ≥ ${:.2}",
+        facts.cost_micros as f64 / MICROS_PER_USD
+    ));
+    out
+}
+
+/// The status bar's right hint for an attached session (AC-P3b-23): the
+/// urgent review state first, else the plain Esc hint. `None` when detached.
+pub fn footer_right_hint(app: &App) -> Option<&'static str> {
+    app.review.as_ref()?;
+    Some(super::keys::footer_hint(app).unwrap_or(REVIEW_FOOTER_HINT))
+}
+
+/// The status bar's left label for an attached session (§6.5).
+pub fn footer_label(app: &App) -> Option<String> {
+    let s = app.review.as_ref()?;
+    Some(review_label(&s.name, &s.label, Utc::now()))
 }

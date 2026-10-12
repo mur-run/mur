@@ -36,7 +36,6 @@ pub mod schema;
 pub mod session;
 pub mod settle;
 pub mod state;
-#[allow(dead_code)] // wired in PR 4 (Task 8): the transport commits (PR 3); the UI's Esc×2 aborts
 pub mod turn_cell;
 pub mod verdict;
 pub mod wire;

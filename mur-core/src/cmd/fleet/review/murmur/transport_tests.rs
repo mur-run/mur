@@ -15,12 +15,6 @@ use super::super::turn_cell::TurnState;
 use super::bridge::{DriverReq, ReviewFlags};
 use super::transport::{DialFn, MurmurTransport, RespondFn};
 
-const MEMBERS: [&str; 2] = ["main-x", "rev-x"];
-
-fn members() -> [String; 2] {
-    MEMBERS.map(String::from)
-}
-
 fn task(reply: &str) -> serde_json::Value {
     json!({"state": "completed", "messages": [
         {"role": "agent", "parts": [{"text": reply}]}]})
@@ -43,7 +37,6 @@ fn transport(dial: DialFn, respond: RespondFn) -> (MurmurTransport, Receiver<Dri
         std::env::temp_dir(),
         tx,
         ReviewFlags::default(),
-        members(),
         dial,
         respond,
     );
@@ -83,8 +76,27 @@ fn confirm_forwards_the_answer_and_marks_turn_boundaries() {
     ui.join().unwrap();
     assert_eq!(
         *seen.lock().unwrap(),
-        ["Confirm", "TurnStarted", "TurnEnded"]
+        ["Confirm", "TurnStarted", "TurnEnded", "Show"]
     );
+}
+
+/// The reply reaches the transcript, in TerminalGate's format, after the turn
+/// ends — MURMUR shows what the stdin path shows (`session.rs` TerminalGate).
+#[test]
+fn send_shows_the_reply_after_turn_ended() {
+    let (t, rx) = transport(dial_ok("R"), no_respond());
+    let ui = std::thread::spawn(move || rx.iter().collect::<Vec<_>>());
+    assert_eq!(t.send("main-x", &json!({})).unwrap(), "R");
+    drop(t);
+    let reqs = ui.join().unwrap();
+    assert_eq!(
+        reqs.iter().map(tag).collect::<Vec<_>>(),
+        ["TurnStarted", "TurnEnded", "Show"]
+    );
+    let DriverReq::Show(text) = &reqs[2] else {
+        unreachable!()
+    };
+    assert_eq!(text, "\n--- reply from main-x ---\nR\n\n");
 }
 
 #[test]
@@ -171,6 +183,44 @@ fn send_aborted_cell_yields_turn_committed_false() {
     t.send("main-x", &json!({})).unwrap();
     assert!(!t.turn_committed());
     assert_eq!(ui.join().unwrap().state(), TurnState::Aborted);
+}
+
+/// An aborted turn's reply is discarded by the driver, so it is never shown.
+#[test]
+fn send_aborted_turn_shows_no_reply() {
+    let (go_tx, go_rx) = channel::<()>();
+    let go_rx = Mutex::new(go_rx);
+    let dial: DialFn = Arc::new(move |_, _, _, _, _| {
+        go_rx.lock().unwrap().recv().unwrap();
+        Ok(task("REPLY-X"))
+    });
+    let (t, rx) = transport(dial, no_respond());
+    let ui = std::thread::spawn(move || {
+        let first = rx.recv().unwrap();
+        let DriverReq::TurnStarted { turn, .. } = &first else {
+            panic!("expected TurnStarted");
+        };
+        assert!(turn.abort());
+        go_tx.send(()).unwrap();
+        std::iter::once(first)
+            .chain(rx.iter())
+            .map(|r| tag(&r))
+            .collect::<Vec<_>>()
+    });
+    t.send("main-x", &json!({})).unwrap();
+    drop(t);
+    assert_eq!(ui.join().unwrap(), ["TurnStarted", "TurnEnded"]);
+}
+
+/// A failed dial has no reply to show.
+#[test]
+fn send_error_shows_no_reply() {
+    let dial: DialFn = Arc::new(|_, _, _, _, _| Err(anyhow::anyhow!("dial down")));
+    let (t, rx) = transport(dial, no_respond());
+    let ui = std::thread::spawn(move || rx.iter().map(|r| tag(&r)).collect::<Vec<_>>());
+    assert!(t.send("main-x", &json!({})).is_err());
+    drop(t);
+    assert_eq!(ui.join().unwrap(), ["TurnStarted", "TurnEnded"]);
 }
 
 #[test]

@@ -15,6 +15,9 @@ pub enum EscAction {
     RequestPause,
     /// P3b-§6.1: second Esc inside the window — abort the in-flight turn.
     AbortTurn,
+    /// P3b-§7.1 / §8.4: second Esc at the ruling or resume prompt — answer
+    /// it as EOF (ruling: `""`; resume: leave paused, lock released).
+    DismissPrompt,
 }
 
 /// Where a MURMUR-hosted review session stands, as far as Esc cares
@@ -25,8 +28,9 @@ pub enum ReviewEsc {
     #[default]
     Detached,
     AwaitingConfirm,
-    #[allow(dead_code)] // wired in PR 4 (Task 8)
     TurnInFlight,
+    /// The ruling prompt (§7.1) or `Paused — continue?` (§8.4).
+    AwaitingAnswer,
 }
 
 /// Pure function — no wall-clock calls, fully testable.
@@ -52,6 +56,13 @@ pub fn esc_action(
             (false, false) => EscAction::Arm,
             (_, true) => EscAction::Nothing,
         },
+        ReviewEsc::AwaitingAnswer => {
+            if within_window(last_esc_at) {
+                EscAction::DismissPrompt
+            } else {
+                EscAction::Arm
+            }
+        }
     }
 }
 

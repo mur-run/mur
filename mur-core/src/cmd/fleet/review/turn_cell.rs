@@ -11,6 +11,8 @@ const ABORTED: u8 = 1;
 const COMMITTED: u8 = 2;
 
 /// Where one member turn stands.
+/// Read by tests only; production code acts on the CAS results.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnState {
     InFlight,
@@ -34,6 +36,7 @@ impl TurnCell {
         self.settle(COMMITTED)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn state(&self) -> TurnState {
         match self.0.load(Ordering::Acquire) {
             ABORTED => TurnState::Aborted,

@@ -41,12 +41,7 @@ pub enum StartKind {
 pub struct WorkerHandle {
     /// Join before taking the run lock again: the lock drops as the thread ends.
     pub join: JoinHandle<()>,
-    #[allow(dead_code)] // wired in PR 4 (Task 8): Esc×1 sets `pause_requested`
     pub flags: ReviewFlags,
-    // No reader: `ReviewSession::name` is what the UI shows. Remove in T12
-    // unless a task gives it one.
-    #[allow(dead_code)]
-    pub name: String,
     pub members: [String; 2],
 }
 
@@ -79,13 +74,12 @@ pub fn spawn_with_io(
         [fleet.members[0].clone(), fleet.members[1].clone()],
     );
     let flags = ReviewFlags::default();
-    let transport = (flags.clone(), members.clone());
+    let worker_flags = flags.clone();
     let join = std::thread::Builder::new()
         .name(format!("review-{name}"))
         .spawn(move || {
-            let (flags, members) = transport;
             let transport =
-                MurmurTransport::with_io(mur_home.clone(), req, flags, members, dial, respond);
+                MurmurTransport::with_io(mur_home.clone(), req, worker_flags, dial, respond);
             // A panic in the loop must still end the session on the UI side.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run(&transport, &mur_home, kind)
@@ -96,7 +90,6 @@ pub fn spawn_with_io(
     Ok(WorkerHandle {
         join,
         flags,
-        name,
         members,
     })
 }

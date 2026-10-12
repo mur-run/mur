@@ -87,13 +87,14 @@ fn attach(app: &mut App, gate: bool) {
         handle: Some(WorkerHandle {
             join: std::thread::spawn(|| {}),
             flags: Default::default(),
-            name: "review-ab130001".into(),
             members: members(),
         }),
         esc: ReviewEsc::AwaitingConfirm,
         awaiting,
         closing: false,
         hint: InlineHint::default(),
+        turn: Default::default(),
+        label: Default::default(),
     });
 }
 

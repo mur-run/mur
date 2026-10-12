@@ -83,6 +83,9 @@ pub struct Current {
     /// Short id of the channel being live-tailed; the `--stop`
     /// row only exists while this is set.
     pub following: Option<String>,
+    /// P3b-§7.1: the open finding IDs while the ruling prompt waits; the
+    /// only time `/rule` has rows.
+    pub open_findings: Vec<String>,
 }
 
 impl Default for Current {
@@ -94,6 +97,7 @@ impl Default for Current {
             skin: "ansi",
             active_channel: None,
             following: None,
+            open_findings: Vec::new(),
         }
     }
 }
@@ -212,6 +216,27 @@ fn review_rows(input: &str, rest: &str, ctx: &MenuContext) -> Vec<Candidate> {
     let rows = ctx.agents.iter().map(|name| Candidate {
         display: name.clone(),
         insert: format!("{line}{name} "),
+        desc: String::new(),
+        has_children: false,
+    });
+    filter(rows.collect(), word)
+}
+
+const RULE: &str = "rule";
+
+/// `/rule drop|fix <id>` rows (P3b-§7.1): the open finding IDs, offered only
+/// as the word after the decision and only while a ruling is awaited.
+fn rule_rows(input: &str, rest: &str, cur: &Current) -> Vec<Candidate> {
+    use crate::cmd::fleet::review::constants::{RULE_DECISION_DROP, RULE_DECISION_FIX};
+    let word = rest.rsplit(char::is_whitespace).next().unwrap_or("");
+    let head: Vec<&str> = rest[..rest.len() - word.len()].split_whitespace().collect();
+    if !matches!(head.as_slice(), [RULE_DECISION_DROP | RULE_DECISION_FIX]) {
+        return Vec::new();
+    }
+    let line = &input[..input.len() - word.len()];
+    let rows = cur.open_findings.iter().map(|id| Candidate {
+        display: id.clone(),
+        insert: format!("{line}{id} "),
         desc: String::new(),
         has_children: false,
     });
@@ -570,6 +595,7 @@ pub fn compute(
         None => (filter(build_top_level(skills, ctx, cur), after), None),
         // Command word complete → maybe an argument layer.
         Some(("review", rest)) => (review_rows(input, rest, ctx), None),
+        Some((RULE, rest)) => (rule_rows(input, rest, cur), None),
         Some((cmd, rest)) => {
             // A second whitespace means we're typing an arg past layer 2 —
             // only a recent channel row has a third layer.

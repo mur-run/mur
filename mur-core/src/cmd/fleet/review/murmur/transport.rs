@@ -64,10 +64,6 @@ pub struct MurmurTransport {
     pub mur_home: PathBuf,
     pub req: Sender<DriverReq>,
     pub flags: ReviewFlags,
-    // No reader in this crate and none in the plan's Tasks 8–12; the UI side
-    // takes members from `WorkerHandle`. Remove or give it a reader in T12.
-    #[allow(dead_code)]
-    pub members: [String; 2],
     dial: DialFn,
     respond: RespondFn,
     last_committed: AtomicBool,
@@ -79,26 +75,12 @@ pub struct MurmurTransport {
 }
 
 impl MurmurTransport {
-    /// The real transport: A2A over `mur_home`.
-    // Unused: `spawn_review_worker` builds the real edges itself and calls
-    // `with_io`. Remove or route the worker through it in T12.
-    #[allow(dead_code)]
-    pub fn new(
-        mur_home: PathBuf,
-        req: Sender<DriverReq>,
-        flags: ReviewFlags,
-        members: [String; 2],
-    ) -> Self {
-        let (dial, respond) = real_io(&mur_home);
-        Self::with_io(mur_home, req, flags, members, dial, respond)
-    }
-
-    /// Same, with the network edges injected.
+    /// Build a transport over the given network edges. The worker passes
+    /// `real_io(&mur_home)`; tests inject their own.
     pub fn with_io(
         mur_home: PathBuf,
         req: Sender<DriverReq>,
         flags: ReviewFlags,
-        members: [String; 2],
         dial: DialFn,
         respond: RespondFn,
     ) -> Self {
@@ -106,7 +88,6 @@ impl MurmurTransport {
             mur_home,
             req,
             flags,
-            members,
             dial,
             respond,
             last_committed: AtomicBool::new(true),
@@ -182,10 +163,18 @@ impl ReviewTransport for MurmurTransport {
         )
         .and_then(|task| task_reply(member, &task, streamed));
         // Settle the turn BEFORE telling the UI it ended (P3b-§6.3 step 4/6).
-        self.last_committed.store(cell.commit(), Ordering::Release);
+        let committed = cell.commit();
+        self.last_committed.store(committed, Ordering::Release);
         let _ = self.req.send(DriverReq::TurnEnded {
             member: member.to_string(),
         });
+        // Same transcript block as the stdin TerminalGate. An aborted turn's
+        // reply is discarded by the driver (P3b-§6.3), so it is not shown.
+        if let (true, Ok(reply)) = (committed, &result) {
+            let _ = self.req.send(DriverReq::Show(format!(
+                "\n--- reply from {member} ---\n{reply}\n\n"
+            )));
+        }
         result
     }
 
@@ -195,6 +184,10 @@ impl ReviewTransport for MurmurTransport {
         params: &serde_json::Value,
         open: &BTreeSet<String>,
     ) -> Result<SendAnswer> {
+        if self.flags.detach_requested.load(Ordering::Acquire) {
+            self.set_pause(PauseKind::Detached);
+            return Ok(SendAnswer::Stop);
+        }
         if self.flags.pause_requested.load(Ordering::Acquire) {
             self.set_pause(PauseKind::User);
             return Ok(SendAnswer::Stop);

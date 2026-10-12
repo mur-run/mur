@@ -383,3 +383,32 @@ async fn finish(app: &mut App, rx: &mut tokio::sync::mpsc::Receiver<StreamMsg>) 
     let s = app.review.take().expect("attached");
     s.handle.expect("spawned").join.join().unwrap();
 }
+
+/// AC-P3b-28 / §8 step 4: Esc ×2 at `Paused — continue?` drops the
+/// `Resumable`, so the lock is free for a fresh caller; nothing is spawned.
+#[tokio::test]
+async fn resume_confirm_esc_twice_releases_lock() {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    let esc = || {
+        Event::Key(KeyEvent {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    };
+    let tmp = home();
+    let h = tmp.path();
+    let ch = resumable(h, PAUSED);
+    let mut app = app_at(h);
+    handle(&mut app, &format!("resume {PAUSED}"), &tx()).await;
+
+    crate::cmd::agent::cli::events::handle_event(&mut app, esc(), &tx()).await;
+    assert!(app.review.is_some(), "Esc ×1 only arms");
+    assert!(!lock_is_free(h, &ch));
+    crate::cmd::agent::cli::events::handle_event(&mut app, esc(), &tx()).await;
+
+    assert!(app.review.is_none());
+    assert_eq!(system_lines(&app).last(), Some(&REVIEW_LEFT_PAUSED_NOTICE));
+    assert!(lock_is_free(h, &ch));
+}
