@@ -146,6 +146,7 @@ async fn drift_denies_fail_closed() {
         reason: "".into(),
         surface: "cli".into(),
         issued_at: Some(chrono::Utc::now()),
+        label: None,
     };
     // Router-signed, so it reaches the hash check: an unsigned one would
     // be ignored and the test would time out instead of drifting.
@@ -195,6 +196,7 @@ fn resp_with_hash(hitl_id: &str, hash: &str) -> HitlResponse {
         reason: "".into(),
         surface: "cli".into(),
         issued_at: Some(chrono::Utc::now()),
+        label: None,
     }
 }
 
@@ -435,6 +437,7 @@ fn answer(home: &Path, ch: &str, hitl_id: &str, allow: bool) {
         reason: "test".into(),
         surface: "cli".into(),
         issued_at: Some(chrono::Utc::now()),
+        label: None,
     };
     crate::channel_writer::append_as_writer(
         &svc,

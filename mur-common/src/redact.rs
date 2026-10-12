@@ -115,3 +115,114 @@ pub fn redact_value(value: &mut serde_json::Value) {
         serde_json::Value::Bool(_) | serde_json::Value::Number(_) | serde_json::Value::Null => {}
     }
 }
+
+/// Mask credential *fields* whatever the value's length or shape.
+///
+/// [`redact_secrets`] recognises secrets by their shape (a provider prefix, a
+/// JWT, a 20+ char `.env` value). A short password has no shape, so
+/// `password=hunter2` passes it untouched. This pass keys on the field name
+/// instead: a value attached to a credential-looking key, a `Bearer` token, a
+/// credential CLI flag, or URL userinfo is replaced outright.
+///
+/// Deliberately NOT folded into [`redact_secrets`]: that function feeds every
+/// telemetry and capture writer, and key-name masking over-redacts ordinary
+/// log text (`tokens: 1200`). Writers whose output is permanent and small —
+/// a signed HITL decision label — call both.
+pub fn redact_credentials(input: &str) -> std::borrow::Cow<'_, str> {
+    use regex_lite::Regex;
+    use std::borrow::Cow;
+    use std::sync::OnceLock;
+
+    /// Key-name stems that mark a credential field. A stem matches inside a
+    /// longer key (`x_api_key`, `GITHUB_TOKEN`), which over-redacts on purpose.
+    const STEMS: &str = r"(?:api[_-]?key|token|secret|password|passwd|pwd|authorization|private[_-]?key|credentials?|cookie)";
+
+    static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        vec![
+            // `Bearer abc` / `Basic abc` — before the key rule, so
+            // `Authorization: Bearer abc` loses the token, not just "Bearer".
+            (
+                Regex::new(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+").unwrap(),
+                "$1 [REDACTED]",
+            ),
+            // `scheme://user:pass@host`
+            (
+                Regex::new(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@:]+:[^/\s@]*@").unwrap(),
+                "${1}[REDACTED]@",
+            ),
+            // `--password hunter2`, `-token=abc`
+            (
+                Regex::new(&format!(r"(?i)(--?[A-Za-z0-9_-]*{STEMS}[A-Za-z0-9_-]*)(\s+|=)[^\s-]\S*"))
+                    .unwrap(),
+                "$1$2[REDACTED]",
+            ),
+            // `password=hunter2`, `"token": "abc"`, `API_KEY: abc`
+            (
+                Regex::new(&format!(
+                    r#"(?i)([A-Za-z0-9_-]*{STEMS}[A-Za-z0-9_-]*["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&]+)"#
+                ))
+                .unwrap(),
+                "${1}[REDACTED]",
+            ),
+        ]
+    });
+
+    let mut out: Cow<'_, str> = Cow::Borrowed(input);
+    for (rx, rep) in patterns {
+        if rx.is_match(&out) {
+            out = Cow::Owned(rx.replace_all(&out, *rep).into_owned());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::redact_credentials;
+
+    #[track_caller]
+    fn masked(input: &str, secret: &str) {
+        let out = redact_credentials(input);
+        assert!(!out.contains(secret), "{secret:?} leaked: {out:?}");
+        assert!(out.contains("[REDACTED]"), "nothing masked: {out:?}");
+    }
+
+    #[test]
+    fn short_values_on_credential_keys_are_masked() {
+        masked("password=hunter2", "hunter2");
+        masked("PWD: x1", "x1");
+        masked("token: abc", "abc");
+        masked(r#"{"api_key": "k9"}"#, "k9");
+        masked("export GITHUB_TOKEN='s3 cr3t'", "s3 cr3t");
+        masked("db_password = pa55;", "pa55");
+    }
+
+    #[test]
+    fn auth_headers_and_flags_are_masked() {
+        masked("curl -H 'Authorization: Bearer abc.def'", "abc.def");
+        masked("Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz");
+        masked("mysql --password hunter2 db", "hunter2");
+        masked("tool -api-key=zz9", "zz9");
+    }
+
+    #[test]
+    fn url_userinfo_is_masked() {
+        masked("git clone https://bob:pa55@example.com/r.git", "pa55");
+        masked("postgres://admin:hunter2@db:5432/x", "hunter2");
+    }
+
+    #[test]
+    fn ordinary_text_is_borrowed() {
+        for s in [
+            "cargo test -p mur-core",
+            "~/proj/Cargo.toml",
+            "https://example.com/a",
+        ] {
+            assert!(
+                matches!(redact_credentials(s), std::borrow::Cow::Borrowed(_)),
+                "{s}"
+            );
+        }
+    }
+}

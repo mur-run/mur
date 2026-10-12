@@ -250,6 +250,14 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
                 env.push((key.to_string(), val));
             }
         }
+        // Turn track: exec-granted CARGO_TARGET_DIR (+ warm clone). Before the vault so a user secret wins.
+        let (target, warm_note) = super::bash_track::prepare_current_turn(
+            &self.session_cwd,
+            self.agent.as_ref(),
+            &command,
+        )
+        .await;
+        env.extend(target);
         // Values leave the vault only here, straight into the child's
         // environment. The model never sees them: the pump masks every chunk
         // before it reaches the tail or the spool (D10).
@@ -293,7 +301,8 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             .poll(&job_id, std::time::Duration::from_secs(timeout_secs))
             .await
             .map_err(|e| ToolError::Execution(e.to_string()))?;
-        Ok(self.finish_poll(poll, &working_dir, false))
+        let out = self.finish_poll(poll, &working_dir, false);
+        Ok(super::bash_track::with_note(out, warm_note))
     }
 }
 

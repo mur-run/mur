@@ -254,6 +254,7 @@ pub async fn gate(
                     reason: why.clone(),
                     surface: if policy.yes { "auto" } else { "policy" }.into(),
                     issued_at: Some(chrono::Utc::now()),
+                    label: None,
                 };
                 {
                     let svc = ChannelService::open(mur_home)?;

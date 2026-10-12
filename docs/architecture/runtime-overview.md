@@ -129,6 +129,10 @@ Manage `~/.mur/models.yaml` (provider/model/secret-ref registry). `migrate` walk
 
 OS-keychain CRUD for an agent's secrets (account format `{agent}/{KEY}`, service `mur-agent`). `set` uses a hidden prompt via `rpassword` when no inline value is given.
 
+### `mur agent hitl {list|forget}`
+
+Gate B remembers each chat-turn approval answer for `APPROVAL_TTL_SECS` (7 days) as a signed `HitlResponse` in the agent's decision channel, and replays it instead of asking. `list` shows what is being replayed (verdict, a redacted tool/target label, age, expiry); `forget <hash-prefix>` or `forget --all` makes the agent ask again. Both are A2A methods (`hitl/list`, `hitl/forget`, proto 3) served by the running runtime, because a revocation is a signed `Note` appended with the agent key — nothing is deleted from the log (#1770). A revocation cancels covered decisions not newer than it; one recorded later stands. The label is built by `mur_common::hitl::label` from an allowlisted field per tool, redacted before it is truncated; decisions recorded before #1806 list as hash only.
+
 ### `mur agent companion <subcommand>`
 
 Manage the companion subsystem for an agent (Phase 1.1):
@@ -561,7 +565,7 @@ LanceDB vector index is always rebuildable via `mur internals reindex`.
 
 ## `mur agent` — full surface notes
 
-`mur agent <subcommand>` — manage murmur agents (create / list / status / send / card / dial / cli / export / doctor / prompt / mcp / skill / perm / secret / companion / rekey / schedule).
+`mur agent <subcommand>` — manage murmur agents (create / list / status / send / card / dial / cli / export / doctor / prompt / mcp / skill / perm / secret / hitl / companion / rekey / schedule).
 
 - `cli <name>...` opens an interactive streaming TUI chat with a running agent (`--resume` to continue the last conversation). In-session slash commands:
   - `/channels [N]` (list/switch channels), `/sessions`

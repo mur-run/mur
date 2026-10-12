@@ -409,6 +409,13 @@ pub enum AgentAction {
         #[arg(long)]
         yes: bool,
     },
+    /// See or forget the approval decisions an agent remembers (list/forget)
+    Hitl {
+        /// Agent name
+        agent: String,
+        #[command(subcommand)]
+        action: super::agent_hitl::AgentHitlAction,
+    },
     /// Manage an agent's keychain-backed secrets (set/list/delete)
     Secret {
         /// Agent name

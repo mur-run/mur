@@ -38,6 +38,34 @@ cargo nextest run -p mur-core --lib -E 'test(/fleet::review::/)'   # one area
   Arrow into every agent process). Shared on-disk state goes in its own small
   crate below both — see the Architecture section of `CLAUDE.md`.
 
+## Per-turn build dirs (turn tracks)
+
+An agent turn that runs in a turn track builds into its own target dir,
+`target/turns/<track>/` (`CARGO_TARGET_DIR` is exported only when the track
+root has a `Cargo.toml`). The first `cargo` command of the turn clones the
+main target's `<profile>/{deps,build,.fingerprint}` dirs into it (APFS
+`clonefile`, a plain copy elsewhere), so most crates come up `Fresh`.
+Each profile's `incremental` dir and final binaries are skipped: they are path-keyed and
+useless in a track. The clone needs no extra build — it only reuses what the
+main target already finished, so a build script that never completed there
+still runs in the turn.
+
+- The clone is skipped (the build runs cold) when free disk is under
+  `min_free_gib`, or on any clone error. Orphan turn dirs are swept first.
+- `cargo clean` deletes every turn dir too; a live turn's next build is cold.
+- Tune or disable it in `~/.mur/config.yaml`:
+
+```yaml
+turn_track:
+  warm_build_cache:
+    enabled: true             # false = every turn builds cold
+    triggers: [cargo]         # first word of a command that triggers the clone
+    cache_dirs: [target]      # project-relative build-cache dirs
+    skip_subdirs: [incremental]
+    min_free_gib: 20
+    turn_target_subdir: turns # target/<this>/<track>/
+```
+
 ## Build profiles
 
 - `Cargo.toml` `[profile.dev]` is CI-tuned: `debug = 0`, `incremental = false`.

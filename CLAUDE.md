@@ -46,7 +46,7 @@ One line each. Full flags, safety rules, and rationale are in
 changing any of these.
 
 - `mur verify [--file path] [--all]` — scan docs for stale claims (paths, commands, code refs).
-- `mur agent <sub>` — create / list / status / send / card / dial / cli / export / doctor / prompt / mcp / skill / perm / secret / companion / rekey / schedule. `murmur` is the quick form of `mur agent cli`; bare `murmur` opens the concierge. `dial` is the passthrough escape hatch for A2A methods without a wrapper.
+- `mur agent <sub>` — create / list / status / send / card / dial / cli / export / doctor / prompt / mcp / skill / perm / secret / hitl / companion / rekey / schedule. `murmur` is the quick form of `mur agent cli`; bare `murmur` opens the concierge. `dial` is the passthrough escape hatch for A2A methods without a wrapper.
 - `mur fleet {create|list|show|status|run|stop|start|export|import|partition-plan|merge}` — squads over one signed channel. **Safety triad, do not weaken:** unattended autorun OFF unless `MUR_FLEET_AUTORUN=1`; autorun requires resolvable `limits:`; `mur fleet stop` is the kill-switch. Unattended HITL **defers, never times out**, matched on `action_hash`.
 - `mur limits <name>` / `mur fleet limits` / `mur agent limits` — the three execution knobs per scope (deadline / stuck / cost_usd). Iteration caps and token budgets are gone.
 - `mur model {connect|import|add|list|show|remove|migrate|prices|role|doctor}` — `~/.mur/models.yaml` registry. `doctor` is offline, read-only, warn-only, and never rewrites a model id.

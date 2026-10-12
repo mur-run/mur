@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod approval_token;
+pub mod label;
 pub mod pin;
 pub mod signed_time;
 
@@ -224,6 +225,59 @@ pub struct HitlResponse {
     /// [`HitlRequest::issued_at`]. `None` (an older writer) settles nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issued_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// What was decided, for `mur agent hitl list` (#1806): tool name plus a
+    /// redacted, truncated summary built by [`label::decision_label`]. It is
+    /// written into a signed append-only log, so it must never carry raw
+    /// input. `None` = an older writer, or a surface that has no tool call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// `message/send`-style A2A methods for gate B's remembered decisions (#1806).
+pub const HITL_LIST_METHOD: &str = "hitl/list";
+pub const HITL_FORGET_METHOD: &str = "hitl/forget";
+
+/// Key inside an `EventKind::Note` payload that marks a gate-B revocation.
+/// A `Note` rather than a new `EventKind` so a reader built before #1806
+/// still parses the channel (an unknown kind would fail the whole line).
+pub const REVOCATION_PAYLOAD_KEY: &str = "hitl_revocation";
+
+/// Which remembered decisions a revocation covers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "scope", content = "action_hash")]
+pub enum RevocationScope {
+    One(String),
+    All,
+}
+
+/// A signed "forget": every decision covered by `scope` whose signed
+/// `issued_at` is not after this one's `issued_at` stops settling the gate.
+/// Nothing is deleted — the log stays append-only (#1770).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HitlRevocation {
+    #[serde(flatten)]
+    pub scope: RevocationScope,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl HitlRevocation {
+    pub fn to_payload(&self) -> serde_json::Value {
+        serde_json::json!({ REVOCATION_PAYLOAD_KEY: self })
+    }
+
+    /// `None` = not a revocation note (or a malformed one, which revokes
+    /// nothing — the safe reading is "still remembered", and the gate asked
+    /// when that decision was recorded).
+    pub fn from_payload(payload: &serde_json::Value) -> Option<Self> {
+        serde_json::from_value(payload.get(REVOCATION_PAYLOAD_KEY)?.clone()).ok()
+    }
+
+    pub fn covers(&self, action_hash: &str) -> bool {
+        match &self.scope {
+            RevocationScope::All => true,
+            RevocationScope::One(h) => h == action_hash,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -351,5 +405,34 @@ mod tests {
         assert!(y.contains("continue"), "got {y}");
         let back: Autonomy = serde_yaml::from_str("review").unwrap();
         assert_eq!(back, Autonomy::Review);
+    }
+
+    #[test]
+    fn revocation_payload_round_trips_and_ignores_other_notes() {
+        let at = chrono::Utc::now();
+        for scope in [RevocationScope::All, RevocationScope::One("abc".into())] {
+            let r = HitlRevocation {
+                scope: scope.clone(),
+                issued_at: at,
+            };
+            let back = HitlRevocation::from_payload(&r.to_payload()).expect("round trip");
+            assert_eq!(back.scope, scope);
+            assert_eq!(back.issued_at, at);
+        }
+        let one = HitlRevocation {
+            scope: RevocationScope::One("abc".into()),
+            issued_at: at,
+        };
+        assert!(one.covers("abc") && !one.covers("abd"));
+        assert!(HitlRevocation::from_payload(&serde_json::json!({"review": {}})).is_none());
+        assert!(HitlRevocation::from_payload(&serde_json::json!({"hitl_revocation": 1})).is_none());
+    }
+
+    #[test]
+    fn a_response_without_label_still_parses() {
+        let v = serde_json::json!({"hitl_id": "h", "action_hash": "a", "allow": true, "surface": "hub"});
+        let r: HitlResponse = serde_json::from_value(v).unwrap();
+        assert!(r.label.is_none());
+        assert!(!serde_json::to_string(&r).unwrap().contains("label"));
     }
 }

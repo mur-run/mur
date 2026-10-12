@@ -40,6 +40,7 @@ async fn forge_allow(home: &std::path::Path) -> Arc<dyn DecisionStore> {
             reason: String::new(),
             surface: "hub".into(),
             issued_at: Some(chrono::Utc::now()),
+            label: None,
         })
         .await;
 
