@@ -6,8 +6,6 @@
 
 pub(super) use mur_common::hitl::dest::*;
 
-use mur_common::hitl::RiskTier;
-
 /// What "don't ask again" would actually buy for one gated call.
 ///
 /// The modal used to offer that row unconditionally and key it on the tool
