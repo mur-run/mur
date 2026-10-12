@@ -4,6 +4,7 @@
 //! `mur agent runtime-doctor` reads). No real model: a scripted LLM stands in,
 //! so these run in CI and pin what the manual E2E for #1788 checked by hand.
 
+use mur_agent_runtime::hitl::HitlApprovals;
 use mur_agent_runtime::live_profile::LiveSettings;
 use mur_agent_runtime::llm::stub::SequenceLlm;
 use mur_agent_runtime::llm::{LlmResponse, RequestIntent, StopReason};
@@ -11,6 +12,7 @@ use mur_agent_runtime::scheduler::CronScheduler;
 use mur_agent_runtime::task_runner::{TaskOutcome, TaskRunner, TaskSpec};
 use mur_common::a2a::{Message, MessagePart};
 use mur_common::agent::{RELOAD_STATE_FILE, ReloadState};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -118,10 +120,15 @@ fn stopped_by(out: TaskOutcome) -> Option<String> {
 
 /// One long-lived runner, as in a running agent — the same instance must see
 /// the edit, not a freshly built one.
+///
+/// Pending approvals route the turn through the agentic loop — the path a
+/// real agent takes and the only one that resolves `limits:` into bounds.
 fn runner(live: Arc<LiveSettings>) -> Arc<TaskRunner> {
-    let r = Arc::new(TaskRunner::with_llm(Arc::new(SequenceLlm::new(vec![
-        end_turn(),
-    ]))));
+    let approvals: HitlApprovals = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    let r = Arc::new(
+        TaskRunner::with_llm(Arc::new(SequenceLlm::new(vec![end_turn()])))
+            .with_pending_approvals(approvals),
+    );
     r.attach_live(live);
     r
 }

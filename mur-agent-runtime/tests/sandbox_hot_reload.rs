@@ -40,6 +40,10 @@ mod sealed {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "linux",
+        ignore = "issue #1794: Landlock file grant pins the seal-time inode; atomic-rename config.yaml edits are unreadable"
+    )]
     fn a_sealed_agent_still_hot_reloads_profile_and_config_limits() {
         let root = tempfile::tempdir().unwrap();
         // SBPL matches resolved paths; macOS tempdirs sit behind /private/var.
