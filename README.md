@@ -652,7 +652,9 @@ Agent** wizard offers the same catalog as a source.
   ruling prompt, if one is still owed. Sessions are hidden
   from `mur fleet list` unless you pass `--include-review`, and their channels
   stay as an audit record until `mur fleet prune-reviews --older-than <age>`
-  clears the finished ones. The same loop runs inside a murmur chat:
+  clears the finished ones, or `mur fleet prune-reviews --id <session>`
+  erases one named session now, whatever its age (a running one is refused).
+  The same loop runs inside a murmur chat:
   `/review --main <agent> --reviewer <agent> <task>` starts it in the chat
   (`--auto` is refused there for now — run it without), bare `/review` lists
   the paused and crashed sessions you can pick up, and `/review resume

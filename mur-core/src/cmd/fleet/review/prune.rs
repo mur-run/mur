@@ -25,7 +25,7 @@ use chrono::{DateTime, Utc};
 use mur_channel::ChannelService;
 
 use super::constants::{FLEET_CHANNEL_PREFIX, REVIEW_FLEET_PREFIX, REVIEW_STOP_REASON_PRUNED};
-use super::state::{SessionState, observe, stop_from_outside};
+use super::state::{Observed, SessionState, observe, stop_from_outside};
 
 /// The review fleet name a review channel belongs to, if it is one.
 pub(super) fn review_session_of(channel_id: &str) -> Option<&str> {
@@ -90,26 +90,10 @@ pub fn prune_reviews(
         let Some(last) = observed.last.filter(|l| *l <= cutoff) else {
             continue;
         };
-        if dry_run {
-            writeln!(out, "would prune {session} ({why}, last activity {last})")?;
-        } else {
-            let lock = observed
-                .lock
-                .as_ref()
-                .expect("observe holds the lock for every non-running state");
-            stop_from_outside(
-                &svc,
-                mur_home,
-                session,
-                id,
-                &observed.state,
-                REVIEW_STOP_REASON_PRUNED,
-                lock,
-            )?;
-            drop(observed.lock);
-            svc.delete_channel(id)?;
-            writeln!(out, "pruned {session} ({why}, last activity {last})")?;
-        }
+        let when = format!("last activity {last}");
+        erase(
+            &svc, mur_home, session, id, observed, why, &when, dry_run, out,
+        )?;
         pruned += 1;
     }
     let scope = if include_paused {
@@ -131,6 +115,130 @@ pub fn prune_reviews(
     Ok(())
 }
 
+/// End `session` crash-safely under the lock `observed` holds, then erase
+/// its channel — or, with `dry_run`, only say that it would.
+#[allow(clippy::too_many_arguments)]
+fn erase(
+    svc: &ChannelService,
+    mur_home: &Path,
+    session: &str,
+    channel_id: &str,
+    observed: Observed,
+    why: &str,
+    when: &str,
+    dry_run: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    if dry_run {
+        writeln!(out, "would prune {session} ({why}, {when})")?;
+        return Ok(());
+    }
+    let lock = observed
+        .lock
+        .as_ref()
+        .expect("observe holds the lock for every non-running state");
+    stop_from_outside(
+        svc,
+        mur_home,
+        session,
+        channel_id,
+        &observed.state,
+        REVIEW_STOP_REASON_PRUNED,
+        lock,
+    )?;
+    drop(observed.lock);
+    svc.delete_channel(channel_id)?;
+    writeln!(out, "pruned {session} ({why}, {when})")?;
+    Ok(())
+}
+
+/// #1804: erase exactly the named sessions (`review-<id>` or bare `<id>`),
+/// regardless of age. Naming a session is the consent `--include-paused`
+/// gives, so paused and crashed sessions are taken too; a running session
+/// or an unreadable corrupted marker is still refused. Each id is handled
+/// on its own; any refusal makes the whole run fail after the rest ran.
+pub fn prune_reviews_by_id(
+    mur_home: &Path,
+    ids: &[String],
+    dry_run: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let svc = ChannelService::open(mur_home)?;
+    let mut failures = Vec::new();
+    for raw in ids {
+        if let Err(e) = prune_one(&svc, mur_home, raw, dry_run, out) {
+            writeln!(out, "error: {e:#}")?;
+            failures.push(format!("{e:#}"));
+        }
+    }
+    match failures.as_slice() {
+        [] => Ok(()),
+        [one] => anyhow::bail!("{one}"),
+        many => anyhow::bail!(
+            "{} of {} review session(s) not pruned: {}",
+            many.len(),
+            ids.len(),
+            many.join("; ")
+        ),
+    }
+}
+
+fn prune_one(
+    svc: &ChannelService,
+    mur_home: &Path,
+    raw: &str,
+    dry_run: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let session = if raw.starts_with(REVIEW_FLEET_PREFIX) {
+        raw.to_string()
+    } else {
+        format!("{REVIEW_FLEET_PREFIX}{raw}")
+    };
+    let channel_id = format!("{FLEET_CHANNEL_PREFIX}{session}");
+    if !svc.store().list_ids()?.contains(&channel_id) {
+        anyhow::bail!("no review session `{session}`");
+    }
+    let observed = observe(svc, mur_home, &channel_id, &session)?;
+    let why = match &observed.state {
+        SessionState::Running(who) => {
+            let by = who
+                .as_deref()
+                .map(|w| format!(" ({w})"))
+                .unwrap_or_default();
+            anyhow::bail!("{session} is running{by} — stop it first; nothing was erased")
+        }
+        SessionState::CorruptedUnreadable(path) => {
+            writeln!(
+                out,
+                "skipped {session}: corrupted marker cannot be read ({})",
+                path.display()
+            )?;
+            anyhow::bail!("{session} has an unreadable corrupted marker; nothing was erased")
+        }
+        state => candidate_label(state, true).expect("every non-running state is a candidate"),
+    };
+    let when = observed
+        .last
+        .map(|l| format!("last activity {l}"))
+        .unwrap_or_else(|| "no readable activity".into());
+    erase(
+        svc,
+        mur_home,
+        &session,
+        &channel_id,
+        observed,
+        why,
+        &when,
+        dry_run,
+        out,
+    )
+}
+
 #[cfg(test)]
 #[path = "prune_tests.rs"]
 mod prune_tests;
+
+#[cfg(test)]
+#[path = "prune_by_id_tests.rs"]
+mod prune_by_id_tests;

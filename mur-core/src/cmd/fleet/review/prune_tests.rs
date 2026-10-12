@@ -17,7 +17,12 @@ use crate::cmd::fleet::store;
 
 /// A review session's channel, with `payloads` appended. `keep_fleet`
 /// leaves the fleet definition in place, as a running/paused session has.
-fn session(home: &Path, name: &str, payloads: &[ReviewPayload], keep_fleet: bool) -> String {
+pub(super) fn session(
+    home: &Path,
+    name: &str,
+    payloads: &[ReviewPayload],
+    keep_fleet: bool,
+) -> String {
     let fleet = super::super::session::create_session_fleet(home, name, "main", "reviewer", "task")
         .unwrap();
     let svc = ChannelService::open(home).unwrap();
@@ -40,7 +45,7 @@ fn session(home: &Path, name: &str, payloads: &[ReviewPayload], keep_fleet: bool
     fleet.channel_id
 }
 
-fn stopped() -> ReviewPayload {
+pub(super) fn stopped() -> ReviewPayload {
     ReviewPayload::SessionStopped {
         reason: "approve".into(),
         unresolved: vec![],
@@ -48,7 +53,7 @@ fn stopped() -> ReviewPayload {
     }
 }
 
-fn paused() -> ReviewPayload {
+pub(super) fn paused() -> ReviewPayload {
     ReviewPayload::Paused {
         kind: PauseKind::Other,
         reason: "detached".into(),
@@ -57,7 +62,7 @@ fn paused() -> ReviewPayload {
     }
 }
 
-fn exists(home: &Path, channel_id: &str) -> bool {
+pub(super) fn exists(home: &Path, channel_id: &str) -> bool {
     ChannelService::open(home)
         .unwrap()
         .store()
@@ -78,7 +83,7 @@ fn prune_with(home: &Path, include_paused: bool, dry_run: bool, days_later: i64)
     String::from_utf8(out).unwrap()
 }
 
-fn home() -> tempfile::TempDir {
+pub(super) fn home() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     crate::channel_writer::plant_writer_identity(tmp.path());
     tmp
