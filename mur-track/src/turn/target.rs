@@ -9,13 +9,19 @@
 use super::WORKTREES_DIR;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The project's Cargo target dir, relative to the project root.
 pub const PROJECT_TARGET_DIR: &str = "target";
 
 /// Prefix of a turn dir that has been renamed aside for deletion.
 const TRASH_PREFIX: &str = ".trash-";
+
+/// Extra attempts at deleting a renamed-aside dir. Windows reports a dir that
+/// another thread is deleting as `PermissionDenied` rather than `NotFound`, so
+/// a concurrent sweep briefly makes our delete fail; it settles in a few ms.
+const TRASH_DELETE_RETRIES: u32 = 5;
+const TRASH_DELETE_BACKOFF: Duration = Duration::from_millis(20);
 
 /// `<project>/target/<subdir>/<track_name>`.
 pub fn turn_target_dir(project: &Path, subdir: &str, track_name: &str) -> PathBuf {
@@ -42,11 +48,28 @@ pub fn remove_turn_target(dir: &Path) -> io::Result<()> {
         name.to_string_lossy(),
         std::process::id()
     ));
-    // A sweep may clear our `.trash-*` while we delete it: NotFound either
-    // way means the dir is gone, which is the goal.
-    match std::fs::rename(dir, &trash).and_then(|()| std::fs::remove_dir_all(&trash)) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        r => r,
+    // Losing the rename to another remover is success. Unix says NotFound;
+    // Windows may say PermissionDenied, so judge by whether `dir` is gone.
+    if let Err(e) = std::fs::rename(dir, &trash) {
+        return if dir.exists() { Err(e) } else { Ok(()) };
+    }
+    delete_trash(&trash)
+}
+
+/// Delete a dir we renamed aside. A sweep may be clearing it concurrently;
+/// whichever error that causes, the dir ending up gone is success.
+fn delete_trash(trash: &Path) -> io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match std::fs::remove_dir_all(trash) {
+            Ok(()) => return Ok(()),
+            Err(_) if !trash.exists() => return Ok(()),
+            Err(e) if attempt >= TRASH_DELETE_RETRIES => return Err(e),
+            Err(_) => {
+                attempt += 1;
+                std::thread::sleep(TRASH_DELETE_BACKOFF * attempt);
+            }
+        }
     }
 }
 
