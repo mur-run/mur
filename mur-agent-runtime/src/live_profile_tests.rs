@@ -53,10 +53,7 @@ fn broken_yaml_keeps_the_last_good_profile_and_reports_once() {
     assert!(st.last_reload_error.is_some(), "{st:?}");
     assert_eq!(st.generation, 0);
     // Same broken stamp: settled, not re-read.
-    assert!(
-        live.file
-            .is_settled(FileStamp::of(&d.path().join("profile.yaml")))
-    );
+    assert!(live.file.is_settled(live.file.stamp()));
 }
 
 #[test]
@@ -164,4 +161,48 @@ fn global_limits_keep_the_last_good_value() {
     write(&cfg, "limits:\n  deadline: soon\n");
     assert_eq!(live.current().deadline.as_deref(), Some("20m"));
     assert!(live.last_error().is_some());
+}
+
+/// #1794: the global scope reloads from `limits/global.yaml`.
+#[test]
+fn global_limits_reload_from_the_new_file() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = mur_common::limits::global_limits_dir(d.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = mur_common::limits::global_limits_path(d.path());
+    write(&path, "deadline: 10m\n");
+    let boot = mur_common::limits::load_global_strict(d.path())
+        .unwrap()
+        .limits;
+    let live = live_global_limits(d.path(), boot);
+    assert_eq!(live.current().deadline.as_deref(), Some("10m"));
+    assert_eq!(live.generation(), 0, "boot stamp is the loaded version");
+    write(&path, "deadline: 20m\n");
+    assert_eq!(live.current().deadline.as_deref(), Some("20m"));
+    write(&path, "deadline: soon\n");
+    assert_eq!(live.current().deadline.as_deref(), Some("20m"));
+    assert!(live.last_error().is_some());
+}
+
+/// The first `mur limits --global` write creates the new file under a running
+/// agent: it takes over at once, and from then on legacy edits are ignored.
+#[test]
+fn creating_the_new_file_takes_over_from_the_legacy_block() {
+    let d = tempfile::tempdir().unwrap();
+    let cfg = d.path().join("config.yaml");
+    write(&cfg, "limits:\n  deadline: 10m\n");
+    let boot = mur_common::limits::load_global_strict(d.path())
+        .unwrap()
+        .limits;
+    let live = live_global_limits(d.path(), boot);
+    std::fs::create_dir_all(mur_common::limits::global_limits_dir(d.path())).unwrap();
+    write(
+        &mur_common::limits::global_limits_path(d.path()),
+        "deadline: 30m\n",
+    );
+    assert_eq!(live.current().deadline.as_deref(), Some("30m"));
+    let generation = live.generation();
+    write(&cfg, "limits:\n  deadline: 99m\n");
+    assert_eq!(live.current().deadline.as_deref(), Some("30m"));
+    assert_eq!(live.generation(), generation, "legacy edit is not a reload");
 }

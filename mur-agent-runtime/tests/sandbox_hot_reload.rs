@@ -2,10 +2,15 @@
 //!
 //! The manual E2E for #1788 ran with `fail_closed_on_sandbox_error: false`,
 //! i.e. advisory mode, so it never proved that a sealed agent can still see
-//! its own `profile.yaml` / `config.yaml` change and record what it did. That
+//! its own `profile.yaml` / global limits change and record what it did. That
 //! is exactly what a seal could break: `profile.yaml` is write-denied to the
 //! agent (#712) and Landlock reads are allow-list only, so a missing grant
 //! would make every reload a silent no-op.
+//!
+//! The global limits edit is an atomic replace of `limits/global.yaml` — a
+//! NEW inode. On Linux that is only readable because `limits/` is a directory
+//! grant; when the scope lived in the file-granted `config.yaml` it was not
+//! (#1794), which is what this test now guards on both kernels.
 //!
 //! Shape: the test re-execs its own binary; a `#[ctor]` in the child seals,
 //! says `SEALED`, waits for the unsealed parent to edit both files, then
@@ -40,11 +45,7 @@ mod sealed {
     }
 
     #[test]
-    #[cfg_attr(
-        target_os = "linux",
-        ignore = "issue #1794: Landlock file grant pins the seal-time inode; atomic-rename config.yaml edits are unreadable"
-    )]
-    fn a_sealed_agent_still_hot_reloads_profile_and_config_limits() {
+    fn a_sealed_agent_still_hot_reloads_profile_and_global_limits() {
         let root = tempfile::tempdir().unwrap();
         // SBPL matches resolved paths; macOS tempdirs sit behind /private/var.
         let mur_home = root.path().canonicalize().unwrap().join("mur");
@@ -53,7 +54,11 @@ mod sealed {
         std::fs::create_dir_all(mur_home.join("agents").join(SIBLING)).unwrap();
         save(&home.join("profile.yaml"), FIXTURE);
         // Must exist before the seal: Landlock grants only paths present then.
+        // The supervisor creates `limits/` pre-seal (seal.rs); the file is
+        // there too so the edit below is a replace, the case #1794 broke.
         save(&mur_home.join("config.yaml"), "{}\n");
+        std::fs::create_dir_all(mur_common::limits::global_limits_dir(&mur_home)).unwrap();
+        save(&mur_common::limits::global_limits_path(&mur_home), "{}\n");
 
         let mut child = Command::new(std::env::current_exe().unwrap())
             .env(CHILD_ENV, &mur_home)
@@ -78,7 +83,10 @@ mod sealed {
             &home.join("profile.yaml"),
             &format!("{FIXTURE}\nlimits: {{ deadline: 0s }}\n"),
         );
-        save(&mur_home.join("config.yaml"), "limits: { stuck: 7m }\n");
+        save(
+            &mur_common::limits::global_limits_path(&mur_home),
+            "stuck: 7m\n",
+        );
         let mut stdin = child.stdin.take().unwrap();
         writeln!(stdin, "{GO}").unwrap();
         drop(stdin);
@@ -157,7 +165,7 @@ mod sealed {
         }
         if live.global_limits.current().stuck.as_deref() != Some("7m") {
             eprintln!(
-                "ERROR: config.yaml limits edit not seen under the seal: {:?}",
+                "ERROR: limits/global.yaml edit not seen under the seal: {:?}",
                 live.global_limits.last_error()
             );
             failed = true;

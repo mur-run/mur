@@ -65,13 +65,18 @@ fn inode(_md: &std::fs::Metadata) -> u64 {
 
 type Loader<T> = Box<dyn Fn(&Path) -> Result<T, String> + Send + Sync>;
 
+/// Version of what a [`LiveFile`] reads: the primary file, plus — only while
+/// the primary is absent — its fallback. Once the primary exists the fallback
+/// is not part of the version, so edits to it no longer trigger a reload.
+pub type Stamp = (Option<FileStamp>, Option<FileStamp>);
+
 struct State<T> {
     current: Arc<T>,
     /// Stamp `current` was loaded at.
-    loaded_at: Option<FileStamp>,
+    loaded_at: Stamp,
     /// Stamp of the last version that failed to load. Matching it means
     /// "already reported, still broken" — skip the re-read and the warning.
-    failed_at: Option<Option<FileStamp>>,
+    failed_at: Option<Stamp>,
     generation: u64,
     last_error: Option<String>,
 }
@@ -79,6 +84,8 @@ struct State<T> {
 /// One file, reloaded on change, never replaced by a version that fails to load.
 pub struct LiveFile<T> {
     path: PathBuf,
+    /// Read instead of `path` while `path` does not exist (a legacy location).
+    fallback: Option<PathBuf>,
     label: &'static str,
     state: RwLock<State<T>>,
     /// Serialises reloads so concurrent turns parse a changed file once.
@@ -98,9 +105,10 @@ impl<T> LiveFile<T> {
         load: impl Fn(&Path) -> Result<T, String> + Send + Sync + 'static,
     ) -> Self {
         let path = path.into();
-        let loaded_at = FileStamp::of(&path);
+        let loaded_at = stamp_of(&path, None);
         Self {
             path,
+            fallback: None,
             label,
             state: RwLock::new(State {
                 current: Arc::new(initial),
@@ -115,6 +123,24 @@ impl<T> LiveFile<T> {
         }
     }
 
+    /// Also watch `fallback` while the primary path is absent. The initial
+    /// stamp is retaken so the first turn does not reload either file.
+    pub fn with_fallback(mut self, fallback: impl Into<PathBuf>) -> Self {
+        let fallback = fallback.into();
+        let stamp = stamp_of(&self.path, Some(&fallback));
+        self.fallback = Some(fallback);
+        self.state
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .loaded_at = stamp;
+        self
+    }
+
+    /// The version on disk now.
+    pub fn stamp(&self) -> Stamp {
+        stamp_of(&self.path, self.fallback.as_deref())
+    }
+
     fn with_on_change(mut self, f: OnChange) -> Self {
         self.on_change = Some(f);
         self
@@ -123,7 +149,7 @@ impl<T> LiveFile<T> {
     /// The last version that loaded cleanly, re-read first if the file moved.
     /// Never fails: a bad file is reported and the previous version served.
     pub fn current(&self) -> Arc<T> {
-        let disk = FileStamp::of(&self.path);
+        let disk = self.stamp();
         if !self.is_settled(disk) {
             self.reload_from(disk);
         }
@@ -144,12 +170,12 @@ impl<T> LiveFile<T> {
         self.state.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn is_settled(&self, disk: Option<FileStamp>) -> bool {
+    fn is_settled(&self, disk: Stamp) -> bool {
         let s = self.read();
         disk == s.loaded_at || s.failed_at == Some(disk)
     }
 
-    fn reload_from(&self, disk: Option<FileStamp>) {
+    fn reload_from(&self, disk: Stamp) {
         let _one = self.reload.lock().unwrap_or_else(|e| e.into_inner());
         // Another turn may have reloaded while this one waited for the lock.
         if self.is_settled(disk) {
@@ -255,18 +281,45 @@ impl LiveProfile {
 
 type OnChange = Box<dyn Fn() + Send + Sync>;
 
-/// `config.yaml`'s global `limits:` — the other scope a turn's bounds read.
+fn stamp_of(path: &Path, fallback: Option<&Path>) -> Stamp {
+    let primary = FileStamp::of(path);
+    let secondary = match (primary, fallback) {
+        (None, Some(f)) => FileStamp::of(f),
+        _ => None,
+    };
+    (primary, secondary)
+}
+
+/// The global limits scope — the other scope a turn's bounds read (#1794).
+/// Watches `<mur_home>/limits/global.yaml`, and while that file does not
+/// exist yet also the legacy `config.yaml limits:` block, so a legacy user's
+/// edit still reloads where the kernel lets the agent read it (macOS).
 pub fn live_global_limits(mur_home: &Path, boot: Limits) -> LiveFile<Limits> {
+    use mur_common::limits::{GlobalSource, global_limits_path, legacy_config_path};
+    let home = mur_home.to_path_buf();
     LiveFile::new(
-        mur_home.join("config.yaml"),
-        "config.yaml limits",
+        global_limits_path(mur_home),
+        "global limits",
         boot,
-        |p: &Path| {
-            let l = mur_common::config::Config::try_load(p)?.limits;
-            mur_common::limits::validate(&l)?;
-            Ok(l)
+        move |_: &Path| {
+            let g = mur_common::limits::load_global_strict(&home).map_err(|e| {
+                if global_limits_path(&home).exists() {
+                    e
+                } else {
+                    format!(
+                        "{e} (legacy location; run `mur limits --global` once to move it to {})",
+                        global_limits_path(&home).display()
+                    )
+                }
+            })?;
+            mur_common::limits::validate(&g.limits)?;
+            if g.source == GlobalSource::Legacy {
+                tracing::debug!("global limits read from legacy config.yaml");
+            }
+            Ok(g.limits)
         },
     )
+    .with_fallback(legacy_config_path(mur_home))
 }
 
 /// What a turn reads once at its start and keeps for its whole length, so an

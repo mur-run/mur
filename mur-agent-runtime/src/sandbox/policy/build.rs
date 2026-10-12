@@ -328,9 +328,17 @@ impl SandboxPolicy {
         // runtime already performs unconditionally, enumerated in the audit
         // (docs/superpowers/specs/2026-08-18-agent-read-confinement-audit.md
         // §7.1). Existence-checked like every other grant (Issue 16).
+        //
+        // The global limits scope is a DIRECTORY grant on purpose (#1794):
+        // Landlock pins a file grant to the inode present at seal time, so
+        // an atomic temp+rename edit of a granted FILE is unreadable after
+        // the seal. Granting the parent directory keeps replaced files
+        // visible — the same reason `profile.yaml` reloads under agent_home.
+        // The supervisor creates it before the seal so the rule sticks.
         if let Some(mur_home) = agent_home.parent().and_then(|p| p.parent()) {
             for p in [
                 mur_home.join("config.yaml"),
+                mur_common::limits::global_limits_dir(mur_home),
                 mur_home.join("compress.yaml"),
                 mur_home.join("compress"),
                 mur_home.join("fleets"),

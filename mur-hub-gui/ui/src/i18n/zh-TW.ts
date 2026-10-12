@@ -954,7 +954,7 @@ export const zhTW: Table = {
   "limits.chip.thisAgent": "此代理",
   "limits.chip.fleet": "fleet.yaml",
   "limits.chip.agent": "profile.yaml",
-  "limits.chip.config": "config.yaml",
+  "limits.chip.config": "global.yaml",
   "limits.chip.builtIn": "內建預設值",
   "limits.chip.legacy": "舊版 loop.* 設定",
   "limits.chip.flag": "命令列旗標",

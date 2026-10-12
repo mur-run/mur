@@ -952,7 +952,7 @@ export const en = {
   "limits.chip.thisAgent": "this agent",
   "limits.chip.fleet": "fleet.yaml",
   "limits.chip.agent": "profile.yaml",
-  "limits.chip.config": "config.yaml",
+  "limits.chip.config": "global.yaml",
   "limits.chip.builtIn": "built-in default",
   "limits.chip.legacy": "legacy loop.* key",
   "limits.chip.flag": "command-line flag",

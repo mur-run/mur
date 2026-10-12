@@ -65,7 +65,9 @@ pub struct ReloadState {
     /// Why the newest `profile.yaml` on disk is not the one being served.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_reload_error: Option<String>,
-    /// Same, for the global `limits:` in `config.yaml`.
+    /// Same, for the global limits scope (`limits/global.yaml`, or the legacy
+    /// `config.yaml limits:` block before #1794). The field keeps its name so
+    /// doctor still reads state written by an agent started before the move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_limits_error: Option<String>,
     /// Changed paths that only take effect after `mur agent restart`.

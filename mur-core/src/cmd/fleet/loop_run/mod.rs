@@ -133,7 +133,9 @@ pub fn fleet_bounds(
     flag_deadline: Option<&str>,
     flag_budget: Option<f64>,
 ) -> Result<FleetBounds> {
-    let global = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).limits;
+    let global = mur_common::limits::load_global(mur_home)
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .limits;
     let fleet_limits = fleet.limits_or_legacy();
     let flags = mur_common::limits::Limits {
         deadline: flag_deadline.map(|d| d.trim().to_string()),

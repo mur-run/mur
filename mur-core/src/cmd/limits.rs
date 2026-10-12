@@ -171,8 +171,9 @@ fn rows_from(
 }
 
 pub fn report(mur_home: &Path, target: &Target) -> Result<LimitsReport> {
-    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
-    let global = cfg.limits.clone();
+    let global = mur_common::limits::load_global(mur_home)
+        .map_err(|e| anyhow!("{e}"))?
+        .limits;
     let none = Limits::default();
     match target {
         Target::Fleet(name) => {
@@ -624,15 +625,16 @@ mod tests {
         assert_eq!(j["stale"][0]["key"], "loop.max_iterations");
     }
 
-    /// The global scope reports config.yaml's own values: what it set is
-    /// local there, the rest is built-in; nothing is inherited from above.
+    /// The global scope reports its own values: what it set is local there,
+    /// the rest is built-in; nothing is inherited from above. A legacy
+    /// `config.yaml limits:` block still reads until the new file exists.
     #[test]
-    fn global_target_reports_config_yaml() {
+    fn global_target_reports_the_global_scope() {
         let t = tempfile::tempdir().unwrap();
         std::fs::write(t.path().join("config.yaml"), "limits:\n  stuck: 20m\n").unwrap();
         let r = report(t.path(), &Target::Global).unwrap();
         let by = |k: &str| r.rows.iter().find(|row| row.knob == k).unwrap();
-        assert_eq!(by("stuck").source, "~/.mur/config.yaml");
+        assert_eq!(by("stuck").source, "~/.mur/limits/global.yaml");
         assert!(by("stuck").local);
         assert_eq!(by("deadline").source, "built-in default");
         assert!(!by("deadline").local);

@@ -260,10 +260,15 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         approval_token,
         sandbox_record,
     } = seal::prepare_and_seal(&profile, &agent_home, &mur_home).await?;
-    // 4. Hot-reloaded settings (profile.yaml hot fields + config.yaml limits),
-    //    read per turn. Built after the seal: both files stay readable.
-    let boot_global_limits =
-        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).limits;
+    // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
+    //    read per turn. Built after the seal: both stay readable.
+    let boot_global_limits = match mur_common::limits::load_global(&mur_home) {
+        Ok(g) => g.limits,
+        Err(e) => {
+            tracing::warn!(error = %e, "global limits did not load at boot; running on built-in defaults");
+            Default::default()
+        }
+    };
     let live = crate::live_profile::LiveSettings::new(
         &agent_home,
         &mur_home,
