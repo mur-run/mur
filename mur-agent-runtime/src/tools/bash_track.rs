@@ -59,12 +59,14 @@ fn is_assignment(word: &str) -> bool {
 /// when it cloned or had to skip for a reason worth knowing.
 pub async fn maybe_warm(
     project: PathBuf,
+    track: PathBuf,
     track_name: String,
     cfg: WarmBuildCacheConfig,
 ) -> Option<String> {
-    let out = tokio::task::spawn_blocking(move || warm_build_cache(&project, &track_name, &cfg))
-        .await
-        .unwrap_or_else(|e| WarmOutcome::Skipped(SkipReason::Failed(e.to_string())));
+    let out =
+        tokio::task::spawn_blocking(move || warm_build_cache(&project, &track, &track_name, &cfg))
+            .await
+            .unwrap_or_else(|e| WarmOutcome::Skipped(SkipReason::Failed(e.to_string())));
     match out {
         WarmOutcome::Warmed { elapsed } => Some(format!(
             "[warm build cache: cloned in {:.1}s]",
@@ -114,7 +116,7 @@ pub(crate) async fn prepare_current_turn(
         .map(str::to_string);
     let note = match name {
         Some(name) if command_triggers(command, &cfg.triggers) => {
-            maybe_warm(project, name, cfg).await
+            maybe_warm(project, track.clone(), name, cfg).await
         }
         _ => None,
     };
