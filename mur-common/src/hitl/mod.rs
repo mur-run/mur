@@ -6,6 +6,7 @@ pub mod approval_token;
 pub mod label;
 pub mod pin;
 pub mod signed_time;
+pub mod tool_name_tier;
 
 pub use signed_time::{HITL_CLOCK_SKEW_SECS, TimeFault, check_answer_time, check_fresh};
 

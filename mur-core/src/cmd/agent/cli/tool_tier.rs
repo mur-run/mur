@@ -116,38 +116,6 @@ const DESTRUCTIVE_HEADS: &[&str] = &[
 /// Heads that spend money or dispatch paid work.
 const SPEND_HEADS: &[&str] = &["mur-fleet", "terraform", "pulumi"];
 
-/// Tool names that are spend/dispatch by nature, whatever their arguments.
-/// Mirrors `NO_ALWAYS_TOOLS` in the GUI's `hitlModel.ts` — one list of
-/// "never standing-granted" dispatch tools, two surfaces, and they must not
-/// drift.
-const SPEND_TOOLS: &[&str] = &["fleet_run", "parallel_jobs", "delegate_to"];
-
-/// Browser MCP tools share one leaf prefix across servers (`mcp__browser__`,
-/// `mcp__playwright__`, ...). Matching the LEAF keeps the tier independent of
-/// whatever name the operator gave the server.
-const BROWSER_PREFIX: &str = "browser_";
-
-/// Browser tools that only observe the current page and hand the result back
-/// to the model. Anything not listed here is treated as acting (#1599): the
-/// list is an allow-list on purpose, so a tool added upstream fails closed.
-const BROWSER_READ_TOOLS: &[&str] = &[
-    "browser_snapshot",
-    "browser_take_screenshot",
-    "browser_screenshot",
-    "browser_console_messages",
-    "browser_network_requests",
-    "browser_generate_locator",
-    "browser_wait_for",
-];
-
-/// Observers named by family rather than one by one (`browser_verify_text_visible`,
-/// `browser_verify_value`, ...): assertions against the page, no side effect.
-const BROWSER_READ_PREFIXES: &[&str] = &["browser_verify_"];
-
-/// Browser tools that read or replace the session's cookies and tokens. That
-/// is a credential, so it sits with `sudo`, not with a click.
-const BROWSER_PRIVILEGED_TOOLS: &[&str] = &["browser_storage_state", "browser_set_storage_state"];
-
 /// Substrings that make an otherwise-ordinary command irreversible. Matched
 /// against the whole command because they are argument-level, not head-level.
 const DESTRUCTIVE_ARGS: &[&str] = &[
@@ -196,10 +164,9 @@ pub fn effective_tier(
 }
 
 pub fn classify(tool_name: &str, tool_input: Option<&Value>) -> RiskTier {
-    if SPEND_TOOLS.contains(&leaf(tool_name)) {
-        return RiskTier::Spend;
-    }
-    if let Some(tier) = classify_browser(leaf(tool_name)) {
+    // Dispatch tools and the browser table: the name alone decides. Shared
+    // with gate B in `mur-common` so the two gates cannot drift (#1786).
+    if let Some(tier) = mur_common::hitl::tool_name_tier::classify_by_name(tool_name) {
         return tier;
     }
     // Read is delegated, never guessed: `bash_class` fails safe on
@@ -233,34 +200,6 @@ pub fn classify(tool_name: &str, tool_input: Option<&Value>) -> RiskTier {
         "write_file" | "edit_file" => RiskTier::Write,
         _ => RiskTier::Write,
     }
-}
-
-/// #1599: a browser tool drives the operator's logged-in web session — a
-/// click can confirm a payment, `evaluate` can POST page data to any host. It
-/// used to fall to the `Write` fallback, inside the ceiling, so the default
-/// session answered it with no prompt. Acting tools are `NetworkEgress` (every
-/// one of them can move data off the machine through the page), which is
-/// above `tier_may_be_granted`; observers are `Read`; cookie/token export is
-/// `Privileged`. `None` = not a browser tool.
-fn classify_browser(leaf: &str) -> Option<RiskTier> {
-    if !leaf.starts_with(BROWSER_PREFIX) {
-        return None;
-    }
-    if BROWSER_PRIVILEGED_TOOLS.contains(&leaf) {
-        return Some(RiskTier::Privileged);
-    }
-    if BROWSER_READ_TOOLS.contains(&leaf)
-        || BROWSER_READ_PREFIXES.iter().any(|p| leaf.starts_with(p))
-    {
-        return Some(RiskTier::Read);
-    }
-    Some(RiskTier::NetworkEgress)
-}
-
-/// `mcp__server__tool` → `tool`. An MCP server must not lower a tool's tier by
-/// prefixing it.
-fn leaf(name: &str) -> &str {
-    name.rsplit("__").next().unwrap_or(name)
 }
 
 fn classify_bash(cmd: &str) -> RiskTier {
