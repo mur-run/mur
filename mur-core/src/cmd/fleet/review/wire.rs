@@ -9,10 +9,18 @@
 
 use super::constants::{
     REVIEW_BINDING_RULINGS_HEADER, REVIEW_HUMAN_NOTES_HEADER, REVIEW_MAIN_PROMPT,
-    REVIEW_NO_OPEN_FINDINGS, REVIEW_REVIEWER_PROMPT,
+    REVIEW_MAIN_RESPONSES_HEADER, REVIEW_NO_OPEN_FINDINGS, REVIEW_REVIEWER_PROMPT,
 };
 use super::ledger::Ledger;
-use super::schema::{HumanNote, Role};
+use super::schema::{HumanNote, RebuttalResponseDto, Role};
+use super::verdict::RebuttalReply;
+
+/// Opens the fenced block main's §3.4 answers travel in.
+const JSON_FENCE_OPEN: &str = "```json";
+/// Closes any fenced block.
+const FENCE: &str = "```";
+/// Between a response's answer and its reason in the metadata section.
+const RESPONSE_REASON_SEPARATOR: &str = " — ";
 
 /// Wrap `text` as A2A `message/send` params: one user message, one text part.
 pub fn text_message_params(text: &str) -> serde_json::Value {
@@ -96,6 +104,66 @@ fn render_human_notes(ledger: &Ledger, pending: &[HumanNote], to: Role) -> Strin
     out
 }
 
+/// #1785: split main's reply into the deliverable and its §3.4 answers.
+///
+/// Only the LAST ```` ```json ```` block counts, and only when it closes at
+/// the very end of the reply (trailing whitespace allowed) and parses as
+/// `{"responses": [...]}`. Anything else — no block, an unterminated fence,
+/// prose after the block, a JSON block that is the task's own output — is
+/// passed through untouched with `None`. If stripping would leave nothing
+/// (main replied with the block alone), the original reply is returned so
+/// the reviewer never gets an empty string; the answers are still parsed.
+pub fn split_responses_block(reply: &str) -> (&str, Option<Vec<RebuttalResponseDto>>) {
+    let trimmed = reply.trim_end();
+    let Some(open) = trimmed.rfind(JSON_FENCE_OPEN) else {
+        return (reply, None);
+    };
+    let after = &trimmed[open + JSON_FENCE_OPEN.len()..];
+    let Some(body_start) = after.find('\n').map(|i| i + 1) else {
+        return (reply, None);
+    };
+    let body = &after[body_start..];
+    // The first fence after the opener must be the reply's last bytes.
+    match body.find(FENCE) {
+        Some(close) if close + FENCE.len() == body.len() => {
+            let Ok(parsed) = serde_json::from_str::<RebuttalReply>(&body[..close]) else {
+                return (reply, None);
+            };
+            let deliverable = trimmed[..open].trim_end();
+            if deliverable.trim().is_empty() {
+                (reply, Some(parsed.responses))
+            } else {
+                (deliverable, Some(parsed.responses))
+            }
+        }
+        _ => (reply, None),
+    }
+}
+
+/// #1785: main's answers as a labelled metadata block that sits after its
+/// reply; empty when there are none, so the slot vanishes.
+fn render_main_responses(responses: Option<&[RebuttalResponseDto]>) -> String {
+    let Some(responses) = responses.filter(|r| !r.is_empty()) else {
+        return String::new();
+    };
+    let mut out = format!("{REVIEW_MAIN_RESPONSES_HEADER}\n");
+    for r in responses {
+        let answer = serde_json::to_value(r.answer).unwrap_or_default();
+        out.push_str(&format!(
+            "{}: {}",
+            r.id,
+            answer.as_str().unwrap_or_default()
+        ));
+        if let Some(reason) = r.reason.as_deref().filter(|s| !s.trim().is_empty()) {
+            out.push_str(RESPONSE_REASON_SEPARATOR);
+            out.push_str(reason);
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+    out
+}
+
 /// Fill `{name}` slots in `template` in ONE left-to-right pass. Substituted
 /// values are never rescanned, so human and model text (task, rulings, main's
 /// reply) reaches the agent byte-for-byte even when it contains a literal
@@ -156,7 +224,8 @@ pub fn main_turn_params(
 }
 
 /// The reviewer's turn (§3.2): the task, main's reply, and the open set the
-/// reviewer must give a status for.
+/// reviewer must give a status for. Main's §3.4 answers are split off the
+/// reply and rendered as a separate metadata block (#1785).
 pub fn reviewer_turn_params(
     task: &str,
     round: u32,
@@ -164,10 +233,15 @@ pub fn reviewer_turn_params(
     ledger: &Ledger,
     pending: &[HumanNote],
 ) -> serde_json::Value {
+    let (deliverable, responses) = split_responses_block(main_reply);
     let text = render_template(
         REVIEW_REVIEWER_PROMPT,
         &[
             ("round", &round.to_string()),
+            (
+                "main_responses",
+                &render_main_responses(responses.as_deref()),
+            ),
             ("open_findings", &render_open_findings(ledger)),
             (
                 "binding_rulings",
@@ -178,7 +252,7 @@ pub fn reviewer_turn_params(
                 &render_human_notes(ledger, pending, Role::Reviewer),
             ),
             ("task", task),
-            ("main_reply", main_reply),
+            ("main_reply", deliverable),
         ],
     );
     text_message_params(&text)

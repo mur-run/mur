@@ -154,14 +154,16 @@ Task:
 {binding_rulings}{human_notes}Open review findings from the reviewer:
 {open_findings}
 
-Do the task, or revise your previous work to address the open findings, then summarise what you changed. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
+Do the task, or revise your previous work to address the open findings, then summarise what you changed. The change summary and the JSON block below are review-loop protocol, not the deliverable: the task's own constraints (length, format, \"only X\") apply to your work, not to them. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
 {\"responses\": [{\"id\": \"F1\", \"answer\": \"accept\" | \"reject\" | \"partial\", \"reason\": \"...\"}]}
 A reason is required for reject and partial.";
 
 /// §3.2: the reviewer's turn prompt. Placeholders: `{task}`, `{round}`,
 /// `{main_reply}`, `{open_findings}`, `{binding_rulings}`, `{human_notes}` (as in
-/// [`REVIEW_MAIN_PROMPT`]). It pins the verdict wire shape and
-/// tells the reviewer to return `blocked` when uncertain (§3.2).
+/// [`REVIEW_MAIN_PROMPT`]), `{main_responses}` (#1785; a
+/// [`REVIEW_MAIN_RESPONSES_HEADER`] block ending in a blank line, or empty).
+/// It pins the verdict wire shape and tells the reviewer to return
+/// `blocked` when uncertain (§3.2).
 pub const REVIEW_REVIEWER_PROMPT: &str = "You are the reviewer in a review loop (round {round}).
 
 Task the main agent is working on:
@@ -170,13 +172,19 @@ Task the main agent is working on:
 The main agent's latest reply:
 {main_reply}
 
-{binding_rulings}{human_notes}Previously issued findings that are still open:
+{main_responses}{binding_rulings}{human_notes}Previously issued findings that are still open:
 {open_findings}
 
 Review the work. End your reply with exactly one fenced ```json block of this shape:
 {\"verdict\": \"approve\" | \"revise\" | \"blocked\", \"findings\": [{\"severity\": \"high\" | \"medium\" | \"low\", \"issue\": \"...\"}], \"prior\": [{\"id\": \"F1\", \"status\": \"open\" | \"withdrawn\" | \"resolved\" | \"disputed\", \"reason\": \"...\"}]}
 
-Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return \"blocked\" rather than guess.";
+Rules: review only the main agent's work on the task. Its change summary and any machine-readable responses section are review-loop protocol, not the deliverable: never raise a finding because they exist or because they break the task's output constraints. `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return \"blocked\" rather than guess.";
+
+/// #1785: heads main's §3.4 answers, split off its reply by
+/// `wire::split_responses_block` so the reviewer sees them as metadata,
+/// never as part of the work under review.
+pub const REVIEW_MAIN_RESPONSES_HEADER: &str =
+    "--- machine-readable responses (not part of the deliverable) ---";
 
 /// P2-§5.3: heads the binding-ruling block, ranked above the findings.
 pub const REVIEW_BINDING_RULINGS_HEADER: &str =

@@ -15,4 +15,4 @@ Previously issued findings that are still open:
 Review the work. End your reply with exactly one fenced ```json block of this shape:
 {"verdict": "approve" | "revise" | "blocked", "findings": [{"severity": "high" | "medium" | "low", "issue": "..."}], "prior": [{"id": "F1", "status": "open" | "withdrawn" | "resolved" | "disputed", "reason": "..."}]}
 
-Rules: `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return "blocked" rather than guess.
+Rules: review only the main agent's work on the task. Its change summary and any machine-readable responses section are review-loop protocol, not the deliverable: never raise a finding because they exist or because they break the task's output constraints. `findings` lists NEW findings only; never invent IDs, the system assigns them. `prior` must give a status for every finding listed above. `approve` is refused while any high-severity finding is `disputed`. If you are uncertain, return "blocked" rather than guess.

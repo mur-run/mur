@@ -9,6 +9,6 @@ Binding rulings from the human (these override any finding below; do not argue t
 Open review findings from the reviewer:
 - F1 [high, open]: unchecked unwrap
 
-Do the task, or revise your previous work to address the open findings, then summarise what you changed. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
+Do the task, or revise your previous work to address the open findings, then summarise what you changed. The change summary and the JSON block below are review-loop protocol, not the deliverable: the task's own constraints (length, format, "only X") apply to your work, not to them. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
 {"responses": [{"id": "F1", "answer": "accept" | "reject" | "partial", "reason": "..."}]}
 A reason is required for reject and partial.

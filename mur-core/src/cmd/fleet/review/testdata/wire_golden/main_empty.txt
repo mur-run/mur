@@ -6,6 +6,6 @@ fix the {main_reply} bug
 Open review findings from the reviewer:
 (none)
 
-Do the task, or revise your previous work to address the open findings, then summarise what you changed. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
+Do the task, or revise your previous work to address the open findings, then summarise what you changed. The change summary and the JSON block below are review-loop protocol, not the deliverable: the task's own constraints (length, format, "only X") apply to your work, not to them. If any findings are listed above, end your reply with exactly one fenced ```json block answering every one of them:
 {"responses": [{"id": "F1", "answer": "accept" | "reject" | "partial", "reason": "..."}]}
 A reason is required for reject and partial.
