@@ -202,6 +202,29 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
     };
 
     // What each running agent did with its latest profile/config edit.
+    // #1786: tool rules whose effect the tool's own tier changes — a bare
+    // allow that now asks, or an exact `risk: write` override. Best-effort
+    // like `dead`: an unreadable profile prints nothing here.
+    let gate_notes = |name: &str| -> Vec<String> {
+        super::load_profile_for_edit(name)
+            .map(|(_p, prof)| {
+                prof.entitlements
+                    .tools
+                    .iter()
+                    .filter_map(|r| {
+                        mur_common::hitl::allow_gate::rule_note(r).map(|n| {
+                            format!(
+                                "  tool rule {}: {}",
+                                r.pattern,
+                                super::perm::tools::gate_note(n)
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
     let reload = |name: &str| super::doctor_reload::read_state(&mur_home.join("agents").join(name));
 
     // Checked outside the rows loop on purpose: `rows` only holds agents with a
@@ -324,6 +347,9 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
                 &mur_home.join("agents").join(&r.name),
             ) && let Some(line) = super::scratch_check::scratch_line(&r.name, &dir, warn_size_mb)
             {
+                println!("{line}");
+            }
+            for line in gate_notes(&r.name) {
                 println!("{line}");
             }
             for (p, reason) in neutralised(&r.name) {

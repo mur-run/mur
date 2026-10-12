@@ -11,7 +11,7 @@ use super::{load_profile_for_edit, pid_alive, resolve_mur_home, save_profile};
 mod network;
 mod paths;
 mod spawn;
-mod tools;
+pub(super) mod tools;
 
 pub(crate) use network::{add_port, is_base_port};
 pub use network::{

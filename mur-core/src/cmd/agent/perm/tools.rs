@@ -50,8 +50,12 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
 fn rule_line(r: &mur_common::agent::ToolRule) -> String {
     use mur_common::agent::ToolPolicy;
     let policy = format!("{:?}", r.policy).to_lowercase();
+    // #1786: the tool's own tier can lift an allow too; say so on the line.
+    let gate = mur_common::hitl::allow_gate::rule_note(r)
+        .map(|n| format!("  {}", gate_note(n)))
+        .unwrap_or_default();
     let Some(risk) = r.risk else {
-        return format!("{policy:10}  {}", r.pattern);
+        return format!("{policy:10}  {}{gate}", r.pattern);
     };
     let risk_name = serde_json::to_value(risk)
         .ok()
@@ -62,7 +66,31 @@ fn rule_line(r: &mur_common::agent::ToolRule) -> String {
     } else {
         ""
     };
-    format!("{policy:10}  {}  risk={risk_name}{note}", r.pattern)
+    format!("{policy:10}  {}  risk={risk_name}{note}{gate}", r.pattern)
+}
+
+/// Operator-facing text for an `allow_gate` note. Shared with `doctor`.
+pub(crate) fn gate_note(n: mur_common::hitl::allow_gate::RuleNote) -> String {
+    use mur_common::hitl::allow_gate::RuleNote;
+    let tier = |t: mur_common::hitl::RiskTier| {
+        serde_json::to_value(t)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{t:?}"))
+    };
+    match n {
+        RuleNote::Override { intrinsic } => format!(
+            "\u{2192} OVERRIDE: runs a {} tool unattended (each call logged)",
+            tier(intrinsic)
+        ),
+        RuleNote::AsksForTool { intrinsic } => format!(
+            "\u{2192} asks ({} tool; add `risk: write` on this exact name to run unattended)",
+            tier(intrinsic)
+        ),
+        RuleNote::AsksForSome => {
+            "\u{2192} browser actions it matches still ask (network-egress/privileged)".to_string()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -88,10 +116,27 @@ mod tests {
     }
 
     #[test]
+    fn gate_notes_name_override_and_lifted_allow() {
+        let nav = |risk| ToolRule {
+            pattern: "mcp__browser__browser_navigate".into(),
+            policy: ToolPolicy::Allow,
+            risk,
+        };
+        assert!(rule_line(&nav(Some(RiskTier::Write))).contains("OVERRIDE"));
+        assert!(rule_line(&nav(None)).contains("asks (network-egress tool"));
+        assert!(rule_line(&r(ToolPolicy::Allow, None)).contains("browser actions"));
+    }
+
+    #[test]
     fn low_risk_and_no_risk_add_no_note() {
+        let gh = |risk| ToolRule {
+            pattern: "mcp__github__*".into(),
+            policy: ToolPolicy::Allow,
+            risk,
+        };
         assert_eq!(
-            rule_line(&r(ToolPolicy::Allow, Some(RiskTier::Write))),
-            "allow       mcp__browser__*  risk=write"
+            rule_line(&gh(Some(RiskTier::Write))),
+            "allow       mcp__github__*  risk=write"
         );
         assert_eq!(
             rule_line(&r(ToolPolicy::Deny, None)),

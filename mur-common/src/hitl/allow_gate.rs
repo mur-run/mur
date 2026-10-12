@@ -40,6 +40,38 @@ pub fn explicit_override(rules: &[ToolRule], tool_name: &str) -> bool {
     })
 }
 
+/// How a single profile rule reads under this gate, for operator-facing
+/// surfaces (`perm list-tools`, `doctor`). Runtime decisions never use this —
+/// they use [`allow_verdict`] on a concrete tool name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleNote {
+    /// Exact-name override: runs a gated tool unattended, logged per call.
+    Override { intrinsic: RiskTier },
+    /// Bare `allow` naming a gated tool exactly: asks anyway.
+    AsksForTool { intrinsic: RiskTier },
+    /// `allow` glob that can match gated (browser) tools: those ask.
+    AsksForSome,
+}
+
+/// The note `rule` deserves, if any. Only `allow` rules whose `risk:` does
+/// not already make them ask are considered — #1600's note covers those.
+pub fn rule_note(rule: &ToolRule) -> Option<RuleNote> {
+    use super::tool_name_tier::{classify_by_name, glob_may_cover_gated};
+    if rule.policy != ToolPolicy::Allow || rule.risk.is_some_and(|t| !super::tier_may_be_granted(t))
+    {
+        return None;
+    }
+    if let Some(prefix) = rule.pattern.strip_suffix('*') {
+        return glob_may_cover_gated(prefix).then_some(RuleNote::AsksForSome);
+    }
+    let intrinsic = classify_by_name(&rule.pattern).filter(|t| needs_attended_allow(*t))?;
+    Some(if rule.risk == Some(RiskTier::Write) {
+        RuleNote::Override { intrinsic }
+    } else {
+        RuleNote::AsksForTool { intrinsic }
+    })
+}
+
 /// What an `allow` that already resolved for `tool_name` does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllowVerdict {
@@ -185,6 +217,43 @@ mod tests {
                 AllowVerdict::Runs,
                 "{intrinsic:?} is outside option 3's scope"
             );
+        }
+    }
+
+    #[test]
+    fn rule_notes_cover_override_bare_and_glob() {
+        assert_eq!(
+            rule_note(&rule(NAV, ToolPolicy::Allow, Some(RiskTier::Write))),
+            Some(RuleNote::Override {
+                intrinsic: RiskTier::NetworkEgress
+            })
+        );
+        assert_eq!(
+            rule_note(&rule(NAV, ToolPolicy::Allow, None)),
+            Some(RuleNote::AsksForTool {
+                intrinsic: RiskTier::NetworkEgress
+            })
+        );
+        for g in [
+            "mcp__browser__*",
+            "mcp__playwright__*",
+            "*",
+            "mcp__x__browser_*",
+        ] {
+            assert_eq!(
+                rule_note(&rule(g, ToolPolicy::Allow, None)),
+                Some(RuleNote::AsksForSome),
+                "{g}"
+            );
+        }
+        for quiet in [
+            rule("mcp__github__*", ToolPolicy::Allow, None),
+            rule("edit_file", ToolPolicy::Allow, None),
+            rule("mcp__browser__browser_snapshot", ToolPolicy::Allow, None),
+            rule(NAV, ToolPolicy::Deny, None),
+            rule(NAV, ToolPolicy::Allow, Some(RiskTier::Destructive)),
+        ] {
+            assert_eq!(rule_note(&quiet), None, "{}", quiet.pattern);
         }
     }
 

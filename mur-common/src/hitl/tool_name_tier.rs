@@ -74,6 +74,42 @@ fn classify_browser(leaf: &str) -> Option<RiskTier> {
     Some(RiskTier::NetworkEgress)
 }
 
+/// Server-name fragments that mark an MCP server as a browser driver, for
+/// [`glob_may_cover_gated`] only. Classification itself never uses these —
+/// it keys on the tool LEAF, so an unlisted server still classifies right;
+/// this list only decides which globs get an operator-facing note.
+const BROWSER_SERVER_HINTS: &[&str] = &["browser", "playwright"];
+
+/// Whether an `allow` glob `<prefix>*` can match a tool whose name tier needs
+/// an attended allow. Advisory (for `perm` / `doctor` notes): `true` for the
+/// catch-alls, a browser-like server segment, or a leaf that can still grow
+/// into `browser_<acting>`.
+pub fn glob_may_cover_gated(prefix: &str) -> bool {
+    if prefix.is_empty() || prefix == "mcp__" {
+        return true;
+    }
+    // A non-MCP glob is all leaf: `browser_*` matches a bare `browser_click`.
+    let leaf = match prefix.strip_prefix("mcp__") {
+        None => prefix,
+        Some(rest) => match rest.split_once("__") {
+            Some((_, leaf)) if !leaf.is_empty() => leaf,
+            // Glob ends inside or right after the server segment: any tool
+            // of a browser-like server (or one it could still grow into).
+            other => {
+                let server = other.map_or(rest, |(s, _)| s).to_ascii_lowercase();
+                return BROWSER_SERVER_HINTS
+                    .iter()
+                    .any(|h| server.contains(h) || h.starts_with(server.as_str()));
+            }
+        },
+    };
+    // `browser_` or any shorter stem can grow into an acting tool; a longer
+    // one can too, unless it sits inside an observer-only family.
+    BROWSER_PREFIX.starts_with(leaf)
+        || (leaf.starts_with(BROWSER_PREFIX)
+            && !BROWSER_READ_PREFIXES.iter().any(|p| leaf.starts_with(p)))
+}
+
 /// `mcp__server__tool` → `tool`. An MCP server must not lower a tool's tier by
 /// prefixing it.
 fn leaf(name: &str) -> &str {
@@ -84,6 +120,32 @@ fn leaf(name: &str) -> &str {
 mod tests {
     use super::*;
     use crate::hitl::tier_may_be_granted;
+
+    #[test]
+    fn glob_coverage_flags_catch_alls_and_browser_servers_only() {
+        for p in [
+            "",
+            "mcp__",
+            "mcp__browser__",
+            "mcp__playwright__",
+            "mcp__x__browser_",
+            "mcp__x__b",
+            "mcp__x__browser_cli",
+            "browser_",
+            "mcp__play",
+        ] {
+            assert!(glob_may_cover_gated(p), "{p:?}");
+        }
+        for p in [
+            "mcp__github__",
+            "bash",
+            "mcp__x__browser_verify_",
+            "mcp__x__read_",
+            "edit_",
+        ] {
+            assert!(!glob_may_cover_gated(p), "{p:?}");
+        }
+    }
 
     /// Dispatch tools are Spend by name, and an MCP prefix must not launder them.
     #[test]
