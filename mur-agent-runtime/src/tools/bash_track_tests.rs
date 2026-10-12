@@ -43,6 +43,14 @@ mod runtime {
         let project = std::fs::canonicalize(tmp.path()).unwrap().join("proj");
         let track = project.join(".worktrees").join(TRACK_NAME);
         std::fs::create_dir_all(&track).unwrap();
+        // A real track is a git worktree; the warm path lists its sources
+        // with `git ls-files` and drops the clone if it cannot.
+        let git = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&track)
+            .status()
+            .unwrap();
+        assert!(git.success(), "git init");
         std::fs::create_dir_all(project.join("target/debug/.fingerprint")).unwrap();
         std::fs::create_dir_all(project.join("target/debug/deps")).unwrap();
         std::fs::write(project.join("Cargo.toml"), "[workspace]\n").unwrap();
@@ -79,6 +87,7 @@ mod runtime {
         let first = run(&tool, "cargo --version >/dev/null 2>&1; true").await;
         let second = run(&tool, "cargo --version >/dev/null 2>&1; true").await;
         if cfg!(any(target_os = "macos", target_os = "linux")) && first.contains(NOTE) {
+            assert!(first.contains(CLONED), "first call must clone: {first}");
             assert!(turn_dir(&project).join("debug/deps").is_dir());
         }
         assert!(
