@@ -45,6 +45,7 @@ async fn bash_write_in_a_turn_lands_via_promote_and_is_counted() {
             pattern: "bash".into(),
             policy: mur_common::agent::ToolPolicy::Allow,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }])
         .with_sandbox_enforcing(true)
         .with_pending_approvals(empty_pending_approvals())
@@ -172,6 +173,7 @@ async fn explicit_project_cwd_in_bash_stays_in_the_track() {
         pattern: "bash".into(),
         policy: mur_common::agent::ToolPolicy::Allow,
         risk: None,
+        bypass_builtin_tier_floor: false,
     }])
     .with_sandbox_enforcing(true)
     .with_pending_approvals(empty_pending_approvals())

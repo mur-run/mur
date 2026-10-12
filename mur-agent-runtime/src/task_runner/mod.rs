@@ -460,6 +460,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Default::default(),
+            bypass_builtin_tier_floor: false,
         }
     }
 
@@ -518,6 +519,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Some(risk),
+            bypass_builtin_tier_floor: false,
         }
     }
 
@@ -594,6 +596,31 @@ mod tool_policy_tests {
                 "{name} only observes"
             );
         }
+    }
+
+    /// #1786: the waiver is per rule and explicit. The deciding rule's
+    /// `bypass_builtin_tier_floor` lets an acting browser tool through; a
+    /// waiver on a broader, non-deciding rule does not, and it never lowers
+    /// a declared `risk:`.
+    #[test]
+    fn bypass_builtin_tier_floor_is_per_rule_and_never_lowers_risk() {
+        let mut waived = rule("mcp__browser__*", ToolPolicy::Allow);
+        waived.bypass_builtin_tier_floor = true;
+        let click = "mcp__browser__browser_click";
+        assert_eq!(
+            effective_tool_policy(std::slice::from_ref(&waived), click),
+            ToolPolicy::Allow
+        );
+
+        let mut broad = rule("mcp__*", ToolPolicy::Allow);
+        broad.bypass_builtin_tier_floor = true;
+        let rules = [rule("mcp__browser__*", ToolPolicy::Allow), broad];
+        assert_eq!(effective_tool_policy(&rules, click), ToolPolicy::Ask);
+
+        let mut risky = rule("mcp__browser__*", ToolPolicy::Allow);
+        risky.bypass_builtin_tier_floor = true;
+        risky.risk = Some(mur_common::hitl::RiskTier::NetworkEgress);
+        assert_eq!(effective_tool_policy(&[risky], click), ToolPolicy::Ask);
     }
 
     /// An exemption only fills in for a missing rule; a risk-declaring rule

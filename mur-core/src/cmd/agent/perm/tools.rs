@@ -16,6 +16,7 @@ pub fn cmd_perm_set_tool(name: &str, policy: ToolPolicy, pattern: &str) -> Resul
             pattern: pattern.to_string(),
             policy,
             risk: None,
+            bypass_builtin_tier_floor: false,
         });
     }
     save_profile(&path, &mut profile)?;
@@ -76,6 +77,7 @@ mod tests {
             pattern: "mcp__browser__*".into(),
             policy,
             risk,
+            bypass_builtin_tier_floor: false,
         }
     }
 

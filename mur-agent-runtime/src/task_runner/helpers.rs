@@ -395,6 +395,9 @@ pub(super) fn user_message(input: &Message) -> crate::llm::RichMessage {
 /// 5. #1600: an `Allow` from steps 2–3 becomes `Ask` when a matching rule
 ///    declares `risk:` above `Write` — `allow` means "policy does not refuse",
 ///    not "skip the risk gate". `Deny` is never loosened.
+/// 6. #1786: likewise when the tool's BUILT-IN tier (acting browser tools)
+///    is above the ceiling, unless the deciding rule sets
+///    `bypass_builtin_tier_floor: true`. `risk:` itself still only raises.
 pub(crate) fn effective_tool_policy(
     rules: &[mur_common::agent::ToolRule],
     tool_name: &str,
@@ -419,7 +422,38 @@ pub(crate) fn effective_tool_policy(
     {
         return ToolPolicy::Ask;
     }
+    // #1786: a riskless `allow` (typically `mcp__browser__*`) must not carry
+    // an acting browser tool past the gate. The built-in tier is a floor;
+    // only the deciding rule's `bypass_builtin_tier_floor` waives it.
+    if base == ToolPolicy::Allow && builtin_floor(rules, tool_name).is_some_and(|f| !f.waived) {
+        return ToolPolicy::Ask;
+    }
     base
+}
+
+/// A built-in tier above the session-grant ceiling that applies to
+/// `tool_name`, and whether the deciding rule waived it (#1786).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BuiltinFloor {
+    pub tier: mur_common::hitl::RiskTier,
+    pub waived: bool,
+    /// Pattern of the rule that decided the policy (`None` = no rule).
+    pub rule: Option<String>,
+}
+
+pub(crate) fn builtin_floor(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+) -> Option<BuiltinFloor> {
+    let tier = mur_common::hitl::builtin_tier::browser_tier(tool_name)
+        .filter(|t| !mur_common::hitl::tier_may_be_granted(*t))?;
+    let rule = mur_common::agent::resolve_tool_rule(rules, tool_name)
+        .or_else(|| mur_common::agent::resolve_tool_rule(rules, policy_name(tool_name)));
+    Some(BuiltinFloor {
+        tier,
+        waived: rule.is_some_and(|r| r.bypass_builtin_tier_floor),
+        rule: rule.map(|r| r.pattern.clone()),
+    })
 }
 
 /// The strictest `risk:` declared for `tool_name`, looked up under the same

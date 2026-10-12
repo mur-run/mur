@@ -228,6 +228,19 @@ impl GuardedToolCall {
         {
             use mur_common::agent::ToolPolicy;
             let policy = effective_tool_policy(&self.tools_policy, &call.tool_name);
+            if policy == ToolPolicy::Allow
+                && let Some(floor) =
+                    crate::task_runner::builtin_floor(&self.tools_policy, &call.tool_name)
+                && floor.waived
+            {
+                // #1786: the opt-out must leave a trail every time it acts.
+                tracing::warn!(
+                    tool = %call.tool_name,
+                    builtin_tier = ?floor.tier,
+                    rule = floor.rule.as_deref().unwrap_or(""),
+                    "builtin tier floor waived by bypass_builtin_tier_floor; running without approval"
+                );
+            }
             match policy {
                 ToolPolicy::Deny => {
                     return Ok(ToolResultEntry {
