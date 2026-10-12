@@ -45,15 +45,6 @@ After every save, tell the user in ONE line, in their language, what you saved a
 pub const MEMORY_DIRECTIVE_ASK: &str = " Before saving, ask the user for a one-line \
 confirmation and save only on a yes.";
 
-/// Read the capture mode from the global config. Missing/unreadable config
-/// falls back to the serde default (auto_announce) — same load path every
-/// other config consumer uses.
-pub fn capture_mode(mur_home: &std::path::Path) -> mur_common::config::CaptureMode {
-    mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
-        .memory
-        .capture
-}
-
 /// The production resolver: the project of the directory THIS TURN works in.
 ///
 /// Wraps the runtime's [`SessionCwd`], which is the same source `bash` and the

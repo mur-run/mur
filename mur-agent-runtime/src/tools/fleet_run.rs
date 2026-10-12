@@ -83,10 +83,9 @@ pub fn allowed(cfg: &mur_common::config::FleetRunConfig, agent: &str, fleet: &st
     cfg.agents.iter().any(|a| a == agent) && cfg.fleets.iter().any(|f| f == fleet)
 }
 
-/// Does the global config allow `agent` to run ANY fleet? Used at tool
-/// registration so unauthorized agents never even see the tool.
-pub fn agent_enabled(mur_home: &std::path::Path, agent: &str) -> bool {
-    let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).fleet_run;
+/// Does `cfg` allow `agent` to run ANY fleet? Used at tool registration (on
+/// the pre-seal boot snapshot, #1796) so unauthorized agents never see it.
+pub fn enabled_in(cfg: &mur_common::config::FleetRunConfig, agent: &str) -> bool {
     cfg.agents.iter().any(|a| a == agent) && !cfg.fleets.is_empty()
 }
 
@@ -497,14 +496,14 @@ mod tests {
     #[test]
     fn agent_enabled_gates_registration() {
         let tmp = tempfile::tempdir().unwrap();
-        write_config(tmp.path(), "{}");
-        assert!(!agent_enabled(tmp.path(), "mur"));
-        write_config(
-            tmp.path(),
-            "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
-        );
-        assert!(agent_enabled(tmp.path(), "mur"));
-        assert!(!agent_enabled(tmp.path(), "dr_worker_1"));
+        let load = |y: &str| {
+            write_config(tmp.path(), y);
+            mur_common::config::Config::load_or_default(&tmp.path().join("config.yaml")).fleet_run
+        };
+        assert!(!enabled_in(&load("{}"), "mur"));
+        let cfg = load("fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n");
+        assert!(enabled_in(&cfg, "mur"));
+        assert!(!enabled_in(&cfg, "dr_worker_1"));
     }
 
     #[test]

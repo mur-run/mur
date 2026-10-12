@@ -253,6 +253,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         warn!(error = %e, "grace-period cleanup failed");
     }
 
+    // 3b'. The one boot read of config.yaml and the global limits seed, both
+    //      BEFORE the seal (#1796): a post-seal read can fail on an atomically
+    //      replaced file and silently fall back to defaults.
+    let boot_cfg = crate::supervisor_runner::load_boot_config(&mur_home);
+    let boot_global_limits = match mur_common::limits::load_global(&mur_home) {
+        Ok(g) => g.limits,
+        Err(e) => {
+            tracing::warn!(error = %e, "global limits did not load at boot; running on built-in defaults");
+            Default::default()
+        }
+    };
     // 3c–3d. Pre-seal setup and the B1 sandbox seal — see `seal.rs`.
     let seal::Sealed {
         egress_proxy,
@@ -262,13 +273,6 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     } = seal::prepare_and_seal(&profile, &agent_home, &mur_home).await?;
     // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
     //    read per turn. Built after the seal: both stay readable.
-    let boot_global_limits = match mur_common::limits::load_global(&mur_home) {
-        Ok(g) => g.limits,
-        Err(e) => {
-            tracing::warn!(error = %e, "global limits did not load at boot; running on built-in defaults");
-            Default::default()
-        }
-    };
     let live = crate::live_profile::LiveSettings::new(
         &agent_home,
         &mur_home,
@@ -294,6 +298,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         &profile,
         socket_enabled,
         &live.profile,
+        &boot_cfg,
     )
     .await?;
 
@@ -347,6 +352,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             // `Some` on every path that reaches here; `None` would mean no
             // seal was attempted, which must not count as sealed.
             sandbox_record.as_ref().is_some_and(|r| r.enforcing),
+            &boot_cfg,
         )
         .await?;
     runner.attach_live(live.clone());

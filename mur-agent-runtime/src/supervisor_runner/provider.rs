@@ -57,6 +57,9 @@ pub async fn build_provider_runner(
     secrets: Arc<crate::secrets::SecretVault>,
     // B1 seal state for this boot, from the supervisor's `sandbox_record`.
     sandbox_enforcing: bool,
+    // Boot snapshot of config.yaml, read before the seal (#1796). Every
+    // boot-once setting below comes from here, never a post-seal re-read.
+    boot_cfg: &mur_common::config::Config,
 ) -> anyhow::Result<(
     Arc<TaskRunner>,
     Option<Arc<dyn LlmClient>>,
@@ -205,9 +208,9 @@ pub async fn build_provider_runner(
     // config (`fleet_run.agents`, deny-by-default) — unauthorized agents never
     // see the tool. An explicit Deny rule in the profile still wins.
     {
-        use crate::tools::fleet_run::{FLEET_RUN, FleetRunTool, agent_enabled};
+        use crate::tools::fleet_run::{FLEET_RUN, FleetRunTool, enabled_in};
         use mur_common::agent::{ToolPolicy, resolve_tool_policy};
-        if agent_enabled(&mur_home, &profile.inner.name)
+        if enabled_in(&boot_cfg.fleet_run, &profile.inner.name)
             && resolve_tool_policy(&tools_policy, FLEET_RUN) != ToolPolicy::Deny
         {
             tool_map.insert(
@@ -230,7 +233,7 @@ pub async fn build_provider_runner(
     // wins. No profile rule can approve a push — the tool only queues it; the
     // human approval happens daemon-side on the exact (ref, old, new).
     #[cfg(unix)]
-    if crate::tools::git_push::agent_enabled(&mur_home, &profile.inner.name) {
+    if crate::tools::git_push::allowed(&boot_cfg.git_push, &profile.inner.name) {
         use crate::tools::git_push::*;
         use mur_common::agent::{ToolPolicy, resolve_tool_policy};
         let agent = profile.inner.name.clone();
@@ -305,7 +308,7 @@ pub async fn build_provider_runner(
     // Built-in remember (memory federation P2a): proactive capture of durable
     // user preferences/facts as agent-local Draft notes. Gated on the global
     // `memory.capture` config; an explicit Deny in the profile still wins.
-    let memory_capture = crate::tools::remember::capture_mode(&mur_home);
+    let memory_capture = boot_cfg.memory.capture;
     {
         use crate::tools::remember::{REMEMBER, RememberTool};
         use mur_common::agent::{ToolPolicy, resolve_tool_policy};
@@ -370,9 +373,8 @@ pub async fn build_provider_runner(
     // expansion, so a signature written into skill markdown could never track
     // this config.
     let system_prompt_with_memory: Option<String> = {
-        let cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
         match attribution_fragment(
-            &cfg.attribution,
+            &boot_cfg.attribution,
             profile.inner.entitlements.processes.spawn.mode,
         ) {
             None => system_prompt_with_memory,
@@ -447,8 +449,7 @@ pub async fn build_provider_runner(
     // Smart off (the default), `needs_routing_client` is false — the exact
     // single-model path below runs unchanged (byte-for-byte with the
     // pre-Task-7 behaviour).
-    let switch_cfg =
-        mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).models;
+    let switch_cfg = boot_cfg.models.clone();
     let routing = profile.inner.effective_routing(&switch_cfg);
     let smart = profile.inner.effective_smart(&switch_cfg);
     let refs = mur_common::model::resolve_model_refs(&profile.inner, &switch_cfg, None);
