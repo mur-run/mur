@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::task_runner::{
-    cap_step_output, decide_without_asking, declared_tool_risk, denied_args_preview, deny_message,
-    effective_tool_policy, step_notification, task_error,
+    approval_risk, cap_step_output, decide_without_asking, denied_args_preview, deny_message,
+    effective_tool_policy, effective_tool_policy_verdict, step_notification, task_error,
 };
 use mur_common::a2a::TaskError;
 
@@ -142,7 +142,7 @@ impl GuardedToolCall {
                 &self.agent_name,
                 step_id,
                 call,
-                declared_tool_risk(&self.tools_policy, &call.tool_name),
+                approval_risk(&self.tools_policy, &call.tool_name),
             ));
         }
         if pending.is_empty() {
@@ -227,7 +227,20 @@ impl GuardedToolCall {
         // 1b. Policy gate: check before executing.
         {
             use mur_common::agent::ToolPolicy;
-            let policy = effective_tool_policy(&self.tools_policy, &call.tool_name);
+            let (policy, verdict) =
+                effective_tool_policy_verdict(&self.tools_policy, &call.tool_name);
+            // #1786 guardrail: an override must never be silent. One line per
+            // call it releases, at warn so it survives the default filter.
+            if let Some(mur_common::hitl::allow_gate::AllowVerdict::RunsByOverride { intrinsic }) =
+                verdict
+            {
+                tracing::warn!(
+                    agent = %self.agent_name,
+                    tool = %call.tool_name,
+                    intrinsic = ?intrinsic,
+                    "risk override: exact `risk: write` rule runs a tool above the allow ceiling unattended"
+                );
+            }
             match policy {
                 ToolPolicy::Deny => {
                     return Ok(ToolResultEntry {

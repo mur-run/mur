@@ -395,13 +395,30 @@ pub(super) fn user_message(input: &Message) -> crate::llm::RichMessage {
 /// 5. #1600: an `Allow` from steps 2–3 becomes `Ask` when a matching rule
 ///    declares `risk:` above `Write` — `allow` means "policy does not refuse",
 ///    not "skip the risk gate". `Deny` is never loosened.
+/// 6. #1786: an `Allow` also becomes `Ask` when the tool's OWN tier is one a
+///    bare `allow` may not cover (`mur_common::hitl::allow_gate`), unless an
+///    exact-name `risk: write` override names it.
 pub(crate) fn effective_tool_policy(
     rules: &[mur_common::agent::ToolRule],
     tool_name: &str,
 ) -> mur_common::agent::ToolPolicy {
+    effective_tool_policy_verdict(rules, tool_name).0
+}
+
+/// [`effective_tool_policy`] plus the `allow` verdict behind it, so the
+/// execution path can leave an audit line when an override is what let a
+/// tool run. `None` = the policy was not `Allow` before step 5.
+pub(crate) fn effective_tool_policy_verdict(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+) -> (
+    mur_common::agent::ToolPolicy,
+    Option<mur_common::hitl::allow_gate::AllowVerdict>,
+) {
     use mur_common::agent::{ToolPolicy, resolve_tool_policy_opt};
+    use mur_common::hitl::allow_gate::{AllowVerdict, allow_verdict};
     if crate::tools::suggest::suggest_replies_allowed(tool_name) {
-        return ToolPolicy::Allow;
+        return (ToolPolicy::Allow, None);
     }
     let base = match resolve_tool_policy_opt(rules, tool_name)
         .or_else(|| resolve_tool_policy_opt(rules, policy_name(tool_name)))
@@ -410,16 +427,38 @@ pub(crate) fn effective_tool_policy(
         None if crate::tools::recall::recall_needs_no_approval(tool_name) => ToolPolicy::Allow,
         None => ToolPolicy::default(),
     };
-    // Deliberately reuses the session-grant ceiling rather than `tier > Write`:
-    // "allow runs without asking" and "a session grant covers it" are the same
-    // line, so widening `tier_may_be_granted` must widen both together (#1600).
-    if base == ToolPolicy::Allow
-        && declared_tool_risk(rules, tool_name)
-            .is_some_and(|tier| !mur_common::hitl::tier_may_be_granted(tier))
-    {
-        return ToolPolicy::Ask;
+    if base != ToolPolicy::Allow {
+        return (base, None);
     }
-    base
+    // Declared risk reuses the session-grant ceiling (#1600); the intrinsic
+    // tier comes from the same name table the cli's chat gate uses (#1786),
+    // so the two gates answer an `allow` the same way. The override must name
+    // `tool_name` itself — the `bash_wait`→`bash` alias is a policy lookup,
+    // not an operator sentence about this tool.
+    let verdict = allow_verdict(
+        rules,
+        tool_name,
+        declared_tool_risk(rules, tool_name),
+        mur_common::hitl::tool_name_tier::classify_by_name(tool_name),
+    );
+    let policy = match verdict {
+        AllowVerdict::Asks { .. } => ToolPolicy::Ask,
+        AllowVerdict::Runs | AllowVerdict::RunsByOverride { .. } => ToolPolicy::Allow,
+    };
+    (policy, Some(verdict))
+}
+
+/// The tier an approval prompt carries: the higher of the declared `risk:`
+/// and the tool's own name tier (#1786). Without the intrinsic half, a call
+/// that asks only because of its own tier would reach the client tier-less
+/// and could be shown — or session-granted — as an ordinary write.
+pub(crate) fn approval_risk(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+) -> Option<mur_common::hitl::RiskTier> {
+    let declared = declared_tool_risk(rules, tool_name);
+    let intrinsic = mur_common::hitl::tool_name_tier::classify_by_name(tool_name);
+    declared.max(intrinsic)
 }
 
 /// The strictest `risk:` declared for `tool_name`, looked up under the same

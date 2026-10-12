@@ -452,7 +452,7 @@ mod deny_message_tests {
 
 #[cfg(test)]
 mod tool_policy_tests {
-    use super::effective_tool_policy;
+    use super::{approval_risk, effective_tool_policy};
     use mur_common::agent::{ToolPolicy, ToolRule};
 
     fn rule(pattern: &str, policy: ToolPolicy) -> ToolRule {
@@ -561,6 +561,82 @@ mod tool_policy_tests {
                 effective_tool_policy(&rules, name),
                 ToolPolicy::Ask,
                 "{name}"
+            );
+        }
+    }
+
+    /// #1786: the issue's own failing case — a bare glob `allow` used to drive
+    /// the logged-in browser unattended because no `risk:` was declared.
+    #[test]
+    fn bare_allow_on_an_acting_browser_tool_asks() {
+        let rules = [rule("mcp__browser__*", ToolPolicy::Allow)];
+        assert_eq!(
+            effective_tool_policy(&rules, "mcp__browser__browser_navigate"),
+            ToolPolicy::Ask
+        );
+        assert_eq!(
+            effective_tool_policy(&rules, "mcp__browser__browser_storage_state"),
+            ToolPolicy::Ask,
+            "Privileged is gated too"
+        );
+        assert_eq!(
+            effective_tool_policy(&rules, "mcp__browser__browser_snapshot"),
+            ToolPolicy::Allow,
+            "observers stay unattended"
+        );
+    }
+
+    /// #1786 escape hatch: an exact-name `risk: write` keeps running.
+    #[test]
+    fn exact_risk_write_override_keeps_a_browser_tool_running() {
+        let rules = [
+            rule("mcp__browser__*", ToolPolicy::Allow),
+            risky(
+                "mcp__browser__browser_navigate",
+                ToolPolicy::Allow,
+                RiskTier::Write,
+            ),
+        ];
+        assert_eq!(
+            effective_tool_policy(&rules, "mcp__browser__browser_navigate"),
+            ToolPolicy::Allow
+        );
+        assert_eq!(
+            effective_tool_policy(&rules, "mcp__browser__browser_click"),
+            ToolPolicy::Ask,
+            "the override covers only the tool it names"
+        );
+    }
+
+    /// #1786: the prompt for a call gated by its own tier carries that tier,
+    /// so a client cannot show or session-grant it as a plain write.
+    #[test]
+    fn approval_risk_is_the_higher_of_declared_and_intrinsic() {
+        let rules = [rule("mcp__browser__*", ToolPolicy::Allow)];
+        assert_eq!(
+            approval_risk(&rules, "mcp__browser__browser_navigate"),
+            mur_common::hitl::tool_name_tier::classify_by_name("mcp__browser__browser_navigate")
+        );
+        let rules = [risky(
+            "mcp__browser__*",
+            ToolPolicy::Allow,
+            RiskTier::Destructive,
+        )];
+        assert_eq!(
+            approval_risk(&rules, "mcp__browser__browser_navigate"),
+            Some(RiskTier::Destructive)
+        );
+        assert_eq!(approval_risk(&[], "edit_file"), None);
+    }
+
+    /// `deny` and `ask` are never touched by the intrinsic tier.
+    #[test]
+    fn intrinsic_tier_never_changes_deny_or_ask() {
+        for p in [ToolPolicy::Deny, ToolPolicy::Ask] {
+            let rules = [rule("mcp__browser__*", p)];
+            assert_eq!(
+                effective_tool_policy(&rules, "mcp__browser__browser_navigate"),
+                p
             );
         }
     }

@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod allow_gate;
 pub mod approval_token;
 pub mod label;
 pub mod pin;
