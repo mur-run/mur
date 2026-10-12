@@ -565,6 +565,37 @@ mod tool_policy_tests {
         }
     }
 
+    /// #1786: a wildcard `allow` with no `risk:` must not carry an acting
+    /// browser tool past the gate. The built-in tier (NetworkEgress for
+    /// acting tools, Privileged for cookie export) is a floor the rule cannot
+    /// silently lower; observers stay allowed.
+    #[test]
+    fn riskless_wildcard_allow_still_asks_for_acting_browser_tools() {
+        let rules = [rule("mcp__browser__*", ToolPolicy::Allow)];
+        for name in [
+            "mcp__browser__browser_click",
+            "mcp__browser__browser_navigate",
+            "mcp__browser__browser_evaluate",
+            "mcp__browser__browser_storage_state",
+        ] {
+            assert_eq!(
+                effective_tool_policy(&rules, name),
+                ToolPolicy::Ask,
+                "{name}"
+            );
+        }
+        for name in [
+            "mcp__browser__browser_snapshot",
+            "mcp__browser__browser_verify_text_visible",
+        ] {
+            assert_eq!(
+                effective_tool_policy(&rules, name),
+                ToolPolicy::Allow,
+                "{name} only observes"
+            );
+        }
+    }
+
     /// An exemption only fills in for a missing rule; a risk-declaring rule
     /// is explicit, so it lifts an exempt tool too.
     #[test]
