@@ -19,6 +19,10 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+pub mod target;
+
+#[cfg(test)]
+mod target_tests;
 #[cfg(test)]
 mod tests;
 
