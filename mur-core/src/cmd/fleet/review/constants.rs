@@ -305,6 +305,17 @@ pub const REVIEW_FLAGS_END: &str = "--";
 /// session, unless a more urgent review hint takes its place.
 pub const REVIEW_FOOTER_HINT: &str = "Esc pause after turn · Esc Esc abort";
 
+/// #1787: footer at the MURMUR send gate. No turn runs and Esc does nothing
+/// there, so it names the gate's keys; the stop word is
+/// [`MURMUR_STOP_COMMAND`] (bare `q` is a note in MURMUR).
+pub const REVIEW_FOOTER_GATE: &str = "Enter send · text adds a note · /stop stops";
+
+/// #1787: footer at the ruling prompt ([`RULING_PROMPT`]).
+pub const REVIEW_FOOTER_RULING: &str = "/rule drop|fix F<n> <text> · /abandon · q leave paused";
+
+/// #1787: footer at `Paused — continue?`. Anything but Enter/y leaves it paused.
+pub const REVIEW_FOOTER_RESUME: &str = "Enter continue · q leave paused";
+
 /// P3b-§6.2: footer while Esc×1 has armed a pause after the current turn.
 pub const REVIEW_FOOTER_PAUSE_ARMED: &str = "⏸ after turn";
 

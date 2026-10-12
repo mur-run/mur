@@ -7,13 +7,15 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 use super::ReviewSession;
+use super::state::Awaiting;
 use super::test_fixtures::{app_at, home, tx};
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::StreamMsg;
 use crate::cmd::agent::cli::stream_handler::handle_stream;
 use crate::cmd::fleet::review::constants::{
-    REVIEW_CANCEL_UNSUPPORTED, REVIEW_FOOTER_CLOSING, REVIEW_FOOTER_HINT, REVIEW_FOOTER_PAUSE_ARMED,
+    MURMUR_STOP_COMMAND, REVIEW_CANCEL_UNSUPPORTED, REVIEW_FOOTER_CLOSING, REVIEW_FOOTER_GATE,
+    REVIEW_FOOTER_HINT, REVIEW_FOOTER_PAUSE_ARMED, REVIEW_FOOTER_RULING,
 };
 use crate::cmd::fleet::review::murmur::bridge::{DriverReq, Outcome};
 use crate::cmd::fleet::review::schema::{Cumulative, ReviewPayload, Role, VerdictKind};
@@ -150,4 +152,44 @@ fn label_refreshes_at_turn_started() {
     let row = footer(&app);
     assert!(row.contains("≥ $1.50"), "{row}");
     assert!(row.contains("review review-ab230001 · "), "{row}");
+}
+
+/// #1787: at the send gate no turn runs and Esc does nothing, so the footer
+/// must not offer the Esc turn hint; it names the gate's own keys instead.
+/// A pause armed earlier in the session does not hide the gate hint.
+#[test]
+fn send_gate_footer_shows_the_gate_hint_not_the_esc_turn_hint() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[]);
+    let s = app.review.as_mut().unwrap();
+    s.turn.pause_armed = true;
+    s.awaiting = Some(Awaiting::Confirm {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = footer(&app);
+
+    assert!(!row.contains(REVIEW_FOOTER_HINT), "{row}");
+    assert!(!row.contains(REVIEW_FOOTER_PAUSE_ARMED), "{row}");
+    assert!(row.contains(REVIEW_FOOTER_GATE), "{row}");
+    assert!(REVIEW_FOOTER_GATE.contains(MURMUR_STOP_COMMAND));
+}
+
+/// #1787: the ruling prompt is an answer prompt too, not a running turn.
+#[test]
+fn ruling_footer_shows_the_answer_hint_not_the_esc_turn_hint() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[]);
+    app.review.as_mut().unwrap().awaiting = Some(Awaiting::Ruling {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = footer(&app);
+
+    assert!(!row.contains(REVIEW_FOOTER_HINT), "{row}");
+    assert!(row.contains(REVIEW_FOOTER_RULING), "{row}");
 }
