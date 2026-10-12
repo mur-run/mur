@@ -90,6 +90,16 @@ pub fn agent_enabled(mur_home: &std::path::Path, agent: &str) -> bool {
     cfg.agents.iter().any(|a| a == agent) && !cfg.fleets.is_empty()
 }
 
+/// Refusal for an unreadable `config.yaml`: still deny (fail-closed), but name
+/// the read error and the restart, not an allowlist edit (#1795).
+fn unreadable_config_message(err: &str) -> String {
+    mur_common::authz::not_authorized(&format!(
+        "fleet_run: could not re-read the fleet_run allowlist ({err}); refusing until it \
+         can be read. If ~/.mur/config.yaml was edited since this agent started, \
+         restart the agent to pick up the change"
+    ))
+}
+
 #[async_trait::async_trait]
 impl ToolExecutor for FleetRunTool {
     fn name(&self) -> &str {
@@ -167,7 +177,10 @@ cost_usd) and by `mur fleet stop`."
 
         // Deny-by-default authorization gate (re-checked here even though
         // registration already gates: defense in depth, and a precise error).
-        let cfg = mur_common::config::Config::load_or_default(&self.mur_home.join("config.yaml"))
+        // Unreadable still refuses, with an accurate error (#1795): on sealed
+        // Linux a rename-replaced config.yaml is an inode Landlock never granted.
+        let cfg = mur_common::config::Config::try_load(&self.mur_home.join("config.yaml"))
+            .map_err(|e| ToolError::NotAuthorized(unreadable_config_message(&e)))?
             .fleet_run;
         if !allowed(&cfg, &self.agent_name, &fleet) {
             return Err(ToolError::NotAuthorized(mur_common::authz::not_authorized(
@@ -345,6 +358,9 @@ pub(crate) fn spawn_error_message(bin: &std::path::Path, e: &std::io::Error) -> 
          changed after it started"
     )
 }
+
+#[cfg(test)]
+mod unreadable_tests;
 
 #[cfg(test)]
 mod tests {
