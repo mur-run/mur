@@ -12,6 +12,7 @@
 //! bypasses the track.
 
 use super::*;
+use mur_track::turn::target::{remove_turn_target, sweep_orphan_turn_targets, turn_target_dir};
 use mur_track::{TreeClone, TurnTrack, UndoStore};
 use std::path::{Path, PathBuf};
 
@@ -64,7 +65,10 @@ impl TaskRunner {
     /// did.
     fn create_track(turn: &str, origin: &Path) -> Option<TurnTrack> {
         match TurnTrack::create(origin, &track_name(turn), TreeClone::detect()) {
-            Ok(t) => Some(t),
+            Ok(t) => {
+                sweep_turn_targets(turn, t.project());
+                Some(t)
+            }
             Err(e) => {
                 tracing::warn!(turn, cwd = %origin.display(), error = %e, "no turn track; working on the project directly");
                 None
@@ -247,8 +251,11 @@ fn close_track(
                     .map(|f| f.to_string_lossy().into_owned())
                     .collect(),
             );
+            let turn_dir = turn_target_dir_of(&track);
             if let Err(e) = track.destroy() {
                 tracing::warn!(turn, error = %e, "turn track promoted but not destroyed");
+            } else if let Some(dir) = turn_dir {
+                remove_turn_target_in_background(turn, dir);
             }
         }
         Err(e) => {
@@ -256,6 +263,53 @@ fn close_track(
             ledger.track_kept = Some(track.path().to_string_lossy().into_owned());
         }
     }
+}
+
+/// `turn_track.warm_build_cache.turn_target_subdir`, validated.
+fn turn_target_subdir() -> String {
+    mur_common::config::Config::load_or_default(&mur_common::trust::mur_home().join("config.yaml"))
+        .turn_track
+        .warm_build_cache
+        .validated_subdir()
+        .to_string()
+}
+
+/// Remove turn dirs whose worktree is gone (a crashed or killed turn, here or
+/// in another agent on the same project). Never fails the turn.
+fn sweep_turn_targets(turn: &str, project: &Path) {
+    let report = sweep_orphan_turn_targets(project, &turn_target_subdir());
+    if !report.removed.is_empty() {
+        tracing::info!(
+            turn,
+            removed = report.removed.len(),
+            "swept orphan turn target dirs"
+        );
+    }
+    for (path, error) in report.failed {
+        tracing::warn!(turn, path = %path.display(), %error, "orphan turn target dir not removed");
+    }
+}
+
+/// `<project>/target/<subdir>/<track-name>` for this track.
+fn turn_target_dir_of(track: &TurnTrack) -> Option<PathBuf> {
+    let name = track.path().file_name()?.to_str()?;
+    Some(turn_target_dir(
+        track.project(),
+        &turn_target_subdir(),
+        name,
+    ))
+}
+
+/// Delete the destroyed track's turn dir off this thread: a warm target is
+/// many GiB and the turn must not wait for it. A failure is left to the
+/// next sweep.
+fn remove_turn_target_in_background(turn: &str, dir: PathBuf) {
+    let turn = turn.to_string();
+    std::thread::spawn(move || {
+        if let Err(e) = remove_turn_target(&dir) {
+            tracing::warn!(turn, dir = %dir.display(), error = %e, "turn target dir not removed; next sweep retries");
+        }
+    });
 }
 
 /// Track directory name for a turn id. Task ids are `task-<uuid>` or

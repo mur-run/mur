@@ -717,3 +717,22 @@ fn explicit_bash_cwd_inside_the_project_is_redirected_into_the_track() {
         "no track, no redirect"
     );
 }
+
+/// The bash tool needs the (project, track) pair of the calling turn to point
+/// `CARGO_TARGET_DIR` at the project's exec-granted `target/`. Only a turn
+/// that is inside a track has one; leaving the track drops it.
+#[test]
+fn track_of_returns_pair_inside_track_only() {
+    let project = PathBuf::from("/p");
+    let track = project.join(".worktrees/turn-1");
+    let cwd = SessionCwd::new(project.clone());
+    cwd.begin_turn("t1", None, Some(project.clone()));
+    assert_eq!(cwd.track_of("t1"), None, "no track yet");
+
+    cwd.enter_track("t1", project.clone(), track.clone());
+    assert_eq!(cwd.track_of("t1"), Some((project.clone(), track)));
+    assert_eq!(cwd.track_of("t2"), None, "other turns are unaffected");
+
+    cwd.leave_track("t1", project);
+    assert_eq!(cwd.track_of("t1"), None, "gone after leave");
+}

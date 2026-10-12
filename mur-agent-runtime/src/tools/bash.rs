@@ -250,6 +250,12 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
                 env.push((key.to_string(), val));
             }
         }
+        // Inside a turn track, route Cargo to an exec-granted target dir. Before
+        // the vault so a user secret of the same name still wins.
+        env.extend(super::bash_track::target_env_for_current_turn(
+            &self.session_cwd,
+            self.agent.as_ref(),
+        ));
         // Values leave the vault only here, straight into the child's
         // environment. The model never sees them: the pump masks every chunk
         // before it reaches the tail or the spool (D10).
