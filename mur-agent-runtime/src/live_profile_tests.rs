@@ -184,6 +184,36 @@ fn global_limits_reload_from_the_new_file() {
     assert!(live.last_error().is_some());
 }
 
+/// #1810/#1812: two same-length versions inside one mtime tick, with no
+/// inode change to tell them apart (Windows has none; an in-place write keeps
+/// it on unix). The stamp must still see the new version.
+#[test]
+fn same_length_rewrite_in_one_mtime_tick_is_reloaded() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = mur_common::limits::global_limits_dir(d.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = mur_common::limits::global_limits_path(d.path());
+    let tick = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let write_in_place = |text: &str| {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut &f, text.as_bytes()).unwrap();
+        f.set_modified(tick).unwrap();
+    };
+    write_in_place("deadline: 10m\n");
+    let boot = mur_common::limits::load_global_strict(d.path())
+        .unwrap()
+        .limits;
+    let live = live_global_limits(d.path(), boot);
+    assert_eq!(live.current().deadline.as_deref(), Some("10m"));
+    write_in_place("deadline: 20m\n");
+    assert_eq!(live.current().deadline.as_deref(), Some("20m"));
+}
+
 /// The first `mur limits --global` write creates the new file under a running
 /// agent: it takes over at once, and from then on legacy edits are ignored.
 #[test]

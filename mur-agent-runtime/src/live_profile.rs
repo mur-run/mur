@@ -23,14 +23,21 @@ use mur_common::limits::Limits;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-/// Identity of one version of a file on disk. Size + nanosecond mtime + inode:
-/// an atomic temp-file-and-rename write (how every MUR writer saves YAML)
-/// always changes the inode, so two writes inside one mtime tick still differ.
+/// Identity of one version of a file on disk: size + nanosecond mtime + inode
+/// + a hash of the bytes.
+///
+/// Metadata alone cannot tell two same-length writes inside one mtime tick
+/// apart when the inode does not change either — always on Windows (no inode,
+/// #1810/#1812), and on unix for an in-place write. The content hash closes
+/// that gap. Cost: every check now reads the file as well as stat-ing it;
+/// `profile.yaml` and `limits/global.yaml` are a few KB, so that is one small
+/// read per check. The hash is in-process only, never persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileStamp {
     len: u64,
     mtime_nanos: u128,
     ino: u64,
+    content: u64,
 }
 
 impl FileStamp {
@@ -44,10 +51,17 @@ impl FileStamp {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
             .as_nanos();
+        let content = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::fs::read(path).ok()?.hash(&mut h);
+            h.finish()
+        };
         Some(Self {
             len: md.len(),
             mtime_nanos,
             ino: inode(&md),
+            content,
         })
     }
 }
