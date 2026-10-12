@@ -522,9 +522,8 @@ mod apfs {
 fn copy_entry(from: &Path, to: &Path) -> Result<()> {
     let meta = std::fs::symlink_metadata(from)?;
     if meta.file_type().is_symlink() {
-        let target = std::fs::read_link(from)?;
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&target, to)
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
             .with_context(|| format!("symlink {}", to.display()))?;
         #[cfg(not(unix))]
         bail!("symlinks in a turn track are unsupported on this platform");

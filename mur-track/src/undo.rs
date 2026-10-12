@@ -431,9 +431,14 @@ mod tests {
         std::fs::write(track.join("src/b.rs"), "y").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink("a.rs", track.join("src/link")).unwrap();
-        let mut files = vec![PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")];
-        #[cfg(unix)]
-        files.push(PathBuf::from("src/link"));
+        let files = [
+            vec![PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")],
+            #[cfg(unix)]
+            vec![PathBuf::from("src/link")],
+        ]
+        .concat();
+        // Only the unix-only symlink entry is asserted on below.
+        #[cfg_attr(not(unix), allow(unused_variables))]
         let m = store.snapshot("t3", &project, &track, &files).unwrap();
         let cas = std::fs::read_dir(store.root().join(CAS_DIR))
             .unwrap()
