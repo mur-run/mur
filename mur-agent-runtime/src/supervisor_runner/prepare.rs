@@ -21,6 +21,8 @@ pub(crate) async fn prepare_runtime(
     profile: &Profile,
     socket_enabled: bool,
     live_profile: &Arc<crate::live_profile::LiveProfile>,
+    // Boot snapshot of config.yaml, read before the seal (#1796).
+    boot_cfg: &mur_common::config::Config,
 ) -> anyhow::Result<(
     TelemetryWriter,
     tokio::sync::mpsc::Receiver<serde_json::Value>,
@@ -150,14 +152,8 @@ pub(crate) async fn prepare_runtime(
         .on_startup(&hook_ctx, &profile.inner, &hook_cancel)
         .await;
 
-    // `mur_home` is a directory; `load_or_default` wants the config FILE.
-    // Passing the directory made `read_to_string` fail, which `load_or_default`
-    // swallows into `Config::default()` — so every `skills:` setting the user
-    // wrote was silently ignored here. Compare the correct call above, which
-    // joins "config.yaml".
-    let prompt_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"));
-    let skills_cfg = prompt_cfg.skills.clone();
-    let memory_cfg = prompt_cfg.memory.clone();
+    let skills_cfg = boot_cfg.skills.clone();
+    let memory_cfg = boot_cfg.memory.clone();
     let loaded = crate::skills::drop_forgotten_notes(
         &mur_home,
         &profile.inner.name,

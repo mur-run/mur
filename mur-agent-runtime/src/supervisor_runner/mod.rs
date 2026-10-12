@@ -308,9 +308,11 @@ pub fn build_runner(
 pub(crate) fn needs_routing_client(refs: usize, routing_on: bool, smart_on: bool) -> bool {
     refs > 1 || routing_on || smart_on
 }
+mod boot_config;
 mod prepare;
 mod provider;
 
+pub(crate) use boot_config::load_boot_config;
 pub(crate) use prepare::prepare_runtime;
 pub use provider::build_provider_runner;
 

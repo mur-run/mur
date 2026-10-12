@@ -300,8 +300,10 @@ impl SandboxPolicy {
         if let (Some(mur_home), Some(agent_name)) = (
             agent_home.parent().and_then(|p| p.parent()),
             agent_home.file_name().and_then(|n| n.to_str()),
-        ) && crate::tools::fleet_run::agent_enabled(mur_home, agent_name)
-        {
+        ) && crate::tools::fleet_run::enabled_in(
+            &mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).fleet_run,
+            agent_name,
+        ) {
             fleet_run_enabled = true;
             for dir in fleet_run_write_dirs(mur_home) {
                 if !fs_write.contains(&dir) {
