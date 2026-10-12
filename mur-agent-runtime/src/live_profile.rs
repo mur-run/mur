@@ -23,45 +23,9 @@ use mur_common::limits::Limits;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-/// Identity of one version of a file on disk. Size + nanosecond mtime + inode:
-/// an atomic temp-file-and-rename write (how every MUR writer saves YAML)
-/// always changes the inode, so two writes inside one mtime tick still differ.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileStamp {
-    len: u64,
-    mtime_nanos: u128,
-    ino: u64,
-}
-
-impl FileStamp {
-    /// `None` when the file is absent or unreadable — itself a state, since it
-    /// is how a deletion shows up.
-    pub fn of(path: &Path) -> Option<Self> {
-        let md = std::fs::metadata(path).ok()?;
-        let mtime_nanos = md
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_nanos();
-        Some(Self {
-            len: md.len(),
-            mtime_nanos,
-            ino: inode(&md),
-        })
-    }
-}
-
-#[cfg(unix)]
-fn inode(md: &std::fs::Metadata) -> u64 {
-    use std::os::unix::fs::MetadataExt;
-    md.ino()
-}
-
-#[cfg(not(unix))]
-fn inode(_md: &std::fs::Metadata) -> u64 {
-    0
-}
+#[path = "live_profile_stamp.rs"]
+mod stamp;
+pub use stamp::FileStamp;
 
 type Loader<T> = Box<dyn Fn(&Path) -> Result<T, String> + Send + Sync>;
 
