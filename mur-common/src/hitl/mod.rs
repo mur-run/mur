@@ -17,6 +17,12 @@ pub use signed_time::{HITL_CLOCK_SKEW_SECS, TimeFault, check_answer_time, check_
 /// remember for different lengths and the Hub cannot explain why.
 pub const APPROVAL_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 
+/// `message/send` param: `false` makes this turn's tool approvals one-shot —
+/// gate B neither answers them from the agent's remembered decisions nor
+/// records the human's answer there. Absent means `true` (chat behaviour).
+/// A `mur fleet review` turn sends `false`: its gate always asks (#1783).
+pub const REMEMBER_DECISIONS_PARAM: &str = "remember_decisions";
+
 /// How risky an action is. `Ord` is severity order: `Read` < … < `Privileged`.
 /// Tier is resolved most-restrictive-wins and is NEVER LLM-asserted.
 #[derive(

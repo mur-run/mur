@@ -145,6 +145,9 @@ const DEFAULT_CONV_BUDGET_TOKENS: u64 = 8_000;
 /// a murmur TUI with a human watching.
 pub(crate) type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bool);
 
+/// Task ids whose tool approvals must not be remembered (#1783).
+pub(crate) type OneShotApprovals = Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>;
+
 /// A caller's `TaskSpec.cwd` the runtime could not adopt for one turn.
 #[derive(Debug, Clone)]
 pub(super) struct RefusedCwd {
@@ -220,6 +223,10 @@ pub struct TaskRunner {
     /// for a CLI-spawn turn, where the shim can answer but the audience is
     /// whoever ran `mur agent send`.
     approval_sinks: Arc<tokio::sync::Mutex<HashMap<String, ApprovalSink>>>,
+    /// Tasks whose approvals are one-shot: gate B neither answers them from
+    /// the decision store nor records into it (#1783). Keyed by turn task id,
+    /// cleared with the turn's sinks.
+    one_shot_approvals: OneShotApprovals,
     /// Per-turn steering channels keyed by task id. A running agentic loop
     /// holds the receiver; `turn/steer` pushes a user interjection here and the
     /// loop picks it up at the next iteration boundary.

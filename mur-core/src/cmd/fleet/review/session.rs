@@ -322,6 +322,8 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
 /// session's terminal (the session already refuses to start without a TTY).
 /// Same tier rule as `murmur`'s plain mode: the prompt names the tier when
 /// the call is above the auto ceiling, and only an explicit yes allows.
+/// #1781: Enter is not an answer here — `Send to …?` taught the operator that
+/// Enter means "go on" — so anything but y/n asks again.
 pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
     use crate::cmd::agent::cli::stream::tool_tier_and_summary;
     let (tier, within_ceiling, summary) = tool_tier_and_summary(hitl);
@@ -330,15 +332,38 @@ pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
         println!("  [{tier:?} — above the auto ceiling]");
     }
     println!("  {summary}");
-    print!("Allow? [y = allow, anything else = deny] ");
-    if std::io::stdout().flush().is_err() {
-        return false;
+    let mut prompt = ALLOW_PROMPT;
+    loop {
+        print!("{prompt}");
+        if std::io::stdout().flush().is_err() {
+            return false;
+        }
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line).is_err() {
+            return false;
+        }
+        match allow_answer(&line) {
+            Some(allow) => return allow,
+            None => prompt = ALLOW_REPROMPT,
+        }
     }
-    let mut line = String::new();
-    if std::io::stdin().lock().read_line(&mut line).is_err() {
-        return false;
+}
+
+const ALLOW_PROMPT: &str = "Allow? [y/n] ";
+const ALLOW_REPROMPT: &str = "Please answer y or n. Allow? [y/n] ";
+
+/// The `Allow?` answer: `y`/`yes` allows, `n`/`no` denies, EOF denies (an
+/// unreadable answer never allows), and anything else — Enter included — is
+/// no answer, so the caller asks again.
+pub(super) fn allow_answer(line: &str) -> Option<bool> {
+    if line.is_empty() {
+        return Some(false); // EOF
     }
-    matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
+    match line.trim().to_lowercase().as_str() {
+        "y" | "yes" => Some(true),
+        "n" | "no" => Some(false),
+        _ => None,
+    }
 }
 
 /// Enter (empty line) or `y`/`yes` sends; anything else, including EOF,

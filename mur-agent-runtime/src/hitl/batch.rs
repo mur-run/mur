@@ -32,6 +32,10 @@ pub struct BatchGate<'a> {
     /// Records which task raised each approval, so a trusted shim can answer
     /// only its own turn's. `None` = no CLI-spawn track wired.
     pub shim_trust: Option<&'a crate::hitl::shim_ticket::ShimTrust>,
+    /// `false` = one-shot approvals for this turn: `store` is neither read nor
+    /// written (#1783). A review session's answer must not become the agent's
+    /// standing policy, and a standing policy must not answer for the review.
+    pub remember: bool,
 }
 
 const TIMED_OUT: &str = "timed out";
@@ -44,8 +48,8 @@ impl BatchGate<'_> {
         let mut ask = Vec::new();
         for c in calls {
             let settled = match self.store {
-                Some(s) => s.lookup(&c.action_hash).await,
-                None => None,
+                Some(s) if self.remember => s.lookup(&c.action_hash).await,
+                _ => None,
             };
             match settled {
                 Some(Settled::Allow) => {
@@ -133,7 +137,7 @@ impl BatchGate<'_> {
             // A timeout is not a human decision: recording it would deny the
             // next identical call without asking anyone. Only answers settle.
             let answered = decision.reason.as_deref() != Some(TIMED_OUT);
-            if let (Some(s), true) = (self.store, answered) {
+            if let (Some(s), true) = (self.store, answered && self.remember) {
                 s.record(mur_common::hitl::HitlResponse {
                     hitl_id: hitl_id.clone(),
                     action_hash: c.action_hash.clone(),
@@ -249,6 +253,7 @@ mod tests {
             approvals: &approvals,
             notifier: &tx,
             store: None,
+            remember: true,
             shim_trust: None,
         };
         let g2 = BatchGate {
@@ -257,6 +262,7 @@ mod tests {
             approvals: &approvals,
             notifier: &tx,
             store: None,
+            remember: true,
             shim_trust: None,
         };
         let (a, b) = tokio::join!(g1.resolve(vec![call("yes")]), g2.resolve(vec![call("no")]));
@@ -290,6 +296,7 @@ mod tests {
             approvals: &approvals,
             notifier: &tx,
             store: None,
+            remember: true,
             shim_trust: None,
         };
         let mut risky = call("a");
@@ -299,5 +306,71 @@ mod tests {
         assert_eq!(n["params"]["calls"][0]["risk"], "destructive");
         assert_eq!(n["params"]["risk"], "destructive", "legacy top-level field");
         assert!(n["params"]["calls"][1].get("risk").is_none());
+    }
+
+    /// Store that always remembers a deny and counts what is written to it.
+    struct Remembers {
+        records: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::hitl::store::DecisionStore for Remembers {
+        async fn lookup(&self, _h: &str) -> Option<Settled> {
+            Some(Settled::Deny)
+        }
+        async fn record(&self, _r: mur_common::hitl::HitlResponse) {
+            self.records
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// #1783: a one-shot gate asks even when the store remembers a decision,
+    /// and the human's answer is not written back as a standing decision.
+    /// A remembering gate over the same store does neither.
+    #[tokio::test]
+    async fn one_shot_gate_always_asks_and_records_nothing() {
+        let remembers = Arc::new(Remembers {
+            records: Default::default(),
+        });
+        let store: Arc<dyn DecisionStore> = remembers.clone();
+        for remember in [false, true] {
+            let approvals: HitlApprovals = Default::default();
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<serde_json::Value>(8);
+            let answerer = approvals.clone();
+            let answer = tokio::spawn(async move {
+                let Some(n) = rx.recv().await else {
+                    return false;
+                };
+                let id = n["params"]["hitl_id"].as_str().unwrap().to_string();
+                let tx = answerer.lock().await.remove(&id).unwrap();
+                let _ = tx.send(HitlDecision {
+                    allow: true,
+                    reason: None,
+                    surface: Some("cli".into()),
+                });
+                true
+            });
+            let gate = BatchGate {
+                task_id: "t",
+                timeout: Duration::from_secs(5),
+                approvals: &approvals,
+                notifier: &tx,
+                store: Some(&store),
+                remember,
+                shim_trust: None,
+            };
+            let out = gate.resolve(vec![call("a")]).await;
+            drop(tx);
+            let asked = answer.await.unwrap();
+            assert_eq!(asked, !remember, "remember={remember}");
+            assert_eq!(out["a"].allow, !remember, "remember={remember}");
+            if !remember {
+                assert_eq!(
+                    remembers.records.load(std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "a one-shot answer must not be recorded"
+                );
+            }
+        }
     }
 }
