@@ -546,6 +546,12 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
             cmd::deps::install::cmd_install_deps(&mur_home, &lines, program.as_deref(), yes)
                 .await?;
         }
+        AgentAction::Hitl { agent, action } => match action {
+            crate::cli::AgentHitlAction::List { json } => cmd::agent::cmd_hitl_list(&agent, json)?,
+            crate::cli::AgentHitlAction::Forget { hash, all } => {
+                cmd::agent::cmd_hitl_forget(&agent, hash.as_deref(), all)?
+            }
+        },
         AgentAction::Secret { agent, action } => match action {
             AgentSecretAction::Set { key, value } => {
                 cmd::agent::cmd_secret_set(&agent, &key, value.as_deref()).await?

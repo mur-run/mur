@@ -135,6 +135,7 @@ pub(crate) fn approve_in(
         reason: reason.unwrap_or_default(),
         surface: "cli".into(),
         issued_at: Some(chrono::Utc::now()),
+        label: None,
     };
     // The actor is the local human who approved, but the channel's WRITER signs
     // the event (v3d) so the gate can verify authority before releasing — a
@@ -254,6 +255,7 @@ mod pending_hitl_tests {
             reason: String::new(),
             surface: "cli".into(),
             issued_at: Some(chrono::Utc::now()),
+            label: None,
         };
         ChannelEvent {
             seq,

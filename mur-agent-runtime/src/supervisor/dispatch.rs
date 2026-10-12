@@ -244,5 +244,24 @@ pub(super) fn build_dispatcher(
         "secret/delete",
         Box::new(crate::protocol::methods::secret_set::SecretDeleteHandler::new(secrets)),
     );
+    // `mur agent hitl list|forget` (#1806). Same channel, key and key version
+    // as the gate's own store in `supervisor_runner::provider`, so a
+    // revocation written here is one the gate verifies.
+    let decisions = Arc::new(crate::hitl::store::ChannelDecisionStore::new(
+        mur_home.to_path_buf(),
+        agent_name.to_string(),
+        identity.clone(),
+        key_version,
+    ));
+    d.register(
+        mur_common::hitl::HITL_LIST_METHOD,
+        Box::new(crate::protocol::methods::hitl_memory::HitlListHandler::new(
+            decisions.clone(),
+        )),
+    );
+    d.register(
+        mur_common::hitl::HITL_FORGET_METHOD,
+        Box::new(crate::protocol::methods::hitl_memory::HitlForgetHandler::new(decisions)),
+    );
     d
 }
