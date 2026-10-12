@@ -270,6 +270,14 @@ jobs:
       # ~40 accumulated violations to clear, two of which were real defects
       # (an error-loop `flatten()` and an undefined-truncate file open).
       - run: cargo clippy --all --all-targets --no-deps --locked -- -D warnings
+      # This host is Linux, so `#[cfg(not(unix))]` paths are never linted above
+      # and Windows-only dead code rots unseen (#1808). Cross-lint the crate
+      # that carries the most platform-gated code for the Windows target; it is
+      # a check, not a link, so no MSVC toolchain is needed. Scoped to
+      # mur-track because the full workspace pulls native build scripts
+      # (whisper, coreaudio) that cannot cross-compile here.
+      - run: rustup target add x86_64-pc-windows-msvc
+      - run: cargo clippy -p mur-track --all-targets --no-deps --locked --target x86_64-pc-windows-msvc -- -D warnings
 
   fmt:
     name: Format
