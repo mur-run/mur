@@ -240,6 +240,12 @@ pub struct ToolRule {
     /// `deny` still wins outright.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub risk: Option<crate::hitl::RiskTier>,
+    /// #1786: opt this one rule out of the built-in tier floor (acting
+    /// browser tools ask even under a riskless `allow`). Default off; it never
+    /// lowers a declared `risk:` — that field only ever raises. The runtime
+    /// logs every call where this actually waives a floor.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass_builtin_tier_floor: bool,
 }
 
 /// Resolve the effective policy for `tool_name` against an ordered rule list.
@@ -254,9 +260,16 @@ pub fn resolve_tool_policy(rules: &[ToolRule], tool_name: &str) -> ToolPolicy {
 /// elsewhere (e.g. `fleet_run`'s config allowlist) and that therefore want a
 /// different default than `Ask` while still honoring explicit rules.
 pub fn resolve_tool_policy_opt(rules: &[ToolRule], tool_name: &str) -> Option<ToolPolicy> {
+    resolve_tool_rule(rules, tool_name).map(|rule| rule.policy)
+}
+
+/// The single rule that decides `tool_name`'s policy (same precedence as
+/// [`resolve_tool_policy_opt`]); `None` = no rule matched. Per-rule switches
+/// such as `bypass_builtin_tier_floor` are read from this rule only.
+pub fn resolve_tool_rule<'a>(rules: &'a [ToolRule], tool_name: &str) -> Option<&'a ToolRule> {
     for rule in rules {
         if rule.pattern == tool_name {
-            return Some(rule.policy);
+            return Some(rule);
         }
     }
     let mut best: Option<(&ToolRule, usize)> = None;
@@ -270,7 +283,7 @@ pub fn resolve_tool_policy_opt(rules: &[ToolRule], tool_name: &str) -> Option<To
             }
         }
     }
-    best.map(|(rule, _)| rule.policy)
+    best.map(|(rule, _)| rule)
 }
 
 /// The declared `risk:` that applies to `tool_name` — the STRICTEST across
@@ -302,21 +315,25 @@ mod tool_policy_tests {
                 pattern: "mcp__github__merge_pr".into(),
                 policy: ToolPolicy::Ask,
                 risk: None,
+                bypass_builtin_tier_floor: false,
             },
             ToolRule {
                 pattern: "mcp__github__*".into(),
                 policy: ToolPolicy::Allow,
                 risk: None,
+                bypass_builtin_tier_floor: false,
             },
             ToolRule {
                 pattern: "mcp__*".into(),
                 policy: ToolPolicy::Deny,
                 risk: None,
+                bypass_builtin_tier_floor: false,
             },
             ToolRule {
                 pattern: "bash".into(),
                 policy: ToolPolicy::Allow,
                 risk: None,
+                bypass_builtin_tier_floor: false,
             },
         ]
     }
@@ -326,6 +343,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Some(risk),
+            bypass_builtin_tier_floor: false,
         }
     }
 

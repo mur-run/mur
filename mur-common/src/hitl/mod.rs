@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod approval_token;
+pub mod builtin_tier;
 pub mod label;
 pub mod pin;
 pub mod signed_time;

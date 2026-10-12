@@ -279,6 +279,7 @@ mod tests {
             pattern: "*".into(),
             policy: ToolPolicy::Deny,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }]);
         let h = ToolsCallHandler::new(Arc::new(runner));
         let out = h
@@ -310,6 +311,7 @@ mod tests {
             pattern: "*".into(),
             policy: ToolPolicy::Ask,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }]);
         let h = ToolsCallHandler::new(Arc::new(runner));
         let out = tokio::time::timeout(
@@ -356,6 +358,7 @@ mod tests {
                     pattern: "*".into(),
                     policy: ToolPolicy::Ask,
                     risk: None,
+                    bypass_builtin_tier_floor: false,
                 }])
                 .with_pending_approvals(Default::default())
                 .with_sandbox_enforcing(true),
@@ -441,6 +444,7 @@ mod tests {
                     pattern: "*".into(),
                     policy: ToolPolicy::Allow,
                     risk: None,
+                    bypass_builtin_tier_floor: false,
                 }])
                 .with_pending_approvals(Default::default()),
         );
