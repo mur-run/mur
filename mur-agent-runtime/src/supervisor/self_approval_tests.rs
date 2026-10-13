@@ -103,6 +103,7 @@ async fn rig_with(trust: crate::hitl::shim_ticket::ShimTrust) -> Rig {
             approvals: &gate_approvals,
             notifier: &gate_notifier,
             store: None,
+            remember: true,
             shim_trust: Some(&gate_trust),
         };
         gate.resolve(vec![PendingCall {

@@ -395,6 +395,9 @@ pub(super) fn user_message(input: &Message) -> crate::llm::RichMessage {
 /// 5. #1600: an `Allow` from steps 2–3 becomes `Ask` when a matching rule
 ///    declares `risk:` above `Write` — `allow` means "policy does not refuse",
 ///    not "skip the risk gate". `Deny` is never loosened.
+/// 6. #1786: likewise when the tool's BUILT-IN tier (acting browser tools)
+///    is above the ceiling, unless the deciding rule sets
+///    `bypass_builtin_tier_floor: true`. `risk:` itself still only raises.
 pub(crate) fn effective_tool_policy(
     rules: &[mur_common::agent::ToolRule],
     tool_name: &str,
@@ -419,7 +422,73 @@ pub(crate) fn effective_tool_policy(
     {
         return ToolPolicy::Ask;
     }
+    // #1786: a riskless `allow` (typically `mcp__browser__*`) must not carry
+    // an acting browser tool past the gate. The built-in tier is a floor;
+    // only the deciding rule's `bypass_builtin_tier_floor` waives it.
+    if base == ToolPolicy::Allow && builtin_floor(rules, tool_name).is_some_and(|f| !f.waived) {
+        return ToolPolicy::Ask;
+    }
     base
+}
+
+/// A built-in tier above the session-grant ceiling that applies to
+/// `tool_name`, and whether the deciding rule waived it (#1786).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BuiltinFloor {
+    pub tier: mur_common::hitl::RiskTier,
+    pub waived: bool,
+    /// Pattern of the rule that decided the policy (`None` = no rule).
+    pub rule: Option<String>,
+}
+
+pub(crate) fn builtin_floor(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+) -> Option<BuiltinFloor> {
+    call_floor(rules, tool_name, None)
+}
+
+/// [`effective_tool_policy`] for one concrete call. #1814: `bash`'s tier
+/// lives in its command, not its name, so a riskless `bash: allow` must not
+/// carry a command classified above the session-grant ceiling (`git push`,
+/// `rm -rf`, `sudo`) past the gate. Same floor and same waiver as #1786.
+/// Without input (preflight inventory) the name-only answer stands.
+pub(crate) fn effective_call_policy(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+    input: Option<&serde_json::Value>,
+) -> mur_common::agent::ToolPolicy {
+    use mur_common::agent::ToolPolicy;
+    let base = effective_tool_policy(rules, tool_name);
+    if base == ToolPolicy::Allow && call_floor(rules, tool_name, input).is_some_and(|f| !f.waived) {
+        return ToolPolicy::Ask;
+    }
+    base
+}
+
+/// The built-in tier floor for one call: the acting-browser table (#1786),
+/// or — for `bash` itself, never its job-id control tools — the tier the
+/// shared classifier derives from the command (#1814).
+pub(crate) fn call_floor(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+    input: Option<&serde_json::Value>,
+) -> Option<BuiltinFloor> {
+    let bash_tier = || {
+        let has_cmd = input?.get("command")?.is_string();
+        (tool_name == "bash" && has_cmd)
+            .then(|| mur_common::hitl::tool_tier::classify(tool_name, input))
+    };
+    let tier = mur_common::hitl::builtin_tier::browser_tier(tool_name)
+        .or_else(bash_tier)
+        .filter(|t| !mur_common::hitl::tier_may_be_granted(*t))?;
+    let rule = mur_common::agent::resolve_tool_rule(rules, tool_name)
+        .or_else(|| mur_common::agent::resolve_tool_rule(rules, policy_name(tool_name)));
+    Some(BuiltinFloor {
+        tier,
+        waived: rule.is_some_and(|r| r.bypass_builtin_tier_floor),
+        rule: rule.map(|r| r.pattern.clone()),
+    })
 }
 
 /// The strictest `risk:` declared for `tool_name`, looked up under the same

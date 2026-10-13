@@ -147,6 +147,12 @@ impl MethodHandler for MessageSendHandler {
             .get("can_approve")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        // #1783: `false` = this turn's approvals are asked every time and not
+        // remembered. Absent means remembered, as every chat client expects.
+        let remember_decisions = p
+            .get(mur_common::hitl::REMEMBER_DECISIONS_PARAM)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let context_task_id = p
             .get("context")
             .and_then(|c| c.get("task_id"))
@@ -221,6 +227,9 @@ impl MethodHandler for MessageSendHandler {
                 self.runner
                     .register_client_notifier(&turn_task_id, notifier.clone(), can_approve)
                     .await;
+                if !remember_decisions {
+                    self.runner.mark_one_shot_approvals(&turn_task_id).await;
+                }
                 // Steering channel: only when this turn has a task id to address
                 // it by. Without an id the sender would be immediately dropped,
                 // leaving the agentic loop with a permanently-closed receiver.

@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::task_runner::{
-    cap_step_output, decide_without_asking, declared_tool_risk, denied_args_preview, deny_message,
-    effective_tool_policy, step_notification, task_error,
+    call_floor, cap_step_output, decide_without_asking, declared_tool_risk, denied_args_preview,
+    deny_message, effective_call_policy, step_notification, task_error,
 };
 use mur_common::a2a::TaskError;
 
@@ -34,6 +34,7 @@ pub struct GuardedToolCall {
         Arc<tokio::sync::Mutex<HashMap<String, crate::task_runner::ApprovalSink>>>,
     pub(crate) approval_sinks:
         Arc<tokio::sync::Mutex<HashMap<String, crate::task_runner::ApprovalSink>>>,
+    pub(crate) one_shot_approvals: crate::task_runner::OneShotApprovals,
     pub(crate) agent_name: String,
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
@@ -112,7 +113,8 @@ impl GuardedToolCall {
         let entry = self.approval_sinks.lock().await.get(task_id).cloned();
         for call in calls {
             if !known.contains(&call.tool_name)
-                || effective_tool_policy(&self.tools_policy, &call.tool_name) != ToolPolicy::Ask
+                || effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input))
+                    != ToolPolicy::Ask
             {
                 continue;
             }
@@ -170,6 +172,7 @@ impl GuardedToolCall {
             notifier,
             store: self.decision_store.as_ref(),
             shim_trust: self.shim_trust.as_ref(),
+            remember: !self.one_shot_approvals.lock().await.contains(task_id),
         };
         out.extend(gate.resolve(pending).await);
         (out, step_ids)
@@ -225,7 +228,21 @@ impl GuardedToolCall {
         // 1b. Policy gate: check before executing.
         {
             use mur_common::agent::ToolPolicy;
-            let policy = effective_tool_policy(&self.tools_policy, &call.tool_name);
+            let policy =
+                effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input));
+            if policy == ToolPolicy::Allow
+                && let Some(floor) =
+                    call_floor(&self.tools_policy, &call.tool_name, Some(&call.input))
+                && floor.waived
+            {
+                // #1786: the opt-out must leave a trail every time it acts.
+                tracing::warn!(
+                    tool = %call.tool_name,
+                    builtin_tier = ?floor.tier,
+                    rule = floor.rule.as_deref().unwrap_or(""),
+                    "builtin tier floor waived by bypass_builtin_tier_floor; running without approval"
+                );
+            }
             match policy {
                 ToolPolicy::Deny => {
                     return Ok(ToolResultEntry {

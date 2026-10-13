@@ -246,6 +246,7 @@ mod tests {
             pattern: "bash".to_string(),
             policy: ToolPolicy::Deny,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }];
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(
@@ -300,6 +301,7 @@ mod tests {
             pattern: "read_file".to_string(),
             policy: ToolPolicy::Deny,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }];
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(
@@ -354,6 +356,7 @@ mod tests {
             pattern: "write_file".to_string(),
             policy: ToolPolicy::Deny,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }];
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(
@@ -408,6 +411,7 @@ mod tests {
             pattern: "edit_file".to_string(),
             policy: ToolPolicy::Deny,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }];
         let pool = McpPool::new(vec![], SandboxPolicy::default(), None);
         let (defs, map) = build_tools(
@@ -441,6 +445,7 @@ mod tests {
             pattern: "bash".into(),
             policy: ToolPolicy::Deny,
             risk: None,
+            bypass_builtin_tier_floor: false,
         }];
         for (rules, expect) in [(deny, false), (vec![], true)] {
             let bash = mk();

@@ -214,6 +214,8 @@ API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — n
 
 **Every writing turn can be undone.** An agent with `bash`, `write_file`, or `edit_file` bound works each turn in a throwaway git worktree of the project (cwd must be a repository root; `MUR_TURN_TRACK=0` opts out). At turn end the changes are promoted back, and the settlement card's `~ changed` comes from that diff, so a `bash` redirect is counted too. Before the promote, the original bytes are saved under `~/.mur/agents/<name>/edits/`. `mur agent turn list <agent>` shows the turns you can undo, and `mur agent turn undo <agent> <turn>` restores them. Undo is last-write-wins: it lists every file you changed after the turn and asks before overwriting it (`--dry-run` only lists, `--yes` skips the prompt), and you can undo a turn only once.
 
+**Rust turns start warm.** In a Cargo project each turn builds into `target/turns/<track>/`, and its first `cargo` command clones the main target's compiled deps there, so only what the turn changed recompiles. The clone is skipped when free disk is under 20 GiB; tune or turn it off under `turn_track.warm_build_cache` in `~/.mur/config.yaml` (see `docs/BUILD.md`).
+
 **A 429 waits exactly as long as the server asks.** When a provider rate-limits a call and sends `retry-after`, MUR sleeps that long (seconds or an HTTP date, clamped to 120s) and retries — the agentic loop up to three times, the companion outbox on its usual four-attempt schedule. Without the header nothing changes: the same exponential backoff as before. The log line and the network-audit entry say which one was used (`source=retry-after` vs `source=backoff`), so a stall is never a mystery.
 
 **Claude Subscription, the same way.** The Model Library's **Claude Subscription** provider signs in through Claude Code (`claude auth login --claudeai`), lists models from the catalog, and writes `provider: claude` entries that can only reach the loopback gateway's `/v1` route — no `secret`, and a `base_url` edit to `api.anthropic.com` is refused at startup instead of quietly switching the bill. Entries you already point at the gateway as `provider: anthropic` keep working; `mur model doctor` shows which ones could carry the explicit label.
@@ -517,8 +519,12 @@ Agent** wizard offers the same catalog as a source.
   the per-tool grants it claims to revoke, and a gate that times out stops
   asking. Tool calls from one model response arrive as a single card rather
   than one prompt each — every call is still decided on its own, and there is
-  no approve-all. A settled decision is remembered by action hash, so the same
-  call stops being asked twice, and an explicit no outranks any standing grant.
+  no approve-all. A settled decision is remembered by action hash for 7 days,
+  so the same call stops being asked twice, and an explicit no outranks any
+  standing grant. `mur agent hitl list <agent>` shows what is being remembered
+  (with a redacted label of the tool and target), and `mur agent hitl forget
+  <agent> <hash>` or `--all` makes it ask again; a review session never
+  remembers its answers.
   *Always* writes the narrowest exact tool rule; where a call reaches outside
   its entitlements the card offers that grant as a separate control, never
   folded into the rule. Reads never have to stop the run: `read_file` and
@@ -767,6 +773,16 @@ Agent** wizard offers the same catalog as a source.
   derived from what the kernel enforces rather than from a list anyone
   maintains — including the capable fleets you haven't authorized yet, and the
   command that authorizes them.
+- **Brokered `git push` (current state: off, and rejects everything)** — the
+  push broker is off by default (`git_push.enabled: false` in
+  `~/.mur/config.yaml`). Turning it on makes `murmurd` verify each signed
+  request an agent drops in `~/.mur/agents/<agent>/inbox/git-push/`, delete it, and answer in
+  `~/.mur/git-push/status/<agent>/<request_id>.yaml` with `state: rejected`
+  and a `code`: `agent_not_allowlisted` if the agent isn't in
+  `git_push.agents`, otherwise `not_enrolled`. `not_enrolled` is expected,
+  not a bug: no agent can be enrolled yet, so nothing is pushed. Enrollment,
+  approvals, and real pushes are tracked in
+  [#1831](https://github.com/mur-run/mur/issues/1831).
 - **Deletion safety** — destructive file actions go through a trash with a
   cancel window and explicit restore (`mur agent trash`); nothing is
   hard-deleted on a timer.
@@ -904,7 +920,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret ·
+│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret · hitl (list · forget) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)

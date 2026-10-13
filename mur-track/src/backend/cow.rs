@@ -10,10 +10,9 @@
 //!   other  → skip (no COW; callers still work, just no warm cache)
 
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(target_os = "macos")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Directories (relative to project root) that are worth COW-copying.
 const CACHE_DIRS: &[&str] = &["target"];
@@ -45,27 +44,146 @@ pub fn detect_cow_method() -> CowMethod {
     CowMethod::Skip
 }
 
-/// COW-copy each `CACHE_DIRS` entry from `src_project` into `dst_worktree`.
+/// Per-profile subdirs the fleet clone leaves out. `incremental/` is the bulk
+/// of a target and is cheap for rustc to regenerate.
+const FLEET_SKIP_SUBDIRS: &[&str] = &["incremental"];
+
+/// A profile dir (`debug/`, `release/`, …) is recognised by this child.
+const PROFILE_MARKER: &str = ".fingerprint";
+
+/// Suffix of the scratch dir a clone is built in before it is renamed into place.
+const TMP_SUFFIX: &str = ".tmp-";
+
+/// What a filtered build-cache clone leaves out.
+pub struct CachePlan<'a> {
+    /// Child dirs of each profile dir to skip, e.g. `["incremental"]`.
+    pub skip_subdirs: &'a [String],
+    /// Dirs directly under the target to skip, e.g. `["turns"]`. Must name
+    /// the turn subdir when cloning for a turn, or a clone would recurse into
+    /// other turns' clones.
+    pub skip_top: &'a [String],
+}
+
+/// Result of [`copy_build_cache_filtered`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum CopyOutcome {
+    Copied { elapsed: Duration },
+    AlreadyPresent,
+    SourceMissing,
+    Unsupported,
+}
+
+/// COW-copy each `CACHE_DIRS` entry from `src_project` into `dst_worktree`,
+/// leaving out `incremental/` and final binaries.
 /// Non-fatal: logs a warning and returns `Ok(())` on any per-dir failure so
 /// track creation is never blocked by a cache-copy error.
 pub fn copy_build_cache(src_project: &Path, dst_worktree: &Path) -> Result<()> {
+    let skip_subdirs: Vec<String> = FLEET_SKIP_SUBDIRS.iter().map(|s| s.to_string()).collect();
+    let plan = CachePlan {
+        skip_subdirs: &skip_subdirs,
+        skip_top: &[],
+    };
+    for dir in CACHE_DIRS {
+        match copy_build_cache_filtered(&src_project.join(dir), &dst_worktree.join(dir), &plan) {
+            Ok(CopyOutcome::Copied { .. }) => eprintln!("COW-copied {dir}/ → track"),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("warn: COW copy of {dir}/ skipped ({e}); track will build from scratch")
+            }
+        }
+    }
+    Ok(())
+}
+
+/// COW-clone the reusable parts of `src_target` into `dst_target`: every
+/// profile dir's children except `plan.skip_subdirs` (profile-root files are
+/// final binaries, which Cargo relinks), plus regular files directly under the
+/// target. Non-profile dirs and `plan.skip_top` are left out.
+///
+/// The clone is built in a sibling scratch dir and renamed into place, so a
+/// half-finished clone is never mistaken for a warm one.
+pub fn copy_build_cache_filtered(
+    src_target: &Path,
+    dst_target: &Path,
+    plan: &CachePlan,
+) -> Result<CopyOutcome> {
     let method = detect_cow_method();
     if method == CowMethod::Skip {
-        return Ok(());
+        return Ok(CopyOutcome::Unsupported);
     }
-    for dir in CACHE_DIRS {
-        let src = src_project.join(dir);
-        if !src.exists() {
-            continue;
+    filtered_with(src_target, dst_target, plan, &|s, d| {
+        cow_copy_dir(&method, s, d)
+    })
+}
+
+type Copier<'a> = &'a dyn Fn(&Path, &Path) -> Result<()>;
+
+fn filtered_with(
+    src_target: &Path,
+    dst_target: &Path,
+    plan: &CachePlan,
+    copy: Copier,
+) -> Result<CopyOutcome> {
+    if !src_target.is_dir() {
+        return Ok(CopyOutcome::SourceMissing);
+    }
+    if dst_target.exists() {
+        return Ok(CopyOutcome::AlreadyPresent);
+    }
+    let started = Instant::now();
+    let tmp = scratch_path(dst_target);
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp)?;
+    }
+    if let Some(parent) = tmp.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir(&tmp)?;
+    if let Err(e) = clone_into(src_target, &tmp, plan, copy) {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, dst_target) {
+        let _ = std::fs::remove_dir_all(&tmp);
+        if dst_target.exists() {
+            return Ok(CopyOutcome::AlreadyPresent); // lost a race to another clone
         }
-        let dst = dst_worktree.join(dir);
-        if dst.exists() {
-            continue; // already present — created by cargo or another call
-        }
-        if let Err(e) = cow_copy_dir(&method, &src, &dst) {
-            eprintln!("warn: COW copy of {dir}/ skipped ({e}); track will build from scratch");
-        } else {
-            eprintln!("COW-copied {dir}/ → track ({})", method_label(&method));
+        return Err(e.into());
+    }
+    Ok(CopyOutcome::Copied {
+        elapsed: started.elapsed(),
+    })
+}
+
+fn scratch_path(dst: &Path) -> PathBuf {
+    let mut name = dst.file_name().unwrap_or_default().to_os_string();
+    name.push(format!("{TMP_SUFFIX}{}", std::process::id()));
+    dst.with_file_name(name)
+}
+
+fn clone_into(src: &Path, tmp: &Path, plan: &CachePlan, copy: Copier) -> Result<()> {
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        let name = entry.file_name();
+        let from = entry.path();
+        if ft.is_file() {
+            copy(&from, &tmp.join(&name))?;
+        } else if ft.is_dir()
+            && !plan.skip_top.iter().any(|s| name == s.as_str())
+            && from.join(PROFILE_MARKER).is_dir()
+        {
+            let profile = tmp.join(&name);
+            std::fs::create_dir(&profile)?;
+            for child in std::fs::read_dir(&from)? {
+                let child = child?;
+                let cname = child.file_name();
+                if child.file_type()?.is_dir()
+                    && !plan.skip_subdirs.iter().any(|s| cname == s.as_str())
+                {
+                    copy(&child.path(), &profile.join(&cname))?;
+                }
+            }
         }
     }
     Ok(())
@@ -89,14 +207,6 @@ fn cow_copy_dir(method: &CowMethod, src: &Path, dst: &Path) -> Result<()> {
         anyhow::bail!("cp exited with {status}");
     }
     Ok(())
-}
-
-fn method_label(m: &CowMethod) -> &'static str {
-    match m {
-        CowMethod::ApfsClone => "APFS clone",
-        CowMethod::Reflink => "reflink",
-        CowMethod::Skip => "skip",
-    }
 }
 
 /// Take a Time Machine local snapshot before parallel track creation so the
@@ -154,6 +264,10 @@ pub fn take_local_snapshot() {
 
 #[cfg(not(target_os = "macos"))]
 pub fn take_local_snapshot() {}
+
+#[cfg(test)]
+#[path = "cow_tests.rs"]
+mod filtered_tests;
 
 #[cfg(test)]
 mod tests {

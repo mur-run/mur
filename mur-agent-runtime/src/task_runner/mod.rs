@@ -145,6 +145,9 @@ const DEFAULT_CONV_BUDGET_TOKENS: u64 = 8_000;
 /// a murmur TUI with a human watching.
 pub(crate) type ApprovalSink = (tokio::sync::mpsc::Sender<serde_json::Value>, bool);
 
+/// Task ids whose tool approvals must not be remembered (#1783).
+pub(crate) type OneShotApprovals = Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>;
+
 /// A caller's `TaskSpec.cwd` the runtime could not adopt for one turn.
 #[derive(Debug, Clone)]
 pub(super) struct RefusedCwd {
@@ -220,6 +223,10 @@ pub struct TaskRunner {
     /// for a CLI-spawn turn, where the shim can answer but the audience is
     /// whoever ran `mur agent send`.
     approval_sinks: Arc<tokio::sync::Mutex<HashMap<String, ApprovalSink>>>,
+    /// Tasks whose approvals are one-shot: gate B neither answers them from
+    /// the decision store nor records into it (#1783). Keyed by turn task id,
+    /// cleared with the turn's sinks.
+    one_shot_approvals: OneShotApprovals,
     /// Per-turn steering channels keyed by task id. A running agentic loop
     /// holds the receiver; `turn/steer` pushes a user interjection here and the
     /// loop picks it up at the next iteration boundary.
@@ -387,6 +394,9 @@ impl AsyncTaskHandle {
 mod tests;
 
 #[cfg(test)]
+mod call_policy_tests;
+
+#[cfg(test)]
 mod step_tests {
     use super::{STEP_MAX_BYTES, cap_step_output, step_notification};
 
@@ -453,6 +463,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Default::default(),
+            bypass_builtin_tier_floor: false,
         }
     }
 
@@ -511,6 +522,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Some(risk),
+            bypass_builtin_tier_floor: false,
         }
     }
 
@@ -556,6 +568,62 @@ mod tool_policy_tests {
                 "{name}"
             );
         }
+    }
+
+    /// #1786: a wildcard `allow` with no `risk:` must not carry an acting
+    /// browser tool past the gate. The built-in tier (NetworkEgress for
+    /// acting tools, Privileged for cookie export) is a floor the rule cannot
+    /// silently lower; observers stay allowed.
+    #[test]
+    fn riskless_wildcard_allow_still_asks_for_acting_browser_tools() {
+        let rules = [rule("mcp__browser__*", ToolPolicy::Allow)];
+        for name in [
+            "mcp__browser__browser_click",
+            "mcp__browser__browser_navigate",
+            "mcp__browser__browser_evaluate",
+            "mcp__browser__browser_storage_state",
+        ] {
+            assert_eq!(
+                effective_tool_policy(&rules, name),
+                ToolPolicy::Ask,
+                "{name}"
+            );
+        }
+        for name in [
+            "mcp__browser__browser_snapshot",
+            "mcp__browser__browser_verify_text_visible",
+        ] {
+            assert_eq!(
+                effective_tool_policy(&rules, name),
+                ToolPolicy::Allow,
+                "{name} only observes"
+            );
+        }
+    }
+
+    /// #1786: the waiver is per rule and explicit. The deciding rule's
+    /// `bypass_builtin_tier_floor` lets an acting browser tool through; a
+    /// waiver on a broader, non-deciding rule does not, and it never lowers
+    /// a declared `risk:`.
+    #[test]
+    fn bypass_builtin_tier_floor_is_per_rule_and_never_lowers_risk() {
+        let mut waived = rule("mcp__browser__*", ToolPolicy::Allow);
+        waived.bypass_builtin_tier_floor = true;
+        let click = "mcp__browser__browser_click";
+        assert_eq!(
+            effective_tool_policy(std::slice::from_ref(&waived), click),
+            ToolPolicy::Allow
+        );
+
+        let mut broad = rule("mcp__*", ToolPolicy::Allow);
+        broad.bypass_builtin_tier_floor = true;
+        let rules = [rule("mcp__browser__*", ToolPolicy::Allow), broad];
+        assert_eq!(effective_tool_policy(&rules, click), ToolPolicy::Ask);
+
+        let mut risky = rule("mcp__browser__*", ToolPolicy::Allow);
+        risky.bypass_builtin_tier_floor = true;
+        risky.risk = Some(mur_common::hitl::RiskTier::NetworkEgress);
+        assert_eq!(effective_tool_policy(&[risky], click), ToolPolicy::Ask);
     }
 
     /// An exemption only fills in for a missing rule; a risk-declaring rule

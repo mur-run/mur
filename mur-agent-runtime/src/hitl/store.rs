@@ -4,6 +4,8 @@
 //! event the agent's pubkey cannot verify is skipped, never trusted. Age and
 //! order come from the signed `issued_at`, never the store's unsigned `ts` or
 //! line order (#1764 option C); a decision without one is skipped.
+//! A signed revocation note cancels the decisions it covers that are not
+//! newer than it (#1806); see [`super::remembered`] for the full fold.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,8 +14,10 @@ use anyhow::{Context, Result};
 use mur_channel::ChannelService;
 use mur_common::agent::HITL_CHANNEL_FILE;
 use mur_common::channel::{ChannelActor, EventKind};
-use mur_common::hitl::{HitlResponse, check_fresh};
+use mur_common::hitl::{HitlResponse, HitlRevocation, RevocationScope};
 use mur_common::identity::AgentIdentity;
+
+use super::remembered::{LiveDecision, live_decisions};
 
 /// The `step_or_call_id` slot of every chat-gate hash. A per-call id would
 /// make every hash unique and the memory useless; a constant makes "the same
@@ -69,48 +73,87 @@ impl ChannelDecisionStore {
         decision_channel(svc, &self.mur_home, &self.agent)
     }
 
-    fn scan(&self, action_hash: &str) -> Result<Option<Settled>> {
+    /// The live decisions — the same fold the gate and `hitl/list` read.
+    fn live(&self) -> Result<std::collections::HashMap<String, LiveDecision>> {
         let svc = ChannelService::open(&self.mur_home)?;
         let channel_id = self.channel_id(&svc)?;
         let events = svc.load_events(&channel_id)?;
         drop(svc);
         let pubkey = self.identity.verifying_key_bytes();
-        let now = chrono::Utc::now();
-        // (signed decision time, decision); newest signed time wins, a deny
-        // wins a tie.
-        let mut settled: Option<(chrono::DateTime<chrono::Utc>, Settled)> = None;
-        for e in &events {
-            if e.kind != EventKind::HitlResponse {
-                continue;
+        Ok(live_decisions(
+            &channel_id,
+            &events,
+            &pubkey,
+            chrono::Utc::now(),
+        ))
+    }
+
+    fn scan(&self, action_hash: &str) -> Result<Option<Settled>> {
+        Ok(self.live()?.get(action_hash).map(LiveDecision::settled))
+    }
+
+    /// Live decisions, newest first.
+    pub fn list(&self) -> Result<Vec<LiveDecision>> {
+        let mut v: Vec<_> = self.live()?.into_values().collect();
+        v.sort_by(|a, b| {
+            b.issued_at
+                .cmp(&a.issued_at)
+                .then(a.action_hash.cmp(&b.action_hash))
+        });
+        Ok(v)
+    }
+
+    /// Revoke live decisions by appending ONE signed revocation; no existing
+    /// line is touched (#1770). `target` = `None` revokes all, `Some(prefix)`
+    /// the single live decision whose hash starts with it. Returns the
+    /// hashes revoked. A prefix matching none, or more than one, is an error
+    /// and writes nothing — a guess here would forget the wrong decision.
+    pub fn forget(&self, target: Option<&str>) -> Result<Vec<String>> {
+        let live = self.list()?;
+        let (scope, hashes) = match target {
+            None => (
+                RevocationScope::All,
+                live.into_iter().map(|d| d.action_hash).collect::<Vec<_>>(),
+            ),
+            Some(prefix) => {
+                let prefix = prefix.trim();
+                anyhow::ensure!(!prefix.is_empty(), "empty hash prefix");
+                let hits: Vec<_> = live
+                    .into_iter()
+                    .filter(|d| d.action_hash.starts_with(prefix))
+                    .map(|d| d.action_hash)
+                    .collect();
+                match hits.as_slice() {
+                    [one] => (RevocationScope::One(one.clone()), hits),
+                    [] => anyhow::bail!("no remembered decision matches '{prefix}'"),
+                    _ => anyhow::bail!(
+                        "'{prefix}' matches {} remembered decisions; use a longer prefix",
+                        hits.len()
+                    ),
+                }
             }
-            let Ok(r) = serde_json::from_value::<HitlResponse>(e.payload.clone()) else {
-                continue;
-            };
-            if r.action_hash != action_hash {
-                continue;
-            }
-            // require_sig = true: this store only ever writes signed events,
-            // so an unsigned one is not ours.
-            if !mur_channel::sign::verify_one(&channel_id, e, &pubkey, true) {
-                continue;
-            }
-            let Some(at) = r.issued_at else { continue };
-            if check_fresh(at, now).is_err() {
-                continue;
-            }
-            let this = if r.allow {
-                Settled::Allow
-            } else {
-                Settled::Deny
-            };
-            let newer = settled.as_ref().is_none_or(|(t, d)| {
-                at > *t || (at == *t && *d == Settled::Allow && this == Settled::Deny)
-            });
-            if newer {
-                settled = Some((at, this));
-            }
+        };
+        if hashes.is_empty() {
+            return Ok(hashes);
         }
-        Ok(settled.map(|(_, d)| d))
+        let rev = HitlRevocation {
+            scope,
+            issued_at: chrono::Utc::now(),
+        };
+        let svc = ChannelService::open(&self.mur_home)?;
+        let channel_id = self.channel_id(&svc)?;
+        svc.append_signed(
+            &channel_id,
+            &self.identity,
+            self.key_version,
+            ChannelActor::Agent {
+                id: self.agent.clone(),
+            },
+            EventKind::Note,
+            rev.to_payload(),
+            Some(format!("chat-hitl-revoke:{}", uuid::Uuid::now_v7())),
+        )?;
+        Ok(hashes)
     }
 
     fn append(&self, resp: &HitlResponse) -> Result<()> {
@@ -187,6 +230,7 @@ mod tests {
             reason: String::new(),
             surface: "hub".into(),
             issued_at: Some(chrono::Utc::now()),
+            label: None,
         }
     }
 
@@ -376,5 +420,133 @@ mod tests {
             a,
             chat_action_hash("bash", &serde_json::json!({"b": 1, "a": 2}), "pm")
         );
+    }
+
+    fn line_count(home: &Path) -> Vec<String> {
+        let svc = ChannelService::open(home).unwrap();
+        let path = svc.store().events_path(marker_id(home).trim());
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn at(r: HitlResponse, secs_ago: i64) -> HitlResponse {
+        HitlResponse {
+            issued_at: Some(chrono::Utc::now() - chrono::Duration::seconds(secs_ago)),
+            ..r
+        }
+    }
+
+    #[tokio::test]
+    async fn a_revoked_deny_is_no_longer_replayed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("h1", false, "a"), 5)).await;
+        assert_eq!(s.forget(Some("h1")).unwrap(), vec!["h1".to_string()]);
+        assert_eq!(s.lookup("h1").await, None, "the gate asks again");
+    }
+
+    #[tokio::test]
+    async fn forgetting_one_leaves_the_others() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("aa1", false, "a"), 5)).await;
+        s.record(at(resp("bb2", true, "b"), 5)).await;
+        s.forget(Some("aa")).unwrap();
+        assert_eq!(s.lookup("aa1").await, None);
+        assert_eq!(s.lookup("bb2").await, Some(Settled::Allow));
+    }
+
+    #[tokio::test]
+    async fn forget_all_then_a_newer_decision_is_honoured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("h1", false, "a"), 5)).await;
+        s.record(at(resp("h2", true, "b"), 5)).await;
+        let mut gone = s.forget(None).unwrap();
+        gone.sort();
+        assert_eq!(gone, vec!["h1".to_string(), "h2".to_string()]);
+        assert!(s.list().unwrap().is_empty());
+        s.record(resp("h1", true, "c")).await;
+        assert_eq!(s.lookup("h1").await, Some(Settled::Allow));
+    }
+
+    #[tokio::test]
+    async fn revocation_appends_and_rewrites_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("h1", false, "a"), 5)).await;
+        s.record(at(resp("h2", false, "b"), 5)).await;
+        let before = line_count(tmp.path());
+        s.forget(None).unwrap();
+        let after = line_count(tmp.path());
+        assert_eq!(after.len(), before.len() + 1);
+        assert_eq!(&after[..before.len()], &before[..], "old lines untouched");
+    }
+
+    #[tokio::test]
+    async fn an_unverifiable_revocation_is_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("h1", false, "a"), 5)).await;
+        // Same channel, a key that is not the agent's.
+        let forger = ChannelDecisionStore::new(
+            tmp.path().to_path_buf(),
+            "qa".into(),
+            Arc::new(AgentIdentity::generate()),
+            0,
+        );
+        // The forger's view of the log is empty (nothing verifies), so build
+        // the revocation by hand through its signing path.
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        svc.append_signed(
+            marker_id(tmp.path()).trim(),
+            &forger.identity,
+            0,
+            ChannelActor::Agent { id: "qa".into() },
+            EventKind::Note,
+            HitlRevocation {
+                scope: RevocationScope::All,
+                issued_at: chrono::Utc::now(),
+            }
+            .to_payload(),
+            None,
+        )
+        .unwrap();
+        drop(svc);
+        assert_eq!(s.lookup("h1").await, Some(Settled::Deny));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_or_unknown_prefix_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("ab1", false, "a"), 5)).await;
+        s.record(at(resp("ab2", false, "b"), 5)).await;
+        let before = line_count(tmp.path()).len();
+        assert!(s.forget(Some("ab")).is_err());
+        assert!(s.forget(Some("zz")).is_err());
+        assert_eq!(line_count(tmp.path()).len(), before);
+        assert_eq!(s.list().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_shows_only_live_decisions_with_labels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        let mut old = resp("old", true, "a");
+        old.issued_at = Some(chrono::Utc::now() - chrono::Duration::days(8));
+        s.record(old).await;
+        let mut labelled = at(resp("new", false, "b"), 5);
+        labelled.label = Some("edit_file: Cargo.toml".into());
+        s.record(labelled).await;
+        s.record(at(resp("gone", true, "c"), 5)).await;
+        s.forget(Some("gone")).unwrap();
+        let live = s.list().unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].action_hash, "new");
+        assert_eq!(live[0].label.as_deref(), Some("edit_file: Cargo.toml"));
     }
 }

@@ -34,6 +34,7 @@ mod doctor;
 mod doctor_reload;
 mod effort;
 pub mod export;
+mod hitl_memory;
 mod hub;
 pub(crate) mod install;
 pub mod lifecycle;
@@ -87,6 +88,7 @@ pub use doctor::cmd_doctor;
 pub use effort::cmd_effort;
 #[allow(unused_imports)]
 pub use export::cmd_export;
+pub use hitl_memory::{cmd_hitl_forget, cmd_hitl_list};
 #[allow(unused_imports)]
 pub use hub::cmd_migrate_to_hub;
 #[allow(unused_imports)]

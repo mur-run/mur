@@ -12,6 +12,11 @@
 //! payload without `issued_at` predates option C; its time is unknown, so it
 //! binds nothing (fail closed). The time rules and their clock-skew slack
 //! live in `mur_common::hitl::signed_time`.
+//!
+//! Public so a verifier outside the gate (the git push broker's approval
+//! adapter) binds answers with this exact rule instead of a local copy.
+//! Binding says which request an answer belongs to; it does not say a human
+//! gave it — pair every `bind` with `authority::is_human_authority`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,7 +26,7 @@ use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::hitl::{HitlRequest, HitlResponse, TimeFault, check_answer_time, check_fresh};
 
 /// Every router-signed request in a channel, keyed by `hitl_id`.
-pub(super) struct Requests(HashMap<String, Issued>);
+pub struct Requests(HashMap<String, Issued>);
 
 struct Issued {
     action_hash: String,
@@ -35,7 +40,7 @@ struct Issued {
 
 /// Why a response does not count as the answer to its request.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Unbound {
+pub enum Unbound {
     /// No router-signed request carries this `hitl_id`.
     NoRequest,
     /// The request was signed more than once under this id.
@@ -49,11 +54,11 @@ pub(super) enum Unbound {
 }
 
 impl Requests {
-    pub(super) fn collect(mur_home: &Path, channel_id: &str, events: &[ChannelEvent]) -> Self {
+    pub fn collect(mur_home: &Path, channel_id: &str, events: &[ChannelEvent]) -> Self {
         let mut map: HashMap<String, Issued> = HashMap::new();
         for e in events {
             if e.kind != EventKind::HitlRequest
-                || !super::super::authority::is_router_signed(mur_home, channel_id, e)
+                || !super::authority::is_router_signed(mur_home, channel_id, e)
             {
                 continue;
             }
@@ -74,11 +79,7 @@ impl Requests {
     /// `Ok(answered_at)` if `r` answers exactly the request it names, in
     /// time, judged at `now`. `answered_at` is the response's signed
     /// `issued_at` — the only time a caller may order or age it by.
-    pub(super) fn bind(
-        &self,
-        r: &HitlResponse,
-        now: DateTime<Utc>,
-    ) -> Result<DateTime<Utc>, Unbound> {
+    pub fn bind(&self, r: &HitlResponse, now: DateTime<Utc>) -> Result<DateTime<Utc>, Unbound> {
         let issued = self.0.get(&r.hitl_id).ok_or(Unbound::NoRequest)?;
         if issued.reissued {
             return Err(Unbound::Reissued);
@@ -95,7 +96,7 @@ impl Requests {
 
     /// True if `hitl_id` was signed more than once. Such an id is never
     /// offered as the pending request to answer.
-    pub(super) fn is_reissued(&self, hitl_id: &str) -> bool {
+    pub fn is_reissued(&self, hitl_id: &str) -> bool {
         self.0.get(hitl_id).is_some_and(|i| i.reissued)
     }
 
@@ -103,7 +104,7 @@ impl Requests {
     /// once, with a signed `issued_at` that has not expired. Only such a
     /// request is offered as pending; anything else the gate asks afresh,
     /// rather than parking on a question nobody can validly settle.
-    pub(super) fn is_answerable(&self, hitl_id: &str, now: DateTime<Utc>) -> bool {
+    pub fn is_answerable(&self, hitl_id: &str, now: DateTime<Utc>) -> bool {
         self.0.get(hitl_id).is_some_and(|i| {
             !i.reissued && i.issued_at.is_some_and(|t| check_fresh(t, now).is_ok())
         })

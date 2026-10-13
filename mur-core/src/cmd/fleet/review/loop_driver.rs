@@ -41,7 +41,8 @@ use super::settle::{
 };
 use super::verdict::{parse_rebuttal, parse_verdict, zero_cumulative};
 use super::wire::{
-    main_turn_params, message_text, reviewer_turn_params, text_message_params, with_working_dir,
+    main_turn_params, message_text, reviewer_turn_params, text_message_params,
+    with_one_shot_approvals, with_working_dir,
 };
 use crate::cmd::fleet::control;
 use crate::cmd::fleet::loop_run::{LoopStop, check_guards};
@@ -523,7 +524,7 @@ impl LoopRun<'_> {
                         message_text(&params).unwrap_or_default()
                     )),
                 };
-                with_working_dir(params, self.cwd)
+                with_one_shot_approvals(with_working_dir(params, self.cwd))
             };
             let (svc, mur_home, channel_id) = (&self.svc, self.mur_home, self.channel_id);
             let mut flush =

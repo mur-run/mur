@@ -26,6 +26,7 @@ async fn truncated_tool_use_injects_guidance_and_recovers() {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
+                bypass_builtin_tier_floor: false,
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)

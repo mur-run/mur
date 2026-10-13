@@ -122,6 +122,19 @@ fn session_names_carry_the_reserved_prefix_and_are_valid() {
     assert_ne!(name, new_session_name());
 }
 
+/// #1781: Enter at `Allow?` is not a deny — it asks again.
+#[test]
+fn allow_prompt_reasks_on_enter_and_only_y_allows() {
+    assert_eq!(allow_answer("\n"), None, "Enter must re-ask, not deny");
+    assert_eq!(allow_answer("  \n"), None);
+    assert_eq!(allow_answer("maybe\n"), None);
+    assert_eq!(allow_answer("y\n"), Some(true));
+    assert_eq!(allow_answer("YES\n"), Some(true));
+    assert_eq!(allow_answer("n\n"), Some(false));
+    assert_eq!(allow_answer("No\n"), Some(false));
+    assert_eq!(allow_answer(""), Some(false), "EOF must deny");
+}
+
 #[test]
 fn only_enter_or_yes_sends_and_eof_never_does() {
     assert!(is_send_answer("\n"));

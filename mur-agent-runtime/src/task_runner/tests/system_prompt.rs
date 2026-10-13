@@ -290,6 +290,7 @@ fn pinned_runner(
                 pattern: "build".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
+                bypass_builtin_tier_floor: false,
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -466,6 +467,7 @@ async fn an_unattended_turn_is_refused_at_once_with_a_readable_reason() {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Ask,
                 risk: None,
+                bypass_builtin_tier_floor: false,
             }]),
     );
     let call = crate::llm::ToolCallResult {

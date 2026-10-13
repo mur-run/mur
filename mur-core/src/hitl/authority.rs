@@ -155,6 +155,40 @@ mod tests {
         }
     }
 
+    /// A human answer the router signed for one channel does not carry over
+    /// to another: the channel id is in the signed input, so copying the
+    /// event into a second channel's log is not a decision there (#1764).
+    #[test]
+    fn a_human_answer_signed_for_another_channel_is_not_authority() {
+        let tmp = TempDir::new().unwrap();
+        let router = crate::channel_writer::plant_writer_identity(tmp.path());
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let here = svc.create_for_workflow("here").unwrap();
+        let there = svc.create_for_workflow("there").unwrap();
+        let ev = svc
+            .append_signed(
+                &here.id,
+                &router,
+                0,
+                ChannelActor::local_human(),
+                EventKind::HitlResponse,
+                response("h1"),
+                None,
+            )
+            .unwrap();
+        assert!(
+            is_human_authority(tmp.path(), &here.id, &ev),
+            "precondition"
+        );
+        assert!(
+            !is_router_signed(tmp.path(), &there.id, &ev)
+                && !is_human_authority(tmp.path(), &there.id, &ev),
+            "a signature for {} must not verify in {}",
+            here.id,
+            there.id
+        );
+    }
+
     /// The self-approval this module exists to stop. Each of these passes
     /// `verify_event` with enforcement off (the default), and none of them
     /// is the human's answer.

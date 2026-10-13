@@ -431,14 +431,16 @@ mod tests {
         std::fs::write(track.join("src/b.rs"), "y").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink("a.rs", track.join("src/link")).unwrap();
-        let mut files = vec![PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")];
         #[cfg(unix)]
-        files.push(PathBuf::from("src/link"));
+        let files = ["src/a.rs", "src/b.rs", "src/link"].map(PathBuf::from);
+        #[cfg(not(unix))]
+        let files = ["src/a.rs", "src/b.rs"].map(PathBuf::from);
         let m = store.snapshot("t3", &project, &track, &files).unwrap();
         let cas = std::fs::read_dir(store.root().join(CAS_DIR))
             .unwrap()
             .count();
         assert_eq!(cas, 1, "identical before bytes stored once");
+        assert_eq!(m.entries.len(), files.len(), "one entry per file");
         #[cfg(unix)]
         assert_eq!(m.entries[2].kind, EntryKind::Skipped);
         assert_eq!(store.list().unwrap().len(), 1);
