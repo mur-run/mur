@@ -90,6 +90,10 @@ pub enum FleetAction {
         /// Cost cap in USD for the session
         #[arg(long)]
         budget_usd: Option<f64>,
+        /// Stop as stuck when the open findings are unchanged across this
+        /// many consecutive rounds (default 3, minimum 2)
+        #[arg(long)]
+        stuck_rounds: Option<u32>,
     },
     /// Resume a paused review session at the same round (semi-auto).
     ReviewResume {

@@ -28,8 +28,9 @@ fn ac_p3b_1_args_equal_what_the_cli_builds_for_the_same_flags() {
         task: "fix the bug".into(),
         deadline: Some("30m".into()),
         budget_usd: Some(2.0),
+        stuck_rounds: Some(4),
     };
-    let line = "--main a --reviewer b --deadline 30m --budget-usd 2 fix the bug";
+    let line = "--main a --reviewer b --deadline 30m --budget-usd 2 --stuck-rounds 4 fix the bug";
     assert_eq!(start(line), cli);
 }
 
@@ -40,7 +41,24 @@ fn flags_may_come_in_any_order_and_optionals_default_to_none() {
     assert_eq!(a.reviewer, "b");
     assert_eq!(a.deadline, None);
     assert_eq!(a.budget_usd, None);
+    assert_eq!(a.stuck_rounds, None);
     assert_eq!(a.task, "fix it");
+}
+
+/// #1780: `--stuck-rounds` takes a whole number of at least 2.
+#[test]
+fn stuck_rounds_rejects_values_below_the_minimum_or_not_numbers() {
+    for bad in ["1", "0", "two", "2.5"] {
+        let e = syntax_err(&format!("--main a --reviewer b --stuck-rounds {bad} t"));
+        assert!(
+            e.contains("--stuck-rounds needs a whole number of at least 2"),
+            "{bad}: {e}"
+        );
+    }
+    assert_eq!(
+        start("--main a --reviewer b --stuck-rounds 2 t").stuck_rounds,
+        Some(2)
+    );
 }
 
 #[test]

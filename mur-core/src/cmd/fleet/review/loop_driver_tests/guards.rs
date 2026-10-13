@@ -138,7 +138,7 @@ impl ReviewTransport for ScriptedClockTransport {
 /// unchanged open set — the loop stops after round 2 (no round 3 send), and
 /// a channel replay through `fold_rounds` reproduces the stuck ledger.
 #[test]
-fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
+fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds_with_window_two() {
     let (tmp, channel_id) = setup_channel();
     let home = tmp.path();
     let clock = Rc::new(Cell::new(Instant::now()));
@@ -169,7 +169,8 @@ fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
         "task",
         Mode::SemiAuto,
         Duration::ZERO,
-        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        // #1780: `--stuck-rounds 2`, the pre-#1780 fail-fast window.
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None).with_stuck_rounds(2),
         &|| clock.get(),
         None,
     )
@@ -180,6 +181,54 @@ fn ac9_round_stuck_stops_loop_after_two_unchanged_rounds() {
     assert!(ledger.round_stuck);
     let replayed = fold_rounds(&read_payloads(home, &channel_id)).unwrap();
     assert_eq!(replayed, ledger, "replay reproduces round-stuck state");
+}
+
+/// #1780: with the default window, one quiet round keeps going; the second
+/// quiet round in a row stops the loop.
+#[test]
+fn round_stuck_default_window_allows_one_quiet_round() {
+    let (tmp, channel_id) = setup_channel();
+    let home = tmp.path();
+    let clock = Rc::new(Cell::new(Instant::now()));
+    let still_open = serde_json::json!({
+        "verdict": "revise",
+        "prior": [{"id": "F1", "status": "open"}],
+    })
+    .to_string();
+    let transport = ScriptedClockTransport::new(
+        Rc::clone(&clock),
+        Duration::ZERO,
+        vec![
+            serde_json::json!({
+                "verdict": "revise",
+                "findings": [{"severity": "medium", "issue": "missing error path"}],
+            })
+            .to_string(),
+            still_open.clone(),
+            still_open,
+        ],
+    );
+
+    let (ledger, stop) = run_review_loop(
+        &transport,
+        home,
+        "review-x",
+        &channel_id,
+        "main",
+        "reviewer",
+        "task",
+        Mode::SemiAuto,
+        Duration::ZERO,
+        SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None),
+        &|| clock.get(),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(stop, LoopDriverStop::RoundStuck);
+    assert_eq!(ledger.round, 3, "round 2 was quiet but round 3 still ran");
+    let replayed = fold_rounds(&read_payloads(home, &channel_id)).unwrap();
+    assert_eq!(replayed, ledger, "replay reproduces the same window");
 }
 
 /// AC13: the loop is stopped by a limit (deadline, landed at the start of

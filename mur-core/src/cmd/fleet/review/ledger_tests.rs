@@ -88,21 +88,21 @@ fn rejecting_the_same_finding_twice_escalates() {
     assert_eq!(ledger.escalations[0].finding_id, f1);
 }
 
-/// AC9: round-stuck fires after EXACTLY two consecutive rounds with an
-/// unchanged open set — not one, not three.
+/// AC9 / #1780: by default round-stuck fires after EXACTLY three round-end
+/// snapshots with an unchanged open set (two quiet rounds in a row) — one
+/// quiet round is not enough.
 #[test]
-fn round_stuck_fires_after_exactly_two_unchanged_rounds() {
+fn round_stuck_fires_after_exactly_three_unchanged_snapshots_by_default() {
     let mut ledger = Ledger::default();
     let f1 = issue(&mut ledger, Severity::Low, "x", 1);
     ledger.note_round_complete(); // round 1 snapshot: {F1: open}
     assert!(!ledger.round_stuck, "only one snapshot so far");
 
-    // Round 2: nothing changes.
-    ledger.note_round_complete(); // round 2 snapshot: {F1: open} — same as round 1
-    assert!(
-        ledger.round_stuck,
-        "two consecutive rounds with the same open set must trip"
-    );
+    ledger.note_round_complete(); // round 2: unchanged
+    assert!(!ledger.round_stuck, "one quiet round must not trip (#1780)");
+
+    ledger.note_round_complete(); // round 3: unchanged again
+    assert!(ledger.round_stuck, "two quiet rounds in a row must trip");
 
     // A change resets it.
     ledger
@@ -230,6 +230,40 @@ fn cumulative_totals_never_decrease() {
         .unwrap();
     assert_eq!(ledger.exec_time_ms, 5000, "never decreases");
     assert_eq!(ledger.cost_usd_micros, 800, "never decreases");
+}
+
+/// #1780: the window comes from `session_started.limits.stuck_rounds`, so
+/// `--stuck-rounds 2` restores the old fail-fast rule.
+#[test]
+fn round_stuck_window_follows_session_started_limits() {
+    let mut ledger = Ledger::default();
+    ledger
+        .apply(&ReviewPayload::SessionStarted {
+            members: ["m".into(), "r".into()],
+            mode: crate::cmd::fleet::review::schema::Mode::SemiAuto,
+            limits: SessionLimits::new(Duration::from_secs(3600), Stuck::Off, None)
+                .with_stuck_rounds(2),
+            cwd: None,
+        })
+        .unwrap();
+    issue(&mut ledger, Severity::Low, "x", 1);
+    ledger.note_round_complete();
+    assert!(!ledger.round_stuck);
+    ledger.note_round_complete();
+    assert!(ledger.round_stuck, "window 2: one quiet round trips");
+}
+
+#[test]
+fn default_stuck_rounds_is_three() {
+    use crate::cmd::fleet::review::constants::DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS;
+    assert_eq!(DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS, 3);
+    let l = SessionLimits::new(Duration::from_secs(60), Stuck::Off, None);
+    assert_eq!(l.stuck_rounds, 3);
+    assert_eq!(
+        l.with_stuck_rounds(1).stuck_rounds,
+        2,
+        "clamped to the minimum"
+    );
 }
 
 #[test]

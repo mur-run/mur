@@ -104,6 +104,7 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                 task,
                 deadline,
                 budget_usd,
+                stuck_rounds,
             } => {
                 let args = cmd::fleet::review::session::ReviewArgs {
                     main,
@@ -111,6 +112,7 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                     task,
                     deadline,
                     budget_usd,
+                    stuck_rounds,
                 };
                 // The driver blocks on A2A sockets and stdin; keep it off
                 // the async runtime's worker threads.
