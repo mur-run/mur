@@ -40,8 +40,14 @@ pub mod switchable;
 /// See `docs/superpowers/specs/2026-09-13-llm-idle-not-total-design.md` D2/D5.
 pub(crate) const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+/// `User-Agent` sent by every LLM client, so a proxy or provider log can
+/// attribute the traffic to this runtime instead of a bare reqwest client
+/// (the model gateway tags those `client=none`).
+pub(crate) const LLM_USER_AGENT: &str = concat!("mur-agent-runtime/", env!("CARGO_PKG_VERSION"));
+
 pub(crate) fn llm_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
+        .user_agent(LLM_USER_AGENT)
         .no_proxy()
         .connect_timeout(std::time::Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
 }
