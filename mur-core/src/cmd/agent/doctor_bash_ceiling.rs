@@ -1,9 +1,10 @@
 //! `mur agent doctor`: bash calls the agent's bash tier ceiling turned into
 //! an approval (#1814).
 //!
-//! On a scheduled agent an unattended approval DEFERS — it never fails — so
-//! nothing on screen says the agent stopped. This list is how an operator
-//! sees it: what asked, how often, and the tier to raise
+//! On a scheduled or delegated agent nobody is at the screen to approve, so a
+//! stopped call does not run and nothing on screen says the agent stopped
+//! (a fleet run defers it, a `channel/delegate` turn refuses it). This list is
+//! how an operator sees it: what stopped, how often, and the tier to raise
 //! `bypass_builtin_tier_floor` to if running those unattended is intended.
 
 use std::collections::BTreeMap;
@@ -80,8 +81,9 @@ pub fn lines(name: &str, scan: &BTreeMap<RiskTier, TierCount>) -> Vec<String> {
     };
     let total: usize = scan.values().map(|c| c.count).sum();
     let mut out = vec![format!(
-        "  {name}: {total} bash call(s) over the bash tier ceiling ASKED in the last {LOOKBACK_DAYS} days \
-         (#1814); an unattended run parks on each, it does not fail"
+        "  {name}: {total} bash call(s) over the bash tier ceiling STOPPED for approval in the last \
+         {LOOKBACK_DAYS} days (#1814; remembered decisions not counted); with nobody to approve, \
+         the call does not run"
     )];
     for (t, c) in scan.iter().rev() {
         out.push(format!(
@@ -93,7 +95,7 @@ pub fn lines(name: &str, scan: &BTreeMap<RiskTier, TierCount>) -> Vec<String> {
     }
     out.push(
         "    to keep these unattended: set bypass_builtin_tier_floor: <tier> on the exact `bash` rule \
-         (privileged always asks)"
+         (commands tiered privileged still ask)"
             .to_string(),
     );
     out
@@ -165,7 +167,13 @@ mod tests {
         );
         let l = lines("mur", &s);
         assert!(l[0].contains("mur: 4 bash call(s)"), "{}", l[0]);
-        assert!(l[0].contains("ASKED"), "{}", l[0]);
+        assert!(l[0].contains("STOPPED"), "{}", l[0]);
+        assert!(
+            l[0].contains("remembered decisions not counted"),
+            "{}",
+            l[0]
+        );
+        assert!(!l[0].contains("parks on each"), "{}", l[0]);
         assert!(l[1].contains("privileged"), "{}", l[1]);
         assert!(l[2].contains("network-egress"), "{}", l[2]);
         assert!(lines("mur", &BTreeMap::new()).is_empty());

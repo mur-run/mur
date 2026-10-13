@@ -491,7 +491,8 @@ pub(crate) fn call_floor(
     // server in one line, so only an exact-name deciding rule counts. On
     // `bash` it names a CEILING, not a switch (#1814): `true` there would
     // release every command, `sudo` included, so `bash_ceiling` ignores it
-    // and never lifts past `destructive` — a privileged command always asks.
+    // and never lifts past `destructive` — a call the classifier tiers
+    // privileged always asks (wrapped forms it misses: #1841).
     let exact = rule.filter(|r| r.pattern == tool_name || r.pattern == policy_name(tool_name));
     let waived = exact.is_some_and(|r| {
         if tool_name == mur_common::hitl::floor_waiver::BASH_TOOL {

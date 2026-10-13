@@ -12,13 +12,18 @@
 //! - a tier name (`network-egress`, `destructive`, ...) — "waive up to this
 //!   tier". Self-describing in review, and stable when the classifier changes.
 //!
-//! `privileged` is never waived on `bash`: a `sudo` or `chmod` always asks.
+//! `privileged` is never waived on `bash`: a command the classifier tiers as
+//! privileged always asks. That covers what the classifier can see —
+//! `sudo ls`, `ls && sudo ls`, `env sudo ls`. Wrapped or quoted forms
+//! (`bash -c "sudo ls"`, `/usr/bin/sudo ls`, `$(sudo ls)`) currently tier as
+//! `write` and run under the default ceiling — a known gap, #1841.
 //!
 //! The runtime gate (`call_floor`) reads [`bash_ceiling`]: a `bash: allow`
 //! call above it asks, and each such call leaves a
 //! `mur.hitl.bash_ceiling_exceeded` record (`enforced: true`) for doctor.
 //!
-//! BREAKING vs #1833, which shipped `bool`: there `true` on `bash` waived
+//! BREAKING vs #1833 (merged to `main`, never in a release), which took a
+//! `bool`: there `true` on `bash` waived
 //! every command, `sudo` included. It is now ignored — the rule behaves as if
 //! the waiver were absent — and warned about at start, in `doctor`, and in
 //! `perm list-tools`.
@@ -31,7 +36,8 @@ use super::RiskTier;
 /// cannot carry a waiver.
 pub const BASH_TOOL: &str = "bash";
 
-/// The highest tier a `bash` waiver can reach. `Privileged` always asks.
+/// The highest tier a `bash` waiver can reach: a call the classifier tiers
+/// `Privileged` always asks (see the module note on #1841 for what it misses).
 pub const BASH_WAIVER_MAX: RiskTier = RiskTier::Destructive;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -119,7 +125,7 @@ pub fn waiver_warnings(rules: &[crate::agent::ToolRule]) -> Vec<String> {
             )),
             FloorWaiver::UpTo(RiskTier::Privileged) => out.push(format!(
                 "profile.yaml tool rule `{BASH_TOOL}`: bypass_builtin_tier_floor: privileged is capped \
-                 at destructive — privileged commands always ask (#1814)"
+                 at destructive — commands tiered privileged still ask (#1814)"
             )),
             _ => {}
         }

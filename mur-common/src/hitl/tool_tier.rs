@@ -394,8 +394,10 @@ mod tests {
     /// payload piped to a shell — is opaque to a static classifier. It must
     /// never land on `Read`: Read is the lane that skips the gate entirely,
     /// so an opaque call tiered as Read would run with no check at all.
-    /// Pinned at the current answer,
-    /// `Write`; raising any of these is a policy change, lowering is a bug.
+    /// This pins a FLOOR, not the right answer: `Write` is the current
+    /// tier, a known limitation — under the default bash ceiling these run
+    /// unasked, even when the wrapped command is `sudo`. Raising them is
+    /// #1841; lowering any to `Read` is a bug.
     #[test]
     fn opaque_commands_never_tier_as_read() {
         for cmd in [

@@ -149,7 +149,7 @@ fn ceiling_hit_only_for_bash_above_the_ceiling() {
     assert_eq!(
         sudo.tier,
         RiskTier::Privileged,
-        "privileged always lands above"
+        "a privileged-tiered call always lands above"
     );
 }
 

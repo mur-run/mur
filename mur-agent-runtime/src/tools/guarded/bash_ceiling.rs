@@ -2,17 +2,19 @@
 //! into an approval.
 //!
 //! #1833 made the ceiling enforce with no observation period first: every
-//! `bash: allow` agent started asking for `git push`, `curl`, `rm` the moment
-//! it shipped. An unattended approval DEFERS rather than failing, so a
-//! scheduled agent parked on one shows nothing on screen. This record is how
-//! `mur agent doctor` shows which agents the ceiling stops, how often, and on
-//! what — `enforced: true`, because the call did stop for a human.
+//! `bash: allow` agent starts asking for `git push`, `curl`, `rm` the moment
+//! it lands. With nobody at the screen a stopped call does not run (a fleet
+//! run defers it, a `channel/delegate` turn refuses it) and shows nothing on
+//! screen. This record is how `mur agent doctor` shows which agents the
+//! ceiling stops, how often, and on what — `enforced: true`. A call a
+//! remembered decision answers is not a stop and is not recorded.
 
 use mur_common::agent::ToolPolicy;
 use mur_common::hitl::floor_waiver::{CeilingHit, bash_ceiling_hit};
 use mur_common::telemetry::METHOD_BASH_CEILING_EXCEEDED;
 
 use super::GuardedToolCall;
+use crate::hitl::batch::PendingCall;
 use crate::llm::ToolCallResult;
 use crate::task_runner::effective_tool_policy;
 use crate::telemetry_writer::Event;
@@ -22,9 +24,11 @@ use crate::telemetry_writer::Event;
 const COMMAND_PREVIEW_CHARS: usize = 400;
 
 impl GuardedToolCall {
-    /// Called for a call the gate is about to ask for. Records only when the
-    /// CEILING is why: a call whose rule already asks (`bash: ask`, a declared
-    /// `risk:`, no rule at all) would have asked without it.
+    /// Called for a call the gate stops: about to ask a human, or refusing
+    /// it outright. Never for one a remembered decision answers — nobody was
+    /// stopped. Records only when the CEILING is why: a call whose rule
+    /// already asks (`bash: ask`, a declared `risk:`, no rule at all) would
+    /// have asked without it.
     pub(crate) async fn record_bash_ceiling(&self, task_id: &str, call: &ToolCallResult) {
         if effective_tool_policy(&self.tools_policy, &call.tool_name) != ToolPolicy::Allow {
             return;
@@ -49,6 +53,19 @@ impl GuardedToolCall {
                 method: METHOD_BASH_CEILING_EXCEEDED.to_string(),
                 attrs: record(&self.agent_name, task_id, call, &command, &hit),
             });
+        }
+    }
+
+    /// [`Self::record_bash_ceiling`] for a call already turned into a
+    /// [`PendingCall`]: records the original call it came from.
+    pub(crate) async fn record_pending_ceiling(
+        &self,
+        task_id: &str,
+        calls: &[ToolCallResult],
+        pending: &PendingCall,
+    ) {
+        if let Some(call) = calls.iter().find(|c| c.call_id == pending.call_id) {
+            self.record_bash_ceiling(task_id, call).await;
         }
     }
 }
