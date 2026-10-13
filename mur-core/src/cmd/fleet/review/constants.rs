@@ -31,8 +31,15 @@ pub const TRANSPORT_RETRY_DELAY: Duration = Duration::from_secs(5);
 pub const WATCHDOG_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// §3.3: round-stuck fires when the open finding set (IDs + statuses) is
-/// unchanged across this many consecutive rounds.
-pub const ROUND_STUCK_AFTER_UNCHANGED_ROUNDS: u32 = 2;
+/// unchanged across this many consecutive round-end snapshots, i.e. after
+/// `N - 1` rounds in a row with no movement. #1780: 3 by default (two
+/// unchanged rounds in a row) — one quiet round is often a reviewer still
+/// gathering evidence. Overridable per session with `--stuck-rounds`.
+pub const DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS: u32 = 3;
+
+/// #1780: the smallest `--stuck-rounds` accepted. A window of one snapshot
+/// has nothing to compare and would stop every session after round 1.
+pub const MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS: u32 = 2;
 
 /// §3.4: a finding rejected this many times by the main agent triggers
 /// automatic escalation to the human.
@@ -279,7 +286,7 @@ pub const MURMUR_STOP_COMMAND: &str = "/stop";
 pub const RUNNING_LOCK: &str = "running.lock";
 
 /// P3b-§3.1 / §3.3: the `/review` grammar, appended to every syntax error.
-pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] <task…>\n/review resume <session>";
+pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] [--stuck-rounds 3] <task…>\n/review resume <session>";
 
 /// P3b-§9 / AC-P3b-6: `--auto` on `/review`, refused with this fixed text.
 pub const REVIEW_AUTO_REFUSED: &str =
@@ -310,6 +317,9 @@ pub const REVIEW_SYNTAX_NEEDS_VALUE: &str = "{flag} needs a value";
 pub const REVIEW_SYNTAX_UNKNOWN_FLAG: &str =
     "unknown flag {flag} (type a task that starts with '-' after --)";
 pub const REVIEW_SYNTAX_BAD_BUDGET: &str = "--budget-usd needs a finite number, got '{value}'";
+/// `{min}` is [`MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS`].
+pub const REVIEW_SYNTAX_BAD_STUCK_ROUNDS: &str =
+    "--stuck-rounds needs a whole number of at least {min}, got '{value}'";
 pub const REVIEW_SYNTAX_RESUME_ARGS: &str = "resume takes exactly one session name";
 
 /// #1779: shown when `!mur fleet review …` is typed in murmur. `{line}` is
@@ -329,6 +339,7 @@ pub const REVIEW_FLAG_MAIN: &str = "--main";
 pub const REVIEW_FLAG_REVIEWER: &str = "--reviewer";
 pub const REVIEW_FLAG_DEADLINE: &str = "--deadline";
 pub const REVIEW_FLAG_BUDGET: &str = "--budget-usd";
+pub const REVIEW_FLAG_STUCK_ROUNDS: &str = "--stuck-rounds";
 pub const REVIEW_FLAG_AUTO: &str = "--auto";
 pub const REVIEW_FLAGS_END: &str = "--";
 

@@ -22,12 +22,12 @@ use mur_common::fleet::Fleet;
 use mur_common::limits::Stuck;
 
 use super::constants::{
-    FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
-    REVIEW_LEFT_PAUSED_NOTICE, REVIEW_NEEDS_TERMINAL, REVIEW_PAUSED_CONTINUE_PROMPT,
-    REVIEW_RESUME_RESTARTS_ROUND, REVIEW_STOP_BANNER, REVIEW_STOP_REASON_DEADLINE_MID_TURN,
-    REVIEW_STOP_REASON_ESCALATION, REVIEW_STOP_REASON_STOPPED_MID_TURN,
-    REVIEW_STOP_REASON_STUCK_MID_TURN, RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT,
-    TRANSPORT_RETRY_DELAY,
+    FLEET_CHANNEL_PREFIX, MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS, OPEN_HIGH_APPROVE_WARNING,
+    REVIEW_FLEET_PREFIX, REVIEW_LEFT_PAUSED_NOTICE, REVIEW_NEEDS_TERMINAL,
+    REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_RESUME_RESTARTS_ROUND, REVIEW_STOP_BANNER,
+    REVIEW_STOP_REASON_DEADLINE_MID_TURN, REVIEW_STOP_REASON_ESCALATION,
+    REVIEW_STOP_REASON_STOPPED_MID_TURN, REVIEW_STOP_REASON_STUCK_MID_TURN,
+    RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
@@ -52,6 +52,8 @@ pub struct ReviewArgs {
     pub task: String,
     pub deadline: Option<String>,
     pub budget_usd: Option<f64>,
+    /// #1780: `--stuck-rounds`; `None` = the default.
+    pub stuck_rounds: Option<u32>,
 }
 
 /// §8.3: the stop reason as one word, also recorded in `session_stopped`.
@@ -448,16 +450,25 @@ pub(crate) fn prepare_session(
     // own (empty) limits block, so a stand-in with the final name is exact.
     let probe = session_fleet(&name, vec![], String::new(), "");
     let bounds = fleet_bounds(mur_home, &probe, args.deadline.as_deref(), args.budget_usd)?;
-    let limits = SessionLimits::new(bounds.deadline, bounds.stuck, bounds.cost_usd);
+    let mut limits = SessionLimits::new(bounds.deadline, bounds.stuck, bounds.cost_usd);
+    if let Some(n) = args.stuck_rounds {
+        if n < MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS {
+            bail!(
+                "--stuck-rounds must be at least {MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS}, got {n}"
+            );
+        }
+        limits = limits.with_stuck_rounds(n);
+    }
 
     let fleet = create_session_fleet(mur_home, &name, &main, &reviewer, &args.task)?;
     let banner = format!(
-        "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}.",
+        "Review session {name}: main = {main}, reviewer = {reviewer}, deadline {}, stuck {}, stuck rounds {}.",
         humantime_like(bounds.deadline),
         match bounds.stuck {
             Stuck::Off => "off".to_string(),
             Stuck::After(d) => humantime_like(d),
         },
+        limits.stuck_rounds,
     );
     Ok((fleet, limits, banner))
 }

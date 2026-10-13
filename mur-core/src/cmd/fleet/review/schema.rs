@@ -12,6 +12,10 @@
 use std::time::Duration;
 
 use mur_common::limits::Stuck;
+
+use super::constants::{
+    DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS, MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS,
+};
 use serde::{Deserialize, Serialize};
 
 /// The top-level key inside `Note.payload` that marks a review event.
@@ -156,6 +160,14 @@ pub struct SessionLimits {
     pub stuck_ms: Option<u64>,
     /// `None` = no cost cap.
     pub cost_usd_micros: Option<u64>,
+    /// #1780: round-end snapshots compared by round-stuck (§3.3). Sessions
+    /// recorded before this field existed read back as the current default.
+    #[serde(default = "default_stuck_rounds")]
+    pub stuck_rounds: u32,
+}
+
+fn default_stuck_rounds() -> u32 {
+    DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS
 }
 
 impl SessionLimits {
@@ -168,7 +180,16 @@ impl SessionLimits {
                 Stuck::After(d) => Some(duration_ms(d)),
             },
             cost_usd_micros: cost_usd.map(usd_to_micros),
+            stuck_rounds: DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS,
         }
+    }
+
+    /// #1780: override the round-stuck window (`--stuck-rounds`). Values
+    /// below [`MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS`] are raised to it;
+    /// the CLI parsers reject them first, this only keeps the struct sane.
+    pub fn with_stuck_rounds(mut self, rounds: u32) -> Self {
+        self.stuck_rounds = rounds.max(MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS);
+        self
     }
 
     pub fn deadline(&self) -> Duration {
@@ -436,11 +457,22 @@ mod tests {
             "type": "session_started",
             "members": ["m", "r"],
             "mode": "semi_auto",
-            "limits": {"deadline_ms": 60_000, "stuck_ms": null, "cost_usd_micros": null},
+            "limits": {"deadline_ms": 60_000, "stuck_ms": null, "cost_usd_micros": null, "stuck_rounds": 3},
         });
         let p: ReviewPayload = serde_json::from_value(old.clone()).unwrap();
         assert!(matches!(p, ReviewPayload::SessionStarted { cwd: None, .. }));
         assert_eq!(serde_json::to_value(&p).unwrap(), old);
+    }
+
+    /// #1780: limits recorded before `stuck_rounds` existed read back as the
+    /// current default.
+    #[test]
+    fn session_limits_without_stuck_rounds_read_as_default() {
+        let l: SessionLimits = serde_json::from_value(
+            serde_json::json!({"deadline_ms": 60_000, "stuck_ms": null, "cost_usd_micros": null}),
+        )
+        .unwrap();
+        assert_eq!(l.stuck_rounds, DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS);
     }
 
     #[test]
@@ -467,7 +499,7 @@ mod tests {
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(
             v["limits"],
-            serde_json::json!({"deadline_ms": 60_000, "stuck_ms": null, "cost_usd_micros": null})
+            serde_json::json!({"deadline_ms": 60_000, "stuck_ms": null, "cost_usd_micros": null, "stuck_rounds": 3})
         );
         assert_eq!(serde_json::from_value::<ReviewPayload>(v).unwrap(), p);
     }

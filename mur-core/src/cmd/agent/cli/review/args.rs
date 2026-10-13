@@ -2,10 +2,11 @@
 //! canonicalised by the caller, which has the MUR home.
 
 use crate::cmd::fleet::review::constants::{
-    REVIEW_FLAG_AUTO, REVIEW_FLAG_BUDGET, REVIEW_FLAG_DEADLINE, REVIEW_FLAG_MAIN,
-    REVIEW_FLAG_REVIEWER, REVIEW_FLAGS_END, REVIEW_SYNTAX_BAD_BUDGET, REVIEW_SYNTAX_MISSING,
-    REVIEW_SYNTAX_NEEDS_VALUE, REVIEW_SYNTAX_RESUME_ARGS, REVIEW_SYNTAX_UNKNOWN_FLAG,
-    REVIEW_USAGE_MURMUR, REVIEW_WORD_RESUME,
+    MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS, REVIEW_FLAG_AUTO, REVIEW_FLAG_BUDGET,
+    REVIEW_FLAG_DEADLINE, REVIEW_FLAG_MAIN, REVIEW_FLAG_REVIEWER, REVIEW_FLAG_STUCK_ROUNDS,
+    REVIEW_FLAGS_END, REVIEW_SYNTAX_BAD_BUDGET, REVIEW_SYNTAX_BAD_STUCK_ROUNDS,
+    REVIEW_SYNTAX_MISSING, REVIEW_SYNTAX_NEEDS_VALUE, REVIEW_SYNTAX_RESUME_ARGS,
+    REVIEW_SYNTAX_UNKNOWN_FLAG, REVIEW_USAGE_MURMUR, REVIEW_WORD_RESUME,
 };
 use crate::cmd::fleet::review::session::ReviewArgs;
 
@@ -79,6 +80,7 @@ pub fn parse_review_line(rest: &str) -> Result<ReviewLine, String> {
     }
 
     let (mut main, mut reviewer, mut deadline, mut budget_usd) = (None, None, None, None);
+    let mut stuck_rounds = None;
     let mut cursor = rest;
     let task = loop {
         let Some((word, after)) = next_word(cursor) else {
@@ -97,12 +99,32 @@ pub fn parse_review_line(rest: &str) -> Result<ReviewLine, String> {
         }
         match word {
             REVIEW_FLAG_AUTO => return Ok(ReviewLine::AutoRefused),
-            REVIEW_FLAG_MAIN | REVIEW_FLAG_REVIEWER | REVIEW_FLAG_DEADLINE | REVIEW_FLAG_BUDGET => {
+            REVIEW_FLAG_MAIN
+            | REVIEW_FLAG_REVIEWER
+            | REVIEW_FLAG_DEADLINE
+            | REVIEW_FLAG_BUDGET
+            | REVIEW_FLAG_STUCK_ROUNDS => {
                 let (value, next) = flag_value(word, after)?;
                 match word {
                     REVIEW_FLAG_MAIN => main = Some(value.to_string()),
                     REVIEW_FLAG_REVIEWER => reviewer = Some(value.to_string()),
                     REVIEW_FLAG_DEADLINE => deadline = Some(value.to_string()),
+                    REVIEW_FLAG_STUCK_ROUNDS => {
+                        let n = value
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|n| *n >= MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS);
+                        stuck_rounds = Some(n.ok_or_else(|| {
+                            syntax(
+                                REVIEW_SYNTAX_BAD_STUCK_ROUNDS
+                                    .replace(
+                                        "{min}",
+                                        &MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS.to_string(),
+                                    )
+                                    .replace("{value}", value),
+                            )
+                        })?);
+                    }
                     _ => {
                         let n = value.parse::<f64>().ok().filter(|n| n.is_finite());
                         budget_usd = Some(n.ok_or_else(|| {
@@ -127,5 +149,6 @@ pub fn parse_review_line(rest: &str) -> Result<ReviewLine, String> {
         task: task.to_string(),
         deadline,
         budget_usd,
+        stuck_rounds,
     }))
 }

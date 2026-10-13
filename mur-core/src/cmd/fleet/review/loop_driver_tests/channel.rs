@@ -52,6 +52,7 @@ fn channel_records_session_started_and_turn_sent() {
                 deadline_ms: 3_600_000,
                 stuck_ms: Some(600_000),
                 cost_usd_micros: Some(2_500_000),
+                stuck_rounds: 3,
             },
             cwd: None,
         }

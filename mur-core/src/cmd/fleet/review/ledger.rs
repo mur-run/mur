@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use super::constants::{REJECT_ESCALATION_THRESHOLD, ROUND_STUCK_AFTER_UNCHANGED_ROUNDS};
+use super::constants::{DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS, REJECT_ESCALATION_THRESHOLD};
 use super::schema::{
     FindingStatus, HumanNote, Mode, ReviewPayload, Role, RulingDecision, Severity,
 };
@@ -75,9 +75,12 @@ pub struct Ledger {
     /// order they were escalated. A ledger consumer treats a non-empty list
     /// as "the session must escalate to the human".
     pub escalations: Vec<EscalationRecord>,
-    /// The last two round-end open-set snapshots, oldest first. Used for
-    /// round-stuck detection (§3.3, AC9).
+    /// The last `stuck_rounds` round-end open-set snapshots, oldest first.
+    /// Used for round-stuck detection (§3.3, AC9).
     round_open_set_history: Vec<BTreeMap<String, FindingStatus>>,
+    /// #1780: the window from `session_started.limits.stuck_rounds`; 0 until
+    /// that event folds, read as the default.
+    stuck_rounds: u32,
     pub round_stuck: bool,
     pub paused: bool,
     pub exec_time_ms: u64,
@@ -195,8 +198,9 @@ impl Ledger {
     /// `TurnSent` are ignored here (driver-only bookkeeping).
     pub fn apply(&mut self, payload: &ReviewPayload) -> Result<(), FoldError> {
         match payload {
-            ReviewPayload::SessionStarted { mode, .. } => {
+            ReviewPayload::SessionStarted { mode, limits, .. } => {
                 self.mode = *mode;
+                self.stuck_rounds = limits.stuck_rounds;
             }
             ReviewPayload::TurnSent { to, .. } => {
                 self.unseen_rulings[role_slot(*to)].clear();
@@ -387,7 +391,10 @@ impl Ledger {
     /// driver, or a test) decides where a round ends — the ledger itself
     /// has no event marking "round complete" (§4 lists no such event).
     pub fn note_round_complete(&mut self) {
-        let window = ROUND_STUCK_AFTER_UNCHANGED_ROUNDS as usize;
+        let window = match self.stuck_rounds {
+            0 => DEFAULT_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS,
+            n => n,
+        } as usize;
         let snapshot = self.open_set();
         self.round_open_set_history.push(snapshot);
         if self.round_open_set_history.len() > window {
