@@ -19,7 +19,7 @@ async fn llm_call_event_appends_jsonl_and_emits_notification() {
             cache_creation_input_tokens: 0,
             cache_read_input_tokens: 0,
             latency_ms: 100,
-            cost_usd: 0.0,
+            cost_usd: None,
             provider: "ollama".into(),
             fired_skills: vec![],
         })

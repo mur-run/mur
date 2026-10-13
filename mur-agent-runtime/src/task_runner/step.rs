@@ -152,8 +152,11 @@ impl TaskRunner {
                             cache_creation_input_tokens: resp.cache_creation_input_tokens,
                             cache_read_input_tokens: resp.cache_read_input_tokens,
                             latency_ms,
-                            cost_usd: 0.0,
-                            provider: "ollama".into(),
+                            cost_usd: None,
+                            provider: self
+                                .telemetry_provider
+                                .clone()
+                                .unwrap_or_else(|| "unknown".into()),
                             fired_skills: fired,
                         })
                         .await;

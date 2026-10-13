@@ -43,7 +43,9 @@ pub enum Event {
         cache_creation_input_tokens: u64,
         cache_read_input_tokens: u64,
         latency_ms: u64,
-        cost_usd: f64,
+        /// `None` until a price is known for the model: an absent key is
+        /// honest, a `0.0` reads as "this call was free".
+        cost_usd: Option<f64>,
         provider: String,
         /// Skill names triggered on this turn (M2 deferred).
         fired_skills: Vec<String>,
@@ -293,7 +295,9 @@ fn event_to_notification(ev: &Event, name: &str, uuid: &str) -> Value {
             params[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = json!(cache_creation_input_tokens);
             params[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = json!(cache_read_input_tokens);
             params["latency_ms"] = json!(latency_ms);
-            params["cost_usd"] = json!(cost_usd);
+            if let Some(cost_usd) = cost_usd {
+                params["cost_usd"] = json!(cost_usd);
+            }
             params["trace_id"] = json!(trace_id);
             params[MUR_TASK_ID] = json!(task_id);
             if !fired_skills.is_empty() {

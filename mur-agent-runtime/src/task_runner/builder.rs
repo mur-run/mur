@@ -51,6 +51,7 @@ impl TaskRunner {
             registry_keys: Arc::new(Mutex::new(VecDeque::new())),
             cancel_signals: Arc::new(Mutex::new(HashMap::new())),
             telemetry: None,
+            telemetry_provider: None,
             system_prompt: None,
             last_activity_at: Arc::new(AtomicI64::new(0)),
             skills: None,
@@ -212,6 +213,19 @@ impl TaskRunner {
 
     pub fn with_telemetry(mut self, tx: mpsc::Sender<Event>) -> Self {
         self.telemetry = Some(tx);
+        self
+    }
+
+    /// Wire the per-call usage sink for production: `None` leaves it off, as
+    /// the stub/test runners want. Paired with the provider id the client
+    /// was built for, since `LlmResponse` carries a model but not a provider.
+    pub fn with_llm_telemetry(
+        mut self,
+        tx: Option<mpsc::Sender<Event>>,
+        provider: impl Into<String>,
+    ) -> Self {
+        self.telemetry = tx;
+        self.telemetry_provider = Some(provider.into());
         self
     }
 
