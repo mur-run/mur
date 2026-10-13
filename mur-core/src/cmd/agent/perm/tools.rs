@@ -51,8 +51,12 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
 fn rule_line(r: &mur_common::agent::ToolRule) -> String {
     use mur_common::agent::ToolPolicy;
     let policy = format!("{:?}", r.policy).to_lowercase();
+    // #1786: the tool's built-in tier can lift an allow too; say so.
+    let floor = mur_common::hitl::builtin_tier::floor_note(r)
+        .map(|n| format!("  {}", floor_note_text(n)))
+        .unwrap_or_default();
     let Some(risk) = r.risk else {
-        return format!("{policy:10}  {}", r.pattern);
+        return format!("{policy:10}  {}{floor}", r.pattern);
     };
     let risk_name = serde_json::to_value(risk)
         .ok()
@@ -63,7 +67,35 @@ fn rule_line(r: &mur_common::agent::ToolRule) -> String {
     } else {
         ""
     };
-    format!("{policy:10}  {}  risk={risk_name}{note}", r.pattern)
+    format!("{policy:10}  {}  risk={risk_name}{note}{floor}", r.pattern)
+}
+
+/// Operator-facing text for a built-in tier floor note. Shared with `doctor`.
+pub(crate) fn floor_note_text(n: mur_common::hitl::builtin_tier::FloorNote) -> String {
+    use mur_common::hitl::builtin_tier::FloorNote;
+    let tier = |t: mur_common::hitl::RiskTier| {
+        serde_json::to_value(t)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{t:?}"))
+    };
+    match n {
+        FloorNote::Waived { tier: t } => format!(
+            "\u{2192} FLOOR WAIVED: runs a {} tool unattended (each call logged)",
+            tier(t)
+        ),
+        FloorNote::AsksForTool { tier: t } => format!(
+            "\u{2192} asks ({} tool; set bypass_builtin_tier_floor on this rule to run unattended)",
+            tier(t)
+        ),
+        FloorNote::AsksForSome => {
+            "\u{2192} acting browser tools it matches still ask (built-in tier)".to_string()
+        }
+        FloorNote::IgnoredBypass => {
+            "\u{2192} bypass_builtin_tier_floor IGNORED: a glob cannot waive the floor; name each tool"
+                .to_string()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -90,11 +122,30 @@ mod tests {
     }
 
     #[test]
+    fn floor_notes_name_waiver_lift_and_ignored_bypass() {
+        let nav = |bypass| ToolRule {
+            pattern: "mcp__browser__browser_navigate".into(),
+            policy: ToolPolicy::Allow,
+            risk: None,
+            bypass_builtin_tier_floor: bypass,
+        };
+        assert!(rule_line(&nav(true)).contains("FLOOR WAIVED"));
+        assert!(rule_line(&nav(false)).contains("asks (network-egress tool"));
+        assert!(rule_line(&r(ToolPolicy::Allow, None)).contains("acting browser tools"));
+        let mut glob = r(ToolPolicy::Allow, None);
+        glob.bypass_builtin_tier_floor = true;
+        assert!(rule_line(&glob).contains("IGNORED"));
+    }
+
+    #[test]
     fn low_risk_and_no_risk_add_no_note() {
-        assert_eq!(
-            rule_line(&r(ToolPolicy::Allow, Some(RiskTier::Write))),
-            "allow       mcp__browser__*  risk=write"
-        );
+        let gh = ToolRule {
+            pattern: "mcp__github__*".into(),
+            policy: ToolPolicy::Allow,
+            risk: Some(RiskTier::Write),
+            bypass_builtin_tier_floor: false,
+        };
+        assert_eq!(rule_line(&gh), "allow       mcp__github__*  risk=write");
         assert_eq!(
             rule_line(&r(ToolPolicy::Deny, None)),
             "deny        mcp__browser__*"

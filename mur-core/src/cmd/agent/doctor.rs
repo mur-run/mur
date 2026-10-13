@@ -201,6 +201,29 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
             .unwrap_or_default()
     };
 
+    // #1786: tool rules the built-in tier floor changes — a bare allow that
+    // still asks, a waiver, or a waiver a glob cannot carry. Best-effort like
+    // `neutralised`: an unreadable profile prints nothing here.
+    let floor_notes = |name: &str| -> Vec<String> {
+        super::load_profile_for_edit(name)
+            .map(|(_p, prof)| {
+                prof.entitlements
+                    .tools
+                    .iter()
+                    .filter_map(|r| {
+                        mur_common::hitl::builtin_tier::floor_note(r).map(|n| {
+                            format!(
+                                "  tool rule {}: {}",
+                                r.pattern,
+                                super::perm::tools::floor_note_text(n)
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
     // What each running agent did with its latest profile/config edit.
     let reload = |name: &str| super::doctor_reload::read_state(&mur_home.join("agents").join(name));
 
@@ -324,6 +347,9 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
                 &mur_home.join("agents").join(&r.name),
             ) && let Some(line) = super::scratch_check::scratch_line(&r.name, &dir, warn_size_mb)
             {
+                println!("{line}");
+            }
+            for line in floor_notes(&r.name) {
                 println!("{line}");
             }
             for (p, reason) in neutralised(&r.name) {
