@@ -170,7 +170,7 @@ fn legacy_root_grants_are_revoked_first() {
         &s(&["node", "chrome-headless-shell"]),
         &dirs,
         &[server()],
-        &[root.clone()],
+        std::slice::from_ref(&root),
     );
     assert_eq!(p.revoke_write, Some(root.clone()));
     assert_eq!(p.revoke_dir, Some(root.clone()));
@@ -309,9 +309,9 @@ fn legacy_revocation_is_explained_before_asking() {
         "mur",
         &browsers(),
         &[],
-        &[root.clone()],
+        std::slice::from_ref(&root),
         &[],
-        &[root],
+        std::slice::from_ref(&root),
     );
     let (_, out, _) = run("no\n", &p);
     assert!(out.contains("take back old grants"), "{out}");
