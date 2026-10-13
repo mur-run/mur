@@ -208,6 +208,12 @@ pub struct AgentProfile {
     /// resolved against the local capability registry / bundle store.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_capabilities: Vec<String>,
+
+    /// Keys this build does not know (written by a newer `mur`). Kept so a
+    /// rewrite by an older binary round-trips them instead of dropping them
+    /// (#1713). Never read by logic; empty for every profile this build wrote.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, serde_yaml_ng::Value>,
 }
 
 fn default_algorithm() -> String {

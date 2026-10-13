@@ -136,6 +136,7 @@ mod tests {
             package: None,
             kind: None,
             project: None,
+            extra: Default::default(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("browser\tfirefox --mcp"));
@@ -167,6 +168,7 @@ mod tests {
             package: None,
             kind: None,
             project: None,
+            extra: Default::default(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("browser\tfirefox"));
@@ -198,6 +200,7 @@ mod tests {
             package: None,
             kind: None,
             project: None,
+            extra: Default::default(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("api\tmcp-api"));
@@ -224,6 +227,7 @@ mod tests {
             package: None,
             kind: None,
             project: None,
+            extra: Default::default(),
         };
         let output = render_server_line(&server);
         assert!(output.contains("local\tlocal-mcp"));
