@@ -78,16 +78,26 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
             }
             FleetAction::PruneReviews {
                 older_than,
+                id,
                 include_paused,
                 dry_run,
-            } => cmd::fleet::review::prune::prune_reviews(
-                &mur_home,
-                &older_than,
-                include_paused,
-                dry_run,
-                &mut std::io::stdout(),
-                chrono::Utc::now(),
-            )?,
+            } => match older_than {
+                // clap guarantees exactly one of --older-than / --id.
+                Some(older_than) => cmd::fleet::review::prune::prune_reviews(
+                    &mur_home,
+                    &older_than,
+                    include_paused,
+                    dry_run,
+                    &mut std::io::stdout(),
+                    chrono::Utc::now(),
+                )?,
+                None => cmd::fleet::review::prune::prune_reviews_by_id(
+                    &mur_home,
+                    &id,
+                    dry_run,
+                    &mut std::io::stdout(),
+                )?,
+            },
             FleetAction::Review {
                 main,
                 reviewer,
