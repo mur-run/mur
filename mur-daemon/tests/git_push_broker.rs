@@ -358,13 +358,17 @@ fn adapter_calls_the_shared_predicate_and_never_copies_it() {
         src.contains("Requests::collect"),
         "binds through the gate's own rule"
     );
+    // The parent module and every submodule: a copy must not hide in one.
+    let all = [src, include_str!("../src/git_push_broker/intake.rs")];
     for local in [
         "fn is_human_authority",
         "fn is_router_signed",
         "fn bind(",
         "verify_one(",
     ] {
-        assert!(!src.contains(local), "no local copy: {local} (spec §4)");
+        for file in all {
+            assert!(!file.contains(local), "no local copy: {local} (spec §4)");
+        }
     }
 }
 

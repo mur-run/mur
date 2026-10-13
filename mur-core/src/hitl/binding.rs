@@ -12,6 +12,11 @@
 //! payload without `issued_at` predates option C; its time is unknown, so it
 //! binds nothing (fail closed). The time rules and their clock-skew slack
 //! live in `mur_common::hitl::signed_time`.
+//!
+//! Public so a verifier outside the gate (the git push broker's approval
+//! adapter) binds answers with this exact rule instead of a local copy.
+//! Binding says which request an answer belongs to; it does not say a human
+//! gave it — pair every `bind` with `authority::is_human_authority`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -53,7 +58,7 @@ impl Requests {
         let mut map: HashMap<String, Issued> = HashMap::new();
         for e in events {
             if e.kind != EventKind::HitlRequest
-                || !super::super::authority::is_router_signed(mur_home, channel_id, e)
+                || !super::authority::is_router_signed(mur_home, channel_id, e)
             {
                 continue;
             }

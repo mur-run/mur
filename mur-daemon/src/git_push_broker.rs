@@ -13,7 +13,7 @@ use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::config::Config;
 use mur_common::hitl::HitlResponse;
 use mur_core::hitl::authority::is_human_authority;
-use mur_core::hitl::gate::binding::Requests;
+use mur_core::hitl::binding::Requests;
 use mur_git_broker::approval::ApprovalProof;
 use mur_git_broker::constants::ALLOWED_REF_PREFIX;
 use mur_git_broker::pending::RequestKey;
