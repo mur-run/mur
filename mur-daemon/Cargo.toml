@@ -13,6 +13,7 @@ mur-common = { path = "../mur-common" }
 mur-core = { path = "../mur-core" }
 mur-channel = { path = "../mur-channel" }
 mur-track = { path = "../mur-track" }
+mur-git-broker = { path = "../mur-git-broker" }
 mur-agent-runtime = { path = "../mur-agent-runtime", features = ["tts"] }
 base64 = "0.22"
 fs2 = { workspace = true }

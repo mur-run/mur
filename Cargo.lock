@@ -6729,6 +6729,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-core",
+ "mur-git-broker",
  "mur-track",
  "serde",
  "serde_json",
