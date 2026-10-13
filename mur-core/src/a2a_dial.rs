@@ -8,7 +8,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use mur_common::LockFile;
@@ -405,9 +405,47 @@ pub fn dial_message_streaming(
     home: &Path,
     agent_name: &str,
     params: Value,
+    on_delta: impl FnMut(&str, bool, &str),
+    on_hitl: impl FnMut(Value),
+    on_step: impl FnMut(StepEvent),
+) -> Result<Value> {
+    dial_message_streaming_polled(home, agent_name, params, on_delta, on_hitl, on_step, None)
+}
+
+/// A caller-side check run while a streaming turn is in flight (#1758).
+/// `check` runs about every `every` — between frames and while the peer is
+/// silent — and an error it returns ends the dial with that error (the
+/// connection is dropped; cancelling the task is the caller's job, by the
+/// id in [`PollState::task_id`]).
+pub struct DialPoll<'a> {
+    pub every: Duration,
+    pub check: &'a mut dyn FnMut(&PollState<'_>) -> Option<anyhow::Error>,
+}
+
+/// What a [`DialPoll`] check sees about the turn so far.
+#[derive(Debug, Clone, Copy)]
+pub struct PollState<'s> {
+    /// Wall time since the request, minus time spent inside `on_hitl`
+    /// (a human answering an approval is not execution time).
+    pub elapsed: Duration,
+    /// Time since the last agent-authored frame (anything but a bare
+    /// `turn/heartbeat`), or since the request if none arrived yet. An
+    /// approval answered in `on_hitl` also counts as activity.
+    pub idle: Duration,
+    /// The turn's task id, from the first frame that carried one.
+    pub task_id: Option<&'s str>,
+}
+
+/// [`dial_message_streaming`] with an optional [`DialPoll`]. `None` keeps
+/// the plain behaviour: one read timeout equal to the idle timeout.
+pub fn dial_message_streaming_polled(
+    home: &Path,
+    agent_name: &str,
+    params: Value,
     mut on_delta: impl FnMut(&str, bool, &str),
     mut on_hitl: impl FnMut(Value),
     mut on_step: impl FnMut(StepEvent),
+    mut poll: Option<DialPoll<'_>>,
 ) -> Result<Value> {
     let agent_name = &canonicalize_agent_name(home, agent_name);
     let lock_path = home.join("agents").join(agent_name).join("running.lock");
@@ -461,27 +499,82 @@ pub fn dial_message_streaming(
             }
         })?;
         stream.flush().context("flush request")?;
-        let reader = BufReader::new(stream.try_clone()?);
+        // With a poll, read in short ticks and track the idle timeout here,
+        // so the check also runs while the peer is silent.
+        let tick = poll.as_ref().map_or(timeout, |p| p.every.min(timeout));
+        stream
+            .set_read_timeout(Some(tick))
+            .context("set read timeout")?;
+        let mut reader = BufReader::new(stream.try_clone()?);
         let mut last_frame: Option<(String, String)> = None;
-        for line in reader.lines() {
-            let line = line.map_err(|e| {
-                if is_io_timeout(&e) {
-                    timeout_error(
-                        agent_name,
-                        proto,
-                        timeout,
-                        last_frame.as_ref(),
-                        "went idle for",
-                    )
-                } else {
-                    anyhow!(e).context("read response line")
+        let mut buf: Vec<u8> = Vec::new();
+        let started = Instant::now();
+        let mut last_read = started;
+        let mut last_poll = started;
+        let mut last_activity = started;
+        let mut hitl_wait = Duration::ZERO;
+        let mut task_id: Option<String> = None;
+        let mut frame_done = false;
+        loop {
+            // The idle timeout counts from the end of the last frame's
+            // callbacks, as the per-read socket timeout used to.
+            if frame_done {
+                last_read = Instant::now();
+                frame_done = false;
+            }
+            if let Some(p) = poll.as_mut()
+                && last_poll.elapsed() >= p.every
+            {
+                last_poll = Instant::now();
+                let state = PollState {
+                    elapsed: started.elapsed().saturating_sub(hitl_wait),
+                    idle: last_activity.elapsed(),
+                    task_id: task_id.as_deref(),
+                };
+                if let Some(e) = (p.check)(&state) {
+                    return Err(e);
                 }
-            })?;
-            let v: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
+            }
+            let before = buf.len();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(_) => last_read = Instant::now(),
+                Err(e) if is_io_timeout(&e) => {
+                    if buf.len() > before {
+                        last_read = Instant::now();
+                    }
+                    if last_read.elapsed() >= timeout {
+                        return Err(timeout_error(
+                            agent_name,
+                            proto,
+                            timeout,
+                            last_frame.as_ref(),
+                            "went idle for",
+                        ));
+                    }
+                    continue;
+                }
+                Err(e) => return Err(anyhow!(e).context("read response line")),
+            }
+            let parsed = serde_json::from_slice::<Value>(&buf);
+            buf.clear();
+            let Ok(v) = parsed else { continue };
+            frame_done = true;
             note_frame(&mut last_frame, &v);
+            if let Some(m) = v.get("method").and_then(Value::as_str) {
+                if m != HEARTBEAT_METHOD {
+                    last_activity = Instant::now();
+                }
+                if task_id.is_none()
+                    && let Some(id) = v
+                        .get("params")
+                        .and_then(|p| p.get("task_id"))
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                {
+                    task_id = Some(id.to_string());
+                }
+            }
             if v.get("method").and_then(Value::as_str) == Some("message/delta") {
                 let params = v.get("params");
                 if let Some(t) = params.and_then(|p| p.get("text")).and_then(Value::as_str) {
@@ -517,7 +610,10 @@ pub fn dial_message_streaming(
             }
             if v.get("method").and_then(Value::as_str) == Some("tool/approval_needed") {
                 if let Some(params) = v.get("params").cloned() {
+                    let asked = Instant::now();
                     on_hitl(params);
+                    hitl_wait += asked.elapsed();
+                    last_activity = Instant::now();
                 }
                 continue;
             }
@@ -532,10 +628,14 @@ pub fn dial_message_streaming(
     }
     #[cfg(not(unix))]
     {
-        let _ = sock;
+        let _ = (sock, &mut poll);
         bail!("unix socket transport is only supported on unix hosts")
     }
 }
+
+/// The runtime's keep-alive frame: proves the peer is up, not that the
+/// agent is making progress.
+const HEARTBEAT_METHOD: &str = mur_agent_runtime::protocol::heartbeat::HEARTBEAT_METHOD;
 
 fn dial_ephemeral(
     home: &Path,

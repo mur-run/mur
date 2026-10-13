@@ -38,6 +38,7 @@ pub mod settle;
 pub mod state;
 pub mod turn_cell;
 pub mod verdict;
+pub mod watchdog;
 pub mod wire;
 
 #[cfg(test)]

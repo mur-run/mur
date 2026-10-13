@@ -18,6 +18,7 @@ const GATE: SendGate<'static> = SendGate {
     boundary: false,
     pre_confirmed: false,
     open: &EMPTY,
+    watch: None,
 };
 
 /// A transport whose `turn_committed()` and gate wait are scripted.

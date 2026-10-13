@@ -82,6 +82,7 @@ fn gate(boundary: bool, pre_confirmed: bool) -> SendGate<'static> {
         boundary,
         pre_confirmed,
         open: &OPEN,
+        watch: None,
     }
 }
 

@@ -17,14 +17,16 @@ use super::super::ledger::{EscalationRecord, Ledger};
 use super::super::ruling::ruling_prompt_text;
 use super::super::schema::PauseKind;
 use super::super::turn_cell::TurnCell;
+use super::super::watchdog::TurnWatch;
 use super::bridge::{DriverReq, ReviewFlags};
+use crate::a2a_dial::DialPoll;
 use crate::cmd::agent::cli::stream::HitlRequest;
 
 /// Audit attribution for an answer given in the MURMUR UI.
 const HITL_SURFACE: &str = "cli";
 
 /// `dial_message_streaming`, injectable: `(home, member, params, on_delta,
-/// on_hitl) -> task`. `on_delta` takes `(text, thinking, task_id)`.
+/// on_hitl, poll) -> task`. `on_delta` takes `(text, thinking, task_id)`.
 pub type DialFn = Arc<
     dyn Fn(
             &Path,
@@ -32,6 +34,7 @@ pub type DialFn = Arc<
             serde_json::Value,
             &mut dyn FnMut(&str, bool, &str),
             &mut dyn FnMut(serde_json::Value),
+            Option<DialPoll<'_>>,
         ) -> Result<serde_json::Value>
         + Send
         + Sync,
@@ -42,8 +45,16 @@ pub type RespondFn = Arc<dyn Fn(&str, &str, bool) + Send + Sync>;
 
 /// The real network edges: A2A streaming dial, and the HITL answer call.
 pub fn real_io(mur_home: &Path) -> (DialFn, RespondFn) {
-    let dial: DialFn = Arc::new(|home, member, params, on_delta, on_hitl| {
-        crate::a2a_dial::dial_message_streaming(home, member, params, on_delta, on_hitl, |_| {})
+    let dial: DialFn = Arc::new(|home, member, params, on_delta, on_hitl, poll| {
+        crate::a2a_dial::dial_message_streaming_polled(
+            home,
+            member,
+            params,
+            on_delta,
+            on_hitl,
+            |_| {},
+            poll,
+        )
     });
     let home = mur_home.to_path_buf();
     let respond: RespondFn = Arc::new(move |member, id, allow| {
@@ -132,50 +143,16 @@ impl MurmurTransport {
 
 impl ReviewTransport for MurmurTransport {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
-        let cell = Arc::new(TurnCell::default());
-        let slot = Arc::new(OnceLock::new());
-        let _ = self.req.send(DriverReq::TurnStarted {
-            member: member.to_string(),
-            task_id: slot.clone(),
-            turn: cell.clone(),
-        });
-        let mut streamed = String::new();
-        let result = (self.dial)(
-            &self.mur_home,
-            member,
-            params.clone(),
-            &mut |delta, thinking, id| {
-                if !thinking {
-                    streamed.push_str(delta);
-                }
-                if !id.is_empty() {
-                    let _ = slot.set(id.to_string());
-                }
-            },
-            &mut |hitl| {
-                answer_hitl(
-                    member,
-                    &hitl,
-                    &|m, call| self.decide_hitl(m, call),
-                    |id, allow| (self.respond)(member, id, allow),
-                );
-            },
-        )
-        .and_then(|task| task_reply(member, &task, streamed));
-        // Settle the turn BEFORE telling the UI it ended (P3b-§6.3 step 4/6).
-        let committed = cell.commit();
-        self.last_committed.store(committed, Ordering::Release);
-        let _ = self.req.send(DriverReq::TurnEnded {
-            member: member.to_string(),
-        });
-        // Same transcript block as the stdin TerminalGate. An aborted turn's
-        // reply is discarded by the driver (P3b-§6.3), so it is not shown.
-        if let (true, Ok(reply)) = (committed, &result) {
-            let _ = self.req.send(DriverReq::Show(format!(
-                "\n--- reply from {member} ---\n{reply}\n\n"
-            )));
-        }
-        result
+        self.send_polled(member, params, None)
+    }
+
+    fn send_watched(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        watch: &TurnWatch<'_>,
+    ) -> Result<String> {
+        watch.guard(member, |poll| self.send_polled(member, params, Some(poll)))
     }
 
     fn confirm_send(
@@ -259,5 +236,60 @@ impl MurmurTransport {
             reply,
         })
         .unwrap_or(false)
+    }
+}
+
+impl MurmurTransport {
+    fn send_polled(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        poll: Option<DialPoll<'_>>,
+    ) -> Result<String> {
+        let cell = Arc::new(TurnCell::default());
+        let slot = Arc::new(OnceLock::new());
+        let _ = self.req.send(DriverReq::TurnStarted {
+            member: member.to_string(),
+            task_id: slot.clone(),
+            turn: cell.clone(),
+        });
+        let mut streamed = String::new();
+        let result = (self.dial)(
+            &self.mur_home,
+            member,
+            params.clone(),
+            &mut |delta, thinking, id| {
+                if !thinking {
+                    streamed.push_str(delta);
+                }
+                if !id.is_empty() {
+                    let _ = slot.set(id.to_string());
+                }
+            },
+            &mut |hitl| {
+                answer_hitl(
+                    member,
+                    &hitl,
+                    &|m, call| self.decide_hitl(m, call),
+                    |id, allow| (self.respond)(member, id, allow),
+                );
+            },
+            poll,
+        )
+        .and_then(|task| task_reply(member, &task, streamed));
+        // Settle the turn BEFORE telling the UI it ended (P3b-§6.3 step 4/6).
+        let committed = cell.commit();
+        self.last_committed.store(committed, Ordering::Release);
+        let _ = self.req.send(DriverReq::TurnEnded {
+            member: member.to_string(),
+        });
+        // Same transcript block as the stdin TerminalGate. An aborted turn's
+        // reply is discarded by the driver (P3b-§6.3), so it is not shown.
+        if let (true, Ok(reply)) = (committed, &result) {
+            let _ = self.req.send(DriverReq::Show(format!(
+                "\n--- reply from {member} ---\n{reply}\n\n"
+            )));
+        }
+        result
     }
 }

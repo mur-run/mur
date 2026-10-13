@@ -24,8 +24,10 @@ use mur_common::limits::Stuck;
 use super::constants::{
     FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
     REVIEW_LEFT_PAUSED_NOTICE, REVIEW_NEEDS_TERMINAL, REVIEW_PAUSED_CONTINUE_PROMPT,
-    REVIEW_RESUME_RESTARTS_ROUND, REVIEW_STOP_BANNER, REVIEW_STOP_REASON_ESCALATION,
-    RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
+    REVIEW_RESUME_RESTARTS_ROUND, REVIEW_STOP_BANNER, REVIEW_STOP_REASON_DEADLINE_MID_TURN,
+    REVIEW_STOP_REASON_ESCALATION, REVIEW_STOP_REASON_STOPPED_MID_TURN,
+    REVIEW_STOP_REASON_STUCK_MID_TURN, RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT,
+    TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
@@ -34,6 +36,7 @@ use super::note::{NoteLine, parse_note_line};
 use super::resume::{Resumable, ResumeEnd};
 use super::ruling::{is_rule_command, parse_rule_command, ruling_prompt_text};
 use super::schema::{Cumulative, Mode, ReviewPayload, Role, SessionLimits, to_note_payload};
+use super::watchdog::MidTurn;
 use super::wire::message_text;
 use crate::cmd::fleet::loop_run::{LoopStop, fleet_bounds};
 use crate::cmd::fleet::store;
@@ -66,6 +69,9 @@ pub fn stop_reason(stop: &LoopDriverStop) -> String {
         LoopDriverStop::TaskFailed { member, cause } => {
             format!("{member} task failed: {cause}")
         }
+        LoopDriverStop::MidTurn(MidTurn::Deadline) => REVIEW_STOP_REASON_DEADLINE_MID_TURN.into(),
+        LoopDriverStop::MidTurn(MidTurn::Stuck) => REVIEW_STOP_REASON_STUCK_MID_TURN.into(),
+        LoopDriverStop::MidTurn(MidTurn::Stopped) => REVIEW_STOP_REASON_STOPPED_MID_TURN.into(),
         LoopDriverStop::RoundStuck => "stuck (round: open findings unchanged)".into(),
         LoopDriverStop::Escalation => REVIEW_STOP_REASON_ESCALATION.into(),
         LoopDriverStop::Guard(LoopStop::Deadline) => "limit: deadline".into(),
@@ -267,6 +273,17 @@ pub(super) struct TerminalGate<'a, T> {
 impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
         let reply = self.inner.send(member, params)?;
+        (self.output)(&format!("\n--- reply from {member} ---\n{reply}\n\n"))?;
+        Ok(reply)
+    }
+
+    fn send_watched(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        watch: &super::watchdog::TurnWatch<'_>,
+    ) -> Result<String> {
+        let reply = self.inner.send_watched(member, params, watch)?;
         (self.output)(&format!("\n--- reply from {member} ---\n{reply}\n\n"))?;
         Ok(reply)
     }

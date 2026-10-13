@@ -20,6 +20,7 @@ const GATE: SendGate<'static> = SendGate {
     boundary: false,
     pre_confirmed: false,
     open: &EMPTY,
+    watch: None,
 };
 static EMPTY: BTreeSet<String> = BTreeSet::new();
 
@@ -529,6 +530,7 @@ fn gate_for(boundary: bool, open: &BTreeSet<String>) -> SendGate<'_> {
         boundary,
         pre_confirmed: false,
         open,
+        watch: None,
     }
 }
 

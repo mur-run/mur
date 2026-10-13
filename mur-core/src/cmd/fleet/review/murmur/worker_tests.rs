@@ -94,7 +94,7 @@ impl Script {
 
     pub(super) fn dial(self: &Arc<Self>) -> DialFn {
         let me = self.clone();
-        Arc::new(move |_, member, params, on_delta, _| {
+        Arc::new(move |_, member, params, on_delta, _, _| {
             on_delta("x", false, "T-1");
             Ok(task(&me.reply(member, &params)))
         })
