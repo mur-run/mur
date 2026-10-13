@@ -6,9 +6,10 @@
 //! the operator granted and answers "is this whole batch already granted?".
 //!
 //! Scope: a key is remembered per `(agent, channel_id)`, in memory only, so a
-//! Hub restart forgets every answer. A turn with no explicit channel (the
-//! "latest channel" fallback) has no defined scope, so it is never auto-allowed
-//! and is never offered the session row.
+//! Hub restart forgets every answer. `agent_chat_send` resolves the "latest
+//! channel" fallback to a concrete id before the turn starts; only a turn with
+//! no channel at all (the agent's very first) stays unscoped, so it is never
+//! auto-allowed and is never offered the session row.
 //!
 //! An auto-allow is never silent: the batch is still emitted with
 //! `auto_allowed: true` (the chat shows an info card) and logged.
@@ -143,7 +144,10 @@ pub fn event_payload(
         .map(|c| {
             let mut w = c.wire.clone();
             if let (Some(obj), Some((key, label))) = (w.as_object_mut(), &c.grant) {
-                obj.insert("session_grant".into(), json!({ "key": key, "label": label }));
+                obj.insert(
+                    "session_grant".into(),
+                    json!({ "key": key, "label": label }),
+                );
             }
             w
         })

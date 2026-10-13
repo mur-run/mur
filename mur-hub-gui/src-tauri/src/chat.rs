@@ -89,6 +89,9 @@ pub async fn agent_chat_send(
     channel_id: Option<String>,
 ) -> Result<ChatReply, String> {
     let home = crate::mur_home_path();
+    // Pin the turn to ONE channel up front: HITL session scope and persistence
+    // must agree, and the "latest" fallback would otherwise leave HITL unscoped.
+    let channel_id = resolve_turn_channel(&home, &name, channel_id);
     // Register the in-flight id synchronously so a Stop pressed mid-turn can
     // cancel by it. Cleared once the turn returns (below).
     registry.0.set(&name, &task_id);
@@ -303,6 +306,27 @@ fn extract_text(message: &Value) -> String {
 
 // ─── Channel persistence ───────────────────────────────────────────────────
 
+/// The channel a turn belongs to: the rail's explicit pick, else the agent's
+/// latest existing channel. Never creates one — an agent with no channel yet
+/// returns `None` (that first turn asks for every HITL as usual, and
+/// `persist_exchange` creates the channel only on a successful reply).
+fn resolve_turn_channel(
+    home: &std::path::Path,
+    agent: &str,
+    explicit: Option<String>,
+) -> Option<String> {
+    if explicit.is_some() {
+        return explicit;
+    }
+    match ChannelService::open(home).and_then(|svc| svc.latest_for_agent(agent)) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!("latest channel lookup failed for {agent}: {e:#}");
+            None
+        }
+    }
+}
+
 /// Persist one user→agent exchange into the agent's channel — the explicit
 /// `channel_id` when the chat window's rail picked one, else the agent's latest —
 /// resolving the channel ONCE so both halves land together (never split across
@@ -486,5 +510,25 @@ mod channel_tests {
         persist_exchange(tmp.path(), "qa", Some(&old), "q2", None, "a2", None, None);
         assert_eq!(svc.load_events(&old).unwrap().len(), 3);
         assert_eq!(svc.load_events(&new).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn turn_channel_resolves_latest_without_creating() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        // No channel yet: unscoped, and nothing is created as a side effect.
+        assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), None);
+        assert!(svc.list(10).unwrap().is_empty());
+
+        let old = svc.create_for_agent("qa").unwrap().id;
+        let new = svc.create_for_agent("qa").unwrap().id;
+        // Explicit pick wins; otherwise the latest.
+        assert_eq!(
+            resolve_turn_channel(tmp.path(), "qa", Some(old.clone())),
+            Some(old)
+        );
+        assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), Some(new));
+        // Another agent's channels never leak in.
+        assert_eq!(resolve_turn_channel(tmp.path(), "other", None), None);
     }
 }

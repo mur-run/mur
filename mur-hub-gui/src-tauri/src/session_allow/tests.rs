@@ -61,7 +61,10 @@ fn a_declared_risk_overrides_a_remembered_key() {
     s.grant("a", "c1", "write_file");
     let mut call = write_call("h1");
     call["risk"] = json!("destructive");
-    assert!(matches!(plan(&s, "a", Some("c1"), &batch(vec![call])), Plan::Ask(_)));
+    assert!(matches!(
+        plan(&s, "a", Some("c1"), &batch(vec![call])),
+        Plan::Ask(_)
+    ));
 }
 
 #[test]
@@ -81,8 +84,12 @@ fn reset_forgets_every_channel_of_that_agent_only() {
 fn a_legacy_single_call_payload_is_planned() {
     let s = SessionAllow::default();
     s.grant("a", "c1", "write_file");
-    let legacy = json!({ "hitl_id": "h1", "tool_name": "write_file", "tool_input": { "path": "/x/y" } });
-    assert!(matches!(plan(&s, "a", Some("c1"), &legacy), Plan::AutoAllow(_)));
+    let legacy =
+        json!({ "hitl_id": "h1", "tool_name": "write_file", "tool_input": { "path": "/x/y" } });
+    assert!(matches!(
+        plan(&s, "a", Some("c1"), &legacy),
+        Plan::AutoAllow(_)
+    ));
 }
 
 #[test]
