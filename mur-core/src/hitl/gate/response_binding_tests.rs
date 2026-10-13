@@ -469,3 +469,131 @@ async fn a_deny_wins_a_tie_on_signed_time() {
     let d = settle([(false, same), (true, same)]).await;
     assert!(!d.allow && !d.deferred, "deny then allow: {d:?}");
 }
+
+// ── Superseded allow (#1770, HITL-only mitigation) ────────────────────
+
+/// An allow is not current once a newer signed request for the same action
+/// has no answer. This is what is left of "the human denied it later, then
+/// the deny line was deleted": the deny is gone, its request is not.
+#[tokio::test]
+async fn an_allow_with_a_newer_unanswered_request_is_not_current() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-0",
+        &hash,
+        Some(ago(chrono::Duration::hours(3))),
+    );
+    human_decides_at(
+        tmp.path(),
+        &ch,
+        "hitl-0",
+        &hash,
+        true,
+        Some(ago(chrono::Duration::hours(2))),
+    );
+    // The later question whose (deleted) deny is not in the log.
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-1",
+        &hash,
+        Some(ago(chrono::Duration::hours(1))),
+    );
+
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
+    assert!(
+        !d.allow,
+        "a superseded allow must not release the gate: {d:?}"
+    );
+    assert!(
+        d.deferred,
+        "the newer request is the one awaiting an answer: {d:?}"
+    );
+    assert_eq!(d.hitl_id.as_deref(), Some("hitl-1"));
+}
+
+/// Control: the newer request was answered (here with an allow), so nothing
+/// is missing and the newest decision stands.
+#[tokio::test]
+async fn an_allow_whose_newer_request_was_answered_still_counts() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-0",
+        &hash,
+        Some(ago(chrono::Duration::hours(3))),
+    );
+    human_decides_at(
+        tmp.path(),
+        &ch,
+        "hitl-0",
+        &hash,
+        true,
+        Some(ago(chrono::Duration::hours(2))),
+    );
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-1",
+        &hash,
+        Some(ago(chrono::Duration::hours(1))),
+    );
+    human_decides_at(
+        tmp.path(),
+        &ch,
+        "hitl-1",
+        &hash,
+        true,
+        Some(ago(chrono::Duration::minutes(30))),
+    );
+
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
+    assert!(d.allow, "every request is answered: {d:?}");
+}
+
+/// Control: a newer unanswered request for a DIFFERENT action says nothing
+/// about this one.
+#[tokio::test]
+async fn a_newer_request_for_another_action_does_not_supersede() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-0",
+        &hash,
+        Some(ago(chrono::Duration::hours(3))),
+    );
+    human_decides_at(
+        tmp.path(),
+        &ch,
+        "hitl-0",
+        &hash,
+        true,
+        Some(ago(chrono::Duration::hours(2))),
+    );
+    router_request_at(
+        tmp.path(),
+        &ch,
+        "hitl-x",
+        "other-hash",
+        Some(ago(chrono::Duration::hours(1))),
+    );
+
+    let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
+        .await
+        .unwrap();
+    assert!(d.allow, "unrelated request: {d:?}");
+}

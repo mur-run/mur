@@ -413,7 +413,21 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
         }
     }
 
-    if let Some((_, d)) = settled {
+    if let Some((answered_at, d)) = settled {
+        // #1770 (HITL-only mitigation): an allow is not current when a newer
+        // signed request for this same action has no answer. Signatures bind
+        // each line alone, so a deleted later deny leaves exactly this
+        // trace: its request without its answer. Ask again rather than
+        // trust the older allow. A deny needs no such check — falling back to
+        // it is already the safe direction. This narrows the log-tampering
+        // problem; it does not detect deletion (that needs a chain + anchor).
+        if d.allow
+            && let Some((asked, id)) = &pending
+            && *asked > answered_at
+            && !responded.contains(id)
+        {
+            return Ok(Prior::Pending(id.clone()));
+        }
         return Ok(Prior::Settled(d));
     }
     match pending {
