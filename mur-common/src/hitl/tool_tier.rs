@@ -230,6 +230,12 @@ fn classify_bash(cmd: &str) -> RiskTier {
     if word_in(&lower, DESTRUCTIVE_HEADS) || DESTRUCTIVE_ARGS.iter().any(|a| lower.contains(a)) {
         tier = tier.max(RiskTier::Destructive);
     }
+    // #1832: a body that cannot be read (`eval $X`, `sh -c "$X"`, `… | sh`) is
+    // arbitrary code execution. A policy choice, narrow by design — see
+    // `opaque_shell`.
+    if super::opaque_shell::is_opaque_shell(cmd) {
+        tier = tier.max(RiskTier::Destructive);
+    }
     if word_in(&lower, EGRESS_HEADS) || git_sub_in(&lower, GIT_EGRESS_SUBCMDS) {
         tier = tier.max(RiskTier::NetworkEgress);
     }
@@ -257,8 +263,8 @@ fn word_in(cmd: &str, words: &[&str]) -> bool {
 /// This can only RAISE a tier, never lower one: it adds matches and removes
 /// none. The cost is a rare false positive (an argument path ending in a head's
 /// name, e.g. `/tmp/rm`), which prompts instead of auto-answering. An opaque
-/// body (`bash -c "$X"`, `eval`) is still invisible here and keeps the `Write`
-/// fallback — see the module docs.
+/// body (`bash -c "$X"`, `eval`) is invisible here; `opaque_shell` (#1832)
+/// handles those shapes separately.
 fn tokens(cmd: &str) -> impl Iterator<Item = &str> {
     cmd.split(|c: char| {
         c.is_whitespace() || CHAINING.contains(&c) || matches!(c, '"' | '\'' | '(' | ')')
@@ -547,6 +553,55 @@ mod tests {
             (r#"bash -c "bash -c 'sudo ls'""#, RiskTier::Privileged),
         ] {
             assert_eq!(classify("bash", Some(&bash(cmd))), want, "cmd: {cmd}");
+        }
+    }
+
+    /// #1832 (policy change, not a bug fix): a command whose body cannot be
+    /// read from the text is arbitrary code execution, so it is asked about
+    /// instead of falling back to `Write`.
+    #[test]
+    fn opaque_shell_invocations_are_destructive() {
+        for cmd in [
+            r#"bash -c "$X""#,
+            "sh -c $CMD",
+            r#"zsh -lc "$(cat payload)""#,
+            "/bin/bash -c `cat payload`",
+            "eval $X",
+            "ls && eval foo",
+            "echo hi; eval foo",
+            "cat payload | sh",
+            "cat payload | /bin/bash",
+            "cat payload |bash",
+        ] {
+            assert_eq!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::Destructive,
+                "cmd: {cmd}"
+            );
+        }
+    }
+
+    /// The shapes #1832's history scan found as false positives (shell words
+    /// inside a grep/pgrep string), plus ordinary literal shell use, must stay
+    /// inside the ceiling.
+    #[test]
+    fn literal_or_quoted_shell_words_stay_within_the_ceiling() {
+        for cmd in [
+            r#"grep "| sh" log.txt"#,
+            r#"pgrep -f "bash -c $X""#,
+            r#"echo "run: eval $X""#,
+            "bash -c 'echo hi'",
+            r#"sh -c "cargo build""#,
+            "bash script.sh",
+            "grep eval src/lib.rs",
+            "true || sh",
+            "echo $X",
+        ] {
+            let t = classify("bash", Some(&bash(cmd)));
+            assert!(
+                crate::hitl::tier_may_be_granted(t),
+                "escalated to {t:?}: {cmd}"
+            );
         }
     }
 

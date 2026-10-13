@@ -8,6 +8,7 @@ pub mod builtin_tier;
 pub mod dest;
 pub mod floor_waiver;
 pub mod label;
+mod opaque_shell;
 pub mod pin;
 pub mod signed_time;
 pub mod tool_tier;
