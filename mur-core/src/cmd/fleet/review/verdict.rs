@@ -45,8 +45,8 @@ pub struct StagedVerdict {
     pub payloads: Vec<ReviewPayload>,
 }
 
-/// Zero cumulative (§4 requires every turn-ending event to carry one; real
-/// execution-time/cost accounting is not wired yet).
+/// Zero cumulative, for test fixtures that do not care about the clock.
+#[cfg(test)]
 pub fn zero_cumulative() -> Cumulative {
     Cumulative {
         exec_time_ms: 0,
@@ -72,7 +72,15 @@ fn missing_open_ids<'a>(
 /// list missing a status for any finding still open (§3.3: "A missing
 /// status counts as a malformed verdict"), or a status for an ID never
 /// issued (§8.2 illegal transition).
-pub fn parse_verdict(ledger: &Ledger, round: u32, reply: &str) -> Result<StagedVerdict, String> {
+///
+/// `cumulative` is the session's running total at the end of this turn
+/// (#1776); it is stamped on the `verdict` event.
+pub fn parse_verdict(
+    ledger: &Ledger,
+    round: u32,
+    reply: &str,
+    cumulative: Cumulative,
+) -> Result<StagedVerdict, String> {
     let json = extract_verdict_json(reply).ok_or("no JSON verdict block found")?;
     let parsed: VerdictReply = serde_json::from_str(json)
         .map_err(|e| format!("the verdict JSON does not match the required shape: {e}"))?;
@@ -84,7 +92,8 @@ pub fn parse_verdict(ledger: &Ledger, round: u32, reply: &str) -> Result<StagedV
         ));
     }
     let mut scratch = ledger.clone();
-    let payloads = stage_round(&mut scratch, round, &parsed).map_err(|e| e.to_string())?;
+    let payloads =
+        stage_round(&mut scratch, round, &parsed, cumulative).map_err(|e| e.to_string())?;
     // §3.3 / AC10: `approve` is refused while any high finding is disputed.
     // Checked on the post-fold ledger, so a reply that resolves the finding
     // in the same round may approve, and one that disputes it may not. A
@@ -116,7 +125,13 @@ pub fn parse_verdict(ledger: &Ledger, round: u32, reply: &str) -> Result<StagedV
 /// Malformed = no JSON block, a JSON block of the wrong shape, an open
 /// finding left unanswered, a `reject`/`partial` without a reason, or an ID
 /// never issued.
-pub fn parse_rebuttal(ledger: &Ledger, round: u32, reply: &str) -> Result<ReviewPayload, String> {
+/// `cumulative` is stamped on the `rebuttal` event, as for [`parse_verdict`].
+pub fn parse_rebuttal(
+    ledger: &Ledger,
+    round: u32,
+    reply: &str,
+    cumulative: Cumulative,
+) -> Result<ReviewPayload, String> {
     let json = extract_verdict_json(reply).ok_or("no JSON responses block found")?;
     let parsed: RebuttalReply = serde_json::from_str(json)
         .map_err(|e| format!("the responses JSON does not match the required shape: {e}"))?;
@@ -149,7 +164,7 @@ pub fn parse_rebuttal(ledger: &Ledger, round: u32, reply: &str) -> Result<Review
     let payload = ReviewPayload::Rebuttal {
         round,
         responses: parsed.responses,
-        cumulative: zero_cumulative(),
+        cumulative,
     };
     ledger.clone().apply(&payload).map_err(|e| e.to_string())?;
     Ok(payload)
@@ -161,6 +176,7 @@ fn stage_round(
     scratch: &mut Ledger,
     round: u32,
     parsed: &VerdictReply,
+    cumulative: Cumulative,
 ) -> Result<Vec<ReviewPayload>, FoldError> {
     // §3.3.1: findings first, `verdict` LAST — it seals the round on replay.
     let mut out = Vec::new();
@@ -187,7 +203,7 @@ fn stage_round(
     let verdict = ReviewPayload::Verdict {
         round,
         kind: parsed.verdict,
-        cumulative: zero_cumulative(),
+        cumulative,
     };
     scratch.apply(&verdict)?;
     out.push(verdict);
@@ -204,6 +220,7 @@ mod tests {
             &Ledger::default(),
             1,
             r#"{"verdict":"revise","findings":[{"severity":"low","issue":"x"}]}"#,
+            zero_cumulative(),
         )
         .unwrap()
         .ledger
@@ -211,20 +228,27 @@ mod tests {
 
     #[test]
     fn verdict_without_json_is_malformed() {
-        let err = parse_verdict(&Ledger::default(), 1, "looks fine").unwrap_err();
+        let err =
+            parse_verdict(&Ledger::default(), 1, "looks fine", zero_cumulative()).unwrap_err();
         assert!(err.contains("no JSON"), "{err}");
     }
 
     #[test]
     fn verdict_missing_a_prior_status_is_malformed() {
-        let err = parse_verdict(&one_open(), 2, r#"{"verdict":"approve"}"#).unwrap_err();
+        let err = parse_verdict(
+            &one_open(),
+            2,
+            r#"{"verdict":"approve"}"#,
+            zero_cumulative(),
+        )
+        .unwrap_err();
         assert!(err.contains("F1"), "{err}");
     }
 
     #[test]
     fn verdict_for_unissued_id_is_malformed() {
         let reply = r#"{"verdict":"approve","prior":[{"id":"F1","status":"resolved"},{"id":"F9","status":"resolved"}]}"#;
-        let err = parse_verdict(&one_open(), 2, reply).unwrap_err();
+        let err = parse_verdict(&one_open(), 2, reply, zero_cumulative()).unwrap_err();
         assert!(err.contains("F9"), "{err}");
     }
 
@@ -233,7 +257,9 @@ mod tests {
         let reply = format!(
             r#"{{"verdict":"revise","findings":[{{"severity":"{severity}","issue":"x"}}]}}"#
         );
-        parse_verdict(&Ledger::default(), 1, &reply).unwrap().ledger
+        parse_verdict(&Ledger::default(), 1, &reply, zero_cumulative())
+            .unwrap()
+            .ledger
     }
 
     /// AC10: approving while disputing a HIGH finding is refused, and the
@@ -242,7 +268,7 @@ mod tests {
     fn ac10_approve_with_a_disputed_high_finding_is_refused() {
         let reply =
             r#"{"verdict":"approve","prior":[{"id":"F1","status":"disputed","reason":"r"}]}"#;
-        let err = parse_verdict(&one_open_with("high"), 2, reply).unwrap_err();
+        let err = parse_verdict(&one_open_with("high"), 2, reply, zero_cumulative()).unwrap_err();
         assert!(err.contains("F1") && err.contains("refused"), "{err}");
     }
 
@@ -251,7 +277,7 @@ mod tests {
     fn ac10_approve_with_only_a_disputed_low_finding_is_accepted() {
         let reply =
             r#"{"verdict":"approve","prior":[{"id":"F1","status":"disputed","reason":"r"}]}"#;
-        let staged = parse_verdict(&one_open_with("low"), 2, reply).unwrap();
+        let staged = parse_verdict(&one_open_with("low"), 2, reply, zero_cumulative()).unwrap();
         assert_eq!(staged.kind, VerdictKind::Approve);
     }
 
@@ -260,29 +286,30 @@ mod tests {
     #[test]
     fn ac10_gate_applies_only_to_disputed_high_on_approve() {
         let open = r#"{"verdict":"approve","prior":[{"id":"F1","status":"open"}]}"#;
-        assert!(parse_verdict(&one_open_with("high"), 2, open).is_ok());
+        assert!(parse_verdict(&one_open_with("high"), 2, open, zero_cumulative()).is_ok());
         let revise =
             r#"{"verdict":"revise","prior":[{"id":"F1","status":"disputed","reason":"r"}]}"#;
-        assert!(parse_verdict(&one_open_with("high"), 2, revise).is_ok());
+        assert!(parse_verdict(&one_open_with("high"), 2, revise, zero_cumulative()).is_ok());
     }
 
     #[test]
     fn rebuttal_covering_every_open_finding_is_valid() {
         let reply = "done\n```json\n{\"responses\":[{\"id\":\"F1\",\"answer\":\"accept\"}]}\n```";
-        let p = parse_rebuttal(&one_open(), 2, reply).unwrap();
+        let p = parse_rebuttal(&one_open(), 2, reply, zero_cumulative()).unwrap();
         assert!(matches!(p, ReviewPayload::Rebuttal { round: 2, .. }));
     }
 
     #[test]
     fn rebuttal_reject_without_reason_is_malformed() {
         let reply = r#"{"responses":[{"id":"F1","answer":"reject","reason":"  "}]}"#;
-        let err = parse_rebuttal(&one_open(), 2, reply).unwrap_err();
+        let err = parse_rebuttal(&one_open(), 2, reply, zero_cumulative()).unwrap_err();
         assert!(err.contains("reason"), "{err}");
     }
 
     #[test]
     fn rebuttal_missing_an_open_finding_is_malformed() {
-        let err = parse_rebuttal(&one_open(), 2, r#"{"responses":[]}"#).unwrap_err();
+        let err =
+            parse_rebuttal(&one_open(), 2, r#"{"responses":[]}"#, zero_cumulative()).unwrap_err();
         assert!(err.contains("F1"), "{err}");
     }
     /// P2-§5.3: after a `fix` ruling on F1, `reject` is malformed (retry
@@ -299,10 +326,10 @@ mod tests {
             .unwrap();
         let answer =
             |a: &str| format!(r#"{{"responses":[{{"id":"F1","answer":"{a}","reason":"r"}}]}}"#);
-        let err = parse_rebuttal(&ledger, 2, &answer("reject")).unwrap_err();
+        let err = parse_rebuttal(&ledger, 2, &answer("reject"), zero_cumulative()).unwrap_err();
         let hint = REVIEW_FIX_RULED_REJECT_HINT.replace("{id}", "F1");
         assert!(err.contains(&hint), "{err}");
-        assert!(parse_rebuttal(&ledger, 2, &answer("partial")).is_ok());
-        assert!(parse_rebuttal(&ledger, 2, &answer("accept")).is_ok());
+        assert!(parse_rebuttal(&ledger, 2, &answer("partial"), zero_cumulative()).is_ok());
+        assert!(parse_rebuttal(&ledger, 2, &answer("accept"), zero_cumulative()).is_ok());
     }
 }

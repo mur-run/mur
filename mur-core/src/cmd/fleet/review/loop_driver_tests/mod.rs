@@ -5,6 +5,7 @@
 
 mod abort;
 mod channel;
+mod cumulative;
 mod cwd;
 mod flow;
 mod guards;
