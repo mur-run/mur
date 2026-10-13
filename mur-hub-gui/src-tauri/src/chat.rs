@@ -537,9 +537,9 @@ mod channel_tests {
         // Explicit pick wins; otherwise the latest.
         assert_eq!(
             resolve_turn_channel(tmp.path(), "qa", Some(old.clone())),
-            Some(old)
+            Some(old.clone())
         );
-        assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), Some(new));
+        assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), Some(new.clone()));
         // Another agent's channels never leak in: it gets its own.
         let other = resolve_turn_channel(tmp.path(), "other", None).unwrap();
         assert!(other != old && other != new);
