@@ -34,3 +34,27 @@ async fn llm_client_builder_ignores_ambient_http_proxy() {
     let resp = resp.expect("no_proxy client reaches base_url despite HTTP_PROXY");
     assert_eq!(resp.status(), 200);
 }
+
+/// Every LLM client identifies itself, so proxies and provider logs can
+/// attribute runtime traffic (#1813).
+#[tokio::test]
+async fn llm_client_builder_sets_user_agent() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 2048];
+        let n = s.read(&mut buf).await.unwrap();
+        let _ = s
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .await;
+        let _ = s.flush().await;
+        let _ = s.shutdown().await;
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    });
+    let client = llm_client_builder().build().unwrap();
+    client.get(format!("http://{addr}/")).send().await.unwrap();
+    let req = server.await.unwrap().to_ascii_lowercase();
+    let want = format!("user-agent: {}", LLM_USER_AGENT.to_ascii_lowercase());
+    assert!(req.contains(&want), "missing {want:?} in request:\n{req}");
+}
