@@ -307,9 +307,11 @@ fn extract_text(message: &Value) -> String {
 // ─── Channel persistence ───────────────────────────────────────────────────
 
 /// The channel a turn belongs to: the rail's explicit pick, else the agent's
-/// latest existing channel. Never creates one — an agent with no channel yet
-/// returns `None` (that first turn asks for every HITL as usual, and
-/// `persist_exchange` creates the channel only on a successful reply).
+/// latest channel, else a fresh one created now — so even an agent's first turn
+/// has a session scope and is offered "don't ask again this session". Creating
+/// up front writes no messages: a failed turn leaves an empty channel, which the
+/// next turn reuses as the latest. `None` only if the channel store itself fails
+/// (that turn then asks for every HITL as usual).
 fn resolve_turn_channel(
     home: &std::path::Path,
     agent: &str,
@@ -318,10 +320,15 @@ fn resolve_turn_channel(
     if explicit.is_some() {
         return explicit;
     }
-    match ChannelService::open(home).and_then(|svc| svc.latest_for_agent(agent)) {
-        Ok(id) => id,
+    let resolved =
+        ChannelService::open(home).and_then(|svc| match svc.latest_for_agent(agent)? {
+            Some(id) => Ok(id),
+            None => Ok(svc.create_for_agent(agent)?.id),
+        });
+    match resolved {
+        Ok(id) => Some(id),
         Err(e) => {
-            tracing::warn!("latest channel lookup failed for {agent}: {e:#}");
+            tracing::warn!("turn channel resolution failed for {agent}: {e:#}");
             None
         }
     }
@@ -513,12 +520,17 @@ mod channel_tests {
     }
 
     #[test]
-    fn turn_channel_resolves_latest_without_creating() {
+    fn turn_channel_creates_first_then_reuses_latest() {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
-        // No channel yet: unscoped, and nothing is created as a side effect.
-        assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), None);
-        assert!(svc.list(10).unwrap().is_empty());
+        // No channel yet: one is created so the first turn has a scope…
+        let first = resolve_turn_channel(tmp.path(), "qa", None).expect("created");
+        assert_eq!(svc.list(10).unwrap().len(), 1);
+        // …it holds no messages until a reply succeeds…
+        assert!(svc.load_events(&first).unwrap().is_empty());
+        // …and the next turn reuses it rather than creating another.
+        assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), Some(first));
+        assert_eq!(svc.list(10).unwrap().len(), 1);
 
         let old = svc.create_for_agent("qa").unwrap().id;
         let new = svc.create_for_agent("qa").unwrap().id;
@@ -528,7 +540,8 @@ mod channel_tests {
             Some(old)
         );
         assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), Some(new));
-        // Another agent's channels never leak in.
-        assert_eq!(resolve_turn_channel(tmp.path(), "other", None), None);
+        // Another agent's channels never leak in: it gets its own.
+        let other = resolve_turn_channel(tmp.path(), "other", None).unwrap();
+        assert!(other != old && other != new);
     }
 }
