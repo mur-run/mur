@@ -12,15 +12,19 @@
 //!   write grant. The probe binary is written at run time and then exec'd;
 //!   `~/.mur` is outside the exec lane, so a write entitlement alone leaves
 //!   the exec failing with `Operation not permitted`.
-//! * Playwright's browsers cache (`ms-playwright`) — both an exec lane and a
-//!   write grant, and both on the cache *root*, not on one revision's build
-//!   dir: allowlisting `chrome-headless-shell` by name is not enough once the
-//!   seal is on (the exec is by absolute path under the cache), and the
-//!   server writes its `browser@<hash>` registry locks there on every launch.
-//!   Scoping to a build dir would break on the next `install-browser`, so a
-//!   working replay after an upgrade needs the root. Skipped when the cache
-//!   cannot be located (`PLAYWRIGHT_BROWSERS_PATH=0`, no `HOME`), so nothing
-//!   is guessed — the live test then reports the denial.
+//! * Playwright's browsers cache (`ms-playwright`) — an exec lane on each
+//!   build dir setup installs (headless shell, full Chromium), and a write
+//!   grant on the server registry only (`ms-playwright/b`, where the server
+//!   writes its `browser@<hash>` descriptors on every launch; `.links` and
+//!   `__dirlock` are install-time and the install runs outside the agent).
+//!   Never write on the cache root: the cache is shared by every agent and by
+//!   the user's own Playwright, so a dir both writable and exec'able there
+//!   would let one agent plant a binary another later runs (#1730). An older
+//!   setup did grant the root writable; that grant is offered back for
+//!   removal. Build-dir lanes are per revision, so rerun setup after an
+//!   `install-browser` upgrade. Skipped when the cache cannot be located
+//!   (`PLAYWRIGHT_BROWSERS_PATH=0`, no `HOME`), so nothing is guessed — the
+//!   live test then reports the denial.
 //!
 //! [`plan`] is pure over the profile it is handed, so tests need no agent on
 //! disk and nothing is granted without a literal `yes` (`cmd::consent`).
@@ -42,18 +46,66 @@ pub fn probe_dir(mur_home: &Path, agent: &str) -> PathBuf {
         .join("probe")
 }
 
+/// Where Playwright's browsers live, as located by the caller. All `None` /
+/// empty when unlocatable, so [`plan`] never guesses a path.
+#[derive(Debug, Default, Clone)]
+pub struct Browsers {
+    /// The cache root (`ms-playwright`). Only used to spot the legacy
+    /// root-wide write grant; never granted itself.
+    pub cache: Option<PathBuf>,
+    /// Build dirs the agent launches from (exec lanes), newest first.
+    pub builds: Vec<PathBuf>,
+    /// The server registry the MCP server writes on every launch.
+    pub registry: Option<PathBuf>,
+}
+
+impl Browsers {
+    /// Locate everything from the cache dir and the server registry dir:
+    /// the headless shell replay launches and the full build `auth` needs.
+    pub fn locate(cache: Option<&Path>, registry: Option<&Path>) -> Self {
+        let builds = cache
+            .map(|dir| {
+                let mut out: Vec<PathBuf> = Vec::new();
+                for name in [
+                    super::doctor::usable_build(dir),
+                    super::doctor::full_build(dir),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    let b = dir.join(name);
+                    if !out.contains(&b) {
+                        out.push(b);
+                    }
+                }
+                out
+            })
+            .unwrap_or_default();
+        Self {
+            cache: cache.map(Path::to_path_buf),
+            builds,
+            registry: registry.map(Path::to_path_buf),
+        }
+    }
+}
+
 /// What the agent's profile is still missing. Empty `Plan` = nothing to do.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Plan {
     /// Binaries absent from `entitlements.processes.spawn.allowed`.
     pub binaries: Vec<String>,
     /// Exec lanes absent from `spawn.allowed_dirs`: the probe dir, and the
-    /// browsers cache when it is locatable.
+    /// browser build dirs when the cache is locatable.
     pub dirs: Vec<String>,
     /// MCP server install dir, when absent from `filesystem.read`.
     pub read: Option<String>,
-    /// Browsers cache, when absent from `filesystem.write`.
+    /// Server registry, when absent from `filesystem.write`.
     pub write: Option<String>,
+    /// Legacy write grant on the shared cache root, to take back (#1730).
+    pub revoke_write: Option<String>,
+    /// Legacy exec lane on the shared cache root, to take back (#1730): left
+    /// in place it would make the registry write grant exec'able too.
+    pub revoke_dir: Option<String>,
 }
 
 impl Plan {
@@ -62,65 +114,83 @@ impl Plan {
             && self.dirs.is_empty()
             && self.read.is_none()
             && self.write.is_none()
+            && self.revoke_write.is_none()
+            && self.revoke_dir.is_none()
     }
 }
 
 /// Diff the required grants against what the profile already allows.
 ///
 /// Pure: `allowed` / `allowed_dirs` / `reads` / `writes` come from the caller,
-/// as does `browsers` (the Playwright cache, `None` when unlocatable), so this
-/// never reads or writes a profile. Matching is exact, like `perm deny-spawn`'s —
-/// a near match must show up as missing rather than be silently accepted.
+/// as does `browsers` (located by [`Browsers::locate`]), so this never reads
+/// or writes a profile. Matching is exact, like `perm deny-spawn`'s — a near
+/// match must show up as missing rather than be silently accepted.
 pub fn plan(
     mur_home: &Path,
     agent: &str,
-    browsers: Option<&Path>,
+    browsers: &Browsers,
     allowed: &[String],
     allowed_dirs: &[String],
     reads: &[String],
     writes: &[String],
 ) -> Plan {
+    let s = |p: &Path| p.to_string_lossy().into_owned();
     let binaries = REQUIRED_BINARIES
         .iter()
         .filter(|b| !allowed.iter().any(|a| a == *b))
         .map(|b| (*b).to_string())
         .collect();
-    let cache = browsers.map(|d| d.to_string_lossy().into_owned());
-    let dirs = [
-        Some(probe_dir(mur_home, agent).to_string_lossy().into_owned()),
-        cache.clone(),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|want| !allowed_dirs.contains(want))
-    .collect();
-    let server = mur_browser::server::install_dir(mur_home)
-        .to_string_lossy()
-        .into_owned();
+    let dirs = std::iter::once(probe_dir(mur_home, agent))
+        .chain(browsers.builds.iter().cloned())
+        .map(|d| s(d.as_path()))
+        .filter(|want| !allowed_dirs.contains(want))
+        .collect();
+    let server = s(&mur_browser::server::install_dir(mur_home));
     let read = (!reads.contains(&server)).then_some(server);
-    let write = cache.filter(|c| !writes.contains(c));
+    let write = browsers
+        .registry
+        .as_deref()
+        .map(s)
+        .filter(|r| !writes.contains(r));
+    let cache = browsers.cache.as_deref().map(s);
+    let revoke_write = cache.clone().filter(|c| writes.contains(c));
+    let revoke_dir = cache.filter(|c| allowed_dirs.contains(c));
     Plan {
         binaries,
         dirs,
         read,
         write,
+        revoke_write,
+        revoke_dir,
     }
 }
 
-/// One grant to apply. The two arms map to the two `perm` subcommands,
-/// which differ in kind (binary allowlist vs. exec lane), not just in value.
+/// One change to apply. The arms map to the `perm` subcommands, which differ
+/// in kind (binary allowlist vs. exec lane), not just in value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Grant {
     Binary(String),
     Dir(String),
     Read(String),
     Write(String),
+    /// Take a write grant back (`perm remove-path … write`).
+    RevokeWrite(String),
+    /// Take an exec lane back (`perm deny-spawn-dir`).
+    RevokeDir(String),
 }
 
 impl Plan {
-    /// The missing grants, binaries first, in the order they are applied.
+    /// The changes, revocation first so a refusal mid-way never leaves the
+    /// overlap in place with more added on top; then binaries, lanes, paths.
     pub fn grants(&self) -> Vec<Grant> {
-        let mut out: Vec<Grant> = self.binaries.iter().cloned().map(Grant::Binary).collect();
+        let mut out: Vec<Grant> = self
+            .revoke_write
+            .iter()
+            .cloned()
+            .map(Grant::RevokeWrite)
+            .collect();
+        out.extend(self.revoke_dir.iter().cloned().map(Grant::RevokeDir));
+        out.extend(self.binaries.iter().cloned().map(Grant::Binary));
         out.extend(self.dirs.iter().cloned().map(Grant::Dir));
         if let Some(r) = &self.read {
             out.push(Grant::Read(r.clone()));
@@ -140,6 +210,8 @@ pub fn command_for(agent: &str, grant: &Grant) -> String {
         Grant::Dir(d) => format!("mur agent perm allow-spawn-dir {agent} {d}"),
         Grant::Read(r) => format!("mur agent perm allow-read {agent} {r}"),
         Grant::Write(w) => format!("mur agent perm allow-write {agent} {w}"),
+        Grant::RevokeWrite(w) => format!("mur agent perm remove-path {agent} write {w}"),
+        Grant::RevokeDir(d) => format!("mur agent perm deny-spawn-dir {agent} {d}"),
     }
 }
 
@@ -184,6 +256,13 @@ pub fn confirm_and_apply(
     for c in &cmds {
         writeln!(output, "    {c}")?;
     }
+    if plan.revoke_write.is_some() || plan.revoke_dir.is_some() {
+        writeln!(
+            output,
+            "    note      the first lines take back old grants on the shared browsers cache:\n              \
+             writable and exec'able together, it lets one agent plant a binary another runs"
+        )?;
+    }
     if !plan.dirs.is_empty() {
         writeln!(
             output,
@@ -202,222 +281,5 @@ pub fn confirm_and_apply(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn home() -> PathBuf {
-        PathBuf::from("/tmp/murhome")
-    }
-
-    /// The expected probe dir, spelled the way the platform spells it:
-    /// `probe_dir` joins components, so the separator is `\` on Windows.
-    fn probe(agent: &str) -> String {
-        probe_dir(&home(), agent).to_string_lossy().into_owned()
-    }
-
-    fn s(v: &[&str]) -> Vec<String> {
-        v.iter().map(|x| (*x).to_string()).collect()
-    }
-
-    /// The cache a mac/Linux install resolves; tests pass it explicitly so
-    /// they do not depend on the host's `HOME` or `PLAYWRIGHT_BROWSERS_PATH`.
-    fn cache() -> PathBuf {
-        home().join("ms-playwright")
-    }
-
-    fn cache_s() -> String {
-        cache().to_string_lossy().into_owned()
-    }
-
-    fn server() -> String {
-        mur_browser::server::install_dir(&home())
-            .to_string_lossy()
-            .into_owned()
-    }
-
-    #[test]
-    fn empty_profile_needs_every_grant() {
-        let p = plan(&home(), "mur", Some(&cache()), &[], &[], &[], &[]);
-        assert_eq!(p.binaries, s(&["node", "chrome-headless-shell"]));
-        assert_eq!(p.dirs, vec![probe("mur"), cache_s()]);
-        assert_eq!(p.read, Some(server()));
-        assert_eq!(p.write, Some(cache_s()));
-        assert!(!p.is_empty());
-    }
-
-    #[test]
-    fn fully_granted_profile_is_a_no_op() {
-        let dirs = vec![probe("mur"), cache_s()];
-        let p = plan(
-            &home(),
-            "mur",
-            Some(&cache()),
-            &s(&["node", "chrome-headless-shell"]),
-            &dirs,
-            &[server()],
-            &[cache_s()],
-        );
-        assert!(p.is_empty(), "{p:?}");
-    }
-
-    /// The probe dir is per-agent: another agent's grant must not count.
-    #[test]
-    fn dir_grant_is_not_shared_between_agents() {
-        let dirs = vec![probe("other"), cache_s()];
-        let p = plan(
-            &home(),
-            "mur",
-            Some(&cache()),
-            &[],
-            &dirs,
-            &[server()],
-            &[cache_s()],
-        );
-        assert_eq!(p.dirs, vec![probe("mur")]);
-    }
-
-    #[test]
-    fn partial_profile_only_lists_what_is_missing() {
-        let p = plan(
-            &home(),
-            "mur",
-            Some(&cache()),
-            &s(&["node"]),
-            &[cache_s()],
-            &[server()],
-            &[cache_s()],
-        );
-        assert_eq!(p.binaries, s(&["chrome-headless-shell"]));
-        let cmds = commands("mur", &p);
-        assert_eq!(cmds.len(), 2, "{cmds:?}");
-        assert!(cmds[0].ends_with("allow-spawn mur chrome-headless-shell"));
-        assert!(cmds[1].contains(&format!("allow-spawn-dir mur {}", probe("mur"))));
-    }
-
-    /// The seal execs the shell by absolute path under the cache and the
-    /// server writes its registry locks there, so both lanes are required
-    /// even when every binary is already allowlisted by name.
-    #[test]
-    fn browsers_cache_needs_both_exec_and_write() {
-        let p = plan(
-            &home(),
-            "mur",
-            Some(&cache()),
-            &s(&["node", "chrome-headless-shell"]),
-            &[probe("mur")],
-            &[server()],
-            &[],
-        );
-        let cmds = commands("mur", &p);
-        assert!(
-            cmds.contains(&format!("mur agent perm allow-spawn-dir mur {}", cache_s())),
-            "{cmds:?}"
-        );
-        assert!(
-            cmds.contains(&format!("mur agent perm allow-write mur {}", cache_s())),
-            "{cmds:?}"
-        );
-    }
-
-    /// `PLAYWRIGHT_BROWSERS_PATH=0` (or no `HOME`) leaves the cache
-    /// unlocatable: nothing about it is planned rather than a path guessed.
-    #[test]
-    fn unlocatable_cache_is_skipped_not_guessed() {
-        let p = plan(
-            &home(),
-            "mur",
-            None,
-            &s(&["node", "chrome-headless-shell"]),
-            &[probe("mur")],
-            &[server()],
-            &[],
-        );
-        assert!(p.is_empty(), "{p:?}");
-    }
-
-    /// The launch chain is `node <install>/…`; the npx-era bare name
-    /// `playwright-mcp` never resolves to an executable and must not count.
-    #[test]
-    fn grants_match_the_vendored_launch_chain() {
-        let p = plan(
-            &home(),
-            "mur",
-            Some(&cache()),
-            &s(&["playwright-mcp"]),
-            &[],
-            &[],
-            &[],
-        );
-        assert!(p.binaries.contains(&"node".to_string()), "{p:?}");
-        let cmds = commands("mur", &p);
-        assert!(
-            cmds.iter()
-                .any(|c| c == &format!("mur agent perm allow-read mur {}", server())),
-            "{cmds:?}"
-        );
-    }
-
-    fn run(answer: &str, p: &Plan) -> (bool, String, Vec<String>) {
-        let mut out = Vec::new();
-        let mut applied = Vec::new();
-        let mut grant = |g: &Grant| {
-            applied.push(command_for("mur", g));
-            Ok(())
-        };
-        let ok = confirm_and_apply(
-            "mur",
-            p,
-            false,
-            &mut answer.as_bytes(),
-            &mut out,
-            &mut grant,
-        )
-        .unwrap();
-        (ok, String::from_utf8(out).unwrap(), applied)
-    }
-
-    #[test]
-    fn nothing_is_granted_without_a_literal_yes() {
-        let p = plan(
-            &home(),
-            "mur",
-            Some(Path::new("/tmp/ms-playwright")),
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-        for a in ["y\n", "YES\n", "\n", "", "no\n"] {
-            let (ok, out, applied) = run(a, &p);
-            assert!(!ok, "{a:?} must not consent");
-            assert!(applied.is_empty(), "{a:?} granted {applied:?}");
-            assert!(out.contains("run the commands above"), "{out}");
-        }
-    }
-
-    #[test]
-    fn a_literal_yes_applies_every_missing_grant() {
-        let p = plan(
-            &home(),
-            "mur",
-            Some(Path::new("/tmp/ms-playwright")),
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-        let (ok, out, applied) = run("yes\n", &p);
-        assert!(ok);
-        assert_eq!(applied, commands("mur", &p));
-        assert!(out.contains("exec lane"), "{out}");
-        assert!(out.contains("✓ granted"), "{out}");
-    }
-
-    #[test]
-    fn an_already_granted_profile_asks_nothing() {
-        let (ok, out, applied) = run("no\n", &Plan::default());
-        assert!(ok, "a no-op must not read as refusal");
-        assert!(applied.is_empty());
-        assert!(out.contains("already granted"), "{out}");
-    }
-}
+#[path = "perms_tests.rs"]
+mod tests;

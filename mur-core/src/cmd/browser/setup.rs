@@ -220,11 +220,14 @@ pub fn grant_perms(
 
     let (_, profile) = crate::cmd::agent::load_profile_for_edit(&agent)?;
     let spawn = &profile.entitlements.processes.spawn;
-    let browsers = mur_browser::chromium::system_browsers_dir();
+    let browsers = perms::Browsers::locate(
+        mur_browser::chromium::system_browsers_dir().as_deref(),
+        mur_browser::chromium::system_server_registry_dir().as_deref(),
+    );
     let plan = perms::plan(
         &mur_home,
         &agent,
-        browsers.as_deref(),
+        &browsers,
         &spawn.allowed,
         &spawn.allowed_dirs,
         &profile.entitlements.filesystem.read,
@@ -234,7 +237,14 @@ pub fn grant_perms(
         perms::Grant::Binary(b) => crate::cmd::agent::cmd_perm_allow_spawn(&agent, b),
         perms::Grant::Dir(d) => crate::cmd::agent::cmd_perm_allow_spawn_dir(&agent, d),
         perms::Grant::Read(r) => crate::cmd::agent::cmd_perm_allow_read(&agent, r),
-        perms::Grant::Write(w) => crate::cmd::agent::cmd_perm_allow_write(&agent, w),
+        perms::Grant::Write(w) => {
+            // The registry appears on the server's first launch; the sandbox
+            // drops a grant on a missing path, so create it before granting.
+            std::fs::create_dir_all(w)?;
+            crate::cmd::agent::cmd_perm_allow_write(&agent, w)
+        }
+        perms::Grant::RevokeWrite(w) => crate::cmd::agent::cmd_perm_remove_path(&agent, "write", w),
+        perms::Grant::RevokeDir(d) => crate::cmd::agent::cmd_perm_deny_spawn_dir(&agent, d),
     };
     perms::confirm_and_apply(&agent, &plan, consent.given(), input, output, &mut grant)?;
     Ok(())
