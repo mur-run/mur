@@ -8,13 +8,15 @@ use crate::{
     action::ActionDocument,
     ancestry::judge,
     approval::{ApprovalProof, Clock, accept_approval, begin_execution},
+    binding::{Bound, EnrollmentSource, Mismatch, bind, build_action},
     error::BrokerError,
     import::{ParserSpawn, import_pack},
     pending::{PendingStore, RequestKey, State, Submitted},
-    policy::{BrokerLimits, RemotePolicy},
+    policy::BrokerLimits,
     prefetch::{PrefetchGate, RemoteReader, run_prefetch},
     push::{RemoteAuth, push},
     repo::PrivateRepo,
+    request_file::RequestFile,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -23,14 +25,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// Builds the prefetch reader for one remote URL. The URL comes from the enrollment record read
+/// for that request, so a reader is never shared across remotes.
+pub type ReaderFor = Box<dyn Fn(&str) -> Box<dyn RemoteReader> + Send + Sync>;
+
 pub struct BrokerConfig {
     pub store_path: PathBuf,
     pub work_root: PathBuf,
     pub limits: BrokerLimits,
     pub git_bin: PathBuf,
-    pub policy: RemotePolicy,
-    pub remote_url: String,
-    pub reader: Box<dyn RemoteReader>,
+    /// Read afresh at every decision; never cached.
+    pub enrollments: Box<dyn EnrollmentSource>,
+    pub reader: ReaderFor,
     pub spawn: Box<dyn ParserSpawn>,
     pub auth: Box<dyn RemoteAuth>,
     pub clock: Arc<dyn Clock>,
@@ -103,19 +109,18 @@ impl Broker {
         pack: &Path,
     ) -> Result<String, BrokerError> {
         let hash = doc.action_hash()?;
-        let p = &self.cfg.policy;
-        if doc.ref_policy_digest != p.digest()
-            || doc.remote_id != p.remote_id
-            || doc.canonical_remote_endpoint != p.canonical_remote_endpoint
-        {
-            return Err(BrokerError::InvalidRequest("policy".into()));
-        }
+        // The records are read here, at the decision, and what they say binds this request.
+        let bound = match bind(&self.snapshot()?, doc) {
+            Ok(b) => b,
+            Err(Mismatch::NotEnrolled) => return Err(BrokerError::NotEnrolled),
+            Err(Mismatch::Changed) => return Err(BrokerError::InvalidRequest("policy".into())),
+        };
         let now = self.cfg.clock.now();
         // Caps and idempotency live inside `submit`'s transaction, ahead of any git work.
         if let Submitted::Existing(_) = self.store.submit(key, doc, &hash, now, &self.cfg.limits)? {
             return Ok(hash);
         }
-        match self.prepare(key, doc, pack) {
+        match self.prepare(key, doc, pack, &bound) {
             Ok(digest) => {
                 self.store.to_pending(key, &digest)?;
                 self.notifications
@@ -135,23 +140,38 @@ impl Broker {
         }
     }
 
+    /// The current records, or why there are none to act on.
+    fn snapshot(&self) -> Result<crate::enrollment::Enrollments, BrokerError> {
+        self.cfg
+            .enrollments
+            .current()?
+            .ok_or(BrokerError::NotEnrolled)
+    }
+
+    /// Intake entry point: stamp a verified request with the current epoch and repo identity
+    /// (the agent supplies neither), then submit it.
+    pub fn submit_verified(&self, req: &RequestFile, pack: &Path) -> Result<String, BrokerError> {
+        let doc = build_action(&self.snapshot()?, req).map_err(|_| BrokerError::NotEnrolled)?;
+        let key = RequestKey {
+            agent_id: req.agent.clone(),
+            task_id: req.task_id.clone(),
+            request_id: req.request_id.clone(),
+        };
+        self.submit_request(&key, &doc, pack)
+    }
+
     /// Everything that touches remote or agent bytes. Returns the frozen control digest.
     fn prepare(
         &self,
         key: &RequestKey,
         doc: &ActionDocument,
         pack: &Path,
+        bound: &Bound,
     ) -> Result<String, BrokerError> {
         let l = &self.cfg.limits;
+        let reader = (self.cfg.reader)(&bound.remote_url);
         let repo = PrivateRepo::create(&self.dir_for(key), doc.object_format, &self.cfg.git_bin)?;
-        run_prefetch(
-            &self.gate,
-            &*self.cfg.reader,
-            &repo,
-            doc,
-            &self.cfg.policy,
-            l,
-        )?;
+        run_prefetch(&self.gate, &*reader, &repo, doc, &bound.policy, l)?;
         // Prefetch writes refs, so the control files are frozen only after it, and before the
         // agent's bytes reach the parser.
         let frozen = repo.freeze()?;
@@ -173,25 +193,36 @@ impl Broker {
         proof: ApprovalProof,
     ) -> Result<State, BrokerError> {
         let row = self.store.get(key)?.ok_or(BrokerError::NotPending)?;
-        let matches_row =
-            proof.request_id == key.request_id && proof.action_hash == row.action_hash;
-        if row.state == State::PendingApproval && matches_row {
-            let doc: ActionDocument = serde_json::from_str(&row.doc_json).map_err(storage)?;
-            if doc.ref_policy_digest != self.cfg.policy.digest() {
+        if row.state != State::PendingApproval
+            || proof.request_id != key.request_id
+            || proof.action_hash != row.action_hash
+        {
+            return Err(BrokerError::NotPending);
+        }
+        let doc: ActionDocument = serde_json::from_str(&row.doc_json).map_err(storage)?;
+        // Read once, before the approval is spent. If the records cannot be read the row stays
+        // pending and the approval unspent; if they no longer match, the request is void.
+        // Execution uses this binding and does not look again.
+        let bound = match self
+            .snapshot()
+            .and_then(|e| bind(&e, &doc).map_err(|_| BrokerError::PolicyChanged))
+        {
+            Ok(b) => b,
+            Err(BrokerError::PolicyChanged | BrokerError::NotEnrolled) => {
                 self.store
                     .transition(key, State::PendingApproval, State::PolicyChanged)?;
                 self.cleanup(key);
                 return Err(BrokerError::PolicyChanged);
             }
-        }
+            Err(e) => return Err(e),
+        };
         let clock = &*self.cfg.clock;
         accept_approval(&self.store, key, &proof, clock)?;
         if let Err(e) = begin_execution(&self.store, key, clock) {
             self.cleanup(key);
             return Err(e);
         }
-        let doc: ActionDocument = serde_json::from_str(&row.doc_json).map_err(storage)?;
-        let result = self.execute(key, &doc);
+        let result = self.execute(key, &doc, &bound);
         let (state, out) = match result {
             Ok(()) => (State::Succeeded, Ok(State::Succeeded)),
             Err(BrokerError::StaleOldSha) => (State::StaleOldSha, Err(BrokerError::StaleOldSha)),
@@ -204,7 +235,21 @@ impl Broker {
         out
     }
 
-    fn execute(&self, key: &RequestKey, doc: &ActionDocument) -> Result<(), BrokerError> {
+    /// A verified human denial arrived. Ends the pending row as `denied` and drops its private
+    /// repository. Anything that is not a pending row is `NotPending` and changes nothing.
+    pub fn on_denial(&self, key: &RequestKey) -> Result<(), BrokerError> {
+        self.store
+            .transition(key, State::PendingApproval, State::Denied)?;
+        self.cleanup(key);
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        key: &RequestKey,
+        doc: &ActionDocument,
+        bound: &Bound,
+    ) -> Result<(), BrokerError> {
         let digest = self
             .store
             .frozen_digest(key)?
@@ -213,7 +258,7 @@ impl Broker {
         push(
             &repo,
             doc,
-            &self.cfg.remote_url,
+            &bound.remote_url,
             &*self.cfg.auth,
             &self.cfg.limits,
             &digest,

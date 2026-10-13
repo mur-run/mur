@@ -20,9 +20,12 @@ use mur_git_broker::pending::RequestKey;
 use mur_git_broker::policy::RemotePolicy;
 use sha2::{Digest, Sha256};
 
+mod approvals;
 mod intake;
+pub use approvals::{BROKER_CHANNEL_ID, approval_pass};
 pub use intake::{
-    CODE_NOT_ALLOWLISTED, CODE_NOT_ENROLLED, SWEEP_INTERVAL_SECS, spawn, sweep_inboxes,
+    BrokerSlot, CODE_NOT_ALLOWLISTED, CODE_NOT_ENROLLED, SWEEP_INTERVAL_SECS, open_broker, spawn,
+    sweep_inboxes, sweep_with,
 };
 
 /// The only environment the parser child may see. `git.rs` clears the rest;
@@ -169,7 +172,8 @@ pub struct Folded {
 /// router-signed `HitlRequest` named by its `hitl_id` with the same
 /// `action_hash` in time (the gate's `Requests::bind`), and whose
 /// `hitl_id` and hash are exactly the row's. The newest signed decision
-/// wins and a deny wins a tie, as in the gate; a deny yields nothing.
+/// wins and a deny wins a tie, as in the gate; a deny yields nothing here
+/// (see [`fold_decisions`] for the denials).
 ///
 /// Only rows in `pending` are considered, so an old allow sitting in the log
 /// releases nothing once its row is gone. The proof's `event_id` is derived
@@ -181,6 +185,21 @@ pub fn fold_approvals(
     events: &[ChannelEvent],
     pending: &[(RequestKey, String)],
 ) -> Vec<Folded> {
+    fold_decisions(mur_home, channel_id, events, pending)
+        .into_iter()
+        .filter_map(|(f, allow)| allow.then_some(f))
+        .collect()
+}
+
+/// The newest human decision for each pending row that has one: `true` for an
+/// allow, `false` for a deny. [`fold_approvals`] keeps the allows; the sweep
+/// ends a row on a deny.
+pub fn fold_decisions(
+    mur_home: &Path,
+    channel_id: &str,
+    events: &[ChannelEvent],
+    pending: &[(RequestKey, String)],
+) -> Vec<(Folded, bool)> {
     let now = chrono::Utc::now();
     let requests = Requests::collect(mur_home, channel_id, events);
     let mut out = Vec::new();
@@ -208,15 +227,18 @@ pub fn fold_approvals(
                 best = Some((at, r.allow, id));
             }
         }
-        if let Some((_, true, event_id)) = best {
-            out.push(Folded {
-                proof: ApprovalProof {
-                    event_id,
-                    request_id: key.request_id.clone(),
-                    action_hash: hash.clone(),
+        if let Some((_, allow, event_id)) = best {
+            out.push((
+                Folded {
+                    proof: ApprovalProof {
+                        event_id,
+                        request_id: key.request_id.clone(),
+                        action_hash: hash.clone(),
+                    },
+                    key: key.clone(),
                 },
-                key: key.clone(),
-            });
+                allow,
+            ));
         }
     }
     out
@@ -249,5 +271,14 @@ impl HumanApprovalVerifier {
     /// Proofs for the rows in `pending` that a human approved in this channel.
     pub fn verify(&self, events: &[ChannelEvent], pending: &[(RequestKey, String)]) -> Vec<Folded> {
         fold_approvals(&self.mur_home, &self.channel_id, events, pending)
+    }
+
+    /// Every human decision on the rows in `pending`, allows and denies.
+    pub fn decide(
+        &self,
+        events: &[ChannelEvent],
+        pending: &[(RequestKey, String)],
+    ) -> Vec<(Folded, bool)> {
+        fold_decisions(&self.mur_home, &self.channel_id, events, pending)
     }
 }

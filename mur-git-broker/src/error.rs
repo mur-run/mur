@@ -28,6 +28,12 @@ pub enum BrokerError {
     OutcomeUnknown(String),
     #[error("not_pending")]
     NotPending,
+    /// No enrollment record binds this (agent, repo, remote).
+    #[error("not_enrolled")]
+    NotEnrolled,
+    /// The enrollment file could not be read or parsed. Fails closed: nothing is decided on it.
+    #[error("enrollment_unavailable")]
+    EnrollmentUnavailable,
     #[error("storage: {0}")]
     Storage(String),
 }
@@ -49,6 +55,8 @@ impl BrokerError {
             Self::Rejected(_) => "rejected",
             Self::OutcomeUnknown(_) => "outcome_unknown",
             Self::NotPending => "not_pending",
+            Self::NotEnrolled => "not_enrolled",
+            Self::EnrollmentUnavailable => "enrollment_unavailable",
             Self::Storage(_) => "storage",
         }
     }

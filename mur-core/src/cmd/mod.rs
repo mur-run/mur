@@ -44,6 +44,8 @@ pub(crate) mod eval;
 pub mod fleet;
 #[allow(dead_code)]
 pub mod fleet_sync;
+#[cfg(unix)]
+pub mod git_push;
 pub(crate) mod hook;
 pub(crate) mod init;
 pub(crate) mod init_daemon;

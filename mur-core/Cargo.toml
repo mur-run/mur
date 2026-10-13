@@ -131,6 +131,10 @@ tui-textarea = "0.7"
 # `draw_lines` prints those cells verbatim (a space), spacing out CJK text.
 unicode-width = "0.1"
 
+# Unix-only like the crate itself (it is an empty lib on Windows).
+[target.'cfg(unix)'.dependencies]
+mur-git-broker = { path = "../mur-git-broker" }
+
 [features]
 default = ["cli", "server", "sources"]
 cli = ["dialoguer", "console", "clap"]

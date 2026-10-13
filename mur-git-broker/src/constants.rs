@@ -63,3 +63,11 @@ pub const IMPORTED_PACK_FILES: [&str; 3] = ["pack.pack", "pack.idx", "pack.rev"]
 pub const PENDING_DB_MODE: u32 = 0o600;
 /// How long a second writer waits on the SQLite lock before giving up with `Storage`.
 pub const PENDING_DB_BUSY_WAIT_MS: u64 = 5_000;
+/// The only endpoint scheme accepted so far.
+pub const ENDPOINT_FILE_SCHEME: &str = "file://";
+pub const ENROLLMENTS_VERSION: u32 = 1;
+/// Hex characters of a repo identity (128 random bits).
+pub const IDENTITY_HEX_LEN: usize = 32;
+pub const ENROLLMENTS_FILE_MODE: u32 = 0o600;
+/// The agent-side tool reads the registry, so it is not owner-only.
+pub const REGISTRY_FILE_MODE: u32 = 0o644;
