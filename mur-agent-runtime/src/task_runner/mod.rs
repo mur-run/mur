@@ -164,6 +164,10 @@ pub struct TaskRunner {
     registry_keys: Arc<Mutex<VecDeque<String>>>,
     cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     telemetry: Option<mpsc::Sender<Event>>,
+    /// Provider id stamped on `Event::LlmCall` (`gen_ai.provider.name`).
+    /// `None` reports `"unknown"` rather than naming a provider that was
+    /// never in use.
+    telemetry_provider: Option<String>,
     system_prompt: Option<String>,
     last_activity_at: Arc<AtomicI64>,
     skills: Option<Arc<RuntimeSkills>>,

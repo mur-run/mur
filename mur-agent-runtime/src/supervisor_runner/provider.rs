@@ -398,9 +398,13 @@ pub async fn build_provider_runner(
     // branch below cannot drift from the in-process one: a runner missing its
     // tools policy would spawn a CLI whose calls arrive unpoliced.
     let scratch_dir = crate::agent_paths::agent_scratch_dir(agent_home).ok();
+    // Per-call usage (`Event::LlmCall`) goes to the same writer as the hook
+    // spans. Cloned because the routing path below consumes `telemetry`.
+    let llm_telemetry = telemetry.clone();
     let build_base = |base: TaskRunner| {
         crate::supervisor_runner::build_runner(
-            base.with_scratch_dir(scratch_dir.clone()),
+            base.with_llm_telemetry(llm_telemetry.clone(), entry.provider.clone())
+                .with_scratch_dir(scratch_dir.clone()),
             system_prompt_with_memory.clone(),
             runtime_skills.clone(),
             skills_cfg.clone(),
