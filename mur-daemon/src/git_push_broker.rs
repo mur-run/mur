@@ -20,6 +20,11 @@ use mur_git_broker::pending::RequestKey;
 use mur_git_broker::policy::RemotePolicy;
 use sha2::{Digest, Sha256};
 
+mod intake;
+pub use intake::{
+    CODE_NOT_ALLOWLISTED, CODE_NOT_ENROLLED, SWEEP_INTERVAL_SECS, spawn, sweep_inboxes,
+};
+
 /// The only environment the parser child may see. `git.rs` clears the rest;
 /// anything credential-shaped must never be added here.
 pub const PARSER_ENV_ALLOW: [&str; 4] =

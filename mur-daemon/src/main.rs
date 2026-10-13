@@ -122,6 +122,12 @@ async fn main() -> Result<()> {
     // verification + scope assembly happen here, outside every agent sandbox).
     snapshot_requests::spawn(mur_dir.clone());
 
+    // Git push broker intake (plan T12). Off unless `git_push.enabled`; no
+    // agent is enrolled before sub-project 2, so every request it takes is
+    // answered `rejected` and none reaches the approval queue.
+    #[cfg(unix)]
+    mur_daemon::git_push_broker::spawn(mur_dir.clone());
+
     // Durable monitor (P1) — recover stranded leases once at startup, then
     // poll due monitors every `TICK_INTERVAL` on its own OS thread (blocking
     // adapters must never occupy a tokio worker). `Handle::current()` is
