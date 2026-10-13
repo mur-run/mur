@@ -145,7 +145,7 @@ pub fn resolve_mur() -> Option<PathBuf> {
 
 /// `mur --version` → "mur X.Y.Z" → "X.Y.Z".
 fn read_cli_version(mur: &Path) -> Option<String> {
-    let out = Command::new(mur).arg("--version").output().ok()?;
+    let out = crate::exec_busy::output(Command::new(mur).arg("--version")).ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
     s.split_whitespace().nth(1).map(str::to_string)
 }

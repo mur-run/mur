@@ -16,6 +16,7 @@ pub mod companion_notify;
 pub mod dashboard;
 pub mod detail;
 pub mod detail_window;
+mod exec_busy;
 pub mod export_muragent;
 pub mod fleet;
 mod geometry;
