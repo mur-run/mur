@@ -536,7 +536,9 @@ async fn wait_for_response(
     }
 }
 
-mod binding;
+/// Public so the git push broker (`mur-daemon`) binds an answer to its
+/// request by the same rule as this gate, instead of a second copy.
+pub mod binding;
 
 #[cfg(test)]
 mod human_authority_tests;

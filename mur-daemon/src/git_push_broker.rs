@@ -1,18 +1,24 @@
 //! Daemon side of the git push broker (plan T12, spec §4 F14, §6).
 //!
-//! This first slice holds the parts that do not depend on HITL authority:
-//! the broker-wide switch, the parser sandbox shape, per-agent notification
-//! aggregation and the enrollment doctor. The approval fold
-//! (`fold_approvals` / `HumanApprovalVerifier`) and the inbox sweeper land
-//! once #1764 is closed, so they call `mur_core::hitl::authority` directly
-//! instead of a local copy of the predicate (spec §4).
+//! The broker-wide switch, the parser sandbox shape, per-agent notification
+//! aggregation, the enrollment doctor, and the approval fold. The fold is the
+//! only place the broker meets HITL authority: it calls
+//! `mur_core::hitl::authority::is_human_authority` and the gate's own
+//! response binding, never a local copy of either (spec §4).
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use mur_common::channel::{ChannelEvent, EventKind};
 use mur_common::config::Config;
+use mur_common::hitl::HitlResponse;
+use mur_core::hitl::authority::is_human_authority;
+use mur_core::hitl::gate::binding::Requests;
+use mur_git_broker::approval::ApprovalProof;
 use mur_git_broker::constants::ALLOWED_REF_PREFIX;
+use mur_git_broker::pending::RequestKey;
 use mur_git_broker::policy::RemotePolicy;
+use sha2::{Digest, Sha256};
 
 /// The only environment the parser child may see. `git.rs` clears the rest;
 /// anything credential-shaped must never be added here.
@@ -142,4 +148,101 @@ fn grant_problems(fs_grants: &[PathBuf]) -> Vec<EnrollmentProblem> {
 #[cfg(not(target_os = "linux"))]
 fn grant_problems(_fs_grants: &[PathBuf]) -> Vec<EnrollmentProblem> {
     Vec::new()
+}
+
+/// A human approval bound to one pending broker row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Folded {
+    pub proof: ApprovalProof,
+    pub key: RequestKey,
+}
+
+/// Fold channel events into approvals for the rows that are pending now.
+///
+/// A row is released only by a `HitlResponse` that is the human's
+/// (`is_human_authority`: router-signed, `Human` actor), answers the
+/// router-signed `HitlRequest` named by its `hitl_id` with the same
+/// `action_hash` in time (the gate's `Requests::bind`), and whose
+/// `hitl_id` and hash are exactly the row's. The newest signed decision
+/// wins and a deny wins a tie, as in the gate; a deny yields nothing.
+///
+/// Only rows in `pending` are considered, so an old allow sitting in the log
+/// releases nothing once its row is gone. The proof's `event_id` is derived
+/// from the signature, so folding the same log twice gives the same id and
+/// the broker's tombstone makes the replay inert.
+pub fn fold_approvals(
+    mur_home: &Path,
+    channel_id: &str,
+    events: &[ChannelEvent],
+    pending: &[(RequestKey, String)],
+) -> Vec<Folded> {
+    let now = chrono::Utc::now();
+    let requests = Requests::collect(mur_home, channel_id, events);
+    let mut out = Vec::new();
+    for (key, hash) in pending {
+        // (signed answer time, allow, event id) of the newest human decision.
+        let mut best: Option<(chrono::DateTime<chrono::Utc>, bool, String)> = None;
+        for e in events.iter().filter(|e| e.kind == EventKind::HitlResponse) {
+            let Ok(r) = serde_json::from_value::<HitlResponse>(e.payload.clone()) else {
+                continue;
+            };
+            if r.hitl_id != key.request_id || r.action_hash != *hash {
+                continue;
+            }
+            if !is_human_authority(mur_home, channel_id, e) {
+                continue;
+            }
+            let Ok(at) = requests.bind(&r, now) else {
+                continue;
+            };
+            let Some(id) = event_id(e) else { continue };
+            let newer = best
+                .as_ref()
+                .is_none_or(|(t, allow, _)| at > *t || (at == *t && *allow && !r.allow));
+            if newer {
+                best = Some((at, r.allow, id));
+            }
+        }
+        if let Some((_, true, event_id)) = best {
+            out.push(Folded {
+                proof: ApprovalProof {
+                    event_id,
+                    request_id: key.request_id.clone(),
+                    action_hash: hash.clone(),
+                },
+                key: key.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Stable id for an approval event: a digest of its signature, which covers
+/// the channel id and the payload. `seq` and `ts` are store-assigned and
+/// unsigned, so a copied line must not become a fresh approval.
+fn event_id(e: &ChannelEvent) -> Option<String> {
+    let sig = e.sig.as_deref()?;
+    Some(hex::encode(Sha256::digest(sig.as_bytes())))
+}
+
+/// The adapter the broker's approval path goes through: one channel, one
+/// `mur_home`, and [`fold_approvals`] as its only judgement.
+#[derive(Debug, Clone)]
+pub struct HumanApprovalVerifier {
+    mur_home: PathBuf,
+    channel_id: String,
+}
+
+impl HumanApprovalVerifier {
+    pub fn new(mur_home: impl Into<PathBuf>, channel_id: impl Into<String>) -> Self {
+        Self {
+            mur_home: mur_home.into(),
+            channel_id: channel_id.into(),
+        }
+    }
+
+    /// Proofs for the rows in `pending` that a human approved in this channel.
+    pub fn verify(&self, events: &[ChannelEvent], pending: &[(RequestKey, String)]) -> Vec<Folded> {
+        fold_approvals(&self.mur_home, &self.channel_id, events, pending)
+    }
 }
