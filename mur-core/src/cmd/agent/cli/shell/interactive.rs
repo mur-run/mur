@@ -43,14 +43,10 @@ const REVIEW_REDIRECTS: &[(&[&str], &str)] = &[
 ];
 
 /// The `/review …` line equivalent to `cmd`, if `cmd` is an attended review
-/// command (#1779). Arguments are carried over verbatim — the person sees the
-/// line in the composer and confirms it, so nothing is guessed silently.
-pub fn review_redirect(cmd: &str) -> Option<String> {
-    review_redirect_named(cmd).map(|(_, line)| line)
-}
-
-/// Like [`review_redirect`], but also names the `mur fleet <sub>` command that
-/// was typed (`review` or `review-resume`), so the hint can quote it back.
+/// command (#1779), plus the `mur fleet <sub>` command that was typed
+/// (`review` or `review-resume`) so the hint can quote it back. Arguments are
+/// carried over verbatim — the person sees the line in the composer and
+/// confirms it, so nothing is guessed silently.
 pub fn review_redirect_named(cmd: &str) -> Option<(&'static str, String)> {
     let mut rest = cmd.trim_start();
     for (prefix, slash) in REVIEW_REDIRECTS {
@@ -97,6 +93,10 @@ pub fn handover_argv(cmd: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn review_redirect(cmd: &str) -> Option<String> {
+        review_redirect_named(cmd).map(|(_, line)| line)
+    }
 
     #[test]
     fn browser_auth_needs_the_terminal() {
