@@ -24,6 +24,7 @@ use super::constants::NOTE_FLUSH_FAILED_REASON;
 use super::ledger::{EscalationRecord, Ledger};
 use super::ruling::RulingInput;
 use super::schema::{Cumulative, HumanNote, Mode, PauseKind, ReviewPayload, to_note_payload};
+use super::watchdog::{MidTurn, Preempted, TurnWatch};
 use crate::cmd::fleet::control;
 
 /// Send one A2A message to a named fleet member and return its reply text,
@@ -31,6 +32,18 @@ use crate::cmd::fleet::control;
 /// ([`A2aTransport`]) and once as a stub for tests (`driver_tests.rs`).
 pub trait ReviewTransport {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String>;
+
+    /// #1758: [`ReviewTransport::send`] held to `watch` while it runs, so a
+    /// turn that never returns is preempted (a [`Preempted`] error). The
+    /// default ignores the watch: stubs return at once anyway.
+    fn send_watched(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        _watch: &TurnWatch<'_>,
+    ) -> Result<String> {
+        self.send(member, params)
+    }
 
     /// §5 semi-auto / P2-§5.3: the human gate before a send. Called after
     /// the `.stopped` check and before [`ReviewTransport::send`]. `Stop`
@@ -140,6 +153,8 @@ pub struct SendGate<'a> {
     /// send after a boundary ruling).
     pub pre_confirmed: bool,
     pub open: &'a BTreeSet<String>,
+    /// #1758: limits the send is held to while in flight. `None`: unwatched.
+    pub watch: Option<TurnWatch<'a>>,
 }
 
 /// A member's turn ended with its task `failed` or `cancelled` — a real
@@ -216,8 +231,28 @@ const HITL_SURFACE: &str = "cli";
 
 impl ReviewTransport for A2aTransport<'_> {
     fn send(&self, member: &str, params: &serde_json::Value) -> Result<String> {
+        self.dial(member, params, None)
+    }
+
+    fn send_watched(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        watch: &TurnWatch<'_>,
+    ) -> Result<String> {
+        watch.guard(member, |poll| self.dial(member, params, Some(poll)))
+    }
+}
+
+impl A2aTransport<'_> {
+    fn dial(
+        &self,
+        member: &str,
+        params: &serde_json::Value,
+        poll: Option<crate::a2a_dial::DialPoll<'_>>,
+    ) -> Result<String> {
         let mut streamed = String::new();
-        let task = crate::a2a_dial::dial_message_streaming(
+        let task = crate::a2a_dial::dial_message_streaming_polled(
             self.mur_home,
             member,
             params.clone(),
@@ -245,6 +280,7 @@ impl ReviewTransport for A2aTransport<'_> {
                 });
             },
             |_step| {},
+            poll,
         )?;
         task_reply(member, &task, streamed)
     }
@@ -340,7 +376,10 @@ pub fn run_turn(
         Gated::Go(held) => held,
         Gated::Note(_) => anyhow::bail!("run_turn has no note queue; use run_turn_with_retry"),
     };
-    let reply = transport.send(member, params)?;
+    let reply = match &g.watch {
+        Some(w) => transport.send_watched(member, params, w)?,
+        None => transport.send(member, params)?,
+    };
     Ok(TurnOutcome::Sent { reply, held })
 }
 
@@ -370,6 +409,9 @@ pub enum RetryOutcome {
     /// dropped, nothing is ledgered, no retry. Never `TaskFailed`, never a
     /// transport failure; the caller writes the `paused` event.
     Aborted,
+    /// #1758: the watchdog cut the send short (and cancelled the task).
+    /// Not retried: a limit, not a transport fault.
+    Preempted(MidTurn),
 }
 
 /// §8.1 / AC14: "A2A send failure or peer offline → one retry after a
@@ -458,6 +500,9 @@ pub fn run_turn_with_retry(
         None => return Ok(RetryOutcome::Aborted),
         Some(Ok(outcome)) => return Ok(sent(outcome)),
         Some(Err(first_err)) => {
+            if let Some(p) = first_err.downcast_ref::<Preempted>() {
+                return Ok(RetryOutcome::Preempted(p.why));
+            }
             if let Some(failed) = first_err.downcast_ref::<TaskFailed>() {
                 return Ok(RetryOutcome::TaskFailed(failed.clone()));
             }
@@ -470,6 +515,9 @@ pub fn run_turn_with_retry(
         None => Ok(RetryOutcome::Aborted),
         Some(Ok(outcome)) => Ok(sent(outcome)),
         Some(Err(second_err)) => {
+            if let Some(p) = second_err.downcast_ref::<Preempted>() {
+                return Ok(RetryOutcome::Preempted(p.why));
+            }
             if let Some(failed) = second_err.downcast_ref::<TaskFailed>() {
                 return Ok(RetryOutcome::TaskFailed(failed.clone()));
             }

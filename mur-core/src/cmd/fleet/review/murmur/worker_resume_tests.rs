@@ -91,7 +91,7 @@ fn recording_dial(calls: Arc<Mutex<Vec<String>>>, hold_at: usize, hold: Receiver
     let script = Script::new("accept", &[ISSUE_F1]);
     let inner = script.dial();
     let hold = Mutex::new(Some(hold));
-    Arc::new(move |home, member, params, on_delta, on_hitl| {
+    Arc::new(move |home, member, params, on_delta, on_hitl, _| {
         let n = {
             let mut c = calls.lock().unwrap();
             c.push(member.to_string());
@@ -104,7 +104,7 @@ fn recording_dial(calls: Arc<Mutex<Vec<String>>>, hold_at: usize, hold: Receiver
             on_delta("x", false, "T-R");
             return Ok(task(APPROVE));
         }
-        inner(home, member, params, on_delta, on_hitl)
+        inner(home, member, params, on_delta, on_hitl, None)
     })
 }
 

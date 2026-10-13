@@ -21,7 +21,7 @@ fn task(reply: &str) -> serde_json::Value {
 }
 
 fn dial_ok(reply: &'static str) -> DialFn {
-    Arc::new(move |_, _, _, on_delta, _| {
+    Arc::new(move |_, _, _, on_delta, _, _| {
         on_delta("partial ", false, "TASK-7");
         Ok(task(reply))
     })
@@ -167,7 +167,7 @@ fn send_aborted_cell_yields_turn_committed_false() {
     // abort deterministically wins the CAS (AC-P3b-20).
     let (go_tx, go_rx) = channel::<()>();
     let go_rx = Mutex::new(go_rx);
-    let dial: DialFn = Arc::new(move |_, _, _, _, _| {
+    let dial: DialFn = Arc::new(move |_, _, _, _, _, _| {
         go_rx.lock().unwrap().recv().unwrap();
         Ok(task("REPLY-X"))
     });
@@ -190,7 +190,7 @@ fn send_aborted_cell_yields_turn_committed_false() {
 fn send_aborted_turn_shows_no_reply() {
     let (go_tx, go_rx) = channel::<()>();
     let go_rx = Mutex::new(go_rx);
-    let dial: DialFn = Arc::new(move |_, _, _, _, _| {
+    let dial: DialFn = Arc::new(move |_, _, _, _, _, _| {
         go_rx.lock().unwrap().recv().unwrap();
         Ok(task("REPLY-X"))
     });
@@ -215,7 +215,7 @@ fn send_aborted_turn_shows_no_reply() {
 /// A failed dial has no reply to show.
 #[test]
 fn send_error_shows_no_reply() {
-    let dial: DialFn = Arc::new(|_, _, _, _, _| Err(anyhow::anyhow!("dial down")));
+    let dial: DialFn = Arc::new(|_, _, _, _, _, _| Err(anyhow::anyhow!("dial down")));
     let (t, rx) = transport(dial, no_respond());
     let ui = std::thread::spawn(move || rx.iter().map(|r| tag(&r)).collect::<Vec<_>>());
     assert!(t.send("main-x", &json!({})).is_err());
@@ -253,7 +253,7 @@ fn hitl_reply_bool_then_worker_responds() {
             .unwrap()
             .push((m.to_string(), id.to_string(), allow));
     });
-    let dial: DialFn = Arc::new(|_, _, _, _, on_hitl| {
+    let dial: DialFn = Arc::new(|_, _, _, _, on_hitl, _| {
         on_hitl(json!({"calls": [
             {"hitl_id": "H-1", "tool_name": "bash", "tool_input": {}},
             {"hitl_id": "H-2", "tool_name": "bash", "tool_input": {}}]}));
@@ -289,7 +289,7 @@ fn hitl_denies_when_the_ui_is_gone() {
     let respond: RespondFn = Arc::new(move |_, id, allow| {
         got.lock().unwrap().push((id.to_string(), allow));
     });
-    let dial: DialFn = Arc::new(|_, _, _, _, on_hitl| {
+    let dial: DialFn = Arc::new(|_, _, _, _, on_hitl, _| {
         on_hitl(json!({"hitl_id": "H-9", "tool_name": "bash", "tool_input": {}}));
         Ok(task("R"))
     });

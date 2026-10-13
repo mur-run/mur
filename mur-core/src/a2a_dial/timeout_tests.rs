@@ -242,3 +242,62 @@ fn a_silent_beating_peer_stopped_responding() {
         "{msg}"
     );
 }
+
+/// #1758: a peer that only beats is alive but idle. The poll sees `idle`
+/// grow past the heartbeats and the task id from the first frame, and its
+/// error ends the dial long before the response would arrive.
+#[test]
+fn poll_sees_heartbeats_as_idle_and_can_end_the_dial() {
+    use std::io::Write;
+    if !sockets_allowed("poll_sees_heartbeats_as_idle_and_can_end_the_dial") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let sock_path = tmp.path().join("agent.sock");
+    let listener = UnixListener::bind(&sock_path).unwrap();
+    let server = std::thread::spawn(move || {
+        if let Ok((mut conn, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            for _ in 0..30 {
+                if conn
+                    .write_all(
+                        b"{\"jsonrpc\":\"2.0\",\"method\":\"turn/heartbeat\",\"params\":{\"task_id\":\"task-7\",\"at\":\"2026-09-12T00:00:00Z\"}}\n",
+                    )
+                    .is_err()
+                {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    });
+    write_lock(tmp.path(), "beating", &sock_path, 2);
+    let mut seen: Option<(Duration, Option<String>)> = None;
+    let mut check = |s: &PollState<'_>| {
+        if s.idle >= Duration::from_millis(400) {
+            seen = Some((s.idle, s.task_id.map(str::to_string)));
+            return Some(anyhow!("preempt"));
+        }
+        None
+    };
+    let started = Instant::now();
+    let err = dial_message_streaming_polled(
+        tmp.path(),
+        "beating",
+        serde_json::json!({}),
+        |_, _, _| {},
+        |_| {},
+        |_| {},
+        Some(DialPoll {
+            every: Duration::from_millis(50),
+            check: &mut check,
+        }),
+    )
+    .expect_err("the poll must end the dial");
+    assert_eq!(err.to_string(), "preempt");
+    assert!(started.elapsed() < Duration::from_secs(2), "preempted late");
+    let (_, task) = seen.expect("poll tripped");
+    assert_eq!(task.as_deref(), Some("task-7"));
+    let _ = server.join();
+}

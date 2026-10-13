@@ -40,6 +40,7 @@ use super::settle::{
     write_ruling,
 };
 use super::verdict::{parse_rebuttal, parse_verdict};
+use super::watchdog::{MidTurn, TurnWatch};
 use super::wire::{
     main_turn_params, message_text, reviewer_turn_params, text_message_params,
     with_one_shot_approvals, with_working_dir,
@@ -69,6 +70,9 @@ pub enum LoopDriverStop {
     Paused { reason: String },
     /// One of the three existing limits tripped (§3.5), via `check_guards`.
     Guard(LoopStop),
+    /// #1758: a limit tripped while a member's turn was still running; the
+    /// watchdog cancelled the task. Resumable like the other limit stops.
+    MidTurn(MidTurn),
     /// A member's task ended `failed`/`cancelled` (e.g. a tool call the
     /// HITL gate denied). Reported as itself, never as a malformed verdict:
     /// the reply was not bad, there was no reply.
@@ -260,9 +264,8 @@ struct LoopRun<'a> {
     // a main coding turn can legitimately run past the stuck window. Stuck
     // is therefore checked only once per round, before main's turn. After
     // each send only the deadline is re-checked (a reply that lands past the
-    // user's deadline is discarded). Known limit: a send that never returns
-    // is not preempted (the transport call is blocking); catching that needs
-    // a watchdog around the transport, not a post-hoc duration check.
+    // user's deadline is discarded). A send still in flight is held to the
+    // same limits by `watchdog::TurnWatch` (#1758).
     last_activity: Instant,
 }
 
@@ -521,6 +524,12 @@ impl LoopRun<'_> {
                 boundary: role == Role::Main && attempt == 0,
                 pre_confirmed: gate.pre_confirmed && attempt == 0,
                 open: gate.open,
+                watch: Some(TurnWatch {
+                    mur_home: self.mur_home,
+                    fleet_name: self.fleet_name,
+                    deadline_left: self.deadline.saturating_sub(self.elapsed()),
+                    stuck: self.stuck,
+                }),
             };
             // Every prompt, resends included, is rebuilt from the ledger and
             // the pending notes (P3a-§4), plus the format hint on a resend.
@@ -569,6 +578,9 @@ impl LoopRun<'_> {
                     return Ok(Turn::Stop(LoopDriverStop::Paused {
                         reason: REVIEW_PAUSE_REASON_ABORTED.into(),
                     }));
+                }
+                RetryOutcome::Preempted(why) => {
+                    return Ok(Turn::Stop(LoopDriverStop::MidTurn(why)));
                 }
                 RetryOutcome::TaskFailed(f) => {
                     return Ok(Turn::Stop(LoopDriverStop::TaskFailed {

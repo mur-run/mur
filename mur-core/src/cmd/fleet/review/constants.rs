@@ -26,6 +26,10 @@ pub const AUTO_COUNTDOWN_MIN: Duration = Duration::from_millis(1500);
 /// before the session pauses and reverts to semi-auto.
 pub const TRANSPORT_RETRY_DELAY: Duration = Duration::from_secs(5);
 
+/// #1758: how often an in-flight send re-checks the session deadline, the
+/// stuck window and the kill-switch. Bounds how late a preemption lands.
+pub const WATCHDOG_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
 /// §3.3: round-stuck fires when the open finding set (IDs + statuses) is
 /// unchanged across this many consecutive rounds.
 pub const ROUND_STUCK_AFTER_UNCHANGED_ROUNDS: u32 = 2;
@@ -116,6 +120,10 @@ pub const RULING_SESSION_END_BLOCKED: &str = "blocked";
 pub const REVIEW_PAUSE_REASON_ESCALATION: &str = "awaiting a ruling";
 /// P2-§5.1 `/abandon`: the `session_stopped` reason (P1 wire value).
 pub const REVIEW_STOP_REASON_ESCALATION: &str = "escalation";
+/// #1758: `session_stopped` reasons when a limit preempts a running turn.
+pub const REVIEW_STOP_REASON_DEADLINE_MID_TURN: &str = "limit: deadline (mid-turn)";
+pub const REVIEW_STOP_REASON_STUCK_MID_TURN: &str = "limit: stuck (mid-turn, no activity)";
+pub const REVIEW_STOP_REASON_STOPPED_MID_TURN: &str = "stopped (mid-turn)";
 /// P2-§5.1 step 3: the ruling prompt; `{id}` is replaced with the finding.
 pub const RULING_PROMPT: &str =
     "Awaiting ruling on {id} — /rule drop|fix {id} <text>, /abandon, q = leave paused ";
