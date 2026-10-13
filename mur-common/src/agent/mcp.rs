@@ -103,6 +103,13 @@ pub struct McpServerEntry {
     /// `kind` that is project-scoped (serena); ignored otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<std::path::PathBuf>,
+
+    /// Keys this build does not know (written by a newer `mur`). Kept so a
+    /// rewrite by an older binary round-trips them (#1713) — dropping a key
+    /// like `kind` would leave the entry less constrained than its author
+    /// intended. Never read by logic.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, serde_yaml_ng::Value>,
 }
 
 /// A known MCP server that MUR launches with server-specific hardening.

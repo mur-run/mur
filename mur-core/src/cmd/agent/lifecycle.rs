@@ -205,6 +205,7 @@ pub fn cmd_create(
         requires_programs: Vec::new(),
         requires_capabilities: Vec::new(),
         limits: None,
+        extra: Default::default(),
     };
 
     let yaml = serde_yaml_ng::to_string(&profile).context("serialize profile.yaml")?;

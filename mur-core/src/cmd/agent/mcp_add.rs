@@ -140,6 +140,7 @@ pub fn cmd_mcp_add(
         package: None,
         kind: None,
         project: None,
+        extra: Default::default(),
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
     if !profile

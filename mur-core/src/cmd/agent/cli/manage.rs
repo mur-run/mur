@@ -167,6 +167,7 @@ pub fn mcp_add_with_policy(
         package: None,
         kind: None,
         project: None,
+        extra: Default::default(),
     });
     if !profile
         .entitlements

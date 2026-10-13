@@ -347,6 +347,7 @@ mod tests {
                 package: None,
                 kind: None,
                 project: None,
+                extra: Default::default(),
             });
         }
 
