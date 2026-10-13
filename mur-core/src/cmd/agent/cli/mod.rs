@@ -8,7 +8,7 @@
 
 mod access;
 mod app;
-mod bash_class;
+use mur_common::hitl::bash_class;
 mod browser_cmd;
 pub(crate) mod browser_live_cmd;
 mod call_summary;
@@ -54,7 +54,7 @@ mod stream_handler;
 mod suggest;
 mod term;
 mod theme;
-mod tool_tier;
+use mur_common::hitl::tool_tier;
 mod turn;
 mod ui;
 mod welcome;
