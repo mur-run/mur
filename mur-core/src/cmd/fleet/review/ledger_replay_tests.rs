@@ -186,6 +186,7 @@ fn the_live_append_order_ends_with_the_verdict() {
         2,
         r#"{"verdict":"revise","findings":[{"severity":"low","issue":"y"}],
             "prior":[{"id":"F1","status":"resolved"}]}"#,
+        cum(0, 0),
     )
     .unwrap();
     let kinds: Vec<&str> = staged

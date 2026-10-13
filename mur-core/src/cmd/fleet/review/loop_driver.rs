@@ -39,7 +39,7 @@ use super::settle::{
     RulingCtx, RulingOutcome, apply_held_rulings, discard_held_rulings, settle_rulings,
     write_ruling,
 };
-use super::verdict::{parse_rebuttal, parse_verdict, zero_cumulative};
+use super::verdict::{parse_rebuttal, parse_verdict};
 use super::wire::{
     main_turn_params, message_text, reviewer_turn_params, text_message_params,
     with_one_shot_approvals, with_working_dir,
@@ -299,6 +299,15 @@ impl LoopRun<'_> {
         self.active_before + wall.saturating_sub(self.human_wait)
     }
 
+    /// §4 running totals for a turn-ending event: execution time so far
+    /// (human wait excluded) and `ledger`'s cost.
+    fn cumulative(&self, ledger: &Ledger) -> Cumulative {
+        Cumulative {
+            exec_time_ms: u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX),
+            cost_usd_micros: ledger.cost_usd_micros,
+        }
+    }
+
     /// The round loop, from `round` on, over an already-folded `ledger`.
     fn drive(&mut self, mut ledger: Ledger, mut round: u32) -> Result<(Ledger, LoopDriverStop)> {
         loop {
@@ -336,9 +345,9 @@ impl LoopRun<'_> {
                         open: &main_open,
                         pre_confirmed,
                     },
-                    |l, reply| {
+                    |l, reply, c| {
                         if open {
-                            parse_rebuttal(l, round, reply).map(Some)
+                            parse_rebuttal(l, round, reply, c).map(Some)
                         } else {
                             Ok(None)
                         }
@@ -394,7 +403,7 @@ impl LoopRun<'_> {
                     open: &reviewer_open,
                     pre_confirmed: false,
                 },
-                |l, reply| parse_verdict(l, round, reply),
+                |l, reply, c| parse_verdict(l, round, reply, c),
             )? {
                 Turn::Stop(LoopDriverStop::Blocked { role }) => {
                     discard_held_rulings(
@@ -409,7 +418,7 @@ impl LoopRun<'_> {
                     let payload = ReviewPayload::Verdict {
                         round,
                         kind: VerdictKind::Blocked,
-                        cumulative: zero_cumulative(),
+                        cumulative: self.cumulative(&round_ledger),
                     };
                     self.fold_round_sent(&mut round_ledger)?;
                     round_ledger.apply(&payload)?;
@@ -494,7 +503,7 @@ impl LoopRun<'_> {
         side: Side<'_>,
         build: impl Fn(&Ledger, &[HumanNote]) -> serde_json::Value,
         gate: TurnGate<'_>,
-        validate: impl Fn(&Ledger, &str) -> std::result::Result<T, String>,
+        validate: impl Fn(&Ledger, &str, Cumulative) -> std::result::Result<T, String>,
     ) -> Result<Turn<T>> {
         let member = match role {
             Role::Main => self.main,
@@ -596,7 +605,9 @@ impl LoopRun<'_> {
                 return Ok(Turn::Stop(LoopDriverStop::Guard(stop)));
             }
             self.last_activity = (self.now)();
-            let checked = validate(&*side.borrow().primary, &reply);
+            // #1776: the turn-ending event carries the running total.
+            let primary = &*side.borrow().primary;
+            let checked = validate(primary, &reply, self.cumulative(primary));
             match checked {
                 Ok(value) => return Ok(Turn::Accepted { reply, value }),
                 Err(problem) if attempt < MALFORMED_RESPONSE_RETRIES => {
@@ -635,10 +646,7 @@ impl LoopRun<'_> {
     /// Prompt time is human wait: out of execution time, carried onto the
     /// next `turn_sent` (AC-P2-7).
     fn settle(&mut self, ledger: &mut Ledger) -> Result<Option<LoopDriverStop>> {
-        let cumulative = Cumulative {
-            exec_time_ms: u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX),
-            cost_usd_micros: ledger.cost_usd_micros,
-        };
+        let cumulative = self.cumulative(ledger);
         let outcome = settle_rulings(
             &self.ruling_ctx(false),
             ledger,
