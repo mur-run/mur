@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::task_runner::{
-    call_floor, cap_step_output, decide_without_asking, declared_tool_risk, denied_args_preview,
+    approval_risk, call_floor, cap_step_output, decide_without_asking, denied_args_preview,
     deny_message, effective_call_policy, step_notification, task_error,
 };
 use mur_common::a2a::TaskError;
@@ -143,7 +143,7 @@ impl GuardedToolCall {
                 &self.agent_name,
                 step_id,
                 call,
-                declared_tool_risk(&self.tools_policy, &call.tool_name),
+                approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)),
             ));
         }
         if pending.is_empty() {

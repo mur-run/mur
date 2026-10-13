@@ -455,7 +455,7 @@ mod deny_message_tests {
 
 #[cfg(test)]
 mod tool_policy_tests {
-    use super::effective_tool_policy;
+    use super::{approval_risk, effective_tool_policy};
     use mur_common::agent::{ToolPolicy, ToolRule};
 
     fn rule(pattern: &str, policy: ToolPolicy) -> ToolRule {
@@ -607,12 +607,21 @@ mod tool_policy_tests {
     /// a declared `risk:`.
     #[test]
     fn bypass_builtin_tier_floor_is_per_rule_and_never_lowers_risk() {
-        let mut waived = rule("mcp__browser__*", ToolPolicy::Allow);
-        waived.bypass_builtin_tier_floor = true;
         let click = "mcp__browser__browser_click";
+        let mut waived = rule(click, ToolPolicy::Allow);
+        waived.bypass_builtin_tier_floor = true;
         assert_eq!(
             effective_tool_policy(std::slice::from_ref(&waived), click),
             ToolPolicy::Allow
+        );
+
+        // A glob never carries the waiver: one line must not release a
+        // whole browser server.
+        let mut glob = rule("mcp__browser__*", ToolPolicy::Allow);
+        glob.bypass_builtin_tier_floor = true;
+        assert_eq!(
+            effective_tool_policy(std::slice::from_ref(&glob), click),
+            ToolPolicy::Ask
         );
 
         let mut broad = rule("mcp__*", ToolPolicy::Allow);
@@ -620,10 +629,49 @@ mod tool_policy_tests {
         let rules = [rule("mcp__browser__*", ToolPolicy::Allow), broad];
         assert_eq!(effective_tool_policy(&rules, click), ToolPolicy::Ask);
 
-        let mut risky = rule("mcp__browser__*", ToolPolicy::Allow);
+        let mut risky = rule(click, ToolPolicy::Allow);
         risky.bypass_builtin_tier_floor = true;
         risky.risk = Some(mur_common::hitl::RiskTier::NetworkEgress);
         assert_eq!(effective_tool_policy(&[risky], click), ToolPolicy::Ask);
+    }
+
+    /// #1786: a call that asks because of its built-in tier carries that
+    /// tier on the prompt, so no client shows or session-grants it as a write.
+    #[test]
+    fn approval_prompt_carries_the_higher_of_declared_and_builtin() {
+        use mur_common::hitl::RiskTier;
+        let glob = [rule("mcp__browser__*", ToolPolicy::Allow)];
+        assert_eq!(
+            approval_risk(&glob, "mcp__browser__browser_click", None),
+            Some(RiskTier::NetworkEgress)
+        );
+        assert_eq!(
+            approval_risk(&glob, "mcp__browser__browser_storage_state", None),
+            Some(RiskTier::Privileged)
+        );
+        let mut destructive = rule("mcp__browser__*", ToolPolicy::Ask);
+        destructive.risk = Some(RiskTier::Destructive);
+        assert_eq!(
+            approval_risk(&[destructive], "mcp__browser__browser_click", None),
+            Some(RiskTier::Destructive)
+        );
+        assert_eq!(approval_risk(&glob, "edit_file", None), None);
+    }
+
+    /// #1814 on top of #1786: a `bash: allow` call that asks because of its
+    /// command carries the command's tier, so no client can session-grant a
+    /// `git push` as a plain write; a command under the ceiling adds nothing.
+    #[test]
+    fn approval_prompt_carries_the_bash_command_tier() {
+        let bash = [rule("bash", ToolPolicy::Allow)];
+        let push = serde_json::json!({ "command": "git push origin main" });
+        let tier = approval_risk(&bash, "bash", Some(&push));
+        assert!(
+            tier.is_some_and(|t| !mur_common::hitl::tier_may_be_granted(t)),
+            "git push must reach the client above the grant ceiling, got {tier:?}"
+        );
+        let ls = serde_json::json!({ "command": "ls -la" });
+        assert_eq!(approval_risk(&bash, "bash", Some(&ls)), None);
     }
 
     /// An exemption only fills in for a missing rule; a risk-declaring rule
