@@ -510,6 +510,17 @@ kernel-level exec check, not in git. Either:
 A repo-manager profile should choose one of these deliberately; the default
 allowlist plus an SSH remote is a silent-failure combination.
 
+**Brokered push (`mur-git-broker`, intake only).** `mur-git-broker` is a
+Unix-only crate (empty library on Windows) holding the broker logic;
+`mur-daemon/src/git_push_broker/intake.rs` is the only part wired into
+`murmurd`. With `git_push.enabled` on, intake verifies each request in
+`<agent_home>/inbox/git-push/` against that agent's on-disk pubkey (agent id
+from the inbox path, never the payload), consumes it and its pack, and writes
+`rejected: agent_not_allowlisted | not_enrolled` to
+`~/.mur/git-push/status/<agent>/`. `Broker::submit_request` is intentionally
+not called: there is no enrollment record (`RemotePolicy`, `enrollment_epoch`)
+until sub-project 2 — tracked in #1831.
+
 ---
 
 # Moved from CLAUDE.md (2026-09-21)
