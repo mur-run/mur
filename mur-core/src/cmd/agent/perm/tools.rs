@@ -16,7 +16,7 @@ pub fn cmd_perm_set_tool(name: &str, policy: ToolPolicy, pattern: &str) -> Resul
             pattern: pattern.to_string(),
             policy,
             risk: None,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         });
     }
     save_profile(&path, &mut profile)?;
@@ -91,6 +91,14 @@ pub(crate) fn floor_note_text(n: mur_common::hitl::builtin_tier::FloorNote) -> S
         FloorNote::AsksForSome => {
             "\u{2192} acting browser tools it matches still ask (built-in tier)".to_string()
         }
+        FloorNote::BashCeiling { ceiling: c } => format!(
+            "\u{2192} commands above {} ask (bash tier ceiling, #1814)",
+            tier(c)
+        ),
+        FloorNote::BashTrueIgnored => {
+            "\u{2192} bypass_builtin_tier_floor: true IGNORED on bash; name a tier, e.g. network-egress"
+                .to_string()
+        }
         FloorNote::IgnoredBypass => {
             "\u{2192} bypass_builtin_tier_floor IGNORED: a glob cannot waive the floor; name each tool"
                 .to_string()
@@ -109,7 +117,7 @@ mod tests {
             pattern: "mcp__browser__*".into(),
             policy,
             risk,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }
     }
 
@@ -127,14 +135,39 @@ mod tests {
             pattern: "mcp__browser__browser_navigate".into(),
             policy: ToolPolicy::Allow,
             risk: None,
-            bypass_builtin_tier_floor: bypass,
+            bypass_builtin_tier_floor: if bypass {
+                mur_common::hitl::floor_waiver::FloorWaiver::All
+            } else {
+                mur_common::hitl::floor_waiver::FloorWaiver::Off
+            },
         };
         assert!(rule_line(&nav(true)).contains("FLOOR WAIVED"));
         assert!(rule_line(&nav(false)).contains("asks (network-egress tool"));
         assert!(rule_line(&r(ToolPolicy::Allow, None)).contains("acting browser tools"));
         let mut glob = r(ToolPolicy::Allow, None);
-        glob.bypass_builtin_tier_floor = true;
+        glob.bypass_builtin_tier_floor = mur_common::hitl::floor_waiver::FloorWaiver::All;
         assert!(rule_line(&glob).contains("IGNORED"));
+    }
+
+    #[test]
+    fn bash_rule_names_its_ceiling_or_the_ignored_true() {
+        use mur_common::hitl::floor_waiver::FloorWaiver;
+        let bash = |w| ToolRule {
+            pattern: "bash".into(),
+            policy: ToolPolicy::Allow,
+            risk: None,
+            bypass_builtin_tier_floor: w,
+        };
+        assert!(
+            rule_line(&bash(FloorWaiver::Off)).contains("above write ask"),
+            "{}",
+            rule_line(&bash(FloorWaiver::Off))
+        );
+        assert!(
+            rule_line(&bash(FloorWaiver::UpTo(RiskTier::NetworkEgress)))
+                .contains("above network-egress")
+        );
+        assert!(rule_line(&bash(FloorWaiver::All)).contains("true IGNORED on bash"));
     }
 
     #[test]
@@ -143,7 +176,7 @@ mod tests {
             pattern: "mcp__github__*".into(),
             policy: ToolPolicy::Allow,
             risk: Some(RiskTier::Write),
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         };
         assert_eq!(rule_line(&gh), "allow       mcp__github__*  risk=write");
         assert_eq!(

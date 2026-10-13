@@ -245,8 +245,13 @@ pub struct ToolRule {
     /// lowers a declared `risk:` — that field only ever raises. Honored only
     /// on an exact-name rule; on a glob it is ignored (`perm list-tools` and
     /// `doctor` say so). The runtime logs every call where it waives a floor.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub bypass_builtin_tier_floor: bool,
+    /// #1814: may also name a tier ("waive up to this tier"); on `bash` only
+    /// that form counts — see [`crate::hitl::floor_waiver`].
+    #[serde(
+        default,
+        skip_serializing_if = "crate::hitl::floor_waiver::FloorWaiver::is_off"
+    )]
+    pub bypass_builtin_tier_floor: crate::hitl::floor_waiver::FloorWaiver,
 }
 
 /// Resolve the effective policy for `tool_name` against an ordered rule list.
@@ -316,25 +321,25 @@ mod tool_policy_tests {
                 pattern: "mcp__github__merge_pr".into(),
                 policy: ToolPolicy::Ask,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             },
             ToolRule {
                 pattern: "mcp__github__*".into(),
                 policy: ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             },
             ToolRule {
                 pattern: "mcp__*".into(),
                 policy: ToolPolicy::Deny,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             },
             ToolRule {
                 pattern: "bash".into(),
                 policy: ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             },
         ]
     }
@@ -344,7 +349,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Some(risk),
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }
     }
 

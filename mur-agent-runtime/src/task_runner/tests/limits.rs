@@ -200,7 +200,7 @@ fn runner_with_scripted_tool_calls_repeating(
                 pattern: tool.into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -299,7 +299,7 @@ fn bash_control_tools_inherit_bashs_rule_unless_named() {
         pattern: p.into(),
         policy,
         risk: None,
-        bypass_builtin_tier_floor: false,
+        bypass_builtin_tier_floor: Default::default(),
     };
     let allow = vec![rule("bash", ToolPolicy::Allow)];
     assert_eq!(
@@ -367,7 +367,7 @@ fn runner_with_real_bash(
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_bash_jobs(jobs.clone())
             .with_iteration_ceiling(50)

@@ -352,6 +352,15 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
             for line in floor_notes(&r.name) {
                 println!("{line}");
             }
+            // #1814: what the bash ceiling stopped for a human, and how often.
+            let over = super::doctor_bash_ceiling::scan(
+                &mur_home.join("agents").join(&r.name),
+                chrono::Utc::now().date_naive(),
+                super::doctor_bash_ceiling::LOOKBACK_DAYS,
+            );
+            for line in super::doctor_bash_ceiling::lines(&r.name, &over) {
+                println!("{line}");
+            }
             for (p, reason) in neutralised(&r.name) {
                 println!("  {}: grant has NO EFFECT: {}", r.name, p.display());
                 println!("    {reason}");

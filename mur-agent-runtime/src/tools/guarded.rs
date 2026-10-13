@@ -11,6 +11,8 @@
 //! tools to a spawned CLI — without that caller becoming a second path.
 //! See `docs/superpowers/specs/2026-09-16-mur-tool-mcp-server-design.md`.
 
+mod bash_ceiling;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,6 +45,9 @@ pub struct GuardedToolCall {
     /// B1 sandbox enforcing on this boot. `false` refuses every `Ask` tool
     /// before the gate asks — see `refuse_unsandboxed`.
     pub(crate) sandbox_enforcing: bool,
+    /// #1814: where the bash-ceiling observation lands (`telemetry/*.jsonl`).
+    /// `None` on runners built without telemetry; the warn! line still fires.
+    pub(crate) telemetry: Option<tokio::sync::mpsc::Sender<crate::telemetry_writer::Event>>,
 }
 
 /// D2 / D2b: with the B1 sandbox not enforcing, the agent can read its own
@@ -118,6 +123,9 @@ impl GuardedToolCall {
             {
                 continue;
             }
+            // #1814: before any branch below, so a refusal is counted too —
+            // doctor's job is "how often does the ceiling stop this agent".
+            self.record_bash_ceiling(task_id, call).await;
             if !self.sandbox_enforcing {
                 out.insert(
                     call.call_id.clone(),

@@ -6,6 +6,7 @@ pub mod approval_token;
 pub mod bash_class;
 pub mod builtin_tier;
 pub mod dest;
+pub mod floor_waiver;
 pub mod label;
 pub mod pin;
 pub mod signed_time;

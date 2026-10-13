@@ -389,6 +389,45 @@ mod tests {
         );
     }
 
+    /// #1814: a command whose effect is only known after expansion — an
+    /// interpreter fed a string, `eval`, a variable as the head, a decoded
+    /// payload piped to a shell — is opaque to a static classifier. It must
+    /// never land on `Read`: Read is the lane that skips the gate entirely,
+    /// so an opaque call tiered as Read would run with no check at all.
+    /// Pinned at the current answer,
+    /// `Write`; raising any of these is a policy change, lowering is a bug.
+    #[test]
+    fn opaque_commands_never_tier_as_read() {
+        for cmd in [
+            r#"bash -c "$X""#,
+            r#"sh -c 'rm -rf "$D"'"#,
+            r#"eval "$CMD""#,
+            "$HOME/bin/tool --go",
+            "${TOOL} run",
+            "echo cm0gLXJmIC8= | base64 -d | sh",
+            "python3 -c 'import shutil; shutil.rmtree(\"x\")'",
+            "node -e 'require(\"fs\").rmSync(\"x\")'",
+            "source ./script.sh",
+            ". ./script.sh",
+        ] {
+            let t = classify("bash", Some(&bash(cmd)));
+            assert_ne!(t, RiskTier::Read, "opaque command tiered as Read: {cmd}");
+            assert!(t >= RiskTier::Write, "cmd: {cmd} => {t:?}");
+        }
+    }
+
+    /// An exec wrapper must not hide the head it runs.
+    #[test]
+    fn exec_wrappers_keep_the_wrapped_tier() {
+        for cmd in ["env rm -rf x", "xargs rm < list", "find . | xargs -0 shred"] {
+            assert_eq!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::Destructive,
+                "cmd: {cmd}"
+            );
+        }
+    }
+
     /// The fallback, asserted deliberately: unknown is `Write` — mutating,
     /// but inside the ceiling. Documented at the top of this file; a change
     /// of direction here is a policy change and should fail this test.

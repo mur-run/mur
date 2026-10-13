@@ -78,6 +78,10 @@ pub const METHOD_NOTE_RETRIEVED: &str = "mur.note.retrieved";
 /// Reduced into `SkillStats::curated_at`; opens the A1 provenance gate.
 pub const METHOD_SKILL_CURATED: &str = "mur.skill.curated";
 
+/// #1814: a `bash` call under an `allow` rule whose command tier is above the
+/// agent's bash ceiling, so the gate asked for it. `enforced: true`.
+pub const METHOD_BASH_CEILING_EXCEEDED: &str = "mur.hitl.bash_ceiling_exceeded";
+
 /// Emitted by `mur agent mcp set-network --broad-audited` — an operator
 /// granted a per-server BroadAudited egress policy (advisory-enforced,
 /// audited-CONNECT). Records which agent+server was authorized.

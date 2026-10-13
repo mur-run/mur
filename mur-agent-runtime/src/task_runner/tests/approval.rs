@@ -318,7 +318,7 @@ async fn fleet_run_explicit_deny_still_wins() {
                 pattern: crate::tools::fleet_run::FLEET_RUN.into(),
                 policy: mur_common::agent::ToolPolicy::Deny,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -411,7 +411,7 @@ async fn a_refused_tool_is_offered_once_and_then_withdrawn() {
             pattern: crate::tools::fleet_run::FLEET_RUN.into(),
             policy: mur_common::agent::ToolPolicy::Allow,
             risk: None,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }])
         .with_pending_approvals(empty_pending_approvals())
         .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -501,7 +501,7 @@ async fn a_sandbox_denial_does_not_withdraw_the_tool() {
             pattern: crate::tools::fleet_run::FLEET_RUN.into(),
             policy: mur_common::agent::ToolPolicy::Allow,
             risk: None,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }])
         .with_pending_approvals(empty_pending_approvals())
         .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -578,7 +578,7 @@ async fn repeated_calls_to_a_withdrawn_tool_settle_the_turn() {
                 pattern: crate::tools::fleet_run::FLEET_RUN.into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -680,7 +680,7 @@ fn missing_tools_reads_the_same_inventory_the_gate_reads() {
             pattern: "bash".into(),
             policy: mur_common::agent::ToolPolicy::Deny,
             risk: None,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }]);
     assert_eq!(
         runner.missing_tools(&["write_file".into()]),

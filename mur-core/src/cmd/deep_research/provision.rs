@@ -114,7 +114,7 @@ fn upsert_tool_rule(
             pattern,
             policy,
             risk: None,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         });
     }
 }
