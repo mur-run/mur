@@ -57,7 +57,7 @@ pub(super) fn route_shell_output(
 mod interactive;
 mod run;
 
-pub use interactive::{handover_argv, needs_terminal};
+pub use interactive::{handover_argv, needs_terminal, review_redirect_named};
 
 pub use run::{
     SHELL_CARD_MAX_BYTES, SHELL_MAX_BYTES, SIGKILL_NUM, SIGTERM_NUM, ShellEnd, cap_tail, run,

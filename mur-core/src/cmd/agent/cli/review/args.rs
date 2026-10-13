@@ -28,6 +28,25 @@ fn next_word(s: &str) -> Option<(&str, &str)> {
     Some((&s[..end], &s[end..]))
 }
 
+/// `!mur fleet review … "task"` is carried over to `/review` verbatim, and the
+/// shell that would have eaten those quotes never runs. Strip one pair that
+/// wraps the whole task; quotes inside it, or an unmatched one, are the
+/// person's own text.
+fn unquote(task: &str) -> &str {
+    let mut chars = task.chars();
+    match (chars.next(), chars.next_back()) {
+        (Some(open @ ('"' | '\'')), Some(close)) if open == close => {
+            let inner = &task[1..task.len() - 1];
+            if inner.contains(open) {
+                task
+            } else {
+                inner.trim()
+            }
+        }
+        _ => task,
+    }
+}
+
 fn syntax(reason: String) -> String {
     format!("{reason}\n{REVIEW_USAGE_MURMUR}")
 }
@@ -74,7 +93,7 @@ pub fn parse_review_line(rest: &str) -> Result<ReviewLine, String> {
             if task.split_whitespace().any(|w| w == REVIEW_FLAG_AUTO) {
                 return Ok(ReviewLine::AutoRefused);
             }
-            break task;
+            break unquote(task);
         }
         match word {
             REVIEW_FLAG_AUTO => return Ok(ReviewLine::AutoRefused),

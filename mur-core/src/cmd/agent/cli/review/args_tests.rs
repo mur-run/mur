@@ -50,6 +50,40 @@ fn task_keeps_its_own_spacing_and_runs_to_end_of_line() {
 }
 
 #[test]
+fn a_task_wrapped_in_one_pair_of_quotes_loses_them() {
+    // #1779's own example, as `!mur fleet review …` carries it over.
+    let a = start(r#"--main a --reviewer b "noop: reply OK""#);
+    assert_eq!(a.task, "noop: reply OK");
+    let a = start("--main a --reviewer b 'fix   the bug'");
+    assert_eq!(a.task, "fix   the bug");
+}
+
+#[test]
+fn quotes_that_do_not_wrap_the_whole_task_are_kept() {
+    for task in [
+        r#""a" and "b""#,
+        r#"say "hi""#,
+        r#""unterminated"#,
+        r#"'mixed""#,
+    ] {
+        let a = start(&format!("--main a --reviewer b {task}"));
+        assert_eq!(a.task, task);
+    }
+}
+
+#[test]
+fn a_quoted_task_after_double_dash_stays_verbatim() {
+    let a = start(r#"--main a --reviewer b -- "-x""#);
+    assert_eq!(a.task, r#""-x""#);
+}
+
+#[test]
+fn a_quoted_empty_task_is_still_missing() {
+    assert!(syntax_err(r#"--main a --reviewer b "  ""#).contains("task"));
+    assert!(syntax_err(r#"--main a --reviewer b """#).contains("task"));
+}
+
+#[test]
 fn ac_p3b_2_task_after_double_dash_starting_with_dash_is_verbatim() {
     let a = start("--main a --reviewer b -- -x task");
     assert_eq!(a.task, "-x task");
