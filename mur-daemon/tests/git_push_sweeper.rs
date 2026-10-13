@@ -83,8 +83,7 @@ fn doctor_refuses_a_ref_prefix_outside_the_agent_namespace() {
 #[cfg(target_os = "linux")]
 #[test]
 fn doctor_refuses_enrollment_when_a_grant_covers_the_broker_dir_on_linux() {
-    // SAFETY: the only test in this binary that touches the environment.
-    unsafe { std::env::set_var("MUR_HOME", "/home/u/.mur") };
+    let _env = mur_common::test_env::EnvGuard::set([("MUR_HOME", "/home/u/.mur")]);
     let grants = vec![PathBuf::from("/home/u/.mur"), PathBuf::from("/home/u/src")];
     let problems = doctor_check_enrollment(&policy(&[], "refs/heads/agent/"), &grants);
     assert_eq!(
