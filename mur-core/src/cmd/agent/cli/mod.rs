@@ -7,8 +7,8 @@
 //! [`persist`] (JSONL session log + resume).
 
 mod access;
+use mur_common::hitl::bash_tier::{bash_class, tool_tier};
 mod app;
-mod bash_class;
 mod browser_cmd;
 pub(crate) mod browser_live_cmd;
 mod call_summary;
@@ -54,7 +54,6 @@ mod stream_handler;
 mod suggest;
 mod term;
 mod theme;
-mod tool_tier;
 mod turn;
 mod ui;
 mod welcome;

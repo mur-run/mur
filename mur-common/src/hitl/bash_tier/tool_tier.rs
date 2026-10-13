@@ -3,7 +3,7 @@
 //! The cli's session lane (`/auto`, `--auto`, the per-tool `[a]` grant, and
 //! since #1228 the DEFAULT session) is standing, unattended authority. The
 //! ceiling on that authority already exists and already has its reasoning
-//! written down — `mur_common::hitl::tier_may_be_granted`, capped at `Write`:
+//! written down — `crate::hitl::tier_may_be_granted`, capped at `Write`:
 //!
 //! > `Spend`, `Destructive` and `Privileged` are exactly the actions whose
 //! > cost a human cannot undo by noticing later, and `NetworkEgress` is how
@@ -38,7 +38,7 @@
 //! here: adding a model on top of a gate this leaky would be using it to patch
 //! static logic it cannot see.
 
-use mur_common::hitl::RiskTier;
+use crate::hitl::RiskTier;
 use serde_json::Value;
 
 use super::{bash_class, dest};
@@ -173,7 +173,7 @@ pub fn classify(tool_name: &str, tool_input: Option<&Value>) -> RiskTier {
     if SPEND_TOOLS.contains(&leaf(tool_name)) {
         return RiskTier::Spend;
     }
-    if let Some(tier) = mur_common::hitl::builtin_tier::browser_tier(tool_name) {
+    if let Some(tier) = crate::hitl::builtin_tier::browser_tier(tool_name) {
         return tier;
     }
     // Read is delegated, never guessed: `bash_class` fails safe on
@@ -321,7 +321,7 @@ mod tests {
         ] {
             let t = classify("bash", Some(&bash(cmd)));
             assert!(
-                mur_common::hitl::tier_may_be_granted(t),
+                crate::hitl::tier_may_be_granted(t),
                 "ordinary command escalated to {t:?}: {cmd}"
             );
         }
@@ -389,6 +389,45 @@ mod tests {
         );
     }
 
+    /// #1814: a command whose effect is only known after expansion — an
+    /// interpreter fed a string, `eval`, a variable as the head, a decoded
+    /// payload piped to a shell — is opaque to a static classifier. It must
+    /// never land on `Read`: Read is the lane that skips the gate entirely,
+    /// so an opaque call tiered as Read would run with no check at all.
+    /// Pinned at the current answer,
+    /// `Write`; raising any of these is a policy change, lowering is a bug.
+    #[test]
+    fn opaque_commands_never_tier_as_read() {
+        for cmd in [
+            r#"bash -c "$X""#,
+            r#"sh -c 'rm -rf "$D"'"#,
+            r#"eval "$CMD""#,
+            "$HOME/bin/tool --go",
+            "${TOOL} run",
+            "echo cm0gLXJmIC8= | base64 -d | sh",
+            "python3 -c 'import shutil; shutil.rmtree(\"x\")'",
+            "node -e 'require(\"fs\").rmSync(\"x\")'",
+            "source ./script.sh",
+            ". ./script.sh",
+        ] {
+            let t = classify("bash", Some(&bash(cmd)));
+            assert_ne!(t, RiskTier::Read, "opaque command tiered as Read: {cmd}");
+            assert!(t >= RiskTier::Write, "cmd: {cmd} => {t:?}");
+        }
+    }
+
+    /// An exec wrapper must not hide the head it runs.
+    #[test]
+    fn exec_wrappers_keep_the_wrapped_tier() {
+        for cmd in ["env rm -rf x", "xargs rm < list", "find . | xargs -0 shred"] {
+            assert_eq!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::Destructive,
+                "cmd: {cmd}"
+            );
+        }
+    }
+
     /// The fallback, asserted deliberately: unknown is `Write` — mutating,
     /// but inside the ceiling. Documented at the top of this file; a change
     /// of direction here is a policy change and should fail this test.
@@ -412,7 +451,7 @@ mod tests {
     /// `browser_*` tool fails closed, and only the listed observers are Read.
     #[test]
     fn browser_tools_that_act_are_above_the_ceiling() {
-        use mur_common::hitl::tier_may_be_granted;
+        use crate::hitl::tier_may_be_granted;
         for tool in [
             "mcp__browser__browser_navigate",
             "mcp__playwright__browser_click",
@@ -453,7 +492,7 @@ mod tests {
     #[test]
     fn matches_whole_tokens_not_substrings() {
         assert!(
-            mur_common::hitl::tier_may_be_granted(classify(
+            crate::hitl::tier_may_be_granted(classify(
                 "bash",
                 Some(&bash("cargo build --formidable"))
             )),

@@ -230,7 +230,7 @@ pub fn is_readonly_bash(cmd: &str) -> bool {
 /// shape in a review session. Only UNQUOTED words get that guard here; the
 /// caller's tokenizer has already refused the expansions a quoted string can
 /// still trigger (`$(…)`, backticks) and split on every real operator.
-pub(super) fn is_readonly_words(words: &[(&str, bool)]) -> bool {
+pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
     if words
         .iter()
         .any(|(t, quoted)| !quoted && t.contains(SHELL_META))
