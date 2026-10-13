@@ -12,6 +12,21 @@ pub struct ChannelStore {
     root: PathBuf,
 }
 
+/// What the sealing hook of [`ChannelStore::append_event_with`] is handed
+/// (channel-log-integrity spec 7.3.1). It describes the line that was just
+/// written, so the hook never has to re-read the log under the lock.
+#[derive(Debug)]
+pub struct SealInput<'a> {
+    pub channel_id: &'a str,
+    /// The event as written, with its assigned `seq` and `ts`.
+    pub event: &'a ChannelEvent,
+    /// The exact bytes appended to `events.jsonl`, terminator included.
+    pub record: &'a [u8],
+}
+
+/// The sealing hook type taken by [`ChannelStore::append_event_with`].
+pub type SealHook<'h> = dyn for<'a, 'b> Fn(&'b SealInput<'a>) -> Result<()> + 'h;
+
 /// The damage [`ChannelStore::load_events_with_damage`] found in a log — the
 /// additive P4 read API §8.2 depends on. Both fields are empty for a clean
 /// log, which is the only case `load_events_with_damage` and `load_events`
@@ -266,6 +281,36 @@ impl ChannelStore {
         sig: Option<String>,
         key_version: Option<u32>,
     ) -> Result<ChannelEvent> {
+        self.append_event_with(
+            id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            sig,
+            key_version,
+            None,
+        )
+    }
+
+    /// [`append_event`](Self::append_event) plus an optional sealing hook
+    /// (spec 7.3.1). The hook runs after the line is written and before the
+    /// lock is released, on the write path only: the dedup return writes
+    /// nothing and never runs it. If the hook returns `Err` the append returns
+    /// `Err` (decision B1) but the line stays on disk; the caller must treat
+    /// the event as written and unsealed, not retry it blindly.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_event_with(
+        &self,
+        id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        sig: Option<String>,
+        key_version: Option<u32>,
+        seal: Option<&SealHook<'_>>,
+    ) -> Result<ChannelEvent> {
         let dir = self.channel_dir(id);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         // An append creates the directory, so it can resurrect a channel whose
@@ -336,7 +381,17 @@ impl ChannelStore {
         record.push(b'\n');
         data.write_all(&record)
             .with_context(|| format!("write {}", path.display()))?;
+        // Seal under the lock, after the write: event first, head second.
+        let sealed = match seal {
+            Some(hook) => hook(&SealInput {
+                channel_id: id,
+                event: &ev,
+                record: &record,
+            }),
+            None => Ok(()),
+        };
         FileExt::unlock(&lock).ok();
+        sealed.context("seal failed after the event was written")?;
         Ok(ev)
     }
 
