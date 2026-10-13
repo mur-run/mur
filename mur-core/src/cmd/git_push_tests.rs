@@ -285,7 +285,10 @@ fn re_enrolling_after_a_revoke_never_gets_the_old_epoch_back() {
     assert!(load(&f.home).unwrap().unwrap().enrollments.is_empty());
     assert_eq!(go(&f, enroll_args(&f, "alice")).0, 0);
     let again = load(&f.home).unwrap().unwrap().enrollments[0].epoch;
-    assert!(again > first, "epoch went {first} -> {again}; it must only grow");
+    assert!(
+        again > first,
+        "epoch went {first} -> {again}; it must only grow"
+    );
 }
 
 #[test]
