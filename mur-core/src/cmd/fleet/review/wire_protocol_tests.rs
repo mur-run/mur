@@ -123,6 +123,13 @@ fn reviewer_prompt_says_the_section_is_metadata_not_work() {
 }
 
 #[test]
+fn reviewer_prompt_requires_self_obtained_evidence_for_approve() {
+    // #1782: a reviewer approved citing line numbers it had not checked.
+    assert!(REVIEW_REVIEWER_PROMPT.contains("evidence you obtained yourself in this turn"));
+    assert!(REVIEW_REVIEWER_PROMPT.contains("cannot reproduce a citation"));
+}
+
+#[test]
 fn main_prompt_scopes_the_summary_as_protocol() {
     assert!(
         REVIEW_MAIN_PROMPT.contains("protocol, not the deliverable"),
