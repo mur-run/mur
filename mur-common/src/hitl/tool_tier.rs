@@ -234,6 +234,15 @@ fn classify_bash(cmd: &str) -> RiskTier {
     // arbitrary code execution. A policy choice, narrow by design — see
     // `opaque_shell`.
     if super::opaque_shell::is_opaque_shell(cmd) {
+        // Count only: the command text is never logged (it may hold secrets).
+        // Enable with `RUST_LOG=mur_common::hitl::tool_tier=debug` to measure
+        // how often this rule fires before deciding whether to keep it.
+        tracing::debug!(
+            target: "mur_common::hitl::tool_tier",
+            rule = "opaque_shell",
+            from = ?tier,
+            "escalating opaque shell invocation to Destructive"
+        );
         tier = tier.max(RiskTier::Destructive);
     }
     if word_in(&lower, EGRESS_HEADS) || git_sub_in(&lower, GIT_EGRESS_SUBCMDS) {
