@@ -8,6 +8,7 @@
 
 mod access;
 mod app;
+mod autostart;
 use mur_common::hitl::bash_class;
 mod browser_cmd;
 pub(crate) mod browser_live_cmd;
@@ -312,9 +313,9 @@ pub async fn cmd_cli(
 
     let agent = canonicalize_agent_name(&home, name);
 
-    // Streaming requires a live socket; fail early with a friendly hint.
-    let lock = home.join("agents").join(&agent).join("running.lock");
-    if !lock.exists() {
+    // Streaming requires a live socket: start the agent if it is down (#1767),
+    // and fall back to the manual hint only when that cannot be confirmed.
+    if !autostart::ensure_running(&home, &agent)? {
         eprintln!(
             "Agent '{agent}' is not running. Start it first with:\n    mur agent start {agent}\nthen retry: mur agent cli {agent}"
         );
