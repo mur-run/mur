@@ -269,6 +269,26 @@ fn revoking_the_last_enrollment_removes_the_repo_and_the_registry_entry() {
 }
 
 #[test]
+fn re_enrolling_after_a_revoke_never_gets_the_old_epoch_back() {
+    // The seam the broker's `re_enrolled_with_a_new_epoch_voids_a_pending_request`
+    // relies on: revoke, then enroll the identical policy. The digest is
+    // unchanged, so only a strictly larger epoch voids a stale pending row.
+    let f = fx();
+    go(&f, enroll_args(&f, "alice"));
+    let first = load(&f.home).unwrap().unwrap().enrollments[0].epoch;
+    let revoke = GitPushAction::Revoke {
+        agent: "alice".into(),
+        repo: "mur".into(),
+        remote: "origin".into(),
+    };
+    assert_eq!(go(&f, revoke).0, 0);
+    assert!(load(&f.home).unwrap().unwrap().enrollments.is_empty());
+    assert_eq!(go(&f, enroll_args(&f, "alice")).0, 0);
+    let again = load(&f.home).unwrap().unwrap().enrollments[0].epoch;
+    assert!(again > first, "epoch went {first} -> {again}; it must only grow");
+}
+
+#[test]
 fn list_prints_json() {
     let f = fx();
     go(&f, enroll_args(&f, "alice"));
@@ -411,5 +431,10 @@ fn concurrent_enrolls_do_not_lose_a_record() {
     for h in handles {
         assert_eq!(h.join().unwrap(), 0);
     }
-    assert_eq!(load(&f.home).unwrap().unwrap().enrollments.len(), 2);
+    let book = load(&f.home).unwrap().unwrap();
+    assert_eq!(book.enrollments.len(), 2);
+    assert_ne!(
+        book.enrollments[0].epoch, book.enrollments[1].epoch,
+        "the lock must also keep two concurrent enrolls from minting the same epoch"
+    );
 }
