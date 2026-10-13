@@ -445,7 +445,42 @@ pub(crate) fn builtin_floor(
     rules: &[mur_common::agent::ToolRule],
     tool_name: &str,
 ) -> Option<BuiltinFloor> {
+    call_floor(rules, tool_name, None)
+}
+
+/// [`effective_tool_policy`] for one concrete call. #1814: `bash`'s tier
+/// lives in its command, not its name, so a riskless `bash: allow` must not
+/// carry a command classified above the session-grant ceiling (`git push`,
+/// `rm -rf`, `sudo`) past the gate. Same floor and same waiver as #1786.
+/// Without input (preflight inventory) the name-only answer stands.
+pub(crate) fn effective_call_policy(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+    input: Option<&serde_json::Value>,
+) -> mur_common::agent::ToolPolicy {
+    use mur_common::agent::ToolPolicy;
+    let base = effective_tool_policy(rules, tool_name);
+    if base == ToolPolicy::Allow && call_floor(rules, tool_name, input).is_some_and(|f| !f.waived) {
+        return ToolPolicy::Ask;
+    }
+    base
+}
+
+/// The built-in tier floor for one call: the acting-browser table (#1786),
+/// or — for `bash` itself, never its job-id control tools — the tier the
+/// shared classifier derives from the command (#1814).
+pub(crate) fn call_floor(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+    input: Option<&serde_json::Value>,
+) -> Option<BuiltinFloor> {
+    let bash_tier = || {
+        let has_cmd = input?.get("command")?.is_string();
+        (tool_name == "bash" && has_cmd)
+            .then(|| mur_common::hitl::tool_tier::classify(tool_name, input))
+    };
     let tier = mur_common::hitl::builtin_tier::browser_tier(tool_name)
+        .or_else(bash_tier)
         .filter(|t| !mur_common::hitl::tier_may_be_granted(*t))?;
     let rule = mur_common::agent::resolve_tool_rule(rules, tool_name)
         .or_else(|| mur_common::agent::resolve_tool_rule(rules, policy_name(tool_name)));

@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::task_runner::{
-    cap_step_output, decide_without_asking, declared_tool_risk, denied_args_preview, deny_message,
-    effective_tool_policy, step_notification, task_error,
+    call_floor, cap_step_output, decide_without_asking, declared_tool_risk, denied_args_preview,
+    deny_message, effective_call_policy, step_notification, task_error,
 };
 use mur_common::a2a::TaskError;
 
@@ -113,7 +113,8 @@ impl GuardedToolCall {
         let entry = self.approval_sinks.lock().await.get(task_id).cloned();
         for call in calls {
             if !known.contains(&call.tool_name)
-                || effective_tool_policy(&self.tools_policy, &call.tool_name) != ToolPolicy::Ask
+                || effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input))
+                    != ToolPolicy::Ask
             {
                 continue;
             }
@@ -227,10 +228,11 @@ impl GuardedToolCall {
         // 1b. Policy gate: check before executing.
         {
             use mur_common::agent::ToolPolicy;
-            let policy = effective_tool_policy(&self.tools_policy, &call.tool_name);
+            let policy =
+                effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input));
             if policy == ToolPolicy::Allow
                 && let Some(floor) =
-                    crate::task_runner::builtin_floor(&self.tools_policy, &call.tool_name)
+                    call_floor(&self.tools_policy, &call.tool_name, Some(&call.input))
                 && floor.waived
             {
                 // #1786: the opt-out must leave a trail every time it acts.
