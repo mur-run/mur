@@ -103,7 +103,9 @@ pub(crate) async fn run_bounded(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| format!("could not start: {e}"))?;
+    let mut child = crate::exec_busy::spawn(&mut cmd)
+        .await
+        .map_err(|e| format!("could not start: {e}"))?;
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let run = async {

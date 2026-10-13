@@ -77,8 +77,7 @@ impl JsonlSession {
     /// Takes the command already built so the caller owns the environment the
     /// server runs in — `start` uses the shell's PATH, tests supply their own.
     async fn start_with(mut cmd: Command) -> Result<Self, ControlError> {
-        let mut child = cmd
-            .args(["app-server", "--listen", "stdio://"])
+        cmd.args(["app-server", "--listen", "stdio://"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Piped, not dropped: when the spawn dies on its shebang this is
@@ -86,8 +85,9 @@ impl JsonlSession {
             // directory"), and an unread pipe would stall a chatty server once
             // the kernel buffer filled.
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        let mut child = crate::exec_busy::spawn(&mut cmd)
+            .await
             .map_err(|e| ControlError::Spawn(e.to_string()))?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
