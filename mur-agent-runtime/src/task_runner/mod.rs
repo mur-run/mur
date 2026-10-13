@@ -394,6 +394,9 @@ impl AsyncTaskHandle {
 mod tests;
 
 #[cfg(test)]
+mod call_policy_tests;
+
+#[cfg(test)]
 mod step_tests {
     use super::{STEP_MAX_BYTES, cap_step_output, step_notification};
 
