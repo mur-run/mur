@@ -82,6 +82,27 @@ async fn run_with(
     store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     sandbox_enforcing: bool,
 ) -> Run {
+    run_wired(cmd, waiver, store, sandbox_enforcing, Wiring::default()).await
+}
+
+/// The two ways a call can be refused without a human ever being asked,
+/// besides the sandbox not enforcing.
+#[derive(Default)]
+struct Wiring {
+    /// The turn's sink says the caller cannot approve (a one-shot CLI).
+    caller_cannot_approve: bool,
+    /// No notifier is wired, so a prompt has nowhere to go. (Dropping the
+    /// pending-approvals table instead would skip the agentic loop entirely.)
+    no_approval_channel: bool,
+}
+
+async fn run_wired(
+    cmd: &str,
+    waiver: FloorWaiver,
+    store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
+    sandbox_enforcing: bool,
+    wiring: Wiring,
+) -> Run {
     use crate::llm::stub::SequenceLlm;
     let calls = Arc::new(AtomicU64::new(0));
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(64);
@@ -103,11 +124,21 @@ async fn run_with(
     .with_telemetry(tx)
     .with_pending_approvals(pa.clone())
     .with_sandbox_enforcing(sandbox_enforcing)
-    .with_notifier(ntx)
     .with_hitl_timeout_secs(5)
     .with_iteration_ceiling(5);
+    if !wiring.no_approval_channel {
+        runner = runner.with_notifier(ntx);
+    }
     if let Some(s) = store {
         runner = runner.with_decision_store(s);
+    }
+    let mut spec = loop_spec("bash-ceiling");
+    if wiring.caller_cannot_approve {
+        let (stx, _srx) = tokio::sync::mpsc::channel(16);
+        runner
+            .register_client_notifier("t-bash-ceiling", stx, false)
+            .await;
+        spec.task_id = Some("t-bash-ceiling".to_string());
     }
     let runner = Arc::new(runner);
     let denier = tokio::spawn(async move {
@@ -127,7 +158,7 @@ async fn run_with(
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     });
-    let _ = runner.run_sync(loop_spec("bash-ceiling")).await;
+    let _ = runner.run_sync(spec).await;
     denier.abort();
     drop(runner);
     let mut asked = Vec::new();
@@ -240,6 +271,48 @@ async fn a_remembered_decision_is_not_recorded() {
 #[tokio::test]
 async fn a_refusal_without_asking_is_recorded() {
     let r = run_with("git push origin main", FloorWaiver::Off, None, false).await;
+    assert_eq!(r.executed, 0);
+    assert!(r.asked.is_empty(), "{:?}", r.asked);
+    assert_eq!(r.records.len(), 1, "{:?}", r.records);
+    assert_eq!(r.records[0]["tier"], "network-egress");
+}
+
+/// Refused because the caller cannot approve (`decide_without_asking`): no
+/// prompt, but still a stop doctor must count.
+#[tokio::test]
+async fn a_refusal_because_the_caller_cannot_approve_is_recorded() {
+    let r = run_wired(
+        "git push origin main",
+        FloorWaiver::Off,
+        None,
+        true,
+        Wiring {
+            caller_cannot_approve: true,
+            ..Wiring::default()
+        },
+    )
+    .await;
+    assert_eq!(r.executed, 0);
+    assert!(r.asked.is_empty(), "{:?}", r.asked);
+    assert_eq!(r.records.len(), 1, "{:?}", r.records);
+    assert_eq!(r.records[0]["tier"], "network-egress");
+}
+
+/// Refused fail-closed because no approval channel exists: the call never
+/// reached a human, and doctor must still count it.
+#[tokio::test]
+async fn a_refusal_with_no_approval_channel_is_recorded() {
+    let r = run_wired(
+        "git push origin main",
+        FloorWaiver::Off,
+        None,
+        true,
+        Wiring {
+            no_approval_channel: true,
+            ..Wiring::default()
+        },
+    )
+    .await;
     assert_eq!(r.executed, 0);
     assert!(r.asked.is_empty(), "{:?}", r.asked);
     assert_eq!(r.records.len(), 1, "{:?}", r.records);
