@@ -60,6 +60,73 @@ pub fn browser_tier(tool_name: &str) -> Option<RiskTier> {
     classify_browser(tool_name.rsplit("__").next().unwrap_or(tool_name))
 }
 
+/// Server-name fragments that mark an MCP server as a browser driver, for
+/// [`glob_may_cover_floor`] only. Classification never uses these — it keys
+/// on the tool LEAF — so this list only decides which globs get a note.
+const BROWSER_SERVER_HINTS: &[&str] = &["browser", "playwright"];
+
+/// Whether an `allow` glob `<prefix>*` can match a tool the floor lifts.
+/// Advisory, for `perm` / `doctor` notes: true for the catch-alls, a
+/// browser-like server segment, or a leaf stem that can still grow into an
+/// acting `browser_*` tool.
+pub fn glob_may_cover_floor(prefix: &str) -> bool {
+    if prefix.is_empty() || prefix == "mcp__" {
+        return true;
+    }
+    let leaf = match prefix.strip_prefix("mcp__") {
+        None => prefix,
+        Some(rest) => match rest.split_once("__") {
+            Some((_, leaf)) if !leaf.is_empty() => leaf,
+            other => {
+                let server = other.map_or(rest, |(s, _)| s).to_ascii_lowercase();
+                return BROWSER_SERVER_HINTS
+                    .iter()
+                    .any(|h| server.contains(h) || h.starts_with(server.as_str()));
+            }
+        },
+    };
+    BROWSER_PREFIX.starts_with(leaf)
+        || (leaf.starts_with(BROWSER_PREFIX)
+            && !BROWSER_READ_PREFIXES.iter().any(|p| leaf.starts_with(p)))
+}
+
+/// How one profile rule reads under the floor, for operator surfaces
+/// (`perm list-tools`, `doctor`). The runtime never uses this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloorNote {
+    /// Exact-name `allow` + `bypass_builtin_tier_floor`: runs unattended,
+    /// logged per call.
+    Waived { tier: RiskTier },
+    /// Exact-name bare `allow` on a floored tool: asks anyway.
+    AsksForTool { tier: RiskTier },
+    /// `allow` glob that can match floored tools: those still ask.
+    AsksForSome,
+    /// `bypass_builtin_tier_floor` on a glob: has no effect.
+    IgnoredBypass,
+}
+
+/// The note `rule` deserves, if any. `allow` rules whose `risk:` already
+/// makes them ask are left to #1600's note.
+pub fn floor_note(rule: &crate::agent::ToolRule) -> Option<FloorNote> {
+    use crate::agent::ToolPolicy;
+    if rule.policy != ToolPolicy::Allow || rule.risk.is_some_and(|t| !super::tier_may_be_granted(t))
+    {
+        return None;
+    }
+    if let Some(prefix) = rule.pattern.strip_suffix('*') {
+        if rule.bypass_builtin_tier_floor {
+            return Some(FloorNote::IgnoredBypass);
+        }
+        return glob_may_cover_floor(prefix).then_some(FloorNote::AsksForSome);
+    }
+    let tier = browser_tier(&rule.pattern).filter(|t| !super::tier_may_be_granted(*t))?;
+    Some(if rule.bypass_builtin_tier_floor {
+        FloorNote::Waived { tier }
+    } else {
+        FloorNote::AsksForTool { tier }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +148,72 @@ mod tests {
         );
         assert_eq!(browser_tier("bash"), None);
         assert_eq!(browser_tier("mcp__browser__navigate"), None);
+    }
+
+    #[test]
+    fn glob_coverage_flags_catch_alls_and_browser_servers_only() {
+        for p in [
+            "",
+            "mcp__",
+            "mcp__browser__",
+            "mcp__playwright__",
+            "mcp__x__browser_",
+            "mcp__x__b",
+            "browser_",
+            "mcp__play",
+        ] {
+            assert!(glob_may_cover_floor(p), "{p:?}");
+        }
+        for p in [
+            "mcp__github__",
+            "bash",
+            "mcp__x__browser_verify_",
+            "mcp__x__read_",
+            "edit_",
+        ] {
+            assert!(!glob_may_cover_floor(p), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn floor_notes_cover_waiver_bare_glob_and_ignored_bypass() {
+        use crate::agent::{ToolPolicy, ToolRule};
+        let r = |pattern: &str, policy, risk, bypass| ToolRule {
+            pattern: pattern.into(),
+            policy,
+            risk,
+            bypass_builtin_tier_floor: bypass,
+        };
+        let nav = "mcp__browser__browser_navigate";
+        let egress = RiskTier::NetworkEgress;
+        assert_eq!(
+            floor_note(&r(nav, ToolPolicy::Allow, None, true)),
+            Some(FloorNote::Waived { tier: egress })
+        );
+        assert_eq!(
+            floor_note(&r(nav, ToolPolicy::Allow, None, false)),
+            Some(FloorNote::AsksForTool { tier: egress })
+        );
+        assert_eq!(
+            floor_note(&r("mcp__browser__*", ToolPolicy::Allow, None, false)),
+            Some(FloorNote::AsksForSome)
+        );
+        assert_eq!(
+            floor_note(&r("mcp__browser__*", ToolPolicy::Allow, None, true)),
+            Some(FloorNote::IgnoredBypass)
+        );
+        for quiet in [
+            r("mcp__github__*", ToolPolicy::Allow, None, false),
+            r(
+                "mcp__browser__browser_snapshot",
+                ToolPolicy::Allow,
+                None,
+                false,
+            ),
+            r(nav, ToolPolicy::Deny, None, false),
+            r(nav, ToolPolicy::Allow, Some(RiskTier::Destructive), true),
+        ] {
+            assert_eq!(floor_note(&quiet), None, "{}", quiet.pattern);
+        }
     }
 }

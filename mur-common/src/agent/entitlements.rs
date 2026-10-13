@@ -242,8 +242,9 @@ pub struct ToolRule {
     pub risk: Option<crate::hitl::RiskTier>,
     /// #1786: opt this one rule out of the built-in tier floor (acting
     /// browser tools ask even under a riskless `allow`). Default off; it never
-    /// lowers a declared `risk:` — that field only ever raises. The runtime
-    /// logs every call where this actually waives a floor.
+    /// lowers a declared `risk:` — that field only ever raises. Honored only
+    /// on an exact-name rule; on a glob it is ignored (`perm list-tools` and
+    /// `doctor` say so). The runtime logs every call where it waives a floor.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub bypass_builtin_tier_floor: bool,
 }

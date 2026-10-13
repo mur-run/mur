@@ -486,9 +486,30 @@ pub(crate) fn call_floor(
         .or_else(|| mur_common::agent::resolve_tool_rule(rules, policy_name(tool_name)));
     Some(BuiltinFloor {
         tier,
-        waived: rule.is_some_and(|r| r.bypass_builtin_tier_floor),
+        // The waiver names one tool, never a family: a glob such as
+        // `mcp__browser__*` carrying it would release every acting tool of
+        // the server in one line, so only an exact-name deciding rule counts.
+        waived: rule.is_some_and(|r| {
+            r.bypass_builtin_tier_floor
+                && (r.pattern == tool_name || r.pattern == policy_name(tool_name))
+        }),
         rule: rule.map(|r| r.pattern.clone()),
     })
+}
+
+/// The tier an approval prompt carries: the declared `risk:` or the tool's
+/// built-in tier, whichever is higher (#1786). A call that asks BECAUSE of
+/// its built-in tier must not reach a client looking like a plain write,
+/// where a session grant could cover it. With the call's input, `bash`
+/// carries its command's tier too (#1814), the same one [`call_floor`] gates on.
+pub(crate) fn approval_risk(
+    rules: &[mur_common::agent::ToolRule],
+    tool_name: &str,
+    input: Option<&serde_json::Value>,
+) -> Option<mur_common::hitl::RiskTier> {
+    declared_tool_risk(rules, tool_name)
+        .max(mur_common::hitl::builtin_tier::browser_tier(tool_name))
+        .max(call_floor(rules, tool_name, input).map(|f| f.tier))
 }
 
 /// The strictest `risk:` declared for `tool_name`, looked up under the same
