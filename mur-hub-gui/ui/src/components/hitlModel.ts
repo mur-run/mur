@@ -2,7 +2,14 @@ import type { HitlBatchPayload, HitlRequest, PermissionsView } from "../types";
 
 /** One card per call. Legacy payloads (no `calls`) are one call. */
 export function expandBatch(p: HitlBatchPayload): HitlRequest[] {
-  const base = { agent: p.agent, prompt: p.prompt, timeout_ms: p.timeout_ms, batch_id: p.batch_id };
+  const base = {
+    agent: p.agent,
+    prompt: p.prompt,
+    timeout_ms: p.timeout_ms,
+    batch_id: p.batch_id,
+    channel_id: p.channel_id,
+    auto_allowed: p.auto_allowed,
+  };
   if (p.calls && p.calls.length > 0) {
     return p.calls.map((c) => ({
       ...base,
@@ -10,10 +17,18 @@ export function expandBatch(p: HitlBatchPayload): HitlRequest[] {
       tool_name: c.tool_name,
       tool_input: c.tool_input,
       action_hash: c.action_hash,
+      session_grant: c.session_grant,
     }));
   }
   return [
-    { ...base, hitl_id: p.hitl_id, tool_name: p.tool_name, tool_input: p.tool_input, action_hash: p.action_hash },
+    {
+      ...base,
+      hitl_id: p.hitl_id,
+      tool_name: p.tool_name,
+      tool_input: p.tool_input,
+      action_hash: p.action_hash,
+      session_grant: p.session_grant,
+    },
   ];
 }
 

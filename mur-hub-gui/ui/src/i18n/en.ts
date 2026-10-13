@@ -560,6 +560,9 @@ export const en = {
   "hitl.grantHint": "This path is outside the agent's grants; approving lets it run, not reach the file.",
   "hitl.grant": "Grant {verb} on {path}",
   "hitl.batchTitle": "{n} approvals for this response",
+  "hitl.session": "Don't ask again this session",
+  "hitl.sessionHint": "In this channel, until the Hub closes or you switch, auto-allow: {label}",
+  "hitl.autoAllowed": "✓ Auto-allowed (this session): {label}",
   // ── Specialist wizard — Role picker (T5) ──
   "wizard.role.title": "Choose a role template",
   "wizard.role.hint": "Select the role that best describes your agent's purpose. MUR will generate skills and a system prompt tailored to it.",

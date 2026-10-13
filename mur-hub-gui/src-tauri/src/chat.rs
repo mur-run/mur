@@ -101,6 +101,7 @@ pub async fn agent_chat_send(
     // duplicate user turns on retry, and pins both halves to one channel.
     let persist_home = home.clone();
     let persist_name = name.clone();
+    let hitl_channel = channel_id.clone();
     let persist_channel = channel_id;
     let persist_user_text = text.clone();
     let user_task_id = task_id.clone();
@@ -134,23 +135,7 @@ pub async fn agent_chat_send(
                     },
                 );
             },
-            |hitl_params| {
-                let _ = app2.emit(
-                    "hitl-approval-needed",
-                    serde_json::json!({
-                        "agent": name,
-                        "hitl_id": hitl_params.get("hitl_id"),
-                        "tool_name": hitl_params.get("tool_name"),
-                        "tool_input": hitl_params.get("tool_input"),
-                        "prompt": hitl_params.get("prompt"),
-                        "timeout_ms": hitl_params.get("timeout_ms"),
-                        // P3: the batch. Legacy fields above stay so listeners
-                        // that only read `agent` keep working.
-                        "batch_id": hitl_params.get("batch_id"),
-                        "calls": hitl_params.get("calls"),
-                    }),
-                );
-            },
+            |hitl_params| on_hitl(&app2, &name, hitl_channel.as_deref(), &hitl_params),
             |step| {
                 if let Some(chip) = crate::proposal_chip::chip_from_step(&agent, &step) {
                     let _ = app3.emit(crate::proposal_chip::PROPOSAL_EVENT, chip);
@@ -215,6 +200,48 @@ pub async fn agent_chat_send(
         streamed,
         usage,
     })
+}
+
+/// Route one `tool/approval_needed` batch: auto-allow it when every call is
+/// covered by a session answer in this `(agent, channel)` scope, else hand it
+/// to the chat. Either way the chat gets the event, so an auto-allow is shown,
+/// never silent.
+fn on_hitl(app: &AppHandle, agent: &str, channel: Option<&str>, params: &Value) {
+    use crate::session_allow::{Plan, SessionAllowState, event_payload, plan};
+    use tauri::Manager;
+    let store = app.state::<SessionAllowState>();
+    match plan(&store.0, agent, channel, params) {
+        Plan::AutoAllow(calls) => {
+            let _ = app.emit(
+                "hitl-approval-needed",
+                event_payload(agent, channel, params, &calls, true),
+            );
+            for c in calls {
+                let key = c.grant.map(|(k, _)| k).unwrap_or_default();
+                tracing::info!(
+                    agent,
+                    channel = channel.unwrap_or(""),
+                    key = %key,
+                    hitl_id = %c.hitl_id,
+                    "HITL auto-allowed by a session answer"
+                );
+                // Off the streaming thread: its socket must keep being read
+                // while the answer goes out on a connection of its own.
+                let agent = agent.to_string();
+                std::thread::spawn(move || {
+                    if let Err(e) = crate::hitl::respond(&agent, &c.hitl_id, true, None) {
+                        tracing::warn!(error = %e, hitl_id = %c.hitl_id, "session auto-allow failed");
+                    }
+                });
+            }
+        }
+        Plan::Ask(calls) => {
+            let _ = app.emit(
+                "hitl-approval-needed",
+                event_payload(agent, channel, params, &calls, false),
+            );
+        }
+    }
 }
 
 /// Cancel agent `name`'s in-flight chat turn by dialing `tasks/cancel` with the

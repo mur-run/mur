@@ -199,6 +199,8 @@ export function ChatTab({ agentName, displayName, aboveCompose, channelId }: Pro
 
     setMessages([]);
     setHitlRequests([]);
+    // Session answers die with the cards they came from.
+    void invoke("hitl_session_reset", { name: agentName }).catch(() => {});
     setStreaming(null);
     setThinking(null);
     streamingRef.current = "";

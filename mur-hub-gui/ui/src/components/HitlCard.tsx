@@ -28,6 +28,8 @@ export function HitlCard({ request, perms, isRunning }: Props) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    // Already answered by a session grant: nothing to count down to.
+    if (request.auto_allowed) return;
     intervalRef.current = setInterval(() => {
       setRemaining((r) => {
         if (r <= 1) {
@@ -39,7 +41,21 @@ export function HitlCard({ request, perms, isRunning }: Props) {
       });
     }, 1000);
     return () => clearInterval(intervalRef.current!);
-  }, []);
+  }, [request.auto_allowed]);
+
+  // "Don't ask again this session" = the one-time allow, then remember the
+  // key the Rust side computed. The next batch it fully covers is allowed
+  // there and shown here as an info card.
+  async function respondSession() {
+    const sg = request.session_grant;
+    if (!sg || !request.channel_id || responded || busy) return;
+    await respond(true);
+    try {
+      await invoke("hitl_session_allow", { name: request.agent, channelId: request.channel_id, key: sg.key });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function respond(allow: boolean, denyReason?: string) {
     if (responded || busy) return;
@@ -105,6 +121,16 @@ export function HitlCard({ request, perms, isRunning }: Props) {
   }
 
   const hasArgs = Object.keys(request.tool_input).length > 0;
+
+  if (request.auto_allowed) {
+    return (
+      <div className="hitl-card hitl-card--resolved hitl-card--allowed">
+        <span className="hitl-card__label">
+          {t("hitl.autoAllowed", { label: request.session_grant?.label ?? toolLabel(request.tool_name) })}
+        </span>
+      </div>
+    );
+  }
 
   if (responded === "timeout") {
     return (
@@ -183,6 +209,16 @@ export function HitlCard({ request, perms, isRunning }: Props) {
           >
             {t("hitl.allowOnce")}
           </button>
+          {request.session_grant && request.channel_id && (
+            <button
+              className="hitl-card__btn hitl-card__btn--always"
+              title={t("hitl.sessionHint", { label: request.session_grant.label })}
+              onClick={() => respondSession()}
+              disabled={busy}
+            >
+              {t("hitl.session")}
+            </button>
+          )}
           {always && (
             <button
               className="hitl-card__btn hitl-card__btn--always"

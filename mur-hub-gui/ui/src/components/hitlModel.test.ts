@@ -82,3 +82,21 @@ describe("groupBatches", () => {
     );
   });
 });
+
+describe("expandBatch session fields", () => {
+  it("carries each call's grant and the batch's channel and auto flag", () => {
+    const reqs = expandBatch({
+      ...base,
+      channel_id: "c1",
+      auto_allowed: true,
+      calls: [
+        { hitl_id: "a", tool_name: "write_file", tool_input: {}, session_grant: { key: "write_file", label: "write_file" } },
+        { hitl_id: "b", tool_name: "bash", tool_input: {} },
+      ],
+    });
+    expect(reqs.map((r) => [r.channel_id, r.auto_allowed, r.session_grant?.key])).toEqual([
+      ["c1", true, "write_file"],
+      ["c1", true, undefined],
+    ]);
+  });
+});
