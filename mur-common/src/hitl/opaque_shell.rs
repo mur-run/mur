@@ -92,7 +92,7 @@ fn segment_is_opaque(seg: &str, piped: bool) -> bool {
     }
     let rest = &words[1..];
     // `… | sh` — a script arriving on stdin: no script file, no `-c`.
-    if piped && rest.iter().all(|w| w.starts_with('-') && !is_c_flag(w)) {
+    if piped && reads_script_from_stdin(rest) {
         return true;
     }
     // `sh -c <body>` where the body is a substitution rather than literal text.
@@ -106,6 +106,37 @@ fn segment_is_opaque(seg: &str, piped: bool) -> bool {
                 b.starts_with('$') || b.starts_with('`')
             }
         })
+}
+
+/// Does a shell invoked with `args` read its script from stdin?
+///
+/// POSIX `sh [options] [file [args]]`: the first operand is a script file
+/// unless `-s` is given, in which case every operand is a positional argument
+/// and the script still comes from stdin. So `curl … | sh -s -- arg` is as
+/// opaque as `curl … | sh` (#1848), while `… | sh script.sh` is not.
+fn reads_script_from_stdin(args: &[&str]) -> bool {
+    let (mut s_flag, mut operand) = (false, false);
+    let mut it = args.iter();
+    while let Some(w) = it.next() {
+        if *w == "--" {
+            operand = it.next().is_some();
+            break;
+        }
+        if is_c_flag(w) {
+            return false;
+        }
+        if w.starts_with('-') || w.starts_with('+') {
+            // `-o name` / `-O name` take a separate argument; it is not a file.
+            if matches!(*w, "-o" | "+o" | "-O" | "+O") {
+                it.next();
+            }
+            s_flag |= w.starts_with('-') && !w.starts_with("--") && w[1..].contains('s');
+        } else {
+            operand = true;
+            break;
+        }
+    }
+    s_flag || !operand
 }
 
 /// `-c`, `-lc`, `-ec` … (a short-flag cluster containing `c`; `--long` excluded).
