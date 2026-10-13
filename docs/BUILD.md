@@ -139,6 +139,27 @@ incremental artifacts. Clean only that crate, not the whole target dir:
 cargo clean -p <crate>      # e.g. cargo clean -p mur-browser
 ```
 
+### `target/debug` grows to tens of GB
+
+The bulk is not third-party dependencies. It is stale hash variants of the
+workspace's own artifacts in `target/debug/deps/`: every feature set, profile
+tweak, or branch switch leaves another `libmur_core-<hash>.rlib` and another
+copy of each integration-test binary behind, and cargo never removes the old
+ones. With the local `debug = 2` profile a single integration-test binary can
+reach a few GB.
+
+Before reaching for `cargo clean`, drop only artifacts that no build has
+touched recently (the same rule `cargo sweep --time 2` applies):
+
+```bash
+find target/debug -type f -mtime +2 -delete
+find target/debug -type d -empty -delete
+```
+
+The next build recompiles whatever it still needs. Each worktree under
+`.worktrees/` has its own `target/`; deleting the `target/` of an idle
+worktree is safe and does not touch its source.
+
 ### `serena_install` `with_fake_uv` tests fail inside a sandbox
 
 `cmd::code_nav::serena_install::tests::with_fake_uv::*` write a fake `uv`
