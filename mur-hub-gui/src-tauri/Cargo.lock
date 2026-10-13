@@ -6802,6 +6802,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-compress",
+ "mur-git-broker",
  "mur-mcp-proto",
  "mur-open-items",
  "mur-track",
@@ -6849,6 +6850,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-normalization",
+ "unicode-width 0.1.14",
  "url",
  "uuid",
 ]
@@ -7043,6 +7045,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mur-git-broker"
+version = "2.92.1"
+dependencies = [
+ "chrono",
+ "hex",
+ "libc",
+ "mur-common",
+ "rusqlite",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mur-gui-core"
 version = "2.92.1"
 dependencies = [
@@ -7146,6 +7165,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 6.0.0",
+ "fs2",
  "libc",
  "mur-common",
  "serde",

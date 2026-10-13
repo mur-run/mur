@@ -285,12 +285,20 @@ export interface HitlRequest {
   action_hash?: string;
   /** P3: shared by every call of one LLM response. */
   batch_id?: string;
+  /** Channel the turn runs in; a session answer is scoped to it. */
+  channel_id?: string | null;
+  /** What "don't ask again this session" would cover; absent = keep asking. */
+  session_grant?: { key: string; label: string };
+  /** The Hub already allowed this call from a session answer: show, don't ask. */
+  auto_allowed?: boolean;
 }
 
 /** `hitl-approval-needed` payload: legacy single-call fields plus, from a P3 runtime, `calls`. */
 export interface HitlBatchPayload extends HitlRequest {
   calls?: Array<
-    Pick<HitlRequest, "hitl_id" | "tool_name" | "tool_input" | "action_hash"> & { step_id?: string }
+    Pick<HitlRequest, "hitl_id" | "tool_name" | "tool_input" | "action_hash" | "session_grant"> & {
+      step_id?: string;
+    }
   >;
 }
 

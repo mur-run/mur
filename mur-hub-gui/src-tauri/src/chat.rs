@@ -89,6 +89,9 @@ pub async fn agent_chat_send(
     channel_id: Option<String>,
 ) -> Result<ChatReply, String> {
     let home = crate::mur_home_path();
+    // Pin the turn to ONE channel up front: HITL session scope and persistence
+    // must agree, and the "latest" fallback would otherwise leave HITL unscoped.
+    let channel_id = resolve_turn_channel(&home, &name, channel_id);
     // Register the in-flight id synchronously so a Stop pressed mid-turn can
     // cancel by it. Cleared once the turn returns (below).
     registry.0.set(&name, &task_id);
@@ -101,6 +104,7 @@ pub async fn agent_chat_send(
     // duplicate user turns on retry, and pins both halves to one channel.
     let persist_home = home.clone();
     let persist_name = name.clone();
+    let hitl_channel = channel_id.clone();
     let persist_channel = channel_id;
     let persist_user_text = text.clone();
     let user_task_id = task_id.clone();
@@ -134,23 +138,7 @@ pub async fn agent_chat_send(
                     },
                 );
             },
-            |hitl_params| {
-                let _ = app2.emit(
-                    "hitl-approval-needed",
-                    serde_json::json!({
-                        "agent": name,
-                        "hitl_id": hitl_params.get("hitl_id"),
-                        "tool_name": hitl_params.get("tool_name"),
-                        "tool_input": hitl_params.get("tool_input"),
-                        "prompt": hitl_params.get("prompt"),
-                        "timeout_ms": hitl_params.get("timeout_ms"),
-                        // P3: the batch. Legacy fields above stay so listeners
-                        // that only read `agent` keep working.
-                        "batch_id": hitl_params.get("batch_id"),
-                        "calls": hitl_params.get("calls"),
-                    }),
-                );
-            },
+            |hitl_params| on_hitl(&app2, &name, hitl_channel.as_deref(), &hitl_params),
             |step| {
                 if let Some(chip) = crate::proposal_chip::chip_from_step(&agent, &step) {
                     let _ = app3.emit(crate::proposal_chip::PROPOSAL_EVENT, chip);
@@ -217,6 +205,48 @@ pub async fn agent_chat_send(
     })
 }
 
+/// Route one `tool/approval_needed` batch: auto-allow it when every call is
+/// covered by a session answer in this `(agent, channel)` scope, else hand it
+/// to the chat. Either way the chat gets the event, so an auto-allow is shown,
+/// never silent.
+fn on_hitl(app: &AppHandle, agent: &str, channel: Option<&str>, params: &Value) {
+    use crate::session_allow::{Plan, SessionAllowState, event_payload, plan};
+    use tauri::Manager;
+    let store = app.state::<SessionAllowState>();
+    match plan(&store.0, agent, channel, params) {
+        Plan::AutoAllow(calls) => {
+            let _ = app.emit(
+                "hitl-approval-needed",
+                event_payload(agent, channel, params, &calls, true),
+            );
+            for c in calls {
+                let key = c.grant.map(|(k, _)| k).unwrap_or_default();
+                tracing::info!(
+                    agent,
+                    channel = channel.unwrap_or(""),
+                    key = %key,
+                    hitl_id = %c.hitl_id,
+                    "HITL auto-allowed by a session answer"
+                );
+                // Off the streaming thread: its socket must keep being read
+                // while the answer goes out on a connection of its own.
+                let agent = agent.to_string();
+                std::thread::spawn(move || {
+                    if let Err(e) = crate::hitl::respond(&agent, &c.hitl_id, true, None) {
+                        tracing::warn!(error = %e, hitl_id = %c.hitl_id, "session auto-allow failed");
+                    }
+                });
+            }
+        }
+        Plan::Ask(calls) => {
+            let _ = app.emit(
+                "hitl-approval-needed",
+                event_payload(agent, channel, params, &calls, false),
+            );
+        }
+    }
+}
+
 /// Cancel agent `name`'s in-flight chat turn by dialing `tasks/cancel` with the
 /// id the Hub stored when the send began. No-ops if nothing is in flight; a
 /// benign "already finished / not running" error is swallowed (the turn is over).
@@ -275,6 +305,34 @@ fn extract_text(message: &Value) -> String {
 }
 
 // ─── Channel persistence ───────────────────────────────────────────────────
+
+/// The channel a turn belongs to: the rail's explicit pick, else the agent's
+/// latest channel, else a fresh one created now — so even an agent's first turn
+/// has a session scope and is offered "don't ask again this session". Creating
+/// up front writes no messages: a failed turn leaves an empty channel, which the
+/// next turn reuses as the latest. `None` only if the channel store itself fails
+/// (that turn then asks for every HITL as usual).
+fn resolve_turn_channel(
+    home: &std::path::Path,
+    agent: &str,
+    explicit: Option<String>,
+) -> Option<String> {
+    if explicit.is_some() {
+        return explicit;
+    }
+    let resolved =
+        ChannelService::open(home).and_then(|svc| match svc.latest_for_agent(agent)? {
+            Some(id) => Ok(id),
+            None => Ok(svc.create_for_agent(agent)?.id),
+        });
+    match resolved {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!("turn channel resolution failed for {agent}: {e:#}");
+            None
+        }
+    }
+}
 
 /// Persist one user→agent exchange into the agent's channel — the explicit
 /// `channel_id` when the chat window's rail picked one, else the agent's latest —
@@ -459,5 +517,34 @@ mod channel_tests {
         persist_exchange(tmp.path(), "qa", Some(&old), "q2", None, "a2", None, None);
         assert_eq!(svc.load_events(&old).unwrap().len(), 3);
         assert_eq!(svc.load_events(&new).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn turn_channel_creates_first_then_reuses_latest() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        // No channel yet: one is created so the first turn has a scope…
+        let first = resolve_turn_channel(tmp.path(), "qa", None).expect("created");
+        assert_eq!(svc.list(10).unwrap().len(), 1);
+        // …it holds no messages until a reply succeeds…
+        assert!(svc.load_events(&first).unwrap().is_empty());
+        // …and the next turn reuses it rather than creating another.
+        assert_eq!(resolve_turn_channel(tmp.path(), "qa", None), Some(first));
+        assert_eq!(svc.list(10).unwrap().len(), 1);
+
+        let old = svc.create_for_agent("qa").unwrap().id;
+        let new = svc.create_for_agent("qa").unwrap().id;
+        // Explicit pick wins; otherwise the latest.
+        assert_eq!(
+            resolve_turn_channel(tmp.path(), "qa", Some(old.clone())),
+            Some(old.clone())
+        );
+        assert_eq!(
+            resolve_turn_channel(tmp.path(), "qa", None),
+            Some(new.clone())
+        );
+        // Another agent's channels never leak in: it gets its own.
+        let other = resolve_turn_channel(tmp.path(), "other", None).unwrap();
+        assert!(other != old && other != new);
     }
 }

@@ -462,7 +462,9 @@ anything is applied; the review lane labels each proposal `✓ signed`.
   chats, skills / workflows / MCP / plugins, settings): source list with filter
   and facets, full-width detail, ⌘K palette, **⌘↩ to open any agent or fleet in
   its own window**, a side-peek from Home, ⌘-click multi-select with bulk
-  Start / Stop, streaming replies, human-in-the-loop tool approvals, a
+  Start / Stop, streaming replies, human-in-the-loop tool approvals (with a
+  per-conversation **Don't ask again this session** that shares the CLI's
+  scope rules — force pushes, protected branches and merges still ask), a
   **Permissions** section that shows every entitlement the sandbox will enforce
   and edits it in place (folders through the native picker, hosts, spawn, tool
   rules — each change is one CLI call and a re-read, so the Hub and

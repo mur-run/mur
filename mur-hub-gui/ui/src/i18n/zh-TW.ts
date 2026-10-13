@@ -562,6 +562,9 @@ export const zhTW: Table = {
   "hitl.grantHint": "這個路徑不在 agent 的授權範圍內；核准只是讓它執行，不代表它碰得到檔案。",
   "hitl.grant": "授權 {path} 的 {verb}",
   "hitl.batchTitle": "這則回覆需要 {n} 個核准",
+  "hitl.session": "這次 session 不再問",
+  "hitl.sessionHint": "在這個頻道裡，直到 Hub 關閉或換頻道前，自動允許：{label}",
+  "hitl.autoAllowed": "✓ 已自動允許（本次 session）：{label}",
   // ── Specialist wizard — Role picker (T5) ──
   "wizard.role.title": "選擇角色範本",
   "wizard.role.hint": "選擇最能描述你 agent 用途的角色，MUR 將根據它生成技能與系統提示詞。",

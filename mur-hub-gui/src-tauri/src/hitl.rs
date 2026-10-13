@@ -9,6 +9,17 @@ pub fn agent_hitl_respond(
     allow: bool,
     reason: Option<String>,
 ) -> Result<(), String> {
+    respond(&name, &hitl_id, allow, reason)
+}
+
+/// Answer one in-chat tool gate. Shared by the card's buttons and the
+/// session auto-allow in `chat.rs`, so both carry the same approval token.
+pub fn respond(
+    name: &str,
+    hitl_id: &str,
+    allow: bool,
+    reason: Option<String>,
+) -> Result<(), String> {
     let home = crate::mur_home_path();
     let mut payload = json!({ "hitl_id": hitl_id, "allow": allow, "surface": "hub" });
     if let Some(r) = reason {
@@ -22,7 +33,7 @@ pub fn agent_hitl_respond(
     }
     dial_method(
         &home,
-        &name,
+        name,
         "tool/hitl_respond",
         payload,
         DialMode::RequireRunning,

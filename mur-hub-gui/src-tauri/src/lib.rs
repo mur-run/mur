@@ -41,6 +41,7 @@ pub mod pet;
 pub mod preset;
 pub mod proposal_chip;
 pub mod seed_mur;
+pub mod session_allow;
 pub mod skills_installed;
 pub mod upgrade_status;
 pub mod work;
@@ -300,6 +301,7 @@ pub fn run() {
         }))
         .manage(AgentState(Mutex::new(Vec::new())))
         .manage(chat::ChatRegistryState::default())
+        .manage(session_allow::SessionAllowState::default())
         .manage(SupervisorState(supervisor))
         .manage(onboarding::spec::WizardSpecState::default())
         .manage(PetState(Mutex::new(std::collections::HashMap::new())))
@@ -681,6 +683,8 @@ pub fn run() {
             hitl::agent_hitl_respond,
             hitl::channel_hitl_respond,
             hitl::hitl_pending_list,
+            session_allow::hitl_session_allow,
+            session_allow::hitl_session_reset,
             open_dashboard,
             toggle_popover,
             onboarding::render_agent_expressions,
