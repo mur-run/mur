@@ -24,8 +24,8 @@ use mur_common::limits::Stuck;
 use super::constants::{
     FLEET_CHANNEL_PREFIX, OPEN_HIGH_APPROVE_WARNING, REVIEW_FLEET_PREFIX,
     REVIEW_LEFT_PAUSED_NOTICE, REVIEW_PAUSED_CONTINUE_PROMPT, REVIEW_RESUME_RESTARTS_ROUND,
-    REVIEW_STOP_REASON_ESCALATION, RULING_RECORDED_CONTINUE_PROMPT, RUNNING_LOCK, SEND_PROMPT,
-    TRANSPORT_RETRY_DELAY,
+    REVIEW_STOP_BANNER, REVIEW_STOP_REASON_ESCALATION, RULING_RECORDED_CONTINUE_PROMPT,
+    RUNNING_LOCK, SEND_PROMPT, TRANSPORT_RETRY_DELAY,
 };
 use super::driver::{A2aTransport, ReviewTransport, SendAnswer};
 use super::ledger::{EscalationRecord, Ledger};
@@ -455,7 +455,7 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     }
     let (fleet, limits, banner) = prepare_session(mur_home, &args)?;
     let name = &fleet.name;
-    println!("{banner}\nStop any time with `mur fleet stop {name}` or by answering q.");
+    println!("{banner}\n{}", REVIEW_STOP_BANNER.replace("{name}", name));
 
     let wait = HumanWait::default();
     let decide = |member: &str, hitl: &serde_json::Value| wait.time(|| ask_hitl(member, hitl));

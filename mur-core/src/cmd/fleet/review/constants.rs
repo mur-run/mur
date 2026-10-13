@@ -55,6 +55,10 @@ pub const REVIEW_ROUND_RESTART_NOTE: &str = "This round was interrupted and rest
 pub const RULE_COMMAND: &str = "/rule";
 pub const RULE_DECISION_DROP: &str = "drop";
 pub const RULE_DECISION_FIX: &str = "fix";
+/// #1778: the session banner's stop line. `q` is named only for the send
+/// prompt, since at a pause or ruling prompt it leaves the session paused.
+/// `{name}` is the review fleet.
+pub const REVIEW_STOP_BANNER: &str = "Stop any time with `mur fleet stop {name}`, or answer q at a send prompt (ends the session; at a paused prompt q leaves it paused).";
 /// P2-§5.2 / R8: abandon is an explicit command, never a single key.
 pub const ABANDON_COMMAND: &str = "/abandon";
 /// P2-§5.2: `q` (case-insensitive) leaves the session paused.
@@ -92,7 +96,9 @@ pub const COMMAND_PREFIX: char = '/';
 /// P2-§5.3 send prompt; `{member}` is replaced with the recipient.
 /// The `/rule` hint says the line also sends this turn, so the human knows
 /// before typing it (the line is the send consent).
-pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop, /rule drop|fix F<n> <text> = record a ruling and send this turn, /note <text> = note to both, @<agent> <text> = note to one] ";
+/// #1778: `q` here ENDS the session, unlike every pause/ruling prompt where it
+/// leaves the session paused — so the prompt says it cannot be resumed.
+pub const SEND_PROMPT: &str = "Send to {member}? [Enter = send, q = stop session (cannot resume), /rule drop|fix F<n> <text> = record a ruling and send this turn, /note <text> = note to both, @<agent> <text> = note to one] ";
 /// P2-§5.3: printed before main's message rebuilt after a `/rule` at its
 /// send prompt; the full rebuilt message follows.
 pub const RULING_REGENERATED_BANNER: &str = "[ruling applied; message regenerated]";
@@ -361,6 +367,19 @@ mod tests {
     fn countdown_min_is_never_zero_and_default_is_above_min() {
         assert!(AUTO_COUNTDOWN_MIN > Duration::ZERO);
         assert!(AUTO_COUNTDOWN_DEFAULT >= AUTO_COUNTDOWN_MIN);
+    }
+
+    /// #1778: `q` ends the session at the send prompt but leaves it paused
+    /// everywhere else; the send prompt and the banner must both say so.
+    #[test]
+    fn q_is_spelled_out_where_it_ends_the_session() {
+        assert!(SEND_PROMPT.contains("q = stop session (cannot resume)"));
+        assert!(REVIEW_STOP_BANNER.contains("at a send prompt"));
+        assert!(REVIEW_STOP_BANNER.contains("leaves it paused"));
+        let leave = format!("{LEAVE_PAUSED_KEY} = leave paused");
+        assert!(REVIEW_PAUSED_CONTINUE_PROMPT.contains(&leave));
+        assert!(RULING_RECORDED_CONTINUE_PROMPT.contains(&leave));
+        assert!(RULING_PROMPT.contains(&leave));
     }
 
     #[test]
