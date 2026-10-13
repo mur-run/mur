@@ -46,6 +46,12 @@ const REVIEW_REDIRECTS: &[(&[&str], &str)] = &[
 /// command (#1779). Arguments are carried over verbatim — the person sees the
 /// line in the composer and confirms it, so nothing is guessed silently.
 pub fn review_redirect(cmd: &str) -> Option<String> {
+    review_redirect_named(cmd).map(|(_, line)| line)
+}
+
+/// Like [`review_redirect`], but also names the `mur fleet <sub>` command that
+/// was typed (`review` or `review-resume`), so the hint can quote it back.
+pub fn review_redirect_named(cmd: &str) -> Option<(&'static str, String)> {
     let mut rest = cmd.trim_start();
     for (prefix, slash) in REVIEW_REDIRECTS {
         let mut r = rest;
@@ -61,11 +67,12 @@ pub fn review_redirect(cmd: &str) -> Option<String> {
         });
         if matched {
             rest = r.trim_end();
-            return Some(if rest.is_empty() {
+            let line = if rest.is_empty() {
                 (*slash).to_string()
             } else {
                 format!("{slash} {rest}")
-            });
+            };
+            return Some((prefix[prefix.len() - 1], line));
         }
     }
     None
@@ -135,6 +142,14 @@ mod tests {
             review_redirect("mur fleet review").as_deref(),
             Some("/review")
         );
+    }
+
+    #[test]
+    fn the_redirect_names_the_command_that_was_typed() {
+        let named = |c| review_redirect_named(c).map(|(sub, _)| sub);
+        assert_eq!(named("mur fleet review --main a"), Some("review"));
+        assert_eq!(named("mur fleet review-resume x"), Some("review-resume"));
+        assert_eq!(named("mur fleet status x"), None);
     }
 
     #[test]

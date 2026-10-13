@@ -248,6 +248,38 @@ async fn a_second_bang_command_is_refused() {
     assert!(last.text.contains("already running"), "{}", last.text);
 }
 
+/// #1779 nit: the `/review` suggestion only fills the composer, so a running
+/// `!command` must not hide it behind the "already running" refusal — and the
+/// hint names the command that was typed.
+#[tokio::test]
+async fn review_redirect_is_offered_while_a_bang_command_runs() {
+    let (tx, _rx) = mpsc::channel(16);
+    let mut app = App::test_fixture();
+    let (c_tx, mut c_rx) = tokio::sync::oneshot::channel();
+    app.shell.begin(0, c_tx).expect("slot");
+    app.set_input("!mur fleet review-resume review-x1");
+
+    submit(&mut app, &tx).await;
+
+    assert!(app.shell.is_running(), "the running job keeps its slot");
+    assert!(matches!(
+        c_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    let last = app.messages.last().expect("a note");
+    assert!(
+        last.text.contains("mur fleet review-resume"),
+        "{}",
+        last.text
+    );
+    assert!(
+        last.text.contains("/review resume review-x1"),
+        "{}",
+        last.text
+    );
+    assert!(!last.text.contains("already running"), "{}", last.text);
+}
+
 /// `!` lines open the shell menu through the same refresh path as `/`,
 /// and accepting a directory keeps it open on that directory.
 ///
