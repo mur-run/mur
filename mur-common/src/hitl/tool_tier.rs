@@ -244,13 +244,32 @@ fn classify_bash(cmd: &str) -> RiskTier {
 /// catching it after a chain operator (`a && rm b`) — which is why the
 /// splitter includes the chaining characters.
 fn word_in(cmd: &str, words: &[&str]) -> bool {
-    cmd.split(|c: char| c.is_whitespace() || CHAINING.contains(&c))
-        .filter(|t| !t.is_empty())
-        .any(|t| words.contains(&t.trim_start_matches("./")))
+    tokens(cmd).any(|t| words.contains(&t))
+}
+
+/// #1841: command words, normalised so a head cannot hide from the deny-list.
+///
+/// - Quotes and parentheses are separators, so the body of `bash -c "sudo ls"`,
+///   `$(sudo ls)` and `` `sudo ls` `` is seen as ordinary words (nesting
+///   included) instead of one opaque quoted token.
+/// - A path-qualified word compares by basename, so `/usr/bin/sudo` is `sudo`.
+///
+/// This can only RAISE a tier, never lower one: it adds matches and removes
+/// none. The cost is a rare false positive (an argument path ending in a head's
+/// name, e.g. `/tmp/rm`), which prompts instead of auto-answering. An opaque
+/// body (`bash -c "$X"`, `eval`) is still invisible here and keeps the `Write`
+/// fallback — see the module docs.
+fn tokens(cmd: &str) -> impl Iterator<Item = &str> {
+    cmd.split(|c: char| {
+        c.is_whitespace() || CHAINING.contains(&c) || matches!(c, '"' | '\'' | '(' | ')')
+    })
+    .filter(|t| !t.is_empty())
+    .map(|t| t.rsplit('/').next().unwrap_or(t))
+    .filter(|t| !t.is_empty())
 }
 
 fn git_sub_in(cmd: &str, subs: &[&str]) -> bool {
-    let toks: Vec<&str> = cmd.split_whitespace().collect();
+    let toks: Vec<&str> = tokens(cmd).collect();
     toks.windows(2)
         .any(|w| w[0] == "git" && subs.contains(&w[1]))
 }
@@ -464,5 +483,46 @@ mod tests {
             RiskTier::Destructive,
             "a head behind a wrapper is still that head"
         );
+    }
+
+    /// #1841: a privileged / destructive / egress head must be seen when it is
+    /// quoted, path-qualified, wrapped in `bash -c`, or inside `$(...)`.
+    #[test]
+    fn wrapped_quoted_and_path_qualified_heads_keep_their_tier() {
+        for (cmd, want) in [
+            (r#"bash -c "sudo ls""#, RiskTier::Privileged),
+            ("sh -c 'chmod 777 /etc/x'", RiskTier::Privileged),
+            ("/usr/bin/sudo ls", RiskTier::Privileged),
+            (r#""sudo" ls"#, RiskTier::Privileged),
+            ("echo $(sudo ls)", RiskTier::Privileged),
+            ("echo `sudo ls`", RiskTier::Privileged),
+            ("bash -c 'git push'", RiskTier::NetworkEgress),
+            ("bash -c 'rm -rf target'", RiskTier::Destructive),
+            ("/bin/rm -rf /tmp/x", RiskTier::Destructive),
+            (
+                "zsh -c '/usr/bin/curl https://x.com'",
+                RiskTier::NetworkEgress,
+            ),
+            (r#"bash -c "bash -c 'sudo ls'""#, RiskTier::Privileged),
+        ] {
+            assert_eq!(classify("bash", Some(&bash(cmd))), want, "cmd: {cmd}");
+        }
+    }
+
+    /// Normalising tokens must not make ordinary quoted text or an argument
+    /// path look like a head.
+    #[test]
+    fn quoting_a_benign_word_does_not_raise_the_tier() {
+        for cmd in [
+            r#"echo "hello world""#,
+            "cargo build --release",
+            "cat docs/rm-notes.md",
+            "make -C ./subdir all",
+        ] {
+            assert!(
+                crate::hitl::tier_may_be_granted(classify("bash", Some(&bash(cmd)))),
+                "cmd: {cmd}"
+            );
+        }
     }
 }
