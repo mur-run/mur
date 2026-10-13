@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 pub const GIT_PUSH_DIR: &str = "git-push";
 /// `repo_id` → sandbox repo path + enrolled remote ids. Daemon writes, agent reads.
 pub const REGISTRY_FILE: &str = "registry.yaml";
+/// Human-written enrollment records, the single source of truth. Lives in
+/// [`PRIVATE_DIR`]; `registry.yaml` is derived from it.
+pub const ENROLLMENTS_FILE: &str = "enrollments.yaml";
 /// Per-agent status files the daemon publishes: `status/<agent>/<request_id>.yaml`.
 pub const STATUS_DIR: &str = "status";
 /// Broker-private state (pending table, per-request repos). No agent grant may reach it.
@@ -50,6 +53,11 @@ pub fn status_dir(mur_home: &Path, agent: &str) -> PathBuf {
 /// `<mur_home>/git-push/private`.
 pub fn private_dir(mur_home: &Path) -> PathBuf {
     broker_dir(mur_home).join(PRIVATE_DIR)
+}
+
+/// `<mur_home>/git-push/private/enrollments.yaml`.
+pub fn enrollments_path(mur_home: &Path) -> PathBuf {
+    private_dir(mur_home).join(ENROLLMENTS_FILE)
 }
 
 /// `<agent_home>/inbox/git-push`.

@@ -6,8 +6,11 @@
 pub mod action;
 pub mod ancestry;
 pub mod approval;
+pub mod binding;
 pub mod broker;
 pub mod constants;
+pub mod doctor;
+pub mod enrollment;
 pub mod error;
 pub mod git;
 pub mod import;

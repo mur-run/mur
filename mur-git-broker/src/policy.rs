@@ -57,6 +57,14 @@ impl RemotePolicy {
         let jcs = serde_jcs::to_string(&v).expect("jcs of a json value");
         hex::encode(sha2::Sha256::digest(jcs.as_bytes()))
     }
+    /// Digest of what the remote *is* (id + endpoint), apart from what may be pushed to it.
+    pub fn remote_digest(&self) -> String {
+        let v = serde_json::json!({
+            "remote_id": self.remote_id, "endpoint": self.canonical_remote_endpoint,
+        });
+        let jcs = serde_jcs::to_string(&v).expect("jcs of a json value");
+        hex::encode(sha2::Sha256::digest(jcs.as_bytes()))
+    }
     pub fn validate_enrollment(&self) -> Result<(), BrokerError> {
         let bad = |m: &str| Err(BrokerError::InvalidRequest(m.into()));
         if !self.ref_prefix.starts_with(ALLOWED_REF_PREFIX) || !self.ref_prefix.ends_with('/') {

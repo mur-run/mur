@@ -40,6 +40,7 @@ mod dispatch;
 mod identity;
 mod pin;
 mod seal;
+pub use seal::extra_write_paths;
 mod test_bridge;
 
 use bootstrap::{

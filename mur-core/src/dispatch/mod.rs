@@ -206,6 +206,14 @@ pub async fn run(cli: Cli) -> Result<()> {
             let mur_home = crate::paths::mur_root(None);
             crate::cmd::job::run(&mur_home, action)?
         }
+        #[cfg(unix)]
+        Commands::GitPush { action } => {
+            let mur_home = crate::paths::mur_root(None);
+            let code = cmd::git_push::run(&mur_home, action)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         Commands::Monitor { action } => {
             let mur_home = crate::paths::mur_root(None);
             cmd::monitor::run(&mur_home, action)?

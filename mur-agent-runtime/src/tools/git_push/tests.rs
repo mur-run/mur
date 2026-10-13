@@ -280,6 +280,22 @@ async fn same_request_id_is_idempotent_on_the_agent_side() {
 }
 
 #[test]
+fn ref_description_names_the_agents_own_namespace_not_a_shared_one() {
+    let f = fx();
+    let d = f.tool.def();
+    let text = d.input_schema["properties"]["ref"]["description"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let own = format!("refs/heads/agent/{}/", f.tool.ctx.agent);
+    assert!(text.contains(&own), "{text}");
+    assert!(
+        !text.contains("refs/heads/agent/task-123"),
+        "the old example is outside every per-agent prefix: {text}"
+    );
+}
+
+#[test]
 fn tool_defs_expose_exactly_the_spec_arguments() {
     let f = fx();
     let d = f.tool.def();

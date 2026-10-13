@@ -113,37 +113,24 @@ pub(super) async fn prepare_and_seal(
     // the existing directory is both necessary and sufficient on Landlock and
     // matches the macOS SBPL subpath grant — so co-watching works on both kernels,
     // not just macOS. (We create the dir first so the Landlock rule sticks.)
-    let mut extra_write_paths: Vec<std::path::PathBuf> = Vec::new();
+    let _ =
+        std::fs::create_dir_all(mur_home.join(mur_track::snapshot_request::SNAPSHOT_REQUEST_DIR));
+    let vlc = mur_common::media::load_runtime(mur_home);
+    if let Some(vlc) = &vlc {
+        let _ = std::fs::create_dir_all(mur_common::media::runtime_dir(mur_home));
+        tracing::info!(
+            vlc_port = vlc.port,
+            "B1 sandbox: allowing VLC HTTP port + runtime dir for co-watching"
+        );
+    }
     // Global limits (#1794): the read grant on `<mur_home>/limits` is
     // existence-checked, so create the directory first or a user who has not
     // yet run `mur limits --global` would get no grant, and their first edit
     // would be invisible until restart. Read-only to the agent; the CLI writes.
     let _ = std::fs::create_dir_all(mur_common::limits::global_limits_dir(mur_home));
-    // Memory federation (P0): the sleep cycle drops signed snapshot requests
-    // and flushed outbox signals into `<mur_home>/inbox/…`. That is the ONLY
-    // central-store write the runtime is granted — the daemon treats the inbox
-    // as an attacker-writable surface and verifies signatures, so this grant
-    // widens no trust boundary. Created first so the Landlock rule sticks
-    // (same reasoning as the VLC runtime dir below).
-    {
-        let inbox_dir = mur_home.join("inbox");
-        let _ = std::fs::create_dir_all(
-            mur_home.join(mur_track::snapshot_request::SNAPSHOT_REQUEST_DIR),
-        );
-        extra_write_paths.push(inbox_dir);
-    }
-    if let Some(vlc) = mur_common::media::load_runtime(mur_home) {
+    let extra_write_paths = extra_write_paths(mur_home);
+    if let Some(vlc) = &vlc {
         extra_ports.push(vlc.port);
-        let runtime_dir = mur_common::media::runtime_dir(mur_home);
-        let _ = std::fs::create_dir_all(&runtime_dir);
-        extra_write_paths.push(runtime_dir);
-        // snapshot_dir normally lives under runtime/, but vlc.json may point it
-        // elsewhere — grant it explicitly so snapshot read/prune works regardless.
-        extra_write_paths.push(vlc.snapshot_dir.clone());
-        tracing::info!(
-            vlc_port = vlc.port,
-            "B1 sandbox: allowing VLC HTTP port + runtime dir for co-watching"
-        );
     }
     // G1: the loopback egress proxy must exist BEFORE the sandbox seals so
     // its listener port can be carved into the kernel profile. Started
@@ -359,6 +346,29 @@ pub(super) async fn prepare_and_seal(
         approval_token,
         sandbox_record,
     })
+}
+
+/// Directories outside `agent_home` that every sealed agent may write, beyond its
+/// profile entitlements. One function for the seal and for `mur git-push doctor`, so the
+/// two cannot disagree about what an agent can write.
+///
+/// Pure: it creates nothing. The seal creates the directories first so the Landlock
+/// rule sticks.
+///
+/// - Memory federation (P0): the sleep cycle drops signed snapshot requests and flushed
+///   outbox signals into `<mur_home>/inbox/…`. The daemon treats the inbox as an
+///   attacker-writable surface and verifies signatures, so this grant widens no trust
+///   boundary.
+/// - Co-watching: the whole `<mur_home>/runtime` directory (a per-file grant cannot
+///   confer the directory-level rights a temp-file + rename needs under Landlock) and the
+///   VLC snapshot dir, which `vlc.json` may point elsewhere. Gated on `vlc.json` existing.
+pub fn extra_write_paths(mur_home: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths = vec![mur_home.join("inbox")];
+    if let Some(vlc) = mur_common::media::load_runtime(mur_home) {
+        paths.push(mur_common::media::runtime_dir(mur_home));
+        paths.push(vlc.snapshot_dir);
+    }
+    paths
 }
 
 /// Create the agent's scratch dir and drop entries past `scratch.retention_days`.

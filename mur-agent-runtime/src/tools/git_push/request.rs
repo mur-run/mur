@@ -36,6 +36,12 @@ pub struct GitPushCtx {
     pub now: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
+/// The namespace a default enrollment allows this agent to push to. Enrollments may narrow or
+/// choose their own prefix, so this is guidance for the model; the broker is what enforces it.
+fn own_ref_namespace(agent: &str) -> String {
+    format!("{}{agent}/", mur_git_broker::constants::ALLOWED_REF_PREFIX)
+}
+
 pub struct GitPushRequestTool {
     pub(super) ctx: GitPushCtx,
 }
@@ -265,7 +271,11 @@ cancel — same id with different content is refused as request_conflict."
                     "request_id": id("Your idempotency key: letters, digits, '.', '-', '_'; max 128."),
                     "repo_id": id("Name of a repo a human enrolled for pushing. A name, never a path."),
                     "remote_id": id("Name of a remote enrolled for that repo. A name, never a URL."),
-                    "ref": id("Full ref under refs/heads/agent/, e.g. refs/heads/agent/task-123."),
+                    "ref": id(&format!(
+                        "Full ref under your own namespace {ns}, e.g. {ns}task-123. A ref \
+            under another agent's namespace is refused.",
+                        ns = own_ref_namespace(&self.ctx.agent)
+                    )),
                     "old_sha": id("Full oid the remote ref points at now. For a new branch, the all-zero oid (40 zeros for SHA-1, 64 for SHA-256)."),
                     "new_sha": id("Full oid of the commit to push.")
                 },

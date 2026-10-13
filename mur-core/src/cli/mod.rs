@@ -144,6 +144,13 @@ pub enum Commands {
         #[command(subcommand)]
         action: crate::cmd::job::JobAction,
     },
+    /// Enroll agents to request git pushes through the broker (unix only)
+    #[cfg(unix)]
+    #[command(name = "git-push")]
+    GitPush {
+        #[command(subcommand)]
+        action: crate::cmd::git_push::GitPushAction,
+    },
     /// Durable monitors for asynchronous work (CI runs, MUR runs, subprocesses)
     Monitor {
         #[command(subcommand)]

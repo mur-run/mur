@@ -1,44 +1,16 @@
 #![cfg(unix)]
 //! T10: approval, consume-once, push, orchestration. Real git, a fake clock.
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::Duration;
 use mur_git_broker::{
     approval::*, error::BrokerError, oid::*, pending::*, policy::BrokerLimits, push::*,
     repo::PrivateRepo,
 };
-use mur_git_broker::{broker::*, import::RlimitSpawn, policy::RemotePolicy, prefetch::*};
 use std::process::Command;
-use std::sync::Mutex;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::Ordering;
 mod common;
+use common::orch::*;
 use common::*;
 
-struct FakeClock(Mutex<DateTime<Utc>>);
-impl FakeClock {
-    fn new() -> Self {
-        Self(Mutex::new(
-            Utc.with_ymd_and_hms(2026, 10, 7, 0, 0, 0).unwrap(),
-        ))
-    }
-    fn advance(&self, d: Duration) {
-        *self.0.lock().unwrap() += d;
-    }
-}
-impl Clock for FakeClock {
-    fn now(&self) -> DateTime<Utc> {
-        *self.0.lock().unwrap()
-    }
-}
-
-fn key(req: &str) -> RequestKey {
-    RequestKey {
-        agent_id: "alice".into(),
-        task_id: "t1".into(),
-        request_id: req.into(),
-    }
-}
 /// A request row already at `PendingApproval`, plus its hash.
 fn pending(s: &PendingStore, req: &str, clock: &FakeClock) -> (RequestKey, String) {
     let mut d = action_for(&"a".repeat(40), &"b".repeat(40), "refs/heads/agent/x");
@@ -51,22 +23,11 @@ fn pending(s: &PendingStore, req: &str, clock: &FakeClock) -> (RequestKey, Strin
         .unwrap();
     (k, h)
 }
-fn proof(ev: &str, req: &str, h: &str) -> ApprovalProof {
-    ApprovalProof {
-        event_id: ev.into(),
-        request_id: req.into(),
-        action_hash: h.into(),
-    }
-}
 fn store() -> (tempfile::TempDir, PendingStore) {
     let t = tempfile::tempdir().unwrap();
     let s = PendingStore::open(&t.path().join("p.sqlite")).unwrap();
     (t, s)
 }
-fn state(s: &PendingStore, k: &RequestKey) -> State {
-    s.get(k).unwrap().unwrap().state
-}
-
 // ---- approval ---------------------------------------------------------------------------------
 #[test]
 fn wrong_action_hash_or_request_id_does_not_advance() {
@@ -391,93 +352,6 @@ fn git_killed_mid_push_is_outcome_unknown_and_never_retried() {
     assert!(start.elapsed().as_secs() < 10);
 }
 
-// ---- orchestration ----------------------------------------------------------------------------
-struct Env {
-    t: tempfile::TempDir,
-    work: std::path::PathBuf,
-    remote: std::path::PathBuf,
-    old: String,
-    new: String,
-    clock: Arc<FakeClock>,
-    fetches: Arc<AtomicUsize>,
-}
-/// Counting wrapper so "no re-prefetch" is observable.
-struct CountingReader {
-    inner: GitFetchReader,
-    n: Arc<AtomicUsize>,
-}
-impl RemoteReader for CountingReader {
-    fn fetch(&self, r: &PrivateRepo, s: &[String], b: &PrefetchBudget) -> Result<(), BrokerError> {
-        self.n.fetch_add(1, Ordering::SeqCst);
-        self.inner.fetch(r, s, b)
-    }
-}
-fn env() -> Env {
-    let t = tempfile::tempdir().unwrap();
-    let work = work_repo(t.path());
-    let old = commit(&work, "old");
-    let remote = bare_remote(t.path());
-    git(
-        &work,
-        &[
-            "push",
-            "-q",
-            remote.to_str().unwrap(),
-            &format!("{old}:refs/heads/agent/x"),
-        ],
-    );
-    let new = commit(&work, "new");
-    Env {
-        t,
-        work,
-        remote,
-        old,
-        new,
-        clock: Arc::new(FakeClock::new()),
-        fetches: Arc::new(AtomicUsize::new(0)),
-    }
-}
-fn broker(e: &Env, p: RemotePolicy) -> Broker {
-    let remote_url: String = e.remote.to_str().unwrap().into();
-    Broker::new(BrokerConfig {
-        store_path: e.t.path().join("pending.sqlite"),
-        work_root: e.t.path().join("work-root"),
-        limits: BrokerLimits::default(),
-        git_bin: git_bin(),
-        policy: p,
-        remote_url: remote_url.clone(),
-        reader: Box::new(CountingReader {
-            inner: GitFetchReader {
-                remote_url,
-                git_bin: git_bin(),
-            },
-            n: e.fetches.clone(),
-        }),
-        spawn: Box::new(RlimitSpawn),
-        auth: Box::new(NoAuth),
-        clock: e.clock.clone(),
-    })
-    .unwrap()
-}
-fn req(
-    e: &Env,
-    id: &str,
-) -> (
-    RequestKey,
-    mur_git_broker::action::ActionDocument,
-    std::path::PathBuf,
-) {
-    let mut d = action_for(&e.old, &e.new, "refs/heads/agent/x");
-    d.request_id = id.into();
-    d.ref_policy_digest = policy().digest();
-    (key(id), d, range_pack(&e.work, &e.new, Some(&e.old), false))
-}
-fn leftovers(e: &Env) -> usize {
-    std::fs::read_dir(e.t.path().join("work-root"))
-        .map(|d| d.count())
-        .unwrap_or(0)
-}
-
 #[test]
 fn happy_path_submit_then_approve_pushes() {
     let e = env();
@@ -532,10 +406,12 @@ fn late_approval_after_restart_completes_the_original_request() {
 fn policy_digest_change_voids_a_pending_request() {
     let e = env();
     let (k, d, pack) = req(&e, "r1");
-    let h = broker(&e, policy()).submit_request(&k, &d, &pack).unwrap();
+    let b = broker(&e, policy());
+    let h = b.submit_request(&k, &d, &pack).unwrap();
+    // The human edits the policy after the request went pending; the same running broker sees it.
     let mut p2 = policy();
     p2.creation_base_refs.push("refs/heads/dev".into());
-    let b = broker(&e, p2);
+    e.enroll(p2);
     let r = b.on_approval(&k, proof("e1", "r1", &h));
     assert_eq!(r.unwrap_err(), BrokerError::PolicyChanged);
     assert_eq!(state(b.store(), &k), State::PolicyChanged);
@@ -613,7 +489,7 @@ fn not_fast_forward_creates_no_row_and_deletes_the_repo() {
     git(&e.work, &["checkout", "-q", "--orphan", "alt"]);
     let alt = commit(&e.work, "alt");
     let mut d = action_for(&e.old, &alt, "refs/heads/agent/x");
-    d.ref_policy_digest = policy().digest();
+    pin(&e, &mut d, &policy());
     d.request_id = "r1".into();
     let pack = range_pack(&e.work, &alt, Some(&e.old), false);
     let r = b.submit_request(&key("r1"), &d, &pack);
@@ -644,4 +520,19 @@ fn no_source_file_consults_the_generic_approval_memory() {
             assert!(!code.contains(banned), "{name}.rs mentions {banned}");
         }
     }
+}
+
+#[test]
+fn a_ref_outside_the_enrolled_prefix_is_refused_before_any_row_or_repo() {
+    let e = env();
+    let mut p = policy();
+    p.ref_prefix = "refs/heads/agent/alice/".into();
+    let b = broker(&e, p.clone());
+    let (k, mut d, pack) = req(&e, "r1");
+    pin(&e, &mut d, &p);
+    d.updates[0].r#ref = "refs/heads/agent/bob/x".into();
+    let r = b.submit_request(&k, &d, &pack);
+    assert!(matches!(r, Err(BrokerError::InvalidRequest(_))), "{r:?}");
+    assert!(b.store().get(&k).unwrap().is_none());
+    assert_eq!(leftovers(&e), 0);
 }
