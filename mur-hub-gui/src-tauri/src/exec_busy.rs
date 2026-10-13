@@ -13,7 +13,7 @@ use std::time::Duration;
 
 /// Attempts after the first. The window is a fork-to-exec gap, so a handful
 /// of short waits is far more than it ever needs.
-const MAX_RETRIES: u32 = 8;
+const MAX_RETRIES: u32 = 0; // CONTROL: retries disabled
 /// Linear backoff step; the total wait across all retries stays under 300 ms.
 const BACKOFF_STEP: Duration = Duration::from_millis(8);
 
