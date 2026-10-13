@@ -323,7 +323,9 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let pending_approvals: Arc<Mutex<HashMap<String, oneshot::Sender<crate::hitl::HitlDecision>>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let hitl_timeout_secs = profile.inner.hitl.timeout_secs;
-    for line in stale_cap_warnings(&profile.inner.hitl) {
+    for line in stale_cap_warnings(&profile.inner.hitl).into_iter().chain(
+        mur_common::hitl::floor_waiver::waiver_warnings(&profile.inner.entitlements.tools),
+    ) {
         tracing::warn!(agent = %profile.inner.name, "{line}");
         eprintln!("warning: {line}");
     }

@@ -44,6 +44,19 @@ impl BatchGate<'_> {
     /// Resolve every pending call. Returns `call_id → decision`; every input
     /// call has an entry (timeout and store-denials included).
     pub async fn resolve(&self, calls: Vec<PendingCall>) -> HashMap<String, HitlDecision> {
+        let (mut out, ask) = self.recall(calls).await;
+        out.extend(self.ask(ask).await);
+        out
+    }
+
+    /// Split `calls` into those a remembered decision settles (answered here)
+    /// and those only a human can answer (returned for [`Self::ask`]). Two
+    /// steps so a caller can tell a call that stopped for a human from one
+    /// the store answered — #1814 counts only the first.
+    pub async fn recall(
+        &self,
+        calls: Vec<PendingCall>,
+    ) -> (HashMap<String, HitlDecision>, Vec<PendingCall>) {
         let mut out = HashMap::with_capacity(calls.len());
         let mut ask = Vec::new();
         for c in calls {
@@ -61,6 +74,14 @@ impl BatchGate<'_> {
                 None => ask.push(c),
             }
         }
+        (out, ask)
+    }
+
+    /// Ask a human about every call in `ask`, as ONE batch. Every call gets
+    /// an entry (timeouts included). Call [`Self::recall`] first: this never
+    /// consults the store.
+    pub async fn ask(&self, ask: Vec<PendingCall>) -> HashMap<String, HitlDecision> {
+        let mut out = HashMap::with_capacity(ask.len());
         if ask.is_empty() {
             return out;
         }

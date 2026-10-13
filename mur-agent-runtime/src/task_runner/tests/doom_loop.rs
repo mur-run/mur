@@ -140,7 +140,7 @@ async fn varying_tool_results_are_not_a_doom_loop() {
                 pattern: "build".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -213,7 +213,7 @@ async fn an_approved_ask_tool_result_is_masked_too() {
                 pattern: "build".into(),
                 policy: mur_common::agent::ToolPolicy::Ask,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(approvals)
             .with_sandbox_enforcing(true)
@@ -257,7 +257,7 @@ async fn the_model_never_receives_a_tool_result_containing_a_secret() {
                 pattern: "build".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -293,7 +293,7 @@ async fn identical_tool_results_still_trip_doom_loop() {
                 pattern: "build".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -361,7 +361,7 @@ async fn doom_loop_fires_when_only_the_description_varies() {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -421,7 +421,7 @@ async fn different_commands_sharing_a_description_do_not_trip_the_guard() {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)
@@ -480,7 +480,7 @@ async fn doom_loop_fires_against_the_real_bash_tool() {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(empty_pending_approvals())
             .with_notifier(tokio::sync::mpsc::channel(16).0)

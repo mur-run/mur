@@ -11,6 +11,8 @@
 //! tools to a spawned CLI — without that caller becoming a second path.
 //! See `docs/superpowers/specs/2026-09-16-mur-tool-mcp-server-design.md`.
 
+mod bash_ceiling;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,6 +45,10 @@ pub struct GuardedToolCall {
     /// B1 sandbox enforcing on this boot. `false` refuses every `Ask` tool
     /// before the gate asks — see `refuse_unsandboxed`.
     pub(crate) sandbox_enforcing: bool,
+    /// #1814: where each call the bash tier ceiling stops is recorded
+    /// (`telemetry/*.jsonl`). `None` on runners built without telemetry; the
+    /// `info!` line in `record_bash_ceiling` is then the only trace.
+    pub(crate) telemetry: Option<tokio::sync::mpsc::Sender<crate::telemetry_writer::Event>>,
 }
 
 /// D2 / D2b: with the B1 sandbox not enforcing, the agent can read its own
@@ -118,7 +124,11 @@ impl GuardedToolCall {
             {
                 continue;
             }
+            // #1814: a refusal is a stop too — doctor's job is "how often
+            // does the ceiling stop this agent". A call the decision store
+            // answers is recorded below only if it still reaches a human.
             if !self.sandbox_enforcing {
+                self.record_bash_ceiling(task_id, call).await;
                 out.insert(
                     call.call_id.clone(),
                     refuse_unsandboxed(&self.agent_name, &call.tool_name),
@@ -128,6 +138,7 @@ impl GuardedToolCall {
             if let Some(d) =
                 decide_without_asking(entry.as_ref().map(|(_, ok)| *ok), &call.tool_name)
             {
+                self.record_bash_ceiling(task_id, call).await;
                 tracing::warn!(
                     task_id,
                     tool = %call.tool_name,
@@ -154,6 +165,7 @@ impl GuardedToolCall {
         let (Some(pa), Some(notifier)) = (&self.pending_approvals, notifier) else {
             // fail-closed: no approval sink => deny.
             for c in pending {
+                self.record_pending_ceiling(task_id, calls, &c).await;
                 out.insert(
                     c.call_id,
                     crate::hitl::HitlDecision {
@@ -174,7 +186,12 @@ impl GuardedToolCall {
             shim_trust: self.shim_trust.as_ref(),
             remember: !self.one_shot_approvals.lock().await.contains(task_id),
         };
-        out.extend(gate.resolve(pending).await);
+        let (settled, ask) = gate.recall(pending).await;
+        out.extend(settled);
+        for c in &ask {
+            self.record_pending_ceiling(task_id, calls, c).await;
+        }
+        out.extend(gate.ask(ask).await);
         (out, step_ids)
     }
 

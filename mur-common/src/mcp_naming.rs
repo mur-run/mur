@@ -73,7 +73,7 @@ mod tests {
             pattern: tool_pattern("research-gateway"),
             policy: ToolPolicy::Allow,
             risk: None,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }];
         // Every tool of the server resolves to Allow…
         let wn = wire_name(&sanitize_server("research-gateway"), "research_search");

@@ -354,7 +354,7 @@ mod tests {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Ask,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -453,7 +453,7 @@ mod tests {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Allow,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
@@ -539,7 +539,7 @@ mod tests {
                 pattern: "bash".into(),
                 policy: mur_common::agent::ToolPolicy::Deny,
                 risk: None,
-                bypass_builtin_tier_floor: false,
+                bypass_builtin_tier_floor: Default::default(),
             }])
             .with_pending_approvals(Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),

@@ -203,6 +203,7 @@ fn empty_pending_approvals() -> HitlApprovals {
 }
 
 mod approval;
+mod bash_ceiling;
 mod basics;
 mod continuation;
 mod conversation;

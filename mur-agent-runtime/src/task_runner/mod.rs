@@ -463,7 +463,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Default::default(),
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }
     }
 
@@ -522,7 +522,7 @@ mod tool_policy_tests {
             pattern: pattern.into(),
             policy,
             risk: Some(risk),
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         }
     }
 
@@ -609,7 +609,7 @@ mod tool_policy_tests {
     fn bypass_builtin_tier_floor_is_per_rule_and_never_lowers_risk() {
         let click = "mcp__browser__browser_click";
         let mut waived = rule(click, ToolPolicy::Allow);
-        waived.bypass_builtin_tier_floor = true;
+        waived.bypass_builtin_tier_floor = mur_common::hitl::floor_waiver::FloorWaiver::All;
         assert_eq!(
             effective_tool_policy(std::slice::from_ref(&waived), click),
             ToolPolicy::Allow
@@ -618,19 +618,19 @@ mod tool_policy_tests {
         // A glob never carries the waiver: one line must not release a
         // whole browser server.
         let mut glob = rule("mcp__browser__*", ToolPolicy::Allow);
-        glob.bypass_builtin_tier_floor = true;
+        glob.bypass_builtin_tier_floor = mur_common::hitl::floor_waiver::FloorWaiver::All;
         assert_eq!(
             effective_tool_policy(std::slice::from_ref(&glob), click),
             ToolPolicy::Ask
         );
 
         let mut broad = rule("mcp__*", ToolPolicy::Allow);
-        broad.bypass_builtin_tier_floor = true;
+        broad.bypass_builtin_tier_floor = mur_common::hitl::floor_waiver::FloorWaiver::All;
         let rules = [rule("mcp__browser__*", ToolPolicy::Allow), broad];
         assert_eq!(effective_tool_policy(&rules, click), ToolPolicy::Ask);
 
         let mut risky = rule(click, ToolPolicy::Allow);
-        risky.bypass_builtin_tier_floor = true;
+        risky.bypass_builtin_tier_floor = mur_common::hitl::floor_waiver::FloorWaiver::All;
         risky.risk = Some(mur_common::hitl::RiskTier::NetworkEgress);
         assert_eq!(effective_tool_policy(&[risky], click), ToolPolicy::Ask);
     }

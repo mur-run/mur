@@ -103,6 +103,10 @@ pub enum FloorNote {
     AsksForSome,
     /// `bypass_builtin_tier_floor` on a glob: has no effect.
     IgnoredBypass,
+    /// #1814: exact-name `bash: allow` — commands above `ceiling` ask.
+    BashCeiling { ceiling: RiskTier },
+    /// #1814: `bypass_builtin_tier_floor: true` on `bash` — ignored; name a tier.
+    BashTrueIgnored,
 }
 
 /// The note `rule` deserves, if any. `allow` rules whose `risk:` already
@@ -113,14 +117,23 @@ pub fn floor_note(rule: &crate::agent::ToolRule) -> Option<FloorNote> {
     {
         return None;
     }
+    if rule.pattern == super::floor_waiver::BASH_TOOL {
+        use super::floor_waiver::{FloorWaiver, bash_ceiling};
+        return Some(match rule.bypass_builtin_tier_floor {
+            FloorWaiver::All => FloorNote::BashTrueIgnored,
+            _ => FloorNote::BashCeiling {
+                ceiling: bash_ceiling(Some(rule)),
+            },
+        });
+    }
     if let Some(prefix) = rule.pattern.strip_suffix('*') {
-        if rule.bypass_builtin_tier_floor {
+        if !rule.bypass_builtin_tier_floor.is_off() {
             return Some(FloorNote::IgnoredBypass);
         }
         return glob_may_cover_floor(prefix).then_some(FloorNote::AsksForSome);
     }
     let tier = browser_tier(&rule.pattern).filter(|t| !super::tier_may_be_granted(*t))?;
-    Some(if rule.bypass_builtin_tier_floor {
+    Some(if rule.bypass_builtin_tier_floor.covers(tier) {
         FloorNote::Waived { tier }
     } else {
         FloorNote::AsksForTool { tier }
@@ -182,7 +195,11 @@ mod tests {
             pattern: pattern.into(),
             policy,
             risk,
-            bypass_builtin_tier_floor: bypass,
+            bypass_builtin_tier_floor: if bypass {
+                crate::hitl::floor_waiver::FloorWaiver::All
+            } else {
+                crate::hitl::floor_waiver::FloorWaiver::Off
+            },
         };
         let nav = "mcp__browser__browser_navigate";
         let egress = RiskTier::NetworkEgress;

@@ -522,7 +522,7 @@ mod tests {
             pattern: "bash".into(),
             policy: mur_common::agent::ToolPolicy::Allow,
             risk: None,
-            bypass_builtin_tier_floor: false,
+            bypass_builtin_tier_floor: Default::default(),
         });
 
         let d = build_agent_detail(p, None);
