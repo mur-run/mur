@@ -238,7 +238,8 @@ mod tests {
             PathBuf::from("/bin/askpass"),
         )
         .unwrap();
-        let mut cmd = Command::new("/bin/sh");
+        // bash, not sh: dash (Ubuntu) rejects multi-digit fds such as `<&57`.
+        let mut cmd = Command::new("/bin/bash");
         cmd.args([
             "-c",
             "cat <&57; echo; echo \"$MUR_ASKPASS_ORIGIN\"; echo \"$GIT_CONFIG_VALUE_0\"",
@@ -248,7 +249,7 @@ mod tests {
         let text = String::from_utf8_lossy(&out.stdout);
         assert_eq!(text, "tok-123\nhttps://u@h.example\nu\n");
         // A second command gets its own pipe: the fd is not shared between children.
-        let mut again = Command::new("/bin/sh");
+        let mut again = Command::new("/bin/bash");
         again.args(["-c", "cat <&57"]);
         auth.apply(&mut again);
         assert_eq!(again.output().unwrap().stdout, b"tok-123");

@@ -73,6 +73,8 @@ fn process_event(event: &NormalizedEvent) -> Result<()> {
 /// prompt from an inherited fd and exits. So the check comes before anything else, and the real
 /// `main` is only entered when it does not apply.
 fn main() -> Result<()> {
+    // mur-git-broker is an empty crate off unix, so the askpass entry exists only there.
+    #[cfg(unix)]
     if std::env::var_os(mur_git_broker::askpass::ENV_FD).is_some() {
         std::process::exit(mur_git_broker::askpass::run_from_env());
     }
