@@ -128,29 +128,54 @@ fn resolved_mur_home() -> PathBuf {
     mur_common::home::mur_home_lossy()
 }
 
-/// AF_UNIX socket paths the restricted network profile must not blanket-deny.
-/// Unix-socket `connect` is itself a `network-outbound` operation under SBPL,
-/// so the `(deny network-outbound)` baseline (see below) would otherwise
-/// reject any process- or test-owned domain socket. Scoped to: the macOS
-/// per-user temp root and `/tmp` (where test/tool sockets land — same dirs
-/// `system_read_paths` re-allows for reads in `sandbox::policy`), and this agent's
-/// own `<mur_home>/agents` directory (peer `agent.sock` files dialed for
-/// A2A). Subpaths, not path-literals, since exact socket filenames vary.
+/// The only socket MUR creates outside `<mur_home>`: when the canonical
+/// `<agent>/agent.sock` path is too long for `sun_path`,
+/// `socket_path::resolve_bind_target` binds `/tmp/mur-<uuid>.sock` and
+/// symlinks the canonical path to it. SBPL checks the RESOLVED path, so a peer
+/// dialing the canonical path reaches `/private/tmp/mur-<uuid>.sock`.
+/// Anchored on both ends and shaped as a UUID, so it admits that file name and
+/// nothing a third party (ssh-agent, a forwarder, a dev server) would pick.
+const MUR_SHORT_SOCKET_REGEX: &str =
+    r"^/private/tmp/mur-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.sock$";
+
+/// Directory trees whose unix sockets the restricted network profile
+/// re-allows (`subpath`). Unix-socket `connect` is itself a `network-outbound`
+/// operation under SBPL, so the `(deny network-outbound)` baseline would
+/// otherwise reject every domain socket.
 ///
-/// Plus the per-agent scratch dir when granted: children get it as `TMPDIR`
-/// (#1642), so tools that create a socket under `$TMPDIR` and then dial it
-/// (Playwright MCP's `browser-*.sock`) land here, not under
-/// `/private/var/folders`. Without it `connect` fails with `EPERM`.
+/// Only trees MUR itself owns (#1873):
+/// - this agent's `<mur_home>/agents` directory (peer `agent.sock` files
+///   dialed for A2A);
+/// - the per-agent scratch dir when granted: children get it as `TMPDIR`
+///   (#1642), so tools that create a socket under `$TMPDIR` and then dial it
+///   (Playwright MCP's `browser-*.sock`) land here (`EPERM` without it).
+///
+/// Deliberately NOT here: `/private/var/folders` and `/private/tmp`. They are
+/// shared with every other process of the user, so a `subpath` there let a
+/// restricted agent talk to an `ssh-agent` or any other local service listening
+/// under them. The one MUR socket that lives in `/private/tmp` is covered by
+/// the exact-shape [`MUR_SHORT_SOCKET_REGEX`] instead.
 fn unix_socket_allow_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
-    let mut paths = vec![
-        PathBuf::from("/private/var/folders"),
-        PathBuf::from("/private/tmp"),
-        resolved_mur_home().join("agents"),
-    ];
+    let mut paths = vec![resolved_mur_home().join("agents")];
     if let Some(scratch) = &policy.scratch_dir {
         paths.push(scratch.clone());
     }
     paths
+}
+
+/// Push the scoped AF_UNIX allows (see [`unix_socket_allow_paths`] and
+/// [`MUR_SHORT_SOCKET_REGEX`]). Shared by both restricted arms so they cannot
+/// drift apart.
+fn push_unix_socket_allows(lines: &mut Vec<String>, policy: &SandboxPolicy) {
+    for p in unix_socket_allow_paths(policy) {
+        let p = sbpl_escape(&p.to_string_lossy());
+        lines.push(format!(
+            "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
+        ));
+    }
+    lines.push(format!(
+        "(allow network-outbound (remote unix-socket (path-regex #\"{MUR_SHORT_SOCKET_REGEX}\")))"
+    ));
 }
 
 /// Build an SBPL profile string from the policy.
@@ -333,12 +358,7 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
                 lines.push(format!(
                     "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
                 ));
-                for p in unix_socket_allow_paths(policy) {
-                    let p = sbpl_escape(&p.to_string_lossy());
-                    lines.push(format!(
-                        "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
-                    ));
-                }
+                push_unix_socket_allows(&mut lines, policy);
                 for port in &policy.net_allow_loopback_ports {
                     lines.push(format!(
                         "(allow network-outbound (remote tcp \"localhost:{port}\"))"
@@ -351,16 +371,11 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
             lines.push(format!(
                 "(allow network-outbound (remote unix-socket (path-literal \"{MDNSRESPONDER_SOCKET}\")))"
             ));
-            // Scoped AF_UNIX carve-out (see unix_socket_allow_paths doc): test/tool
-            // sockets under the temp dirs, and peer agent.sock dialing under
-            // <mur_home>/agents. Does NOT widen general network-outbound access —
+            // Scoped AF_UNIX carve-out (see unix_socket_allow_paths doc): peer
+            // agent.sock dialing under <mur_home>/agents, the scratch dir, and
+            // MUR's own /tmp/mur-<uuid>.sock fallback. Does NOT widen general network-outbound access —
             // TCP stays port-gated by the loop below.
-            for p in unix_socket_allow_paths(policy) {
-                let p = sbpl_escape(&p.to_string_lossy());
-                lines.push(format!(
-                    "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
-                ));
-            }
+            push_unix_socket_allows(&mut lines, policy);
             for port in ports {
                 lines.push(format!(
                     "(allow network-outbound (remote tcp \"*:{port}\"))"

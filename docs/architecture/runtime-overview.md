@@ -368,6 +368,7 @@ Each agent gets its own scratch directory, `<mur_home>/tmp/<agent>` (`agent_path
 
 - **Cleanup:** at start, before `sandbox::apply`, top-level entries older than `scratch.retention_days` (default 7) are pruned; entries whose age cannot be read are kept. `mur agent doctor` warns when a running agent's dir exceeds `scratch.warn_size_mb` (default 2048). `mur agent uninstall --purge` removes the dir.
 - **`TMPDIR` sets the default, not isolation.** On macOS the kernel baseline still lets every agent write `/private/tmp` and `/private/var/folders`; on Linux `/tmp` is denied. Tightening the macOS exemptions is a follow-up change.
+- **Restricted-network unix sockets are scoped to MUR's own trees (#1873).** In ProxyOnly and port-allowlist modes the macOS profile allows unix-socket `connect` only under `<mur_home>/agents`, the agent's scratch dir, and the `/tmp/mur-<uuid>.sock` short-path fallback (`socket_path::resolve_bind_target`). `/private/var/folders` and `/private/tmp` are no longer allowed wholesale, so a user's `ssh-agent` or another local service listening there is unreachable. A tool that binds a socket outside `$TMPDIR` now gets `EPERM`.
 - **BSD `mktemp` ignores `TMPDIR`.** On macOS, bare `mktemp` and `mktemp -t prefix` create under `/var/folders/.../T`, outside the scratch dir (allowed by the baseline, so nothing fails). Use an explicit template: `mktemp "$TMPDIR/name.XXXXXX"`. GNU `mktemp` on Linux honors `TMPDIR`.
 
 ### Per-Server MCP Egress

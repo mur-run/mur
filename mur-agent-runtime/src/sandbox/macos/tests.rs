@@ -405,26 +405,49 @@ fn unrestricted_emits_no_network_rules() {
     assert!(!sbpl.contains("network-outbound"));
 }
 
+/// Every `(allow network-outbound (remote unix-socket ...))` line in `sbpl`.
+fn unix_socket_allow_lines(sbpl: &str) -> Vec<&str> {
+    sbpl.lines()
+        .filter(|l| l.contains("(remote unix-socket") && l.starts_with("(allow network-outbound"))
+        .collect()
+}
+
+/// #1873: `subpath` over a shared temp tree lets a restricted agent connect
+/// to ANY socket there, including a user's own `ssh-agent`
+/// (`$TMPDIR/ssh-*/agent.*`, or a forwarder under `/tmp`). Neither tree may
+/// be allowed wholesale, in either restricted arm.
+#[test]
+fn restricted_never_allows_a_shared_temp_tree_for_unix_sockets() {
+    for ports in [vec![443], vec![]] {
+        let mut policy = policy_with(vec![], vec![]);
+        policy.net_allow_ports = Some(ports.clone());
+        policy.net_allow_loopback_ports = vec![8080];
+        let sbpl = build_sbpl_profile(&policy);
+        for line in unix_socket_allow_lines(&sbpl) {
+            for tree in ["/private/var/folders", "/private/tmp", "/tmp", "/var"] {
+                assert!(
+                    !line.contains(&format!("(subpath \"{tree}\")")),
+                    "ports={ports:?}: `{tree}` must not be allowed wholesale for unix sockets \
+                     (exposes ssh-agent and other local services): {line}\n{sbpl}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn restricted_allows_scoped_unix_sockets() {
     // AF_UNIX connect is itself `network-outbound` under SBPL, so the
-    // `(deny network-outbound)` baseline would otherwise break any
-    // domain socket (test sockets, peer agent.sock dialing). These three
-    // subpath carve-outs must be present without widening general
-    // network access (TCP stays port-gated — see the next test).
+    // `(deny network-outbound)` baseline would otherwise break peer
+    // `agent.sock` dialing. Two narrow carve-outs must be present without
+    // widening general network access (TCP stays port-gated):
+    //  - MUR's own `<mur_home>/agents` tree;
+    //  - the short-path fallback sockets `/tmp/mur-<uuid>.sock` that
+    //    `socket_path::resolve_bind_target` binds (SBPL checks the
+    //    resolved path, so the `agent.sock` symlink target is what counts).
     let mut policy = policy_with(vec![], vec![]);
     policy.net_allow_ports = Some(vec![443]);
     let sbpl = build_sbpl_profile(&policy);
-    assert!(
-        sbpl.contains(
-            "(allow network-outbound (remote unix-socket (subpath \"/private/var/folders\")))"
-        ),
-        "restricted profile must allow unix sockets under macOS per-user temp:\n{sbpl}"
-    );
-    assert!(
-        sbpl.contains("(allow network-outbound (remote unix-socket (subpath \"/private/tmp\")))"),
-        "restricted profile must allow unix sockets under /private/tmp:\n{sbpl}"
-    );
     let agents_dir = resolved_mur_home().join("agents");
     let agents_dir = sbpl_escape(&agents_dir.to_string_lossy());
     assert!(
@@ -433,6 +456,83 @@ fn restricted_allows_scoped_unix_sockets() {
         )),
         "restricted profile must allow unix sockets under <mur_home>/agents (A2A agent.sock):\n{sbpl}"
     );
+    assert!(
+        sbpl.contains(&format!(
+            "(allow network-outbound (remote unix-socket (path-regex #\"{MUR_SHORT_SOCKET_REGEX}\")))"
+        )),
+        "restricted profile must allow the /tmp/mur-<uuid>.sock short-path fallback:\n{sbpl}"
+    );
+}
+
+/// The short-path regex admits exactly what `resolve_bind_target` creates
+/// and nothing a third party's socket would normally be named.
+#[test]
+fn short_socket_regex_matches_only_mur_fallback_sockets() {
+    // SBPL regex is POSIX-style; the pattern uses only anchors, classes and
+    // `{n}` repetition, which the `regex` crate reads identically.
+    let re = regex::Regex::new(MUR_SHORT_SOCKET_REGEX).unwrap();
+    let uuid = uuid::Uuid::now_v7().to_string();
+    let bound = crate::socket_path::resolve_bind_target(
+        &std::env::temp_dir()
+            .join("x".repeat(120))
+            .join("agent.sock"),
+        &uuid,
+    )
+    .unwrap();
+    let _ = std::fs::remove_file(&bound.canonical_path);
+    // `/tmp/...` on macOS resolves to `/private/tmp/...`.
+    let real = format!("/private{}", bound.bind_path.display());
+    assert!(re.is_match(&real), "{real} must be allowed");
+    for denied in [
+        "/private/tmp/agent.1234",
+        "/private/tmp/ssh-AbCdEf/agent.1234",
+        "/private/tmp/mur-x.sock",
+        "/private/tmp/mur-0198a0b0-0000-7000-8000-000000000000.sock.evil",
+        "/private/tmp/sub/mur-0198a0b0-0000-7000-8000-000000000000.sock",
+        "/private/tmp/mur-0198a0b0-0000-7000-8000-000000000000.sockX",
+        "/private/var/folders/zz/T/mur-0198a0b0-0000-7000-8000-000000000000.sock",
+    ] {
+        assert!(!re.is_match(denied), "{denied} must NOT be allowed");
+    }
+}
+
+#[link(name = "sandbox")]
+unsafe extern "C" {
+    fn sandbox_compile_string(
+        profile: *const libc::c_char,
+        params: *const libc::c_void,
+        errorbuf: *mut *mut libc::c_char,
+    ) -> *mut libc::c_void;
+    fn sandbox_free_profile(profile: *mut libc::c_void);
+}
+
+/// A profile the kernel cannot parse silently fails OPEN (`apply_macos`
+/// reports `macos-sbpl-failed`, not enforcing), so every restricted shape
+/// must at least compile. `sandbox_compile_string` parses without applying,
+/// so it also works inside an already-sandboxed shell.
+#[test]
+fn restricted_profiles_compile() {
+    for ports in [vec![443], vec![]] {
+        let mut policy = policy_with(vec![], vec![]);
+        policy.scratch_dir = Some(PathBuf::from("/Users/someone/.mur/tmp/agent_x"));
+        policy.net_allow_ports = Some(ports.clone());
+        policy.net_allow_loopback_ports = vec![8080];
+        let sbpl = build_sbpl_profile(&policy);
+        let c = std::ffi::CString::new(sbpl.clone()).unwrap();
+        let mut err: *mut libc::c_char = std::ptr::null_mut();
+        let compiled = unsafe { sandbox_compile_string(c.as_ptr(), std::ptr::null(), &mut err) };
+        if compiled.is_null() {
+            let msg = if err.is_null() {
+                "unknown".to_string()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(err) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            panic!("ports={ports:?}: profile does not compile: {msg}\n{sbpl}");
+        }
+        unsafe { sandbox_free_profile(compiled) };
+    }
 }
 
 #[test]
