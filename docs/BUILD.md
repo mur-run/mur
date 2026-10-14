@@ -130,6 +130,36 @@ the platform default. If a previous run was interrupted, delete the partial
 directory it left under that cache before retrying. Outside a sandbox nothing
 needs changing.
 
+### Build scripts fail inside a sandbox in a `.worktrees/` checkout
+
+**Symptom** — in a worktree under `.worktrees/`, the very first build script
+fails before any code compiles:
+
+```text
+error: failed to run custom build command for `quote v1.0.46`
+  could not execute process `…/.worktrees/<name>/target/debug/build/quote-…/build-script-build` (never executed)
+  Operation not permitted (os error 1)
+```
+
+**Cause** — the sandbox profile lets the shell write the worktree's own
+`target/` but not execute binaries from it, so every compiled build script is
+refused. This is unrelated to the sccache / ort cache dirs above; setting those
+does not help.
+
+**Fix** — point the worktree at a target dir the sandbox allows executing from,
+e.g. the main checkout's `target/`, and remove the worktree's partial
+`target/`:
+
+```bash
+rm -rf target
+CARGO_TARGET_DIR=<main-checkout>/target cargo check --workspace --tests --locked
+```
+
+Sharing one target dir between checkouts means their builds serialize on its
+lock and invalidate each other's incremental state when the branches differ;
+for a long-lived worktree use a dedicated subdirectory such as
+`<main-checkout>/target/wt-<name>`. Outside a sandbox nothing needs changing.
+
 ### Stale crate after switching branches (`cannot find function … in module`)
 
 An `E0425` on a symbol that plainly exists in the source usually means stale
