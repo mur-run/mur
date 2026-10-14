@@ -237,6 +237,46 @@ async fn digit_shortcuts_pick_rows_directly() {
     assert!(!app.auto_approve);
 }
 
+/// #1878: with auto-approve already on (the session default), row 3 changes
+/// nothing, and the prompt that is still on screen is there because the call
+/// is above the grant ceiling. Pressing the row must say so, instead of
+/// teaching the operator that the menu is broken.
+#[tokio::test]
+async fn row_three_says_so_when_auto_was_already_on() {
+    let (tx, _rx) = mpsc::channel(16);
+    let mut app = App::test_fixture();
+    assert!(app.auto_approve, "auto-approve is the session default");
+    gate(&mut app);
+
+    handle_event(&mut app, key('3'), &tx).await;
+
+    assert!(app.hitl.is_none(), "the call itself is still approved");
+    let said = app
+        .messages
+        .iter()
+        .any(|m| m.text.contains("already on") && m.text.contains("still ask"));
+    assert!(said, "row 3 must explain it changed nothing");
+}
+
+/// When auto was off, row 3 turns it on, and says what that does and does
+/// not cover.
+#[tokio::test]
+async fn row_three_reports_turning_auto_on() {
+    let (tx, _rx) = mpsc::channel(16);
+    let mut app = App::test_fixture();
+    app.auto_approve = false;
+    gate(&mut app);
+
+    handle_event(&mut app, key('3'), &tx).await;
+
+    assert!(app.auto_approve);
+    let said = app
+        .messages
+        .iter()
+        .any(|m| m.text.contains("auto-approve on") && m.text.contains("still ask"));
+    assert!(said, "turning auto on must be visible");
+}
+
 /// The menu's reason for existing: ↑/↓ and Enter cannot collide with typed
 /// text, so a denial can carry the message the operator is writing, while
 /// the digits step aside and stay ordinary characters.

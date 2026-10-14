@@ -113,7 +113,21 @@ pub(super) fn commit_hitl_choice(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             decide_hitl(app, tx, true);
         }
         super::ui::HitlChoice::All => {
-            app.auto_approve = true;
+            // This row only flips `auto_approve`, and the stream handler ANDs
+            // that with the tier ceiling, so it can never silence a call
+            // above `Write`. With auto already on (the session default) it
+            // changes nothing at all; say so rather than leave the operator
+            // to watch the same prompt come back (#1878).
+            if app.auto_approve {
+                app.push_system(
+                    "auto-approve was already on — risky calls (network, destructive, privileged) still ask",
+                );
+            } else {
+                app.auto_approve = true;
+                app.push_system(
+                    "auto-approve on for this session — risky calls (network, destructive, privileged) still ask",
+                );
+            }
             decide_hitl(app, tx, true);
         }
         super::ui::HitlChoice::Deny => decide_hitl(app, tx, false),
