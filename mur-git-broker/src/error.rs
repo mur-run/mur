@@ -34,6 +34,11 @@ pub enum BrokerError {
     /// The enrollment file could not be read or parsed. Fails closed: nothing is decided on it.
     #[error("enrollment_unavailable")]
     EnrollmentUnavailable,
+    /// The credential file could not be used (missing, wrong mode or owner, outside `secrets/`,
+    /// ...). The payload is a fixed reason token, never a path or file content. Retryable: the
+    /// approval is not spent (credentials design §3).
+    #[error("credential_unreadable: {0}")]
+    CredentialUnreadable(&'static str),
     #[error("storage: {0}")]
     Storage(String),
 }
@@ -57,6 +62,7 @@ impl BrokerError {
             Self::NotPending => "not_pending",
             Self::NotEnrolled => "not_enrolled",
             Self::EnrollmentUnavailable => "enrollment_unavailable",
+            Self::CredentialUnreadable(_) => "credential_unreadable",
             Self::Storage(_) => "storage",
         }
     }

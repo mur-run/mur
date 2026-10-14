@@ -52,7 +52,7 @@ pub enum GitPushAction {
         repo: String,
         #[arg(long)]
         remote: String,
-        /// `file:///absolute/path/to/remote.git` (the only scheme supported so far).
+        /// `file:///absolute/path/to/remote.git`, or `https://<dns-name>[:<port>]/<path>`.
         #[arg(long)]
         endpoint: String,
         /// Full `refs/heads/<name>` an agent may create a branch from. Repeatable; default none.
@@ -264,6 +264,10 @@ fn describe(p: &EnrollmentProblem) -> String {
              there would run with the broker's privileges",
             path.display()
         ),
+        EndpointPathChecksNotApplicable(e) => format!(
+            "endpoint {e} is a network remote: the path checks (canonical, exists, agent-writable) \
+             do not apply to it, so they were not run"
+        ),
         AgentMayRunUnsandboxed(a) => format!(
             "agent {a} may run without its sandbox (fail_closed_on_sandbox_error is false or its \
              sandbox is not enforcing) and could rewrite the enrollment"
@@ -296,7 +300,8 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
     }
     let endpoint = Endpoint::parse(&a.endpoint).map_err(|_| {
         anyhow::anyhow!(
-            "--endpoint must be file:///absolute/path (other schemes are not supported yet)"
+            "--endpoint must be file:///absolute/path or https://<dns-name>[:<port>]/<path> \
+             (lowercase DNS name, no user@, no IP address, no explicit :443)"
         )
     })?;
     let ref_prefix = a
@@ -340,6 +345,7 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
             endpoint,
             ref_prefix,
             creation_base_refs: a.base_refs,
+            credential: None,
             new_repo,
         })
         .map_err(|e| match e.to_string().as_str() {

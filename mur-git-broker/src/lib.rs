@@ -6,10 +6,14 @@
 pub mod action;
 pub mod ancestry;
 pub mod approval;
+pub mod askpass;
 pub mod binding;
 pub mod broker;
 pub mod constants;
+pub mod credential;
+pub mod credential_source;
 pub mod doctor;
+pub mod endpoint;
 pub mod enrollment;
 pub mod error;
 pub mod git;
