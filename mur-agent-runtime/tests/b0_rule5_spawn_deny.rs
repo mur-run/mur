@@ -36,6 +36,7 @@ fn ent_with_spawn(mode: SpawnMode, allowed: Vec<String>) -> Entitlements {
         llm: Default::default(),
         tools: vec![],
         fail_closed_on_sandbox_error: true,
+        ssh: Default::default(),
     }
 }
 

@@ -98,6 +98,41 @@ mod tests {
         assert!(msg.contains("filesystem") && msg.contains("perm reseal bridge_test"));
     }
 
+    /// SSH proxy spec: on Linux the pin is the only thing stopping an agent
+    /// from granting itself an ssh key. An edit to `entitlements.ssh` alone
+    /// must refuse to start, naming `ssh`.
+    #[test]
+    fn self_granted_ssh_key_is_refused() {
+        let (tmp, home) = setup(|y| y);
+        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        let p = home.join("profile.yaml");
+        let y = std::fs::read_to_string(&p).unwrap();
+        // Edit the parsed document, not the text: the fixture is CRLF on a
+        // Windows checkout, so newline-anchored string replaces silently miss.
+        let mut doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&y).unwrap();
+        let ents = doc
+            .get_mut("entitlements")
+            .and_then(serde_yaml_ng::Value::as_mapping_mut)
+            .expect("fixture must contain an entitlements block");
+        let ssh: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            "keys: [{ fingerprint: \"SHA256:attacker\", allow_hosts: [{ host_key: \"SHA256:anyhost\" }] }]",
+        )
+        .unwrap();
+        assert!(
+            ents.insert("ssh".into(), ssh).is_none(),
+            "fixture must not grant ssh"
+        );
+        let granted = serde_yaml_ng::to_string(&doc).unwrap();
+        std::fs::write(&p, granted).unwrap();
+        let Verdict::Refuse(msg) = verify(&load(&home), &home, tmp.path()) else {
+            panic!("self-granted ssh key must not start");
+        };
+        assert!(
+            msg.contains("ssh") && msg.contains("perm reseal bridge_test"),
+            "{msg}"
+        );
+    }
+
     #[test]
     fn non_entitlement_edit_still_starts() {
         let (tmp, home) = setup(|y| y);
