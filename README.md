@@ -788,15 +788,20 @@ Agent** wizard offers the same catalog as a source.
   derived from what the kernel enforces rather than from a list anyone
   maintains — including the capable fleets you haven't authorized yet, and the
   command that authorizes them.
-- **Brokered `git push` (current state: off, and rejects everything)** — the
-  push broker is off by default (`git_push.enabled: false` in
-  `~/.mur/config.yaml`). Turning it on makes `murmurd` verify each signed
-  request an agent drops in `~/.mur/agents/<agent>/inbox/git-push/`, delete it, and answer in
-  `~/.mur/git-push/status/<agent>/<request_id>.yaml` with `state: rejected`
-  and a `code`: `agent_not_allowlisted` if the agent isn't in
-  `git_push.agents`, otherwise `not_enrolled`. `not_enrolled` is expected,
-  not a bug: no agent can be enrolled yet, so nothing is pushed. Enrollment,
-  approvals, and real pushes are tracked in
+- **Brokered `git push`** — off by default (`git_push.enabled: false` in
+  `~/.mur/config.yaml`). An agent never holds push credentials: it drops a
+  signed request in `~/.mur/agents/<agent>/inbox/git-push/`, and `murmurd`
+  verifies it against the agent's on-disk key, checks it against the
+  enrollment you registered with `mur git-push enroll`, and parks it as
+  `pending_approval`. Nothing is pushed until a human allows that exact
+  action on the approval channel; an allow granted before the enrollment was
+  revoked or re-enrolled ends as `policy_changed` and pushes nothing. Status
+  lands in `~/.mur/git-push/status/<agent>/<request_id>.yaml`. Rejections carry
+  a `code`: `agent_not_allowlisted` (agent missing from `git_push.agents`),
+  `not_enrolled`, or `enrollment_unavailable`. `mur git-push doctor` warns when
+  the broker is on with an empty `git_push.agents`, or when that list names an
+  agent that does not exist. Only `file://` remotes are supported in this
+  release; credential-backed https remotes are tracked in
   [#1831](https://github.com/mur-run/mur/issues/1831).
 - **Deletion safety** — destructive file actions go through a trash with a
   cancel window and explicit restore (`mur agent trash`); nothing is

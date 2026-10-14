@@ -511,16 +511,22 @@ kernel-level exec check, not in git. Either:
 A repo-manager profile should choose one of these deliberately; the default
 allowlist plus an SSH remote is a silent-failure combination.
 
-**Brokered push (`mur-git-broker`, intake only).** `mur-git-broker` is a
-Unix-only crate (empty library on Windows) holding the broker logic;
-`mur-daemon/src/git_push_broker/intake.rs` is the only part wired into
-`murmurd`. With `git_push.enabled` on, intake verifies each request in
+**Brokered push (`mur-git-broker`).** `mur-git-broker` is a Unix-only crate
+(empty library on Windows) holding the broker logic;
+`mur-daemon/src/git_push_broker/` (`intake.rs`, `approvals.rs`) is the part
+wired into `murmurd`. With `git_push.enabled` on, intake verifies each request in
 `<agent_home>/inbox/git-push/` against that agent's on-disk pubkey (agent id
-from the inbox path, never the payload), consumes it and its pack, and writes
-`rejected: agent_not_allowlisted | not_enrolled` to
-`~/.mur/git-push/status/<agent>/`. `Broker::submit_request` is intentionally
-not called: there is no enrollment record (`RemotePolicy`, `enrollment_epoch`)
-until sub-project 2 — tracked in #1831.
+from the inbox path, never the payload) and consumes it and its pack. A request
+whose (agent, repo, remote) is enrolled in `~/.mur/git-push/enrollments.yaml`
+goes to `Broker::submit_request`, stamped with the epoch and repo identity the
+*current* records carry (re-read per request, never cached). Anything else is
+refused with `agent_not_allowlisted | not_enrolled | enrollment_unavailable`.
+The approval pass asks the router-signed `HitlRequest` once per row and folds
+the human's answer with `HumanApprovalVerifier`; the epoch is re-checked at
+execution, so an allow granted before a revoke or re-enroll ends
+`policy_changed` and pushes nothing. Status goes to
+`~/.mur/git-push/status/<agent>/`. Remotes are `file://` only until the
+credential adapter lands (#1831).
 
 ---
 
