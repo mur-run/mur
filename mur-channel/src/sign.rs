@@ -64,7 +64,7 @@ pub fn sign_event_v2(
 }
 
 /// Verify a multibase signature over arbitrary canonical bytes. Fail-closed.
-fn verify_input_sig(input: &[u8], sig_multibase: &str, pubkey: &[u8; 32]) -> bool {
+pub(crate) fn verify_input_sig(input: &[u8], sig_multibase: &str, pubkey: &[u8; 32]) -> bool {
     let Ok((_b, sig_bytes)) = multibase::decode(sig_multibase) else {
         return false;
     };
