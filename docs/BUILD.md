@@ -79,6 +79,15 @@ turn_track:
 
 ### `whisper-rs-sys` build script fails inside a sandbox (sccache cache dir)
 
+> **MUR agents need no manual exports.** The agent's bash tool defaults
+> `SCCACHE_DIR`, `SCCACHE_SERVER_UDS` and `ORT_CACHE_DIR` into its scratch dir
+> (`$TMPDIR`) for every command, only for variables that are not already set
+> (#1860). The socket gives the agent its own sccache server: a server already
+> running on the machine ignores a new `SCCACHE_DIR`, which is why a cache dir
+> alone is not always enough. To use your own server, set `SCCACHE_SERVER_PORT`
+> or `SCCACHE_SERVER_UDS` yourself and the socket default is skipped. The rest
+> of this section applies to other sandboxed shells.
+
 > **Sandboxed agents (MUR, Claude Code, any seatbelt/sandbox-exec shell):
 > point sccache at a directory you can write before building.**
 

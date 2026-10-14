@@ -86,6 +86,49 @@ pub fn scratch_env(dir: &Path) -> [(String, String); 3] {
     SCRATCH_ENV_KEYS.map(|k| (k.to_string(), v.clone()))
 }
 
+/// Longest Unix-socket path we will hand out. macOS `sun_path` is 104 bytes
+/// including the NUL; leave headroom rather than sit on the limit.
+const MAX_SOCKET_PATH: usize = 100;
+
+/// Build-tool cache defaults for an agent-side child, rooted in the agent's
+/// scratch dir (#1860). `is_set` reports whether a variable is already
+/// defined, so a value the caller chose is never overridden.
+///
+/// - `SCCACHE_DIR` / `ORT_CACHE_DIR`: the tools' own defaults live under
+///   `~/Library/Caches`, which the sandbox denies.
+/// - `SCCACHE_SERVER_UDS`: an sccache server already running on the machine
+///   ignores a new `SCCACHE_DIR`, so the agent needs a server of its own. A
+///   socket under the scratch dir is unique per agent without inventing port
+///   numbers. Skipped when the user pinned a server (`SCCACHE_SERVER_PORT` or
+///   `..._UDS`), or when the path would exceed the socket limit.
+pub fn cache_env(dir: &Path, is_set: impl Fn(&str) -> bool) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut put = |key: &str, value: PathBuf| {
+        if !is_set(key) {
+            out.push((key.to_string(), value.to_string_lossy().into_owned()));
+        }
+    };
+    put("SCCACHE_DIR", dir.join("sccache"));
+    let socket = dir.join("sccache.sock");
+    let server_pinned = is_set("SCCACHE_SERVER_PORT");
+    if !server_pinned && socket.as_os_str().len() <= MAX_SOCKET_PATH {
+        put("SCCACHE_SERVER_UDS", socket);
+    }
+    put("ORT_CACHE_DIR", dir.join("ort-cache"));
+    out
+}
+
+/// Everything an agent-side bash child gets from its scratch dir: the
+/// `TMPDIR` family, plus build-cache defaults (#1860) that never override a
+/// variable already in the runtime's own environment or in `env`.
+pub fn extend_scratch_env(env: &mut Vec<(String, String)>, dir: &Path) {
+    env.extend(scratch_env(dir));
+    let add = cache_env(dir, |k| {
+        std::env::var_os(k).is_some() || env.iter().any(|(e, _)| e == k)
+    });
+    env.extend(add);
+}
+
 pub mod prune;
 
 #[cfg(test)]
