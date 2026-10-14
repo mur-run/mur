@@ -4,11 +4,14 @@
 use super::*;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use mur_git_broker::binding::EnrollmentSource;
+use mur_git_broker::credential::SecretPath;
+use mur_git_broker::credential_source::CredentialSource;
 use mur_git_broker::enrollment::{Endpoint, EnrollmentRecord, Enrollments, RepoRecord};
 use mur_git_broker::{
     approval::*, error::BrokerError, pending::*, policy::BrokerLimits, push::*, repo::PrivateRepo,
 };
 use mur_git_broker::{broker::*, import::RlimitSpawn, policy::RemotePolicy, prefetch::*};
+use secrecy::SecretString;
 use std::sync::Mutex;
 use std::sync::{
     Arc,
@@ -97,6 +100,7 @@ pub fn records_for(endpoint: &str, p: &RemotePolicy) -> Enrollments {
         endpoint: Endpoint::parse(endpoint).unwrap(),
         ref_prefix: p.ref_prefix.clone(),
         creation_base_refs: p.creation_base_refs.clone(),
+        credential: None,
         epoch: EPOCH,
     });
     e
@@ -163,6 +167,16 @@ pub fn broker(e: &Env, p: RemotePolicy) -> Broker {
     broker_on_current_records(e)
 }
 pub fn broker_on_current_records(e: &Env) -> Broker {
+    broker_with_credentials(e, Box::new(NoCredentials))
+}
+/// For tests whose enrollments carry no credential: asking for one is a bug in the broker.
+pub struct NoCredentials;
+impl CredentialSource for NoCredentials {
+    fn open(&self, _: &SecretPath) -> Result<SecretString, BrokerError> {
+        panic!("credential requested for a binding that has none")
+    }
+}
+pub fn broker_with_credentials(e: &Env, credentials: Box<dyn CredentialSource>) -> Broker {
     let n = e.fetches.clone();
     Broker::new(BrokerConfig {
         store_path: e.t.path().join("pending.sqlite"),
@@ -181,6 +195,8 @@ pub fn broker_on_current_records(e: &Env) -> Broker {
         }),
         spawn: Box::new(RlimitSpawn),
         auth: Box::new(NoAuth),
+        askpass_bin: std::path::PathBuf::from("/nonexistent/askpass"),
+        credentials,
         clock: e.clock.clone(),
     })
     .unwrap()

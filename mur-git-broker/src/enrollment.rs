@@ -15,6 +15,7 @@
 //! Loading is fail-closed: any record that does not validate makes the whole file an `Err`.
 
 use crate::constants::*;
+use crate::credential::Credential;
 use crate::error::BrokerError;
 use crate::oid::ObjectFormat;
 use crate::policy::RemotePolicy;
@@ -27,46 +28,7 @@ fn bad(m: impl Into<String>) -> BrokerError {
     BrokerError::InvalidRequest(m.into())
 }
 
-/// A remote endpoint the broker will push to. Only absolute `file://` URLs exist at this stage;
-/// anything else cannot be constructed, so a hand-edited file fails to load.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct Endpoint(String);
-
-impl Endpoint {
-    pub fn parse(s: &str) -> Result<Self, BrokerError> {
-        let path = s
-            .strip_prefix(ENDPOINT_FILE_SCHEME)
-            .filter(|p| p.starts_with('/'))
-            .ok_or_else(|| bad("endpoint_scheme"))?;
-        // No percent-encoding, query or fragment: the path must mean exactly what it says.
-        let clean = !path.contains(['\0', '%', '?', '#', '\\'])
-            && Path::new(path).components().all(|c| {
-                !matches!(
-                    c,
-                    std::path::Component::ParentDir | std::path::Component::CurDir
-                )
-            })
-            && !path.contains("//");
-        if !clean {
-            return Err(bad("endpoint_path"));
-        }
-        Ok(Self(s.to_string()))
-    }
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-    /// The filesystem path of the remote.
-    pub fn path(&self) -> &Path {
-        Path::new(&self.0[ENDPOINT_FILE_SCHEME.len()..])
-    }
-}
-impl<'de> Deserialize<'de> for Endpoint {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        Endpoint::parse(&s).map_err(serde::de::Error::custom)
-    }
-}
+pub use crate::endpoint::Endpoint;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +49,10 @@ pub struct EnrollmentRecord {
     pub ref_prefix: String,
     #[serde(default)]
     pub creation_base_refs: Vec<String>,
+    /// Login for a network endpoint. Absent in every record written before https existed, and
+    /// omitted again on write when `None`, so those files round-trip byte for byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<Credential>,
     pub epoch: u64,
 }
 
@@ -97,6 +63,7 @@ impl EnrollmentRecord {
             canonical_remote_endpoint: self.endpoint.as_str().to_string(),
             creation_base_refs: self.creation_base_refs.clone(),
             ref_prefix: self.ref_prefix.clone(),
+            credential: self.credential.clone(),
         }
     }
     fn same_key(&self, agent: &str, repo_id: &str, remote_id: &str) -> bool {
@@ -113,6 +80,7 @@ pub struct EnrollRequest {
     pub endpoint: Endpoint,
     pub ref_prefix: String,
     pub creation_base_refs: Vec<String>,
+    pub credential: Option<Credential>,
     pub new_repo: Option<NewRepo>,
 }
 #[derive(Debug, Clone)]
@@ -235,6 +203,7 @@ impl Enrollments {
             endpoint: req.endpoint,
             ref_prefix: req.ref_prefix,
             creation_base_refs: bases,
+            credential: req.credential,
             epoch: 0,
         };
         rec.policy().validate_enrollment()?;
@@ -268,7 +237,9 @@ impl Enrollments {
         match idx {
             Some(i) => {
                 let old = &self.enrollments[i];
-                if old.policy().digest() == rec.policy().digest() {
+                if old.policy().digest() == rec.policy().digest()
+                    && old.credential == rec.credential
+                {
                     return Ok(EnrollOutcome::Unchanged);
                 }
                 let epoch = self.mint_epoch();
@@ -418,6 +389,7 @@ mod tests {
             endpoint: Endpoint::parse("file:///srv/remote.git").unwrap(),
             ref_prefix: format!("{ALLOWED_REF_PREFIX}{agent}/"),
             creation_base_refs: vec!["refs/heads/main".into()],
+            credential: None,
             new_repo: Some(NewRepo {
                 path: "/work/mur".into(),
                 object_format: ObjectFormat::Sha1,
@@ -426,27 +398,6 @@ mod tests {
     }
     fn fresh() -> Enrollments {
         Enrollments::empty(100)
-    }
-
-    #[test]
-    fn only_absolute_clean_file_urls_parse() {
-        for ok in ["file:///a", "file:///srv/x.git"] {
-            assert!(Endpoint::parse(ok).is_ok(), "{ok}");
-        }
-        for no in [
-            "ssh://h/r",
-            "https://h/r",
-            "file://host/r",
-            "file://relative",
-            "file:///a/../b",
-            "file:///a//b",
-            "file:///a%2e",
-            "file:///a?x",
-            "/plain",
-            "",
-        ] {
-            assert!(Endpoint::parse(no).is_err(), "{no}");
-        }
     }
 
     #[test]
@@ -582,6 +533,97 @@ mod tests {
         assert!(Enrollments::load(&p).is_err(), "unknown field");
         std::fs::remove_file(&p).unwrap();
         assert_eq!(Enrollments::load(&p).unwrap(), None);
+    }
+
+    fn cred(path: &str, user: &str) -> Credential {
+        Credential {
+            secret_path: crate::credential::SecretPath::parse(path).unwrap(),
+            username: crate::credential::Username::parse(user).unwrap(),
+        }
+    }
+    fn https_req(agent: &str, c: Option<Credential>) -> EnrollRequest {
+        EnrollRequest {
+            endpoint: Endpoint::parse("https://git.example.com/o/r.git").unwrap(),
+            credential: c,
+            ..req(agent)
+        }
+    }
+
+    #[test]
+    fn a_record_without_a_credential_writes_no_credential_key_and_old_files_load() {
+        let mut e = fresh();
+        e.enroll(req("alice")).unwrap();
+        let y = serde_yaml_ng::to_string(&e).unwrap();
+        assert!(!y.contains("credential"), "{y}");
+        // A file written before the field existed is exactly this text, and still loads.
+        let back: Enrollments = serde_yaml_ng::from_str(&y).unwrap();
+        assert_eq!(back.enrollments[0].credential, None);
+        assert_eq!(back, e);
+    }
+
+    #[test]
+    fn a_credential_survives_save_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("enrollments.yaml");
+        let mut e = fresh();
+        let c = cred("/h/.mur/secrets/gh", "x-access-token");
+        e.enroll(https_req("alice", Some(c.clone()))).unwrap();
+        std::fs::write(&p, serde_yaml_ng::to_string(&e).unwrap()).unwrap();
+        let back = Enrollments::load(&p).unwrap().unwrap();
+        assert_eq!(back.enrollments[0].credential, Some(c));
+    }
+
+    #[test]
+    fn a_hand_edited_bad_credential_fails_the_load_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("enrollments.yaml");
+        let mut e = fresh();
+        e.enroll(https_req(
+            "alice",
+            Some(cred("/h/.mur/secrets/gh", "oauth2")),
+        ))
+        .unwrap();
+        let good = serde_yaml_ng::to_string(&e).unwrap();
+        for (from, to) in [
+            ("/h/.mur/secrets/gh", "../gh"),
+            ("username: oauth2", "username: 'a b'"),
+            ("username: oauth2", "token: hunter2"),
+        ] {
+            assert!(good.contains(from), "{from}");
+            std::fs::write(&p, good.replace(from, to)).unwrap();
+            assert!(Enrollments::load(&p).is_err(), "{to}");
+        }
+    }
+
+    #[test]
+    fn changing_the_credential_is_an_update_with_a_new_epoch_and_the_same_one_is_not() {
+        let mut e = fresh();
+        let a = cred("/h/.mur/secrets/a", "u");
+        assert_eq!(
+            e.enroll(https_req("alice", Some(a.clone()))).unwrap(),
+            EnrollOutcome::Created
+        );
+        let first = e.enrollments[0].epoch;
+        assert_eq!(
+            e.enroll(https_req("alice", Some(a))).unwrap(),
+            EnrollOutcome::Unchanged
+        );
+        assert_eq!(e.enrollments[0].epoch, first);
+        for changed in [
+            Some(cred("/h/.mur/secrets/b", "u")),
+            Some(cred("/h/.mur/secrets/a", "v")),
+            None,
+        ] {
+            let before = e.enrollments[0].epoch;
+            assert_eq!(
+                e.enroll(https_req("alice", changed)).unwrap(),
+                EnrollOutcome::Updated
+            );
+            assert!(e.enrollments[0].epoch > before);
+            // Put a credential back so the next iteration changes it again.
+            e.enroll(https_req("alice", Some(cred("/h/.mur/secrets/a", "u"))))
+                .unwrap();
+        }
     }
 
     #[test]

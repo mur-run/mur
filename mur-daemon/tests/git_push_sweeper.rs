@@ -17,6 +17,7 @@ fn policy(base: &[&str], prefix: &str) -> RemotePolicy {
         canonical_remote_endpoint: "https://h/r.git".into(),
         creation_base_refs: base.iter().map(|s| s.to_string()).collect(),
         ref_prefix: prefix.into(),
+        credential: None,
     }
 }
 

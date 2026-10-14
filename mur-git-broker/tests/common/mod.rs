@@ -84,6 +84,7 @@ pub fn policy() -> RemotePolicy {
         canonical_remote_endpoint: "file:///remote.git".into(),
         creation_base_refs: vec!["refs/heads/main".into()],
         ref_prefix: ALLOWED_REF_PREFIX.into(),
+        credential: None,
     }
 }
 pub fn action_for(old: &str, new: &str, r#ref: &str) -> ActionDocument {

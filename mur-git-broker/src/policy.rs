@@ -1,4 +1,5 @@
 use crate::constants::*;
+use crate::credential::Credential;
 use crate::error::BrokerError;
 use sha2::Digest;
 
@@ -44,24 +45,37 @@ pub struct RemotePolicy {
     pub canonical_remote_endpoint: String,
     pub creation_base_refs: Vec<String>,
     pub ref_prefix: String,
+    /// Login for a network endpoint (path and username, never the secret). `None` for a local
+    /// endpoint and for every policy that predates credentials.
+    pub credential: Option<Credential>,
 }
 impl RemotePolicy {
+    /// Add the credential's identity to a digest input. Only when present, so a policy without
+    /// one hashes the exact JSON it did before credentials existed and old approvals still verify.
+    fn with_credential(&self, mut v: serde_json::Value) -> serde_json::Value {
+        if let Some(c) = &self.credential {
+            v["credential"] = serde_json::json!({
+                "secret_path": c.secret_path.as_str(), "username": c.username.as_str(),
+            });
+        }
+        v
+    }
     /// Hex SHA-256 of the JCS of the policy, base refs sorted so order cannot void approvals.
     pub fn digest(&self) -> String {
         let mut base = self.creation_base_refs.clone();
         base.sort();
-        let v = serde_json::json!({
+        let v = self.with_credential(serde_json::json!({
             "remote_id": self.remote_id, "endpoint": self.canonical_remote_endpoint,
             "ref_prefix": self.ref_prefix, "creation_base_refs": base,
-        });
+        }));
         let jcs = serde_jcs::to_string(&v).expect("jcs of a json value");
         hex::encode(sha2::Sha256::digest(jcs.as_bytes()))
     }
-    /// Digest of what the remote *is* (id + endpoint), apart from what may be pushed to it.
+    /// Digest of what the remote *is* (id + endpoint + login), apart from what may be pushed to it.
     pub fn remote_digest(&self) -> String {
-        let v = serde_json::json!({
+        let v = self.with_credential(serde_json::json!({
             "remote_id": self.remote_id, "endpoint": self.canonical_remote_endpoint,
-        });
+        }));
         let jcs = serde_jcs::to_string(&v).expect("jcs of a json value");
         hex::encode(sha2::Sha256::digest(jcs.as_bytes()))
     }
@@ -98,6 +112,7 @@ mod tests {
             canonical_remote_endpoint: "https://h/r.git".into(),
             creation_base_refs: vec!["refs/heads/main".into()],
             ref_prefix: ALLOWED_REF_PREFIX.into(),
+            credential: None,
         }
     }
     #[test]
@@ -141,5 +156,56 @@ mod tests {
             BrokerLimits::default().max_pack_bytes,
             DEFAULT_MAX_PACK_BYTES
         );
+    }
+
+    fn cred(path: &str, user: &str) -> crate::credential::Credential {
+        crate::credential::Credential {
+            secret_path: crate::credential::SecretPath::parse(path).unwrap(),
+            username: crate::credential::Username::parse(user).unwrap(),
+        }
+    }
+    #[test]
+    fn a_policy_without_a_credential_keeps_the_digests_it_had_before_credentials_existed() {
+        // Pinned from the code at 6c5bceaa1, before `credential` was a field: an approval signed
+        // then must still verify, so the no-credential JSON shape may not gain a key.
+        let p = policy();
+        assert_eq!(
+            p.digest(),
+            "8c8b17a21109a5a93d25c5804d5a2710e1f6bea7c5ffb8924312d30af2419a22"
+        );
+        assert_eq!(
+            p.remote_digest(),
+            "3d00dc20aa8f273b3d34a663b6e5375e955479f1b160b9f37319096c2e51fe5f"
+        );
+    }
+    #[test]
+    fn adding_a_credential_changes_both_digests() {
+        let bare = policy();
+        let mut p = policy();
+        p.credential = Some(cred("/s/t", "bot"));
+        assert_ne!(p.digest(), bare.digest());
+        assert_ne!(p.remote_digest(), bare.remote_digest());
+    }
+    #[test]
+    fn changing_the_secret_path_or_the_username_changes_both_digests() {
+        let mut base = policy();
+        base.credential = Some(cred("/s/t", "bot"));
+        let mut other_path = policy();
+        other_path.credential = Some(cred("/s/other", "bot"));
+        let mut other_user = policy();
+        other_user.credential = Some(cred("/s/t", "someone"));
+        for p in [&other_path, &other_user] {
+            assert_ne!(p.digest(), base.digest());
+            assert_ne!(p.remote_digest(), base.remote_digest());
+        }
+    }
+    #[test]
+    fn the_same_credential_digests_the_same() {
+        let mut a = policy();
+        a.credential = Some(cred("/s/t", "bot"));
+        let mut b = policy();
+        b.credential = Some(cred("/s/t", "bot"));
+        assert_eq!(a.digest(), b.digest());
+        assert_eq!(a.remote_digest(), b.remote_digest());
     }
 }

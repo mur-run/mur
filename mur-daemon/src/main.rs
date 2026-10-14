@@ -68,8 +68,21 @@ fn process_event(event: &NormalizedEvent) -> Result<()> {
     Ok(())
 }
 
+/// git runs this same binary as `GIT_ASKPASS` for a broker push (https design §5). That
+/// invocation must not start a runtime, take the singleton lock, or read config: it answers one
+/// prompt from an inherited fd and exits. So the check comes before anything else, and the real
+/// `main` is only entered when it does not apply.
+fn main() -> Result<()> {
+    // mur-git-broker is an empty crate off unix, so the askpass entry exists only there.
+    #[cfg(unix)]
+    if std::env::var_os(mur_git_broker::askpass::ENV_FD).is_some() {
+        std::process::exit(mur_git_broker::askpass::run_from_env());
+    }
+    daemon_main()
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn daemon_main() -> Result<()> {
     let lock_file = lock_path();
 
     // Exclude a second daemon with an flock, BEFORE touching anything else.
