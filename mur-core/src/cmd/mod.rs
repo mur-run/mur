@@ -24,6 +24,7 @@ pub(crate) mod agent_webhook;
 pub mod browser;
 pub mod capability;
 pub mod channel;
+pub mod channel_integrity;
 /// Plan 2026-10-03 code-nav, Phase 3 — `mur code-nav setup`.
 #[allow(dead_code)]
 pub mod code_nav;

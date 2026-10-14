@@ -225,4 +225,17 @@ pub enum ChannelAction {
         #[arg(long, default_value_t = 500)]
         limit: usize,
     },
+    /// Check channel logs against their sealed heads (read-only)
+    ///
+    /// `ok` means unchanged since sealed, not genuine. Anything that could not be
+    /// established (never sealed, unknown signing key, unreadable lines) is
+    /// `unverified`, never `ok`. Exit code: 0 all ok, 1 any failed, 2 none
+    /// failed but some unverified.
+    Verify {
+        /// Channels to check; every channel when omitted
+        channel_ids: Vec<String>,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
 }

@@ -201,6 +201,14 @@ pub async fn run(cli: Cli) -> Result<()> {
                 let home = cmd::agent::resolve_mur_home()?;
                 cmd::channel::backfill_purpose(&home, apply, limit)?;
             }
+            ChannelAction::Verify { channel_ids, json } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let code =
+                    cmd::channel_integrity::run(&home, &channel_ids, json, &mut std::io::stdout())?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
         },
         Commands::Job { action } => {
             let mur_home = crate::paths::mur_root(None);

@@ -527,6 +527,9 @@ see `mur skill <command> --help`.")]
 }
 
 #[cfg(test)]
+mod channel_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
