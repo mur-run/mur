@@ -232,6 +232,125 @@ async fn recording_after_tampering_does_not_re_bless_the_surviving_allow() {
     );
 }
 
+// --- concurrent append + read ------------------------------------------
+
+/// Run a future to completion on the calling thread, so plain OS threads can
+/// drive the async store API.
+fn block<F: std::future::Future>(f: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(f)
+}
+
+/// Two writers append while two readers verify. A line is written before its
+/// head is sealed; a reader that saw the gap would call it a deletion and the
+/// store would refuse to remember anything. Readers must never see that, and
+/// every record must survive.
+#[test]
+fn concurrent_append_and_read_never_looks_like_tampering() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    const WRITERS: usize = 2;
+    const PER_WRITER: usize = 60;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    // The channel and marker exist before the race starts.
+    block(s.record(resp("seed", true, "seed", 0)));
+
+    let done = AtomicBool::new(false);
+    let reads = AtomicUsize::new(0);
+    let false_alarms = std::sync::Mutex::new(Vec::<String>::new());
+
+    std::thread::scope(|scope| {
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|w| {
+                let s = &s;
+                scope.spawn(move || {
+                    for i in 0..PER_WRITER {
+                        let h = format!("h-{w}-{i}");
+                        block(s.record(resp(&h, true, &h, 0)));
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..3 {
+            scope.spawn(|| {
+                // At least one full pass even if the writers win the race.
+                loop {
+                    let finished = done.load(Ordering::SeqCst);
+                    match s.list() {
+                        Ok(_) => {}
+                        Err(e) => false_alarms.lock().unwrap().push(format!("{e:#}")),
+                    }
+                    reads.fetch_add(1, Ordering::SeqCst);
+                    if finished {
+                        break;
+                    }
+                    // A real reader looks once per tool call. Back-to-back
+                    // shared locks from several threads would starve the
+                    // writers' exclusive lock and the test would never end.
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            });
+        }
+        for w in writers {
+            w.join().unwrap();
+        }
+        done.store(true, Ordering::SeqCst);
+    });
+
+    assert!(reads.load(Ordering::SeqCst) >= 2, "readers actually ran");
+    let alarms = false_alarms.into_inner().unwrap();
+    assert!(
+        alarms.is_empty(),
+        "a reader mistook a write for tampering: {alarms:?}"
+    );
+
+    // Nothing was lost or refused to seal: the final log verifies and holds
+    // the seed plus every record.
+    let live = s.list().expect("final log verifies");
+    assert_eq!(live.len(), 1 + WRITERS * PER_WRITER);
+    assert_eq!(block(s.lookup("h-1-24")), Some(Settled::Allow));
+}
+
+/// The stress test above cannot hit the one real window (a reader sees the
+/// log from before an append and the head from after it) because it is
+/// microseconds wide. So pin the mechanism that closes it: while a writer
+/// holds the channel's append lock, a reader waits instead of reading.
+#[test]
+fn a_reader_waits_for_a_writer_that_holds_the_append_lock() {
+    use fs2::FileExt;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    block(s.record(resp("h1", true, "a", 0)));
+    let lock_path = log_path(tmp.path()).with_file_name("events.lock");
+    let writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    writer.lock_exclusive().unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| tx.send(s.list().map(|l| l.len())).unwrap());
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the reader went ahead while a writer held the append lock"
+        );
+        FileExt::unlock(&writer).unwrap();
+        let got = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("reader resumes");
+        assert_eq!(got.unwrap(), 1);
+    });
+}
+
 // --- what is NOT detected, written down as a test ----------------------
 
 #[tokio::test]
