@@ -120,7 +120,13 @@ fn advance(
     let id = input.channel_id;
     let dir = anchor::heads_dir(mur_home);
     let sealed = (|| -> Result<()> {
-        let f = std::fs::File::open(log_path).context("open log for fsync")?;
+        // Windows' FlushFileBuffers needs a handle with write access; a
+        // read-only `File::open` fails there with "Access is denied". Opening
+        // for write neither creates nor truncates, so this is safe everywhere.
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(log_path)
+            .context("open log for fsync")?;
         f.sync_all().context("fsync log before the head")?;
         let log = std::fs::read(log_path).context("read log to chain it")?;
         let current = head_io::read_head(&dir, id)?;
