@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -8,7 +8,9 @@ use mur_common::channel::{
     EventKind, Goal, Participant, ParticipantRole,
 };
 
+use crate::head_io::{head_path, remove_head};
 use crate::index::{ChannelIndex, ChannelRow};
+use crate::seal::HEADS_DIR_NAME;
 use crate::store::{ChannelStore, SealInput};
 
 /// Shared truncation limit for auto-derived conversation titles. One constant
@@ -89,6 +91,8 @@ pub struct ChannelService {
     /// Run after every event line this service writes. `None` (the default)
     /// leaves behaviour exactly as before sealing existed.
     seal: Option<SharedSealHook>,
+    /// `<mur_home>/channel-heads`, where heads live (spec 7.4).
+    heads_dir: PathBuf,
 }
 
 impl ChannelService {
@@ -117,6 +121,7 @@ impl ChannelService {
             store,
             index,
             seal: None,
+            heads_dir: mur_home.join(HEADS_DIR_NAME),
         })
     }
 
@@ -371,9 +376,16 @@ impl ChannelService {
     }
 
     /// Delete the channel entirely (store dir + read-model row). Idempotent.
+    ///
+    /// Also removes the channel's head (spec 7.4), last: a crash after the
+    /// directory is gone leaves an orphan head (`LogMissing`, benign), never a
+    /// log with no head. The id is validated for a head path before anything
+    /// is deleted, so a hostile id fails without touching the store.
     pub fn delete_channel(&self, channel_id: &str) -> Result<()> {
+        head_path(&self.heads_dir, channel_id)?;
         self.store.delete(channel_id)?;
         self.index.remove(channel_id)?;
+        remove_head(&self.heads_dir, channel_id)?;
         Ok(())
     }
 
