@@ -64,8 +64,11 @@ pub fn check_protected_writes(
         }
     }
     for grant in &policy.fs_write {
+        // Likewise a grant written through a symlink (macOS `/var` is
+        // `/private/var`) is judged under the name the kernel will see.
+        let resolved = std::fs::canonicalize(grant).ok();
         for target in &protected {
-            if overlaps(grant, target) {
+            if overlaps(grant, target) || resolved.as_deref().is_some_and(|r| overlaps(r, target)) {
                 return Err(ProtectedPathWritable {
                     grant: grant.clone(),
                     protected: target.clone(),
@@ -192,7 +195,9 @@ mod tests {
         let f = fixture();
         let home = f.mur_home.parent().unwrap();
         assert!(f.check(&f.policy(&[home], &[])).is_err());
-        assert!(f.check(&f.policy(&[Path::new("/")], &[])).is_err());
+        // The filesystem root of this platform (`/`, or `C:\` on Windows).
+        let root = f.mur_home.ancestors().last().unwrap();
+        assert!(f.check(&f.policy(&[root], &[])).is_err());
     }
 
     #[test]
