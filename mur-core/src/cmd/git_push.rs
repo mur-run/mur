@@ -18,6 +18,7 @@ use clap::Subcommand;
 use fs2::FileExt;
 use mur_common::agent::AgentProfile;
 use mur_common::git_push::{broker_dir, enrollments_path, private_dir, registry_path};
+use mur_common::hitl::approval_token::SECRETS_DIR;
 use mur_git_broker::constants::ALLOWED_REF_PREFIX;
 use mur_git_broker::doctor::{AgentFacts, EnrollmentProblem, check_enrollment};
 use mur_git_broker::enrollment::{Endpoint, EnrollOutcome, EnrollRequest, Enrollments, NewRepo};
@@ -268,6 +269,15 @@ fn describe(p: &EnrollmentProblem) -> String {
             "endpoint {e} is a network remote: the path checks (canonical, exists, agent-writable) \
              do not apply to it, so they were not run"
         ),
+        CredentialUnusable(why) => format!(
+            "the credential's secret cannot be used ({why}); it must be a 0600 regular file owned \
+             by you, under the secrets directory"
+        ),
+        SecretsWritableByAgent { agent, path } => format!(
+            "agent {agent} can write to {}, which contains or sits inside the secrets directory; \
+             it could replace the credential",
+            path.display()
+        ),
         AgentMayRunUnsandboxed(a) => format!(
             "agent {a} may run without its sandbox (fail_closed_on_sandbox_error is false or its \
              sandbox is not enforcing) and could rewrite the enrollment"
@@ -326,6 +336,7 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
         &endpoint,
         &collect_agents(mur_home),
         &broker_dir(mur_home),
+        &mur_home.join(SECRETS_DIR),
     );
     let (refusals, notes): (Vec<_>, Vec<_>) = problems.iter().partition(|p| p.is_refusal());
     for n in &notes {
@@ -513,7 +524,13 @@ fn doctor(mur_home: &Path, out: &mut dyn Write, json: bool, fix: bool) -> Result
         })
     };
     for e in &book_ref.enrollments {
-        for p in check_enrollment(&e.policy(), &e.endpoint, &agents, &broker_dir(mur_home)) {
+        for p in check_enrollment(
+            &e.policy(),
+            &e.endpoint,
+            &agents,
+            &broker_dir(mur_home),
+            &mur_home.join(SECRETS_DIR),
+        ) {
             if p.is_refusal() {
                 refused = true;
             }
