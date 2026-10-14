@@ -4,6 +4,7 @@ pub mod launch_chain;
 pub mod policy;
 pub mod reqwest_guard;
 pub mod search_dirs;
+pub mod ssh_bypass;
 
 // Unconditional: `partition_write_grants` is shared with sandbox::policy on every
 // platform; only the apply path inside is linux-gated.

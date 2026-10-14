@@ -173,15 +173,31 @@ fn unix_socket_allow_paths(mur_home: &Path, policy: &SandboxPolicy) -> Vec<PathB
 /// [`MUR_SHORT_SOCKET_REGEX`]). Shared by both restricted arms so they cannot
 /// drift apart.
 fn push_unix_socket_allows(lines: &mut Vec<String>, policy: &SandboxPolicy) {
-    for p in unix_socket_allow_paths(&resolved_mur_home(), policy) {
+    let (roots, patterns) = unix_socket_allow_rules(policy);
+    for p in roots {
         let p = sbpl_escape(&p.to_string_lossy());
         lines.push(format!(
             "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
         ));
     }
-    lines.push(format!(
-        "(allow network-outbound (remote unix-socket (path-regex #\"{MUR_SHORT_SOCKET_REGEX}\")))"
-    ));
+    for re in patterns {
+        lines.push(format!(
+            "(allow network-outbound (remote unix-socket (path-regex #\"{re}\")))"
+        ));
+    }
+}
+
+/// Every unix-socket allow rule the restricted profile emits: `subpath` roots
+/// and `path-regex` patterns. The profile builder and the ssh-agent proxy's
+/// bypass classifier both read this one function, so the classifier can never
+/// judge against a list the kernel is not actually enforcing.
+pub(crate) fn unix_socket_allow_rules(
+    policy: &SandboxPolicy,
+) -> (Vec<PathBuf>, &'static [&'static str]) {
+    (
+        unix_socket_allow_paths(&resolved_mur_home(), policy),
+        &[MUR_SHORT_SOCKET_REGEX],
+    )
 }
 
 /// Build an SBPL profile string from the policy.
