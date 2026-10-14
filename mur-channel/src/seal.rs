@@ -14,7 +14,7 @@
 //!   `legacy_through` (spec 12 item 13). The first seal fails rather than sign
 //!   a value that cannot be corrected later.
 
-use std::fs::{self, File};
+use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -73,7 +73,11 @@ impl HeadSealer {
         let prev = read_head(&heads_dir, id)?;
 
         // Step 1: the log is durable before any head can name its lines.
-        File::open(&log_path)
+        // Opened for write (never truncating): Windows `FlushFileBuffers`
+        // rejects a read-only handle with "Access is denied".
+        OpenOptions::new()
+            .write(true)
+            .open(&log_path)
             .and_then(|f| f.sync_all())
             .with_context(|| format!("fsync log {}", log_path.display()))?;
         let log = fs::read(&log_path).with_context(|| format!("read {}", log_path.display()))?;
