@@ -147,7 +147,12 @@ pub fn cmd_commander_directive(
     // v2 makes the fold silently drop it — a kill that never takes effect.
     // Guarded by the commander-kill loop / deep-research tests; if you change
     // `append_event`'s default to write `prev_hash`, those go red for this path.
-    let ev = svc.append_signed_v1(
+    //
+    // `_and_anchor`: the commander runs in mur-core, outside any agent
+    // sandbox, so it moves the trusted head. A kill directive is usually the
+    // LAST line of the fleet log — without an anchor after it, truncating one
+    // line silently un-kills the fleet.
+    let ev = svc.append_and_anchor_v1(
         &format!("fleet-{fleet}"),
         &id,
         0,
@@ -264,5 +269,56 @@ mod tests {
         assert!(governance_state(home, "dev").unwrap().killed);
         // the pinned pubkey accepts the commander's own key
         assert_eq!(accepted_pubkeys(home), vec![id.verifying_key_bytes()]);
+    }
+
+    /// A kill directive is the last line of the fleet log. Without an anchor
+    /// after it, truncating the log back one line silently un-kills the
+    /// fleet and `anchor_mismatch` stays clean. The commander runs in
+    /// mur-core, outside any agent sandbox, so it must move the trusted head.
+    #[test]
+    fn directive_advances_the_chain_anchor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        seed_commander(home);
+        let fleet = mur_common::fleet::Fleet {
+            name: "dev".into(),
+            display_name: String::new(),
+            goal: "g".into(),
+            router: None,
+            members: vec!["pm".into()],
+            team_id: None,
+            channel_id: "fleet-dev".into(),
+            procedure: vec![],
+            rules: vec![],
+            skills: vec![],
+            loop_cfg: None,
+            parallel: None,
+            hitl: None,
+            requires_programs: vec![],
+            limits: None,
+            needs: vec![],
+        };
+        crate::cmd::fleet::store::save_fleet(home, &fleet).unwrap();
+        let svc = mur_channel::ChannelService::open(home).unwrap();
+        svc.create_for_fleet("dev", "mur", &["pm".into()]).unwrap();
+
+        cmd_commander_directive(home, "dev", "kill", None, 1000).unwrap();
+
+        let head =
+            mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(home), "fleet-dev")
+                .unwrap()
+                .expect("commander directive must seal a head");
+        let raw =
+            std::fs::read_to_string(home.join("channels").join("fleet-dev").join("events.jsonl"))
+                .unwrap();
+        let line = raw.lines().last().unwrap();
+        let last: mur_common::channel::ChannelEvent = serde_json::from_str(line).unwrap();
+        assert_eq!(head.seq, last.seq, "head must cover the directive line");
+        let state = mur_channel::head::chain_log(raw.as_bytes());
+        assert_eq!(head.chain_hash, hex::encode(state.hash));
+        assert!(
+            !mur_channel::anchor::is_dirty(home, "fleet-dev"),
+            "a successful append clears the dirty marker"
+        );
     }
 }

@@ -207,21 +207,58 @@ fn record_refusal(home: &Path, router_agent: &str, reason: &str) {
 ///
 /// One derivation on purpose: an append and a state transition on the same
 /// channel must not disagree about whether that channel is protected.
-fn writer_key(
-    home: &Path,
-    router_agent: &str,
-) -> anyhow::Result<Option<(mur_common::identity::AgentIdentity, u32)>> {
+/// Where the writer key came from — which decides whether this process may
+/// advance the chain-head anchor after it appends.
+///
+/// `channel-heads/` is outside every agent's sandbox grant on purpose: an
+/// agent may append (its grant covers `channels/`) but must never move the
+/// trusted head. A key that was *read from disk* proves this process is
+/// outside that sandbox (`keys/` is denied inside it); a key that arrived by
+/// handoff proves the opposite. So the source, not the caller, is what
+/// selects between `append_and_anchor` and plain `append_signed`.
+///
+/// INVARIANT (implicit, so it is pinned by a test): `Disk` is chosen ⟺ the
+/// caller is outside the sandbox ⟺ `channel-heads/` is writable. This holds
+/// only while `keys/` stays unreadable inside the sandbox. Moving the signing
+/// key anywhere the sandbox can read (env var, agent home, a readable carve-in)
+/// breaks the implication silently — see
+/// `mur_agent_runtime::sandbox::policy::tests::fs_grants::`
+/// `key_source_invariant_keys_unreadable_iff_channel_heads_unwritable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeySource {
+    /// Loaded from `<home>/agents/<name>/identity.*` — trusted, anchors.
+    Disk,
+    /// Received over stdin from the sealing parent — sandboxed, never anchors.
+    Handoff,
+}
+
+/// A resolved writer identity plus the provenance that decides anchoring.
+pub(crate) struct WriterKey {
+    pub(crate) id: mur_common::identity::AgentIdentity,
+    pub(crate) kv: u32,
+    pub(crate) source: KeySource,
+}
+
+fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Option<WriterKey>> {
     // A process sealed inside an agent's sandbox cannot read `keys/` — that
     // subtree is denied on purpose. Its parent loaded the key before sealing
     // and handed it over stdin, so prefer that when it is for THIS writer.
     // Checked before the disk read because the disk read is the thing that
     // cannot work here, not a faster path we are skipping.
     if let Some((id, kv)) = handoff_for(router_agent) {
-        return Ok(Some((id.clone(), kv)));
+        return Ok(Some(WriterKey {
+            id: id.clone(),
+            kv,
+            source: KeySource::Handoff,
+        }));
     }
     let agent_home = home.join("agents").join(router_agent);
     match mur_common::identity::AgentIdentity::load(&agent_home) {
-        Ok(id) => Ok(Some((id, read_key_version(&agent_home)))),
+        Ok(id) => Ok(Some(WriterKey {
+            kv: read_key_version(&agent_home),
+            id,
+            source: KeySource::Disk,
+        })),
         Err(mur_common::identity::IdentityError::NotFound) => Ok(None),
         // The key is THERE and we may not read it — a sandbox deny (a spawned
         // `mur` cannot read a sibling's signing key since #975). Falling back
@@ -275,7 +312,7 @@ pub fn transition_as_writer(
         new_state,
         actor,
         run_id,
-        key.as_ref().map(|(id, kv)| (id, *kv)),
+        key.as_ref().map(|k| (&k.id, k.kv)),
     )
 }
 
@@ -297,8 +334,31 @@ pub fn append_as_writer(
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
     match writer_key(home, router_agent)? {
-        Some((id, kv)) => svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem),
+        Some(key) => append_with_key(svc, channel_id, key, actor, kind, payload, idem),
         None => svc.append(channel_id, actor, kind, payload, idem),
+    }
+}
+
+/// Append signed with `key`, anchoring the chain head when — and only when —
+/// the key's provenance proves this process is outside the agent sandbox.
+///
+/// The anchor is the one write a sandboxed agent must not be able to make,
+/// so the decision lives on the key, where it is a property of the process,
+/// and not at the call site, where it would be a property of whoever
+/// remembered to pick the right method.
+pub(crate) fn append_with_key(
+    svc: &ChannelService,
+    channel_id: &str,
+    key: WriterKey,
+    actor: ChannelActor,
+    kind: EventKind,
+    payload: serde_json::Value,
+    idem: Option<String>,
+) -> anyhow::Result<ChannelEvent> {
+    let WriterKey { id, kv, source } = key;
+    match source {
+        KeySource::Disk => svc.append_and_anchor(channel_id, &id, kv, actor, kind, payload, idem),
+        KeySource::Handoff => svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem),
     }
 }
 
@@ -493,6 +553,55 @@ mod tests {
         assert!(
             mur_channel::sign::verify_one(&ch.id, &ev, &pubkey, true),
             "signed event must verify against the router pubkey even when require_sig"
+        );
+        // A key read from disk means this process is outside the agent
+        // sandbox (keys/ is denied inside it), so it is the trusted writer
+        // and must advance the chain-head anchor to the line it just wrote.
+        let head =
+            mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(tmp.path()), &ch.id)
+                .unwrap()
+                .expect("disk-keyed writer seals the head");
+        assert_eq!(head.seq, ev.seq);
+        assert!(head.verify(&pubkey), "head signed by the router key");
+        assert!(
+            !mur_channel::anchor::is_dirty(tmp.path(), &ch.id),
+            "a successful anchored append leaves no dirty marker"
+        );
+    }
+
+    /// The handed-over key is the sealed-child path: that process may append
+    /// (its grant covers `channels/`) but must never touch `channel-heads/`.
+    /// Anchoring from there would fail at `mark_dirty` BEFORE the append and
+    /// lose the event — so the handoff path appends without anchoring.
+    #[test]
+    fn a_handed_over_key_signs_but_does_not_anchor() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        let id = AgentIdentity::generate();
+        let key = WriterKey {
+            id,
+            kv: 1,
+            source: KeySource::Handoff,
+        };
+        let ev = append_with_key(
+            &svc,
+            &ch.id,
+            key,
+            ChannelActor::System,
+            EventKind::HitlResponse,
+            serde_json::json!({ "allow": true }),
+            None,
+        )
+        .unwrap();
+        assert!(ev.sig.is_some(), "handoff key → still signed");
+        assert!(
+            !mur_channel::anchor::heads_dir(tmp.path()).exists(),
+            "handoff path must not create a head"
+        );
+        assert!(
+            !mur_channel::anchor::is_dirty(tmp.path(), &ch.id),
+            "handoff path must not even touch channel-heads/"
         );
     }
 }

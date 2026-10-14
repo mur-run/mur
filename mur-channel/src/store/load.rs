@@ -25,14 +25,56 @@ pub struct DamageReport {
     /// before it (#1770) — a deleted, reordered, or edited earlier line.
     /// Only events that carry a `prev_hash` (sig-input v2) can appear here.
     pub chain_breaks: Vec<u64>,
+    /// The signed head in `<mur_home>/channel-heads/` (#1868) does not hold
+    /// for this log (#1770): its signature fails, or the log's first
+    /// `head.lines` lines do not chain to `head.chain_hash` — truncated below
+    /// the head, or rewritten inside it. `chain_breaks` cannot see either;
+    /// every remaining link still holds. A log *longer* than the head is fine
+    /// (sandboxed agents append past it); one with no head at all is too.
+    pub anchor_mismatch: Option<AnchorMismatch>,
+    /// The channel's dirty marker is present: an anchored append began (the
+    /// marker goes down under the lock before the line is written) and never
+    /// advanced the anchor. The anchor is known stale until a later anchored
+    /// append succeeds. A crash between the marker and the write leaves a
+    /// marker with no new line — a deliberate false positive: over-reporting
+    /// is recoverable, a silent stale anchor is not. Do not "optimise" it out.
+    pub anchor_dirty: bool,
+}
+
+/// Where the signed head and the log disagree. See
+/// [`DamageReport::anchor_mismatch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnchorMismatch {
+    /// The head as read from disk.
+    pub head: crate::head::Head,
+    pub kind: AnchorMismatchKind,
+    /// `\n`-terminated lines the log actually has.
+    pub log_lines: u64,
+}
+
+/// Why a head does not hold for its log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorMismatchKind {
+    /// The signature does not verify under the writer's key: the head file
+    /// itself was forged or edited.
+    BadSignature,
+    /// Validly signed, but for a different channel: copied in from another.
+    WrongChannel,
+    /// The log has fewer lines than the head covers.
+    Truncated,
+    /// The log has the lines, but they chain to a different hash.
+    Rewritten,
 }
 
 impl DamageReport {
-    /// No unparseable lines, no verification failures, no chain breaks.
+    /// No unparseable lines, no verification failures, no chain breaks, and
+    /// the chain-head anchor (if any) is both trusted and matched.
     pub fn is_clean(&self) -> bool {
         self.unparseable_lines.is_empty()
             && self.unverified.is_empty()
             && self.chain_breaks.is_empty()
+            && self.anchor_mismatch.is_none()
+            && !self.anchor_dirty
     }
 }
 
@@ -152,7 +194,15 @@ impl ChannelStore {
         let path = self.events_path(id);
         let content = match Self::read_events_file(&path, &self.channel_dir(id))? {
             Some(c) => c,
-            None => return Ok((Vec::new(), DamageReport::default())),
+            // No log but an anchor (or a dirty marker) is the most complete
+            // truncation there is; fall through with empty content.
+            None if crate::head_io::read_head(&crate::anchor::heads_dir(&self.mur_home), id)?
+                .is_none()
+                && !crate::anchor::is_dirty(&self.mur_home, id) =>
+            {
+                return Ok((Vec::new(), DamageReport::default()));
+            }
+            None => String::new(),
         };
         let mut events = Vec::new();
         let mut report = DamageReport::default();
@@ -175,6 +225,9 @@ impl ChannelStore {
             }
         }
         report.chain_breaks = super::chain::chain_breaks(&content);
+        report.anchor_mismatch =
+            super::chain::anchor_mismatch(&self.mur_home, id, &content, writer_pubkey)?;
+        report.anchor_dirty = crate::anchor::is_dirty(&self.mur_home, id);
         Ok((events, report))
     }
 }

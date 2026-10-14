@@ -57,6 +57,20 @@ pub fn chain_log(log: &[u8]) -> ChainState {
     state
 }
 
+/// Chain only the first `n` `\n`-terminated lines of `log`, same rules as
+/// [`chain_log`]. `None` when the log has fewer than `n` such lines — the
+/// shape of a log truncated below a head that covered `n` lines.
+pub fn chain_prefix(log: &[u8], n: u64) -> Option<ChainState> {
+    let mut state = ChainState::genesis();
+    let mut rest = log;
+    while state.lines < n {
+        let nl = rest.iter().position(|&b| b == b'\n')?;
+        state.extend(&rest[..nl]);
+        rest = &rest[nl + 1..];
+    }
+    Some(state)
+}
+
 /// The signed fields of a head, before `ts` and `sig` are attached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadFields {

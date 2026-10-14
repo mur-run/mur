@@ -12,8 +12,45 @@ pub struct SealInput<'a> {
     pub record: &'a [u8],
 }
 
-/// The sealing hook type taken by [`ChannelStore::append_event_with`].
+/// The post-write sealing hook type (see [`SealHooks::post_write`]).
 pub type SealHook<'h> = dyn for<'a, 'b> Fn(&'b SealInput<'a>) -> Result<()> + 'h;
+
+/// What the pre-write hook is handed: the event about to be written, with
+/// its final `seq`. No `record` — nothing is on disk yet.
+#[derive(Debug)]
+pub struct PreSealInput<'a> {
+    pub channel_id: &'a str,
+    pub event: &'a ChannelEvent,
+}
+
+/// The pre-write hook type (see [`SealHooks::pre_write`]).
+pub type PreSealHook<'h> = dyn for<'a, 'b> Fn(&'b PreSealInput<'a>) -> Result<()> + 'h;
+
+/// The two points an append lends to its caller, both UNDER the lock.
+///
+/// - `pre_write` runs after `seq` is assigned and before the line is
+///   written. An `Err` aborts the append with nothing written. It exists for
+///   the chain-head dirty marker (#1770): evidence that the head is about to
+///   lag must be on disk before the line is, or a crash between the write
+///   and `post_write` leaves an unanchored line with no trace.
+/// - `post_write` runs after the line is written (and again on a dedup hit,
+///   with nothing written). An `Err` makes the append `Err` but the line
+///   stays (decision B1).
+#[derive(Clone, Copy, Default)]
+pub struct SealHooks<'h> {
+    pub pre_write: Option<&'h PreSealHook<'h>>,
+    pub post_write: Option<&'h SealHook<'h>>,
+}
+
+impl<'h> SealHooks<'h> {
+    /// Only a post-write hook — the shape every pre-#1770 caller used.
+    pub fn post(post_write: Option<&'h SealHook<'h>>) -> Self {
+        Self {
+            pre_write: None,
+            post_write,
+        }
+    }
+}
 
 impl ChannelStore {
     /// Append one event under an advisory lock so `seq` stays monotonic across
@@ -38,16 +75,17 @@ impl ChannelStore {
             idempotency_key,
             sig,
             key_version,
-            None,
+            SealHooks::default(),
         )
     }
 
-    /// [`append_event`](Self::append_event) plus an optional sealing hook
-    /// (spec 7.3.1). The hook runs after the line is written and before the
-    /// lock is released. A dedup hit writes nothing but runs it again on the
-    /// existing line, so a retry never reports `Ok` for an unsealed event. If
-    /// the hook returns `Err` the append returns `Err` (decision B1) but the line stays on disk; the caller must treat
-    /// the event as written and unsealed, not retry it blindly.
+    /// [`append_event`](Self::append_event) plus optional sealing hooks
+    /// (spec 7.3.1; see [`SealHooks`]). `post_write` runs after the line is
+    /// written and before the lock is released. A dedup hit writes nothing but
+    /// runs it again on the existing line, so a retry never reports `Ok` for
+    /// an unsealed event. If it returns `Err` the append returns `Err`
+    /// (decision B1) but the line stays on disk; the caller must treat the
+    /// event as written and unsealed, not retry it blindly.
     #[allow(clippy::too_many_arguments)]
     pub fn append_event_with(
         &self,
@@ -58,7 +96,7 @@ impl ChannelStore {
         idempotency_key: Option<String>,
         sig: Option<String>,
         key_version: Option<u32>,
-        seal: Option<&SealHook<'_>>,
+        hooks: SealHooks<'_>,
     ) -> Result<ChannelEvent> {
         self.append_sealed(
             id,
@@ -71,14 +109,14 @@ impl ChannelStore {
                 key_version,
                 prev_hash: None,
             },
-            seal,
+            hooks,
         )
     }
 
     /// The append body. `signer` runs UNDER the lock with the chain hash of the
     /// current tail line ([`GENESIS_PREV_HASH`] for an empty log), so a v2
-    /// signer commits to exactly the line this event lands after. `seal` is the
-    /// post-write head hook ([`append_event_with`](Self::append_event_with)).
+    /// signer commits to exactly the line this event lands after. `hooks` are
+    /// the pre/post-write points of [`SealHooks`].
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_sealed(
         &self,
@@ -88,7 +126,7 @@ impl ChannelStore {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
         signer: impl FnOnce(chain::Unsealed<'_>) -> chain::Seal,
-        seal: Option<&SealHook<'_>>,
+        hooks: SealHooks<'_>,
     ) -> Result<ChannelEvent> {
         let dir = self.channel_dir(id);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -163,7 +201,7 @@ impl ChannelStore {
         // idempotency (head already covers this seq => no-op). Nothing is
         // written here.
         if let Some((existing, segment)) = hit {
-            let resealed = match seal {
+            let resealed = match hooks.post_write {
                 Some(hook) => Self::record_of(segment).and_then(|record| {
                     hook(&SealInput {
                         channel_id: id,
@@ -204,6 +242,15 @@ impl ChannelStore {
             prev_hash,
         };
         let line = serde_json::to_string(&ev).context("serialize event")?;
+        if let Some(pre) = hooks.pre_write
+            && let Err(e) = pre(&PreSealInput {
+                channel_id: id,
+                event: &ev,
+            })
+        {
+            FileExt::unlock(&lock).ok();
+            return Err(e.context("pre-write seal failed; nothing was written"));
+        }
         let mut data = OpenOptions::new()
             .create(true)
             .append(true)
@@ -220,7 +267,7 @@ impl ChannelStore {
         data.write_all(&record)
             .with_context(|| format!("write {}", path.display()))?;
         // Seal under the lock, after the write: event first, head second.
-        let sealed = match seal {
+        let sealed = match hooks.post_write {
             Some(hook) => hook(&SealInput {
                 channel_id: id,
                 event: &ev,

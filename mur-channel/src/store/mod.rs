@@ -10,23 +10,33 @@ use mur_common::channel::{Channel, ChannelActor, ChannelEvent, EventKind};
 /// Event-sourced store rooted at `<mur_home>/channels/`.
 pub struct ChannelStore {
     root: PathBuf,
+    /// Needed for the chain-head anchors, which live beside `channels/`
+    /// rather than inside it so the sandbox grant on `channels/` cannot
+    /// cover them.
+    mur_home: PathBuf,
 }
 
 mod append;
 mod chain;
 mod load;
 
-pub use append::{SealHook, SealInput};
+pub use append::{PreSealHook, PreSealInput, SealHook, SealHooks, SealInput};
 pub use chain::{GENESIS_PREV_HASH, line_hash};
-pub use load::DamageReport;
 #[cfg(test)]
 use load::check_absence_is_not_corruption;
+pub use load::{AnchorMismatch, AnchorMismatchKind, DamageReport};
 
 impl ChannelStore {
     pub fn new(mur_home: &Path) -> Self {
         Self {
             root: mur_home.join("channels"),
+            mur_home: mur_home.to_path_buf(),
         }
+    }
+
+    /// The `mur_home` this store was opened on (anchors live under it).
+    pub fn mur_home(&self) -> &Path {
+        &self.mur_home
     }
 
     fn channel_dir(&self, id: &str) -> PathBuf {

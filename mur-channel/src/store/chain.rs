@@ -34,6 +34,47 @@ fn chain_lines(content: &str) -> impl Iterator<Item = &str> {
     content.lines().filter(|l| !l.trim().is_empty())
 }
 
+/// Compare the log against the channel's signed head (#1868's [`Head`]).
+/// `Ok(None)` when there is no head, or when the head verifies under
+/// `writer_pubkey`, names this channel, and the log's first `head.lines`
+/// lines chain to `head.chain_hash` — the log may be longer (sandboxed agents
+/// append past the head). A head file that exists but cannot be read is an
+/// error, not "no head": the two verdicts must stay distinct.
+///
+/// [`Head`]: crate::head::Head
+pub(super) fn anchor_mismatch(
+    mur_home: &std::path::Path,
+    channel_id: &str,
+    content: &str,
+    writer_pubkey: &[u8; 32],
+) -> Result<Option<super::AnchorMismatch>> {
+    use super::AnchorMismatchKind as K;
+    use anyhow::Context;
+    let dir = crate::anchor::heads_dir(mur_home);
+    let Some(head) = crate::head_io::read_head(&dir, channel_id)
+        .with_context(|| format!("read signed head for {channel_id}"))?
+    else {
+        return Ok(None);
+    };
+    let log = content.as_bytes();
+    let kind = if !head.verify(writer_pubkey) {
+        Some(K::BadSignature)
+    } else if head.channel_id != channel_id {
+        Some(K::WrongChannel)
+    } else {
+        match crate::head::chain_prefix(log, head.lines) {
+            None => Some(K::Truncated),
+            Some(s) if hex::encode(s.hash) != head.chain_hash => Some(K::Rewritten),
+            Some(_) => None,
+        }
+    };
+    Ok(kind.map(|kind| super::AnchorMismatch {
+        log_lines: crate::head::chain_log(log).lines,
+        head,
+        kind,
+    }))
+}
+
 /// What the next appended event's `prev_hash` must be for this log content.
 pub(super) fn tail_hash(content: &str) -> String {
     chain_lines(content)
@@ -102,12 +143,12 @@ impl ChannelStore {
             kind,
             payload,
             idempotency_key,
-            None,
+            super::SealHooks::default(),
         )
     }
 
-    /// [`append_signed_event`](Self::append_signed_event) plus the post-write
-    /// seal hook, so the signer and the head share one lock acquisition.
+    /// [`append_signed_event`](Self::append_signed_event) plus the seal
+    /// hooks, so the signer and the head share one lock acquisition.
     #[allow(clippy::too_many_arguments)]
     pub fn append_signed_event_with(
         &self,
@@ -118,7 +159,7 @@ impl ChannelStore {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
-        seal: Option<&super::SealHook<'_>>,
+        hooks: super::SealHooks<'_>,
     ) -> Result<ChannelEvent> {
         self.append_sealed(
             id,
@@ -142,7 +183,7 @@ impl ChannelStore {
                     prev_hash: Some(u.tail_hash.to_owned()),
                 }
             },
-            seal,
+            hooks,
         )
     }
 }
