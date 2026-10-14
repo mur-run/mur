@@ -65,6 +65,51 @@ fn resolve(p: &Path) -> Result<PathBuf, &'static str> {
     })
 }
 
+/// The real path of an open descriptor, from the kernel rather than from any path we hold.
+#[cfg(target_os = "macos")]
+fn descriptor_path(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = [0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes a NUL-terminated path of at most PATH_MAX bytes into `buf`, which
+    // is exactly that long, and the descriptor is open for the duration of the call.
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
+    if rc == -1 {
+        return None;
+    }
+    let len = buf.iter().position(|&b| b == 0)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..len])))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn descriptor_path(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+/// No way to ask a descriptor for its path here, so nothing can be confirmed: refuse.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+fn descriptor_path(_file: &std::fs::File) -> Option<PathBuf> {
+    None
+}
+
+/// Open `real` (already resolved) and confirm, from the descriptor, that it is under `root`.
+/// Fails closed: a descriptor whose path cannot be read is refused.
+fn open_confined(root: &Path, real: &Path) -> Result<std::fs::File, BrokerError> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(real)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => refuse(why::NOT_FOUND),
+            _ => refuse(why::UNREADABLE),
+        })?;
+    match descriptor_path(&file) {
+        Some(actual) if actual.starts_with(root) => Ok(file),
+        _ => Err(refuse(why::OUTSIDE)),
+    }
+}
+
 impl CredentialSource for FileCredentials {
     /// Order matters, and each step relies on the one before:
     /// 1. resolve the root and the path (`realpath`), so every symlink is gone before any
@@ -72,7 +117,9 @@ impl CredentialSource for FileCredentials {
     /// 2. the resolved path is under the resolved root (component-wise, so `secrets-evil` is not
     ///    under `secrets`);
     /// 3. open the resolved path without following a final symlink and without blocking, so a
-    ///    FIFO cannot hang the daemon;
+    ///    FIFO cannot hang the daemon, then ask the descriptor where it really is and require
+    ///    that to be under the root too: `O_NOFOLLOW` covers only the last component, so a parent
+    ///    directory swapped for a symlink after step 2 is caught here;
     /// 4. from here on every fact comes from the open descriptor, never the path again: regular
     ///    file, mode exactly `0600`, owned by this uid, size within the bound;
     /// 5. read at most the bound plus one byte, once, into a buffer that is wiped on drop;
@@ -84,14 +131,7 @@ impl CredentialSource for FileCredentials {
             return Err(refuse(why::OUTSIDE));
         }
 
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-            .open(&real)
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => refuse(why::NOT_FOUND),
-                _ => refuse(why::UNREADABLE),
-            })?;
+        let file = open_confined(&root, &real)?;
         let meta = file.metadata().map_err(|_| refuse(why::UNREADABLE))?;
         if !meta.is_file() {
             return Err(refuse(why::NOT_REGULAR));
@@ -264,6 +304,29 @@ mod tests {
         );
     }
 
+    // The race the descriptor check closes: `open` resolves and compares, then opens by path. If a
+    // parent directory is swapped for a symlink in between, the path handed to the open no longer
+    // resolves where the comparison said. `open_confined` is that second half on its own, so the
+    // swapped path can be given to it directly.
+    #[test]
+    fn a_parent_swapped_for_a_symlink_after_the_root_check_is_refused() {
+        let f = fx();
+        let root = f.root.canonicalize().unwrap();
+        put(&f.outside, "token", b"stolen\n", 0o600);
+        symlink(&f.outside, root.join("dir")).unwrap();
+        let swapped = root.join("dir").join("token");
+        assert_eq!(
+            open_confined(&root, &swapped).unwrap_err(),
+            refuse(why::OUTSIDE)
+        );
+    }
+    #[test]
+    fn a_file_really_under_the_root_is_opened_by_the_confined_open() {
+        let f = fx();
+        let root = f.root.canonicalize().unwrap();
+        let p = put(&root, "token", b"ok\n", 0o600);
+        assert!(open_confined(&root, &p).is_ok());
+    }
     #[test]
     fn a_symlink_that_stays_inside_secrets_is_followed() {
         let f = fx();
