@@ -11,7 +11,7 @@
 //! succeeds: serena loads (and migrates) its config before it answers.
 //! Warn-only: a rewrite never fails the spawn.
 
-use super::serena_paths;
+use super::serena_paths_for;
 use mur_common::agent::{McpServerEntry, McpServerKind};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -31,7 +31,7 @@ pub fn fingerprint(entry: &McpServerEntry, agent_home: Option<&Path>) -> Option<
     if entry.kind != Some(McpServerKind::Serena) {
         return None;
     }
-    let file = serena_paths(agent_home?).config_file;
+    let file = serena_paths_for(agent_home?, &entry.name).ok()?.config_file;
     Some(ConfigFingerprint {
         digest: digest(&file),
         file,
@@ -71,7 +71,7 @@ mod tests {
 
     fn setup() -> (tempfile::TempDir, PathBuf) {
         let home = tempfile::tempdir().unwrap();
-        let cfg = serena_paths(home.path()).config_file;
+        let cfg = crate::mcp::serena::serena_paths(home.path()).config_file;
         std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
         std::fs::write(&cfg, "projects: []\n").unwrap();
         (home, cfg)

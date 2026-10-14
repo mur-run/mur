@@ -16,7 +16,7 @@ impl Fx {
         let tmp = tempfile::tempdir().unwrap();
         let agent_home = tmp.path().join("agent");
         let repo = tmp.path().join("repo");
-        let paths = serena_paths(&agent_home);
+        let paths = serena_paths_for(&agent_home, "code-nav").unwrap();
         let folder = paths.projects_dir.join("repo");
         fs::create_dir_all(&folder).unwrap();
         fs::create_dir_all(&repo).unwrap();
@@ -94,7 +94,9 @@ fn project_absent_relative_or_missing_is_refused() {
 #[test]
 fn preflight_failure_names_entry_and_check() {
     let fx = Fx::new();
-    let cfg = serena_paths(&fx.agent_home).config_file;
+    let cfg = serena_paths_for(&fx.agent_home, "code-nav")
+        .unwrap()
+        .config_file;
     let text = fs::read_to_string(&cfg).unwrap();
     fs::write(
         &cfg,
@@ -131,7 +133,7 @@ fn second_serena_entry_is_checked_too() {
 fn launch_additions_carry_home_and_fixed_project() {
     let fx = Fx::new();
     let got = launch_additions(&fx.serena(Some(fx.repo.clone())), Some(&fx.agent_home)).unwrap();
-    let paths = serena_paths(&fx.agent_home);
+    let paths = serena_paths_for(&fx.agent_home, "code-nav").unwrap();
     assert_eq!(got.env, launch_env(&paths));
     assert_eq!(got.env_remove, ["CLANGD_FLAGS"]);
     assert_eq!(got.args, launch_args(&fx.repo));
@@ -165,7 +167,9 @@ fn launch_additions_rerun_preflight_after_config_drift() {
     let fx = Fx::new();
     let entry = fx.serena(Some(fx.repo.clone()));
     fx.verify(std::slice::from_ref(&entry)).unwrap();
-    let cfg = serena_paths(&fx.agent_home).config_file;
+    let cfg = serena_paths_for(&fx.agent_home, "code-nav")
+        .unwrap()
+        .config_file;
     let text = fs::read_to_string(&cfg).unwrap();
     fs::write(
         &cfg,
@@ -222,4 +226,98 @@ fn serena_registers_exactly_the_five() {
 fn plain_entry_tools_pass_through() {
     let got = admit_tools(None, fake_tools(&FAKE_LIST));
     assert_eq!(got.len(), FAKE_LIST.len());
+}
+
+// ── per-entry SERENA_HOME (#1718) ──────────────────────────────────────
+
+#[test]
+fn default_entry_name_keeps_the_legacy_home() {
+    let h = Path::new("/h/agent");
+    assert_eq!(serena_paths_for(h, "serena").unwrap(), serena_paths(h));
+    assert_eq!(
+        serena_paths_for(h, "serena").unwrap().home,
+        h.join("serena"),
+        "existing single-project installs must not move"
+    );
+}
+
+#[test]
+fn other_entries_get_their_own_home_beside_the_legacy_one() {
+    let h = Path::new("/h/agent");
+    let a = serena_paths_for(h, "repo-a").unwrap();
+    let b = serena_paths_for(h, "repo-b").unwrap();
+    assert_eq!(a.home, h.join("serena-homes").join("repo-a"));
+    assert_ne!(a.home, b.home);
+    assert_ne!(a.config_file, b.config_file);
+    assert_ne!(a.projects_dir, b.projects_dir);
+    // never nested inside the legacy home, so no name can hit `projects/`.
+    assert!(!a.home.starts_with(h.join("serena")));
+}
+
+#[test]
+fn home_depends_on_the_name_only() {
+    let h = Path::new("/h/agent");
+    assert_eq!(
+        serena_paths_for(h, "x").unwrap(),
+        serena_paths_for(h, "x").unwrap()
+    );
+}
+
+#[test]
+fn unsafe_or_ambiguous_names_are_refused_not_sanitized() {
+    let h = Path::new("/h/agent");
+    let too_long = "a".repeat(65);
+    for bad in [
+        "",
+        ".",
+        "..",
+        "a/b",
+        "a_b/c",
+        "a\\b",
+        "a b",
+        "a.b",
+        "répo",
+        "a\0b",
+        too_long.as_str(),
+    ] {
+        let err = serena_paths_for(h, bad).unwrap_err();
+        assert!(matches!(err, SerenaEntryError::EntryName { .. }), "{bad:?}");
+    }
+    // `a/b` and `a_b` used to be able to collapse to one tool prefix; here
+    // the first is refused outright and the second is its own home.
+    assert!(serena_paths_for(h, "a_b").is_ok());
+}
+
+#[test]
+fn two_entries_are_verified_against_their_own_homes() {
+    let fx = Fx::new();
+    // Second entry has no home of its own on disk: it must fail on ITS home
+    // (not borrow code-nav's), and the error names it.
+    let first = fx.serena(Some(fx.repo.clone()));
+    let mut second = fx.serena(Some(fx.repo.clone()));
+    second.name = "other".into();
+    let err = fx.verify(&[first, second]).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("`other`"), "{msg}");
+    assert!(msg.contains("serena-homes/other"), "{msg}");
+}
+
+#[test]
+fn launch_additions_set_serena_home_per_entry() {
+    let fx = Fx::new();
+    let got = launch_additions(&fx.serena(Some(fx.repo.clone())), Some(&fx.agent_home)).unwrap();
+    let home = serena_paths_for(&fx.agent_home, "code-nav").unwrap().home;
+    assert_eq!(
+        got.env,
+        vec![(SERENA_HOME_ENV.to_owned(), home.into_os_string())]
+    );
+}
+
+#[test]
+fn an_invalid_entry_name_refuses_to_spawn() {
+    let fx = Fx::new();
+    let mut e = fx.serena(Some(fx.repo.clone()));
+    e.name = "a/b".into();
+    let err = launch_additions(&e, Some(&fx.agent_home)).unwrap_err();
+    assert!(matches!(err, SerenaEntryError::EntryName { .. }), "{err}");
 }

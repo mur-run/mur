@@ -50,6 +50,15 @@ pub fn admit_tools(
 
 /// Directory under the agent home used as serena's `SERENA_HOME`.
 pub const SERENA_HOME_DIR: &str = "serena";
+/// Parent of every non-default entry's `SERENA_HOME`, beside (not inside) the
+/// legacy home so an entry name can never collide with `projects/` or
+/// `serena_config.yml`.
+pub const SERENA_ENTRY_HOMES_DIR: &str = "serena-homes";
+/// The entry name whose `SERENA_HOME` stays at the legacy `<agent_home>/serena`.
+/// Existing single-project installs use it, so they need no migration.
+pub const DEFAULT_ENTRY_NAME: &str = "serena";
+/// Longest entry name accepted as a home directory name.
+const MAX_ENTRY_NAME_LEN: usize = 64;
 /// serena's global config file name inside `SERENA_HOME`.
 pub const SERENA_CONFIG_FILE: &str = "serena_config.yml";
 /// MUR-owned parent of every per-project serena folder, inside
@@ -98,6 +107,43 @@ pub fn serena_paths(agent_home: &Path) -> SerenaPaths {
     }
 }
 
+/// The paths for one named entry. Each entry gets its own `SERENA_HOME`
+/// because serena read-modify-writes `serena_config.yml` unlocked: two
+/// processes sharing one home lose project registrations when they start
+/// together (6 of 6 simultaneous starts dropped one in the #1718 probe).
+///
+/// The home is a pure function of the entry *name*, never of entry order,
+/// so removing or reordering entries cannot move anyone's home:
+/// [`DEFAULT_ENTRY_NAME`] keeps `<agent_home>/serena`; any other name maps to
+/// `<agent_home>/serena-homes/<name>`. Names are accepted verbatim or refused
+/// (`[A-Za-z0-9_-]`, 1..=64 chars) — never sanitized — so two names cannot
+/// collapse into one home.
+pub fn serena_paths_for(
+    agent_home: &Path,
+    entry_name: &str,
+) -> Result<SerenaPaths, SerenaEntryError> {
+    if entry_name == DEFAULT_ENTRY_NAME {
+        return Ok(serena_paths(agent_home));
+    }
+    let ok = !entry_name.is_empty()
+        && entry_name.len() <= MAX_ENTRY_NAME_LEN
+        && entry_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if !ok {
+        return Err(SerenaEntryError::EntryName {
+            entry: entry_name.to_owned(),
+        });
+    }
+    let home = agent_home.join(SERENA_ENTRY_HOMES_DIR).join(entry_name);
+    Ok(SerenaPaths {
+        config_file: home.join(SERENA_CONFIG_FILE),
+        projects_dir: home.join(SERENA_PROJECTS_DIR),
+        tools_dir: mur_common::home::mur_home_lossy().join(mur_common::config::MUR_TOOLS_DIR),
+        home,
+    })
+}
+
 /// Environment for the serena child: `SERENA_HOME` and nothing else.
 /// There is deliberately no profile-level `env` field (plan D1).
 ///
@@ -139,6 +185,11 @@ pub enum SerenaEntryError {
          home, so `SERENA_HOME` cannot be fixed; refusing to spawn"
     )]
     NoAgentHome { entry: String },
+    #[error(
+        "MCP server `{entry}` (kind: serena): the entry name must be 1-64 characters of \
+         [A-Za-z0-9_-] because it names the entry's own SERENA_HOME directory"
+    )]
+    EntryName { entry: String },
     #[error("MCP server `{entry}` (kind: serena): {source}")]
     Preflight {
         entry: String,
@@ -155,11 +206,11 @@ pub fn verify_entries(
     entries: &[McpServerEntry],
     agent_home: &Path,
 ) -> Result<(), SerenaEntryError> {
-    let paths = serena_paths(agent_home);
     for entry in entries {
         if entry.kind != Some(McpServerKind::Serena) {
             continue;
         }
+        let paths = serena_paths_for(agent_home, &entry.name)?;
         verify_entry(entry, &paths)?;
     }
     Ok(())
@@ -206,7 +257,7 @@ pub fn launch_additions(
             entry: entry.name.clone(),
         });
     };
-    let paths = serena_paths(agent_home);
+    let paths = serena_paths_for(agent_home, &entry.name)?;
     let project = verify_entry(entry, &paths)?;
     Ok(LaunchAdditions {
         env: launch_env(&paths),
