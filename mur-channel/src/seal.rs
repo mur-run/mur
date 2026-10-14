@@ -23,7 +23,7 @@ use chrono::Utc;
 use mur_common::channel::ChannelEvent;
 use mur_common::identity::AgentIdentity;
 
-use crate::head::{ChainState, Head, HeadFields, chain_log};
+use crate::head::{Head, HeadFields, chain_log, chain_prefix, split_lines};
 use crate::head_io::{read_head, sync_dir, write_head};
 use crate::service::SharedSealHook;
 use crate::store::{ChannelStore, SealInput};
@@ -158,27 +158,6 @@ impl HeadSealer {
         }
         Ok(())
     }
-}
-
-/// `\n`-terminated segments of `log`, without the terminator. An unterminated
-/// tail is not a line (spec section 9).
-fn split_lines(log: &[u8]) -> Vec<&[u8]> {
-    let mut out = Vec::new();
-    let mut rest = log;
-    while let Some(nl) = rest.iter().position(|&b| b == b'\n') {
-        out.push(&rest[..nl]);
-        rest = &rest[nl + 1..];
-    }
-    out
-}
-
-/// Chain the first `n` lines; `None` if the log has fewer.
-fn chain_prefix(log: &[u8], n: u64) -> Option<ChainState> {
-    let mut state = ChainState::genesis();
-    for line in split_lines(log).into_iter().take(n as usize) {
-        state.extend(line);
-    }
-    (state.lines == n).then_some(state)
 }
 
 /// Spec section 9: with no head yet, `legacy_through` is the last `seq` before

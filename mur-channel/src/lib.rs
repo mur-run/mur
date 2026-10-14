@@ -11,6 +11,7 @@ pub mod service;
 pub mod sign;
 pub mod store;
 pub mod summary;
+pub mod verify;
 pub mod watch;
 
 pub use service::ChannelService;

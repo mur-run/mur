@@ -57,6 +57,27 @@ pub fn chain_log(log: &[u8]) -> ChainState {
     state
 }
 
+/// `\n`-terminated segments of `log`, without the terminator. An unterminated
+/// tail is not a line (spec section 9).
+pub(crate) fn split_lines(log: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut rest = log;
+    while let Some(nl) = rest.iter().position(|&b| b == b'\n') {
+        out.push(&rest[..nl]);
+        rest = &rest[nl + 1..];
+    }
+    out
+}
+
+/// Chain the first `n` lines; `None` if the log has fewer.
+pub(crate) fn chain_prefix(log: &[u8], n: u64) -> Option<ChainState> {
+    let mut state = ChainState::genesis();
+    for line in split_lines(log).into_iter().take(n as usize) {
+        state.extend(line);
+    }
+    (state.lines == n).then_some(state)
+}
+
 /// The signed fields of a head, before `ts` and `sig` are attached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadFields {
