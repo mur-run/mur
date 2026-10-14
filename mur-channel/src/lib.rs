@@ -13,7 +13,6 @@ pub mod store;
 pub mod summary;
 pub mod watch;
 
-pub use anchor::ChainTail;
 pub use service::ChannelService;
 pub use store::ChannelStore;
 pub use summary::{

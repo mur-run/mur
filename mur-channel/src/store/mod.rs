@@ -24,7 +24,7 @@ pub use append::{PreSealHook, PreSealInput, SealHook, SealHooks, SealInput};
 pub use chain::{GENESIS_PREV_HASH, line_hash};
 #[cfg(test)]
 use load::check_absence_is_not_corruption;
-pub use load::{AnchorMismatch, DamageReport};
+pub use load::{AnchorMismatch, AnchorMismatchKind, DamageReport};
 
 impl ChannelStore {
     pub fn new(mur_home: &Path) -> Self {

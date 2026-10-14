@@ -304,19 +304,18 @@ mod tests {
 
         cmd_commander_directive(home, "dev", "kill", None, 1000).unwrap();
 
-        let anchor = mur_channel::anchor::read_anchor(home, "fleet-dev")
-            .unwrap()
-            .expect("commander directive must leave an anchor");
+        let head =
+            mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(home), "fleet-dev")
+                .unwrap()
+                .expect("commander directive must seal a head");
         let raw =
             std::fs::read_to_string(home.join("channels").join("fleet-dev").join("events.jsonl"))
                 .unwrap();
         let line = raw.lines().last().unwrap();
         let last: mur_common::channel::ChannelEvent = serde_json::from_str(line).unwrap();
-        assert_eq!(
-            anchor.seq, last.seq,
-            "anchor must point at the directive line"
-        );
-        assert_eq!(anchor.hash, mur_channel::store::line_hash(line));
+        assert_eq!(head.seq, last.seq, "head must cover the directive line");
+        let state = mur_channel::head::chain_log(raw.as_bytes());
+        assert_eq!(head.chain_hash, hex::encode(state.hash));
         assert!(
             !mur_channel::anchor::is_dirty(home, "fleet-dev"),
             "a successful append clears the dirty marker"

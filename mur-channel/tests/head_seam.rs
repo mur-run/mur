@@ -12,7 +12,7 @@ use std::cell::RefCell;
 
 use chrono::Utc;
 use mur_channel::ChannelStore;
-use mur_channel::store::{GENESIS_PREV_HASH, SealInput, line_hash};
+use mur_channel::store::{GENESIS_PREV_HASH, SealHooks, SealInput, line_hash};
 use mur_common::channel::{Channel, ChannelActor, ChannelState, EventKind, Goal};
 use mur_common::identity::AgentIdentity;
 use tempfile::TempDir;
@@ -64,7 +64,7 @@ fn sealed_record_minus_newline_is_the_chained_line() {
                 None,
                 None,
                 None,
-                Some(&record_hook),
+                SealHooks::post(Some(&record_hook)),
             )
             .unwrap();
     }
@@ -79,7 +79,7 @@ fn sealed_record_minus_newline_is_the_chained_line() {
             EventKind::Message,
             serde_json::json!({ "text": "v2" }),
             None,
-            None,
+            SealHooks::default(),
         )
         .unwrap();
 

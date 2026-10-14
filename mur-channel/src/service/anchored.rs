@@ -1,73 +1,142 @@
-//! Anchored appends (#1770): the trusted writer advances the chain-head
-//! anchor in `<mur_home>/channel-heads/` through the store's [`SealHooks`],
-//! so the whole protocol runs under the channel lock:
+//! Anchored appends (#1770 part 2): the trusted writer advances the signed
+//! [`Head`] of #1868 in `<mur_home>/channel-heads/` through the store's
+//! [`SealHooks`], so the whole protocol runs under the channel lock:
 //!
-//! `lock` → `pre_write: mark_dirty` → write line → `post_write: write_anchor`
-//! → `clear_dirty` → `unlock`.
+//! `lock` → `pre_write: mark_dirty` → write line → `post_write: fsync log,
+//! seal + write_head` → `clear_dirty` → `unlock`.
 //!
-//! Under the lock, two anchored appends cannot interleave, so an older tail
-//! can never overwrite a newer anchor. The one remaining regression source
-//! is a dedup hit, which re-runs `post_write` on an EARLIER line; the post
-//! hook is therefore monotonic (it never moves the anchor backwards).
+//! Dedup (aligned with #1868): a hit skips `pre_write` (no new line, so no
+//! new marker) but still runs `post_write`, which is a no-op when the head
+//! already covers the log and otherwise repairs a head left behind by a crash
+//! and clears the stale marker. Skipping it would leave that marker forever.
+//!
+//! The head is sealed over the WHOLE log, not just the line handed in, so it
+//! also covers lines sandboxed agents appended since the last head. It only
+//! moves forward along the same history: a log that no longer extends the
+//! current head is refused, never re-sealed.
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use chrono::Utc;
 use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+use mur_common::identity::AgentIdentity;
 
 use super::ChannelService;
-use crate::anchor::{self, AnchorLagError, ChainTail};
-use crate::store::{PreSealInput, SealHook, SealHooks, SealInput, line_hash};
+use crate::anchor::{self, AnchorLagError};
+use crate::head::{Head, HeadFields, chain_log, chain_prefix};
+use crate::head_io;
+use crate::store::{PreSealInput, SealHook, SealHooks, SealInput};
 
-/// Pre-write half: the dirty marker must be on disk before the line is, so a
-/// crash between the write and the anchor leaves evidence. Failing here
-/// aborts the append with nothing written.
-fn mark(mur_home: &Path, input: &PreSealInput<'_>) -> Result<()> {
-    anchor::mark_dirty(mur_home, input.channel_id)
-        .with_context(|| format!("mark chain-head dirty for {}", input.channel_id))
+/// Who signs the head of an anchored append: the writer's identity and its
+/// key version, the same pair that signs the event.
+#[derive(Clone, Copy)]
+pub(super) struct HeadSigner<'a> {
+    pub identity: &'a AgentIdentity,
+    pub kv: u32,
 }
 
-/// Post-write half: advance the anchor to the line just written, then clear
-/// the marker. A failed anchor write is an [`AnchorLagError`] (the line is
-/// durable; the marker stays). A failed `clear_dirty` is only a warning: the
-/// anchor is correct, the lingering marker over-reports until the next
-/// anchored append clears it.
-fn advance(mur_home: &Path, input: &SealInput<'_>) -> Result<()> {
-    let id = input.channel_id;
-    let body = std::str::from_utf8(input.record)
-        .context("event record is not UTF-8")?
-        .strip_suffix('\n')
-        .context("event record has no LF terminator")?;
-    let tail = ChainTail {
-        seq: input.event.seq,
-        hash: line_hash(body),
+/// Pre-write half: the dirty marker must be on disk before the line is, so a
+/// crash between the write and the head leaves evidence. Failing here aborts
+/// the append with nothing written. Not run on a dedup hit: no new line.
+fn mark(mur_home: &Path, input: &PreSealInput<'_>) -> Result<()> {
+    anchor::mark_dirty(mur_home, input.channel_id)
+        .with_context(|| format!("mark channel head dirty for {}", input.channel_id))
+}
+
+/// `seq` of the last parseable event in `log`, and of the last one that
+/// predates `record` when `record` is the log's final line (a fresh write);
+/// when it is not (a dedup hit on an older line), every line predates the
+/// first head, so both are the last `seq`.
+fn seqs(log: &[u8], record: &[u8]) -> (Option<u64>, Option<u64>) {
+    let fresh = log.ends_with(record);
+    let body = if fresh {
+        &log[..log.len() - record.len()]
+    } else {
+        log
     };
-    // Monotonic: a dedup hit hands us an earlier line, and a log truncated
-    // below the anchor hands us a lower seq. Never move backwards — that
-    // would launder the truncation — and leave any marker in place. A corrupt
-    // anchor is an error, not "absent": overwriting it would erase evidence.
-    // Everything below runs after the line is durable, so EVERY failure —
-    // reading the current anchor included — is an `AnchorLagError`, never a
-    // plain error a caller could mistake for "nothing was written".
-    let advanced = anchor::read_anchor(mur_home, id).and_then(|current| {
-        if current.as_ref().is_some_and(|a| a.seq >= tail.seq) {
-            return Ok(false);
-        }
-        anchor::write_anchor(mur_home, id, &tail).map(|()| true)
-    });
-    match advanced {
-        Ok(true) => {}
-        Ok(false) => return Ok(()),
-        Err(source) => {
-            tracing::error!(channel = id, seq = tail.seq, error = %source,
-                "chain-head anchor not advanced; channel stays dirty");
-            return Err(AnchorLagError {
-                event: input.event.clone(),
-                tail,
-                source,
+    let last_seq = |bytes: &[u8]| {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .rev()
+            .find_map(|l| serde_json::from_str::<ChannelEvent>(l).ok())
+            .map(|e| e.seq)
+    };
+    (last_seq(log), last_seq(body))
+}
+
+/// The head the log should have now, or `None` when the current head already
+/// covers the whole log. Refuses (never overwrites) a head the log no longer
+/// extends — truncated below it, or rewritten inside it — because sealing
+/// over that would launder the damage. This is the monotonic guard: a head
+/// only ever moves forward along the same history.
+fn next_head(
+    current: Option<&Head>,
+    log: &[u8],
+    input: &SealInput<'_>,
+    signer: HeadSigner<'_>,
+) -> Result<Option<Head>> {
+    let state = chain_log(log);
+    let (last_seq, before) = seqs(log, input.record);
+    let legacy_through = match current {
+        Some(h) => {
+            let prefix = chain_prefix(log, h.lines)
+                .with_context(|| format!("log has fewer than the head's {} lines", h.lines))?;
+            if hex::encode(prefix.hash) != h.chain_hash {
+                bail!("log no longer extends the signed head at line {}", h.lines);
             }
-            .into());
+            if h.lines == state.lines {
+                return Ok(None);
+            }
+            h.legacy_through
         }
+        // First seal: every event written before this line predates any head.
+        None => before,
+    };
+    let fields = HeadFields {
+        channel_id: input.channel_id.to_owned(),
+        seq: last_seq.unwrap_or(input.event.seq),
+        lines: state.lines,
+        chain_hash: hex::encode(state.hash),
+        key_version: Some(signer.kv),
+        legacy_through,
+    };
+    Ok(Some(Head::seal(signer.identity, fields, Utc::now())))
+}
+
+/// Post-write half (also run on a dedup hit): fsync the log (spec 7.3.1
+/// step 1), seal the head over the whole log, then clear the marker. Every
+/// failure here comes after the line is durable, so it is an
+/// [`AnchorLagError`] — never a plain error a caller could read as "nothing
+/// was written" — and the marker stays. A failed `clear_dirty` is only a
+/// warning: the head is correct, the marker over-reports until the next
+/// anchored append clears it.
+fn advance(
+    mur_home: &Path,
+    log_path: &Path,
+    signer: HeadSigner<'_>,
+    input: &SealInput<'_>,
+) -> Result<()> {
+    let id = input.channel_id;
+    let dir = anchor::heads_dir(mur_home);
+    let sealed = (|| -> Result<()> {
+        let f = std::fs::File::open(log_path).context("open log for fsync")?;
+        f.sync_all().context("fsync log before the head")?;
+        let log = std::fs::read(log_path).context("read log to chain it")?;
+        let current = head_io::read_head(&dir, id)?;
+        if let Some(head) = next_head(current.as_ref(), &log, input, signer)? {
+            head_io::write_head(&dir, &head)?;
+        }
+        Ok(())
+    })();
+    if let Err(source) = sealed {
+        tracing::error!(channel = id, seq = input.event.seq, error = %format!("{source:#}"),
+            "signed channel head not advanced; channel stays dirty");
+        return Err(AnchorLagError {
+            event: input.event.clone(),
+            source,
+        }
+        .into());
     }
     if let Err(e) = anchor::clear_dirty(mur_home, id) {
         tracing::warn!(channel = id, error = %e, "could not clear dirty marker");
@@ -77,28 +146,27 @@ fn advance(mur_home: &Path, input: &SealInput<'_>) -> Result<()> {
 
 impl ChannelService {
     /// Lend `f` the hooks for one write: the service's own post-write seal
-    /// (if any), plus — when `anchored` — the chain-head anchor protocol. The
-    /// anchor runs first so an installed seal sees an anchored head.
+    /// (if any), plus — when `signer` is set — the signed-head protocol. The
+    /// head runs first so an installed seal sees an advanced head.
     pub(super) fn with_hooks<T>(
         &self,
-        anchored: bool,
+        signer: Option<HeadSigner<'_>>,
         f: impl FnOnce(SealHooks<'_>) -> Result<T>,
     ) -> Result<T> {
         let home = self.store.mur_home();
         let seal = self.seal.as_deref();
+        let Some(signer) = signer else {
+            return f(SealHooks::post(seal.map(|h| h as &SealHook<'_>)));
+        };
         let pre = |i: &PreSealInput<'_>| mark(home, i);
         let post = |i: &SealInput<'_>| {
-            advance(home, i)?;
+            advance(home, &self.store.events_path(i.channel_id), signer, i)?;
             seal.map_or(Ok(()), |s| s(i))
         };
-        if anchored {
-            f(SealHooks {
-                pre_write: Some(&pre),
-                post_write: Some(&post as &SealHook<'_>),
-            })
-        } else {
-            f(SealHooks::post(seal.map(|h| h as &SealHook<'_>)))
-        }
+        f(SealHooks {
+            pre_write: Some(&pre),
+            post_write: Some(&post as &SealHook<'_>),
+        })
     }
 
     /// The sig-input v2 write behind `append_signed` / `append_and_anchor`.
@@ -106,7 +174,7 @@ impl ChannelService {
     pub(super) fn signed_v2(
         &self,
         channel_id: &str,
-        identity: &mur_common::identity::AgentIdentity,
+        identity: &AgentIdentity,
         kv: u32,
         actor: ChannelActor,
         kind: EventKind,
@@ -114,7 +182,8 @@ impl ChannelService {
         idempotency_key: Option<String>,
         anchored: bool,
     ) -> Result<ChannelEvent> {
-        let ev = self.with_hooks(anchored, |hooks| {
+        let signer = anchored.then_some(HeadSigner { identity, kv });
+        let ev = self.with_hooks(signer, |hooks| {
             self.store.append_signed_event_with(
                 channel_id,
                 identity,
@@ -136,7 +205,7 @@ impl ChannelService {
     pub(super) fn signed_v1(
         &self,
         channel_id: &str,
-        identity: &mur_common::identity::AgentIdentity,
+        identity: &AgentIdentity,
         kv: u32,
         actor: ChannelActor,
         kind: EventKind,
@@ -144,6 +213,7 @@ impl ChannelService {
         idempotency_key: Option<String>,
         anchored: bool,
     ) -> Result<ChannelEvent> {
+        let signer = anchored.then_some(HeadSigner { identity, kv });
         let sig = crate::sign::sign_event(
             identity,
             channel_id,
@@ -152,7 +222,7 @@ impl ChannelService {
             &payload,
             idempotency_key.as_deref(),
         );
-        let ev = self.with_hooks(anchored, |hooks| {
+        let ev = self.with_hooks(signer, |hooks| {
             self.store.append_event_with(
                 channel_id,
                 actor,
@@ -169,7 +239,7 @@ impl ChannelService {
     }
 
     /// [`append_signed`](Self::append_signed) that also advances the
-    /// chain-head anchor, under the same lock as the write.
+    /// signed channel head, under the same lock as the write.
     ///
     /// **Only call from outside the agent sandbox** (mur-core, Hub). A
     /// sandboxed agent's fs grant covers `channels/` but deliberately not
@@ -184,7 +254,7 @@ impl ChannelService {
     pub fn append_and_anchor(
         &self,
         channel_id: &str,
-        identity: &mur_common::identity::AgentIdentity,
+        identity: &AgentIdentity,
         kv: u32,
         actor: ChannelActor,
         kind: EventKind,
@@ -209,7 +279,7 @@ impl ChannelService {
     pub fn append_and_anchor_v1(
         &self,
         channel_id: &str,
-        identity: &mur_common::identity::AgentIdentity,
+        identity: &AgentIdentity,
         kv: u32,
         actor: ChannelActor,
         kind: EventKind,

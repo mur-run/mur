@@ -34,49 +34,44 @@ fn chain_lines(content: &str) -> impl Iterator<Item = &str> {
     content.lines().filter(|l| !l.trim().is_empty())
 }
 
-/// `(seq, hash)` of the last chain line. `None` for an empty log or when the
-/// tail line does not parse as an event: an anchor needs a `seq`, and one
-/// pointing at garbage would be meaningless.
-#[cfg(test)]
-pub(super) fn chain_tail(content: &str) -> Option<crate::anchor::ChainTail> {
-    let l = chain_lines(content).last()?;
-    let ev: ChannelEvent = serde_json::from_str(l).ok()?;
-    Some(crate::anchor::ChainTail {
-        seq: ev.seq,
-        hash: line_hash(l),
-    })
-}
-
-/// Compare the log against the channel's chain-head anchor. `Ok(None)` when
-/// there is no anchor or the anchored line is present and intact — the log
-/// may be longer. The anchored line is located by `seq` (lines are not
-/// seq-indexed, so this is a scan) and then compared by raw-line hash.
+/// Compare the log against the channel's signed head (#1868's [`Head`]).
+/// `Ok(None)` when there is no head, or when the head verifies under
+/// `writer_pubkey`, names this channel, and the log's first `head.lines`
+/// lines chain to `head.chain_hash` — the log may be longer (sandboxed agents
+/// append past the head). A head file that exists but cannot be read is an
+/// error, not "no head": the two verdicts must stay distinct.
+///
+/// [`Head`]: crate::head::Head
 pub(super) fn anchor_mismatch(
     mur_home: &std::path::Path,
     channel_id: &str,
     content: &str,
+    writer_pubkey: &[u8; 32],
 ) -> Result<Option<super::AnchorMismatch>> {
+    use super::AnchorMismatchKind as K;
     use anyhow::Context;
-    let Some(anchor) = crate::anchor::read_anchor(mur_home, channel_id)
-        .with_context(|| format!("read chain-head anchor for {channel_id}"))?
+    let dir = crate::anchor::heads_dir(mur_home);
+    let Some(head) = crate::head_io::read_head(&dir, channel_id)
+        .with_context(|| format!("read signed head for {channel_id}"))?
     else {
         return Ok(None);
     };
-    let mut last_seq = None;
-    for l in chain_lines(content) {
-        let Ok(ev) = serde_json::from_str::<ChannelEvent>(l) else {
-            continue;
-        };
-        last_seq = Some(ev.seq);
-        if ev.seq == anchor.seq {
-            let found_seq = Some(ev.seq);
-            return Ok((line_hash(l) != anchor.hash)
-                .then_some(super::AnchorMismatch { anchor, found_seq }));
+    let log = content.as_bytes();
+    let kind = if !head.verify(writer_pubkey) {
+        Some(K::BadSignature)
+    } else if head.channel_id != channel_id {
+        Some(K::WrongChannel)
+    } else {
+        match crate::head::chain_prefix(log, head.lines) {
+            None => Some(K::Truncated),
+            Some(s) if hex::encode(s.hash) != head.chain_hash => Some(K::Rewritten),
+            Some(_) => None,
         }
-    }
-    Ok(Some(super::AnchorMismatch {
-        anchor,
-        found_seq: last_seq,
+    };
+    Ok(kind.map(|kind| super::AnchorMismatch {
+        log_lines: crate::head::chain_log(log).lines,
+        head,
+        kind,
     }))
 }
 

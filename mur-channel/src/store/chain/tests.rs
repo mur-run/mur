@@ -279,23 +279,56 @@ fn every_line_shape_survives_a_serde_round_trip_byte_for_byte() {
     }
 }
 
-// ---- chain-head anchors (#1770 PR 2) ----
+// ---- signed heads (#1770 part 2, #1868 format) ----
+
+use crate::store::AnchorMismatchKind as K;
 
 impl Fx {
     fn mur_home(&self) -> &std::path::Path {
         self._tmp.path()
     }
 
-    /// Anchor at the CURRENT tail of the log.
+    fn heads(&self) -> std::path::PathBuf {
+        crate::anchor::heads_dir(self.mur_home())
+    }
+
+    /// A head signed by `signer` over the CURRENT log.
+    fn head_by(&self, signer: &AgentIdentity, channel_id: &str) -> crate::head::Head {
+        let log = fs::read(self.store.events_path(CH)).unwrap();
+        let state = crate::head::chain_log(&log);
+        let seq = serde_json::from_str::<ChannelEvent>(f_last(&log))
+            .unwrap()
+            .seq;
+        crate::head::Head::seal(
+            signer,
+            crate::head::HeadFields {
+                channel_id: channel_id.into(),
+                seq,
+                lines: state.lines,
+                chain_hash: hex::encode(state.hash),
+                key_version: Some(1),
+                legacy_through: None,
+            },
+            chrono::Utc::now(),
+        )
+    }
+
+    /// Seal a valid head at the current tail of the log.
     fn anchor_now(&self) {
-        let content = fs::read_to_string(self.store.events_path(CH)).unwrap();
-        let tail = chain_tail(&content).expect("non-empty parseable tail");
-        crate::anchor::write_anchor(self.mur_home(), CH, &tail).unwrap();
+        crate::head_io::write_head(&self.heads(), &self.head_by(&self.id, CH)).unwrap();
+    }
+
+    fn mismatch(&self) -> K {
+        self.report().anchor_mismatch.expect("anchor mismatch").kind
     }
 }
 
+fn f_last(log: &[u8]) -> &str {
+    std::str::from_utf8(log).unwrap().lines().last().unwrap()
+}
+
 #[test]
-fn no_anchor_means_no_mismatch() {
+fn no_head_means_no_mismatch() {
     let f = fx();
     f.v2(0);
     f.v2(1);
@@ -305,7 +338,7 @@ fn no_anchor_means_no_mismatch() {
 }
 
 #[test]
-fn log_exactly_at_anchor_is_clean() {
+fn log_exactly_at_head_is_clean() {
     let f = fx();
     f.v2(0);
     f.v2(1);
@@ -316,11 +349,11 @@ fn log_exactly_at_anchor_is_clean() {
 }
 
 #[test]
-fn log_longer_than_anchor_is_clean_when_the_anchored_line_is_intact() {
+fn log_longer_than_head_is_clean_when_the_covered_prefix_is_intact() {
     let f = fx();
     f.v2(0);
     f.anchor_now();
-    f.unsigned(1); // sandboxed agent appends past the anchor: allowed.
+    f.unsigned(1); // sandboxed agent appends past the head: allowed.
     f.v2(2);
     let r = f.report();
     assert_eq!(r.anchor_mismatch, None);
@@ -328,7 +361,7 @@ fn log_longer_than_anchor_is_clean_when_the_anchored_line_is_intact() {
 }
 
 #[test]
-fn truncating_below_the_anchor_is_a_mismatch_even_though_every_link_holds() {
+fn truncating_below_the_head_is_a_mismatch_even_though_every_link_holds() {
     let f = fx();
     f.v2(0);
     f.v2(1);
@@ -339,40 +372,93 @@ fn truncating_below_the_anchor_is_a_mismatch_even_though_every_link_holds() {
     let r = f.report();
     assert!(r.chain_breaks.is_empty(), "adjacent links are all valid");
     let m = r.anchor_mismatch.as_ref().expect("anchor mismatch");
-    assert_eq!(m.anchor.seq, 2);
-    assert_eq!(m.found_seq, Some(1));
+    assert_eq!(m.kind, K::Truncated);
+    assert_eq!((m.head.lines, m.log_lines), (3, 2));
     assert!(!r.is_clean());
 }
 
 #[test]
-fn replacing_the_anchored_line_is_a_mismatch_even_at_the_same_seq() {
+fn replacing_a_covered_line_is_a_mismatch_even_at_the_same_length() {
     let f = fx();
     f.v2(0);
     f.v2(1);
+    f.anchor_now();
+    let lines = f.lines();
+    f.rewrite(&lines[..1]);
+    f.v2(1); // same seq, same line count, different bytes.
+    assert_eq!(f.lines().len(), 2);
+    assert_eq!(f.mismatch(), K::Rewritten);
+}
+
+/// The cumulative chain covers lines no `prev_hash` does: an unsigned line
+/// edited in the middle of a head-covered prefix is caught.
+#[test]
+fn editing_an_unsigned_covered_line_is_a_mismatch() {
+    let f = fx();
+    f.v2(0);
+    f.unsigned(1);
     f.anchor_now();
     let mut lines = f.lines();
-    // Rewrite the log from scratch so seq 1 exists but is a different line.
-    f.rewrite(&lines[..1]);
-    f.v2(1);
-    lines = f.lines();
-    assert_eq!(lines.len(), 2);
-    let r = f.report();
-    let m = r.anchor_mismatch.as_ref().expect("anchor mismatch");
-    assert_eq!(m.anchor.seq, 1);
-    assert_eq!(m.found_seq, Some(1));
-    assert!(!r.is_clean());
+    lines[1] = lines[1].replace("\"seq\":1", "\"seq\":1 ");
+    f.rewrite(&lines);
+    assert_eq!(f.mismatch(), K::Rewritten);
 }
 
 #[test]
-fn emptied_log_with_an_anchor_is_a_mismatch() {
+fn emptied_log_with_a_head_is_a_mismatch() {
     let f = fx();
     f.v2(0);
     f.anchor_now();
-    f.rewrite(&[]);
-    let r = f.report();
-    let m = r.anchor_mismatch.as_ref().expect("anchor mismatch");
-    assert_eq!(m.found_seq, None);
-    assert!(!r.is_clean());
+    fs::write(f.store.events_path(CH), b"").unwrap();
+    let m = f.report().anchor_mismatch.expect("anchor mismatch");
+    assert_eq!((m.kind, m.log_lines), (K::Truncated, 0));
+}
+
+/// The point of signing: an attacker who can write `channel-heads/` but has
+/// no router key cannot re-anchor a truncated log.
+#[test]
+fn a_head_forged_by_another_key_is_a_mismatch() {
+    let f = fx();
+    f.v2(0);
+    f.v2(1);
+    let forger = AgentIdentity::generate();
+    crate::head_io::write_head(&f.heads(), &f.head_by(&forger, CH)).unwrap();
+    assert_eq!(f.mismatch(), K::BadSignature);
+}
+
+#[test]
+fn a_hand_edited_head_is_a_mismatch() {
+    let f = fx();
+    f.v2(0);
+    f.v2(1);
+    let mut h = f.head_by(&f.id, CH);
+    h.lines = 1; // pretend the head only ever covered seq 0
+    crate::head_io::write_head(&f.heads(), &h).unwrap();
+    assert_eq!(f.mismatch(), K::BadSignature);
+}
+
+#[test]
+fn a_validly_signed_head_of_another_channel_is_a_mismatch() {
+    let f = fx();
+    f.v2(0);
+    let other = f.head_by(&f.id, "elsewhere");
+    let path = crate::head_io::head_path(&f.heads(), CH).unwrap();
+    fs::create_dir_all(f.heads()).unwrap();
+    fs::write(path, serde_json::to_vec(&other).unwrap()).unwrap();
+    assert_eq!(f.mismatch(), K::WrongChannel);
+}
+
+#[test]
+fn a_corrupt_head_file_is_an_error_not_no_head() {
+    let f = fx();
+    f.v2(0);
+    fs::create_dir_all(f.heads()).unwrap();
+    fs::write(crate::head_io::head_path(&f.heads(), CH).unwrap(), b"{nope").unwrap();
+    assert!(
+        f.store
+            .load_events_with_damage(CH, &f.id.verifying_key_bytes(), false)
+            .is_err()
+    );
 }
 
 #[test]

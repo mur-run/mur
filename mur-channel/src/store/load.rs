@@ -25,12 +25,12 @@ pub struct DamageReport {
     /// before it (#1770) — a deleted, reordered, or edited earlier line.
     /// Only events that carry a `prev_hash` (sig-input v2) can appear here.
     pub chain_breaks: Vec<u64>,
-    /// The chain-head anchor in `<mur_home>/channel-heads/` names a line that
-    /// is not in the log at that `seq` with that hash (#1770): the log was
-    /// truncated below the anchor, or rewritten from an earlier point.
-    /// `chain_breaks` cannot see either — every remaining link still holds.
-    /// A log *longer* than the anchor is fine (sandboxed agents append past
-    /// it); one with no anchor at all is also fine.
+    /// The signed head in `<mur_home>/channel-heads/` (#1868) does not hold
+    /// for this log (#1770): its signature fails, or the log's first
+    /// `head.lines` lines do not chain to `head.chain_hash` — truncated below
+    /// the head, or rewritten inside it. `chain_breaks` cannot see either;
+    /// every remaining link still holds. A log *longer* than the head is fine
+    /// (sandboxed agents append past it); one with no head at all is too.
     pub anchor_mismatch: Option<AnchorMismatch>,
     /// The channel's dirty marker is present: an anchored append began (the
     /// marker goes down under the lock before the line is written) and never
@@ -41,16 +41,29 @@ pub struct DamageReport {
     pub anchor_dirty: bool,
 }
 
-/// Where the anchor and the log disagree. See [`DamageReport::anchor_mismatch`].
+/// Where the signed head and the log disagree. See
+/// [`DamageReport::anchor_mismatch`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnchorMismatch {
-    /// What the anchor says the head is.
-    pub anchor: crate::anchor::ChainTail,
-    /// The `seq` the log actually has at the anchor's position: the last
-    /// event's `seq` when the log is shorter than the anchor, the event at
-    /// `anchor.seq` when it is present but hashes differently, `None` when
-    /// the log is empty.
-    pub found_seq: Option<u64>,
+    /// The head as read from disk.
+    pub head: crate::head::Head,
+    pub kind: AnchorMismatchKind,
+    /// `\n`-terminated lines the log actually has.
+    pub log_lines: u64,
+}
+
+/// Why a head does not hold for its log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorMismatchKind {
+    /// The signature does not verify under the writer's key: the head file
+    /// itself was forged or edited.
+    BadSignature,
+    /// Validly signed, but for a different channel: copied in from another.
+    WrongChannel,
+    /// The log has fewer lines than the head covers.
+    Truncated,
+    /// The log has the lines, but they chain to a different hash.
+    Rewritten,
 }
 
 impl DamageReport {
@@ -183,7 +196,8 @@ impl ChannelStore {
             Some(c) => c,
             // No log but an anchor (or a dirty marker) is the most complete
             // truncation there is; fall through with empty content.
-            None if crate::anchor::read_anchor(&self.mur_home, id)?.is_none()
+            None if crate::head_io::read_head(&crate::anchor::heads_dir(&self.mur_home), id)?
+                .is_none()
                 && !crate::anchor::is_dirty(&self.mur_home, id) =>
             {
                 return Ok((Vec::new(), DamageReport::default()));
@@ -211,7 +225,8 @@ impl ChannelStore {
             }
         }
         report.chain_breaks = super::chain::chain_breaks(&content);
-        report.anchor_mismatch = super::chain::anchor_mismatch(&self.mur_home, id, &content)?;
+        report.anchor_mismatch =
+            super::chain::anchor_mismatch(&self.mur_home, id, &content, writer_pubkey)?;
         report.anchor_dirty = crate::anchor::is_dirty(&self.mur_home, id);
         Ok((events, report))
     }

@@ -557,10 +557,12 @@ mod tests {
         // A key read from disk means this process is outside the agent
         // sandbox (keys/ is denied inside it), so it is the trusted writer
         // and must advance the chain-head anchor to the line it just wrote.
-        let anchor = mur_channel::anchor::read_anchor(tmp.path(), &ch.id)
-            .unwrap()
-            .expect("disk-keyed writer advances the anchor");
-        assert_eq!(anchor.seq, ev.seq);
+        let head =
+            mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(tmp.path()), &ch.id)
+                .unwrap()
+                .expect("disk-keyed writer seals the head");
+        assert_eq!(head.seq, ev.seq);
+        assert!(head.verify(&pubkey), "head signed by the router key");
         assert!(
             !mur_channel::anchor::is_dirty(tmp.path(), &ch.id),
             "a successful anchored append leaves no dirty marker"
@@ -594,13 +596,11 @@ mod tests {
         .unwrap();
         assert!(ev.sig.is_some(), "handoff key → still signed");
         assert!(
-            mur_channel::anchor::read_anchor(tmp.path(), &ch.id)
-                .unwrap()
-                .is_none(),
-            "handoff path must not create an anchor"
+            !mur_channel::anchor::heads_dir(tmp.path()).exists(),
+            "handoff path must not create a head"
         );
         assert!(
-            !mur_channel::anchor::dirty_path(tmp.path(), &ch.id).exists(),
+            !mur_channel::anchor::is_dirty(tmp.path(), &ch.id),
             "handoff path must not even touch channel-heads/"
         );
     }

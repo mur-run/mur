@@ -145,7 +145,7 @@ impl ChannelService {
         key_version: Option<u32>,
         new_state: Option<ChannelState>,
     ) -> Result<ChannelEvent> {
-        let ev = self.with_hooks(false, |hooks| {
+        let ev = self.with_hooks(None, |hooks| {
             self.store.append_event_with(
                 channel_id,
                 actor,
