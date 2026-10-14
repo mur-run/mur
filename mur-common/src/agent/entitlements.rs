@@ -22,6 +22,40 @@ pub struct Entitlements {
     /// intentionally run without kernel sandbox enforcement.
     #[serde(default = "default_true")]
     pub fail_closed_on_sandbox_error: bool,
+    /// SSH agent proxy policy. Lives under `entitlements` so the entitlement
+    /// pin covers it — on Linux the pin is the only tamper protection.
+    #[serde(default, skip_serializing_if = "SshEntitlement::is_empty")]
+    pub ssh: SshEntitlement,
+}
+
+/// Default-deny allowlist of key fingerprints and, per key, host-key
+/// fingerprints. Fingerprints are the only identities; labels are display only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SshEntitlement {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<SshKeyRule>,
+}
+
+impl SshEntitlement {
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SshKeyRule {
+    pub fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_hosts: Vec<SshHostRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SshHostRule {
+    pub host_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -115,6 +115,7 @@ fn strict_entitlements() -> Entitlements {
         llm: Default::default(),
         tools: vec![],
         fail_closed_on_sandbox_error: true,
+        ssh: Default::default(),
     }
 }
 

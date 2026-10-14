@@ -98,6 +98,30 @@ mod tests {
         assert!(msg.contains("filesystem") && msg.contains("perm reseal bridge_test"));
     }
 
+    /// SSH proxy spec: on Linux the pin is the only thing stopping an agent
+    /// from granting itself an ssh key. An edit to `entitlements.ssh` alone
+    /// must refuse to start, naming `ssh`.
+    #[test]
+    fn self_granted_ssh_key_is_refused() {
+        let (tmp, home) = setup(|y| y);
+        assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
+        let p = home.join("profile.yaml");
+        let y = std::fs::read_to_string(&p).unwrap();
+        let granted = y.replace(
+            "entitlements:\n",
+            "entitlements:\n  ssh:\n    keys:\n      - fingerprint: \"SHA256:attacker\"\n        allow_hosts:\n          - host_key: \"SHA256:anyhost\"\n",
+        );
+        assert_ne!(granted, y, "fixture must contain an entitlements block");
+        std::fs::write(&p, granted).unwrap();
+        let Verdict::Refuse(msg) = verify(&load(&home), &home, tmp.path()) else {
+            panic!("self-granted ssh key must not start");
+        };
+        assert!(
+            msg.contains("ssh") && msg.contains("perm reseal bridge_test"),
+            "{msg}"
+        );
+    }
+
     #[test]
     fn non_entitlement_edit_still_starts() {
         let (tmp, home) = setup(|y| y);

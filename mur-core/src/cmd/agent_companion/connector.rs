@@ -598,6 +598,7 @@ pub(crate) async fn scaffold_stub_bridge(name: &str, default_route: &str) -> Res
             llm: LlmEntitlement { mode: LlmMode::Off },
             tools: vec![],
             fail_closed_on_sandbox_error: true,
+            ssh: Default::default(),
         },
         notifications: NotificationsConfig::default(),
         retry: RetryConfig {

@@ -124,3 +124,50 @@ fn rename_carries_and_remove_clears() {
     rename_pin(tmp.path(), "b", "c").unwrap();
     assert_eq!(check(tmp.path(), "b", &ent()).unwrap(), PinCheck::Missing);
 }
+
+/// SSH proxy spec: `entitlements.ssh` is protected ONLY because the pin covers
+/// it. A profile edit that touches nothing but the ssh block must be a mismatch.
+#[test]
+fn ssh_only_edit_in_profile_yaml_is_a_pin_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = serde_yaml_ng::to_string(&AgentProfile::default_for_tests()).unwrap();
+    let mut v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&base).unwrap();
+    v["entitlements"]["ssh"] = serde_yaml_ng::from_str(
+        "keys:\n  - fingerprint: \"SHA256:attacker\"\n    allow_hosts:\n      - host_key: \"SHA256:anyhost\"\n",
+    )
+    .unwrap();
+    let tampered = serde_yaml_ng::to_string(&v).unwrap();
+    let p = Path::new("profile.yaml");
+
+    write_pin(tmp.path(), "a", &entitlements_from_yaml(&base, p).unwrap()).unwrap();
+    let edited = entitlements_from_yaml(&tampered, p).unwrap();
+    assert_eq!(
+        check(tmp.path(), "a", &edited).unwrap(),
+        PinCheck::Mismatch {
+            changed: vec!["ssh".to_string()]
+        }
+    );
+}
+
+#[test]
+fn changed_entitlements_names_ssh_when_only_ssh_differs() {
+    let mut edited = ent();
+    edited.ssh.keys.push(crate::agent::SshKeyRule {
+        fingerprint: "SHA256:attacker".to_string(),
+        label: None,
+        allow_hosts: Vec::new(),
+    });
+    assert_eq!(
+        changed_entitlements(&ent(), &edited),
+        vec!["ssh".to_string()]
+    );
+}
+
+#[test]
+fn empty_ssh_block_is_not_serialized_so_existing_pins_still_match() {
+    let v = serde_json::to_value(ent()).unwrap();
+    assert!(
+        v.get("ssh").is_none(),
+        "empty ssh must not appear in pin JSON"
+    );
+}
