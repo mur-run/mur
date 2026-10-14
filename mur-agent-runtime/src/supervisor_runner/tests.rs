@@ -346,3 +346,33 @@ fn entry_loopback_port_reads_injected_env() {
     let pinned = entry("ollama", Some("http://127.0.0.1:12000"));
     assert_eq!(entry_loopback_port(&pinned, &no_env, home), Some(12000));
 }
+
+/// #1880: a missing credential is not a model-selection problem. The notice
+/// must name the secret to set, and must not send the user to `/model`.
+#[test]
+fn a_missing_secret_notice_names_the_secret_not_the_model() {
+    let e = anyhow::Error::from(crate::llm::LlmError::MissingSecret(
+        "ANTHROPIC_API_KEY".into(),
+    ));
+    let m = client_build_failure_notice("mur", "anthropic", &e);
+    assert!(
+        m.contains("mur agent secret mur set ANTHROPIC_API_KEY"),
+        "{m}"
+    );
+    assert!(m.contains("mur agent restart mur"), "{m}");
+    assert!(
+        !m.contains("/model"),
+        "model hints are for model faults: {m}"
+    );
+    assert!(!m.contains("invalid response"), "{m}");
+}
+
+/// Every other client-build failure keeps the model-selection remedies.
+#[test]
+fn other_client_build_failures_keep_the_model_remedies() {
+    let e = anyhow::anyhow!("tls backend unavailable");
+    let m = client_build_failure_notice("mur", "anthropic", &e);
+    assert!(m.contains("the anthropic client could not be built"), "{m}");
+    assert!(m.contains("tls backend unavailable"), "{m}");
+    assert!(m.contains("/model"), "{m}");
+}

@@ -261,7 +261,7 @@ impl AnthropicClient {
     /// Convenience constructor reading API key from `ANTHROPIC_API_KEY`.
     pub fn from_env(model: String) -> Result<Self, LlmError> {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| LlmError::InvalidResponse("ANTHROPIC_API_KEY not set".into()))?;
+            .map_err(|_| LlmError::MissingSecret("ANTHROPIC_API_KEY".into()))?;
         Ok(Self::new(anthropic_base_url(), api_key, model))
     }
 
@@ -354,7 +354,7 @@ impl AnthropicClient {
             )),
             Ok(None) => {
                 let api_key = std::env::var("ANTHROPIC_API_KEY")
-                    .map_err(|_| LlmError::InvalidResponse("ANTHROPIC_API_KEY not set".into()))?;
+                    .map_err(|_| LlmError::MissingSecret("ANTHROPIC_API_KEY".into()))?;
                 Ok(Self::new_with_http_client(
                     anthropic_base_url(),
                     api_key,

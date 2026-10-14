@@ -125,7 +125,7 @@ impl OpenAiClient {
     /// URL from `OPENAI_BASE_URL` (defaults to api.openai.com/v1).
     pub fn from_env(model: String) -> Result<Self, LlmError> {
         let api_key = std::env::var("OPENAI_API_KEY")
-            .map_err(|_| LlmError::InvalidResponse("OPENAI_API_KEY not set".into()))?;
+            .map_err(|_| LlmError::MissingSecret("OPENAI_API_KEY".into()))?;
         let base_url =
             std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
         Ok(Self::new(base_url, api_key, model))
@@ -210,7 +210,7 @@ impl OpenAiClient {
             )),
             Ok(None) => {
                 let api_key = std::env::var("OPENAI_API_KEY")
-                    .map_err(|_| LlmError::InvalidResponse("OPENAI_API_KEY not set".into()))?;
+                    .map_err(|_| LlmError::MissingSecret("OPENAI_API_KEY".into()))?;
                 let base = std::env::var("OPENAI_BASE_URL")
                     .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
                 Ok(Self::new_with_http_client(base, api_key, model, http))

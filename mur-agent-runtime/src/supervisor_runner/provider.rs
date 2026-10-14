@@ -513,13 +513,13 @@ pub async fn build_provider_runner(
                         "anthropic" | "openai" => {
                             error!(provider = %entry.provider, error = %e, "model client unavailable — replying with a misconfiguration notice instead of echo");
                             (
-                                Arc::new(TaskRunner::new_stub_misconfigured(no_model_notice(
-                                    &profile.inner.name,
-                                    &format!(
-                                        "the {} client could not be built: {e:#}",
-                                        entry.provider
+                                Arc::new(TaskRunner::new_stub_misconfigured(
+                                    client_build_failure_notice(
+                                        &profile.inner.name,
+                                        &entry.provider,
+                                        &e,
                                     ),
-                                ))),
+                                )),
                                 None,
                                 Some(pool.clone()),
                                 None,

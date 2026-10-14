@@ -642,7 +642,7 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
                     ),
                 )),
             },
-            None => out.push(Check::new("secret", true, "model needs no secret")),
+            None => out.push(implicit_secret::status(&entry, name)),
         },
         Err(e) => out.push(Check::new(
             "model",
@@ -729,6 +729,8 @@ pub fn run_agent(name: &str, json: bool) -> Result<()> {
     }
     Ok(())
 }
+
+mod implicit_secret;
 
 #[cfg(test)]
 mod tests;
