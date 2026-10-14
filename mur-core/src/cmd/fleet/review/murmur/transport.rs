@@ -133,8 +133,11 @@ impl MurmurTransport {
     /// when sending or while waiting for the answer.
     fn ask<T>(&self, build: impl FnOnce(std::sync::mpsc::SyncSender<T>) -> DriverReq) -> Option<T> {
         let (tx, rx) = sync_channel(1);
-        self.req.send(build(tx)).ok()?;
+        // Start the clock before handing the question over: once sent, the UI
+        // may receive it and start waiting before this thread runs again, and
+        // a clock started after `send` would under-count that head start.
         let started = Instant::now();
+        self.req.send(build(tx)).ok()?;
         let answer = rx.recv().ok();
         self.add_wait(started);
         answer
