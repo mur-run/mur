@@ -390,10 +390,8 @@ fn detached_pause_carries_prompt_wait() {
     let p = paused(&payloads(tmp.path(), &fleet.channel_id));
     assert_eq!(p.len(), 1);
     assert_eq!(p[0].0, PauseKind::Detached);
-    // The UI holds for 200 ms but the worker times it on its own clock and
-    // truncates to whole ms, so assert a margin below the hold, not equality.
     assert!(
-        p[0].2 >= 150,
+        p[0].2 >= 200,
         "the prompt wait is recorded, got {} ms",
         p[0].2
     );
