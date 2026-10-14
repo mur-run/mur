@@ -17,6 +17,7 @@ use mur_common::channel::{ChannelActor, EventKind};
 use mur_common::hitl::{HitlResponse, HitlRevocation, RevocationScope};
 use mur_common::identity::AgentIdentity;
 
+use super::integrity::{self, IntegrityError};
 use super::remembered::{LiveDecision, live_decisions};
 
 /// The `step_or_call_id` slot of every chat-gate hash. A per-call id would
@@ -77,9 +78,15 @@ impl ChannelDecisionStore {
     fn live(&self) -> Result<std::collections::HashMap<String, LiveDecision>> {
         let svc = ChannelService::open(&self.mur_home)?;
         let channel_id = self.channel_id(&svc)?;
+        let pubkey = self.identity.verifying_key_bytes();
+        // Hold the append lock shared across check and read: a reader must not
+        // see a line that is written but not sealed yet. A log whose integrity
+        // cannot be established yields no decisions at all (#1859) — never the
+        // older allow that survived.
+        let _guard = integrity::read_lock(&self.mur_home, &channel_id);
+        integrity::verify(&self.mur_home, &self.agent, &channel_id, &pubkey)?;
         let events = svc.load_events(&channel_id)?;
         drop(svc);
-        let pubkey = self.identity.verifying_key_bytes();
         Ok(live_decisions(
             &channel_id,
             &events,
@@ -109,7 +116,13 @@ impl ChannelDecisionStore {
     /// hashes revoked. A prefix matching none, or more than one, is an error
     /// and writes nothing — a guess here would forget the wrong decision.
     pub fn forget(&self, target: Option<&str>) -> Result<Vec<String>> {
-        let live = self.list()?;
+        let live = match self.list() {
+            Ok(l) => l,
+            // Nothing is remembered while the log is untrusted, so there is
+            // nothing to revoke; say so rather than sealing over the damage.
+            Err(e) if e.downcast_ref::<IntegrityError>().is_some() => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
         let (scope, hashes) = match target {
             None => (
                 RevocationScope::All,
@@ -140,8 +153,8 @@ impl ChannelDecisionStore {
             scope,
             issued_at: chrono::Utc::now(),
         };
-        let svc = ChannelService::open(&self.mur_home)?;
-        let channel_id = self.channel_id(&svc)?;
+        let svc = self.sealing_service()?;
+        let channel_id = self.writable_channel(&svc)?;
         svc.append_signed(
             &channel_id,
             &self.identity,
@@ -156,9 +169,51 @@ impl ChannelDecisionStore {
         Ok(hashes)
     }
 
+    /// A service whose every append seals a fresh head (#1859).
+    fn sealing_service(&self) -> Result<ChannelService> {
+        Ok(
+            ChannelService::open(&self.mur_home)?.with_seal(integrity::seal_hook(
+                self.mur_home.clone(),
+                self.agent.clone(),
+                self.identity.clone(),
+                self.key_version,
+            )),
+        )
+    }
+
+    /// The channel to append to. If the current one fails its integrity
+    /// check, start a fresh one: sealing over a log with a hole would make the
+    /// surviving older allow live again. The damaged channel is left on disk
+    /// as evidence and never read again; the cost is that the agent asks
+    /// again for everything it had remembered.
+    fn writable_channel(&self, svc: &ChannelService) -> Result<String> {
+        let channel_id = self.channel_id(svc)?;
+        let pubkey = self.identity.verifying_key_bytes();
+        let verdict = {
+            let _guard = integrity::read_lock(&self.mur_home, &channel_id);
+            integrity::verify(&self.mur_home, &self.agent, &channel_id, &pubkey)
+        };
+        let Err(e) = verdict else {
+            return Ok(channel_id);
+        };
+        tracing::warn!(
+            error = %e,
+            damaged_channel = %channel_id,
+            "chat-gate decision log failed its integrity check; starting a new one"
+        );
+        let fresh = svc.create_for_agent(&self.agent)?;
+        let marker = self
+            .mur_home
+            .join("agents")
+            .join(&self.agent)
+            .join(HITL_CHANNEL_FILE);
+        std::fs::write(&marker, &fresh.id).context("record the replacement hitl channel id")?;
+        Ok(fresh.id)
+    }
+
     fn append(&self, resp: &HitlResponse) -> Result<()> {
-        let svc = ChannelService::open(&self.mur_home)?;
-        let channel_id = self.channel_id(&svc)?;
+        let svc = self.sealing_service()?;
+        let channel_id = self.writable_channel(&svc)?;
         svc.append_signed(
             &channel_id,
             &self.identity,
@@ -305,9 +360,22 @@ mod tests {
         old.issued_at = Some(chrono::Utc::now() - chrono::Duration::days(8));
         s.record(old).await;
         s.record(resp("h-new", true, "b")).await;
+        // Editing a line is a deletion as far as the head is concerned, so
+        // re-seal after each edit: this test is about which clock the fold
+        // reads, not about tamper detection (store_integrity_tests).
+        let reseal = |s: &ChannelDecisionStore| {
+            super::super::integrity::reseal_for_test(
+                tmp.path(),
+                "qa",
+                marker_id(tmp.path()).trim(),
+                &s.identity,
+            )
+        };
         rewrite_ts(tmp.path(), chrono::Utc::now());
+        reseal(&s);
         assert_eq!(s.lookup("h-old").await, None, "fresh ts, stale decision");
         rewrite_ts(tmp.path(), chrono::Utc::now() - chrono::Duration::days(30));
+        reseal(&s);
         assert_eq!(
             s.lookup("h-new").await,
             Some(Settled::Allow),
