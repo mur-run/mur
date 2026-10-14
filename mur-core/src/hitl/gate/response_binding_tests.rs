@@ -353,6 +353,38 @@ async fn rewriting_ts_does_not_revive_an_expired_approval() {
     );
     rewrite_ts(tmp.path(), &ch, chrono::Utc::now());
 
+    // Since #1770 the rewrite also breaks the signed channel head, so the
+    // gate's own append refuses to seal over it. Either outcome — that
+    // refusal or a plain deny — keeps the stale approval dead.
+    match gate(tmp.path(), &ch, &a, &unattended(), None, None).await {
+        Ok(d) => assert!(!d.allow, "a week-old approval with a fresh ts: {d:?}"),
+        Err(e) => assert!(
+            format!("{e:#}").contains("no longer extends the signed head"),
+            "unexpected gate error: {e:#}"
+        ),
+    }
+}
+
+/// The `issued_at` check stands on its own: with the signed head removed
+/// (so the anchor cannot catch the rewrite), a fresh `ts` still does not
+/// revive an expired approval.
+#[tokio::test]
+async fn rewriting_ts_without_a_head_still_does_not_revive() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    let old = ago(ttl() + chrono::Duration::days(1));
+    router_request_at(tmp.path(), &ch, "hitl-stale", &hash, Some(old));
+    human_allows_at(
+        tmp.path(),
+        &ch,
+        "hitl-stale",
+        &hash,
+        Some(old + chrono::Duration::minutes(5)),
+    );
+    rewrite_ts(tmp.path(), &ch, chrono::Utc::now());
+    let _ = std::fs::remove_dir_all(mur_channel::anchor::heads_dir(tmp.path()));
+
     let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
         .await
         .unwrap();
