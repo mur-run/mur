@@ -81,7 +81,7 @@ pub fn expand_entitlement_path(s: &str) -> PathBuf {
 /// access under it was denied without a hint. The link path is kept as well:
 /// Landlock and the tool-level gate compare the name as written. Paths that do
 /// not resolve (a dead deny entry) are left as they are.
-fn with_resolved_aliases(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+pub(crate) fn with_resolved_aliases(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut out = paths.clone();
     for p in &paths {
         if let Ok(real) = std::fs::canonicalize(p)
