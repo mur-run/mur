@@ -47,6 +47,29 @@ fn no_model_notice(agent: &str, reason: &str) -> String {
     )
 }
 
+/// The notice for a configured provider whose client would not build.
+///
+/// A missing credential is a different fault from a bad model reference, so
+/// it gets different remedies: naming the secret to set, and no `/model`
+/// hint (the model is fine, only the key is absent). Every other build
+/// failure keeps the generic notice and its model-selection remedies.
+fn client_build_failure_notice(agent: &str, provider: &str, err: &anyhow::Error) -> String {
+    use crate::llm::LlmError;
+    match err.downcast_ref::<LlmError>() {
+        Some(LlmError::MissingSecret(key)) => format!(
+            "⚠️ This agent has no working model, so it cannot answer.\n\
+             Reason: the {provider} credential {key} is not set.\n\
+             Set it: `mur agent secret {agent} set {key}`\n\
+             Apply it: `mur agent restart {agent}`\n\
+             Diagnose: `mur agent doctor {agent}`"
+        ),
+        _ => no_model_notice(
+            agent,
+            &format!("the {provider} client could not be built: {err:#}"),
+        ),
+    }
+}
+
 /// The external host the agent's configured model talks to, for auto-allowing
 /// it under restricted outbound (so a user never has to `allow-host` their own
 /// provider). `None` for loopback base_urls (handled by `local_llm_port`) and

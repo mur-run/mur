@@ -275,3 +275,14 @@ fn typed_request_failures_have_bounded_dispositions() {
         Stop
     );
 }
+
+/// #1880: a missing key is its own class, not a server reply that happened
+/// to be malformed — nothing was sent.
+#[test]
+fn missing_secret_is_its_own_class_and_stops() {
+    let e = LlmError::MissingSecret("OPENAI_API_KEY".into());
+    assert_eq!(classify(&e), Disposition::Stop);
+    let shown = e.to_string();
+    assert!(shown.contains("OPENAI_API_KEY"), "{shown}");
+    assert!(!shown.contains("invalid response"), "{shown}");
+}

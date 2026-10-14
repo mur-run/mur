@@ -379,6 +379,12 @@ pub enum LlmError {
     Timeout,
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+    /// The credential this provider needs (the payload names it, e.g.
+    /// `ANTHROPIC_API_KEY`) is in neither the agent's keychain nor the
+    /// environment. Nothing was sent, so this is not a server reply and not a
+    /// model fault: the fix is to set the secret, never to pick another model.
+    #[error("{0} is not set")]
+    MissingSecret(String),
     #[error("server error: {0}")]
     ServerError(u16),
     #[error("insufficient credit")]
@@ -518,7 +524,8 @@ pub fn classify(e: &LlmError) -> Disposition {
         | LlmError::Rejected(..)
         | LlmError::Auth(..)
         | LlmError::Http(_)
-        | LlmError::InvalidResponse(_) => Disposition::Stop,
+        | LlmError::InvalidResponse(_)
+        | LlmError::MissingSecret(_) => Disposition::Stop,
         // Already exhausted; classify as whatever the operator should act on.
         LlmError::AllCandidatesFailed { source, .. } => classify(source),
     }
