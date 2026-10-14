@@ -17,6 +17,11 @@ use std::path::Path;
 
 /// Canonicalization version — bump if the sign-input shape changes so an old
 /// signature is never silently checked against a new canonicalization.
+///
+/// Do NOT bump this for the hash chain: v2 is a sibling shape
+/// ([`SIG_INPUT_VERSION_V2`]), not a successor. Commander directives are signed
+/// outside MUR against this v1 shape and verified by [`verify_event_sig`];
+/// bumping it would make every externally signed directive fail to verify.
 pub const SIG_INPUT_VERSION: u32 = 1;
 
 /// Sig-input v2 (#1770): v1's fields plus `prev_hash`, so a signature also
