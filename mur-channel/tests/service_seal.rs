@@ -118,3 +118,91 @@ fn a_failing_hook_fails_the_write_but_leaves_the_line() {
     assert!(r.is_err(), "B1: a failed seal must surface as Err");
     assert_eq!(svc.load_events(&ch.id).unwrap().len(), before + 1);
 }
+
+// --- append_presigned (commit 3) ---------------------------------------------
+// The Commander governance receipt arrives already signed (the Commander's key,
+// not ours) and is verified by the caller. The service only persists + seals it.
+
+#[test]
+fn append_presigned_persists_sig_verbatim_and_runs_the_seal_hook() {
+    let tmp = TempDir::new().unwrap();
+    let (hook, seen) = recording_hook();
+    let svc = ChannelService::open(tmp.path()).unwrap().with_seal(hook);
+    let id = svc.create_for_agent("seal-agent").unwrap().id;
+    let identity = AgentIdentity::generate();
+    let payload = serde_json::json!({ "directive": "pause" });
+    let sig = mur_channel::sign::sign_event(
+        &identity,
+        &id,
+        &ChannelActor::System,
+        EventKind::Message,
+        &payload,
+        Some("nonce-1"),
+    );
+
+    let ev = svc
+        .append_presigned(
+            &id,
+            ChannelActor::System,
+            EventKind::Message,
+            payload,
+            Some("nonce-1".into()),
+            sig.clone(),
+            Some(7),
+        )
+        .unwrap();
+
+    assert_eq!(ev.sig.as_deref(), Some(sig.as_str()));
+    assert_eq!(ev.key_version, Some(7));
+    let on_disk = svc.load_events(&id).unwrap();
+    assert_eq!(on_disk.last().unwrap().sig.as_deref(), Some(sig.as_str()));
+    assert_eq!(seen.lock().unwrap().len(), 1, "hook ran exactly once");
+}
+
+#[test]
+fn append_presigned_refreshes_the_read_model() {
+    let tmp = TempDir::new().unwrap();
+    let svc = ChannelService::open(tmp.path()).unwrap();
+    let id = svc.create_for_agent("seal-agent").unwrap().id;
+
+    let ev = svc
+        .append_presigned(
+            &id,
+            ChannelActor::System,
+            EventKind::Message,
+            serde_json::json!({ "x": 1 }),
+            None,
+            "z-opaque".into(),
+            Some(1),
+        )
+        .unwrap();
+
+    let row = svc
+        .list(10)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == id)
+        .expect("channel is in the read model");
+    assert_eq!(row.last_seq, ev.seq as i64, "index saw the presigned event");
+}
+
+#[test]
+fn append_presigned_does_not_verify_the_signature() {
+    // Verification stays with the caller (governance checks the Commander's
+    // key). The service must not second-guess a sig it cannot attribute.
+    let tmp = TempDir::new().unwrap();
+    let svc = ChannelService::open(tmp.path()).unwrap();
+    let id = svc.create_for_agent("seal-agent").unwrap().id;
+    let ev = svc
+        .append_presigned(
+            &id,
+            ChannelActor::System,
+            EventKind::Message,
+            serde_json::json!({}),
+            None,
+            "not-a-real-signature".into(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(ev.sig.as_deref(), Some("not-a-real-signature"));
+}

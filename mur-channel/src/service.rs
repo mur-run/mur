@@ -342,6 +342,37 @@ impl ChannelService {
         )
     }
 
+    /// Append an event whose signature was produced elsewhere (e.g. a
+    /// Commander governance directive signed with the Commander's key).
+    ///
+    /// The service does NOT verify `sig`: it cannot attribute it to a key.
+    /// Verification stays with the caller, which must reject a bad signature
+    /// *before* calling this. What the service adds is the same write path as
+    /// every other append: the seal hook runs and the read model is refreshed,
+    /// so the event is visible in conversation lists and ordering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_presigned(
+        &self,
+        channel_id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        sig: String,
+        key_version: Option<u32>,
+    ) -> Result<ChannelEvent> {
+        self.write_event(
+            channel_id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            Some(sig),
+            key_version,
+            None,
+        )
+    }
+
     /// Append a `Delegation` event (actor `System`) recording that `target_agent`
     /// was handed the sub-goal under `child_task_id`. `idempotency_key` is set by
     /// the caller (deterministic in v3b) but NOT yet de-duplicated (v3c).

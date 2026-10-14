@@ -88,35 +88,37 @@ pub async fn post_directive(
         return Err(AppError::Forbidden("invalid commander signature".into()));
     }
 
-    // Channel must already exist — append_event auto-creates the dir, so guard here.
-    let store = mur_channel::ChannelStore::new(&mur_home);
-    if store.load_manifest(&channel_id).is_err() {
+    // Channel must already exist — append auto-creates the dir, so guard here.
+    // Writes go through the service so the receipt is sealed and shows up in the
+    // read model (conversation list + ordering) like every other channel event.
+    let service = mur_channel::ChannelService::open(&mur_home).map_err(AppError::Internal)?;
+    if service.store().load_manifest(&channel_id).is_err() {
         return Err(AppError::NotFound(format!(
             "unknown fleet channel {channel_id}"
         )));
     }
 
     // Was this nonce already persisted? (don't double-write the receipt audit.)
-    // ponytail: this load_events → append_event → audit sequence makes the receipt
+    // ponytail: this load_events → append_presigned → audit sequence makes the receipt
     // row exactly-once for SEQUENTIAL retries (what the single-node engine does) but
     // at-least-once under two truly-concurrent identical POSTs. A duplicate row is
     // benign — the engine's ComplianceChecker matches by nonce and the content_sha256
     // is identical. Tighten with a per-channel lock only if multiple issuers ever race.
     let already = idem.as_deref().is_some_and(|k| {
-        store
+        service
             .load_events(&channel_id)
             .map(|evs| evs.iter().any(|e| e.idempotency_key.as_deref() == Some(k)))
             .unwrap_or(false)
     });
 
-    let ev = store
-        .append_event(
+    let ev = service
+        .append_presigned(
             &channel_id,
             actor.clone(),
             kind,
             payload.clone(),
             idem.clone(),
-            Some(sig),
+            sig,
             key_version,
         )
         .map_err(AppError::Internal)?;
@@ -302,6 +304,26 @@ mod tests {
             })
             .expect("received row");
         assert!(!row.content_sha256.is_empty());
+    }
+
+    #[tokio::test]
+    async fn accepted_directive_advances_the_read_model() {
+        // The receipt goes through ChannelService, so the index sees it (it is
+        // sorted by recency and counted in last_seq like any other event).
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, id) = setup(&tmp);
+        let (status, json) = post(state, directive_body(&id, "dev", "kill", None)).await;
+        assert_eq!(status, StatusCode::OK);
+        let seq = json["seq"].as_i64().expect("seq in response");
+
+        let row = mur_channel::ChannelService::open(tmp.path())
+            .unwrap()
+            .list(50)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == "fleet-dev")
+            .expect("fleet channel is in the read model");
+        assert_eq!(row.last_seq, seq);
     }
 
     #[tokio::test]
