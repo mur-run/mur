@@ -493,6 +493,7 @@ fn an_allow_after_a_revoke_and_re_enroll_ends_policy_changed_and_pushes_nothing(
         endpoint: rec.endpoint,
         ref_prefix: rec.ref_prefix,
         creation_base_refs: rec.creation_base_refs,
+        credential: rec.credential,
         new_repo: None,
     })
     .unwrap();
