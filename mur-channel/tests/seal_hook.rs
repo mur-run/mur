@@ -177,3 +177,23 @@ fn none_seal_matches_the_legacy_append_event() {
     assert_eq!(lines.lines().count(), 2);
     assert!(lines.ends_with('\n'));
 }
+
+/// Characterization of the gap the head slice must close: after a failed seal
+/// the line is on disk, and a retry with the same idempotency key is answered
+/// by dedup (`Ok`) without running the hook again, so nothing ever seals it.
+#[test]
+fn retry_after_failed_seal_is_deduped_and_never_resealed() {
+    let (_tmp, store) = store_with_channel();
+    let calls = Cell::new(0u32);
+    let failing = |_: &mur_channel::store::SealInput<'_>| -> anyhow::Result<()> {
+        calls.set(calls.get() + 1);
+        anyhow::bail!("disk full")
+    };
+    let first = append(&store, "a", Some("k"), Some(&failing));
+    assert!(first.is_err());
+    assert_eq!(calls.get(), 1);
+
+    let retry = append(&store, "a", Some("k"), Some(&failing));
+    assert!(retry.is_ok(), "retry is answered by dedup");
+    assert_eq!(calls.get(), 1, "hook did not run again: event stays unsealed");
+}
