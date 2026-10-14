@@ -317,6 +317,7 @@ mod tests {
             canonical_remote_endpoint: "file:///r".into(),
             creation_base_refs: vec!["main".into(), "refs/heads/ok".into()],
             ref_prefix: "refs/heads/".into(),
+            credential: None,
         };
         assert_eq!(
             policy_problems(&p),

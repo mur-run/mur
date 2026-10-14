@@ -113,8 +113,19 @@ fn rig(secret: &str) -> Rig {
 fn submit(r: &Rig) -> (RequestKey, String) {
     let mut d = action_for(&r.e.old, &r.e.new, "refs/heads/agent/x");
     d.request_id = "r1".into();
-    let mut p = policy();
-    p.canonical_remote_endpoint = URL.into();
+    // Stamp from the enrollment as it is now, as intake does: its digests cover the credential,
+    // so a bare `policy()` would (rightly) no longer match.
+    let p =
+        r.e.records
+            .0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .enrollments[0]
+            .policy();
     d.canonical_remote_endpoint = URL.into();
     d.remote_policy_digest = p.remote_digest();
     d.ref_policy_digest = p.digest();

@@ -319,6 +319,7 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
         canonical_remote_endpoint: endpoint.as_str().to_string(),
         creation_base_refs: a.base_refs.clone(),
         ref_prefix: ref_prefix.clone(),
+        credential: None,
     };
     let problems = check_enrollment(
         &policy,
