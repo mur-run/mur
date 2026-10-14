@@ -52,7 +52,7 @@ fn append(
         key.map(str::to_string),
         None,
         None,
-        seal,
+        mur_channel::store::SealHooks::post(seal),
     )
 }
 
@@ -269,4 +269,117 @@ fn dedup_reseal_refuses_a_crlf_line() {
         0,
         "no hook call on a record we cannot reproduce"
     );
+}
+
+// ---- pre_write (#1770): the point before the line exists ----
+
+fn lines(store: &ChannelStore) -> usize {
+    std::fs::read_to_string(store.events_path(CH))
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
+}
+
+/// `pre_write` runs under the lock, after `seq` is assigned and BEFORE the
+/// write: it sees the final seq and an unchanged log; `post_write` follows.
+#[test]
+fn pre_write_runs_before_the_line_with_the_final_seq() {
+    let (_t, store) = store_with_channel();
+    append(&store, "a", None, None).unwrap();
+    let order = RefCell::new(Vec::new());
+    let pre = |i: &mur_channel::store::PreSealInput<'_>| {
+        order
+            .borrow_mut()
+            .push(format!("pre seq={} lines={}", i.event.seq, lines(&store)));
+        Ok(())
+    };
+    let post = |i: &mur_channel::store::SealInput<'_>| {
+        order
+            .borrow_mut()
+            .push(format!("post seq={} lines={}", i.event.seq, lines(&store)));
+        Ok(())
+    };
+    store
+        .append_event_with(
+            CH,
+            human(),
+            EventKind::Message,
+            serde_json::json!({ "text": "b" }),
+            None,
+            None,
+            None,
+            mur_channel::store::SealHooks {
+                pre_write: Some(&pre),
+                post_write: Some(&post),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        *order.borrow(),
+        vec!["pre seq=1 lines=1".to_string(), "post seq=1 lines=2".into()]
+    );
+}
+
+/// A failing `pre_write` aborts with NOTHING written and no `post_write`,
+/// and the lock is released (the next append goes through).
+#[test]
+fn failed_pre_write_writes_nothing_and_skips_post() {
+    let (_t, store) = store_with_channel();
+    let posts = Cell::new(0);
+    let pre = |_: &mur_channel::store::PreSealInput<'_>| anyhow::bail!("marker down");
+    let post = |_: &mur_channel::store::SealInput<'_>| {
+        posts.set(posts.get() + 1);
+        Ok(())
+    };
+    let err = store
+        .append_event_with(
+            CH,
+            human(),
+            EventKind::Message,
+            serde_json::json!({ "text": "x" }),
+            None,
+            None,
+            None,
+            mur_channel::store::SealHooks {
+                pre_write: Some(&pre),
+                post_write: Some(&post),
+            },
+        )
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("marker down"), "{err:#}");
+    assert_eq!(lines(&store), 0, "nothing written");
+    assert_eq!(posts.get(), 0, "post_write never ran");
+    let lock = std::fs::File::open(store.events_path(CH).with_file_name("events.lock")).unwrap();
+    lock.try_lock_exclusive().expect("lock released");
+    FileExt::unlock(&lock).unwrap();
+    append(&store, "y", None, None).unwrap();
+    assert_eq!(lines(&store), 1);
+}
+
+/// A dedup hit writes nothing, so `pre_write` must not run (it would plant a
+/// marker for a line that never comes); only `post_write` gets its retry.
+#[test]
+fn dedup_hit_skips_pre_write() {
+    let (_t, store) = store_with_channel();
+    append(&store, "a", Some("k"), None).unwrap();
+    let pres = Cell::new(0);
+    let pre = |_: &mur_channel::store::PreSealInput<'_>| {
+        pres.set(pres.get() + 1);
+        Ok(())
+    };
+    store
+        .append_event_with(
+            CH,
+            human(),
+            EventKind::Message,
+            serde_json::json!({ "text": "a" }),
+            Some("k".into()),
+            None,
+            None,
+            mur_channel::store::SealHooks {
+                pre_write: Some(&pre),
+                post_write: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(pres.get(), 0);
 }

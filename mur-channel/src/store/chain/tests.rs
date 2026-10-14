@@ -278,3 +278,112 @@ fn every_line_shape_survives_a_serde_round_trip_byte_for_byte() {
         assert_eq!(&serde_json::to_string(&ev).unwrap(), line);
     }
 }
+
+// ---- chain-head anchors (#1770 PR 2) ----
+
+impl Fx {
+    fn mur_home(&self) -> &std::path::Path {
+        self._tmp.path()
+    }
+
+    /// Anchor at the CURRENT tail of the log.
+    fn anchor_now(&self) {
+        let content = fs::read_to_string(self.store.events_path(CH)).unwrap();
+        let tail = chain_tail(&content).expect("non-empty parseable tail");
+        crate::anchor::write_anchor(self.mur_home(), CH, &tail).unwrap();
+    }
+}
+
+#[test]
+fn no_anchor_means_no_mismatch() {
+    let f = fx();
+    f.v2(0);
+    f.v2(1);
+    let r = f.report();
+    assert_eq!(r.anchor_mismatch, None);
+    assert!(r.is_clean());
+}
+
+#[test]
+fn log_exactly_at_anchor_is_clean() {
+    let f = fx();
+    f.v2(0);
+    f.v2(1);
+    f.anchor_now();
+    let r = f.report();
+    assert_eq!(r.anchor_mismatch, None);
+    assert!(r.is_clean());
+}
+
+#[test]
+fn log_longer_than_anchor_is_clean_when_the_anchored_line_is_intact() {
+    let f = fx();
+    f.v2(0);
+    f.anchor_now();
+    f.unsigned(1); // sandboxed agent appends past the anchor: allowed.
+    f.v2(2);
+    let r = f.report();
+    assert_eq!(r.anchor_mismatch, None);
+    assert!(r.is_clean());
+}
+
+#[test]
+fn truncating_below_the_anchor_is_a_mismatch_even_though_every_link_holds() {
+    let f = fx();
+    f.v2(0);
+    f.v2(1);
+    f.v2(2);
+    f.anchor_now();
+    let lines = f.lines();
+    f.rewrite(&lines[..2]); // drop seq 2: chain_breaks sees nothing wrong.
+    let r = f.report();
+    assert!(r.chain_breaks.is_empty(), "adjacent links are all valid");
+    let m = r.anchor_mismatch.as_ref().expect("anchor mismatch");
+    assert_eq!(m.anchor.seq, 2);
+    assert_eq!(m.found_seq, Some(1));
+    assert!(!r.is_clean());
+}
+
+#[test]
+fn replacing_the_anchored_line_is_a_mismatch_even_at_the_same_seq() {
+    let f = fx();
+    f.v2(0);
+    f.v2(1);
+    f.anchor_now();
+    let mut lines = f.lines();
+    // Rewrite the log from scratch so seq 1 exists but is a different line.
+    f.rewrite(&lines[..1]);
+    f.v2(1);
+    lines = f.lines();
+    assert_eq!(lines.len(), 2);
+    let r = f.report();
+    let m = r.anchor_mismatch.as_ref().expect("anchor mismatch");
+    assert_eq!(m.anchor.seq, 1);
+    assert_eq!(m.found_seq, Some(1));
+    assert!(!r.is_clean());
+}
+
+#[test]
+fn emptied_log_with_an_anchor_is_a_mismatch() {
+    let f = fx();
+    f.v2(0);
+    f.anchor_now();
+    f.rewrite(&[]);
+    let r = f.report();
+    let m = r.anchor_mismatch.as_ref().expect("anchor mismatch");
+    assert_eq!(m.found_seq, None);
+    assert!(!r.is_clean());
+}
+
+#[test]
+fn a_dirty_marker_alone_makes_the_channel_not_clean() {
+    let f = fx();
+    f.v2(0);
+    f.anchor_now();
+    crate::anchor::mark_dirty(f.mur_home(), CH).unwrap();
+    let r = f.report();
+    assert!(r.anchor_dirty);
+    assert!(!r.is_clean());
+    crate::anchor::clear_dirty(f.mur_home(), CH).unwrap();
+    assert!(f.report().is_clean());
+}

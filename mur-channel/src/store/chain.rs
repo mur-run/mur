@@ -34,6 +34,52 @@ fn chain_lines(content: &str) -> impl Iterator<Item = &str> {
     content.lines().filter(|l| !l.trim().is_empty())
 }
 
+/// `(seq, hash)` of the last chain line. `None` for an empty log or when the
+/// tail line does not parse as an event: an anchor needs a `seq`, and one
+/// pointing at garbage would be meaningless.
+#[cfg(test)]
+pub(super) fn chain_tail(content: &str) -> Option<crate::anchor::ChainTail> {
+    let l = chain_lines(content).last()?;
+    let ev: ChannelEvent = serde_json::from_str(l).ok()?;
+    Some(crate::anchor::ChainTail {
+        seq: ev.seq,
+        hash: line_hash(l),
+    })
+}
+
+/// Compare the log against the channel's chain-head anchor. `Ok(None)` when
+/// there is no anchor or the anchored line is present and intact — the log
+/// may be longer. The anchored line is located by `seq` (lines are not
+/// seq-indexed, so this is a scan) and then compared by raw-line hash.
+pub(super) fn anchor_mismatch(
+    mur_home: &std::path::Path,
+    channel_id: &str,
+    content: &str,
+) -> Result<Option<super::AnchorMismatch>> {
+    use anyhow::Context;
+    let Some(anchor) = crate::anchor::read_anchor(mur_home, channel_id)
+        .with_context(|| format!("read chain-head anchor for {channel_id}"))?
+    else {
+        return Ok(None);
+    };
+    let mut last_seq = None;
+    for l in chain_lines(content) {
+        let Ok(ev) = serde_json::from_str::<ChannelEvent>(l) else {
+            continue;
+        };
+        last_seq = Some(ev.seq);
+        if ev.seq == anchor.seq {
+            let found_seq = Some(ev.seq);
+            return Ok((line_hash(l) != anchor.hash)
+                .then_some(super::AnchorMismatch { anchor, found_seq }));
+        }
+    }
+    Ok(Some(super::AnchorMismatch {
+        anchor,
+        found_seq: last_seq,
+    }))
+}
+
 /// What the next appended event's `prev_hash` must be for this log content.
 pub(super) fn tail_hash(content: &str) -> String {
     chain_lines(content)
@@ -102,12 +148,12 @@ impl ChannelStore {
             kind,
             payload,
             idempotency_key,
-            None,
+            super::SealHooks::default(),
         )
     }
 
-    /// [`append_signed_event`](Self::append_signed_event) plus the post-write
-    /// seal hook, so the signer and the head share one lock acquisition.
+    /// [`append_signed_event`](Self::append_signed_event) plus the seal
+    /// hooks, so the signer and the head share one lock acquisition.
     #[allow(clippy::too_many_arguments)]
     pub fn append_signed_event_with(
         &self,
@@ -118,7 +164,7 @@ impl ChannelStore {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
-        seal: Option<&super::SealHook<'_>>,
+        hooks: super::SealHooks<'_>,
     ) -> Result<ChannelEvent> {
         self.append_sealed(
             id,
@@ -142,7 +188,7 @@ impl ChannelStore {
                     prev_hash: Some(u.tail_hash.to_owned()),
                 }
             },
-            seal,
+            hooks,
         )
     }
 }

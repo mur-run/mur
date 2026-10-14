@@ -145,18 +145,24 @@ impl ChannelService {
         key_version: Option<u32>,
         new_state: Option<ChannelState>,
     ) -> Result<ChannelEvent> {
-        let ev = self.store.append_event_with(
-            channel_id,
-            actor,
-            kind,
-            payload,
-            idempotency_key,
-            sig,
-            key_version,
-            self.seal
-                .as_deref()
-                .map(|h| h as &crate::store::SealHook<'_>),
-        )?;
+        let ev = self.with_hooks(false, |hooks| {
+            self.store.append_event_with(
+                channel_id,
+                actor,
+                kind,
+                payload,
+                idempotency_key,
+                sig,
+                key_version,
+                hooks,
+            )
+        })?;
+        self.after_write(channel_id, &ev, new_state);
+        Ok(ev)
+    }
+
+    /// Manifest + read-model bookkeeping after any successful append.
+    fn after_write(&self, channel_id: &str, ev: &ChannelEvent, new_state: Option<ChannelState>) {
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             if let Some(state) = new_state {
                 ch.state = state;
@@ -164,12 +170,11 @@ impl ChannelService {
             // Monotonic: a dedup hit hands back the ORIGINAL event, whose `ts`
             // predates any activity since. Replaying it must not rewind recency.
             ch.updated_at = ch.updated_at.max(ev.ts);
-            if let Some(t) = Self::derived_title(&ch, &ev) {
+            if let Some(t) = Self::derived_title(&ch, ev) {
                 ch.title = t;
             }
-            self.refresh_read_model(&ch, &ev);
+            self.refresh_read_model(&ch, ev);
         }
-        Ok(ev)
     }
 
     /// Create a fresh channel whose participants are the local human (owner)
@@ -324,7 +329,7 @@ impl ChannelService {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        let ev = self.store.append_signed_event_with(
+        self.signed_v2(
             channel_id,
             identity,
             kv,
@@ -332,18 +337,8 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            self.seal
-                .as_deref()
-                .map(|h| h as &crate::store::SealHook<'_>),
-        )?;
-        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
-            ch.updated_at = ev.ts;
-            if let Some(t) = Self::derived_title(&ch, &ev) {
-                ch.title = t;
-            }
-            self.refresh_read_model(&ch, &ev);
-        }
-        Ok(ev)
+            false,
+        )
     }
 
     /// Sign an event against sig-input **v1** (no `prev_hash`) and append it.
@@ -365,23 +360,15 @@ impl ChannelService {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        let sig = crate::sign::sign_event(
+        self.signed_v1(
+            channel_id,
             identity,
-            channel_id,
-            &actor,
-            kind,
-            &payload,
-            idempotency_key.as_deref(),
-        );
-        self.write_event(
-            channel_id,
+            kv,
             actor,
             kind,
             payload,
             idempotency_key,
-            Some(sig),
-            Some(kv),
-            None,
+            false,
         )
     }
 
@@ -784,6 +771,8 @@ impl ChannelService {
         Some(text.chars().take(TITLE_MAX_CHARS).collect())
     }
 }
+
+mod anchored;
 
 #[cfg(test)]
 mod tests;

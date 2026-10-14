@@ -508,3 +508,67 @@ fn scratch_grant_is_skipped_and_logged_when_helper_errs() {
     let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
     assert!(log.contains("scratch dir not granted"), "log: {log}");
 }
+
+#[test]
+fn channel_heads_dir_is_never_writable_even_though_channels_is() {
+    // The chain-head anchors in <mur_home>/channel-heads/ are the one thing
+    // a sandboxed agent must not be able to move: it may append to the log
+    // (channels/ grant above) but never advance or rewrite the trusted head.
+    // No grant path may cover it — not channels/, not a parent, not itself.
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("w1");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    let heads = mur_home.join("channel-heads");
+    assert!(
+        policy.fs_write.contains(&mur_home.join("channels")),
+        "precondition: the channels carve-out is still granted"
+    );
+    assert!(
+        !policy.fs_write.iter().any(|p| heads.starts_with(p)),
+        "channel-heads/ must not be covered by any write grant: {:?}",
+        policy.fs_write
+    );
+    assert!(
+        !policy.fs_write.contains(&heads),
+        "channel-heads/ must not be granted directly"
+    );
+}
+
+/// Pins the invariant `mur_core::channel_writer::KeySource` relies on:
+/// "the signing key could be read from `keys/` ⟺ this process is outside
+/// the sandbox ⟺ it may write `channel-heads/`". Both halves must hold in
+/// the SAME policy, or a future change that makes `keys/` readable inside
+/// the sandbox would let a sandboxed agent pick the `Disk` branch and move
+/// the trusted head. `own_profile_and_identity_key_always_denied` and
+/// `channel_heads_dir_is_never_writable…` each cover one half; this test
+/// is the coupling.
+#[test]
+fn key_source_invariant_keys_unreadable_iff_channel_heads_unwritable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("w1");
+    std::fs::create_dir_all(mur_home.join("keys")).unwrap();
+    std::fs::create_dir_all(&agent_home).unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    let keys = mur_home.join("keys");
+    let heads = mur_home.join("channel-heads");
+    let reaches = |grants: &[PathBuf], x: &std::path::Path| grants.iter().any(|g| x.starts_with(g));
+    let keys_readable = reaches(&policy.fs_read, &keys);
+    let heads_writable = reaches(&policy.fs_write, &heads);
+    assert!(
+        !keys_readable,
+        "keys/ readable inside the sandbox breaks KeySource::Disk ⇒ outside-sandbox: {:?}",
+        policy.fs_read
+    );
+    assert!(
+        !heads_writable,
+        "channel-heads/ writable inside the sandbox lets a Disk-keyed writer move the head: {:?}",
+        policy.fs_write
+    );
+    assert_eq!(
+        keys_readable, heads_writable,
+        "KeySource invariant: keys/ readability and channel-heads/ writability must agree"
+    );
+}
