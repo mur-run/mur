@@ -44,9 +44,9 @@ impl ChannelStore {
 
     /// [`append_event`](Self::append_event) plus an optional sealing hook
     /// (spec 7.3.1). The hook runs after the line is written and before the
-    /// lock is released, on the write path only: the dedup return writes
-    /// nothing and never runs it. If the hook returns `Err` the append returns
-    /// `Err` (decision B1) but the line stays on disk; the caller must treat
+    /// lock is released. A dedup hit writes nothing but runs it again on the
+    /// existing line, so a retry never reports `Ok` for an unsealed event. If
+    /// the hook returns `Err` the append returns `Err` (decision B1) but the line stays on disk; the caller must treat
     /// the event as written and unsealed, not retry it blindly.
     #[allow(clippy::too_many_arguments)]
     pub fn append_event_with(
