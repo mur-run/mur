@@ -35,6 +35,37 @@ impl ChannelService {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
+        self.append_signed_with(
+            channel_id,
+            identity,
+            kv,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            None,
+        )
+    }
+
+    /// [`Self::append_signed`] with a per-call seal hook, for a caller whose
+    /// hook depends on the writer's key (known only at call time).
+    ///
+    /// `Some(hook)` seals with that hook *instead of* the service's own (one
+    /// seal per event); `None` falls back to the service hook, so a service
+    /// built `with_seal` never silently skips sealing. Signing, sealing and
+    /// the read-model refresh stay in this one place.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_signed_with(
+        &self,
+        channel_id: &str,
+        identity: &mur_common::identity::AgentIdentity,
+        kv: u32,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        seal: Option<&crate::store::SealHook<'_>>,
+    ) -> Result<ChannelEvent> {
         let ev = self.store.append_signed_event_with(
             channel_id,
             identity,
@@ -43,9 +74,11 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            self.seal
-                .as_deref()
-                .map(|h| h as &crate::store::SealHook<'_>),
+            seal.or_else(|| {
+                self.seal
+                    .as_deref()
+                    .map(|h| h as &crate::store::SealHook<'_>)
+            }),
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
