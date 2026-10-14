@@ -258,3 +258,23 @@ fn stripping_prev_hash_does_not_downgrade_to_a_valid_v1_event() {
         vec![ev2.seq]
     );
 }
+
+/// The chain hashes RAW bytes, so any future path that rewrites the log by
+/// parse → serialize (compaction, archive, migration) must reproduce every
+/// line byte-for-byte, or it breaks every link after it. Pins it for all
+/// three line shapes, including `prev_hash: None` staying absent.
+#[test]
+fn every_line_shape_survives_a_serde_round_trip_byte_for_byte() {
+    let f = fx();
+    f.v2(1);
+    f.v1_external(2);
+    f.unsigned(3);
+    f.v2(4);
+    let lines = f.lines();
+    assert!(!lines[1].contains("prev_hash"));
+    assert!(!lines[2].contains("prev_hash"));
+    for line in &lines {
+        let ev: ChannelEvent = serde_json::from_str(line).unwrap();
+        assert_eq!(&serde_json::to_string(&ev).unwrap(), line);
+    }
+}
