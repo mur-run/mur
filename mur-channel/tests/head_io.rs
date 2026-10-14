@@ -112,3 +112,67 @@ fn a_failed_rename_is_an_error_and_cleans_up_its_temp() {
     assert!(format!("{err:#}").contains("rename"), "{err:#}");
     assert!(!dir.path().join("chan-1.head.tmp").exists());
 }
+
+// ---- crash recovery: the on-disk states a crash can leave behind ----------
+//
+// `write_head` is temp write + fsync, rename, dir fsync. A crash lands between
+// two steps; the disk then holds one of the states below, and a reader must
+// see either the old head or the new one, never a hybrid.
+
+fn plant_tmp(dir: &std::path::Path, h: &Head) {
+    std::fs::write(dir.join("chan-1.head.tmp"), serde_json::to_vec(h).unwrap()).unwrap();
+}
+
+#[test]
+fn crash_after_temp_fsync_before_rename_keeps_the_old_head() {
+    // The temp holds a complete, valid newer head, but the rename never ran.
+    // The reader must keep returning the sealed head, not the unpublished one.
+    let dir = tempfile::tempdir().unwrap();
+    write_head(dir.path(), &head(1)).unwrap();
+    plant_tmp(dir.path(), &head(2));
+
+    assert_eq!(read_head(dir.path(), "chan-1").unwrap().unwrap().seq, 1);
+}
+
+#[test]
+fn the_write_after_such_a_crash_publishes_and_clears_the_temp() {
+    let dir = tempfile::tempdir().unwrap();
+    write_head(dir.path(), &head(1)).unwrap();
+    plant_tmp(dir.path(), &head(2));
+
+    write_head(dir.path(), &head(3)).unwrap();
+
+    assert_eq!(read_head(dir.path(), "chan-1").unwrap().unwrap().seq, 3);
+    assert!(!dir.path().join("chan-1.head.tmp").exists());
+}
+
+#[test]
+fn crash_mid_first_write_reads_as_no_head_not_as_damage() {
+    // First seal of a channel crashed with a torn temp and no head file: the
+    // channel simply has no head yet. Reporting damage here would make a crash
+    // look like tampering.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("chan-1.head.tmp"), b"{\"v\":1,\"chan").unwrap();
+
+    assert!(read_head(dir.path(), "chan-1").unwrap().is_none());
+}
+
+#[test]
+fn a_failed_temp_create_leaves_the_old_head_untouched() {
+    // A directory squatting on the temp name makes step 1 fail. A write that
+    // went straight to the head file would succeed here; the temp+rename order
+    // must instead fail and leave the sealed head exactly as it was.
+    let dir = tempfile::tempdir().unwrap();
+    write_head(dir.path(), &head(1)).unwrap();
+    let before = std::fs::read(dir.path().join("chan-1.head")).unwrap();
+    std::fs::create_dir(dir.path().join("chan-1.head.tmp")).unwrap();
+
+    let err = write_head(dir.path(), &head(2)).unwrap_err();
+
+    assert!(format!("{err:#}").contains("temp"), "{err:#}");
+    assert_eq!(
+        std::fs::read(dir.path().join("chan-1.head")).unwrap(),
+        before
+    );
+    assert_eq!(read_head(dir.path(), "chan-1").unwrap().unwrap().seq, 1);
+}
