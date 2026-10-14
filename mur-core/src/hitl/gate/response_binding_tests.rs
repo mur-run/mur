@@ -352,11 +352,42 @@ async fn rewriting_ts_does_not_revive_an_expired_approval() {
         Some(old + chrono::Duration::minutes(5)),
     );
     rewrite_ts(tmp.path(), &ch, chrono::Utc::now());
+    // Router-side appends now seal a head, and the rewrite above breaks the
+    // head's chain (the gate's own next append would be refused: see
+    // `a_rewritten_log_is_refused_by_the_head_seal`). This test is about the
+    // signed `issued_at`, so take the head out of the picture.
+    let _ = std::fs::remove_dir_all(tmp.path().join(mur_channel::seal::HEADS_DIR_NAME));
 
     let d = gate(tmp.path(), &ch, &a, &unattended(), None, None)
         .await
         .unwrap();
     assert!(!d.allow, "a week-old approval with a fresh ts: {d:?}");
+}
+
+/// With the head in place, the same rewrite is caught earlier: the gate's own
+/// next append cannot seal over a log that no longer matches its head, so the
+/// gate errors instead of deciding. Nothing is allowed.
+#[tokio::test]
+async fn a_rewritten_log_is_refused_by_the_head_seal() {
+    let (tmp, ch) = setup();
+    let a = action("rm -rf build");
+    let hash = hash_of(&ch, &a);
+    let old = ago(ttl() + chrono::Duration::days(1));
+    router_request_at(tmp.path(), &ch, "hitl-stale", &hash, Some(old));
+    human_allows_at(
+        tmp.path(),
+        &ch,
+        "hitl-stale",
+        &hash,
+        Some(old + chrono::Duration::minutes(5)),
+    );
+    rewrite_ts(tmp.path(), &ch, chrono::Utc::now());
+
+    let r = gate(tmp.path(), &ch, &a, &unattended(), None, None).await;
+    assert!(
+        r.as_ref().map_or(true, |d| !d.allow),
+        "a tampered log must never yield an allow: {r:?}"
+    );
 }
 
 /// A response with no signed `issued_at` predates option C. Its issue time

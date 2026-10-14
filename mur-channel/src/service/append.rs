@@ -19,6 +19,7 @@ impl ChannelService {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -126,6 +127,7 @@ impl ChannelService {
             Some(sig),
             Some(kv),
             None,
+            None,
         )
     }
 
@@ -156,6 +158,7 @@ impl ChannelService {
             idempotency_key,
             Some(sig),
             key_version,
+            None,
             None,
         )
     }
@@ -214,6 +217,20 @@ impl ChannelService {
         run_id: Option<&str>,
         signer: Option<(&mur_common::identity::AgentIdentity, u32)>,
     ) -> Result<ChannelEvent> {
+        self.transition_signed_with(channel_id, new_state, actor, run_id, signer, None)
+    }
+
+    /// [`Self::transition_signed`] with a per-call seal hook, the transition
+    /// twin of [`Self::append_signed_with`].
+    pub fn transition_signed_with(
+        &self,
+        channel_id: &str,
+        new_state: ChannelState,
+        actor: ChannelActor,
+        run_id: Option<&str>,
+        signer: Option<(&mur_common::identity::AgentIdentity, u32)>,
+        seal: Option<&crate::store::SealHook<'_>>,
+    ) -> Result<ChannelEvent> {
         let old_state = self
             .store
             .load_manifest(channel_id)
@@ -251,6 +268,7 @@ impl ChannelService {
             sig,
             kv,
             Some(new_state),
+            seal,
         )
     }
 }

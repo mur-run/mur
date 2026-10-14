@@ -96,6 +96,34 @@ fn read_key_version(agent_home: &Path) -> u32 {
     }
 }
 
+/// A writer's signing key and where it came from.
+struct WriterKey {
+    id: mur_common::identity::AgentIdentity,
+    kv: u32,
+    /// Handed over by the parent (we are inside its sandbox) rather than read
+    /// from disk. Such a process is not router-side, so it never seals a head
+    /// (spec 7.3.1: only the router-side signed path passes `Some(hook)`);
+    /// its lines are `Unsealed` until the next router append (spec 8.2). It
+    /// also cannot write `channel-heads/`, which the sandbox does not grant.
+    from_handoff: bool,
+}
+
+/// The seal hook for one write, or `None` when this writer must not seal.
+///
+/// `kv` is passed through as-is, including 0: that is the real key version of
+/// every agent whose key was never rotated, so 0 cannot mean "unknown" here.
+fn head_sealer(home: &Path, key: &WriterKey) -> Option<mur_channel::seal::HeadSealer> {
+    (!key.from_handoff).then(|| {
+        mur_channel::seal::HeadSealer::new(home, std::sync::Arc::new(key.id.clone()), key.kv)
+    })
+}
+
+/// Box the sealer as a store hook. The coercion target is what lets the
+/// closure be inferred as higher-ranked over `SealInput`'s lifetimes.
+fn seal_hook(s: &mur_channel::seal::HeadSealer) -> Box<mur_channel::store::SealHook<'_>> {
+    Box::new(move |i| s.seal(i))
+}
+
 /// The signing capability our parent handed us on stdin, if any.
 ///
 /// Set once, at process start, by `ingest_signing_handoff`. `None` for every
@@ -207,21 +235,26 @@ fn record_refusal(home: &Path, router_agent: &str, reason: &str) {
 ///
 /// One derivation on purpose: an append and a state transition on the same
 /// channel must not disagree about whether that channel is protected.
-fn writer_key(
-    home: &Path,
-    router_agent: &str,
-) -> anyhow::Result<Option<(mur_common::identity::AgentIdentity, u32)>> {
+fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Option<WriterKey>> {
     // A process sealed inside an agent's sandbox cannot read `keys/` — that
     // subtree is denied on purpose. Its parent loaded the key before sealing
     // and handed it over stdin, so prefer that when it is for THIS writer.
     // Checked before the disk read because the disk read is the thing that
     // cannot work here, not a faster path we are skipping.
     if let Some((id, kv)) = handoff_for(router_agent) {
-        return Ok(Some((id.clone(), kv)));
+        return Ok(Some(WriterKey {
+            id: id.clone(),
+            kv,
+            from_handoff: true,
+        }));
     }
     let agent_home = home.join("agents").join(router_agent);
     match mur_common::identity::AgentIdentity::load(&agent_home) {
-        Ok(id) => Ok(Some((id, read_key_version(&agent_home)))),
+        Ok(id) => Ok(Some(WriterKey {
+            kv: read_key_version(&agent_home),
+            id,
+            from_handoff: false,
+        })),
         Err(mur_common::identity::IdentityError::NotFound) => Ok(None),
         // The key is THERE and we may not read it — a sandbox deny (a spawned
         // `mur` cannot read a sibling's signing key since #975). Falling back
@@ -270,12 +303,15 @@ pub fn transition_as_writer(
     run_id: Option<&str>,
 ) -> anyhow::Result<ChannelEvent> {
     let key = writer_key(home, router_agent)?;
-    svc.transition_signed(
+    let sealer = key.as_ref().and_then(|k| head_sealer(home, k));
+    let hook = sealer.as_ref().map(seal_hook);
+    svc.transition_signed_with(
         channel_id,
         new_state,
         actor,
         run_id,
-        key.as_ref().map(|(id, kv)| (id, *kv)),
+        key.as_ref().map(|k| (&k.id, k.kv)),
+        hook.as_deref(),
     )
 }
 
@@ -297,7 +333,20 @@ pub fn append_as_writer(
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
     match writer_key(home, router_agent)? {
-        Some((id, kv)) => svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem),
+        Some(key) => {
+            let sealer = head_sealer(home, &key);
+            let hook = sealer.as_ref().map(seal_hook);
+            svc.append_signed_with(
+                channel_id,
+                &key.id,
+                key.kv,
+                actor,
+                kind,
+                payload,
+                idem,
+                hook.as_deref(),
+            )
+        }
         None => svc.append(channel_id, actor, kind, payload, idem),
     }
 }
@@ -494,5 +543,106 @@ mod tests {
             mur_channel::sign::verify_one(&ch.id, &ev, &pubkey, true),
             "signed event must verify against the router pubkey even when require_sig"
         );
+    }
+    fn heads_dir(home: &Path) -> std::path::PathBuf {
+        home.join(mur_channel::seal::HEADS_DIR_NAME)
+    }
+
+    fn plant_router(home: &Path) -> AgentIdentity {
+        let agent_home = home.join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&agent_home).unwrap();
+        id
+    }
+
+    #[test]
+    fn a_router_side_append_seals_a_head() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        let id = plant_router(tmp.path());
+
+        let ev = append_as_writer(
+            &svc,
+            tmp.path(),
+            &ch.id,
+            "mur",
+            ChannelActor::System,
+            EventKind::Note,
+            serde_json::json!({ "text": "hi" }),
+            None,
+        )
+        .unwrap();
+
+        let head = mur_channel::head_io::read_head(&heads_dir(tmp.path()), &ch.id)
+            .unwrap()
+            .expect("a router-side signed append must leave a head");
+        assert_eq!(head.seq, ev.seq);
+        assert!(head.verify(&id.verifying_key_bytes()));
+    }
+
+    #[test]
+    fn a_router_side_transition_seals_a_head() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        plant_router(tmp.path());
+
+        let ev = transition_as_writer(
+            &svc,
+            tmp.path(),
+            &ch.id,
+            "mur",
+            mur_common::channel::ChannelState::Completed,
+            ChannelActor::System,
+            None,
+        )
+        .unwrap();
+
+        let head = mur_channel::head_io::read_head(&heads_dir(tmp.path()), &ch.id)
+            .unwrap()
+            .expect("a router-side transition must leave a head");
+        assert_eq!(head.seq, ev.seq);
+    }
+
+    #[test]
+    fn an_unsigned_append_leaves_no_head() {
+        let tmp = TempDir::new().unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+        append_as_writer(
+            &svc,
+            tmp.path(),
+            &ch.id,
+            "mur",
+            ChannelActor::System,
+            EventKind::Note,
+            serde_json::json!({ "text": "hi" }),
+            None,
+        )
+        .unwrap();
+        assert!(
+            mur_channel::head_io::read_head(&heads_dir(tmp.path()), &ch.id)
+                .unwrap()
+                .is_none(),
+            "no router key, nothing to seal with"
+        );
+    }
+
+    #[test]
+    fn a_handed_over_key_never_seals() {
+        let tmp = TempDir::new().unwrap();
+        let handed = WriterKey {
+            id: AgentIdentity::generate(),
+            kv: 3,
+            from_handoff: true,
+        };
+        assert!(head_sealer(tmp.path(), &handed).is_none());
+        let on_disk = WriterKey {
+            from_handoff: false,
+            ..handed
+        };
+        assert!(head_sealer(tmp.path(), &on_disk).is_some());
     }
 }

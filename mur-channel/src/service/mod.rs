@@ -132,7 +132,7 @@ impl ChannelService {
     /// (lending it the seal hook), then bump the manifest's `updated_at`,
     /// derived title and, for a transition, `state`, and refresh the read
     /// model. A failed seal returns `Err` before the refresh; the line stays
-    /// on disk (decision B1).
+    /// on disk (decision B1). A per-call `seal` wins over the service's own.
     #[allow(clippy::too_many_arguments)]
     fn write_event(
         &self,
@@ -144,6 +144,7 @@ impl ChannelService {
         sig: Option<String>,
         key_version: Option<u32>,
         new_state: Option<ChannelState>,
+        seal: Option<&crate::store::SealHook<'_>>,
     ) -> Result<ChannelEvent> {
         let ev = self.store.append_event_with(
             channel_id,
@@ -153,9 +154,11 @@ impl ChannelService {
             idempotency_key,
             sig,
             key_version,
-            self.seal
-                .as_deref()
-                .map(|h| h as &crate::store::SealHook<'_>),
+            seal.or_else(|| {
+                self.seal
+                    .as_deref()
+                    .map(|h| h as &crate::store::SealHook<'_>)
+            }),
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             if let Some(state) = new_state {
@@ -266,7 +269,9 @@ impl ChannelService {
         if let Some(t) = task_id {
             payload["task_id"] = serde_json::Value::String(t.to_string());
         }
-        self.write_event(channel_id, actor, kind, payload, None, None, None, None)
+        self.write_event(
+            channel_id, actor, kind, payload, None, None, None, None, None,
+        )
     }
 
     /// Create a channel that records a workflow execution. No agent participant;
