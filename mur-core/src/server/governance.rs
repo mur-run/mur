@@ -293,6 +293,18 @@ mod tests {
         (status, json)
     }
 
+    /// Canary for the externally-signed directive path (#1770). It runs the full
+    /// POST -> `append_event` -> `fold_governance` round trip and asserts the
+    /// folded *effect* (`killed`), not just a signature check, because the
+    /// failure it guards is silent: `fold_governance` skips a directive whose
+    /// signature does not verify, with no error.
+    ///
+    /// The directive arrives v1-signed and is stored verbatim. It only breaks
+    /// when BOTH happen: `append_event` starts writing `prev_hash`, AND the fold
+    /// switches to `verify_one` (which reads `prev_hash` as "this is v2").
+    /// Either change alone keeps this test green (verified by mutation). Do not
+    /// move the fold to `verify_one` without confirming the v1 landing path
+    /// still stores `prev_hash: None`.
     #[tokio::test]
     async fn valid_kill_is_persisted_audited_and_folds_killed() {
         let tmp = tempfile::tempdir().unwrap();

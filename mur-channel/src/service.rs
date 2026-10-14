@@ -324,6 +324,47 @@ impl ChannelService {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
+        let ev = self.store.append_signed_event_with(
+            channel_id,
+            identity,
+            kv,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            self.seal
+                .as_deref()
+                .map(|h| h as &crate::store::SealHook<'_>),
+        )?;
+        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
+            ch.updated_at = ev.ts;
+            if let Some(t) = Self::derived_title(&ch, &ev) {
+                ch.title = t;
+            }
+            self.refresh_read_model(&ch, &ev);
+        }
+        Ok(ev)
+    }
+
+    /// Sign an event against sig-input **v1** (no `prev_hash`) and append it.
+    ///
+    /// Only for writers whose events are verified by `verify_event_sig`, which
+    /// is v1-only on purpose: commander directives. A directive's signature
+    /// proves "who authorised what"; chain position is the router chain's job.
+    /// The line still feeds the next v2 line's `prev_hash`, so a mid-log
+    /// deletion of it is caught by chain verification. Do not route this
+    /// through `append_signed` (v2) — `fold_governance` would silently drop it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_signed_v1(
+        &self,
+        channel_id: &str,
+        identity: &mur_common::identity::AgentIdentity,
+        kv: u32,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+    ) -> Result<ChannelEvent> {
         let sig = crate::sign::sign_event(
             identity,
             channel_id,

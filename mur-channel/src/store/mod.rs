@@ -13,9 +13,11 @@ pub struct ChannelStore {
 }
 
 mod append;
+mod chain;
 mod load;
 
 pub use append::{SealHook, SealInput};
+pub use chain::{GENESIS_PREV_HASH, line_hash};
 pub use load::DamageReport;
 #[cfg(test)]
 use load::check_absence_is_not_corruption;

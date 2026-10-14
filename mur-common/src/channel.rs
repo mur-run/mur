@@ -173,6 +173,11 @@ pub struct ChannelEvent {
     /// RESERVED — key version for the signing key (v3d).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_version: Option<u32>,
+    /// Hex SHA-256 of the previous raw line in `events.jsonl` (or the genesis
+    /// constant for the first line). Set only on sig-input v2 events, which
+    /// sign over it; `None` for v1 (externally signed) and unsigned events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_hash: Option<String>,
 }
 
 #[cfg(test)]
@@ -196,6 +201,7 @@ mod tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         };
         let line = serde_json::to_string(&ev).unwrap();
         let back: ChannelEvent = serde_json::from_str(&line).unwrap();
@@ -225,6 +231,7 @@ mod tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         };
         let line = serde_json::to_string(&ev).unwrap();
         assert!(!line.contains("sig"), "sig must be omitted when None");

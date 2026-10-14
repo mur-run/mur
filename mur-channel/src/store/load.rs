@@ -21,12 +21,18 @@ pub struct DamageReport {
     /// file the first damage sits relative to the parsed events — needed to
     /// decide a round boundary (§8.2) without re-parsing the file itself.
     pub event_lines: Vec<usize>,
+    /// `seq` of each event whose `prev_hash` does not match the raw line
+    /// before it (#1770) — a deleted, reordered, or edited earlier line.
+    /// Only events that carry a `prev_hash` (sig-input v2) can appear here.
+    pub chain_breaks: Vec<u64>,
 }
 
 impl DamageReport {
-    /// No unparseable lines and no verification failures.
+    /// No unparseable lines, no verification failures, no chain breaks.
     pub fn is_clean(&self) -> bool {
-        self.unparseable_lines.is_empty() && self.unverified.is_empty()
+        self.unparseable_lines.is_empty()
+            && self.unverified.is_empty()
+            && self.chain_breaks.is_empty()
     }
 }
 
@@ -168,6 +174,7 @@ impl ChannelStore {
                 Err(_) => report.unparseable_lines.push(idx + 1),
             }
         }
+        report.chain_breaks = super::chain::chain_breaks(&content);
         Ok((events, report))
     }
 }

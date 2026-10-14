@@ -60,6 +60,36 @@ impl ChannelStore {
         key_version: Option<u32>,
         seal: Option<&SealHook<'_>>,
     ) -> Result<ChannelEvent> {
+        self.append_sealed(
+            id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            |_| chain::Seal {
+                sig,
+                key_version,
+                prev_hash: None,
+            },
+            seal,
+        )
+    }
+
+    /// The append body. `signer` runs UNDER the lock with the chain hash of the
+    /// current tail line ([`GENESIS_PREV_HASH`] for an empty log), so a v2
+    /// signer commits to exactly the line this event lands after. `seal` is the
+    /// post-write head hook ([`append_event_with`](Self::append_event_with)).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_sealed(
+        &self,
+        id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        signer: impl FnOnce(chain::Unsealed<'_>) -> chain::Seal,
+        seal: Option<&SealHook<'_>>,
+    ) -> Result<ChannelEvent> {
         let dir = self.channel_dir(id);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         // An append creates the directory, so it can resurrect a channel whose
@@ -149,6 +179,18 @@ impl ChannelStore {
         }
 
         let next_seq = last_seq.map(|s| s + 1).unwrap_or(0);
+        let chain::Seal {
+            sig,
+            key_version,
+            prev_hash,
+        } = signer(chain::Unsealed {
+            channel_id: id,
+            actor: &actor,
+            kind,
+            payload: &payload,
+            idempotency_key: idempotency_key.as_deref(),
+            tail_hash: &chain::tail_hash(&content),
+        });
 
         let ev = ChannelEvent {
             seq: next_seq,
@@ -159,6 +201,7 @@ impl ChannelStore {
             idempotency_key,
             sig,
             key_version,
+            prev_hash,
         };
         let line = serde_json::to_string(&ev).context("serialize event")?;
         let mut data = OpenOptions::new()

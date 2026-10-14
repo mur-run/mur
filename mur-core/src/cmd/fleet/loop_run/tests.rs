@@ -10,6 +10,7 @@ fn agent_event(seq: u64, id: &str, text: &str) -> ChannelEvent {
         idempotency_key: None,
         sig: None,
         key_version: None,
+        prev_hash: None,
     }
 }
 
@@ -23,6 +24,7 @@ fn sys_event(seq: u64, text: &str) -> ChannelEvent {
         idempotency_key: None,
         sig: None,
         key_version: None,
+        prev_hash: None,
     }
 }
 

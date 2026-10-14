@@ -302,6 +302,7 @@ fn record_event_folds_the_channels_first_event_at_seq_zero() {
         idempotency_key: None,
         sig: None,
         key_version: None,
+        prev_hash: None,
     };
     idx.record_event("c1", &ev).unwrap();
 
@@ -338,6 +339,7 @@ fn remove_deletes_the_channels_fts_body_text_too() {
         idempotency_key: None,
         sig: None,
         key_version: None,
+        prev_hash: None,
     };
     idx.record_event("c1", &ev).unwrap();
     assert_eq!(

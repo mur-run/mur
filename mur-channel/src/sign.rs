@@ -17,7 +17,67 @@ use std::path::Path;
 
 /// Canonicalization version — bump if the sign-input shape changes so an old
 /// signature is never silently checked against a new canonicalization.
+///
+/// Do NOT bump this for the hash chain: v2 is a sibling shape
+/// ([`SIG_INPUT_VERSION_V2`]), not a successor. Commander directives are signed
+/// outside MUR against this v1 shape and verified by [`verify_event_sig`];
+/// bumping it would make every externally signed directive fail to verify.
 pub const SIG_INPUT_VERSION: u32 = 1;
+
+/// Sig-input v2 (#1770): v1's fields plus `prev_hash`, so a signature also
+/// commits to the event's position in the log.
+pub const SIG_INPUT_VERSION_V2: u32 = 2;
+
+/// Canonical v2 bytes: the v1 shape with `v = 2` and `prev_hash` added.
+pub fn sign_input_v2(
+    channel_id: &str,
+    actor: &ChannelActor,
+    kind: EventKind,
+    payload: &serde_json::Value,
+    idempotency_key: Option<&str>,
+    prev_hash: &str,
+) -> Vec<u8> {
+    let canon = serde_json::json!({
+        "v": SIG_INPUT_VERSION_V2,
+        "channel_id": channel_id,
+        "actor": actor,
+        "kind": kind,
+        "payload": payload,
+        "idempotency_key": idempotency_key,
+        "prev_hash": prev_hash,
+    });
+    serde_json::to_vec(&canon).unwrap_or_default()
+}
+
+/// Sign an event's v2 canonical input; returns the multibase sig.
+pub fn sign_event_v2(
+    identity: &AgentIdentity,
+    channel_id: &str,
+    actor: &ChannelActor,
+    kind: EventKind,
+    payload: &serde_json::Value,
+    idempotency_key: Option<&str>,
+    prev_hash: &str,
+) -> String {
+    let input = sign_input_v2(channel_id, actor, kind, payload, idempotency_key, prev_hash);
+    multibase::encode(multibase::Base::Base58Btc, identity.sign_bytes(&input))
+}
+
+/// Verify a multibase signature over arbitrary canonical bytes. Fail-closed.
+fn verify_input_sig(input: &[u8], sig_multibase: &str, pubkey: &[u8; 32]) -> bool {
+    let Ok((_b, sig_bytes)) = multibase::decode(sig_multibase) else {
+        return false;
+    };
+    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.as_slice().try_into() else {
+        return false;
+    };
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+    let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(pubkey) else {
+        return false;
+    };
+    use ed25519_dalek::Verifier;
+    vk.verify(input, &sig).is_ok()
+}
 
 /// Canonical bytes signed for an event. `serde_json` sorts object keys (no
 /// preserve_order), so this is deterministic for a given input.
@@ -64,31 +124,36 @@ pub fn verify_event_sig(
     sig_multibase: &str,
     pubkey: &[u8; 32],
 ) -> bool {
-    let Ok((_b, sig_bytes)) = multibase::decode(sig_multibase) else {
-        return false;
-    };
-    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.as_slice().try_into() else {
-        return false;
-    };
-    let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
-    let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(pubkey) else {
-        return false;
-    };
     let input = sign_input(channel_id, actor, kind, payload, idempotency_key);
-    use ed25519_dalek::Verifier;
-    vk.verify(&input, &sig).is_ok()
+    verify_input_sig(&input, sig_multibase, pubkey)
 }
 
 /// Verify a single event against a known writer pubkey. A present sig must be
 /// valid (always). A missing sig is tolerated only when `!require_sig`.
+///
+/// An event carrying `prev_hash` is checked against sig-input v2, otherwise
+/// v1. Adding or stripping `prev_hash` changes the canonical bytes (including
+/// `v`), so neither downgrade nor upgrade forgery verifies.
 pub fn verify_one(
     channel_id: &str,
     ev: &ChannelEvent,
     writer_pubkey: &[u8; 32],
     require_sig: bool,
 ) -> bool {
-    match ev.sig.as_deref() {
-        Some(sig) => verify_event_sig(
+    match (ev.sig.as_deref(), ev.prev_hash.as_deref()) {
+        (Some(sig), Some(prev)) => verify_input_sig(
+            &sign_input_v2(
+                channel_id,
+                &ev.actor,
+                ev.kind,
+                &ev.payload,
+                ev.idempotency_key.as_deref(),
+                prev,
+            ),
+            sig,
+            writer_pubkey,
+        ),
+        (Some(sig), None) => verify_event_sig(
             channel_id,
             &ev.actor,
             ev.kind,
@@ -97,7 +162,7 @@ pub fn verify_one(
             sig,
             writer_pubkey,
         ),
-        None => !require_sig,
+        (None, _) => !require_sig,
     }
 }
 
@@ -273,6 +338,7 @@ mod tests {
             idempotency_key: None,
             sig,
             key_version: Some(0),
+            prev_hash: None,
         };
         let pubkey = writer.verifying_key_bytes();
         // valid signed → kept (any require_sig)
