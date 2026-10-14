@@ -4,9 +4,13 @@
 
 pub mod authority;
 pub mod batch;
+pub mod integrity;
 pub mod remembered;
 pub mod shim_ticket;
 pub mod store;
+
+#[cfg(test)]
+mod store_integrity_tests;
 
 /// Decision returned by the Hub (or any HITL responder) for a pending approval.
 #[derive(Debug, Clone)]

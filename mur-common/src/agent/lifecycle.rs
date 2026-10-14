@@ -142,6 +142,11 @@ pub const SCHEDULE_CHANNEL_FILE: &str = "schedule-channel";
 /// channel that no longer loads.
 pub const HITL_CHANNEL_FILE: &str = "hitl-channel";
 
+/// Directory in the agent's home holding the signed head of the decision
+/// channel (`<agent_home>/hitl-heads/<channel_id>.head`, #1859). It is how gate
+/// B tells "a record was written and then deleted" from "never written".
+pub const HITL_HEAD_DIR: &str = "hitl-heads";
+
 /// A schedule an agent asked for and a person has not yet granted.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScheduleProposal {
