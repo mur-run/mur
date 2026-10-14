@@ -714,3 +714,30 @@ fn proxy_only_sbpl_allows_loopback_and_dns_but_no_wildcard() {
 fn sandbox_check_reports_launchd_unsealed() {
     assert!(!pid_sealed(1));
 }
+
+/// Seatbelt matches `subpath` against the RESOLVED path. With the shared temp
+/// trees gone, a `MUR_HOME` (or scratch dir) reached through a symlink — the
+/// e2e scripts keep it under `$TMPDIR`, i.e. `/var/...` -> `/private/var/...`
+/// — must be allowed by its resolved path too, or peer `agent.sock` dialing
+/// and the CLI shim's socket break under restricted mode.
+#[test]
+fn unix_socket_allows_cover_symlinked_mur_home_and_scratch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(real.join("home/agents")).unwrap();
+    std::fs::create_dir_all(real.join("scratch")).unwrap();
+    std::os::unix::fs::symlink(real.join("home"), real.join("home-link")).unwrap();
+    std::os::unix::fs::symlink(real.join("scratch"), real.join("scratch-link")).unwrap();
+
+    let mut policy = policy_with(vec![], vec![]);
+    policy.scratch_dir = Some(real.join("scratch-link"));
+    let paths = unix_socket_allow_paths(&real.join("home-link"), &policy);
+
+    for resolved in [real.join("home/agents"), real.join("scratch")] {
+        assert!(
+            paths.contains(&resolved),
+            "{} (the resolved path Seatbelt checks) missing from {paths:?}",
+            resolved.display()
+        );
+    }
+}

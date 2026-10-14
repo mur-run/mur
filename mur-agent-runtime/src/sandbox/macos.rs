@@ -2,7 +2,7 @@ use super::{SandboxPolicy, SandboxStatus};
 use anyhow::Context;
 use mur_common::agent::SpawnMode;
 use std::ffi::CString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
     let profile = build_sbpl_profile(policy);
@@ -155,19 +155,25 @@ const MUR_SHORT_SOCKET_REGEX: &str =
 /// restricted agent talk to an `ssh-agent` or any other local service listening
 /// under them. The one MUR socket that lives in `/private/tmp` is covered by
 /// the exact-shape [`MUR_SHORT_SOCKET_REGEX`] instead.
-fn unix_socket_allow_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
-    let mut paths = vec![resolved_mur_home().join("agents")];
+///
+/// Each path is also emitted in its resolved form: Seatbelt matches `subpath`
+/// against the RESOLVED path, so a `MUR_HOME` or scratch dir reached through a
+/// symlink (the e2e scripts put `MUR_HOME` under `$TMPDIR`, i.e. `/var/...` ->
+/// `/private/var/...`) would otherwise match nothing now that the shared temp
+/// trees are no longer allowed wholesale.
+fn unix_socket_allow_paths(mur_home: &Path, policy: &SandboxPolicy) -> Vec<PathBuf> {
+    let mut paths = vec![mur_home.join("agents")];
     if let Some(scratch) = &policy.scratch_dir {
         paths.push(scratch.clone());
     }
-    paths
+    crate::sandbox::policy::with_resolved_aliases(paths)
 }
 
 /// Push the scoped AF_UNIX allows (see [`unix_socket_allow_paths`] and
 /// [`MUR_SHORT_SOCKET_REGEX`]). Shared by both restricted arms so they cannot
 /// drift apart.
 fn push_unix_socket_allows(lines: &mut Vec<String>, policy: &SandboxPolicy) {
-    for p in unix_socket_allow_paths(policy) {
+    for p in unix_socket_allow_paths(&resolved_mur_home(), policy) {
         let p = sbpl_escape(&p.to_string_lossy());
         lines.push(format!(
             "(allow network-outbound (remote unix-socket (subpath \"{p}\")))"
