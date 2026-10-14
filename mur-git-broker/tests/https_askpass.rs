@@ -30,10 +30,13 @@ impl CredentialSource for Fixed {
 }
 
 /// A `git` that records the push and forwards everything else to the real one.
+///
+/// `bash`, not `sh`: reading fd 57 needs a two-digit redirection, and dash (Debian/Ubuntu's
+/// `/bin/sh`) accepts single-digit fds only ("Bad fd number").
 fn stub_git(dir: &Path, out: &Path) -> PathBuf {
     let bin = dir.join("git");
     let script = format!(
-        r#"#!/bin/sh
+        r#"#!/bin/bash
 for a in "$@"; do
   if [ "$a" = push ]; then
     printf '%s\n' "$@" > '{out}/argv'
