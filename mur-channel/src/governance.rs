@@ -337,4 +337,97 @@ mod tests {
         );
         assert_eq!(g2.budget_nonce.as_deref(), Some("b9"));
     }
+
+    // --- warn_dropped: a dropped directive must leave a trace (#1862) ---
+
+    #[derive(Clone, Default)]
+    struct LogBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
+        type Writer = LogBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `fold_governance` under a capturing subscriber; return the log text.
+    fn fold_logs(evs: &[ChannelEvent], pk: &[[u8; 32]]) -> String {
+        let buf = LogBuf::default();
+        let sub = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        tracing::subscriber::with_default(sub, || {
+            fold_governance(evs, CID, "dev", pk);
+        });
+        String::from_utf8(buf.0.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn unparseable_directive_warns_with_reason_and_seq() {
+        let cmd = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        let mut ev = directive_event(&cmd, 7, "kill", "dev", None, "k1", 1000);
+        ev.payload = serde_json::json!({ COMMANDER_DIRECTIVE_KEY: { "garbage": 1 } });
+        let log = fold_logs(&[ev], &pk);
+        assert!(log.contains("commander directive dropped"), "{log}");
+        assert!(log.contains("unparseable"), "{log}");
+        assert!(log.contains("seq=7"), "{log}");
+        assert!(log.contains("channel_id=\"fleet-dev\""), "{log}");
+    }
+
+    #[test]
+    fn unsigned_directive_warns_missing_signature() {
+        let cmd = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        let mut ev = directive_event(&cmd, 8, "kill", "dev", None, "k1", 1000);
+        ev.sig = None;
+        let log = fold_logs(&[ev], &pk);
+        assert!(log.contains("commander directive dropped"), "{log}");
+        assert!(log.contains("missing signature"), "{log}");
+        assert!(log.contains("seq=8"), "{log}");
+        assert!(log.contains("idempotency_key=\"k1\""), "{log}");
+    }
+
+    #[test]
+    fn wrong_key_directive_warns_signature_rejected() {
+        let cmd = AgentIdentity::generate();
+        let attacker = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        let ev = directive_event(&attacker, 9, "kill", "dev", None, "k1", 1000);
+        let log = fold_logs(&[ev], &pk);
+        assert!(log.contains("commander directive dropped"), "{log}");
+        assert!(
+            log.contains("signature rejected by every accepted pubkey"),
+            "{log}"
+        );
+        assert!(log.contains("seq=9"), "{log}");
+    }
+
+    #[test]
+    fn other_fleet_directive_stays_quiet() {
+        let cmd = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        let ev = directive_event(&cmd, 1, "kill", "other", None, "k1", 1000);
+        assert_eq!(fold_logs(&[ev], &pk), "");
+    }
+
+    #[test]
+    fn accepted_directive_does_not_warn() {
+        let cmd = AgentIdentity::generate();
+        let pk = [cmd.verifying_key_bytes()];
+        let ev = directive_event(&cmd, 1, "kill", "dev", None, "k1", 1000);
+        assert_eq!(fold_logs(&[ev], &pk), "");
+    }
 }
