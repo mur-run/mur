@@ -7,6 +7,9 @@ use chrono::Utc;
 use fs2::FileExt;
 use mur_common::channel::{Channel, ChannelActor, ChannelEvent, EventKind};
 
+mod chain;
+pub use chain::{GENESIS_PREV_HASH, line_hash};
+
 /// Event-sourced store rooted at `<mur_home>/channels/`.
 pub struct ChannelStore {
     root: PathBuf,
@@ -33,12 +36,18 @@ pub struct DamageReport {
     /// file the first damage sits relative to the parsed events — needed to
     /// decide a round boundary (§8.2) without re-parsing the file itself.
     pub event_lines: Vec<usize>,
+    /// `seq` of each event whose `prev_hash` does not match the raw line
+    /// before it (#1770) — a deleted, reordered, or edited earlier line.
+    /// Only events that carry a `prev_hash` (sig-input v2) can appear here.
+    pub chain_breaks: Vec<u64>,
 }
 
 impl DamageReport {
-    /// No unparseable lines and no verification failures.
+    /// No unparseable lines, no verification failures, no chain breaks.
     pub fn is_clean(&self) -> bool {
-        self.unparseable_lines.is_empty() && self.unverified.is_empty()
+        self.unparseable_lines.is_empty()
+            && self.unverified.is_empty()
+            && self.chain_breaks.is_empty()
     }
 }
 
@@ -249,6 +258,7 @@ impl ChannelStore {
                 Err(_) => report.unparseable_lines.push(idx + 1),
             }
         }
+        report.chain_breaks = chain::chain_breaks(&content);
         Ok((events, report))
     }
 
@@ -265,6 +275,25 @@ impl ChannelStore {
         idempotency_key: Option<String>,
         sig: Option<String>,
         key_version: Option<u32>,
+    ) -> Result<ChannelEvent> {
+        self.append_sealed(id, actor, kind, payload, idempotency_key, |_| chain::Seal {
+            sig,
+            key_version,
+            prev_hash: None,
+        })
+    }
+
+    /// The append body. `seal` runs UNDER the lock with the chain hash of the
+    /// current tail line ([`GENESIS_PREV_HASH`] for an empty log), so a v2
+    /// signer commits to exactly the line this event lands after.
+    pub(crate) fn append_sealed(
+        &self,
+        id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        seal: impl FnOnce(chain::Unsealed<'_>) -> chain::Seal,
     ) -> Result<ChannelEvent> {
         let dir = self.channel_dir(id);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -309,6 +338,19 @@ impl ChannelStore {
 
         // Compute next seq from the existing (unlocked) log, held under the lock.
         let next_seq = self.load_events(id)?.last().map(|e| e.seq + 1).unwrap_or(0);
+        let tail = Self::read_events_file(&path, &dir)?.unwrap_or_default();
+        let chain::Seal {
+            sig,
+            key_version,
+            prev_hash,
+        } = seal(chain::Unsealed {
+            channel_id: id,
+            actor: &actor,
+            kind,
+            payload: &payload,
+            idempotency_key: idempotency_key.as_deref(),
+            tail_hash: &chain::tail_hash(&tail),
+        });
 
         let ev = ChannelEvent {
             seq: next_seq,
@@ -319,6 +361,7 @@ impl ChannelStore {
             idempotency_key,
             sig,
             key_version,
+            prev_hash,
         };
         let line = serde_json::to_string(&ev).context("serialize event")?;
         let mut data = OpenOptions::new()

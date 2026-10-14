@@ -141,7 +141,13 @@ pub fn cmd_commander_directive(
         "nonce": nonce, "issued_at_ms": now_ms,
     }});
     let svc = mur_channel::ChannelService::open(mur_home)?;
-    let ev = svc.append_signed(
+    // Deliberately sig-input v1, not `append_signed` (v2). `fold_governance`
+    // verifies directives with the v1-only `verify_event_sig`: a directive's
+    // authority must not depend on the router chain's format. Signing this as
+    // v2 makes the fold silently drop it — a kill that never takes effect.
+    // Guarded by the commander-kill loop / deep-research tests; if you change
+    // `append_event`'s default to write `prev_hash`, those go red for this path.
+    let ev = svc.append_signed_v1(
         &format!("fleet-{fleet}"),
         &id,
         0,

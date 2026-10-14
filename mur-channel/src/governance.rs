@@ -135,6 +135,7 @@ mod tests {
             idempotency_key: Some(nonce.to_string()),
             sig: Some(sig),
             key_version: None,
+            prev_hash: None,
         }
     }
 

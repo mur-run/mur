@@ -678,6 +678,7 @@ mod tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         };
         let events = vec![ev("fleet-dev-abc", "deadline")];
         assert_eq!(
@@ -704,6 +705,7 @@ mod tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         };
         let events = vec![ev("fleet-dev-1", "stuck"), ev("fleet-dev-2", "budget")];
         assert_eq!(newest_stop(&events).unwrap().stop_reason, "budget");

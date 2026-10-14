@@ -394,6 +394,7 @@ mod tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         };
         let line = summarize(&ev, "ch1");
         assert!(line.contains("mur channel approve ch1 h7"), "{line}");
@@ -417,6 +418,7 @@ mod tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         }
     }
 

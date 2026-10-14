@@ -293,14 +293,13 @@ fn append_signed_stores_verifiable_sig() {
     assert_eq!(ev.key_version, Some(0));
     let loaded = svc.load_events(&ch.id).unwrap();
     let e = &loaded[0];
-    assert!(crate::sign::verify_event_sig(
+    // append_signed writes v2 (prev_hash-bound); verify_one dispatches on it.
+    assert!(e.prev_hash.is_some());
+    assert!(crate::sign::verify_one(
         &ch.id,
-        &e.actor,
-        e.kind,
-        &e.payload,
-        e.idempotency_key.as_deref(),
-        e.sig.as_ref().unwrap(),
-        &id.verifying_key_bytes()
+        e,
+        &id.verifying_key_bytes(),
+        true
     ));
 }
 
