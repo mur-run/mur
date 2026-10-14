@@ -99,7 +99,7 @@ impl ChannelStore {
     /// [`load_events`] and [`load_events_with_damage`] (§8.2 P4) agree on
     /// what "absent" means without duplicating the Windows `ENOTDIR`
     /// handling (see [`check_absence_is_not_corruption`]).
-    fn read_events_file(path: &Path, channel_dir: &Path) -> Result<Option<String>> {
+    pub(super) fn read_events_file(path: &Path, channel_dir: &Path) -> Result<Option<String>> {
         match fs::read_to_string(path) {
             Ok(c) => Ok(Some(c)),
             // `NotFound` normally means genuine absence: no such channel, or a

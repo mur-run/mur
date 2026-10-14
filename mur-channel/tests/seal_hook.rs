@@ -97,10 +97,10 @@ fn hook_receives_the_event_channel_id_and_exact_record_bytes() {
     assert!(seen[0].2.ends_with(b"\n"), "record includes its terminator");
 }
 
-/// 7.3.1: the dedup path writes nothing, so it must not run the hook (and so
-/// cannot advance a head).
+/// A dedup hit writes nothing, but it does re-offer the line to the hook (the
+/// hook owns idempotency: head already covers the seq => no-op).
 #[test]
-fn dedup_return_does_not_run_the_hook() {
+fn dedup_hit_reruns_the_hook_but_appends_nothing() {
     let (_tmp, store) = store_with_channel();
     let calls = Cell::new(0);
     let hook = |_: &mur_channel::store::SealInput| -> anyhow::Result<()> {
@@ -110,7 +110,7 @@ fn dedup_return_does_not_run_the_hook() {
     let first = append(&store, "once", Some("k1"), Some(&hook)).unwrap();
     let again = append(&store, "once", Some("k1"), Some(&hook)).unwrap();
     assert_eq!(first.seq, again.seq);
-    assert_eq!(calls.get(), 1, "dedup hit must not seal");
+    assert_eq!(calls.get(), 2, "dedup hit re-offers the line to the hook");
     assert_eq!(store.load_events(CH).unwrap().len(), 1);
 }
 
@@ -178,22 +178,95 @@ fn none_seal_matches_the_legacy_append_event() {
     assert!(lines.ends_with('\n'));
 }
 
-/// Characterization of the gap the head slice must close: after a failed seal
-/// the line is on disk, and a retry with the same idempotency key is answered
-/// by dedup (`Ok`) without running the hook again, so nothing ever seals it.
+/// A dedup hit re-runs the seal hook: after a failed seal the line is on
+/// disk, and the retry with the same idempotency key must give the hook
+/// another chance to seal it. The hook owns idempotency (head already covers
+/// the seq => no-op), so the store always calls it on a hit.
 #[test]
-fn retry_after_failed_seal_is_deduped_and_never_resealed() {
+fn retry_after_failed_seal_is_deduped_and_resealed() {
+    let (_tmp, store) = store_with_channel();
+    let calls = Cell::new(0u32);
+    let seen = RefCell::new(Vec::<(u64, Vec<u8>)>::new());
+    let flaky = |i: &mur_channel::store::SealInput<'_>| -> anyhow::Result<()> {
+        calls.set(calls.get() + 1);
+        seen.borrow_mut().push((i.event.seq, i.record.to_vec()));
+        if calls.get() == 1 {
+            anyhow::bail!("disk full")
+        }
+        Ok(())
+    };
+    assert!(append(&store, "a", Some("k"), Some(&flaky)).is_err());
+    assert_eq!(calls.get(), 1);
+
+    let retry = append(&store, "a", Some("k"), Some(&flaky)).expect("second seal succeeds");
+    assert_eq!(retry.seq, 0, "dedup returns the original event");
+    assert_eq!(calls.get(), 2, "hook ran again on the dedup hit");
+    assert_eq!(
+        store.load_events(CH).unwrap().len(),
+        1,
+        "nothing re-appended"
+    );
+    let seen = seen.borrow();
+    assert_eq!(
+        seen[0], seen[1],
+        "same seq and exact record bytes both times"
+    );
+    let on_disk = std::fs::read(store.events_path(CH)).unwrap();
+    assert_eq!(seen[1].1, on_disk, "record is the exact line on disk");
+}
+
+/// A hook that fails again on the retry surfaces as `Err`, same as the write path.
+#[test]
+fn retry_after_failed_seal_errs_when_the_hook_fails_again() {
     let (_tmp, store) = store_with_channel();
     let calls = Cell::new(0u32);
     let failing = |_: &mur_channel::store::SealInput<'_>| -> anyhow::Result<()> {
         calls.set(calls.get() + 1);
         anyhow::bail!("disk full")
     };
-    let first = append(&store, "a", Some("k"), Some(&failing));
-    assert!(first.is_err());
-    assert_eq!(calls.get(), 1);
-
+    assert!(append(&store, "a", Some("k"), Some(&failing)).is_err());
     let retry = append(&store, "a", Some("k"), Some(&failing));
-    assert!(retry.is_ok(), "retry is answered by dedup");
-    assert_eq!(calls.get(), 1, "hook did not run again: event stays unsealed");
+    let err = format!("{:#}", retry.expect_err("second failure is an Err"));
+    assert!(
+        err.contains("seal failed after the event was written"),
+        "{err}"
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(store.load_events(CH).unwrap().len(), 1);
+}
+
+/// `seal: None` keeps the legacy dedup: nothing re-read, nothing sealed.
+#[test]
+fn dedup_with_no_hook_is_unchanged() {
+    let (_tmp, store) = store_with_channel();
+    let first = append(&store, "a", Some("k"), None).unwrap();
+    let again = append(&store, "a", Some("k"), None).unwrap();
+    assert_eq!(first.seq, again.seq);
+    assert_eq!(store.load_events(CH).unwrap().len(), 1);
+}
+
+/// A hand-edited (CRLF) log cannot yield the bytes that were originally
+/// written, so re-sealing refuses instead of letting the hook hash a
+/// divergent record. The hook must not run.
+#[test]
+fn dedup_reseal_refuses_a_crlf_line() {
+    let (_tmp, store) = store_with_channel();
+    append(&store, "a", Some("k"), None).unwrap();
+    let path = store.events_path(CH);
+    let crlf = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace('\n', "\r\n");
+    std::fs::write(&path, crlf).unwrap();
+
+    let calls = Cell::new(0u32);
+    let hook = |_: &mur_channel::store::SealInput<'_>| -> anyhow::Result<()> {
+        calls.set(calls.get() + 1);
+        Ok(())
+    };
+    assert!(append(&store, "a", Some("k"), Some(&hook)).is_err());
+    assert_eq!(
+        calls.get(),
+        0,
+        "no hook call on a record we cannot reproduce"
+    );
 }

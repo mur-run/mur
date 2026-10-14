@@ -88,21 +88,67 @@ impl ChannelStore {
             .with_context(|| format!("open {}", lock_path.display()))?;
         lock.lock_exclusive().context("lock channel events")?;
 
+        // One read of the log under the lock serves both the dedup lookup and
+        // `next_seq`. Lines are split keeping their terminator so a dedup hit
+        // can hand the seal hook the exact bytes that were appended.
+        let content = Self::read_events_file(&path, &dir)?.unwrap_or_default();
+        let mut last_seq = None;
+        let mut hit: Option<(ChannelEvent, &str)> = None;
+        let mut damaged = Vec::new();
+        for (idx, segment) in content.split_inclusive('\n').enumerate() {
+            let body = segment.trim_end_matches(['\n', '\r']);
+            if body.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<ChannelEvent>(body) {
+                Ok(e) => {
+                    last_seq = Some(e.seq);
+                    if hit.is_none()
+                        && idempotency_key.is_some()
+                        && e.idempotency_key == idempotency_key
+                    {
+                        hit = Some((e, segment));
+                    }
+                }
+                Err(_) => damaged.push(idx + 1),
+            }
+        }
+        if !damaged.is_empty() {
+            tracing::warn!(
+                channel_id = %id,
+                path = %path.display(),
+                dropped = damaged.len(),
+                lines = ?damaged,
+                "unparseable event line(s) skipped — the events they carried are missing from every fold of this channel"
+            );
+        }
+
         // Dedup: if this idempotency_key already exists in the log, return the
         // prior event unchanged (exactly-once for crash-reruns; v3c). Done under
         // the lock so a concurrent writer can't slip a duplicate in between.
-        if let Some(key) = idempotency_key.as_deref()
-            && let Some(existing) = self
-                .load_events(id)?
-                .into_iter()
-                .find(|e| e.idempotency_key.as_deref() == Some(key))
-        {
+        //
+        // A hit also gives the seal hook another chance: the first attempt may
+        // have written the line and then failed to seal it, and the retry must
+        // not be answered `Ok` with the event still unsealed. The hook owns
+        // idempotency (head already covers this seq => no-op). Nothing is
+        // written here.
+        if let Some((existing, segment)) = hit {
+            let resealed = match seal {
+                Some(hook) => Self::record_of(segment).and_then(|record| {
+                    hook(&SealInput {
+                        channel_id: id,
+                        event: &existing,
+                        record,
+                    })
+                }),
+                None => Ok(()),
+            };
             FileExt::unlock(&lock).ok();
+            resealed.context("seal failed after the event was written")?;
             return Ok(existing);
         }
 
-        // Compute next seq from the existing (unlocked) log, held under the lock.
-        let next_seq = self.load_events(id)?.last().map(|e| e.seq + 1).unwrap_or(0);
+        let next_seq = last_seq.map(|s| s + 1).unwrap_or(0);
 
         let ev = ChannelEvent {
             seq: next_seq,
@@ -142,5 +188,20 @@ impl ChannelStore {
         FileExt::unlock(&lock).ok();
         sealed.context("seal failed after the event was written")?;
         Ok(ev)
+    }
+
+    /// The exact bytes originally appended for `segment` (one `split_inclusive`
+    /// line of the log). Appends only ever write `<json>\n`, so a segment with
+    /// a `\r\n` terminator or no terminator was edited by hand: the original
+    /// bytes cannot be reproduced, and handing the hook a divergent record
+    /// would let it hash something the writer never wrote. Refuse instead.
+    /// (The formal `record` contract belongs to the head slice.)
+    fn record_of(segment: &str) -> Result<&[u8]> {
+        match segment.strip_suffix('\n') {
+            Some(body) if !body.ends_with('\r') => Ok(segment.as_bytes()),
+            _ => anyhow::bail!(
+                "cannot re-seal: the event line does not end in a bare LF, so its original bytes are unknown"
+            ),
+        }
     }
 }
