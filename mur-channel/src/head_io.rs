@@ -99,13 +99,13 @@ fn ensure_dir(dir: &Path) -> Result<()> {
 /// open a directory as a file; NTFS journals the rename, so this is a no-op
 /// there rather than an error.
 #[cfg(unix)]
-fn sync_dir(dir: &Path) -> Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> Result<()> {
     File::open(dir)
         .and_then(|d| d.sync_all())
         .with_context(|| format!("fsync dir {}", dir.display()))
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> Result<()> {
+pub(crate) fn sync_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }

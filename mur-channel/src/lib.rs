@@ -6,6 +6,7 @@ pub mod head;
 pub mod head_io;
 pub mod index;
 pub mod purpose;
+pub mod seal;
 pub mod service;
 pub mod sign;
 pub mod store;
