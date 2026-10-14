@@ -91,8 +91,22 @@ pub async fn post_directive(
     // Channel must already exist — append auto-creates the dir, so guard here.
     // Writes go through the service so the receipt is sealed and shows up in the
     // read model (conversation list + ordering) like every other channel event.
-    let service = mur_channel::ChannelService::open(&mur_home).map_err(AppError::Internal)?;
-    if service.store().load_manifest(&channel_id).is_err() {
+    //
+    // The read model is a rebuildable index. If it cannot be opened (corrupt
+    // SQLite, unwritable dir) kill/resume directives must stay writable, so we
+    // degrade to the bare store append and let the index heal on a later rebuild.
+    let store = mur_channel::ChannelStore::new(&mur_home);
+    let service = match mur_channel::ChannelService::open(&mur_home) {
+        Ok(svc) => Some(svc),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "channel read model unavailable; appending directive without index refresh"
+            );
+            None
+        }
+    };
+    if store.load_manifest(&channel_id).is_err() {
         return Err(AppError::NotFound(format!(
             "unknown fleet channel {channel_id}"
         )));
@@ -105,14 +119,14 @@ pub async fn post_directive(
     // benign — the engine's ComplianceChecker matches by nonce and the content_sha256
     // is identical. Tighten with a per-channel lock only if multiple issuers ever race.
     let already = idem.as_deref().is_some_and(|k| {
-        service
+        store
             .load_events(&channel_id)
             .map(|evs| evs.iter().any(|e| e.idempotency_key.as_deref() == Some(k)))
             .unwrap_or(false)
     });
 
-    let ev = service
-        .append_presigned(
+    let ev = match &service {
+        Some(svc) => svc.append_presigned(
             &channel_id,
             actor.clone(),
             kind,
@@ -120,8 +134,18 @@ pub async fn post_directive(
             idem.clone(),
             sig,
             key_version,
-        )
-        .map_err(AppError::Internal)?;
+        ),
+        None => store.append_event(
+            &channel_id,
+            actor.clone(),
+            kind,
+            payload.clone(),
+            idem.clone(),
+            Some(sig),
+            key_version,
+        ),
+    }
+    .map_err(AppError::Internal)?;
 
     if !already {
         let content =
@@ -324,6 +348,35 @@ mod tests {
             .find(|r| r.id == "fleet-dev")
             .expect("fleet channel is in the read model");
         assert_eq!(row.last_seq, seq);
+    }
+
+    #[tokio::test]
+    async fn corrupt_read_model_does_not_block_a_directive() {
+        // The index is rebuildable; a kill/resume directive must stay writable
+        // when it cannot be opened.
+        let tmp = tempfile::tempdir().unwrap();
+        let (state, id) = setup(&tmp);
+        let db = tmp
+            .path()
+            .join("index")
+            .join("channels")
+            .join("channels.db");
+        std::fs::write(&db, b"this is not a sqlite database").unwrap();
+        for ext in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(db.with_extension(format!("db{ext}")));
+        }
+        assert!(
+            mur_channel::ChannelService::open(tmp.path()).is_err(),
+            "precondition: the corrupt index must fail to open"
+        );
+
+        let (status, json) = post(state, directive_body(&id, "dev", "kill", None)).await;
+        assert_eq!(status, StatusCode::OK, "body: {json}");
+
+        let evs = mur_channel::ChannelStore::new(tmp.path())
+            .load_events("fleet-dev")
+            .unwrap();
+        assert_eq!(evs.len(), 1, "directive must be persisted to the log");
     }
 
     #[tokio::test]

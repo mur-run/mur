@@ -161,7 +161,9 @@ impl ChannelService {
             if let Some(state) = new_state {
                 ch.state = state;
             }
-            ch.updated_at = ev.ts;
+            // Monotonic: a dedup hit hands back the ORIGINAL event, whose `ts`
+            // predates any activity since. Replaying it must not rewind recency.
+            ch.updated_at = ch.updated_at.max(ev.ts);
             if let Some(t) = Self::derived_title(&ch, &ev) {
                 ch.title = t;
             }
