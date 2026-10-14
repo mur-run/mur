@@ -1,6 +1,7 @@
 pub(crate) mod atomic_write;
 pub mod bash;
 pub mod bash_control;
+pub mod bash_env;
 pub mod bash_jobs;
 pub mod bash_track;
 pub(crate) mod denial;

@@ -254,3 +254,34 @@ async fn unwritable_spool_dir_is_a_note_not_a_failure() {
         "{p:?}"
     );
 }
+
+/// The child gets exactly `spec.env` — nothing the runtime inherited
+/// (`SSH_AUTH_SOCK`, a stray API token) reaches it. Asserts the exact key
+/// set, so any future inheritance path turns this red, not just one name.
+#[cfg(unix)]
+#[tokio::test]
+async fn child_env_is_exactly_the_spec_env() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = JobTable::new();
+    let s = SpawnSpec {
+        command: "env",
+        cwd: dir.path(),
+        env: vec![
+            ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+            ("MUR_SPEC_ONLY".into(), "1".into()),
+        ],
+        spool_dir: dir.path(),
+        vault: None,
+    };
+    let id = t.spawn(s).unwrap();
+    let p = t.poll(&id, Duration::from_secs(5)).await.unwrap();
+    let mut keys: Vec<&str> = p
+        .new_stdout
+        .lines()
+        .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+        // bash itself exports these on startup.
+        .filter(|k| !matches!(*k, "PWD" | "OLDPWD" | "SHLVL" | "_"))
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["MUR_SPEC_ONLY", "PATH"], "{}", p.new_stdout);
+}
