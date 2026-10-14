@@ -13,6 +13,7 @@ fn ev(seq: u64, actor: ChannelActor, kind: EventKind, payload: serde_json::Value
         idempotency_key: None,
         sig: None,
         key_version: None,
+        prev_hash: None,
     }
 }
 

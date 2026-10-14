@@ -273,6 +273,7 @@ mod tests {
             idempotency_key: None,
             sig,
             key_version: Some(0),
+            prev_hash: None,
         };
         let pubkey = writer.verifying_key_bytes();
         // valid signed → kept (any require_sig)

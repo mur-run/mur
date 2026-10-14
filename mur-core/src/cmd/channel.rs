@@ -244,6 +244,7 @@ mod pending_hitl_tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         }
     }
 
@@ -266,6 +267,7 @@ mod pending_hitl_tests {
             idempotency_key: None,
             sig: None,
             key_version: None,
+            prev_hash: None,
         }
     }
 

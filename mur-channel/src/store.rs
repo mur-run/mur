@@ -319,6 +319,7 @@ impl ChannelStore {
             idempotency_key,
             sig,
             key_version,
+            prev_hash: None,
         };
         let line = serde_json::to_string(&ev).context("serialize event")?;
         let mut data = OpenOptions::new()
