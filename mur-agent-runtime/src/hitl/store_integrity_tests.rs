@@ -252,7 +252,10 @@ fn concurrent_append_and_read_never_looks_like_tampering() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     const WRITERS: usize = 2;
-    const PER_WRITER: usize = 60;
+    // Small on purpose: every append re-reads the log and fsyncs a head, so
+    // the cost grows with the square of this, and a loaded CI runner timed
+    // out at 120 appends. The lock itself is pinned deterministically below.
+    const PER_WRITER: usize = 12;
 
     let tmp = tempfile::tempdir().unwrap();
     let s = store(tmp.path());
@@ -312,7 +315,7 @@ fn concurrent_append_and_read_never_looks_like_tampering() {
     // the seed plus every record.
     let live = s.list().expect("final log verifies");
     assert_eq!(live.len(), 1 + WRITERS * PER_WRITER);
-    assert_eq!(block(s.lookup("h-1-24")), Some(Settled::Allow));
+    assert_eq!(block(s.lookup("h-1-11")), Some(Settled::Allow));
 }
 
 /// The stress test above cannot hit the one real window (a reader sees the
