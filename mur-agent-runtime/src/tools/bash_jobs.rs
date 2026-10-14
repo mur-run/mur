@@ -181,6 +181,9 @@ impl JobTable {
         cmd.arg("-c")
             .arg(spec.command)
             .current_dir(spec.cwd)
+            // Nothing inherited: `spec.env` is the whole environment, so the
+            // runtime's own `SSH_AUTH_SOCK` or a stray token cannot leak.
+            .env_clear()
             .envs(spec.env)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())

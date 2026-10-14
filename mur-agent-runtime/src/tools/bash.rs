@@ -231,25 +231,10 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
                 .and_then(serde_json::Value::as_i64),
         );
 
-        let mut env = vec![(
-            "PATH".to_string(),
-            augmented_path(std::env::var("PATH").ok().as_deref()),
-        )];
-        // Issue #015: pass through HOME, NPM_CONFIG_CACHE, and other user-facing
-        // env vars that third-party tools (npm, vitest, cargo, etc.) expect.
-        // Without these, `npm` falls back to system defaults that the sandbox
-        // may not permit, and fails with EPERM on ~/.npm/_cacache.
-        for key in &[
-            "HOME",
-            "USER",
-            "NPM_CONFIG_CACHE",
-            "CARGO_HOME",
-            "PYTHONUSERBASE",
-        ] {
-            if let Ok(val) = std::env::var(key) {
-                env.push((key.to_string(), val));
-            }
-        }
+        // The child is spawned with a cleared env; this allowlist is all it
+        // inherits from the runtime (see `bash_env`).
+        let mut env =
+            super::bash_env::base_env(augmented_path(std::env::var("PATH").ok().as_deref()));
         // Turn track: exec-granted CARGO_TARGET_DIR (+ warm clone). Before the vault so a user secret wins.
         let (target, warm_note) = super::bash_track::prepare_current_turn(
             &self.session_cwd,
@@ -264,8 +249,8 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         if let Some(vault) = &self.secrets {
             env.extend(vault.env_pairs());
         }
-        // Later `.envs` entries win over the inherited env, so this overrides
-        // a `TMPDIR` the runtime itself was launched with.
+        // Later `.envs` entries win, so this overrides an allowlisted `TMPDIR`
+        // the runtime itself was launched with.
         if let Some(d) = &self.scratch_dir {
             if std::env::var_os("TMPDIR").is_some_and(|v| v != d.as_os_str()) {
                 tracing::debug!(scratch = %d.display(), "overriding inherited TMPDIR");
