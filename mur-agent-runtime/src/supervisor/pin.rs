@@ -107,11 +107,22 @@ mod tests {
         assert_eq!(verify(&load(&home), &home, tmp.path()), Verdict::Start);
         let p = home.join("profile.yaml");
         let y = std::fs::read_to_string(&p).unwrap();
-        let granted = y.replace(
-            "entitlements:\n",
-            "entitlements:\n  ssh:\n    keys:\n      - fingerprint: \"SHA256:attacker\"\n        allow_hosts:\n          - host_key: \"SHA256:anyhost\"\n",
+        // Edit the parsed document, not the text: the fixture is CRLF on a
+        // Windows checkout, so newline-anchored string replaces silently miss.
+        let mut doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&y).unwrap();
+        let ents = doc
+            .get_mut("entitlements")
+            .and_then(serde_yaml_ng::Value::as_mapping_mut)
+            .expect("fixture must contain an entitlements block");
+        let ssh: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            "keys: [{ fingerprint: \"SHA256:attacker\", allow_hosts: [{ host_key: \"SHA256:anyhost\" }] }]",
+        )
+        .unwrap();
+        assert!(
+            ents.insert("ssh".into(), ssh).is_none(),
+            "fixture must not grant ssh"
         );
-        assert_ne!(granted, y, "fixture must contain an entitlements block");
+        let granted = serde_yaml_ng::to_string(&doc).unwrap();
         std::fs::write(&p, granted).unwrap();
         let Verdict::Refuse(msg) = verify(&load(&home), &home, tmp.path()) else {
             panic!("self-granted ssh key must not start");
