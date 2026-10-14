@@ -94,22 +94,56 @@ impl ChannelStore {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        self.append_sealed(id, actor, kind, payload, idempotency_key, |u| {
-            let sig = crate::sign::sign_event_v2(
-                identity,
-                u.channel_id,
-                u.actor,
-                u.kind,
-                u.payload,
-                u.idempotency_key,
-                u.tail_hash,
-            );
-            Seal {
-                sig: Some(sig),
-                key_version: Some(key_version),
-                prev_hash: Some(u.tail_hash.to_owned()),
-            }
-        })
+        self.append_signed_event_with(
+            id,
+            identity,
+            key_version,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            None,
+        )
+    }
+
+    /// [`append_signed_event`](Self::append_signed_event) plus the post-write
+    /// seal hook, so the signer and the head share one lock acquisition.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_signed_event_with(
+        &self,
+        id: &str,
+        identity: &AgentIdentity,
+        key_version: u32,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        seal: Option<&super::SealHook<'_>>,
+    ) -> Result<ChannelEvent> {
+        self.append_sealed(
+            id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            |u| {
+                let sig = crate::sign::sign_event_v2(
+                    identity,
+                    u.channel_id,
+                    u.actor,
+                    u.kind,
+                    u.payload,
+                    u.idempotency_key,
+                    u.tail_hash,
+                );
+                Seal {
+                    sig: Some(sig),
+                    key_version: Some(key_version),
+                    prev_hash: Some(u.tail_hash.to_owned()),
+                }
+            },
+            seal,
+        )
     }
 }
 

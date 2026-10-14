@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -8,7 +9,7 @@ use mur_common::channel::{
 };
 
 use crate::index::{ChannelIndex, ChannelRow};
-use crate::store::ChannelStore;
+use crate::store::{ChannelStore, SealInput};
 
 /// Shared truncation limit for auto-derived conversation titles. One constant
 /// so TUI, Hub, and mobile cannot disagree about where a title ends.
@@ -77,9 +78,17 @@ fn state_str(s: ChannelState) -> &'static str {
     }
 }
 
+/// An owned, shareable sealing hook for [`ChannelService`] (spec 7.3.1). The
+/// store takes a borrowed [`SealHook`]; the service keeps this `Arc` and lends
+/// it per write.
+pub type SharedSealHook = Arc<dyn for<'a, 'b> Fn(&'b SealInput<'a>) -> Result<()> + Send + Sync>;
+
 pub struct ChannelService {
     store: ChannelStore,
     index: ChannelIndex,
+    /// Run after every event line this service writes. `None` (the default)
+    /// leaves behaviour exactly as before sealing existed.
+    seal: Option<SharedSealHook>,
 }
 
 impl ChannelService {
@@ -104,7 +113,63 @@ impl ChannelService {
                 "post-migration channel index rebuild failed; index remains stale but usable"
             );
         }
-        Ok(Self { store, index })
+        Ok(Self {
+            store,
+            index,
+            seal: None,
+        })
+    }
+
+    /// Install the sealing hook run after every event line this service
+    /// writes (spec 7.3.1). Without it the service behaves as before.
+    #[must_use]
+    pub fn with_seal(mut self, seal: SharedSealHook) -> Self {
+        self.seal = Some(seal);
+        self
+    }
+
+    /// The one place the service writes an event: append through the store
+    /// (lending it the seal hook), then bump the manifest's `updated_at`,
+    /// derived title and, for a transition, `state`, and refresh the read
+    /// model. A failed seal returns `Err` before the refresh; the line stays
+    /// on disk (decision B1).
+    #[allow(clippy::too_many_arguments)]
+    fn write_event(
+        &self,
+        channel_id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        sig: Option<String>,
+        key_version: Option<u32>,
+        new_state: Option<ChannelState>,
+    ) -> Result<ChannelEvent> {
+        let ev = self.store.append_event_with(
+            channel_id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            sig,
+            key_version,
+            self.seal
+                .as_deref()
+                .map(|h| h as &crate::store::SealHook<'_>),
+        )?;
+        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
+            if let Some(state) = new_state {
+                ch.state = state;
+            }
+            // Monotonic: a dedup hit hands back the ORIGINAL event, whose `ts`
+            // predates any activity since. Replaying it must not rewind recency.
+            ch.updated_at = ch.updated_at.max(ev.ts);
+            if let Some(t) = Self::derived_title(&ch, &ev) {
+                ch.title = t;
+            }
+            self.refresh_read_model(&ch, &ev);
+        }
+        Ok(ev)
     }
 
     /// Create a fresh channel whose participants are the local human (owner)
@@ -201,17 +266,7 @@ impl ChannelService {
         if let Some(t) = task_id {
             payload["task_id"] = serde_json::Value::String(t.to_string());
         }
-        let ev = self
-            .store
-            .append_event(channel_id, actor, kind, payload, None, None, None)?;
-        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
-            ch.updated_at = ev.ts;
-            if let Some(t) = Self::derived_title(&ch, &ev) {
-                ch.title = t;
-            }
-            self.refresh_read_model(&ch, &ev);
-        }
-        Ok(ev)
+        self.write_event(channel_id, actor, kind, payload, None, None, None, None)
     }
 
     /// Create a channel that records a workflow execution. No agent participant;
@@ -244,7 +299,7 @@ impl ChannelService {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        let ev = self.store.append_event(
+        self.write_event(
             channel_id,
             actor,
             kind,
@@ -252,15 +307,8 @@ impl ChannelService {
             idempotency_key,
             None,
             None,
-        )?;
-        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
-            ch.updated_at = ev.ts;
-            if let Some(t) = Self::derived_title(&ch, &ev) {
-                ch.title = t;
-            }
-            self.refresh_read_model(&ch, &ev);
-        }
-        Ok(ev)
+            None,
+        )
     }
 
     /// Sign an event with `identity` (key_version `kv`) and append it. Used by
@@ -276,7 +324,7 @@ impl ChannelService {
         payload: serde_json::Value,
         idempotency_key: Option<String>,
     ) -> Result<ChannelEvent> {
-        let ev = self.store.append_signed_event(
+        let ev = self.store.append_signed_event_with(
             channel_id,
             identity,
             kv,
@@ -284,6 +332,9 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
+            self.seal
+                .as_deref()
+                .map(|h| h as &crate::store::SealHook<'_>),
         )?;
         if let Ok(mut ch) = self.store.load_manifest(channel_id) {
             ch.updated_at = ev.ts;
@@ -322,7 +373,7 @@ impl ChannelService {
             &payload,
             idempotency_key.as_deref(),
         );
-        let ev = self.store.append_event(
+        self.write_event(
             channel_id,
             actor,
             kind,
@@ -330,15 +381,39 @@ impl ChannelService {
             idempotency_key,
             Some(sig),
             Some(kv),
-        )?;
-        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
-            ch.updated_at = ev.ts;
-            if let Some(t) = Self::derived_title(&ch, &ev) {
-                ch.title = t;
-            }
-            self.refresh_read_model(&ch, &ev);
-        }
-        Ok(ev)
+            None,
+        )
+    }
+
+    /// Append an event whose signature was produced elsewhere (e.g. a
+    /// Commander governance directive signed with the Commander's key).
+    ///
+    /// The service does NOT verify `sig`: it cannot attribute it to a key.
+    /// Verification stays with the caller, which must reject a bad signature
+    /// *before* calling this. What the service adds is the same write path as
+    /// every other append: the seal hook runs and the read model is refreshed,
+    /// so the event is visible in conversation lists and ordering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_presigned(
+        &self,
+        channel_id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        sig: String,
+        key_version: Option<u32>,
+    ) -> Result<ChannelEvent> {
+        self.write_event(
+            channel_id,
+            actor,
+            kind,
+            payload,
+            idempotency_key,
+            Some(sig),
+            key_version,
+            None,
+        )
     }
 
     /// Append a `Delegation` event (actor `System`) recording that `target_agent`
@@ -423,7 +498,7 @@ impl ChannelService {
             ),
             None => (None, None),
         };
-        let ev = self.store.append_event(
+        self.write_event(
             channel_id,
             actor,
             EventKind::StateChange,
@@ -431,16 +506,8 @@ impl ChannelService {
             None,
             sig,
             kv,
-        )?;
-        if let Ok(mut ch) = self.store.load_manifest(channel_id) {
-            ch.state = new_state;
-            ch.updated_at = ev.ts;
-            if let Some(t) = Self::derived_title(&ch, &ev) {
-                ch.title = t;
-            }
-            self.refresh_read_model(&ch, &ev);
-        }
-        Ok(ev)
+            Some(new_state),
+        )
     }
 
     pub fn load_events(&self, channel_id: &str) -> Result<Vec<ChannelEvent>> {

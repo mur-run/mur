@@ -839,3 +839,55 @@ fn a_new_agent_message_after_reading_is_unread_again() {
     };
     assert_eq!(svc.list_conversations(q).unwrap()[0].unread, 1);
 }
+
+#[test]
+fn replaying_an_old_idempotency_key_never_moves_updated_at_backwards() {
+    // A dedup hit returns the ORIGINAL event, whose `ts` is older than any
+    // activity since. Refreshing the manifest from it must not rewind recency.
+    let tmp = TempDir::new().unwrap();
+    let svc = ChannelService::open(tmp.path()).unwrap();
+    svc.create_for_fleet("dev", "mur", &[]).unwrap();
+    let id = "fleet-dev";
+    let append = |key: &str| {
+        svc.append_presigned(
+            id,
+            ChannelActor::System,
+            EventKind::Message,
+            serde_json::json!({ "text": key }),
+            Some(key.to_string()),
+            "sig".into(),
+            None,
+        )
+        .unwrap()
+    };
+
+    let first = append("old-receipt");
+    let newer = append("newer-activity");
+    assert!(newer.ts > first.ts);
+    let before = svc.store().load_manifest(id).unwrap().updated_at;
+    assert_eq!(before, newer.ts);
+
+    let replay = append("old-receipt");
+    assert_eq!(
+        replay.seq, first.seq,
+        "replay must dedup to the original line"
+    );
+
+    let after = svc.store().load_manifest(id).unwrap().updated_at;
+    assert_eq!(
+        after, before,
+        "manifest updated_at went backwards on replay"
+    );
+    let row = svc
+        .index()
+        .list(10)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == id)
+        .unwrap();
+    assert_eq!(
+        row.updated_at,
+        before.to_rfc3339(),
+        "index recency went backwards on replay"
+    );
+}
