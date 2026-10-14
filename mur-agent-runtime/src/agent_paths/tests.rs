@@ -35,19 +35,16 @@ fn scratch_env_sets_all_three_keys_to_the_dir() {
 /// dir is silently not used.
 #[test]
 fn cache_env_points_build_caches_into_the_scratch_dir() {
-    let env = cache_env(Path::new("/m/tmp/a"), |_| false);
+    let dir = Path::new("/m/tmp/a");
+    // Built with `join`, not a literal: the separator is the platform's.
+    let at = |leaf: &str| dir.join(leaf).display().to_string();
+    let env = cache_env(dir, |_| false);
     assert_eq!(
         env,
         vec![
-            ("SCCACHE_DIR".to_string(), "/m/tmp/a/sccache".to_string()),
-            (
-                "SCCACHE_SERVER_UDS".to_string(),
-                "/m/tmp/a/sccache.sock".to_string()
-            ),
-            (
-                "ORT_CACHE_DIR".to_string(),
-                "/m/tmp/a/ort-cache".to_string()
-            ),
+            ("SCCACHE_DIR".to_string(), at("sccache")),
+            ("SCCACHE_SERVER_UDS".to_string(), at("sccache.sock")),
+            ("ORT_CACHE_DIR".to_string(), at("ort-cache")),
         ]
     );
 }
