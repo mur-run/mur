@@ -168,6 +168,9 @@ pub(crate) fn partition_read_grants(
     chain.partition_read_grants(grants)
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod unix_connect_probe;
+
 #[cfg(test)]
 mod tests {
     use super::*;
