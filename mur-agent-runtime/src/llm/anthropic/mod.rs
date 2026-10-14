@@ -710,13 +710,15 @@ fn parse_response_body(
 }
 
 impl AnthropicClient {
-    /// Build the `/v1/messages` body with two prompt-cache breakpoints (the
-    /// API allows four): the system prompt — the prefix every call of a turn
-    /// shares; tools render before it and ride along — and the last content
-    /// block of the last message, so each call of an agentic loop re-reads
-    /// the whole prior conversation at the cached rate instead of paying for
-    /// it again. A turn that makes 70 calls resends its history 70 times;
-    /// cache reads are what make that affordable. Nothing here is beta: the
+    /// Build the `/v1/messages` body with three prompt-cache breakpoints (the
+    /// API allows four): the last tool definition — every agent sends the
+    /// same tools under its own system prompt, so this is the one entry all
+    /// of them can share across sessions; the system prompt — the prefix
+    /// every call of a turn shares; and the last content block of the last
+    /// message, so each call of an agentic loop re-reads the whole prior
+    /// conversation at the cached rate instead of paying for it again. A
+    /// turn that makes 70 calls resends its history 70 times; cache reads
+    /// are what make that affordable. Nothing here is beta: the
     /// `2023-06-01` version header accepts `cache_control`.
     ///
     /// ponytail: the system prompt is one block, so a turn whose per-turn
@@ -750,16 +752,23 @@ impl AnthropicClient {
             body["output_config"] = json!({ "effort": e.as_str() });
         }
         if !req.tools.is_empty() {
-            body["tools"] = json!(
-                req.tools
-                    .iter()
-                    .map(|t| json!({
+            let mut tools: Vec<_> = req
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
                         "name": t.name,
                         "description": t.description,
                         "input_schema": t.input_schema,
-                    }))
-                    .collect::<Vec<_>>()
-            );
+                    })
+                })
+                .collect();
+            // The cache prefix runs tools → system → messages, so a marker
+            // on the last tool closes an entry that holds only the tools.
+            if let Some(last) = tools.last_mut() {
+                last["cache_control"] = json!({"type": "ephemeral"});
+            }
+            body["tools"] = json!(tools);
         }
         body
     }

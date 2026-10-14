@@ -14,7 +14,7 @@ fn the_self_built_client_has_no_response_clock() {
 
 use super::convert::BLANK_USER_TURN;
 use super::*;
-use crate::llm::{RichMessage, ToolCallResult, ToolResultEntry};
+use crate::llm::{RichMessage, ToolCallResult, ToolDef, ToolResultEntry};
 use serde_json::json;
 
 fn make_client() -> AnthropicClient {
@@ -823,6 +823,47 @@ fn request_body_caches_system_and_last_message_block() {
         caching_client().request_body(&req, true)["stream"],
         json!(true)
     );
+}
+
+#[test]
+fn request_body_marks_only_the_last_tool_as_a_breakpoint() {
+    // Every agent sends the same tools under a different system block, so
+    // without a breakpoint after the tools each agent's first turn rewrites
+    // them into the cache (#1865). One marker on the last tool gives all
+    // agents a shared entry; earlier tools stay bare.
+    let tool = |name: &str| ToolDef {
+        name: name.into(),
+        description: format!("{name} tool"),
+        input_schema: json!({"type": "object", "properties": {}}),
+    };
+    let req = LlmRequest {
+        messages: vec![RichMessage::Text {
+            role: "user".into(),
+            content: "hi".into(),
+        }],
+        tools: vec![tool("read_file"), tool("bash"), tool("write_file")],
+        ..Default::default()
+    };
+    let body = caching_client().request_body(&req, false);
+
+    let tools = body["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 3);
+    assert_eq!(
+        tools[2]["cache_control"],
+        json!({"type": "ephemeral"}),
+        "last tool carries the breakpoint: {}",
+        tools[2]
+    );
+    for t in &tools[..2] {
+        assert!(
+            t.get("cache_control").is_none(),
+            "earlier tools stay bare: {t}"
+        );
+    }
+    // Nothing else about the tool shape changes.
+    assert_eq!(tools[0]["name"], "read_file");
+    assert_eq!(tools[0]["description"], "read_file tool");
+    assert_eq!(tools[0]["input_schema"]["type"], "object");
 }
 
 #[test]
