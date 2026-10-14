@@ -141,7 +141,7 @@ fn resolved_mur_home() -> PathBuf {
 /// (#1642), so tools that create a socket under `$TMPDIR` and then dial it
 /// (Playwright MCP's `browser-*.sock`) land here, not under
 /// `/private/var/folders`. Without it `connect` fails with `EPERM`.
-fn unix_socket_allow_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
+pub(crate) fn unix_socket_allow_paths(policy: &SandboxPolicy) -> Vec<PathBuf> {
     let mut paths = vec![
         PathBuf::from("/private/var/folders"),
         PathBuf::from("/private/tmp"),
