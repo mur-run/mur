@@ -260,8 +260,11 @@ impl ChannelStore {
         // `File` is unbuffered, so `writeln!` is two `write(2)` calls: a process
         // that dies between them leaves a line with no newline, and the next
         // append (O_APPEND, starting at EOF) glues its JSON onto the orphan —
-        // losing BOTH events, silently, in every reader. A single write cannot
-        // be torn that way by a crash between syscalls.
+        // losing BOTH events, silently, in every reader. One `write_all`
+        // removes that guaranteed two-syscall window. It is atomic in practice
+        // for a small record on a local filesystem, not by guarantee (a short
+        // write makes `write_all` loop). A torn tail is still reported as an
+        // unparseable line, and tail truncation is the head anchor's job (#1770).
         let mut record = line.into_bytes();
         record.push(b'\n');
         data.write_all(&record)
