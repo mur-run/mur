@@ -249,9 +249,11 @@ fn block<F: std::future::Future>(f: F) -> F::Output {
 /// every record must survive.
 #[test]
 fn concurrent_append_and_read_never_looks_like_tampering() {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const WRITERS: usize = 2;
+    const READERS: usize = 3;
+    const READS_EACH: usize = 20;
     // Small on purpose: every append re-reads the log and fsyncs a head, so
     // the cost grows with the square of this, and a loaded CI runner timed
     // out at 120 appends. The lock itself is pinned deterministically below.
@@ -262,49 +264,41 @@ fn concurrent_append_and_read_never_looks_like_tampering() {
     // The channel and marker exist before the race starts.
     block(s.record(resp("seed", true, "seed", 0)));
 
-    let done = AtomicBool::new(false);
     let reads = AtomicUsize::new(0);
     let false_alarms = std::sync::Mutex::new(Vec::<String>::new());
 
     std::thread::scope(|scope| {
-        let writers: Vec<_> = (0..WRITERS)
-            .map(|w| {
-                let s = &s;
-                scope.spawn(move || {
-                    for i in 0..PER_WRITER {
-                        let h = format!("h-{w}-{i}");
-                        block(s.record(resp(&h, true, &h, 0)));
-                    }
-                })
-            })
-            .collect();
-        for _ in 0..3 {
-            scope.spawn(|| {
-                // At least one full pass even if the writers win the race.
-                loop {
-                    let finished = done.load(Ordering::SeqCst);
-                    match s.list() {
-                        Ok(_) => {}
-                        Err(e) => false_alarms.lock().unwrap().push(format!("{e:#}")),
-                    }
-                    reads.fetch_add(1, Ordering::SeqCst);
-                    if finished {
-                        break;
-                    }
-                    // A real reader looks once per tool call. Back-to-back
-                    // shared locks from several threads would starve the
-                    // writers' exclusive lock and the test would never end.
-                    std::thread::sleep(std::time::Duration::from_millis(2));
+        for w in 0..WRITERS {
+            let s = &s;
+            scope.spawn(move || {
+                for i in 0..PER_WRITER {
+                    let h = format!("h-{w}-{i}");
+                    block(s.record(resp(&h, true, &h, 0)));
                 }
             });
         }
-        for w in writers {
-            w.join().unwrap();
+        // A FIXED number of reads, never "until the writers finish". flock has
+        // no writer preference on Linux: readers that keep overlapping starve
+        // the writers' exclusive lock forever, and CI timed out on exactly
+        // that. Bounded readers always leave the writers a way through.
+        for _ in 0..READERS {
+            scope.spawn(|| {
+                for _ in 0..READS_EACH {
+                    if let Err(e) = s.list() {
+                        false_alarms.lock().unwrap().push(format!("{e:#}"));
+                    }
+                    reads.fetch_add(1, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(3));
+                }
+            });
         }
-        done.store(true, Ordering::SeqCst);
     });
 
-    assert!(reads.load(Ordering::SeqCst) >= 2, "readers actually ran");
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        READERS * READS_EACH,
+        "every read ran"
+    );
     let alarms = false_alarms.into_inner().unwrap();
     assert!(
         alarms.is_empty(),
