@@ -28,6 +28,62 @@ fn scratch_env_sets_all_three_keys_to_the_dir() {
     assert!(env.iter().all(|(_, v)| v == "/m/tmp/a"));
 }
 
+/// #1860: build tooling defaults its cache under `~/Library/Caches`, which the
+/// sandbox denies. Point it at the agent's scratch dir instead, and give
+/// sccache its own server socket there: a server already running on the
+/// machine ignores a new `SCCACHE_DIR`, so without its own server the cache
+/// dir is silently not used.
+#[test]
+fn cache_env_points_build_caches_into_the_scratch_dir() {
+    let env = cache_env(Path::new("/m/tmp/a"), |_| false);
+    assert_eq!(
+        env,
+        vec![
+            ("SCCACHE_DIR".to_string(), "/m/tmp/a/sccache".to_string()),
+            (
+                "SCCACHE_SERVER_UDS".to_string(),
+                "/m/tmp/a/sccache.sock".to_string()
+            ),
+            (
+                "ORT_CACHE_DIR".to_string(),
+                "/m/tmp/a/ort-cache".to_string()
+            ),
+        ]
+    );
+}
+
+/// A value the caller or the user already chose is never overridden.
+#[test]
+fn cache_env_leaves_an_already_set_variable_alone() {
+    let env = cache_env(Path::new("/m/tmp/a"), |k| k == "SCCACHE_DIR");
+    let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys, ["SCCACHE_SERVER_UDS", "ORT_CACHE_DIR"]);
+    assert!(cache_env(Path::new("/m/tmp/a"), |_| true).is_empty());
+}
+
+/// A user who pinned their own sccache server (port or socket) keeps it: we
+/// must not start a second, competing one.
+#[test]
+fn cache_env_respects_a_user_chosen_sccache_server() {
+    for pinned in ["SCCACHE_SERVER_PORT", "SCCACHE_SERVER_UDS"] {
+        let env = cache_env(Path::new("/m/tmp/a"), |k| k == pinned);
+        assert!(
+            env.iter().all(|(k, _)| k != "SCCACHE_SERVER_UDS"),
+            "{pinned}: {env:?}"
+        );
+    }
+}
+
+/// A Unix socket path over the platform limit cannot be bound, so a deep
+/// scratch dir skips the socket and keeps the two cache dirs.
+#[test]
+fn cache_env_skips_the_socket_when_the_path_is_too_long() {
+    let long = format!("/m/tmp/{}", "a".repeat(120));
+    let env = cache_env(Path::new(&long), |_| false);
+    let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys, ["SCCACHE_DIR", "ORT_CACHE_DIR"]);
+}
+
 #[cfg(unix)]
 fn mode(p: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;

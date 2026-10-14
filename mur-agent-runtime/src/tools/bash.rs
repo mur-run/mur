@@ -270,7 +270,7 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             if std::env::var_os("TMPDIR").is_some_and(|v| v != d.as_os_str()) {
                 tracing::debug!(scratch = %d.display(), "overriding inherited TMPDIR");
             }
-            env.extend(crate::agent_paths::scratch_env(d));
+            crate::agent_paths::extend_scratch_env(&mut env, d);
         }
         let spool_dir = self.working_dir.join("jobs");
         let job_id = self
