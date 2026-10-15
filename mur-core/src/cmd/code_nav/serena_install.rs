@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// PyPI / dist name uv records the tool under.
-const PACKAGE: &str = "serena-agent";
-const SERENA_GIT_URL: &str = "https://github.com/oraios/serena";
+pub(super) const PACKAGE: &str = "serena-agent";
+pub(super) const SERENA_GIT_URL: &str = "https://github.com/oraios/serena";
 /// Upstream commit whose `pyproject.toml` declares version `SERENA_PIN`.
 /// Bump together with `SERENA_PIN` and `SERENA_EXCLUDE_NEWER`.
 pub const SERENA_GIT_REV: &str = "8a3ce35cae29a93748842ba463231d6c78d181e7";
@@ -29,8 +29,8 @@ pub const SERENA_GIT_REV: &str = "8a3ce35cae29a93748842ba463231d6c78d181e7";
 /// published after it.
 pub const SERENA_EXCLUDE_NEWER: &str = "2026-09-29T10:49:50Z";
 /// Under the managed dir: uv's tool environments, and its entry-point links.
-const UV_TOOL_SUBDIR: &str = "uv-tools";
-const BIN_SUBDIR: &str = "bin";
+pub(super) const UV_TOOL_SUBDIR: &str = "uv-tools";
+pub(super) const BIN_SUBDIR: &str = "bin";
 /// Where uv puts the Python it fetches for the tool env.
 pub(super) const PYTHON_SUBDIR: &str = "python";
 /// The venv metadata file naming the base interpreter.

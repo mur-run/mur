@@ -324,6 +324,78 @@ fn real_serena_resolves_every_entrys_paths_inside_its_own_home() {
     assert_eq!(seen.len(), 3, "entries shared a project folder: {seen:?}");
 }
 
+/// #1917: the `ls_path` MUR writes is what real serena turns into the language
+/// server's launch command. Asks serena itself, through the same provider
+/// pyright uses (`LanguageServerDependencyProviderUvx`), so a change in how
+/// serena reads `ls_specific_settings.python` shows up here. With the key,
+/// serena must launch exactly our binary and never fall back to `uvx`.
+#[test]
+#[ignore = "needs a pinned serena install"]
+fn real_serena_launches_the_managed_language_server_from_ls_path() {
+    let dir =
+        PathBuf::from(std::env::var_os("MUR_SERENA_INSTALL_DIR").expect("MUR_SERENA_INSTALL_DIR"));
+    let tpl = read_pinned_template(&dir).unwrap();
+    let python = serena_venv_python(&dir);
+    let mut f = fx();
+    let ls = fake_ls(&mut f);
+
+    // The provider is built exactly as `PyrightServer` builds it.
+    let probe = "import json\n\
+        import sys\n\
+        from serena.config.serena_config import SerenaConfig as C\n\
+        from solidlsp.ls_config import LanguageServerId\n\
+        from solidlsp.settings import SolidLSPSettings\n\
+        from solidlsp.dependency_provider import LanguageServerDependencyProviderUvx as U\n\
+        c = C.from_config_file(generate_if_missing=False)\n\
+        s = SolidLSPSettings(solidlsp_dir=sys.argv[1], project_data_path=sys.argv[1], \
+            ls_specific_settings=c.ls_specific_settings)\n\
+        u = U(s.get_ls_specific_settings(LanguageServerId.PYTHON), sys.argv[1], \
+            package='pyright', entrypoint='pyright-langserver', default_version='0', \
+            version_setting_key='pyright_version', extra_args=('--stdio',))\n\
+        print(json.dumps(u.create_launch_command()))";
+    let launch = |f: &Fx| -> Vec<String> {
+        let out = std::process::Command::new(&python)
+            .args(["-c", probe])
+            .arg(f._tmp.path().join("scratch"))
+            .env("SERENA_HOME", &f.paths.home)
+            // Without `ls_path`, serena would look for uv here; nothing is on
+            // PATH, so reaching for it is a visible failure, not a silent one.
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).expect("a JSON command line")
+    };
+
+    write_config(&f.paths, &f.project, &tpl, SECRET, Some(&ls)).unwrap();
+    preflight(&f.paths, &f.project).unwrap();
+    assert_eq!(
+        launch(&f),
+        vec![ls.to_str().unwrap().to_owned(), "--stdio".to_owned()],
+        "serena did not launch the managed pyright from ls_path"
+    );
+
+    // Without it serena goes for uv, which is exactly what ls_path avoids
+    // (and why a re-run without Python keeps the earlier path).
+    write_config(&f.paths, &f.project, &tpl, SECRET, None).unwrap();
+    let out = std::process::Command::new(&python)
+        .args(["-c", probe])
+        .arg(f._tmp.path().join("scratch"))
+        .env("SERENA_HOME", &f.paths.home)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "without ls_path serena should need uv: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 /// A `pyright-langserver` stand-in inside a tools root the test owns.
 fn fake_ls(f: &mut Fx) -> PathBuf {
     let tools = f._tmp.path().join("mur").join("tools");
