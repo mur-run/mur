@@ -82,10 +82,13 @@ pub fn resolve_model_entry(
         let path = ModelRegistry::default_path()?;
         let reg = ModelRegistry::load_from(&path)
             .with_context(|| format!("load registry {}", path.display()))?;
-        let entry = reg
-            .models
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("model_ref {name:?} not found in {}", path.display()))?;
+        let entry = reg.models.get(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "model_ref {name:?} not found in {}. Fix: run `mur model list`, \
+                     then point this agent at an existing model (or restore the entry)",
+                path.display()
+            )
+        })?;
         Ok(entry.clone())
     } else {
         Ok(ModelEntry {
