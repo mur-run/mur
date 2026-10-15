@@ -133,6 +133,46 @@ impl TaskRunner {
         }
     }
 
+    /// Shutdown drain: wait up to `wait` for in-flight turns to finish on
+    /// their own; if any are still running, cancel them and wait up to
+    /// `grace` more. A cancelled turn still runs `sweep_turn_track`, so its
+    /// track is promoted or kept instead of being dropped with the process
+    /// (#1909). `wait + grace` must fit the service manager's stop budget.
+    pub async fn drain(
+        &self,
+        wait: std::time::Duration,
+        grace: std::time::Duration,
+    ) -> DrainOutcome {
+        self.begin_drain();
+        if self.await_idle(wait).await {
+            return DrainOutcome::Idle;
+        }
+        let cancelled = self.cancel_inflight().await;
+        if self.await_idle(grace).await {
+            DrainOutcome::Cancelled(cancelled)
+        } else {
+            DrainOutcome::Abandoned(cancelled)
+        }
+    }
+
+    /// Fire the cancel signal of every in-flight turn. Returns how many.
+    pub async fn cancel_inflight(&self) -> usize {
+        let ids: Vec<String> = self
+            .cancel_signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        let mut n = 0;
+        for id in ids {
+            if self.cancel(&id).await.is_ok() {
+                n += 1;
+            }
+        }
+        n
+    }
+
     pub fn with_tools(mut self, tools: Vec<Arc<dyn crate::tools::ToolExecutor>>) -> Self {
         self.tools = tools;
         self
@@ -574,4 +614,15 @@ pub(super) struct TurnSettings {
     pub global_limits: mur_common::limits::Limits,
     pub agent_limits: Option<mur_common::limits::Limits>,
     pub autonomy: mur_common::hitl::Autonomy,
+}
+
+/// How a shutdown [`TaskRunner::drain`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainOutcome {
+    /// Every turn finished on its own.
+    Idle,
+    /// N turns were cancelled and all of them settled within the grace.
+    Cancelled(usize),
+    /// N turns were cancelled but some were still running when grace ran out.
+    Abandoned(usize),
 }

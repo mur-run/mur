@@ -18,7 +18,7 @@ use crate::protocol::methods::{
 use crate::scheduler::CronScheduler;
 #[cfg(unix)]
 use crate::socket_path::resolve_bind_target;
-use crate::task_runner::TaskRunner;
+use crate::task_runner::{DrainOutcome, TaskRunner};
 use crate::telemetry_writer::{Event, TelemetryWriter};
 use crate::transport::stdio::serve_stdio;
 use crate::transport::tcp::{TcpTransportConfig, spawn_tcp_listener};
@@ -34,6 +34,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
+
+/// Extra time after `stop_timeout_secs` for cancelled turns to settle their
+/// tracks. Default stop timeout (15s) plus this stays under launchd's default
+/// 20s `ExitTimeOut`, after which the process is SIGKILLed.
+const SHUTDOWN_CANCEL_GRACE_SECS: u64 = 4;
 
 mod bootstrap;
 mod dispatch;
@@ -727,15 +732,19 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         .await;
     // Stop accepting new turns, then cooperatively wait for any in-flight turn
     // to finish before tearing down transports. Never SIGKILL mid-flight work.
-    runner.begin_drain();
-    let drain_timeout = std::time::Duration::from_secs(profile.inner.lifecycle.stop_timeout_secs);
-    if runner.await_idle(drain_timeout).await {
-        info!("task runner drained cleanly");
-    } else {
-        warn!(
-            "task runner did not drain within {}s; tearing down anyway",
-            profile.inner.lifecycle.stop_timeout_secs
-        );
+    let stop_secs = profile.inner.lifecycle.stop_timeout_secs;
+    let wait = std::time::Duration::from_secs(stop_secs);
+    let grace = std::time::Duration::from_secs(SHUTDOWN_CANCEL_GRACE_SECS);
+    match runner.drain(wait, grace).await {
+        DrainOutcome::Idle => info!("task runner drained cleanly"),
+        DrainOutcome::Cancelled(n) => warn!(
+            turns = n,
+            "task runner did not drain within {stop_secs}s; cancelled in-flight turns, all settled"
+        ),
+        DrainOutcome::Abandoned(n) => warn!(
+            turns = n,
+            "task runner did not drain within {stop_secs}s; cancelled in-flight turns but some did not settle within {SHUTDOWN_CANCEL_GRACE_SECS}s; tearing down anyway"
+        ),
     }
     // Every bash job is a process group this runtime started; nothing else
     // will end them once we are gone (spec D3/D9).

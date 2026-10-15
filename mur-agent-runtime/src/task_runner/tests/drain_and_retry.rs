@@ -264,3 +264,61 @@ fn rate_limit_retry_constants_are_sane() {
     let max_delay = rate_limit_backoff_delay(MAX_RATE_LIMIT_RETRIES);
     assert!(max_delay <= std::time::Duration::from_secs(60));
 }
+
+// ── Shutdown drain: cancel then grace (#1909) ─────────────────────────────
+
+#[tokio::test]
+async fn drain_cancels_inflight_turn_after_wait_and_lets_it_settle() {
+    use std::sync::Arc;
+    let runner = Arc::new(TaskRunner::new_stub_slow());
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let spec = TaskSpec {
+        cwd: None,
+        input: mur_common::a2a::Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text {
+                text: "slow".into(),
+            }],
+        },
+        context_task_id: None,
+        task_id: Some("task-shutdown".to_string()),
+        intent: RequestIntent::Interactive,
+        output_artifact_path: None,
+        active_fleet: None,
+        active_team: None,
+        attended: true,
+        deadline_secs: None,
+    };
+    let r2 = runner.clone();
+    let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // The slow stub never finishes on its own within `wait`, so the drain
+    // must cancel it; the cancelled turn then reaches its settle path
+    // (sweep_turn_track) and goes terminal well inside the grace.
+    let outcome = runner
+        .drain(
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+    assert_eq!(outcome, DrainOutcome::Cancelled(1));
+
+    let done = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await
+        .expect("cancelled turn must finish")
+        .expect("join");
+    assert!(matches!(done, TaskOutcome::Cancelled(_)), "got {done:?}");
+}
+
+#[tokio::test]
+async fn drain_idle_runner_cancels_nothing() {
+    let runner = TaskRunner::new_stub_echo();
+    let outcome = runner
+        .drain(
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(100),
+        )
+        .await;
+    assert_eq!(outcome, DrainOutcome::Idle);
+}
