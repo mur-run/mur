@@ -62,14 +62,16 @@ pub fn cmd_hitl_list(agent: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_hitl_forget(agent: &str, hash: Option<&str>, all: bool) -> Result<()> {
-    let params = match (hash, all) {
-        (_, true) => serde_json::json!({ "all": true }),
-        (Some(h), false) => serde_json::json!({ "hash_prefix": h }),
-        (None, false) => anyhow::bail!("give a hash prefix, or --all"),
-    };
+pub fn cmd_hitl_forget(
+    agent: &str,
+    hash: Option<&str>,
+    all: bool,
+    denies_only: bool,
+) -> Result<()> {
+    let params = forget_params(hash, all, denies_only)?;
     let r: ForgetResult = serde_json::from_value(dial(agent, HITL_FORGET_METHOD, params)?)?;
     match r.revoked.len() {
+        0 if denies_only => println!("nothing to forget — no remembered denials"),
         0 => println!("nothing to forget — no remembered decisions"),
         n => {
             for h in &r.revoked {
@@ -79,6 +81,18 @@ pub fn cmd_hitl_forget(agent: &str, hash: Option<&str>, all: bool) -> Result<()>
         }
     }
     Ok(())
+}
+
+/// Exactly one target. Denies-only is sent as its own key, never alongside
+/// `all`, so a runtime that predates it errors instead of forgetting allows.
+fn forget_params(hash: Option<&str>, all: bool, denies_only: bool) -> Result<serde_json::Value> {
+    match (hash, all, denies_only) {
+        (None, true, false) => Ok(serde_json::json!({ "all": true })),
+        (None, false, true) => Ok(serde_json::json!({ "denies_only": true })),
+        (Some(h), false, false) => Ok(serde_json::json!({ "hash_prefix": h })),
+        (None, false, false) => anyhow::bail!("give a hash prefix, --all, or --denies-only"),
+        _ => anyhow::bail!("use only one of a hash prefix, --all, or --denies-only"),
+    }
 }
 
 fn short(h: &str) -> &str {
@@ -119,6 +133,25 @@ fn human(d: chrono::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forget_params_sends_one_target_under_its_own_key() {
+        assert_eq!(
+            forget_params(None, false, true).unwrap(),
+            serde_json::json!({ "denies_only": true })
+        );
+        assert_eq!(
+            forget_params(None, true, false).unwrap(),
+            serde_json::json!({ "all": true })
+        );
+        assert_eq!(
+            forget_params(Some("ab"), false, false).unwrap(),
+            serde_json::json!({ "hash_prefix": "ab" })
+        );
+        assert!(forget_params(None, false, false).is_err());
+        assert!(forget_params(None, true, true).is_err());
+        assert!(forget_params(Some("ab"), false, true).is_err());
+    }
 
     #[test]
     fn render_shows_label_or_marks_old_rows() {

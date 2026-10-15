@@ -146,26 +146,57 @@ impl ChannelDecisionStore {
                 }
             }
         };
+        self.append_revocations(vec![scope], hashes)
+    }
+
+    /// Revoke only the live DENIES, leaving remembered allows replaying.
+    /// One signed revocation per denied hash (`One` scopes), so the wire
+    /// format and older readers are unchanged. Returns the hashes revoked.
+    pub fn forget_denies(&self) -> Result<Vec<String>> {
+        let live = match self.list() {
+            Ok(l) => l,
+            Err(e) if e.downcast_ref::<IntegrityError>().is_some() => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let hashes: Vec<String> = live
+            .into_iter()
+            .filter(|d| !d.allow)
+            .map(|d| d.action_hash)
+            .collect();
+        let scopes = hashes.iter().cloned().map(RevocationScope::One).collect();
+        self.append_revocations(scopes, hashes)
+    }
+
+    /// Append one signed revocation per scope; nothing is touched on an empty
+    /// set. A failure part-way leaves the earlier ones in force — forgetting
+    /// is idempotent, so the caller can simply run it again.
+    fn append_revocations(
+        &self,
+        scopes: Vec<RevocationScope>,
+        hashes: Vec<String>,
+    ) -> Result<Vec<String>> {
         if hashes.is_empty() {
             return Ok(hashes);
         }
-        let rev = HitlRevocation {
-            scope,
-            issued_at: chrono::Utc::now(),
-        };
         let svc = self.sealing_service()?;
         let channel_id = self.writable_channel(&svc)?;
-        svc.append_signed(
-            &channel_id,
-            &self.identity,
-            self.key_version,
-            ChannelActor::Agent {
-                id: self.agent.clone(),
-            },
-            EventKind::Note,
-            rev.to_payload(),
-            Some(format!("chat-hitl-revoke:{}", uuid::Uuid::now_v7())),
-        )?;
+        for scope in scopes {
+            let rev = HitlRevocation {
+                scope,
+                issued_at: chrono::Utc::now(),
+            };
+            svc.append_signed(
+                &channel_id,
+                &self.identity,
+                self.key_version,
+                ChannelActor::Agent {
+                    id: self.agent.clone(),
+                },
+                EventKind::Note,
+                rev.to_payload(),
+                Some(format!("chat-hitl-revoke:{}", uuid::Uuid::now_v7())),
+            )?;
+        }
         Ok(hashes)
     }
 
@@ -616,5 +647,31 @@ mod tests {
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].action_hash, "new");
         assert_eq!(live[0].label.as_deref(), Some("edit_file: Cargo.toml"));
+    }
+
+    #[tokio::test]
+    async fn forget_denies_keeps_allows_replaying() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("al1", true, "a"), 5)).await;
+        s.record(at(resp("de1", false, "b"), 5)).await;
+        s.record(at(resp("de2", false, "c"), 5)).await;
+        let mut gone = s.forget_denies().unwrap();
+        gone.sort();
+        assert_eq!(gone, vec!["de1".to_string(), "de2".to_string()]);
+        assert_eq!(s.lookup("al1").await, Some(Settled::Allow));
+        assert_eq!(s.lookup("de1").await, None);
+        assert_eq!(s.lookup("de2").await, None);
+    }
+
+    #[tokio::test]
+    async fn forget_denies_with_none_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("al1", true, "a"), 5)).await;
+        let before = line_count(tmp.path()).len();
+        assert!(s.forget_denies().unwrap().is_empty());
+        assert_eq!(line_count(tmp.path()).len(), before);
+        assert_eq!(s.lookup("al1").await, Some(Settled::Allow));
     }
 }
