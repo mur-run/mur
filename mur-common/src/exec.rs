@@ -133,7 +133,15 @@ const INTERPRETERS: &[&str] = &[
 /// Real coverage for these needs a package-level pin (version + integrity),
 /// which is a different mechanism than hashing a file on disk.
 pub fn is_interpreter_command(command: &str) -> bool {
-    let first = command.split_whitespace().next().unwrap_or(command);
+    // The spawn treats `command` as one path, so when that whole path is a
+    // real file (`…/Application Support/…/node`) judge it whole. Otherwise
+    // fall back to the first word, which keeps legacy inline-args entries
+    // (`npx @scope/pkg`) classified as before.
+    let first = if Path::new(command).is_file() {
+        command
+    } else {
+        command.split_whitespace().next().unwrap_or(command)
+    };
     let stem = Path::new(first)
         .file_stem() // also strips .exe / .cmd on Windows
         .and_then(|s| s.to_str())
@@ -252,6 +260,19 @@ mod tests {
                 "`{c}` should count as an interpreter"
             );
         }
+    }
+
+    #[test]
+    fn interpreter_path_with_spaces_is_judged_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("Application Support").join("bin");
+        std::fs::create_dir_all(&sub).unwrap();
+        let node = sub.join("node");
+        std::fs::write(&node, b"").unwrap();
+        let server = sub.join("my-server");
+        std::fs::write(&server, b"").unwrap();
+        assert!(is_interpreter_command(node.to_str().unwrap()));
+        assert!(!is_interpreter_command(server.to_str().unwrap()));
     }
 
     #[test]
