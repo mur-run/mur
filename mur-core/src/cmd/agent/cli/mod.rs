@@ -12,6 +12,7 @@ mod autostart;
 use mur_common::hitl::bash_class;
 mod browser_cmd;
 pub(crate) mod browser_live_cmd;
+mod browser_live_intent;
 mod call_summary;
 mod complete;
 mod deep_research;

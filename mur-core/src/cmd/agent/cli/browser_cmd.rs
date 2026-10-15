@@ -43,6 +43,15 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
     use super::browser_live_cmd::{self as live, Route};
     let route = live::route(&args);
     if let Route::Live(hosts) = route {
+        use super::browser_live_intent::{
+            LiveIntent, TASK_NOTICE, classify_live_args, task_choices,
+        };
+        if classify_live_args(&hosts) == LiveIntent::Task {
+            app.push_system(TASK_NOTICE);
+            app.pending_suggestions = task_choices(&hosts);
+            app.reveal_suggestions();
+            return;
+        }
         let ready = mur_browser::server::require_entry(Some(&app.home)).is_ok();
         run_manage(app, move |agent| {
             live::run(&agent, &hosts, ready, &mut live::ProfileOps(&agent))

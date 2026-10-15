@@ -85,7 +85,7 @@ pub(super) struct ParsedHosts {
 
 /// Split `host[:port]` without cutting an IPv6 address at a colon: only
 /// `[v6]:port` or an authority with exactly one `:` carries a port.
-fn split_authority(authority: &str) -> (&str, Option<&str>) {
+pub(super) fn split_authority(authority: &str) -> (&str, Option<&str>) {
     if authority.starts_with('[') {
         if let Some(i) = authority.find("]:") {
             return (&authority[..=i], Some(&authority[i + 2..]));
@@ -187,7 +187,7 @@ const URL_SCHEMES: [&str; 2] = ["http", "https"];
 /// Reduce URL-shaped input to its `host[:port]` (#1676): a pasted
 /// `https://example.com:8443/path?q` becomes `example.com:8443`. Bare
 /// `host[:port]` passes through unchanged; a non-web scheme is refused.
-fn strip_url(raw: &str) -> Result<&str, String> {
+pub(super) fn strip_url(raw: &str) -> Result<&str, String> {
     let Some((scheme, rest)) = raw.split_once("://") else {
         return Ok(raw);
     };
