@@ -10,6 +10,7 @@ mod companion;
 mod entitlements;
 mod lifecycle;
 mod mcp;
+mod mcp_status;
 mod reload;
 mod transport;
 
@@ -17,6 +18,7 @@ pub use companion::*;
 pub use entitlements::*;
 pub use lifecycle::*;
 pub use mcp::*;
+pub use mcp_status::{MCP_STATUS_FILE, McpServerStatus, McpStatus};
 pub use reload::{HOT_PATHS, RELOAD_STATE_FILE, ReloadDiff, ReloadState};
 pub use transport::*;
 

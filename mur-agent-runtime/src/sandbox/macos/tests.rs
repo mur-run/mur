@@ -741,3 +741,40 @@ fn unix_socket_allows_cover_symlinked_mur_home_and_scratch() {
         );
     }
 }
+
+#[test]
+fn exec_permitted_mirrors_the_seal_for_none_mode() {
+    let policy = SandboxPolicy {
+        spawn_mode: SpawnMode::None,
+        fs_exec: vec![PathBuf::from("/usr/local/bin")],
+        spawn_allowed_paths: vec![PathBuf::from("/opt/homebrew/Cellar/node/25/bin/node")],
+        spawn_allowed_prefixes: vec![PathBuf::from("/opt/tools")],
+        ..Default::default()
+    };
+    let ok = |p: &str| exec_permitted(&policy, Path::new(p));
+    assert!(ok("/opt/homebrew/Cellar/node/25/bin/node"));
+    assert!(
+        ok("/usr/bin/env"),
+        "system exec dirs are exempt outside Strict"
+    );
+    assert!(ok("/usr/local/bin/x"));
+    assert!(ok("/opt/tools/sub/y"));
+    // A version-manager shim's node: the field-report EPERM.
+    assert!(!ok(
+        "/Users/u/Library/Application Support/BitL/node-versions/v25/bin/node"
+    ));
+}
+
+#[test]
+fn exec_permitted_strict_drops_the_system_exemption_and_any_allows_all() {
+    let strict = SandboxPolicy {
+        spawn_mode: SpawnMode::Strict,
+        ..Default::default()
+    };
+    assert!(!exec_permitted(&strict, Path::new("/usr/bin/env")));
+    let any = SandboxPolicy {
+        spawn_mode: SpawnMode::Any,
+        ..Default::default()
+    };
+    assert!(exec_permitted(&any, Path::new("/anywhere/node")));
+}

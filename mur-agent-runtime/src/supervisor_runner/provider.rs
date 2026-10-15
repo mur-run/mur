@@ -198,6 +198,7 @@ pub async fn build_provider_runner(
         crate::tools::registry::McpBackend {
             pool: pool.clone(),
             session_cwd: Some(session_cwd.clone()),
+            status_file: Some(agent_home.join(mur_common::agent::MCP_STATUS_FILE)),
         },
     )
     .await;

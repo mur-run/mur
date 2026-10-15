@@ -95,6 +95,26 @@ const MACOS_SYSTEM_WRITE_PATHS: &[&str] = &[
 /// other system binary, including coreutils, is implied.
 const MACOS_SYSTEM_EXEC_PATHS: &[&str] = &["/bin", "/usr/bin", "/usr/lib"];
 
+/// Would the seal [`build_sbpl_profile`] emits for `policy` let `path` be
+/// exec'd? Mirrors its `process-exec*` clauses one for one — keep the two in
+/// lockstep — so `mur agent doctor` can predict an MCP launch the kernel
+/// would refuse without starting the agent. `path` should be canonical, the
+/// form Seatbelt checks.
+pub fn exec_permitted(policy: &SandboxPolicy, path: &Path) -> bool {
+    if policy.spawn_mode == SpawnMode::Any {
+        return true;
+    }
+    let system = (policy.spawn_mode != SpawnMode::Strict)
+        && MACOS_SYSTEM_EXEC_PATHS.iter().any(|p| path.starts_with(p));
+    system
+        || policy.fs_exec.iter().any(|d| path.starts_with(d))
+        || policy.spawn_allowed_paths.iter().any(|p| p == path)
+        || policy
+            .spawn_allowed_prefixes
+            .iter()
+            .any(|d| path.starts_with(d))
+}
+
 /// Escape a string for safe inclusion in an SBPL double-quoted literal.
 ///
 /// SBPL (a TinyScheme dialect) honors `\\` and `\"` inside string literals.
