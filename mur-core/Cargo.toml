@@ -151,6 +151,7 @@ qdrant = ["dep:qdrant-client"]
 
 [dev-dependencies]
 tempfile = "3"
+shell-words = "1"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 wiremock = "0.6"

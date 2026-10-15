@@ -220,13 +220,7 @@ fn real_template_renders_passes_preflight_and_is_not_rewritten() {
     write_config(&f.paths, &f.project, &tpl, SECRET, None).unwrap();
     preflight(&f.paths, &f.project).unwrap();
 
-    let python = walkdir::WalkDir::new(&dir)
-        .max_depth(4)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .map(|e| e.into_path())
-        .find(|p| p.ends_with("bin/python"))
-        .expect("serena venv python");
+    let python = serena_venv_python(&dir);
     let before = std::fs::read(&f.paths.config_file).unwrap();
     let out = std::process::Command::new(python)
         .args(["-c", "from serena.config.serena_config import SerenaConfig as C; C.from_config_file(generate_if_missing=False)"])
@@ -245,6 +239,89 @@ fn real_template_renders_passes_preflight_and_is_not_rewritten() {
         before,
         "serena rewrote the file"
     );
+}
+
+/// The venv interpreter of a pinned serena install: the one whose shebang
+/// serena's own entry point uses, not uv's bare managed CPython (which also
+/// has a `bin/python` but cannot import `serena`).
+fn serena_venv_python(install_dir: &Path) -> PathBuf {
+    let bin = crate::cmd::code_nav::serena_install::serena_binary_path_in(install_dir);
+    let shebang = std::fs::read_to_string(&bin).expect("serena entry point");
+    PathBuf::from(
+        shebang
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix("#!"))
+            .expect("serena entry point has a shebang")
+            .trim(),
+    )
+}
+
+/// #1917: with a real serena, each entry's own `SERENA_HOME` is what serena
+/// actually reads, and `project_serena_folder_location` resolves inside that
+/// home, so two entries can never navigate each other's tree. Asks serena
+/// itself rather than trusting our own path arithmetic.
+#[test]
+#[ignore = "needs a pinned serena install"]
+fn real_serena_resolves_every_entrys_paths_inside_its_own_home() {
+    use mur_agent_runtime::mcp::serena::serena_paths_for;
+    let dir =
+        PathBuf::from(std::env::var_os("MUR_SERENA_INSTALL_DIR").expect("MUR_SERENA_INSTALL_DIR"));
+    let tpl = read_pinned_template(&dir).unwrap();
+    let python = serena_venv_python(&dir);
+    let tmp = tempfile::tempdir().unwrap();
+    let agent_home = tmp.path().join("agent");
+    let project = tmp.path().join("repo");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // The probe prints what serena itself resolved, as `key=value` lines.
+    let probe = "import sys\n\
+        from serena.config.serena_config import SerenaConfig as C, SerenaPaths as P\n\
+        c = C.from_config_file(generate_if_missing=False)\n\
+        print('home=' + P().serena_user_home_dir)\n\
+        print('folder=' + c.get_configured_project_serena_folder(sys.argv[1]))";
+    let mut seen = Vec::new();
+    for entry in ["serena", "code-nav", "repo_b"] {
+        let paths = serena_paths_for(&agent_home, entry).unwrap();
+        write_config(&paths, &project, &tpl, SECRET, None).unwrap();
+        preflight(&paths, &project).unwrap();
+        let out = std::process::Command::new(&python)
+            .args(["-c", probe])
+            .arg(&project)
+            .env("SERENA_HOME", &paths.home)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{entry}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let get = |k: &str| {
+            text.lines()
+                .find_map(|l| l.strip_prefix(&format!("{k}=")))
+                .unwrap_or_else(|| panic!("{entry}: no `{k}` in {text}"))
+                .to_owned()
+        };
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+        assert_eq!(
+            canon(Path::new(&get("home"))),
+            canon(&paths.home),
+            "{entry}: serena read a different SERENA_HOME"
+        );
+        let folder = PathBuf::from(get("folder"));
+        assert!(
+            folder.starts_with(&paths.projects_dir),
+            "{entry}: serena put the project folder at {}, outside {}",
+            folder.display(),
+            paths.projects_dir.display()
+        );
+        seen.push(folder);
+    }
+    // Same repo, three entries: three distinct folders.
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 3, "entries shared a project folder: {seen:?}");
 }
 
 /// A `pyright-langserver` stand-in inside a tools root the test owns.

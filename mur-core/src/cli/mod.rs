@@ -789,3 +789,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "serena_hint_tests.rs"]
+mod serena_hint_tests;
