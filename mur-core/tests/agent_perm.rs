@@ -66,13 +66,61 @@ fn perm_set_mode_changes_outbound_mode() {
 }
 
 #[test]
+fn perm_allow_host_without_a_terminal_refuses_and_writes_nothing() {
+    // Tests run with no TTY — exactly what an agent's bash tool sees.
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+    let out = run(
+        mur_home.path(),
+        &["agent", "perm", "allow-host", "agent_x", "*.example.com"],
+    );
+    assert!(!out.status.success(), "must fail closed without --yes");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("--yes"), "{stderr}");
+    let p = read_profile(mur_home.path(), "agent_x");
+    assert!(
+        !p.entitlements
+            .network
+            .outbound
+            .allow_hosts
+            .contains(&"*.example.com".to_string())
+    );
+}
+
+#[test]
+fn perm_allow_host_already_present_needs_no_consent() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+    let args = ["agent", "perm", "allow-host", "agent_x", "*.example.com"];
+    let first = run(mur_home.path(), &[&args[..], &["--yes"]].concat());
+    assert!(first.status.success());
+    // Re-running without --yes and without a TTY is a no-op, not an error.
+    let again = run(mur_home.path(), &args);
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert!(String::from_utf8_lossy(&again.stdout).contains("nothing to do"));
+}
+
+#[test]
 fn perm_allow_host_appends_and_list_prints() {
     let mur_home = TempDir::new().unwrap();
     let bin_dir = TempDir::new().unwrap();
     mur_create(mur_home.path(), bin_dir.path(), "agent_x");
     let _ = run(
         mur_home.path(),
-        &["agent", "perm", "allow-host", "agent_x", "*.example.com"],
+        &[
+            "agent",
+            "perm",
+            "allow-host",
+            "agent_x",
+            "*.example.com",
+            "--yes",
+        ],
     );
     let p = read_profile(mur_home.path(), "agent_x");
     assert!(

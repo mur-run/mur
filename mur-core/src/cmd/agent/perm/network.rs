@@ -16,23 +16,20 @@ pub fn cmd_perm_allow_host(name: &str, glob: &str, yes: bool) -> Result<()> {
     let glob = value.as_str();
     let (path, mut profile) = load_profile_for_edit(name)?;
     let before = profile.entitlements.network.outbound.allow_hosts.clone();
+    if before.iter().any(|h| h == glob) {
+        // Nothing widens, so there is nothing to consent to — and a script
+        // re-running an idempotent grant must not start failing.
+        println!("`{glob}` is already in '{name}' outbound allow_hosts — nothing to do");
+        return Ok(());
+    }
     eprintln!("{}", allow_host_preview(name, &before, glob, &notes));
-    crate::cmd::agent::cli::browser_live_preview::confirm_on_tty(yes)?;
-    if !profile
+    crate::cmd::consent::confirm_grant_on_terminal(yes)?;
+    profile
         .entitlements
         .network
         .outbound
         .allow_hosts
-        .iter()
-        .any(|h| h == glob)
-    {
-        profile
-            .entitlements
-            .network
-            .outbound
-            .allow_hosts
-            .push(glob.to_string());
-    }
+        .push(glob.to_string());
     save_profile(&path, &mut profile)?;
     warn_if_running(name);
     Ok(())

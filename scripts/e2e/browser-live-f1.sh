@@ -169,7 +169,7 @@ for u in "$URL_A" "$URL_B"; do
   p="${u%/}"; p="${p##*:}"
   NET_ARGS+=(--allow-host "127.0.0.1:$p" --allow-port "$p")
 done
-"$MUR" agent mcp set-network "$AGENT" browser "${NET_ARGS[@]}" >/dev/null
+"$MUR" agent mcp set-network "$AGENT" browser "${NET_ARGS[@]}" --yes >/dev/null
 # What `mur browser record` spawns on the agent's behalf (perms.rs
 # REQUIRED_BINARIES): `node <install>/…/cli.js`, then Chromium. No npx, so no
 # npx binary and no npx cache lane.
