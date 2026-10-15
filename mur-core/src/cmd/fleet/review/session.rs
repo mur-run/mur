@@ -343,7 +343,11 @@ impl<T: ReviewTransport> ReviewTransport for TerminalGate<'_, T> {
 /// the call is above the auto ceiling, and only an explicit yes allows.
 /// #1781: Enter is not an answer here — `Send to …?` taught the operator that
 /// Enter means "go on" — so anything but y/n asks again.
-pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
+pub(super) fn ask_hitl(
+    member: &str,
+    hitl: &serde_json::Value,
+    deadline: Option<std::time::Instant>,
+) -> bool {
     use crate::cmd::agent::cli::stream::tool_tier_and_summary;
     let (tier, within_ceiling, summary) = tool_tier_and_summary(hitl);
     println!("\n--- {member} asks to run a tool ---");
@@ -351,9 +355,12 @@ pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
         println!("  [{tier:?} — above the auto ceiling]");
     }
     println!("  {summary}");
-    let mut prompt = ALLOW_PROMPT;
+    // #1762: the runtime denies at its timeout and rejects a late answer, so
+    // the prompt shows what is left — recomputed on every re-ask.
+    let mut lead = "";
     loop {
-        print!("{prompt}");
+        let clock = super::approval_window::prompt_clock(deadline, std::time::Instant::now());
+        print!("{lead}Allow? {clock}[y/n] ");
         if std::io::stdout().flush().is_err() {
             return false;
         }
@@ -363,13 +370,12 @@ pub(super) fn ask_hitl(member: &str, hitl: &serde_json::Value) -> bool {
         }
         match allow_answer(&line) {
             Some(allow) => return allow,
-            None => prompt = ALLOW_REPROMPT,
+            None => lead = ALLOW_REASK_LEAD,
         }
     }
 }
 
-const ALLOW_PROMPT: &str = "Allow? [y/n] ";
-const ALLOW_REPROMPT: &str = "Please answer y or n. Allow? [y/n] ";
+const ALLOW_REASK_LEAD: &str = "Please answer y or n. ";
 
 /// The `Allow?` answer: `y`/`yes` allows, `n`/`no` denies, EOF denies (an
 /// unreadable answer never allows), and anything else — Enter included — is
@@ -486,7 +492,9 @@ pub fn cmd_fleet_review(mur_home: &Path, args: ReviewArgs) -> Result<()> {
     println!("{banner}\n{}", REVIEW_STOP_BANNER.replace("{name}", name));
 
     let wait = HumanWait::default();
-    let decide = |member: &str, hitl: &serde_json::Value| wait.time(|| ask_hitl(member, hitl));
+    let decide = |member: &str, hitl: &serde_json::Value, deadline: Option<std::time::Instant>| {
+        wait.time(|| ask_hitl(member, hitl, deadline))
+    };
     let transport = TerminalGate {
         inner: A2aTransport {
             mur_home,
@@ -573,7 +581,9 @@ pub fn cmd_fleet_review_resume(mur_home: &Path, name: &str) -> Result<()> {
     }
     let channel_id = r.fleet.channel_id.clone();
     let wait = HumanWait::default();
-    let decide = |member: &str, hitl: &serde_json::Value| wait.time(|| ask_hitl(member, hitl));
+    let decide = |member: &str, hitl: &serde_json::Value, deadline: Option<std::time::Instant>| {
+        wait.time(|| ask_hitl(member, hitl, deadline))
+    };
     let transport = TerminalGate {
         inner: A2aTransport {
             mur_home,

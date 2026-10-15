@@ -654,7 +654,7 @@ fn a_batched_approval_answers_every_call() {
         ],
     });
     let asked = Mutex::new(Vec::<String>::new());
-    let decide = |_m: &str, call: &serde_json::Value| {
+    let decide = |_m: &str, call: &serde_json::Value, _d: Option<std::time::Instant>| {
         let tool = call["tool_name"].as_str().unwrap_or_default().to_string();
         asked.lock().unwrap().push(tool.clone());
         tool == "read_file"
@@ -679,10 +679,47 @@ fn a_legacy_single_call_approval_is_answered_once() {
         "tool_name": "bash",
         "tool_input": {"command": "ls"},
     });
-    let decide = |_m: &str, _c: &serde_json::Value| true;
+    let decide = |_m: &str, _c: &serde_json::Value, _d: Option<std::time::Instant>| true;
     let mut answered = Vec::new();
     answer_hitl("reviewer", &hitl, &decide, |id, allow| {
         answered.push((id.to_string(), allow));
     });
     assert_eq!(answered, vec![("h1".to_string(), true)]);
+}
+
+/// #1762: every call in a batch is asked against the notification's one
+/// deadline, taken from `timeout_ms`; an older runtime gives none.
+#[test]
+fn approval_deadline_reaches_every_call_in_a_batch() {
+    use super::driver::answer_hitl;
+    let hitl = serde_json::json!({
+        "timeout_ms": 300_000,
+        "calls": [{"hitl_id": "h1"}, {"hitl_id": "h2"}],
+    });
+    let seen = Mutex::new(Vec::new());
+    let decide = |_m: &str, _c: &serde_json::Value, d: Option<std::time::Instant>| {
+        seen.lock().unwrap().push(d);
+        true
+    };
+    answer_hitl("reviewer", &hitl, &decide, |_, _| {});
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen[0].is_some() && seen[0] == seen[1],
+        "one shared deadline"
+    );
+
+    seen_none();
+    fn seen_none() {
+        let decide = |_m: &str, _c: &serde_json::Value, d: Option<std::time::Instant>| {
+            assert!(d.is_none(), "no timeout_ms, no clock");
+            true
+        };
+        answer_hitl(
+            "r",
+            &serde_json::json!({"hitl_id": "h"}),
+            &decide,
+            |_, _| {},
+        );
+    }
 }

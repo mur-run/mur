@@ -273,7 +273,9 @@ impl MurmurTransport {
                 answer_hitl(
                     member,
                     &hitl,
-                    &|m, call| self.decide_hitl(m, call),
+                    // MURMUR's modal is its own surface; the plain-prompt countdown
+                    // (#1762) does not apply, so the deadline is not forwarded.
+                    &|m, call, _deadline| self.decide_hitl(m, call),
                     |id, allow| (self.respond)(member, id, allow),
                 );
             },
