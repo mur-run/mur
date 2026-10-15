@@ -299,7 +299,9 @@ fn two_entries_are_verified_against_their_own_homes() {
     let err = fx.verify(&[first, second]).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("`other`"), "{msg}");
-    assert!(msg.contains("serena-homes/other"), "{msg}");
+    // Compare against the platform's own rendering: Windows joins with `\`.
+    let want = Path::new("serena-homes").join("other");
+    assert!(msg.contains(&want.display().to_string()), "{msg}");
 }
 
 #[test]
