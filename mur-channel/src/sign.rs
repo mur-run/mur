@@ -201,6 +201,33 @@ pub fn resolve_writer_pubkey(agent_home: &Path, key_version: Option<u32>) -> Opt
     decode_pubkey(txt.trim()).ok()
 }
 
+/// The pubkey the VERIFIED rotation chain assigns to `key_version`, or `None`.
+///
+/// Stricter than [`resolve_writer_pubkey`] on purpose: no fallback to
+/// `identity.pub`. That fallback returns the *current* key for any version,
+/// which is right for a single-host bootstrap but would let a head claiming
+/// an arbitrary old version be checked against (or accepted under) the wrong
+/// key. A missing, unreadable, or non-verifying chain resolves nothing.
+pub fn resolve_writer_pubkey_strict(agent_home: &Path, key_version: u32) -> Option<[u8; 32]> {
+    use mur_common::identity::{ChainOptions, RotationAttestation, decode_pubkey, verify_chain};
+    let text = std::fs::read_to_string(agent_home.join("rotations.jsonl")).ok()?;
+    let chain: Vec<RotationAttestation> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    verify_chain(
+        &chain,
+        ChainOptions {
+            allow_emergency: false,
+        },
+    )
+    .ok()?;
+    let att = chain.iter().find(|a| a.new_key_version == key_version)?;
+    decode_pubkey(&att.new_pubkey).ok()
+}
+
 /// Verify-on-fold primitive: filter a log to the events that pass verification
 /// against the channel's writer. Forged (bad-sig) events are dropped + logged;
 /// unsigned events pass only when `!require_sig`.

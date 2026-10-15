@@ -156,6 +156,7 @@ pub fn cmd_commander_directive(
         &format!("fleet-{fleet}"),
         &id,
         0,
+        &mur_home.join(COMMANDER_DIR),
         mur_common::channel::ChannelActor::System,
         mur_common::channel::EventKind::Note,
         payload,

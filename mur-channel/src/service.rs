@@ -10,6 +10,7 @@ use mur_common::channel::{
 
 use crate::index::{ChannelIndex, ChannelRow};
 use crate::store::{ChannelStore, SealInput};
+use anchored::HeadSigner;
 
 /// Shared truncation limit for auto-derived conversation titles. One constant
 /// so TUI, Hub, and mobile cannot disagree about where a title ends.
@@ -144,8 +145,9 @@ impl ChannelService {
         sig: Option<String>,
         key_version: Option<u32>,
         new_state: Option<ChannelState>,
+        anchor: Option<HeadSigner<'_>>,
     ) -> Result<ChannelEvent> {
-        let ev = self.with_hooks(None, |hooks| {
+        let ev = self.with_hooks(anchor, |hooks| {
             self.store.append_event_with(
                 channel_id,
                 actor,
@@ -271,7 +273,9 @@ impl ChannelService {
         if let Some(t) = task_id {
             payload["task_id"] = serde_json::Value::String(t.to_string());
         }
-        self.write_event(channel_id, actor, kind, payload, None, None, None, None)
+        self.write_event(
+            channel_id, actor, kind, payload, None, None, None, None, None,
+        )
     }
 
     /// Create a channel that records a workflow execution. No agent participant;
@@ -313,6 +317,7 @@ impl ChannelService {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -337,7 +342,7 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            false,
+            None,
         )
     }
 
@@ -368,7 +373,7 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            false,
+            None,
         )
     }
 
@@ -400,6 +405,7 @@ impl ChannelService {
             Some(sig),
             key_version,
             None,
+            None,
         )
     }
 
@@ -423,77 +429,6 @@ impl ChannelService {
             EventKind::Delegation,
             payload,
             idempotency_key,
-        )
-    }
-
-    /// Emit a `StateChange` event and persist the new state on the manifest.
-    /// `run_id` stamps the run-status run boundary on the payload; pass `None`
-    /// for transitions that are not part of a recorded run.
-    /// Unsigned state transition. Prefer `transition_signed` from anywhere a
-    /// writer identity is available — see that method for why.
-    pub fn transition(
-        &self,
-        channel_id: &str,
-        new_state: ChannelState,
-        actor: ChannelActor,
-        run_id: Option<&str>,
-    ) -> Result<ChannelEvent> {
-        self.transition_signed(channel_id, new_state, actor, run_id, None)
-    }
-
-    /// A state transition SIGNED by the channel's writer, when one is given.
-    ///
-    /// `transition` used to be the only entry point and never signed, so every
-    /// `StateChange` on every channel was unsigned regardless of who wrote it
-    /// — 33 of 33 on one live fleet channel, from sandboxed and unsandboxed
-    /// processes alike. `Message` and `Delegation` events went through the
-    /// signing path and these did not, which makes "the run started" and "the
-    /// run failed" the two events in a channel that nothing can attribute.
-    pub fn transition_signed(
-        &self,
-        channel_id: &str,
-        new_state: ChannelState,
-        actor: ChannelActor,
-        run_id: Option<&str>,
-        signer: Option<(&mur_common::identity::AgentIdentity, u32)>,
-    ) -> Result<ChannelEvent> {
-        let old_state = self
-            .store
-            .load_manifest(channel_id)
-            .map(|ch| ch.state)
-            .unwrap_or(ChannelState::Working);
-        let mut payload = serde_json::json!({
-            "from": state_str(old_state),
-            "to":   state_str(new_state),
-        });
-        if let Some(run_id) = run_id {
-            payload["run_id"] = serde_json::json!(run_id);
-        }
-        // Same canonical sign-input as `append_signed`: no idempotency key
-        // participates here because a transition never carries one.
-        let (sig, kv) = match signer {
-            Some((id, kv)) => (
-                Some(crate::sign::sign_event(
-                    id,
-                    channel_id,
-                    &actor,
-                    EventKind::StateChange,
-                    &payload,
-                    None,
-                )),
-                Some(kv),
-            ),
-            None => (None, None),
-        };
-        self.write_event(
-            channel_id,
-            actor,
-            EventKind::StateChange,
-            payload,
-            None,
-            sig,
-            kv,
-            Some(new_state),
         )
     }
 
@@ -773,6 +708,7 @@ impl ChannelService {
 }
 
 mod anchored;
+mod transition;
 
 #[cfg(test)]
 mod tests;

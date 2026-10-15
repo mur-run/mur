@@ -306,14 +306,27 @@ pub fn transition_as_writer(
     actor: ChannelActor,
     run_id: Option<&str>,
 ) -> anyhow::Result<ChannelEvent> {
-    let key = writer_key(home, router_agent)?;
-    svc.transition_signed(
-        channel_id,
-        new_state,
-        actor,
-        run_id,
-        key.as_ref().map(|k| (&k.id, k.kv)),
-    )
+    match writer_key(home, router_agent)? {
+        // Same provenance rule as `append_with_key`: only a key read from
+        // disk proves this process is outside the sandbox, so only it anchors.
+        Some(WriterKey {
+            id,
+            kv,
+            source: KeySource::Disk,
+        }) => svc.transition_and_anchor(
+            channel_id,
+            new_state,
+            actor,
+            run_id,
+            &id,
+            kv,
+            &home.join("agents").join(router_agent),
+        ),
+        Some(WriterKey { id, kv, .. }) => {
+            svc.transition_signed(channel_id, new_state, actor, run_id, Some((&id, kv)))
+        }
+        None => svc.transition_signed(channel_id, new_state, actor, run_id, None),
+    }
 }
 
 /// Append `actor`/`kind`/`payload` to `channel_id`, SIGNED by `router_agent`'s
@@ -334,7 +347,10 @@ pub fn append_as_writer(
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
     match writer_key(home, router_agent)? {
-        Some(key) => append_with_key(svc, channel_id, key, actor, kind, payload, idem),
+        Some(key) => {
+            let key_home = home.join("agents").join(router_agent);
+            append_with_key(svc, channel_id, key, &key_home, actor, kind, payload, idem)
+        }
         None => svc.append(channel_id, actor, kind, payload, idem),
     }
 }
@@ -346,10 +362,12 @@ pub fn append_as_writer(
 /// so the decision lives on the key, where it is a property of the process,
 /// and not at the call site, where it would be a property of whoever
 /// remembered to pick the right method.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn append_with_key(
     svc: &ChannelService,
     channel_id: &str,
     key: WriterKey,
+    key_home: &Path,
     actor: ChannelActor,
     kind: EventKind,
     payload: serde_json::Value,
@@ -357,7 +375,9 @@ pub(crate) fn append_with_key(
 ) -> anyhow::Result<ChannelEvent> {
     let WriterKey { id, kv, source } = key;
     match source {
-        KeySource::Disk => svc.append_and_anchor(channel_id, &id, kv, actor, kind, payload, idem),
+        KeySource::Disk => {
+            svc.append_and_anchor(channel_id, &id, kv, key_home, actor, kind, payload, idem)
+        }
         KeySource::Handoff => svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem),
     }
 }
@@ -569,6 +589,44 @@ mod tests {
         );
     }
 
+    /// A run's state transitions are written by the same trusted writer as
+    /// its messages, so a disk-keyed transition must leave the head on the
+    /// log instead of one line behind it.
+    #[test]
+    fn a_disk_keyed_transition_advances_the_head() {
+        let tmp = TempDir::new().unwrap();
+        let agent_home = tmp.path().join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        AgentIdentity::generate().save(&agent_home).unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+
+        transition_as_writer(
+            &svc,
+            tmp.path(),
+            &ch.id,
+            "mur",
+            mur_common::channel::ChannelState::Completed,
+            ChannelActor::System,
+            None,
+        )
+        .unwrap();
+
+        let log = std::fs::read(
+            tmp.path()
+                .join("channels")
+                .join(&ch.id)
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        let head =
+            mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(tmp.path()), &ch.id)
+                .unwrap()
+                .expect("disk-keyed transition seals the head");
+        assert_eq!(head.lines, mur_channel::head::chain_log(&log).lines);
+        assert!(!mur_channel::anchor::is_dirty(tmp.path(), &ch.id));
+    }
+
     /// The handed-over key is the sealed-child path: that process may append
     /// (its grant covers `channels/`) but must never touch `channel-heads/`.
     /// Anchoring from there would fail at `mark_dirty` BEFORE the append and
@@ -588,6 +646,7 @@ mod tests {
             &svc,
             &ch.id,
             key,
+            tmp.path(),
             ChannelActor::System,
             EventKind::HitlResponse,
             serde_json::json!({ "allow": true }),

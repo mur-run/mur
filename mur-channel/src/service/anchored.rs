@@ -34,6 +34,24 @@ use crate::store::{PreSealInput, SealHook, SealHooks, SealInput};
 pub(super) struct HeadSigner<'a> {
     pub identity: &'a AgentIdentity,
     pub kv: u32,
+    /// The signing agent's home (`rotations.jsonl` lives there). Heads sealed
+    /// under an earlier key version are verified against the rotation chain
+    /// found here; without it a normal rekey would brick every later append.
+    pub key_home: &'a Path,
+}
+
+impl HeadSigner<'_> {
+    /// The pubkey that should have signed a head claiming `key_version`.
+    /// The signer's own key when the version is its own (or unstated);
+    /// otherwise whatever the trusted rotation history says. `None` means
+    /// the head cannot be attributed to any key we trust.
+    fn pubkey_for(&self, key_version: Option<u32>) -> Option<[u8; 32]> {
+        match key_version {
+            None => Some(self.identity.verifying_key_bytes()),
+            Some(kv) if kv == self.kv => Some(self.identity.verifying_key_bytes()),
+            Some(kv) => crate::sign::resolve_writer_pubkey_strict(self.key_home, kv),
+        }
+    }
 }
 
 /// Pre-write half: the dirty marker must be on disk before the line is, so a
@@ -65,6 +83,16 @@ fn seqs(log: &[u8], record: &[u8]) -> (Option<u64>, Option<u64>) {
     (last_seq(log), last_seq(body))
 }
 
+/// The part of `log` ahead of `record` when `record` is its final line, else
+/// the whole log (a dedup hit on an older line).
+fn body_before<'a>(log: &'a [u8], record: &[u8]) -> &'a [u8] {
+    if log.ends_with(record) {
+        &log[..log.len() - record.len()]
+    } else {
+        log
+    }
+}
+
 /// The head the log should have now, or `None` when the current head already
 /// covers the whole log. Refuses (never overwrites) a head the log no longer
 /// extends — truncated below it, or rewritten inside it — because sealing
@@ -78,8 +106,36 @@ fn next_head(
 ) -> Result<Option<Head>> {
     let state = chain_log(log);
     let (last_seq, before) = seqs(log, input.record);
+    // The new line must stand on its own. If it was appended onto an
+    // unterminated tail it is glued to that garbage (and unparseable itself);
+    // `chain_log` ignores unterminated bytes, so nothing below would notice.
+    let body = body_before(log, input.record);
+    if log.ends_with(input.record) && !body.is_empty() && !body.ends_with(b"\n") {
+        bail!("the log ends in an unterminated line; the new event was glued onto it");
+    }
     let legacy_through = match current {
         Some(h) => {
+            // The head is only a trust anchor if it is the one we signed for
+            // THIS channel. Chaining the log is not enough: anyone who can
+            // write `channel-heads/` can chain a log, and re-sealing over
+            // their file would launder it into a legitimate-looking head.
+            if h.channel_id != input.channel_id {
+                bail!(
+                    "existing head names channel {:?}, expected {:?}",
+                    h.channel_id,
+                    input.channel_id
+                );
+            }
+            let Some(key) = signer.pubkey_for(h.key_version) else {
+                bail!(
+                    "existing head claims key_version {:?}, which the rotation history \
+                     does not resolve; refusing to overwrite it",
+                    h.key_version
+                );
+            };
+            if !h.verify(&key) {
+                bail!("existing head fails signature verification; refusing to overwrite it");
+            }
             let prefix = chain_prefix(log, h.lines)
                 .with_context(|| format!("log has fewer than the head's {} lines", h.lines))?;
             if hex::encode(prefix.hash) != h.chain_hash {
@@ -91,7 +147,18 @@ fn next_head(
             h.legacy_through
         }
         // First seal: every event written before this line predates any head.
-        None => before,
+        None => {
+            // Lines exist but none parse, so `legacy_through` would be `None`
+            // ("head since the first line") while unverifiable history sits
+            // behind it. Refuse rather than sign that claim.
+            if before.is_none() && chain_log(body).lines > 0 {
+                bail!(
+                    "first seal: the log has lines before this one but no parseable event, \
+                     so legacy_through has no value"
+                );
+            }
+            before
+        }
     };
     let fields = HeadFields {
         channel_id: input.channel_id.to_owned(),
@@ -186,9 +253,13 @@ impl ChannelService {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
-        anchored: bool,
+        anchored: Option<&Path>,
     ) -> Result<ChannelEvent> {
-        let signer = anchored.then_some(HeadSigner { identity, kv });
+        let signer = anchored.map(|key_home| HeadSigner {
+            identity,
+            kv,
+            key_home,
+        });
         let ev = self.with_hooks(signer, |hooks| {
             self.store.append_signed_event_with(
                 channel_id,
@@ -217,9 +288,13 @@ impl ChannelService {
         kind: EventKind,
         payload: serde_json::Value,
         idempotency_key: Option<String>,
-        anchored: bool,
+        anchored: Option<&Path>,
     ) -> Result<ChannelEvent> {
-        let signer = anchored.then_some(HeadSigner { identity, kv });
+        let signer = anchored.map(|key_home| HeadSigner {
+            identity,
+            kv,
+            key_home,
+        });
         let sig = crate::sign::sign_event(
             identity,
             channel_id,
@@ -247,6 +322,11 @@ impl ChannelService {
     /// [`append_signed`](Self::append_signed) that also advances the
     /// signed channel head, under the same lock as the write.
     ///
+    /// `key_home` is the signing agent's home directory (where
+    /// `rotations.jsonl` lives): a head sealed under an earlier key version
+    /// is verified through that rotation history, so a normal rekey does not
+    /// strand the channel.
+    ///
     /// **Only call from outside the agent sandbox** (mur-core, Hub). A
     /// sandboxed agent's fs grant covers `channels/` but deliberately not
     /// `channel-heads/`, so there the pre-write `mark_dirty` fails and the
@@ -262,6 +342,7 @@ impl ChannelService {
         channel_id: &str,
         identity: &AgentIdentity,
         kv: u32,
+        key_home: &Path,
         actor: ChannelActor,
         kind: EventKind,
         payload: serde_json::Value,
@@ -275,7 +356,7 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            true,
+            Some(key_home),
         )
     }
 
@@ -287,6 +368,7 @@ impl ChannelService {
         channel_id: &str,
         identity: &AgentIdentity,
         kv: u32,
+        key_home: &Path,
         actor: ChannelActor,
         kind: EventKind,
         payload: serde_json::Value,
@@ -300,7 +382,7 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            true,
+            Some(key_home),
         )
     }
 }
