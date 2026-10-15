@@ -656,7 +656,10 @@ Agent** wizard offers the same catalog as a source.
   --reviewer <agent> "<task>"` runs round after round until the reviewer
   approves, blocks, or a limit trips. Findings get IDs from the system, not
   the model, and a malformed reply gets one retry before the session stops as
-  `blocked`. You see every message and press Enter to send it. When the main
+  `blocked`. Before it creates anything it checks that both agents answer on
+  their socket and that each one's `hitl.timeout_secs` outlasts the stuck
+  window, and lists every problem with its fix. You see every message and
+  press Enter to send it. When the main
   agent rejects the same finding twice, the session waits for your ruling
   instead of stopping: `/rule drop F3 <why>` closes it, `/rule fix F3 <how>`
   makes it binding (main can no longer reject it), `/abandon` ends the

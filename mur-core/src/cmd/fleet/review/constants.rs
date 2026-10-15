@@ -285,6 +285,12 @@ pub const MURMUR_STOP_COMMAND: &str = "/stop";
 /// session preflight checks the same file so it agrees with the first send.
 pub const RUNNING_LOCK: &str = "running.lock";
 
+/// #1762: how long the pre-start check waits for a member's runtime to answer
+/// on its socket before calling it dead. `agent/card` is a local, in-memory
+/// reply, so a healthy runtime answers well inside this.
+#[cfg_attr(test, allow(dead_code))] // only the real probe reads it
+pub const PREFLIGHT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// P3b-§3.1 / §3.3: the `/review` grammar, appended to every syntax error.
 pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] [--stuck-rounds 3] <task…>\n/review resume <session>";
 
