@@ -75,7 +75,8 @@ pub fn apply_draft(draft: &WizardDraft) -> Result<WizardOutcome> {
         crate::cmd::agent::cmd_perm_allow_spawn(name, b)?;
     }
     for h in &e.allow_host {
-        crate::cmd::agent::cmd_perm_allow_host(name, h)?;
+        // The wizard already showed and confirmed its plan.
+        crate::cmd::agent::cmd_perm_allow_host(name, h, true)?;
     }
     for d in &e.deny_path {
         crate::cmd::agent::cmd_perm_deny_path(name, d)?;

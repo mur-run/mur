@@ -6,13 +6,18 @@ use mur_common::agent::NetworkOutboundMode;
 use super::super::{load_profile_for_edit, save_profile};
 use super::{print_outbound_picture, warn_if_running};
 
-pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
+pub fn cmd_perm_allow_host(name: &str, glob: &str, yes: bool) -> Result<()> {
     let value = validate_host_pattern(name, glob)?;
-    if value != glob {
-        eprintln!("stored as {value}");
-    }
+    let notes: Vec<String> = if value != glob {
+        vec![format!("`{glob}` → `{value}`")]
+    } else {
+        Vec::new()
+    };
     let glob = value.as_str();
     let (path, mut profile) = load_profile_for_edit(name)?;
+    let before = profile.entitlements.network.outbound.allow_hosts.clone();
+    eprintln!("{}", allow_host_preview(name, &before, glob, &notes));
+    crate::cmd::agent::cli::browser_live_preview::confirm_on_tty(yes)?;
     if !profile
         .entitlements
         .network
@@ -31,6 +36,19 @@ pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
     save_profile(&path, &mut profile)?;
     warn_if_running(name);
     Ok(())
+}
+
+/// What `allow-host` will write: the agent's whole outbound allowlist, diffed.
+fn allow_host_preview(agent: &str, before: &[String], value: &str, notes: &[String]) -> String {
+    let mut after = before.to_vec();
+    if !after.iter().any(|h| h == value) {
+        after.push(value.to_owned());
+    }
+    let mut out = vec![format!("agent `{agent}` outbound allow_hosts will be:")];
+    out.extend(crate::cmd::agent::cli::browser_live_preview::host_diff(
+        before, &after, notes,
+    ));
+    out.join("\n")
 }
 
 /// Refuse patterns the matcher can never match, at write time.
@@ -235,7 +253,20 @@ pub fn cmd_perm_list_hosts(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_port, is_base_port, remove_port, validate_host_pattern};
+    use super::{add_port, allow_host_preview, is_base_port, remove_port, validate_host_pattern};
+
+    #[test]
+    fn allow_host_preview_names_stored_value() {
+        let p = allow_host_preview(
+            "a1",
+            &["keep.example.com".into()],
+            "shop.example.com",
+            &["`Shop.Example.com` → `shop.example.com`".into()],
+        );
+        assert!(p.contains("+ shop.example.com"), "{p}");
+        assert!(p.contains("  keep.example.com"), "{p}");
+        assert!(p.contains("`Shop.Example.com` → `shop.example.com`"), "{p}");
+    }
 
     #[test]
     fn patterns_the_matcher_can_match_are_accepted() {

@@ -18,6 +18,43 @@ pub(crate) fn research_caveat(e: DenyEnforcement) -> &'static str {
     }
 }
 
+/// `+ added`, `- removed`, `  kept` (in `after` order, removed last), then
+/// one `(input)` line per normalization note. Shared by every egress writer.
+pub(crate) fn host_diff(before: &[String], after: &[String], notes: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for h in after {
+        let mark = if before.contains(h) { ' ' } else { '+' };
+        out.push(format!("{mark} {h}"));
+    }
+    for h in before.iter().filter(|h| !after.contains(h)) {
+        out.push(format!("- {h}"));
+    }
+    for n in notes {
+        out.push(format!("  (input) {n}"));
+    }
+    out
+}
+
+/// Ask `Save? [y/N]` on stderr when a person is at the terminal and did not
+/// pass `--yes`. Scripts, the wizard and hub-gui (non-TTY) write without a
+/// prompt, as before; the stderr preview is their record.
+pub(crate) fn confirm_on_tty(yes: bool) -> anyhow::Result<()> {
+    use std::io::{IsTerminal, Write};
+    if yes || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Ok(());
+    }
+    eprint!("Save? [y/N] ");
+    std::io::stderr().flush().ok();
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| anyhow::anyhow!("read confirmation from stdin: {e}"))?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        anyhow::bail!("cancelled — nothing was changed");
+    }
+    Ok(())
+}
+
 /// Render the before → after picture of one MCP server's network policy.
 pub(crate) fn render_preview(
     agent: &str,
@@ -35,17 +72,11 @@ pub(crate) fn render_preview(
     };
     let mut out = vec![format!("`{server}` on agent `{agent}` will be: {what}")];
     let old: &[String] = before.map(|b| b.allow_hosts.as_slice()).unwrap_or(&[]);
-    for h in &after.allow_hosts {
-        let mark = if old.contains(h) { ' ' } else { '+' };
-        out.push(format!("{mark} {h}"));
-    }
-    for h in old.iter().filter(|h| !after.allow_hosts.contains(h)) {
-        out.push(format!("- {h}"));
-    }
-    for n in notes {
-        out.push(format!("  (input) {n}"));
-    }
+    out.extend(host_diff(old, &after.allow_hosts, notes));
     if research {
+        if !after.deny_hosts.is_empty() {
+            out.push(format!("deny list: {}", after.deny_hosts.join(", ")));
+        }
         out.push(research_caveat(enforcement).to_owned());
         out.push(
             "private, link-local and cloud-metadata IPs are still refused by the proxy.".into(),

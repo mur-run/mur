@@ -179,6 +179,24 @@ pub(crate) fn record_broad_audited_enabled(
     Ok(())
 }
 
+/// The stderr preview `set-network` prints before a `Restricted` or
+/// `BroadAudited` write; the research caveat is generated, never typed (D1).
+fn set_network_preview(
+    agent: &str,
+    server_id: &str,
+    before: Option<&McpServerNetwork>,
+    after: &McpServerNetwork,
+) -> String {
+    crate::cmd::agent::cli::browser_live_preview::render_preview(
+        agent,
+        server_id,
+        before,
+        after,
+        &[],
+        mur_agent_runtime::sandbox::egress_proxy::DENY_OVERLAY_ENFORCEMENT,
+    )
+}
+
 /// Set (or clear) a per-server egress policy on `server_id`. Restart the agent
 /// to apply (the sandbox + proxy are wired at supervisor startup).
 ///
@@ -212,16 +230,12 @@ pub fn cmd_mcp_set_network(
         .find(|s| s.name == server_id)
         .ok_or_else(|| anyhow::anyhow!("MCP server '{server_id}' not found on '{agent}'"))?;
 
+    let before = srv.network.clone();
     if broad_audited {
-        println!(
-            "This grants MCP server '{server_id}' on agent '{agent}' outbound access to ALL hosts \
-             except: {}\nEvery CONNECT is audited, but this is a broad trust grant — only use it \
-             for tools that legitimately need unenumerable destinations (e.g. a research browser).",
-            if deny_hosts.is_empty() {
-                "(none)".to_string()
-            } else {
-                deny_hosts.join(", ")
-            }
+        let preview_net = broad_audited_network(deny_hosts.clone(), String::new(), 0);
+        eprintln!(
+            "{}",
+            set_network_preview(agent, server_id, before.as_ref(), &preview_net)
         );
         if !yes {
             print!("\nApprove broad-audited egress? [y/N] ");
@@ -252,7 +266,15 @@ pub fn cmd_mcp_set_network(
         record_broad_audited_enabled(&mur_home, agent, server_id, chrono::Utc::now())?;
     } else {
         // Any non-BroadAudited mode change clears a prior authorization.
-        srv.network = network_policy_from_args(allow_hosts, off);
+        let after = network_policy_from_args(allow_hosts, off);
+        if let Some(net) = after.as_ref().filter(|n| n.mode == McpNetMode::Restricted) {
+            eprintln!(
+                "{}",
+                set_network_preview(agent, server_id, before.as_ref(), net)
+            );
+            crate::cmd::agent::cli::browser_live_preview::confirm_on_tty(yes)?;
+        }
+        srv.network = after;
         save_profile(&path, &mut profile)?;
     }
 
@@ -353,6 +375,18 @@ mod tests {
         assert!(split_host_ports(&hosts(&["評分，"]), &[]).is_err());
         let (h, _) = split_host_ports(&hosts(&["::1"]), &[]).unwrap();
         assert_eq!(h, hosts(&["::1"]));
+    }
+
+    #[test]
+    fn set_network_restricted_preview_lists_diff() {
+        let before = network_policy_from_args(hosts(&["old.com", "keep.com"]), false);
+        let after = network_policy_from_args(hosts(&["keep.com", "new.com"]), false).unwrap();
+        let p = set_network_preview("a1", "browser", before.as_ref(), &after);
+        assert!(p.contains("+ new.com") && p.contains("- old.com"), "{p}");
+        assert!(
+            p.contains("  keep.com") && p.contains("`browser` on agent `a1`"),
+            "{p}"
+        );
     }
 
     #[test]

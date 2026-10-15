@@ -13,7 +13,7 @@ use mur_common::hitl::bash_class;
 mod browser_cmd;
 pub(crate) mod browser_live_cmd;
 mod browser_live_intent;
-mod browser_live_preview;
+pub(crate) mod browser_live_preview;
 mod call_summary;
 mod complete;
 mod deep_research;

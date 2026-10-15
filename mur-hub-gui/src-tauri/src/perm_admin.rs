@@ -25,7 +25,7 @@ pub fn agent_perm_set_outbound_mode(name: String, mode: String) -> Result<AgentD
 
 #[tauri::command]
 pub fn agent_perm_allow_host(name: String, host: String) -> Result<AgentDetail, String> {
-    cmd_perm_allow_host(&name, host.trim()).map_err(err)?;
+    cmd_perm_allow_host(&name, host.trim(), true).map_err(err)?;
     get_agent_detail(name)
 }
 
