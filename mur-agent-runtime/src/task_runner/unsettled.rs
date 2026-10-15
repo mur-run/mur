@@ -3,7 +3,7 @@
 //! A track opened by a turn is normally closed by `sweep_turn_track` or the
 //! settle path. When the process dies first — SIGKILL, a crash, a shutdown
 //! that outlived its grace — nothing in-process can close it, and the log
-//! that recorded the open may itself be gone (launchd logs often live under
+//! that recorded the open may itself be gone (service-manager logs often live under
 //! a temp dir). So every open track gets a small marker file in the agent
 //! home, removed when the track closes. A marker found at boot is a track
 //! nobody settled: it is reported, never deleted — the worktree may hold the
@@ -94,7 +94,7 @@ pub(super) fn scan(agent_home: &Path) -> Vec<Unsettled> {
             }
         }
     }
-    out.sort_by(|a, b| a.marker.opened_at.cmp(&b.marker.opened_at));
+    out.sort_by_key(|a| a.marker.opened_at);
     out
 }
 
