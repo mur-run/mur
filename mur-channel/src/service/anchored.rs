@@ -65,6 +65,16 @@ fn seqs(log: &[u8], record: &[u8]) -> (Option<u64>, Option<u64>) {
     (last_seq(log), last_seq(body))
 }
 
+/// The part of `log` ahead of `record` when `record` is its final line, else
+/// the whole log (a dedup hit on an older line).
+fn body_before<'a>(log: &'a [u8], record: &[u8]) -> &'a [u8] {
+    if log.ends_with(record) {
+        &log[..log.len() - record.len()]
+    } else {
+        log
+    }
+}
+
 /// The head the log should have now, or `None` when the current head already
 /// covers the whole log. Refuses (never overwrites) a head the log no longer
 /// extends — truncated below it, or rewritten inside it — because sealing
@@ -80,6 +90,20 @@ fn next_head(
     let (last_seq, before) = seqs(log, input.record);
     let legacy_through = match current {
         Some(h) => {
+            // The head is only a trust anchor if it is the one we signed for
+            // THIS channel. Chaining the log is not enough: anyone who can
+            // write `channel-heads/` can chain a log, and re-sealing over
+            // their file would launder it into a legitimate-looking head.
+            if h.channel_id != input.channel_id {
+                bail!(
+                    "existing head names channel {:?}, expected {:?}",
+                    h.channel_id,
+                    input.channel_id
+                );
+            }
+            if !h.verify(&signer.identity.verifying_key_bytes()) {
+                bail!("existing head fails signature verification; refusing to overwrite it");
+            }
             let prefix = chain_prefix(log, h.lines)
                 .with_context(|| format!("log has fewer than the head's {} lines", h.lines))?;
             if hex::encode(prefix.hash) != h.chain_hash {
@@ -91,7 +115,18 @@ fn next_head(
             h.legacy_through
         }
         // First seal: every event written before this line predates any head.
-        None => before,
+        None => {
+            // Lines exist but none parse, so `legacy_through` would be `None`
+            // ("head since the first line") while unverifiable history sits
+            // behind it. Refuse rather than sign that claim.
+            if before.is_none() && chain_log(body_before(log, input.record)).lines > 0 {
+                bail!(
+                    "first seal: the log has lines before this one but no parseable event, \
+                     so legacy_through has no value"
+                );
+            }
+            before
+        }
     };
     let fields = HeadFields {
         channel_id: input.channel_id.to_owned(),

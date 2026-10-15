@@ -306,14 +306,19 @@ pub fn transition_as_writer(
     actor: ChannelActor,
     run_id: Option<&str>,
 ) -> anyhow::Result<ChannelEvent> {
-    let key = writer_key(home, router_agent)?;
-    svc.transition_signed(
-        channel_id,
-        new_state,
-        actor,
-        run_id,
-        key.as_ref().map(|k| (&k.id, k.kv)),
-    )
+    match writer_key(home, router_agent)? {
+        // Same provenance rule as `append_with_key`: only a key read from
+        // disk proves this process is outside the sandbox, so only it anchors.
+        Some(WriterKey {
+            id,
+            kv,
+            source: KeySource::Disk,
+        }) => svc.transition_and_anchor(channel_id, new_state, actor, run_id, &id, kv),
+        Some(WriterKey { id, kv, .. }) => {
+            svc.transition_signed(channel_id, new_state, actor, run_id, Some((&id, kv)))
+        }
+        None => svc.transition_signed(channel_id, new_state, actor, run_id, None),
+    }
 }
 
 /// Append `actor`/`kind`/`payload` to `channel_id`, SIGNED by `router_agent`'s
@@ -567,6 +572,44 @@ mod tests {
             !mur_channel::anchor::is_dirty(tmp.path(), &ch.id),
             "a successful anchored append leaves no dirty marker"
         );
+    }
+
+    /// A run's state transitions are written by the same trusted writer as
+    /// its messages, so a disk-keyed transition must leave the head on the
+    /// log instead of one line behind it.
+    #[test]
+    fn a_disk_keyed_transition_advances_the_head() {
+        let tmp = TempDir::new().unwrap();
+        let agent_home = tmp.path().join("agents").join("mur");
+        std::fs::create_dir_all(&agent_home).unwrap();
+        AgentIdentity::generate().save(&agent_home).unwrap();
+        let svc = ChannelService::open(tmp.path()).unwrap();
+        let ch = svc.create_for_workflow("g").unwrap();
+
+        transition_as_writer(
+            &svc,
+            tmp.path(),
+            &ch.id,
+            "mur",
+            mur_common::channel::ChannelState::Completed,
+            ChannelActor::System,
+            None,
+        )
+        .unwrap();
+
+        let log = std::fs::read(
+            tmp.path()
+                .join("channels")
+                .join(&ch.id)
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        let head =
+            mur_channel::head_io::read_head(&mur_channel::anchor::heads_dir(tmp.path()), &ch.id)
+                .unwrap()
+                .expect("disk-keyed transition seals the head");
+        assert_eq!(head.lines, mur_channel::head::chain_log(&log).lines);
+        assert!(!mur_channel::anchor::is_dirty(tmp.path(), &ch.id));
     }
 
     /// The handed-over key is the sealed-child path: that process may append
