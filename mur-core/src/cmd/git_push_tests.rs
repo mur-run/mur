@@ -386,6 +386,52 @@ fn doctor_does_not_ask_for_a_router_when_nothing_is_enrolled() {
     assert_eq!(code, 0, "{out}");
 }
 
+fn set_git_push(f: &Fx, yaml: &str) {
+    std::fs::write(f.home.join("config.yaml"), yaml).unwrap();
+}
+
+#[test]
+fn doctor_warns_when_the_broker_is_on_but_no_agent_is_allowlisted() {
+    let f = fx();
+    set_git_push(&f, "git_push:\n  enabled: true\n  agents: []\n");
+    let (code, out) = doctor_out(&f);
+    assert_eq!(code, 0, "a warning never fails the doctor: {out}");
+    assert!(out.contains("git_push.agents is empty"), "{out}");
+}
+
+#[test]
+fn doctor_warns_about_an_allowlisted_agent_that_does_not_exist() {
+    let f = fx();
+    set_git_push(&f, "git_push:\n  enabled: true\n  agents: [alice, ghost]\n");
+    let (code, out) = doctor_out(&f);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("ghost"), "{out}");
+    assert!(out.contains("names an agent that does not exist"), "{out}");
+    assert!(
+        !out.contains("alice"),
+        "an existing agent is not flagged: {out}"
+    );
+    assert!(!out.contains("agents is empty"), "{out}");
+}
+
+#[test]
+fn doctor_says_nothing_about_the_allowlist_while_the_broker_is_off() {
+    let f = fx();
+    set_git_push(&f, "git_push:\n  enabled: false\n  agents: [ghost]\n");
+    let (code, out) = doctor_out(&f);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out.trim(), "ok", "{out}");
+}
+
+#[test]
+fn doctor_is_quiet_when_the_allowlist_names_only_existing_agents() {
+    let f = fx();
+    set_git_push(&f, "git_push:\n  enabled: true\n  agents: [alice]\n");
+    let (code, out) = doctor_out(&f);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out.trim(), "ok", "{out}");
+}
+
 #[test]
 fn a_corrupt_enrollment_file_stops_every_verb() {
     let f = fx();

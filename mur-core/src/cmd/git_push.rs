@@ -565,6 +565,31 @@ fn doctor(mur_home: &Path, out: &mut dyn Write, json: bool, fix: bool) -> Result
             );
         }
     }
+    if cfg.git_push.enabled {
+        // Warn-only: the broker already refuses these requests at intake, so the finding explains
+        // a refusal the operator would otherwise only see as `agent_not_allowlisted` in a status file.
+        if cfg.git_push.agents.is_empty() {
+            push(
+                "-",
+                "-",
+                "-",
+                "warn",
+                "git_push.enabled is on but git_push.agents is empty; every request is refused"
+                    .into(),
+            );
+        }
+        for name in &cfg.git_push.agents {
+            if !agents.iter().any(|a| &a.name == name) {
+                push(
+                    name,
+                    "-",
+                    "-",
+                    "warn",
+                    "git_push.agents names an agent that does not exist".into(),
+                );
+            }
+        }
+    }
     if !book_ref.enrollments.is_empty() && !router_identity_present(mur_home) {
         // Without it every approval request is written unsigned, and the gate counts only
         // router-signed ones: pushes would sit in `pending_approval` forever with no error.
