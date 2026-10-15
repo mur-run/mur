@@ -248,6 +248,7 @@ struct Fake {
     fail_save: bool,
     fail_add: bool,
     save_notes: Vec<String>,
+    research_events: usize,
 }
 
 impl LiveOps for Fake {
@@ -272,6 +273,10 @@ impl LiveOps for Fake {
         }
         self.servers = servers;
         Ok(self.save_notes.clone())
+    }
+    fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
+        self.research_events += 1;
+        Ok(())
     }
 }
 
@@ -584,4 +589,44 @@ fn confirm_chip_carries_normalized_hosts_and_profile() {
             "browser live --yes a.example.com --profile site".into()
         )
     );
+}
+
+// #1905 Part 1b: `--research` previews the generated caveat and writes nothing.
+#[test]
+fn research_without_yes_previews_caveat_only() {
+    use super::super::browser_live_preview::research_caveat;
+    let mut f = Fake::default();
+    let (text, chip) = run("bob", &s(&["--research"]), true, &mut f).unwrap();
+    assert!(f.adds.is_empty() && f.saves == 0);
+    assert!(
+        text.contains(research_caveat(DENY_OVERLAY_ENFORCEMENT)),
+        "{text}"
+    );
+    assert_eq!(
+        chip.expect("chip").kind,
+        mur_common::proposal::ProposalKind::Slash("browser live --yes --research".into())
+    );
+}
+
+#[test]
+fn research_with_yes_writes_broad_audited_with_authorization() {
+    let mut f = Fake::default();
+    let (_, chip) = run("bob", &s(&["--yes", "--research"]), true, &mut f).unwrap();
+    let net = f.servers[0].network.as_ref().expect("policy");
+    assert_eq!(net.mode, McpNetMode::BroadAudited);
+    assert!(net.allow_hosts.is_empty());
+    assert!(net.authorization.is_some());
+    assert_eq!(f.research_events, 1);
+    assert!(chip.is_some());
+}
+
+#[test]
+fn research_with_hosts_is_refused() {
+    let mut f = Fake::default();
+    let err = run("bob", &s(&["--research", "a.com"]), true, &mut f).unwrap_err();
+    assert!(
+        err.to_string().contains("research mode takes no hosts"),
+        "{err}"
+    );
+    assert!(f.adds.is_empty() && f.saves == 0);
 }

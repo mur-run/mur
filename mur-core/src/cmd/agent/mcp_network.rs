@@ -131,7 +131,7 @@ fn network_policy_from_args(allow_hosts: Vec<String>, off: bool) -> Option<McpSe
 /// Pure builder for a `BroadAudited` grant: allow-ALL except `deny_hosts`,
 /// stamped with who authorized it and when. Requires explicit operator
 /// consent upstream (`cmd_mcp_set_network` prompts unless `yes`).
-fn broad_audited_network(
+pub(crate) fn broad_audited_network(
     deny_hosts: Vec<String>,
     authorized_by: String,
     authorized_at_ms: u64,
@@ -149,7 +149,7 @@ fn broad_audited_network(
 
 /// Append a `mur.egress.broad_audited.enabled` event to today's trace log,
 /// mirroring `skill_curate::record_curation`.
-fn record_broad_audited_enabled(
+pub(crate) fn record_broad_audited_enabled(
     mur_home: &std::path::Path,
     agent: &str,
     server_id: &str,
