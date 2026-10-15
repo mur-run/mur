@@ -81,6 +81,14 @@ pub(super) fn refresh_completion(app: &mut App) {
 /// re-filtering as you type, and Esc closes it for good.
 pub(super) fn refresh_completion_with(app: &mut App, invited: bool) {
     let input = app.input_text();
+    // A spaced reply chooser opened by `submit()` (e.g. `/browser live` task
+    // words, #1905) must survive the key handler's trailing refresh: the
+    // composer is empty by then and `compute` would close it at once. Any
+    // typed character makes the input non-empty and replaces it as before.
+    if input.is_empty() && app.completion.as_ref().is_some_and(|c| c.spaced) {
+        super::review::hint::refresh_hint(app);
+        return;
+    }
     app.completion = if input.trim_start().starts_with('!') {
         if invited || app.completion.is_some() {
             shell_completion(app, input.trim_start())
