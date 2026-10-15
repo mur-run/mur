@@ -450,3 +450,7 @@ mod tests {
         assert_eq!(existing_auth_secret(&tmp.path().join("none")), None);
     }
 }
+
+#[cfg(test)]
+#[path = "setup_tests.rs"]
+mod run_tests;

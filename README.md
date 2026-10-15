@@ -899,7 +899,18 @@ so a repo can't swap in its own language server. High-risk language servers
 To navigate a second repo, append another entry with its own `SERENA_HOME`:
 `mur code-nav setup --agent <name> --with-serena --project <repo2> --entry serena-b`.
 Two serena processes sharing one home race on its project registry and drop a
-registration; one home per entry avoids that. `--entry` defaults to `serena`.
+registration; one home per entry avoids that. `--entry` defaults to `serena`,
+which keeps `<agent home>/serena`; any other name gets its own
+`<agent home>/serena-homes/<name>`.
+
+An entry name is 1–64 characters of lower-case `a-z`, `0-9`, `_` and `-`, and
+must survive tool-name sanitizing unchanged: no trailing `_` and no `__`. It
+also must not share a tool prefix with another MCP server on the same agent
+(`code_nav` and `code/nav` both become `mcp__code_nav__*`, so one would silently
+replace the other's tools). `setup` refuses these before it installs or writes
+anything. If you set up a custom-named entry before per-entry homes existed,
+the agent now points at a home that was never created. Starting it fails with
+the exact `mur code-nav setup … --entry <name>` line to re-run.
 
 ---
 

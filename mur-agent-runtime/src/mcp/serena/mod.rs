@@ -269,6 +269,20 @@ pub fn tool_prefix_clash<'a>(
         .find(|o| *o != name && sanitize_server(o) == prefix)
 }
 
+/// Quote `s` for a POSIX shell line the user will paste. A repo under
+/// `/Volumes/My Drive/...` would otherwise split into two arguments. Plain
+/// paths stay bare so the common message reads unchanged.
+fn sh_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+~@:=".contains(c))
+    {
+        s.to_owned()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 /// The entry's paths, or the recovery message when it predates #1718.
 ///
 /// Before per-entry homes every entry shared `<agent_home>/serena`, so a
@@ -286,10 +300,10 @@ fn entry_paths(agent_home: &Path, entry: &McpServerEntry) -> Result<SerenaPaths,
             agent: agent_home
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-            project: entry
-                .project
-                .as_deref()
-                .map_or_else(|| "<repo>".to_owned(), |p| p.display().to_string()),
+            project: entry.project.as_deref().map_or_else(
+                || "<repo>".to_owned(),
+                |p| sh_quote(&p.display().to_string()),
+            ),
             home: paths.home.display().to_string(),
             legacy: legacy.display().to_string(),
         });
