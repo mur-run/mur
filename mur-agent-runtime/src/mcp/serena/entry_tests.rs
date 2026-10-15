@@ -277,6 +277,10 @@ fn unsafe_or_ambiguous_names_are_refused_not_sanitized() {
         "a b",
         "a.b",
         "répo",
+        // Case-only differences share one directory on case-insensitive
+        // filesystems (macOS, Windows), so upper case is refused outright.
+        "Repo",
+        "REPO",
         "a\0b",
         too_long.as_str(),
     ] {
@@ -322,4 +326,59 @@ fn an_invalid_entry_name_refuses_to_spawn() {
     e.name = "a/b".into();
     let err = launch_additions(&e, Some(&fx.agent_home)).unwrap_err();
     assert!(matches!(err, SerenaEntryError::EntryName { .. }), "{err}");
+}
+
+#[test]
+fn case_variants_can_never_resolve_to_one_directory() {
+    let h = Path::new("/h/agent");
+    assert!(serena_paths_for(h, "repo").is_ok());
+    assert!(serena_paths_for(h, "Repo").is_err());
+}
+
+/// An agent home with only the pre-#1718 shared `serena/` home on disk.
+fn legacy_only_home() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let agent_home = tmp.path().join("agent");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(serena_paths(&agent_home).home).unwrap();
+    fs::create_dir_all(&repo).unwrap();
+    (tmp, agent_home, repo)
+}
+
+#[test]
+fn a_custom_named_entry_on_a_legacy_home_gets_a_recovery_message() {
+    let (_tmp, agent_home, repo) = legacy_only_home();
+    let entry = McpServerEntry {
+        name: "code-nav".into(),
+        command: "serena".into(),
+        kind: Some(McpServerKind::Serena),
+        project: Some(repo),
+        ..Default::default()
+    };
+    for err in [
+        verify_entries(std::slice::from_ref(&entry), &agent_home).unwrap_err(),
+        launch_additions(&entry, Some(&agent_home)).unwrap_err(),
+    ] {
+        assert!(matches!(err, SerenaEntryError::LegacyHome { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("mur code-nav setup"), "{msg}");
+        assert!(msg.contains("--entry code-nav"), "{msg}");
+        assert!(msg.contains("--agent agent"), "{msg}");
+    }
+}
+
+#[test]
+fn the_default_entry_on_a_legacy_home_is_not_a_migration_case() {
+    let (_tmp, agent_home, repo) = legacy_only_home();
+    let entry = McpServerEntry {
+        name: DEFAULT_ENTRY_NAME.into(),
+        command: "serena".into(),
+        kind: Some(McpServerKind::Serena),
+        project: Some(repo),
+        ..Default::default()
+    };
+    // Its home IS the legacy one, so it reaches preflight (and fails there
+    // on the missing config), not the recovery message.
+    let err = verify_entries(&[entry], &agent_home).unwrap_err();
+    assert!(matches!(err, SerenaEntryError::Preflight { .. }), "{err}");
 }

@@ -116,8 +116,9 @@ pub fn serena_paths(agent_home: &Path) -> SerenaPaths {
 /// so removing or reordering entries cannot move anyone's home:
 /// [`DEFAULT_ENTRY_NAME`] keeps `<agent_home>/serena`; any other name maps to
 /// `<agent_home>/serena-homes/<name>`. Names are accepted verbatim or refused
-/// (`[A-Za-z0-9_-]`, 1..=64 chars) — never sanitized — so two names cannot
-/// collapse into one home.
+/// (`[a-z0-9_-]`, 1..=64 chars) — never sanitized — so two names cannot
+/// collapse into one home. Upper case is refused because `Repo` and `repo`
+/// are one directory on case-insensitive filesystems (macOS, Windows).
 pub fn serena_paths_for(
     agent_home: &Path,
     entry_name: &str,
@@ -129,7 +130,7 @@ pub fn serena_paths_for(
         && entry_name.len() <= MAX_ENTRY_NAME_LEN
         && entry_name
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
     if !ok {
         return Err(SerenaEntryError::EntryName {
             entry: entry_name.to_owned(),
@@ -187,9 +188,23 @@ pub enum SerenaEntryError {
     NoAgentHome { entry: String },
     #[error(
         "MCP server `{entry}` (kind: serena): the entry name must be 1-64 characters of \
-         [A-Za-z0-9_-] because it names the entry's own SERENA_HOME directory"
+         [a-z0-9_-] (lower case only) because it names the entry's own SERENA_HOME \
+         directory, and `Repo` / `repo` are one directory on case-insensitive filesystems"
     )]
     EntryName { entry: String },
+    #[error(
+        "MCP server `{entry}` (kind: serena): its SERENA_HOME is now `{home}`, but only the \
+         older shared home `{legacy}` exists (entries other than `serena` used to share it). \
+         Re-run setup to create the entry's own home: \
+         `mur code-nav setup --agent {agent} --with-serena --project {project} --entry {entry}`"
+    )]
+    LegacyHome {
+        entry: String,
+        agent: String,
+        project: String,
+        home: String,
+        legacy: String,
+    },
     #[error("MCP server `{entry}` (kind: serena): {source}")]
     Preflight {
         entry: String,
@@ -210,10 +225,38 @@ pub fn verify_entries(
         if entry.kind != Some(McpServerKind::Serena) {
             continue;
         }
-        let paths = serena_paths_for(agent_home, &entry.name)?;
+        let paths = entry_paths(agent_home, entry)?;
         verify_entry(entry, &paths)?;
     }
     Ok(())
+}
+
+/// The entry's paths, or the recovery message when it predates #1718.
+///
+/// Before per-entry homes every entry shared `<agent_home>/serena`, so a
+/// custom-named entry (e.g. `code-nav`) written by an older setup now points
+/// at a home that was never created. When exactly that is on disk — no own
+/// home, the legacy one present — say how to recreate it instead of the bare
+/// C1 "not a directory". Nothing is migrated: the config embeds absolute
+/// paths and a pinned auth secret, and setup already regenerates both.
+fn entry_paths(agent_home: &Path, entry: &McpServerEntry) -> Result<SerenaPaths, SerenaEntryError> {
+    let paths = serena_paths_for(agent_home, &entry.name)?;
+    let legacy = serena_paths(agent_home).home;
+    if entry.name != DEFAULT_ENTRY_NAME && !paths.home.exists() && legacy.is_dir() {
+        return Err(SerenaEntryError::LegacyHome {
+            entry: entry.name.clone(),
+            agent: agent_home
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            project: entry
+                .project
+                .as_deref()
+                .map_or_else(|| "<repo>".to_owned(), |p| p.display().to_string()),
+            home: paths.home.display().to_string(),
+            legacy: legacy.display().to_string(),
+        });
+    }
+    Ok(paths)
 }
 
 /// One entry: the `project` checks, then [`preflight`]. Returns the checked
@@ -257,7 +300,7 @@ pub fn launch_additions(
             entry: entry.name.clone(),
         });
     };
-    let paths = serena_paths_for(agent_home, &entry.name)?;
+    let paths = entry_paths(agent_home, entry)?;
     let project = verify_entry(entry, &paths)?;
     Ok(LaunchAdditions {
         env: launch_env(&paths),
