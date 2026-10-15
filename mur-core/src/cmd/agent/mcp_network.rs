@@ -192,6 +192,73 @@ fn set_network_preview(
     )
 }
 
+/// Preview for clearing a server's policy back to `Inherit`. Clearing LIFTS a
+/// host bound (the agent's `allow_hosts` does not reach a spawned server), so
+/// it is a widening and must be confirmed like any other grant.
+fn clear_network_preview(agent: &str, server_id: &str, before: &McpServerNetwork) -> String {
+    let was = match before.mode {
+        McpNetMode::Restricted => format!("only {}", before.allow_hosts.join(", ")),
+        McpNetMode::Off => "no outbound access".to_string(),
+        McpNetMode::BroadAudited => "research mode (all hosts, audited)".to_string(),
+        McpNetMode::Inherit => "no per-server policy".to_string(),
+    };
+    format!(
+        "`{server_id}` on agent `{agent}` will lose its egress policy (was: {was}).\n\
+         It will then be bounded only by the OS sandbox, which restricts PORTS, not hosts — \
+         the agent's `allow_hosts` does NOT apply to it.\n\
+         Saved to the profile; takes effect after the agent restarts."
+    )
+}
+
+/// Preview lines for the agent-wide port grants a `set-network` call adds.
+/// Only ports not already granted are listed; empty ⇒ nothing to confirm.
+fn port_grant_preview(agent: &str, new_ports: &[u16], mode: NetworkOutboundMode) -> Option<String> {
+    if new_ports.is_empty() {
+        return None;
+    }
+    let list = new_ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut out = format!(
+        "Also grants outbound TCP port(s) {list} to the WHOLE agent `{agent}`: \
+         that opens port(s) {list} to ANY host, not just this server's hosts — \
+         the OS sandbox port rule does not bind a host."
+    );
+    if mode != NetworkOutboundMode::Restricted {
+        out.push_str(
+            "\n(The agent's outbound mode is not `restricted`, so the port grant changes nothing until it is.)",
+        );
+    }
+    Some(out)
+}
+
+/// Everything a non-research `set-network` write must show before it saves:
+/// a `Restricted` host diff, a clear-to-`Inherit` (a widening), and any new
+/// agent-wide port grants. `None` ⇒ nothing widens (e.g. `--off`, or clearing
+/// an already-clear server with no ports), so no confirmation is needed.
+fn set_network_confirm_preview(
+    agent: &str,
+    server_id: &str,
+    before: Option<&McpServerNetwork>,
+    after: Option<&McpServerNetwork>,
+    ports_note: Option<String>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    match (before, after) {
+        (_, Some(net)) if net.mode == McpNetMode::Restricted => {
+            parts.push(set_network_preview(agent, server_id, before, net));
+        }
+        (Some(b), None) if b.mode != McpNetMode::Inherit => {
+            parts.push(clear_network_preview(agent, server_id, b));
+        }
+        _ => {}
+    }
+    parts.extend(ports_note);
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
 /// Set (or clear) a per-server egress policy on `server_id`. Restart the agent
 /// to apply (the sandbox + proxy are wired at supervisor startup).
 ///
@@ -219,6 +286,20 @@ pub fn cmd_mcp_set_network(
     }
     let (allow_hosts, port_grants) = split_host_ports(&allow_hosts, &allow_ports)?;
     let (path, mut profile) = load_profile_for_edit(agent)?;
+    let outbound_mode = profile.entitlements.network.outbound.mode;
+    let new_ports: Vec<u16> = port_grants
+        .iter()
+        .copied()
+        .filter(|p| {
+            !profile
+                .entitlements
+                .network
+                .outbound
+                .allow_ports
+                .contains(p)
+        })
+        .collect();
+    let ports_note = port_grant_preview(agent, &new_ports, outbound_mode);
     let srv = profile
         .mcp_servers
         .iter_mut()
@@ -232,6 +313,9 @@ pub fn cmd_mcp_set_network(
             "{}",
             set_network_preview(agent, server_id, before.as_ref(), &preview_net)
         );
+        if let Some(note) = &ports_note {
+            eprintln!("\n{note}");
+        }
         if !yes {
             print!("\nApprove broad-audited egress? [y/N] ");
             use std::io::{self, Write};
@@ -262,11 +346,14 @@ pub fn cmd_mcp_set_network(
     } else {
         // Any non-BroadAudited mode change clears a prior authorization.
         let after = network_policy_from_args(allow_hosts, off);
-        if let Some(net) = after.as_ref().filter(|n| n.mode == McpNetMode::Restricted) {
-            eprintln!(
-                "{}",
-                set_network_preview(agent, server_id, before.as_ref(), net)
-            );
+        if let Some(preview) = set_network_confirm_preview(
+            agent,
+            server_id,
+            before.as_ref(),
+            after.as_ref(),
+            ports_note,
+        ) {
+            eprintln!("{preview}");
             crate::cmd::agent::cli::browser_live_preview::confirm_on_tty(yes)?;
         }
         srv.network = after;
@@ -382,6 +469,44 @@ mod tests {
             p.contains("  keep.com") && p.contains("`browser` on agent `a1`"),
             "{p}"
         );
+    }
+
+    #[test]
+    fn clearing_a_policy_requires_a_preview() {
+        let before = network_policy_from_args(hosts(&["a.com"]), false);
+        let p = set_network_confirm_preview("a1", "browser", before.as_ref(), None, None)
+            .expect("clearing a host bound must be confirmed");
+        assert!(
+            p.contains("lose its egress policy") && p.contains("only a.com"),
+            "{p}"
+        );
+        assert!(p.contains("does NOT apply"), "{p}");
+        // Already clear and no ports: nothing widens, nothing to confirm.
+        assert!(set_network_confirm_preview("a1", "browser", None, None, None).is_none());
+        // --off narrows: no confirmation.
+        let off = network_policy_from_args(vec![], true);
+        assert!(
+            set_network_confirm_preview("a1", "browser", before.as_ref(), off.as_ref(), None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn port_grants_appear_in_the_preview_before_saving() {
+        let after = network_policy_from_args(hosts(&["db.internal"]), false);
+        let note = port_grant_preview("a1", &[9000], NetworkOutboundMode::Restricted);
+        let p = set_network_confirm_preview("a1", "browser", None, after.as_ref(), note).unwrap();
+        assert!(p.contains("+ db.internal"), "{p}");
+        assert!(
+            p.contains("port(s) 9000") && p.contains("WHOLE agent") && p.contains("ANY host"),
+            "{p}"
+        );
+        // A port grant alone (e.g. with --off) still needs confirmation.
+        let off = network_policy_from_args(vec![], true);
+        let note = port_grant_preview("a1", &[9000], NetworkOutboundMode::Restricted);
+        assert!(set_network_confirm_preview("a1", "browser", None, off.as_ref(), note).is_some());
+        // Already-granted ports are filtered upstream; none ⇒ no note.
+        assert!(port_grant_preview("a1", &[], NetworkOutboundMode::Restricted).is_none());
     }
 
     #[test]
