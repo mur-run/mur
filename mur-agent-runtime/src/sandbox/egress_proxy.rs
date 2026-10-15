@@ -12,6 +12,17 @@
 //! the same token, allowlist, and SSRF checks, then are forwarded in
 //! origin-form (#1677).
 
+/// Whether `BroadAudited` deny-list hosts are actually blocked or only
+/// logged. User-facing text is generated from this, never hard-coded (D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenyEnforcement {
+    Advisory,
+    Enforced,
+}
+
+/// Flip to `Enforced` in the same PR that makes the deny overlay airtight.
+pub const DENY_OVERLAY_ENFORCEMENT: DenyEnforcement = DenyEnforcement::Advisory;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
