@@ -63,6 +63,7 @@ impl EnrollmentRecord {
             canonical_remote_endpoint: self.endpoint.as_str().to_string(),
             creation_base_refs: self.creation_base_refs.clone(),
             ref_prefix: self.ref_prefix.clone(),
+            credential: self.credential.clone(),
         }
     }
     fn same_key(&self, agent: &str, repo_id: &str, remote_id: &str) -> bool {

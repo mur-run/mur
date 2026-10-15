@@ -6,6 +6,7 @@
 //! this crate sits below it and must not).
 
 use crate::constants::ALLOWED_REF_PREFIX;
+use crate::credential_source::{CredentialSource, FileCredentials};
 use crate::enrollment::Endpoint;
 use crate::policy::RemotePolicy;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,12 @@ pub enum EnrollmentProblem {
     /// The endpoint is a network remote: the canonical / missing / agent-writable path checks
     /// do not apply to it. Information, never a refusal.
     EndpointPathChecksNotApplicable(String),
+    /// The credential's secret cannot be used as the broker would use it. The reason is the same
+    /// fixed token the broker refuses with (no path, no content).
+    CredentialUnusable(&'static str),
+    /// An agent can write to (or above, or inside) the secrets directory, and could then swap
+    /// the credential for one of its own.
+    SecretsWritableByAgent { agent: String, path: PathBuf },
 }
 
 impl EnrollmentProblem {
@@ -149,17 +156,54 @@ fn overlaps(endpoint_real: &Path, grant: &Path) -> bool {
     endpoint_real.starts_with(&g) || g.starts_with(endpoint_real)
 }
 
+/// The credential an enrollment carries, if any: the file must open the way the broker opens it
+/// (same checks, via [`FileCredentials`]), and no agent may be able to write the secrets
+/// directory or anything above it.
+///
+/// Nothing is reported for an enrollment without a credential: there is nothing to check.
+pub fn credential_problems(
+    policy: &RemotePolicy,
+    secrets_root: &Path,
+    agents: &[AgentFacts],
+) -> Vec<EnrollmentProblem> {
+    let Some(cred) = &policy.credential else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    // The secret is read and dropped at once; only the refusal reason is kept.
+    if let Err(crate::error::BrokerError::CredentialUnreadable(why)) =
+        FileCredentials::new(secrets_root).open(&cred.secret_path)
+    {
+        out.push(EnrollmentProblem::CredentialUnusable(why));
+    }
+    let real = std::fs::canonicalize(secrets_root).unwrap_or_else(|_| secrets_root.to_path_buf());
+    for a in agents {
+        let reach = std::iter::once(&a.home)
+            .chain(&a.write_paths)
+            .find(|w| overlaps(&real, w));
+        if let Some(w) = reach {
+            out.push(EnrollmentProblem::SecretsWritableByAgent {
+                agent: a.name.clone(),
+                path: w.clone(),
+            });
+        }
+    }
+    out
+}
+
 /// Everything the doctor checks for one enrollment.
 pub fn check_enrollment(
     policy: &RemotePolicy,
     endpoint: &Endpoint,
     agents: &[AgentFacts],
     broker_dir: &Path,
+    secrets_root: &Path,
 ) -> Vec<EnrollmentProblem> {
     let grants: Vec<PathBuf> = agents.iter().flat_map(|a| a.write_paths.clone()).collect();
     let mut out = policy_problems(policy);
     out.extend(endpoint_problems(endpoint, agents));
     out.extend(grant_problems(&grants, broker_dir));
+    out.extend(credential_problems(policy, secrets_root, agents));
     out
 }
 
@@ -317,6 +361,7 @@ mod tests {
             canonical_remote_endpoint: "file:///r".into(),
             creation_base_refs: vec!["main".into(), "refs/heads/ok".into()],
             ref_prefix: "refs/heads/".into(),
+            credential: None,
         };
         assert_eq!(
             policy_problems(&p),
@@ -324,6 +369,127 @@ mod tests {
                 EnrollmentProblem::RefPrefixTooWide("refs/heads/".into()),
                 EnrollmentProblem::BaseRefNotFullHead("main".into()),
             ]
+        );
+    }
+
+    // --- credential checks -------------------------------------------------------------------
+
+    use crate::credential::{Credential, SecretPath, Username};
+    use std::os::unix::fs::PermissionsExt;
+
+    fn with_cred(secret: &Path) -> RemotePolicy {
+        RemotePolicy {
+            remote_id: "r".into(),
+            canonical_remote_endpoint: "https://h/r.git".into(),
+            creation_base_refs: vec!["refs/heads/main".into()],
+            ref_prefix: ALLOWED_REF_PREFIX.into(),
+            credential: Some(Credential {
+                secret_path: SecretPath::parse(secret.to_str().unwrap()).unwrap(),
+                username: Username::parse("bot").unwrap(),
+            }),
+        }
+    }
+    fn secret(root: &Path, mode: u32) -> PathBuf {
+        std::fs::create_dir_all(root).unwrap();
+        let f = root.join("token");
+        std::fs::write(&f, b"s3cret\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(mode)).unwrap();
+        f
+    }
+
+    #[test]
+    fn a_usable_credential_outside_every_agent_is_clean() {
+        let f = fx();
+        let root = f.root.join("secrets");
+        let p = with_cred(&secret(&root, 0o600));
+        let home = f.root.join("agents/a");
+        assert_eq!(
+            credential_problems(&p, &root, &[agent("a", &home, &[&home])]),
+            vec![]
+        );
+    }
+    #[test]
+    fn an_enrollment_without_a_credential_has_nothing_to_check() {
+        let f = fx();
+        // A root that does not exist and an agent that can write everywhere: still nothing,
+        // because no credential means no secret to protect.
+        let mut p = with_cred(Path::new("/x"));
+        p.credential = None;
+        let home = f.root.join("agents/a");
+        assert_eq!(
+            credential_problems(&p, &f.root.join("nope"), &[agent("a", &home, &[&f.root])]),
+            vec![]
+        );
+    }
+    #[test]
+    fn a_missing_secret_file_is_reported_with_the_broker_reason() {
+        let f = fx();
+        let root = f.root.join("secrets");
+        std::fs::create_dir_all(&root).unwrap();
+        let p = with_cred(&root.join("absent"));
+        assert_eq!(
+            credential_problems(&p, &root, &[]),
+            vec![EnrollmentProblem::CredentialUnusable("not_found")]
+        );
+    }
+    #[test]
+    fn a_secret_file_with_the_wrong_mode_is_reported() {
+        let f = fx();
+        let root = f.root.join("secrets");
+        let p = with_cred(&secret(&root, 0o644));
+        assert_eq!(
+            credential_problems(&p, &root, &[]),
+            vec![EnrollmentProblem::CredentialUnusable("bad_mode")]
+        );
+    }
+    #[test]
+    fn a_secret_outside_the_secrets_root_is_reported() {
+        let f = fx();
+        let root = f.root.join("secrets");
+        std::fs::create_dir_all(&root).unwrap();
+        let elsewhere = secret(&f.root.join("elsewhere"), 0o600);
+        assert_eq!(
+            credential_problems(&with_cred(&elsewhere), &root, &[]),
+            vec![EnrollmentProblem::CredentialUnusable("outside_secrets")]
+        );
+    }
+    #[test]
+    fn an_agent_that_can_write_the_secrets_directory_is_reported() {
+        let f = fx();
+        let root = f.root.join("secrets");
+        let p = with_cred(&secret(&root, 0o600));
+        let home = f.root.join("agents/a");
+        let problems = credential_problems(&p, &root, &[agent("a", &home, &[&root])]);
+        assert_eq!(
+            problems,
+            vec![EnrollmentProblem::SecretsWritableByAgent {
+                agent: "a".into(),
+                path: root.clone()
+            }]
+        );
+    }
+    #[test]
+    fn an_agent_that_can_write_above_the_secrets_directory_is_reported() {
+        let f = fx();
+        let root = f.root.join("mur/secrets");
+        let p = with_cred(&secret(&root, 0o600));
+        let home = f.root.join("agents/a");
+        let above = f.root.join("mur");
+        let problems = credential_problems(&p, &root, &[agent("a", &home, &[&above])]);
+        assert!(matches!(
+            problems.as_slice(),
+            [EnrollmentProblem::SecretsWritableByAgent { .. }]
+        ));
+    }
+    #[test]
+    fn both_credential_problems_are_refusals() {
+        assert!(EnrollmentProblem::CredentialUnusable("bad_mode").is_refusal());
+        assert!(
+            EnrollmentProblem::SecretsWritableByAgent {
+                agent: "a".into(),
+                path: "/p".into()
+            }
+            .is_refusal()
         );
     }
 }

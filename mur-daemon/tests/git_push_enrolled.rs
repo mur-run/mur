@@ -476,6 +476,41 @@ fn an_allow_after_the_enrollment_was_revoked_ends_policy_changed_and_pushes_noth
 }
 
 #[test]
+fn an_allow_after_a_revoke_and_re_enroll_ends_policy_changed_and_pushes_nothing() {
+    let w = world();
+    let slot = BrokerSlot::default();
+    let hash = asked(&w, "r1", &slot);
+    // Same policy, same repo: only the epoch moves. The human approved the old enrollment.
+    let mut book = Enrollments::load(&enrollments_path(w.home.path()))
+        .unwrap()
+        .unwrap();
+    let old = book.enrollments[0].epoch;
+    let rec = book.enrollments.remove(0);
+    book.enroll(EnrollRequest {
+        agent: rec.agent,
+        repo_id: rec.repo_id,
+        remote_id: rec.remote_id,
+        endpoint: rec.endpoint,
+        ref_prefix: rec.ref_prefix,
+        creation_base_refs: rec.creation_base_refs,
+        credential: rec.credential,
+        new_repo: None,
+    })
+    .unwrap();
+    assert!(
+        book.enrollments[0].epoch > old,
+        "re-enroll must mint a new epoch"
+    );
+    book.save(w.home.path()).unwrap();
+
+    answer(&w, "r1", &hash, true, ChannelActor::local_human());
+    approval_pass(w.home.path(), &slot);
+
+    assert_eq!(state_of(&w, &slot, "r1"), State::PolicyChanged);
+    assert_eq!(git(&w.remote, &["rev-parse", BRANCH]), w.old);
+}
+
+#[test]
 fn an_unreadable_enrollment_file_leaves_the_row_pending_and_the_approval_unspent() {
     let w = world();
     let slot = BrokerSlot::default();

@@ -60,8 +60,34 @@ fn set_records(e: &Env, f: impl FnOnce(&mut Enrollments)) {
     let mut g = e.records.0.lock().unwrap();
     f(g.as_mut().unwrap().as_mut().unwrap());
 }
+/// A request stamped from what the records say now, as intake does: the digests cover the
+/// credential, so a document pinned from the bare `policy()` no longer matches a record that
+/// carries one.
+fn request(
+    e: &Env,
+    id: &str,
+) -> (
+    RequestKey,
+    mur_git_broker::action::ActionDocument,
+    std::path::PathBuf,
+) {
+    let (k, mut d, pack) = req(e, id);
+    let current = e
+        .records
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .enrollments[0]
+        .policy();
+    pin(e, &mut d, &current);
+    (k, d, pack)
+}
 fn pended(e: &Env, b: &Broker) -> (RequestKey, String) {
-    let (k, d, pack) = req(e, "r1");
+    let (k, d, pack) = request(e, "r1");
     let h = b.submit_request(&k, &d, &pack).unwrap();
     (k, h)
 }
@@ -154,7 +180,7 @@ fn a_failed_accept_after_a_successful_open_leaves_the_request_pending() {
     let (k, h) = pended(&e, &b);
     // Burn event id "e1" on another request, so accepting r1 with it fails inside the store.
     let (k2, d2, pack2) = {
-        let (mut k2, mut d2, pack2) = req(&e, "r2");
+        let (mut k2, mut d2, pack2) = request(&e, "r2");
         k2.request_id = "r2".into();
         d2.request_id = "r2".into();
         (k2, d2, pack2)
