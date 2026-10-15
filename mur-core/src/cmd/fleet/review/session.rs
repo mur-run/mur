@@ -450,6 +450,9 @@ pub(crate) fn prepare_session(
     // own (empty) limits block, so a stand-in with the final name is exact.
     let probe = session_fleet(&name, vec![], String::new(), "");
     let bounds = fleet_bounds(mur_home, &probe, args.deadline.as_deref(), args.budget_usd)?;
+    // #1762: members answer and can outwait the stuck window, checked before
+    // the fleet and channel exist. Needs the resolved stuck, so it follows it.
+    super::preflight::preflight(mur_home, &[&main, &reviewer], bounds.stuck)?;
     let mut limits = SessionLimits::new(bounds.deadline, bounds.stuck, bounds.cost_usd);
     if let Some(n) = args.stuck_rounds {
         if n < MIN_ROUND_STUCK_AFTER_UNCHANGED_ROUNDS {

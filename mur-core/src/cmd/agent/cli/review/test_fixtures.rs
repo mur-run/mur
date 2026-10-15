@@ -38,7 +38,11 @@ pub(super) fn app_at(home: &Path) -> App {
 pub(super) fn agent(home: &Path, name: &str, running: bool) {
     let dir = home.join("agents").join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("profile.yaml"), format!("name: {name}\n")).unwrap();
+    std::fs::write(
+        dir.join("profile.yaml"),
+        format!("name: {name}\nhitl:\n  timeout_secs: 3600\n"),
+    )
+    .unwrap();
     if running {
         std::fs::write(dir.join(RUNNING_LOCK), "{}").unwrap();
     }

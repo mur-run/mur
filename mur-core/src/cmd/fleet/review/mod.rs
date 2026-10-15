@@ -24,6 +24,7 @@ pub mod ledger;
 pub mod loop_driver;
 pub mod murmur;
 pub mod note;
+pub mod preflight;
 pub mod prune;
 pub mod resume;
 // `replay_with_damage` is wired into resume; the Continue-from-checkpoint
