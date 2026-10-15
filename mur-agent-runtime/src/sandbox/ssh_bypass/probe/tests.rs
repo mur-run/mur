@@ -204,3 +204,33 @@ fn connect_only_to_a_missing_socket_is_other_errno() {
         EXIT_OTHER_ERRNO
     );
 }
+
+/// Comfortably above any OS pipe buffer (64 KiB on Linux and macOS), so a
+/// synchronous `write_all` to a child that never reads would block forever.
+const OVERSIZED_PROFILE_BYTES: usize = 256 * 1024;
+
+#[test]
+fn child_that_never_reads_stdin_cannot_stall_parent_past_timeout() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let exe = dir.path().join("fake-probe");
+    // No `cat`: this child never drains the profile from stdin.
+    std::fs::write(&exe, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let profile = "x".repeat(OVERSIZED_PROFILE_BYTES);
+    let timeout = Duration::from_millis(300);
+
+    let start = Instant::now();
+    let outcome = run_probe(&exe, &profile, Path::new("/nonexistent.sock"), timeout);
+    let elapsed = start.elapsed();
+
+    // Must be the timeout path, not e.g. a spawn failure, or the test proves
+    // nothing about stdin back-pressure.
+    assert!(
+        matches!(&outcome, ProbeOutcome::Inconclusive(why) if why.starts_with("timed out")),
+        "{outcome:?}"
+    );
+    assert!(
+        elapsed < timeout + Duration::from_secs(2),
+        "a full stdin pipe must not stall the parent: {elapsed:?}"
+    );
+}
