@@ -93,6 +93,20 @@ fn same_entry(a: &McpServerEntry, b: &McpServerEntry) -> bool {
 /// user's own server). Pure, so setup can run it before anything is
 /// installed or written, not only at the final profile save.
 pub fn check_slot(profile: &AgentProfile, name: &str) -> Result<()> {
+    // Another server with the same tool prefix would swallow or replace this
+    // entry's tools; refuse before anything is written.
+    if let Some(other) = mur_agent_runtime::mcp::serena::tool_prefix_clash(
+        name,
+        profile.mcp_servers.iter().map(|m| m.name.as_str()),
+    ) {
+        bail!(
+            "agent `{agent}`: MCP server `{other}` has the same tool prefix as `{name}` \
+             (`mcp__{prefix}__*`), so one would overwrite the other's tools; \
+             pick a different --entry name",
+            agent = profile.name,
+            prefix = mur_common::mcp_naming::sanitize_server(name),
+        );
+    }
     let Some(slot) = profile.mcp_servers.iter().find(|m| m.name == name) else {
         return Ok(());
     };

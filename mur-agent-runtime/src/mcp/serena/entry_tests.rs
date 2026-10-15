@@ -329,6 +329,41 @@ fn an_invalid_entry_name_refuses_to_spawn() {
 }
 
 #[test]
+fn names_that_sanitize_to_another_name_are_refused() {
+    // `sanitize_server` trims a trailing `_` and collapses `__`, so these
+    // would share a tool prefix with `serena` / `repo_a`.
+    let h = Path::new("/h/agent");
+    for bad in ["serena_", "repo__a", "repo_a_", "x___"] {
+        let err = serena_paths_for(h, bad).unwrap_err();
+        assert!(matches!(err, SerenaEntryError::EntryName { .. }), "{bad:?}");
+    }
+    for ok in ["repo_a", "_a", "a-b", "a_b-c"] {
+        assert!(serena_paths_for(h, ok).is_ok(), "{ok:?}");
+    }
+}
+
+#[test]
+fn serena_entry_colliding_with_another_servers_tool_prefix_is_refused() {
+    let fx = Fx::new();
+    let serena = fx.serena(Some(fx.repo.clone()));
+    // A user's own server `code/nav` also sanitizes to `code_nav`; a serena
+    // entry named `code_nav` would then overwrite its tools.
+    let other = McpServerEntry {
+        name: "code/nav".into(),
+        command: "x".into(),
+        ..Default::default()
+    };
+    let clash = McpServerEntry {
+        name: "code_nav".into(),
+        ..serena.clone()
+    };
+    let err = verify_entries(&[other, clash], &fx.agent_home).unwrap_err();
+    assert!(matches!(err, SerenaEntryError::ToolPrefix { .. }), "{err}");
+    // Distinct prefixes stay fine.
+    assert!(verify_entries(&[serena], &fx.agent_home).is_ok());
+}
+
+#[test]
 fn case_variants_can_never_resolve_to_one_directory() {
     let h = Path::new("/h/agent");
     assert!(serena_paths_for(h, "repo").is_ok());

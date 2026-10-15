@@ -183,6 +183,22 @@ fn check_slot_matches_upserts_refusal() {
     assert!(err.contains("mur agent mcp remove"), "{err}");
 }
 
+/// `repo_a` and `repo/a` both become the tool prefix `mcp__repo_a__`, so the
+/// later server's tools would replace the earlier one's. Setup refuses first.
+#[test]
+fn check_slot_refuses_a_shared_tool_prefix() {
+    let mut p = profile();
+    p.mcp_servers.push(McpServerEntry {
+        name: "repo/a".into(),
+        command: "uvx".into(),
+        ..Default::default()
+    });
+    let err = check_slot(&p, "repo_a").unwrap_err().to_string();
+    assert!(err.contains("same tool prefix"), "{err}");
+    assert!(err.contains("`repo/a`"), "{err}");
+    assert!(check_slot(&p, "repo_b").is_ok());
+}
+
 #[test]
 fn entry_round_trips_through_profile_yaml() {
     let f = fx();

@@ -18,7 +18,7 @@ pub enum CodeNavAction {
         project: Option<std::path::PathBuf>,
         /// Name of the serena MCP entry to create or update. Each entry has
         /// its own SERENA_HOME, so give a second repository its own name
-        /// (`[a-z0-9_-]`, lower case, up to 64 characters). Defaults to `serena`.
+        /// (`[a-z0-9_-]`, lower case, up to 64 characters, no trailing or doubled `_`). Defaults to `serena`.
         #[arg(long, value_name = "NAME", default_value = "serena")]
         entry: String,
         /// Skip ast-grep (installed by default).

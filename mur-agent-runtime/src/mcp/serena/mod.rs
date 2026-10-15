@@ -13,6 +13,7 @@ pub mod rewrite;
 pub use preflight::{SerenaPreflightError, preflight};
 
 use mur_common::agent::{McpServerEntry, McpServerKind};
+use mur_common::mcp_naming::sanitize_server;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -119,6 +120,8 @@ pub fn serena_paths(agent_home: &Path) -> SerenaPaths {
 /// (`[a-z0-9_-]`, 1..=64 chars) — never sanitized — so two names cannot
 /// collapse into one home. Upper case is refused because `Repo` and `repo`
 /// are one directory on case-insensitive filesystems (macOS, Windows).
+/// Names `sanitize_server` would rewrite (trailing or doubled `_`) are
+/// refused too, so the name is also its own tool prefix.
 pub fn serena_paths_for(
     agent_home: &Path,
     entry_name: &str,
@@ -130,7 +133,10 @@ pub fn serena_paths_for(
         && entry_name.len() <= MAX_ENTRY_NAME_LEN
         && entry_name
             .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        // The tool prefix is `sanitize_server(name)`; a name it would rewrite
+        // (`serena_`, `repo__a`) shares a prefix with its rewritten form.
+        && sanitize_server(entry_name) == entry_name;
     if !ok {
         return Err(SerenaEntryError::EntryName {
             entry: entry_name.to_owned(),
@@ -187,6 +193,16 @@ pub enum SerenaEntryError {
     )]
     NoAgentHome { entry: String },
     #[error(
+        "MCP server `{entry}` (kind: serena): its tool prefix `mcp__{prefix}__` is also the \
+         prefix of server `{other}`, so one would overwrite the other's tools and calls could \
+         reach the wrong repository; rename one of them"
+    )]
+    ToolPrefix {
+        entry: String,
+        other: String,
+        prefix: String,
+    },
+    #[error(
         "MCP server `{entry}` (kind: serena): the entry name must be 1-64 characters of \
          [a-z0-9_-] (lower case only) because it names the entry's own SERENA_HOME \
          directory, and `Repo` / `repo` are one directory on case-insensitive filesystems"
@@ -225,10 +241,32 @@ pub fn verify_entries(
         if entry.kind != Some(McpServerKind::Serena) {
             continue;
         }
+        let others = entries.iter().map(|e| e.name.as_str());
+        if let Some(other) = tool_prefix_clash(&entry.name, others) {
+            return Err(SerenaEntryError::ToolPrefix {
+                entry: entry.name.clone(),
+                other: other.to_owned(),
+                prefix: sanitize_server(&entry.name),
+            });
+        }
         let paths = entry_paths(agent_home, entry)?;
         verify_entry(entry, &paths)?;
     }
     Ok(())
+}
+
+/// The name of another server whose tool prefix equals `name`'s, if any.
+/// Pure over names, so setup can run it before writing anything. Tool
+/// registration keys on the sanitized name, so a shared prefix means the
+/// later server silently replaces the earlier one's tools.
+pub fn tool_prefix_clash<'a>(
+    name: &str,
+    others: impl IntoIterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let prefix = sanitize_server(name);
+    others
+        .into_iter()
+        .find(|o| *o != name && sanitize_server(o) == prefix)
 }
 
 /// The entry's paths, or the recovery message when it predates #1718.
