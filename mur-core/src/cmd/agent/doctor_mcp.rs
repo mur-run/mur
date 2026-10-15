@@ -79,6 +79,8 @@ pub fn predicted(_profile: &AgentProfile, _agent_home: &Path) -> Vec<Blocked> {
 /// Pure core of [`predicted`]: `path` is the child `PATH`, `permitted` the
 /// seal predicate. A command that does not resolve is skipped — the runtime
 /// reports that one itself, as a spawn error in the recorded status.
+/// Only the macOS seal calls it outside tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn predict_with(
     servers: &[McpServerEntry],
     path: &std::ffi::OsStr,
@@ -117,6 +119,7 @@ pub(crate) fn predict_with(
 }
 
 /// `x` from a leading `#!/usr/bin/env [-S] x …` line, else `None`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn env_shebang(bin: &Path) -> Option<String> {
     use std::io::Read;
     let mut buf = [0u8; 256];
