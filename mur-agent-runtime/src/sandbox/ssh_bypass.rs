@@ -46,6 +46,11 @@ pub enum AuditReason {
     /// The resolved upstream matches the allowlisted MUR short-socket pattern.
     /// Not a row in the design table; kept so no allow rule is ever skipped.
     UpstreamMatchesAllowPattern,
+    /// The live probe connected to the upstream under the agent's profile.
+    ProbeReachable,
+    /// The live probe could not give a clean answer (timeout, spawn or
+    /// sandbox failure, unexpected errno). Never upgraded to boundary.
+    ProbeInconclusive,
 }
 
 impl AuditReason {
@@ -57,6 +62,8 @@ impl AuditReason {
             Self::UpstreamUnresolved => "upstream_unresolved",
             Self::UpstreamInAllowlist { .. } => "upstream_in_allowlist",
             Self::UpstreamMatchesAllowPattern => "upstream_matches_allow_pattern",
+            Self::ProbeReachable => "probe_reachable",
+            Self::ProbeInconclusive => "probe_inconclusive",
         }
     }
 }
@@ -69,6 +76,9 @@ pub enum Classification {
     /// macOS, restricted network, upstream outside every allow rule. Still
     /// needs the live probe before MUR may claim "boundary".
     Candidate { canonical_upstream: PathBuf },
+    /// The live probe saw `connect` denied under the agent's own profile.
+    /// Only [`probe::ProbeOutcome::Denied`] produces this; [`classify`] never does.
+    Boundary,
 }
 
 /// Inputs to the static table. The allowlist is the effective one the
@@ -124,6 +134,11 @@ pub fn classify(inputs: Inputs<'_>) -> Classification {
         canonical_upstream: canonical,
     }
 }
+
+// The probe dials a unix socket from a child process; there is no unix
+// socket to dial where `cfg(unix)` is false.
+#[cfg(unix)]
+pub mod probe;
 
 #[cfg(test)]
 mod tests;
