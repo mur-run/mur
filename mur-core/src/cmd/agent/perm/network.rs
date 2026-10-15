@@ -7,7 +7,11 @@ use super::super::{load_profile_for_edit, save_profile};
 use super::{print_outbound_picture, warn_if_running};
 
 pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
-    validate_host_pattern(name, glob)?;
+    let value = validate_host_pattern(name, glob)?;
+    if value != glob {
+        eprintln!("stored as {value}");
+    }
+    let glob = value.as_str();
     let (path, mut profile) = load_profile_for_edit(name)?;
     if !profile
         .entitlements
@@ -37,7 +41,7 @@ pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
 /// while matching nothing (field report: `allow-host 'IP:3306'` accepted, the
 /// connection still blocked, no warning anywhere). `deny-host` is left
 /// unvalidated on purpose — it must be able to REMOVE junk entries.
-fn validate_host_pattern(name: &str, glob: &str) -> Result<()> {
+fn validate_host_pattern(name: &str, glob: &str) -> Result<String> {
     let g = glob.trim();
     if g.is_empty() {
         bail!("empty host pattern");
@@ -67,7 +71,12 @@ fn validate_host_pattern(name: &str, glob: &str) -> Result<()> {
              To allow the HOST for web traffic: `mur agent perm allow-host {name} {host}`"
         );
     }
-    Ok(())
+    let n = mur_common::host_pattern::normalize_host_pattern(g).map_err(|e| {
+        anyhow::anyhow!(
+            "'{glob}' is not a hostname — {e}. Pass a bare host (`api.example.com`), a wildcard (`*.example.com`), or an IP"
+        )
+    })?;
+    Ok(n.value)
 }
 
 /// `mur agent perm allow-port <agent> <port>` — grant an extra outbound TCP
@@ -242,6 +251,14 @@ mod tests {
     }
 
     #[test]
+    fn accepted_patterns_are_returned_normalized() {
+        assert_eq!(
+            validate_host_pattern("a1", "Shop.Example.com").unwrap(),
+            "shop.example.com"
+        );
+    }
+
+    #[test]
     fn inert_patterns_are_refused_with_guidance() {
         for bad in [
             "35.229.166.236:3306",
@@ -251,6 +268,10 @@ mod tests {
             "example.com/path",
             "two hosts",
             "",
+            "pro360",
+            "591／tasker／鄰家師傅",
+            "評分，",
+            "a.*.com",
         ] {
             assert!(
                 validate_host_pattern("a1", bad).is_err(),
