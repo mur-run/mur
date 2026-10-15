@@ -10,8 +10,11 @@ fn accepts_and_normalizes() {
         ("*.x.com", "*.x.com"),
         (".x.com", ".x.com"),
         ("1.2.3.4", "1.2.3.4"),
-        ("2001:db8::1", "2001:db8::1"),
-        ("[::1]", "::1"),
+        // IPv6 is stored bracketed: both matchers see `[v6]` (the proxy's
+        // CONNECT authority and `Url::host_str`), and they compare exactly.
+        ("2001:db8::1", "[2001:db8::1]"),
+        ("[::1]", "[::1]"),
+        ("::1", "[::1]"),
         ("localhost", "localhost"),
     ] {
         assert_eq!(normalize_host_pattern(raw).unwrap().value, want, "{raw}");

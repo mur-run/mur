@@ -48,13 +48,8 @@ fn split_host_ports(
         }
         let n = mur_common::host_pattern::normalize_host_pattern(host)
             .map_err(|e| anyhow::anyhow!("'{raw}' is not a hostname — {e}"))?;
-        // Bracketed IPv6 keeps its brackets: the proxy's rsplit_once(':')
-        // leaves `[::1]` as the host it matches against.
-        let host = if host.starts_with('[') {
-            host.to_string()
-        } else {
-            n.value
-        };
+        // `normalize_host_pattern` brackets IPv6, matching what the proxy sees.
+        let host = n.value;
         if !hosts.contains(&host) {
             hosts.push(host);
         }
@@ -369,12 +364,12 @@ mod tests {
     }
 
     #[test]
-    fn split_host_ports_rejects_urls_and_leaves_bare_ipv6_alone() {
+    fn split_host_ports_rejects_urls_and_brackets_bare_ipv6() {
         assert!(split_host_ports(&hosts(&["https://a.com"]), &[]).is_err());
         assert!(split_host_ports(&hosts(&["pro360"]), &[]).is_err());
         assert!(split_host_ports(&hosts(&["評分，"]), &[]).is_err());
         let (h, _) = split_host_ports(&hosts(&["::1"]), &[]).unwrap();
-        assert_eq!(h, hosts(&["::1"]));
+        assert_eq!(h, hosts(&["[::1]"]));
     }
 
     #[test]

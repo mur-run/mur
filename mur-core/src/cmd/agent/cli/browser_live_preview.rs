@@ -79,7 +79,9 @@ pub(crate) fn render_preview(
         }
         out.push(research_caveat(enforcement).to_owned());
         out.push(
-            "private, link-local and cloud-metadata IPs are still refused by the proxy.".into(),
+            "link-local and cloud-metadata IPs are still refused by the proxy; \
+             loopback and private (LAN) addresses are NOT blocked."
+                .into(),
         );
     }
     out.push("Saved to the profile; takes effect after the agent restarts.".into());
@@ -144,7 +146,8 @@ mod tests {
             "{p}"
         );
         assert!(
-            p.contains("private, link-local and cloud-metadata IPs are still refused"),
+            p.contains("link-local and cloud-metadata IPs are still refused")
+                && p.contains("loopback and private (LAN) addresses are NOT blocked"),
             "{p}"
         );
     }

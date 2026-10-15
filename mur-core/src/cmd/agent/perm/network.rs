@@ -287,6 +287,11 @@ mod tests {
             validate_host_pattern("a1", "Shop.Example.com").unwrap(),
             "shop.example.com"
         );
+        // `Url::host_str` yields `[v6]`, and the guard compares exactly.
+        assert_eq!(
+            validate_host_pattern("a1", "2001:db8::1").unwrap(),
+            "[2001:db8::1]"
+        );
     }
 
     #[test]

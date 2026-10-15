@@ -70,8 +70,15 @@ pub fn normalize_host_pattern(raw: &str) -> Result<NormalizedHost, HostPatternEr
         .and_then(|r| r.strip_suffix(']'))
         .unwrap_or(s);
     if let Ok(ip) = unbracketed.parse::<IpAddr>() {
+        // IPv6 is stored bracketed: both matchers compare exact strings, and
+        // both see `[v6]` — the egress proxy's CONNECT authority host and
+        // `Url::host_str`. A bare `::1` would never match (#1919 review).
+        let value = match ip {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => format!("[{v6}]"),
+        };
         return Ok(NormalizedHost {
-            value: ip.to_string(),
+            value,
             notes: vec![],
         });
     }

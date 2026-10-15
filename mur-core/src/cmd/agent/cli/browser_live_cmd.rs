@@ -475,6 +475,9 @@ pub(super) trait LiveOps {
     /// path (an entry made before those existed lacks both).
     /// Returns one note per grant added. `Err` means nothing was written.
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>>;
+    /// The notes [`LiveOps::save`] would report for `servers`, computed
+    /// without writing — so a preview can tell "unchanged" from "needs repair".
+    fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;
     /// Append the `broad_audited_enabled` trace event after a `--research` write.
     fn record_research(&mut self, agent: &str) -> anyhow::Result<()>;
 }
@@ -525,11 +528,23 @@ pub(super) fn run(
         let profile_same = profile
             .as_deref()
             .is_none_or(|site| existing.is_some_and(|e| e.args == live_argv(agent, Some(site))));
-        if existing.is_some_and(|e| e.network.as_ref().is_some_and(|n| same_policy(n, &after)))
-            && profile_same
-        {
+        let policy_same =
+            existing.is_some_and(|e| e.network.as_ref().is_some_and(|n| same_policy(n, &after)));
+        // An older entry can match the policy yet still need the re-pin or
+        // grants `save` backfills; that is a change, so preview it (#1919).
+        let repairs = if existing.is_some() {
+            ops.pending_repairs(&servers)?
+        } else {
+            Vec::new()
+        };
+        if policy_same && profile_same && repairs.is_empty() {
             return Ok((unchanged_text(&hosts), None));
         }
+        let preview = if repairs.is_empty() {
+            preview
+        } else {
+            format!("{preview}\nalso repairs:\n  {}", repairs.join("\n  "))
+        };
         let cmd = confirm_command(&hosts, profile.as_deref(), flags.research);
         return Ok(match confirm_chip(&cmd) {
             Some(chip) => (preview, Some(chip)),
@@ -652,36 +667,8 @@ impl LiveOps for ProfileOps<'_> {
     }
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>> {
         let fs = self.prepared_fs()?;
-        let mut servers = servers;
-        let mut notes = Vec::new();
-        let mut spawn_command = None;
-        if let Some(entry) = servers.iter_mut().find(|e| e.name == LIVE_ENTRY) {
-            // Hash before any write: a binary we cannot hash must not be
-            // pinned, and bailing here leaves the profile untouched.
-            let command = live_command(std::env::current_exe());
-            let resolved = crate::cmd::agent_mcp_pin::resolve_command(&command)
-                .with_context(|| format!("resolve browser live command `{command}`"))?;
-            let sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&resolved)?;
-            notes.extend(repin_command(entry, &command, sha));
-            spawn_command = Some(command);
-        }
         let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
-        let servers_changed = profile.mcp_servers != servers;
-        profile.mcp_servers = servers;
-        notes.extend(manage::merge_fs(&mut profile.entitlements.filesystem, &fs));
-        if let Some(command) = spawn_command {
-            notes.extend(ensure_spawn_allowed(
-                &mut profile.entitlements.processes.spawn.allowed,
-                &command,
-            ));
-            let browsers = mur_browser::chromium::system_browsers_dir();
-            if let Some(dir) = live_spawn_dir(browsers.as_deref()) {
-                notes.extend(ensure_spawn_dir(
-                    &mut profile.entitlements.processes.spawn.allowed_dirs,
-                    &dir,
-                ));
-            }
-        }
+        let (servers_changed, notes) = apply_repairs(&mut profile, servers, &fs)?;
         // Nothing to persist: skip the write so `updated_at` stays put and the
         // caller can tell "no change" from "saved".
         if servers_changed || !notes.is_empty() {
@@ -689,6 +676,56 @@ impl LiveOps for ProfileOps<'_> {
         }
         Ok(notes)
     }
+    fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>> {
+        // Same computation as `save`, on a copy that is never written. No
+        // `prepared_fs` here: a preview must not create directories.
+        let home = crate::cmd::agent::resolve_mur_home()?;
+        let registry = mur_browser::chromium::system_server_registry_dir();
+        let fs = live_fs(&home, registry.as_deref());
+        let (_, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
+        Ok(apply_repairs(&mut profile, servers.to_vec(), &fs)?.1)
+    }
+}
+
+/// Re-pin the live entry onto this binary and backfill its fs/spawn grants on
+/// `profile` in memory. Returns whether `servers` differ from the profile's,
+/// and one note per repair. Shared by `save` and `pending_repairs` so the
+/// preview names exactly what the write will do.
+fn apply_repairs(
+    profile: &mut mur_common::AgentProfile,
+    servers: Vec<McpServerEntry>,
+    fs: &FilesystemEntitlement,
+) -> anyhow::Result<(bool, Vec<String>)> {
+    let mut servers = servers;
+    let mut notes = Vec::new();
+    let mut spawn_command = None;
+    if let Some(entry) = servers.iter_mut().find(|e| e.name == LIVE_ENTRY) {
+        // Hash before any write: a binary we cannot hash must not be
+        // pinned, and bailing here leaves the profile untouched.
+        let command = live_command(std::env::current_exe());
+        let resolved = crate::cmd::agent_mcp_pin::resolve_command(&command)
+            .with_context(|| format!("resolve browser live command `{command}`"))?;
+        let sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&resolved)?;
+        notes.extend(repin_command(entry, &command, sha));
+        spawn_command = Some(command);
+    }
+    let servers_changed = profile.mcp_servers != servers;
+    profile.mcp_servers = servers;
+    notes.extend(manage::merge_fs(&mut profile.entitlements.filesystem, fs));
+    if let Some(command) = spawn_command {
+        notes.extend(ensure_spawn_allowed(
+            &mut profile.entitlements.processes.spawn.allowed,
+            &command,
+        ));
+        let browsers = mur_browser::chromium::system_browsers_dir();
+        if let Some(dir) = live_spawn_dir(browsers.as_deref()) {
+            notes.extend(ensure_spawn_dir(
+                &mut profile.entitlements.processes.spawn.allowed_dirs,
+                &dir,
+            ));
+        }
+    }
+    Ok((servers_changed, notes))
 }
 
 impl ProfileOps<'_> {

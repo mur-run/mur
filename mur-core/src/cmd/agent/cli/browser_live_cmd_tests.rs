@@ -233,7 +233,7 @@ fn issue_1905_accept_list() {
             "example.com",
             "xn--fiqs8s.tw",
             "127.0.0.1",
-            "::1",
+            "[::1]",
             "localhost"
         ])
     );
@@ -248,6 +248,7 @@ struct Fake {
     fail_save: bool,
     fail_add: bool,
     save_notes: Vec<String>,
+    repairs: Vec<String>,
     research_events: usize,
 }
 
@@ -273,6 +274,9 @@ impl LiveOps for Fake {
         }
         self.servers = servers;
         Ok(self.save_notes.clone())
+    }
+    fn pending_repairs(&mut self, _servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>> {
+        Ok(self.repairs.clone())
     }
     fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
         self.research_events += 1;
@@ -629,4 +633,36 @@ fn research_with_hosts_is_refused() {
         "{err}"
     );
     assert!(f.adds.is_empty() && f.saves == 0);
+}
+
+// Review of #1919: the stored IPv6 value must be the string the egress proxy
+// matches — the host part of a CONNECT authority, which is bracketed.
+#[test]
+fn ipv6_allowlist_matches_what_the_proxy_sees() {
+    let p = parse_hosts(&s(&["[::1]:443", "2001:db8::1"])).unwrap();
+    for (host, connect) in p.hosts.iter().zip(["[::1]:443", "[2001:db8::1]:443"]) {
+        let seen = connect.rsplit_once(':').unwrap().0;
+        assert!(
+            mur_common::net::host_allowed(seen, std::slice::from_ref(host)),
+            "{host} must match CONNECT {connect}"
+        );
+    }
+}
+
+// Review of #1919: an older entry that `save` would still repair (stale pin,
+// missing grant) is not "unchanged" — preview it and offer the confirm chip.
+#[test]
+fn same_policy_with_pending_repairs_still_previews_and_offers_confirm() {
+    let mut e = live_entry();
+    e.network = Some(live_network(&s(&["a.example.com"])));
+    let mut f = Fake {
+        servers: vec![e],
+        repairs: vec!["re-pinned `browser` to /x/mur".into()],
+        ..Fake::default()
+    };
+    let (text, chip) = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    assert!(!text.contains("nothing changed"), "{text}");
+    assert!(text.contains("re-pinned `browser`"), "{text}");
+    assert_eq!(chip.map(|c| c.label), Some(CONFIRM_LABEL.to_owned()));
+    assert!(f.adds.is_empty() && f.saves == 0, "preview must not write");
 }
