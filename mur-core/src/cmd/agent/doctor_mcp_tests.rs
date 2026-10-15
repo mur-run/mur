@@ -47,6 +47,27 @@ fn env_shebang_interpreter_is_followed_one_hop() {
 }
 
 #[test]
+fn absolute_command_with_spaces_is_resolved_whole() {
+    // The runtime spawns `entry.command` as one path (args live in
+    // `entry.args`), so a space inside it is part of the path.
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("Application Support");
+    std::fs::create_dir(&dir).unwrap();
+    let node = bin(&dir, "node", "#!/bin/sh\n");
+    let cmd = node.to_str().unwrap();
+    let path = std::ffi::OsString::from("/definitely/not/here");
+    let got = predict_with(&profile(cmd), &path, |_| false);
+    assert_eq!(
+        got,
+        vec![Blocked {
+            server: "dc".into(),
+            wanted: cmd.into(),
+            resolved: node,
+        }]
+    );
+}
+
+#[test]
 fn unresolvable_command_is_left_to_the_runtime() {
     let path = std::ffi::OsString::from("/definitely/not/here");
     assert!(predict_with(&profile("nope"), &path, |_| false).is_empty());

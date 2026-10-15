@@ -88,11 +88,9 @@ pub(crate) fn predict_with(
 ) -> Vec<Blocked> {
     let mut out = Vec::new();
     for entry in servers {
-        let prog = entry
-            .command
-            .split_whitespace()
-            .next()
-            .unwrap_or(&entry.command);
+        // Resolve the whole command, as the spawn does: args live in
+        // `entry.args`, so a space here is part of the path.
+        let prog = entry.command.as_str();
         let Ok(bin) = mur_common::exec::resolve_command_in(path, prog) else {
             continue;
         };
