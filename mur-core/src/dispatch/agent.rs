@@ -548,9 +548,11 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
         }
         AgentAction::Hitl { agent, action } => match action {
             crate::cli::AgentHitlAction::List { json } => cmd::agent::cmd_hitl_list(&agent, json)?,
-            crate::cli::AgentHitlAction::Forget { hash, all } => {
-                cmd::agent::cmd_hitl_forget(&agent, hash.as_deref(), all)?
-            }
+            crate::cli::AgentHitlAction::Forget {
+                hash,
+                all,
+                denies_only,
+            } => cmd::agent::cmd_hitl_forget(&agent, hash.as_deref(), all, denies_only)?,
         },
         AgentAction::Secret { agent, action } => match action {
             AgentSecretAction::Set { key, value } => {

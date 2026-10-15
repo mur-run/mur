@@ -538,8 +538,8 @@ Agent** wizard offers the same catalog as a source.
   so the same call stops being asked twice, and an explicit no outranks any
   standing grant. `mur agent hitl list <agent>` shows what is being remembered
   (with a redacted label of the tool and target), and `mur agent hitl forget
-  <agent> <hash>` or `--all` makes it ask again; a review session never
-  remembers its answers.
+  <agent> <hash>`, `--all`, or `--denies-only` (drops remembered no's, keeps
+  the yes's) makes it ask again; a review session never remembers its answers.
   *Always* writes the narrowest exact tool rule; where a call reaches outside
   its entitlements the card offers that grant as a separate control, never
   folded into the rule. Reads never have to stop the run: `read_file` and
