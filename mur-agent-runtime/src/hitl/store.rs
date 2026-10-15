@@ -146,7 +146,8 @@ impl ChannelDecisionStore {
                 }
             }
         };
-        self.append_revocations(vec![scope], hashes)
+        let now = chrono::Utc::now();
+        self.append_revocations(vec![(scope, now)], hashes)
     }
 
     /// Revoke only the live DENIES, leaving remembered allows replaying.
@@ -158,12 +159,22 @@ impl ChannelDecisionStore {
             Err(e) if e.downcast_ref::<IntegrityError>().is_some() => return Ok(Vec::new()),
             Err(e) => return Err(e),
         };
-        let hashes: Vec<String> = live
+        self.revoke_denies_in(live)
+    }
+
+    /// Revoke the denies in a `list()` snapshot. Split out so a test can land
+    /// a decision between the snapshot and the revocation.
+    fn revoke_denies_in(&self, live: Vec<LiveDecision>) -> Result<Vec<String>> {
+        // Each revocation is stamped with the issue time of the deny it saw,
+        // not "now": a revocation covers every decision at or before its
+        // stamp, so a stamp of "now" would also revoke an allow recorded for
+        // the same hash after this snapshot was read.
+        let denied: Vec<_> = live.into_iter().filter(|d| !d.allow).collect();
+        let hashes: Vec<String> = denied.iter().map(|d| d.action_hash.clone()).collect();
+        let scopes = denied
             .into_iter()
-            .filter(|d| !d.allow)
-            .map(|d| d.action_hash)
+            .map(|d| (RevocationScope::One(d.action_hash), d.issued_at))
             .collect();
-        let scopes = hashes.iter().cloned().map(RevocationScope::One).collect();
         self.append_revocations(scopes, hashes)
     }
 
@@ -172,7 +183,7 @@ impl ChannelDecisionStore {
     /// is idempotent, so the caller can simply run it again.
     fn append_revocations(
         &self,
-        scopes: Vec<RevocationScope>,
+        scopes: Vec<(RevocationScope, chrono::DateTime<chrono::Utc>)>,
         hashes: Vec<String>,
     ) -> Result<Vec<String>> {
         if hashes.is_empty() {
@@ -180,11 +191,8 @@ impl ChannelDecisionStore {
         }
         let svc = self.sealing_service()?;
         let channel_id = self.writable_channel(&svc)?;
-        for scope in scopes {
-            let rev = HitlRevocation {
-                scope,
-                issued_at: chrono::Utc::now(),
-            };
+        for (scope, issued_at) in scopes {
+            let rev = HitlRevocation { scope, issued_at };
             svc.append_signed(
                 &channel_id,
                 &self.identity,
@@ -662,6 +670,21 @@ mod tests {
         assert_eq!(s.lookup("al1").await, Some(Settled::Allow));
         assert_eq!(s.lookup("de1").await, None);
         assert_eq!(s.lookup("de2").await, None);
+    }
+
+    #[tokio::test]
+    async fn forget_denies_spares_an_allow_recorded_after_the_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        s.record(at(resp("h1", false, "a"), 10)).await;
+        let snapshot = s.list().unwrap();
+        // The operator allows the same action after the snapshot was read.
+        s.record(at(resp("h1", true, "b"), 1)).await;
+        assert_eq!(
+            s.revoke_denies_in(snapshot).unwrap(),
+            vec!["h1".to_string()]
+        );
+        assert_eq!(s.lookup("h1").await, Some(Settled::Allow));
     }
 
     #[tokio::test]
