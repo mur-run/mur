@@ -30,7 +30,9 @@ fn no_host_is_refused_with_an_example() {
 // 2. hosts → entry created, allowlist exact, restricted
 #[test]
 fn hosts_create_the_entry_with_that_allowlist() {
-    let hosts = parse_hosts(&s(&["shop-a.example.com", "shop-b.example.com"])).unwrap();
+    let hosts = parse_hosts(&s(&["shop-a.example.com", "shop-b.example.com"]))
+        .unwrap()
+        .hosts;
     let mut servers = Vec::new();
     let out = apply(&mut servers, &hosts, live_entry);
     assert!(out.added);
@@ -120,7 +122,9 @@ fn web_set_ports_are_accepted() {
 // 9. ports are stripped and duplicates collapse
 #[test]
 fn port_is_normalized_away_and_duplicates_collapse() {
-    let hosts = parse_hosts(&s(&["shop-a.example.com:443", "shop-a.example.com"])).unwrap();
+    let hosts = parse_hosts(&s(&["shop-a.example.com:443", "shop-a.example.com"]))
+        .unwrap()
+        .hosts;
     assert_eq!(hosts, s(&["shop-a.example.com"]));
 }
 
@@ -144,15 +148,19 @@ fn flag_like_host_is_refused() {
 #[test]
 fn full_urls_are_reduced_to_host_and_port() {
     assert_eq!(
-        parse_hosts(&s(&["https://example.com"])).unwrap(),
+        parse_hosts(&s(&["https://example.com"])).unwrap().hosts,
         s(&["example.com"])
     );
     assert_eq!(
-        parse_hosts(&s(&["https://Example.com:8443/path?q=1#x"])).unwrap(),
+        parse_hosts(&s(&["https://Example.com:8443/path?q=1#x"]))
+            .unwrap()
+            .hosts,
         s(&["example.com"])
     );
     assert_eq!(
-        parse_hosts(&s(&["http://example.com/", "example.com"])).unwrap(),
+        parse_hosts(&s(&["http://example.com/", "example.com"]))
+            .unwrap()
+            .hosts,
         s(&["example.com"])
     );
 }
@@ -175,6 +183,60 @@ fn non_web_scheme_is_refused() {
     // A scheme with no host is still "not a host".
     let err = parse_hosts(&s(&["https:///path"])).unwrap_err();
     assert!(err.contains("not a host"), "{err}");
+}
+
+// #1905: a sentence split into words is refused, every bad word named
+#[test]
+fn issue_1905_garbage_is_refused_and_named() {
+    let args = s(&[
+        "pro360",
+        "與家電維修垂直市場兩條三角驗證，市場規模、用戶數、app",
+        "評分、591／tasker／鄰家師傅",
+    ]);
+    let err = parse_hosts(&args).unwrap_err();
+    assert!(err.contains("`pro360`"), "{err}");
+    assert!(err.contains("nothing was changed"), "{err}");
+}
+
+#[test]
+fn mixed_valid_and_junk_is_refused_whole() {
+    let err = parse_hosts(&s(&["ok.example.com", "pro360"])).unwrap_err();
+    assert!(
+        err.contains("`pro360`") && !err.contains("`ok.example.com`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn idn_and_url_are_normalized_with_notes() {
+    let p = parse_hosts(&s(&["https://Shop.Example.com/admin?x=1", "例子.台灣"])).unwrap();
+    assert_eq!(p.hosts, s(&["shop.example.com", "xn--fsqu00a.xn--kpry57d"]));
+    assert!(p.notes.iter().any(
+        |n| n.contains("https://Shop.Example.com/admin?x=1") && n.contains("shop.example.com")
+    ));
+    assert!(p.notes.iter().any(|n| n.contains("例子.台灣")));
+}
+
+#[test]
+fn issue_1905_accept_list() {
+    let p = parse_hosts(&s(&[
+        "example.com",
+        "xn--fiqs8s.tw",
+        "127.0.0.1",
+        "[::1]:443",
+        "localhost",
+    ]))
+    .unwrap();
+    assert_eq!(
+        p.hosts,
+        s(&[
+            "example.com",
+            "xn--fiqs8s.tw",
+            "127.0.0.1",
+            "::1",
+            "localhost"
+        ])
+    );
 }
 
 /// Fake [`LiveOps`]: records every call, never touches disk or spawns.

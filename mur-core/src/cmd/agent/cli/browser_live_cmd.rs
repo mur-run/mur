@@ -13,6 +13,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use mur_common::agent::{FilesystemEntitlement, McpNetMode, McpServerEntry, McpServerNetwork};
+use mur_common::host_pattern::{Normalization, normalize_host_pattern};
 use mur_common::proposal::Proposal;
 
 use super::manage::{self, Managed};
@@ -74,37 +75,70 @@ pub(super) fn split_profile(args: &[String]) -> Result<(Vec<String>, Option<Stri
     Ok((hosts, profile))
 }
 
+/// Hosts that passed validation, plus display lines for every input that was
+/// rewritten on the way (URL stripped, lowercased, punycoded).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedHosts {
+    pub hosts: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+/// Split `host[:port]` without cutting an IPv6 address at a colon: only
+/// `[v6]:port` or an authority with exactly one `:` carries a port.
+fn split_authority(authority: &str) -> (&str, Option<&str>) {
+    if authority.starts_with('[') {
+        if let Some(i) = authority.find("]:") {
+            return (&authority[..=i], Some(&authority[i + 2..]));
+        }
+        return (authority, None);
+    }
+    if authority.bytes().filter(|&b| b == b':').count() == 1 {
+        let (h, p) = authority.rsplit_once(':').unwrap_or((authority, ""));
+        return (h, Some(p));
+    }
+    (authority, None)
+}
+
 /// Validate and normalize hosts. `host:443` → `host`; a port outside the
-/// restricted-mode web set is rejected (see #1619). Error text is user-facing.
-pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
+/// restricted-mode web set is rejected (see #1619). Every argument that is not
+/// a host is named in one refusal (#1905), and nothing is written unless all
+/// of them pass. Error text is user-facing.
+pub(super) fn parse_hosts(args: &[String]) -> Result<ParsedHosts, String> {
     if args.is_empty() {
         return Err(format!(
             "usage: /browser live <host>... — name the sites this agent may reach, e.g. `{USAGE_EXAMPLE}`"
         ));
     }
-    let mut out: Vec<String> = Vec::new();
+    let mut out = ParsedHosts {
+        hosts: Vec::new(),
+        notes: Vec::new(),
+    };
+    let mut bad: Vec<String> = Vec::new();
     for raw in args {
         let authority = strip_url(raw)?;
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((_, "")) => {
+        let (host, port) = match split_authority(authority) {
+            (_, Some("")) => {
                 return Err(format!(
                     "`{raw}`: the port after `:` is empty — drop the colon or give a port"
                 ));
             }
-            Some((h, p)) => {
+            (h, Some(p)) => {
                 let port: u16 = p
                     .parse()
                     .map_err(|_| format!("`{raw}`: port is not a number"))?;
                 (h, Some(port))
             }
-            None => (authority, None),
+            (h, None) => (h, None),
         };
-        // `-` first: `/browser live` parses no flags, so `--add` here is a
-        // mistake, never a hostname to put in the allowlist.
-        if host.is_empty() || host.contains('/') || host.starts_with('-') {
-            return Err(format!(
-                "`{raw}` is not a host — pass a bare hostname, e.g. `{USAGE_EXAMPLE}`"
-            ));
+        // `-` first: `/browser live` parses no flags of its own here, so
+        // `--add` is a mistake, never a hostname to put in the allowlist.
+        if host.starts_with('-') {
+            bad.push(format!("`{raw}` (looks like a flag)"));
+            continue;
+        }
+        if host.is_empty() {
+            bad.push(format!("`{raw}` (empty host)"));
+            continue;
         }
         if let Some(p) = port
             && !RESTRICTED_GENERAL_PORTS.contains(&p)
@@ -117,10 +151,32 @@ pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
                  (see #1619), then rerun `/browser live {host}`"
             ));
         }
-        let host = host.to_ascii_lowercase();
-        if !out.contains(&host) {
-            out.push(host);
+        let n = match normalize_host_pattern(host) {
+            Ok(n) => n,
+            Err(e) => {
+                bad.push(format!("`{raw}` ({e})"));
+                continue;
+            }
+        };
+        if out.hosts.contains(&n.value) {
+            continue;
         }
+        if raw != &n.value {
+            out.notes.push(format!("`{raw}` → `{}`", n.value));
+        }
+        for note in &n.notes {
+            if let Normalization::Punycode { from } = note {
+                out.notes
+                    .push(format!("`{from}` is stored as punycode `{}`", n.value));
+            }
+        }
+        out.hosts.push(n.value);
+    }
+    if !bad.is_empty() {
+        return Err(format!(
+            "not a host: {} — nothing was changed. Name sites like `{USAGE_EXAMPLE}`",
+            bad.join("; ")
+        ));
     }
     Ok(out)
 }
@@ -355,7 +411,7 @@ pub(super) fn run(
     ops: &mut impl LiveOps,
 ) -> anyhow::Result<Managed> {
     let (host_args, profile) = split_profile(args).map_err(anyhow::Error::msg)?;
-    let hosts = parse_hosts(&host_args).map_err(anyhow::Error::msg)?;
+    let hosts = parse_hosts(&host_args).map_err(anyhow::Error::msg)?.hosts;
     check_setup(ready).map_err(anyhow::Error::msg)?;
     let mut notes = Vec::new();
     let mut servers = ops.servers()?;
