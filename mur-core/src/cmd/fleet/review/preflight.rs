@@ -119,24 +119,90 @@ impl MemberProbe for SocketProbe {
 }
 
 #[cfg(unix)]
+/// JSON-RPC id of the probe request; only a reply carrying it counts.
+const PROBE_REQUEST_ID: u64 = 1;
+
+/// One absolute deadline covers connect, write and every read: a peer that
+/// trickles bytes cannot stretch the probe past `timeout`. The work runs on a
+/// helper thread and the caller waits with `recv_timeout`, so even a connect
+/// that blocks (full accept backlog) is bounded; the thread's own socket
+/// timeouts are re-armed from the remaining time and let it end soon after.
+#[cfg(unix)]
 fn probe_socket(sock: &str, timeout: Duration) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = sock.to_owned();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe_socket_until(&path, deadline));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => bail!("no reply within {}s", timeout.as_secs()),
+    }
+}
+
+#[cfg(unix)]
+fn probe_socket_until(sock: &str, deadline: std::time::Instant) -> Result<()> {
     use anyhow::Context;
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{Read, Write};
+    let remaining = || {
+        deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|d| !d.is_zero())
+            .context("probe deadline passed")
+    };
     let mut stream =
         std::os::unix::net::UnixStream::connect(sock).with_context(|| format!("connect {sock}"))?;
-    stream.set_write_timeout(Some(timeout))?;
-    stream.set_read_timeout(Some(timeout))?;
-    let req =
-        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "agent/card", "params": null});
+    stream.set_write_timeout(Some(remaining()?))?;
+    let req = serde_json::json!({
+        "jsonrpc": "2.0", "id": PROBE_REQUEST_ID, "method": "agent/card", "params": null
+    });
     stream.write_all(format!("{req}\n").as_bytes())?;
-    let mut line = String::new();
-    let n = BufReader::new(stream)
-        .read_line(&mut line)
-        .with_context(|| format!("no reply within {}s", timeout.as_secs()))?;
-    if n == 0 {
-        bail!("socket closed without a reply");
+    let mut pending: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        // Re-armed before every read, so the limit is the deadline, not a
+        // per-read allowance.
+        stream.set_read_timeout(Some(remaining()?))?;
+        let n = stream
+            .read(&mut chunk)
+            .context("no reply before the probe deadline")?;
+        if n == 0 {
+            bail!("socket closed without a reply");
+        }
+        pending.extend_from_slice(&chunk[..n]);
+        while let Some(end) = pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            if let Some(outcome) = judge_reply(&line) {
+                return outcome;
+            }
+        }
     }
-    Ok(())
+}
+
+#[cfg(unix)]
+/// `Some` once `line` is the reply to the probe request: `Ok` for a result,
+/// `Err` for a JSON-RPC error (the runtime's `accepts_from` gate answers
+/// `CommunicationDenied` this way, and the first real send would fail the same
+/// way). `None` for anything else — notifications, other ids, non-JSON — which
+/// the caller skips.
+fn judge_reply(line: &[u8]) -> Option<Result<()>> {
+    let v: serde_json::Value = serde_json::from_slice(line).ok()?;
+    if v.get("id").and_then(serde_json::Value::as_u64) != Some(PROBE_REQUEST_ID) {
+        return None;
+    }
+    if let Some(err) = v.get("error") {
+        let code = err.get("code").and_then(serde_json::Value::as_i64);
+        let msg = err
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("no message");
+        return Some(Err(anyhow::anyhow!(
+            "the runtime refused the request (code {}): {msg}",
+            code.map_or_else(|| "?".to_string(), |c| c.to_string())
+        )));
+    }
+    v.get("result").map(|_| Ok(()))
 }
 
 #[cfg(not(unix))]
