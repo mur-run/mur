@@ -115,10 +115,10 @@ pub(crate) async fn prepare_runtime(
             .inner
             .enabled_mcp_servers()
             .iter()
-            .filter_map(|s| {
-                let prog = s.command.split_whitespace().next().unwrap_or(&s.command);
-                mur_common::exec::resolve_command_in(&aug_path, prog).ok()
-            })
+            // The whole command, as the spawn resolves it: args live in
+            // `args`, so a space here is part of the path
+            // (`~/Library/Application Support/…/node`), not a separator.
+            .filter_map(|s| mur_common::exec::resolve_command_in(&aug_path, &s.command).ok())
             .collect()
     };
 

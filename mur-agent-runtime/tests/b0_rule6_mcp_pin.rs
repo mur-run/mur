@@ -60,6 +60,25 @@ fn matching_binary_hash_passes_startup() {
 }
 
 #[test]
+fn drift_is_caught_when_the_binary_path_contains_a_space() {
+    // The spawn resolves `command` whole, so a space is part of the path
+    // (`~/Library/Application Support/…`). Splitting on it resolved nothing,
+    // soft-failed, and ran the drifted binary unpinned.
+    let dir = TempDir::new().unwrap();
+    let spaced = dir.path().join("Application Support");
+    std::fs::create_dir(&spaced).unwrap();
+    let bin = write_fake_binary(&spaced, b"pretend MCP body v1\n");
+    let pinned_hash = sha256_hex(b"pretend MCP body v1\n");
+    std::fs::write(&bin, b"pretend MCP body v2 -- drifted\n").unwrap();
+
+    let profile = profile_with_pin(&bin, "weather", Some(pinned_hash));
+
+    let msg = verify_mcp_supply_chain(&[], &profile)
+        .expect_err("drift behind a spaced path must still fail startup");
+    assert!(msg.contains("B0 rule 6"), "got {msg}");
+}
+
+#[test]
 fn binary_drift_fails_startup_with_inspect_hint() {
     let dir = TempDir::new().unwrap();
     let installed = b"pretend MCP body v1\n";

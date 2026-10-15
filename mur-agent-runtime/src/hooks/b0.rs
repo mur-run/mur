@@ -170,14 +170,14 @@ pub fn verify_mcp_supply_chain(
         // spawn but not for this check: verification soft-failed with "command
         // not resolvable, continuing" and the binary then ran entirely
         // unpinned. The two passes must consult one PATH.
-        let prog = entry
-            .command
-            .split_whitespace()
-            .next()
-            .unwrap_or(&entry.command);
+        //
+        // And one command: the spawn resolves `entry.command` whole (args live
+        // in `entry.args`). Taking its first word truncated a path with a
+        // space (`~/Library/Application Support/…`) to one that does not
+        // exist, which soft-failed here and ran the server unpinned.
         let path = match mur_common::exec::resolve_command_in(
             &mur_common::exec::augmented_path_var(),
-            prog,
+            &entry.command,
         ) {
             Ok(p) => p,
             Err(e) => {
