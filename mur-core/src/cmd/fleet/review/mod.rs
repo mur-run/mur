@@ -18,6 +18,7 @@
 //! session with a clean channel resumes via `resume.rs`. Items waiting on
 //! those carry an `#[allow(dead_code)]` naming the section.
 
+mod approval_window;
 pub mod constants;
 pub mod driver;
 pub mod ledger;

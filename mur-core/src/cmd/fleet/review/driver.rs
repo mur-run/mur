@@ -178,10 +178,11 @@ impl std::fmt::Display for TaskFailed {
 impl std::error::Error for TaskFailed {}
 
 /// Answers one gated tool call raised inside a member's turn:
-/// `(member, call) -> allow`. The call is one entry of the runtime's
+/// `(member, call, deadline) -> allow`. `deadline` is when the runtime stops
+/// accepting an answer (`None` if the notification named no timeout). The call is one entry of the runtime's
 /// approval notification (`hitl_id`, `tool_name`, `tool_input`, `risk`, …);
 /// a batched notification is split by [`answer_hitl`] first.
-pub type HitlDecider<'a> = &'a dyn Fn(&str, &serde_json::Value) -> bool;
+pub type HitlDecider<'a> = &'a dyn Fn(&str, &serde_json::Value, Option<std::time::Instant>) -> bool;
 
 /// Real transport: wraps [`crate::a2a_dial::dial_message_streaming`]
 /// unchanged (A2). Accumulates only non-thinking deltas as the reply text,
@@ -217,12 +218,15 @@ pub(super) fn answer_hitl(
             Some(calls) if !calls.is_empty() => calls.iter().collect(),
             _ => vec![hitl],
         };
+    // One deadline per notification: the runtime awaits a whole batch against
+    // a single timeout, so later calls in it have less time than the first.
+    let deadline = super::approval_window::deadline_from(hitl, std::time::Instant::now());
     for call in calls {
         let id = call
             .get("hitl_id")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        respond(id, decide(member, call));
+        respond(id, decide(member, call, deadline));
     }
 }
 
