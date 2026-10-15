@@ -8,6 +8,7 @@
 //! The decision logic is pure ([`parse_hosts`], [`apply`]) so tests never
 //! touch a profile on disk or spawn the install probe `manage::mcp_add` runs.
 
+use mur_agent_runtime::sandbox::egress_proxy::DENY_OVERLAY_ENFORCEMENT;
 use mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS;
 use std::path::Path;
 
@@ -16,6 +17,7 @@ use mur_common::agent::{FilesystemEntitlement, McpNetMode, McpServerEntry, McpSe
 use mur_common::host_pattern::{Normalization, normalize_host_pattern};
 use mur_common::proposal::Proposal;
 
+use super::browser_live_preview::render_preview;
 use super::manage::{self, Managed};
 
 /// Profile entry name for the live browser server.
@@ -387,6 +389,57 @@ pub(super) fn unchanged_text(hosts: &[String]) -> String {
 /// Chip label for the restart live mode needs.
 pub(super) const RESTART_LABEL: &str = "restart to enable browser live mode";
 
+/// `/browser live` flags other than `--profile`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LiveFlags {
+    /// The user confirmed the preview: write it.
+    pub yes: bool,
+    /// Research mode: all hosts, audited (`BroadAudited`).
+    pub research: bool,
+}
+
+/// Strip `--yes` / `--research`, leaving `--profile` and the hosts.
+pub(super) fn split_flags(args: &[String]) -> (Vec<String>, LiveFlags) {
+    let mut flags = LiveFlags::default();
+    let mut rest = Vec::with_capacity(args.len());
+    for a in args {
+        match a.as_str() {
+            "--yes" => flags.yes = true,
+            "--research" => flags.research = true,
+            _ => rest.push(a.clone()),
+        }
+    }
+    (rest, flags)
+}
+
+/// The slash command (no leading `/`) that confirms a preview. Hosts are the
+/// normalized ones, so what the user approves is exactly what gets written.
+pub(super) fn confirm_command(
+    hosts_args: &[String],
+    profile: Option<&str>,
+    research: bool,
+) -> String {
+    let mut cmd = vec!["browser live --yes".to_owned()];
+    if research {
+        cmd.push("--research".to_owned());
+    }
+    cmd.extend(hosts_args.iter().cloned());
+    if let Some(site) = profile {
+        cmd.push(format!("--profile {site}"));
+    }
+    cmd.join(" ")
+}
+
+/// Chip label for the confirm step.
+pub(super) const CONFIRM_LABEL: &str = "save this browser network policy";
+
+/// The confirm chip, or `None` when the command would not pass
+/// [`mur_common::proposal::vet`] (e.g. too long for a chip).
+fn confirm_chip(cmd: &str) -> Option<Proposal> {
+    let args = serde_json::json!({ "label": CONFIRM_LABEL, "kind": "slash", "command": cmd });
+    mur_common::proposal::vet(&args).ok()
+}
+
 /// Profile side effects, injected so tests run with a fake.
 pub(super) trait LiveOps {
     /// Current MCP entries on the agent.
@@ -410,11 +463,39 @@ pub(super) fn run(
     ready: bool,
     ops: &mut impl LiveOps,
 ) -> anyhow::Result<Managed> {
-    let (host_args, profile) = split_profile(args).map_err(anyhow::Error::msg)?;
-    let hosts = parse_hosts(&host_args).map_err(anyhow::Error::msg)?.hosts;
+    let (args, flags) = split_flags(args);
+    let (host_args, profile) = split_profile(&args).map_err(anyhow::Error::msg)?;
+    let parsed = parse_hosts(&host_args).map_err(anyhow::Error::msg)?;
+    let hosts = parsed.hosts;
     check_setup(ready).map_err(anyhow::Error::msg)?;
-    let mut notes = Vec::new();
     let mut servers = ops.servers()?;
+    // #1905 Part 2: show what will be written, and write only on `--yes`.
+    let existing = servers.iter().find(|e| e.name == LIVE_ENTRY);
+    let after = live_network(&hosts);
+    let preview = render_preview(
+        agent,
+        LIVE_ENTRY,
+        existing.and_then(|e| e.network.as_ref()),
+        &after,
+        &parsed.notes,
+        DENY_OVERLAY_ENFORCEMENT,
+    );
+    if !flags.yes {
+        // A rerun that changes nothing never offers a chip. With `--yes` the
+        // write path below decides, so `save` can still backfill grants.
+        let profile_same = profile
+            .as_deref()
+            .is_none_or(|site| existing.is_some_and(|e| e.args == live_argv(agent, Some(site))));
+        if existing.is_some_and(|e| e.network.as_ref() == Some(&after)) && profile_same {
+            return Ok((unchanged_text(&hosts), None));
+        }
+        let cmd = confirm_command(&hosts, profile.as_deref(), flags.research);
+        return Ok(match confirm_chip(&cmd) {
+            Some(chip) => (preview, Some(chip)),
+            None => (format!("{preview}\nRun: `/{cmd}`"), None),
+        });
+    }
+    let mut notes = vec![preview];
     // `mcp_add` bails on a duplicate name by contract; decide here instead.
     let previous = if servers.iter().any(|e| e.name == LIVE_ENTRY) {
         // Existing entry: overwrite its allowlist. The save is atomic
