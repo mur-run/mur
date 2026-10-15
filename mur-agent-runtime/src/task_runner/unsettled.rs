@@ -60,9 +60,38 @@ pub(super) fn mark_closed(agent_home: &Path, track_name: &str) {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Unsettled {
     pub marker: OpenMarker,
-    /// Whether the worktree is still on disk. A marker whose track is gone
-    /// was cleaned up by hand and needs no report.
-    pub track_exists: bool,
+    /// Whether the worktree is still on disk. Only a confirmed absence lets
+    /// the marker go; an unreadable path is not proof of deletion.
+    pub track: TrackState,
+}
+
+/// What a boot can say about a marker's worktree.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) enum TrackState {
+    Present,
+    /// Confirmed gone: the user cleaned it up.
+    Absent,
+    /// Could not tell (e.g. permission denied after a filesystem grant was
+    /// removed, or the sandbox sealed it off). `Path::exists` would call this
+    /// absent and delete the only reminder, so it is kept.
+    Unknown,
+}
+
+impl TrackState {
+    fn probe(path: &Path) -> Self {
+        Self::from_probe(path.try_exists(), path)
+    }
+
+    fn from_probe(r: std::io::Result<bool>, path: &Path) -> Self {
+        match r {
+            Ok(true) => Self::Present,
+            Ok(false) => Self::Absent,
+            Err(error) => {
+                tracing::warn!(track = %path.display(), %error, "cannot check turn track; marker kept");
+                Self::Unknown
+            }
+        }
+    }
 }
 
 /// Every marker under `agent_home`. Unparseable files are skipped with a
@@ -84,11 +113,8 @@ pub(super) fn scan(agent_home: &Path) -> Vec<Unsettled> {
             .and_then(|b| serde_json::from_slice::<OpenMarker>(&b).map_err(|e| e.to_string()));
         match parsed {
             Ok(marker) => {
-                let track_exists = marker.track.exists();
-                out.push(Unsettled {
-                    marker,
-                    track_exists,
-                });
+                let track = TrackState::probe(&marker.track);
+                out.push(Unsettled { marker, track });
             }
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "unreadable open turn track marker; skipped")
@@ -126,7 +152,7 @@ pub(super) fn report_at_boot(agent_home: &Path, mur_home: &Path, agent: &str) ->
         let m = &u.marker;
         let title = item_title(m);
         let is_open = live.contains(&title);
-        if !u.track_exists {
+        if u.track == TrackState::Absent {
             if is_open && let Err(e) = mur_open_items::resolve(mur_home, &title) {
                 tracing::warn!(track_name = %m.track_name, error = %e, "could not resolve open item; marker kept");
                 continue;
@@ -226,6 +252,44 @@ mod tests {
         assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 0);
         assert!(mur_open_items::open(mur_home.path()).is_empty());
         assert!(scan(home.path()).is_empty());
+    }
+
+    #[test]
+    fn probe_error_is_unknown_not_absent() {
+        let p = Path::new("x");
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(TrackState::from_probe(Err(denied), p), TrackState::Unknown);
+        assert_eq!(TrackState::from_probe(Ok(false), p), TrackState::Absent);
+        assert_eq!(TrackState::from_probe(Ok(true), p), TrackState::Present);
+    }
+
+    /// Review #1913 P2: a worktree behind a revoked grant must not be
+    /// mistaken for a deleted one.
+    #[cfg(unix)]
+    #[test]
+    fn inaccessible_worktree_keeps_marker_and_item() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let mur_home = tempfile::tempdir().unwrap();
+        let locked = home.path().join("locked");
+        let wt = locked.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        mark_open(home.path(), &marker(home.path(), "turn-locked", wt.clone()));
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 1);
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = wt.try_exists().is_err(); // false when running as root
+        let n = report_at_boot(home.path(), mur_home.path(), "mur");
+        let markers = scan(home.path()).len();
+        let items = mur_open_items::open(mur_home.path()).len();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        if denied {
+            assert_eq!(n, 1, "unknown still counts as unsettled");
+            assert_eq!(markers, 1, "marker kept on access error");
+            assert_eq!(items, 1, "open item not resolved on access error");
+        }
+        assert!(wt.exists(), "worktree untouched");
     }
 
     #[test]
