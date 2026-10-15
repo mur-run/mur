@@ -136,9 +136,13 @@ serena (LSP-backed code navigation, opt-in) is the first MCP entry whose risk is
 
 ### What MUR does at launch
 
-- **`SERENA_HOME`** is computed by the runtime as `<agent home>/serena` and set *after* the inherited, policy and seal env, so nothing upstream can override it. If the sandbox policy carries no agent home (`LaunchChain::is_inert()`), a serena entry refuses (`NoAgentHome`) rather than guess one.
+- **`SERENA_HOME`** is computed by the runtime as `<agent home>/serena` for the entry named `serena`, and per entry otherwise (see "One home per entry" below), and set *after* the inherited, policy and seal env, so nothing upstream can override it. If the sandbox policy carries no agent home (`LaunchChain::is_inert()`), a serena entry refuses (`NoAgentHome`) rather than guess one.
 - **`--project <root>`** comes from the entry's own `project:` field, which is written at setup into `profile.yaml`. That file is write-protected (`SELF_PROTECTED_WRITE_ONLY`), so the agent cannot retarget it. `project:` is never inferred from the session cwd.
 - **The dashboard is forced off**: `--enable-web-dashboard false --open-web-dashboard false`. serena defaults it to on.
+
+### One home per entry
+
+The entry named `serena` keeps `<agent home>/serena`. Any other entry gets `<agent home>/serena-homes/<entry>`, and every check below (C1–C9) resolves paths against that entry's own home. Entry names are limited to ASCII alphanumerics, `_` and `-`, and are validated before anything is installed. The reason: serena keeps its project registry in `SERENA_HOME`, and two processes sharing one home race on it and drop a registration. A probe with serena 2.0.0.dev0 on two simultaneous processes lost a registration in 5/5 rounds with a shared home and 0/5 with separate homes. `mur code-nav setup --entry <name>` creates such an entry.
 
 ### The checks, C1–C9
 

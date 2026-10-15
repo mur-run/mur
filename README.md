@@ -888,6 +888,11 @@ is granted exec only there, and serena's config is checked before every launch
 so a repo can't swap in its own language server. High-risk language servers
 (Rust, TypeScript, Go, …) stay off unless you name them with `--lsp`.
 
+To navigate a second repo, append another entry with its own `SERENA_HOME`:
+`mur code-nav setup --agent <name> --with-serena --project <repo2> --entry serena-b`.
+Two serena processes sharing one home race on its project registry and drop a
+registration; one home per entry avoids that. `--entry` defaults to `serena`.
+
 ---
 
 ## 🦀 Architecture
