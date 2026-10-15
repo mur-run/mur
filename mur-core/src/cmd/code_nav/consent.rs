@@ -35,6 +35,10 @@ pub struct Manifest {
     pub languages: BTreeSet<String>,
     /// Project serena serves, if serena was set up.
     pub project: Option<PathBuf>,
+    /// Project per additional (non-default) serena entry, by entry name.
+    /// Absent in manifests written before multi-entry setup.
+    #[serde(default)]
+    pub entry_projects: std::collections::BTreeMap<String, PathBuf>,
     pub serena: Option<Record>,
     /// The pyright serena launches via `ls_path` (3.6b). Absent in
     /// manifests written before it existed.
@@ -111,7 +115,28 @@ pub fn enabled_languages(plan: &Plan) -> Vec<String> {
         .collect()
 }
 
-pub fn diff(plan: &Plan, project: Option<&Path>, m: &Manifest) -> Diff {
+impl Manifest {
+    /// The project last applied for `entry`.
+    pub fn project_of(&self, entry: &str) -> Option<&Path> {
+        if entry == mur_agent_runtime::mcp::serena::DEFAULT_ENTRY_NAME {
+            self.project.as_deref()
+        } else {
+            self.entry_projects.get(entry).map(PathBuf::as_path)
+        }
+    }
+
+    /// Record the project applied for `entry`.
+    pub fn set_project(&mut self, entry: &str, project: &Path) {
+        if entry == mur_agent_runtime::mcp::serena::DEFAULT_ENTRY_NAME {
+            self.project = Some(project.to_path_buf());
+        } else {
+            self.entry_projects
+                .insert(entry.to_owned(), project.to_path_buf());
+        }
+    }
+}
+
+pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> Diff {
     let installs = plan
         .install
         .iter()
@@ -138,7 +163,7 @@ pub fn diff(plan: &Plan, project: Option<&Path>, m: &Manifest) -> Diff {
         .cloned()
         .collect();
     let project = project
-        .filter(|p| m.project.as_deref() != Some(*p))
+        .filter(|p| m.project_of(entry) != Some(*p))
         .map(Path::to_path_buf);
     Diff {
         installs,

@@ -41,7 +41,7 @@ fn applied(plan: &Plan, project: &Path) -> Manifest {
 #[test]
 fn first_run_needs_consent_for_everything() {
     let plan = p(true, &[]);
-    let d = diff(&plan, Some(Path::new("/r")), &Manifest::default());
+    let d = diff(&plan, "serena", Some(Path::new("/r")), &Manifest::default());
     assert!(!d.is_empty());
     // ast-grep, serena, and pyright (Python is on by default).
     assert_eq!(d.installs.len(), 3);
@@ -53,7 +53,7 @@ fn first_run_needs_consent_for_everything() {
 fn identical_rerun_asks_nothing() {
     let plan = p(true, &[]);
     let m = applied(&plan, Path::new("/r"));
-    assert!(diff(&plan, Some(Path::new("/r")), &m).is_empty());
+    assert!(diff(&plan, "serena", Some(Path::new("/r")), &m).is_empty());
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn adding_a_high_language_asks_only_for_it() {
     let before = p(true, &["python"]);
     let m = applied(&before, Path::new("/r"));
     let after = p(true, &["python", "go"]);
-    let d = diff(&after, Some(Path::new("/r")), &m);
+    let d = diff(&after, "serena", Some(Path::new("/r")), &m);
     assert!(d.installs.is_empty());
     assert_eq!(d.languages, ["go"]);
     let grants: BTreeSet<_> = d.grants.iter().map(String::as_str).collect();
@@ -73,7 +73,7 @@ fn adding_a_high_language_asks_only_for_it() {
 fn changing_project_needs_consent() {
     let plan = p(true, &[]);
     let m = applied(&plan, Path::new("/r"));
-    let d = diff(&plan, Some(Path::new("/other")), &m);
+    let d = diff(&plan, "serena", Some(Path::new("/other")), &m);
     assert_eq!(d.project.as_deref(), Some(Path::new("/other")));
     assert!(!d.is_empty());
 }
@@ -81,7 +81,7 @@ fn changing_project_needs_consent() {
 #[test]
 fn dropped_language_is_kept_and_reported_not_asked() {
     let m = applied(&p(true, &["python", "go"]), Path::new("/r"));
-    let d = diff(&p(true, &["python"]), Some(Path::new("/r")), &m);
+    let d = diff(&p(true, &["python"]), "serena", Some(Path::new("/r")), &m);
     assert!(
         d.is_empty(),
         "removing scope is not something to consent to"
@@ -156,4 +156,38 @@ fn enabled_high_row_prints_its_mandated_note() {
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("HIGH"), "{text}");
     assert!(text.contains("runs its build scripts"), "{text}");
+}
+
+#[test]
+fn second_entry_with_same_project_still_needs_consent() {
+    let plan = p(true, &[]);
+    let m = applied(&plan, Path::new("/r"));
+    let d = diff(&plan, "other", Some(Path::new("/r")), &m);
+    assert_eq!(d.project.as_deref(), Some(Path::new("/r")));
+}
+
+#[test]
+fn entry_projects_are_tracked_per_name() {
+    let plan = p(true, &[]);
+    let mut m = applied(&plan, Path::new("/r"));
+    m.set_project("other", Path::new("/o"));
+    assert_eq!(m.project_of("serena"), Some(Path::new("/r")));
+    assert_eq!(m.project_of("other"), Some(Path::new("/o")));
+    assert!(
+        diff(&plan, "other", Some(Path::new("/o")), &m)
+            .project
+            .is_none()
+    );
+    assert!(
+        diff(&plan, "serena", Some(Path::new("/r")), &m)
+            .project
+            .is_none()
+    );
+}
+
+#[test]
+fn manifest_without_entry_projects_still_loads() {
+    let json = r#"{"installed":[],"granted":[],"languages":[],"project":null,"serena":null,"disabled":[]}"#;
+    let m: Manifest = serde_json::from_str(json).unwrap();
+    assert!(m.entry_projects.is_empty());
 }

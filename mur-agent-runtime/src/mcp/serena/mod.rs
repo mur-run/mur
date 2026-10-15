@@ -13,6 +13,7 @@ pub mod rewrite;
 pub use preflight::{SerenaPreflightError, preflight};
 
 use mur_common::agent::{McpServerEntry, McpServerKind};
+use mur_common::mcp_naming::sanitize_server;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,15 @@ pub fn admit_tools(
 
 /// Directory under the agent home used as serena's `SERENA_HOME`.
 pub const SERENA_HOME_DIR: &str = "serena";
+/// Parent of every non-default entry's `SERENA_HOME`, beside (not inside) the
+/// legacy home so an entry name can never collide with `projects/` or
+/// `serena_config.yml`.
+pub const SERENA_ENTRY_HOMES_DIR: &str = "serena-homes";
+/// The entry name whose `SERENA_HOME` stays at the legacy `<agent_home>/serena`.
+/// Existing single-project installs use it, so they need no migration.
+pub const DEFAULT_ENTRY_NAME: &str = "serena";
+/// Longest entry name accepted as a home directory name.
+const MAX_ENTRY_NAME_LEN: usize = 64;
 /// serena's global config file name inside `SERENA_HOME`.
 pub const SERENA_CONFIG_FILE: &str = "serena_config.yml";
 /// MUR-owned parent of every per-project serena folder, inside
@@ -98,6 +108,49 @@ pub fn serena_paths(agent_home: &Path) -> SerenaPaths {
     }
 }
 
+/// The paths for one named entry. Each entry gets its own `SERENA_HOME`
+/// because serena read-modify-writes `serena_config.yml` unlocked: two
+/// processes sharing one home lose project registrations when they start
+/// together (6 of 6 simultaneous starts dropped one in the #1718 probe).
+///
+/// The home is a pure function of the entry *name*, never of entry order,
+/// so removing or reordering entries cannot move anyone's home:
+/// [`DEFAULT_ENTRY_NAME`] keeps `<agent_home>/serena`; any other name maps to
+/// `<agent_home>/serena-homes/<name>`. Names are accepted verbatim or refused
+/// (`[a-z0-9_-]`, 1..=64 chars) — never sanitized — so two names cannot
+/// collapse into one home. Upper case is refused because `Repo` and `repo`
+/// are one directory on case-insensitive filesystems (macOS, Windows).
+/// Names `sanitize_server` would rewrite (trailing or doubled `_`) are
+/// refused too, so the name is also its own tool prefix.
+pub fn serena_paths_for(
+    agent_home: &Path,
+    entry_name: &str,
+) -> Result<SerenaPaths, SerenaEntryError> {
+    if entry_name == DEFAULT_ENTRY_NAME {
+        return Ok(serena_paths(agent_home));
+    }
+    let ok = !entry_name.is_empty()
+        && entry_name.len() <= MAX_ENTRY_NAME_LEN
+        && entry_name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+        // The tool prefix is `sanitize_server(name)`; a name it would rewrite
+        // (`serena_`, `repo__a`) shares a prefix with its rewritten form.
+        && sanitize_server(entry_name) == entry_name;
+    if !ok {
+        return Err(SerenaEntryError::EntryName {
+            entry: entry_name.to_owned(),
+        });
+    }
+    let home = agent_home.join(SERENA_ENTRY_HOMES_DIR).join(entry_name);
+    Ok(SerenaPaths {
+        config_file: home.join(SERENA_CONFIG_FILE),
+        projects_dir: home.join(SERENA_PROJECTS_DIR),
+        tools_dir: mur_common::home::mur_home_lossy().join(mur_common::config::MUR_TOOLS_DIR),
+        home,
+    })
+}
+
 /// Environment for the serena child: `SERENA_HOME` and nothing else.
 /// There is deliberately no profile-level `env` field (plan D1).
 ///
@@ -139,6 +192,35 @@ pub enum SerenaEntryError {
          home, so `SERENA_HOME` cannot be fixed; refusing to spawn"
     )]
     NoAgentHome { entry: String },
+    #[error(
+        "MCP server `{entry}` (kind: serena): its tool prefix `mcp__{prefix}__` is also the \
+         prefix of server `{other}`, so one would overwrite the other's tools and calls could \
+         reach the wrong repository; rename one of them"
+    )]
+    ToolPrefix {
+        entry: String,
+        other: String,
+        prefix: String,
+    },
+    #[error(
+        "MCP server `{entry}` (kind: serena): the entry name must be 1-64 characters of \
+         [a-z0-9_-] (lower case only) because it names the entry's own SERENA_HOME \
+         directory, and `Repo` / `repo` are one directory on case-insensitive filesystems"
+    )]
+    EntryName { entry: String },
+    #[error(
+        "MCP server `{entry}` (kind: serena): its SERENA_HOME is now `{home}`, but only the \
+         older shared home `{legacy}` exists (entries other than `serena` used to share it). \
+         Re-run setup to create the entry's own home: \
+         `mur code-nav setup --agent {agent} --with-serena --project {project} --entry {entry}`"
+    )]
+    LegacyHome {
+        entry: String,
+        agent: String,
+        project: String,
+        home: String,
+        legacy: String,
+    },
     #[error("MCP server `{entry}` (kind: serena): {source}")]
     Preflight {
         entry: String,
@@ -155,14 +237,64 @@ pub fn verify_entries(
     entries: &[McpServerEntry],
     agent_home: &Path,
 ) -> Result<(), SerenaEntryError> {
-    let paths = serena_paths(agent_home);
     for entry in entries {
         if entry.kind != Some(McpServerKind::Serena) {
             continue;
         }
+        let others = entries.iter().map(|e| e.name.as_str());
+        if let Some(other) = tool_prefix_clash(&entry.name, others) {
+            return Err(SerenaEntryError::ToolPrefix {
+                entry: entry.name.clone(),
+                other: other.to_owned(),
+                prefix: sanitize_server(&entry.name),
+            });
+        }
+        let paths = entry_paths(agent_home, entry)?;
         verify_entry(entry, &paths)?;
     }
     Ok(())
+}
+
+/// The name of another server whose tool prefix equals `name`'s, if any.
+/// Pure over names, so setup can run it before writing anything. Tool
+/// registration keys on the sanitized name, so a shared prefix means the
+/// later server silently replaces the earlier one's tools.
+pub fn tool_prefix_clash<'a>(
+    name: &str,
+    others: impl IntoIterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let prefix = sanitize_server(name);
+    others
+        .into_iter()
+        .find(|o| *o != name && sanitize_server(o) == prefix)
+}
+
+/// The entry's paths, or the recovery message when it predates #1718.
+///
+/// Before per-entry homes every entry shared `<agent_home>/serena`, so a
+/// custom-named entry (e.g. `code-nav`) written by an older setup now points
+/// at a home that was never created. When exactly that is on disk — no own
+/// home, the legacy one present — say how to recreate it instead of the bare
+/// C1 "not a directory". Nothing is migrated: the config embeds absolute
+/// paths and a pinned auth secret, and setup already regenerates both.
+fn entry_paths(agent_home: &Path, entry: &McpServerEntry) -> Result<SerenaPaths, SerenaEntryError> {
+    let paths = serena_paths_for(agent_home, &entry.name)?;
+    let legacy = serena_paths(agent_home).home;
+    if entry.name != DEFAULT_ENTRY_NAME && !paths.home.exists() && legacy.is_dir() {
+        return Err(SerenaEntryError::LegacyHome {
+            entry: entry.name.clone(),
+            agent: agent_home
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            project: entry
+                .project
+                .as_deref()
+                .map_or_else(|| "<repo>".to_owned(), |p| p.display().to_string()),
+            home: paths.home.display().to_string(),
+            legacy: legacy.display().to_string(),
+        });
+    }
+    Ok(paths)
 }
 
 /// One entry: the `project` checks, then [`preflight`]. Returns the checked
@@ -206,7 +338,7 @@ pub fn launch_additions(
             entry: entry.name.clone(),
         });
     };
-    let paths = serena_paths(agent_home);
+    let paths = entry_paths(agent_home, entry)?;
     let project = verify_entry(entry, &paths)?;
     Ok(LaunchAdditions {
         env: launch_env(&paths),

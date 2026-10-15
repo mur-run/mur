@@ -30,6 +30,25 @@ fn profile() -> AgentProfile {
 }
 
 #[test]
+fn build_named_sets_the_entry_name_and_keeps_the_shape() {
+    let f = fx();
+    let e = build_named(&f.record, "serena-b", &f.repo).unwrap();
+    assert_eq!(e.name, "serena-b");
+    assert_eq!(e.kind, Some(McpServerKind::Serena));
+    assert_eq!(e.args, build(&f.record, &f.repo).unwrap().args);
+}
+
+#[test]
+fn two_entries_coexist_in_one_profile() {
+    let f = fx();
+    let mut profile = profile();
+    upsert(&mut profile, build(&f.record, &f.repo).unwrap()).unwrap();
+    let c = upsert(&mut profile, build_named(&f.record, "b", &f.repo).unwrap()).unwrap();
+    assert_eq!(c, Change::Added);
+    assert_eq!(profile.mcp_servers.len(), 2);
+}
+
+#[test]
 fn entry_has_the_layer_b_shape() {
     let f = fx();
     let e = build(&f.record, &f.repo).unwrap();
@@ -162,6 +181,22 @@ fn check_slot_matches_upserts_refusal() {
     let err = check_slot(&q, ENTRY_NAME).unwrap_err().to_string();
     assert!(err.contains("not kind: serena"), "{err}");
     assert!(err.contains("mur agent mcp remove"), "{err}");
+}
+
+/// `repo_a` and `repo/a` both become the tool prefix `mcp__repo_a__`, so the
+/// later server's tools would replace the earlier one's. Setup refuses first.
+#[test]
+fn check_slot_refuses_a_shared_tool_prefix() {
+    let mut p = profile();
+    p.mcp_servers.push(McpServerEntry {
+        name: "repo/a".into(),
+        command: "uvx".into(),
+        ..Default::default()
+    });
+    let err = check_slot(&p, "repo_a").unwrap_err().to_string();
+    assert!(err.contains("same tool prefix"), "{err}");
+    assert!(err.contains("`repo/a`"), "{err}");
+    assert!(check_slot(&p, "repo_b").is_ok());
 }
 
 #[test]
