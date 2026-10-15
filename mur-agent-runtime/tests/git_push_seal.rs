@@ -1,7 +1,9 @@
 //! Git-push registry decision, premise 1, under a REAL seal: the agent can read
 //! `<mur_home>/git-push/registry.yaml` but cannot write it — even when its
-//! profile grants write over the whole `<mur_home>` (on Linux that grant is
-//! dropped whole; on macOS SBPL denies the broker dir after the allow).
+//! profile grants write over the broker dir itself (on Linux that grant is
+//! dropped whole; on macOS SBPL denies the broker dir after the allow). A grant
+//! over the whole `<mur_home>` is no longer a profile the sandbox accepts: it
+//! would reach `channel-heads/` and is refused (E2, #1875).
 //!
 //! Re-exec pattern from `scratch_seal.rs`: a `#[ctor]` hook in the child seals
 //! for agent `<home>/agents/a` and runs the probe. The fake home lives under
@@ -60,7 +62,7 @@ fn was_sealed(home: &Path) -> bool {
     home.join("agents").join(AGENT).join(SEALED_MARKER).exists()
 }
 
-/// The registry survives a sealed agent that holds a write grant over all of `<mur_home>`.
+/// The registry survives a sealed agent that holds a write grant over the broker dir.
 #[test]
 fn sealed_agent_cannot_rewrite_the_registry_even_under_a_mur_home_grant() {
     let home = run_case("registry");
@@ -108,12 +110,13 @@ fn git_push_seal_subprocess_main() {
     let agent_home = home.join("agents").join(AGENT);
 
     let mut profile = mur_common::agent::AgentProfile::default_for_tests();
-    // The widest grant a user could plausibly write.
-    profile
-        .entitlements
-        .filesystem
-        .write
-        .push(home.to_string_lossy().into_owned());
+    // The widest grant a user could write that the sandbox still accepts: a
+    // `<mur_home>` grant reaches `channel-heads/` and is refused outright.
+    profile.entitlements.filesystem.write.push(
+        mur_common::git_push::broker_dir(&home)
+            .to_string_lossy()
+            .into_owned(),
+    );
     match mur_agent_runtime::sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
         Ok(s) if s.enforcing => {}
         other => skip_or_fail_unenforced(&other),

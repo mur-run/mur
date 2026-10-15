@@ -2,6 +2,7 @@ pub mod child;
 pub mod egress_proxy;
 pub mod launch_chain;
 pub mod policy;
+pub mod protected;
 pub mod reqwest_guard;
 pub mod search_dirs;
 
@@ -96,6 +97,14 @@ pub fn apply(
     // …and to write the shared runtime media state it owns (co-watching:
     // watch.json + VLC snapshot dir), which lives outside agent_home.
     policy.allow_extra_write_paths(extra_write_paths);
+    // E2 (#1875): judged on the finished policy, before anything is installed.
+    // Same `<mur_home>` derivation as the `channels` grant in `policy/build.rs`.
+    let mur_home = agent_home
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(mur_common::home::mur_home);
+    protected::check_protected_writes(&policy, &mur_home)?;
     let dropped = policy.dropped.clone();
     let mut status = apply_policy(&policy)?;
     status.dropped = dropped;

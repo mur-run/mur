@@ -320,6 +320,13 @@ pub(super) async fn prepare_and_seal(
             })
         }
         Err(e) => {
+            // E2 (#1875): not a sandbox malfunction but a profile that could
+            // move the channel heads. Advisory-only would run it with MORE
+            // access than the profile, so `fail_closed_on_sandbox_error: false`
+            // must not excuse it.
+            if crate::sandbox::protected::is_refusal(&e) {
+                return Err(e);
+            }
             if fail_closed {
                 return Err(e.context(
                     "B1 sandbox::apply failed and fail_closed_on_sandbox_error=true; \
