@@ -6,8 +6,9 @@
 //! that recorded the open may itself be gone (service-manager logs often live under
 //! a temp dir). So every open track gets a small marker file in the agent
 //! home, removed when the track closes. A marker found at boot is a track
-//! nobody settled: it is reported, never deleted — the worktree may hold the
-//! only copy of the turn's edits.
+//! nobody settled: it is reported on every boot until the worktree is gone,
+//! and the worktree is never deleted — it may hold the only copy of the
+//! turn's edits.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -98,41 +99,62 @@ pub(super) fn scan(agent_home: &Path) -> Vec<Unsettled> {
     out
 }
 
-/// Boot-time report: log each leftover track and raise one open item per
-/// track so the user sees it after the log is gone. Markers are cleared once
-/// reported (the open item is now the durable record); tracks are left
-/// alone. Returns how many tracks were reported.
+fn item_title(m: &OpenMarker) -> String {
+    format!(
+        "Review unsettled turn track {} in {}",
+        m.track_name,
+        m.project.display()
+    )
+}
+
+/// Boot-time report: log each leftover track and keep one open item per
+/// track so the user sees it after the log is gone.
+///
+/// The marker lives exactly as long as the worktree. Clearing it on first
+/// report meant that closing the open item without removing the worktree
+/// silenced the only reminder; now every boot re-checks, re-raises a
+/// resolved item while the worktree remains, and only when the worktree is
+/// gone resolves the item and drops the marker. Tracks are never touched.
+/// Returns how many unsettled tracks are still on disk.
 pub(super) fn report_at_boot(agent_home: &Path, mur_home: &Path, agent: &str) -> usize {
-    let mut reported = 0;
+    let live: Vec<String> = mur_open_items::open(mur_home)
+        .into_iter()
+        .map(|i| i.title)
+        .collect();
+    let mut remaining = 0;
     for u in scan(agent_home) {
         let m = &u.marker;
-        if u.track_exists {
-            tracing::warn!(
-                turn = %m.turn,
-                track_name = %m.track_name,
-                track = %m.track.display(),
-                project = %m.project.display(),
-                opened_at = %m.opened_at,
-                "unsettled turn track from a previous run; left in place for review"
-            );
-            let title = format!(
-                "Review unsettled turn track {} in {}",
-                m.track_name,
-                m.project.display()
-            );
-            let next = format!(
-                "inspect {} then `git worktree remove` it",
-                m.track.display()
-            );
-            if let Err(e) = mur_open_items::report(mur_home, agent, &title, Some(&next)) {
-                tracing::warn!(track_name = %m.track_name, error = %e, "could not raise open item; marker kept");
+        let title = item_title(m);
+        let is_open = live.contains(&title);
+        if !u.track_exists {
+            if is_open && let Err(e) = mur_open_items::resolve(mur_home, &title) {
+                tracing::warn!(track_name = %m.track_name, error = %e, "could not resolve open item; marker kept");
                 continue;
             }
-            reported += 1;
+            mark_closed(agent_home, &m.track_name);
+            continue;
         }
-        mark_closed(agent_home, &m.track_name);
+        remaining += 1;
+        tracing::warn!(
+            turn = %m.turn,
+            track_name = %m.track_name,
+            track = %m.track.display(),
+            project = %m.project.display(),
+            opened_at = %m.opened_at,
+            "unsettled turn track from a previous run; left in place for review"
+        );
+        if is_open {
+            continue; // already listed; don't grow the log every boot
+        }
+        let next = format!(
+            "inspect {} then `git worktree remove` it",
+            m.track.display()
+        );
+        if let Err(e) = mur_open_items::report(mur_home, agent, &title, Some(&next)) {
+            tracing::warn!(track_name = %m.track_name, error = %e, "could not raise open item");
+        }
     }
-    reported
+    remaining
 }
 
 #[cfg(test)]
@@ -182,11 +204,28 @@ mod tests {
         let items = mur_open_items::open(mur_home.path());
         assert_eq!(items.len(), 1);
         assert!(items[0].title.contains("turn-live"), "{}", items[0].title);
-        assert!(
-            scan(home.path()).is_empty(),
-            "markers cleared once reported"
+        assert_eq!(
+            scan(home.path()).len(),
+            1,
+            "live marker kept, gone-track marker dropped"
         );
+
+        // Second boot: still open, no duplicate record.
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 1);
+        assert_eq!(mur_open_items::open(mur_home.path()).len(), 1);
+
+        // User closes the item but leaves the worktree: it comes back.
+        let title = items[0].title.clone();
+        mur_open_items::resolve(mur_home.path(), &title).unwrap();
+        assert!(mur_open_items::open(mur_home.path()).is_empty());
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 1);
+        assert_eq!(mur_open_items::open(mur_home.path()).len(), 1, "re-raised");
+
+        // Worktree removed: item resolves itself, marker goes.
+        std::fs::remove_dir_all(&wt).unwrap();
         assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 0);
+        assert!(mur_open_items::open(mur_home.path()).is_empty());
+        assert!(scan(home.path()).is_empty());
     }
 
     #[test]
