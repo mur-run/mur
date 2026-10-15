@@ -276,6 +276,16 @@ pub fn audit(
     out
 }
 
+/// Names of agents whose `model_ref` is exactly `key`. Used by
+/// `mur model remove` to warn before a registry edit strands them.
+pub fn agents_referencing(agents: &[AgentModel], key: &str) -> Vec<String> {
+    agents
+        .iter()
+        .filter(|a| a.model_ref.as_deref() == Some(key))
+        .map(|a| a.name.clone())
+        .collect()
+}
+
 /// Read every `<mur_home>/agents/*/profile.yaml`. Unreadable or unparseable
 /// profiles are skipped rather than fatal: a doctor that dies on one bad file
 /// tells you nothing about the other twenty-six.
@@ -519,6 +529,18 @@ mod tests {
     fn no_catalog_means_no_catalog_findings() {
         let reg = reg_with(&[("claude_sonnet", "anthropic", "claude-sonnet-4-6", None)]);
         assert!(audit(&reg, &[], None).is_empty());
+    }
+
+    #[test]
+    fn remove_finds_only_the_agents_that_reference_the_key() {
+        let agents = vec![
+            agent("a", Some("k1"), "claude", "m"),
+            agent("b", Some("k2"), "claude", "m"),
+            agent("c", None, "claude", "m"),
+            agent("d", Some("k1"), "claude", "m"),
+        ];
+        assert_eq!(agents_referencing(&agents, "k1"), vec!["a", "d"]);
+        assert!(agents_referencing(&agents, "nope").is_empty());
     }
 
     #[test]
