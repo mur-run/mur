@@ -48,6 +48,13 @@ pub fn checked_project(project: &Path) -> Result<PathBuf> {
 /// Build the entry for a verified install. `binary_sha256` pins the entry
 /// point the runtime will exec (B0 rule 6), hashed now, at setup.
 pub fn build(record: &Record, project: &Path) -> Result<McpServerEntry> {
+    build_named(record, ENTRY_NAME, project)
+}
+
+/// [`build`] for an explicitly named entry. Each name gets its own
+/// `SERENA_HOME` at spawn time (`serena_paths_for`), so a second project is a
+/// second entry, never a second registration in a shared home.
+pub fn build_named(record: &Record, name: &str, project: &Path) -> Result<McpServerEntry> {
     let project = checked_project(project)?;
     if !record.bin.is_absolute() {
         bail!(
@@ -62,7 +69,7 @@ pub fn build(record: &Record, project: &Path) -> Result<McpServerEntry> {
         .to_owned();
     let sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&record.bin)?;
     Ok(McpServerEntry {
-        name: ENTRY_NAME.into(),
+        name: name.to_owned(),
         command,
         args: ENTRY_ARGS.iter().map(|a| (*a).to_owned()).collect(),
         binary_sha256: Some(sha),

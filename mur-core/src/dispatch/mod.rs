@@ -311,6 +311,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 agent,
                 with_serena,
                 project,
+                entry,
                 no_ast_grep,
                 lsp,
                 yes,
@@ -321,6 +322,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 let args = cmd::code_nav::setup::Args {
                     agent,
                     project,
+                    entry,
                     flags: cmd::code_nav::plan::Flags {
                         with_serena,
                         no_ast_grep,

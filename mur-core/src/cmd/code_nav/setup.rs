@@ -12,7 +12,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use mur_agent_runtime::mcp::serena::serena_paths;
+use mur_agent_runtime::mcp::serena::serena_paths_for;
 use serde_yaml_ng::Value;
 
 use super::consent::{self, Manifest};
@@ -25,6 +25,8 @@ use crate::cmd::browser::setup::Consent;
 pub struct Args {
     pub agent: String,
     pub project: Option<PathBuf>,
+    /// Name of the `kind: serena` entry this run creates or updates.
+    pub entry: String,
     pub flags: Flags,
 }
 
@@ -109,6 +111,10 @@ pub fn run(
     if !agent_home.join("profile.yaml").is_file() {
         bail!("agent '{agent}' not found");
     }
+    // Refuse a name serena_paths_for would refuse at spawn, before anything
+    // is installed: the home is derived from the name alone.
+    serena_paths_for(&agent_home, &args.entry)?;
+    let entry = args.entry.as_str();
     let project = match (&args.project, args.flags.with_serena) {
         (Some(p), true) => Some(serena_entry::checked_project(p)?),
         (None, true) => bail!("--with-serena needs --project <dir>: the repo serena will serve"),
@@ -120,7 +126,7 @@ pub fn run(
     // before the plan is even printed, so nothing changes on disk.
     if project.is_some() {
         let (_, profile) = crate::cmd::agent::load_profile_for_edit(&agent)?;
-        serena_entry::check_slot(&profile, serena_entry::ENTRY_NAME)?;
+        serena_entry::check_slot(&profile, entry)?;
     }
 
     let plan = plan::plan(&mur_home, &args.flags, &detect())?;
@@ -141,7 +147,7 @@ pub fn run(
     writeln!(out, "mur code-nav setup for agent '{agent}'\n")?;
     consent::print_tables(out, &plan)?;
     if let Some(p) = &project {
-        writeln!(out, "\nserena project: {}", p.display())?;
+        writeln!(out, "\nserena entry `{entry}` project: {}", p.display())?;
         writeln!(
             out,
             "    also granted after install: exec of serena's (and pyright's) own Python \
@@ -152,7 +158,7 @@ pub fn run(
     let manifest_path = consent::manifest_path(&mur_home, &agent);
     let prior = consent::load_manifest(&manifest_path)?;
     let first_run = prior == Manifest::default();
-    let diff = consent::diff(&plan, project.as_deref(), &prior);
+    let diff = consent::diff(&plan, entry, project.as_deref(), &prior);
     consent::print_diff(out, &diff, first_run)?;
 
     if diff.is_empty() {
@@ -178,9 +184,12 @@ pub fn run(
     }
 
     let manifest = apply(
-        &mur_home,
-        &agent,
-        &agent_home,
+        &Target {
+            mur_home: &mur_home,
+            agent: &agent,
+            agent_home: &agent_home,
+            entry,
+        },
         &plan,
         project.as_deref(),
         prior,
@@ -191,15 +200,27 @@ pub fn run(
     Ok(())
 }
 
+/// Whose profile and which serena entry a run applies to.
+struct Target<'a> {
+    mur_home: &'a Path,
+    agent: &'a str,
+    agent_home: &'a Path,
+    entry: &'a str,
+}
+
 fn apply(
-    mur_home: &Path,
-    agent: &str,
-    agent_home: &Path,
+    t: &Target<'_>,
     plan: &plan::Plan,
     project: Option<&Path>,
     prior: Manifest,
     out: &mut dyn Write,
 ) -> Result<Manifest> {
+    let Target {
+        mur_home,
+        agent,
+        agent_home,
+        entry,
+    } = *t;
     let mut m = prior;
     m.disabled = plan.disabled_lines();
     for row in plan.install.iter().filter(|r| r.missing.is_none()) {
@@ -270,7 +291,7 @@ fn apply(
                     .any(|r| r.lang == *l && r.status == LspStatus::Enabled)
         })
         .collect();
-    let paths = serena_paths(agent_home);
+    let paths = serena_paths_for(agent_home, entry)?;
     let ptpl = serena_project::read_pinned_project_template(&dir)?;
     let pfile = serena_project::write_project(&paths, project, &ptpl, &langs)?;
     writeln!(out, "  ✓ wrote {}", pfile.display())?;
@@ -298,9 +319,12 @@ fn apply(
         }
     }
     let (ppath, mut profile) = crate::cmd::agent::load_profile_for_edit(agent)?;
-    let change = serena_entry::upsert(&mut profile, serena_entry::build(&record, project)?)?;
+    let change = serena_entry::upsert(
+        &mut profile,
+        serena_entry::build_named(&record, entry, project)?,
+    )?;
     crate::cmd::agent::save_profile(&ppath, &mut profile)?;
-    writeln!(out, "  ✓ profile entry `serena`: {change:?}")?;
+    writeln!(out, "  ✓ profile entry `{entry}`: {change:?}")?;
 
     // The quiet `grant_*` forms: the consent table above already named each
     // grant, and the running-agent warning is printed once, below, instead
@@ -323,7 +347,7 @@ fn apply(
 
     m.languages
         .extend(langs.iter().map(|l| l.flag().to_owned()));
-    m.project = Some(project.to_path_buf());
+    m.set_project(entry, project);
     m.serena = Some(record);
     m.pyright = pyright;
     Ok(m)
