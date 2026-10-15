@@ -16,6 +16,15 @@ rusqlite = { workspace = true }
 libc = "0.2"
 serde_yaml_ng = "0.10"
 mur-common = { path = "../mur-common" }
+secrecy = "0.10"
+zeroize = "1"
+
+# The same dispatch the daemon's `main` does: git runs this as `GIT_ASKPASS`, so a test can exercise
+# the real answer path under real git without depending on the daemon crate.
+[[bin]]
+name = "askpass-probe"
+path = "tests/support/askpass_probe.rs"
+required-features = ["test-support"]
 
 [features]
 # Exposes `PendingStore::force_state_for_test`, which bypasses the edge table.

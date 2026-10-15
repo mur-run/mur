@@ -17,10 +17,12 @@ use std::sync::{Arc, Mutex};
 
 use mur_common::config::Config;
 use mur_common::git_push::{enrollments_path, inbox_dir, private_dir, status_dir};
+use mur_common::hitl::approval_token::SECRETS_DIR;
 use mur_common::identity::AgentIdentity;
 use mur_git_broker::approval::SystemClock;
 use mur_git_broker::binding::{EnrollmentSource, FileEnrollments};
 use mur_git_broker::broker::{Broker, BrokerConfig};
+use mur_git_broker::credential_source::FileCredentials;
 use mur_git_broker::error::BrokerError;
 use mur_git_broker::import::RlimitSpawn;
 use mur_git_broker::policy::BrokerLimits;
@@ -105,6 +107,8 @@ pub fn open_broker(mur_home: &Path) -> Result<Broker, BrokerError> {
         }),
         spawn: Box::new(RlimitSpawn),
         auth: Box::new(NoAuth),
+        askpass_bin: std::env::current_exe().map_err(storage)?,
+        credentials: Box::new(FileCredentials::new(mur_home.join(SECRETS_DIR))),
         clock: Arc::new(SystemClock),
     })
 }

@@ -8,7 +8,9 @@ use crate::{
     action::ActionDocument,
     ancestry::judge,
     approval::{ApprovalProof, Clock, accept_approval, begin_execution},
+    askpass::TokenAuth,
     binding::{Bound, EnrollmentSource, Mismatch, bind, build_action},
+    credential_source::CredentialSource,
     error::BrokerError,
     import::{ParserSpawn, import_pack},
     pending::{PendingStore, RequestKey, State, Submitted},
@@ -18,6 +20,7 @@ use crate::{
     repo::PrivateRepo,
     request_file::RequestFile,
 };
+use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -38,7 +41,13 @@ pub struct BrokerConfig {
     pub enrollments: Box<dyn EnrollmentSource>,
     pub reader: ReaderFor,
     pub spawn: Box<dyn ParserSpawn>,
+    /// Used for remotes that carry no credential (`file://`, or an https remote with none).
     pub auth: Box<dyn RemoteAuth>,
+    /// The binary git runs as `GIT_ASKPASS` for an https push with a credential. It must call
+    /// [`crate::askpass::run_from_env`] first thing in `main` when `MUR_ASKPASS_FD` is set.
+    pub askpass_bin: PathBuf,
+    /// Where a credential's secret is read from. Only asked when the binding carries one.
+    pub credentials: Box<dyn CredentialSource>,
     pub clock: Arc<dyn Clock>,
 }
 
@@ -216,13 +225,22 @@ impl Broker {
             }
             Err(e) => return Err(e),
         };
+        // The secret is read after the binding holds and before the approval is spent, so a file
+        // that cannot be used leaves the request pending and the same approval usable once it is
+        // fixed. `?` here and on `accept_approval` drop the secret (`SecretString` zeroizes on
+        // drop), so no early return leaves it behind.
+        let secret = bound
+            .credential
+            .as_ref()
+            .map(|c| self.cfg.credentials.open(&c.secret_path))
+            .transpose()?;
         let clock = &*self.cfg.clock;
         accept_approval(&self.store, key, &proof, clock)?;
         if let Err(e) = begin_execution(&self.store, key, clock) {
             self.cleanup(key);
             return Err(e);
         }
-        let result = self.execute(key, &doc, &bound);
+        let result = self.execute(key, &doc, &bound, secret);
         let (state, out) = match result {
             Ok(()) => (State::Succeeded, Ok(State::Succeeded)),
             Err(BrokerError::StaleOldSha) => (State::StaleOldSha, Err(BrokerError::StaleOldSha)),
@@ -249,17 +267,43 @@ impl Broker {
         key: &RequestKey,
         doc: &ActionDocument,
         bound: &Bound,
+        // Taken by value so it is dropped (and zeroized) when this function returns, whatever
+        // the outcome. `TokenAuth` copies it into a pipe per git command.
+        secret: Option<SecretString>,
     ) -> Result<(), BrokerError> {
         let digest = self
             .store
             .frozen_digest(key)?
             .ok_or_else(|| storage("missing frozen digest"))?;
         let repo = PrivateRepo::open(&self.dir_for(key), &self.cfg.git_bin)?;
+        let token_auth = match (secret, &bound.credential) {
+            (Some(secret), Some(c)) => {
+                let built = TokenAuth::new(
+                    secret,
+                    c.username.as_str(),
+                    &bound.remote_url,
+                    self.cfg.askpass_bin.clone(),
+                );
+                // `file://` has no password prompt, so a credential on it is simply unused. For an
+                // https remote `None` cannot happen (enrollment refuses userinfo, `open` caps the
+                // size); if it does, push with no credential would only fail later and less
+                // clearly, so stop here instead.
+                if built.is_none() && bound.remote_url.starts_with("https://") {
+                    return Err(BrokerError::CredentialUnreadable("credential_unusable"));
+                }
+                built
+            }
+            _ => None,
+        };
+        let auth: &dyn RemoteAuth = match &token_auth {
+            Some(t) => t,
+            None => &*self.cfg.auth,
+        };
         push(
             &repo,
             doc,
             &bound.remote_url,
-            &*self.cfg.auth,
+            auth,
             &self.cfg.limits,
             &digest,
         )

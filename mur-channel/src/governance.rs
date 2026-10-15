@@ -13,6 +13,19 @@ use mur_common::commander::{COMMANDER_DIRECTIVE_KEY, CommanderDirective, Governa
 use crate::sign::verify_event_sig;
 
 /// Fold the channel's commander directives into governance state.
+/// Leave a trace when a marked directive is dropped: a kill or budget-ceiling
+/// directive ignored with no log is indistinguishable from "never sent".
+fn warn_dropped(channel_id: &str, fleet_name: &str, e: &ChannelEvent, reason: &str) {
+    tracing::warn!(
+        channel_id,
+        fleet = fleet_name,
+        seq = e.seq,
+        idempotency_key = e.idempotency_key.as_deref().unwrap_or(""),
+        reason,
+        "commander directive dropped"
+    );
+}
+
 pub fn fold_governance(
     events: &[ChannelEvent],
     channel_id: &str,
@@ -26,13 +39,19 @@ pub fn fold_governance(
         let Some(raw) = e.payload.get(COMMANDER_DIRECTIVE_KEY) else {
             continue;
         };
-        let Ok(d) = serde_json::from_value::<CommanderDirective>(raw.clone()) else {
-            continue;
+        let d = match serde_json::from_value::<CommanderDirective>(raw.clone()) {
+            Ok(d) => d,
+            Err(err) => {
+                warn_dropped(channel_id, fleet_name, e, &format!("unparseable: {err}"));
+                continue;
+            }
         };
+        // A directive for another fleet is a legitimate skip — stay quiet.
         if d.fleet != fleet_name {
             continue;
         }
         let Some(sig) = e.sig.as_deref() else {
+            warn_dropped(channel_id, fleet_name, e, "missing signature");
             continue;
         };
         let ok = accepted_pubkeys.iter().any(|pk| {
@@ -48,6 +67,13 @@ pub fn fold_governance(
         });
         if ok {
             candidates.push(d);
+        } else {
+            warn_dropped(
+                channel_id,
+                fleet_name,
+                e,
+                "signature rejected by every accepted pubkey",
+            );
         }
     }
 

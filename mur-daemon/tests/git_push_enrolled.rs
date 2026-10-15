@@ -5,10 +5,12 @@
 
 use chrono::Utc;
 use mur_common::git_push::{enrollments_path, inbox_dir, status_dir};
+use mur_common::hitl::approval_token::SECRETS_DIR;
 use mur_common::identity::AgentIdentity;
 use mur_daemon::git_push_broker::{BrokerSlot, sweep_with};
 use mur_git_broker::action::ActionDocument;
 use mur_git_broker::approval::ApprovalProof;
+use mur_git_broker::credential::{Credential, SecretPath, Username};
 use mur_git_broker::enrollment::{Endpoint, EnrollRequest, Enrollments, NewRepo};
 use mur_git_broker::oid::ObjectFormat;
 use mur_git_broker::pending::{RequestKey, State};
@@ -91,6 +93,10 @@ fn world() -> World {
 }
 
 fn enroll(w: &World) {
+    enroll_with(w, None);
+}
+
+fn enroll_with(w: &World, credential: Option<Credential>) {
     let mut e = Enrollments::empty(100);
     e.enroll(EnrollRequest {
         agent: AGENT.into(),
@@ -99,6 +105,7 @@ fn enroll(w: &World) {
         endpoint: Endpoint::parse(&format!("file://{}", w.remote.display())).unwrap(),
         ref_prefix: PREFIX.into(),
         creation_base_refs: vec![],
+        credential,
         new_repo: Some(NewRepo {
             path: w.work.clone(),
             object_format: ObjectFormat::Sha1,
@@ -484,4 +491,93 @@ fn an_unreadable_enrollment_file_leaves_the_row_pending_and_the_approval_unspent
     approval_pass(w.home.path(), &slot);
     assert_eq!(state_of(&w, &slot, "r1"), State::Succeeded);
     assert_eq!(git(&w.remote, &["rev-parse", BRANCH]), w.new);
+}
+
+/// Writes `<home>/secrets/<name>` with `mode` (the dir is `0700`) and returns a credential that
+/// points at it.
+fn plant_secret(w: &World, mode: u32) -> (Credential, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = w.home.path().join(SECRETS_DIR);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let file = dir.join("tok");
+    std::fs::write(&file, b"ghp_not_a_real_token\n").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+    let cred = Credential {
+        secret_path: SecretPath::parse(file.to_str().unwrap()).unwrap(),
+        username: Username::parse("x-access-token").unwrap(),
+    };
+    (cred, file)
+}
+
+/// Enrolls with a credential, drops a request, sweeps it to pending, returns its proof.
+fn pending_with_credential(w: &World, slot: &BrokerSlot, cred: Credential) -> ApprovalProof {
+    enroll_with(w, Some(cred));
+    drop_request(w, "r1", REMOTE);
+    sweep_with(w.home.path(), slot);
+    let row = slot
+        .get(w.home.path())
+        .unwrap()
+        .store()
+        .get(&key("r1"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, State::PendingApproval, "{}", status(w, "r1"));
+    ApprovalProof {
+        event_id: "e1".into(),
+        request_id: "r1".into(),
+        action_hash: row.action_hash,
+    }
+}
+
+#[test]
+fn a_binding_with_a_readable_credential_goes_through_the_real_file_source_and_pushes() {
+    let w = world();
+    let (cred, _) = plant_secret(&w, 0o600);
+    let slot = BrokerSlot::default();
+    let proof = pending_with_credential(&w, &slot, cred);
+    let broker = slot.get(w.home.path()).unwrap();
+    assert_eq!(
+        broker.on_approval(&key("r1"), proof).unwrap(),
+        State::Succeeded
+    );
+    assert_eq!(git(&w.remote, &["rev-parse", BRANCH]), w.new);
+}
+
+#[test]
+fn an_unusable_credential_file_keeps_the_row_pending_and_the_approval_unspent() {
+    let w = world();
+    // 0644 is refused by the real `FileCredentials`; this is also what proves `open` was reached.
+    let (cred, file) = plant_secret(&w, 0o644);
+    let slot = BrokerSlot::default();
+    let proof = pending_with_credential(&w, &slot, cred);
+    let broker = slot.get(w.home.path()).unwrap();
+
+    let err = broker.on_approval(&key("r1"), proof.clone()).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            mur_git_broker::error::BrokerError::CredentialUnreadable(_)
+        ),
+        "{err:?}"
+    );
+    assert_eq!(state_of_row(&broker), State::PendingApproval);
+    assert_eq!(
+        git(&w.remote, &["rev-parse", BRANCH]),
+        w.old,
+        "nothing was pushed while the credential was unusable"
+    );
+
+    // Fixed on disk; the very same proof now goes through.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        broker.on_approval(&key("r1"), proof).unwrap(),
+        State::Succeeded
+    );
+    assert_eq!(git(&w.remote, &["rev-parse", BRANCH]), w.new);
+}
+
+fn state_of_row(broker: &mur_git_broker::broker::Broker) -> State {
+    broker.store().get(&key("r1")).unwrap().unwrap().state
 }

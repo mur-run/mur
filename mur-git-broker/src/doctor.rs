@@ -50,12 +50,18 @@ pub enum EnrollmentProblem {
     EndpointWritableByAgent { agent: String, path: PathBuf },
     /// An agent may run without its sandbox, and could then rewrite the enrollment file.
     AgentMayRunUnsandboxed(String),
+    /// The endpoint is a network remote: the canonical / missing / agent-writable path checks
+    /// do not apply to it. Information, never a refusal.
+    EndpointPathChecksNotApplicable(String),
 }
 
 impl EnrollmentProblem {
     /// Whether `enroll` must refuse. Everything else is information.
     pub fn is_refusal(&self) -> bool {
-        !matches!(self, Self::GrantCoversBrokerDir(_))
+        !matches!(
+            self,
+            Self::GrantCoversBrokerDir(_) | Self::EndpointPathChecksNotApplicable(_)
+        )
     }
 }
 
@@ -92,31 +98,43 @@ pub fn grant_problems(grants: &[PathBuf], broker_dir: &Path) -> Vec<EnrollmentPr
 }
 
 /// The remote is a real, existing path no agent can write to, and no agent may skip its sandbox.
+///
+/// The path checks apply to `file://` remotes only. A network remote is not on this machine's
+/// filesystem, so they are not "passing", they are not applicable, and that is reported as
+/// [`EnrollmentProblem::EndpointPathChecksNotApplicable`] instead of silence.
 pub fn endpoint_problems(endpoint: &Endpoint, agents: &[AgentFacts]) -> Vec<EnrollmentProblem> {
     let mut out = Vec::new();
-    let stored = endpoint.path();
-    let real = match std::fs::canonicalize(stored) {
-        Ok(r) => r,
-        Err(_) => {
-            out.push(EnrollmentProblem::EndpointMissing(stored.to_path_buf()));
-            return out;
+    match endpoint.path() {
+        Some(stored) => {
+            let real = match std::fs::canonicalize(stored) {
+                Ok(r) => r,
+                Err(_) => {
+                    out.push(EnrollmentProblem::EndpointMissing(stored.to_path_buf()));
+                    return out;
+                }
+            };
+            if real != stored {
+                out.push(EnrollmentProblem::EndpointNotCanonical(
+                    stored.to_path_buf(),
+                ));
+            }
+            for a in agents {
+                let reach = std::iter::once(&a.home)
+                    .chain(&a.write_paths)
+                    .find(|w| overlaps(&real, w));
+                if let Some(w) = reach {
+                    out.push(EnrollmentProblem::EndpointWritableByAgent {
+                        agent: a.name.clone(),
+                        path: w.clone(),
+                    });
+                }
+            }
         }
-    };
-    if real != stored {
-        out.push(EnrollmentProblem::EndpointNotCanonical(
-            stored.to_path_buf(),
-        ));
+        None => out.push(EnrollmentProblem::EndpointPathChecksNotApplicable(
+            endpoint.as_str().to_string(),
+        )),
     }
     for a in agents {
-        let reach = std::iter::once(&a.home)
-            .chain(&a.write_paths)
-            .find(|w| overlaps(&real, w));
-        if let Some(w) = reach {
-            out.push(EnrollmentProblem::EndpointWritableByAgent {
-                agent: a.name.clone(),
-                path: w.clone(),
-            });
-        }
         if a.may_run_unsandboxed() {
             out.push(EnrollmentProblem::AgentMayRunUnsandboxed(a.name.clone()));
         }
@@ -211,6 +229,36 @@ mod tests {
         std::os::unix::fs::symlink(&remote, &link).unwrap();
         let got = endpoint_problems(&ep(&remote), &[agent("a", &f.root.join("h"), &[&link])]);
         assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    #[test]
+    fn a_network_endpoint_reports_path_checks_as_not_applicable_not_as_clean() {
+        let https = Endpoint::parse("https://git.example.com/o/r.git").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let a = agent("a", tmp.path(), &[tmp.path()]);
+        let got = endpoint_problems(&https, &[a]);
+        assert_eq!(
+            got,
+            vec![EnrollmentProblem::EndpointPathChecksNotApplicable(
+                "https://git.example.com/o/r.git".into()
+            )]
+        );
+        assert!(got.iter().all(|p| !p.is_refusal()));
+    }
+
+    #[test]
+    fn a_network_endpoint_still_flags_an_unsandboxed_agent() {
+        let https = Endpoint::parse("https://git.example.com/o/r.git").unwrap();
+        let loose = AgentFacts {
+            name: "loose".into(),
+            home: "/h".into(),
+            write_paths: vec![],
+            fail_closed: false,
+            sandbox_enforcing: None,
+        };
+        let got = endpoint_problems(&https, &[loose]);
+        assert!(got.contains(&EnrollmentProblem::AgentMayRunUnsandboxed("loose".into())));
+        assert!(got.iter().any(EnrollmentProblem::is_refusal));
     }
 
     #[test]

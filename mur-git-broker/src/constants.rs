@@ -63,11 +63,32 @@ pub const IMPORTED_PACK_FILES: [&str; 3] = ["pack.pack", "pack.idx", "pack.rev"]
 pub const PENDING_DB_MODE: u32 = 0o600;
 /// How long a second writer waits on the SQLite lock before giving up with `Storage`.
 pub const PENDING_DB_BUSY_WAIT_MS: u64 = 5_000;
-/// The only endpoint scheme accepted so far.
+/// Endpoint scheme for a remote on this machine's filesystem.
 pub const ENDPOINT_FILE_SCHEME: &str = "file://";
+/// Endpoint scheme for a network remote. Lowercase only; there is no `http` in a release build.
+pub const ENDPOINT_HTTPS_SCHEME: &str = "https://";
+/// An explicit `:443` is a second spelling of "no port", so it is refused.
+pub const HTTPS_DEFAULT_PORT: u16 = 443;
+/// RFC 1035: a DNS name is at most 253 characters, each label at most 63.
+pub const ENDPOINT_HOST_MAX_LEN: usize = 253;
+pub const ENDPOINT_LABEL_MAX_LEN: usize = 63;
+/// Test seam (`test-support` / `cfg(test)` only): the one plaintext endpoint form, loopback http.
+#[cfg(any(test, feature = "test-support"))]
+pub const ENDPOINT_LOOPBACK_HTTP_PREFIX: &str = "http://127.0.0.1:";
+/// The default `http` port; an explicit `:80` is refused for the same reason as `:443`.
+#[cfg(any(test, feature = "test-support"))]
+pub const HTTP_DEFAULT_PORT: u16 = 80;
 pub const ENROLLMENTS_VERSION: u32 = 1;
 /// Hex characters of a repo identity (128 random bits).
 pub const IDENTITY_HEX_LEN: usize = 32;
 pub const ENROLLMENTS_FILE_MODE: u32 = 0o600;
 /// The agent-side tool reads the registry, so it is not owner-only.
 pub const REGISTRY_FILE_MODE: u32 = 0o644;
+/// A credential username is 1..=this many bytes of `[A-Za-z0-9._-]` (https design §6).
+pub const CREDENTIAL_USERNAME_MAX_LEN: usize = 64;
+
+/// A credential file larger than this is refused unread: a token is a few hundred bytes, so a big
+/// file is a wrong path, not a secret.
+pub const CREDENTIAL_MAX_BYTES: u64 = 4096;
+/// The only permission bits a credential file may have (owner read/write, nothing else).
+pub const CREDENTIAL_FILE_MODE: u32 = 0o600;

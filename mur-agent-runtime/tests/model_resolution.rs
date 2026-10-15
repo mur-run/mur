@@ -70,4 +70,6 @@ fn missing_model_ref_errors_loudly() {
     let p: AgentProfile = serde_yaml_ng::from_str(yaml_with_ref).unwrap();
     let err = resolve_model_entry(&p).unwrap_err();
     assert!(err.to_string().contains("test_model"), "got {err}");
+    // The error must say how to repair it, not just what is missing.
+    assert!(err.to_string().contains("mur model list"), "got {err}");
 }

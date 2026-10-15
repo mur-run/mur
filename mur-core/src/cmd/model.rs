@@ -374,6 +374,22 @@ pub async fn run(args: ModelArgs) -> anyhow::Result<()> {
             if reg.models.remove(&name).is_some() {
                 reg.save_to(&path)?;
                 println!("Removed {name}");
+                // Warn-only: the removal already happened, but a stranded
+                // agent should not be a surprise at its next start.
+                if let Ok(home) = crate::cmd::agent::resolve_mur_home() {
+                    let stranded = super::model_doctor::agents_referencing(
+                        &super::model_doctor::read_agents(&home),
+                        &name,
+                    );
+                    if !stranded.is_empty() {
+                        eprintln!(
+                            "warning: {} agent(s) still use model_ref '{name}' and can no longer \
+                             start: {}. Run `mur model doctor` for details.",
+                            stranded.len(),
+                            stranded.join(", ")
+                        );
+                    }
+                }
             } else {
                 anyhow::bail!("not found: {name}");
             }

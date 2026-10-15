@@ -8,6 +8,7 @@
 use crate::{
     action::{ActionDocument, RefUpdate},
     constants::ACTION_VERSION,
+    credential::Credential,
     enrollment::Enrollments,
     error::BrokerError,
     policy::RemotePolicy,
@@ -53,6 +54,8 @@ pub enum Mismatch {
 pub struct Bound {
     pub remote_url: String,
     pub policy: RemotePolicy,
+    /// Where the secret lives and who it belongs to; never the secret. Safe under `Debug`.
+    pub credential: Option<Credential>,
 }
 
 /// The document for a verified request, stamped with the *current* epoch and identity. The agent
@@ -109,5 +112,78 @@ pub fn bind(e: &Enrollments, doc: &ActionDocument) -> Result<Bound, Mismatch> {
     Ok(Bound {
         remote_url: b.enrollment.endpoint.as_str().to_string(),
         policy: p,
+        credential: b.enrollment.credential.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credential::{SecretPath, Username};
+    use crate::endpoint::Endpoint;
+    use crate::enrollment::{EnrollRequest, NewRepo};
+    use crate::oid::ObjectFormat;
+
+    const SHA: &str = "1111111111111111111111111111111111111111";
+
+    fn enroll(c: Option<Credential>) -> Enrollments {
+        let mut e = Enrollments::empty(100);
+        e.enroll(EnrollRequest {
+            agent: "alice".into(),
+            repo_id: "mur".into(),
+            remote_id: "origin".into(),
+            endpoint: Endpoint::parse("https://git.example.com/o/r.git").unwrap(),
+            ref_prefix: "refs/heads/agent/alice/".into(),
+            creation_base_refs: vec![],
+            credential: c,
+            new_repo: Some(NewRepo {
+                path: "/work/mur".into(),
+                object_format: ObjectFormat::Sha1,
+            }),
+        })
+        .unwrap();
+        e
+    }
+    fn request() -> RequestFile {
+        RequestFile {
+            agent: "alice".into(),
+            task_id: "t".into(),
+            request_id: "r1".into(),
+            repo_id: "mur".into(),
+            remote_id: "origin".into(),
+            r#ref: "refs/heads/agent/alice/x".into(),
+            old_sha: SHA.into(),
+            new_sha: SHA.into(),
+            pack_sha256: "0".repeat(64),
+            requested_at: chrono::Utc::now(),
+            key_version: 1,
+            sig: String::new(),
+        }
+    }
+    fn cred() -> Credential {
+        Credential {
+            secret_path: SecretPath::parse("/h/.mur/secrets/gh").unwrap(),
+            username: Username::parse("x-access-token").unwrap(),
+        }
+    }
+
+    #[test]
+    fn bind_carries_the_credential_record_from_the_enrollment() {
+        for c in [Some(cred()), None] {
+            let e = enroll(c.clone());
+            let doc = build_action(&e, &request()).unwrap();
+            let bound = bind(&e, &doc).unwrap();
+            assert_eq!(bound.credential, c);
+            assert_eq!(bound.remote_url, "https://git.example.com/o/r.git");
+        }
+    }
+
+    #[test]
+    fn bound_debug_has_the_remote_without_userinfo_and_the_secret_location_only() {
+        let e = enroll(Some(cred()));
+        let bound = bind(&e, &build_action(&e, &request()).unwrap()).unwrap();
+        let d = format!("{bound:?}");
+        assert!(d.contains("/h/.mur/secrets/gh"), "{d}");
+        assert!(!d.contains('@'), "no userinfo in a loggable value: {d}");
+    }
 }
