@@ -21,6 +21,7 @@ fn anchored(svc: &ChannelService, ch: &str, id: &AgentIdentity) -> anyhow::Resul
         ch,
         id,
         1,
+        std::path::Path::new(""),
         ChannelActor::System,
         EventKind::Message,
         serde_json::json!({ "text": "x" }),
@@ -112,10 +113,133 @@ fn an_anchored_transition_keeps_the_head_on_the_log() {
         None,
         &id,
         1,
+        std::path::Path::new(""),
     )
     .unwrap();
 
     let lines = chain_log(&std::fs::read(log_path(&tmp, &ch)).unwrap()).lines;
     assert_eq!(head(&tmp, &ch).unwrap().lines, lines, "head lags the log");
     assert!(!anchor::is_dirty(tmp.path(), &ch));
+}
+
+/// `<home>/rotations.jsonl` for `old` (v0) → `new` (v1), signed by `old`, the
+/// shape `mur agent rekey` leaves behind.
+fn write_rotation(home: &std::path::Path, old: &AgentIdentity, new: &AgentIdentity) {
+    use mur_common::identity::{RotationAttestation, RotationReason, encode_pubkey};
+    let enc = |i: &AgentIdentity| encode_pubkey(&i.signing_key().verifying_key());
+    let boot = RotationAttestation::new(
+        "u",
+        "",
+        enc(old),
+        0,
+        0,
+        "2026-01-01T00:00:00Z",
+        RotationReason::Scheduled,
+    )
+    .into_bootstrap();
+    let mut step = RotationAttestation::new(
+        "u",
+        enc(old),
+        enc(new),
+        0,
+        1,
+        "2026-02-01T00:00:00Z",
+        RotationReason::Scheduled,
+    );
+    step.sign(old.signing_key());
+    std::fs::create_dir_all(home).unwrap();
+    let lines: Vec<String> = [boot, step]
+        .iter()
+        .map(|a| serde_json::to_string(a).unwrap())
+        .collect();
+    std::fs::write(home.join("rotations.jsonl"), lines.join("\n") + "\n").unwrap();
+}
+
+fn anchored_as(
+    svc: &ChannelService,
+    ch: &str,
+    id: &AgentIdentity,
+    kv: u32,
+    key_home: &std::path::Path,
+) -> anyhow::Result<()> {
+    svc.append_and_anchor(
+        ch,
+        id,
+        kv,
+        key_home,
+        ChannelActor::System,
+        EventKind::Message,
+        serde_json::json!({ "text": "x" }),
+        None,
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn a_head_sealed_before_a_rekey_does_not_strand_the_channel() {
+    let (tmp, svc, ch, old) = setup();
+    let new = AgentIdentity::generate();
+    let home = tmp.path().join("agents").join("mur");
+    write_rotation(&home, &old, &new);
+
+    anchored_as(&svc, &ch, &old, 0, &home).unwrap();
+    assert_eq!(head(&tmp, &ch).unwrap().key_version, Some(0));
+
+    // After the rekey the writer holds the new key; the head on disk is still
+    // signed by the old one and must verify through the rotation history.
+    anchored_as(&svc, &ch, &new, 1, &home).expect("append after rekey");
+    let h = head(&tmp, &ch).unwrap();
+    assert_eq!(h.key_version, Some(1));
+    assert_eq!(h.lines, 2);
+    assert!(!anchor::is_dirty(tmp.path(), &ch));
+}
+
+#[test]
+fn a_head_claiming_a_version_the_history_does_not_know_is_refused() {
+    let (tmp, svc, ch, old) = setup();
+    let new = AgentIdentity::generate();
+    let home = tmp.path().join("agents").join("mur");
+    write_rotation(&home, &old, &new);
+    anchored_as(&svc, &ch, &old, 0, &home).unwrap();
+
+    // Signed by the CURRENT key but claiming v7, a version the chain never
+    // had: only the history lookup can reject it (the signature itself is
+    // valid under the signer's key).
+    let forged = head_over_log_kv(&tmp, &ch, &new, 7);
+    write_head(&anchor::heads_dir(tmp.path()), &forged).unwrap();
+    assert!(anchored_as(&svc, &ch, &new, 1, &home).is_err());
+    assert_eq!(head(&tmp, &ch), Some(forged), "refused head was replaced");
+}
+
+fn head_over_log_kv(tmp: &TempDir, ch: &str, signer: &AgentIdentity, kv: u32) -> Head {
+    let st = chain_log(&std::fs::read(log_path(tmp, ch)).unwrap());
+    Head::seal(
+        signer,
+        HeadFields {
+            channel_id: ch.to_owned(),
+            seq: 1,
+            lines: st.lines,
+            chain_hash: hex::encode(st.hash),
+            key_version: Some(kv),
+            legacy_through: None,
+        },
+        chrono::Utc::now(),
+    )
+}
+
+#[test]
+fn first_seal_over_an_unterminated_unparseable_tail_is_refused() {
+    let (tmp, svc, ch, id) = setup();
+    let lp = log_path(&tmp, &ch);
+    std::fs::create_dir_all(lp.parent().unwrap()).unwrap();
+    std::fs::write(&lp, b"not json").unwrap(); // no trailing newline
+
+    assert!(
+        anchored(&svc, &ch, &id).is_err(),
+        "sealed over a glued line"
+    );
+    assert!(
+        head(&tmp, &ch).is_none(),
+        "a head was sealed with legacy_through None"
+    );
 }

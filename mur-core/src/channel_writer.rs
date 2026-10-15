@@ -313,7 +313,15 @@ pub fn transition_as_writer(
             id,
             kv,
             source: KeySource::Disk,
-        }) => svc.transition_and_anchor(channel_id, new_state, actor, run_id, &id, kv),
+        }) => svc.transition_and_anchor(
+            channel_id,
+            new_state,
+            actor,
+            run_id,
+            &id,
+            kv,
+            &home.join("agents").join(router_agent),
+        ),
         Some(WriterKey { id, kv, .. }) => {
             svc.transition_signed(channel_id, new_state, actor, run_id, Some((&id, kv)))
         }
@@ -339,7 +347,10 @@ pub fn append_as_writer(
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
     match writer_key(home, router_agent)? {
-        Some(key) => append_with_key(svc, channel_id, key, actor, kind, payload, idem),
+        Some(key) => {
+            let key_home = home.join("agents").join(router_agent);
+            append_with_key(svc, channel_id, key, &key_home, actor, kind, payload, idem)
+        }
         None => svc.append(channel_id, actor, kind, payload, idem),
     }
 }
@@ -351,10 +362,12 @@ pub fn append_as_writer(
 /// so the decision lives on the key, where it is a property of the process,
 /// and not at the call site, where it would be a property of whoever
 /// remembered to pick the right method.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn append_with_key(
     svc: &ChannelService,
     channel_id: &str,
     key: WriterKey,
+    key_home: &Path,
     actor: ChannelActor,
     kind: EventKind,
     payload: serde_json::Value,
@@ -362,7 +375,9 @@ pub(crate) fn append_with_key(
 ) -> anyhow::Result<ChannelEvent> {
     let WriterKey { id, kv, source } = key;
     match source {
-        KeySource::Disk => svc.append_and_anchor(channel_id, &id, kv, actor, kind, payload, idem),
+        KeySource::Disk => {
+            svc.append_and_anchor(channel_id, &id, kv, key_home, actor, kind, payload, idem)
+        }
         KeySource::Handoff => svc.append_signed(channel_id, &id, kv, actor, kind, payload, idem),
     }
 }
@@ -631,6 +646,7 @@ mod tests {
             &svc,
             &ch.id,
             key,
+            tmp.path(),
             ChannelActor::System,
             EventKind::HitlResponse,
             serde_json::json!({ "allow": true }),

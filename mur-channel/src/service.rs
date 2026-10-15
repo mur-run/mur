@@ -342,7 +342,7 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            false,
+            None,
         )
     }
 
@@ -373,7 +373,7 @@ impl ChannelService {
             kind,
             payload,
             idempotency_key,
-            false,
+            None,
         )
     }
 

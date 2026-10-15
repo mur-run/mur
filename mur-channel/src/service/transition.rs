@@ -40,7 +40,7 @@ impl ChannelService {
         run_id: Option<&str>,
         signer: Option<(&mur_common::identity::AgentIdentity, u32)>,
     ) -> Result<ChannelEvent> {
-        self.transition_with(channel_id, new_state, actor, run_id, signer, false)
+        self.transition_with(channel_id, new_state, actor, run_id, signer, None)
     }
 
     /// [`transition_signed`](Self::transition_signed) that also advances the
@@ -51,6 +51,7 @@ impl ChannelService {
     ///
     /// **Only call from outside the agent sandbox**, for the same reason as
     /// `append_and_anchor`.
+    #[allow(clippy::too_many_arguments)]
     pub fn transition_and_anchor(
         &self,
         channel_id: &str,
@@ -59,6 +60,7 @@ impl ChannelService {
         run_id: Option<&str>,
         identity: &mur_common::identity::AgentIdentity,
         kv: u32,
+        key_home: &std::path::Path,
     ) -> Result<ChannelEvent> {
         self.transition_with(
             channel_id,
@@ -66,7 +68,7 @@ impl ChannelService {
             actor,
             run_id,
             Some((identity, kv)),
-            true,
+            Some(key_home),
         )
     }
 
@@ -77,7 +79,7 @@ impl ChannelService {
         actor: ChannelActor,
         run_id: Option<&str>,
         signer: Option<(&mur_common::identity::AgentIdentity, u32)>,
-        anchored: bool,
+        anchored: Option<&std::path::Path>,
     ) -> Result<ChannelEvent> {
         let old_state = self
             .store
@@ -107,8 +109,12 @@ impl ChannelService {
             ),
             None => (None, None),
         };
-        let head_signer = match signer {
-            Some((identity, kv)) if anchored => Some(HeadSigner { identity, kv }),
+        let head_signer = match (signer, anchored) {
+            (Some((identity, kv)), Some(key_home)) => Some(HeadSigner {
+                identity,
+                kv,
+                key_home,
+            }),
             _ => None,
         };
         self.write_event(
