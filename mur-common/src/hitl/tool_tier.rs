@@ -409,7 +409,13 @@ mod tests {
     #[test]
     fn read_is_delegated_not_guessed() {
         assert_eq!(classify("read_file", None), RiskTier::Read);
-        assert_eq!(classify("bash", Some(&bash("git status"))), RiskTier::Read);
+        assert_eq!(
+            classify("bash", Some(&bash("git log --oneline"))),
+            RiskTier::Read
+        );
+        // #1937: an index refresh can run `core.fsmonitor` — a Write, which a
+        // standing grant may still cover.
+        assert_eq!(classify("bash", Some(&bash("git status"))), RiskTier::Write);
         // `cat a > b` writes; bash_class refuses it, so it must not be Read.
         assert_ne!(classify("bash", Some(&bash("cat a > b"))), RiskTier::Read);
     }
@@ -443,7 +449,7 @@ mod tests {
     #[test]
     fn a_chain_of_reads_is_read() {
         for cmd in [
-            "cd ~/Projects/mur && pwd -P && git status -sb | head -5 && git branch --show-current && git remote -v | head -2",
+            "cd ~/Projects/mur && pwd -P && git log --oneline -5 | head -5 && git branch --show-current && git remote -v | head -2",
             "cd ~/Projects/mur && echo \"=== pr list ===\" && gh pr list --limit 10; echo \"=== pr view ===\" && gh pr view 1482",
             "gh pr checks 1482 || true",
         ] {
