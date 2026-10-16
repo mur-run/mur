@@ -36,9 +36,16 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 /// Extra time after `stop_timeout_secs` for cancelled turns to settle their
-/// tracks. Default stop timeout (15s) plus this stays under launchd's default
-/// 20s `ExitTimeOut`, after which the process is SIGKILLed.
-const SHUTDOWN_CANCEL_GRACE_SECS: u64 = 4;
+/// tracks. The whole stop is `stop_timeout_secs` (default 15s) + this +
+/// `2 x SHUTDOWN_JOB_KILL_GRACE` for the final job sweep = 19s, which leaves
+/// ~1s of teardown under launchd's default 20s `ExitTimeOut`, after which
+/// the process is SIGKILLed mid-write.
+const SHUTDOWN_CANCEL_GRACE_SECS: u64 = 3;
+/// SIGTERM-to-SIGKILL grace for the bash jobs still alive after the drain.
+/// Turn-owned jobs already had their SIGTERM and the drain's grace; this is
+/// the last sweep, kept short so a SIGTERM-ignoring job cannot push the stop
+/// past the service manager's budget (#1909).
+const SHUTDOWN_JOB_KILL_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 mod bootstrap;
 mod dispatch;
@@ -748,7 +755,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     }
     // Every bash job is a process group this runtime started; nothing else
     // will end them once we are gone (spec D3/D9).
-    let killed = runner.kill_all_jobs().await;
+    let killed = runner.kill_all_jobs(SHUTDOWN_JOB_KILL_GRACE).await;
     if killed > 0 {
         info!(jobs = killed, "ended running bash jobs");
     }

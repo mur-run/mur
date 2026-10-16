@@ -394,8 +394,17 @@ async fn drain_stays_within_budget_when_jobs_ignore_sigterm() {
         .expect("join");
     assert!(matches!(done, TaskOutcome::Cancelled(_)), "got {done:?}");
 
-    // What the supervisor does next: the stubborn groups end with SIGKILL.
-    runner.kill_all_jobs().await;
+    // What the supervisor does next: the stubborn groups end with SIGKILL,
+    // inside `2 x grace` even though every one of them ignores SIGTERM.
+    let kill_grace = Duration::from_millis(300);
+    let t1 = Instant::now();
+    runner.kill_all_jobs(kill_grace).await;
+    let took = t1.elapsed();
+    assert!(
+        took < kill_grace * 2 + Duration::from_millis(500),
+        "final job sweep took {took:?}, budget {:?}",
+        kill_grace * 2
+    );
     for pid in pids {
         assert!(!pid_alive(pid), "job {pid} survived kill_all_jobs");
     }

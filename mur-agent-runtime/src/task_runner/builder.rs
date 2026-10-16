@@ -224,10 +224,11 @@ impl TaskRunner {
         self
     }
 
-    /// Runtime shutdown: every running bash job, whoever started it.
-    pub async fn kill_all_jobs(&self) -> usize {
+    /// Runtime shutdown: every running bash job, whoever started it, each
+    /// given `grace` after SIGTERM before SIGKILL. Bounded by `2 x grace`.
+    pub async fn kill_all_jobs(&self, grace: std::time::Duration) -> usize {
         match &self.bash_jobs {
-            Some(t) => t.kill_all().await,
+            Some(t) => t.kill_all_within(grace).await,
             None => 0,
         }
     }
