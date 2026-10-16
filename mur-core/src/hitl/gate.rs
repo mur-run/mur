@@ -215,8 +215,16 @@ pub async fn gate(
                 // rebuild — a run that loses its cache while waiting on this
                 // gate would come back as `Working`, disagreeing with the
                 // channel about the one state the operator needs to see.
-                svc.transition(
+                //
+                // Written through the router like the request above (#1900):
+                // signed so the pause is as attributable as the messages
+                // around it, and anchored so a sealed head does not fall one
+                // line behind the log.
+                crate::channel_writer::transition_as_writer(
+                    &svc,
+                    mur_home,
                     channel_id,
+                    ROUTER_AGENT,
                     ChannelState::InputRequired,
                     ChannelActor::System,
                     run_id,
@@ -283,8 +291,12 @@ pub async fn gate(
 
             {
                 let svc = ChannelService::open(mur_home)?;
-                svc.transition(
+                // Same writer as the pause, for the same reason (#1900).
+                crate::channel_writer::transition_as_writer(
+                    &svc,
+                    mur_home,
                     channel_id,
+                    ROUTER_AGENT,
                     ChannelState::Working,
                     ChannelActor::System,
                     run_id,
@@ -555,5 +567,7 @@ async fn wait_for_response(
 mod human_authority_tests;
 #[cfg(test)]
 mod response_binding_tests;
+#[cfg(test)]
+mod sealed_head_tests;
 #[cfg(test)]
 mod tests;
