@@ -335,6 +335,20 @@ mod tests {
             classify("bash", Some(&bash("gh issue list > out.txt"))),
             RiskTier::Read
         );
+        // PR #1932 review: stripping the redirect must not launder a writing
+        // flag on an allowlisted head — discard, fd join, and chained forms.
+        for cmd in [
+            "git log --output=victim.txt 2>/dev/null",
+            "git log --output=victim.txt 2>&1 | head",
+            "git status && git show --output=x HEAD 2>/dev/null",
+            "git grep -Otouch pat >/dev/null",
+        ] {
+            assert_ne!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::Read,
+                "cmd: {cmd}"
+            );
+        }
     }
 
     /// Most-restrictive-wins: a command that is several things at once takes

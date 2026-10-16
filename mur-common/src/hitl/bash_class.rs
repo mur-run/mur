@@ -96,6 +96,35 @@ const GIT_BRANCH_LIST_FLAGS: &[&str] = &[
 /// `prune` deletes refs.
 const GIT_REMOTE_LIST_FLAGS: &[&str] = &["-v", "--verbose"];
 
+/// The diff-family option that writes the output to a FILE instead of stdout
+/// (`git log/show/diff/whatchanged --output=F`). Revision options are matched
+/// exactly by git — `--outp=F` is rejected — so no abbreviation check here.
+const GIT_OUTPUT_FLAG: &str = "--output";
+
+/// `git grep -O[cmd]` / `--open-files-in-pager[=cmd]` RUNS a command. grep
+/// parses with parse-options, which accepts any unique long prefix (`--open`),
+/// so the long form is matched by prefix down to this minimum (`--op`).
+const GIT_GREP_EXEC_LONG: &str = "--open-files-in-pager";
+const GIT_GREP_EXEC_MIN_PREFIX: usize = 4;
+const GIT_GREP_EXEC_SHORT: char = 'O';
+
+/// Does this argument turn a read-only git subcommand into a write or an exec?
+/// Fail-safe on shape: any short-option cluster holding `O` counts for grep,
+/// even where the `O` might be a value, because a false prompt is cheap.
+fn git_flag_writes(sub: &str, arg: &str) -> bool {
+    let name = arg.split_once('=').map_or(arg, |(n, _)| n);
+    if name == GIT_OUTPUT_FLAG {
+        return true;
+    }
+    if sub != "grep" {
+        return false;
+    }
+    if name.starts_with("--") {
+        return name.len() >= GIT_GREP_EXEC_MIN_PREFIX && GIT_GREP_EXEC_LONG.starts_with(name);
+    }
+    name.starts_with('-') && name.contains(GIT_GREP_EXEC_SHORT)
+}
+
 /// Is every remaining token one of `allowed`? No positional operands at all.
 fn only_flags<'a>(mut rest: impl Iterator<Item = &'a str>, allowed: &[&str]) -> bool {
     rest.all(|t| allowed.contains(&t))
@@ -260,7 +289,9 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         "git" => match toks.next() {
             Some("branch") => only_flags(toks, GIT_BRANCH_LIST_FLAGS),
             Some("remote") => only_flags(toks, GIT_REMOTE_LIST_FLAGS),
-            Some(sub) => GIT_READONLY_SUBCMDS.contains(&sub),
+            Some(sub) => {
+                GIT_READONLY_SUBCMDS.contains(&sub) && !toks.any(|t| git_flag_writes(sub, t))
+            }
             None => false,
         },
         // `gh`/`glab` only for a fixed noun + read verb pair — `gh pr view`,
@@ -441,6 +472,35 @@ mod tests {
         assert!(!is_readonly_bash("   "));
         assert!(!is_readonly_bash("somerandomtool --flag"));
         assert!(!is_readonly_bash("git")); // bare git, no subcommand
+    }
+
+    /// PR #1932 review: a read-only git subcommand is NOT read-only under every
+    /// flag. `--output` makes `log`/`show`/`diff`/`whatchanged` overwrite a
+    /// file, and `grep -O`/`--open-files` runs an arbitrary command.
+    #[test]
+    fn git_read_subcommands_with_a_write_or_exec_flag_prompt() {
+        for c in [
+            "git log --output=victim.txt",
+            "git log --output victim.txt",
+            "git show --output=x HEAD",
+            "git diff HEAD --output=x",
+            "git whatchanged --output=x",
+            "git grep -Otouch pat",
+            "git grep -O pat",
+            "git grep -iO pat",
+            "git grep --open-files=touch pat",
+            "git grep --open pat", // parse-options accepts the abbreviation
+        ] {
+            assert!(!is_readonly_bash(c), "should prompt: {c}");
+        }
+        for c in [
+            "git log --oneline -5",
+            "git grep -n pat",
+            "git grep -i -o pat", // lowercase -o only prints the match
+            "git diff --stat",
+        ] {
+            assert!(is_readonly_bash(c), "should stay read-only: {c}");
+        }
     }
 
     /// Regression test: adversarial-review confirmed bypasses that were
