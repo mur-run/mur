@@ -186,6 +186,20 @@ const GLAB_READONLY_NOUNS: &[&str] =
     &["mr", "issue", "repo", "release", "label", "milestone", "ci"];
 const GLAB_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff"];
 
+/// Verbs that only read for the container / cluster / package CLIs below.
+/// These heads sit on the egress deny-list in `tool_tier` (`docker push`,
+/// `kubectl apply`, `npm publish`, `pip install` all move bytes or change
+/// state), so without an explicit read allowlist `docker ps` was classed
+/// `NetworkEgress` — above the auto ceiling — and prompted in an auto session
+/// (#1878). Same shape as `gh`: head + the VERB directly after it, nothing
+/// else. A flag in the verb slot (`docker -H tcp://host ps`, `kubectl
+/// --context prod get`) fails the check and keeps asking, which costs a prompt
+/// and buys a parser that never has to know which flags take values.
+const DOCKER_READONLY_VERBS: &[&str] = &["ps", "images", "logs", "inspect", "version", "info"];
+const KUBECTL_READONLY_VERBS: &[&str] = &["get", "describe", "logs", "top", "version"];
+const NPM_READONLY_VERBS: &[&str] = &["ls", "list", "outdated"];
+const PIP_READONLY_VERBS: &[&str] = &["list", "show", "freeze"];
+
 /// Does the read lane cover this tool call?
 ///
 /// The single definition of the lane, shared by the interactive TUI and plain
@@ -290,6 +304,19 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
             noun.is_some_and(|n| TEA_READONLY_NOUNS.contains(&n))
                 && verb.is_some_and(|v| TEA_READONLY_VERBS.contains(&v))
         }
+        // Container / cluster / package CLIs: a fixed read verb, directly after
+        // the head. `kubectl get secret(s)` is refused outright — the lane
+        // exists for status checks, and a secret's value is not one.
+        "docker" => toks
+            .next()
+            .is_some_and(|v| DOCKER_READONLY_VERBS.contains(&v)),
+        "kubectl" => {
+            let verb = toks.next();
+            verb.is_some_and(|v| KUBECTL_READONLY_VERBS.contains(&v))
+                && !toks.any(|t| t.to_ascii_lowercase().contains("secret"))
+        }
+        "npm" => toks.next().is_some_and(|v| NPM_READONLY_VERBS.contains(&v)),
+        "pip" | "pip3" => toks.next().is_some_and(|v| PIP_READONLY_VERBS.contains(&v)),
         // `date` prints unless it SETS. `+FORMAT` is the read form. A bare
         // positional is NOT allowed: on BSD `date 010203` sets the clock
         // without any flag at all, so an allowlist of two shapes is the only
@@ -321,6 +348,51 @@ mod tests {
         );
         assert!(!is_readonly_call("write_file", None));
         assert!(!is_readonly_call("edit", Some(&cmd("git status"))));
+    }
+
+    /// #1878: read verbs of the egress-headed CLIs must not prompt in an auto
+    /// session, and their write verbs must still stop.
+    #[test]
+    fn container_and_package_read_verbs_are_read_only() {
+        for c in [
+            "docker ps",
+            "docker ps -a",
+            "docker images",
+            "docker logs web",
+            "docker inspect web",
+            "kubectl get pods",
+            "kubectl get pods -n x -o wide",
+            "kubectl describe pod x",
+            "kubectl logs x",
+            "npm ls",
+            "npm list --depth=0",
+            "pip list",
+            "pip3 show requests",
+            "pip freeze",
+        ] {
+            assert!(is_readonly_bash(c), "{c} should be read-only");
+        }
+        for c in [
+            "docker push img",
+            "docker run img",
+            "docker rm web",
+            "docker exec web ls",
+            "docker -H tcp://h:2375 ps",
+            "docker",
+            "kubectl apply -f x.yaml",
+            "kubectl delete pod x",
+            "kubectl exec x -- ls",
+            "kubectl get secret x -o yaml",
+            "kubectl get secrets",
+            "kubectl --context prod get pods",
+            "npm publish",
+            "npm install",
+            "npm run build",
+            "pip install x",
+            "pip download x",
+        ] {
+            assert!(!is_readonly_bash(c), "{c} must NOT be read-only");
+        }
     }
 
     #[test]

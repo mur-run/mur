@@ -371,6 +371,30 @@ mod tests {
         assert_ne!(classify("bash", Some(&bash("cat a > b"))), RiskTier::Read);
     }
 
+    /// #1878: `docker ps` / `kubectl get` / `npm ls` / `pip list` read. Their
+    /// heads are on the egress deny-list, which used to lift them above the
+    /// auto ceiling, so an auto session raised the approval modal for a status
+    /// check. The write verbs of the same heads must stay above it.
+    #[test]
+    fn read_verbs_of_egress_headed_clis_are_read_but_writes_stay_egress() {
+        for cmd in ["docker ps", "kubectl get pods -n x", "npm ls", "pip list"] {
+            assert_eq!(classify("bash", Some(&bash(cmd))), RiskTier::Read, "{cmd}");
+        }
+        for cmd in [
+            "docker push img",
+            "kubectl apply -f x.yaml",
+            "kubectl get secret x",
+            "npm publish",
+            "pip install x",
+        ] {
+            assert_eq!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::NetworkEgress,
+                "{cmd}"
+            );
+        }
+    }
+
     /// The chain from the report. Every segment reads; `git remote -v` and
     /// `gh pr view` used to lift it to `NetworkEgress` by head alone.
     #[test]
