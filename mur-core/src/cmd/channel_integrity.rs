@@ -154,6 +154,10 @@ fn check_id(channel_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Placeholder for `load_events_with_damage`'s bare-key parameter when the
+/// channel has no signed head (so nothing is checked against it). Not a key.
+const NO_HEAD_INERT_KEY: [u8; 32] = [0u8; 32];
+
 /// Check `channel_id` under `mur_home`. Errors only when the check cannot run
 /// (no such channel, no router key); damage is a successful report.
 pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
@@ -191,12 +195,14 @@ pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
     // The head is signed by the router, whatever actors wrote the events.
     // Only the head needs it, so a channel with no head (a keyless, legacy
     // router) is still checkable without one; a head we cannot verify is not.
-    let router_key =
-        match crate::channel_verify::actor_pubkey(mur_home, &ChannelActor::System, None) {
-            Some(key) => key,
-            None if head.is_none() => [0u8; 32],
-            None => bail!("cannot read the router's key, so the signed head cannot be checked"),
-        };
+    let router_key = crate::channel_verify::actor_pubkey(mur_home, &ChannelActor::System, None);
+    if router_key.is_none() && head.is_some() {
+        bail!("cannot read the router's key, so the signed head cannot be checked");
+    }
+    // `load_events_with_damage` takes a bare key, not an `Option`. With no
+    // head it never reaches the head check, and its per-event verdicts are
+    // ignored (the per-actor pass below decides), so the key is inert here.
+    let router_key = router_key.unwrap_or(NO_HEAD_INERT_KEY);
     // `require_sig` is applied by the per-actor pass below, not here.
     let (events, damage) = store.load_events_with_damage(channel_id, &router_key, false)?;
 
