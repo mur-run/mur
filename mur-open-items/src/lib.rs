@@ -275,8 +275,18 @@ fn append(mur_home: &Path, rec: &Record) -> Result<()> {
 /// one stays finished after somebody re-opened it. The sort is stable, so
 /// records sharing an instant keep the order they were written in.
 pub fn open(mur_home: &Path) -> Vec<OpenItem> {
-    let Ok(body) = std::fs::read_to_string(log_path(mur_home)) else {
-        return Vec::new();
+    try_open(mur_home).unwrap_or_default()
+}
+
+/// Like [`open`], but an unreadable log is an error instead of an empty
+/// list. A missing log is still `Ok(vec![])` — nothing was ever reported.
+/// Callers that act on absence (clearing a reminder because "no item is
+/// open") need this: an unreadable log proves nothing.
+pub fn try_open(mur_home: &Path) -> std::io::Result<Vec<OpenItem>> {
+    let body = match std::fs::read_to_string(log_path(mur_home)) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
     };
     let mut recs: Vec<Record> = body
         .lines()
@@ -311,7 +321,7 @@ pub fn open(mur_home: &Path) -> Vec<OpenItem> {
             Record::Resolve { id, .. } => live.retain(|(k, _)| *k != id),
         }
     }
-    live.into_iter().map(|(_, v)| v).collect()
+    Ok(live.into_iter().map(|(_, v)| v).collect())
 }
 
 /// Stable across turns and processes, so a repeated claim folds.

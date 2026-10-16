@@ -72,14 +72,25 @@ pub(super) enum TrackState {
     /// Confirmed gone: the user cleaned it up.
     Absent,
     /// Could not tell (e.g. permission denied after a filesystem grant was
-    /// removed, or the sandbox sealed it off). `Path::exists` would call this
-    /// absent and delete the only reminder, so it is kept.
+    /// removed, the sandbox sealed it off, or the project's volume is not
+    /// mounted). `Path::exists` would call this absent and delete the only
+    /// reminder, so it is kept.
     Unknown,
 }
 
 impl TrackState {
-    fn probe(path: &Path) -> Self {
-        Self::from_probe(path.try_exists(), path)
+    /// A missing worktree only counts as deleted when its project is
+    /// reachable: on an unmounted volume the project vanishes too, and that
+    /// is "offline", not "cleaned up".
+    fn probe(m: &OpenMarker) -> Self {
+        match Self::from_probe(m.project.try_exists(), &m.project) {
+            Self::Present => Self::from_probe(m.track.try_exists(), &m.track),
+            Self::Absent => {
+                tracing::warn!(project = %m.project.display(), "project not reachable (volume offline?); marker kept");
+                Self::Unknown
+            }
+            Self::Unknown => Self::Unknown,
+        }
     }
 
     fn from_probe(r: std::io::Result<bool>, path: &Path) -> Self {
@@ -113,7 +124,7 @@ pub(super) fn scan(agent_home: &Path) -> Vec<Unsettled> {
             .and_then(|b| serde_json::from_slice::<OpenMarker>(&b).map_err(|e| e.to_string()));
         match parsed {
             Ok(marker) => {
-                let track = TrackState::probe(&marker.track);
+                let track = TrackState::probe(&marker);
                 out.push(Unsettled { marker, track });
             }
             Err(error) => {
@@ -143,14 +154,23 @@ fn item_title(m: &OpenMarker) -> String {
 /// gone resolves the item and drops the marker. Tracks are never touched.
 /// Returns how many unsettled tracks are still on disk.
 pub(super) fn report_at_boot(agent_home: &Path, mur_home: &Path, agent: &str) -> usize {
-    let live: Vec<String> = mur_open_items::open(mur_home)
-        .into_iter()
-        .map(|i| i.title)
-        .collect();
+    // An unreadable log can't say which items are open, so nothing is
+    // cleared or raised against it this boot — markers just wait.
+    let live: Option<Vec<String>> = match mur_open_items::try_open(mur_home) {
+        Ok(items) => Some(items.into_iter().map(|i| i.title).collect()),
+        Err(error) => {
+            tracing::warn!(%error, "open-item log unreadable; unsettled-track markers kept");
+            None
+        }
+    };
     let mut remaining = 0;
     for u in scan(agent_home) {
         let m = &u.marker;
         let title = item_title(m);
+        let Some(live) = &live else {
+            remaining += usize::from(u.track != TrackState::Absent);
+            continue;
+        };
         let is_open = live.contains(&title);
         if u.track == TrackState::Absent {
             if is_open && let Err(e) = mur_open_items::resolve(mur_home, &title) {
@@ -290,6 +310,70 @@ mod tests {
             assert_eq!(items, 1, "open item not resolved on access error");
         }
         assert!(wt.exists(), "worktree untouched");
+    }
+
+    /// Review #1913 P2: an unreadable open-item log must not let a marker
+    /// go just because "no item looked open".
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_item_log_keeps_marker() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let mur_home = tempfile::tempdir().unwrap();
+        let wt = home.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        mark_open(home.path(), &marker(home.path(), "turn-log", wt.clone()));
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 1);
+        std::fs::remove_dir_all(&wt).unwrap(); // gone, but item state unknowable
+
+        let log = mur_home.path().join(mur_open_items::LOG_FILE);
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = std::fs::read(&log).is_err(); // false when running as root
+        report_at_boot(home.path(), mur_home.path(), "mur");
+        let markers = scan(home.path()).len();
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        if denied {
+            assert_eq!(markers, 1, "marker kept while the log is unreadable");
+            assert_eq!(
+                mur_open_items::open(mur_home.path()).len(),
+                1,
+                "item untouched"
+            );
+        }
+        // Log readable again: the absent worktree now settles normally.
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 0);
+        assert!(scan(home.path()).is_empty());
+        assert!(mur_open_items::open(mur_home.path()).is_empty());
+    }
+
+    /// Review #1913 P2: a worktree on an unmounted volume is offline, not
+    /// deleted — its project root is missing too.
+    #[test]
+    fn offline_project_volume_keeps_marker_and_item() {
+        let home = tempfile::tempdir().unwrap();
+        let mur_home = tempfile::tempdir().unwrap();
+        let project = home.path().join("volume").join("proj");
+        let wt = project.join(".worktrees").join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let mut m = marker(home.path(), "turn-vol", wt.clone());
+        m.project = project.clone();
+        mark_open(home.path(), &m);
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 1);
+
+        // "Unmount": the whole volume disappears, project included.
+        let vol = home.path().join("volume");
+        let parked = home.path().join("parked");
+        std::fs::rename(&vol, &parked).unwrap();
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 1);
+        assert_eq!(scan(home.path()).len(), 1, "marker kept while offline");
+        assert_eq!(mur_open_items::open(mur_home.path()).len(), 1);
+
+        // Remount, then really remove the worktree: settles.
+        std::fs::rename(&parked, &vol).unwrap();
+        std::fs::remove_dir_all(&wt).unwrap();
+        assert_eq!(report_at_boot(home.path(), mur_home.path(), "mur"), 0);
+        assert!(scan(home.path()).is_empty());
     }
 
     #[test]
