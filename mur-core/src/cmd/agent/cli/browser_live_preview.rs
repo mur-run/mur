@@ -73,10 +73,13 @@ pub(crate) fn render_preview(
     let mut out = vec![format!("`{server}` on agent `{agent}` will be: {what}")];
     let old: &[String] = before.map(|b| b.allow_hosts.as_slice()).unwrap_or(&[]);
     out.extend(host_diff(old, &after.allow_hosts, notes));
+    // Lifting a block is a grant too: show every deny-list change (#1919).
+    let old_deny: &[String] = before.map(|b| b.deny_hosts.as_slice()).unwrap_or(&[]);
+    if !old_deny.is_empty() || !after.deny_hosts.is_empty() {
+        out.push("deny list:".into());
+        out.extend(host_diff(old_deny, &after.deny_hosts, &[]));
+    }
     if research {
-        if !after.deny_hosts.is_empty() {
-            out.push(format!("deny list: {}", after.deny_hosts.join(", ")));
-        }
         out.push(research_caveat(enforcement).to_owned());
         out.push(
             "link-local and cloud-metadata IPs are still refused by the proxy; \
@@ -125,6 +128,50 @@ mod tests {
         assert!(p.contains("https://new.com/x"), "{p}");
         assert!(p.contains("agent `mur`") && p.contains("restart"), "{p}");
         assert!(!p.contains("research"), "{p}");
+    }
+
+    #[test]
+    fn preview_shows_deny_hosts_being_lifted() {
+        let before = McpServerNetwork {
+            mode: McpNetMode::BroadAudited,
+            deny_hosts: vec!["evil.example".into(), "keep.example".into()],
+            ..Default::default()
+        };
+        let after = McpServerNetwork {
+            mode: McpNetMode::BroadAudited,
+            deny_hosts: vec!["keep.example".into()],
+            ..Default::default()
+        };
+        let p = render_preview(
+            "mur",
+            "browser",
+            Some(&before),
+            &after,
+            &[],
+            DenyEnforcement::Advisory,
+        );
+        assert!(p.contains("- evil.example"), "{p}");
+        assert!(p.contains("  keep.example"), "{p}");
+        assert!(p.contains("deny list"), "{p}");
+    }
+
+    #[test]
+    fn preview_shows_deny_list_dropped_when_leaving_research() {
+        let before = McpServerNetwork {
+            mode: McpNetMode::BroadAudited,
+            deny_hosts: vec!["evil.example".into()],
+            ..Default::default()
+        };
+        let after = net(McpNetMode::Restricted, &["a.com"]);
+        let p = render_preview(
+            "mur",
+            "browser",
+            Some(&before),
+            &after,
+            &[],
+            DenyEnforcement::Advisory,
+        );
+        assert!(p.contains("- evil.example"), "{p}");
     }
 
     #[test]

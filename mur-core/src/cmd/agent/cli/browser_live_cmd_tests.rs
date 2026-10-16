@@ -666,3 +666,28 @@ fn same_policy_with_pending_repairs_still_previews_and_offers_confirm() {
     assert_eq!(chip.map(|c| c.label), Some(CONFIRM_LABEL.to_owned()));
     assert!(f.adds.is_empty() && f.saves == 0, "preview must not write");
 }
+
+#[test]
+fn research_rerun_keeps_existing_deny_hosts() {
+    let existing = crate::cmd::agent::mcp_network::broad_audited_network(
+        vec!["evil.example".into()],
+        "dave".into(),
+        1,
+    );
+    let mut after = research_network("dave".into(), 2);
+    carry_deny_hosts(&mut after, Some(&existing));
+    assert_eq!(after.deny_hosts, vec!["evil.example"]);
+    assert!(same_policy(&existing, &after));
+}
+
+#[test]
+fn restricted_policy_does_not_inherit_deny_hosts() {
+    let existing = crate::cmd::agent::mcp_network::broad_audited_network(
+        vec!["evil.example".into()],
+        "dave".into(),
+        1,
+    );
+    let mut after = live_network(&["a.com".to_owned()]);
+    carry_deny_hosts(&mut after, Some(&existing));
+    assert!(after.deny_hosts.is_empty());
+}

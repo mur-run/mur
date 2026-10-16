@@ -275,6 +275,19 @@ pub(super) fn research_network(by: String, at_ms: u64) -> McpServerNetwork {
     crate::cmd::agent::mcp_network::broad_audited_network(vec![], by, at_ms)
 }
 
+/// `--research` reruns keep the deny list already on the entry: the flag
+/// takes no hosts, so silently emptying a deny list would lift blocks the
+/// user never asked to lift (#1919 review). A `Restricted` policy has no
+/// deny list to carry.
+pub(super) fn carry_deny_hosts(after: &mut McpServerNetwork, existing: Option<&McpServerNetwork>) {
+    if after.mode == McpNetMode::BroadAudited
+        && after.deny_hosts.is_empty()
+        && let Some(prev) = existing.filter(|n| n.mode == McpNetMode::BroadAudited)
+    {
+        after.deny_hosts = prev.deny_hosts.clone();
+    }
+}
+
 /// Same policy, ignoring who authorized it and when: a `--research` rerun
 /// mints a fresh authorization but changes nothing the proxy enforces.
 fn same_policy(a: &McpServerNetwork, b: &McpServerNetwork) -> bool {
@@ -514,6 +527,8 @@ pub(super) fn run(
     let mut servers = ops.servers()?;
     // #1905 Part 2: show what will be written, and write only on `--yes`.
     let existing = servers.iter().find(|e| e.name == LIVE_ENTRY);
+    let mut after = after;
+    carry_deny_hosts(&mut after, existing.and_then(|e| e.network.as_ref()));
     let preview = render_preview(
         agent,
         LIVE_ENTRY,
