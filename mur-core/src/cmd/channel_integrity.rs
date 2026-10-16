@@ -15,8 +15,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use mur_channel::ChannelService;
 use mur_channel::store::AnchorMismatchKind;
+use mur_channel::store::ChannelStore;
 use mur_common::channel::ChannelActor;
 
 /// Exit code for a channel that verified clean.
@@ -169,8 +169,10 @@ const NO_HEAD_INERT_KEY: [u8; 32] = [0u8; 32];
 /// (no such channel, no router key); damage is a successful report.
 pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
     check_id(channel_id)?;
-    let svc = ChannelService::open(mur_home)?;
-    let store = svc.store();
+    // The store, not `ChannelService`: the service also opens the SQLite
+    // index (creating dirs, migrating, enabling WAL), which would break the
+    // "writes nothing" promise and tie the check to an unrelated read-model.
+    let store = ChannelStore::new(mur_home);
     let log_path = store.events_path(channel_id);
     let heads = mur_channel::anchor::heads_dir(mur_home);
 
@@ -198,8 +200,14 @@ pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
             return Ok(report);
         }
     };
-    if log.is_none() && head.is_none() && !mur_channel::anchor::is_dirty(mur_home, channel_id) {
-        bail!("no such channel: {channel_id} (no log, no signed head)");
+    // A freshly created channel has a manifest and nothing else, so the
+    // manifest counts as existence too.
+    if log.is_none()
+        && head.is_none()
+        && !store.has_manifest(channel_id)
+        && !mur_channel::anchor::is_dirty(mur_home, channel_id)
+    {
+        bail!("no such channel: {channel_id} (no manifest, no log, no signed head)");
     }
     report.anchored_lines = head.as_ref().map(|h| h.lines);
 

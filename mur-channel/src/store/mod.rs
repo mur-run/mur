@@ -50,6 +50,11 @@ impl ChannelStore {
     fn manifest_path(&self, id: &str) -> PathBuf {
         self.channel_dir(id).join("channel.yaml")
     }
+    /// Whether `id` has a manifest on disk. `create` writes only the manifest,
+    /// so a channel that exists but holds no events yet is known by this alone.
+    pub fn has_manifest(&self, id: &str) -> bool {
+        self.manifest_path(id).exists()
+    }
 
     /// Create the channel directory and write its initial manifest.
     pub fn create(&self, channel: &Channel) -> Result<()> {

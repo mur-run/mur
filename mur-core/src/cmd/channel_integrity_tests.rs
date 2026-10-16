@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::channel_writer::append_as_writer;
+use mur_channel::ChannelService;
 use mur_common::channel::EventKind;
 use mur_common::identity::AgentIdentity;
 use tempfile::TempDir;
@@ -311,4 +312,40 @@ fn signed_events_with_no_head_stay_intact_under_the_inert_key() {
     let r = f.check();
     assert!(r.is_intact(), "{}", r.render());
     assert_eq!(r.events, 3);
+}
+
+#[test]
+fn a_created_channel_with_no_events_is_intact_and_unanchored() {
+    // `ChannelStore::create` writes only the directory and manifest; there is
+    // no log yet. That is an existing, empty channel, not a missing one.
+    let f = Fixture::unanchored(0);
+    assert!(!f.log_path().exists(), "premise: no events file yet");
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert_eq!(r.events, 0);
+    assert_eq!(r.anchored_lines, None);
+    assert_eq!(r.exit_code(), EXIT_INTACT);
+}
+
+#[test]
+fn verify_does_not_create_the_channel_index() {
+    let f = Fixture::anchored(2);
+    let index = f.home.path().join("index");
+    std::fs::remove_dir_all(&index).unwrap();
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert!(!index.exists(), "verify created {}", index.display());
+}
+
+#[test]
+fn verify_works_without_a_usable_index() {
+    // An index path that cannot be opened (a plain file where the directory
+    // belongs) must not stop a check that only needs the log and the head.
+    let f = Fixture::anchored(2);
+    let index = f.home.path().join("index");
+    std::fs::remove_dir_all(&index).unwrap();
+    std::fs::write(&index, b"not a directory").unwrap();
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert_eq!(std::fs::read(&index).unwrap(), b"not a directory");
 }
