@@ -313,10 +313,15 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         "kubectl" => {
             let verb = toks.next();
             verb.is_some_and(|v| KUBECTL_READONLY_VERBS.contains(&v))
-                && !toks.any(|t| t.to_ascii_lowercase().contains("secret"))
+                && !toks.any(|t| {
+                    t.to_ascii_lowercase().contains("secret") || kubectl_selects_from_file(t)
+                })
         }
         "npm" => toks.next().is_some_and(|v| NPM_READONLY_VERBS.contains(&v)),
-        "pip" | "pip3" => toks.next().is_some_and(|v| PIP_READONLY_VERBS.contains(&v)),
+        "pip" | "pip3" => {
+            toks.next().is_some_and(|v| PIP_READONLY_VERBS.contains(&v))
+                && !toks.any(pip_writes_log_file)
+        }
         // `date` prints unless it SETS. `+FORMAT` is the read form. A bare
         // positional is NOT allowed: on BSD `date 010203` sets the clock
         // without any flag at all, so an allowlist of two shapes is the only
@@ -324,6 +329,36 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         "date" => toks.all(|t| t.starts_with('+') || DATE_READONLY_FLAGS.contains(&t)),
         other => READONLY_HEADS.contains(&other),
     }
+}
+
+/// True when a `kubectl` argument selects resources from a manifest file or
+/// directory (`-f`, `--filename`, `-k`, `--kustomize`, attached-value forms,
+/// and short-flag clusters such as `-Rf`). The manifest can name a Secret by
+/// `kind` and `metadata.name`, so no command-line token need contain
+/// "secret"; the contents are not inspected, so the call is not provably a
+/// status check. A false positive only costs a prompt.
+fn kubectl_selects_from_file(tok: &str) -> bool {
+    let name = tok.split('=').next().unwrap_or(tok);
+    if let Some(long) = name.strip_prefix("--") {
+        return long == "filename" || long == "kustomize";
+    }
+    match name.strip_prefix('-') {
+        // `-fFILE` / `-kDIR` (attached value, may contain non-letters) or a
+        // letter cluster ending in the flag (`-Rf`).
+        Some(short) if !short.is_empty() => {
+            short.starts_with(['f', 'k'])
+                || (short.chars().all(|c| c.is_ascii_alphabetic()) && short.contains(['f', 'k']))
+        }
+        _ => false,
+    }
+}
+
+/// True when a `pip` argument is `--log` (or an unambiguous prefix optparse
+/// would expand to it, e.g. `--lo` for `pip show`), with or without `=PATH`.
+/// `--log PATH` creates or appends to a file, so the call is not read-only.
+fn pip_writes_log_file(tok: &str) -> bool {
+    let name = tok.split('=').next().unwrap_or(tok);
+    name.len() >= 3 && "--log".starts_with(name)
 }
 
 #[cfg(test)]
@@ -385,6 +420,23 @@ mod tests {
             "kubectl get secret x -o yaml",
             "kubectl get secrets",
             "kubectl --context prod get pods",
+            // Manifest / directory selection can name a Secret indirectly.
+            "kubectl get -f resource.yaml -o yaml",
+            "kubectl get -fresource.yaml",
+            "kubectl get --filename resource.yaml",
+            "kubectl get --filename=resource.yaml",
+            "kubectl get -Rf dir",
+            "kubectl describe -f resource.yaml",
+            "kubectl get -k overlay/",
+            "kubectl get -kdir",
+            "kubectl get --kustomize overlay/",
+            "kubectl get --kustomize=overlay/",
+            // `pip --log` writes a file.
+            "pip list --log ./pip-session.log",
+            "pip list --log=./pip-session.log",
+            "pip3 freeze --log ./x.log",
+            "pip3 show requests --log=./x.log",
+            "pip show requests --lo ./x.log",
             "npm publish",
             "npm install",
             "npm run build",
