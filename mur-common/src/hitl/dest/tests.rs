@@ -177,3 +177,44 @@ fn unquoted_metachars_still_refused() {
         assert_eq!(scope(cmd), None, "must not be grantable: {cmd}");
     }
 }
+
+/// #1878: agents append `2>/dev/null` / `2>&1` to almost every read. Those
+/// only discard or join the command's own streams — they cannot write a
+/// file — so a read with one is still a local read, not an unparseable line
+/// that falls through to the head deny-list (`gh … 2>/dev/null` was
+/// `NetworkEgress`, which auto-approve may never cover).
+#[test]
+fn stream_discard_and_join_redirects_keep_a_read_local() {
+    for cmd in [
+        "gh issue list --limit 10 2>/dev/null",
+        "gh issue view 1878 2>&1 | head -80",
+        "git log --oneline -5 2>/dev/null",
+        "ls missing >/dev/null 2>&1",
+        "cat a 1>/dev/null",
+        "grep -rn x src 2> /dev/null | head",
+        "cd /repo && git status -sb 2>&1 | head -8",
+    ] {
+        assert_eq!(scope(cmd).as_deref(), Some("local:ro"), "cmd: {cmd}");
+    }
+}
+
+/// The exemption is exactly those two shapes. Anything that can land bytes in
+/// a real file, read from one, or close a stream is still unmodelled.
+#[test]
+fn every_other_redirect_is_still_refused() {
+    for cmd in [
+        "cat a > b",
+        "cat a >> b",
+        "ls 2>err.log",
+        "ls 2>/dev/nullx",
+        "ls 2>/dev/null/x",
+        "ls '2'>/dev/null",
+        "ls >&-",
+        "ls 2>&1x",
+        "cat < secret",
+        "ls &>/dev/null",
+        "ls 2>'/dev/null'",
+    ] {
+        assert_eq!(scope(cmd), None, "cmd: {cmd}");
+    }
+}

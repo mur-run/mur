@@ -51,54 +51,20 @@ const DATE_READONLY_FLAGS: &[&str] = &[
     "-Iseconds",
 ];
 
-/// `git` subcommands that only read (regardless of flags). Excludes anything
-/// with a write mode (`branch -D`, `tag X`, `remote add`, `config`, `stash`, …).
-///
-/// REMOVED `reflog` — `git reflog expire/delete` is destructive (prunes the reflog).
-const GIT_READONLY_SUBCMDS: &[&str] = &[
-    "status",
-    "log",
-    "diff",
-    "show",
-    "blame",
-    "rev-parse",
-    "ls-files",
-    "ls-tree",
-    "cat-file",
-    "describe",
-    "shortlog",
-    "whatchanged",
-    "grep",
-];
+mod git;
 
-/// Flags under which `git branch` only LISTS. Any positional argument makes it
-/// create a branch (`git branch x`), and `-d/-D/-m/-M/-c/-C/-f/-u` rename,
-/// delete, copy or retarget — all absent. `--list` is here but its pattern
-/// operand is not: a positional still fails the check, which costs one prompt
-/// for `git branch --list 'feat*'` and buys a parser that never has to know
-/// which flags take values.
-const GIT_BRANCH_LIST_FLAGS: &[&str] = &[
-    "--show-current",
-    "-a",
-    "--all",
-    "-r",
-    "--remotes",
-    "-v",
-    "-vv",
-    "--verbose",
-    "--list",
-    "--no-color",
-];
+/// ripgrep flags that RUN a program: `--pre` per searched file,
+/// `--hostname-bin` for hyperlinks. `--pre-glob` only scopes `--pre`.
+const RG_EXEC_FLAGS: &[&str] = &["--pre", "--hostname-bin"];
 
-/// Flags under which `git remote` only prints the configured remotes. Bare
-/// `git remote` lists names. `show`/`update`/`prune` are subcommands, not
-/// flags, so they fail the check — `show` and `update` contact the remote,
-/// `prune` deletes refs.
-const GIT_REMOTE_LIST_FLAGS: &[&str] = &["-v", "--verbose"];
+/// `file -C` / `--compile` compiles the `-m` magic source into `<name>.mgc`.
+const FILE_COMPILE_SHORT: char = 'C';
+const FILE_COMPILE_LONG: &str = "--compile";
+const FILE_COMPILE_MIN_PREFIX: usize = 4;
 
-/// Is every remaining token one of `allowed`? No positional operands at all.
-fn only_flags<'a>(mut rest: impl Iterator<Item = &'a str>, allowed: &[&str]) -> bool {
-    rest.all(|t| allowed.contains(&t))
+/// The flag's name, without an `=value`.
+fn flag_name(arg: &str) -> &str {
+    arg.split_once('=').map_or(arg, |(n, _)| n)
 }
 
 /// `gh` nouns that have a genuine read-only surface (excludes `api` — an
@@ -271,12 +237,8 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         // `git` only for a fixed read-only subcommand set, plus the two
         // subcommands whose read and write modes share a name (`branch`,
         // `remote`) — those only when EVERY argument is a known listing flag.
-        "git" => match toks.next() {
-            Some("branch") => only_flags(toks, GIT_BRANCH_LIST_FLAGS),
-            Some("remote") => only_flags(toks, GIT_REMOTE_LIST_FLAGS),
-            Some(sub) => GIT_READONLY_SUBCMDS.contains(&sub),
-            None => false,
-        },
+        // Flag and repo-driver checks live in `git.rs`.
+        "git" => git::is_readonly(toks),
         // `gh`/`glab` only for a fixed noun + read verb pair — `gh pr view`,
         // `gh issue list`, never `gh api` (arbitrary REST, can write) or the
         // auth/secret/config nouns that mix read and mutate under one name.
@@ -329,6 +291,19 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         // without any flag at all, so an allowlist of two shapes is the only
         // safe read of this head.
         "date" => toks.all(|t| t.starts_with('+') || DATE_READONLY_FLAGS.contains(&t)),
+        // `rg --pre=CMD` / `--hostname-bin=CMD` run a program; clap needs the
+        // full name, so an exact name match (with or without `=value`) holds.
+        "rg" => !toks.any(|t| RG_EXEC_FLAGS.contains(&flag_name(t))),
+        // `file -C` / `--compile` writes `<magic>.mgc`. Short options cluster
+        // (`-zC`); getopt_long takes a unique prefix (`--co`).
+        "file" => !toks.any(|t| {
+            let long = flag_name(t);
+            if long.starts_with("--") {
+                long.len() >= FILE_COMPILE_MIN_PREFIX && FILE_COMPILE_LONG.starts_with(long)
+            } else {
+                t.starts_with('-') && t.contains(FILE_COMPILE_SHORT)
+            }
+        }),
         other => READONLY_HEADS.contains(&other),
     }
 }
@@ -513,7 +488,7 @@ mod tests {
             "find . -name '*.rs'",
             "git status",
             "git log --oneline -10",
-            "git diff HEAD~1",
+            "git diff --stat HEAD~1", // a bare diff can run textconv: see git/tests.rs
             "git branch",
             "git branch --show-current",
             "git branch -a -vv",
@@ -618,6 +593,35 @@ mod tests {
         assert!(!is_readonly_bash("   "));
         assert!(!is_readonly_bash("somerandomtool --flag"));
         assert!(!is_readonly_bash("git")); // bare git, no subcommand
+    }
+
+    /// PR #1932 review: a read-only git subcommand is NOT read-only under every
+    /// flag. `--output` makes `log`/`show`/`diff`/`whatchanged` overwrite a
+    /// file, and `grep -O`/`--open-files` runs an arbitrary command.
+    #[test]
+    fn git_read_subcommands_with_a_write_or_exec_flag_prompt() {
+        for c in [
+            "git log --output=victim.txt",
+            "git log --output victim.txt",
+            "git show --output=x HEAD",
+            "git diff HEAD --output=x",
+            "git whatchanged --output=x",
+            "git grep -Otouch pat",
+            "git grep -O pat",
+            "git grep -iO pat",
+            "git grep --open-files=touch pat",
+            "git grep --open pat", // parse-options accepts the abbreviation
+        ] {
+            assert!(!is_readonly_bash(c), "should prompt: {c}");
+        }
+        for c in [
+            "git log --oneline -5",
+            "git grep -n pat",
+            "git grep -i -o pat", // lowercase -o only prints the match
+            "git diff --stat",
+        ] {
+            assert!(is_readonly_bash(c), "should stay read-only: {c}");
+        }
     }
 
     /// Regression test: adversarial-review confirmed bypasses that were
