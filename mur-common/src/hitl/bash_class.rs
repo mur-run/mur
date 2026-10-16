@@ -186,6 +186,20 @@ const GLAB_READONLY_NOUNS: &[&str] =
     &["mr", "issue", "repo", "release", "label", "milestone", "ci"];
 const GLAB_READONLY_VERBS: &[&str] = &["view", "list", "status", "diff"];
 
+/// Verbs that only read for the container / cluster / package CLIs below.
+/// These heads sit on the egress deny-list in `tool_tier` (`docker push`,
+/// `kubectl apply`, `npm publish`, `pip install` all move bytes or change
+/// state), so without an explicit read allowlist `docker ps` was classed
+/// `NetworkEgress` — above the auto ceiling — and prompted in an auto session
+/// (#1878). Same shape as `gh`: head + the VERB directly after it, nothing
+/// else. A flag in the verb slot (`docker -H tcp://host ps`, `kubectl
+/// --context prod get`) fails the check and keeps asking, which costs a prompt
+/// and buys a parser that never has to know which flags take values.
+const DOCKER_READONLY_VERBS: &[&str] = &["ps", "images", "logs", "inspect", "version", "info"];
+const KUBECTL_READONLY_VERBS: &[&str] = &["get", "describe", "logs", "top", "version"];
+const NPM_READONLY_VERBS: &[&str] = &["ls", "list", "outdated"];
+const PIP_READONLY_VERBS: &[&str] = &["list", "show", "freeze"];
+
 /// Does the read lane cover this tool call?
 ///
 /// The single definition of the lane, shared by the interactive TUI and plain
@@ -290,6 +304,26 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
             noun.is_some_and(|n| TEA_READONLY_NOUNS.contains(&n))
                 && verb.is_some_and(|v| TEA_READONLY_VERBS.contains(&v))
         }
+        // Container / cluster / package CLIs: a fixed read verb, directly after
+        // the head. `kubectl get secret(s)` is refused outright — the lane
+        // exists for status checks, and a secret's value is not one.
+        "docker" => toks
+            .next()
+            .is_some_and(|v| DOCKER_READONLY_VERBS.contains(&v)),
+        "kubectl" => {
+            let verb = toks.next();
+            verb.is_some_and(|v| KUBECTL_READONLY_VERBS.contains(&v))
+                && !toks.any(|t| {
+                    t.to_ascii_lowercase().contains("secret")
+                        || kubectl_selects_from_file(t)
+                        || kubectl_unsafe_long_flag(t)
+                })
+        }
+        "npm" => toks.next().is_some_and(|v| NPM_READONLY_VERBS.contains(&v)),
+        "pip" | "pip3" => {
+            toks.next().is_some_and(|v| PIP_READONLY_VERBS.contains(&v))
+                && !toks.any(pip_writes_log_file)
+        }
         // `date` prints unless it SETS. `+FORMAT` is the read form. A bare
         // positional is NOT allowed: on BSD `date 010203` sets the clock
         // without any flag at all, so an allowlist of two shapes is the only
@@ -297,6 +331,60 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         "date" => toks.all(|t| t.starts_with('+') || DATE_READONLY_FLAGS.contains(&t)),
         other => READONLY_HEADS.contains(&other),
     }
+}
+
+/// True when a `kubectl` argument selects resources from a manifest file or
+/// directory (`-f`, `--filename`, `-k`, `--kustomize`, attached-value forms,
+/// and short-flag clusters such as `-Rf`). The manifest can name a Secret by
+/// `kind` and `metadata.name`, so no command-line token need contain
+/// "secret"; the contents are not inspected, so the call is not provably a
+/// status check. A false positive only costs a prompt.
+fn kubectl_selects_from_file(tok: &str) -> bool {
+    let name = kubectl_flag_name(tok);
+    if let Some(long) = name.strip_prefix("--") {
+        return long == "filename" || long == "kustomize";
+    }
+    match name.strip_prefix('-') {
+        // pflag reads a short cluster left to right until it meets a flag
+        // that takes a value, so `-fFILE`, `-Rf`, and `-Rf./x` all select a
+        // manifest. Any `f`/`k` in the cluster is refused: a value attached
+        // to an earlier flag that happens to contain one only costs a prompt.
+        Some(short) if !short.is_empty() => short.contains(['f', 'k']),
+        _ => false,
+    }
+}
+
+/// True when a `kubectl` argument is one of [`KUBECTL_UNSAFE_LONG_FLAGS`].
+fn kubectl_unsafe_long_flag(tok: &str) -> bool {
+    KUBECTL_UNSAFE_LONG_FLAGS.contains(&kubectl_flag_name(tok).as_str())
+}
+
+/// The flag name of a `kubectl` argument as kubectl sees it: text before
+/// `=`, with `_` folded to `-` (kubectl installs pflag's
+/// `WordSepNormalizeFunc`, so `--cache_dir` IS `--cache-dir`).
+fn kubectl_flag_name(tok: &str) -> String {
+    tok.split('=').next().unwrap_or(tok).replace('_', "-")
+}
+
+/// Long flags refused in the kubectl read lane, matched bare or `=VALUE`.
+/// `--raw` fetches an arbitrary API path that client-go percent-decodes
+/// (`%73ecrets`), defeating the "secret" token check; the rest write to a
+/// caller-chosen path (`--profile` alone writes `profile.pprof`).
+const KUBECTL_UNSAFE_LONG_FLAGS: &[&str] = &[
+    "--raw",
+    "--profile",
+    "--profile-output",
+    "--cache-dir",
+    "--log-file",
+    "--log-dir",
+];
+
+/// True when a `pip` argument is `--log` (or an unambiguous prefix optparse
+/// would expand to it, e.g. `--lo` for `pip show`), with or without `=PATH`.
+/// `--log PATH` creates or appends to a file, so the call is not read-only.
+fn pip_writes_log_file(tok: &str) -> bool {
+    let name = tok.split('=').next().unwrap_or(tok);
+    name.len() >= 3 && "--log".starts_with(name)
 }
 
 #[cfg(test)]
@@ -321,6 +409,95 @@ mod tests {
         );
         assert!(!is_readonly_call("write_file", None));
         assert!(!is_readonly_call("edit", Some(&cmd("git status"))));
+    }
+
+    /// #1878: read verbs of the egress-headed CLIs must not prompt in an auto
+    /// session, and their write verbs must still stop.
+    #[test]
+    fn container_and_package_read_verbs_are_read_only() {
+        for c in [
+            "docker ps",
+            "docker ps -a",
+            "docker images",
+            "docker logs web",
+            "docker inspect web",
+            "kubectl get pods",
+            "kubectl get pods -n x -o wide",
+            "kubectl describe pod x",
+            "kubectl logs x",
+            "npm ls",
+            "npm list --depth=0",
+            "pip list",
+            "pip3 show requests",
+            "pip freeze",
+        ] {
+            assert!(is_readonly_bash(c), "{c} should be read-only");
+        }
+        for c in [
+            "docker push img",
+            "docker run img",
+            "docker rm web",
+            "docker exec web ls",
+            "docker -H tcp://h:2375 ps",
+            "docker",
+            "kubectl apply -f x.yaml",
+            "kubectl delete pod x",
+            "kubectl exec x -- ls",
+            "kubectl get secret x -o yaml",
+            "kubectl get secrets",
+            "kubectl --context prod get pods",
+            // Manifest / directory selection can name a Secret indirectly.
+            "kubectl get -f resource.yaml -o yaml",
+            "kubectl get -fresource.yaml",
+            "kubectl get --filename resource.yaml",
+            "kubectl get --filename=resource.yaml",
+            "kubectl get -Rf dir",
+            "kubectl describe -f resource.yaml",
+            "kubectl get -k overlay/",
+            "kubectl get -kdir",
+            "kubectl get --kustomize overlay/",
+            "kubectl get --kustomize=overlay/",
+            // pflag splits `-Rf./x` into `-R` + `-f ./x`: a cluster with an
+            // attached value still selects from a manifest.
+            "kubectl get -Rf./resource.yaml -o yaml",
+            "kubectl describe -Rf./resource.yaml",
+            "kubectl get -Rk./overlay",
+            // `--profile-output` creates or truncates a file.
+            "kubectl version --client --profile=cpu --profile-output=./out.prof",
+            "kubectl get pods --profile cpu --profile-output ./out.prof",
+            "kubectl version --profile=cpu",
+            // `--raw` takes a URL whose path client-go percent-decodes, so
+            // `%73ecrets` reaches the Secret API with no "secret" token.
+            "kubectl get --raw=/api/v1/namespaces/default/%73ecrets",
+            "kubectl get --raw /api/v1/namespaces/default/%73ecrets/x",
+            // Flags that write to a caller-chosen path.
+            "kubectl get pods --cache-dir ./cache",
+            "kubectl get pods --cache-dir=./cache",
+            "kubectl get pods --log-file=./k.log",
+            "kubectl get pods --log-dir ./logs",
+            // kubectl folds `_` to `-` in flag names.
+            "kubectl version --client --profile_output=./out.prof",
+            "kubectl version --client --profile_output ./out.prof",
+            "kubectl get pods --cache_dir=./cache",
+            "kubectl get pods --cache_dir ./cache",
+            "kubectl get pods --log_file=./k.log",
+            "kubectl get pods --log_file ./k.log",
+            "kubectl get pods --log_dir ./logs",
+            "kubectl get pods --log_dir=./logs",
+            // `pip --log` writes a file.
+            "pip list --log ./pip-session.log",
+            "pip list --log=./pip-session.log",
+            "pip3 freeze --log ./x.log",
+            "pip3 show requests --log=./x.log",
+            "pip show requests --lo ./x.log",
+            "npm publish",
+            "npm install",
+            "npm run build",
+            "pip install x",
+            "pip download x",
+        ] {
+            assert!(!is_readonly_bash(c), "{c} must NOT be read-only");
+        }
     }
 
     #[test]
