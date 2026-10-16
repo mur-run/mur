@@ -24,7 +24,7 @@ use mur_common::identity::AgentIdentity;
 
 use super::ChannelService;
 use crate::anchor::{self, AnchorLagError};
-use crate::head::{Head, HeadFields, chain_log, chain_prefix};
+use crate::head::{Head, HeadFields, chain_log, chain_log_with_prefix};
 use crate::head_io;
 use crate::store::{PreSealInput, SealHook, SealHooks, SealInput};
 
@@ -73,11 +73,12 @@ fn seqs(log: &[u8], record: &[u8]) -> (Option<u64>, Option<u64>) {
     } else {
         log
     };
+    // Walk back from the end and decode one line at a time, so the cost is
+    // the unparseable tail plus one event, not the whole log.
     let last_seq = |bytes: &[u8]| {
-        String::from_utf8_lossy(bytes)
-            .lines()
-            .rev()
-            .find_map(|l| serde_json::from_str::<ChannelEvent>(l).ok())
+        bytes
+            .rsplit(|&b| b == b'\n')
+            .find_map(|l| serde_json::from_str::<ChannelEvent>(&String::from_utf8_lossy(l)).ok())
             .map(|e| e.seq)
     };
     (last_seq(log), last_seq(body))
@@ -104,7 +105,8 @@ fn next_head(
     input: &SealInput<'_>,
     signer: HeadSigner<'_>,
 ) -> Result<Option<Head>> {
-    let state = chain_log(log);
+    // One scan serves both the new head and the check of the old one.
+    let (state, prefix) = chain_log_with_prefix(log, current.map_or(0, |h| h.lines));
     let (last_seq, before) = seqs(log, input.record);
     // The new line must stand on its own. If it was appended onto an
     // unterminated tail it is glued to that garbage (and unparseable itself);
@@ -136,7 +138,7 @@ fn next_head(
             if !h.verify(&key) {
                 bail!("existing head fails signature verification; refusing to overwrite it");
             }
-            let prefix = chain_prefix(log, h.lines)
+            let prefix = prefix
                 .with_context(|| format!("log has fewer than the head's {} lines", h.lines))?;
             if hex::encode(prefix.hash) != h.chain_hash {
                 bail!("log no longer extends the signed head at line {}", h.lines);
