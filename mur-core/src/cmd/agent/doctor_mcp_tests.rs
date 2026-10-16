@@ -22,7 +22,7 @@ fn bare_interpreter_resolving_outside_the_grant_is_predicted() {
     let shim = tempfile::tempdir().unwrap();
     let node = bin(shim.path(), "node", "#!/bin/sh\n");
     let path = std::env::join_paths([shim.path()]).unwrap();
-    let got = predict_with(&profile("node"), &path, |_| false);
+    let got = predict_with(&profile("node"), &no_bundle(), &path, |_| false);
     assert_eq!(
         got,
         vec![Blocked {
@@ -31,7 +31,7 @@ fn bare_interpreter_resolving_outside_the_grant_is_predicted() {
             resolved: node,
         }]
     );
-    assert!(predict_with(&profile("node"), &path, |_| true).is_empty());
+    assert!(predict_with(&profile("node"), &no_bundle(), &path, |_| true).is_empty());
 }
 
 #[test]
@@ -40,10 +40,34 @@ fn env_shebang_interpreter_is_followed_one_hop() {
     let npx = bin(d.path(), "npx", "#!/usr/bin/env node\n");
     let node = bin(d.path(), "node", "#!/bin/sh\n");
     let path = std::env::join_paths([d.path()]).unwrap();
-    let got = predict_with(&profile("npx"), &path, |p| p == npx);
+    let env = Path::new("/usr/bin/env");
+    let got = predict_with(&profile("npx"), &no_bundle(), &path, |p| {
+        p == npx || p == env
+    });
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].wanted, "env node");
     assert_eq!(got[0].resolved, node);
+}
+
+#[test]
+fn a_refused_shebang_executable_is_predicted_before_its_target() {
+    // Strict mode can grant the script and `node` yet deny `/usr/bin/env`;
+    // the kernel execs `env` first, so startup fails there.
+    let d = tempfile::tempdir().unwrap();
+    let npx = bin(d.path(), "npx", "#!/usr/bin/env node\n");
+    let node = bin(d.path(), "node", "#!/bin/sh\n");
+    let path = std::env::join_paths([d.path()]).unwrap();
+    let got = predict_with(&profile("npx"), &no_bundle(), &path, |p| {
+        p == npx || p == node
+    });
+    assert_eq!(
+        got,
+        vec![Blocked {
+            server: "dc".into(),
+            wanted: "#!/usr/bin/env".into(),
+            resolved: PathBuf::from("/usr/bin/env"),
+        }]
+    );
 }
 
 #[test]
@@ -56,7 +80,7 @@ fn absolute_command_with_spaces_is_resolved_whole() {
     let node = bin(&dir, "node", "#!/bin/sh\n");
     let cmd = node.to_str().unwrap();
     let path = std::ffi::OsString::from("/definitely/not/here");
-    let got = predict_with(&profile(cmd), &path, |_| false);
+    let got = predict_with(&profile(cmd), &no_bundle(), &path, |_| false);
     assert_eq!(
         got,
         vec![Blocked {
@@ -70,7 +94,7 @@ fn absolute_command_with_spaces_is_resolved_whole() {
 #[test]
 fn unresolvable_command_is_left_to_the_runtime() {
     let path = std::ffi::OsString::from("/definitely/not/here");
-    assert!(predict_with(&profile("nope"), &path, |_| false).is_empty());
+    assert!(predict_with(&profile("nope"), &no_bundle(), &path, |_| false).is_empty());
 }
 
 #[test]
@@ -97,4 +121,28 @@ fn recorded_failures_only_for_the_live_pid() {
         format_recorded("mur", &status, 8).is_empty(),
         "stale boot ignored"
     );
+}
+
+fn no_bundle() -> PathBuf {
+    PathBuf::from("/nonexistent/mur-mcp-server")
+}
+
+#[test]
+fn bundled_mcp_server_is_judged_instead_of_a_path_copy() {
+    // The runtime execs the bundled copy whenever it exists, so a refused
+    // PATH copy of the same name must not be reported as blocked.
+    let d = tempfile::tempdir().unwrap();
+    let b = tempfile::tempdir().unwrap();
+    let on_path = bin(d.path(), "mur-mcp-server", "#!/bin/sh\n");
+    let bundled = bin(b.path(), "mur-mcp-server", "#!/bin/sh\n");
+    let path = std::env::join_paths([d.path()]).unwrap();
+    let got = predict_with(&profile("mur-mcp-server"), &bundled, &path, |p| {
+        p == bundled
+    });
+    assert!(got.is_empty(), "{got:?}");
+    let got = predict_with(&profile("mur-mcp-server"), &bundled, &path, |p| {
+        p == on_path
+    });
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].resolved, bundled);
 }

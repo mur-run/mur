@@ -223,3 +223,38 @@ fn vendored_package_with_a_missing_install_does_not_block_startup() {
         "a missing install should warn, not strand the agent: {result:?}"
     );
 }
+
+#[test]
+fn pin_is_checked_against_the_binary_the_seal_first_path_execs() {
+    // Under a fenced spawn mode the child PATH puts the seal's dirs (here
+    // `$HOME/.local/bin`) ahead of the inherited PATH. Two same-named
+    // binaries: the pin matches the inherited copy, but the spawn execs the
+    // seal-dir copy — rule 6 must judge that one and refuse.
+    let home = TempDir::new().unwrap();
+    let seal_dir = home.path().join(".local/bin");
+    std::fs::create_dir_all(&seal_dir).unwrap();
+    let inherited = TempDir::new().unwrap();
+    let name = "mur-rule6-probe";
+    std::fs::write(seal_dir.join(name), b"seal copy\n").unwrap();
+    std::fs::write(inherited.path().join(name), b"inherited copy\n").unwrap();
+    // SAFETY: nextest runs each test in its own process.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("PATH", inherited.path());
+    }
+    let mut profile = profile_with_pin(
+        std::path::Path::new(name),
+        "probe",
+        Some(sha256_hex(b"inherited copy\n")),
+    );
+    assert_ne!(
+        profile.entitlements.processes.spawn.mode,
+        mur_common::agent::SpawnMode::Any
+    );
+    let err = verify_mcp_supply_chain(&[], &profile)
+        .expect_err("the exec'd seal-dir copy does not match the pin");
+    assert!(err.contains("changed since install"), "{err}");
+
+    profile.mcp_servers[0].binary_sha256 = Some(sha256_hex(b"seal copy\n"));
+    assert!(verify_mcp_supply_chain(&[], &profile).is_ok());
+}

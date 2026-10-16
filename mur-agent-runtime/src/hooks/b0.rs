@@ -175,8 +175,13 @@ pub fn verify_mcp_supply_chain(
         // in `entry.args`). Taking its first word truncated a path with a
         // space (`~/Library/Application Support/…`) to one that does not
         // exist, which soft-failed here and ran the server unpinned.
-        let path = match mur_common::exec::resolve_command_in(
-            &mur_common::exec::augmented_path_var(),
+        //
+        // And the SAME ordering: under every fenced spawn mode the spawn uses
+        // the seal-first `mcp_child_path`, not the bare augmented PATH. With
+        // two same-named binaries, hashing the inherited-PATH copy would
+        // approve one file while the runtime execs the other, unchecked.
+        let path = match mur_common::exec::resolve_mcp_launch_in(
+            &crate::sandbox::search_dirs::mcp_child_path(profile.entitlements.processes.spawn.mode),
             &entry.command,
         ) {
             Ok(p) => p,

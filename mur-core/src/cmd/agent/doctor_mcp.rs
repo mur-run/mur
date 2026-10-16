@@ -7,7 +7,8 @@
 //!   tools silently vanish from the agent; this surfaces the reason.
 //! - **Predicted** (static): resolve each enabled server's command the way the
 //!   runtime will (`mcp_child_path`), follow an `#!/usr/bin/env <x>` shebang
-//!   one hop, and ask whether the seal lets that binary exec. Catches a
+//!   one hop, and ask whether the seal lets each exec in that chain — the
+//!   command, the shebang's `env`, and `<x>` — happen. Catches a
 //!   version-manager shim's `node` the allowlist never granted before the
 //!   agent even starts.
 
@@ -66,7 +67,8 @@ pub fn predicted(profile: &AgentProfile, agent_home: &Path) -> Vec<Blocked> {
     use mur_agent_runtime::sandbox::{macos::exec_permitted, policy::SandboxPolicy};
     let policy = SandboxPolicy::from_entitlements(&profile.entitlements, agent_home);
     let path = mur_agent_runtime::sandbox::search_dirs::mcp_child_path(policy.spawn_mode);
-    predict_with(&profile.enabled_mcp_servers(), &path, |p| {
+    let bundled = mur_common::exec::bundled_mcp_server_path();
+    predict_with(&profile.enabled_mcp_servers(), &bundled, &path, |p| {
         exec_permitted(&policy, p)
     })
 }
@@ -76,22 +78,24 @@ pub fn predicted(_profile: &AgentProfile, _agent_home: &Path) -> Vec<Blocked> {
     Vec::new()
 }
 
-/// Pure core of [`predicted`]: `path` is the child `PATH`, `permitted` the
-/// seal predicate. A command that does not resolve is skipped — the runtime
+/// Pure core of [`predicted`]: `bundled` is MUR's own MCP server copy (the
+/// runtime execs it in place of a PATH `mur-mcp-server`), `path` the child
+/// `PATH`, `permitted` the seal predicate. A command that does not resolve is skipped — the runtime
 /// reports that one itself, as a spawn error in the recorded status.
 /// Only the macOS seal calls it outside tests.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn predict_with(
     servers: &[McpServerEntry],
+    bundled: &Path,
     path: &std::ffi::OsStr,
     permitted: impl Fn(&Path) -> bool,
 ) -> Vec<Blocked> {
     let mut out = Vec::new();
     for entry in servers {
-        // Resolve the whole command, as the spawn does: args live in
-        // `entry.args`, so a space here is part of the path.
+        // Resolve with the spawn's own resolver: the whole command (args
+        // live in `entry.args`), and the bundled-server redirect.
         let prog = entry.command.as_str();
-        let Ok(bin) = mur_common::exec::resolve_command_in(path, prog) else {
+        let Ok(bin) = mur_common::exec::resolve_mcp_launch_with(bundled, path, prog) else {
             continue;
         };
         if !permitted(&bin) {
@@ -102,8 +106,21 @@ pub(crate) fn predict_with(
             });
             continue;
         }
-        if let Some(interp) = env_shebang(&bin)
-            && let Ok(ib) = mur_common::exec::resolve_command_in(path, &interp)
+        let Some((env, interp)) = env_shebang(&bin) else {
+            continue;
+        };
+        // The kernel execs the shebang's own executable before `env` looks
+        // anything up, and Strict can grant the script and its target while
+        // refusing `/usr/bin/env` — so judge that hop first.
+        if !permitted(&env) {
+            out.push(Blocked {
+                server: entry.name.clone(),
+                wanted: format!("#!{}", env.display()),
+                resolved: env,
+            });
+            continue;
+        }
+        if let Ok(ib) = mur_common::exec::resolve_command_in(path, &interp)
             && !permitted(&ib)
         {
             out.push(Blocked {
@@ -116,19 +133,22 @@ pub(crate) fn predict_with(
     out
 }
 
-/// `x` from a leading `#!/usr/bin/env [-S] x …` line, else `None`.
+/// The shebang executable and `x` from a leading `#!…/env [-S] x …` line,
+/// else `None`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn env_shebang(bin: &Path) -> Option<String> {
+fn env_shebang(bin: &Path) -> Option<(PathBuf, String)> {
     use std::io::Read;
     let mut buf = [0u8; 256];
     let n = std::fs::File::open(bin).ok()?.read(&mut buf).ok()?;
     let head = std::str::from_utf8(&buf[..n]).ok()?;
     let line = head.strip_prefix("#!")?.lines().next()?;
     let mut parts = line.split_whitespace();
-    if !parts.next()?.ends_with("/env") {
+    let env = parts.next()?;
+    if !env.ends_with("/env") {
         return None;
     }
-    parts.find(|p| !p.starts_with('-')).map(str::to_string)
+    let interp = parts.find(|p| !p.starts_with('-'))?;
+    Some((PathBuf::from(env), interp.to_string()))
 }
 
 /// One line per enabled MCP server whose launch chain the seal
