@@ -197,6 +197,13 @@ pub async fn run(cli: Cli) -> Result<()> {
             } => {
                 cmd::channel::approve(&channel_id, &hitl_id, deny, reason)?;
             }
+            ChannelAction::Verify { channel_id } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let code = cmd::channel_integrity::run(&home, &channel_id)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
             ChannelAction::BackfillPurpose { apply, limit } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 cmd::channel::backfill_purpose(&home, apply, limit)?;
