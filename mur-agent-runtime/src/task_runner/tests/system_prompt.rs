@@ -722,3 +722,53 @@ fn per_turn_cwd_sits_after_the_stable_prefix() {
     );
     assert!(!a[..cut_a].contains("turn-aaaa"), "{a}");
 }
+
+/// Same invariant on the skills-present path, which returns through a
+/// different statement than the no-skills early return above. A skill's
+/// injected text is stable across turns, so it must land BEFORE the cwd
+/// block; moving the cwd back in front of the skill addendum would still
+/// pass the prefix check in the test above, but fails here.
+#[test]
+fn per_turn_cwd_follows_the_skill_addendum() {
+    use mur_common::skill::loader::{LoadedSkill, SkillScope};
+    use mur_common::skill::note::{NoteSpec, note_manifest};
+    use mur_common::skill::types::TrustLevel;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = mur_track::turn::canonicalize(tmp.path())
+        .unwrap()
+        .join("turn-cccc");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let note = LoadedSkill {
+        name: "stable-rule".into(),
+        manifest: note_manifest(&NoteSpec {
+            name: "stable-rule",
+            description: "a rule that is the same every turn",
+            body: "STABLE-SKILL-MARKER",
+            kind: mur_common::skill::lifecycle::NoteKind::Rule,
+            publisher: "agent:mur",
+        }),
+        trust: TrustLevel::Sandboxed,
+        scope: SkillScope::Agent,
+        content_hash: String::new(),
+        dir: std::path::PathBuf::new(),
+    };
+    let runner = TaskRunner::new_stub_echo()
+        .with_system_prompt(Some("BASE".into()))
+        .with_skills(Arc::new(RuntimeSkills::build(vec![note])))
+        .with_session_cwd(
+            crate::tools::fs_policy::SessionCwd::new(root.clone()),
+            vec![root.to_string_lossy().into_owned()],
+        );
+    let (sys, _fired) = runner.assemble_system_prompt(None, "hello", None, None);
+    let skill_at = sys.find("STABLE-SKILL-MARKER").expect("skill text present");
+    let cwd_at = sys.find("## Working directory").expect("cwd block present");
+    assert!(
+        skill_at < cwd_at,
+        "the stable skill text must precede the per-turn cwd block; got:\n{sys}"
+    );
+    assert!(
+        !sys[..cwd_at].contains("turn-cccc"),
+        "nothing before the cwd block may carry the turn directory; got:\n{sys}"
+    );
+}
