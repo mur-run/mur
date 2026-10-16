@@ -723,21 +723,14 @@ fn per_turn_cwd_sits_after_the_stable_prefix() {
     assert!(!a[..cut_a].contains("turn-aaaa"), "{a}");
 }
 
-/// Same invariant on the skills-present path, which returns through a
-/// different statement than the no-skills early return above. A skill's
-/// injected text is stable across turns, so it must land BEFORE the cwd
-/// block; moving the cwd back in front of the skill addendum would still
-/// pass the prefix check in the test above, but fails here.
-#[test]
-fn per_turn_cwd_follows_the_skill_addendum() {
+/// Build a runner with one deterministic skill and a per-turn cwd rooted at
+/// `<tmp>/<turn>`, returning its assembled system prompt.
+fn skills_prompt_for_turn(tmp: &std::path::Path, turn: &str) -> String {
     use mur_common::skill::loader::{LoadedSkill, SkillScope};
     use mur_common::skill::note::{NoteSpec, note_manifest};
     use mur_common::skill::types::TrustLevel;
 
-    let tmp = tempfile::tempdir().unwrap();
-    let root = mur_track::turn::canonicalize(tmp.path())
-        .unwrap()
-        .join("turn-cccc");
+    let root = mur_track::turn::canonicalize(tmp).unwrap().join(turn);
     std::fs::create_dir_all(root.join(".git")).unwrap();
     let note = LoadedSkill {
         name: "stable-rule".into(),
@@ -760,7 +753,18 @@ fn per_turn_cwd_follows_the_skill_addendum() {
             crate::tools::fs_policy::SessionCwd::new(root.clone()),
             vec![root.to_string_lossy().into_owned()],
         );
-    let (sys, _fired) = runner.assemble_system_prompt(None, "hello", None, None);
+    runner.assemble_system_prompt(None, "hello", None, None).0
+}
+
+/// Same invariant on the skills-present path, which returns through a
+/// different statement than the no-skills early return above. A skill's
+/// injected text is stable across turns, so it must land BEFORE the cwd
+/// block; moving the cwd back in front of the skill addendum would still
+/// pass the prefix check in the test above, but fails here.
+#[test]
+fn per_turn_cwd_follows_the_skill_addendum() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sys = skills_prompt_for_turn(tmp.path(), "turn-cccc");
     let skill_at = sys.find("STABLE-SKILL-MARKER").expect("skill text present");
     let cwd_at = sys.find("## Working directory").expect("cwd block present");
     assert!(
@@ -771,4 +775,23 @@ fn per_turn_cwd_follows_the_skill_addendum() {
         !sys[..cwd_at].contains("turn-cccc"),
         "nothing before the cwd block may carry the turn directory; got:\n{sys}"
     );
+}
+
+/// The cache invariant itself, on the skills-present path: two turns that
+/// differ only in their cwd must yield byte-identical prompts up to the cwd
+/// block, with the skill text inside that shared prefix.
+#[test]
+fn skills_prompt_prefix_is_identical_across_turn_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = skills_prompt_for_turn(tmp.path(), "turn-aaaa");
+    let b = skills_prompt_for_turn(tmp.path(), "turn-bbbb");
+    let a_at = a.find("## Working directory").expect("cwd block in a");
+    let b_at = b.find("## Working directory").expect("cwd block in b");
+    assert_eq!(a_at, b_at, "prefix lengths must match");
+    assert_eq!(&a[..a_at], &b[..b_at], "prefix must be byte-identical");
+    assert!(
+        a[..a_at].contains("STABLE-SKILL-MARKER"),
+        "the skill text must sit inside the shared prefix; got:\n{a}"
+    );
+    assert_ne!(a, b, "the per-turn tail must still differ");
 }
