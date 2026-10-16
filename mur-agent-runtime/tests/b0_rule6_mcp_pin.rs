@@ -224,6 +224,10 @@ fn vendored_package_with_a_missing_install_does_not_block_startup() {
     );
 }
 
+// Unix only: the seal dirs are derived from `dirs::home_dir()`, which reads
+// `HOME` on Unix but the user profile on Windows, so the temp `HOME` below
+// cannot plant a seal-dir copy there. Same scope as `seal_first_path`'s tests.
+#[cfg(unix)]
 #[test]
 fn pin_is_checked_against_the_binary_the_seal_first_path_execs() {
     // Under a fenced spawn mode the child PATH puts the seal's dirs (here
