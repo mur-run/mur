@@ -29,12 +29,13 @@ use std::fs;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use mur_channel::ChannelService;
 use mur_channel::anchor;
 use mur_channel::store::DamageReport;
-use mur_common::channel::{ChannelActor, EventKind};
+use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
 use mur_common::identity::AgentIdentity;
 use tempfile::TempDir;
 
@@ -49,6 +50,14 @@ const READY_FILE: &str = "child-ready";
 /// A child that nobody kills must not outlive the test run.
 const CHILD_LIMIT: Duration = Duration::from_secs(120);
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(5);
+/// How long the post-kill recovery append may wait for `events.lock`. The
+/// kernel drops the dead child's lock, so this only trips on a real hang.
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Exit code of a child that reached its time limit without being killed.
+const CHILD_LIMIT_EXIT_CODE: i32 = 3;
+/// Payload `i` of the recovery append, distinct from every child event.
+const RECOVERY_MARKER: usize = usize::MAX;
 const SIGKILL: i32 = 9;
 
 const ENV_ROLE: &str = "MUR_ANCHOR_CRASH_CHILD";
@@ -74,11 +83,46 @@ fn anchor_one(svc: &ChannelService, ch: &str, id: &AgentIdentity, i: usize) {
     .expect("anchored append");
 }
 
-fn damage(home: &Path, ch: &str, id: &AgentIdentity) -> DamageReport {
+fn load(home: &Path, ch: &str, id: &AgentIdentity) -> (Vec<ChannelEvent>, DamageReport) {
     mur_channel::ChannelStore::new(home)
         .load_events_with_damage(ch, &id.verifying_key_bytes(), false)
         .expect("load")
-        .1
+}
+
+/// `(seq, text)` per event: what must survive a kill unchanged.
+fn history(events: &[ChannelEvent]) -> Vec<(u64, String)> {
+    events
+        .iter()
+        .map(|e| (e.seq, e.payload["text"].as_str().unwrap_or("").to_owned()))
+        .collect()
+}
+
+/// Kills and reaps the child however the test leaves, including a failed
+/// assertion, so a stuck child never outlives the run.
+struct ChildGuard(Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The recovery append on its own thread and its own service handle, bounded
+/// by [`RECOVERY_TIMEOUT`], so a lock that never frees fails the test rather
+/// than hanging it.
+fn recover_with_timeout(home: &Path, ch: &str, id: &AgentIdentity) {
+    let (home, ch) = (home.to_path_buf(), ch.to_owned());
+    let secret = id.secret_bytes_for_handoff();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let id = AgentIdentity::from_secret_bytes(&secret);
+        let svc = ChannelService::open(&home).expect("open");
+        anchor_one(&svc, &ch, &id, RECOVERY_MARKER);
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(RECOVERY_TIMEOUT)
+        .expect("recovery append did not finish: events.lock still held?");
 }
 
 /// What the kill must never cause. A dirty marker and a head that lags the
@@ -115,7 +159,7 @@ fn child_entry() {
         }
     }
     // Only reached if the parent never killed us.
-    std::process::exit(3);
+    std::process::exit(CHILD_LIMIT_EXIT_CODE);
 }
 
 fn spawn_child(home: &Path, ch: &str, id: &AgentIdentity) -> Child {
@@ -140,7 +184,7 @@ fn wait_ready(home: &Path, child: &mut Child) {
             "child exited before it was ready"
         );
         assert!(start.elapsed() < READY_TIMEOUT, "child never became ready");
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(READY_POLL_INTERVAL);
     }
 }
 
@@ -154,8 +198,9 @@ fn sigkill_during_anchored_appends_leaves_no_damage() {
         let ch = svc.create_for_workflow("crash").unwrap().id;
         let id = AgentIdentity::generate();
 
-        let mut child = spawn_child(home, &ch, &id);
-        wait_ready(home, &mut child);
+        let mut guard = ChildGuard(spawn_child(home, &ch, &id));
+        let child = &mut guard.0;
+        wait_ready(home, child);
         std::thread::sleep(Duration::from_micros(round * DELAY_STEP_US));
         assert!(
             child.try_wait().unwrap().is_none(),
@@ -169,18 +214,46 @@ fn sigkill_during_anchored_appends_leaves_no_damage() {
             "round {round}: not killed by SIGKILL: {status:?}"
         );
 
-        // 1. Whatever point the kill landed on, nothing is damaged.
-        let after_kill = damage(home, &ch, &id);
+        // 1. Whatever point the kill landed on, nothing is damaged and the
+        //    events acknowledged before the kill are still there, in order.
+        let (killed_events, after_kill) = load(home, &ch, &id);
         assert_no_damage(&after_kill, &format!("round {round} after kill"));
+        let before = history(&killed_events);
+        assert!(
+            before.len() >= WARMUP,
+            "round {round}: lost warmup events: {before:?}"
+        );
+        for (i, (seq, text)) in before.iter().enumerate() {
+            assert_eq!(
+                text,
+                &format!("event {i}"),
+                "round {round}: history changed"
+            );
+            assert_eq!(*seq, before[0].0 + i as u64, "round {round}: seq gap");
+        }
         if anchor::is_dirty(home, &ch) {
             dirty_seen += 1;
         }
 
         // 2. The lock died with the process, and the next anchored append
         //    repairs the head and clears any marker the kill left behind.
-        anchor_one(&svc, &ch, &id, usize::MAX);
-        let repaired = damage(home, &ch, &id);
+        recover_with_timeout(home, &ch, &id);
+        let (repaired_events, repaired) = load(home, &ch, &id);
         assert_no_damage(&repaired, &format!("round {round} after repair"));
+        let after = history(&repaired_events);
+        assert_eq!(
+            &after[..before.len()],
+            &before[..],
+            "round {round}: recovery rewrote history"
+        );
+        assert_eq!(
+            after[before.len()..],
+            [(
+                before.last().unwrap().0 + 1,
+                format!("event {RECOVERY_MARKER}")
+            )],
+            "round {round}: recovery event missing or duplicated"
+        );
         assert!(
             repaired.is_clean(),
             "round {round}: still not clean after the next anchored append: {repaired:?}"
@@ -192,4 +265,39 @@ fn sigkill_during_anchored_appends_leaves_no_damage() {
     }
     // Informational: how many rounds the kill left the recoverable marker.
     println!("rounds with a dirty marker after the kill: {dirty_seen}/{ROUNDS}");
+}
+
+/// The state a kill between "line written" and "head written" leaves, built
+/// deterministically: a dirty marker, plus a line the head does not cover.
+/// The sweep above cannot promise it hit this window; this does.
+#[test]
+fn line_ahead_of_head_with_marker_is_not_damage_and_the_next_append_repairs_it() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+    let svc = ChannelService::open(home).unwrap();
+    let ch = svc.create_for_workflow("crash").unwrap().id;
+    let id = AgentIdentity::generate();
+    anchor_one(&svc, &ch, &id, 0);
+
+    anchor::mark_dirty(home, &ch).unwrap();
+    svc.append_signed(
+        &ch,
+        &id,
+        KV,
+        actor(),
+        EventKind::Message,
+        serde_json::json!({ "text": "event 1" }),
+        None,
+    )
+    .unwrap();
+    assert!(anchor::is_dirty(home, &ch));
+    let (events, lagging) = load(home, &ch, &id);
+    assert_no_damage(&lagging, "log ahead of head");
+    assert_eq!(history(&events).len(), 2);
+
+    recover_with_timeout(home, &ch, &id);
+    let (events, repaired) = load(home, &ch, &id);
+    assert!(repaired.is_clean(), "not clean after repair: {repaired:?}");
+    assert!(!anchor::is_dirty(home, &ch));
+    assert_eq!(history(&events).len(), 3);
 }

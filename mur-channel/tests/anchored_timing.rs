@@ -2,9 +2,11 @@
 //! parent #1770).
 //!
 //! The first anchor on a channel seals a head over the WHOLE existing log, so
-//! its cost scales with the log; later anchors only pay for the part they
-//! add plus re-chaining. This reports plain append vs. first anchor vs. a
-//! later anchor, so a regression in `advance` shows up as a number.
+//! its cost scales with the log. Whether a later anchor is cheaper is exactly
+//! what this measures; nothing here assumes it is. It reports plain append,
+//! the first anchor, and the min / median / max of [`NEXT_ANCHORS`] later
+//! anchors, so a regression in `advance` shows up as a distribution rather
+//! than a single noisy sample.
 //!
 //! Measurement, not a gate: `#[ignore]`d, prints timings. Run with
 //! `cargo test -p mur-channel --release --test anchored_timing -- --ignored --nocapture`.
@@ -71,6 +73,9 @@ fn legacy_channel(home: &Path, svc: &ChannelService, lines: usize) -> (String, u
     (id, bytes)
 }
 
+/// Later anchors timed per size; the median is the figure to compare.
+const NEXT_ANCHORS: usize = 9;
+
 fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
 }
@@ -79,7 +84,9 @@ fn ms(t: Instant) -> f64 {
 #[ignore = "measurement; run explicitly with --release --ignored --nocapture"]
 fn anchor_cost_on_a_large_legacy_log() {
     let sizes = std::env::var(SIZES_ENV).unwrap_or_else(|_| DEFAULT_SIZES.into());
-    println!("lines      log_MB   plain_ms   first_anchor_ms   next_anchor_ms");
+    println!(
+        "lines      log_MB   plain_ms   first_anchor_ms   next_anchor_ms (min / median / max of {NEXT_ANCHORS})"
+    );
     for n in sizes.split(',').map(|s| s.trim().parse::<usize>().unwrap()) {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
@@ -110,14 +117,19 @@ fn anchor_cost_on_a_large_legacy_log() {
             ms(t)
         };
         let first = anchor("first");
-        let next = anchor("second");
+        let mut next: Vec<f64> = (0..NEXT_ANCHORS)
+            .map(|i| anchor(&format!("next-{i}")))
+            .collect();
+        next.sort_by(f64::total_cmp);
 
         println!(
-            "{n:<10} {:<8.1} {:<10.1} {:<17.1} {:.1}",
+            "{n:<10} {:<8.1} {:<10.1} {:<17.1} {:.1} / {:.1} / {:.1}",
             bytes as f64 / 1e6,
             plain,
             first,
-            next
+            next[0],
+            next[NEXT_ANCHORS / 2],
+            next[NEXT_ANCHORS - 1]
         );
     }
 }
