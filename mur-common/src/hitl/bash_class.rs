@@ -481,7 +481,9 @@ mod tests {
             "kubectl get pods --cache_dir=./cache",
             "kubectl get pods --cache_dir ./cache",
             "kubectl get pods --log_file=./k.log",
+            "kubectl get pods --log_file ./k.log",
             "kubectl get pods --log_dir ./logs",
+            "kubectl get pods --log_dir=./logs",
             // `pip --log` writes a file.
             "pip list --log ./pip-session.log",
             "pip list --log=./pip-session.log",
