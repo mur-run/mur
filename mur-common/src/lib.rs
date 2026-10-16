@@ -34,6 +34,7 @@ pub mod guard;
 pub mod hitl;
 pub mod home;
 pub mod hooks_config;
+pub mod host_pattern;
 pub mod hub;
 pub mod identity;
 pub mod jcs;

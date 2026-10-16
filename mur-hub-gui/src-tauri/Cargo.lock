@@ -6863,6 +6863,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "fs2",
+ "hex",
  "multibase",
  "mur-common",
  "notify",
@@ -6870,6 +6871,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tracing",
  "uuid",
 ]
@@ -6891,6 +6893,7 @@ dependencies = [
  "globset",
  "hex",
  "hmac",
+ "idna",
  "keyring",
  "libc",
  "multibase",
@@ -6995,6 +6998,7 @@ dependencies = [
  "mur-channel",
  "mur-common",
  "mur-compress",
+ "mur-git-broker",
  "mur-monitor",
  "mur-open-items",
  "mur-track",
@@ -7053,12 +7057,14 @@ dependencies = [
  "libc",
  "mur-common",
  "rusqlite",
+ "secrecy",
  "serde",
  "serde_jcs",
  "serde_json",
  "serde_yaml_ng",
  "sha2 0.10.9",
  "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]

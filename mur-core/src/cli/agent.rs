@@ -860,7 +860,13 @@ pub enum AgentPermAction {
         value: String,
     },
     /// Allow an outbound host glob
-    AllowHost { name: String, glob: String },
+    AllowHost {
+        name: String,
+        glob: String,
+        /// Save without the `[y/N]` prompt shown on a terminal
+        #[arg(long)]
+        yes: bool,
+    },
     /// Deny an outbound host glob
     DenyHost { name: String, glob: String },
     /// Print the outbound host allow / deny lists

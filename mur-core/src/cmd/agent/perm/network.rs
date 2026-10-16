@@ -6,9 +6,18 @@ use mur_common::agent::NetworkOutboundMode;
 use super::super::{load_profile_for_edit, save_profile};
 use super::{print_outbound_picture, warn_if_running};
 
-pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
-    validate_host_pattern(name, glob)?;
+pub fn cmd_perm_allow_host(name: &str, glob: &str, yes: bool) -> Result<()> {
+    let value = validate_host_pattern(name, glob)?;
+    let notes: Vec<String> = if value != glob {
+        vec![format!("`{glob}` → `{value}`")]
+    } else {
+        Vec::new()
+    };
+    let glob = value.as_str();
     let (path, mut profile) = load_profile_for_edit(name)?;
+    let before = profile.entitlements.network.outbound.allow_hosts.clone();
+    eprintln!("{}", allow_host_preview(name, &before, glob, &notes));
+    crate::cmd::agent::cli::browser_live_preview::confirm_on_tty(yes)?;
     if !profile
         .entitlements
         .network
@@ -29,6 +38,19 @@ pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
     Ok(())
 }
 
+/// What `allow-host` will write: the agent's whole outbound allowlist, diffed.
+fn allow_host_preview(agent: &str, before: &[String], value: &str, notes: &[String]) -> String {
+    let mut after = before.to_vec();
+    if !after.iter().any(|h| h == value) {
+        after.push(value.to_owned());
+    }
+    let mut out = vec![format!("agent `{agent}` outbound allow_hosts will be:")];
+    out.extend(crate::cmd::agent::cli::browser_live_preview::host_diff(
+        before, &after, notes,
+    ));
+    out.join("\n")
+}
+
 /// Refuse patterns the matcher can never match, at write time.
 ///
 /// `mur_common::net::host_matches_pattern` compares PORTLESS hosts — exact,
@@ -37,7 +59,7 @@ pub fn cmd_perm_allow_host(name: &str, glob: &str) -> Result<()> {
 /// while matching nothing (field report: `allow-host 'IP:3306'` accepted, the
 /// connection still blocked, no warning anywhere). `deny-host` is left
 /// unvalidated on purpose — it must be able to REMOVE junk entries.
-fn validate_host_pattern(name: &str, glob: &str) -> Result<()> {
+fn validate_host_pattern(name: &str, glob: &str) -> Result<String> {
     let g = glob.trim();
     if g.is_empty() {
         bail!("empty host pattern");
@@ -67,7 +89,12 @@ fn validate_host_pattern(name: &str, glob: &str) -> Result<()> {
              To allow the HOST for web traffic: `mur agent perm allow-host {name} {host}`"
         );
     }
-    Ok(())
+    let n = mur_common::host_pattern::normalize_host_pattern(g).map_err(|e| {
+        anyhow::anyhow!(
+            "'{glob}' is not a hostname — {e}. Pass a bare host (`api.example.com`), a wildcard (`*.example.com`), or an IP"
+        )
+    })?;
+    Ok(n.value)
 }
 
 /// `mur agent perm allow-port <agent> <port>` — grant an extra outbound TCP
@@ -226,7 +253,20 @@ pub fn cmd_perm_list_hosts(name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_port, is_base_port, remove_port, validate_host_pattern};
+    use super::{add_port, allow_host_preview, is_base_port, remove_port, validate_host_pattern};
+
+    #[test]
+    fn allow_host_preview_names_stored_value() {
+        let p = allow_host_preview(
+            "a1",
+            &["keep.example.com".into()],
+            "shop.example.com",
+            &["`Shop.Example.com` → `shop.example.com`".into()],
+        );
+        assert!(p.contains("+ shop.example.com"), "{p}");
+        assert!(p.contains("  keep.example.com"), "{p}");
+        assert!(p.contains("`Shop.Example.com` → `shop.example.com`"), "{p}");
+    }
 
     #[test]
     fn patterns_the_matcher_can_match_are_accepted() {
@@ -242,6 +282,19 @@ mod tests {
     }
 
     #[test]
+    fn accepted_patterns_are_returned_normalized() {
+        assert_eq!(
+            validate_host_pattern("a1", "Shop.Example.com").unwrap(),
+            "shop.example.com"
+        );
+        // `Url::host_str` yields `[v6]`, and the guard compares exactly.
+        assert_eq!(
+            validate_host_pattern("a1", "2001:db8::1").unwrap(),
+            "[2001:db8::1]"
+        );
+    }
+
+    #[test]
     fn inert_patterns_are_refused_with_guidance() {
         for bad in [
             "35.229.166.236:3306",
@@ -251,6 +304,10 @@ mod tests {
             "example.com/path",
             "two hosts",
             "",
+            "pro360",
+            "591／tasker／鄰家師傅",
+            "評分，",
+            "a.*.com",
         ] {
             assert!(
                 validate_host_pattern("a1", bad).is_err(),

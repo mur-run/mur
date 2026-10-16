@@ -8,13 +8,16 @@
 //! The decision logic is pure ([`parse_hosts`], [`apply`]) so tests never
 //! touch a profile on disk or spawn the install probe `manage::mcp_add` runs.
 
+use mur_agent_runtime::sandbox::egress_proxy::DENY_OVERLAY_ENFORCEMENT;
 use mur_agent_runtime::sandbox::policy::RESTRICTED_GENERAL_PORTS;
 use std::path::Path;
 
 use anyhow::Context;
 use mur_common::agent::{FilesystemEntitlement, McpNetMode, McpServerEntry, McpServerNetwork};
+use mur_common::host_pattern::{Normalization, normalize_host_pattern};
 use mur_common::proposal::Proposal;
 
+use super::browser_live_preview::render_preview;
 use super::manage::{self, Managed};
 
 /// Profile entry name for the live browser server.
@@ -74,37 +77,71 @@ pub(super) fn split_profile(args: &[String]) -> Result<(Vec<String>, Option<Stri
     Ok((hosts, profile))
 }
 
+/// Hosts that passed validation, plus display lines for every input that was
+/// rewritten on the way (URL stripped, lowercased, punycoded).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedHosts {
+    pub hosts: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+/// Split `host[:port]` without cutting an IPv6 address at a colon: only
+/// `[v6]:port` or an authority with exactly one `:` carries a port.
+pub(super) fn split_authority(authority: &str) -> (&str, Option<&str>) {
+    if authority.starts_with('[') {
+        if let Some(i) = authority.find("]:") {
+            return (&authority[..=i], Some(&authority[i + 2..]));
+        }
+        return (authority, None);
+    }
+    if authority.bytes().filter(|&b| b == b':').count() == 1 {
+        let (h, p) = authority.rsplit_once(':').unwrap_or((authority, ""));
+        return (h, Some(p));
+    }
+    (authority, None)
+}
+
 /// Validate and normalize hosts. `host:443` → `host`; a port outside the
-/// restricted-mode web set is rejected (see #1619). Error text is user-facing.
-pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
+/// restricted-mode web set is rejected (see #1619). Every argument that is not
+/// a host is named in one refusal (#1905), and nothing is written unless all
+/// of them pass. Error text is user-facing.
+pub(super) fn parse_hosts(args: &[String]) -> Result<ParsedHosts, String> {
     if args.is_empty() {
         return Err(format!(
-            "usage: /browser live <host>... — name the sites this agent may reach, e.g. `{USAGE_EXAMPLE}`"
+            "usage: /browser live <host>... — name the sites this agent may reach, e.g. `{USAGE_EXAMPLE}` \
+             (or `/browser live --research` to allow every host, audited)"
         ));
     }
-    let mut out: Vec<String> = Vec::new();
+    let mut out = ParsedHosts {
+        hosts: Vec::new(),
+        notes: Vec::new(),
+    };
+    let mut bad: Vec<String> = Vec::new();
     for raw in args {
         let authority = strip_url(raw)?;
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((_, "")) => {
+        let (host, port) = match split_authority(authority) {
+            (_, Some("")) => {
                 return Err(format!(
                     "`{raw}`: the port after `:` is empty — drop the colon or give a port"
                 ));
             }
-            Some((h, p)) => {
+            (h, Some(p)) => {
                 let port: u16 = p
                     .parse()
                     .map_err(|_| format!("`{raw}`: port is not a number"))?;
                 (h, Some(port))
             }
-            None => (authority, None),
+            (h, None) => (h, None),
         };
-        // `-` first: `/browser live` parses no flags, so `--add` here is a
-        // mistake, never a hostname to put in the allowlist.
-        if host.is_empty() || host.contains('/') || host.starts_with('-') {
-            return Err(format!(
-                "`{raw}` is not a host — pass a bare hostname, e.g. `{USAGE_EXAMPLE}`"
-            ));
+        // `-` first: `/browser live` parses no flags of its own here, so
+        // `--add` is a mistake, never a hostname to put in the allowlist.
+        if host.starts_with('-') {
+            bad.push(format!("`{raw}` (looks like a flag)"));
+            continue;
+        }
+        if host.is_empty() {
+            bad.push(format!("`{raw}` (empty host)"));
+            continue;
         }
         if let Some(p) = port
             && !RESTRICTED_GENERAL_PORTS.contains(&p)
@@ -117,10 +154,32 @@ pub(super) fn parse_hosts(args: &[String]) -> Result<Vec<String>, String> {
                  (see #1619), then rerun `/browser live {host}`"
             ));
         }
-        let host = host.to_ascii_lowercase();
-        if !out.contains(&host) {
-            out.push(host);
+        let n = match normalize_host_pattern(host) {
+            Ok(n) => n,
+            Err(e) => {
+                bad.push(format!("`{raw}` ({e})"));
+                continue;
+            }
+        };
+        if out.hosts.contains(&n.value) {
+            continue;
         }
+        if raw != &n.value {
+            out.notes.push(format!("`{raw}` → `{}`", n.value));
+        }
+        for note in &n.notes {
+            if let Normalization::Punycode { from } = note {
+                out.notes
+                    .push(format!("`{from}` is stored as punycode `{}`", n.value));
+            }
+        }
+        out.hosts.push(n.value);
+    }
+    if !bad.is_empty() {
+        return Err(format!(
+            "not a host: {} — nothing was changed. Name sites like `{USAGE_EXAMPLE}`",
+            bad.join("; ")
+        ));
     }
     Ok(out)
 }
@@ -131,7 +190,7 @@ const URL_SCHEMES: [&str; 2] = ["http", "https"];
 /// Reduce URL-shaped input to its `host[:port]` (#1676): a pasted
 /// `https://example.com:8443/path?q` becomes `example.com:8443`. Bare
 /// `host[:port]` passes through unchanged; a non-web scheme is refused.
-fn strip_url(raw: &str) -> Result<&str, String> {
+pub(super) fn strip_url(raw: &str) -> Result<&str, String> {
     let Some((scheme, rest)) = raw.split_once("://") else {
         return Ok(raw);
     };
@@ -156,9 +215,19 @@ pub(super) struct Applied {
 
 /// Ensure the live entry exists and overwrite its allowlist with `hosts`.
 /// `new_entry` is only called when the entry is missing.
+#[cfg(test)]
 pub(super) fn apply(
     servers: &mut Vec<McpServerEntry>,
     hosts: &[String],
+    new_entry: impl FnOnce() -> McpServerEntry,
+) -> Applied {
+    apply_network(servers, live_network(hosts), new_entry)
+}
+
+/// [`apply`] for any policy: `Restricted` hosts or `--research`'s `BroadAudited`.
+pub(super) fn apply_network(
+    servers: &mut Vec<McpServerEntry>,
+    network: McpServerNetwork,
     new_entry: impl FnOnce() -> McpServerEntry,
 ) -> Applied {
     let added = !servers.iter().any(|e| e.name == LIVE_ENTRY);
@@ -175,7 +244,7 @@ pub(super) fn apply(
         .map(|n| n.allow_hosts)
         .unwrap_or_default();
     // Replace, never merge: the allowlist is exactly what this call named.
-    entry.network = Some(live_network(hosts));
+    entry.network = Some(network);
     Applied { added, previous }
 }
 
@@ -199,6 +268,30 @@ pub(super) fn check_setup(ready: bool) -> Result<(), String> {
                 .into(),
         )
     }
+}
+
+/// `--research`'s policy: all hosts, audited, with who enabled it and when.
+pub(super) fn research_network(by: String, at_ms: u64) -> McpServerNetwork {
+    crate::cmd::agent::mcp_network::broad_audited_network(vec![], by, at_ms)
+}
+
+/// `--research` reruns keep the deny list already on the entry: the flag
+/// takes no hosts, so silently emptying a deny list would lift blocks the
+/// user never asked to lift (#1919 review). A `Restricted` policy has no
+/// deny list to carry.
+pub(super) fn carry_deny_hosts(after: &mut McpServerNetwork, existing: Option<&McpServerNetwork>) {
+    if after.mode == McpNetMode::BroadAudited
+        && after.deny_hosts.is_empty()
+        && let Some(prev) = existing.filter(|n| n.mode == McpNetMode::BroadAudited)
+    {
+        after.deny_hosts = prev.deny_hosts.clone();
+    }
+}
+
+/// Same policy, ignoring who authorized it and when: a `--research` rerun
+/// mints a fresh authorization but changes nothing the proxy enforces.
+fn same_policy(a: &McpServerNetwork, b: &McpServerNetwork) -> bool {
+    (a.mode, &a.allow_hosts, &a.deny_hosts) == (b.mode, &b.allow_hosts, &b.deny_hosts)
 }
 
 /// `--run` for the live entry: `live-<agent>`. Agent names are already
@@ -331,6 +424,57 @@ pub(super) fn unchanged_text(hosts: &[String]) -> String {
 /// Chip label for the restart live mode needs.
 pub(super) const RESTART_LABEL: &str = "restart to enable browser live mode";
 
+/// `/browser live` flags other than `--profile`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LiveFlags {
+    /// The user confirmed the preview: write it.
+    pub yes: bool,
+    /// Research mode: all hosts, audited (`BroadAudited`).
+    pub research: bool,
+}
+
+/// Strip `--yes` / `--research`, leaving `--profile` and the hosts.
+pub(super) fn split_flags(args: &[String]) -> (Vec<String>, LiveFlags) {
+    let mut flags = LiveFlags::default();
+    let mut rest = Vec::with_capacity(args.len());
+    for a in args {
+        match a.as_str() {
+            "--yes" => flags.yes = true,
+            "--research" => flags.research = true,
+            _ => rest.push(a.clone()),
+        }
+    }
+    (rest, flags)
+}
+
+/// The slash command (no leading `/`) that confirms a preview. Hosts are the
+/// normalized ones, so what the user approves is exactly what gets written.
+pub(super) fn confirm_command(
+    hosts_args: &[String],
+    profile: Option<&str>,
+    research: bool,
+) -> String {
+    let mut cmd = vec!["browser live --yes".to_owned()];
+    if research {
+        cmd.push("--research".to_owned());
+    }
+    cmd.extend(hosts_args.iter().cloned());
+    if let Some(site) = profile {
+        cmd.push(format!("--profile {site}"));
+    }
+    cmd.join(" ")
+}
+
+/// Chip label for the confirm step.
+pub(super) const CONFIRM_LABEL: &str = "save this browser network policy";
+
+/// The confirm chip, or `None` when the command would not pass
+/// [`mur_common::proposal::vet`] (e.g. too long for a chip).
+fn confirm_chip(cmd: &str) -> Option<Proposal> {
+    let args = serde_json::json!({ "label": CONFIRM_LABEL, "kind": "slash", "command": cmd });
+    mur_common::proposal::vet(&args).ok()
+}
+
 /// Profile side effects, injected so tests run with a fake.
 pub(super) trait LiveOps {
     /// Current MCP entries on the agent.
@@ -344,6 +488,11 @@ pub(super) trait LiveOps {
     /// path (an entry made before those existed lacks both).
     /// Returns one note per grant added. `Err` means nothing was written.
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>>;
+    /// The notes [`LiveOps::save`] would report for `servers`, computed
+    /// without writing — so a preview can tell "unchanged" from "needs repair".
+    fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;
+    /// Append the `broad_audited_enabled` trace event after a `--research` write.
+    fn record_research(&mut self, agent: &str) -> anyhow::Result<()>;
 }
 
 /// The whole `/browser live` flow. Every refusal returns before the first
@@ -354,18 +503,77 @@ pub(super) fn run(
     ready: bool,
     ops: &mut impl LiveOps,
 ) -> anyhow::Result<Managed> {
-    let (host_args, profile) = split_profile(args).map_err(anyhow::Error::msg)?;
-    let hosts = parse_hosts(&host_args).map_err(anyhow::Error::msg)?;
+    let (args, flags) = split_flags(args);
+    let (host_args, profile) = split_profile(&args).map_err(anyhow::Error::msg)?;
+    let (hosts, input_notes, after) = if flags.research {
+        if !host_args.is_empty() {
+            anyhow::bail!(
+                "research mode takes no hosts — it allows every host and logs each connection; \
+                 nothing was changed. Run `/browser live --research` alone, or name sites without it"
+            );
+        }
+        let by = std::env::var("USER").unwrap_or_else(|_| "unknown".to_owned());
+        let at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        (Vec::new(), Vec::new(), research_network(by, at_ms))
+    } else {
+        let parsed = parse_hosts(&host_args).map_err(anyhow::Error::msg)?;
+        let after = live_network(&parsed.hosts);
+        (parsed.hosts, parsed.notes, after)
+    };
     check_setup(ready).map_err(anyhow::Error::msg)?;
-    let mut notes = Vec::new();
     let mut servers = ops.servers()?;
+    // #1905 Part 2: show what will be written, and write only on `--yes`.
+    let existing = servers.iter().find(|e| e.name == LIVE_ENTRY);
+    let mut after = after;
+    carry_deny_hosts(&mut after, existing.and_then(|e| e.network.as_ref()));
+    let preview = render_preview(
+        agent,
+        LIVE_ENTRY,
+        existing.and_then(|e| e.network.as_ref()),
+        &after,
+        &input_notes,
+        DENY_OVERLAY_ENFORCEMENT,
+    );
+    if !flags.yes {
+        // A rerun that changes nothing never offers a chip. With `--yes` the
+        // write path below decides, so `save` can still backfill grants.
+        let profile_same = profile
+            .as_deref()
+            .is_none_or(|site| existing.is_some_and(|e| e.args == live_argv(agent, Some(site))));
+        let policy_same =
+            existing.is_some_and(|e| e.network.as_ref().is_some_and(|n| same_policy(n, &after)));
+        // An older entry can match the policy yet still need the re-pin or
+        // grants `save` backfills; that is a change, so preview it (#1919).
+        let repairs = if existing.is_some() {
+            ops.pending_repairs(&servers)?
+        } else {
+            Vec::new()
+        };
+        if policy_same && profile_same && repairs.is_empty() {
+            return Ok((unchanged_text(&hosts), None));
+        }
+        let preview = if repairs.is_empty() {
+            preview
+        } else {
+            format!("{preview}\nalso repairs:\n  {}", repairs.join("\n  "))
+        };
+        let cmd = confirm_command(&hosts, profile.as_deref(), flags.research);
+        return Ok(match confirm_chip(&cmd) {
+            Some(chip) => (preview, Some(chip)),
+            None => (format!("{preview}\nRun: `/{cmd}`"), None),
+        });
+    }
+    let mut notes = vec![preview];
     // `mcp_add` bails on a duplicate name by contract; decide here instead.
     let previous = if servers.iter().any(|e| e.name == LIVE_ENTRY) {
         // Existing entry: overwrite its allowlist. The save is atomic
         // (`save_profile` → `write_atomic`), so a failed save leaves the old,
         // still-valid policy in place — nothing to roll back.
         let before = servers.clone();
-        let out = apply(&mut servers, &hosts, || unreachable!("entry exists"));
+        let out = apply_network(&mut servers, after.clone(), || unreachable!("entry exists"));
         // A rerun that names a profile re-points the existing entry at it:
         // otherwise an entry created before `--profile` existed keeps
         // launching sessionless forever.
@@ -391,10 +599,20 @@ pub(super) fn run(
         // it `Restricted` (so it runs behind the egress proxy, #1639), and
         // there is no on-disk moment where `browser` exists unrestricted — so
         // no rollback path is needed.
-        notes.push(ops.mcp_add(&live_argv(agent, profile.as_deref()), live_network(&hosts))?);
+        notes.push(ops.mcp_add(&live_argv(agent, profile.as_deref()), after.clone())?);
         Vec::new()
     };
-    notes.push(format!("browser live mode may reach: {}", hosts.join(", ")));
+    if flags.research {
+        notes.push("browser live mode may reach: any host (research mode, audited)".to_owned());
+        // Telemetry must not undo a write that already succeeded.
+        if let Err(e) = ops.record_research(agent) {
+            notes.push(format!(
+                "could not record the research-mode audit event: {e:#}"
+            ));
+        }
+    } else {
+        notes.push(format!("browser live mode may reach: {}", hosts.join(", ")));
+    }
     match profile.as_deref() {
         Some(site) => notes.push(format!("signed in as the saved profile `{site}`")),
         None => notes.push(
@@ -433,6 +651,9 @@ pub(crate) fn ensure_entry(agent: &str) -> anyhow::Result<Option<String>> {
 pub(super) struct ProfileOps<'a>(pub &'a str);
 
 impl LiveOps for ProfileOps<'_> {
+    fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
+        self.record_research_event()
+    }
     fn servers(&mut self) -> anyhow::Result<Vec<McpServerEntry>> {
         Ok(crate::cmd::agent::load_profile_for_edit(self.0)?
             .1
@@ -461,36 +682,8 @@ impl LiveOps for ProfileOps<'_> {
     }
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>> {
         let fs = self.prepared_fs()?;
-        let mut servers = servers;
-        let mut notes = Vec::new();
-        let mut spawn_command = None;
-        if let Some(entry) = servers.iter_mut().find(|e| e.name == LIVE_ENTRY) {
-            // Hash before any write: a binary we cannot hash must not be
-            // pinned, and bailing here leaves the profile untouched.
-            let command = live_command(std::env::current_exe());
-            let resolved = crate::cmd::agent_mcp_pin::resolve_command(&command)
-                .with_context(|| format!("resolve browser live command `{command}`"))?;
-            let sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&resolved)?;
-            notes.extend(repin_command(entry, &command, sha));
-            spawn_command = Some(command);
-        }
         let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
-        let servers_changed = profile.mcp_servers != servers;
-        profile.mcp_servers = servers;
-        notes.extend(manage::merge_fs(&mut profile.entitlements.filesystem, &fs));
-        if let Some(command) = spawn_command {
-            notes.extend(ensure_spawn_allowed(
-                &mut profile.entitlements.processes.spawn.allowed,
-                &command,
-            ));
-            let browsers = mur_browser::chromium::system_browsers_dir();
-            if let Some(dir) = live_spawn_dir(browsers.as_deref()) {
-                notes.extend(ensure_spawn_dir(
-                    &mut profile.entitlements.processes.spawn.allowed_dirs,
-                    &dir,
-                ));
-            }
-        }
+        let (servers_changed, notes) = apply_repairs(&mut profile, servers, &fs)?;
         // Nothing to persist: skip the write so `updated_at` stays put and the
         // caller can tell "no change" from "saved".
         if servers_changed || !notes.is_empty() {
@@ -498,9 +691,69 @@ impl LiveOps for ProfileOps<'_> {
         }
         Ok(notes)
     }
+    fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>> {
+        // Same computation as `save`, on a copy that is never written. No
+        // `prepared_fs` here: a preview must not create directories.
+        let home = crate::cmd::agent::resolve_mur_home()?;
+        let registry = mur_browser::chromium::system_server_registry_dir();
+        let fs = live_fs(&home, registry.as_deref());
+        let (_, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
+        Ok(apply_repairs(&mut profile, servers.to_vec(), &fs)?.1)
+    }
+}
+
+/// Re-pin the live entry onto this binary and backfill its fs/spawn grants on
+/// `profile` in memory. Returns whether `servers` differ from the profile's,
+/// and one note per repair. Shared by `save` and `pending_repairs` so the
+/// preview names exactly what the write will do.
+fn apply_repairs(
+    profile: &mut mur_common::AgentProfile,
+    servers: Vec<McpServerEntry>,
+    fs: &FilesystemEntitlement,
+) -> anyhow::Result<(bool, Vec<String>)> {
+    let mut servers = servers;
+    let mut notes = Vec::new();
+    let mut spawn_command = None;
+    if let Some(entry) = servers.iter_mut().find(|e| e.name == LIVE_ENTRY) {
+        // Hash before any write: a binary we cannot hash must not be
+        // pinned, and bailing here leaves the profile untouched.
+        let command = live_command(std::env::current_exe());
+        let resolved = crate::cmd::agent_mcp_pin::resolve_command(&command)
+            .with_context(|| format!("resolve browser live command `{command}`"))?;
+        let sha = crate::cmd::agent_mcp_pin::compute_binary_sha256(&resolved)?;
+        notes.extend(repin_command(entry, &command, sha));
+        spawn_command = Some(command);
+    }
+    let servers_changed = profile.mcp_servers != servers;
+    profile.mcp_servers = servers;
+    notes.extend(manage::merge_fs(&mut profile.entitlements.filesystem, fs));
+    if let Some(command) = spawn_command {
+        notes.extend(ensure_spawn_allowed(
+            &mut profile.entitlements.processes.spawn.allowed,
+            &command,
+        ));
+        let browsers = mur_browser::chromium::system_browsers_dir();
+        if let Some(dir) = live_spawn_dir(browsers.as_deref()) {
+            notes.extend(ensure_spawn_dir(
+                &mut profile.entitlements.processes.spawn.allowed_dirs,
+                &dir,
+            ));
+        }
+    }
+    Ok((servers_changed, notes))
 }
 
 impl ProfileOps<'_> {
+    fn record_research_event(&self) -> anyhow::Result<()> {
+        let home = crate::cmd::agent::resolve_mur_home()?;
+        crate::cmd::agent::mcp_network::record_broad_audited_enabled(
+            &home,
+            self.0,
+            LIVE_ENTRY,
+            chrono::Utc::now(),
+        )
+    }
+
     /// [`live_fs`] for this install, vetted and ready to seal: same guards as
     /// `perm allow-*`, and write dirs created, since the seal drops a path
     /// that does not exist yet. Runs before any profile write.

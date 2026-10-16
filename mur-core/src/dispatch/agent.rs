@@ -402,8 +402,8 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
             AgentPermAction::SetMode { name, key, value } => {
                 cmd::agent::cmd_perm_set_mode(&name, &key, &value)?
             }
-            AgentPermAction::AllowHost { name, glob } => {
-                cmd::agent::cmd_perm_allow_host(&name, &glob)?
+            AgentPermAction::AllowHost { name, glob, yes } => {
+                cmd::agent::cmd_perm_allow_host(&name, &glob, yes)?
             }
             AgentPermAction::DenyHost { name, glob } => {
                 cmd::agent::cmd_perm_deny_host(&name, &glob)?

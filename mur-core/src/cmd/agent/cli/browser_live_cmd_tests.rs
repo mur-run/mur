@@ -30,7 +30,9 @@ fn no_host_is_refused_with_an_example() {
 // 2. hosts → entry created, allowlist exact, restricted
 #[test]
 fn hosts_create_the_entry_with_that_allowlist() {
-    let hosts = parse_hosts(&s(&["shop-a.example.com", "shop-b.example.com"])).unwrap();
+    let hosts = parse_hosts(&s(&["shop-a.example.com", "shop-b.example.com"]))
+        .unwrap()
+        .hosts;
     let mut servers = Vec::new();
     let out = apply(&mut servers, &hosts, live_entry);
     assert!(out.added);
@@ -120,7 +122,9 @@ fn web_set_ports_are_accepted() {
 // 9. ports are stripped and duplicates collapse
 #[test]
 fn port_is_normalized_away_and_duplicates_collapse() {
-    let hosts = parse_hosts(&s(&["shop-a.example.com:443", "shop-a.example.com"])).unwrap();
+    let hosts = parse_hosts(&s(&["shop-a.example.com:443", "shop-a.example.com"]))
+        .unwrap()
+        .hosts;
     assert_eq!(hosts, s(&["shop-a.example.com"]));
 }
 
@@ -144,15 +148,19 @@ fn flag_like_host_is_refused() {
 #[test]
 fn full_urls_are_reduced_to_host_and_port() {
     assert_eq!(
-        parse_hosts(&s(&["https://example.com"])).unwrap(),
+        parse_hosts(&s(&["https://example.com"])).unwrap().hosts,
         s(&["example.com"])
     );
     assert_eq!(
-        parse_hosts(&s(&["https://Example.com:8443/path?q=1#x"])).unwrap(),
+        parse_hosts(&s(&["https://Example.com:8443/path?q=1#x"]))
+            .unwrap()
+            .hosts,
         s(&["example.com"])
     );
     assert_eq!(
-        parse_hosts(&s(&["http://example.com/", "example.com"])).unwrap(),
+        parse_hosts(&s(&["http://example.com/", "example.com"]))
+            .unwrap()
+            .hosts,
         s(&["example.com"])
     );
 }
@@ -177,6 +185,60 @@ fn non_web_scheme_is_refused() {
     assert!(err.contains("not a host"), "{err}");
 }
 
+// #1905: a sentence split into words is refused, every bad word named
+#[test]
+fn issue_1905_garbage_is_refused_and_named() {
+    let args = s(&[
+        "pro360",
+        "與家電維修垂直市場兩條三角驗證，市場規模、用戶數、app",
+        "評分、591／tasker／鄰家師傅",
+    ]);
+    let err = parse_hosts(&args).unwrap_err();
+    assert!(err.contains("`pro360`"), "{err}");
+    assert!(err.contains("nothing was changed"), "{err}");
+}
+
+#[test]
+fn mixed_valid_and_junk_is_refused_whole() {
+    let err = parse_hosts(&s(&["ok.example.com", "pro360"])).unwrap_err();
+    assert!(
+        err.contains("`pro360`") && !err.contains("`ok.example.com`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn idn_and_url_are_normalized_with_notes() {
+    let p = parse_hosts(&s(&["https://Shop.Example.com/admin?x=1", "例子.台灣"])).unwrap();
+    assert_eq!(p.hosts, s(&["shop.example.com", "xn--fsqu00a.xn--kpry57d"]));
+    assert!(p.notes.iter().any(
+        |n| n.contains("https://Shop.Example.com/admin?x=1") && n.contains("shop.example.com")
+    ));
+    assert!(p.notes.iter().any(|n| n.contains("例子.台灣")));
+}
+
+#[test]
+fn issue_1905_accept_list() {
+    let p = parse_hosts(&s(&[
+        "example.com",
+        "xn--fiqs8s.tw",
+        "127.0.0.1",
+        "[::1]:443",
+        "localhost",
+    ]))
+    .unwrap();
+    assert_eq!(
+        p.hosts,
+        s(&[
+            "example.com",
+            "xn--fiqs8s.tw",
+            "127.0.0.1",
+            "[::1]",
+            "localhost"
+        ])
+    );
+}
+
 /// Fake [`LiveOps`]: records every call, never touches disk or spawns.
 #[derive(Default)]
 struct Fake {
@@ -186,6 +248,8 @@ struct Fake {
     fail_save: bool,
     fail_add: bool,
     save_notes: Vec<String>,
+    repairs: Vec<String>,
+    research_events: usize,
 }
 
 impl LiveOps for Fake {
@@ -211,6 +275,13 @@ impl LiveOps for Fake {
         self.servers = servers;
         Ok(self.save_notes.clone())
     }
+    fn pending_repairs(&mut self, _servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>> {
+        Ok(self.repairs.clone())
+    }
+    fn record_research(&mut self, _agent: &str) -> anyhow::Result<()> {
+        self.research_events += 1;
+        Ok(())
+    }
 }
 
 // flow: refused port → no add, no save, and no chip (it's an Err)
@@ -229,7 +300,7 @@ fn run_refusal_writes_nothing_and_offers_no_chip() {
 #[test]
 fn run_adds_once_with_per_agent_run_and_offers_restart() {
     let mut f = Fake::default();
-    let (text, chip) = run("bob", &s(&["old.example.com"]), true, &mut f).unwrap();
+    let (text, chip) = run("bob", &s(&["--yes", "old.example.com"]), true, &mut f).unwrap();
     assert_eq!(
         f.adds,
         vec![s(&[
@@ -237,7 +308,7 @@ fn run_adds_once_with_per_agent_run_and_offers_restart() {
         ])]
     );
     assert!(chip.is_some_and(|p| p.is_executable()), "{text}");
-    let (text, _) = run("bob", &s(&["new.example.com"]), true, &mut f).unwrap();
+    let (text, _) = run("bob", &s(&["--yes", "new.example.com"]), true, &mut f).unwrap();
     assert_eq!(f.adds.len(), 1, "second call must not re-add");
     assert!(text.contains("old.example.com"), "{text}");
     assert_eq!(hosts_of(&f.servers), s(&["new.example.com"]));
@@ -251,7 +322,7 @@ fn new_entry_is_created_with_its_allowlist_in_one_write() {
         fail_save: true, // would trip if the create path still saved twice
         ..Fake::default()
     };
-    run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap();
     assert_eq!((f.adds.len(), f.saves), (1, 0));
     let net = f.servers[0]
         .network
@@ -269,7 +340,7 @@ fn save_failure_keeps_a_preexisting_entry() {
         fail_save: true,
         ..Fake::default()
     };
-    let err = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap_err();
+    let err = run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap_err();
     assert!(f.adds.is_empty());
     assert!(f.servers.iter().any(|e| e.name == LIVE_ENTRY));
     assert!(format!("{err:#}").contains("disk full"), "{err:#}");
@@ -282,7 +353,7 @@ fn failed_add_leaves_no_entry() {
         fail_add: true,
         ..Fake::default()
     };
-    let err = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap_err();
+    let err = run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap_err();
     assert!(format!("{err:#}").contains("probe failed"), "{err:#}");
     assert!(f.servers.is_empty() && f.saves == 0);
 }
@@ -360,7 +431,7 @@ fn existing_entry_save_reports_backfilled_grants() {
         save_notes: vec!["granted write on /x/browser".into()],
         ..Default::default()
     };
-    let (text, chip) = run("bot", &["example.com".into()], true, &mut ops).unwrap();
+    let (text, chip) = run("bot", &s(&["--yes", "example.com"]), true, &mut ops).unwrap();
     assert_eq!(ops.saves, 1);
     assert!(ops.adds.is_empty(), "existing entry must not be re-added");
     assert!(text.contains("granted write on /x/browser"), "{text}");
@@ -418,12 +489,12 @@ fn spawn_allowlist_gets_absolute_command_once() {
 #[test]
 fn unchanged_rerun_offers_no_restart() {
     let mut f = Fake::default();
-    run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
-    let (text, chip) = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap();
+    let (text, chip) = run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap();
     assert!(chip.is_none(), "{text}");
     assert!(text.contains("nothing changed"), "{text}");
     // A different allowlist is a real change again.
-    let (_, chip) = run("bob", &s(&["b.example.com"]), true, &mut f).unwrap();
+    let (_, chip) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
     assert!(chip.is_some());
 }
 
@@ -468,4 +539,155 @@ fn spawn_dir_is_granted_once_with_a_note() {
     assert_eq!(dirs, s(&["/keep", "/b/shell-1246"]));
     assert!(note.unwrap().contains("/b/shell-1246"));
     assert_eq!(ensure_spawn_dir(&mut dirs, "/b/shell-1246"), None);
+}
+
+// #1905 Part 2: the first call only previews; nothing is written until `--yes`.
+#[test]
+fn first_call_previews_and_writes_nothing() {
+    let mut f = Fake::default();
+    let (text, chip) = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    assert!(f.adds.is_empty() && f.saves == 0);
+    assert!(text.contains("+ a.example.com"), "{text}");
+    let chip = chip.expect("confirm chip");
+    assert_eq!(
+        chip.kind,
+        mur_common::proposal::ProposalKind::Slash("browser live --yes a.example.com".into())
+    );
+    let vetted = mur_common::proposal::vet(&serde_json::json!({
+        "label": chip.label, "kind": "slash", "command": "browser live --yes a.example.com"
+    }));
+    assert!(vetted.is_ok(), "{vetted:?}");
+}
+
+#[test]
+fn yes_writes_and_note_includes_preview() {
+    let mut f = Fake::default();
+    let (text, chip) = run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap();
+    assert_eq!(f.adds.len(), 1);
+    assert!(text.contains("+ a.example.com"), "{text}");
+    assert_eq!(chip, Some(Proposal::restart(RESTART_LABEL)));
+}
+
+#[test]
+fn unchanged_rerun_without_yes_says_unchanged_and_offers_nothing() {
+    let mut e = live_entry();
+    e.network = Some(live_network(&s(&["a.example.com"])));
+    let mut f = Fake {
+        servers: vec![e],
+        ..Fake::default()
+    };
+    let (text, chip) = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    assert_eq!(text, unchanged_text(&s(&["a.example.com"])));
+    assert!(chip.is_none());
+    assert!(f.adds.is_empty() && f.saves == 0);
+}
+
+#[test]
+fn confirm_chip_carries_normalized_hosts_and_profile() {
+    let mut f = Fake::default();
+    let args = s(&["https://A.example.com/x", "--profile", "site"]);
+    let (_, chip) = run("bob", &args, true, &mut f).unwrap();
+    assert_eq!(
+        chip.expect("chip").kind,
+        mur_common::proposal::ProposalKind::Slash(
+            "browser live --yes a.example.com --profile site".into()
+        )
+    );
+}
+
+// #1905 Part 1b: `--research` previews the generated caveat and writes nothing.
+#[test]
+fn research_without_yes_previews_caveat_only() {
+    use super::super::browser_live_preview::research_caveat;
+    let mut f = Fake::default();
+    let (text, chip) = run("bob", &s(&["--research"]), true, &mut f).unwrap();
+    assert!(f.adds.is_empty() && f.saves == 0);
+    assert!(
+        text.contains(research_caveat(DENY_OVERLAY_ENFORCEMENT)),
+        "{text}"
+    );
+    assert_eq!(
+        chip.expect("chip").kind,
+        mur_common::proposal::ProposalKind::Slash("browser live --yes --research".into())
+    );
+}
+
+#[test]
+fn research_with_yes_writes_broad_audited_with_authorization() {
+    let mut f = Fake::default();
+    let (_, chip) = run("bob", &s(&["--yes", "--research"]), true, &mut f).unwrap();
+    let net = f.servers[0].network.as_ref().expect("policy");
+    assert_eq!(net.mode, McpNetMode::BroadAudited);
+    assert!(net.allow_hosts.is_empty());
+    assert!(net.authorization.is_some());
+    assert_eq!(f.research_events, 1);
+    assert!(chip.is_some());
+}
+
+#[test]
+fn research_with_hosts_is_refused() {
+    let mut f = Fake::default();
+    let err = run("bob", &s(&["--research", "a.com"]), true, &mut f).unwrap_err();
+    assert!(
+        err.to_string().contains("research mode takes no hosts"),
+        "{err}"
+    );
+    assert!(f.adds.is_empty() && f.saves == 0);
+}
+
+// Review of #1919: the stored IPv6 value must be the string the egress proxy
+// matches — the host part of a CONNECT authority, which is bracketed.
+#[test]
+fn ipv6_allowlist_matches_what_the_proxy_sees() {
+    let p = parse_hosts(&s(&["[::1]:443", "2001:db8::1"])).unwrap();
+    for (host, connect) in p.hosts.iter().zip(["[::1]:443", "[2001:db8::1]:443"]) {
+        let seen = connect.rsplit_once(':').unwrap().0;
+        assert!(
+            mur_common::net::host_allowed(seen, std::slice::from_ref(host)),
+            "{host} must match CONNECT {connect}"
+        );
+    }
+}
+
+// Review of #1919: an older entry that `save` would still repair (stale pin,
+// missing grant) is not "unchanged" — preview it and offer the confirm chip.
+#[test]
+fn same_policy_with_pending_repairs_still_previews_and_offers_confirm() {
+    let mut e = live_entry();
+    e.network = Some(live_network(&s(&["a.example.com"])));
+    let mut f = Fake {
+        servers: vec![e],
+        repairs: vec!["re-pinned `browser` to /x/mur".into()],
+        ..Fake::default()
+    };
+    let (text, chip) = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    assert!(!text.contains("nothing changed"), "{text}");
+    assert!(text.contains("re-pinned `browser`"), "{text}");
+    assert_eq!(chip.map(|c| c.label), Some(CONFIRM_LABEL.to_owned()));
+    assert!(f.adds.is_empty() && f.saves == 0, "preview must not write");
+}
+
+#[test]
+fn research_rerun_keeps_existing_deny_hosts() {
+    let existing = crate::cmd::agent::mcp_network::broad_audited_network(
+        vec!["evil.example".into()],
+        "dave".into(),
+        1,
+    );
+    let mut after = research_network("dave".into(), 2);
+    carry_deny_hosts(&mut after, Some(&existing));
+    assert_eq!(after.deny_hosts, vec!["evil.example"]);
+    assert!(same_policy(&existing, &after));
+}
+
+#[test]
+fn restricted_policy_does_not_inherit_deny_hosts() {
+    let existing = crate::cmd::agent::mcp_network::broad_audited_network(
+        vec!["evil.example".into()],
+        "dave".into(),
+        1,
+    );
+    let mut after = live_network(&["a.com".to_owned()]);
+    carry_deny_hosts(&mut after, Some(&existing));
+    assert!(after.deny_hosts.is_empty());
 }

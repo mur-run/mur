@@ -16,7 +16,8 @@ pub fn set_mode(name: &str, key: &str, value: &str) -> Result<()> {
 }
 
 pub fn allow_host(name: &str, glob: &str) -> Result<()> {
-    agent::cmd_perm_allow_host(name, glob)
+    // Callers of the admin API have their own consent UI.
+    agent::cmd_perm_allow_host(name, glob, true)
 }
 
 pub fn deny_host(name: &str, glob: &str) -> Result<()> {
