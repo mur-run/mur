@@ -265,3 +265,50 @@ fn an_event_signed_by_the_wrong_actors_key_is_flagged() {
     assert_eq!(r.unverified_seqs.len(), 1, "{}", r.render());
     assert_eq!(r.exit_code(), EXIT_DAMAGED);
 }
+
+#[test]
+fn a_removed_middle_line_breaks_the_chain_even_with_the_head_deleted_too() {
+    // Signed (v2) events carry `prev_hash`. With the head gone, the chain is
+    // the only thing left that can notice a line removed from the middle.
+    let f = Fixture::anchored(4);
+    let mut lines = f.log_lines();
+    lines.remove(1);
+    f.write_log_lines(&lines);
+    std::fs::remove_file(f.head_path()).unwrap();
+    let r = f.check();
+    assert!(!r.chain_breaks.is_empty(), "{}", r.render());
+    assert_eq!(r.exit_code(), EXIT_DAMAGED);
+    assert!(r.render().contains("broken hash chain"), "{}", r.render());
+}
+
+#[test]
+fn a_chain_break_is_reported_even_when_a_head_exists() {
+    let f = Fixture::anchored(4);
+    let mut lines = f.log_lines();
+    lines.remove(1);
+    f.write_log_lines(&lines);
+    let r = f.check();
+    assert!(!r.chain_breaks.is_empty(), "{}", r.render());
+    assert_eq!(r.exit_code(), EXIT_DAMAGED);
+}
+
+#[test]
+fn an_unreadable_head_does_not_claim_the_channel_has_zero_events() {
+    let f = Fixture::anchored(3);
+    std::fs::write(f.head_path(), b"{ not a head").unwrap();
+    let out = f.check().render();
+    assert!(!out.contains("0 events"), "{out}");
+    assert!(out.contains("3 lines"), "{out}");
+}
+
+#[test]
+fn signed_events_with_no_head_stay_intact_under_the_inert_key() {
+    // Locks the premise behind `NO_HEAD_INERT_KEY`: with no head, the loader
+    // must not judge signed events against that all-zero key. If it ever
+    // does, every signed event here turns up as damage.
+    let f = Fixture::anchored(3);
+    std::fs::remove_file(f.head_path()).unwrap();
+    let r = f.check();
+    assert!(r.is_intact(), "{}", r.render());
+    assert_eq!(r.events, 3);
+}

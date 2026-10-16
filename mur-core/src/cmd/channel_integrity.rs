@@ -79,9 +79,16 @@ impl IntegrityReport {
         } else {
             "DAMAGED"
         };
+        // An unreadable head stops the check before events are loaded, so
+        // `events` is unknown there, not zero; say only what was counted.
+        let counts = if self.head_error.is_some() {
+            format!("{} lines", self.log_lines)
+        } else {
+            format!("{} events, {} lines", self.events, self.log_lines)
+        };
         out.push_str(&format!(
-            "channel {}: {verdict} ({} events, {} lines)\n",
-            self.channel_id, self.events, self.log_lines
+            "channel {}: {verdict} ({counts})\n",
+            self.channel_id
         ));
         match (self.anchored_lines, &self.head_error) {
             (_, Some(e)) => out.push_str(&format!(
@@ -167,6 +174,10 @@ pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
     let log_path = store.events_path(channel_id);
     let heads = mur_channel::anchor::heads_dir(mur_home);
 
+    // The log is read here for the line count and again inside
+    // `load_events_with_damage`. No lock is taken (the check is read-only), so
+    // an append landing between the two reads can make `log_lines` and
+    // `events` disagree by that append; rerun for an exact snapshot.
     let log = match std::fs::read(&log_path) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,

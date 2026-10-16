@@ -45,9 +45,6 @@ pub fn actor_pubkey(
 ///
 /// Not an authorization check: it proves who wrote `ev`, not that the writer
 /// may decide anything. HITL approvals use `hitl::authority` instead.
-// The `mur` bin compiles this module privately and no longer calls it (the
-// HITL gate was its last caller); the lib keeps it public for readers.
-#[allow(dead_code)]
 pub fn verify_event(
     mur_home: &Path,
     channel_id: &str,
