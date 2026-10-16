@@ -62,6 +62,15 @@ impl Fixture {
         check(self.home.path(), &self.id).unwrap()
     }
 
+    /// Drops the service so its SQLite index handle is closed, keeping the
+    /// home and channel id. Windows refuses to delete or replace a file that
+    /// another handle still holds open (os error 32).
+    fn close_index(self) -> (TempDir, String) {
+        let Self { home, svc, id } = self;
+        drop(svc);
+        (home, id)
+    }
+
     fn log_path(&self) -> std::path::PathBuf {
         self.svc.store().events_path(&self.id)
     }
@@ -329,10 +338,10 @@ fn a_created_channel_with_no_events_is_intact_and_unanchored() {
 
 #[test]
 fn verify_does_not_create_the_channel_index() {
-    let f = Fixture::anchored(2);
-    let index = f.home.path().join("index");
+    let (home, id) = Fixture::anchored(2).close_index();
+    let index = home.path().join("index");
     std::fs::remove_dir_all(&index).unwrap();
-    let r = f.check();
+    let r = check(home.path(), &id).unwrap();
     assert!(r.is_intact(), "{}", r.render());
     assert!(!index.exists(), "verify created {}", index.display());
 }
@@ -341,11 +350,11 @@ fn verify_does_not_create_the_channel_index() {
 fn verify_works_without_a_usable_index() {
     // An index path that cannot be opened (a plain file where the directory
     // belongs) must not stop a check that only needs the log and the head.
-    let f = Fixture::anchored(2);
-    let index = f.home.path().join("index");
+    let (home, id) = Fixture::anchored(2).close_index();
+    let index = home.path().join("index");
     std::fs::remove_dir_all(&index).unwrap();
     std::fs::write(&index, b"not a directory").unwrap();
-    let r = f.check();
+    let r = check(home.path(), &id).unwrap();
     assert!(r.is_intact(), "{}", r.render());
     assert_eq!(std::fs::read(&index).unwrap(), b"not a directory");
 }
