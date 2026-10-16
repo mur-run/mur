@@ -340,7 +340,7 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
 /// "secret"; the contents are not inspected, so the call is not provably a
 /// status check. A false positive only costs a prompt.
 fn kubectl_selects_from_file(tok: &str) -> bool {
-    let name = tok.split('=').next().unwrap_or(tok);
+    let name = kubectl_flag_name(tok);
     if let Some(long) = name.strip_prefix("--") {
         return long == "filename" || long == "kustomize";
     }
@@ -356,8 +356,14 @@ fn kubectl_selects_from_file(tok: &str) -> bool {
 
 /// True when a `kubectl` argument is one of [`KUBECTL_UNSAFE_LONG_FLAGS`].
 fn kubectl_unsafe_long_flag(tok: &str) -> bool {
-    let name = tok.split('=').next().unwrap_or(tok);
-    KUBECTL_UNSAFE_LONG_FLAGS.contains(&name)
+    KUBECTL_UNSAFE_LONG_FLAGS.contains(&kubectl_flag_name(tok).as_str())
+}
+
+/// The flag name of a `kubectl` argument as kubectl sees it: text before
+/// `=`, with `_` folded to `-` (kubectl installs pflag's
+/// `WordSepNormalizeFunc`, so `--cache_dir` IS `--cache-dir`).
+fn kubectl_flag_name(tok: &str) -> String {
+    tok.split('=').next().unwrap_or(tok).replace('_', "-")
 }
 
 /// Long flags refused in the kubectl read lane, matched bare or `=VALUE`.
@@ -469,6 +475,13 @@ mod tests {
             "kubectl get pods --cache-dir=./cache",
             "kubectl get pods --log-file=./k.log",
             "kubectl get pods --log-dir ./logs",
+            // kubectl folds `_` to `-` in flag names.
+            "kubectl version --client --profile_output=./out.prof",
+            "kubectl version --client --profile_output ./out.prof",
+            "kubectl get pods --cache_dir=./cache",
+            "kubectl get pods --cache_dir ./cache",
+            "kubectl get pods --log_file=./k.log",
+            "kubectl get pods --log_dir ./logs",
             // `pip --log` writes a file.
             "pip list --log ./pip-session.log",
             "pip list --log=./pip-session.log",
