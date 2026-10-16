@@ -46,6 +46,12 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
             format!("{spin} generating…")
         };
         (msg, theme.accent)
+    } else if let Some((label, since)) = &app.manage_busy {
+        let spin = SPINNER[app.spinner % SPINNER.len()];
+        (
+            format!("{spin} {label}… {}s", since.elapsed().as_secs()),
+            theme.accent,
+        )
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"

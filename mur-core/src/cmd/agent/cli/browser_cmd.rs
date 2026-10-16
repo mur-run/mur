@@ -53,10 +53,13 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
             return;
         }
         let ready = mur_browser::server::require_entry(Some(&app.home)).is_ok();
-        run_manage(app, move |agent| {
-            live::run(&agent, &hosts, ready, &mut live::ProfileOps(&agent))
-        })
-        .await;
+        // May pin + probe a new MCP entry (#1921): run off the event loop.
+        run_manage_bg(
+            app,
+            "setting up live browser (probing)".into(),
+            tx,
+            move |agent| live::run(&agent, &hosts, ready, &mut live::ProfileOps(&agent)),
+        );
         return;
     }
     // `--add` path is the pre-live behavior, kept byte-for-byte.

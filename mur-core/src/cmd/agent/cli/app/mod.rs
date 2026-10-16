@@ -372,6 +372,9 @@ pub struct App {
     pub proposal: Option<mur_common::proposal::Proposal>,
     /// A chip-triggered `/restart` is running; turn submission is locked.
     pub restart_in_flight: bool,
+    /// A background manage op (`run_manage_bg`, #1921): its status label and
+    /// start time. Keeps the spinner ticking and the status bar honest.
+    pub manage_busy: Option<(String, std::time::Instant)>,
     /// When the current real chip auto-dismisses. `None` while the countdown
     /// has not started (no chip, a ghost, or a turn still streaming); armed
     /// and swept by `proposal::tick`.
@@ -523,6 +526,7 @@ impl App {
             pending_suggestions: Vec::new(),
             proposal: None,
             restart_in_flight: false,
+            manage_busy: None,
             proposal_deadline: None,
             proposal_pinned: false,
             wants_screen_wipe: false,

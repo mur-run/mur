@@ -113,6 +113,9 @@ pub enum StreamMsg {
     ReviewFinished(crate::cmd::fleet::review::murmur::bridge::Outcome),
     /// Esc×2's `tasks/cancel` failed (P3b-§6.3 step 5).
     ReviewCancelFailed(String),
+    /// A background manage op (`run_manage_bg`, #1921) finished; the error
+    /// side is already display-formatted.
+    ManageDone(Result<super::manage::Managed, String>),
 }
 
 impl StreamMsg {
@@ -135,7 +138,8 @@ impl StreamMsg {
             | StreamMsg::ShellCardDone { .. }
             | StreamMsg::ReviewReq(_)
             | StreamMsg::ReviewFinished(_)
-            | StreamMsg::ReviewCancelFailed(_) => None,
+            | StreamMsg::ReviewCancelFailed(_)
+            | StreamMsg::ManageDone(_) => None,
         }
     }
 }
