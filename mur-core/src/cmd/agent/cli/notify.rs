@@ -77,9 +77,11 @@ pub(super) fn sanitize_notifier_arg(value: &str) -> String {
     }
 }
 
-/// Post via `terminal-notifier`, attributing the notification to the host
-/// terminal so clicking it raises that terminal. Waits for the exit status:
-/// the helper can be present but unable to run (a wrapper script whose exec
+/// Post via `terminal-notifier`; `-activate` makes clicking it raise the host
+/// terminal. No `-sender`: impersonating the terminal's bundle id makes the
+/// helper never exit, so every notification leaked a process (100 stuck
+/// helpers posing as Ghostty preceded Ghostty going unresponsive). Waits for
+/// the exit status: the helper can be present but unable to run (a wrapper script whose exec
 /// fails), and a spawn that succeeds would otherwise swallow the notification.
 /// Any non-success is the signal to fall back.
 #[cfg(target_os = "macos")]
@@ -94,8 +96,6 @@ fn notify_via_terminal_notifier(
             &sanitize_notifier_arg(title),
             "-message",
             &sanitize_notifier_arg(message),
-            "-sender",
-            bundle_id,
             "-activate",
             bundle_id,
         ])
