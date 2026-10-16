@@ -24,7 +24,7 @@ use mur_common::identity::AgentIdentity;
 
 use super::ChannelService;
 use crate::anchor::{self, AnchorLagError};
-use crate::head::{Head, HeadFields, chain_log, chain_prefix};
+use crate::head::{Head, HeadFields, chain_log, chain_log_with_prefix};
 use crate::head_io;
 use crate::store::{PreSealInput, SealHook, SealHooks, SealInput};
 
@@ -73,11 +73,12 @@ fn seqs(log: &[u8], record: &[u8]) -> (Option<u64>, Option<u64>) {
     } else {
         log
     };
+    // Walk back from the end and decode one line at a time, so the cost is
+    // the unparseable tail plus one event, not the whole log.
     let last_seq = |bytes: &[u8]| {
-        String::from_utf8_lossy(bytes)
-            .lines()
-            .rev()
-            .find_map(|l| serde_json::from_str::<ChannelEvent>(l).ok())
+        bytes
+            .rsplit(|&b| b == b'\n')
+            .find_map(|l| serde_json::from_str::<ChannelEvent>(&String::from_utf8_lossy(l)).ok())
             .map(|e| e.seq)
     };
     (last_seq(log), last_seq(body))
@@ -104,7 +105,8 @@ fn next_head(
     input: &SealInput<'_>,
     signer: HeadSigner<'_>,
 ) -> Result<Option<Head>> {
-    let state = chain_log(log);
+    // One scan serves both the new head and the check of the old one.
+    let (state, prefix) = chain_log_with_prefix(log, current.map_or(0, |h| h.lines));
     let (last_seq, before) = seqs(log, input.record);
     // The new line must stand on its own. If it was appended onto an
     // unterminated tail it is glued to that garbage (and unparseable itself);
@@ -136,7 +138,7 @@ fn next_head(
             if !h.verify(&key) {
                 bail!("existing head fails signature verification; refusing to overwrite it");
             }
-            let prefix = chain_prefix(log, h.lines)
+            let prefix = prefix
                 .with_context(|| format!("log has fewer than the head's {} lines", h.lines))?;
             if hex::encode(prefix.hash) != h.chain_hash {
                 bail!("log no longer extends the signed head at line {}", h.lines);
@@ -384,5 +386,74 @@ impl ChannelService {
             idempotency_key,
             Some(key_home),
         )
+    }
+}
+
+#[cfg(test)]
+mod seqs_tests {
+    use super::*;
+
+    fn line(seq: u64) -> Vec<u8> {
+        let ev = ChannelEvent {
+            seq,
+            ts: Utc::now(),
+            actor: ChannelActor::System,
+            kind: EventKind::Message,
+            payload: serde_json::json!({ "n": seq }),
+            idempotency_key: None,
+            sig: None,
+            key_version: None,
+            prev_hash: None,
+        };
+        let mut v = serde_json::to_vec(&ev).unwrap();
+        v.push(b'\n');
+        v
+    }
+
+    /// The whole-log scan `seqs` replaced: kept here as the oracle.
+    fn last_seq_full_scan(bytes: &[u8]) -> Option<u64> {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .rev()
+            .find_map(|l| serde_json::from_str::<ChannelEvent>(l).ok())
+            .map(|e| e.seq)
+    }
+
+    /// Several unparseable lines at the tail (garbage, blank, CRLF, non-UTF-8,
+    /// unterminated) must be skipped back to the last real event, exactly as
+    /// the old whole-log scan did.
+    #[test]
+    fn tail_walk_matches_full_scan_over_a_garbage_tail() {
+        let tails: [&[u8]; 6] = [
+            b"",
+            b"not json\n",
+            b"not json\n\n{\"half\":\n",
+            b"\xff\xfe\n{broken\r\n",
+            b"\n\n\n",
+            b"garbage-without-newline",
+        ];
+        for tail in tails {
+            let mut log = Vec::new();
+            for s in 1..=3 {
+                log.extend(line(s));
+            }
+            log.extend_from_slice(tail);
+            let record = line(9);
+            for (log, record) in [(log.clone(), record.as_slice()), {
+                let mut fresh = log.clone();
+                fresh.extend(&record);
+                (fresh, record.as_slice())
+            }] {
+                let body = body_before(&log, record);
+                assert_eq!(
+                    seqs(&log, record),
+                    (last_seq_full_scan(&log), last_seq_full_scan(body)),
+                    "tail {:?}",
+                    String::from_utf8_lossy(tail)
+                );
+            }
+        }
+        // Nothing parseable at all.
+        assert_eq!(seqs(b"x\ny\n", b"z\n"), (None, None));
     }
 }

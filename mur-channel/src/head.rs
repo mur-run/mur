@@ -71,6 +71,25 @@ pub fn chain_prefix(log: &[u8], n: u64) -> Option<ChainState> {
     Some(state)
 }
 
+/// [`chain_log`] and [`chain_prefix`] in one pass over `log`: the state after
+/// every `\n`-terminated line, and the state after the first `n` of them
+/// (`None` when the log has fewer than `n`). Same result as calling both, at
+/// the cost of one scan, which matters because the head check needs both on
+/// every anchored append.
+pub fn chain_log_with_prefix(log: &[u8], n: u64) -> (ChainState, Option<ChainState>) {
+    let mut state = ChainState::genesis();
+    let mut prefix = (n == 0).then_some(state);
+    let mut rest = log;
+    while let Some(nl) = rest.iter().position(|&b| b == b'\n') {
+        state.extend(&rest[..nl]);
+        if state.lines == n {
+            prefix = Some(state);
+        }
+        rest = &rest[nl + 1..];
+    }
+    (state, prefix)
+}
+
 /// The signed fields of a head, before `ts` and `sig` are attached.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadFields {

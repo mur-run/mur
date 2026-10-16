@@ -100,3 +100,31 @@ fn any_byte_change_breaks_the_chain_from_that_line_on() {
 fn chain_is_order_sensitive() {
     assert_ne!(chain_log(b"x\ny\n").hash, chain_log(b"y\nx\n").hash);
 }
+
+/// `chain_log_with_prefix` must agree with the two separate passes it
+/// replaces, for every prefix length, on logs with empty, CRLF, non-UTF-8 and
+/// unterminated lines.
+#[test]
+fn chain_with_prefix_matches_the_two_separate_passes() {
+    use mur_channel::head::{chain_log_with_prefix, chain_prefix};
+    let logs: [&[u8]; 6] = [
+        b"",
+        b"a\n",
+        b"a\nb\nc\n",
+        b"a\r\n\n\xff\xfe\nz\n",
+        b"a\nb\npartial",
+        b"partial-only",
+    ];
+    for log in logs {
+        let total = chain_log(log);
+        for n in 0..=(total.lines + 2) {
+            let (whole, prefix) = chain_log_with_prefix(log, n);
+            assert_eq!(whole, total, "whole-log state, n={n}, log={log:?}");
+            assert_eq!(
+                prefix,
+                chain_prefix(log, n),
+                "prefix state, n={n}, log={log:?}"
+            );
+        }
+    }
+}
