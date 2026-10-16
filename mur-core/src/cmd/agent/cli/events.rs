@@ -301,7 +301,7 @@ pub(super) async fn event_loop(
             Some(f) = panel_rx.recv() => match f {
                 mur_common::panel::HubFrame::Insert { text } => app.set_input(&text),
             },
-            _ = spinner.tick(), if app.streaming || app.shell.is_running() => app.tick_spinner(),
+            _ = spinner.tick(), if app.streaming || app.shell.is_running() || app.manage_busy.is_some() => app.tick_spinner(),
             // P3b-§6.3 step 2: wake to fire a won abort's cancel once its id lands.
             _ = tokio::time::sleep(Duration::from_millis(SPINNER_MS)), if review::keys::cancel_pending(app) => {}
             _ = tokio::time::sleep_until(follow_at), if follow_armed => {

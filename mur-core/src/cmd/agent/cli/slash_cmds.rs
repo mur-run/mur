@@ -483,6 +483,15 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
             },
         },
         SlashCmd::Secret { key, delete } => secret_cmd::request(app, key, delete),
+        // `add` pins and probes (spawns the server, waits up to the probe
+        // timeout) — run it off the loop so the screen keeps repainting.
+        SlashCmd::Mcp(args) if args.first().map(String::as_str) == Some("add") => {
+            let label = format!(
+                "probing MCP server {}",
+                args.get(1).map_or("", String::as_str)
+            );
+            run_manage_bg(app, label, tx, move |agent| manage::run_mcp(&agent, &args))
+        }
         SlashCmd::Mcp(args) => run_manage(app, move |agent| manage::run_mcp(&agent, &args)).await,
         SlashCmd::Skill(args) => {
             run_manage(app, move |agent| manage::run_skill(&agent, &args)).await
@@ -585,8 +594,43 @@ where
     F: FnOnce(String) -> Result<manage::Managed> + Send + 'static,
 {
     let agent = app.agent.clone();
-    match tokio::task::spawn_blocking(move || f(agent)).await {
-        Ok(Ok((text, chip))) => {
+    let res = match tokio::task::spawn_blocking(move || f(agent)).await {
+        Ok(r) => r.map_err(|e| format!("error: {e:#}")),
+        Err(e) => Err(format!("task failed: {e}")),
+    };
+    apply_managed(app, res);
+}
+
+/// Like [`run_manage`], but for ops slow enough to stall the screen (#1921):
+/// the MCP install probe spawns a server and waits up to its timeout. The
+/// event loop awaits slash handlers inside its `select!`, so awaiting the
+/// probe there freezes every repaint. Instead the work runs detached, the
+/// status bar shows `label` with a spinner and elapsed time, and the outcome
+/// comes back as [`StreamMsg::ManageDone`].
+pub(super) fn run_manage_bg<F>(app: &mut App, label: String, tx: &mpsc::Sender<StreamMsg>, f: F)
+where
+    F: FnOnce(String) -> Result<manage::Managed> + Send + 'static,
+{
+    if let Some((busy, _)) = &app.manage_busy {
+        app.push_system(format!("still busy: {busy} — wait for it to finish"));
+        return;
+    }
+    app.manage_busy = Some((label, std::time::Instant::now()));
+    let agent = app.agent.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let res = match tokio::task::spawn_blocking(move || f(agent)).await {
+            Ok(r) => r.map_err(|e| format!("error: {e:#}")),
+            Err(e) => Err(format!("task failed: {e}")),
+        };
+        let _ = tx.send(StreamMsg::ManageDone(res)).await;
+    });
+}
+
+/// Render a manage op's outcome: the text as a system note, the chip offered.
+pub(super) fn apply_managed(app: &mut App, res: std::result::Result<manage::Managed, String>) {
+    match res {
+        Ok((text, chip)) => {
             app.push_system(text);
             // Every `manage::*` op rewrites the agent profile, and `app.skills`
             // is otherwise read from disk exactly once at startup (`term.rs`).
@@ -599,8 +643,7 @@ where
                 proposal::offer(app, p);
             }
         }
-        Ok(Err(e)) => app.push_error(format!("error: {e:#}")),
-        Err(e) => app.push_error(format!("task failed: {e}")),
+        Err(e) => app.push_error(e),
     }
 }
 

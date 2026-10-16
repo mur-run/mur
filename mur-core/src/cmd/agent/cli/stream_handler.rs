@@ -253,6 +253,10 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
         StreamMsg::ReviewReq(req) => review::on_request(app, req),
         StreamMsg::ReviewFinished(outcome) => review::on_finished(app, outcome),
         StreamMsg::ReviewCancelFailed(e) => review::keys::on_cancel_failed(app, &e),
+        StreamMsg::ManageDone(res) => {
+            app.manage_busy = None;
+            super::slash_cmds::apply_managed(app, res);
+        }
     }
 }
 
