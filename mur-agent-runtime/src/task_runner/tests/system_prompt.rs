@@ -687,3 +687,38 @@ mod refused_cwd {
         assert!(!sys.contains("[cwd]"), "{sys}");
     }
 }
+
+/// The per-turn directory must come last: the prompt cache matches a byte
+/// prefix, so two turns that differ only in cwd (`.worktrees/turn-<uuid>`)
+/// must share everything before the `## Working directory` block.
+#[test]
+fn per_turn_cwd_sits_after_the_stable_prefix() {
+    let build = |name: &str| {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = mur_track::turn::canonicalize(tmp.path())
+            .unwrap()
+            .join(name);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let grant = root.to_string_lossy().into_owned();
+        let runner = TaskRunner::new_stub_echo()
+            .with_system_prompt(Some("BASE".into()))
+            .with_session_cwd(
+                crate::tools::fs_policy::SessionCwd::new(root.clone()),
+                vec![grant],
+            );
+        let sys = runner.assemble_system_prompt(None, "hello", None, None).0;
+        drop(tmp);
+        sys
+    };
+    let a = build("turn-aaaa");
+    let b = build("turn-bbbb");
+    assert_ne!(a, b, "the cwd differs, so the prompts differ");
+    let cut_a = a.find("## Working directory").expect("cwd block in a");
+    let cut_b = b.find("## Working directory").expect("cwd block in b");
+    assert_eq!(
+        a[..cut_a],
+        b[..cut_b],
+        "prefix before the cwd must be identical"
+    );
+    assert!(!a[..cut_a].contains("turn-aaaa"), "{a}");
+}
