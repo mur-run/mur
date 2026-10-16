@@ -342,6 +342,12 @@ mod tests {
             "git log --output=victim.txt 2>&1 | head",
             "git status && git show --output=x HEAD 2>/dev/null",
             "git grep -Otouch pat >/dev/null",
+            "git log -p --ext-diff 2>/dev/null",
+            "git diff --textconv 2>&1 | head",
+            "git diff HEAD~1 2>/dev/null", // default textconv
+            "git cat-file --filters HEAD:path 2>/dev/null",
+            "rg --pre=touch pattern victim.txt 2>/dev/null",
+            "file -C -m ./magic 2>&1",
         ] {
             assert_ne!(
                 classify("bash", Some(&bash(cmd))),

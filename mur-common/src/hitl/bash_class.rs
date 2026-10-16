@@ -51,83 +51,20 @@ const DATE_READONLY_FLAGS: &[&str] = &[
     "-Iseconds",
 ];
 
-/// `git` subcommands that only read (regardless of flags). Excludes anything
-/// with a write mode (`branch -D`, `tag X`, `remote add`, `config`, `stash`, …).
-///
-/// REMOVED `reflog` — `git reflog expire/delete` is destructive (prunes the reflog).
-const GIT_READONLY_SUBCMDS: &[&str] = &[
-    "status",
-    "log",
-    "diff",
-    "show",
-    "blame",
-    "rev-parse",
-    "ls-files",
-    "ls-tree",
-    "cat-file",
-    "describe",
-    "shortlog",
-    "whatchanged",
-    "grep",
-];
+mod git;
 
-/// Flags under which `git branch` only LISTS. Any positional argument makes it
-/// create a branch (`git branch x`), and `-d/-D/-m/-M/-c/-C/-f/-u` rename,
-/// delete, copy or retarget — all absent. `--list` is here but its pattern
-/// operand is not: a positional still fails the check, which costs one prompt
-/// for `git branch --list 'feat*'` and buys a parser that never has to know
-/// which flags take values.
-const GIT_BRANCH_LIST_FLAGS: &[&str] = &[
-    "--show-current",
-    "-a",
-    "--all",
-    "-r",
-    "--remotes",
-    "-v",
-    "-vv",
-    "--verbose",
-    "--list",
-    "--no-color",
-];
+/// ripgrep flags that RUN a program: `--pre` per searched file,
+/// `--hostname-bin` for hyperlinks. `--pre-glob` only scopes `--pre`.
+const RG_EXEC_FLAGS: &[&str] = &["--pre", "--hostname-bin"];
 
-/// Flags under which `git remote` only prints the configured remotes. Bare
-/// `git remote` lists names. `show`/`update`/`prune` are subcommands, not
-/// flags, so they fail the check — `show` and `update` contact the remote,
-/// `prune` deletes refs.
-const GIT_REMOTE_LIST_FLAGS: &[&str] = &["-v", "--verbose"];
+/// `file -C` / `--compile` compiles the `-m` magic source into `<name>.mgc`.
+const FILE_COMPILE_SHORT: char = 'C';
+const FILE_COMPILE_LONG: &str = "--compile";
+const FILE_COMPILE_MIN_PREFIX: usize = 4;
 
-/// The diff-family option that writes the output to a FILE instead of stdout
-/// (`git log/show/diff/whatchanged --output=F`). Revision options are matched
-/// exactly by git — `--outp=F` is rejected — so no abbreviation check here.
-const GIT_OUTPUT_FLAG: &str = "--output";
-
-/// `git grep -O[cmd]` / `--open-files-in-pager[=cmd]` RUNS a command. grep
-/// parses with parse-options, which accepts any unique long prefix (`--open`),
-/// so the long form is matched by prefix down to this minimum (`--op`).
-const GIT_GREP_EXEC_LONG: &str = "--open-files-in-pager";
-const GIT_GREP_EXEC_MIN_PREFIX: usize = 4;
-const GIT_GREP_EXEC_SHORT: char = 'O';
-
-/// Does this argument turn a read-only git subcommand into a write or an exec?
-/// Fail-safe on shape: any short-option cluster holding `O` counts for grep,
-/// even where the `O` might be a value, because a false prompt is cheap.
-fn git_flag_writes(sub: &str, arg: &str) -> bool {
-    let name = arg.split_once('=').map_or(arg, |(n, _)| n);
-    if name == GIT_OUTPUT_FLAG {
-        return true;
-    }
-    if sub != "grep" {
-        return false;
-    }
-    if name.starts_with("--") {
-        return name.len() >= GIT_GREP_EXEC_MIN_PREFIX && GIT_GREP_EXEC_LONG.starts_with(name);
-    }
-    name.starts_with('-') && name.contains(GIT_GREP_EXEC_SHORT)
-}
-
-/// Is every remaining token one of `allowed`? No positional operands at all.
-fn only_flags<'a>(mut rest: impl Iterator<Item = &'a str>, allowed: &[&str]) -> bool {
-    rest.all(|t| allowed.contains(&t))
+/// The flag's name, without an `=value`.
+fn flag_name(arg: &str) -> &str {
+    arg.split_once('=').map_or(arg, |(n, _)| n)
 }
 
 /// `gh` nouns that have a genuine read-only surface (excludes `api` — an
@@ -286,14 +223,8 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         // `git` only for a fixed read-only subcommand set, plus the two
         // subcommands whose read and write modes share a name (`branch`,
         // `remote`) — those only when EVERY argument is a known listing flag.
-        "git" => match toks.next() {
-            Some("branch") => only_flags(toks, GIT_BRANCH_LIST_FLAGS),
-            Some("remote") => only_flags(toks, GIT_REMOTE_LIST_FLAGS),
-            Some(sub) => {
-                GIT_READONLY_SUBCMDS.contains(&sub) && !toks.any(|t| git_flag_writes(sub, t))
-            }
-            None => false,
-        },
+        // Flag and repo-driver checks live in `git.rs`.
+        "git" => git::is_readonly(toks),
         // `gh`/`glab` only for a fixed noun + read verb pair — `gh pr view`,
         // `gh issue list`, never `gh api` (arbitrary REST, can write) or the
         // auth/secret/config nouns that mix read and mutate under one name.
@@ -326,6 +257,19 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         // without any flag at all, so an allowlist of two shapes is the only
         // safe read of this head.
         "date" => toks.all(|t| t.starts_with('+') || DATE_READONLY_FLAGS.contains(&t)),
+        // `rg --pre=CMD` / `--hostname-bin=CMD` run a program; clap needs the
+        // full name, so an exact name match (with or without `=value`) holds.
+        "rg" => !toks.any(|t| RG_EXEC_FLAGS.contains(&flag_name(t))),
+        // `file -C` / `--compile` writes `<magic>.mgc`. Short options cluster
+        // (`-zC`); getopt_long takes a unique prefix (`--co`).
+        "file" => !toks.any(|t| {
+            let long = flag_name(t);
+            if long.starts_with("--") {
+                long.len() >= FILE_COMPILE_MIN_PREFIX && FILE_COMPILE_LONG.starts_with(long)
+            } else {
+                t.starts_with('-') && t.contains(FILE_COMPILE_SHORT)
+            }
+        }),
         other => READONLY_HEADS.contains(&other),
     }
 }
@@ -367,7 +311,7 @@ mod tests {
             "find . -name '*.rs'",
             "git status",
             "git log --oneline -10",
-            "git diff HEAD~1",
+            "git diff --stat HEAD~1", // a bare diff can run textconv: see git/tests.rs
             "git branch",
             "git branch --show-current",
             "git branch -a -vv",
