@@ -27,6 +27,7 @@ mod run;
 mod step;
 mod system_prompt;
 mod turn_track;
+mod unsettled;
 
 use conversation::*;
 pub(crate) use helpers::*;

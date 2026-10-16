@@ -359,6 +359,13 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         )
         .await?;
     runner.attach_live(live.clone());
+    // Before the first turn: tracks a killed predecessor never closed (#1909).
+    let unsettled = runner.report_unsettled_tracks(&mur_home);
+    if unsettled > 0 {
+        eprintln!(
+            "warning: {unsettled} unsettled turn track(s) from a previous run; see `mur open`"
+        );
+    }
     let dispatcher = Arc::new(build_dispatcher(
         &profile_arc,
         &runner,

@@ -85,6 +85,20 @@ impl TaskRunner {
             );
         }
         tracing::info!(turn, track = %track.path().display(), "turn track open");
+        if let (Some((session, _)), Some(name)) =
+            (self.session_cwd.as_ref(), track_dir_name(&track))
+        {
+            super::unsettled::mark_open(
+                session.home(),
+                &super::unsettled::OpenMarker {
+                    turn: turn.to_string(),
+                    track_name: name,
+                    track: track.path().to_path_buf(),
+                    project: track.project().to_path_buf(),
+                    opened_at: chrono::Utc::now(),
+                },
+            );
+        }
         self.turn_tracks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -179,6 +193,7 @@ impl TaskRunner {
         }
         let id = turn.to_string();
         let undo = self.undo_store();
+        let marker = self.marker_of(&open.track);
         let closed = tokio::task::spawn_blocking(move || {
             let mut l = crate::turn_ledger::TurnLedger::default();
             close_track(&id, open.track, undo.as_ref(), &mut l);
@@ -192,6 +207,24 @@ impl TaskRunner {
             }
             Err(e) => tracing::error!(turn, error = %e, "turn track close panicked"),
         }
+        if let Some((home, name)) = marker {
+            super::unsettled::mark_closed(&home, &name);
+        }
+    }
+
+    /// `(agent home, track dir name)` for this runner's open-track marker.
+    fn marker_of(&self, track: &TurnTrack) -> Option<(PathBuf, String)> {
+        let (session, _) = self.session_cwd.as_ref()?;
+        Some((session.home().to_path_buf(), track_dir_name(track)?))
+    }
+
+    /// Report tracks a previous process opened and never closed (#1909).
+    /// Call once at boot, before the first turn.
+    pub fn report_unsettled_tracks(&self, mur_home: &Path) -> usize {
+        let Some((session, _)) = self.session_cwd.as_ref() else {
+            return 0;
+        };
+        super::unsettled::report_at_boot(session.home(), mur_home, &self.agent_name)
     }
 
     /// End the turn synchronously: restore the cwd, promote, record,
@@ -206,7 +239,11 @@ impl TaskRunner {
         if let Some((session, _)) = self.session_cwd.as_ref() {
             session.leave_track(turn, open.original_cwd.clone());
         }
+        let marker = self.marker_of(&open.track);
         close_track(turn, open.track, self.undo_store().as_ref(), ledger);
+        if let Some((home, name)) = marker {
+            super::unsettled::mark_closed(&home, &name);
+        }
     }
 
     /// The per-agent undo store (spec §4.1 step 4), rooted at the session
@@ -288,6 +325,11 @@ fn sweep_turn_targets(turn: &str, project: &Path) {
     for (path, error) in report.failed {
         tracing::warn!(turn, path = %path.display(), %error, "orphan turn target dir not removed");
     }
+}
+
+/// The track's directory name — what `git worktree list` shows.
+fn track_dir_name(track: &TurnTrack) -> Option<String> {
+    Some(track.path().file_name()?.to_str()?.to_string())
 }
 
 /// `<project>/target/<subdir>/<track-name>` for this track.
@@ -404,10 +446,21 @@ mod tests {
         let track_dir = open.track.path().to_path_buf();
         assert_eq!(cwd.for_turn("t1"), track_dir, "turn cwd redirected");
         assert!(track_dir.starts_with(project.join(".worktrees")));
+        let markers = project.join(super::super::unsettled::OPEN_TRACKS_DIR);
+        assert_eq!(
+            std::fs::read_dir(&markers).unwrap().count(),
+            1,
+            "open track recorded"
+        );
 
         std::fs::write(track_dir.join("a.txt"), "edited").unwrap();
         let mut ledger = crate::turn_ledger::TurnLedger::default();
         runner.close_turn_track("t1", open, &mut ledger);
+        assert_eq!(
+            std::fs::read_dir(&markers).unwrap().count(),
+            0,
+            "closed track clears its marker"
+        );
 
         assert_eq!(
             std::fs::read_to_string(project.join("a.txt")).unwrap(),
