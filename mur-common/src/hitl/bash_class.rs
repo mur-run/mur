@@ -314,7 +314,9 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
             let verb = toks.next();
             verb.is_some_and(|v| KUBECTL_READONLY_VERBS.contains(&v))
                 && !toks.any(|t| {
-                    t.to_ascii_lowercase().contains("secret") || kubectl_selects_from_file(t)
+                    t.to_ascii_lowercase().contains("secret")
+                        || kubectl_selects_from_file(t)
+                        || kubectl_writes_profile(t)
                 })
         }
         "npm" => toks.next().is_some_and(|v| NPM_READONLY_VERBS.contains(&v)),
@@ -343,14 +345,22 @@ fn kubectl_selects_from_file(tok: &str) -> bool {
         return long == "filename" || long == "kustomize";
     }
     match name.strip_prefix('-') {
-        // `-fFILE` / `-kDIR` (attached value, may contain non-letters) or a
-        // letter cluster ending in the flag (`-Rf`).
-        Some(short) if !short.is_empty() => {
-            short.starts_with(['f', 'k'])
-                || (short.chars().all(|c| c.is_ascii_alphabetic()) && short.contains(['f', 'k']))
-        }
+        // pflag reads a short cluster left to right until it meets a flag
+        // that takes a value, so `-fFILE`, `-Rf`, and `-Rf./x` all select a
+        // manifest. Any `f`/`k` in the cluster is refused: a value attached
+        // to an earlier flag that happens to contain one only costs a prompt.
+        Some(short) if !short.is_empty() => short.contains(['f', 'k']),
         _ => false,
     }
+}
+
+/// True when a `kubectl` argument enables profiling (`--profile`,
+/// `--profile-output`, with or without `=VALUE`). `--profile-output` creates
+/// or truncates a file, and `--profile` alone writes the default
+/// `profile.pprof`, so neither is a read.
+fn kubectl_writes_profile(tok: &str) -> bool {
+    let name = tok.split('=').next().unwrap_or(tok);
+    name == "--profile" || name == "--profile-output"
 }
 
 /// True when a `pip` argument is `--log` (or an unambiguous prefix optparse
@@ -431,6 +441,15 @@ mod tests {
             "kubectl get -kdir",
             "kubectl get --kustomize overlay/",
             "kubectl get --kustomize=overlay/",
+            // pflag splits `-Rf./x` into `-R` + `-f ./x`: a cluster with an
+            // attached value still selects from a manifest.
+            "kubectl get -Rf./resource.yaml -o yaml",
+            "kubectl describe -Rf./resource.yaml",
+            "kubectl get -Rk./overlay",
+            // `--profile-output` creates or truncates a file.
+            "kubectl version --client --profile=cpu --profile-output=./out.prof",
+            "kubectl get pods --profile cpu --profile-output ./out.prof",
+            "kubectl version --profile=cpu",
             // `pip --log` writes a file.
             "pip list --log ./pip-session.log",
             "pip list --log=./pip-session.log",
