@@ -72,23 +72,28 @@ impl TaskRunner {
         }
         // Bound before `turn` is shadowed by the turn counter below.
         let session_dir = self.working_dir(turn);
+        // Built here but appended LAST: the path carries a per-turn directory
+        // (`.worktrees/turn-<uuid>`), and the prompt cache matches a byte
+        // prefix, so anything placed after it misses on every new turn.
+        let mut cwd_block = String::new();
         if let Some(dir) = &session_dir {
-            base.push_str(&WORKING_DIR_RULE.replace("{path}", &dir.to_string_lossy()));
+            cwd_block.push_str(&WORKING_DIR_RULE.replace("{path}", &dir.to_string_lossy()));
             // The caller asked for a different directory and was refused: say
             // so here, or the model goes looking for the project on its own.
             if let Some(note) = turn.and_then(|t| self.refused_cwd_hint(t)) {
-                base.push('\n');
-                base.push_str(&note);
-                base.push_str(
+                cwd_block.push('\n');
+                cwd_block.push_str(&note);
+                cwd_block.push_str(
                     "\nDo not search for the project elsewhere; tell the user this and relay the command.",
                 );
             }
             // Names the pinned block right after the path it describes. The
             // file contents themselves travel as the first user message
             // ([`TaskRunner::pinned_and_prior`]), never in the system prompt.
-            base.push_str(PROJECT_INSTRUCTIONS_RULE);
+            cwd_block.push_str(PROJECT_INSTRUCTIONS_RULE);
         }
         let Some(skills) = &self.skills else {
+            base.push_str(&cwd_block);
             return (base, vec![]);
         };
         // Pick up skills and memories that another process changed on disk
@@ -208,6 +213,7 @@ impl TaskRunner {
             combined.push('\n');
             combined.push_str(&layer3);
         }
+        combined.push_str(&cwd_block);
         (combined, fired)
     }
 
