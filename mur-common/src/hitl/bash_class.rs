@@ -316,7 +316,7 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
                 && !toks.any(|t| {
                     t.to_ascii_lowercase().contains("secret")
                         || kubectl_selects_from_file(t)
-                        || kubectl_writes_profile(t)
+                        || kubectl_unsafe_long_flag(t)
                 })
         }
         "npm" => toks.next().is_some_and(|v| NPM_READONLY_VERBS.contains(&v)),
@@ -354,14 +354,24 @@ fn kubectl_selects_from_file(tok: &str) -> bool {
     }
 }
 
-/// True when a `kubectl` argument enables profiling (`--profile`,
-/// `--profile-output`, with or without `=VALUE`). `--profile-output` creates
-/// or truncates a file, and `--profile` alone writes the default
-/// `profile.pprof`, so neither is a read.
-fn kubectl_writes_profile(tok: &str) -> bool {
+/// True when a `kubectl` argument is one of [`KUBECTL_UNSAFE_LONG_FLAGS`].
+fn kubectl_unsafe_long_flag(tok: &str) -> bool {
     let name = tok.split('=').next().unwrap_or(tok);
-    name == "--profile" || name == "--profile-output"
+    KUBECTL_UNSAFE_LONG_FLAGS.contains(&name)
 }
+
+/// Long flags refused in the kubectl read lane, matched bare or `=VALUE`.
+/// `--raw` fetches an arbitrary API path that client-go percent-decodes
+/// (`%73ecrets`), defeating the "secret" token check; the rest write to a
+/// caller-chosen path (`--profile` alone writes `profile.pprof`).
+const KUBECTL_UNSAFE_LONG_FLAGS: &[&str] = &[
+    "--raw",
+    "--profile",
+    "--profile-output",
+    "--cache-dir",
+    "--log-file",
+    "--log-dir",
+];
 
 /// True when a `pip` argument is `--log` (or an unambiguous prefix optparse
 /// would expand to it, e.g. `--lo` for `pip show`), with or without `=PATH`.
@@ -450,6 +460,15 @@ mod tests {
             "kubectl version --client --profile=cpu --profile-output=./out.prof",
             "kubectl get pods --profile cpu --profile-output ./out.prof",
             "kubectl version --profile=cpu",
+            // `--raw` takes a URL whose path client-go percent-decodes, so
+            // `%73ecrets` reaches the Secret API with no "secret" token.
+            "kubectl get --raw=/api/v1/namespaces/default/%73ecrets",
+            "kubectl get --raw /api/v1/namespaces/default/%73ecrets/x",
+            // Flags that write to a caller-chosen path.
+            "kubectl get pods --cache-dir ./cache",
+            "kubectl get pods --cache-dir=./cache",
+            "kubectl get pods --log-file=./k.log",
+            "kubectl get pods --log-dir ./logs",
             // `pip --log` writes a file.
             "pip list --log ./pip-session.log",
             "pip list --log=./pip-session.log",
