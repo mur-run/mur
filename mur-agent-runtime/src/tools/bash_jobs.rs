@@ -271,6 +271,12 @@ impl JobTable {
 
     /// SIGTERM the group, wait `KILL_GRACE`, SIGKILL it, then report.
     pub async fn kill(&self, job_id: &str) -> Result<Poll, JobError> {
+        self.kill_within(job_id, KILL_GRACE).await
+    }
+
+    /// `kill` with a caller-chosen grace: SIGTERM, wait `grace`, SIGKILL,
+    /// wait `grace` for the reap. Worst case is `2 x grace`.
+    async fn kill_within(&self, job_id: &str, grace: Duration) -> Result<Poll, JobError> {
         let (pid, mut done, killed_by) = {
             let jobs = self.lock();
             let j = jobs
@@ -281,13 +287,13 @@ impl JobTable {
         if done.borrow().is_none() {
             *killed_by.lock().unwrap_or_else(|e| e.into_inner()) = Some(FIRST_SIGNAL);
             signal_group(pid, Signal::Term);
-            if tokio::time::timeout(KILL_GRACE, done.wait_for(|e| e.is_some()))
+            if tokio::time::timeout(grace, done.wait_for(|e| e.is_some()))
                 .await
                 .is_err()
             {
                 *killed_by.lock().unwrap_or_else(|e| e.into_inner()) = Some(SECOND_SIGNAL);
                 signal_group(pid, Signal::Kill);
-                let _ = tokio::time::timeout(KILL_GRACE, done.wait_for(|e| e.is_some())).await;
+                let _ = tokio::time::timeout(grace, done.wait_for(|e| e.is_some())).await;
             }
         }
         self.take_snapshot(job_id)
@@ -302,25 +308,30 @@ impl JobTable {
                 .map(|(id, _)| id.clone())
                 .collect()
         };
-        let mut n = 0;
-        for id in ids {
-            if self.kill(&id).await.is_ok() {
-                n += 1;
-            }
-        }
-        n
+        self.kill_each(ids, KILL_GRACE).await
     }
 
-    /// Runtime shutdown: every running job, whoever started it.
+    /// Every running job, whoever started it.
     pub async fn kill_all(&self) -> usize {
-        let ids = self.running_ids();
-        let mut n = 0;
-        for id in ids {
-            if self.kill(&id).await.is_ok() {
-                n += 1;
-            }
-        }
-        n
+        self.kill_all_within(KILL_GRACE).await
+    }
+
+    /// Runtime shutdown: `kill_all` with a shorter grace, so the last step
+    /// of a stop fits the service manager's budget (#1909). Bounded by
+    /// `2 x grace` however many jobs ignore SIGTERM.
+    pub async fn kill_all_within(&self, grace: Duration) -> usize {
+        self.kill_each(self.running_ids(), grace).await
+    }
+
+    /// Kill the jobs concurrently: each kill may sit out its full grace on
+    /// a SIGTERM-ignoring group, and serial waits would stack those past a
+    /// shutdown's stop budget (#1909).
+    async fn kill_each(&self, ids: Vec<String>, grace: Duration) -> usize {
+        futures::future::join_all(ids.iter().map(|id| self.kill_within(id, grace)))
+            .await
+            .into_iter()
+            .filter(|r| r.is_ok())
+            .count()
     }
 
     fn take_snapshot(&self, job_id: &str) -> Result<Poll, JobError> {

@@ -133,6 +133,59 @@ impl TaskRunner {
         }
     }
 
+    /// Shutdown drain: wait up to `wait` for in-flight turns to finish on
+    /// their own; if any are still running, cancel them and wait up to
+    /// `grace` more. A cancelled turn still runs `sweep_turn_track`, so its
+    /// track is promoted or kept instead of being dropped with the process
+    /// (#1909). `wait + grace` must fit the service manager's stop budget.
+    ///
+    /// Everything after `wait` shares one deadline: every turn is signalled
+    /// first, then the turns' bash jobs are killed concurrently, bounded by
+    /// the same `grace`. `cancel()` kills a task's jobs one by one *before*
+    /// signalling it, so N SIGTERM-ignoring jobs would push the signal
+    /// N x `KILL_GRACE` past the budget — exactly the leak this exists to
+    /// close. Jobs still alive at the deadline are `kill_all_jobs`'s.
+    pub async fn drain(
+        &self,
+        wait: std::time::Duration,
+        grace: std::time::Duration,
+    ) -> DrainOutcome {
+        self.begin_drain();
+        if self.await_idle(wait).await {
+            return DrainOutcome::Idle;
+        }
+        let deadline = tokio::time::Instant::now() + grace;
+        let ids = self.signal_inflight();
+        let kills = futures::future::join_all(ids.iter().map(|id| self.kill_jobs_of(id)));
+        let (_, idle) = tokio::join!(
+            tokio::time::timeout_at(deadline, kills),
+            self.await_idle(deadline.saturating_duration_since(tokio::time::Instant::now())),
+        );
+        if idle {
+            DrainOutcome::Cancelled(ids.len())
+        } else {
+            DrainOutcome::Abandoned(ids.len())
+        }
+    }
+
+    /// Fire the cancel signal of every in-flight turn at once, without
+    /// waiting on their jobs. Returns the signalled task ids.
+    fn signal_inflight(&self) -> Vec<String> {
+        let senders: Vec<(String, tokio::sync::oneshot::Sender<()>)> = self
+            .cancel_signals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .collect();
+        senders
+            .into_iter()
+            .map(|(id, tx)| {
+                let _ = tx.send(());
+                id
+            })
+            .collect()
+    }
+
     pub fn with_tools(mut self, tools: Vec<Arc<dyn crate::tools::ToolExecutor>>) -> Self {
         self.tools = tools;
         self
@@ -171,10 +224,11 @@ impl TaskRunner {
         self
     }
 
-    /// Runtime shutdown: every running bash job, whoever started it.
-    pub async fn kill_all_jobs(&self) -> usize {
+    /// Runtime shutdown: every running bash job, whoever started it, each
+    /// given `grace` after SIGTERM before SIGKILL. Bounded by `2 x grace`.
+    pub async fn kill_all_jobs(&self, grace: std::time::Duration) -> usize {
         match &self.bash_jobs {
-            Some(t) => t.kill_all().await,
+            Some(t) => t.kill_all_within(grace).await,
             None => 0,
         }
     }
@@ -574,4 +628,15 @@ pub(super) struct TurnSettings {
     pub global_limits: mur_common::limits::Limits,
     pub agent_limits: Option<mur_common::limits::Limits>,
     pub autonomy: mur_common::hitl::Autonomy,
+}
+
+/// How a shutdown [`TaskRunner::drain`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainOutcome {
+    /// Every turn finished on its own.
+    Idle,
+    /// N turns were cancelled and all of them settled within the grace.
+    Cancelled(usize),
+    /// N turns were cancelled but some were still running when grace ran out.
+    Abandoned(usize),
 }

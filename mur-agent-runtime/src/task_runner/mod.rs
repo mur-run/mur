@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 mod agentic_loop;
 mod builder;
+pub use builder::DrainOutcome;
 mod conversation;
 mod helpers;
 mod run;
