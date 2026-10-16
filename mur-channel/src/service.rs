@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -8,6 +8,8 @@ use mur_common::channel::{
     EventKind, Goal, Participant, ParticipantRole,
 };
 
+use crate::anchor;
+use crate::head_io::remove_head;
 use crate::index::{ChannelIndex, ChannelRow};
 use crate::store::{ChannelStore, SealInput};
 use anchored::HeadSigner;
@@ -90,6 +92,9 @@ pub struct ChannelService {
     /// Run after every event line this service writes. `None` (the default)
     /// leaves behaviour exactly as before sealing existed.
     seal: Option<SharedSealHook>,
+    /// Where `channel-heads/` lives (#1770): `delete_channel` removes a
+    /// channel's head and dirty marker from it.
+    mur_home: PathBuf,
 }
 
 impl ChannelService {
@@ -118,6 +123,7 @@ impl ChannelService {
             store,
             index,
             seal: None,
+            mur_home: mur_home.to_path_buf(),
         })
     }
 
@@ -507,10 +513,23 @@ impl ChannelService {
         Ok(())
     }
 
-    /// Delete the channel entirely (store dir + read-model row). Idempotent.
+    /// Delete the channel entirely (store dir + read-model row + head).
+    /// Idempotent.
+    ///
+    /// The head and its dirty marker go LAST (spec 7.4): a crash after the
+    /// directory is gone leaves an orphan head (`LogMissing`, visible and
+    /// benign), never a log with no head (`NoHead`). The id is validated for a
+    /// head path before anything is deleted, so a hostile id fails without
+    /// touching the store.
+    ///
+    /// Like `append_and_anchor`, this writes `channel-heads/`, so it belongs
+    /// outside the agent sandbox, which deliberately has no grant there.
     pub fn delete_channel(&self, channel_id: &str) -> Result<()> {
+        anchor::dirty_path(&self.mur_home, channel_id)?;
         self.store.delete(channel_id)?;
         self.index.remove(channel_id)?;
+        remove_head(&anchor::heads_dir(&self.mur_home), channel_id)?;
+        anchor::clear_dirty(&self.mur_home, channel_id)?;
         Ok(())
     }
 

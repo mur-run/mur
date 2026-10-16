@@ -95,6 +95,29 @@ fn ensure_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove a channel's head and any temp a crashed write left beside it.
+/// Idempotent: a missing head (or a missing `heads_dir`) is success, because
+/// deleting a channel that was never sealed must not fail. The id is checked
+/// before anything is touched.
+///
+/// The dirty marker is not handled here; it is `anchor`'s file
+/// (`anchor::clear_dirty`).
+pub fn remove_head(heads_dir: &Path, channel_id: &str) -> Result<()> {
+    let path = head_path(heads_dir, channel_id)?;
+    let mut removed = false;
+    for p in [&path, &tmp_path(&path)] {
+        match fs::remove_file(p) {
+            Ok(()) => removed = true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("remove head {}", p.display())),
+        }
+    }
+    if removed {
+        sync_dir(heads_dir)?;
+    }
+    Ok(())
+}
+
 /// fsync a directory so a rename or new entry in it is durable. Windows cannot
 /// open a directory as a file; NTFS journals the rename, so this is a no-op
 /// there rather than an error.
