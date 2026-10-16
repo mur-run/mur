@@ -84,7 +84,12 @@ impl TaskRunner {
                 track.path().to_path_buf(),
             );
         }
-        tracing::info!(turn, track = %track.path().display(), "turn track open");
+        tracing::info!(
+            turn,
+            track_name = %track_dir_name(&track).unwrap_or_default(),
+            track = %track.path().display(),
+            "turn track open"
+        );
         if let (Some((session, _)), Some(name)) =
             (self.session_cwd.as_ref(), track_dir_name(&track))
         {
@@ -235,15 +240,16 @@ impl TaskRunner {
         turn: &str,
         open: OpenTrack,
         ledger: &mut crate::turn_ledger::TurnLedger,
-    ) {
+    ) -> TrackClose {
         if let Some((session, _)) = self.session_cwd.as_ref() {
             session.leave_track(turn, open.original_cwd.clone());
         }
         let marker = self.marker_of(&open.track);
-        close_track(turn, open.track, self.undo_store().as_ref(), ledger);
+        let outcome = close_track(turn, open.track, self.undo_store().as_ref(), ledger);
         if let Some((home, name)) = marker {
             super::unsettled::mark_closed(&home, &name);
         }
+        outcome
     }
 
     /// The per-agent undo store (spec §4.1 step 4), rooted at the session
@@ -269,7 +275,9 @@ fn close_track(
     track: TurnTrack,
     undo: Option<&UndoStore>,
     ledger: &mut crate::turn_ledger::TurnLedger,
-) {
+) -> TrackClose {
+    let name = track_dir_name(&track).unwrap_or_default();
+    let path = track.path().display().to_string();
     if let Some(store) = undo {
         match track.diff_files() {
             Ok(files) => {
@@ -280,8 +288,9 @@ fn close_track(
             Err(e) => tracing::warn!(turn, error = %e, "undo snapshot skipped: diff failed"),
         }
     }
-    match track.promote() {
+    let (outcome, files) = match track.promote() {
         Ok(files) => {
+            let count = files.len();
             ledger.files_changed = Some(
                 files
                     .iter()
@@ -291,17 +300,56 @@ fn close_track(
             let turn_dir = turn_target_dir_of(&track);
             if let Err(e) = track.destroy() {
                 tracing::warn!(turn, error = %e, "turn track promoted but not destroyed");
-            } else if let Some(dir) = turn_dir {
-                remove_turn_target_in_background(turn, dir);
+                (TrackClose::PromotedNotDestroyed, count)
+            } else {
+                if let Some(dir) = turn_dir {
+                    remove_turn_target_in_background(turn, dir);
+                }
+                (TrackClose::Promoted, count)
             }
         }
         Err(e) => {
             tracing::error!(turn, track = %track.path().display(), error = %e, "promote failed; track kept for review");
             ledger.track_kept = Some(track.path().to_string_lossy().into_owned());
+            (TrackClose::Kept, 0)
+        }
+    };
+    // One line per close, success included: a `turn track open` with no
+    // matching close means the runtime died before closing (#1909).
+    tracing::info!(
+        turn,
+        track_name = %name,
+        track = %path,
+        outcome = outcome.as_str(),
+        files,
+        "turn track closed"
+    );
+    outcome
+}
+
+/// How a turn track was closed; `as_str` is the `outcome` log field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TrackClose {
+    /// Promoted and the worktree removed.
+    Promoted,
+    /// Promoted, but the worktree is still on disk.
+    PromotedNotDestroyed,
+    /// Promote failed; the worktree is kept for review.
+    Kept,
+}
+
+impl TrackClose {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Promoted => "promoted",
+            Self::PromotedNotDestroyed => "promoted_not_destroyed",
+            Self::Kept => "kept",
         }
     }
 }
 
+/// The track's directory name — what `git worktree list` shows, so an
+/// operator can grep the log for a leftover worktree by its dir name.
 /// `turn_track.warm_build_cache.turn_target_subdir`, validated.
 fn turn_target_subdir() -> String {
     mur_common::config::Config::load_or_default(&mur_common::trust::mur_home().join("config.yaml"))
@@ -455,7 +503,8 @@ mod tests {
 
         std::fs::write(track_dir.join("a.txt"), "edited").unwrap();
         let mut ledger = crate::turn_ledger::TurnLedger::default();
-        runner.close_turn_track("t1", open, &mut ledger);
+        let outcome = runner.close_turn_track("t1", open, &mut ledger);
+        assert_eq!(outcome, TrackClose::Promoted);
         assert_eq!(
             std::fs::read_dir(&markers).unwrap().count(),
             0,
@@ -523,7 +572,8 @@ mod tests {
         let track_dir = open.track.path().to_path_buf();
         std::fs::write(track_dir.join("a.txt"), "edited").unwrap();
         let mut ledger = crate::turn_ledger::TurnLedger::default();
-        runner.close_turn_track("t1", open, &mut ledger);
+        let outcome = runner.close_turn_track("t1", open, &mut ledger);
+        assert_eq!(outcome, TrackClose::Promoted);
 
         assert_eq!(
             std::fs::read_to_string(project.join("a.txt")).unwrap(),
@@ -540,6 +590,99 @@ mod tests {
             project.join(mur_track::undo::EDITS_DIR).is_file(),
             "the squatter is untouched: no store, no manifest"
         );
+    }
+
+    /// #1909 asks for the success-path close line itself, not just the enum:
+    /// exactly one `turn track closed` event per close, carrying the turn,
+    /// the track name, the outcome label and the promoted file count.
+    #[test]
+    fn successful_close_emits_one_close_log_line() {
+        use std::sync::{Arc as SArc, Mutex};
+        #[derive(Clone, Default)]
+        struct Buf(SArc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        // `k=v` or `k="v"`: fmt quotes `&str` fields but not `%Display` ones.
+        fn has(line: &str, k: &str, v: &str) -> bool {
+            line.contains(&format!("{k}={v}")) || line.contains(&format!("{k}=\"{v}\""))
+        }
+
+        let td = tempfile::tempdir().unwrap();
+        let project = mur_track::turn::canonicalize(td.path()).unwrap();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&project)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        git(&["init", "-q"]);
+        std::fs::write(project.join("a.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+
+        let cwd = crate::tools::fs_policy::SessionCwd::new(project.clone());
+        let runner = TaskRunner::new_stub_echo()
+            .with_tools(vec![Arc::new(
+                crate::tools::write_file::WriteFileTool::new_for_test(
+                    cwd.clone(),
+                    mur_common::agent::FilesystemEntitlement::default(),
+                ),
+            )])
+            .with_session_cwd(cwd.clone(), vec![project.to_string_lossy().into_owned()]);
+        cwd.begin_turn("t1", None, Some(project.clone()));
+        let open = runner.open_turn_track("t1").expect("track at a repo root");
+        let name = track_dir_name(&open.track).expect("track dir name");
+        std::fs::write(open.track.path().join("a.txt"), "edited").unwrap();
+
+        let buf = Buf::default();
+        let w = buf.clone();
+        let sub = tracing_subscriber::fmt()
+            .with_writer(move || w.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .finish();
+        let mut ledger = crate::turn_ledger::TurnLedger::default();
+        let outcome = tracing::subscriber::with_default(sub, || {
+            runner.close_turn_track("t1", open, &mut ledger)
+        });
+        assert_eq!(outcome, TrackClose::Promoted);
+
+        let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let closes: Vec<&str> = log
+            .lines()
+            .filter(|l| l.contains("turn track closed"))
+            .collect();
+        assert_eq!(closes.len(), 1, "exactly one close line; log: {log}");
+        let line = closes[0];
+        assert!(has(line, "turn", "t1"), "{line}");
+        assert!(has(line, "track_name", &name), "{line}");
+        assert!(
+            has(line, "outcome", TrackClose::Promoted.as_str()),
+            "{line}"
+        );
+        assert!(has(line, "files", "1"), "{line}");
+    }
+
+    /// The close log's `outcome` field is grepped by operators; the labels
+    /// are a contract, not prose.
+    #[test]
+    fn close_outcome_labels_are_stable() {
+        assert_eq!(TrackClose::Promoted.as_str(), "promoted");
+        assert_eq!(
+            TrackClose::PromotedNotDestroyed.as_str(),
+            "promoted_not_destroyed"
+        );
+        assert_eq!(TrackClose::Kept.as_str(), "kept");
     }
 
     #[test]
