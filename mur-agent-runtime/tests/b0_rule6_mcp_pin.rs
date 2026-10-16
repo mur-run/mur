@@ -237,11 +237,10 @@ fn pin_is_checked_against_the_binary_the_seal_first_path_execs() {
     let name = "mur-rule6-probe";
     std::fs::write(seal_dir.join(name), b"seal copy\n").unwrap();
     std::fs::write(inherited.path().join(name), b"inherited copy\n").unwrap();
-    // SAFETY: nextest runs each test in its own process.
-    unsafe {
-        std::env::set_var("HOME", home.path());
-        std::env::set_var("PATH", inherited.path());
-    }
+    let _env = mur_common::test_env::EnvGuard::set([
+        ("HOME", home.path().as_os_str()),
+        ("PATH", inherited.path().as_os_str()),
+    ]);
     let mut profile = profile_with_pin(
         std::path::Path::new(name),
         "probe",
