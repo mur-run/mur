@@ -302,25 +302,23 @@ impl JobTable {
                 .map(|(id, _)| id.clone())
                 .collect()
         };
-        let mut n = 0;
-        for id in ids {
-            if self.kill(&id).await.is_ok() {
-                n += 1;
-            }
-        }
-        n
+        self.kill_each(ids).await
     }
 
     /// Runtime shutdown: every running job, whoever started it.
     pub async fn kill_all(&self) -> usize {
-        let ids = self.running_ids();
-        let mut n = 0;
-        for id in ids {
-            if self.kill(&id).await.is_ok() {
-                n += 1;
-            }
-        }
-        n
+        self.kill_each(self.running_ids()).await
+    }
+
+    /// Kill the jobs concurrently: each `kill` may sit out a full
+    /// `KILL_GRACE` on a SIGTERM-ignoring group, and serial waits would
+    /// stack those past a shutdown's stop budget (#1909).
+    async fn kill_each(&self, ids: Vec<String>) -> usize {
+        futures::future::join_all(ids.iter().map(|id| self.kill(id)))
+            .await
+            .into_iter()
+            .filter(|r| r.is_ok())
+            .count()
     }
 
     fn take_snapshot(&self, job_id: &str) -> Result<Poll, JobError> {

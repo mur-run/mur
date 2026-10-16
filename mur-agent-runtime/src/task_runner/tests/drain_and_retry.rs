@@ -322,3 +322,81 @@ async fn drain_idle_runner_cancels_nothing() {
         .await;
     assert_eq!(outcome, DrainOutcome::Idle);
 }
+
+/// Review P1 on #1911: the cancel must land inside the drain budget even
+/// when the turn owns bash jobs that ignore SIGTERM. Serial per-job kills
+/// before the signal took 3 x `KILL_GRACE` (~6s) on top of `wait + grace`.
+#[cfg(unix)]
+#[tokio::test]
+async fn drain_stays_within_budget_when_jobs_ignore_sigterm() {
+    use crate::tools::bash_jobs::{CURRENT_TASK_ID, JobTable, SpawnSpec, pid_alive};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let jobs = JobTable::new();
+    let runner = Arc::new(TaskRunner::new_stub_slow().with_bash_jobs(jobs.clone()));
+    let task = "task-stubborn";
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let spec = TaskSpec {
+        cwd: None,
+        input: mur_common::a2a::Message {
+            role: "user".into(),
+            parts: vec![MessagePart::Text {
+                text: "slow".into(),
+            }],
+        },
+        context_task_id: None,
+        task_id: Some(task.to_string()),
+        intent: RequestIntent::Interactive,
+        output_artifact_path: None,
+        active_fleet: None,
+        active_team: None,
+        attended: true,
+        deadline_secs: None,
+    };
+    let r2 = runner.clone();
+    let handle = tokio::spawn(async move { r2.run_sync_streaming(spec, tx, None).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mut pids = Vec::new();
+    for _ in 0..3 {
+        let id = CURRENT_TASK_ID
+            .scope(task.to_string(), async {
+                jobs.spawn(SpawnSpec {
+                    command: "trap '' TERM; sleep 30",
+                    cwd: dir.path(),
+                    env: vec![("PATH".into(), std::env::var("PATH").unwrap_or_default())],
+                    spool_dir: dir.path(),
+                    vault: None,
+                })
+            })
+            .await
+            .unwrap();
+        pids.push(jobs.pid(&id).unwrap());
+    }
+    // Let the shells install the trap before anyone signals them.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let (wait, grace) = (Duration::from_millis(100), Duration::from_millis(500));
+    let t0 = Instant::now();
+    let outcome = runner.drain(wait, grace).await;
+    let took = t0.elapsed();
+    assert!(
+        took < wait + grace + Duration::from_millis(500),
+        "drain took {took:?}, budget {:?}",
+        wait + grace
+    );
+    assert_eq!(outcome, DrainOutcome::Cancelled(1));
+    let done = tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("cancelled turn must finish")
+        .expect("join");
+    assert!(matches!(done, TaskOutcome::Cancelled(_)), "got {done:?}");
+
+    // What the supervisor does next: the stubborn groups end with SIGKILL.
+    runner.kill_all_jobs().await;
+    for pid in pids {
+        assert!(!pid_alive(pid), "job {pid} survived kill_all_jobs");
+    }
+}
