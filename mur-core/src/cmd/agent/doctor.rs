@@ -144,6 +144,8 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
     let agents_dir = mur_home.join("agents");
 
     let mut rows: Vec<AgentRow> = Vec::new();
+    // Running PID per agent, for matching `mcp_status.json` to this boot.
+    let mut pids: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     let warn_size_mb = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
         .scratch
         .warn_size_mb;
@@ -175,6 +177,7 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
             // Per-agent: the baseline is the binary THIS agent's symlink
             // resolves to, not the runtime next to `mur`. Memoized in `stale`.
             let disk_sha = stale::on_disk_sha_for(&agent_name);
+            pids.insert(agent_name.clone(), lock.pid);
             rows.push(build_row(&agent_name, &lock, &disk_sha, drift));
         }
     }
@@ -245,6 +248,12 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
                     "stale":    r.stale,
                     "profile_drift": r.profile_drift,
                     "reload": reload(&r.name),
+                    "mcp_failed": pids.get(&r.name).map(|pid| {
+                        super::doctor_mcp::recorded_failures(
+                            &mur_home.join("agents").join(&r.name),
+                            *pid,
+                        )
+                    }).unwrap_or_default(),
                     "lock_sha": r.lock_sha,
                     "disk_sha": r.disk_sha,
                     "dead_grants": dead(&r.name)
@@ -273,6 +282,11 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
         // stale counts, and this is a host-level fact about an agent that may
         // not be running at all. Reshaping the array to carry it would break
         // that consumer for no gain.
+        // Predicted MCP exec denials, for every agent with a loadable
+        // profile — running or not: the point is to catch it before boot.
+        for line in super::doctor_mcp::predictions(&mur_home) {
+            println!("{line}");
+        }
         if !concierge_gaps.is_empty() {
             println!(
                 "{}: cannot author MUR objects — no write grant covers:",
@@ -351,6 +365,15 @@ pub fn cmd_doctor(json: bool, fix: bool) -> Result<()> {
             }
             for line in floor_notes(&r.name) {
                 println!("{line}");
+            }
+            if let Some(pid) = pids.get(&r.name) {
+                for line in super::doctor_mcp::recorded_lines(
+                    &r.name,
+                    &mur_home.join("agents").join(&r.name),
+                    *pid,
+                ) {
+                    println!("{line}");
+                }
             }
             // #1814: what the bash ceiling stopped for a human, and how often.
             let over = super::doctor_bash_ceiling::scan(

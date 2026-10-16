@@ -70,20 +70,26 @@ pub fn spawn_search_dirs(home: &Path) -> Vec<PathBuf> {
 /// `PATH` for an MCP server child (and for resolving its command, so B0
 /// admission hashes the binary that is exec'd).
 ///
-/// Under an allowlist (`Allowlist` / `Strict`) the seal's search dirs come
-/// first, then the augmented inherited `PATH` minus duplicates — so a bare
-/// name resolves to the binary the seal granted, while tools that live only
-/// in the inherited `PATH` stay reachable. `Any` / `None` have no allowlist to
-/// agree with, so they keep the augmented inherited `PATH` unchanged.
+/// Whenever the seal fences exec (`Allowlist` / `None` / `Strict` — every
+/// mode except `Any`) the seal's search dirs come first, then the augmented
+/// inherited `PATH` minus duplicates — so a bare name resolves to the binary
+/// the seal granted, while tools that live only in the inherited `PATH` stay
+/// reachable. Only `Any` emits no exec clauses, so only `Any` keeps the
+/// augmented inherited `PATH` unchanged.
+///
+/// `None` used to share `Any`'s arm on the theory that it had "no allowlist
+/// to agree with". It does: the macOS seal denies exec for `None` exactly as
+/// for `Allowlist` and still re-allows every resolved `spawn.allowed` entry,
+/// so a shim dir first on the inherited `PATH` made `node` resolve to a binary
+/// the seal refused — `tools/list` failed with EPERM and the server's tools
+/// silently vanished.
 pub fn mcp_child_path(mode: SpawnMode) -> OsString {
     let inherited = mur_common::exec::augmented_path_var();
-    match mode {
-        SpawnMode::Allowlist | SpawnMode::Strict => {
-            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-            seal_first_path(&spawn_search_dirs(&home), &inherited)
-        }
-        SpawnMode::Any | SpawnMode::None => inherited,
+    if mode == SpawnMode::Any {
+        return inherited;
     }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    seal_first_path(&spawn_search_dirs(&home), &inherited)
 }
 
 /// `seal_dirs` that exist, in order, then every `inherited` entry not already
@@ -150,6 +156,22 @@ mod tests {
         let inherited = OsString::from("/usr/bin");
         let path = seal_first_path(&[PathBuf::from("/definitely/not/here")], &inherited);
         assert_eq!(path, inherited);
+    }
+
+    /// Regression: `None` seals exec like `Allowlist`, so its child `PATH`
+    /// must lead with the seal's dirs too.
+    #[test]
+    fn every_exec_fencing_mode_puts_seal_dirs_first() {
+        let home = dirs::home_dir().unwrap();
+        let first_seal = spawn_search_dirs(&home)
+            .into_iter()
+            .find(|d| d.is_dir())
+            .expect("at least one seal search dir exists");
+        for mode in [SpawnMode::Allowlist, SpawnMode::None, SpawnMode::Strict] {
+            let path = mcp_child_path(mode);
+            let lead = std::env::split_paths(&path).next();
+            assert_eq!(lead.as_deref(), Some(first_seal.as_path()), "{mode:?}");
+        }
     }
 
     #[test]

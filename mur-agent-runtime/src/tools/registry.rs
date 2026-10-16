@@ -22,6 +22,10 @@ pub struct McpBackend {
     pub pool: Arc<McpPool>,
     /// `None` in contexts with no session (tests, headless probes).
     pub session_cwd: Option<SessionCwd>,
+    /// Where to record each server's discovery outcome
+    /// (`mur_common::agent::MCP_STATUS_FILE`) so `mur agent doctor` can report
+    /// a server whose tools never loaded. `None` records nothing.
+    pub status_file: Option<std::path::PathBuf>,
 }
 
 impl McpBackend {
@@ -31,6 +35,7 @@ impl McpBackend {
         Self {
             pool,
             session_cwd: None,
+            status_file: None,
         }
     }
 }
@@ -52,7 +57,11 @@ pub async fn build_tools(
     rules: &[ToolRule],
     mcp: McpBackend,
 ) -> (Vec<ToolDef>, HashMap<String, Arc<dyn ToolExecutor>>) {
-    let McpBackend { pool, session_cwd } = mcp;
+    let McpBackend {
+        pool,
+        session_cwd,
+        status_file,
+    } = mcp;
     let mut defs: Vec<ToolDef> = Vec::new();
     let mut map: HashMap<String, Arc<dyn ToolExecutor>> = HashMap::new();
 
@@ -112,11 +121,11 @@ pub async fn build_tools(
                 match pool.list_tools(&name).await {
                     Ok(tools) => {
                         let tools = crate::mcp::serena::admit_tools(kind, tools);
-                        Some((name, sanitized, tools, timeout_secs))
+                        Ok((name, sanitized, tools, timeout_secs))
                     }
                     Err(e) => {
                         tracing::warn!(server = %name, "mcp tools/list failed: {e:#}");
-                        None
+                        Err((name, format!("{e:#}")))
                     }
                 }
             }
@@ -124,6 +133,10 @@ pub async fn build_tools(
         .collect();
 
     let discovered = future::join_all(discovery_futs).await;
+
+    if let Some(path) = &status_file {
+        record_status(path, &discovered);
+    }
 
     for item in discovered.into_iter().flatten() {
         let (server, sanitized, tools, timeout_secs) = item;
@@ -157,6 +170,44 @@ pub async fn build_tools(
     (defs, map)
 }
 
+type Discovered = Result<
+    (
+        String,
+        String,
+        Vec<crate::protocol::mcp_client::ToolInfo>,
+        Option<u32>,
+    ),
+    (String, String),
+>;
+
+/// Best-effort write of [`mur_common::agent::McpStatus`]. A failed write only
+/// costs `doctor` its MCP line, so it is logged and never fails the boot.
+fn record_status(path: &std::path::Path, discovered: &[Discovered]) {
+    use mur_common::agent::{McpServerStatus, McpStatus};
+    let servers = discovered
+        .iter()
+        .map(|d| match d {
+            Ok((name, _, tools, _)) => McpServerStatus {
+                name: name.clone(),
+                tools: tools.len(),
+                error: None,
+            },
+            Err((name, err)) => McpServerStatus {
+                name: name.clone(),
+                tools: 0,
+                error: Some(err.clone()),
+            },
+        })
+        .collect();
+    let status = McpStatus {
+        pid: std::process::id(),
+        servers,
+    };
+    if let Err(e) = status.save(path) {
+        tracing::warn!(path = %path.display(), "could not record MCP status: {e}");
+    }
+}
+
 /// Register `bash_wait`/`bash_kill` iff `bash` itself was registered — the
 /// three share one gate (spec D6/D11). Call after `build_tools`.
 pub fn attach_bash_control(
@@ -179,6 +230,31 @@ mod tests {
 
     /// Always-registered built-ins: `suggest_replies` and `propose`.
     const BUILTINS: usize = 2;
+
+    /// A server whose `tools/list` fails used to vanish with only a stderr
+    /// warning; it must now be on disk for `mur agent doctor`.
+    #[tokio::test]
+    async fn failed_discovery_is_recorded_in_status_file() {
+        let entry = mur_common::agent::McpServerEntry {
+            name: "broken".into(),
+            command: "/definitely/not/a/real/mcp-binary".into(),
+            ..Default::default()
+        };
+        let pool = McpPool::new(vec![entry.clone()], SandboxPolicy::default(), None);
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join(mur_common::agent::MCP_STATUS_FILE);
+        let backend = McpBackend {
+            status_file: Some(status_path.clone()),
+            ..McpBackend::unrouted(pool)
+        };
+        let (defs, _) = build_tools(None, None, None, None, &[entry], &[], backend).await;
+        assert_eq!(defs.len(), BUILTINS);
+
+        let status = mur_common::agent::McpStatus::load(&status_path).expect("status written");
+        assert_eq!(status.pid, std::process::id());
+        let failed: Vec<_> = status.failed().map(|s| s.name.as_str()).collect();
+        assert_eq!(failed, ["broken"]);
+    }
 
     #[tokio::test]
     async fn no_servers_empty_result() {

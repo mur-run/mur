@@ -32,6 +32,7 @@ pub mod cli;
 mod comm;
 mod doctor;
 mod doctor_bash_ceiling;
+mod doctor_mcp;
 mod doctor_reload;
 mod effort;
 pub mod export;

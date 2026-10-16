@@ -252,18 +252,13 @@ impl StdioMcpClient {
         // Serena gate first: a refused preflight must spawn nothing.
         let serena = crate::mcp::serena::launch_additions(entry, policy.agent_home())
             .map_err(|e| McpError::Serena(Box::new(e)))?;
-        let bundled = mur_common::exec::bundled_mcp_server_path();
         let aug_path = crate::sandbox::search_dirs::mcp_child_path(policy.spawn_mode);
+        // Shared with B0 rule 6 and `mur agent doctor`: all three must judge
+        // the file this spawn execs, bundled-server redirect included.
         let resolved: std::borrow::Cow<'_, str> =
-            if std::path::Path::new(&entry.command).file_name() == bundled.file_name()
-                && bundled.is_file()
-            {
-                bundled.to_string_lossy().into_owned().into()
-            } else {
-                match mur_common::exec::resolve_command_in(&aug_path, &entry.command) {
-                    Ok(p) => p.to_string_lossy().into_owned().into(),
-                    Err(_) => std::borrow::Cow::Borrowed(entry.command.as_str()),
-                }
+            match mur_common::exec::resolve_mcp_launch_in(&aug_path, &entry.command) {
+                Ok(p) => p.to_string_lossy().into_owned().into(),
+                Err(_) => std::borrow::Cow::Borrowed(entry.command.as_str()),
             };
         let mut std_cmd = std::process::Command::new(resolved.as_ref());
         std_cmd

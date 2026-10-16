@@ -133,7 +133,15 @@ const INTERPRETERS: &[&str] = &[
 /// Real coverage for these needs a package-level pin (version + integrity),
 /// which is a different mechanism than hashing a file on disk.
 pub fn is_interpreter_command(command: &str) -> bool {
-    let first = command.split_whitespace().next().unwrap_or(command);
+    // The spawn treats `command` as one path, so when that whole path is a
+    // real file (`…/Application Support/…/node`) judge it whole. Otherwise
+    // fall back to the first word, which keeps legacy inline-args entries
+    // (`npx @scope/pkg`) classified as before.
+    let first = if Path::new(command).is_file() {
+        command
+    } else {
+        command.split_whitespace().next().unwrap_or(command)
+    };
     let stem = Path::new(first)
         .file_stem() // also strips .exe / .cmd on Windows
         .and_then(|s| s.to_str())
@@ -160,6 +168,28 @@ pub fn is_interpreter_command(command: &str) -> bool {
 /// Returns an error if the binary can't be located.
 pub fn resolve_command(command: &str) -> Result<PathBuf> {
     resolve_command_in(&augmented_path_var(), command)
+}
+
+/// The file an MCP server launch will exec for `command`, given the child
+/// `path_var`. One resolver for the spawn, the B0 pin check, and `mur agent
+/// doctor`, so all three judge the same file: a command naming the MUR MCP
+/// server is redirected to [`bundled_mcp_server_path`] when that copy exists
+/// (the seal grants it even where a PATH copy is refused); anything else
+/// resolves whole against `path_var`.
+pub fn resolve_mcp_launch_in(path_var: &std::ffi::OsStr, command: &str) -> Result<PathBuf> {
+    resolve_mcp_launch_with(&bundled_mcp_server_path(), path_var, command)
+}
+
+/// [`resolve_mcp_launch_in`] with an explicit bundled-server location.
+pub fn resolve_mcp_launch_with(
+    bundled: &Path,
+    path_var: &std::ffi::OsStr,
+    command: &str,
+) -> Result<PathBuf> {
+    if Path::new(command).file_name() == bundled.file_name() && bundled.is_file() {
+        return Ok(bundled.to_path_buf());
+    }
+    resolve_command_in(path_var, command)
 }
 
 /// [`resolve_command`] against an explicit PATH value instead of the ambient
@@ -252,6 +282,19 @@ mod tests {
                 "`{c}` should count as an interpreter"
             );
         }
+    }
+
+    #[test]
+    fn interpreter_path_with_spaces_is_judged_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("Application Support").join("bin");
+        std::fs::create_dir_all(&sub).unwrap();
+        let node = sub.join("node");
+        std::fs::write(&node, b"").unwrap();
+        let server = sub.join("my-server");
+        std::fs::write(&server, b"").unwrap();
+        assert!(is_interpreter_command(node.to_str().unwrap()));
+        assert!(!is_interpreter_command(server.to_str().unwrap()));
     }
 
     #[test]
@@ -358,6 +401,32 @@ mod tests {
                 "{d:?}: expected append-only-when-absent"
             );
         }
+    }
+
+    #[test]
+    fn mcp_launch_prefers_the_bundled_server_over_a_path_copy() {
+        let bundled_dir = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+        let bundled = bundled_dir.path().join(MCP_SERVER_BIN);
+        let var = std::env::join_paths([path_dir.path()]).unwrap();
+        std::fs::write(path_dir.path().join(MCP_SERVER_BIN), b"x").unwrap();
+        // No bundled copy yet: falls through to PATH, like the spawn.
+        let got = resolve_mcp_launch_with(&bundled, &var, MCP_SERVER_BIN).unwrap();
+        assert_eq!(
+            got,
+            path_dir.path().join(MCP_SERVER_BIN).canonicalize().unwrap()
+        );
+        std::fs::write(&bundled, b"x").unwrap();
+        assert_eq!(
+            resolve_mcp_launch_with(&bundled, &var, MCP_SERVER_BIN).unwrap(),
+            bundled
+        );
+        // Any other command is untouched by the override.
+        std::fs::write(path_dir.path().join("other"), b"x").unwrap();
+        assert_ne!(
+            resolve_mcp_launch_with(&bundled, &var, "other").unwrap(),
+            bundled
+        );
     }
 
     #[test]

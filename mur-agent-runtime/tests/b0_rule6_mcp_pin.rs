@@ -60,6 +60,25 @@ fn matching_binary_hash_passes_startup() {
 }
 
 #[test]
+fn drift_is_caught_when_the_binary_path_contains_a_space() {
+    // The spawn resolves `command` whole, so a space is part of the path
+    // (`~/Library/Application Support/…`). Splitting on it resolved nothing,
+    // soft-failed, and ran the drifted binary unpinned.
+    let dir = TempDir::new().unwrap();
+    let spaced = dir.path().join("Application Support");
+    std::fs::create_dir(&spaced).unwrap();
+    let bin = write_fake_binary(&spaced, b"pretend MCP body v1\n");
+    let pinned_hash = sha256_hex(b"pretend MCP body v1\n");
+    std::fs::write(&bin, b"pretend MCP body v2 -- drifted\n").unwrap();
+
+    let profile = profile_with_pin(&bin, "weather", Some(pinned_hash));
+
+    let msg = verify_mcp_supply_chain(&[], &profile)
+        .expect_err("drift behind a spaced path must still fail startup");
+    assert!(msg.contains("B0 rule 6"), "got {msg}");
+}
+
+#[test]
 fn binary_drift_fails_startup_with_inspect_hint() {
     let dir = TempDir::new().unwrap();
     let installed = b"pretend MCP body v1\n";
@@ -203,4 +222,42 @@ fn vendored_package_with_a_missing_install_does_not_block_startup() {
         result.is_ok(),
         "a missing install should warn, not strand the agent: {result:?}"
     );
+}
+
+// Unix only: the seal dirs are derived from `dirs::home_dir()`, which reads
+// `HOME` on Unix but the user profile on Windows, so the temp `HOME` below
+// cannot plant a seal-dir copy there. Same scope as `seal_first_path`'s tests.
+#[cfg(unix)]
+#[test]
+fn pin_is_checked_against_the_binary_the_seal_first_path_execs() {
+    // Under a fenced spawn mode the child PATH puts the seal's dirs (here
+    // `$HOME/.local/bin`) ahead of the inherited PATH. Two same-named
+    // binaries: the pin matches the inherited copy, but the spawn execs the
+    // seal-dir copy — rule 6 must judge that one and refuse.
+    let home = TempDir::new().unwrap();
+    let seal_dir = home.path().join(".local/bin");
+    std::fs::create_dir_all(&seal_dir).unwrap();
+    let inherited = TempDir::new().unwrap();
+    let name = "mur-rule6-probe";
+    std::fs::write(seal_dir.join(name), b"seal copy\n").unwrap();
+    std::fs::write(inherited.path().join(name), b"inherited copy\n").unwrap();
+    let _env = mur_common::test_env::EnvGuard::set([
+        ("HOME", home.path().as_os_str()),
+        ("PATH", inherited.path().as_os_str()),
+    ]);
+    let mut profile = profile_with_pin(
+        std::path::Path::new(name),
+        "probe",
+        Some(sha256_hex(b"inherited copy\n")),
+    );
+    assert_ne!(
+        profile.entitlements.processes.spawn.mode,
+        mur_common::agent::SpawnMode::Any
+    );
+    let err = verify_mcp_supply_chain(&[], &profile)
+        .expect_err("the exec'd seal-dir copy does not match the pin");
+    assert!(err.contains("changed since install"), "{err}");
+
+    profile.mcp_servers[0].binary_sha256 = Some(sha256_hex(b"seal copy\n"));
+    assert!(verify_mcp_supply_chain(&[], &profile).is_ok());
 }
