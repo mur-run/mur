@@ -332,6 +332,18 @@ pub fn tokenize(line: &str) -> Option<Vec<Token>> {
             // Substitution: the output is a command we cannot see.
             '`' => return None,
             '$' if b.get(i + 1) == Some(&'(') => return None,
+            // #1878: `2>/dev/null`, `>/dev/null`, `2>&1` only discard or join
+            // the command's own streams; they cannot write a file. Skip them
+            // whole. Every other redirect is still refused below.
+            '>' | '1' | '2' if !have_cur => match harmless_redirect_len(&b[i..]) {
+                Some(n) => i += n,
+                None if c == '>' => return None,
+                None => {
+                    cur.push(c);
+                    have_cur = true;
+                    i += 1;
+                }
+            },
             // Redirection of any kind (heredocs were lifted out already).
             '>' | '<' => return None,
             // Subshells and process substitution.
@@ -369,6 +381,36 @@ pub fn tokenize(line: &str) -> Option<Vec<Token>> {
     flush!();
     Some(out)
 }
+
+/// Length of a stream-discard/join redirect at the start of `rest`, or `None`.
+///
+/// Accepts exactly `[1|2]>/dev/null` and `[1|2]>&[1|2]`, optionally with
+/// spaces after `>` before `/dev/null`, and only when followed by whitespace,
+/// an operator, or the end of the line — so `2>/dev/nullx`, `2>/dev/null/x`
+/// and `2>'/dev/null'` stay unparseable. `&>` and `>&-` never match.
+fn harmless_redirect_len(rest: &[char]) -> Option<usize> {
+    let mut i = usize::from(matches!(rest.first(), Some('1' | '2')));
+    if rest.get(i) != Some(&'>') {
+        return None;
+    }
+    i += 1;
+    let tail_ok = |j: usize| {
+        rest.get(j)
+            .is_none_or(|c| c.is_whitespace() || matches!(c, ';' | '|' | '&' | '\n'))
+    };
+    if rest.get(i) == Some(&'&') {
+        return (matches!(rest.get(i + 1), Some('1' | '2')) && tail_ok(i + 2)).then_some(i + 2);
+    }
+    while rest.get(i).is_some_and(|c| *c == ' ') {
+        i += 1;
+    }
+    let target: Vec<char> = DEV_NULL.chars().collect();
+    let end = i + target.len();
+    (rest.get(i..end) == Some(&target[..]) && tail_ok(end)).then_some(end)
+}
+
+/// The only file a redirect may name and still leave a read a read.
+const DEV_NULL: &str = "/dev/null";
 
 /// Group tokens into simple commands, dropping empty runs (`a ;; b`).
 pub fn segments(tokens: Vec<Token>) -> Vec<Vec<Word>> {

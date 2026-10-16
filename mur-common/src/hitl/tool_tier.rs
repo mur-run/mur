@@ -314,6 +314,29 @@ mod tests {
         }
     }
 
+    /// #1878: with auto-approve on, a read must land in `Read` (within the
+    /// ceiling) even when it carries the stream redirect agents append to
+    /// almost every call. `gh … 2>/dev/null` was `NetworkEgress` and prompted.
+    #[test]
+    fn a_read_with_a_stream_discard_redirect_is_still_read() {
+        for cmd in [
+            "gh issue list --limit 10 2>/dev/null",
+            "git log --oneline -5 2>/dev/null",
+            "cat a 2>&1 | head",
+        ] {
+            assert_eq!(
+                classify("bash", Some(&bash(cmd))),
+                RiskTier::Read,
+                "cmd: {cmd}"
+            );
+        }
+        // A real write redirect keeps its old tier.
+        assert_ne!(
+            classify("bash", Some(&bash("gh issue list > out.txt"))),
+            RiskTier::Read
+        );
+    }
+
     /// Most-restrictive-wins: a command that is several things at once takes
     /// the highest tier, not the first one matched.
     #[test]
