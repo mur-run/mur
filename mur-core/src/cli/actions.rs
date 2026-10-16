@@ -216,6 +216,12 @@ pub enum ChannelAction {
         #[arg(long)]
         reason: Option<String>,
     },
+    /// Check a channel's log against its signed head (read-only). Exits 0 when
+    /// intact, 2 when damaged, 1 when the check could not run.
+    Verify {
+        /// Channel ID
+        channel_id: String,
+    },
     /// Classify legacy channels missing a `purpose` (dry run unless --apply)
     BackfillPurpose {
         /// Write the inferred purposes to disk
