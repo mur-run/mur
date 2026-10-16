@@ -35,26 +35,6 @@ pub(crate) fn host_diff(before: &[String], after: &[String], notes: &[String]) -
     out
 }
 
-/// Ask `Save? [y/N]` on stderr when a person is at the terminal and did not
-/// pass `--yes`. Scripts, the wizard and hub-gui (non-TTY) write without a
-/// prompt, as before; the stderr preview is their record.
-pub(crate) fn confirm_on_tty(yes: bool) -> anyhow::Result<()> {
-    use std::io::{IsTerminal, Write};
-    if yes || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return Ok(());
-    }
-    eprint!("Save? [y/N] ");
-    std::io::stderr().flush().ok();
-    let mut answer = String::new();
-    std::io::stdin()
-        .read_line(&mut answer)
-        .map_err(|e| anyhow::anyhow!("read confirmation from stdin: {e}"))?;
-    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        anyhow::bail!("cancelled — nothing was changed");
-    }
-    Ok(())
-}
-
 /// Render the before → after picture of one MCP server's network policy.
 pub(crate) fn render_preview(
     agent: &str,

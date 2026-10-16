@@ -863,7 +863,8 @@ pub enum AgentPermAction {
     AllowHost {
         name: String,
         glob: String,
-        /// Save without the `[y/N]` prompt shown on a terminal
+        /// Approve without a prompt. Required when there is no terminal
+        /// (scripts, agents) — the grant is refused otherwise.
         #[arg(long)]
         yes: bool,
     },
@@ -1177,8 +1178,8 @@ pub enum AgentMcpAction {
         /// (prompts unless `--yes`) and records who authorized it and when.
         #[arg(long = "broad-audited", conflicts_with = "off")]
         broad_audited: bool,
-        /// Skip the y/N consent prompt for `--broad-audited`. Use for
-        /// scripted / non-interactive grants.
+        /// Approve widening grants without a prompt. Required when there is no
+        /// terminal (scripts, agents) — the grant is refused otherwise.
         #[arg(long)]
         yes: bool,
     },

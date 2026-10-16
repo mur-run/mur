@@ -316,18 +316,8 @@ pub fn cmd_mcp_set_network(
         if let Some(note) = &ports_note {
             eprintln!("\n{note}");
         }
-        if !yes {
-            print!("\nApprove broad-audited egress? [y/N] ");
-            use std::io::{self, Write};
-            io::stdout().flush().ok();
-            let mut answer = String::new();
-            io::stdin()
-                .read_line(&mut answer)
-                .with_context(|| "read confirmation from stdin")?;
-            if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-                bail!("broad-audited egress grant cancelled");
-            }
-        }
+        eprintln!("\nApprove broad-audited egress?");
+        crate::cmd::consent::confirm_grant_on_terminal(yes)?;
 
         let authorized_by = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
         let authorized_at_ms = std::time::SystemTime::now()
@@ -354,7 +344,7 @@ pub fn cmd_mcp_set_network(
             ports_note,
         ) {
             eprintln!("{preview}");
-            crate::cmd::agent::cli::browser_live_preview::confirm_on_tty(yes)?;
+            crate::cmd::consent::confirm_grant_on_terminal(yes)?;
         }
         srv.network = after;
         save_profile(&path, &mut profile)?;
