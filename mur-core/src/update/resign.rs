@@ -33,12 +33,21 @@ pub const SIGN_TARGETS: &[&str] = &[
 /// Only the re-signing is macOS-specific. The checklist and the restart legs
 /// (agents + daemon) apply everywhere: an upgrade changes every binary's hash
 /// on any platform, which stales every long-lived process running the old one.
+///
+/// `install_dir` is where the upgraded binaries now live, captured by the
+/// caller (see [`repin_first_party_mcp`]); `None` skips the MCP re-pin.
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path>) -> Result<()> {
+pub fn post_upgrade(
+    restart_agents: bool,
+    fresh_runtime: Option<&std::path::Path>,
+    install_dir: Option<&std::path::Path>,
+) -> Result<()> {
     #[cfg(target_os = "macos")]
     macos::resign_installed_binaries(fresh_runtime)?;
 
-    repin_first_party_mcp();
+    if let Some(dir) = install_dir {
+        repin_first_party_mcp(dir);
+    }
 
     let daemon_running = crate::cmd::murmurd::murmurd_running();
     print_checklist(restart_agents, daemon_running);
@@ -69,12 +78,13 @@ pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path
 /// status`, and `mur doctor` show no drift the next start would erase anyway
 /// (#1944). The runtime does the same at start; this just does it sooner.
 /// Third-party entries are never touched: rule 6 exists to catch them.
-fn repin_first_party_mcp() {
-    let Some(install_dir) = mur_common::mcp_first_party::current_install_dir() else {
-        return;
-    };
+///
+/// `install_dir` comes from the caller, never from `current_exe()` here: this
+/// runs after the swap, and on Linux the running executable then resolves to
+/// a deleted inode; under Homebrew it names the old Cellar version.
+fn repin_first_party_mcp(install_dir: &std::path::Path) {
     let agents_dir = crate::paths::mur_root(None).join("agents");
-    let repinned = mur_agent_runtime::mcp_repin::repin_first_party_all(&agents_dir, &install_dir);
+    let repinned = mur_agent_runtime::mcp_repin::repin_first_party_all(&agents_dir, install_dir);
     if !repinned.is_empty() {
         println!(
             "re-pinned MUR's own MCP servers for: {}",

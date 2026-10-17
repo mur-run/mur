@@ -63,7 +63,7 @@ The exemption is a **property, not a list of names** — a list goes stale the d
 
 Resolution canonicalizes, so a symlinked install (Homebrew's `bin` into its Cellar) compares equal.
 
-`mur update` applies the same re-pin to every agent's profile right after a successful upgrade, so stopped agents, `mur agent status`, and `mur doctor` show no drift that the next start would clear anyway. Third-party drift is still never re-pinned by an update; re-approve it with `mur agent mcp pin`.
+`mur update` applies the same re-pin to every agent's profile right after a successful upgrade, so stopped agents, `mur agent status`, and `mur doctor` show no drift that the next start would clear anyway. Third-party drift is still never re-pinned by an update; re-approve it with `mur agent mcp pin`. The install directory is captured *before* the binary swap (or, under Homebrew, resolved from `PATH` after `brew upgrade`): once the running executable is replaced, Linux resolves `current_exe()` to a deleted inode, so asking afterwards would silently skip every agent.
 
 ### Rule 6 resolves against the PATH the spawn uses
 

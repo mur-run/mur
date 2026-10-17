@@ -64,12 +64,16 @@ pub fn first_party_target(
 /// The canonical directory holding the running executable — the install dir
 /// [`first_party_target`] compares against. `None` when it cannot be resolved.
 pub fn current_install_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()?
-        .canonicalize()
-        .ok()?
-        .parent()
-        .map(Path::to_path_buf)
+    install_dir_of(&std::env::current_exe().ok()?)
+}
+
+/// The canonical directory holding `exe`. `mur update` must capture this
+/// BEFORE it swaps the binary (#1944): on Linux `current_exe()` reads
+/// `/proc/self/exe`, which after the rename names the replaced inode with a
+/// ` (deleted)` suffix, so [`current_install_dir`] stops resolving. A path
+/// taken beforehand still names the directory the new binary landed in.
+pub fn install_dir_of(exe: &Path) -> Option<PathBuf> {
+    exe.canonicalize().ok()?.parent().map(Path::to_path_buf)
 }
 
 #[cfg(test)]
@@ -178,5 +182,47 @@ mod tests {
             first_party_target("mur-mcp-server", Some(&bundled), &dir),
             Some(bundled)
         );
+    }
+
+    #[test]
+    fn install_dir_of_survives_replacing_the_binary() {
+        let (_g, dir) = install_dir();
+        let exe = dir.join("mur");
+        std::fs::write(&exe, b"old").unwrap();
+        let captured = install_dir_of(&exe);
+        let staged = dir.join("mur.new");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::rename(&staged, &exe).unwrap();
+        assert_eq!(captured.as_deref(), Some(dir.as_path()));
+        assert_eq!(install_dir_of(&exe).as_deref(), Some(dir.as_path()));
+    }
+
+    /// The failure the pre-swap capture exists for (#1944): once a running
+    /// executable is replaced by rename, Linux's `/proc/<pid>/exe` — what
+    /// `current_exe()` reads — names a deleted inode and stops canonicalizing,
+    /// while the path captured before the swap still yields the install dir.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_exe_link_breaks_after_swap_but_captured_dir_does_not() {
+        let (_g, dir) = install_dir();
+        let exe = dir.join("mur");
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let captured = install_dir_of(&exe);
+        let mut child = std::process::Command::new(&exe).arg("30").spawn().unwrap();
+        let proc_exe = PathBuf::from(format!("/proc/{}/exe", child.id()));
+        assert_eq!(install_dir_of(&proc_exe).as_deref(), Some(dir.as_path()));
+
+        let staged = dir.join("mur.new");
+        std::fs::copy("/bin/sleep", &staged).unwrap();
+        std::fs::rename(&staged, &exe).unwrap();
+
+        let after = install_dir_of(&proc_exe);
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(
+            after, None,
+            "the replaced exe link should no longer resolve"
+        );
+        assert_eq!(captured.as_deref(), Some(dir.as_path()));
     }
 }
