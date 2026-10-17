@@ -26,6 +26,7 @@ pub mod capability;
 pub mod channel;
 pub mod channel_integrity;
 pub mod channel_repair;
+mod channel_repair_gate_b;
 /// Plan 2026-10-03 code-nav, Phase 3 — `mur code-nav setup`.
 #[allow(dead_code)]
 pub mod code_nav;

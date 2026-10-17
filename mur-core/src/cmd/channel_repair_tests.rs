@@ -182,17 +182,105 @@ fn declining_the_prompt_touches_nothing() {
     assert_eq!(std::fs::read(log_path(tmp.path(), &ch)).unwrap(), before);
 }
 
-#[test]
-fn a_gate_b_decision_channel_is_refused() {
-    let (tmp, ch) = setup();
-    note(tmp.path(), &ch, 0);
-    mur_channel::anchor::mark_dirty(tmp.path(), &ch).unwrap();
-    let agent = tmp.path().join("agents").join("qa");
-    std::fs::create_dir_all(&agent).unwrap();
-    std::fs::write(agent.join(HITL_CHANNEL_FILE), &ch).unwrap();
-    let err = repair(tmp.path(), &ch, Confirm::Yes).unwrap_err();
-    assert!(format!("{err:#}").contains("qa"), "{err:#}");
-    assert!(mur_channel::anchor::is_dirty(tmp.path(), &ch), "untouched");
+// --- Gate B: the agent's own decision channel ---------------------------
+
+mod gate_b {
+    use super::*;
+    use mur_agent_runtime::hitl::store::{ChannelDecisionStore, DecisionStore, Settled};
+    use mur_common::hitl::HitlResponse;
+    use mur_common::identity::AgentIdentity;
+    use std::sync::Arc;
+
+    const AGENT: &str = "qa";
+
+    /// A home whose agent key is on disk, as `mur agent create` leaves it.
+    fn agent_store(home: &Path) -> ChannelDecisionStore {
+        let dir = home.join("agents").join(AGENT);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = AgentIdentity::generate();
+        id.save(&dir).unwrap();
+        ChannelDecisionStore::new(home.to_path_buf(), AGENT.into(), Arc::new(id), 0)
+    }
+
+    fn channel(home: &Path) -> String {
+        std::fs::read_to_string(home.join("agents").join(AGENT).join(HITL_CHANNEL_FILE))
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    fn resp(hash: &str, id: &str) -> HitlResponse {
+        HitlResponse {
+            hitl_id: id.into(),
+            action_hash: hash.into(),
+            allow: true,
+            reason: String::new(),
+            surface: "hub".into(),
+            issued_at: Some(chrono::Utc::now()),
+            label: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_damaged_decision_channel_is_resealed_by_the_agent_key() {
+        let tmp = TempDir::new().unwrap();
+        let s = agent_store(tmp.path());
+        s.record(resp("h0", "a")).await;
+        s.record(resp("h1", "b")).await;
+        let ch = channel(tmp.path());
+        // A deleted record: Gate B now refuses every remembered approval.
+        truncate_last_line(tmp.path(), &ch);
+        assert_eq!(s.lookup("h0").await, None, "damaged log is not trusted");
+
+        let Outcome::Repaired { quarantined, seq } = repair(tmp.path(), &ch, Confirm::Yes).unwrap()
+        else {
+            panic!("expected a repair");
+        };
+        assert_eq!(seq, 0);
+        assert!(quarantined.is_some_and(|p| p.exists()));
+
+        // The fresh chain carries the agent seal, so Gate B trusts it again —
+        // and nothing from before the repair came back.
+        assert_eq!(s.lookup("h0").await, None, "no decision carried over");
+        s.record(resp("h2", "c")).await;
+        assert_eq!(s.lookup("h2").await, Some(Settled::Allow));
+        assert_eq!(channel(tmp.path()), ch, "the same channel, not a rollover");
+
+        // A second repair finds nothing to do.
+        assert!(matches!(
+            repair(tmp.path(), &ch, Confirm::Yes).unwrap(),
+            Outcome::Intact
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_intact_decision_channel_is_a_no_op() {
+        let tmp = TempDir::new().unwrap();
+        let s = agent_store(tmp.path());
+        s.record(resp("h0", "a")).await;
+        let ch = channel(tmp.path());
+        let before = std::fs::read(log_path(tmp.path(), &ch)).unwrap();
+        assert!(matches!(
+            repair(tmp.path(), &ch, Confirm::Yes).unwrap(),
+            Outcome::Intact
+        ));
+        assert_eq!(std::fs::read(log_path(tmp.path(), &ch)).unwrap(), before);
+    }
+
+    #[test]
+    fn without_the_agent_key_it_refuses_and_touches_nothing() {
+        let (tmp, ch) = setup();
+        note(tmp.path(), &ch, 0);
+        mur_channel::anchor::mark_dirty(tmp.path(), &ch).unwrap();
+        let agent = tmp.path().join("agents").join(AGENT);
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join(HITL_CHANNEL_FILE), &ch).unwrap();
+        let before = std::fs::read(log_path(tmp.path(), &ch)).unwrap();
+        let err = repair(tmp.path(), &ch, Confirm::Yes).unwrap_err();
+        assert!(format!("{err:#}").contains("signing key"), "{err:#}");
+        assert!(mur_channel::anchor::is_dirty(tmp.path(), &ch), "untouched");
+        assert_eq!(std::fs::read(log_path(tmp.path(), &ch)).unwrap(), before);
+    }
 }
 
 #[test]
