@@ -11,6 +11,8 @@ use mur_common::channel::{Channel, ChannelActor, ChannelEvent, EventKind};
 const EVENTS_FILE: &str = "events.jsonl";
 /// File name of a channel's manifest inside its directory.
 const MANIFEST_FILE: &str = "channel.yaml";
+/// Sidecar lock serializing appends (never the log itself — see `append`).
+const LOCK_FILE: &str = "events.lock";
 
 /// Event-sourced store rooted at `<mur_home>/channels/`.
 pub struct ChannelStore {

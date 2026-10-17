@@ -232,4 +232,34 @@ impl ChannelStore {
         report.anchor_dirty = crate::anchor::is_dirty(&self.mur_home, id);
         Ok((events, report))
     }
+
+    /// [`load_events_with_damage`](Self::load_events_with_damage) under the
+    /// channel's append lock (shared), so the log, the signed head, and the
+    /// dirty marker are read as one snapshot. Unlocked, a reader racing an
+    /// anchored append sees the marker down or the head one line behind — a
+    /// spurious `anchor_dirty` that a decision-maker (the HITL gate, #1935)
+    /// would act on. Takes the lock only; writes nothing to the log. A
+    /// channel with no directory yet has no writer to race and is read as is.
+    pub fn load_events_with_damage_locked(
+        &self,
+        id: &str,
+        writer_pubkey: &[u8; 32],
+        require_sig: bool,
+    ) -> Result<(Vec<ChannelEvent>, DamageReport)> {
+        let dir = self.channel_dir(id)?;
+        if !dir.is_dir() {
+            return self.load_events_with_damage(id, writer_pubkey, require_sig);
+        }
+        let lock_path = dir.join(super::LOCK_FILE);
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| format!("open {}", lock_path.display()))?;
+        fs2::FileExt::lock_shared(&lock).context("lock channel events (shared)")?;
+        let out = self.load_events_with_damage(id, writer_pubkey, require_sig);
+        fs2::FileExt::unlock(&lock).ok();
+        out
+    }
 }

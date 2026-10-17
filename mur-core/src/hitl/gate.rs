@@ -159,6 +159,7 @@ pub async fn gate(
             // answer a human gave to the previous run — the defect that made
             // late approval impossible and piled up duplicate requests, one
             // per loop iteration, all asking the same question.
+            let mut damaged: Option<String> = None;
             match scan_prior(mur_home, channel_id, &hash)? {
                 // Settled (approved or denied) and still inside the TTL:
                 // release the gate now. This is what lets an overnight
@@ -178,6 +179,7 @@ pub async fn gate(
                         hitl_id: Some(existing_id),
                     });
                 }
+                Prior::Damaged(why) => damaged = Some(why),
                 _ => {}
             }
 
@@ -197,7 +199,12 @@ pub async fn gate(
             // Open, write, drop — never cross an await with the service open.
             // The router ("mur") signs the events it writes (v3d) so a reader
             // can verify authority; falls back to unsigned when no identity.
-            {
+            //
+            // On a damaged log the anchored write usually refuses (the log no
+            // longer extends the signed head). Then nobody can be asked on
+            // this channel: deny, and say why — never an error the caller
+            // might retry into the same wall, never a release.
+            let asked = (|| -> Result<()> {
                 let svc = ChannelService::open(mur_home)?;
                 crate::channel_writer::append_as_writer(
                     &svc,
@@ -229,7 +236,23 @@ pub async fn gate(
                     ChannelActor::System,
                     run_id,
                 )?;
+                Ok(())
+            })();
+            if let Err(e) = asked {
+                let Some(why) = &damaged else { return Err(e) };
+                return Ok(GateDecision {
+                    allow: false,
+                    deferred: false,
+                    reason: format!("{why}; cannot ask again on this channel: {e:#}"),
+                    action_hash: hash,
+                    hitl_id: None,
+                });
             }
+            // Asked afresh because of damage: the reason carries it.
+            let with_damage = |base: String| match &damaged {
+                Some(why) => format!("{base} — {why}"),
+                None => base,
+            };
 
             // Park instead of polling. The request is durable and the channel
             // stays `InputRequired`, so the answer can arrive at any time from
@@ -240,7 +263,7 @@ pub async fn gate(
                 return Ok(GateDecision {
                     allow: false,
                     deferred: true,
-                    reason: format!("awaiting approval ({hitl_id})"),
+                    reason: with_damage(format!("awaiting approval ({hitl_id})")),
                     action_hash: hash,
                     hitl_id: Some(hitl_id),
                 });
@@ -289,7 +312,7 @@ pub async fn gate(
                 wait_for_response(mur_home, channel_id, &hitl_id, &hash, timeout).await?
             };
 
-            {
+            let resumed = (|| -> Result<()> {
                 let svc = ChannelService::open(mur_home)?;
                 // Same writer as the pause, for the same reason (#1900).
                 crate::channel_writer::transition_as_writer(
@@ -301,6 +324,19 @@ pub async fn gate(
                     ChannelActor::System,
                     run_id,
                 )?;
+                Ok(())
+            })();
+            match resumed {
+                // A deny for a damaged log stands even though the resume
+                // cannot be sealed onto that log: the refusal is the
+                // decision, and an error here would only hide its reason.
+                Err(e)
+                    if !decision.allow
+                        && decision.reason.starts_with(log_integrity::INTEGRITY_FAILED) =>
+                {
+                    tracing::warn!(channel_id, error = %format!("{e:#}"), "resume transition not written on a damaged log");
+                }
+                r => r?,
             }
             Ok(decision)
         }
@@ -315,6 +351,8 @@ enum Prior {
     Pending(String),
     /// Never asked — or asked and answered too long ago to still count.
     None,
+    /// The log failed its integrity check (#1935); nothing in it counts.
+    Damaged(String),
 }
 
 /// Look up prior HITL traffic for `hash` in one pass over the channel log.
@@ -336,9 +374,14 @@ enum Prior {
 /// the TTL leaves the action `None` (ask again), not `Pending` — its request is
 /// answered, just too long ago to act on.
 fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
-    let svc = ChannelService::open(mur_home)?;
-    let events = svc.load_events(channel_id)?;
-    drop(svc);
+    // A log that fails its integrity check settles nothing and offers no
+    // pending request: an allow, a deny, or a parked id read from it may be
+    // what is left after a deletion (#1935). Ask afresh.
+    let log_integrity::Checked { events, damage } =
+        log_integrity::load_checked(mur_home, channel_id)?;
+    if let Some(why) = damage {
+        return Ok(Prior::Damaged(why));
+    }
 
     let now = chrono::Utc::now();
     let requests = binding::Requests::collect(mur_home, channel_id, &events);
@@ -470,9 +513,22 @@ async fn wait_for_response(
         // reply is a verified statement by that agent, not an approval; it is
         // filtered out and the loop keeps waiting.
         let (found, requests) = {
-            let svc = ChannelService::open(mur_home)?;
-            let evs = svc.load_events(channel_id)?;
-            drop(svc);
+            let log_integrity::Checked {
+                events: evs,
+                damage,
+            } = log_integrity::load_checked(mur_home, channel_id)?;
+            // Fail closed at once (#1935): on a damaged log a missing answer
+            // may be a deleted one, and a deleted request can never be
+            // answered — waiting out the timeout would hide that.
+            if let Some(why) = damage {
+                return Ok(GateDecision {
+                    allow: false,
+                    deferred: false,
+                    reason: why,
+                    action_hash: expected_hash.to_string(),
+                    hitl_id: None,
+                });
+            }
             let requests = binding::Requests::collect(mur_home, channel_id, &evs);
             let found = evs.into_iter().rev().find(|e| {
                 if e.kind != EventKind::HitlResponse
@@ -563,8 +619,12 @@ async fn wait_for_response(
     }
 }
 
+mod log_integrity;
+
 #[cfg(test)]
 mod human_authority_tests;
+#[cfg(test)]
+mod integrity_tests;
 #[cfg(test)]
 mod response_binding_tests;
 #[cfg(test)]

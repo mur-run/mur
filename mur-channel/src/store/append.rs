@@ -147,7 +147,7 @@ impl ChannelStore {
         // a lock on the data file blocks our own reads/writes of it (os error 33).
         // Locking a separate file gives cross-process mutual exclusion while the
         // data file stays freely readable/writable on every platform.
-        let lock_path = dir.join("events.lock");
+        let lock_path = dir.join(super::LOCK_FILE);
         let lock = OpenOptions::new()
             .create(true)
             .write(true)
