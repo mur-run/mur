@@ -436,6 +436,13 @@ fn a_key_swap_without_rotation_history_is_still_damage() {
 /// `rotate_files_atomic` does (with or without the rotation record), and
 /// return what Gate A's integrity read reports.
 fn rekey_then_check(with_history: bool) -> Option<String> {
+    let (tmp, ch) = rekeyed_home(with_history);
+    log_integrity::load_checked(tmp.path(), &ch).unwrap().damage
+}
+
+/// A home whose channel head was sealed under the router's first key, after
+/// the key was replaced (see [`rekey_then_check`]).
+fn rekeyed_home(with_history: bool) -> (TempDir, String) {
     let tmp = TempDir::new().unwrap();
     let old = crate::channel_writer::plant_writer_identity(tmp.path());
     let ch = ChannelService::open(tmp.path())
@@ -470,6 +477,62 @@ fn rekey_then_check(with_history: bool) -> Option<String> {
         std::fs::rename(dir.join(f), dir.join(format!("{f}.prev"))).unwrap();
     }
     new.save(&agent_home).unwrap();
+    if with_history {
+        // ...and bumps the profile's `key_version`, which writers sign under.
+        let yaml = crate::executor::delegation::grant::tests::profile_yaml(ROUTER_AGENT, &[]);
+        let mut p: mur_common::AgentProfile = serde_yaml_ng::from_str(&yaml).unwrap();
+        p.identity.key_version = 1;
+        let out = serde_yaml_ng::to_string(&p).unwrap();
+        std::fs::write(agent_home.join("profile.yaml"), out).unwrap();
+    }
+    (tmp, ch)
+}
 
-    log_integrity::load_checked(tmp.path(), &ch).unwrap().damage
+/// An append racing the re-check of a pre-rekey head reseals it under the
+/// new key. Both reads share one lock, so the append waits until the check
+/// is done instead of landing between them and turning the retry into a
+/// bad signature on a healthy log.
+#[test]
+fn an_append_racing_the_rekeyed_head_recheck_is_not_damage() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+    /// Long enough for an unblocked append to finish inside the window.
+    const RACE_WINDOW: Duration = Duration::from_millis(500);
+
+    let (tmp, ch) = rekeyed_home(true);
+    let home = tmp.path().to_path_buf();
+    let racer: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::default();
+    let slot = racer.clone();
+    let (ch2, h) = (ch.clone(), hash_of(&ch, &action()));
+    log_integrity::BETWEEN_READS.with(|b| {
+        *b.borrow_mut() = Some(Box::new(move || {
+            let (done_tx, done_rx) = mpsc::channel();
+            let (home, ch, h) = (home.clone(), ch2.clone(), h.clone());
+            *slot.lock().unwrap() = Some(std::thread::spawn(move || {
+                request_at(&home, &ch, "hitl-1", &h, chrono::Utc::now());
+                done_tx.send(()).ok();
+            }));
+            // Give the append its chance to land between the two reads.
+            let _ = done_rx.recv_timeout(RACE_WINDOW);
+        }));
+    });
+
+    let raced = log_integrity::load_checked(tmp.path(), &ch).unwrap().damage;
+    log_integrity::BETWEEN_READS.with(|b| b.borrow_mut().take());
+    racer
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the re-check ran, so the hook fired")
+        .join()
+        .unwrap();
+    assert!(
+        raced.is_none(),
+        "a racing append flagged the log: {raced:?}"
+    );
+    let after = log_integrity::load_checked(tmp.path(), &ch).unwrap().damage;
+    assert!(
+        after.is_none(),
+        "the resealed head did not verify: {after:?}"
+    );
 }
