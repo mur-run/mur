@@ -151,9 +151,17 @@ pub async fn record(
         return Err(error);
     }
 
-    let hook = BrokerHook::new(
-        RecordHook::with_actions_path(run_state, paths::run_actions(&mur_home, run)),
-        Arc::new(SocketClient::new(&socket, token)),
+    // Live mode inlines console entries the server parks in a log file: the
+    // sealed agent could only follow that link with an approval-gated
+    // `read_file` (#1685). The recording modes keep the raw response.
+    let hook = mur_browser::console_inline::ConsoleInlineHook::new(
+        BrokerHook::new(
+            RecordHook::with_actions_path(run_state, paths::run_actions(&mur_home, run)),
+            Arc::new(SocketClient::new(&socket, token)),
+        ),
+        live_config
+            .as_ref()
+            .map(mur_browser::live_proxy::ConfigFile::output_dir),
     );
     tracing::info!(
         run,
