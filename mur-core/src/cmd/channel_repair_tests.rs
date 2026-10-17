@@ -100,22 +100,15 @@ async fn repair_lets_the_gate_ask_once_and_then_reuse_the_new_answer() {
     let home = tmp.path();
     let ch = damaged_channel(home).await;
 
-    // Before repair: an answer given on the damaged log is never reused.
-    let stuck = ask(home, &ch).await;
-    assert!(stuck.deferred, "{stuck:?}");
-    // The line lands but the head cannot advance over a damaged log, so
-    // the writer reports an anchor lag; the answer is on disk regardless.
-    let lag = try_answer(home, &ch, stuck.hitl_id.as_deref().unwrap(), true).unwrap_err();
-    assert!(
-        lag.chain().any(|e| e
-            .downcast_ref::<mur_channel::anchor::AnchorLagError>()
-            .is_some()),
-        "{lag:#}"
-    );
-    assert!(
-        ask(home, &ch).await.deferred,
-        "damaged log must keep asking"
-    );
+    // Before repair: main's #1935 gate fails closed. A re-ask cannot be
+    // sealed over the damaged log, so the action is denied outright and
+    // stays denied however often it is retried.
+    for _ in 0..2 {
+        let stuck = ask(home, &ch).await;
+        assert!(!stuck.allow && !stuck.deferred, "{stuck:?}");
+        assert!(stuck.hitl_id.is_none(), "{stuck:?}");
+        assert!(stuck.reason.contains("integrity check failed"), "{stuck:?}");
+    }
 
     let done = repair(home, &ch, "tester").unwrap().expect("was damaged");
     assert!(done.after.is_intact(), "{}", done.after.render());
