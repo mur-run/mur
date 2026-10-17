@@ -557,6 +557,15 @@ Agent** wizard offers the same catalog as a source.
   `git ls-files` and a bare `git diff` are not, so `--ask` asks first. Put
   the prompt back on reads with `--no-auto-reads`, the strictest setting; the
   old `--auto-reads` still parses and does nothing.
+- **Tamper-evident approvals** — every channel log is hash-chained, and its
+  signed head lives outside the agent's sandbox, so an agent that deletes a
+  line (say, your later "no") or truncates the log is caught. The gate only
+  trusts a log that passes that check: on a damaged log, earlier answers —
+  yes and no alike — no longer count and you are asked afresh, and a gate
+  already waiting on you denies at once instead of sitting out its timeout.
+  After a crash this can mean one extra prompt; that is deliberate.
+  `mur channel verify <channel>` runs the same check by hand and exits 0 when
+  intact, 2 when damaged, 1 when the check could not run.
 - **No approvals without a sealed sandbox** — an agent running advisory-only
   (`fail_closed_on_sandbox_error: false` and the kernel seal failed) could read
   its own signing key, so any approval it holds could be forged. Tools that
@@ -965,7 +974,7 @@ mur dashboard        # terminal TUI dashboard
 ```
 
 <details>
-<summary><b>Full command tree</b> (35 top-level commands)</summary>
+<summary><b>Full command tree</b> (36 top-level commands)</summary>
 
 ```
 mur
@@ -998,6 +1007,7 @@ mur
 ├── dashboard    terminal dashboard
 ├── browser      record · replay · auth · broker · list · show · export · status   (browser work through Playwright MCP;
 │                `list` tables recorded runs with a summary, domain, steps and run count — `--json` for all fields)
+├── channel      approve · verify · backfill-purpose   (HITL approval; verify checks a log against its signed head)
 ├── commander    pin · status · directive   (governance: pin the operator key, issue and inspect directives)
 ├── auth         login · logout
 ├── team         shared skills (private registries)
