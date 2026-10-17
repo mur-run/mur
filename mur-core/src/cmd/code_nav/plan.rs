@@ -27,6 +27,10 @@ pub const UV: &str = "uv";
 pub const PYRIGHT: &str = "pyright";
 /// serena's `PYRIGHT_VERSION` at the serena pin. Bump together.
 pub const PYRIGHT_PIN: &str = "1.1.403";
+/// The PHP language server, pre-installed and launched via the canonical
+/// `ls_base_cmd` (#1945) so its shebang script is never exec'd.
+pub const INTELEPHENSE: &str = mur_common::serena_ls_cmd::INTELEPHENSE_TOOL_DIR;
+pub use mur_common::serena_ls_cmd::INTELEPHENSE_PIN;
 // `<mur_home>/tools/<name>/<version>/` — the managed-tools root, shared
 // with the ast-grep resolver in `mur-mcp-server`.
 use mur_common::config::MUR_TOOLS_DIR as TOOLS_DIR;
@@ -337,6 +341,22 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
             missing: None,
         });
         out.permissions.push(Permission::SpawnDir(dir));
+    }
+
+    let php_on = out
+        .lsp
+        .iter()
+        .any(|r| r.lang == Lang::Php && r.status == LspStatus::Enabled);
+    if php_on {
+        let dir = tool_dir(mur_home, INTELEPHENSE, INTELEPHENSE_PIN);
+        out.install.push(InstallRow {
+            name: INTELEPHENSE,
+            version: INTELEPHENSE_PIN,
+            dir: dir.clone(),
+            missing: None,
+        });
+        // node loads the `.js`; nothing under it is exec'd.
+        out.permissions.push(Permission::Read(dir));
     }
 
     if serena_missing.is_none() {

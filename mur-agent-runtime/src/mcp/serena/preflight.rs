@@ -35,7 +35,8 @@ const KEY_EXCLUDED: &str = "excluded_tools";
 const KEY_OPTIONAL: &str = "included_optional_tools";
 const KEY_DASHBOARD: &str = "web_dashboard";
 const KEY_LS_SETTINGS: &str = "ls_specific_settings";
-/// Replaces the whole launch command (arbitrary exec): always refused.
+/// Replaces the whole launch command (arbitrary exec): refused unless it is
+/// exactly `mur_common::serena_ls_cmd::canonical_base_cmd` (#1945).
 const KEY_LS_BASE_CMD: &str = "ls_base_cmd";
 /// Replaces the executable: allowed only inside MUR's tools root (3.6b).
 const KEY_LS_PATH: &str = "ls_path";
@@ -289,10 +290,11 @@ pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaP
     }
 }
 
-/// C7 over one `ls_specific_settings` mapping: no `ls_base_cmd`, and an
-/// `ls_path` must canonicalize under `tools_dir` (symlinks resolved, so one
-/// pointing out of the tools root is refused). A missing target is refused
-/// too: serena would otherwise fail later with a less useful error.
+/// C7 over one `ls_specific_settings` mapping: an `ls_base_cmd` must equal
+/// the canonical one MUR writes (see [`check_base_cmd`]), and an `ls_path`
+/// must canonicalize under `tools_dir` (symlinks resolved, so one pointing
+/// out of the tools root is refused). A missing target is refused too:
+/// serena would otherwise fail later with a less useful error.
 fn check_ls_exec(
     ls: Option<&serde_yaml_ng::Mapping>,
     file: &Path,
@@ -302,7 +304,8 @@ fn check_ls_exec(
     for (lang, settings) in ls.into_iter().flatten() {
         let key = |k: &str| format!("{KEY_LS_SETTINGS}.{}.{k}", show(lang));
         if let Some(v) = settings.get(KEY_LS_BASE_CMD) {
-            return fail!(C7LsExec, file, key(KEY_LS_BASE_CMD), show(v), ABSENT);
+            check_base_cmd(lang, settings, v, file, tools_dir)?;
+            continue;
         }
         let Some(v) = settings.get(KEY_LS_PATH) else {
             continue;
@@ -330,6 +333,66 @@ fn check_ls_exec(
         }
     }
     Ok(())
+}
+
+/// C7 for an `ls_base_cmd`: accepted only when it is exactly what
+/// `canonical_base_cmd` returns for this server, its `.js` entry resolves
+/// under `tools_dir`, and nothing else rewrites the launch command. serena
+/// builds `base + ls_args` (instead of `base + default args`) and then
+/// appends `ls_extra_args`, so either key would change what C7 just matched.
+fn check_base_cmd(
+    lang: &Value,
+    settings: &Value,
+    v: &Value,
+    file: &Path,
+    tools_dir: &Path,
+) -> Result<(), SerenaPreflightError> {
+    let key = |k: &str| format!("{KEY_LS_SETTINGS}.{}.{k}", show(lang));
+    let canonical = lang
+        .as_str()
+        .and_then(|id| mur_common::serena_ls_cmd::canonical_base_cmd(id, tools_dir));
+    let Some(canonical) = canonical else {
+        return fail!(C7LsExec, file, key(KEY_LS_BASE_CMD), show(v), ABSENT);
+    };
+    let expected = format!("{canonical:?} (written by `mur code-nav setup`)");
+    let given: Option<Vec<&str>> = v
+        .as_sequence()
+        .and_then(|xs| xs.iter().map(Value::as_str).collect());
+    let want: Vec<&str> = canonical.iter().map(String::as_str).collect();
+    if given.as_deref() != Some(want.as_slice()) {
+        return fail!(C7LsExec, file, key(KEY_LS_BASE_CMD), show(v), expected);
+    }
+    // The entry is a script node will load: it must really be inside the
+    // tools root (not a symlink leading out) and must exist.
+    let entry = Path::new(&canonical[1]);
+    match (entry.canonicalize(), tools_dir.canonicalize()) {
+        (Ok(real), Ok(base)) if real.starts_with(&base) => {}
+        (Ok(real), Ok(_)) => {
+            let found = format!("{} -> {}", entry.display(), real.display());
+            return fail!(C7LsExec, file, key(KEY_LS_BASE_CMD), found, expected);
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            let found = format!(
+                "{} ({e}); re-run `mur code-nav setup --lsp php`",
+                entry.display()
+            );
+            return fail!(C7LsExec, file, key(KEY_LS_BASE_CMD), found, expected);
+        }
+    }
+    if let Some(a) = settings.get(KEY_LS_ARGS) {
+        return fail!(C7LsExec, file, key(KEY_LS_ARGS), show(a), ABSENT);
+    }
+    match settings.get(KEY_LS_EXTRA_ARGS) {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::Sequence(xs)) if xs.is_empty() => Ok(()),
+        Some(a) => fail!(
+            C7LsExec,
+            file,
+            key(KEY_LS_EXTRA_ARGS),
+            show(a),
+            "absent or []"
+        ),
+    }
 }
 
 /// Why C8 applies. Each reason maps to the fixes that actually help.

@@ -51,6 +51,10 @@ pub struct Manifest {
     /// manifests written before it existed.
     #[serde(default)]
     pub pyright: Option<super::pyright_install::Record>,
+    /// The intelephense serena launches via the canonical `ls_base_cmd`
+    /// (#1945). Absent in manifests written before it existed.
+    #[serde(default)]
+    pub intelephense: Option<super::intelephense_install::Record>,
     /// Finding 4: every disabled line, so "off" is never silent.
     pub disabled: Vec<String>,
 }
@@ -88,8 +92,22 @@ pub fn grant_key(p: &Permission) -> String {
     match p {
         Permission::Spawn(b) => format!("spawn {b}"),
         Permission::Read(d) => format!("read {}", d.display()),
-        Permission::SpawnDir(d) => format!("spawn-dir {}", d.display()),
+        Permission::SpawnDir(d) => lane_grant_key(d),
     }
+}
+
+/// The manifest key an exec lane is recorded under.
+pub fn lane_grant_key(dir: &Path) -> String {
+    format!("spawn-dir {}", dir.display())
+}
+
+/// #1942: lanes resolved after install that the manifest never recorded.
+pub fn new_lanes(lanes: &[PathBuf], m: &Manifest) -> Vec<PathBuf> {
+    lanes
+        .iter()
+        .filter(|l| !m.granted.contains(&lane_grant_key(l)))
+        .cloned()
+        .collect()
 }
 
 /// What this plan would add on top of the manifest.
@@ -106,6 +124,8 @@ pub struct Diff {
     /// per-entry languages) but not listed for this entry. Reported so the
     /// narrower list is never silent.
     pub other_languages: Vec<String>,
+    /// #1942 note 1: the project this one replaces, whose read grant stays.
+    pub kept_project: Option<PathBuf>,
 }
 
 impl Diff {
@@ -196,6 +216,10 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
     let project = project
         .filter(|p| m.project_of(entry) != Some(*p))
         .map(Path::to_path_buf);
+    let kept_project = project
+        .as_ref()
+        .and(m.project_of(entry))
+        .map(Path::to_path_buf);
     Diff {
         installs,
         grants,
@@ -203,6 +227,7 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
         project,
         kept_languages,
         other_languages,
+        kept_project,
     }
 }
 
@@ -283,6 +308,13 @@ pub fn print_diff(out: &mut dyn Write, d: &Diff, first_run: bool) -> Result<()> 
             "\nConsented for this agent but not listed for this entry: {} \
              (pass --lsp to add)",
             d.other_languages.join(", ")
+        )?;
+    }
+    if let Some(p) = &d.kept_project {
+        writeln!(
+            out,
+            "\nStill granted from the replaced project (setup never revokes): read {}",
+            p.display()
         )?;
     }
     if first_run || d.is_empty() {

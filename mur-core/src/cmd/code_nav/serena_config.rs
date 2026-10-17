@@ -16,6 +16,7 @@
 
 use anyhow::{Context, Result, bail};
 use mur_agent_runtime::mcp::serena::{SERENA_TOOL_ALLOWLIST, SerenaPaths, preflight};
+use mur_common::serena_ls_cmd::{PHP_LS_ID, canonical_base_cmd};
 use serde_yaml_ng::{Mapping, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -36,6 +37,8 @@ const CPP_LS_ID: &str = "cpp";
 /// launch a given binary instead of running uv (3.6b; C7 confines it).
 const PYTHON_LS_ID: &str = "python";
 const LS_PATH: &str = "ls_path";
+/// The key C7 accepts only with the canonical value (#1945).
+const LS_BASE_CMD: &str = "ls_base_cmd";
 const CLANGD_LOCKDOWN: &str = "--enable-config=false";
 /// serena's own mode for this file (it holds `auth_secret`).
 #[cfg(unix)]
@@ -114,13 +117,22 @@ pub fn project_folder(paths: &SerenaPaths, project_root: &Path) -> Result<PathBu
     Ok(paths.projects_dir.join(name))
 }
 
-/// The values MUR owns, in `OWNED_KEYS` order. `python_ls` is the
-/// pre-installed `pyright-langserver` (3.6b), when Python is enabled.
+/// Language servers MUR pre-installed, which the config must point serena at.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ManagedLs<'a> {
+    /// The pre-installed `pyright-langserver` (3.6b), when Python is enabled.
+    pub python: Option<&'a Path>,
+    /// intelephense is pre-installed under the tools root (#1945); serena
+    /// gets the canonical `ls_base_cmd` for it.
+    pub php: bool,
+}
+
+/// The values MUR owns, in `OWNED_KEYS` order.
 pub fn owned_values(
     paths: &SerenaPaths,
     project_root: &Path,
     auth_secret: &str,
-    python_ls: Option<&Path>,
+    managed: ManagedLs<'_>,
 ) -> Result<Mapping> {
     let s = |p: &Path| -> Result<Value> {
         p.to_str()
@@ -142,10 +154,20 @@ pub fn owned_values(
     );
     let mut ls = Mapping::new();
     ls.insert(CPP_LS_ID.into(), Value::Mapping(cpp));
-    if let Some(bin) = python_ls {
+    if let Some(bin) = managed.python {
         let mut py = Mapping::new();
         py.insert(LS_PATH.into(), s(bin)?);
         ls.insert(PYTHON_LS_ID.into(), Value::Mapping(py));
+    }
+    if managed.php {
+        let cmd = canonical_base_cmd(PHP_LS_ID, &paths.tools_dir)
+            .with_context(|| format!("tools root {} is not UTF-8", paths.tools_dir.display()))?;
+        let mut php = Mapping::new();
+        php.insert(
+            LS_BASE_CMD.into(),
+            strings(&cmd.iter().map(String::as_str).collect::<Vec<_>>()),
+        );
+        ls.insert(PHP_LS_ID.into(), Value::Mapping(php));
     }
 
     let values: [Value; 10] = [
@@ -253,17 +275,18 @@ pub fn new_auth_secret() -> String {
 }
 
 /// Write the config for `project_root` and run the runtime preflight on it
-/// (whose C7 confines `python_ls` under the MUR tools root).
+/// (whose C7 confines `managed.python` under the MUR tools root and accepts
+/// only the canonical `ls_base_cmd` for PHP).
 pub fn write_config(
     paths: &SerenaPaths,
     project_root: &Path,
     template: &str,
     auth_secret: &str,
-    python_ls: Option<&Path>,
+    managed: ManagedLs<'_>,
 ) -> Result<PathBuf> {
     let folder = project_folder(paths, project_root)?;
     std::fs::create_dir_all(&folder).with_context(|| format!("create {}", folder.display()))?;
-    let owned = owned_values(paths, project_root, auth_secret, python_ls)?;
+    let owned = owned_values(paths, project_root, auth_secret, managed)?;
     let text = render(template, &owned)?;
     write_private(&paths.config_file, text.as_bytes())?;
     preflight(paths, project_root).with_context(|| {

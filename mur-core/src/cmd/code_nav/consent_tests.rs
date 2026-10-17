@@ -252,3 +252,36 @@ fn kept_languages_are_per_entry() {
         d.kept_languages
     );
 }
+
+/// #1942: a lane uv picked this run that the manifest never recorded is
+/// new, even though the plan diff is empty; a recorded one is not.
+#[test]
+fn unrecorded_exec_lane_is_new_recorded_one_is_not() {
+    let x = Path::new("/mh/tools/serena/python/cpython-3.13.2/bin");
+    let y = Path::new("/mh/tools/serena/python/cpython-3.13.5/bin");
+    let m = Manifest {
+        granted: [lane_grant_key(x)].into_iter().collect(),
+        ..Default::default()
+    };
+    assert_eq!(new_lanes(&[x.into(), y.into()], &m), vec![y.to_path_buf()]);
+    assert!(new_lanes(&[x.into()], &m).is_empty());
+    assert!(new_lanes(&[], &Manifest::default()).is_empty());
+}
+
+/// #1942 note 1: a replaced project keeps its read grant, and says so.
+#[test]
+fn replaced_project_reports_the_kept_read_grant() {
+    let plan = p(true, &[]);
+    let m = applied(&plan, Path::new("/r"));
+    let d = diff(&plan, "serena", Some(Path::new("/other")), &m);
+    assert_eq!(d.kept_project.as_deref(), Some(Path::new("/r")));
+    let mut out = Vec::new();
+    print_diff(&mut out, &d, false).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(
+        out.contains("Still granted") && out.contains("read /r"),
+        "{out}"
+    );
+    let same = diff(&plan, "serena", Some(Path::new("/r")), &m);
+    assert_eq!(same.kept_project, None);
+}

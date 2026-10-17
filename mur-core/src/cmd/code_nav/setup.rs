@@ -6,6 +6,12 @@
 //! decide its scope. No terminal and no `--yes` refuses before anything is
 //! installed, written or granted. A re-run whose plan adds nothing over the
 //! manifest asks nothing and only re-verifies.
+//!
+//! The exec lanes are the one thing the plan cannot list: after install,
+//! any lane the manifest has not recorded is printed by path and asked
+//! about again, under the same rules, before it is granted (#1942). A run
+//! that fails part way saves no manifest, so the next run re-lists what it
+//! had already applied: conservative, never silent.
 
 use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
@@ -150,8 +156,9 @@ pub fn run(
         writeln!(out, "\nserena entry `{entry}` project: {}", p.display())?;
         writeln!(
             out,
-            "    also granted after install: exec of serena's (and pyright's) own Python \
-             (each venv bin dir and the interpreter uv chose)"
+            "    also needed after install: exec of serena's (and pyright's) own Python \
+             (each venv bin dir and the interpreter uv chose); any not granted before \
+             is shown by path and asked about then"
         )?;
     }
 
@@ -193,11 +200,63 @@ pub fn run(
         &plan,
         project.as_deref(),
         prior,
+        &mut Ask { consent, input },
         out,
     )?;
     consent::save_manifest(&manifest_path, &manifest)?;
     writeln!(out, "\nRecorded in {}", manifest_path.display())?;
     Ok(())
+}
+
+/// How `apply` asks about what the plan could not list.
+struct Ask<'a> {
+    consent: Consent,
+    input: &'a mut dyn BufRead,
+}
+
+/// #1942: exec lanes are known only after install, so the plan diff never
+/// saw them. Any lane the manifest has not recorded is shown by its path
+/// and consented to under the same rules as the plan, before it is granted.
+fn consent_to_lanes(
+    lanes: &[PathBuf],
+    m: &Manifest,
+    consent: Consent,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let new = consent::new_lanes(lanes, m);
+    if new.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "\nExec lanes to grant (resolved after install):")?;
+    for l in &new {
+        writeln!(out, "    {}", consent::lane_grant_key(l))?;
+    }
+    let listed = || {
+        new.iter()
+            .map(|l| l.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match consent {
+        Consent::Given => Ok(()),
+        Consent::Impossible => bail!(
+            "new exec lanes need consent and there is no terminal to ask: {}. \
+             Pass --yes to confirm them; nothing was granted",
+            listed()
+        ),
+        Consent::Ask if crate::cmd::consent::literal_yes(input, out)? => Ok(()),
+        Consent::Ask => {
+            writeln!(
+                out,
+                "  skipped — no exec lane or profile entry was granted."
+            )?;
+            bail!(
+                "code-nav setup not applied: exec lanes not approved ({})",
+                listed()
+            )
+        }
+    }
 }
 
 /// Whose profile and which serena entry a run applies to.
@@ -213,6 +272,7 @@ fn apply(
     plan: &plan::Plan,
     project: Option<&Path>,
     prior: Manifest,
+    ask: &mut Ask<'_>,
     out: &mut dyn Write,
 ) -> Result<Manifest> {
     let Target {
@@ -307,6 +367,7 @@ fn apply(
             }
         }
     }
+    consent_to_lanes(&lanes, &m, ask.consent, ask.input, out)?;
     let (ppath, mut profile) = crate::cmd::agent::load_profile_for_edit(agent)?;
     let change = serena_entry::upsert(
         &mut profile,
@@ -328,7 +389,7 @@ fn apply(
     }
     for lane in &lanes {
         crate::cmd::agent::grant_spawn_dir(agent, path_str(lane)?)?;
-        m.granted.insert(format!("spawn-dir {}", lane.display()));
+        m.granted.insert(consent::lane_grant_key(lane));
         writeln!(out, "  ✓ exec lane {}", lane.display())?;
     }
     writeln!(out, "  ✓ permissions granted")?;
