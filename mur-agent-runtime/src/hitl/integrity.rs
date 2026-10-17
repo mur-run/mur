@@ -55,14 +55,16 @@ pub fn heads_dir(mur_home: &Path, agent: &str) -> PathBuf {
     mur_home.join("agents").join(agent).join(HITL_HEAD_DIR)
 }
 
-fn log_path(mur_home: &Path, channel_id: &str) -> PathBuf {
+fn log_path(mur_home: &Path, channel_id: &str) -> anyhow::Result<PathBuf> {
     ChannelStore::new(mur_home).events_path(channel_id)
 }
 
 /// Shared lock on the channel's append lock, so a reader never sees a line
 /// that is written but not yet sealed. `None` when nothing was ever appended.
 pub fn read_lock(mur_home: &Path, channel_id: &str) -> Option<std::fs::File> {
-    let lock = log_path(mur_home, channel_id).with_file_name("events.lock");
+    let lock = log_path(mur_home, channel_id)
+        .ok()?
+        .with_file_name("events.lock");
     let f = OpenOptions::new().read(true).open(lock).ok()?;
     f.lock_shared().ok()?;
     Some(f)
@@ -103,7 +105,9 @@ pub fn verify(
     pubkey: &[u8; 32],
 ) -> Result<(), IntegrityError> {
     let bad = |why: String| IntegrityError(why);
-    let log = read_log(&log_path(mur_home, channel_id)).map_err(|e| bad(format!("{e:#}")))?;
+    let log = log_path(mur_home, channel_id)
+        .and_then(|p| read_log(&p))
+        .map_err(|e| bad(format!("{e:#}")))?;
     let head = read_head(&heads_dir(mur_home, agent), channel_id)
         .map_err(|e| bad(format!("head unreadable: {e:#}")))?;
     let Some(head) = head else {
@@ -140,7 +144,7 @@ pub fn seal_hook(
 ) -> SharedSealHook {
     Arc::new(move |input| {
         let dir = heads_dir(&mur_home, &agent);
-        let bytes = read_log(&log_path(&mur_home, input.channel_id))?;
+        let bytes = read_log(&log_path(&mur_home, input.channel_id)?)?;
         let full = chain_log(&bytes);
         let prior = read_head(&dir, input.channel_id)?;
         let pubkey = identity.verifying_key_bytes();
@@ -178,7 +182,7 @@ pub(crate) fn reseal_for_test(
     channel_id: &str,
     identity: &AgentIdentity,
 ) {
-    let bytes = read_log(&log_path(mur_home, channel_id)).unwrap();
+    let bytes = read_log(&log_path(mur_home, channel_id).unwrap()).unwrap();
     let c = chain_log(&bytes);
     let head = Head::seal(
         identity,

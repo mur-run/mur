@@ -13,7 +13,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::head::Head;
 
@@ -25,13 +25,7 @@ const TMP_SUFFIX: &str = "tmp";
 /// `<heads_dir>/<channel_id>.head`. Refuses an id that could leave `heads_dir`
 /// or name no file, so a hostile id cannot make the router sign elsewhere.
 pub fn head_path(heads_dir: &Path, channel_id: &str) -> Result<PathBuf> {
-    let unsafe_id = channel_id.is_empty()
-        || channel_id == "."
-        || channel_id == ".."
-        || channel_id.contains(['/', '\\', '\0']);
-    if unsafe_id {
-        bail!("unsafe channel id for a head file: {channel_id:?}");
-    }
+    crate::id::check_channel_id(channel_id)?;
     Ok(heads_dir.join(format!("{channel_id}.{HEAD_EXT}")))
 }
 

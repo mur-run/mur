@@ -99,7 +99,7 @@ pub fn observe(
     }
     let marker_path = svc
         .store()
-        .events_path(channel_id)
+        .events_path(channel_id)?
         .with_file_name(REVIEW_CORRUPTED_MARKER_FILE);
     let marker = if marker_path.exists() {
         Some(

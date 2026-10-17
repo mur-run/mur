@@ -72,7 +72,7 @@ impl Fixture {
     }
 
     fn log_path(&self) -> std::path::PathBuf {
-        self.svc.store().events_path(&self.id)
+        self.svc.store().events_path(&self.id).unwrap()
     }
 
     fn head_path(&self) -> std::path::PathBuf {

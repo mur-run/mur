@@ -173,7 +173,8 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
             .load_events_with_damage(&fleet.channel_id, &pubkey, false)?;
     // The raw text only feeds the lenient cumulative scan; a channel with no
     // events yet has no file, which is an empty log, not an error.
-    let raw = match std::fs::read_to_string(svc.store().events_path(&fleet.channel_id)) {
+    let log_path = svc.store().events_path(&fleet.channel_id)?;
+    let raw = match std::fs::read_to_string(&log_path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.into()),
@@ -202,7 +203,7 @@ pub fn prepare_resume(mur_home: &Path, name: &str) -> Result<Resumable> {
              Remove it with: mur fleet delete {name}\n\
              Then start a new session with: mur fleet review ...\n\
              Channel: {}",
-            svc.store().events_path(&fleet.channel_id).display()
+            log_path.display()
         ),
     }
 

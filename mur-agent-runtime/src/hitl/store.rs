@@ -376,7 +376,7 @@ mod tests {
     /// verify afterwards.
     fn rewrite_ts(home: &Path, to: chrono::DateTime<chrono::Utc>) {
         let svc = ChannelService::open(home).unwrap();
-        let path = svc.store().events_path(marker_id(home).trim());
+        let path = svc.store().events_path(marker_id(home).trim()).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
         let rewritten: Vec<String> = raw
             .lines()
@@ -531,7 +531,7 @@ mod tests {
 
     fn line_count(home: &Path) -> Vec<String> {
         let svc = ChannelService::open(home).unwrap();
-        let path = svc.store().events_path(marker_id(home).trim());
+        let path = svc.store().events_path(marker_id(home).trim()).unwrap();
         std::fs::read_to_string(path)
             .unwrap()
             .lines()

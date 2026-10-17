@@ -134,7 +134,7 @@ fn payloads(home: &Path, name: &str) -> Vec<ReviewPayload> {
 
 fn events_bytes(home: &Path, name: &str) -> Vec<u8> {
     let svc = mur_channel::ChannelService::open(home).unwrap();
-    std::fs::read(svc.store().events_path(&format!("fleet-{name}"))).unwrap()
+    std::fs::read(svc.store().events_path(&format!("fleet-{name}")).unwrap()).unwrap()
 }
 
 #[derive(Clone, Copy, Debug)]

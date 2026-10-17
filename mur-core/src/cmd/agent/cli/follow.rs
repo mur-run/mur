@@ -143,7 +143,10 @@ impl Follow {
 }
 
 fn log_len(store: &ChannelStore, id: &str) -> u64 {
-    std::fs::metadata(store.events_path(id))
+    store
+        .events_path(id)
+        .ok()
+        .and_then(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .unwrap_or(0)
 }

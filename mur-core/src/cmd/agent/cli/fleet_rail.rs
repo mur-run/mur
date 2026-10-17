@@ -454,7 +454,10 @@ impl FleetRail {
     pub fn poll(&mut self, home: &Path, now: Instant) -> bool {
         self.next_poll = now + POLL_INTERVAL;
         let store = mur_channel::ChannelStore::new(home);
-        let len = std::fs::metadata(store.events_path(&self.channel_id))
+        let len = store
+            .events_path(&self.channel_id)
+            .ok()
+            .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .unwrap_or(0);
         let jobs_gate = jobs_dir_gate(home, &self.fleet);

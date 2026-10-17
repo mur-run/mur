@@ -199,7 +199,8 @@ fn resume_refuses_a_damaged_channel_and_names_the_line() {
     let path = mur_channel::ChannelService::open(home)
         .unwrap()
         .store()
-        .events_path(&format!("fleet-{name}"));
+        .events_path(&format!("fleet-{name}"))
+        .unwrap();
     let mut text = std::fs::read_to_string(&path).unwrap();
     text.push_str("{truncated\n");
     std::fs::write(&path, text).unwrap();
@@ -401,7 +402,8 @@ fn a_damaged_channel_has_a_working_exit() {
     let path = mur_channel::ChannelService::open(home)
         .unwrap()
         .store()
-        .events_path(&channel);
+        .events_path(&channel)
+        .unwrap();
     let mut text = std::fs::read_to_string(&path).unwrap();
     text.push_str("{truncated\n");
     std::fs::write(&path, text).unwrap();

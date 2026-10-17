@@ -102,6 +102,7 @@ fn each_state_is_derived() {
         .unwrap()
         .store()
         .events_path(&ch)
+        .unwrap()
         .with_file_name(REVIEW_CORRUPTED_MARKER_FILE);
     std::fs::write(&marker, r#"{"detected_at":"2026-01-01T00:00:00Z"}"#).unwrap();
     assert_eq!(state_of(h, &ch, "review-corr0001"), SessionState::Corrupted);
