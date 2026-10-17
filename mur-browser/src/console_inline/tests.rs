@@ -91,3 +91,34 @@ fn responses_without_links_are_untouched() {
     inline_console_links(&mut err, tmp.path());
     assert_eq!(err["error"]["message"], "x");
 }
+
+#[test]
+fn scan_keeps_only_the_displayed_lines_but_counts_all() {
+    let n = MAX_INLINE_LINES * 40;
+    let body: String = (1..=n).map(|i| format!("line{i}\n")).collect();
+    let r = scan_lines(std::io::Cursor::new(body), 1, n).unwrap();
+    assert_eq!(r.total, n);
+    assert_eq!(r.shown.len(), MAX_INLINE_LINES);
+    assert_eq!(r.shown[0], "line1");
+}
+
+#[test]
+fn scan_bounds_one_giant_line_and_still_marks_truncation() {
+    let giant = "é".repeat(MAX_LINE_CHARS * 100);
+    let r = scan_lines(std::io::Cursor::new(format!("{giant}\nnext\n")), 1, 2).unwrap();
+    assert_eq!(r.total, 2);
+    assert!(
+        r.shown[0].len() <= MAX_LINE_CHARS * 4 + 4,
+        "kept {}",
+        r.shown[0].len()
+    );
+    assert!(truncate(&r.shown[0], MAX_LINE_CHARS).ends_with('…'));
+    assert_eq!(r.shown[1], "next");
+}
+
+#[test]
+fn scan_honours_the_range_crlf_and_a_missing_final_newline() {
+    let r = scan_lines(std::io::Cursor::new("a\r\nb\r\nc\r\nd"), 2, 9).unwrap();
+    assert_eq!(r.shown, vec!["b", "c", "d"]);
+    assert_eq!(r.total, 3);
+}

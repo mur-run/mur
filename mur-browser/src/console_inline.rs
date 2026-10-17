@@ -97,17 +97,16 @@ fn rewrite_text(text: &str, root: &Path) -> String {
 fn render_link(link: &str, root: &Path) -> String {
     let header = CONSOLE_LINK_PREFIX.trim_end();
     match read_range(link, root) {
-        Some(lines) if lines.is_empty() => format!("{header} (none)"),
-        Some(lines) => {
-            let total = lines.len();
+        Some(scan) if scan.total == 0 => format!("{header} (none)"),
+        Some(scan) => {
             let mut out = vec![header.to_owned()];
-            for l in lines.iter().take(MAX_INLINE_LINES) {
+            for l in &scan.shown {
                 out.push(format!("  {}", truncate(l, MAX_LINE_CHARS)));
             }
-            if total > MAX_INLINE_LINES {
+            if scan.total > scan.shown.len() {
                 out.push(format!(
                     "  … {} more; call browser_console_messages for all",
-                    total - MAX_INLINE_LINES
+                    scan.total - scan.shown.len()
                 ));
             }
             out.join("\n")
@@ -116,9 +115,9 @@ fn render_link(link: &str, root: &Path) -> String {
     }
 }
 
-/// Parse `<path>#L<a>[-L<b>]` and return those 1-based lines, if the path is
+/// Parse `<path>#L<a>[-L<b>]` and scan those 1-based lines, if the path is
 /// a file inside `root`.
-fn read_range(link: &str, root: &Path) -> Option<Vec<String>> {
+fn read_range(link: &str, root: &Path) -> Option<Scan> {
     let (path, frag) = link.trim().rsplit_once("#L")?;
     let (from, to) = match frag.split_once("-L") {
         Some((a, b)) => (a.parse::<usize>().ok()?, b.parse::<usize>().ok()?),
@@ -135,14 +134,82 @@ fn read_range(link: &str, root: &Path) -> Option<Vec<String>> {
     if !file.starts_with(&root) {
         return None;
     }
-    let body = std::fs::read_to_string(&file).ok()?;
-    Some(
-        body.lines()
-            .skip(from - 1)
-            .take(to - from + 1)
-            .map(ToOwned::to_owned)
-            .collect(),
-    )
+    let f = std::fs::File::open(&file).ok()?;
+    scan_lines(f, from, to).ok()
+}
+
+/// What [`scan_lines`] kept from a line range.
+#[derive(Debug)]
+struct Scan {
+    /// Lines in the requested range that exist in the file.
+    total: usize,
+    /// The first [`MAX_INLINE_LINES`] of them, each capped just past
+    /// [`MAX_LINE_CHARS`] so [`truncate`] still marks the cut.
+    shown: Vec<String>,
+}
+
+/// Stream lines `from..=to` (1-based) out of `src` with bounded memory: a
+/// page can log one multi-megabyte line, or millions of lines, and neither
+/// may be read whole into the proxy.
+fn scan_lines(src: impl std::io::Read, from: usize, to: usize) -> std::io::Result<Scan> {
+    use std::io::BufRead;
+    // One char is at most 4 UTF-8 bytes; keep one char past the limit.
+    let byte_cap = (MAX_LINE_CHARS + 1) * 4;
+    let mut reader = std::io::BufReader::new(src);
+    let mut scan = Scan {
+        total: 0,
+        shown: Vec::new(),
+    };
+    let mut line_no = 1usize;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut in_line = false;
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            if in_line {
+                finish_line(&mut scan, &mut buf, line_no, from);
+            }
+            return Ok(scan);
+        }
+        let (part, ends_line) = match chunk.iter().position(|&b| b == b'\n') {
+            Some(i) => (&chunk[..i], Some(i + 1)),
+            None => (chunk, None),
+        };
+        let keep = line_no >= from && scan.shown.len() < MAX_INLINE_LINES;
+        if keep && buf.len() < byte_cap {
+            let room = byte_cap - buf.len();
+            buf.extend_from_slice(&part[..part.len().min(room)]);
+        }
+        in_line = true;
+        let used = ends_line.unwrap_or(chunk.len());
+        reader.consume(used);
+        if ends_line.is_some() {
+            finish_line(&mut scan, &mut buf, line_no, from);
+            in_line = false;
+            if line_no >= to {
+                return Ok(scan);
+            }
+            line_no += 1;
+        }
+    }
+}
+
+fn finish_line(scan: &mut Scan, buf: &mut Vec<u8>, line_no: usize, from: usize) {
+    if line_no < from {
+        return;
+    }
+    scan.total += 1;
+    if scan.shown.len() < MAX_INLINE_LINES {
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        let text: String = String::from_utf8_lossy(buf)
+            .chars()
+            .take(MAX_LINE_CHARS + 1)
+            .collect();
+        scan.shown.push(text);
+    }
+    buf.clear();
 }
 
 fn truncate(s: &str, max: usize) -> String {
