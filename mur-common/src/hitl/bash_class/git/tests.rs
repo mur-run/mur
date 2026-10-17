@@ -131,6 +131,11 @@ fn worktree_or_index_reads_prompt() {
         "git diff HEAD~1 HEAD --stat", // no `--`: an operand may be a path
         "git diff HEAD..f.x --stat",   // `HEAD..f.x` can be a file name
         "git diff --no-index --stat a b",
+        // A value-taking flag: its value would be miscounted as a second rev,
+        // so git diffs `HEAD` against the worktree (ran fsmonitor).
+        "git diff --no-textconv --no-ext-diff -O f.x HEAD --",
+        "git diff --no-textconv --no-ext-diff -S hello HEAD --",
+        "git diff --no-textconv --no-ext-diff -G hello HEAD --",
         "git diff --stat :f HEAD:f --",
         "git grep -n pat",
         "git grep pat HEAD", // no `--`
