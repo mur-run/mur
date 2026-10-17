@@ -291,6 +291,50 @@ pub const RUNNING_LOCK: &str = "running.lock";
 #[cfg_attr(test, allow(dead_code))] // only the real probe reads it
 pub const PREFLIGHT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// #1762 `review-setup`: the main agent's name when `--main` is not given.
+pub const DEFAULT_REVIEW_MAIN_AGENT: &str = "coach";
+/// #1762 `review-setup`: the reviewer's name when `--reviewer` is not given.
+pub const DEFAULT_REVIEW_REVIEWER_AGENT: &str = "reviewer";
+
+/// #1762: file in the agent dir holding the SHA-256 of the role prompt
+/// `review-setup` last wrote, so a re-run can tell its own (possibly older)
+/// prompt from one the user edited by hand.
+pub const REVIEW_SETUP_PROMPT_HASH_FILE: &str = "review-setup-prompt.sha256";
+
+/// #1762: built-in tools the reviewer is denied on creation, so it reviews the
+/// work instead of editing it. `bash` stays at the default `ask`: the reviewer
+/// must be able to run tests to obtain the evidence an `approve` rests on.
+pub const REVIEWER_DENIED_TOOLS: [&str; 2] = ["write_file", "edit_file"];
+
+/// #1762: system prompt `review-setup` installs on the main agent. The exact
+/// reply format is NOT repeated here: every turn's message
+/// ([`REVIEW_MAIN_PROMPT`]) carries it, so a wire change cannot leave this
+/// prompt describing a stale format.
+pub const REVIEW_MAIN_ROLE_PROMPT: &str = "# Main agent (review loop)
+
+You do the task in an attended review loop. A separate reviewer agent checks your work each round and raises findings with IDs (F1, F2, ...).
+
+- Do the task the human gave, then summarise what you changed.
+- Answer every open finding: `accept` and fix it, `partial` and say what you did, or `reject` with a concrete reason. Never ignore one.
+- A ruling or note from the human outranks the findings; follow it.
+- Each round's message states the exact machine-readable block to end your reply with. Follow it exactly: the loop parses it, and a malformed block costs a retry.
+- Cite evidence (`file:line`, command output) for claims the reviewer will need to check.
+";
+
+/// #1762: system prompt `review-setup` installs on the reviewer. As with
+/// [`REVIEW_MAIN_ROLE_PROMPT`], the verdict format lives in the per-turn
+/// [`REVIEW_REVIEWER_PROMPT`], not here.
+pub const REVIEW_REVIEWER_ROLE_PROMPT: &str = "# Reviewer (review loop)
+
+You review another agent's work in an attended review loop. You do not do the task and you do not edit the work.
+
+- Check the work against the task. Raise only real problems, each with a severity (high / medium / low) and a concrete description.
+- Verify with your own tools: read the files, run the tests. Never approve on the main agent's quotes or citations alone.
+- Give every previously issued finding a status: open, resolved, withdrawn, or disputed.
+- When you cannot verify something an approval depends on, return `blocked` rather than guess.
+- Each round's message states the exact verdict block to reply with. Follow it exactly: the loop parses it, and a malformed reply costs a retry.
+";
+
 /// P3b-§3.1 / §3.3: the `/review` grammar, appended to every syntax error.
 pub const REVIEW_USAGE_MURMUR: &str = "/review --main <agent> --reviewer <agent> [--deadline 30m] [--budget-usd 2] [--stuck-rounds 3] <task…>\n/review resume <session>";
 

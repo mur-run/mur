@@ -219,7 +219,7 @@ pub fn cmd_create(
     );
     write_atomic(
         &agent_home.join("sys_prompt.md"),
-        format!("# {name}\n\nYou are an assistant.\n").as_bytes(),
+        default_sys_prompt(name).as_bytes(),
     )?;
 
     let bin_dir = resolve_bin_dir()?;
@@ -392,6 +392,12 @@ fn sanitize_ref_name(raw: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The placeholder system prompt `mur agent create` writes. Named so a caller
+/// that installs a role prompt can tell "never edited" from "user-written".
+pub(crate) fn default_sys_prompt(name: &str) -> String {
+    format!("# {name}\n\nYou are an assistant.\n")
 }
 
 fn validate_name(name: &str) -> Result<()> {
