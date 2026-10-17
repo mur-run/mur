@@ -36,10 +36,48 @@ impl std::ops::DerefMut for ChildGuard {
     }
 }
 
-#[test]
-fn test_initialize_and_list_tools() {
+/// Size of the base catalog (`src/tools/catalog.rs`). `ast_grep_search` is
+/// registered on top of it only when the pinned binary is installed.
+const BASE_TOOL_COUNT: usize = 20;
+
+/// Spawn the server against `mur_home`, run initialize, return `tools/list`.
+fn list_tools(mur_home: &std::path::Path) -> Vec<serde_json::Value> {
     let mut child = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+            .env("MUR_HOME", mur_home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}"#,
+    );
+    let _ = read_response(&mut stdout);
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
+    send_request(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+    );
+    let resp = read_response(&mut stdout);
+    resp["result"]["tools"].as_array().unwrap().clone()
+}
+
+#[test]
+fn test_initialize_and_list_tools() {
+    // Hermetic MUR_HOME: the real ~/.mur may hold the pinned ast-grep, which
+    // adds `ast_grep_search` and breaks the base count (#1953).
+    let home = tempfile::tempdir().unwrap();
+    let mut child = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_mur-mcp-server"))
+            .env("MUR_HOME", home.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -78,7 +116,15 @@ fn test_initialize_and_list_tools() {
     );
     let resp = read_response(&mut stdout);
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 20, "Expected 20 tools");
+    assert_eq!(
+        tools.len(),
+        BASE_TOOL_COUNT,
+        "Expected {BASE_TOOL_COUNT} base tools"
+    );
+    assert!(
+        !tools.iter().any(|t| t["name"] == "ast_grep_search"),
+        "ast_grep_search must not register without the pinned binary"
+    );
 
     // Verify properties is an object (not an array) — MCP spec requires JSON object
     let first_tool_with_props = tools
@@ -113,6 +159,26 @@ fn test_initialize_and_list_tools() {
     assert!(names.contains(&"mur_compress_stats"));
     assert!(names.contains(&"parallel_jobs"));
     assert!(names.contains(&"mur_job_status"));
+}
+
+#[test]
+fn lists_ast_grep_search_when_pinned_binary_installed() {
+    let home = tempfile::tempdir().unwrap();
+    let bin = mur_common::config::ast_grep_binary_path(home.path());
+    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let tools = list_tools(home.path());
+    assert_eq!(tools.len(), BASE_TOOL_COUNT + 1);
+    assert!(
+        tools.iter().any(|t| t["name"] == "ast_grep_search"),
+        "ast_grep_search must register when the pinned binary is installed"
+    );
 }
 
 #[test]
