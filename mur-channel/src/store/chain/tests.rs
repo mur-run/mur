@@ -79,7 +79,7 @@ impl Fx {
     }
 
     fn lines(&self) -> Vec<String> {
-        fs::read_to_string(self.store.events_path(CH))
+        fs::read_to_string(self.store.events_path(CH).unwrap())
             .unwrap()
             .lines()
             .map(str::to_owned)
@@ -89,7 +89,7 @@ impl Fx {
     fn rewrite(&self, lines: &[String]) {
         let mut body = lines.join("\n");
         body.push('\n');
-        fs::write(self.store.events_path(CH), body).unwrap();
+        fs::write(self.store.events_path(CH).unwrap(), body).unwrap();
     }
 
     fn report(&self) -> DamageReport {
@@ -294,7 +294,7 @@ impl Fx {
 
     /// A head signed by `signer` over the CURRENT log.
     fn head_by(&self, signer: &AgentIdentity, channel_id: &str) -> crate::head::Head {
-        let log = fs::read(self.store.events_path(CH)).unwrap();
+        let log = fs::read(self.store.events_path(CH).unwrap()).unwrap();
         let state = crate::head::chain_log(&log);
         let seq = serde_json::from_str::<ChannelEvent>(f_last(&log))
             .unwrap()
@@ -409,7 +409,7 @@ fn emptied_log_with_a_head_is_a_mismatch() {
     let f = fx();
     f.v2(0);
     f.anchor_now();
-    fs::write(f.store.events_path(CH), b"").unwrap();
+    fs::write(f.store.events_path(CH).unwrap(), b"").unwrap();
     let m = f.report().anchor_mismatch.expect("anchor mismatch");
     assert_eq!((m.kind, m.log_lines), (K::Truncated, 0));
 }

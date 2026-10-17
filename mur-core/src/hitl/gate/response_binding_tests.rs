@@ -156,7 +156,7 @@ fn router_request_at(
 /// verifies afterwards — which is why no HITL decision may read it (#1764 C).
 fn rewrite_ts(home: &Path, ch: &str, to: chrono::DateTime<chrono::Utc>) {
     let svc = ChannelService::open(home).unwrap();
-    let path = svc.store().events_path(ch);
+    let path = svc.store().events_path(ch).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     let mut out = String::new();
     for line in text.lines() {

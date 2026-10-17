@@ -7,6 +7,11 @@ use chrono::Utc;
 use fs2::FileExt;
 use mur_common::channel::{Channel, ChannelActor, ChannelEvent, EventKind};
 
+/// File name of a channel's append-only log inside its directory.
+const EVENTS_FILE: &str = "events.jsonl";
+/// File name of a channel's manifest inside its directory.
+const MANIFEST_FILE: &str = "channel.yaml";
+
 /// Event-sourced store rooted at `<mur_home>/channels/`.
 pub struct ChannelStore {
     root: PathBuf,
@@ -39,26 +44,31 @@ impl ChannelStore {
         &self.mur_home
     }
 
-    fn channel_dir(&self, id: &str) -> PathBuf {
-        self.root.join(id)
+    /// `<root>/<id>`. The only place an id becomes a path, so it is the only
+    /// place that has to refuse one that could leave `root` (#1936).
+    fn channel_dir(&self, id: &str) -> Result<PathBuf> {
+        crate::id::check_channel_id(id)?;
+        Ok(self.root.join(id))
     }
     /// Path of a channel's append-only log. Public so a reader can cheaply
-    /// gate on its length instead of re-parsing an unchanged log.
-    pub fn events_path(&self, id: &str) -> PathBuf {
-        self.channel_dir(id).join("events.jsonl")
+    /// gate on its length instead of re-parsing an unchanged log. Errors on an
+    /// id that is not a single safe path component.
+    pub fn events_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.channel_dir(id)?.join(EVENTS_FILE))
     }
-    fn manifest_path(&self, id: &str) -> PathBuf {
-        self.channel_dir(id).join("channel.yaml")
+    fn manifest_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.channel_dir(id)?.join(MANIFEST_FILE))
     }
     /// Whether `id` has a manifest on disk. `create` writes only the manifest,
     /// so a channel that exists but holds no events yet is known by this alone.
+    /// An unsafe id names no channel, so it has none.
     pub fn has_manifest(&self, id: &str) -> bool {
-        self.manifest_path(id).exists()
+        self.manifest_path(id).is_ok_and(|p| p.exists())
     }
 
     /// Create the channel directory and write its initial manifest.
     pub fn create(&self, channel: &Channel) -> Result<()> {
-        let dir = self.channel_dir(&channel.id);
+        let dir = self.channel_dir(&channel.id)?;
         fs::create_dir_all(&dir)
             .with_context(|| format!("create channel dir {}", dir.display()))?;
         self.save_manifest(channel)
@@ -66,7 +76,7 @@ impl ChannelStore {
 
     /// Atomic manifest write (temp file + rename), matching the YamlStore idiom.
     pub fn save_manifest(&self, channel: &Channel) -> Result<()> {
-        let path = self.manifest_path(&channel.id);
+        let path = self.manifest_path(&channel.id)?;
         let yaml = serde_yaml::to_string(channel).context("serialize channel manifest")?;
         let tmp = path.with_extension("yaml.tmp");
         fs::write(&tmp, &yaml).with_context(|| format!("write {}", tmp.display()))?;
@@ -83,7 +93,7 @@ impl ChannelStore {
     /// version, and that nobody claimed ownership. Title and participants fill
     /// in through the normal paths (`add_participant`, a later `save_manifest`).
     fn ensure_manifest(&self, id: &str) -> Result<()> {
-        if self.manifest_path(id).exists() {
+        if self.manifest_path(id)?.exists() {
             return Ok(());
         }
         let now = chrono::Utc::now();
@@ -102,14 +112,14 @@ impl ChannelStore {
     }
 
     pub fn load_manifest(&self, id: &str) -> Result<Channel> {
-        let path = self.manifest_path(id);
+        let path = self.manifest_path(id)?;
         let s = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         serde_yaml::from_str(&s).with_context(|| format!("parse {}", path.display()))
     }
 
     /// Delete the channel directory entirely. Idempotent — no error if already absent.
     pub fn delete(&self, id: &str) -> Result<()> {
-        let dir = self.channel_dir(id);
+        let dir = self.channel_dir(id)?;
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -183,7 +193,7 @@ mod tests {
 
         // What archiving did on a live machine: the manifest left, the events
         // stayed, and the next append resurrected the directory without one.
-        std::fs::remove_file(store.manifest_path("fleet-x")).unwrap();
+        std::fs::remove_file(store.manifest_path("fleet-x").unwrap()).unwrap();
         assert!(store.load_manifest("fleet-x").is_err(), "precondition");
 
         store
@@ -283,7 +293,7 @@ mod tests {
         // Line 2: two records glued together — what an interrupted append
         // leaves behind once the next append writes at EOF.
         {
-            let path = store.events_path("c1");
+            let path = store.events_path("c1").unwrap();
             let mut f = OpenOptions::new().append(true).open(&path).unwrap();
             f.write_all(br#"{"seq":1,"seq":2}{"seq":3}"#).unwrap();
             f.write_all(b"\n").unwrap();
@@ -357,7 +367,7 @@ mod tests {
             .unwrap();
         // A garbled line, exactly like the existing damaged-line test.
         {
-            let path = store.events_path("c1");
+            let path = store.events_path("c1").unwrap();
             let mut f = OpenOptions::new().append(true).open(&path).unwrap();
             f.write_all(b"{not json at all").unwrap();
             f.write_all(b"\n").unwrap();
@@ -430,7 +440,7 @@ mod tests {
             .unwrap();
         // Line 2: unparseable.
         {
-            let path = store.events_path("c1");
+            let path = store.events_path("c1").unwrap();
             let mut f = OpenOptions::new().append(true).open(&path).unwrap();
             f.write_all(b"not even json").unwrap();
             f.write_all(b"\n").unwrap();
@@ -711,6 +721,38 @@ mod tests {
         let mut ids = store.list_ids().unwrap();
         ids.sort();
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// #1936: the store refuses an id that could leave `root` before it
+    /// touches the disk — including a Windows drive prefix, which `join`
+    /// would treat as a new base rather than one more component.
+    #[test]
+    fn store_refuses_unsafe_ids_before_touching_disk() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("channels");
+        let store = ChannelStore::new(&root);
+        for id in ["..", "../escape", "a/b", "C:escape", "C:", "c1:stream"] {
+            assert!(store.create(&sample_channel(id)).is_err(), "create {id:?}");
+            assert!(store.delete(id).is_err(), "delete {id:?}");
+            let appended = store.append_event(
+                id,
+                ChannelActor::Human { name: "me".into() },
+                EventKind::Message,
+                serde_json::json!({"text": "x"}),
+                None,
+                None,
+                None,
+            );
+            assert!(appended.is_err(), "append {id:?}");
+            assert!(!store.has_manifest(id), "has_manifest {id:?}");
+        }
+        assert!(!root.exists(), "nothing may be created for a refused id");
+        let mut left: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert!(left.is_empty(), "stray entries: {left:?}");
     }
 
     #[test]

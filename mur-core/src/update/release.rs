@@ -161,6 +161,9 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 const LATEST_URL: &str = "https://api.github.com/repos/mur-run/mur/releases/latest";
+const TAG_URL_PREFIX: &str = "https://api.github.com/repos/mur-run/mur/releases/tags/";
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(1800);
 const CACHE_TTL: Duration = Duration::from_secs(300);
 const USER_AGENT: &str = concat!("mur-update/", env!("CARGO_PKG_VERSION"));
 
@@ -195,19 +198,36 @@ pub fn fetch_latest() -> anyhow::Result<Release> {
     {
         return Ok(r);
     }
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(30))
-        .build()?;
-    let resp = client.get(LATEST_URL).send()?;
-    if resp.status() == reqwest::StatusCode::FORBIDDEN {
-        anyhow::bail!("GitHub API rate limit reached. Try again in a few minutes.");
-    }
-    let release: Release = resp.error_for_status()?.json()?;
+    let release = fetch_release_json(LATEST_URL)?;
     if let Some(p) = cache.as_ref() {
         let _ = write_cached_release(p, &release);
     }
     Ok(release)
+}
+
+/// GitHub API URL for the release published under `version` (with or
+/// without a leading `v`; tags are always `vX.Y.Z`).
+pub fn tag_url(version: &str) -> String {
+    format!("{TAG_URL_PREFIX}v{}", strip_v_prefix(version))
+}
+
+/// Fetch one specific release by version. Uncached: it only runs on the
+/// rare runtime-repair path, and the latest-release cache must not be
+/// polluted with a pinned older release.
+pub fn fetch_release(version: &str) -> anyhow::Result<Release> {
+    fetch_release_json(&tag_url(version))
+}
+
+fn fetch_release_json(url: &str) -> anyhow::Result<Release> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let resp = client.get(url).send()?;
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        anyhow::bail!("GitHub API rate limit reached. Try again in a few minutes.");
+    }
+    Ok(resp.error_for_status()?.json()?)
 }
 
 #[cfg(test)]
@@ -232,6 +252,13 @@ mod cache_tests {
     }
 
     #[test]
+    fn tag_url_always_uses_a_single_v_prefix() {
+        let want = "https://api.github.com/repos/mur-run/mur/releases/tags/v2.93.0";
+        assert_eq!(tag_url("2.93.0"), want);
+        assert_eq!(tag_url("v2.93.0"), want);
+    }
+
+    #[test]
     fn expires_after_ttl() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.json");
@@ -244,6 +271,44 @@ mod cache_tests {
 // ─── Checksum verification ───────────────────────────────────────────────────
 
 use sha2::{Digest, Sha256};
+
+/// Download `asset_name` from `release` and verify it against the release's
+/// `checksums.txt`. Shared by the upgrade path and the runtime repair path.
+///
+/// A total-request timeout is a throughput floor, and the release tarball
+/// is 150 MB and growing: 120 s total demanded 1.3 MB/s or the download
+/// died with "operation timed out" (seen twice on 2.78.0 while curl pulled
+/// the same asset fine at 2.6 MB/s). `reqwest::blocking` has no idle-read
+/// timeout, so the ceiling has to cover the whole body: 30 min is ~85 kB/s
+/// on today's asset — slow enough to be generous, bounded enough that a
+/// wedged connection cannot hang the CLI forever. `connect_timeout` keeps
+/// an unreachable host failing fast, which is the common case.
+pub fn download_verified(release: &Release, asset_name: &str) -> anyhow::Result<Vec<u8>> {
+    let asset = select_asset(release, asset_name)?;
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(DOWNLOAD_CONNECT_TIMEOUT)
+        .timeout(DOWNLOAD_TOTAL_TIMEOUT)
+        .build()?;
+    let bin_bytes = client
+        .get(&asset.browser_download_url)
+        .send()?
+        .error_for_status()?
+        .bytes()?
+        .to_vec();
+    let checksums_asset = select_asset(release, "checksums.txt")?;
+    let checksums_txt = client
+        .get(&checksums_asset.browser_download_url)
+        .send()?
+        .error_for_status()?
+        .text()?;
+    let expected = checksum_for(&checksums_txt, asset_name)
+        .ok_or_else(|| anyhow::anyhow!("no checksum entry for {asset_name}"))?;
+    if !sha256_hex(&bin_bytes).eq_ignore_ascii_case(&expected) {
+        anyhow::bail!("Checksum verification FAILED. Aborting.");
+    }
+    Ok(bin_bytes)
+}
 
 /// Parse a `checksums.txt` line ("<hex> *<filename>" or "<hex>  <filename>")
 /// and return the SHA256 hex for `filename`, or `None`.

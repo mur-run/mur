@@ -315,6 +315,16 @@ pub async fn cmd_cli(
 
     let agent = canonicalize_agent_name(&home, name);
 
+    // If this project dir is outside the agent's filesystem grants, offer to
+    // add it (explicit consent, persisted). This MUST run before autostart:
+    // the sandbox is sealed when the agent starts, so a grant written after
+    // it is inert until a restart (#1939).
+    let was_live = autostart::is_running(&home, &agent);
+    let cwd_access = access::ensure_cwd_access(&agent)?;
+    if cwd_access.needs_restart(was_live) {
+        access::offer_restart_after_grant(&agent)?;
+    }
+
     // Streaming requires a live socket: start the agent if it is down (#1767),
     // and fall back to the manual hint only when that cannot be confirmed.
     if !autostart::ensure_running(&home, &agent)? {
@@ -323,10 +333,6 @@ pub async fn cmd_cli(
         );
         return Ok(());
     }
-
-    // If this project dir is outside the agent's filesystem grants, offer to
-    // add it (explicit consent, persisted; sandbox applies it on next restart).
-    access::ensure_cwd_access(&agent)?;
 
     // Plain line mode: forced by --plain, or automatic when stdout is not a
     // terminal (piped / CI). `interactive` drives the prompt + HITL behaviour:

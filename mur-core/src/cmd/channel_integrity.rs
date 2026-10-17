@@ -148,19 +148,6 @@ fn push_list<T: std::fmt::Display>(out: &mut String, label: &str, items: &[T]) {
     out.push_str(&format!("  {label}: {}\n", joined.join(", ")));
 }
 
-/// A channel id names a directory under `channels/` and a file under
-/// `channel-heads/`; refuse anything that could point elsewhere.
-fn check_id(channel_id: &str) -> Result<()> {
-    let unsafe_id = channel_id.is_empty()
-        || channel_id == "."
-        || channel_id == ".."
-        || channel_id.contains(['/', '\\', '\0']);
-    if unsafe_id {
-        bail!("not a valid channel id: {channel_id:?}");
-    }
-    Ok(())
-}
-
 /// Placeholder for `load_events_with_damage`'s bare-key parameter when the
 /// channel has no signed head (so nothing is checked against it). Not a key.
 const NO_HEAD_INERT_KEY: [u8; 32] = [0u8; 32];
@@ -168,12 +155,12 @@ const NO_HEAD_INERT_KEY: [u8; 32] = [0u8; 32];
 /// Check `channel_id` under `mur_home`. Errors only when the check cannot run
 /// (no such channel, no router key); damage is a successful report.
 pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
-    check_id(channel_id)?;
+    mur_channel::check_channel_id(channel_id)?;
     // The store, not `ChannelService`: the service also opens the SQLite
     // index (creating dirs, migrating, enabling WAL), which would break the
     // "writes nothing" promise and tie the check to an unrelated read-model.
     let store = ChannelStore::new(mur_home);
-    let log_path = store.events_path(channel_id);
+    let log_path = store.events_path(channel_id)?;
     let heads = mur_channel::anchor::heads_dir(mur_home);
 
     // The log is read here for the line count and again inside

@@ -39,6 +39,13 @@ pub struct Manifest {
     /// Absent in manifests written before multi-entry setup.
     #[serde(default)]
     pub entry_projects: std::collections::BTreeMap<String, PathBuf>,
+    /// `--lsp` values written to each entry's `project.yml`, by entry name
+    /// (the default entry included). `languages` stays the agent-wide
+    /// consent history; this is what each project actually lists (#1943).
+    /// Absent in manifests written before per-entry languages: such an
+    /// entry's next setup lists only the languages enabled for it.
+    #[serde(default)]
+    pub entry_languages: std::collections::BTreeMap<String, BTreeSet<String>>,
     pub serena: Option<Record>,
     /// The pyright serena launches via `ls_path` (3.6b). Absent in
     /// manifests written before it existed.
@@ -93,8 +100,12 @@ pub struct Diff {
     pub languages: Vec<String>,
     /// A different project than last time.
     pub project: Option<PathBuf>,
-    /// Consented before, not in this plan. Reported, never revoked.
+    /// Listed for this entry before, not in this plan. Reported, never revoked.
     pub kept_languages: Vec<String>,
+    /// Consented for the agent (another entry, or a manifest older than
+    /// per-entry languages) but not listed for this entry. Reported so the
+    /// narrower list is never silent.
+    pub other_languages: Vec<String>,
 }
 
 impl Diff {
@@ -123,6 +134,19 @@ impl Manifest {
         } else {
             self.entry_projects.get(entry).map(PathBuf::as_path)
         }
+    }
+
+    /// The languages last written to `entry`'s `project.yml`, if recorded.
+    pub fn languages_of(&self, entry: &str) -> Option<&BTreeSet<String>> {
+        self.entry_languages.get(entry)
+    }
+
+    /// Record the languages written for `entry`. The agent-wide set keeps
+    /// them too, as consent history.
+    pub fn set_languages(&mut self, entry: &str, langs: impl IntoIterator<Item = String>) {
+        let langs: BTreeSet<String> = langs.into_iter().collect();
+        self.languages.extend(langs.iter().cloned());
+        self.entry_languages.insert(entry.to_owned(), langs);
     }
 
     /// Record the project applied for `entry`.
@@ -156,10 +180,17 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
         .filter(|l| !m.languages.contains(*l))
         .cloned()
         .collect();
-    let kept_languages = m
-        .languages
+    let empty = BTreeSet::new();
+    let own = m.languages_of(entry).unwrap_or(&empty);
+    let kept_languages = own
         .iter()
         .filter(|l| !enabled.contains(l))
+        .cloned()
+        .collect();
+    let other_languages = m
+        .languages
+        .iter()
+        .filter(|l| !enabled.contains(l) && !own.contains(*l))
         .cloned()
         .collect();
     let project = project
@@ -171,6 +202,7 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
         languages,
         project,
         kept_languages,
+        other_languages,
     }
 }
 
@@ -243,6 +275,14 @@ pub fn print_diff(out: &mut dyn Write, d: &Diff, first_run: bool) -> Result<()> 
             out,
             "\nStill enabled from an earlier run (setup never revokes): {}",
             d.kept_languages.join(", ")
+        )?;
+    }
+    if !d.other_languages.is_empty() {
+        writeln!(
+            out,
+            "\nConsented for this agent but not listed for this entry: {} \
+             (pass --lsp to add)",
+            d.other_languages.join(", ")
         )?;
     }
     if first_run || d.is_empty() {

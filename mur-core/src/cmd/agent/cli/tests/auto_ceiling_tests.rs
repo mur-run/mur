@@ -200,7 +200,9 @@ fn an_unclassifiable_command_lands_at_write_not_above() {
 #[tokio::test]
 async fn tmux_probe_replay_readonly_chains_do_not_prompt() {
     for cmd in [
-        "cd ~/Projects/mur && pwd -P && git status -sb | head -5 && git branch --show-current && git remote -v | head -2",
+        // #1937: the report's chain led with `git status -sb`, which is no
+        // longer Read (an index refresh runs `core.fsmonitor`).
+        "cd ~/Projects/mur && pwd -P && git log --oneline -5 | head -5 && git branch --show-current && git remote -v | head -2",
         "cd ~/Projects/mur && gh pr list --limit 10",
         "cd ~/Projects/mur && gh pr view 1482",
         "cd ~/Projects/mur && gh pr checks 1482",

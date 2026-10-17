@@ -5,6 +5,7 @@
 //! unit testing possible.
 
 pub mod release;
+pub mod repair;
 pub mod resign;
 pub mod source;
 pub mod swap;
@@ -26,6 +27,7 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
     if src == source::InstallSource::Homebrew {
         if opts.check_only {
             println!("Installed via Homebrew. Run: brew upgrade mur");
+            repair::report_for_brew();
             return Ok(());
         }
         println!("Installed via Homebrew — running: brew upgrade mur");
@@ -48,6 +50,8 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
                 .ok()
                 .and_then(|p| mur_common::mcp_first_party::install_dir_of(&p));
         resign::post_upgrade(opts.restart_agents, None, install_dir.as_deref())?;
+        // The keg is brew's to manage: report a bad runtime, never swap it.
+        repair::report_for_brew();
         return Ok(());
     }
     if src == source::InstallSource::Pkg {
@@ -66,6 +70,13 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
 
     if !release::is_newer(current, latest)? {
         println!("Already up to date (v{current})");
+        // "Up to date" covers this binary only. A release CLI refuses to
+        // launch a runtime not signed by MUR's Developer ID, so a swapped
+        // (e.g. locally built) runtime next to a current CLI would break
+        // every agent launch while this command claimed all was well.
+        // Verify the installed runtimes; restore any failure from THIS
+        // version's archive (`--check` only reports).
+        repair::check_or_repair(current, opts.check_only)?;
         if let Some(nudge) = hub_staleness_nudge(current) {
             println!("{nudge}");
         }
@@ -94,42 +105,8 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
             arch = std::env::consts::ARCH,
         )
     })?;
-    let asset = release::select_asset(&release, asset_name)?;
-
-    // A total-request timeout is a throughput floor, and the release tarball
-    // is 150 MB and growing: 120 s total demanded 1.3 MB/s or the download
-    // died with "operation timed out" (seen twice on 2.78.0 while curl pulled
-    // the same asset fine at 2.6 MB/s). `reqwest::blocking` has no idle-read
-    // timeout, so the ceiling has to cover the whole body: 30 min is ~85 kB/s
-    // on today's asset — slow enough to be generous, bounded enough that a
-    // wedged connection cannot hang the CLI forever. `connect_timeout` keeps
-    // an unreachable host failing fast, which is the common case.
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!("mur-update/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .timeout(std::time::Duration::from_secs(1800))
-        .build()?;
-
     println!("Downloading {asset_name}…");
-    let bin_bytes = client
-        .get(&asset.browser_download_url)
-        .send()?
-        .error_for_status()?
-        .bytes()?
-        .to_vec();
-
-    let checksums_asset = release::select_asset(&release, "checksums.txt")?;
-    let checksums_txt = client
-        .get(&checksums_asset.browser_download_url)
-        .send()?
-        .error_for_status()?
-        .text()?;
-    let expected = release::checksum_for(&checksums_txt, asset_name)
-        .ok_or_else(|| anyhow::anyhow!("no checksum entry for {asset_name}"))?;
-    let actual = release::sha256_hex(&bin_bytes);
-    if !actual.eq_ignore_ascii_case(&expected) {
-        anyhow::bail!("Checksum verification FAILED. Aborting.");
-    }
+    let bin_bytes = release::download_verified(&release, asset_name)?;
 
     let target = swap::current_exe().context(
         "Cannot determine install location. Please reinstall via: \

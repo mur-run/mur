@@ -118,6 +118,30 @@ Alternatives: take sccache off `PATH` for the build, or pass
 `GGML_CCACHE=OFF` through the CMake environment. Outside a sandbox nothing
 needs changing.
 
+### `whisper-rs-sys` build script fails with `Server startup failed: File exists`
+
+**Symptom** — the cache dir is writable (see above), yet the build still fails:
+
+```text
+error: failed to run custom build command for `whisper-rs-sys v0.15.0`
+  sccache: error: Server startup failed: File exists (os error 17)
+```
+
+**Likely cause** — no sccache server is running on `SCCACHE_SERVER_UDS` yet,
+so the parallel CMake compiles of ggml each try to start one, and the losers
+fail when the socket file already exists. (Inferred from the error; not traced
+in sccache itself.)
+
+**Fix** — start the server once before building, with the same environment
+the build will use:
+
+```bash
+sccache --start-server
+cargo nextest run --workspace --no-fail-fast
+```
+
+`sccache --show-stats` succeeding is a quick check that the server is up.
+
 ### `ort-sys` build script fails inside a sandbox (ONNX Runtime cache dir)
 
 **Symptom** — `cargo build` / `clippy` fails in `ort-sys`'s build script while

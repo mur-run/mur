@@ -109,7 +109,7 @@ fn local_reads_share_one_local_key() {
     for cmd in [
         "ls -la src/",
         "cat Cargo.toml",
-        "git status",
+        "git log --oneline -5",
         "cd /tmp && ls",
     ] {
         assert_eq!(scope(cmd).as_deref(), Some("local:ro"), "cmd: {cmd}");
@@ -192,7 +192,7 @@ fn stream_discard_and_join_redirects_keep_a_read_local() {
         "ls missing >/dev/null 2>&1",
         "cat a 1>/dev/null",
         "grep -rn x src 2> /dev/null | head",
-        "cd /repo && git status -sb 2>&1 | head -8",
+        "cd /repo && git rev-parse HEAD 2>&1 | head -8",
     ] {
         assert_eq!(scope(cmd).as_deref(), Some("local:ro"), "cmd: {cmd}");
     }

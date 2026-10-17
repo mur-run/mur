@@ -135,6 +135,11 @@ cargo install mur-core        # installs the `mur` binary
 # Later: upgrade in place — agents AND the daemon restart onto the new
 # binary, each verified and reported in a per-agent summary table
 mur update --restart-agents
+
+# Already current but agents won't launch? `mur update` also verifies the
+# installed runtimes and restores any broken one from the CLI's own release
+# (`--check` reports without touching anything; Homebrew installs report only)
+mur update --check
 ```
 
 ```bash
@@ -544,9 +549,14 @@ Agent** wizard offers the same catalog as a source.
   its entitlements the card offers that grant as a separate control, never
   folded into the rule. Reads never have to stop the run: `read_file` and
   provably read-only shell commands are auto-approved by default, in the TUI and
-  in `--plain` alike, so `--ask` only asks about the risky ones. Put the prompt
-  back on reads with `--no-auto-reads`, the strictest setting; the old
-  `--auto-reads` still parses and does nothing.
+  in `--plain` alike, so `--ask` only asks about the risky ones. A git command
+  counts as a read only when it names fixed revisions and never touches the
+  working tree or index, because repo config (`core.fsmonitor`, a clean
+  filter) can run a program on an index refresh: `git log --oneline` and
+  `git diff --stat HEAD~1 HEAD --` are reads, while `git status`,
+  `git ls-files` and a bare `git diff` are not, so `--ask` asks first. Put
+  the prompt back on reads with `--no-auto-reads`, the strictest setting; the
+  old `--auto-reads` still parses and does nothing.
 - **No approvals without a sealed sandbox** — an agent running advisory-only
   (`fail_closed_on_sandbox_error: false` and the kernel seal failed) could read
   its own signing key, so any approval it holds could be forged. Tools that

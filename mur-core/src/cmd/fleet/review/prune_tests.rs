@@ -67,6 +67,7 @@ pub(super) fn exists(home: &Path, channel_id: &str) -> bool {
         .unwrap()
         .store()
         .events_path(channel_id)
+        .unwrap()
         .parent()
         .unwrap()
         .exists()
@@ -166,6 +167,7 @@ fn readable_corrupted_marker_is_a_candidate_and_dates_last_activity() {
         .unwrap()
         .store()
         .events_path(&ch)
+        .unwrap()
         .with_file_name(REVIEW_CORRUPTED_MARKER_FILE);
     let detected = Utc::now() + ChronoDuration::days(5);
     std::fs::write(
@@ -201,6 +203,7 @@ fn unreadable_marker_is_reported_and_never_pruned() {
         .unwrap()
         .store()
         .events_path(&ch)
+        .unwrap()
         .with_file_name(REVIEW_CORRUPTED_MARKER_FILE);
     std::fs::write(&marker, "{not json").unwrap();
     let report = prune(h, false, 30);

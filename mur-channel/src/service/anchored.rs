@@ -235,7 +235,7 @@ impl ChannelService {
         };
         let pre = |i: &PreSealInput<'_>| mark(home, i);
         let post = |i: &SealInput<'_>| {
-            advance(home, &self.store.events_path(i.channel_id), signer, i)?;
+            advance(home, &self.store.events_path(i.channel_id)?, signer, i)?;
             seal.map_or(Ok(()), |s| s(i))
         };
         f(SealHooks {
