@@ -135,6 +135,11 @@ cargo install mur-core        # installs the `mur` binary
 # Later: upgrade in place — agents AND the daemon restart onto the new
 # binary, each verified and reported in a per-agent summary table
 mur update --restart-agents
+
+# Already current but agents won't launch? `mur update` also verifies the
+# installed runtimes and restores any broken one from the CLI's own release
+# (`--check` reports without touching anything; Homebrew installs report only)
+mur update --check
 ```
 
 ```bash
