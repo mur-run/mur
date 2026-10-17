@@ -43,8 +43,9 @@ fn first_run_needs_consent_for_everything() {
     let plan = p(true, &[]);
     let d = diff(&plan, "serena", Some(Path::new("/r")), &Manifest::default());
     assert!(!d.is_empty());
-    // ast-grep, serena, and pyright (Python is on by default).
-    assert_eq!(d.installs.len(), 3);
+    // ast-grep, serena, pyright (Python is on by default), and
+    // intelephense (PHP is on by default; #1945).
+    assert_eq!(d.installs.len(), 4);
     assert_eq!(d.languages, ["python", "php", "lua", "cpp"]);
     assert_eq!(d.project.as_deref(), Some(Path::new("/r")));
 }
