@@ -5,7 +5,9 @@ pub enum CodeNavAction {
     /// Install ast-grep (and, with --with-serena, serena) for an agent.
     /// Prints the install, permission and language-server tables, then
     /// applies them only after you type `yes` (or pass --yes). Re-runs ask
-    /// only about what changed since the last setup.
+    /// only about what changed since the last setup. A setup that fails part
+    /// way records nothing, so the next run lists the already-applied
+    /// grants again.
     Setup {
         /// Agent to set up (case-insensitive).
         #[arg(long)]
