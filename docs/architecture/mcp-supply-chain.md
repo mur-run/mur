@@ -56,12 +56,14 @@ This is not a weakening: that binary was written moments earlier by this runtime
 
 The same reasoning covers MUR's **other** shipped servers, and originally did not reach them. `mur-research-gateway` — what `mur deep-research setup` installs — rides in the same release, lands in the same install directory, and is replaced by the same upgrade, but was pinned by a bare command name like any third-party entry. One `mur` upgrade left every deep-research worker crash-looping at boot on `B0 rule 6: MCP \`research-gateway\` changed since install`; launchd restarts it, it fail-closes again, and `mur agent status` reports only `stopped`.
 
-The exemption is a **property, not a list of names** — a list goes stale the day MUR ships another server. An entry is first-party when it resolves into the directory holding the running runtime's own executable **and** carries MUR's `mur-` name prefix. Both halves are load-bearing:
+The exemption is a **property, not a list of names** — a list goes stale the day MUR ships another server. An entry is first-party when it resolves into the directory holding the running runtime's own executable **and** carries MUR's name — exactly `mur` (`mur.exe` on Windows), or the `mur-` prefix. The exact `mur` match covers entries that run the CLI itself, like `browser` (`mur browser record …`), which every upgrade also replaces (#1944). The resolved file's name is checked too, so a `mur-`-named symlink to a third-party binary is not trusted. Both halves are load-bearing:
 
 - **Directory alone** would silently drop pin enforcement for an unrelated third-party MCP binary the user keeps in `~/.local/bin` — a crowded directory on a normal machine, unlike a Homebrew Cellar.
 - **Name alone** would trust any binary wearing MUR's name from anywhere on PATH.
 
 Resolution canonicalizes, so a symlinked install (Homebrew's `bin` into its Cellar) compares equal.
+
+`mur update` applies the same re-pin to every agent's profile right after a successful upgrade, so stopped agents, `mur agent status`, and `mur doctor` show no drift that the next start would clear anyway. Third-party drift is still never re-pinned by an update; re-approve it with `mur agent mcp pin`.
 
 ### Rule 6 resolves against the PATH the spawn uses
 

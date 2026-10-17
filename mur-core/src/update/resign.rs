@@ -38,6 +38,8 @@ pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path
     #[cfg(target_os = "macos")]
     macos::resign_installed_binaries(fresh_runtime)?;
 
+    repin_first_party_mcp();
+
     let daemon_running = crate::cmd::murmurd::murmurd_running();
     print_checklist(restart_agents, daemon_running);
     warn_pinned_launchers();
@@ -60,6 +62,25 @@ pub fn post_upgrade(restart_agents: bool, fresh_runtime: Option<&std::path::Path
     }
     crate::update::warn_stale_compress_writers();
     agents_result
+}
+
+/// Re-pin every agent's MCP entries that run MUR's own binaries — the `mur`
+/// CLI (`browser`) and its `mur-` siblings — so a stopped agent, `mur agent
+/// status`, and `mur doctor` show no drift the next start would erase anyway
+/// (#1944). The runtime does the same at start; this just does it sooner.
+/// Third-party entries are never touched: rule 6 exists to catch them.
+fn repin_first_party_mcp() {
+    let Some(install_dir) = mur_common::mcp_first_party::current_install_dir() else {
+        return;
+    };
+    let agents_dir = crate::paths::mur_root(None).join("agents");
+    let repinned = mur_agent_runtime::mcp_repin::repin_first_party_all(&agents_dir, &install_dir);
+    if !repinned.is_empty() {
+        println!(
+            "re-pinned MUR's own MCP servers for: {}",
+            repinned.join(", ")
+        );
+    }
 }
 
 /// The agent leg of [`post_upgrade`], without any binary work.

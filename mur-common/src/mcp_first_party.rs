@@ -15,6 +15,17 @@ use std::path::{Path, PathBuf};
 /// directory alone would exempt unrelated binaries in a crowded `~/.local/bin`.
 pub const MUR_BINARY_PREFIX: &str = "mur-";
 
+/// The `mur` CLI itself. Entries like `browser` run `mur browser record …`,
+/// and every upgrade replaces `mur` just like its `mur-` siblings (#1944).
+/// Matched exactly — not as a prefix — so `murmur`-style strangers stay out.
+pub const MUR_CLI_NAMES: &[&str] = &["mur", "mur.exe"];
+
+/// Whether a file name is one MUR ships: the `mur` CLI itself, or a
+/// `mur-` prefixed sibling.
+pub fn is_mur_binary_name(name: &str) -> bool {
+    MUR_CLI_NAMES.contains(&name) || name.starts_with(MUR_BINARY_PREFIX)
+}
+
 /// The first-party binary `command` resolves to, or `None` when the entry is
 /// third-party and rule 6 must keep enforcing its install-time hash.
 ///
@@ -37,15 +48,16 @@ pub fn first_party_target(
     // will run. Resolution canonicalizes, so a symlinked install (Homebrew's
     // `bin` into its Cellar) compares equal to the canonical install dir.
     let prog = command.split_whitespace().next()?;
-    if !Path::new(prog)
-        .file_name()?
-        .to_str()?
-        .starts_with(MUR_BINARY_PREFIX)
-    {
+    if !is_mur_binary_name(Path::new(prog).file_name()?.to_str()?) {
         return None;
     }
     let resolved =
         crate::exec::resolve_command_in(&crate::exec::augmented_path_var(), prog).ok()?;
+    // Judge the name of the file that will actually run, too: a `mur-x`
+    // symlink pointing at some third-party binary in the same dir is not MUR's.
+    if !is_mur_binary_name(resolved.file_name()?.to_str()?) {
+        return None;
+    }
     (resolved.parent()? == install_dir).then_some(resolved)
 }
 
@@ -99,6 +111,63 @@ mod tests {
         let gw = elsewhere.join("mur-research-gateway");
         std::fs::write(&gw, b"gw").unwrap();
         assert_eq!(first_party_target(gw.to_str().unwrap(), None, &dir), None);
+    }
+
+    #[test]
+    fn the_mur_cli_in_the_install_dir_is_first_party() {
+        let (_d, dir) = install_dir();
+        let mur = dir.join("mur");
+        std::fs::write(&mur, b"mur").unwrap();
+        assert_eq!(
+            first_party_target(mur.to_str().unwrap(), None, &dir),
+            Some(mur)
+        );
+    }
+
+    #[test]
+    fn the_mur_cli_elsewhere_on_path_is_not() {
+        let (_d, dir) = install_dir();
+        let (_e, elsewhere) = install_dir();
+        let mur = elsewhere.join("mur");
+        std::fs::write(&mur, b"mur").unwrap();
+        assert_eq!(first_party_target(mur.to_str().unwrap(), None, &dir), None);
+    }
+
+    #[test]
+    fn a_mur_prefixed_lookalike_name_is_not_the_cli() {
+        let (_d, dir) = install_dir();
+        let other = dir.join("murky");
+        std::fs::write(&other, b"x").unwrap();
+        assert_eq!(
+            first_party_target(other.to_str().unwrap(), None, &dir),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_mur_cli_canonicalizes_into_the_install_dir() {
+        let (_d, dir) = install_dir();
+        let (_l, link_dir) = install_dir();
+        let mur = dir.join("mur");
+        std::fs::write(&mur, b"mur").unwrap();
+        let link = link_dir.join("mur");
+        std::os::unix::fs::symlink(&mur, &link).unwrap();
+        assert_eq!(
+            first_party_target(link.to_str().unwrap(), None, &dir),
+            Some(mur)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_mur_named_symlink_to_a_third_party_binary_is_not() {
+        let (_d, dir) = install_dir();
+        let other = dir.join("some-mcp");
+        std::fs::write(&other, b"x").unwrap();
+        let link = dir.join("mur-sneaky");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert_eq!(first_party_target(link.to_str().unwrap(), None, &dir), None);
     }
 
     #[test]
