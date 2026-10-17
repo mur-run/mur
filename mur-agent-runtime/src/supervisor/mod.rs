@@ -345,6 +345,12 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // The two scopes this process can see (spec §3.4). The fleet's clock, when
     // there is one, arrives per turn in the A2A `limits` parameter.
     let limits = (boot_global_limits, profile.inner.limits.clone());
+    // #1907: denials reach clients over the same broadcast as other
+    // request-independent notices; the clone keeps a handle for `egress/grant`.
+    if let Some(p) = &egress_proxy {
+        p.attach_events(sock_notif_tx.clone());
+    }
+    let egress_for_grants = egress_proxy.clone();
     let (runner, llm_for_companion, mcp_pool, model_switch) =
         crate::supervisor_runner::build_provider_runner(
             force_echo,
@@ -394,6 +400,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             approval_token,
             sandbox_record.as_ref().is_some_and(|r| r.enforcing),
         ),
+        egress_for_grants,
     ));
 
     // 7. Transports

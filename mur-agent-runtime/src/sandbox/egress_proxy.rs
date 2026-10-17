@@ -33,11 +33,17 @@ use tokio::net::{TcpListener, TcpStream};
 use super::reqwest_guard::{host_allowed, host_matches_pattern};
 
 mod http_forward;
+mod live;
+
+pub use live::GrantError;
 
 /// A registered per-server policy: either a `Restricted` allowlist, or a
 /// `BroadAudited` allow-all-except-`deny` policy.
 #[derive(Clone, Default)]
 struct PolicyEntry {
+    /// The MCP server this token was minted for: the key runtime grants and
+    /// `egress/denied` events use (a respawned child gets a fresh token).
+    server: String,
     allow: Vec<String>,
     deny: Vec<String>,
     /// `true` for `BroadAudited` (allow-all-except-`deny`); `false` for
@@ -51,6 +57,7 @@ type Registry = Arc<Mutex<HashMap<String, PolicyEntry>>>;
 pub struct EgressProxyHandle {
     pub addr: SocketAddr,
     registry: Registry,
+    events: live::Events,
 }
 
 impl EgressProxyHandle {
@@ -60,6 +67,7 @@ impl EgressProxyHandle {
         Self {
             addr,
             registry: Arc::new(Mutex::new(HashMap::new())),
+            events: live::Events::new("test"),
         }
     }
 
@@ -79,10 +87,23 @@ impl EgressProxyHandle {
         deny_hosts: Vec<String>,
         broad: bool,
     ) -> String {
+        self.register_server("", allow_hosts, deny_hosts, broad)
+    }
+
+    /// [`Self::register_policy`] for a named MCP server, so later runtime
+    /// grants ([`Self::grant`]) and denial events can find it.
+    pub fn register_server(
+        &self,
+        server: &str,
+        allow_hosts: Vec<String>,
+        deny_hosts: Vec<String>,
+        broad: bool,
+    ) -> String {
         let token = uuid::Uuid::now_v7().simple().to_string();
         self.registry.lock().unwrap().insert(
             token.clone(),
             PolicyEntry {
+                server: server.to_owned(),
                 allow: allow_hosts,
                 deny: deny_hosts,
                 broad,
@@ -100,7 +121,9 @@ pub async fn start_egress_proxy(agent: &str) -> std::io::Result<EgressProxyHandl
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let registry: Registry = Arc::new(Mutex::new(HashMap::new()));
+    let events = live::Events::new(&agent);
     let reg = registry.clone();
+    let ev = events.clone();
     tokio::spawn(async move {
         loop {
             let Ok((sock, _)) = listener.accept().await else {
@@ -108,19 +131,25 @@ pub async fn start_egress_proxy(agent: &str) -> std::io::Result<EgressProxyHandl
             };
             let reg = reg.clone();
             let agent = agent.clone();
+            let ev = ev.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_conn(sock, reg, &agent).await {
+                if let Err(e) = handle_conn(sock, reg, &ev, &agent).await {
                     tracing::warn!("egress proxy conn ended: {e}");
                 }
             });
         }
     });
-    Ok(EgressProxyHandle { addr, registry })
+    Ok(EgressProxyHandle {
+        addr,
+        registry,
+        events,
+    })
 }
 
 async fn handle_conn(
     mut client: TcpStream,
     registry: Registry,
+    events: &live::Events,
     agent: &str,
 ) -> std::io::Result<()> {
     // Read the request head (request line + headers, up to the blank line).
@@ -186,6 +215,12 @@ async fn handle_conn(
             broad = entry.as_ref().map(|e| e.broad),
             "egress proxy {kind} DENY"
         );
+        // A known server refused a host: tell clients so a human can grant
+        // it. The connection still fails now — no pending state (D2).
+        if let Some(e) = &entry {
+            let port = target.rsplit_once(':').and_then(|(_, p)| p.parse().ok());
+            events.denied(&e.server, host, port, e.broad, std::time::Instant::now());
+        }
         client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
         return Ok(());
     }
@@ -563,6 +598,35 @@ mod tests {
         let resp = String::from_utf8_lossy(&out);
         assert!(resp.starts_with("HTTP/1.1 501"), "{resp}");
         assert!(resp.contains("absolute-form"), "{resp}");
+    }
+
+    /// #1907: a denial fails now and emits one `egress/denied`; a runtime
+    /// grant lets the NEXT connection through with no restart.
+    #[tokio::test]
+    async fn denied_host_emits_event_and_a_grant_applies_to_later_connections() {
+        let proxy = start_egress_proxy("shop").await.unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        proxy.attach_events(tx);
+        let token = proxy.register_server("browser", vec!["example.com".into()], vec![], false);
+
+        let up = upstream().await;
+        let denied = connect_via(proxy.addr, &token, &up.to_string()).await;
+        assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+        let n = rx.recv().await.unwrap();
+        assert_eq!(n["method"], mur_common::egress_event::DENIED_METHOD);
+        assert_eq!(n["params"]["server"], "browser");
+        assert_eq!(n["params"]["host"], "127.0.0.1");
+        assert_eq!(n["params"]["reason"], "not_allowed");
+
+        // Same host again inside the window: still denied, no second event.
+        let again = connect_via(proxy.addr, &token, &up.to_string()).await;
+        assert!(again.starts_with("HTTP/1.1 403"), "{again}");
+        assert!(rx.try_recv().is_err());
+
+        proxy.grant("browser", "127.0.0.1").unwrap();
+        let up = upstream().await;
+        let ok = connect_via(proxy.addr, &token, &up.to_string()).await;
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
     }
 
     #[tokio::test]

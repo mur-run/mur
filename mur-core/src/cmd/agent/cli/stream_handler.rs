@@ -250,6 +250,7 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
         StreamMsg::StepTokens {
             step_id, tokens, ..
         } => app.update_step_tokens(&step_id, tokens),
+        StreamMsg::EgressDenied(ev) => on_egress_denied(app, ev),
         StreamMsg::ReviewReq(req) => review::on_request(app, req),
         StreamMsg::ReviewFinished(outcome) => review::on_finished(app, outcome),
         StreamMsg::ReviewCancelFailed(e) => review::keys::on_cancel_failed(app, &e),
@@ -257,6 +258,27 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             app.manage_busy = None;
             super::slash_cmds::apply_managed(app, res);
         }
+    }
+}
+
+/// #1907: one notice line (with the paste-able command, so nothing is lost if
+/// the chooser is pre-empted), and the 這次放行 / 永久放行 / 不用 chooser,
+/// revealed when the turn ends so it never interrupts it.
+fn on_egress_denied(app: &mut App, ev: mur_common::egress_event::EgressDenied) {
+    use super::egress_denied as ed;
+    let allow: Vec<String> = crate::cmd::agent::load_profile_for_edit(&app.agent)
+        .ok()
+        .and_then(|(_, p)| p.mcp_servers.into_iter().find(|e| e.name == ev.server))
+        .and_then(|e| e.network)
+        .map(|n| n.allow_hosts)
+        .unwrap_or_default();
+    let chips = ed::chips(&ev, &mut app.egress_chips, &allow);
+    if chips.is_none() && app.egress_chips.dismissed.contains(&ev.host) {
+        return;
+    }
+    app.push_system(ed::text_fallback(&ev));
+    if let Some(c) = chips {
+        app.pending_suggestions = c;
     }
 }
 

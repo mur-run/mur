@@ -346,6 +346,9 @@ pub enum StepEvent {
         task_id: String,
         tokens: usize,
     },
+    /// The egress proxy refused a scoped MCP server a host (#1907). Not tied
+    /// to a step: it arrives on the runtime's broadcast while a turn streams.
+    EgressDenied(mur_common::egress_event::EgressDenied),
 }
 
 /// Parse the `params` of a `step/tokens` notification, or `None` when the
@@ -605,6 +608,17 @@ pub fn dial_message_streaming_polled(
             if v.get("method").and_then(Value::as_str) == Some("step/tokens") {
                 if let Some(ev) = v.get("params").and_then(parse_step_tokens) {
                     on_step(ev);
+                }
+                continue;
+            }
+            if v.get("method").and_then(Value::as_str)
+                == Some(mur_common::egress_event::DENIED_METHOD)
+            {
+                if let Some(ev) = v
+                    .get("params")
+                    .and_then(|p| serde_json::from_value(p.clone()).ok())
+                {
+                    on_step(StepEvent::EgressDenied(ev));
                 }
                 continue;
             }
