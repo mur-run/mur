@@ -28,7 +28,8 @@
 //!
 //! * **Same directory as the running runtime.** A `mur-` prefixed binary found
 //!   anywhere else on PATH is a stranger wearing MUR's name and stays enforced.
-//! * **MUR's own `mur-` name prefix.** Without it, an unrelated third-party MCP
+//! * **MUR's own name** — the `mur` CLI exactly (the `browser` entry runs it,
+//!   #1944), or the `mur-` prefix for siblings. Without it, an unrelated third-party MCP
 //!   binary the user happens to keep in `~/.local/bin` — a crowded directory on
 //!   a normal machine, unlike a Homebrew Cellar — would silently stop being
 //!   pin-enforced. That is coverage rule 6 exists to provide.
@@ -99,6 +100,41 @@ pub fn repin_first_party(
     std::fs::write(&tmp, new_yaml.as_bytes())?;
     std::fs::rename(&tmp, &profile_path)?;
     Ok(true)
+}
+
+/// [`repin_first_party`] across every agent under `agents_dir`, for
+/// `mur update` (#1944): agents not restarted soon after an upgrade, and
+/// `mur agent status` / `mur doctor` in the meantime, should not see drift the
+/// next start would erase anyway. Returns the agents whose profile changed;
+/// per-agent failures are logged and skipped — one unreadable profile must
+/// not block the rest.
+pub fn repin_first_party_all(agents_dir: &Path, runtime_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(agents_dir) else {
+        return Vec::new();
+    };
+    let mut homes: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.join("profile.yaml").is_file())
+        .collect();
+    homes.sort();
+    let mut repinned = Vec::new();
+    for home in homes {
+        match repin_first_party(&home, None, runtime_dir) {
+            Ok(true) => repinned.push(
+                home.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(
+                agent = %home.display(),
+                error = %e,
+                "could not re-pin first-party MCP binaries",
+            ),
+        }
+    }
+    repinned
 }
 
 #[cfg(test)]
@@ -229,6 +265,54 @@ mod tests {
             reload(dir.path()).mcp_servers[0].binary_sha256.as_deref(),
             Some("b".repeat(64).as_str()),
         );
+    }
+
+    /// #1944: the `browser` entry runs the `mur` CLI itself, which every
+    /// upgrade replaces. No dash, so the old `mur-` prefix test missed it.
+    #[test]
+    fn repins_the_mur_cli_itself_in_the_runtime_dir() {
+        let (dir, runtime_dir) =
+            one_entry(|rt| sibling(rt, "mur", b"mur v2").display().to_string());
+
+        assert!(repin_first_party(dir.path(), None, &runtime_dir).unwrap());
+        let expected = crate::hooks::b0_helpers::binary_sha256(&runtime_dir.join("mur")).unwrap();
+        assert_eq!(
+            reload(dir.path()).mcp_servers[0].binary_sha256.as_deref(),
+            Some(expected.as_str()),
+        );
+    }
+
+    #[test]
+    fn a_mur_cli_outside_the_runtime_dir_stays_enforced() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let (dir, runtime_dir) = one_entry(|_| {
+            sibling(elsewhere.path(), "mur", b"impostor")
+                .display()
+                .to_string()
+        });
+
+        assert!(!repin_first_party(dir.path(), None, &runtime_dir).unwrap());
+        assert_eq!(
+            reload(dir.path()).mcp_servers[0].binary_sha256.as_deref(),
+            Some("b".repeat(64).as_str()),
+        );
+    }
+
+    #[test]
+    fn repin_all_walks_every_agent_and_names_the_changed_ones() {
+        let (dir, runtime_dir) =
+            one_entry(|rt| sibling(rt, "mur", b"mur v2").display().to_string());
+        let agents = tempfile::tempdir().unwrap();
+        let a = agents.path().join("alpha");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::copy(dir.path().join("profile.yaml"), a.join("profile.yaml")).unwrap();
+        std::fs::create_dir_all(agents.path().join("no-profile")).unwrap();
+
+        assert_eq!(
+            repin_first_party_all(agents.path(), &runtime_dir),
+            vec!["alpha".to_string()]
+        );
+        assert!(repin_first_party_all(agents.path(), &runtime_dir).is_empty());
     }
 
     #[test]

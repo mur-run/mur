@@ -15,6 +15,17 @@ use std::path::{Path, PathBuf};
 /// directory alone would exempt unrelated binaries in a crowded `~/.local/bin`.
 pub const MUR_BINARY_PREFIX: &str = "mur-";
 
+/// The `mur` CLI itself. Entries like `browser` run `mur browser record …`,
+/// and every upgrade replaces `mur` just like its `mur-` siblings (#1944).
+/// Matched exactly — not as a prefix — so `murmur`-style strangers stay out.
+pub const MUR_CLI_NAMES: &[&str] = &["mur", "mur.exe"];
+
+/// Whether a file name is one MUR ships: the `mur` CLI itself, or a
+/// `mur-` prefixed sibling.
+pub fn is_mur_binary_name(name: &str) -> bool {
+    MUR_CLI_NAMES.contains(&name) || name.starts_with(MUR_BINARY_PREFIX)
+}
+
 /// The first-party binary `command` resolves to, or `None` when the entry is
 /// third-party and rule 6 must keep enforcing its install-time hash.
 ///
@@ -37,27 +48,32 @@ pub fn first_party_target(
     // will run. Resolution canonicalizes, so a symlinked install (Homebrew's
     // `bin` into its Cellar) compares equal to the canonical install dir.
     let prog = command.split_whitespace().next()?;
-    if !Path::new(prog)
-        .file_name()?
-        .to_str()?
-        .starts_with(MUR_BINARY_PREFIX)
-    {
+    if !is_mur_binary_name(Path::new(prog).file_name()?.to_str()?) {
         return None;
     }
     let resolved =
         crate::exec::resolve_command_in(&crate::exec::augmented_path_var(), prog).ok()?;
+    // Judge the name of the file that will actually run, too: a `mur-x`
+    // symlink pointing at some third-party binary in the same dir is not MUR's.
+    if !is_mur_binary_name(resolved.file_name()?.to_str()?) {
+        return None;
+    }
     (resolved.parent()? == install_dir).then_some(resolved)
 }
 
 /// The canonical directory holding the running executable — the install dir
 /// [`first_party_target`] compares against. `None` when it cannot be resolved.
 pub fn current_install_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()?
-        .canonicalize()
-        .ok()?
-        .parent()
-        .map(Path::to_path_buf)
+    install_dir_of(&std::env::current_exe().ok()?)
+}
+
+/// The canonical directory holding `exe`. `mur update` must capture this
+/// BEFORE it swaps the binary (#1944): on Linux `current_exe()` reads
+/// `/proc/self/exe`, which after the rename names the replaced inode with a
+/// ` (deleted)` suffix, so [`current_install_dir`] stops resolving. A path
+/// taken beforehand still names the directory the new binary landed in.
+pub fn install_dir_of(exe: &Path) -> Option<PathBuf> {
+    exe.canonicalize().ok()?.parent().map(Path::to_path_buf)
 }
 
 #[cfg(test)]
@@ -102,6 +118,63 @@ mod tests {
     }
 
     #[test]
+    fn the_mur_cli_in_the_install_dir_is_first_party() {
+        let (_d, dir) = install_dir();
+        let mur = dir.join("mur");
+        std::fs::write(&mur, b"mur").unwrap();
+        assert_eq!(
+            first_party_target(mur.to_str().unwrap(), None, &dir),
+            Some(mur)
+        );
+    }
+
+    #[test]
+    fn the_mur_cli_elsewhere_on_path_is_not() {
+        let (_d, dir) = install_dir();
+        let (_e, elsewhere) = install_dir();
+        let mur = elsewhere.join("mur");
+        std::fs::write(&mur, b"mur").unwrap();
+        assert_eq!(first_party_target(mur.to_str().unwrap(), None, &dir), None);
+    }
+
+    #[test]
+    fn a_mur_prefixed_lookalike_name_is_not_the_cli() {
+        let (_d, dir) = install_dir();
+        let other = dir.join("murky");
+        std::fs::write(&other, b"x").unwrap();
+        assert_eq!(
+            first_party_target(other.to_str().unwrap(), None, &dir),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_mur_cli_canonicalizes_into_the_install_dir() {
+        let (_d, dir) = install_dir();
+        let (_l, link_dir) = install_dir();
+        let mur = dir.join("mur");
+        std::fs::write(&mur, b"mur").unwrap();
+        let link = link_dir.join("mur");
+        std::os::unix::fs::symlink(&mur, &link).unwrap();
+        assert_eq!(
+            first_party_target(link.to_str().unwrap(), None, &dir),
+            Some(mur)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_mur_named_symlink_to_a_third_party_binary_is_not() {
+        let (_d, dir) = install_dir();
+        let other = dir.join("some-mcp");
+        std::fs::write(&other, b"x").unwrap();
+        let link = dir.join("mur-sneaky");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert_eq!(first_party_target(link.to_str().unwrap(), None, &dir), None);
+    }
+
+    #[test]
     fn the_bundled_server_matches_by_name() {
         let (_d, dir) = install_dir();
         let bundled = PathBuf::from("/x/.mur/mcp-servers/mur-mcp-server");
@@ -109,5 +182,47 @@ mod tests {
             first_party_target("mur-mcp-server", Some(&bundled), &dir),
             Some(bundled)
         );
+    }
+
+    #[test]
+    fn install_dir_of_survives_replacing_the_binary() {
+        let (_g, dir) = install_dir();
+        let exe = dir.join("mur");
+        std::fs::write(&exe, b"old").unwrap();
+        let captured = install_dir_of(&exe);
+        let staged = dir.join("mur.new");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::rename(&staged, &exe).unwrap();
+        assert_eq!(captured.as_deref(), Some(dir.as_path()));
+        assert_eq!(install_dir_of(&exe).as_deref(), Some(dir.as_path()));
+    }
+
+    /// The failure the pre-swap capture exists for (#1944): once a running
+    /// executable is replaced by rename, Linux's `/proc/<pid>/exe` — what
+    /// `current_exe()` reads — names a deleted inode and stops canonicalizing,
+    /// while the path captured before the swap still yields the install dir.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_exe_link_breaks_after_swap_but_captured_dir_does_not() {
+        let (_g, dir) = install_dir();
+        let exe = dir.join("mur");
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let captured = install_dir_of(&exe);
+        let mut child = std::process::Command::new(&exe).arg("30").spawn().unwrap();
+        let proc_exe = PathBuf::from(format!("/proc/{}/exe", child.id()));
+        assert_eq!(install_dir_of(&proc_exe).as_deref(), Some(dir.as_path()));
+
+        let staged = dir.join("mur.new");
+        std::fs::copy("/bin/sleep", &staged).unwrap();
+        std::fs::rename(&staged, &exe).unwrap();
+
+        let after = install_dir_of(&proc_exe);
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(
+            after, None,
+            "the replaced exe link should no longer resolve"
+        );
+        assert_eq!(captured.as_deref(), Some(dir.as_path()));
     }
 }

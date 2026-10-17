@@ -43,7 +43,13 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
         // grants survive, then walk the deploy checklist (#849/#866).
         // No extracted runtime here: brew just refreshed the keg, so the
         // sibling fallback finds the current one.
-        resign::post_upgrade(opts.restart_agents, None)?;
+        // brew pours the new version into a fresh Cellar dir, so the running
+        // exe still names the old one — ask PATH where `mur` lives now.
+        let install_dir =
+            mur_common::exec::resolve_command_in(&mur_common::exec::augmented_path_var(), "mur")
+                .ok()
+                .and_then(|p| mur_common::mcp_first_party::install_dir_of(&p));
+        resign::post_upgrade(opts.restart_agents, None, install_dir.as_deref())?;
         // The keg is brew's to manage: report a bad runtime, never swap it.
         repair::report_for_brew();
         return Ok(());
@@ -130,10 +136,17 @@ pub fn run(opts: UpdateOptions) -> Result<()> {
                 .ok()
                 .map(|_| tmp_runtime);
         let preexisting_interactive_sessions = interactive_sessions_at();
+        // Before the swap: afterwards Linux resolves the running exe to a
+        // deleted inode and the install dir is lost (#1944).
+        let install_dir = mur_common::mcp_first_party::install_dir_of(&target);
         swap::swap(&tmp_bin, &target)?;
         println!("Updated to v{latest}");
         refresh_siblings(asset_name, &bin_bytes, &target);
-        resign::post_upgrade(opts.restart_agents, fresh_runtime.as_deref())?;
+        resign::post_upgrade(
+            opts.restart_agents,
+            fresh_runtime.as_deref(),
+            install_dir.as_deref(),
+        )?;
         warn_stale_interactive_sessions(preexisting_interactive_sessions);
     }
     #[cfg(windows)]
