@@ -33,6 +33,10 @@ pub(super) enum Route {
     Add,
     /// `live ...`: the remaining args are the hosts.
     Live(Vec<String>),
+    /// `allow ...`: grant one more host (#1907).
+    Allow(Vec<String>),
+    /// `status`: the effective network policy (#1906).
+    Status,
     /// Anything else: forwarded to the model as a browser-skill turn.
     Turn,
 }
@@ -41,6 +45,8 @@ pub(super) fn route(args: &[String]) -> Route {
     match args.first().map(String::as_str) {
         Some("--add") => Route::Add,
         Some("live") => Route::Live(args[1..].to_vec()),
+        Some("allow") => Route::Allow(args[1..].to_vec()),
+        Some("status") if args.len() == 1 => Route::Status,
         _ => Route::Turn,
     }
 }

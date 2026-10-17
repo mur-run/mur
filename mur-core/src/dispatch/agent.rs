@@ -534,6 +534,10 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
                 }
             }
         }
+        AgentAction::Network { name } => {
+            let home = cmd::agent::resolve_mur_home()?;
+            cmd::agent::network_view::run(&crate::a2a_dial::canonicalize_agent_name(&home, &name))?
+        }
         AgentAction::Doctor { name, format, json } => match name {
             Some(name) => cmd::doctor::run_agent(&name, json)?,
             None => cmd::doctor::run(&format, json)?,

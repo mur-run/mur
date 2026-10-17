@@ -524,6 +524,23 @@ Agent** wizard offers the same catalog as a source.
 
 - **Kernel sandbox** per OS — Landlock + seccomp (Linux), SBPL (macOS), Job
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
+- **See who may reach what** — `mur agent network <agent>` (or `/browser
+  status` in the chat) prints one table: the agent's own outbound rule, which
+  governs only MUR's own connections, and every MCP server's. A server with no
+  network policy shows as *any host (port-limited only)*, flagged, because the
+  OS sandbox filters by port, not host. `mur doctor` reports stored host
+  entries that are not hostnames (a sentence pasted into `/browser live`, say);
+  `mur doctor --fix` previews and removes them, and flags a server left with no
+  hosts instead of quietly changing its mode.
+- **Grant a host when it is blocked** — when the browser is refused a host, the
+  chat shows *this time* / *always* / *no* choices after the turn. *This time*
+  lets it through until the agent restarts and writes nothing; *always* shows
+  the change, saves it to the profile and applies it to the running agent with
+  no restart. The blocked request fails right away and is not replayed: retry
+  the page. Outside the chat, paste `/browser allow <host>` (`--session` for
+  this time only). Hosts on a research-mode deny list are never offered. Live
+  grants need the same approval token as a tool approval, so the agent cannot
+  grant itself a host.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only

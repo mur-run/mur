@@ -40,6 +40,7 @@ pub mod deps;
 pub mod doctor;
 /// #1587 — `codesign-identity` check + `mur doctor --fix` for local re-signing.
 pub(crate) mod doctor_codesign;
+pub(crate) mod doctor_network;
 pub(crate) mod drafts;
 pub(crate) mod eval;
 pub mod fleet;

@@ -107,6 +107,9 @@ pub enum StreamMsg {
         step_id: String,
         tokens: usize,
     },
+    /// The egress proxy blocked a host (#1907). Turn-independent: the chip
+    /// stays useful after the turn that triggered it ends.
+    EgressDenied(mur_common::egress_event::EgressDenied),
     /// The attached `/review` worker asks the UI something (P3b-§4.1).
     ReviewReq(crate::cmd::fleet::review::murmur::bridge::DriverReq),
     /// The attached `/review` worker ended; sent once, last (P3b-§7.2).
@@ -131,6 +134,7 @@ impl StreamMsg {
             | StreamMsg::StepCompleted { task_id, .. }
             | StreamMsg::StepTokens { task_id, .. } => Some(task_id),
             StreamMsg::Note(_)
+            | StreamMsg::EgressDenied(_)
             | StreamMsg::RestartDone(_)
             | StreamMsg::Expired { .. }
             | StreamMsg::ShellOutput { .. }
@@ -339,6 +343,7 @@ pub fn spawn_stream(
                         step_id,
                         tokens,
                     },
+                    crate::a2a_dial::StepEvent::EgressDenied(ev) => StreamMsg::EgressDenied(ev),
                 };
                 let _ = tx.blocking_send(msg);
             },

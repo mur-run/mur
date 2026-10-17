@@ -461,7 +461,15 @@ fn channels_menu_hides_follows_the_handler_refuses() {
 fn browser_menu_offers_live() {
     let st = compute("/browser ", &[], &ctx(), &cur()).unwrap();
     let words: Vec<&str> = st.items.iter().map(|i| i.display.as_str()).collect();
-    for mode in ["--add", "auth", "testing", "automation", "live"] {
+    for mode in [
+        "--add",
+        "auth",
+        "testing",
+        "automation",
+        "live",
+        "allow",
+        "status",
+    ] {
         assert!(
             words.contains(&mode),
             "/browser menu is missing {mode}: {words:?}"

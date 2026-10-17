@@ -46,6 +46,7 @@ pub mod mcp_discover;
 pub mod mcp_login;
 pub mod mcp_network;
 pub mod mcp_registry;
+pub mod network_view;
 pub mod start;
 mod who;
 // Items exported for the Hub GUI (mur-hub-gui crate) — not used from the

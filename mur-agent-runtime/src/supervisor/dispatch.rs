@@ -129,6 +129,7 @@ pub(super) fn build_dispatcher(
     runtime_skills: Arc<crate::skills::RuntimeSkills>,
     secrets: Arc<crate::secrets::SecretVault>,
     approval_authority: crate::hitl::authority::ApprovalAuthority,
+    egress_proxy: Option<crate::sandbox::egress_proxy::EgressProxyHandle>,
 ) -> Dispatcher {
     let mut d = Dispatcher::new();
     d.register("agent/card", Box::new(CardHandler::new(profile.clone())));
@@ -185,7 +186,7 @@ pub(super) fn build_dispatcher(
         "tool/hitl_respond",
         Box::new(HitlRespondHandler {
             pending_approvals: pending_approvals.clone(),
-            authority: approval_authority,
+            authority: approval_authority.clone(),
             shim_trust: runner.shim_trust(),
         }),
     );
@@ -240,6 +241,19 @@ pub(super) fn build_dispatcher(
             secrets.clone(),
         )),
     );
+    // #1907: just-in-time egress grants. Only when a proxy exists; without
+    // one there is no scoped server to grant for, and method-not-found says so.
+    if let Some(proxy) = egress_proxy {
+        d.register(
+            mur_common::egress_event::GRANT_METHOD,
+            Box::new(
+                crate::protocol::methods::egress_grant::EgressGrantHandler::new(
+                    proxy,
+                    approval_authority.clone(),
+                ),
+            ),
+        );
+    }
     d.register(
         "secret/delete",
         Box::new(crate::protocol::methods::secret_set::SecretDeleteHandler::new(secrets)),

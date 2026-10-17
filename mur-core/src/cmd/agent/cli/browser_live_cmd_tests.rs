@@ -97,6 +97,10 @@ fn routing_keeps_add_and_splits_live() {
         Route::Live(s(&["a.example.com"]))
     );
     assert_eq!(route(&s(&["live"])), Route::Live(vec![]));
+    assert_eq!(route(&s(&["allow", "a.com"])), Route::Allow(s(&["a.com"])));
+    assert_eq!(route(&s(&["status"])), Route::Status);
+    // `status` with more words is a browser-skill turn, not the view.
+    assert_eq!(route(&s(&["status", "of", "my", "order"])), Route::Turn);
     assert_eq!(route(&s(&["check", "the", "cart"])), Route::Turn);
     assert_eq!(route(&[]), Route::Turn);
 }

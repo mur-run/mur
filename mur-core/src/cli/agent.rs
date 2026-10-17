@@ -371,6 +371,13 @@ pub enum AgentAction {
         #[arg(long = "unset")]
         unset: Vec<String>,
     },
+    /// The effective outbound network policy: the agent's own layer and every
+    /// MCP server in one table. The agent's `allow_hosts` does not govern its
+    /// MCP servers; this is where that shows.
+    Network {
+        /// Agent name (case-insensitive).
+        name: String,
+    },
     Doctor {
         /// Agent name to run per-agent health checks for. Omit for the
         /// existing export-prereq checks.

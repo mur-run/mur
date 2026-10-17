@@ -62,6 +62,35 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
         );
         return;
     }
+    if let Route::Allow(rest) = route {
+        // 不用: remember it for this session; nothing else changes.
+        if let [flag, host] = rest.as_slice()
+            && flag == "--dismiss"
+        {
+            app.egress_chips.dismissed.insert(host.clone());
+            app.push_system(format!(
+                "ok — `{host}` stays blocked; no more prompts for it this session"
+            ));
+            return;
+        }
+        let home = app.home.clone();
+        run_manage(app, move |agent| {
+            super::browser_allow_cmd::run_allow(
+                &agent,
+                &rest,
+                &mut super::browser_allow_cmd::ProfileAllowOps {
+                    agent: &agent,
+                    home,
+                },
+            )
+        })
+        .await;
+        return;
+    }
+    if route == Route::Status {
+        run_manage(app, |agent| super::browser_allow_cmd::run_status(&agent)).await;
+        return;
+    }
     // `--add` path is the pre-live behavior, kept byte-for-byte.
     if route == Route::Add {
         // D6: reuse `/skill add`'s own path unmodified. The global copy of
