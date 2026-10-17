@@ -685,7 +685,8 @@ Agent** wizard offers the same catalog as a source.
   reviewer the edit tools, starts both and runs the same checks. Re-running it
   never deletes an agent, never lowers a timeout, and keeps a hand-edited
   prompt unless you confirm (`--overwrite-prompts` in scripts, with
-  `--no-interactive`). You see every message and
+  `--no-interactive`); from murmur, `!mur fleet review-setup` hands over the
+  terminal for the wizard. You see every message and
   press Enter to send it. When the main
   agent rejects the same finding twice, the session waits for your ruling
   instead of stopping: `/rule drop F3 <why>` closes it, `/rule fix F3 <how>`

@@ -320,6 +320,27 @@ pub fn answers_from_flags(
     })
 }
 
+/// Resolve both names to their on-disk spelling and refuse a pair that lands
+/// on one agent. The raw-name check in the wizard / flag paths cannot see
+/// `coach` vs `Coach`; this runs before anything is mutated. The comparison
+/// is case-insensitive so two not-yet-created names that differ only in case
+/// (one directory on a case-insensitive filesystem) are refused too.
+pub(crate) fn canonicalize_answers(
+    mut answers: WizardAnswers,
+    canon: &dyn Fn(&str) -> String,
+) -> Result<WizardAnswers> {
+    answers.main.name = canon(&answers.main.name);
+    answers.reviewer.name = canon(&answers.reviewer.name);
+    if answers.main.name.to_lowercase() == answers.reviewer.name.to_lowercase() {
+        bail!(
+            "--main and --reviewer must be different agents ('{}' and '{}' are the same agent)",
+            answers.main.name,
+            answers.reviewer.name
+        );
+    }
+    Ok(answers)
+}
+
 /// A model that is not a registry key would leave `model_ref` unresolvable.
 fn check_models(answers: &WizardAnswers, choices: &[String]) -> Result<()> {
     for m in [&answers.main.model, &answers.reviewer.model] {
@@ -436,13 +457,12 @@ pub fn cmd_review_setup(mur_home: &Path, args: SetupArgs) -> Result<()> {
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let mut out = std::io::stdout();
-    let mut answers = if interactive {
+    let answers = if interactive {
         run_wizard(&mut input, &mut out, &args, &choices, &current)?
     } else {
         answers_from_flags(&args, &choices, &current)?
     };
-    answers.main.name = canon(&answers.main.name);
-    answers.reviewer.name = canon(&answers.reviewer.name);
+    let answers = canonicalize_answers(answers, &canon)?;
     check_models(&answers, &choices)?;
     if let (Some(a), Some(b)) = (
         registry.models.get(&answers.main.model),

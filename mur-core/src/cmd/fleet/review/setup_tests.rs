@@ -247,3 +247,64 @@ fn role_prompts_defer_the_wire_format_to_the_per_turn_message() {
     }
     assert!(super::super::constants::REVIEW_MAIN_PROMPT.contains("\"responses\""));
 }
+
+fn seed_agent(home: &std::path::Path, name: &str) {
+    let dir = home.join("agents").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("profile.yaml"), format!("name: {name}\n")).unwrap();
+}
+
+fn pair(main: &str, reviewer: &str) -> WizardAnswers {
+    WizardAnswers {
+        main: MemberChoice {
+            name: main.into(),
+            model: "alpha".into(),
+        },
+        reviewer: MemberChoice {
+            name: reviewer.into(),
+            model: "beta".into(),
+        },
+    }
+}
+
+#[test]
+fn differently_cased_names_of_one_existing_agent_are_refused() {
+    // `coach` exists; `--main coach --reviewer Coach` passes the raw-name
+    // check but both resolve to `coach`. Must be refused before any mutation.
+    let tmp = tempfile::tempdir().unwrap();
+    seed_agent(tmp.path(), "coach");
+    let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(tmp.path(), n);
+    let args = SetupArgs {
+        main: Some("coach".into()),
+        reviewer: Some("Coach".into()),
+        main_model: Some("alpha".into()),
+        reviewer_model: Some("beta".into()),
+        ..Default::default()
+    };
+    let raw = answers_from_flags(&args, &choices(), &no_current).unwrap();
+    let err = canonicalize_answers(raw, &canon).unwrap_err().to_string();
+    assert!(err.contains("different agents"), "{err}");
+}
+
+#[test]
+fn case_only_difference_between_new_names_is_refused() {
+    // Neither exists yet; on a case-insensitive filesystem they would be
+    // one directory, so the pair is refused regardless of the host FS.
+    let tmp = tempfile::tempdir().unwrap();
+    let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(tmp.path(), n);
+    let err = canonicalize_answers(pair("Pair", "pair"), &canon).unwrap_err();
+    assert!(err.to_string().contains("different agents"));
+}
+
+#[test]
+fn canonicalization_rewrites_to_the_on_disk_spelling() {
+    let tmp = tempfile::tempdir().unwrap();
+    seed_agent(tmp.path(), "coach");
+    let canon = |n: &str| crate::a2a_dial::canonicalize_agent_name(tmp.path(), n);
+    let a = canonicalize_answers(pair("COACH", "critic"), &canon).unwrap();
+    // Case-sensitive FS: rewritten to `coach`. Case-insensitive FS (macOS):
+    // the exact-match probe already hits, so the typed spelling is kept —
+    // which is why the collision check compares case-insensitively.
+    assert!(a.main.name.eq_ignore_ascii_case("coach"), "{}", a.main.name);
+    assert_eq!(a.reviewer.name, "critic");
+}

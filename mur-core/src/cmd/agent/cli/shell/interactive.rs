@@ -18,7 +18,15 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     &["mur", "deep-research", "secret"],
     // Confirms before overwriting paths changed since the promote.
     &["mur", "agent", "turn", "undo"],
+    // The review-pair wizard asks for names and models and refuses a
+    // non-tty stdin (unless `--no-interactive`, see `PIPED_OPT_OUTS`).
+    &["mur", "fleet", "review-setup"],
 ];
+
+/// Flags that make an otherwise interactive command safe on piped stdio, so
+/// a scripted run keeps its output in the transcript: (prefix, opt-out flag).
+const PIPED_OPT_OUTS: &[(&[&str], &str)] =
+    &[(&["mur", "fleet", "review-setup"], "--no-interactive")];
 
 /// Whether `cmd` must be run with the terminal handed over.
 ///
@@ -28,9 +36,15 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
 /// a command that never needed it.
 pub fn needs_terminal(cmd: &str) -> bool {
     let tokens: Vec<&str> = cmd.split_whitespace().collect();
-    INTERACTIVE_PREFIXES
+    let starts_with =
+        |prefix: &[&str]| tokens.len() >= prefix.len() && tokens[..prefix.len()] == *prefix;
+    let opted_out = PIPED_OPT_OUTS
         .iter()
-        .any(|prefix| tokens.len() >= prefix.len() && tokens[..prefix.len()] == **prefix)
+        .any(|(prefix, flag)| starts_with(prefix) && tokens[prefix.len()..].contains(flag));
+    !opted_out
+        && INTERACTIVE_PREFIXES
+            .iter()
+            .any(|prefix| starts_with(prefix))
 }
 
 /// `!mur fleet review …` and `!mur fleet review-resume …` are attended and
@@ -115,6 +129,21 @@ mod tests {
         assert!(!needs_terminal("mur agent turn list mur"));
         assert!(!needs_terminal("mur deep-research \"some question\""));
         assert!(!needs_terminal("mur deep-research"));
+    }
+
+    #[test]
+    fn review_setup_wizard_needs_the_terminal() {
+        assert!(needs_terminal("mur fleet review-setup"));
+        assert!(needs_terminal(
+            "mur fleet review-setup --main a --reviewer b"
+        ));
+        // Scripted path keeps piped stdio.
+        assert!(!needs_terminal(
+            "mur fleet review-setup --no-interactive --main a --reviewer b"
+        ));
+        // It is not mistaken for an attended review (that goes to /review).
+        assert_eq!(review_redirect("mur fleet review-setup"), None);
+        assert!(!needs_terminal("mur fleet review --main a --reviewer b t"));
     }
 
     #[test]
