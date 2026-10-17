@@ -85,7 +85,7 @@ pub fn refusals_since(mark: usize) -> usize {
 /// Read the router agent's current key version from its `profile.yaml`
 /// (`identity.key_version`). Returns 0 on any failure (missing profile,
 /// malformed YAML), matching the bootstrap key version.
-fn read_key_version(agent_home: &Path) -> u32 {
+pub(crate) fn read_key_version(agent_home: &Path) -> u32 {
     let profile_path = agent_home.join("profile.yaml");
     let Ok(yaml) = std::fs::read_to_string(&profile_path) else {
         return 0;

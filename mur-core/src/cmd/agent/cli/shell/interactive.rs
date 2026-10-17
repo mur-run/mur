@@ -18,6 +18,8 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     &["mur", "deep-research", "secret"],
     // Confirms before overwriting paths changed since the promote.
     &["mur", "agent", "turn", "undo"],
+    // Confirms before quarantining a damaged channel log.
+    &["mur", "channel", "repair"],
 ];
 
 /// Whether `cmd` must be run with the terminal handed over.
