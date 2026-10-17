@@ -1032,7 +1032,7 @@ mur
 ├── dashboard    terminal dashboard
 ├── browser      record · replay · auth · broker · list · show · export · status   (browser work through Playwright MCP;
 │                `list` tables recorded runs with a summary, domain, steps and run count — `--json` for all fields)
-├── channel      approve · verify · backfill-purpose   (HITL approval; verify checks a log against its signed head)
+├── channel      approve · verify · repair · backfill-purpose   (HITL approval; verify checks a log against its signed head, repair restarts a damaged one)
 ├── commander    pin · status · directive   (governance: pin the operator key, issue and inspect directives)
 ├── auth         login · logout
 ├── team         shared skills (private registries)
