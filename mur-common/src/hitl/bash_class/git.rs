@@ -11,9 +11,13 @@
 //! patch (every flag is on a no-patch allowlist) or it switches both drivers
 //! off (`--no-ext-diff --no-textconv`).
 //!
-//! NOT covered, deliberately: config that runs a program on a plain read with
-//! no flag at all (`core.fsmonitor` on `git status`). Closing that would take
-//! `git status` out of the read lane; it is a repo-trust problem, not a flag.
+//!
+//! Repo config also runs a program on reads that render nothing: `core.fsmonitor`
+//! on any index refresh, `filter.<drv>.clean` on a stat-dirty file. No flag
+//! switches every clean filter off, so a command that touches the worktree or
+//! the index — `status`, `ls-files`, a `diff`/`grep`/`blame` without two
+//! explicit tree-ish sides, `describe --dirty`, a `:path` object — prompts.
+//! The rule is in `worktree.rs` (#1937).
 
 /// `git` subcommands that only read, given the per-subcommand flag checks below.
 /// Excludes anything with a write mode (`branch -D`, `tag X`, `remote add`,
@@ -178,7 +182,9 @@ pub(super) fn is_readonly<'a>(mut toks: impl Iterator<Item = &'a str>) -> bool {
         Some("remote") => only_flags(toks, GIT_REMOTE_LIST_FLAGS),
         Some(sub) if GIT_READONLY_SUBCMDS.contains(&sub) => {
             let args: Vec<&str> = toks.collect();
-            !args.iter().any(|t| flag_writes(sub, t)) && runs_no_driver(sub, &args)
+            !args.iter().any(|t| flag_writes(sub, t))
+                && runs_no_driver(sub, &args)
+                && worktree::stays_off_worktree(sub, &args)
         }
         _ => false,
     }
@@ -290,6 +296,8 @@ fn is_no_patch_flag(arg: &str) -> bool {
     }
     NO_PATCH_FLAGS.contains(&flag_name(arg))
 }
+
+mod worktree;
 
 #[cfg(test)]
 mod tests;

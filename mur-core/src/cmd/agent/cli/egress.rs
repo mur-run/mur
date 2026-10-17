@@ -444,7 +444,8 @@ mod tests {
         for cmd in [
             "git push -u origin fix/x",
             "git push origin HEAD",
-            "git status -sb && git push -u origin fix/x 2>&1 | tail -3",
+            // #1937: `git status` is not a read any more; a history read is.
+            "git log --oneline -1 && git push -u origin fix/x 2>&1 | tail -3",
             "git push origin fix/x:fix/x",
         ] {
             assert_eq!(

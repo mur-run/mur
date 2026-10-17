@@ -374,7 +374,7 @@ mod tests {
         let cmd = |c: &str| serde_json::json!({ "command": c });
 
         assert!(is_readonly_call("read_file", None));
-        assert!(is_readonly_call("bash", Some(&cmd("git status"))));
+        assert!(is_readonly_call("bash", Some(&cmd("git log --oneline -5"))));
 
         assert!(!is_readonly_call("bash", Some(&cmd("rm -rf /"))));
         assert!(!is_readonly_call("bash", Some(&cmd("cat a > b"))));
@@ -486,9 +486,9 @@ mod tests {
             "head -50 file.rs",
             "wc -l *.rs",
             "find . -name '*.rs'",
-            "git status",
+            "git rev-parse --show-toplevel", // `git status` refreshes the index: see git/tests.rs
             "git log --oneline -10",
-            "git diff --stat HEAD~1", // a bare diff can run textconv: see git/tests.rs
+            "git diff --stat HEAD~1 HEAD --",
             "git branch",
             "git branch --show-current",
             "git branch -a -vv",
@@ -616,9 +616,9 @@ mod tests {
         }
         for c in [
             "git log --oneline -5",
-            "git grep -n pat",
-            "git grep -i -o pat", // lowercase -o only prints the match
-            "git diff --stat",
+            "git grep -n pat HEAD --",
+            "git grep -i -o pat HEAD --", // lowercase -o only prints the match
+            "git diff --stat HEAD~1 HEAD --",
         ] {
             assert!(is_readonly_bash(c), "should stay read-only: {c}");
         }
@@ -667,7 +667,7 @@ mod tests {
             "cat Cargo.toml",
             "ls -la src/",
             "grep -rn foo src/",
-            "git status",
+            "git rev-parse HEAD",
             "git log --oneline -10",
             "find . -name '*.rs'",
             "printenv PATH",
