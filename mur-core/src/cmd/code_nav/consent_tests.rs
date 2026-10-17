@@ -80,7 +80,8 @@ fn changing_project_needs_consent() {
 
 #[test]
 fn dropped_language_is_kept_and_reported_not_asked() {
-    let m = applied(&p(true, &["python", "go"]), Path::new("/r"));
+    let mut m = applied(&p(true, &["python", "go"]), Path::new("/r"));
+    m.set_languages("serena", ["python".to_owned(), "go".to_owned()]);
     let d = diff(&p(true, &["python"]), "serena", Some(Path::new("/r")), &m);
     assert!(
         d.is_empty(),
@@ -190,4 +191,64 @@ fn manifest_without_entry_projects_still_loads() {
     let json = r#"{"installed":[],"granted":[],"languages":[],"project":null,"serena":null,"disabled":[]}"#;
     let m: Manifest = serde_json::from_str(json).unwrap();
     assert!(m.entry_projects.is_empty());
+}
+
+#[test]
+fn entry_languages_are_tracked_per_entry() {
+    let mut m = Manifest::default();
+    m.set_languages("serena", ["rust".to_owned()]);
+    m.set_languages("site", ["php".to_owned()]);
+    m.set_project("serena", Path::new("/r"));
+    m.set_project("site", Path::new("/s"));
+    assert_eq!(
+        m.languages_of("serena").unwrap(),
+        &BTreeSet::from(["rust".to_owned()])
+    );
+    assert_eq!(
+        m.languages_of("site").unwrap(),
+        &BTreeSet::from(["php".to_owned()])
+    );
+    // The agent-wide set stays the consent history of both.
+    assert_eq!(
+        m.languages,
+        BTreeSet::from(["php".to_owned(), "rust".to_owned()])
+    );
+}
+
+#[test]
+fn a_new_entry_inherits_no_languages() {
+    let mut m = Manifest::default();
+    m.set_project("serena", Path::new("/r"));
+    m.set_languages("serena", ["php".to_owned()]);
+    assert!(m.languages_of("other").is_none());
+}
+
+#[test]
+fn legacy_manifest_has_no_entry_languages() {
+    // Written before per-entry languages: only the agent-wide union exists.
+    // It is not copied onto any entry; the next setup of each entry writes
+    // only that entry's languages.
+    let json = r#"{"installed":[],"granted":[],"languages":["go","php"],"project":"/r","serena":null,"disabled":[]}"#;
+    let m: Manifest = serde_json::from_str(json).unwrap();
+    assert!(m.languages_of("serena").is_none());
+    let d = diff(&p(true, &["go"]), "serena", Some(Path::new("/r")), &m);
+    assert!(d.kept_languages.is_empty(), "{:?}", d.kept_languages);
+    assert_eq!(d.other_languages, ["php"]);
+    let mut out = Vec::new();
+    print_diff(&mut out, &d, false).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("not listed for this entry: php"), "{text}");
+}
+
+#[test]
+fn kept_languages_are_per_entry() {
+    let mut m = applied(&p(true, &["python", "go"]), Path::new("/r"));
+    m.set_languages("serena", ["python".to_owned(), "go".to_owned()]);
+    m.set_project("serena", Path::new("/r"));
+    let d = diff(&p(true, &["python"]), "other", Some(Path::new("/o")), &m);
+    assert!(
+        d.kept_languages.is_empty(),
+        "another entry's language is not kept here: {:?}",
+        d.kept_languages
+    );
 }

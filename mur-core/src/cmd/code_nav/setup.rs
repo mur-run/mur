@@ -279,18 +279,7 @@ fn apply(
         m.pyright.clone()
     };
 
-    // Union with earlier runs: setup never revokes, so a language the user
-    // consented to before stays in serena's list until they remove it.
-    let langs: Vec<Lang> = Lang::ALL
-        .into_iter()
-        .filter(|l| {
-            m.languages.contains(l.flag())
-                || plan
-                    .lsp
-                    .iter()
-                    .any(|r| r.lang == *l && r.status == LspStatus::Enabled)
-        })
-        .collect();
+    let langs = entry_langs(&m, entry, plan);
     let paths = serena_paths_for(agent_home, entry)?;
     let ptpl = serena_project::read_pinned_project_template(&dir)?;
     let pfile = serena_project::write_project(&paths, project, &ptpl, &langs)?;
@@ -345,12 +334,29 @@ fn apply(
     writeln!(out, "  ✓ permissions granted")?;
     crate::cmd::agent::warn_if_running(agent);
 
-    m.languages
-        .extend(langs.iter().map(|l| l.flag().to_owned()));
+    m.set_languages(entry, langs.iter().map(|l| l.flag().to_owned()));
     m.set_project(entry, project);
     m.serena = Some(record);
     m.pyright = pyright;
     Ok(m)
+}
+
+/// The languages `entry`'s `project.yml` lists: what this plan enables,
+/// unioned with what this entry listed before (setup never revokes). Only
+/// this entry's: serena refuses to start if any listed server fails, so
+/// another project's languages must not leak in (#1943).
+pub(super) fn entry_langs(m: &Manifest, entry: &str, plan: &plan::Plan) -> Vec<Lang> {
+    let own = m.languages_of(entry);
+    Lang::ALL
+        .into_iter()
+        .filter(|l| {
+            own.is_some_and(|o| o.contains(l.flag()))
+                || plan
+                    .lsp
+                    .iter()
+                    .any(|r| r.lang == *l && r.status == LspStatus::Enabled)
+        })
+        .collect()
 }
 
 fn path_str(p: &Path) -> Result<&str> {
