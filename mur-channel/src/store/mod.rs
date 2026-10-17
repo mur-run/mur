@@ -723,6 +723,38 @@ mod tests {
         assert_eq!(ids, vec!["a".to_string(), "b".to_string()]);
     }
 
+    /// #1936: the store refuses an id that could leave `root` before it
+    /// touches the disk — including a Windows drive prefix, which `join`
+    /// would treat as a new base rather than one more component.
+    #[test]
+    fn store_refuses_unsafe_ids_before_touching_disk() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("channels");
+        let store = ChannelStore::new(&root);
+        for id in ["..", "../escape", "a/b", "C:escape", "C:", "c1:stream"] {
+            assert!(store.create(&sample_channel(id)).is_err(), "create {id:?}");
+            assert!(store.delete(id).is_err(), "delete {id:?}");
+            let appended = store.append_event(
+                id,
+                ChannelActor::Human { name: "me".into() },
+                EventKind::Message,
+                serde_json::json!({"text": "x"}),
+                None,
+                None,
+                None,
+            );
+            assert!(appended.is_err(), "append {id:?}");
+            assert!(!store.has_manifest(id), "has_manifest {id:?}");
+        }
+        assert!(!root.exists(), "nothing may be created for a refused id");
+        let mut left: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert!(left.is_empty(), "stray entries: {left:?}");
+    }
+
     #[test]
     fn save_manifest_overwrites_existing() {
         let tmp = TempDir::new().unwrap();
