@@ -3,9 +3,10 @@
 //! On launch, if the current working directory is outside the agent's
 //! filesystem entitlements, offer to grant it (read+write) and persist it to
 //! the profile. We grant the enclosing git repo root when there is one, so a
-//! single consent covers subdirs and `<repo>/.worktrees/` checkouts. The running
-//! agent's sandbox is sealed at startup (no hot reload), so a grant only takes
-//! effect after a restart — we say so.
+//! single consent covers subdirs and `<repo>/.worktrees/` checkouts. The
+//! agent's sandbox is sealed at startup (no hot reload), so the consent runs
+//! BEFORE autostart (#1939): a stopped agent then seals with the grant already
+//! in place, and a live one is offered a restart right there.
 
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -67,14 +68,31 @@ fn git_repo_root(cwd: &Path) -> Option<PathBuf> {
     (!s.is_empty()).then(|| PathBuf::from(s))
 }
 
+/// What [`ensure_cwd_access`] did to the profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CwdAccess {
+    /// Nothing written: already allowed, declined, non-interactive, or too broad.
+    Unchanged,
+    /// A new read+write grant was persisted to the profile.
+    Granted,
+}
+
+impl CwdAccess {
+    /// A grant only reaches a sandbox sealed after it was written, so a live
+    /// agent must be restarted; a stopped one picks it up when it starts.
+    pub(super) fn needs_restart(self, agent_live: bool) -> bool {
+        self == CwdAccess::Granted && agent_live
+    }
+}
+
 /// Ensure the agent may touch the current project dir; offer consent if not.
 ///
-/// Returns `Ok(())` in every case the launch should continue (grant, decline,
+/// Returns `Ok(_)` in every case the launch should continue (grant, decline,
 /// non-interactive, or already-allowed). Only a profile read/write *error*
-/// propagates.
-pub(super) fn ensure_cwd_access(agent: &str) -> Result<()> {
+/// propagates. Call it BEFORE starting the agent (#1939).
+pub(super) fn ensure_cwd_access(agent: &str) -> Result<CwdAccess> {
     let Ok(cwd) = std::env::current_dir() else {
-        return Ok(());
+        return Ok(CwdAccess::Unchanged);
     };
     let home = user_home();
 
@@ -82,7 +100,7 @@ pub(super) fn ensure_cwd_access(agent: &str) -> Result<()> {
     let (_path, profile) = super::super::load_profile_for_edit(agent)?;
     let fs = &profile.entitlements.filesystem;
     if path_within_roots(&cwd, &fs.write, &home) || path_within_roots(&cwd, &fs.read, &home) {
-        return Ok(());
+        return Ok(CwdAccess::Unchanged);
     }
 
     // Grant the enclosing repo root when there is one (covers subdirs +
@@ -94,7 +112,7 @@ pub(super) fn ensure_cwd_access(agent: &str) -> Result<()> {
             "note: '{agent}' has no access to {} and it is too broad to grant automatically.\n      Grant a specific dir with: mur agent perm allow-write {agent} <path>",
             grant.display()
         );
-        return Ok(());
+        return Ok(CwdAccess::Unchanged);
     }
 
     // Non-interactive (piped) launch: never block on stdin; just inform.
@@ -104,7 +122,7 @@ pub(super) fn ensure_cwd_access(agent: &str) -> Result<()> {
             grant.display(),
             grant.display()
         );
-        return Ok(());
+        return Ok(CwdAccess::Unchanged);
     }
 
     eprintln!("'{agent}' has no filesystem access to this project:");
@@ -115,7 +133,7 @@ pub(super) fn ensure_cwd_access(agent: &str) -> Result<()> {
     io::stdin().read_line(&mut line)?;
     if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
         eprintln!("Skipped — the agent cannot read or write here.");
-        return Ok(());
+        return Ok(CwdAccess::Unchanged);
     }
 
     // One load/mutate/save (vs. two perm calls) keeps a single restart warning.
@@ -130,15 +148,52 @@ pub(super) fn ensure_cwd_access(agent: &str) -> Result<()> {
     }
     super::super::save_profile(&ppath, &mut profile)?;
     eprintln!("Granted {grant_str} (read + write).");
-    // Prints the canonical "restart required for changes to take effect" line
-    // when the agent is live — its sandbox is sealed at startup.
-    super::super::perm::warn_if_running(agent);
+    Ok(CwdAccess::Granted)
+}
+
+/// After a fresh grant on an agent that is ALREADY running, its sealed sandbox
+/// cannot see the new path. Offer to restart it now (default yes) instead of
+/// printing a warning the TUI immediately paints over (#1939).
+pub(super) fn offer_restart_after_grant(agent: &str) -> Result<()> {
+    eprint!(
+        "'{agent}' is running with its old sandbox; restart it now so the grant applies? [Y/n] "
+    );
+    io::stderr().flush().ok();
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    if matches!(line.trim().to_ascii_lowercase().as_str(), "n" | "no") {
+        eprintln!("Not restarted — run `mur agent restart {agent}` before working here.");
+        return Ok(());
+    }
+    eprintln!("Restarting '{agent}'…");
+    let r = crate::cmd::agent::restart_quiet(agent)?;
+    for (failed, note) in &r.notes {
+        if *failed {
+            eprintln!("✗ {note}");
+        }
+    }
+    if !r.ok {
+        eprintln!(
+            "✗ {} — run `mur agent restart {agent}` and retry.",
+            r.detail
+        );
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_fresh_grant_on_a_live_agent_needs_a_restart() {
+        // #1939: a grant written while the agent is stopped is picked up when
+        // it starts; only a live (already sealed) sandbox needs a bounce.
+        assert!(CwdAccess::Granted.needs_restart(true));
+        assert!(!CwdAccess::Granted.needs_restart(false));
+        assert!(!CwdAccess::Unchanged.needs_restart(true));
+        assert!(!CwdAccess::Unchanged.needs_restart(false));
+    }
 
     #[test]
     fn within_roots_matches_nested_and_tilde() {

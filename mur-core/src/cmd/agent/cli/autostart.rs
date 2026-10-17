@@ -16,14 +16,24 @@ use anyhow::Result;
 const READY_WINDOW: Duration = Duration::from_secs(60);
 const READY_POLL: Duration = Duration::from_millis(250);
 
+/// Whether `agent` has a `running.lock` — the same liveness test
+/// [`ensure_running`] uses, exposed so the caller can tell a sealed sandbox
+/// from one that will seal on the coming start (#1939).
+pub(super) fn is_running(home: &Path, agent: &str) -> bool {
+    home.join("agents")
+        .join(agent)
+        .join("running.lock")
+        .exists()
+}
+
 /// Ensure `agent` is running. Returns `Ok(true)` once its `running.lock`
 /// exists, `Ok(false)` when it could not be confirmed (the caller prints the
 /// manual hint), and an error only when `start` itself refused.
 pub(super) fn ensure_running(home: &Path, agent: &str) -> Result<bool> {
-    let lock = home.join("agents").join(agent).join("running.lock");
-    if lock.exists() {
+    if is_running(home, agent) {
         return Ok(true);
     }
+    let lock = home.join("agents").join(agent).join("running.lock");
     eprintln!("Agent '{agent}' is not running — starting it…");
     crate::cmd::agent::start::cmd_start(agent)?;
     Ok(wait_for(&lock, READY_WINDOW, READY_POLL))
