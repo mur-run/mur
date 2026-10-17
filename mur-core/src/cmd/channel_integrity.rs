@@ -46,6 +46,8 @@ pub struct IntegrityReport {
     pub anchor_mismatch: Option<AnchorMismatchKind>,
     /// An anchored append began and never advanced the head.
     pub anchor_dirty: bool,
+    /// A `mur channel repair` started and has not finished; rerun it.
+    pub repair_pending: bool,
     /// The head file exists but could not be read or parsed. When set the
     /// other checks were skipped, because the reader refuses such a channel.
     pub head_error: Option<String>,
@@ -60,6 +62,7 @@ impl IntegrityReport {
             && self.chain_breaks.is_empty()
             && self.anchor_mismatch.is_none()
             && !self.anchor_dirty
+            && !self.repair_pending
             && self.head_error.is_none()
     }
 
@@ -116,6 +119,11 @@ impl IntegrityReport {
             out.push_str(
                 "  head is stale: an anchored append began and never advanced it \
                  (a crash right before the write also leaves this marker)\n",
+            );
+        }
+        if self.repair_pending {
+            out.push_str(
+                "  an interrupted repair has not finished: rerun `mur channel repair` to complete it\n",
             );
         }
         push_list(&mut out, "unparseable lines", &self.unparseable_lines);
@@ -193,6 +201,7 @@ pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
         && head.is_none()
         && !store.has_manifest(channel_id)
         && !mur_channel::anchor::is_dirty(mur_home, channel_id)
+        && !mur_channel::repair_marker::is_pending(mur_home, channel_id)
     {
         bail!("no such channel: {channel_id} (no manifest, no log, no signed head)");
     }
@@ -223,6 +232,7 @@ pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
     report.chain_breaks = damage.chain_breaks;
     report.anchor_mismatch = damage.anchor_mismatch.map(|m| m.kind);
     report.anchor_dirty = damage.anchor_dirty;
+    report.repair_pending = damage.repair_pending;
     Ok(report)
 }
 

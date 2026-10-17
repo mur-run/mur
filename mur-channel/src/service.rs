@@ -530,6 +530,8 @@ impl ChannelService {
         self.index.remove(channel_id)?;
         remove_head(&anchor::heads_dir(&self.mur_home), channel_id)?;
         anchor::clear_dirty(&self.mur_home, channel_id)?;
+        // A deleted channel has nothing left to repair.
+        crate::repair_marker::clear(&self.mur_home, channel_id)?;
         Ok(())
     }
 

@@ -147,14 +147,7 @@ impl ChannelStore {
         // a lock on the data file blocks our own reads/writes of it (os error 33).
         // Locking a separate file gives cross-process mutual exclusion while the
         // data file stays freely readable/writable on every platform.
-        let lock_path = dir.join(super::LOCK_FILE);
-        let lock = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .with_context(|| format!("open {}", lock_path.display()))?;
-        lock.lock_exclusive().context("lock channel events")?;
+        let _lock = super::lock::AppendLock::exclusive(&dir.join(super::LOCK_FILE))?;
 
         // One read of the log under the lock serves both the dedup lookup and
         // `next_seq`. Lines are split keeping their terminator so a dedup hit
@@ -211,7 +204,6 @@ impl ChannelStore {
                 }),
                 None => Ok(()),
             };
-            FileExt::unlock(&lock).ok();
             resealed.context("seal failed after the event was written")?;
             return Ok(existing);
         }
@@ -248,7 +240,6 @@ impl ChannelStore {
                 event: &ev,
             })
         {
-            FileExt::unlock(&lock).ok();
             return Err(e.context("pre-write seal failed; nothing was written"));
         }
         let mut data = OpenOptions::new()
@@ -278,7 +269,6 @@ impl ChannelStore {
             }),
             None => Ok(()),
         };
-        FileExt::unlock(&lock).ok();
         sealed.context("seal failed after the event was written")?;
         Ok(ev)
     }

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use fs2::FileExt;
 use mur_common::channel::{Channel, ChannelActor, ChannelEvent, EventKind};
 
 /// File name of a channel's append-only log inside its directory.
@@ -26,6 +25,7 @@ pub struct ChannelStore {
 mod append;
 mod chain;
 mod load;
+mod lock;
 mod quarantine;
 
 pub use append::{PreSealHook, PreSealInput, SealHook, SealHooks, SealInput};
@@ -33,6 +33,7 @@ pub use chain::{GENESIS_PREV_HASH, line_hash};
 #[cfg(test)]
 use load::check_absence_is_not_corruption;
 pub use load::{AnchorMismatch, AnchorMismatchKind, DamageReport};
+pub use lock::AppendLock;
 pub use quarantine::{QUARANTINE_DIR, QUARANTINED_HEAD_FILE, Quarantined};
 
 impl ChannelStore {
@@ -54,6 +55,16 @@ impl ChannelStore {
         crate::id::check_channel_id(id)?;
         Ok(self.root.join(id))
     }
+    /// Take `id`'s append lock exclusively until the guard drops. Appends,
+    /// quarantine and locked reads made on THIS thread while it is held
+    /// nest inside it instead of deadlocking; every other writer waits. For
+    /// a multi-step transition that must look atomic to writers (repair).
+    pub fn lock_exclusive(&self, id: &str) -> Result<AppendLock> {
+        let dir = self.channel_dir(id)?;
+        fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        AppendLock::exclusive(&dir.join(LOCK_FILE))
+    }
+
     /// Path of a channel's append-only log. Public so a reader can cheaply
     /// gate on its length instead of re-parsing an unchanged log. Errors on an
     /// id that is not a single safe path component.
