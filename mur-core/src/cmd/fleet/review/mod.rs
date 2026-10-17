@@ -37,6 +37,7 @@ pub mod run_lock;
 pub mod schema;
 pub mod session;
 pub mod settle;
+pub mod setup;
 pub mod state;
 pub mod turn_cell;
 pub mod verdict;

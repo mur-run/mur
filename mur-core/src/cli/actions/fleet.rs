@@ -95,6 +95,31 @@ pub enum FleetAction {
         #[arg(long)]
         stuck_rounds: Option<u32>,
     },
+    /// Create (or reconcile) a main/reviewer agent pair ready for `mur fleet
+    /// review`: role prompts, models from models.yaml, a HITL timeout that
+    /// outlasts the stuck window, a reviewer that cannot edit, both started
+    /// and checked. Safe to re-run: never deletes, never lowers a timeout,
+    /// keeps a hand-edited prompt unless you confirm.
+    ReviewSetup {
+        /// Main agent name (default: coach)
+        #[arg(long)]
+        main: Option<String>,
+        /// Reviewer agent name (default: reviewer)
+        #[arg(long)]
+        reviewer: Option<String>,
+        /// models.yaml key for the main agent
+        #[arg(long, value_name = "REF")]
+        main_model: Option<String>,
+        /// models.yaml key for the reviewer (default: a different one than main)
+        #[arg(long, value_name = "REF")]
+        reviewer_model: Option<String>,
+        /// Ask nothing; fill gaps from defaults (for scripts)
+        #[arg(long)]
+        no_interactive: bool,
+        /// Replace a hand-edited system prompt with the role prompt
+        #[arg(long)]
+        overwrite_prompts: bool,
+    },
     /// Resume a paused review session at the same round (semi-auto).
     ReviewResume {
         /// The review session name (`review-…`)

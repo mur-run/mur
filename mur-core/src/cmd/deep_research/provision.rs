@@ -102,7 +102,7 @@ const RENDER_ENGINE_OBSCURA: &str = "obscura";
 /// guard and stayed clean. `resolve_tool_policy` is first-match-wins so the
 /// duplicates were harmless to policy resolution — they just made the profile
 /// unreadable and grew without bound.
-fn upsert_tool_rule(
+pub(crate) fn upsert_tool_rule(
     rules: &mut Vec<mur_common::agent::ToolRule>,
     pattern: String,
     policy: mur_common::agent::ToolPolicy,
