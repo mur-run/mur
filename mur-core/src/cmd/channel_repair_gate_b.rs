@@ -7,7 +7,7 @@
 //! by that same key — otherwise the runtime would read "records but no
 //! signed head" and the channel would stay broken.
 //!
-//! The repair event is therefore appended exactly the way the runtime appends
+//! The repair event is therefore written exactly the way the runtime appends
 //! its own decisions: signed by the agent key, through the runtime's own seal
 //! hook, which seals a genesis head over the one-line log. This runs in the
 //! operator's `mur` process outside the agent sandbox, the same place
@@ -20,7 +20,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use mur_agent_runtime::hitl::integrity;
 use mur_channel::ChannelService;
-use mur_common::channel::{ChannelActor, ChannelEvent, EventKind};
+use mur_channel::service::restart::RestartSigner;
+use mur_common::channel::ChannelActor;
 use mur_common::identity::AgentIdentity;
 
 /// The agent that owns a Gate B decision channel, with the key that seals it.
@@ -82,30 +83,32 @@ impl GateB {
         mur_channel::head_io::remove_head(&integrity::heads_dir(mur_home, &self.agent), channel_id)
     }
 
-    /// Append the repair record as the runtime would: agent-signed, with the
-    /// runtime's seal hook writing the fresh chain's genesis head.
-    pub fn append(
-        &self,
-        mur_home: &Path,
-        channel_id: &str,
-        payload: serde_json::Value,
-    ) -> Result<ChannelEvent> {
-        let svc = ChannelService::open(mur_home)?.with_seal(integrity::seal_hook(
-            mur_home.to_path_buf(),
-            self.agent.clone(),
-            self.identity.clone(),
-            self.key_version,
-        ));
-        svc.append_signed(
-            channel_id,
-            &self.identity,
-            self.key_version,
-            ChannelActor::Agent {
-                id: self.agent.clone(),
-            },
-            EventKind::Note,
-            payload,
-            None,
+    /// A service whose seal hook is the runtime's own, so the fresh chain's
+    /// genesis head in `hitl-heads/` is written exactly as the runtime would.
+    pub fn service(&self, mur_home: &Path) -> Result<ChannelService> {
+        Ok(
+            ChannelService::open(mur_home)?.with_seal(integrity::seal_hook(
+                mur_home.to_path_buf(),
+                self.agent.clone(),
+                self.identity.clone(),
+                self.key_version,
+            )),
         )
+    }
+
+    /// The agent key signs the fresh chain; the router head is not sealed
+    /// (Gate B reads only its own).
+    pub fn signer(&self) -> RestartSigner<'_> {
+        RestartSigner {
+            identity: &self.identity,
+            kv: self.key_version,
+            anchor_home: None,
+        }
+    }
+
+    pub fn actor(&self) -> ChannelActor {
+        ChannelActor::Agent {
+            id: self.agent.clone(),
+        }
     }
 }

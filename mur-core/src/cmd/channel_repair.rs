@@ -10,11 +10,13 @@
 //!
 //! 1. run the `mur channel verify` check; an intact channel is a no-op;
 //! 2. confirm (or `--yes`; a non-interactive caller without it is refused);
-//! 3. under the append lock, move the log aside (never delete) and drop the
-//!    signed head and dirty marker, so the next anchored append seals a
-//!    genesis head;
-//! 4. write a signed system event recording the repair as the fresh chain's
-//!    first line.
+//! 3. resolve the signing key — refused, touching nothing, when it cannot be
+//!    read from disk (never an unsigned fallback);
+//! 4. in ONE append-lock acquisition (`ChannelService::restart_chain`): move
+//!    the log aside (never delete), drop the signed head and dirty marker,
+//!    and write a signed record of the repair as seq 0 with a fresh genesis
+//!    head. Releasing the lock in between would let another writer put old,
+//!    still-valid records into the new log, sealed as trusted.
 //!
 //! No HITL decision is carried over — not the old ones, not ones given after
 //! the damage. The next gated action asks once, and that answer is reused.
@@ -30,10 +32,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use mur_channel::ChannelService;
+use mur_channel::service::restart::RestartSigner;
 use mur_common::agent::HITL_CHANNEL_FILE;
-use mur_common::channel::{ChannelActor, EventKind};
+use mur_common::channel::ChannelActor;
 
-use crate::channel_writer::{ROUTER_AGENT, append_as_writer};
+use crate::channel_writer::{KeySource, ROUTER_AGENT, WriterKey, writer_key};
 use crate::cmd::channel_integrity::{self, IntegrityReport};
 use crate::cmd::channel_repair_gate_b::GateB;
 
@@ -115,6 +118,13 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
     if report.is_intact() && gate_b_damage.is_none() {
         return Ok(Outcome::Intact);
     }
+    // The signer is resolved before anything is asked or touched, and there
+    // is no unsigned fallback: a repair that cannot sign would drop the old
+    // log and head and leave a chain nothing can verify.
+    let writer = match &gate_b {
+        Some(_) => None,
+        None => Some(router_key(mur_home)?),
+    };
     if !confirmed(confirm)? {
         return Ok(Outcome::Declined);
     }
@@ -128,22 +138,6 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
         .as_ref()
         .and_then(|g| g.old_head(mur_home, channel_id));
     let now = chrono::Utc::now();
-    let svc = ChannelService::open(mur_home)?;
-    let quarantined = svc.store().quarantine_log(channel_id, now, || {
-        mur_channel::head_io::remove_head(&heads, channel_id)?;
-        mur_channel::anchor::clear_dirty(mur_home, channel_id)?;
-        match &gate_b {
-            Some(g) => g.drop_head(mur_home, channel_id),
-            None => Ok(()),
-        }
-    })?;
-    // Seqs restart at 0; the read-model's fold guard (`seq > last_seq`)
-    // would ignore the fresh chain, so drop the row and let the append
-    // re-seed it.
-    if let Err(e) = svc.index().remove(channel_id) {
-        tracing::warn!(channel_id, error = %e, "could not reset the channel index row");
-    }
-
     let mut reason = summary(&report);
     if let Some(why) = &gate_b_damage {
         if !reason.is_empty() {
@@ -151,43 +145,80 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
         }
         reason.push_str(&format!("agent-sealed head does not hold ({why})"));
     }
-    let payload = serde_json::json!({
-        "type": REPAIR_EVENT_TYPE,
-        "text": format!("channel log repaired: {reason}"),
-        "repaired_by": ChannelActor::local_human(),
-        "repaired_at": now,
-        "reason": reason,
-        "report": report.render(),
-        "quarantined_log": quarantined
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned()),
-        "old_head": old_head.as_ref().map(|h| serde_json::json!({
-            "lines": h.lines,
-            "seq": h.seq,
-            "chain_hash": h.chain_hash,
-        })),
-        "old_agent_head": old_agent_head,
-    });
-    let ev = match &gate_b {
+    let rendered = report.render();
+    // Runs under the append lock, after the move and before the record is
+    // written: the old log is gone and no other writer can append until the
+    // fresh chain's signed first line and head are on disk.
+    let prepare = |quarantined: Option<&Path>| -> Result<serde_json::Value> {
+        mur_channel::head_io::remove_head(&heads, channel_id)?;
+        mur_channel::anchor::clear_dirty(mur_home, channel_id)?;
+        if let Some(g) = &gate_b {
+            g.drop_head(mur_home, channel_id)?;
+        }
+        Ok(serde_json::json!({
+            "type": REPAIR_EVENT_TYPE,
+            "text": format!("channel log repaired: {reason}"),
+            "repaired_by": ChannelActor::local_human(),
+            "repaired_at": now,
+            "reason": reason,
+            "report": rendered,
+            "quarantined_log": quarantined
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned()),
+            "old_head": old_head.as_ref().map(|h| serde_json::json!({
+                "lines": h.lines,
+                "seq": h.seq,
+                "chain_hash": h.chain_hash,
+            })),
+            "old_agent_head": old_agent_head,
+        }))
+    };
+    let done = match (&gate_b, &writer) {
         // The agent's seal hook writes the fresh `hitl-heads/` genesis head.
-        Some(g) => g.append(mur_home, channel_id, payload),
-        None => append_as_writer(
-            &svc,
-            mur_home,
-            channel_id,
-            ROUTER_AGENT,
-            ChannelActor::System,
-            EventKind::Note,
-            payload,
-            None,
-        ),
+        (Some(g), _) => {
+            g.service(mur_home)?
+                .restart_chain(channel_id, now, g.actor(), g.signer(), prepare)
+        }
+        (None, Some(w)) => {
+            let key_home = mur_home.join("agents").join(ROUTER_AGENT);
+            ChannelService::open(mur_home)?.restart_chain(
+                channel_id,
+                now,
+                ChannelActor::System,
+                RestartSigner {
+                    identity: &w.id,
+                    kv: w.kv,
+                    anchor_home: Some(&key_home),
+                },
+                prepare,
+            )
+        }
+        (None, None) => unreachable!("the router key was resolved above"),
     }
-    .context("record the repair on the fresh chain")?;
+    .context("restart the channel on a fresh chain")?;
     Ok(Outcome::Repaired {
-        quarantined,
-        seq: ev.seq,
+        quarantined: done.quarantined,
+        seq: done.event.seq,
     })
+}
+
+/// The router's signing key, read from disk. Refused when it is missing,
+/// unreadable, or only a sandbox handoff (which may not seal the trusted
+/// head): any of those would leave the fresh chain unsigned or unanchored.
+fn router_key(mur_home: &Path) -> Result<WriterKey> {
+    let refuse = |why: String| {
+        anyhow::anyhow!(
+            "refusing to repair: the router signing key (agent `{ROUTER_AGENT}`) {why}, so \
+             the fresh chain could not be signed and anchored; nothing was touched. Run this \
+             outside any agent sandbox, from the `mur` that owns the key."
+        )
+    };
+    match writer_key(mur_home, ROUTER_AGENT) {
+        Ok(Some(k)) if k.source == KeySource::Disk => Ok(k),
+        Ok(Some(_)) => Err(refuse("is only available as a sandbox handoff".into())),
+        Ok(None) => Err(refuse("is missing or unreadable".into())),
+        Err(e) => Err(refuse(format!("is unreadable ({e:#})"))),
+    }
 }
 
 fn confirmed(confirm: Confirm<'_>) -> Result<bool> {

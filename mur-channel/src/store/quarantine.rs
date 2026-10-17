@@ -3,73 +3,48 @@
 //!
 //! The quarantined copy stays inside the channel directory under a name no
 //! reader treats as the log, so nothing loads, folds, or trusts it again.
-//! It runs under the channel's append lock: an append racing the move would
-//! otherwise land in the file being moved and vanish from the new chain.
+//! It runs under the channel's append lock, held by the caller across the
+//! move AND the fresh chain's first line (`ChannelService::restart_chain`):
+//! releasing it in between would let another writer put old, still-valid
+//! records into the new log, which the restart would then seal as trusted.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use fs2::FileExt;
 
-use super::{ChannelStore, EVENTS_FILE, LOCK_FILE};
+use super::{ChannelStore, EVENTS_FILE};
 
 /// Prefix of a quarantined log's file name inside the channel directory.
 pub const QUARANTINE_PREFIX: &str = "events.quarantined-";
 
 impl ChannelStore {
-    /// Rename the channel's log to `events.quarantined-<ts>.jsonl` beside it,
-    /// under the append lock, and run `then` while that lock is still held
-    /// (so the caller can reset the signed head before any writer appends to
-    /// the fresh log). Returns the quarantined path, or `None` when there was
-    /// no log to move. Never deletes anything; refuses to overwrite an
-    /// existing quarantine file.
-    pub fn quarantine_log<F>(
+    /// Rename the channel's log to `events.quarantined-<ts>.jsonl` beside it.
+    /// The caller MUST hold the append lock (`with_append_lock`). Returns the
+    /// quarantined path, or `None` when there was no log to move. Never
+    /// deletes anything; refuses to overwrite an existing quarantine file.
+    pub(crate) fn quarantine_locked(
         &self,
         id: &str,
         now: DateTime<Utc>,
-        then: F,
-    ) -> Result<Option<PathBuf>>
-    where
-        F: FnOnce() -> Result<()>,
-    {
+    ) -> Result<Option<PathBuf>> {
         let dir = self.channel_dir(id)?;
-        if !dir.is_dir() {
-            then()?;
+        let log = dir.join(EVENTS_FILE);
+        if !log.exists() {
             return Ok(None);
         }
-        let lock_path = dir.join(LOCK_FILE);
-        let lock = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .with_context(|| format!("open {}", lock_path.display()))?;
-        lock.lock_exclusive().context("lock channel events")?;
-        let out = (|| {
-            let log = dir.join(EVENTS_FILE);
-            let moved = if log.exists() {
-                let name = format!(
-                    "{QUARANTINE_PREFIX}{}.jsonl",
-                    now.format("%Y%m%dT%H%M%S%.6fZ")
-                );
-                let dest = dir.join(name);
-                if dest.exists() {
-                    bail!("quarantine target already exists: {}", dest.display());
-                }
-                fs::rename(&log, &dest).with_context(|| {
-                    format!("quarantine {} -> {}", log.display(), dest.display())
-                })?;
-                Some(dest)
-            } else {
-                None
-            };
-            then()?;
-            Ok(moved)
-        })();
-        FileExt::unlock(&lock).ok();
-        out
+        let name = format!(
+            "{QUARANTINE_PREFIX}{}.jsonl",
+            now.format("%Y%m%dT%H%M%S%.6fZ")
+        );
+        let dest = dir.join(name);
+        if dest.exists() {
+            bail!("quarantine target already exists: {}", dest.display());
+        }
+        fs::rename(&log, &dest)
+            .with_context(|| format!("quarantine {} -> {}", log.display(), dest.display()))?;
+        Ok(Some(dest))
     }
 }
 
@@ -95,15 +70,10 @@ mod tests {
             )
             .unwrap();
         let before = fs::read(store.events_path("c1").unwrap()).unwrap();
-        let mut ran = false;
         let moved = store
-            .quarantine_log("c1", Utc::now(), || {
-                ran = true;
-                Ok(())
-            })
+            .with_append_lock("c1", || store.quarantine_locked("c1", Utc::now()))
             .unwrap()
             .expect("there was a log to move");
-        assert!(ran);
         assert!(!store.events_path("c1").unwrap().exists());
         assert_eq!(fs::read(&moved).unwrap(), before);
         assert!(
@@ -134,7 +104,7 @@ mod tests {
         let store = ChannelStore::new(tmp.path());
         assert!(
             store
-                .quarantine_log("c1", Utc::now(), || Ok(()))
+                .with_append_lock("c1", || store.quarantine_locked("c1", Utc::now()))
                 .unwrap()
                 .is_none()
         );

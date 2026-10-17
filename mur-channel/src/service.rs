@@ -727,6 +727,7 @@ impl ChannelService {
 }
 
 mod anchored;
+pub mod restart;
 mod transition;
 
 #[cfg(test)]

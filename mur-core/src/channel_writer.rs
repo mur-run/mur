@@ -239,7 +239,7 @@ pub(crate) struct WriterKey {
     pub(crate) source: KeySource,
 }
 
-fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Option<WriterKey>> {
+pub(crate) fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Option<WriterKey>> {
     // A process sealed inside an agent's sandbox cannot read `keys/` — that
     // subtree is denied on purpose. Its parent loaded the key before sealing
     // and handed it over stdin, so prefer that when it is for THIS writer.

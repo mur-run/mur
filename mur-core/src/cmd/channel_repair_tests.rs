@@ -3,8 +3,10 @@
 //! is done to the files the way a bad disk or an attacker would.
 
 use super::*;
+use crate::channel_writer::append_as_writer;
 use crate::cmd::channel_integrity::check;
 use crate::hitl::gate::{ActionRequest, GatePolicy, gate};
+use mur_common::channel::EventKind;
 use mur_common::hitl::{RiskTier, Unanswered};
 use tempfile::TempDir;
 
@@ -180,6 +182,85 @@ fn declining_the_prompt_touches_nothing() {
     .unwrap();
     assert!(matches!(out, Outcome::Declined));
     assert_eq!(std::fs::read(log_path(tmp.path(), &ch)).unwrap(), before);
+}
+
+/// Every file named `name` under `dir` (the private key lives in a
+/// platform-specific subdirectory, so it is found rather than guessed).
+fn find_files(dir: &Path, name: &str, out: &mut Vec<PathBuf>) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            find_files(&p, name, out);
+        } else if p.file_name().is_some_and(|n| n == name) {
+            out.push(p);
+        }
+    }
+}
+
+/// Review P2 on #1973: with the router's PRIVATE key gone but its public key
+/// still there, the damage check runs, so the old code quarantined the log,
+/// dropped the head, and then fell back to an UNSIGNED repair record —
+/// reporting success over a chain nothing can verify. It must refuse first.
+#[test]
+fn without_the_router_private_key_it_refuses_and_touches_nothing() {
+    let (tmp, ch) = setup();
+    note(tmp.path(), &ch, 0);
+    note(tmp.path(), &ch, 1);
+    truncate_last_line(tmp.path(), &ch);
+    let mut keys = Vec::new();
+    find_files(tmp.path(), "identity.key", &mut keys);
+    assert!(!keys.is_empty(), "the planted router key must be on disk");
+    for k in &keys {
+        std::fs::remove_file(k).unwrap();
+    }
+    let heads = mur_channel::anchor::heads_dir(tmp.path());
+    let head_before = mur_channel::head_io::read_head(&heads, &ch).unwrap();
+    assert!(head_before.is_some());
+    let log_before = std::fs::read(log_path(tmp.path(), &ch)).unwrap();
+
+    let err = repair(tmp.path(), &ch, Confirm::Yes).unwrap_err();
+
+    assert!(format!("{err:#}").contains("signing key"), "{err:#}");
+    assert_eq!(
+        std::fs::read(log_path(tmp.path(), &ch)).unwrap(),
+        log_before
+    );
+    assert_eq!(
+        mur_channel::head_io::read_head(&heads, &ch).unwrap(),
+        head_before,
+        "the old head must not be dropped"
+    );
+    let dir = log_path(tmp.path(), &ch).parent().unwrap().to_path_buf();
+    let quarantined = std::fs::read_dir(&dir).unwrap().flatten().any(|e| {
+        e.file_name()
+            .to_string_lossy()
+            .starts_with("events.quarantined-")
+    });
+    assert!(!quarantined, "nothing may be moved aside");
+}
+
+/// The repaired chain is signed and anchored: seq 0 carries a signature and
+/// the router head exists, so `verify` reports intact.
+#[test]
+fn the_repair_record_is_signed_and_anchored() {
+    let (tmp, ch) = setup();
+    note(tmp.path(), &ch, 0);
+    note(tmp.path(), &ch, 1);
+    truncate_last_line(tmp.path(), &ch);
+    repair(tmp.path(), &ch, Confirm::Yes).unwrap();
+    let text = std::fs::read_to_string(log_path(tmp.path(), &ch)).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "{text}");
+    let ev: mur_common::channel::ChannelEvent = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(ev.seq, 0);
+    assert!(ev.sig.is_some(), "the repair record must be signed");
+    let heads = mur_channel::anchor::heads_dir(tmp.path());
+    assert!(
+        mur_channel::head_io::read_head(&heads, &ch)
+            .unwrap()
+            .is_some()
+    );
+    assert!(check(tmp.path(), &ch).unwrap().is_intact());
 }
 
 // --- Gate B: the agent's own decision channel ---------------------------
