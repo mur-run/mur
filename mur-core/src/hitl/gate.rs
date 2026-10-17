@@ -159,6 +159,7 @@ pub async fn gate(
             // answer a human gave to the previous run — the defect that made
             // late approval impossible and piled up duplicate requests, one
             // per loop iteration, all asking the same question.
+            let mut damage = None;
             match scan_prior(mur_home, channel_id, &hash)? {
                 // Settled (approved or denied) and still inside the TTL:
                 // release the gate now. This is what lets an overnight
@@ -178,6 +179,7 @@ pub async fn gate(
                         hitl_id: Some(existing_id),
                     });
                 }
+                Prior::Untrusted(why) => damage = Some(why),
                 _ => {}
             }
 
@@ -199,7 +201,7 @@ pub async fn gate(
             // can verify authority; falls back to unsigned when no identity.
             {
                 let svc = ChannelService::open(mur_home)?;
-                crate::channel_writer::append_as_writer(
+                durable(crate::channel_writer::append_as_writer(
                     &svc,
                     mur_home,
                     channel_id,
@@ -208,7 +210,7 @@ pub async fn gate(
                     EventKind::HitlRequest,
                     serde_json::to_value(&request)?,
                     None,
-                )?;
+                ))?;
                 // Attributed to the run that paused, like every other executor
                 // event: a rebuild filters BY `run_id`, so an unstamped
                 // transition belongs to no run and is invisible to every
@@ -220,7 +222,7 @@ pub async fn gate(
                 // signed so the pause is as attributable as the messages
                 // around it, and anchored so a sealed head does not fall one
                 // line behind the log.
-                crate::channel_writer::transition_as_writer(
+                durable(crate::channel_writer::transition_as_writer(
                     &svc,
                     mur_home,
                     channel_id,
@@ -228,7 +230,7 @@ pub async fn gate(
                     ChannelState::InputRequired,
                     ChannelActor::System,
                     run_id,
-                )?;
+                ))?;
             }
 
             // Park instead of polling. The request is durable and the channel
@@ -237,10 +239,18 @@ pub async fn gate(
             // nobody is watching. A granted tier skips this: it has an answer
             // already, given in advance.
             if !granted && policy.unanswered == Unanswered::Defer {
+                let reason = match &damage {
+                    None => format!("awaiting approval ({hitl_id})"),
+                    Some(why) => format!(
+                        "awaiting approval ({hitl_id}); earlier answers ignored because the \
+                         channel log failed its integrity check ({why}) — see \
+                         `mur channel verify {channel_id}`"
+                    ),
+                };
                 return Ok(GateDecision {
                     allow: false,
                     deferred: true,
-                    reason: format!("awaiting approval ({hitl_id})"),
+                    reason,
                     action_hash: hash,
                     hitl_id: Some(hitl_id),
                 });
@@ -267,7 +277,7 @@ pub async fn gate(
                 };
                 {
                     let svc = ChannelService::open(mur_home)?;
-                    crate::channel_writer::append_as_writer(
+                    durable(crate::channel_writer::append_as_writer(
                         &svc,
                         mur_home,
                         channel_id,
@@ -276,7 +286,7 @@ pub async fn gate(
                         EventKind::HitlResponse,
                         serde_json::to_value(&resp)?,
                         None,
-                    )?;
+                    ))?;
                 }
                 GateDecision {
                     allow: true,
@@ -292,7 +302,7 @@ pub async fn gate(
             {
                 let svc = ChannelService::open(mur_home)?;
                 // Same writer as the pause, for the same reason (#1900).
-                crate::channel_writer::transition_as_writer(
+                durable(crate::channel_writer::transition_as_writer(
                     &svc,
                     mur_home,
                     channel_id,
@@ -300,10 +310,29 @@ pub async fn gate(
                     ChannelState::Working,
                     ChannelActor::System,
                     run_id,
-                )?;
+                ))?;
             }
             Ok(decision)
         }
+    }
+}
+
+/// The gate's own writes on a channel whose signed head no longer holds
+/// (#1935). `AnchorLagError` means the line IS durable and only the head was
+/// not advanced — the store refuses to seal over damage. For the gate that is
+/// still a written request (or transition): a human can answer it, which is
+/// exactly the "ask again" a damaged log calls for. Any other error is real.
+fn durable(r: Result<mur_common::channel::ChannelEvent>) -> Result<()> {
+    match r {
+        Ok(_) => Ok(()),
+        Err(e) => match e.downcast_ref::<mur_channel::anchor::AnchorLagError>() {
+            Some(lag) => {
+                tracing::warn!(seq = lag.event.seq, error = %format!("{:#}", lag.source),
+                    "gate write landed but the signed head was not advanced");
+                Ok(())
+            }
+            None => Err(e),
+        },
     }
 }
 
@@ -315,6 +344,10 @@ enum Prior {
     Pending(String),
     /// Never asked — or asked and answered too long ago to still count.
     None,
+    /// The log failed its integrity check (#1935), so it cannot say either
+    /// way: ask afresh, exactly as for `None`, and carry the reason so a
+    /// parked request says why the earlier answer did not count.
+    Untrusted(String),
 }
 
 /// Look up prior HITL traffic for `hash` in one pass over the channel log.
@@ -336,9 +369,18 @@ enum Prior {
 /// the TTL leaves the action `None` (ask again), not `Pending` — its request is
 /// answered, just too long ago to act on.
 fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
-    let svc = ChannelService::open(mur_home)?;
-    let events = svc.load_events(channel_id)?;
-    drop(svc);
+    // #1935: through the checked loader. A log whose chain or signed head
+    // does not hold says nothing about prior decisions — a deleted deny
+    // leaves exactly an older allow behind — so ask again instead.
+    let checked::CheckedLog { events, damage } = checked::load(mur_home, channel_id)?;
+    if let Some(why) = damage {
+        tracing::warn!(
+            channel_id,
+            damage = %why,
+            "channel log integrity check failed — ignoring prior approvals and denials, asking again"
+        );
+        return Ok(Prior::Untrusted(why));
+    }
 
     let now = chrono::Utc::now();
     let requests = binding::Requests::collect(mur_home, channel_id, &events);
@@ -431,8 +473,9 @@ fn scan_prior(mur_home: &Path, channel_id: &str, hash: &str) -> Result<Prior> {
         // each line alone, so a deleted later deny leaves exactly this
         // trace: its request without its answer. Ask again rather than
         // trust the older allow. A deny needs no such check — falling back to
-        // it is already the safe direction. This narrows the log-tampering
-        // problem; it does not detect deletion (that needs a chain + anchor).
+        // it is already the safe direction. Deletion itself is caught above
+        // by the chain + signed head (#1935); this check remains for logs
+        // with no head yet, which nothing can prove complete.
         if d.allow
             && let Some((asked, id)) = &pending
             && *asked > answered_at
@@ -563,6 +606,10 @@ async fn wait_for_response(
     }
 }
 
+mod checked;
+
+#[cfg(test)]
+mod damaged_log_tests;
 #[cfg(test)]
 mod human_authority_tests;
 #[cfg(test)]
