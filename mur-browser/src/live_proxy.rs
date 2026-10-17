@@ -92,14 +92,32 @@ impl ConfigFile {
         &self.path
     }
 
-    /// The `--config <path>` argument pair for `@playwright/mcp`.
+    /// Where `@playwright/mcp` writes its output (console logs, saved
+    /// files). Inside the private 0700 directory, so it goes when this does,
+    /// and it is the only root `console_inline` will read from.
+    pub fn output_dir(&self) -> PathBuf {
+        self.dir.join(OUTPUT_SUBDIR)
+    }
+
+    /// The `--config`, `--output-dir`, and `--file-paths` arguments for
+    /// `@playwright/mcp`. Absolute paths let `console_inline` resolve a
+    /// console link without knowing the server's working directory.
     pub fn args(&self) -> Vec<String> {
         vec![
             "--config".to_owned(),
             self.path.to_string_lossy().into_owned(),
+            "--output-dir".to_owned(),
+            self.output_dir().to_string_lossy().into_owned(),
+            "--file-paths".to_owned(),
+            FILE_PATHS_ABSOLUTE.to_owned(),
         ]
     }
 }
+
+/// Subdirectory of the private config dir that holds server output.
+pub const OUTPUT_SUBDIR: &str = "output";
+/// `--file-paths` value making every link in a response absolute.
+pub const FILE_PATHS_ABSOLUTE: &str = "absolute";
 
 /// `@playwright/mcp` flag choosing how action tools (navigate, click, ...)
 /// carry the page snapshot.
@@ -232,6 +250,21 @@ mod tests {
         let dir = path.parent().unwrap().to_path_buf();
         assert_eq!(file.args()[0], "--config");
         assert_eq!(file.args()[1], path.to_string_lossy());
+        // Console logs land inside the private dir, linked absolutely, so
+        // `console_inline` can read them back and they vanish on drop.
+        let o = file
+            .args()
+            .iter()
+            .position(|a| a == "--output-dir")
+            .unwrap();
+        assert_eq!(file.args()[o + 1], file.output_dir().to_string_lossy());
+        assert!(file.output_dir().starts_with(&dir));
+        let f = file
+            .args()
+            .iter()
+            .position(|a| a == "--file-paths")
+            .unwrap();
+        assert_eq!(file.args()[f + 1], FILE_PATHS_ABSOLUTE);
         let body: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(body, config_json(&c));
