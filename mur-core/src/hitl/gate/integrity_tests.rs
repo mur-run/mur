@@ -376,3 +376,100 @@ async fn a_concurrent_approval_is_not_mistaken_for_damage() {
     let d = waiting.await.unwrap().unwrap();
     assert!(d.allow, "a clean approval was refused: {d:?}");
 }
+
+/// `<agent_home>/rotations.jsonl` for `old` (v0) → `new` (v1), signed by
+/// `old` — the shape `mur agent rekey` leaves behind.
+fn write_rotation(
+    agent_home: &Path,
+    old: &mur_common::identity::AgentIdentity,
+    new: &mur_common::identity::AgentIdentity,
+) {
+    use mur_common::identity::{RotationAttestation, RotationReason, encode_pubkey};
+    let enc =
+        |i: &mur_common::identity::AgentIdentity| encode_pubkey(&i.signing_key().verifying_key());
+    let boot = RotationAttestation::new(
+        "u",
+        "",
+        enc(old),
+        0,
+        0,
+        "2026-01-01T00:00:00Z",
+        RotationReason::Scheduled,
+    )
+    .into_bootstrap();
+    let mut step = RotationAttestation::new(
+        "u",
+        enc(old),
+        enc(new),
+        0,
+        1,
+        "2026-02-01T00:00:00Z",
+        RotationReason::Scheduled,
+    );
+    step.sign(old.signing_key());
+    let lines: Vec<String> = [boot, step]
+        .iter()
+        .map(|a| serde_json::to_string(a).unwrap())
+        .collect();
+    std::fs::write(agent_home.join("rotations.jsonl"), lines.join("\n") + "\n").unwrap();
+}
+
+/// A head sealed under the router's previous key, read right after a normal
+/// `mur agent rekey` and before any new append, is not damage: the rotation
+/// history vouches for the old key.
+#[test]
+fn a_head_sealed_before_a_router_rekey_is_not_damage() {
+    let damage = rekey_then_check(true);
+    assert!(damage.is_none(), "rekey alone flagged the log: {damage:?}");
+}
+
+/// The same key swap with no rotation history to vouch for the old key is
+/// still a bad signature: the version a head claims is only trusted through
+/// the verified chain, never by falling back to whatever key is on disk.
+#[test]
+fn a_key_swap_without_rotation_history_is_still_damage() {
+    let damage = rekey_then_check(false).expect("an unvouched key swap must be damage");
+    assert!(damage.contains("bad signature"), "{damage}");
+}
+
+/// Seal a head under the router's first key, replace the key the way
+/// `rotate_files_atomic` does (with or without the rotation record), and
+/// return what Gate A's integrity read reports.
+fn rekey_then_check(with_history: bool) -> Option<String> {
+    let tmp = TempDir::new().unwrap();
+    let old = crate::channel_writer::plant_writer_identity(tmp.path());
+    let ch = ChannelService::open(tmp.path())
+        .unwrap()
+        .create_for_workflow("g")
+        .unwrap()
+        .id;
+    let h = hash_of(&ch, &action());
+    request_at(
+        tmp.path(),
+        &ch,
+        "hitl-0",
+        &h,
+        ago(chrono::Duration::hours(1)),
+    );
+    assert!(
+        log_integrity::load_checked(tmp.path(), &ch)
+            .unwrap()
+            .damage
+            .is_none(),
+        "precondition: clean before the rekey"
+    );
+
+    let agent_home = tmp.path().join("agents").join(ROUTER_AGENT);
+    let new = mur_common::identity::AgentIdentity::generate();
+    if with_history {
+        write_rotation(&agent_home, &old, &new);
+    }
+    // What `rotate_files_atomic` does: old halves to `.prev`, new in place.
+    let key_dir = mur_common::identity::private_key_dir(&agent_home);
+    for (dir, f) in [(&key_dir, "identity.key"), (&agent_home, "identity.pub")] {
+        std::fs::rename(dir.join(f), dir.join(format!("{f}.prev"))).unwrap();
+    }
+    new.save(&agent_home).unwrap();
+
+    log_integrity::load_checked(tmp.path(), &ch).unwrap().damage
+}

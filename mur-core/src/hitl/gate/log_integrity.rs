@@ -43,17 +43,41 @@ pub(super) fn load_checked(mur_home: &Path, channel_id: &str) -> Result<Checked>
     let svc = ChannelService::open(mur_home)?;
     let router_key = crate::channel_verify::actor_pubkey(mur_home, &ChannelActor::System, None);
     // Signatures are not judged here (see module doc), so `require_sig` is off.
-    let (events, report) = svc.store().load_events_with_damage_locked(
-        channel_id,
-        &router_key.unwrap_or(NO_ROUTER_KEY),
-        false,
-    )?;
+    let load = |key: &[u8; 32]| {
+        svc.store()
+            .load_events_with_damage_locked(channel_id, key, false)
+    };
+    let (mut events, mut report) = load(&router_key.unwrap_or(NO_ROUTER_KEY))?;
+    // A head sealed before a router rekey carries the old `key_version`;
+    // check it under the key the verified rotation history gives that
+    // version, as the writer does, instead of calling it forged.
+    if let Some(older) = rekeyed_head_key(mur_home, &report, router_key) {
+        (events, report) = load(&older)?;
+    }
     drop(svc);
     let damage = describe(&report, router_key.is_some());
     if let Some(why) = &damage {
         tracing::warn!(channel_id, damage = %why, "HITL gate: {INTEGRITY_FAILED}");
     }
     Ok(Checked { events, damage })
+}
+
+/// The key a head that failed under the current router key claims, when the
+/// verified rotation history resolves its `key_version` to a different key.
+/// Strict on purpose: no fallback to the current key, so a head naming a
+/// version the history does not vouch for stays a bad signature.
+fn rekeyed_head_key(
+    mur_home: &Path,
+    r: &DamageReport,
+    tried: Option<[u8; 32]>,
+) -> Option<[u8; 32]> {
+    let m = r.anchor_mismatch.as_ref()?;
+    if m.kind != AnchorMismatchKind::BadSignature {
+        return None;
+    }
+    let dir = crate::channel_verify::actor_key_dir(mur_home, &ChannelActor::System)?;
+    let key = mur_channel::sign::resolve_writer_pubkey_strict(&dir, m.head.key_version?)?;
+    (Some(key) != tried).then_some(key)
 }
 
 /// The damage that decides, as one human-readable line; `None` when clean.
