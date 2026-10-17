@@ -101,6 +101,18 @@ impl ConfigFile {
     }
 }
 
+/// `@playwright/mcp` flag choosing how action tools (navigate, click, ...)
+/// carry the page snapshot.
+pub const SNAPSHOT_MODE_FLAG: &str = "--snapshot-mode";
+/// Action tools carry no snapshot; `browser_snapshot` still returns one inline.
+///
+/// The default (`full`) does not inline it either: it writes
+/// `.playwright-mcp/page-*.yml` and answers with only a link. A live agent is
+/// sealed, so following that link means the built-in `read_file`, which needs
+/// approval a non-interactive caller cannot give (#1685). With `none` the
+/// only way to see the page is `browser_snapshot`, whose answer is inline.
+pub const SNAPSHOT_MODE_NONE: &str = "none";
+
 /// Launch arguments for `@playwright/mcp` in live mode (Gap 0). Mirrors
 /// replay's headless flags so live and replay exercise the same Chromium,
 /// plus the proxy config. `--isolated` keeps the profile in memory so the
@@ -110,6 +122,8 @@ pub fn launch_args(config: &ConfigFile) -> Vec<String> {
         "--headless".to_owned(),
         "--isolated".to_owned(),
         "--browser=chromium".to_owned(),
+        SNAPSHOT_MODE_FLAG.to_owned(),
+        SNAPSHOT_MODE_NONE.to_owned(),
     ];
     args.extend(crate::chromium::headless_exe_args(
         crate::chromium::system_browsers_dir().as_deref(),
@@ -245,6 +259,13 @@ mod tests {
         let args = launch_args(&file);
         assert!(args.contains(&"--isolated".to_owned()), "{args:?}");
         assert!(args.contains(&"--headless".to_owned()), "{args:?}");
+        // #1685: no snapshot may be parked in a file the sealed agent can only
+        // reach through an approval-gated `read_file`.
+        let m = args
+            .iter()
+            .position(|a| a == SNAPSHOT_MODE_FLAG)
+            .expect("--snapshot-mode present");
+        assert_eq!(args[m + 1], SNAPSHOT_MODE_NONE);
         let i = args
             .iter()
             .position(|a| a == "--config")
