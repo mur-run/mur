@@ -210,6 +210,16 @@ mod tests {
         let captured = install_dir_of(&exe);
         let mut child = std::process::Command::new(&exe).arg("30").spawn().unwrap();
         let proc_exe = PathBuf::from(format!("/proc/{}/exe", child.id()));
+        // `spawn()` can return before the child's execve lands, so the link
+        // briefly still names the forked test binary; wait for the exec.
+        const EXEC_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+        const EXEC_SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+        let settle_deadline = std::time::Instant::now() + EXEC_SETTLE_TIMEOUT;
+        while install_dir_of(&proc_exe).as_deref() != Some(dir.as_path())
+            && std::time::Instant::now() < settle_deadline
+        {
+            std::thread::sleep(EXEC_SETTLE_POLL);
+        }
         assert_eq!(install_dir_of(&proc_exe).as_deref(), Some(dir.as_path()));
 
         let staged = dir.join("mur.new");
