@@ -513,3 +513,103 @@ fn c9_null_or_listed_projects_are_fine() {
     fx.patch("projects: []", "projects:\n  - /some/repo");
     fx.run().unwrap();
 }
+
+/// The intelephense entry `mur code-nav setup` installs (#1945).
+fn installed_php_entry(fx: &Fx) -> PathBuf {
+    let entry = mur_common::serena_ls_cmd::intelephense_entry(&fx.paths.tools_dir);
+    fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    fs::write(&entry, "").unwrap();
+    entry
+}
+
+fn php_settings(extra: &str) -> String {
+    format!("ls_specific_settings: {{php: {{ls_base_cmd: [node, '{{ENTRY}}']{extra}}}}}")
+}
+
+fn patch_php(fx: &Fx, entry: &Path, extra: &str) {
+    let yaml = php_settings(extra).replace("{ENTRY}", &entry.to_string_lossy());
+    fx.patch("ls_specific_settings: {}", &yaml);
+}
+
+#[test]
+fn c7_canonical_php_base_cmd_passes() {
+    let fx = Fx::new();
+    let entry = installed_php_entry(&fx);
+    for extra in ["", ", ls_extra_args: []", ", ls_extra_args: null"] {
+        patch_php(&fx, &entry, extra);
+        fx.run().unwrap();
+    }
+}
+
+#[test]
+fn c7_any_other_base_cmd_is_refused() {
+    let fx = Fx::new();
+    let entry = installed_php_entry(&fx);
+    let e = entry.to_string_lossy();
+    for bad in [
+        // Arbitrary command, and the canonical one under another server.
+        "{php: {ls_base_cmd: [sh, -c, x]}}".to_owned(),
+        format!("{{python: {{ls_base_cmd: [node, '{e}']}}}}"),
+        // Extra argv: node options or a duplicated --stdio.
+        format!("{{php: {{ls_base_cmd: [node, -e, x, '{e}']}}}}"),
+        format!("{{php: {{ls_base_cmd: [node, '{e}', --stdio]}}}}"),
+        // Another interpreter, a resolved node path, a different script.
+        format!("{{php: {{ls_base_cmd: [python3, '{e}']}}}}"),
+        format!("{{php: {{ls_base_cmd: [/opt/homebrew/bin/node, '{e}']}}}}"),
+        format!(
+            "{{php: {{ls_base_cmd: [node, '{}']}}}}",
+            fx.repo.join("pwn.js").display()
+        ),
+        // Not a list of strings.
+        format!("{{php: {{ls_base_cmd: 'node {e}'}}}}"),
+        "{php: {ls_base_cmd: [node]}}".to_owned(),
+    ] {
+        fx.patch(
+            "ls_specific_settings: {}",
+            &format!("ls_specific_settings: {bad}"),
+        );
+        let msg = assert_refused!(fx, C7LsExec).to_string();
+        assert!(msg.contains("ls_base_cmd"), "{bad}: {msg}");
+    }
+}
+
+/// serena builds `base + ls_args` and then appends `ls_extra_args`, so
+/// either would change the command C7 just matched.
+#[test]
+fn c7_canonical_base_cmd_refuses_arg_overrides() {
+    let fx = Fx::new();
+    let entry = installed_php_entry(&fx);
+    for (extra, key) in [
+        (", ls_args: []", "ls_args"),
+        (", ls_args: [--node-ipc]", "ls_args"),
+        (", ls_extra_args: [--foo]", "ls_extra_args"),
+        (", ls_extra_args: x", "ls_extra_args"),
+    ] {
+        patch_php(&fx, &entry, extra);
+        let msg = assert_refused!(fx, C7LsExec).to_string();
+        assert!(msg.contains(&format!("php.{key}")), "{extra}: {msg}");
+    }
+}
+
+#[test]
+fn c7_canonical_base_cmd_needs_the_installed_entry() {
+    let fx = Fx::new();
+    let entry = mur_common::serena_ls_cmd::intelephense_entry(&fx.paths.tools_dir);
+    patch_php(&fx, &entry, "");
+    let msg = assert_refused!(fx, C7LsExec).to_string();
+    assert!(msg.contains("mur code-nav setup"), "{msg}");
+}
+
+#[cfg(unix)]
+#[test]
+fn c7_canonical_entry_symlinked_out_of_tools_dir_is_refused() {
+    let fx = Fx::new();
+    let outside = fx.repo.join("pwn.js");
+    fs::write(&outside, "").unwrap();
+    let entry = mur_common::serena_ls_cmd::intelephense_entry(&fx.paths.tools_dir);
+    fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &entry).unwrap();
+    patch_php(&fx, &entry, "");
+    let msg = assert_refused!(fx, C7LsExec).to_string();
+    assert!(msg.contains("pwn.js"), "{msg}");
+}

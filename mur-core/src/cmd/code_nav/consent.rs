@@ -9,6 +9,16 @@
 //! Re-runs never remove anything. A language dropped from the flags stays
 //! granted until the user revokes it (`mur agent perm deny-spawn`); setup
 //! only says so.
+//!
+//! The exec lanes for serena's and pyright's Python are only knowable after
+//! install, so the plan cannot list them. `apply` diffs them against the
+//! manifest with [`new_lanes`] and asks again before granting any it has
+//! not recorded (#1942).
+//!
+//! `--yes` is a convenience for scripted runs, not a guard against an agent:
+//! anything that can run `mur code-nav setup --yes` can grant itself the
+//! plan. The protection is that the manifest and the agent's profile sit
+//! outside every agent's write grant, not the confirmation prompt.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -51,6 +61,10 @@ pub struct Manifest {
     /// manifests written before it existed.
     #[serde(default)]
     pub pyright: Option<super::pyright_install::Record>,
+    /// The intelephense serena launches via the canonical `ls_base_cmd`
+    /// (#1945). Absent in manifests written before it existed.
+    #[serde(default)]
+    pub intelephense: Option<super::intelephense_install::Record>,
     /// Finding 4: every disabled line, so "off" is never silent.
     pub disabled: Vec<String>,
 }
@@ -88,8 +102,22 @@ pub fn grant_key(p: &Permission) -> String {
     match p {
         Permission::Spawn(b) => format!("spawn {b}"),
         Permission::Read(d) => format!("read {}", d.display()),
-        Permission::SpawnDir(d) => format!("spawn-dir {}", d.display()),
+        Permission::SpawnDir(d) => lane_grant_key(d),
     }
+}
+
+/// The manifest key an exec lane is recorded under.
+pub fn lane_grant_key(dir: &Path) -> String {
+    format!("spawn-dir {}", dir.display())
+}
+
+/// #1942: lanes resolved after install that the manifest never recorded.
+pub fn new_lanes(lanes: &[PathBuf], m: &Manifest) -> Vec<PathBuf> {
+    lanes
+        .iter()
+        .filter(|l| !m.granted.contains(&lane_grant_key(l)))
+        .cloned()
+        .collect()
 }
 
 /// What this plan would add on top of the manifest.
@@ -106,6 +134,8 @@ pub struct Diff {
     /// per-entry languages) but not listed for this entry. Reported so the
     /// narrower list is never silent.
     pub other_languages: Vec<String>,
+    /// #1942 note 1: the project this one replaces, whose read grant stays.
+    pub kept_project: Option<PathBuf>,
 }
 
 impl Diff {
@@ -196,6 +226,10 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
     let project = project
         .filter(|p| m.project_of(entry) != Some(*p))
         .map(Path::to_path_buf);
+    let kept_project = project
+        .as_ref()
+        .and(m.project_of(entry))
+        .map(Path::to_path_buf);
     Diff {
         installs,
         grants,
@@ -203,6 +237,7 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
         project,
         kept_languages,
         other_languages,
+        kept_project,
     }
 }
 
@@ -283,6 +318,14 @@ pub fn print_diff(out: &mut dyn Write, d: &Diff, first_run: bool) -> Result<()> 
             "\nConsented for this agent but not listed for this entry: {} \
              (pass --lsp to add)",
             d.other_languages.join(", ")
+        )?;
+    }
+    if let Some(p) = &d.kept_project {
+        writeln!(
+            out,
+            "\nStill granted from the replaced project (setup never revokes): read {0} \
+             (revoke: mur agent perm remove-path <agent> read {0})",
+            p.display()
         )?;
     }
     if first_run || d.is_empty() {

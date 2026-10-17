@@ -3,10 +3,12 @@
 //!
 //! The pure planner (3.1), both installers (3.2, 3.3), the serena config
 //! generator (3.4), the profile entry (3.5), the consent flow that
-//! applies them (3.6, [`setup::run`]), and the pre-installed pyright (3.6b).
+//! applies them (3.6, [`setup::run`]), the pre-installed pyright (3.6b), and the
+//! pre-installed intelephense (#1945).
 
 pub mod ast_grep_install;
 pub mod consent;
+pub mod intelephense_install;
 pub mod plan;
 pub mod pyright_install;
 pub mod serena_config;

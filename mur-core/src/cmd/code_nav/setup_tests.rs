@@ -336,3 +336,68 @@ fn entry_languages_do_not_leak_across_entries() {
         [Lang::Python, Lang::Php]
     );
 }
+
+/// #1942: manifest records lane X, uv now resolves Y, the plan diff is
+/// empty. Setup must ask about Y (or refuse), never grant it silently.
+mod lane_consent {
+    use super::*;
+
+    fn lanes() -> (Manifest, Vec<PathBuf>) {
+        let x = PathBuf::from("/mh/tools/serena/python/cpython-3.13.2/bin");
+        let y = PathBuf::from("/mh/tools/serena/python/cpython-3.13.5/bin");
+        let m = Manifest {
+            granted: [consent::lane_grant_key(&x)].into_iter().collect(),
+            ..Default::default()
+        };
+        (m, vec![x, y])
+    }
+
+    fn check(c: Consent, answer: &str) -> (Result<()>, String) {
+        let (m, l) = lanes();
+        let mut out = Vec::new();
+        let r = consent_to_lanes(&l, &m, c, &mut answer.as_bytes(), &mut out);
+        (r, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn no_terminal_and_no_yes_refuses_a_new_lane() {
+        let (r, _) = check(Consent::Impossible, "");
+        let e = format!("{:#}", r.expect_err("must refuse"));
+        assert!(e.contains("cpython-3.13.5"), "names the lane: {e}");
+    }
+
+    #[test]
+    fn a_new_lane_is_asked_with_its_concrete_path() {
+        let (r, out) = check(Consent::Ask, "no\n");
+        assert!(r.is_err(), "anything but `yes` refuses");
+        assert!(out.contains("cpython-3.13.5"), "{out}");
+        assert!(
+            !out.contains("cpython-3.13.2"),
+            "recorded lane not re-asked: {out}"
+        );
+        let (r, _) = check(Consent::Ask, "yes\n");
+        r.unwrap();
+    }
+
+    #[test]
+    fn yes_flag_accepts_but_still_prints_the_path() {
+        let (r, out) = check(Consent::Given, "");
+        r.unwrap();
+        assert!(out.contains("cpython-3.13.5"), "{out}");
+    }
+
+    #[test]
+    fn recorded_lanes_ask_nothing_even_without_a_terminal() {
+        let (m, l) = lanes();
+        let mut out = Vec::new();
+        consent_to_lanes(
+            &l[..1],
+            &m,
+            Consent::Impossible,
+            &mut std::io::empty(),
+            &mut out,
+        )
+        .unwrap();
+        assert!(out.is_empty());
+    }
+}

@@ -22,11 +22,17 @@ pub const SERENA: &str = "serena";
 pub const SERENA_PIN: &str = "2.0.0.dev0";
 /// Install-time prerequisite for serena (P3-D2). MUR does not install uv.
 pub const UV: &str = "uv";
+/// Installs intelephense (#1945); a PHP prerequisite.
+pub const NPM: &str = "npm";
 /// The Python language server, pre-installed and launched via `ls_path`
 /// (3.6b) so the agent never runs uv.
 pub const PYRIGHT: &str = "pyright";
 /// serena's `PYRIGHT_VERSION` at the serena pin. Bump together.
 pub const PYRIGHT_PIN: &str = "1.1.403";
+/// The PHP language server, pre-installed and launched via the canonical
+/// `ls_base_cmd` (#1945) so its shebang script is never exec'd.
+pub const INTELEPHENSE: &str = mur_common::serena_ls_cmd::INTELEPHENSE_TOOL_DIR;
+pub use mur_common::serena_ls_cmd::INTELEPHENSE_PIN;
 // `<mur_home>/tools/<name>/<version>/` — the managed-tools root, shared
 // with the ast-grep resolver in `mur-mcp-server`.
 use mur_common::config::MUR_TOOLS_DIR as TOOLS_DIR;
@@ -137,7 +143,7 @@ impl Lang {
     pub fn prerequisites(self) -> &'static [&'static str] {
         match self {
             Lang::Python => &["node"],
-            Lang::TypeScript | Lang::Php => &["node", "npm"],
+            Lang::TypeScript | Lang::Php => &["node", NPM],
             Lang::Ruby => &["ruby", "gem"],
             Lang::Rust => &["rust-analyzer"],
             Lang::Go => &["go", "gopls"],
@@ -337,6 +343,22 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
             missing: None,
         });
         out.permissions.push(Permission::SpawnDir(dir));
+    }
+
+    let php_on = out
+        .lsp
+        .iter()
+        .any(|r| r.lang == Lang::Php && r.status == LspStatus::Enabled);
+    if php_on {
+        let dir = tool_dir(mur_home, INTELEPHENSE, INTELEPHENSE_PIN);
+        out.install.push(InstallRow {
+            name: INTELEPHENSE,
+            version: INTELEPHENSE_PIN,
+            dir: dir.clone(),
+            missing: None,
+        });
+        // node loads the `.js`; nothing under it is exec'd.
+        out.permissions.push(Permission::Read(dir));
     }
 
     if serena_missing.is_none() {
