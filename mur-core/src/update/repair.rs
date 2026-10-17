@@ -27,7 +27,11 @@ pub fn enforced() -> bool {
 
 /// The installed runtimes a release `mur` may launch: the sibling next to the
 /// real `mur` executable and the launchd copy in `~/.local/bin`. Only existing
-/// files, deduplicated by their real path (the two are often the same file).
+/// files, deduplicated by directory entry: the same entry reached through a
+/// symlinked parent counts once, but two distinct symlinks to one shared
+/// target are kept apart, because [`replace_from`] replaces the entry, not
+/// the target — repairing one alias leaves the other pointing at the old
+/// file.
 pub fn installed_runtimes() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe()
@@ -46,13 +50,27 @@ fn dedup_existing(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = Vec::new();
     let mut out = Vec::new();
     for p in candidates {
-        let Ok(real) = p.canonicalize() else { continue };
-        if real.is_file() && !seen.contains(&real) {
-            seen.push(real);
+        if !p.canonicalize().is_ok_and(|real| real.is_file()) {
+            continue;
+        }
+        let Some(entry) = entry_key(&p) else { continue };
+        if !seen.contains(&entry) {
+            seen.push(entry);
             out.push(p);
         }
     }
     out
+}
+
+/// Identity of the directory entry `p` names: its parent resolved through
+/// symlinks, plus its own file name left unresolved.
+fn entry_key(p: &Path) -> Option<PathBuf> {
+    let name = p.file_name()?;
+    let parent = match p.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.canonicalize().ok()?,
+        _ => std::env::current_dir().ok()?,
+    };
+    Some(parent.join(name))
 }
 
 /// Every path whose signature check fails, paired with the reason.
@@ -147,6 +165,14 @@ where
             )
         })?;
         println!("✓ restored {}", path.display());
+    }
+    // Success means every installed path verifies, not just the ones that
+    // were replaced: an alias the replacement did not reach must fail here.
+    if let Some((path, e)) = find_invalid(paths, &verify).into_iter().next() {
+        anyhow::bail!(
+            "{} still fails signature verification after repair: {e}",
+            path.display()
+        );
     }
     Ok(Outcome::Repaired(invalid.len()))
 }
@@ -308,8 +334,80 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&link).unwrap(), "good");
     }
 
+    /// Two installed symlinks sharing one ad-hoc target are two directory
+    /// entries: repairing one must not hide the other.
+    #[cfg(unix)]
     #[test]
-    fn dedup_drops_missing_and_same_real_file() {
+    fn symlinks_sharing_a_target_are_both_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sib_dir, bin_dir) = (dir.path().join("sib"), dir.path().join("bin"));
+        std::fs::create_dir_all(&sib_dir).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let target = dir.path().join("dev-build");
+        let fresh = dir.path().join("fresh");
+        write(&target, "adhoc");
+        write(&fresh, "good");
+        let sibling = sib_dir.join(RUNTIME_BIN);
+        let local_bin = bin_dir.join(RUNTIME_BIN);
+        std::os::unix::fs::symlink(&target, &sibling).unwrap();
+        std::os::unix::fs::symlink(&target, &local_bin).unwrap();
+
+        let paths = dedup_existing(vec![sibling.clone(), local_bin.clone()]);
+        assert_eq!(paths, vec![sibling.clone(), local_bin.clone()]);
+        let out = check_or_repair_with(&paths, false, verify_body, || Ok(fresh.clone())).unwrap();
+        assert_eq!(out, Outcome::Repaired(2));
+        assert!(verify_body(&sibling).is_ok());
+        assert!(verify_body(&local_bin).is_ok());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "adhoc");
+    }
+
+    /// A path that was not replaced but fails afterwards must turn the run
+    /// into an error, never a `Repaired` success.
+    #[test]
+    fn repair_fails_when_an_unreplaced_path_still_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, fresh) = (
+            dir.path().join("a"),
+            dir.path().join("b"),
+            dir.path().join("f"),
+        );
+        write(&a, "adhoc");
+        write(&b, "good");
+        write(&fresh, "good");
+        let calls = std::cell::Cell::new(0);
+        let verify = |p: &Path| {
+            if p == b.as_path() {
+                calls.set(calls.get() + 1);
+                if calls.get() > 1 {
+                    return Err("alias left behind".into());
+                }
+            }
+            verify_body(p)
+        };
+        let err =
+            check_or_repair_with(&[a.clone(), b.clone()], false, verify, || Ok(fresh.clone()))
+                .unwrap_err();
+        assert!(err.to_string().contains("alias left behind"), "{err}");
+    }
+
+    /// The same directory entry reached through a symlinked parent is one
+    /// entry; replacing it once covers both spellings.
+    #[cfg(unix)]
+    #[test]
+    fn dedup_merges_same_entry_via_symlinked_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_dir = dir.path().join("real");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        let alias_dir = dir.path().join("alias");
+        std::os::unix::fs::symlink(&real_dir, &alias_dir).unwrap();
+        let a = real_dir.join(RUNTIME_BIN);
+        write(&a, "x");
+        let got = dedup_existing(vec![a.clone(), alias_dir.join(RUNTIME_BIN)]);
+        assert_eq!(got, vec![a]);
+    }
+
+    #[test]
+    fn dedup_drops_missing_and_repeated_entry() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a");
         write(&a, "x");
