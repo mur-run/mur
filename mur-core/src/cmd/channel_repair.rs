@@ -75,8 +75,9 @@ fn quarantine_agent_heads(home: &Path, channel_id: &str, quarantine: &Path) -> R
         let src = mur_channel::head_io::head_path(&heads, channel_id)?;
         let dst = quarantine.join(format!("{HITL_HEAD_DIR}-{agent}.head"));
         // A resumed run may find a head here already (moved by the first
-        // run) and a newer one in place: the newer one is not a head over the
-        // fresh log either, so it goes too, but beside the first, not over it.
+        // run) and a newer one in place. The newer one does not cover the
+        // fresh log either, so it is deleted; the copy already in quarantine
+        // is the one kept for forensics, and it is never overwritten.
         if dst.exists() {
             mur_channel::head_io::remove_head(&heads, channel_id)?;
             continue;
@@ -295,7 +296,13 @@ fn finish(
     repair_marker::clear(home, channel_id)?;
 
     let after = channel_integrity::check(home, channel_id)?;
-    if after.is_intact() && after.anchored_lines.is_none() {
+    if !after.is_intact() {
+        bail!(
+            "repair record written but the channel still fails its check:\n{}",
+            after.render()
+        );
+    }
+    if after.anchored_lines.is_none() {
         bail!("repair record written but the fresh chain has no signed head");
     }
     Ok(RepairOutcome {
