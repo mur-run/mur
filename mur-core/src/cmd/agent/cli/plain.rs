@@ -250,6 +250,15 @@ pub(super) fn run_plain(
                     // Plain mode has already printed the row by the time the
                     // count arrives; it cannot be edited in place.
                     StepEvent::Tokens { .. } => {}
+                    // No chips in plain mode: the text form carries the command.
+                    StepEvent::EgressDenied(ev) => {
+                        let _ = writeln!(
+                            out2.borrow_mut(),
+                            "⚠ {}",
+                            super::scrub::scrub_str(&super::egress_denied::text_fallback(&ev))
+                        );
+                        let _ = out2.borrow_mut().flush();
+                    }
                 }
             },
         );

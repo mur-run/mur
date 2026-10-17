@@ -25,6 +25,8 @@ pub mod browser;
 pub mod capability;
 pub mod channel;
 pub mod channel_integrity;
+pub mod channel_repair;
+mod channel_repair_gate_b;
 /// Plan 2026-10-03 code-nav, Phase 3 — `mur code-nav setup`.
 #[allow(dead_code)]
 pub mod code_nav;
@@ -40,6 +42,7 @@ pub mod deps;
 pub mod doctor;
 /// #1587 — `codesign-identity` check + `mur doctor --fix` for local re-signing.
 pub(crate) mod doctor_codesign;
+pub(crate) mod doctor_network;
 pub(crate) mod drafts;
 pub(crate) mod eval;
 pub mod fleet;

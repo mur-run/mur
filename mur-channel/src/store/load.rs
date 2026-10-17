@@ -246,9 +246,21 @@ impl ChannelStore {
         writer_pubkey: &[u8; 32],
         require_sig: bool,
     ) -> Result<(Vec<ChannelEvent>, DamageReport)> {
+        self.with_shared_lock(id, |s| {
+            s.load_events_with_damage(id, writer_pubkey, require_sig)
+        })
+    }
+
+    /// Run `f` under channel `id`'s append lock (shared), so every read `f`
+    /// makes sees one snapshot: no anchored append lands between them. For a
+    /// reader that must read twice to decide — e.g. re-checking a head under
+    /// the key its `key_version` names — where two separately locked reads
+    /// would let an append reseal the head in between. A channel with no
+    /// directory yet has no writer to race; `f` runs unlocked.
+    pub fn with_shared_lock<T>(&self, id: &str, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
         let dir = self.channel_dir(id)?;
         if !dir.is_dir() {
-            return self.load_events_with_damage(id, writer_pubkey, require_sig);
+            return f(self);
         }
         let lock_path = dir.join(super::LOCK_FILE);
         let lock = fs::OpenOptions::new()
@@ -258,7 +270,7 @@ impl ChannelStore {
             .open(&lock_path)
             .with_context(|| format!("open {}", lock_path.display()))?;
         fs2::FileExt::lock_shared(&lock).context("lock channel events (shared)")?;
-        let out = self.load_events_with_damage(id, writer_pubkey, require_sig);
+        let out = f(self);
         fs2::FileExt::unlock(&lock).ok();
         out
     }

@@ -293,6 +293,14 @@ const BROWSER_MODES: &[(&str, &str)] = &[
         "live",
         "allow this agent these hosts, e.g. live shop.example.com",
     ),
+    (
+        "allow",
+        "let the browser reach one more host (--session: this run only)",
+    ),
+    (
+        "status",
+        "who may reach what: the agent and every MCP server",
+    ),
 ];
 /// `/search` takes free text, so the menu can only teach the flags — the
 /// query itself is typed, not completed.

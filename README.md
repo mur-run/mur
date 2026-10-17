@@ -524,6 +524,23 @@ Agent** wizard offers the same catalog as a source.
 
 - **Kernel sandbox** per OS — Landlock + seccomp (Linux), SBPL (macOS), Job
   Object (Windows) — plus a DNS-resolver guard that filters network egress.
+- **See who may reach what** — `mur agent network <agent>` (or `/browser
+  status` in the chat) prints one table: the agent's own outbound rule, which
+  governs only MUR's own connections, and every MCP server's. A server with no
+  network policy shows as *any host (port-limited only)*, flagged, because the
+  OS sandbox filters by port, not host. `mur doctor` reports stored host
+  entries that are not hostnames (a sentence pasted into `/browser live`, say);
+  `mur doctor --fix` previews and removes them, and flags a server left with no
+  hosts instead of quietly changing its mode.
+- **Grant a host when it is blocked** — when the browser is refused a host, the
+  chat shows *this time* / *always* / *no* choices after the turn. *This time*
+  lets it through until the agent restarts and writes nothing; *always* shows
+  the change, saves it to the profile and applies it to the running agent with
+  no restart. The blocked request fails right away and is not replayed: retry
+  the page. Outside the chat, paste `/browser allow <host>` (`--session` for
+  this time only). Hosts on a research-mode deny list are never offered. Live
+  grants need the same approval token as a tool approval, so the agent cannot
+  grant itself a host.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only
@@ -566,6 +583,14 @@ Agent** wizard offers the same catalog as a source.
   After a crash this can mean one extra prompt; that is deliberate.
   `mur channel verify <channel>` runs the same check by hand and exits 0 when
   intact, 2 when damaged, 1 when the check could not run.
+  `mur channel repair <channel>` is the way out of a damaged log: it moves the
+  log aside inside the channel directory (never deleted), starts a fresh signed
+  chain, and records the repair as that chain's first event. No earlier
+  answer is carried over, so the next gated action asks once and that answer
+  is reused. It asks for confirmation (`--yes` without a terminal) and does
+  nothing on an intact channel. An agent's own HITL decision channel is
+  repaired too: the fresh chain is signed and sealed with that agent's key,
+  so it must run outside the agent's sandbox, where that key is readable.
 - **No approvals without a sealed sandbox** — an agent running advisory-only
   (`fail_closed_on_sandbox_error: false` and the kernel seal failed) could read
   its own signing key, so any approval it holds could be forged. Tools that
@@ -1016,7 +1041,7 @@ mur
 ├── dashboard    terminal dashboard
 ├── browser      record · replay · auth · broker · list · show · export · status   (browser work through Playwright MCP;
 │                `list` tables recorded runs with a summary, domain, steps and run count — `--json` for all fields)
-├── channel      approve · verify · backfill-purpose   (HITL approval; verify checks a log against its signed head)
+├── channel      approve · verify · repair · backfill-purpose   (HITL approval; verify checks a log against its signed head, repair restarts a damaged one)
 ├── commander    pin · status · directive   (governance: pin the operator key, issue and inspect directives)
 ├── auth         login · logout
 ├── team         shared skills (private registries)

@@ -107,6 +107,13 @@ def make_handler(shop_id: str):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif self.path == "/favicon.ico":
+                # Chromium fetches this on every page. A 404 becomes a console
+                # error, and @playwright/mcp answers a console error with a
+                # link to a log file, which the sealed agent can only open
+                # with an approval-gated `read_file` (#1685).
+                self.send_response(204)
+                self.end_headers()
             else:
                 self.send_response(404)
                 self.send_header("Content-Length", "0")

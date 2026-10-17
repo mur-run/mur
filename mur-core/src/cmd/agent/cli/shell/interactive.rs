@@ -18,6 +18,8 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     &["mur", "deep-research", "secret"],
     // Confirms before overwriting paths changed since the promote.
     &["mur", "agent", "turn", "undo"],
+    // Confirms before quarantining a damaged channel log.
+    &["mur", "channel", "repair"],
     // The review-pair wizard asks for names and models and refuses a
     // non-tty stdin (unless `--no-interactive`, see `PIPED_OPT_OUTS`).
     &["mur", "fleet", "review-setup"],
@@ -126,6 +128,7 @@ mod tests {
     fn deep_research_secret_needs_the_terminal() {
         assert!(needs_terminal("mur deep-research secret --brave"));
         assert!(needs_terminal("mur agent turn undo mur t1"));
+        assert!(needs_terminal("mur channel repair c1"));
         assert!(!needs_terminal("mur agent turn list mur"));
         assert!(!needs_terminal("mur deep-research \"some question\""));
         assert!(!needs_terminal("mur deep-research"));

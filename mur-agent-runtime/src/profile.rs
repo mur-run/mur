@@ -40,6 +40,7 @@ impl Profile {
         let inner: AgentProfile = serde_yaml_ng::from_str(&expanded)?;
         validate_uuid_v7(&inner.id)?;
         validate_filesystem_paths(&inner, agent_home)?;
+        warn_invalid_hosts(&inner);
         let digest = compute_digest(&expanded);
         let system_prompt = {
             let sp_path = agent_home.join(&inner.sys_prompt_file);
@@ -65,6 +66,20 @@ fn expand_template(yaml: &str, agent_home: &Path) -> String {
     // scalars; plain or single-quoted scalars are not supported.
     let home_str = agent_home.to_string_lossy().replace('\\', "\\\\");
     yaml.replace("{{agent_home}}", &home_str)
+}
+
+/// Warn, never fail, on stored host entries the validator refuses (#1906):
+/// they match nothing, and refusing to boot over them would strand the agent.
+fn warn_invalid_hosts(p: &AgentProfile) {
+    for bad in mur_common::host_pattern::audit::invalid_hosts(p) {
+        tracing::warn!(
+            agent = %p.name,
+            list = %bad.list,
+            value = %bad.value,
+            "invalid host entry ({}) matches nothing; remove it with `mur doctor --fix`",
+            bad.reason
+        );
+    }
 }
 
 fn validate_uuid_v7(id: &str) -> Result<(), ProfileLoadError> {

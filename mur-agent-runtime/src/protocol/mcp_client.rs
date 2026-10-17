@@ -480,7 +480,12 @@ pub fn proxy_env_for(
             return vec![];
         }
     };
-    let token = proxy.register_policy(net.allow_hosts.clone(), net.deny_hosts.clone(), broad);
+    let token = proxy.register_server(
+        &entry.name,
+        net.allow_hosts.clone(),
+        net.deny_hosts.clone(),
+        broad,
+    );
     let url = format!("http://{token}:x@{}", proxy.addr);
     let no_proxy = "127.0.0.1,localhost,::1".to_string();
     let mut env = vec![

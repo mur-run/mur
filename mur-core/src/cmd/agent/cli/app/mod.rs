@@ -365,6 +365,8 @@ pub struct App {
     /// Replies captured from a `suggest_replies` tool call this turn, revealed
     /// after the turn finishes (see `reveal_suggestions`).
     pub pending_suggestions: Vec<super::suggest::Suggestion>,
+    /// Egress-denial chips state for this session (#1907).
+    pub egress_chips: super::egress_denied::EgressChips,
     /// The agent's current `propose` chip (see `cli/proposal.rs`), or the
     /// single `suggest_replies` ghost — a ghost is an insert-only chip
     /// (`ProposalKind::Reply`) rendered as placeholder text. Its own field,
@@ -524,6 +526,7 @@ impl App {
             menu_ctx: super::complete::MenuContext::default(),
             path_bins: None,
             pending_suggestions: Vec::new(),
+            egress_chips: Default::default(),
             proposal: None,
             restart_in_flight: false,
             manage_busy: None,

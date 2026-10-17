@@ -200,6 +200,19 @@ mkdir -p "$PW_CACHE/b"
 "$MUR" agent perm tool-allow "$AGENT" 'mcp__browser__browser_snapshot' >/dev/null
 "$MUR" agent perm tool-allow "$AGENT" 'mcp__browser__browser_navigate_back' >/dev/null
 "$MUR" agent perm tool-allow "$AGENT" 'mcp__browser__browser_tabs' >/dev/null
+# #1786: navigate / navigate_back / tabs carry the built-in network-egress
+# floor, so a riskless `allow` still asks — and the one-shot A2A caller here
+# cannot answer. F1's hosts are already pinned by the Restricted live entry,
+# so waive the floor on exactly these exact-name rules (a glob cannot).
+# `perm` has no flag for the waiver; set it on the saved profile.
+PROFILE="$MUR_HOME_DIR/agents/$AGENT/profile.yaml"
+perl -0pi -e 's/(- pattern: mcp__browser__browser_(?:navigate|navigate_back|tabs)\n(\s+)policy: allow\n)/$1$2bypass_builtin_tier_floor: true\n/g' "$PROFILE"
+[ "$(grep -c 'bypass_builtin_tier_floor: true' "$PROFILE")" -eq 3 ] || {
+  echo "FAIL: could not set the #1786 floor waiver in $PROFILE" >&2
+  exit 1
+}
+# A hand edit of the tool entitlements trips the #712 pin; accept it.
+"$MUR" agent perm reseal "$AGENT" </dev/null >/dev/null
 
 echo "==> 3/5 start"
 "$MUR" agent start "$AGENT" >/dev/null

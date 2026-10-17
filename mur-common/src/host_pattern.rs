@@ -3,6 +3,8 @@
 
 use std::net::IpAddr;
 
+pub mod audit;
+
 #[cfg(test)]
 mod tests;
 

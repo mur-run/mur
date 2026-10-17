@@ -354,10 +354,22 @@ pub(crate) fn cmd_doctor(fix: bool) -> Result<()> {
     report_mcp_pins(&mur_dir);
     report_auto_index_hook();
 
+    // #1906: stored hosts the validator refuses (pre-#1905 garbage).
+    let net_findings = crate::cmd::doctor_network::scan(&mur_dir);
+    for line in crate::cmd::doctor_network::report(&net_findings) {
+        println!("{line}");
+    }
+
     if fix {
         run_fixes(&codesign)?;
-    } else if codesign.needs_attention() {
-        println!("\n💡 `mur doctor --fix` can repair the codesign identity above.");
+        crate::cmd::doctor_network::run_fix(&mur_dir, net_findings, &mut confirm)?;
+    } else {
+        if codesign.needs_attention() {
+            println!("\n💡 `mur doctor --fix` can repair the codesign identity above.");
+        }
+        if !net_findings.is_empty() {
+            println!("\n💡 `mur doctor --fix` can remove the invalid host entries above.");
+        }
     }
 
     Ok(())
@@ -395,7 +407,7 @@ fn run_fixes(codesign: &crate::cmd::doctor_codesign::CodesignVerdict) -> Result<
     use crate::cmd::doctor_codesign as cs;
 
     let Some(desc) = cs::fix_description(codesign) else {
-        println!("\n✅ Nothing to fix.");
+        println!("\n✅ Codesign identity: nothing to fix.");
         return Ok(());
     };
 
