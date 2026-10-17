@@ -9,6 +9,16 @@
 //! Re-runs never remove anything. A language dropped from the flags stays
 //! granted until the user revokes it (`mur agent perm deny-spawn`); setup
 //! only says so.
+//!
+//! The exec lanes for serena's and pyright's Python are only knowable after
+//! install, so the plan cannot list them. `apply` diffs them against the
+//! manifest with [`new_lanes`] and asks again before granting any it has
+//! not recorded (#1942).
+//!
+//! `--yes` is a convenience for scripted runs, not a guard against an agent:
+//! anything that can run `mur code-nav setup --yes` can grant itself the
+//! plan. The protection is that the manifest and the agent's profile sit
+//! outside every agent's write grant, not the confirmation prompt.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -313,7 +323,8 @@ pub fn print_diff(out: &mut dyn Write, d: &Diff, first_run: bool) -> Result<()> 
     if let Some(p) = &d.kept_project {
         writeln!(
             out,
-            "\nStill granted from the replaced project (setup never revokes): read {}",
+            "\nStill granted from the replaced project (setup never revokes): read {0} \
+             (revoke: mur agent perm remove-path <agent> read {0})",
             p.display()
         )?;
     }
