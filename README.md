@@ -583,6 +583,14 @@ Agent** wizard offers the same catalog as a source.
   After a crash this can mean one extra prompt; that is deliberate.
   `mur channel verify <channel>` runs the same check by hand and exits 0 when
   intact, 2 when damaged, 1 when the check could not run.
+  `mur channel repair <channel>` is the way out of a damaged log: it moves the
+  log aside inside the channel directory (never deleted), starts a fresh signed
+  chain, and records the repair as that chain's first event. No earlier
+  answer is carried over, so the next gated action asks once and that answer
+  is reused. It asks for confirmation (`--yes` without a terminal) and does
+  nothing on an intact channel. An agent's own HITL decision channel is
+  repaired too: the fresh chain is signed and sealed with that agent's key,
+  so it must run outside the agent's sandbox, where that key is readable.
 - **No approvals without a sealed sandbox** — an agent running advisory-only
   (`fail_closed_on_sandbox_error: false` and the kernel seal failed) could read
   its own signing key, so any approval it holds could be forged. Tools that

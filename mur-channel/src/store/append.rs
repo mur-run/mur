@@ -128,25 +128,35 @@ impl ChannelStore {
         signer: impl FnOnce(chain::Unsealed<'_>) -> chain::Seal,
         hooks: SealHooks<'_>,
     ) -> Result<ChannelEvent> {
+        self.with_append_lock(id, || {
+            self.append_locked(id, actor, kind, payload, idempotency_key, signer, hooks)
+        })
+    }
+
+    /// Run `f` holding the channel's append lock. Creates the channel
+    /// directory and (write-if-absent) its manifest first.
+    ///
+    /// An append creates the directory, so it can resurrect a channel whose
+    /// manifest is gone — archived away, or never written because the first
+    /// thing that touched the id was an append. The events then accumulate
+    /// in a channel every reader calls unreadable, because `load_manifest`
+    /// is the existence check (the fleet rail's `⚠ channel unreadable` came
+    /// from exactly this, permanently, on a live install). Write-if-absent:
+    /// an existing manifest is authoritative and must never be clobbered by
+    /// a write on the event path.
+    ///
+    /// The lock is a SIDECAR file — never events.jsonl itself. On Windows OS
+    /// file locks are mandatory (not advisory like flock on macOS/Linux), so
+    /// holding a lock on the data file blocks our own reads/writes of it (os
+    /// error 33). Locking a separate file gives cross-process mutual exclusion
+    /// while the data file stays freely readable/writable on every platform.
+    ///
+    /// Not re-entrant: `f` must use the `*_locked` bodies, never a locking
+    /// append, or it deadlocks on its own lock.
+    pub(crate) fn with_append_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
         let dir = self.channel_dir(id)?;
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        // An append creates the directory, so it can resurrect a channel whose
-        // manifest is gone — archived away, or never written because the first
-        // thing that touched the id was an append. The events then accumulate
-        // in a channel every reader calls unreadable, because `load_manifest`
-        // is the existence check (the fleet rail's `⚠ channel unreadable` came
-        // from exactly this, permanently, on a live install). Write-if-absent:
-        // an existing manifest is authoritative and must never be clobbered by
-        // a write on the event path.
         self.ensure_manifest(id)?;
-        let path = self.events_path(id)?;
-
-        // Serialize concurrent appends (CLI + Hub may write the same channel) via
-        // a SIDECAR lock file — never lock events.jsonl itself. On Windows OS file
-        // locks are mandatory (not advisory like flock on macOS/Linux), so holding
-        // a lock on the data file blocks our own reads/writes of it (os error 33).
-        // Locking a separate file gives cross-process mutual exclusion while the
-        // data file stays freely readable/writable on every platform.
         let lock_path = dir.join(super::LOCK_FILE);
         let lock = OpenOptions::new()
             .create(true)
@@ -155,6 +165,28 @@ impl ChannelStore {
             .open(&lock_path)
             .with_context(|| format!("open {}", lock_path.display()))?;
         lock.lock_exclusive().context("lock channel events")?;
+        let out = f();
+        FileExt::unlock(&lock).ok();
+        out
+    }
+
+    /// The append body, for a caller that ALREADY holds the channel's append
+    /// lock (`append_sealed`, and the quarantine-and-restart of #1965, which
+    /// must move the old log aside and write the fresh chain's first line in
+    /// one lock acquisition).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_locked(
+        &self,
+        id: &str,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        signer: impl FnOnce(chain::Unsealed<'_>) -> chain::Seal,
+        hooks: SealHooks<'_>,
+    ) -> Result<ChannelEvent> {
+        let dir = self.channel_dir(id)?;
+        let path = self.events_path(id)?;
 
         // One read of the log under the lock serves both the dedup lookup and
         // `next_seq`. Lines are split keeping their terminator so a dedup hit
@@ -211,7 +243,6 @@ impl ChannelStore {
                 }),
                 None => Ok(()),
             };
-            FileExt::unlock(&lock).ok();
             resealed.context("seal failed after the event was written")?;
             return Ok(existing);
         }
@@ -248,7 +279,6 @@ impl ChannelStore {
                 event: &ev,
             })
         {
-            FileExt::unlock(&lock).ok();
             return Err(e.context("pre-write seal failed; nothing was written"));
         }
         let mut data = OpenOptions::new()
@@ -278,7 +308,6 @@ impl ChannelStore {
             }),
             None => Ok(()),
         };
-        FileExt::unlock(&lock).ok();
         sealed.context("seal failed after the event was written")?;
         Ok(ev)
     }

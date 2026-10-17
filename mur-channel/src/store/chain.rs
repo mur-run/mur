@@ -161,7 +161,35 @@ impl ChannelStore {
         idempotency_key: Option<String>,
         hooks: super::SealHooks<'_>,
     ) -> Result<ChannelEvent> {
-        self.append_sealed(
+        self.with_append_lock(id, || {
+            self.append_signed_event_locked(
+                id,
+                identity,
+                key_version,
+                actor,
+                kind,
+                payload,
+                idempotency_key,
+                hooks,
+            )
+        })
+    }
+
+    /// [`append_signed_event_with`](Self::append_signed_event_with) for a
+    /// caller already holding the append lock (see `with_append_lock`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn append_signed_event_locked(
+        &self,
+        id: &str,
+        identity: &AgentIdentity,
+        key_version: u32,
+        actor: ChannelActor,
+        kind: EventKind,
+        payload: serde_json::Value,
+        idempotency_key: Option<String>,
+        hooks: super::SealHooks<'_>,
+    ) -> Result<ChannelEvent> {
+        self.append_locked(
             id,
             actor,
             kind,
