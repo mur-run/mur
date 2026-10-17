@@ -800,7 +800,11 @@ Agent** wizard offers the same catalog as a source.
   cost more than noticing afterwards can undo. Your explicit *no* to an action
   outranks a standing grant for its tier, and every auto-approval is still
   written to the channel, so "what did it do without asking me?" always has an
-  answer.
+  answer. If a channel's log is tampered with or damaged, the gate stops
+  reusing any earlier answer there and asks again; `mur channel verify <id>`
+  shows what broke, and `mur channel repair <id>` moves the damaged log aside
+  (never deleted) and starts a fresh signed one, after which the next gated
+  action asks you once and your answer sticks.
 - **A run status that can't outlive the run** — every fleet or workflow run
   writes one record, and `mur job status` / `mur fleet status` both read that
   one record through one derivation. A run whose orchestrator died reports

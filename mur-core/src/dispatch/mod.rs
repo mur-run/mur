@@ -204,6 +204,13 @@ pub async fn run(cli: Cli) -> Result<()> {
                     std::process::exit(code);
                 }
             }
+            ChannelAction::Repair { channel_id, yes } => {
+                let home = cmd::agent::resolve_mur_home()?;
+                let code = cmd::channel_repair::run(&home, &channel_id, yes)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+            }
             ChannelAction::BackfillPurpose { apply, limit } => {
                 let home = cmd::agent::resolve_mur_home()?;
                 cmd::channel::backfill_purpose(&home, apply, limit)?;
