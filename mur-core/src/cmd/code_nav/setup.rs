@@ -24,7 +24,8 @@ use serde_yaml_ng::Value;
 use super::consent::{self, Manifest};
 use super::plan::{self, Detected, Flags, Lang, LspStatus, Permission, UV};
 use super::{
-    ast_grep_install, pyright_install, serena_config, serena_entry, serena_install, serena_project,
+    ast_grep_install, intelephense_install, pyright_install, serena_config, serena_entry,
+    serena_install, serena_project,
 };
 use crate::cmd::browser::setup::Consent;
 
@@ -339,6 +340,26 @@ fn apply(
         m.pyright.clone()
     };
 
+    // #1945: intelephense is pre-installed only when PHP is enabled; serena
+    // then gets the canonical `ls_base_cmd`. An earlier install stays, like
+    // pyright's, so a re-run without PHP keeps the same launch command.
+    let intelephense = if plan.install.iter().any(|r| r.name == plan::INTELEPHENSE) {
+        let npm = on_path(plan::NPM).with_context(|| format!("{} not found on PATH", plan::NPM))?;
+        let (o, r) =
+            intelephense_install::install_with(&npm, &intelephense_install::tools_dir(mur_home))?;
+        writeln!(
+            out,
+            "  ✓ intelephense {} ({o:?}) at {}",
+            r.version,
+            r.entry.display()
+        )?;
+        m.installed
+            .insert(consent::install_key(plan::INTELEPHENSE, &r.version));
+        Some(r)
+    } else {
+        m.intelephense.clone()
+    };
+
     let langs = entry_langs(&m, entry, plan);
     let paths = serena_paths_for(agent_home, entry)?;
     let ptpl = serena_project::read_pinned_project_template(&dir)?;
@@ -347,8 +368,11 @@ fn apply(
     let tpl = serena_config::read_pinned_template(&dir)?;
     let secret =
         existing_auth_secret(&paths.config_file).unwrap_or_else(serena_config::new_auth_secret);
-    let python_ls = pyright.as_ref().map(|r| r.bin.as_path());
-    let cfg = serena_config::write_config(&paths, project, &tpl, &secret, python_ls)?;
+    let managed = serena_config::ManagedLs {
+        python: pyright.as_ref().map(|r| r.bin.as_path()),
+        php: intelephense.is_some(),
+    };
+    let cfg = serena_config::write_config(&paths, project, &tpl, &secret, managed)?;
     writeln!(out, "  ✓ wrote {} (preflight passed)", cfg.display())?;
 
     // Both entry points are scripts run by a venv interpreter uv chose;
@@ -399,6 +423,7 @@ fn apply(
     m.set_project(entry, project);
     m.serena = Some(record);
     m.pyright = pyright;
+    m.intelephense = intelephense;
     Ok(m)
 }
 

@@ -145,7 +145,7 @@ fn rewrite_replaces_the_previous_config() {
     let f = fx();
     write_config(&f.paths, &f.project, FIXTURE, SECRET, ManagedLs::default()).unwrap();
     let other = "11111111-1111-4111-8111-111111111111";
-    write_config(&f.paths, &f.project, FIXTURE, other, None).unwrap();
+    write_config(&f.paths, &f.project, FIXTURE, other, ManagedLs::default()).unwrap();
     let text = std::fs::read_to_string(&f.paths.config_file).unwrap();
     assert_eq!(top(&text)["auth_secret"].as_str(), Some(other));
 }

@@ -22,6 +22,8 @@ pub const SERENA: &str = "serena";
 pub const SERENA_PIN: &str = "2.0.0.dev0";
 /// Install-time prerequisite for serena (P3-D2). MUR does not install uv.
 pub const UV: &str = "uv";
+/// Installs intelephense (#1945); a PHP prerequisite.
+pub const NPM: &str = "npm";
 /// The Python language server, pre-installed and launched via `ls_path`
 /// (3.6b) so the agent never runs uv.
 pub const PYRIGHT: &str = "pyright";
@@ -141,7 +143,7 @@ impl Lang {
     pub fn prerequisites(self) -> &'static [&'static str] {
         match self {
             Lang::Python => &["node"],
-            Lang::TypeScript | Lang::Php => &["node", "npm"],
+            Lang::TypeScript | Lang::Php => &["node", NPM],
             Lang::Ruby => &["ruby", "gem"],
             Lang::Rust => &["rust-analyzer"],
             Lang::Go => &["go", "gopls"],
