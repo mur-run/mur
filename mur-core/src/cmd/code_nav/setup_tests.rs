@@ -303,3 +303,36 @@ mod success {
         assert_ne!(own, other);
     }
 }
+
+/// #1943: setting up a second entry must not widen the first entry's
+/// `language_servers`, and vice versa.
+#[test]
+fn entry_languages_do_not_leak_across_entries() {
+    let plan_for = |lsp: &[&str]| {
+        let flags = Flags {
+            with_serena: true,
+            no_ast_grep: true,
+            lsp: lsp.iter().map(|s| s.to_string()).collect(),
+        };
+        // node + npm: php's intelephense needs them, and the test must not
+        // depend on what this host has on PATH.
+        let detected = Detected {
+            on_path: ["node", "npm", UV].into_iter().map(String::from).collect(),
+        };
+        super::plan::plan(Path::new("/mh"), &flags, &detected).unwrap()
+    };
+    let mut m = Manifest::default();
+    let site = entry_langs(&m, "site", &plan_for(&["php"]));
+    assert_eq!(site, [Lang::Php]);
+    m.set_languages("site", site.iter().map(|l| l.flag().to_owned()));
+
+    let repo = entry_langs(&m, "serena", &plan_for(&["lua"]));
+    assert_eq!(repo, [Lang::Lua], "php leaked from another entry");
+    m.set_languages("serena", repo.iter().map(|l| l.flag().to_owned()));
+
+    // Re-running an entry keeps its own earlier languages (never revokes).
+    assert_eq!(
+        entry_langs(&m, "site", &plan_for(&["python"])),
+        [Lang::Python, Lang::Php]
+    );
+}
