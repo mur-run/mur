@@ -352,7 +352,7 @@ pub(crate) fn read_member_state(mur_home: &Path, name: &str) -> Result<MemberSta
 }
 
 /// Apply one member's plan. Returns whether the prompt was written. Uses the
-/// agent commands, which resolve `MUR_HOME` themselves; the caller pins it.
+/// agent commands, which resolve the MUR home themselves (see the caller).
 fn apply_member(
     mur_home: &Path,
     choice: &MemberChoice,
@@ -457,11 +457,10 @@ pub fn cmd_review_setup(mur_home: &Path, args: SetupArgs) -> Result<()> {
     }
 
     let need = required_hitl_timeout(session_stuck(mur_home)?);
-    // The agent commands resolve the home from MUR_HOME; pin it for this run
-    // (same as `deep-research setup`).
-    unsafe {
-        std::env::set_var("MUR_HOME", mur_home);
-    }
+    // The agent commands below (`cmd_create`, `load_profile_for_edit`, …)
+    // re-resolve the home themselves; `mur_home` comes from the same resolver
+    // (`paths::mur_root(None)` in dispatch), so both name one directory and no
+    // environment mutation is needed.
 
     for (choice, role) in [
         (&answers.main, Role::Main),
