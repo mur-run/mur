@@ -14,6 +14,38 @@ const ALWAYS_TOUCHES: &[&str] = &["status", "ls-files"];
 /// `diff` flags that put the index or worktree on one side.
 const DIFF_INDEX_FLAGS: &[&str] = &["--cached", "--staged", "--no-index", "--merge-base"];
 
+/// `diff` options proven to take no separate value, matched on the name
+/// before any `=`. Anything else (`-O f`, `-S str`, `-G re`, an abbreviated
+/// `--cach`) prompts: a value word would be miscounted as the second rev and
+/// git would diff the one real rev against the worktree.
+const DIFF_NOVALUE: &[&str] = &[
+    "--stat",
+    "--numstat",
+    "--shortstat",
+    "--summary",
+    "--name-only",
+    "--name-status",
+    "--raw",
+    "--patch",
+    "-p",
+    "-u",
+    "--no-patch",
+    "-s",
+    "--no-textconv",
+    "--no-ext-diff",
+    "--no-color",
+    "--no-renames",
+    "--quiet",
+    "--exit-code",
+    "--ignore-all-space",
+    "-w",
+    "--ignore-space-change",
+    "-b",
+    "--ignore-blank-lines",
+    "-R",
+    "--full-index",
+];
+
 /// `grep` flags that search the index or worktree instead of the named tree.
 /// `--untracked` / `--no-index` read the worktree; `--cached` the index.
 const GREP_INDEX_FLAGS: &[&str] = &["--cached", "--untracked", "--no-index"];
@@ -131,10 +163,10 @@ fn diff_is_tree_to_tree(args: &[&str], opts: &[&str]) -> bool {
         return false;
     }
     let (flags, revs): (Vec<&str>, Vec<&str>) = opts.iter().partition(|a| a.starts_with('-'));
-    if flags
-        .iter()
-        .any(|f| DIFF_INDEX_FLAGS.contains(&super::flag_name(f)))
-    {
+    if flags.iter().any(|f| {
+        let name = super::flag_name(f);
+        DIFF_INDEX_FLAGS.contains(&name) || !DIFF_NOVALUE.contains(&name)
+    }) {
         return false;
     }
     match revs.as_slice() {
