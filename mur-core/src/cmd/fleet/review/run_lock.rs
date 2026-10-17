@@ -47,16 +47,19 @@ impl std::fmt::Display for LockDenied {
 }
 
 /// `driver.lock` for a session channel.
-pub fn lock_path(svc: &ChannelService, channel_id: &str) -> PathBuf {
-    svc.store()
-        .events_path(channel_id)
-        .with_file_name(DRIVER_LOCK_FILE)
+pub fn lock_path(svc: &ChannelService, channel_id: &str) -> anyhow::Result<PathBuf> {
+    Ok(svc
+        .store()
+        .events_path(channel_id)?
+        .with_file_name(DRIVER_LOCK_FILE))
 }
 
 /// Try to take the run lock without blocking. On success the owner file is
 /// rewritten with this process's pid, start time and host (display only).
 pub fn try_acquire(svc: &ChannelService, channel_id: &str) -> Result<DriverLock, LockDenied> {
-    acquire_at(&lock_path(svc, channel_id))
+    let path = lock_path(svc, channel_id)
+        .map_err(|e| LockDenied::Unavailable(std::io::Error::other(format!("{e:#}"))))?;
+    acquire_at(&path)
 }
 
 fn acquire_at(path: &Path) -> Result<DriverLock, LockDenied> {

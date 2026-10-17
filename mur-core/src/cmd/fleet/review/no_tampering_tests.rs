@@ -82,7 +82,7 @@ fn write_clean_rounds(store: &ChannelStore, id: &str, up_to: u32) {
 /// Load the full raw text + a line-split view of a channel's `events.jsonl`,
 /// for both the damage-detection read path and the byte-identity check.
 fn load_raw_and_lines(store: &ChannelStore, id: &str) -> (String, Vec<String>) {
-    let raw = fs::read_to_string(store.events_path(id)).unwrap();
+    let raw = fs::read_to_string(store.events_path(id).unwrap()).unwrap();
     let lines: Vec<String> = raw.lines().map(str::to_string).collect();
     (raw, lines)
 }
@@ -121,7 +121,7 @@ fn ac11c_partial_replay_does_not_touch_pre_existing_bytes() {
         )
         .unwrap();
     {
-        let path = store.events_path(id);
+        let path = store.events_path(id).unwrap();
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .open(&path)
@@ -131,7 +131,7 @@ fn ac11c_partial_replay_does_not_touch_pre_existing_bytes() {
     }
 
     // Snapshot every byte BEFORE replay runs.
-    let before_raw = fs::read_to_string(store.events_path(id)).unwrap();
+    let before_raw = fs::read_to_string(store.events_path(id).unwrap()).unwrap();
 
     let writer = AgentIdentity::generate();
     let (events, report) = store
@@ -160,7 +160,7 @@ fn ac11c_partial_replay_does_not_touch_pre_existing_bytes() {
     assert_eq!(last_good_round, 3);
 
     // The replay call itself must not have touched the file at all.
-    let after_replay_raw = fs::read_to_string(store.events_path(id)).unwrap();
+    let after_replay_raw = fs::read_to_string(store.events_path(id).unwrap()).unwrap();
     assert_eq!(
         before_raw, after_replay_raw,
         "replay (the read path) must not write anything"
@@ -234,7 +234,7 @@ fn ac11c_fatal_replay_does_not_touch_pre_existing_bytes() {
         )
         .unwrap();
 
-    let before_raw = fs::read_to_string(store.events_path(id)).unwrap();
+    let before_raw = fs::read_to_string(store.events_path(id).unwrap()).unwrap();
 
     let writer = AgentIdentity::generate();
     let (events, report) = store
@@ -256,7 +256,7 @@ fn ac11c_fatal_replay_does_not_touch_pre_existing_bytes() {
         "expected Fatal, got {outcome:?}"
     );
 
-    let after_replay_raw = fs::read_to_string(store.events_path(id)).unwrap();
+    let after_replay_raw = fs::read_to_string(store.events_path(id).unwrap()).unwrap();
     assert_eq!(
         before_raw, after_replay_raw,
         "replay (the read path) must not write anything, even in the fatal case"

@@ -5,6 +5,7 @@ pub mod anchor;
 pub mod governance;
 pub mod head;
 pub mod head_io;
+pub mod id;
 pub mod index;
 pub mod purpose;
 pub mod service;
@@ -13,6 +14,7 @@ pub mod store;
 pub mod summary;
 pub mod watch;
 
+pub use id::{check_channel_id, is_safe_channel_id};
 pub use service::ChannelService;
 pub use store::ChannelStore;
 pub use summary::{

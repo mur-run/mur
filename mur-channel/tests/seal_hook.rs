@@ -91,7 +91,7 @@ fn hook_receives_the_event_channel_id_and_exact_record_bytes() {
     assert_eq!((seen[0].0, seen[1].0), (0, 1));
     assert!(seen.iter().all(|s| s.1 == CH));
 
-    let on_disk = std::fs::read(store.events_path(CH)).unwrap();
+    let on_disk = std::fs::read(store.events_path(CH).unwrap()).unwrap();
     let joined: Vec<u8> = seen.iter().flat_map(|s| s.2.clone()).collect();
     assert_eq!(joined, on_disk, "record bytes must equal the log bytes");
     assert!(seen[0].2.ends_with(b"\n"), "record includes its terminator");
@@ -120,7 +120,12 @@ fn dedup_hit_reruns_the_hook_but_appends_nothing() {
 #[test]
 fn hook_runs_while_events_lock_is_still_held() {
     let (_tmp, store) = store_with_channel();
-    let lock_path = store.events_path(CH).parent().unwrap().join("events.lock");
+    let lock_path = store
+        .events_path(CH)
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("events.lock");
     let contended = Cell::new(None);
     let hook = |_: &mur_channel::store::SealInput| -> anyhow::Result<()> {
         let other = std::fs::OpenOptions::new()
@@ -173,7 +178,7 @@ fn none_seal_matches_the_legacy_append_event() {
         .unwrap();
     assert_eq!((new.seq, old.seq), (0, 1));
     assert_eq!(new.payload, old.payload);
-    let lines = std::fs::read_to_string(store.events_path(CH)).unwrap();
+    let lines = std::fs::read_to_string(store.events_path(CH).unwrap()).unwrap();
     assert_eq!(lines.lines().count(), 2);
     assert!(lines.ends_with('\n'));
 }
@@ -211,7 +216,7 @@ fn retry_after_failed_seal_is_deduped_and_resealed() {
         seen[0], seen[1],
         "same seq and exact record bytes both times"
     );
-    let on_disk = std::fs::read(store.events_path(CH)).unwrap();
+    let on_disk = std::fs::read(store.events_path(CH).unwrap()).unwrap();
     assert_eq!(seen[1].1, on_disk, "record is the exact line on disk");
 }
 
@@ -252,7 +257,7 @@ fn dedup_with_no_hook_is_unchanged() {
 fn dedup_reseal_refuses_a_crlf_line() {
     let (_tmp, store) = store_with_channel();
     append(&store, "a", Some("k"), None).unwrap();
-    let path = store.events_path(CH);
+    let path = store.events_path(CH).unwrap();
     let crlf = std::fs::read_to_string(&path)
         .unwrap()
         .replace('\n', "\r\n");
@@ -274,7 +279,7 @@ fn dedup_reseal_refuses_a_crlf_line() {
 // ---- pre_write (#1770): the point before the line exists ----
 
 fn lines(store: &ChannelStore) -> usize {
-    std::fs::read_to_string(store.events_path(CH))
+    std::fs::read_to_string(store.events_path(CH).unwrap())
         .map(|s| s.lines().count())
         .unwrap_or(0)
 }
@@ -348,7 +353,8 @@ fn failed_pre_write_writes_nothing_and_skips_post() {
     assert!(format!("{err:#}").contains("marker down"), "{err:#}");
     assert_eq!(lines(&store), 0, "nothing written");
     assert_eq!(posts.get(), 0, "post_write never ran");
-    let lock = std::fs::File::open(store.events_path(CH).with_file_name("events.lock")).unwrap();
+    let lock =
+        std::fs::File::open(store.events_path(CH).unwrap().with_file_name("events.lock")).unwrap();
     lock.try_lock_exclusive().expect("lock released");
     FileExt::unlock(&lock).unwrap();
     append(&store, "y", None, None).unwrap();

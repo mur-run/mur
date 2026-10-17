@@ -128,7 +128,7 @@ impl ChannelStore {
         signer: impl FnOnce(chain::Unsealed<'_>) -> chain::Seal,
         hooks: SealHooks<'_>,
     ) -> Result<ChannelEvent> {
-        let dir = self.channel_dir(id);
+        let dir = self.channel_dir(id)?;
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         // An append creates the directory, so it can resurrect a channel whose
         // manifest is gone — archived away, or never written because the first
@@ -139,7 +139,7 @@ impl ChannelStore {
         // an existing manifest is authoritative and must never be clobbered by
         // a write on the event path.
         self.ensure_manifest(id)?;
-        let path = self.events_path(id);
+        let path = self.events_path(id)?;
 
         // Serialize concurrent appends (CLI + Hub may write the same channel) via
         // a SIDECAR lock file — never lock events.jsonl itself. On Windows OS file

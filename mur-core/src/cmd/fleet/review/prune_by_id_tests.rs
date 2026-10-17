@@ -109,6 +109,7 @@ fn unreadable_marker_is_refused_with_its_path() {
         .unwrap()
         .store()
         .events_path(&ch)
+        .unwrap()
         .with_file_name(REVIEW_CORRUPTED_MARKER_FILE);
     std::fs::write(&marker, "{not json").unwrap();
 

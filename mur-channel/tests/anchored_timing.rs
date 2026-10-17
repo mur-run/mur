@@ -51,7 +51,7 @@ fn legacy_channel(home: &Path, svc: &ChannelService, lines: usize) -> (String, u
             SealHooks::default(),
         )
         .unwrap();
-    let path = store.events_path(&id);
+    let path = store.events_path(&id).unwrap();
     let first = std::fs::read_to_string(&path).unwrap();
     let template: ChannelEvent = serde_json::from_str(first.lines().next().unwrap()).unwrap();
 

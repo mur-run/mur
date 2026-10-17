@@ -111,8 +111,9 @@ impl ChannelStore {
     /// "that never happened" from "I could not read it". Losing a
     /// `HitlResponse` silently makes an approved gate read as still waiting.
     pub fn load_events(&self, id: &str) -> Result<Vec<ChannelEvent>> {
-        let path = self.events_path(id);
-        let content = match Self::read_events_file(&path, &self.channel_dir(id))? {
+        let dir = self.channel_dir(id)?;
+        let path = dir.join(super::EVENTS_FILE);
+        let content = match Self::read_events_file(&path, &dir)? {
             Some(c) => c,
             None => return Ok(Vec::new()),
         };
@@ -191,8 +192,9 @@ impl ChannelStore {
         writer_pubkey: &[u8; 32],
         require_sig: bool,
     ) -> Result<(Vec<ChannelEvent>, DamageReport)> {
-        let path = self.events_path(id);
-        let content = match Self::read_events_file(&path, &self.channel_dir(id))? {
+        let dir = self.channel_dir(id)?;
+        let path = dir.join(super::EVENTS_FILE);
+        let content = match Self::read_events_file(&path, &dir)? {
             Some(c) => c,
             // No log but an anchor (or a dirty marker) is the most complete
             // truncation there is; fall through with empty content.
