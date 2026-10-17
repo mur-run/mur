@@ -222,6 +222,16 @@ pub enum ChannelAction {
         /// Channel ID
         channel_id: String,
     },
+    /// Recover a damaged channel: quarantine its log (never deleted) and start
+    /// a fresh signed chain. No earlier HITL decision is carried over. No-op
+    /// on an intact channel. Exits 0 when intact or repaired, 2 when declined.
+    Repair {
+        /// Channel ID
+        channel_id: String,
+        /// Skip the confirmation prompt (required without a terminal)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Classify legacy channels missing a `purpose` (dry run unless --apply)
     BackfillPurpose {
         /// Write the inferred purposes to disk
