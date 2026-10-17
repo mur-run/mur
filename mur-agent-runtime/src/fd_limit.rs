@@ -33,7 +33,11 @@ pub fn raise_nofile_soft_limit() -> Option<(u64, u64)> {
     if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } != 0 {
         return None;
     }
-    Some((old, target))
+    // `rlim_t` is `u64` on macOS/Linux but `i64` on FreeBSD; both limits
+    // here are non-negative, so the widening cast is lossless.
+    #[allow(clippy::unnecessary_cast)]
+    let raised = (old as u64, target as u64);
+    Some(raised)
 }
 
 #[cfg(not(unix))]
