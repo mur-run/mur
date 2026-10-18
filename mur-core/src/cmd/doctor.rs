@@ -653,7 +653,7 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
 
     for server in &profile.mcp_servers {
         let check_name = format!("mcp:{}", server.name);
-        match crate::cmd::agent_mcp_pin::resolve_command(&server.command) {
+        match crate::cmd::agent_mcp_pin::resolve_mcp_launch(&server.command) {
             Ok(resolved) => out.push(Check::new(check_name, true, resolved.display().to_string())),
             Err(e) => out.push(Check::new(check_name, false, e.to_string())),
         }

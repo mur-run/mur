@@ -125,30 +125,31 @@ pub fn mcp_add_with_policy(
             notes.push(format!("allowed spawn under {d}"));
         }
     }
-    let (binary_sha256, resolved_path) = match crate::cmd::agent_mcp_pin::resolve_command(command) {
-        Ok(p) => {
-            let sha = match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
-                Ok(h) => {
-                    notes.push(format!("binary sha256 {}…", &h[..16.min(h.len())]));
-                    Some(h)
-                }
-                Err(e) => {
-                    notes.push(format!(
-                        "warning: could not hash {} ({e}); no binary pin",
-                        p.display()
-                    ));
-                    None
-                }
-            };
-            (sha, Some(p))
-        }
-        Err(_) => {
-            notes.push(format!(
-                "warning: `{command}` not found on PATH; no binary pin"
-            ));
-            (None, None)
-        }
-    };
+    let (binary_sha256, resolved_path) =
+        match crate::cmd::agent_mcp_pin::resolve_mcp_launch(command) {
+            Ok(p) => {
+                let sha = match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
+                    Ok(h) => {
+                        notes.push(format!("binary sha256 {}…", &h[..16.min(h.len())]));
+                        Some(h)
+                    }
+                    Err(e) => {
+                        notes.push(format!(
+                            "warning: could not hash {} ({e}); no binary pin",
+                            p.display()
+                        ));
+                        None
+                    }
+                };
+                (sha, Some(p))
+            }
+            Err(_) => {
+                notes.push(format!(
+                    "warning: `{command}` not found on PATH; no binary pin"
+                ));
+                (None, None)
+            }
+        };
 
     profile.mcp_servers.push(McpServerEntry {
         name: server_id.to_string(),
@@ -169,21 +170,11 @@ pub fn mcp_add_with_policy(
         project: None,
         extra: Default::default(),
     });
-    if !profile
-        .entitlements
-        .processes
-        .spawn
-        .allowed
-        .iter()
-        .any(|a| a == command)
-    {
-        profile
-            .entitlements
-            .processes
-            .spawn
-            .allowed
-            .push(command.to_string());
-    }
+    crate::cmd::agent_mcp_pin::grant_mcp_spawn(
+        &mut profile.entitlements.processes.spawn.allowed,
+        command,
+        resolved_path.as_deref(),
+    );
     // Same gate as `mur agent mcp add`, through the same function: a slash
     // command that reports "added" for a server which cannot start produces
     // the same unbootable agent, and this path used to skip the check purely

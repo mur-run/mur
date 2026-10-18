@@ -41,6 +41,35 @@ pub fn resolve_command(command: &str) -> Result<PathBuf> {
     mur_common::exec::resolve_command(command)
 }
 
+/// The file the runtime will exec for an MCP `command`: [`resolve_command`]
+/// plus the redirect of `mur-mcp-server` to MUR's bundled copy
+/// ([`mur_common::exec::resolve_mcp_launch_in`]). Install-time pinning and
+/// the spawn grant must use this, not [`resolve_command`] — hashing and
+/// granting the PATH copy while the runtime execs the bundled one passed the
+/// probe and left the restarted agent with EPERM and 0 tools (#1984).
+pub fn resolve_mcp_launch(command: &str) -> Result<PathBuf> {
+    mur_common::exec::resolve_mcp_launch_in(&mur_common::exec::augmented_path_var(), command)
+}
+
+/// Add `command` to `spawn.allowed`, plus the absolute launch target when the
+/// runtime will exec a different file than `command` names (the bundled
+/// `mur-mcp-server`). The seal resolves a bare name across fixed directories
+/// that never include `~/.mur/mcp-servers`, so the bare name alone grants
+/// nothing the runtime actually runs.
+pub fn grant_mcp_spawn(allowed: &mut Vec<String>, command: &str, launch: Option<&Path>) {
+    let mut push = |s: String| {
+        if !allowed.contains(&s) {
+            allowed.push(s);
+        }
+    };
+    push(command.to_string());
+    if let Some(l) = launch
+        && l == mur_common::exec::bundled_mcp_server_path()
+    {
+        push(l.to_string_lossy().into_owned());
+    }
+}
+
 /// Stream-hash the file at `path` with SHA-256. Returns lowercase
 /// hex. Reads in 64 KiB chunks so large MCP binaries don't allocate
 /// the whole file into memory.
