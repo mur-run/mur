@@ -4,11 +4,12 @@
 //! The pure planner (3.1), both installers (3.2, 3.3), the serena config
 //! generator (3.4), the profile entry (3.5), the consent flow that
 //! applies them (3.6, [`setup::run`]), the pre-installed pyright (3.6b), and the
-//! pre-installed intelephense (#1945).
+//! pre-installed intelephense (#1945), and the sealed smoke launch that
+//! closes setup ([`smoke`], #1981).
 
 pub mod ast_grep_install;
 pub mod consent;
-pub mod intelephense_install;
+pub mod node_ls_install;
 pub mod plan;
 pub mod pyright_install;
 pub mod serena_config;
@@ -16,3 +17,5 @@ pub mod serena_entry;
 pub mod serena_install;
 pub mod serena_project;
 pub mod setup;
+pub mod smoke;
+pub mod smoke_probe;

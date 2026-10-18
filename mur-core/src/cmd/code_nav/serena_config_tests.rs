@@ -510,6 +510,56 @@ fn trailing_blank_lines_after_a_dropped_block_are_kept() {
 fn py(bin: &Path) -> ManagedLs<'_> {
     ManagedLs {
         python: Some(bin),
-        php: false,
+        node: &[],
     }
+}
+
+/// A fake TypeScript install where C7 looks for it.
+fn fake_ts(f: &mut Fx) -> PathBuf {
+    let tools = f._tmp.path().join("mur").join("tools");
+    let entry = mur_common::serena_ls_cmd::TYPESCRIPT.entry(&tools);
+    std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    std::fs::write(&entry, b"").unwrap();
+    f.paths.tools_dir = tools;
+    entry
+}
+
+const TS_ONLY: &[mur_common::serena_ls_cmd::ManagedNodeLs] =
+    &[mur_common::serena_ls_cmd::TYPESCRIPT];
+
+/// #1981: serena gets `[node, cli.mjs]`, so it never runs its own npm
+/// install in the sandbox nor execs the `.bin` shebang shim.
+#[test]
+fn typescript_gets_the_canonical_base_cmd_and_passes_preflight() {
+    let mut f = fx();
+    let entry = fake_ts(&mut f);
+    let m = ManagedLs {
+        python: None,
+        node: TS_ONLY,
+    };
+    let o = owned_values(&f.paths, &f.project, SECRET, m).unwrap();
+    let ts = &o["ls_specific_settings"]["typescript"]["ls_base_cmd"];
+    let got: Vec<_> = ts
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(got, ["node", entry.to_str().unwrap()]);
+    assert!(o["ls_specific_settings"].get("php").is_none());
+    write_config(&f.paths, &f.project, FIXTURE, SECRET, m).unwrap();
+    preflight(&f.paths, &f.project).unwrap();
+}
+
+#[test]
+fn typescript_without_its_install_fails_preflight() {
+    let mut f = fx();
+    let entry = fake_ts(&mut f);
+    std::fs::remove_file(&entry).unwrap();
+    let m = ManagedLs {
+        python: None,
+        node: TS_ONLY,
+    };
+    let e = write_config(&f.paths, &f.project, FIXTURE, SECRET, m).unwrap_err();
+    assert!(format!("{e:#}").contains("--lsp typescript"), "{e:#}");
 }

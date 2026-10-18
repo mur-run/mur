@@ -8,6 +8,12 @@ pub enum CodeNavAction {
     /// only about what changed since the last successful setup. If setup
     /// fails partway, nothing is recorded, so the next run asks again about
     /// everything, including steps that already succeeded.
+    ///
+    /// With --with-serena, setup then starts each enabled language server
+    /// under the agent's sandbox and reports whether it answered
+    /// `initialize`. Without --with-serena no language server is started,
+    /// so nothing is smoke-tested. A failed smoke launch keeps the installs
+    /// and grants already recorded.
     Setup {
         /// Agent to set up (case-insensitive).
         #[arg(long)]
@@ -33,5 +39,17 @@ pub enum CodeNavAction {
         /// Confirm the printed plan without a prompt. Never adds to it.
         #[arg(long)]
         yes: bool,
+    },
+    /// Internal: seal this process as the agent, start one language server,
+    /// and report whether it answered `initialize` (setup's smoke launch).
+    #[command(name = "smoke-ls", hide = true)]
+    SmokeLs {
+        #[arg(long)]
+        agent: String,
+        #[arg(long, value_name = "DIR")]
+        project: std::path::PathBuf,
+        /// The server's argv.
+        #[arg(last = true, required = true)]
+        cmd: Vec<String>,
     },
 }

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use mur_common::config::AST_GREP_PINNED_VERSION;
+use mur_common::serena_ls_cmd::ManagedNodeLs;
 
 /// Install-table names.
 pub const AST_GREP: &str = "ast-grep";
@@ -32,7 +33,9 @@ pub const PYRIGHT_PIN: &str = "1.1.403";
 /// The PHP language server, pre-installed and launched via the canonical
 /// `ls_base_cmd` (#1945) so its shebang script is never exec'd.
 pub const INTELEPHENSE: &str = mur_common::serena_ls_cmd::INTELEPHENSE_TOOL_DIR;
-pub use mur_common::serena_ls_cmd::INTELEPHENSE_PIN;
+/// The TypeScript server, pre-installed and launched via the canonical
+/// `ls_base_cmd` (#1981), so serena never npm-installs it in the sandbox.
+pub const TS_LS: &str = mur_common::serena_ls_cmd::TS_LS_PACKAGE;
 // `<mur_home>/tools/<name>/<version>/` — the managed-tools root, shared
 // with the ast-grep resolver in `mur-mcp-server`.
 use mur_common::config::MUR_TOOLS_DIR as TOOLS_DIR;
@@ -345,15 +348,11 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
         out.permissions.push(Permission::SpawnDir(dir));
     }
 
-    let php_on = out
-        .lsp
-        .iter()
-        .any(|r| r.lang == Lang::Php && r.status == LspStatus::Enabled);
-    if php_on {
-        let dir = tool_dir(mur_home, INTELEPHENSE, INTELEPHENSE_PIN);
+    for ls in managed_node_ls(&out) {
+        let dir = tool_dir(mur_home, ls.tool_dir, ls.pin());
         out.install.push(InstallRow {
-            name: INTELEPHENSE,
-            version: INTELEPHENSE_PIN,
+            name: ls.tool_dir,
+            version: ls.pin(),
             dir: dir.clone(),
             missing: None,
         });
@@ -367,6 +366,23 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
             .extend(spawn.into_iter().map(Permission::Spawn));
     }
     Ok(out)
+}
+
+/// The serena language each managed node server serves.
+fn node_ls_lang(ls: &ManagedNodeLs) -> Option<Lang> {
+    Lang::ALL.into_iter().find(|l| l.flag() == ls.ls_id)
+}
+
+/// Managed node servers whose language this plan enables.
+fn managed_node_ls(p: &Plan) -> Vec<&'static ManagedNodeLs> {
+    mur_common::serena_ls_cmd::MANAGED
+        .iter()
+        .filter(|ls| {
+            p.lsp
+                .iter()
+                .any(|r| Some(r.lang) == node_ls_lang(ls) && r.status == LspStatus::Enabled)
+        })
+        .collect()
 }
 
 #[cfg(test)]

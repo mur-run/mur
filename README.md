@@ -950,7 +950,10 @@ so a repo can't swap in its own language server. High-risk language servers
 (Rust, TypeScript, Go, …) stay off unless you name them with `--lsp`.
 Re-runs ask only about what changed since the last successful setup. If setup
 fails partway, nothing is recorded, so the next run asks again about
-everything, including steps that already succeeded.
+everything, including steps that already succeeded. With `--with-serena`, setup
+finishes by starting each enabled language server under the agent's sandbox and
+reporting whether it answered `initialize`; without it, no server is started and
+nothing is smoke-tested.
 
 To navigate a second repo, append another entry with its own `SERENA_HOME`:
 `mur code-nav setup --agent <name> --with-serena --project <repo2> --entry serena-b`.

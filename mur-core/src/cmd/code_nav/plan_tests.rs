@@ -301,3 +301,34 @@ fn python_no_longer_needs_uvx() {
     let p = plan(home(), &flags(true, &["python"]), &d).unwrap();
     assert_eq!(row(&p, Lang::Python).status, LspStatus::Enabled);
 }
+
+/// #1981: TypeScript's server is pre-installed under the tools root like
+/// intelephense, and the agent only needs to read it (node loads the
+/// `.mjs`; nothing under it is exec'd). `~/.npm` is never a grant.
+#[test]
+fn typescript_installs_its_server_and_grants_read_only() {
+    let p = plan(home(), &flags(true, &["typescript"]), &all_tools()).unwrap();
+    assert_eq!(row(&p, Lang::TypeScript).status, LspStatus::Enabled);
+    let r = p.install.iter().find(|r| r.name == TS_LS).expect("ts row");
+    assert_eq!(r.version, "5.1.3");
+    let dir = Path::new("/mh/tools/typescript-language-server/5.1.3");
+    assert_eq!(r.dir, dir);
+    assert!(p.permissions.contains(&Permission::Read(dir.to_path_buf())));
+    assert!(
+        !p.permissions
+            .contains(&Permission::SpawnDir(dir.to_path_buf()))
+    );
+    assert!(
+        p.permissions
+            .iter()
+            .all(|g| !format!("{g:?}").contains(".npm")),
+        "{:?}",
+        p.permissions
+    );
+}
+
+#[test]
+fn typescript_off_installs_no_ts_server() {
+    let p = plan(home(), &flags(true, &["php"]), &all_tools()).unwrap();
+    assert!(p.install.iter().all(|r| r.name != TS_LS));
+}
