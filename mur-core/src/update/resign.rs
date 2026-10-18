@@ -91,6 +91,18 @@ fn repin_first_party_mcp(install_dir: &std::path::Path) {
             repinned.join(", ")
         );
     }
+    // Profiles from before #1987 grant the bundled server only by bare name,
+    // which the seal never resolves to `~/.mur/mcp-servers/` (#1984).
+    let granted = mur_agent_runtime::mcp_spawn_migrate::migrate_bundled_spawn_grant_all(
+        &crate::paths::mur_root(None),
+        &mur_common::exec::bundled_mcp_server_path(),
+    );
+    if !granted.is_empty() {
+        println!(
+            "granted the bundled mur-mcp-server by absolute path for: {}",
+            granted.join(", ")
+        );
+    }
 }
 
 /// The agent leg of [`post_upgrade`], without any binary work.
