@@ -41,7 +41,20 @@ pub enum Slot {
 
 /// Does `command` launch MUR's own MCP server?
 pub fn is_mur_mcp_server(command: &str) -> bool {
-    Path::new(command).file_name() == Some(mur_common::exec::MCP_SERVER_BIN.as_ref())
+    let Some(name) = Path::new(command).file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let bin = mur_common::exec::MCP_SERVER_BIN;
+    if cfg!(windows) {
+        // A bare `mur-mcp-server` resolves to the `.exe` through PATHEXT, and
+        // Windows file names are case-insensitive, so both spellings count.
+        let stem = bin
+            .strip_suffix(std::env::consts::EXE_SUFFIX)
+            .unwrap_or(bin);
+        name.eq_ignore_ascii_case(bin) || name.eq_ignore_ascii_case(stem)
+    } else {
+        name == bin
+    }
 }
 
 /// Decide the slot from the profile as it stands. Refuses a user-owned

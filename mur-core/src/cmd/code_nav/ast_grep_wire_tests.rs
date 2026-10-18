@@ -72,6 +72,15 @@ fn only_the_exact_file_name_counts_as_mur_server() {
     assert!(!is_mur_mcp_server("/a/mur-mcp-server/x"));
 }
 
+/// On Windows the bundled binary carries `.exe` and names are case-insensitive.
+#[cfg(windows)]
+#[test]
+fn windows_accepts_the_exe_and_any_case() {
+    assert!(is_mur_mcp_server(r"C:\m\mcp-servers\mur-mcp-server.exe"));
+    assert!(is_mur_mcp_server(r"C:\m\MUR-MCP-SERVER.EXE"));
+    assert!(!is_mur_mcp_server(r"C:\m\not-mur-mcp-server.exe"));
+}
+
 #[test]
 fn permissions_name_the_bundled_server_and_pinned_binary() {
     let home = Path::new("/mh");
