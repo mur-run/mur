@@ -92,7 +92,12 @@ fn new_session_name() -> String {
 /// The session fleet's definition: two members, no limits of its own (they
 /// come from the session flags and the global config via `fleet_bounds`).
 /// The task is kept in `goal` so a paused session can be resumed (AC2).
-fn session_fleet(name: &str, members: Vec<String>, channel_id: String, task: &str) -> Fleet {
+pub(super) fn session_fleet(
+    name: &str,
+    members: Vec<String>,
+    channel_id: String,
+    task: &str,
+) -> Fleet {
     Fleet {
         name: name.to_string(),
         display_name: String::new(),

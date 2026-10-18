@@ -702,7 +702,16 @@ Agent** wizard offers the same catalog as a source.
   the model, and a malformed reply gets one retry before the session stops as
   `blocked`. Before it creates anything it checks that both agents answer on
   their socket and that each one's `hitl.timeout_secs` outlasts the stuck
-  window, and lists every problem with its fix. You see every message and
+  window, and lists every problem with its fix. `mur fleet review-setup`
+  builds that pair for you: it creates or reconciles a main agent and a
+  reviewer (default names `coach` / `reviewer`, models picked from
+  `models.yaml`, a different one for the reviewer by default), installs a role
+  prompt on each, raises `hitl.timeout_secs` to the stuck window, denies the
+  reviewer the edit tools, starts both and runs the same checks. Re-running it
+  never deletes an agent, never lowers a timeout, and keeps a hand-edited
+  prompt unless you confirm (`--overwrite-prompts` in scripts, with
+  `--no-interactive`); from murmur, `!mur fleet review-setup` hands over the
+  terminal for the wizard. You see every message and
   press Enter to send it. When the main
   agent rejects the same finding twice, the session waits for your ruling
   instead of stopping: `/rule drop F3 <why>` closes it, `/rule fix F3 <how>`
@@ -1009,7 +1018,7 @@ mur
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret · hitl (list · forget) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
-├── fleet        create · list · show · status · run [--run-id] · review · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
+├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source; global scope: ~/.mur/limits/global.yaml)
 ├── monitor      add · list · show · cancel · retry   (durable monitors for work that outlives the turn: CI runs, MUR runs, subprocesses)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)

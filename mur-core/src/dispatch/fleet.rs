@@ -70,6 +70,27 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                     .await?
                 }
             }
+            FleetAction::ReviewSetup {
+                main,
+                reviewer,
+                main_model,
+                reviewer_model,
+                no_interactive,
+                overwrite_prompts,
+            } => {
+                let args = cmd::fleet::review::setup::SetupArgs {
+                    main,
+                    reviewer,
+                    main_model,
+                    reviewer_model,
+                    no_interactive,
+                    overwrite_prompts,
+                };
+                tokio::task::spawn_blocking(move || {
+                    cmd::fleet::review::setup::cmd_review_setup(&mur_home, args)
+                })
+                .await??
+            }
             FleetAction::ReviewResume { name } => {
                 tokio::task::spawn_blocking(move || {
                     cmd::fleet::review::session::cmd_fleet_review_resume(&mur_home, &name)
