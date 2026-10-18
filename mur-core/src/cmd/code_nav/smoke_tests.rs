@@ -267,6 +267,39 @@ fn a_hung_probe_takes_its_separately_grouped_server_down() {
     assert!(server_gone, "server group {server_pgid} survived");
 }
 
+/// A probe that dies after starting the server (crash, signal, early exit)
+/// never runs its own cleanup either, so an abnormal exit must take the
+/// announced server group down just like a hang does.
+#[test]
+fn a_probe_that_exits_abnormally_takes_its_server_down() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pgid_file = tmp.path().join("server.pgid");
+    let mut c = Command::new("/bin/sh");
+    // The server's stdio goes to /dev/null so the probe's pipes close on exit,
+    // as the real server's do (its stdio is piped to the probe, not shared).
+    c.arg("-c").arg(format!(
+        "set -m; sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '{f}'; echo \"{p}$!\"; exit 3",
+        f = pgid_file.display(),
+        p = SERVER_PGID_PREFIX,
+    ));
+    let child = server_command(&mut c).spawn().unwrap();
+    let probe_pgid = child.id() as libc::pid_t;
+    let r = collect(child, Duration::from_secs(10));
+    assert!(matches!(&r, Report::Failed { .. }), "{r:?}");
+    let server_pgid: libc::pid_t = std::fs::read_to_string(&pgid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(server_pgid, probe_pgid, "the fake must use two groups");
+    let server_gone = !group_alive(server_pgid);
+    if !server_gone {
+        // SAFETY: cleanup of the group this test created.
+        unsafe { libc::killpg(server_pgid, libc::SIGKILL) };
+    }
+    assert!(server_gone, "server group {server_pgid} survived");
+}
+
 #[test]
 fn only_a_real_announced_group_is_taken() {
     assert_eq!(parse_server_group("server-pgid: 4242\n"), Some(4242));

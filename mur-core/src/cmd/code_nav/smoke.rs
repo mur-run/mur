@@ -170,7 +170,9 @@ fn launch(exe: &Path, agent: &str, project: &Path, cmd: &[String], deadline: Dur
 /// Wait at most `deadline` for `child` to exit, then parse its report. A
 /// probe still running at the deadline is stopped with its process group,
 /// and so is the server group it announced: the server leads a group of its
-/// own, and killing the probe skips the probe's own cleanup of it.
+/// own, and killing the probe skips the probe's own cleanup of it. A probe
+/// that exits unsuccessfully (crash, signal, early error) may also have
+/// skipped that cleanup, so its announced server group is taken down too.
 pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
     drop(child.stdin.take());
     let server_group = Arc::new(AtomicU32::new(0));
@@ -196,14 +198,14 @@ pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
         rx
     };
     let start = Instant::now();
-    let exited = loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break true,
+            Ok(Some(st)) => break Some(st),
             Ok(None) if start.elapsed() < deadline => std::thread::sleep(POLL),
-            _ => break false,
+            _ => break None,
         }
     };
-    if !exited {
+    let Some(status) = status else {
         stop(&mut child);
         kill_server_group(server_group.load(Ordering::SeqCst));
         return Report::Failed {
@@ -212,9 +214,13 @@ pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
                 deadline.as_secs()
             ),
         };
-    }
+    };
+    // Drain first: the announce line may still be in flight to the reader.
     let out = stdout.recv_timeout(POST_EXIT_DRAIN).unwrap_or_default();
     let err = stderr.recv_timeout(POST_EXIT_DRAIN).unwrap_or_default();
+    if !status.success() {
+        kill_server_group(server_group.load(Ordering::SeqCst));
+    }
     parse_report(&out, &err)
 }
 
