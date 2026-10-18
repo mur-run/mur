@@ -122,3 +122,102 @@ fn blocked_dirs_name_the_binary_and_its_shebang_interpreter() {
 
     assert!(blocked_dirs(&cmd, &path, |_| true).is_empty());
 }
+
+fn target(lang: Lang) -> Target {
+    Target {
+        lang,
+        cmd: vec!["x".into()],
+    }
+}
+
+/// #1981: "Setup reports success only if this passes." A launch that could
+/// not be verified is not a pass — in an already-sealed shell or under a
+/// non-enforcing seal alike.
+#[test]
+fn an_unverified_launch_fails_setup() {
+    for detail in [
+        "this shell already runs inside a sandbox",
+        "the agent's sandbox is not enforcing on this host (unsupported)",
+    ] {
+        let mut out = Vec::new();
+        let err = verify_with("a", &[target(Lang::TypeScript)], &[], &mut out, |_| {
+            Report::Unverified {
+                detail: detail.into(),
+            }
+        })
+        .expect_err("unverified must not be success");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("typescript") && msg.contains("not verified"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("kept"),
+            "installs and grants are preserved: {msg}"
+        );
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(detail), "{out}");
+    }
+}
+
+#[test]
+fn every_launch_ok_is_success() {
+    let mut out = Vec::new();
+    verify_with(
+        "a",
+        &[target(Lang::Php), target(Lang::TypeScript)],
+        &[],
+        &mut out,
+        |_| Report::Ok,
+    )
+    .unwrap();
+}
+
+#[test]
+fn failed_and_unverified_are_both_named() {
+    let mut out = Vec::new();
+    let err = verify_with(
+        "a",
+        &[target(Lang::Php), target(Lang::TypeScript)],
+        &[],
+        &mut out,
+        |t| match t.lang {
+            Lang::Php => Report::Failed {
+                detail: "boom".into(),
+            },
+            _ => Report::Unverified {
+                detail: "sealed".into(),
+            },
+        },
+    )
+    .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("php") && msg.contains("typescript"), "{msg}");
+}
+
+/// The parent bounds the probe independently of the probe's own timeout.
+#[test]
+fn a_hung_probe_is_stopped_at_the_parent_deadline() {
+    let mut c = Command::new("/bin/sh");
+    c.arg("-c").arg("sleep 30 & exec sleep 30");
+    let child = server_command(&mut c).spawn().unwrap();
+    let start = Instant::now();
+    let r = collect(child, Duration::from_millis(300));
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(
+        matches!(&r, Report::Failed { detail } if detail.contains("did not finish")),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_finished_probe_is_parsed() {
+    let mut c = Command::new("/bin/sh");
+    c.arg("-c").arg(r#"echo '{"status":"ok"}'"#);
+    let child = server_command(&mut c).spawn().unwrap();
+    assert_eq!(collect(child, Duration::from_secs(10)), Report::Ok);
+}

@@ -953,6 +953,9 @@ The PHP and TypeScript servers are installed by MUR at pinned versions under
 inside the sandbox. Setup ends with a smoke launch: each server MUR installed
 is started under the agent's own sandbox and must answer `initialize`. A
 failure names the server and keeps the installs, so you fix it and re-run.
+A launch that cannot be verified (setup run from an already-sandboxed shell,
+or a host where the sandbox does not enforce) also fails setup rather than
+passing silently.
 Re-runs ask only about what changed since the last successful setup. If setup
 fails partway, nothing is recorded, so the next run asks again about
 everything, including steps that already succeeded.

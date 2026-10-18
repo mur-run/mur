@@ -6,17 +6,26 @@
 //! servers MUR pre-installs are launched: the others serena fetches itself on
 //! first start, so there is nothing on disk yet to launch.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
 use super::consent::Manifest;
 use super::node_ls_install;
 use super::plan::Lang;
-use super::smoke_probe::Report;
+use super::smoke_probe::{Report, SMOKE_TIMEOUT, server_command, stop};
 use mur_common::serena_ls_cmd::{self, ManagedNodeLs};
+
+/// How often the parent checks whether the probe has exited.
+const POLL: Duration = Duration::from_millis(50);
+
+/// After the probe exits, how long its pipes get to reach EOF. A server
+/// descendant the probe failed to stop could otherwise hold them open.
+const POST_EXIT_DRAIN: Duration = Duration::from_secs(2);
 
 /// Hidden subcommand path the child is started with.
 pub const SUBCOMMAND: [&str; 2] = ["code-nav", "smoke-ls"];
@@ -53,7 +62,12 @@ pub fn targets(m: &Manifest, langs: &[Lang], mur_home: &Path) -> Vec<Target> {
         .collect()
 }
 
-/// Launch every target; print one line each. `Err` when any failed.
+/// How long the parent waits for the sealed probe beyond the server's own
+/// `initialize` budget: sealing, the stderr drain, and process start-up.
+const PROBE_SLACK: Duration = Duration::from_secs(15);
+
+/// Launch every target; print one line each. `Err` unless every target
+/// answered `initialize` — a launch that could not be verified is not a pass.
 pub fn verify(
     agent: &str,
     project: &Path,
@@ -64,15 +78,34 @@ pub fn verify(
     if targets.is_empty() && unmanaged.is_empty() {
         return Ok(());
     }
-    writeln!(out, "\nSmoke launch under agent '{agent}''s sandbox:")?;
     let exe = std::env::current_exe().context("locate the mur binary")?;
+    let deadline = SMOKE_TIMEOUT + PROBE_SLACK;
+    verify_with(agent, targets, unmanaged, out, |t| {
+        launch(&exe, agent, project, &t.cmd, deadline)
+    })
+}
+
+/// [`verify`] with the launch injected.
+pub(crate) fn verify_with(
+    agent: &str,
+    targets: &[Target],
+    unmanaged: &[Lang],
+    out: &mut dyn Write,
+    mut launch: impl FnMut(&Target) -> Report,
+) -> Result<()> {
+    if targets.is_empty() && unmanaged.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "\nSmoke launch under agent '{agent}''s sandbox:")?;
     let mut failed: Vec<&'static str> = Vec::new();
+    let mut unverified: Vec<&'static str> = Vec::new();
     for t in targets {
         let name = t.lang.flag();
-        match launch(&exe, agent, project, &t.cmd) {
+        match launch(t) {
             Report::Ok => writeln!(out, "  ✓ {name}: initialize answered")?,
             Report::Unverified { detail } => {
                 writeln!(out, "  ? {name}: not verified — {detail}")?;
+                unverified.push(name);
             }
             Report::Failed { detail } => {
                 writeln!(out, "  ✗ {name}: {detail}")?;
@@ -91,34 +124,85 @@ pub fn verify(
             names.join(", ")
         )?;
     }
-    if failed.is_empty() {
+    let mut problems = Vec::new();
+    if !failed.is_empty() {
+        problems.push(format!(
+            "failed to start under the agent's sandbox: {} (fix the line(s) marked ✗)",
+            failed.join(", ")
+        ));
+    }
+    if !unverified.is_empty() {
+        problems.push(format!(
+            "not verified: {} (see the line(s) marked ?)",
+            unverified.join(", ")
+        ));
+    }
+    if problems.is_empty() {
         return Ok(());
     }
     anyhow::bail!(
-        "language server(s) failed to start under the agent's sandbox: {}. \
-         Installs and grants above are kept; fix the line(s) marked ✗ and re-run setup.",
-        failed.join(", ")
+        "language server smoke launch did not pass — {}. \
+         Installs and grants above are kept; re-run setup once that is addressed.",
+        problems.join("; ")
     )
 }
 
-/// Run the sealed child and read its one-line report.
-fn launch(exe: &Path, agent: &str, project: &Path, cmd: &[String]) -> Report {
-    let out = Command::new(exe)
-        .args(SUBCOMMAND)
+/// Run the sealed child and read its one-line report, giving up (and
+/// killing its whole group) after `deadline`.
+fn launch(exe: &Path, agent: &str, project: &Path, cmd: &[String], deadline: Duration) -> Report {
+    let mut c = Command::new(exe);
+    c.args(SUBCOMMAND)
         .arg("--agent")
         .arg(agent)
         .arg("--project")
         .arg(project)
         .arg("--")
-        .args(cmd)
-        .stdin(std::process::Stdio::null())
-        .output();
-    match out {
-        Ok(o) => parse_report(&o.stdout, &o.stderr),
+        .args(cmd);
+    match server_command(&mut c).spawn() {
+        Ok(child) => collect(child, deadline),
         Err(e) => Report::Failed {
             detail: format!("could not start the smoke probe: {e}"),
         },
     }
+}
+
+/// Wait at most `deadline` for `child` to exit, then parse its report. A
+/// probe still running at the deadline is stopped with its process group.
+pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
+    drop(child.stdin.take());
+    let read = |r: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut r) = r {
+                let _ = r.read_to_end(&mut buf);
+            }
+            let _ = tx.send(buf);
+        });
+        rx
+    };
+    let stdout = read(child.stdout.take().map(|r| Box::new(r) as _));
+    let stderr = read(child.stderr.take().map(|r| Box::new(r) as _));
+    let start = Instant::now();
+    let exited = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break true,
+            Ok(None) if start.elapsed() < deadline => std::thread::sleep(POLL),
+            _ => break false,
+        }
+    };
+    if !exited {
+        stop(&mut child);
+        return Report::Failed {
+            detail: format!(
+                "the smoke probe did not finish within {}s and was stopped",
+                deadline.as_secs()
+            ),
+        };
+    }
+    let out = stdout.recv_timeout(POST_EXIT_DRAIN).unwrap_or_default();
+    let err = stderr.recv_timeout(POST_EXIT_DRAIN).unwrap_or_default();
+    parse_report(&out, &err)
 }
 
 /// The child's report: the last stdout line that parses. Anything else is a
