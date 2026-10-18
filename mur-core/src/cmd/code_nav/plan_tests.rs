@@ -8,6 +8,7 @@ fn flags(with_serena: bool, lsp: &[&str]) -> Flags {
         with_serena,
         no_ast_grep: false,
         lsp: lsp.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
     }
 }
 
@@ -331,4 +332,21 @@ fn typescript_installs_its_server_and_grants_read_only() {
 fn typescript_off_installs_no_ts_server() {
     let p = plan(home(), &flags(true, &["php"]), &all_tools()).unwrap();
     assert!(p.install.iter().all(|r| r.name != TS_LS));
+}
+
+/// #1992: `--lsp-only` with no language would wipe the entry; refuse it.
+#[test]
+fn exact_lsp_without_languages_is_refused() {
+    let mut f = flags(true, &[]);
+    f.exact_lsp = true;
+    let e = plan(home(), &f, &all_tools()).unwrap_err();
+    assert!(e.to_string().contains("--lsp-only"), "{e}");
+}
+
+#[test]
+fn exact_lsp_is_carried_on_the_plan() {
+    let mut f = flags(true, &["python"]);
+    assert!(!plan(home(), &f, &all_tools()).unwrap().exact_lsp);
+    f.exact_lsp = true;
+    assert!(plan(home(), &f, &all_tools()).unwrap().exact_lsp);
 }

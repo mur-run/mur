@@ -313,6 +313,7 @@ fn entry_languages_do_not_leak_across_entries() {
             with_serena: true,
             no_ast_grep: true,
             lsp: lsp.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
         };
         // node + npm: php's intelephense needs them, and the test must not
         // depend on what this host has on PATH.
@@ -334,6 +335,39 @@ fn entry_languages_do_not_leak_across_entries() {
     assert_eq!(
         entry_langs(&m, "site", &plan_for(&["python"])),
         [Lang::Python, Lang::Php]
+    );
+}
+
+/// #1992: `--lsp-only` sets the entry's languages to exactly what this run
+/// enables, dropping what the entry listed before, instead of the union.
+#[test]
+fn lsp_only_replaces_the_entry_languages() {
+    let plan_for = |lsp: &[&str], exact: bool| {
+        let flags = Flags {
+            with_serena: true,
+            no_ast_grep: true,
+            lsp: lsp.iter().map(|s| s.to_string()).collect(),
+            exact_lsp: exact,
+        };
+        let detected = Detected {
+            on_path: ["node", "npm", UV].into_iter().map(String::from).collect(),
+        };
+        super::plan::plan(Path::new("/mh"), &flags, &detected).unwrap()
+    };
+    let mut m = Manifest::default();
+    m.set_languages(
+        "mur",
+        ["php".to_owned(), "lua".to_owned(), "cpp".to_owned()],
+    );
+    assert_eq!(
+        entry_langs(&m, "mur", &plan_for(&["php"], true)),
+        [Lang::Php],
+        "--lsp-only must not keep lua/cpp"
+    );
+    // Plain --lsp still unions.
+    assert_eq!(
+        entry_langs(&m, "mur", &plan_for(&["php"], false)),
+        [Lang::Php, Lang::Lua, Lang::Cpp]
     );
 }
 

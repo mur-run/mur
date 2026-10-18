@@ -134,6 +134,9 @@ pub struct Diff {
     pub project: Option<PathBuf>,
     /// Listed for this entry before, not in this plan. Reported, never revoked.
     pub kept_languages: Vec<String>,
+    /// `--lsp-only` (#1992): listed for this entry before, removed by this
+    /// run. Narrowing needs no consent, but it is never silent.
+    pub dropped_languages: Vec<String>,
     /// Consented for the agent (another entry, or a manifest older than
     /// per-entry languages) but not listed for this entry. Reported so the
     /// narrower list is never silent.
@@ -216,11 +219,11 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
         .collect();
     let empty = BTreeSet::new();
     let own = m.languages_of(entry).unwrap_or(&empty);
-    let kept_languages = own
+    let (dropped_languages, kept_languages): (Vec<String>, Vec<String>) = own
         .iter()
         .filter(|l| !enabled.contains(l))
         .cloned()
-        .collect();
+        .partition(|_| plan.exact_lsp);
     let other_languages = m
         .languages
         .iter()
@@ -240,6 +243,7 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
         languages,
         project,
         kept_languages,
+        dropped_languages,
         other_languages,
         kept_project,
     }
@@ -309,6 +313,13 @@ pub fn print_tables(out: &mut dyn Write, plan: &Plan) -> Result<()> {
 
 /// What a re-run is about to add, so the prompt names only the difference.
 pub fn print_diff(out: &mut dyn Write, d: &Diff, first_run: bool) -> Result<()> {
+    if !d.dropped_languages.is_empty() {
+        writeln!(
+            out,
+            "\nDropped from this entry (--lsp-only): {}",
+            d.dropped_languages.join(", ")
+        )?;
+    }
     if !d.kept_languages.is_empty() {
         writeln!(
             out,

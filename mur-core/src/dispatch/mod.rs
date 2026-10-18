@@ -328,6 +328,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 entry,
                 no_ast_grep,
                 lsp,
+                lsp_only,
                 yes,
             } => {
                 use std::io::IsTerminal;
@@ -340,7 +341,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                     flags: cmd::code_nav::plan::Flags {
                         with_serena,
                         no_ast_grep,
-                        lsp,
+                        exact_lsp: !lsp_only.is_empty(),
+                        lsp: if lsp_only.is_empty() { lsp } else { lsp_only },
                     },
                 };
                 // The installers use blocking HTTP and `Command::status`;

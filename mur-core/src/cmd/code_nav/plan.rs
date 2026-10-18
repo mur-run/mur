@@ -55,6 +55,9 @@ pub struct Flags {
     pub no_ast_grep: bool,
     /// `--lsp <lang>`, repeatable. Non-empty replaces the default set.
     pub lsp: Vec<String>,
+    /// `--lsp-only` (#1992): `lsp` is the entry's exact language set, not
+    /// an addition to what it listed before.
+    pub exact_lsp: bool,
 }
 
 /// What the caller found on the host. Only `PATH` lookups for now.
@@ -242,6 +245,9 @@ pub struct Plan {
     pub permissions: Vec<Permission>,
     /// Every v1 language when serena is requested, empty otherwise.
     pub lsp: Vec<LspRow>,
+    /// From [`Flags::exact_lsp`]: the entry's languages become exactly the
+    /// enabled rows instead of their union with what it listed before.
+    pub exact_lsp: bool,
 }
 
 impl Plan {
@@ -274,13 +280,19 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
     if !flags.with_serena && !flags.lsp.is_empty() {
         bail!("--lsp only applies with --with-serena");
     }
+    if flags.exact_lsp && flags.lsp.is_empty() {
+        bail!("--lsp-only needs at least one language");
+    }
     let requested: BTreeSet<Lang> = flags
         .lsp
         .iter()
         .map(|s| Lang::parse(s))
         .collect::<Result<_>>()?;
 
-    let mut out = Plan::default();
+    let mut out = Plan {
+        exact_lsp: flags.exact_lsp,
+        ..Plan::default()
+    };
     if !flags.no_ast_grep {
         out.install.push(InstallRow {
             name: AST_GREP,

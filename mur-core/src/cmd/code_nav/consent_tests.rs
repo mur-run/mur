@@ -18,6 +18,17 @@ fn p(with_serena: bool, lsp: &[&str]) -> Plan {
         with_serena,
         no_ast_grep: false,
         lsp: lsp.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    plan(Path::new("/mh"), &flags, &tools()).unwrap()
+}
+
+fn p_only(lsp: &[&str]) -> Plan {
+    let flags = Flags {
+        with_serena: true,
+        lsp: lsp.iter().map(|s| s.to_string()).collect(),
+        exact_lsp: true,
+        ..Default::default()
     };
     plan(Path::new("/mh"), &flags, &tools()).unwrap()
 }
@@ -125,6 +136,8 @@ fn tables_show_skipped_flag_high_note_and_disabled_lines() {
         with_serena: true,
         no_ast_grep: false,
         lsp: vec!["python".into(), "rust".into()],
+
+        ..Default::default()
     };
     let plan = plan(Path::new("/mh"), &flags, &detected).unwrap();
     let mut out = Vec::new();
@@ -151,6 +164,8 @@ fn enabled_high_row_prints_its_mandated_note() {
         with_serena: true,
         no_ast_grep: false,
         lsp: vec!["rust".into()],
+
+        ..Default::default()
     };
     let plan = plan(Path::new("/mh"), &flags, &detected).unwrap();
     let mut out = Vec::new();
@@ -285,4 +300,24 @@ fn replaced_project_reports_the_kept_read_grant() {
     );
     let same = diff(&plan, "serena", Some(Path::new("/r")), &m);
     assert_eq!(same.kept_project, None);
+}
+
+/// #1992: `--lsp-only` drops what the entry listed before. Narrowing needs
+/// no consent, but the dropped languages are named, never silent.
+#[test]
+fn lsp_only_reports_dropped_languages_not_kept_ones() {
+    let mut m = applied(&p(true, &["python", "go"]), Path::new("/r"));
+    m.set_languages("serena", ["python".to_owned(), "go".to_owned()]);
+    let d = diff(&p_only(&["python"]), "serena", Some(Path::new("/r")), &m);
+    assert!(d.is_empty(), "narrowing is not something to consent to");
+    assert!(d.kept_languages.is_empty(), "{:?}", d.kept_languages);
+    assert_eq!(d.dropped_languages, ["go"]);
+    let mut out = Vec::new();
+    print_diff(&mut out, &d, false).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("Dropped from this entry (--lsp-only): go"),
+        "{text}"
+    );
+    assert!(!text.contains("never revokes): go"), "{text}");
 }
