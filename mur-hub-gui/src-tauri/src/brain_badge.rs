@@ -18,7 +18,7 @@ pub fn dismiss_nudge(mur_home: &Path) -> std::io::Result<()> {
     std::fs::write(dismiss_marker_path(mur_home), "")
 }
 
-/// Read the seed Mur agent's current model name from its profile, if present.
+/// Read the seed MUR agent's current model name from its profile, if present.
 pub fn current_model_label(mur_home: &Path) -> Option<String> {
     let body = std::fs::read_to_string(mur_home.join("agents/mur/profile.yaml")).ok()?;
     let profile: mur_common::AgentProfile = serde_yaml_ng::from_str(&body).ok()?;

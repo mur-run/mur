@@ -25,7 +25,7 @@ use ops::{
 
 pub const DEFAULT_LOCAL_LLM_MODEL: &str = "qwen3.5:4b";
 
-/// Default model id seeded for the built-in "Mur" agent and used to name the
+/// Default model id seeded for the built-in "MUR" agent and used to name the
 /// bundled MLX weights. This is the DEFAULT VALUE only — it is written into the
 /// seed agent's profile and can be changed by the user afterwards; it is not a
 /// behavioural constant baked into logic.

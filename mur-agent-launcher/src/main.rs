@@ -72,7 +72,7 @@ fn run() -> Result<(), String> {
 
     // ── 6. Build Hub binary path ──────────────────────────────────────────────
     // host_exe is the Hub's Mach-O binary (e.g.
-    // /Applications/MuR Agent Host.app/Contents/MacOS/mur-host).
+    // /Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui).
     // We exec it directly (not via `open -b`), preserving argv.
 
     // ── 7. Detect invocation mode and build args ──────────────────────────────

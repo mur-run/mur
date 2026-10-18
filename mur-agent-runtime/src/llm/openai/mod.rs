@@ -144,7 +144,7 @@ impl OpenAiClient {
         Self::new(base, key.expose_secret().to_string(), model)
     }
 
-    /// Mur's agent-aware credential resolution, symmetric with
+    /// MUR's agent-aware credential resolution, symmetric with
     /// [`super::anthropic::AnthropicClient::from_agent_credentials`]. Keychain
     /// at `mur-agent/{agent}/OPENAI_API_KEY` wins over the `OPENAI_API_KEY`
     /// env var; backend errors propagate rather than silently falling through.
