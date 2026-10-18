@@ -48,6 +48,7 @@ pub mod mcp_network;
 pub mod mcp_registry;
 pub mod network_view;
 pub mod start;
+mod startup_error;
 mod who;
 // Items exported for the Hub GUI (mur-hub-gui crate) — not used from the
 // mur binary itself, so suppress dead_code for the binary target.

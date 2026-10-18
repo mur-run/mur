@@ -78,6 +78,9 @@ pub fn cmd_start(name: &str) -> Result<()> {
             // written exactly this.
             heal_launcher(name);
             verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
+            // Before kickstart: only what this start writes may be quoted.
+            let mark =
+                super::startup_error::LogMark::at_end(super::service::service_stderr_log(name));
             let label = format!("run.mur.agent.{name}");
             let uid = unsafe { libc::getuid() };
             let kick = Command::new("launchctl")
@@ -85,7 +88,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 .output()?;
             if kick.status.success() {
                 println!("started '{name}' via launchd ({label})");
-                return confirm_startup(name, &agent_home, &service_log_hint(name));
+                return confirm_startup(name, &agent_home, &service_log_hint(name), Some(&mark));
             }
             // Not loaded (e.g. after a manual bootout) — load brings it up
             // by itself thanks to RunAtLoad.
@@ -95,7 +98,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 .output()?;
             if load.status.success() {
                 println!("loaded + started '{name}' via launchd ({label})");
-                return confirm_startup(name, &agent_home, &service_log_hint(name));
+                return confirm_startup(name, &agent_home, &service_log_hint(name), Some(&mark));
             }
             bail!(
                 "launchd refused to start '{name}': kickstart: {} / load: {}",
@@ -123,7 +126,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 );
             }
             println!("started '{name}' via systemd --user");
-            return confirm_startup(name, &agent_home, &service_log_hint(name));
+            return confirm_startup(name, &agent_home, &service_log_hint(name), None);
         }
     }
 
@@ -212,7 +215,12 @@ fn live_lock_pid(agent_home: &std::path::Path) -> Option<u32> {
 /// watch there): wait for a live `running.lock`, and on timeout say where to
 /// look instead of guessing a verdict.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn confirm_startup(name: &str, agent_home: &std::path::Path, log_hint: &str) -> Result<()> {
+fn confirm_startup(
+    name: &str,
+    agent_home: &std::path::Path,
+    log_hint: &str,
+    mark: Option<&super::startup_error::LogMark>,
+) -> Result<()> {
     let deadline = Instant::now() + CONFIRM_WINDOW;
     loop {
         if let Some(pid) = live_lock_pid(agent_home) {
@@ -220,6 +228,16 @@ fn confirm_startup(name: &str, agent_home: &std::path::Path, log_hint: &str) -> 
             return Ok(());
         }
         if Instant::now() >= deadline {
+            // A fresh `Error:` is evidence, not a slow start: this start's
+            // runtime died (#1979). One window usually sees one attempt
+            // (launchd's ThrottleInterval is >= 10s), so claim that attempt
+            // failed, not that it crash-loops; a later retry may succeed.
+            if let Some(why) = mark.and_then(|m| m.report()) {
+                bail!(
+                    "'{name}' failed at startup (launchd will retry it; \
+                     `mur agent status {name}` shows the current state):{why}"
+                );
+            }
             println!(
                 "ℹ start not confirmed within {}s — slow starts are normal; check `mur agent status {name}` or {log_hint}",
                 CONFIRM_WINDOW.as_secs()

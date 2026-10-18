@@ -51,7 +51,10 @@ impl Fx {
         }
     }
 
-    fn verify(&self, entries: &[McpServerEntry]) -> Result<(), SerenaEntryError> {
+    fn verify(
+        &self,
+        entries: &[McpServerEntry],
+    ) -> Result<Vec<SerenaEntryError>, SerenaEntryError> {
         verify_entries(entries, &self.agent_home)
     }
 }
@@ -76,19 +79,67 @@ fn entries_without_kind_are_untouched() {
 }
 
 #[test]
-fn project_absent_relative_or_missing_is_refused() {
+fn project_absent_or_relative_is_refused() {
     let fx = Fx::new();
-    for project in [
-        None,
-        Some(PathBuf::from("repo")),
-        Some(fx.repo.join("does-not-exist")),
-    ] {
+    for project in [None, Some(PathBuf::from("repo"))] {
         let err = fx.verify(&[fx.serena(project)]).unwrap_err();
         assert!(matches!(err, SerenaEntryError::Project { .. }), "{err}");
         let msg = err.to_string();
         assert!(msg.contains("`code-nav`"), "{msg}");
         assert!(msg.contains("never falls back"), "{msg}");
     }
+}
+
+/// #1979: a deleted (or unmounted) project takes down only its own entry.
+/// The agent must still start; the entry is reported, not silently dropped.
+#[test]
+fn missing_project_skips_the_entry_without_failing_startup() {
+    let fx = Fx::new();
+    let gone = fx.repo.join("does-not-exist");
+    let skipped = fx.verify(&[fx.serena(Some(gone.clone()))]).unwrap();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert!(
+        matches!(&skipped[0], SerenaEntryError::ProjectMissing { entry, .. } if entry == "code-nav"),
+        "{:?}",
+        skipped[0]
+    );
+    let msg = skipped[0].to_string();
+    assert!(msg.contains(&gone.display().to_string()), "{msg}");
+    assert!(msg.contains("does not exist"), "{msg}");
+}
+
+/// Skipping one entry must not exempt the others from the full gate.
+#[test]
+fn a_skipped_entry_does_not_hide_a_bad_sibling() {
+    let fx = Fx::new();
+    let gone = fx.serena(Some(fx.repo.join("does-not-exist")));
+    let mut bad = fx.serena(None);
+    bad.name = "second".into();
+    let err = fx.verify(&[gone, bad]).unwrap_err();
+    assert!(err.to_string().contains("`second`"), "{err}");
+}
+
+/// The spawn gate stays fail-closed: a skipped entry still spawns nothing.
+#[test]
+fn missing_project_still_refuses_to_spawn() {
+    let fx = Fx::new();
+    let entry = fx.serena(Some(fx.repo.join("does-not-exist")));
+    let err = launch_additions(&entry, Some(&fx.agent_home)).unwrap_err();
+    assert!(
+        matches!(err, SerenaEntryError::ProjectMissing { .. }),
+        "{err}"
+    );
+}
+
+/// A path that exists but is a file is a config mistake, not a vanished
+/// mount: it still refuses startup.
+#[test]
+fn project_that_is_a_file_is_refused() {
+    let fx = Fx::new();
+    let file = fx.repo.join("a.txt");
+    fs::write(&file, b"x").unwrap();
+    let err = fx.verify(&[fx.serena(Some(file))]).unwrap_err();
+    assert!(matches!(err, SerenaEntryError::Project { .. }), "{err}");
 }
 
 #[test]

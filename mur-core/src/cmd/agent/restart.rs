@@ -15,6 +15,7 @@ use mur_common::{AgentProfile as _AgentProfile, LockFile};
 
 use super::attest::verify_runtime_at;
 use super::start::tail_of;
+use super::startup_error::{LogMark, last_error_line, startup_log};
 use super::{pid_alive, resolve_bin_dir, resolve_mur_home, restart_confirm, stale};
 
 /// Extra grace period added on top of the runtime's `stop_timeout_secs` before
@@ -313,39 +314,6 @@ fn service_failure_report(name: &str, log: &Path) -> Option<String> {
     ))
 }
 
-/// The last hard `Error:` line in a log tail, stripped of ANSI colour codes.
-///
-/// Matches the runtime's own fatal shape (`anyhow` prints `Error: …` on exit),
-/// not `WARN`/`ERROR`-level tracing lines — a sealed agent logs several
-/// warnings on every healthy start, and reporting one of those as the cause
-/// would send the user after the wrong thing.
-fn last_error_line(tail: &str) -> Option<String> {
-    tail.lines()
-        .map(strip_ansi)
-        .rfind(|l| l.trim_start().starts_with("Error:"))
-        .map(|l| l.trim().to_string())
-}
-
-/// Drop ANSI escape sequences — the runtime writes coloured output and the
-/// service log keeps the escapes verbatim.
-fn strip_ansi(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push(c);
-            continue;
-        }
-        // CSI sequence: ESC '[' … final byte in @-~
-        for c in chars.by_ref() {
-            if ('@'..='~').contains(&c) && c != '[' {
-                break;
-            }
-        }
-    }
-    out
-}
-
 /// Split the lock-less agents into `(stopped, should_be_running)`.
 ///
 /// `has_service` is injected so this is testable without writing into the real
@@ -487,6 +455,10 @@ fn restart_one_with(
         }
     };
 
+    // Mark the startup log before the old process goes down, so a failure
+    // report quotes only what THIS respawn wrote (#1979).
+    let log_mark = startup_log(name, &agent_home, has_service).map(LogMark::at_end);
+
     // ── SIGTERM (drain) ───────────────────────────────────────────────
     #[cfg(unix)]
     unsafe {
@@ -575,9 +547,14 @@ fn restart_one_with(
             }
         }
         None => {
-            let line = format!(
-                "'{name}' not confirmed running — check `mur agent status {name}` and its stderr.log"
-            );
+            // The runtime's own `Error:` line names the cause; without it the
+            // user only learns that something, somewhere, went wrong.
+            let line = match log_mark.as_ref().and_then(LogMark::report) {
+                Some(why) => format!("'{name}' not confirmed running — its startup failed:{why}"),
+                None => format!(
+                    "'{name}' not confirmed running — check `mur agent status {name}` and its stderr.log"
+                ),
+            };
             note(RestartNote::Failure(line.clone()));
             RestartReport {
                 ok: false,

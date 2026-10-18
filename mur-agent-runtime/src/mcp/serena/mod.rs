@@ -187,6 +187,15 @@ pub enum SerenaEntryError {
          to an existing directory; serena never falls back to the working directory"
     )]
     Project { entry: String, found: String },
+    /// #1979: the configured `project` path does not exist (deleted repo,
+    /// unmounted volume). Startup skips just this entry; the spawn gate
+    /// still refuses it, so nothing ever runs against a missing tree.
+    #[error(
+        "MCP server `{entry}` (kind: serena): `project` {path} does not exist (deleted, or \
+         its volume is not mounted); this server is skipped until the directory is back or \
+         the entry is removed with `mur agent mcp remove`"
+    )]
+    ProjectMissing { entry: String, path: String },
     #[error(
         "MCP server `{entry}` (kind: serena): the sandbox policy carries no absolute agent \
          home, so `SERENA_HOME` cannot be fixed; refusing to spawn"
@@ -233,10 +242,18 @@ pub enum SerenaEntryError {
 /// existing `project` directory and pass [`preflight`]. Entries without a
 /// kind are untouched. The first failure wins; there is no fallback to the
 /// session cwd.
+///
+/// #1979: one failure is entry-scoped instead — a `project` path that does
+/// not exist ([`SerenaEntryError::ProjectMissing`]). That entry is logged,
+/// returned in the `Ok` list, and left to the spawn gate
+/// ([`launch_additions`]), which still refuses it. A deleted repo must not
+/// put the whole agent into a launchd crash loop; every other check stays
+/// fail-closed for the agent.
 pub fn verify_entries(
     entries: &[McpServerEntry],
     agent_home: &Path,
-) -> Result<(), SerenaEntryError> {
+) -> Result<Vec<SerenaEntryError>, SerenaEntryError> {
+    let mut skipped = Vec::new();
     for entry in entries {
         if entry.kind != Some(McpServerKind::Serena) {
             continue;
@@ -250,9 +267,16 @@ pub fn verify_entries(
             });
         }
         let paths = entry_paths(agent_home, entry)?;
-        verify_entry(entry, &paths)?;
+        match verify_entry(entry, &paths) {
+            Ok(_) => {}
+            Err(e @ SerenaEntryError::ProjectMissing { .. }) => {
+                tracing::warn!(server = %entry.name, "{e}");
+                skipped.push(e);
+            }
+            Err(e) => return Err(e),
+        }
     }
-    Ok(())
+    Ok(skipped)
 }
 
 /// The name of another server whose tool prefix equals `name`'s, if any.
@@ -372,6 +396,14 @@ fn checked_project(entry: &McpServerEntry) -> Result<&Path, SerenaEntryError> {
     };
     if !project.is_absolute() {
         return Err(refuse(format!("{} (relative)", project.display())));
+    }
+    // Only a definite "not there" is entry-scoped. A path that cannot be
+    // stat'ed (permissions) falls through to the fail-closed refusal.
+    if matches!(project.try_exists(), Ok(false)) {
+        return Err(SerenaEntryError::ProjectMissing {
+            entry: entry.name.clone(),
+            path: project.display().to_string(),
+        });
     }
     if !project.is_dir() {
         return Err(refuse(format!("{} (not a directory)", project.display())));
