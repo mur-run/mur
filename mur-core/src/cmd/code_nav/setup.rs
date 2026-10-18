@@ -24,8 +24,8 @@ use serde_yaml_ng::Value;
 use super::consent::{self, Manifest};
 use super::plan::{self, Detected, Flags, Lang, LspStatus, Permission, UV};
 use super::{
-    ast_grep_install, intelephense_install, pyright_install, serena_config, serena_entry,
-    serena_install, serena_project,
+    ast_grep_install, node_ls_install, pyright_install, serena_config, serena_entry,
+    serena_install, serena_project, smoke,
 };
 use crate::cmd::browser::setup::Consent;
 
@@ -206,6 +206,29 @@ pub fn run(
     )?;
     consent::save_manifest(&manifest_path, &manifest)?;
     writeln!(out, "\nRecorded in {}", manifest_path.display())?;
+
+    // #1981 Layer 3: success means the servers start under the agent's seal,
+    // not that the files landed. Run after the manifest is saved, so a
+    // failure here keeps the installs and grants recorded above.
+    if let Some(project) = &project
+        && manifest.serena.is_some()
+    {
+        let langs: Vec<Lang> = Lang::ALL
+            .into_iter()
+            .filter(|l| {
+                manifest
+                    .languages_of(entry)
+                    .is_some_and(|s| s.contains(l.flag()))
+            })
+            .collect();
+        let targets = smoke::targets(&manifest, &langs, &mur_home);
+        let unmanaged: Vec<Lang> = langs
+            .iter()
+            .copied()
+            .filter(|l| !targets.iter().any(|t| t.lang == *l))
+            .collect();
+        smoke::verify(&agent, project, &targets, &unmanaged, out)?;
+    }
     Ok(())
 }
 
@@ -340,25 +363,34 @@ fn apply(
         m.pyright.clone()
     };
 
-    // #1945: intelephense is pre-installed only when PHP is enabled; serena
-    // then gets the canonical `ls_base_cmd`. An earlier install stays, like
-    // pyright's, so a re-run without PHP keeps the same launch command.
-    let intelephense = if plan.install.iter().any(|r| r.name == plan::INTELEPHENSE) {
-        let npm = on_path(plan::NPM).with_context(|| format!("{} not found on PATH", plan::NPM))?;
-        let (o, r) =
-            intelephense_install::install_with(&npm, &intelephense_install::tools_dir(mur_home))?;
-        writeln!(
-            out,
-            "  ✓ intelephense {} ({o:?}) at {}",
-            r.version,
-            r.entry.display()
-        )?;
-        m.installed
-            .insert(consent::install_key(plan::INTELEPHENSE, &r.version));
-        Some(r)
-    } else {
-        m.intelephense.clone()
-    };
+    // #1945 / #1981: each managed node server (intelephense, TypeScript) is
+    // pre-installed only when its language is enabled; serena then gets the
+    // canonical `ls_base_cmd`, so it never npm-installs in the sandbox. An
+    // earlier install stays, like pyright's, so a re-run without that
+    // language keeps the same launch command.
+    let intelephense = install_node_ls(
+        &mur_common::serena_ls_cmd::INTELEPHENSE,
+        m.intelephense.clone(),
+        plan,
+        mur_home,
+        &mut m,
+        out,
+    )?;
+    let typescript = install_node_ls(
+        &mur_common::serena_ls_cmd::TYPESCRIPT,
+        m.typescript.clone(),
+        plan,
+        mur_home,
+        &mut m,
+        out,
+    )?;
+    let node_ls: Vec<_> = [
+        (&intelephense, mur_common::serena_ls_cmd::INTELEPHENSE),
+        (&typescript, mur_common::serena_ls_cmd::TYPESCRIPT),
+    ]
+    .into_iter()
+    .filter_map(|(r, ls)| r.as_ref().map(|_| ls))
+    .collect();
 
     let langs = entry_langs(&m, entry, plan);
     let paths = serena_paths_for(agent_home, entry)?;
@@ -370,7 +402,7 @@ fn apply(
         existing_auth_secret(&paths.config_file).unwrap_or_else(serena_config::new_auth_secret);
     let managed = serena_config::ManagedLs {
         python: pyright.as_ref().map(|r| r.bin.as_path()),
-        php: intelephense.is_some(),
+        node: &node_ls,
     };
     let cfg = serena_config::write_config(&paths, project, &tpl, &secret, managed)?;
     writeln!(out, "  ✓ wrote {} (preflight passed)", cfg.display())?;
@@ -424,7 +456,34 @@ fn apply(
     m.serena = Some(record);
     m.pyright = pyright;
     m.intelephense = intelephense;
+    m.typescript = typescript;
     Ok(m)
+}
+
+/// Install `ls` when the plan lists it; otherwise keep `prior`.
+fn install_node_ls(
+    ls: &mur_common::serena_ls_cmd::ManagedNodeLs,
+    prior: Option<node_ls_install::Record>,
+    plan: &plan::Plan,
+    mur_home: &Path,
+    m: &mut Manifest,
+    out: &mut dyn Write,
+) -> Result<Option<node_ls_install::Record>> {
+    if !plan.install.iter().any(|r| r.name == ls.tool_dir) {
+        return Ok(prior);
+    }
+    let npm = on_path(plan::NPM).with_context(|| format!("{} not found on PATH", plan::NPM))?;
+    let (o, r) = node_ls_install::install_with(ls, &npm, &node_ls_install::tools_dir(mur_home))?;
+    writeln!(
+        out,
+        "  ✓ {} {} ({o:?}) at {}",
+        ls.tool_dir,
+        r.version,
+        r.entry.display()
+    )?;
+    m.installed
+        .insert(consent::install_key(ls.tool_dir, &r.version));
+    Ok(Some(r))
 }
 
 /// The languages `entry`'s `project.yml` lists: what this plan enables,

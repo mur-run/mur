@@ -356,6 +356,20 @@ pub async fn run(cli: Cli) -> Result<()> {
                 .await
                 .context("code-nav setup task")??
             }
+            CodeNavAction::SmokeLs {
+                agent,
+                project,
+                cmd,
+            } => {
+                // On a thread of its own: the seal confines the thread that
+                // applies it, and the server it spawns must inherit it.
+                let report = std::thread::spawn(move || {
+                    cmd::code_nav::smoke_probe::run(&agent, &project, &cmd)
+                })
+                .join()
+                .map_err(|_| anyhow::anyhow!("smoke probe thread panicked"))?;
+                println!("{}", serde_json::to_string(&report)?);
+            }
         },
         Commands::DeepResearch {
             action,
