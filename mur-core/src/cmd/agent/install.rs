@@ -247,7 +247,7 @@ pub fn cmd_inspect(path: &Path) -> Result<()> {
     );
     println!("Schema:      {}", manifest.schema);
     println!("Exported at: {}", manifest.exported_at);
-    println!("Mur version: {}", manifest.exporter.mur_version);
+    println!("MUR version: {}", manifest.exporter.mur_version);
     println!("Bundle ID:   {}", manifest.agent.bundle_id);
     println!("URL scheme:  {}", manifest.agent.url_scheme);
     println!("Agent UUID:  {}", manifest.agent.original_uuid);

@@ -22,7 +22,7 @@ pub fn cmd_export(name: &str, out: &str, format: &str) -> Result<()> {
             "--format={format} is no longer supported.\n\
              Export a portable .muragent (the default) and share that one file:\n  \
              mur agent export {name} -o {name}.muragent\n\
-             Recipients open it with the MuR Hub app, or run it headless with:\n  \
+             Recipients open it with the MUR Hub app, or run it headless with:\n  \
              mur-agent-runtime --load {name}.muragent"
         );
     }

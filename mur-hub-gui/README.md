@@ -1,6 +1,6 @@
 # mur-hub-gui
 
-MuR Hub — the cross-agent desktop app. Tauri 2 + React + Vite.
+MUR Hub — the cross-agent desktop app. Tauri 2 + React + Vite.
 
 In v1 this replaces `mur-agent-gui` as the single desktop entry point;
 during the migration window both apps coexist (the design spec calls this
