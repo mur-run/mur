@@ -955,6 +955,14 @@ finishes by starting each enabled language server under the agent's sandbox and
 reporting whether it answered `initialize`; without it, no server is started and
 nothing is smoke-tested.
 
+`mur code-nav doctor [--agent <name>]` checks later that what setup recorded
+still holds: each install is on disk at the pinned version, each grant is still
+in the agent's profile, and each entry's `project.yml` lists the languages
+setup wrote. It also flags code-nav grants that setup never recorded, such as a
+hand-added write grant on `~/.npm`. It is offline and read-only. Each warning
+comes with the exact `mur agent perm …` or `mur code-nav setup …` command that
+fixes it. A corrupt manifest is reported as an error, never as "not set up".
+
 To navigate a second repo, append another entry with its own `SERENA_HOME`:
 `mur code-nav setup --agent <name> --with-serena --project <repo2> --entry serena-b`.
 Two serena processes sharing one home race on its project registry and drop a
@@ -1039,7 +1047,7 @@ mur
 │                default · fallback · smart · migrate   (connect = one key, many models)
 ├── source       external knowledge — Obsidian · Notion · Joplin
 ├── project      index · search   (semantic code search)
-├── code-nav     setup   (ast-grep + opt-in serena LSP navigation for an agent, sandboxed under ~/.mur/tools)
+├── code-nav     setup · doctor   (ast-grep + opt-in serena LSP navigation for an agent, sandboxed under ~/.mur/tools)
 ├── daemon       start · stop · restart · status · serve · sleep
 ├── dashboard    terminal dashboard
 ├── browser      record · replay · auth · broker · list · show · export · status   (browser work through Playwright MCP;

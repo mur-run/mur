@@ -356,6 +356,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 .await
                 .context("code-nav setup task")??
             }
+            CodeNavAction::Doctor { agent } => {
+                cmd::code_nav::doctor::run(agent.as_deref(), &mut std::io::stdout())?
+            }
             CodeNavAction::SmokeLs {
                 agent,
                 project,
