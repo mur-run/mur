@@ -52,6 +52,13 @@ impl GateB {
     /// Why Gate B would refuse this log, or `None` when its seal holds.
     pub fn damage(&self, mur_home: &Path, channel_id: &str) -> Option<String> {
         let _guard = integrity::read_lock(mur_home, channel_id);
+        self.damage_locked(mur_home, channel_id)
+    }
+
+    /// [`damage`](Self::damage) for a caller that already holds the append
+    /// lock exclusively (the recheck inside `restart_chain`): taking the
+    /// shared lock there would wait on ourselves.
+    pub fn damage_locked(&self, mur_home: &Path, channel_id: &str) -> Option<String> {
         integrity::verify(
             mur_home,
             &self.agent,

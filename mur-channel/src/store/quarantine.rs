@@ -38,9 +38,14 @@ impl ChannelStore {
             "{QUARANTINE_PREFIX}{}.jsonl",
             now.format("%Y%m%dT%H%M%S%.6fZ")
         );
-        let dest = dir.join(name);
+        let dest = dir.join(&name);
         if dest.exists() {
             bail!("quarantine target already exists: {}", dest.display());
+        }
+        // Named in the repair marker before the move, so a rerun after a
+        // crash can still reference it (no-op outside a repair).
+        if crate::repair_marker::is_pending(&self.mur_home, id) {
+            crate::repair_marker::record_quarantine(&self.mur_home, id, &name)?;
         }
         fs::rename(&log, &dest)
             .with_context(|| format!("quarantine {} -> {}", log.display(), dest.display()))?;

@@ -39,6 +39,11 @@ pub struct DamageReport {
     /// marker with no new line — a deliberate false positive: over-reporting
     /// is recoverable, a silent stale anchor is not. Do not "optimise" it out.
     pub anchor_dirty: bool,
+    /// A `mur channel repair` began on this channel and never finished
+    /// (`repair_marker`). Whatever the log looks like — often empty, which
+    /// would otherwise read as a fresh, intact channel — it is not to be
+    /// trusted until a repair runs to the end.
+    pub repair_pending: bool,
 }
 
 /// Where the signed head and the log disagree. See
@@ -75,6 +80,7 @@ impl DamageReport {
             && self.chain_breaks.is_empty()
             && self.anchor_mismatch.is_none()
             && !self.anchor_dirty
+            && !self.repair_pending
     }
 }
 
@@ -200,7 +206,8 @@ impl ChannelStore {
             // truncation there is; fall through with empty content.
             None if crate::head_io::read_head(&crate::anchor::heads_dir(&self.mur_home), id)?
                 .is_none()
-                && !crate::anchor::is_dirty(&self.mur_home, id) =>
+                && !crate::anchor::is_dirty(&self.mur_home, id)
+                && !crate::repair_marker::is_pending(&self.mur_home, id) =>
             {
                 return Ok((Vec::new(), DamageReport::default()));
             }
@@ -230,6 +237,7 @@ impl ChannelStore {
         report.anchor_mismatch =
             super::chain::anchor_mismatch(&self.mur_home, id, &content, writer_pubkey)?;
         report.anchor_dirty = crate::anchor::is_dirty(&self.mur_home, id);
+        report.repair_pending = crate::repair_marker::is_pending(&self.mur_home, id);
         Ok((events, report))
     }
 

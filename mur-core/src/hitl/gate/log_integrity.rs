@@ -118,6 +118,9 @@ fn describe(r: &DamageReport, have_router_key: bool) -> Option<String> {
     if r.anchor_dirty {
         parts.push("signed head is stale (dirty marker set)".to_string());
     }
+    if r.repair_pending {
+        parts.push("a channel repair began and did not finish".to_string());
+    }
     (!parts.is_empty()).then(|| format!("{INTEGRITY_FAILED}: {}", parts.join("; ")))
 }
 

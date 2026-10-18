@@ -173,12 +173,27 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
             "old_agent_head": old_agent_head,
         }))
     };
+    // The check above ran before the lock (and before the prompt). Run it
+    // again under the lock: another repair may have finished meanwhile, and
+    // quarantining its fresh chain would throw that repair away. A pending
+    // repair marker counts as damage here, so an interrupted run resumes.
+    let still_damaged = || -> Result<bool> {
+        let again = channel_integrity::check(mur_home, channel_id)?;
+        let gate_b_again = gate_b
+            .as_ref()
+            .and_then(|g| g.damage_locked(mur_home, channel_id));
+        Ok(!again.is_intact() || gate_b_again.is_some())
+    };
     let done = match (&gate_b, &writer) {
         // The agent's seal hook writes the fresh `hitl-heads/` genesis head.
-        (Some(g), _) => {
-            g.service(mur_home)?
-                .restart_chain(channel_id, now, g.actor(), g.signer(), prepare)
-        }
+        (Some(g), _) => g.service(mur_home)?.restart_chain(
+            channel_id,
+            now,
+            g.actor(),
+            g.signer(),
+            still_damaged,
+            prepare,
+        ),
         (None, Some(w)) => {
             let key_home = mur_home.join("agents").join(ROUTER_AGENT);
             ChannelService::open(mur_home)?.restart_chain(
@@ -190,12 +205,17 @@ pub fn repair(mur_home: &Path, channel_id: &str, confirm: Confirm<'_>) -> Result
                     kv: w.kv,
                     anchor_home: Some(&key_home),
                 },
+                still_damaged,
                 prepare,
             )
         }
         (None, None) => unreachable!("the router key was resolved above"),
     }
     .context("restart the channel on a fresh chain")?;
+    let Some(done) = done else {
+        // Damaged when checked, healthy under the lock: another repair won.
+        return Ok(Outcome::Intact);
+    };
     Ok(Outcome::Repaired {
         quarantined: done.quarantined,
         seq: done.event.seq,
@@ -250,6 +270,9 @@ fn summary(r: &IntegrityReport) -> String {
     }
     if r.anchor_dirty {
         parts.push("dirty marker set".into());
+    }
+    if r.repair_pending {
+        parts.push("an earlier repair did not finish".into());
     }
     if !r.chain_breaks.is_empty() {
         parts.push(format!("hash chain broken at seq {:?}", r.chain_breaks));

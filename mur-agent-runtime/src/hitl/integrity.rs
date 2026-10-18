@@ -105,6 +105,11 @@ pub fn verify(
     pubkey: &[u8; 32],
 ) -> Result<(), IntegrityError> {
     let bad = |why: String| IntegrityError(why);
+    // An unfinished `mur channel repair` may have left an empty log and no
+    // head, which would otherwise pass below as a never-written channel.
+    if mur_channel::repair_marker::is_pending(mur_home, channel_id) {
+        return Err(bad("a channel repair began and did not finish".into()));
+    }
     let log = log_path(mur_home, channel_id)
         .and_then(|p| read_log(&p))
         .map_err(|e| bad(format!("{e:#}")))?;
