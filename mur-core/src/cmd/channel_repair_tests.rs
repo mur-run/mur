@@ -356,14 +356,14 @@ mod gate_b {
         let s = agent_store(tmp.path());
         s.record(resp("h0", "a")).await;
         let ch = channel(tmp.path());
-        mur_channel::repair_marker::mark(tmp.path(), &ch, "t0").unwrap();
-        let log = log_path(tmp.path(), &ch);
-        std::fs::rename(&log, log.with_file_name("events.quarantine-crash.jsonl")).unwrap();
-        mur_channel::head_io::remove_head(
-            &mur_agent_runtime::hitl::integrity::heads_dir(tmp.path(), AGENT),
+        // Gate B heads live under the agent; `channel-heads/` does not exist
+        // until the marker creates it (review P1 on #1977).
+        assert!(!mur_channel::anchor::heads_dir(tmp.path()).exists());
+        crash_mid_repair(
+            tmp.path(),
             &ch,
-        )
-        .unwrap();
+            &mur_agent_runtime::hitl::integrity::heads_dir(tmp.path(), AGENT),
+        );
         let key = AgentIdentity::load(&tmp.path().join("agents").join(AGENT))
             .unwrap()
             .verifying_key_bytes();
@@ -372,10 +372,14 @@ mod gate_b {
             "an empty, headless log under a pending repair must not pass Gate B"
         );
 
-        assert!(matches!(
-            repair(tmp.path(), &ch, Confirm::Yes).unwrap(),
-            Outcome::Repaired { seq: 0, .. }
-        ));
+        let Outcome::Repaired {
+            seq: 0,
+            quarantined,
+        } = repair(tmp.path(), &ch, Confirm::Yes).unwrap()
+        else {
+            panic!("a rerun must resume the decision channel repair");
+        };
+        assert_names_crash_quarantine(tmp.path(), &ch, quarantined);
         assert!(!mur_channel::repair_marker::is_pending(tmp.path(), &ch));
         s.record(resp("h1", "b")).await;
         assert_eq!(s.lookup("h1").await, Some(Settled::Allow));
@@ -397,13 +401,33 @@ mod gate_b {
     }
 }
 
-/// Leave `ch` the way a repair killed part-way leaves it: marker down, log
-/// moved aside, old head dropped, and no fresh record yet.
-fn crash_mid_repair(home: &Path, ch: &str) {
+/// Name a crashed repair gave the log it moved aside.
+const CRASH_QUARANTINE: &str = "events.quarantined-crash.jsonl";
+
+/// Leave `ch` the way a repair killed part-way leaves it: marker down naming
+/// the log it moved aside, the move done, and no fresh record yet. The old
+/// head goes from `heads`.
+fn crash_mid_repair(home: &Path, ch: &str, heads: &Path) {
     mur_channel::repair_marker::mark(home, ch, "t0").unwrap();
+    mur_channel::repair_marker::record_quarantine(home, ch, CRASH_QUARANTINE).unwrap();
     let log = log_path(home, ch);
-    std::fs::rename(&log, log.with_file_name("events.quarantine-crash.jsonl")).unwrap();
-    mur_channel::head_io::remove_head(&mur_channel::anchor::heads_dir(home), ch).unwrap();
+    std::fs::rename(&log, log.with_file_name(CRASH_QUARANTINE)).unwrap();
+    mur_channel::head_io::remove_head(heads, ch).unwrap();
+}
+
+/// Review P2 on #1977: the finished record names the log the interrupted
+/// run moved aside, not `null`.
+fn assert_names_crash_quarantine(home: &Path, ch: &str, quarantined: Option<PathBuf>) {
+    let quarantined = quarantined.expect("the resumed repair reports the original log");
+    assert_eq!(quarantined.file_name().unwrap(), CRASH_QUARANTINE);
+    assert!(
+        quarantined.is_file(),
+        "the damaged history is still on disk"
+    );
+    let events = mur_channel::ChannelStore::new(home)
+        .load_events(ch)
+        .unwrap();
+    assert_eq!(events[0].payload["quarantined_log"], CRASH_QUARANTINE);
 }
 
 /// Review P1 on #1968: without a marker, a repair that died after the move
@@ -415,16 +439,18 @@ fn an_interrupted_repair_reads_damaged_and_a_rerun_finishes_it() {
     let (tmp, ch) = setup();
     note(tmp.path(), &ch, 0);
     note(tmp.path(), &ch, 1);
-    crash_mid_repair(tmp.path(), &ch);
+    crash_mid_repair(tmp.path(), &ch, &mur_channel::anchor::heads_dir(tmp.path()));
 
     let r = check(tmp.path(), &ch).unwrap();
     assert!(r.repair_pending && !r.is_intact(), "{r:?}");
     assert!(r.render().contains("did not finish"));
 
-    let Outcome::Repaired { seq, .. } = repair(tmp.path(), &ch, Confirm::Yes).unwrap() else {
+    let Outcome::Repaired { seq, quarantined } = repair(tmp.path(), &ch, Confirm::Yes).unwrap()
+    else {
         panic!("a rerun must resume, not take the intact shortcut");
     };
     assert_eq!(seq, 0);
+    assert_names_crash_quarantine(tmp.path(), &ch, quarantined);
     assert!(!mur_channel::repair_marker::is_pending(tmp.path(), &ch));
     let after = check(tmp.path(), &ch).unwrap();
     assert!(after.is_intact(), "{after:?}");

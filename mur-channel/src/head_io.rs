@@ -78,7 +78,7 @@ fn write_synced(tmp: &Path, body: &[u8]) -> Result<()> {
 
 /// Create `dir` if absent; when it was just created, fsync its parent so the
 /// entry itself is durable (spec 7.3.1: the first append syncs the new dir).
-fn ensure_dir(dir: &Path) -> Result<()> {
+pub(crate) fn ensure_dir(dir: &Path) -> Result<()> {
     if dir.is_dir() {
         return Ok(());
     }
@@ -116,13 +116,13 @@ pub fn remove_head(heads_dir: &Path, channel_id: &str) -> Result<()> {
 /// open a directory as a file; NTFS journals the rename, so this is a no-op
 /// there rather than an error.
 #[cfg(unix)]
-fn sync_dir(dir: &Path) -> Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> Result<()> {
     File::open(dir)
         .and_then(|d| d.sync_all())
         .with_context(|| format!("fsync dir {}", dir.display()))
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> Result<()> {
+pub(crate) fn sync_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }

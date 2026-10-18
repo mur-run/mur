@@ -82,7 +82,10 @@ impl ChannelService {
                 return Ok(None);
             }
             crate::repair_marker::mark(mur_home, channel_id, &now.to_rfc3339())?;
-            let quarantined = store.quarantine_locked(channel_id, now)?;
+            store.quarantine_locked(channel_id, now)?;
+            // The ORIGINAL damaged log: on a resumed repair this run found
+            // nothing to move, and the marker is what still names it.
+            let quarantined = original_quarantine(store, mur_home, channel_id)?;
             let payload = prepare(quarantined.as_deref())?;
             let event = self.with_hooks(head_signer, |hooks| {
                 store.append_signed_event_locked(
@@ -121,6 +124,25 @@ impl ChannelService {
         self.after_write(channel_id, &event, None);
         Ok(Some(Restarted { quarantined, event }))
     }
+}
+
+/// First log the marker names that is still on disk beside the channel.
+fn original_quarantine(
+    store: &crate::ChannelStore,
+    mur_home: &Path,
+    channel_id: &str,
+) -> Result<Option<PathBuf>> {
+    let Some(dir) = store
+        .events_path(channel_id)?
+        .parent()
+        .map(Path::to_path_buf)
+    else {
+        return Ok(None);
+    };
+    Ok(crate::repair_marker::quarantined(mur_home, channel_id)
+        .into_iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.is_file()))
 }
 
 #[cfg(test)]
