@@ -64,7 +64,11 @@ pub struct Manifest {
     /// The intelephense serena launches via the canonical `ls_base_cmd`
     /// (#1945). Absent in manifests written before it existed.
     #[serde(default)]
-    pub intelephense: Option<super::intelephense_install::Record>,
+    pub intelephense: Option<super::node_ls_install::Record>,
+    /// The typescript-language-server serena launches via the canonical
+    /// `ls_base_cmd` (#1981). Absent in manifests written before it existed.
+    #[serde(default)]
+    pub typescript: Option<super::node_ls_install::Record>,
     /// Finding 4: every disabled line, so "off" is never silent.
     pub disabled: Vec<String>,
 }

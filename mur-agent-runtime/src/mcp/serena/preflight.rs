@@ -373,8 +373,9 @@ fn check_base_cmd(
         }
         (Err(e), _) | (_, Err(e)) => {
             let found = format!(
-                "{} ({e}); re-run `mur code-nav setup --lsp php`",
-                entry.display()
+                "{} ({e}); re-run `mur code-nav setup --lsp {}`",
+                entry.display(),
+                show(lang)
             );
             return fail!(C7LsExec, file, key(KEY_LS_BASE_CMD), found, expected);
         }

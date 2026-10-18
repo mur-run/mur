@@ -16,7 +16,7 @@
 
 use anyhow::{Context, Result, bail};
 use mur_agent_runtime::mcp::serena::{SERENA_TOOL_ALLOWLIST, SerenaPaths, preflight};
-use mur_common::serena_ls_cmd::{PHP_LS_ID, canonical_base_cmd};
+use mur_common::serena_ls_cmd::{ManagedNodeLs, canonical_base_cmd};
 use serde_yaml_ng::{Mapping, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -122,9 +122,9 @@ pub fn project_folder(paths: &SerenaPaths, project_root: &Path) -> Result<PathBu
 pub struct ManagedLs<'a> {
     /// The pre-installed `pyright-langserver` (3.6b), when Python is enabled.
     pub python: Option<&'a Path>,
-    /// intelephense is pre-installed under the tools root (#1945); serena
-    /// gets the canonical `ls_base_cmd` for it.
-    pub php: bool,
+    /// Node servers pre-installed under the tools root (intelephense #1945,
+    /// TypeScript #1981); serena gets the canonical `ls_base_cmd` for each.
+    pub node: &'a [ManagedNodeLs],
 }
 
 /// The values MUR owns, in `OWNED_KEYS` order.
@@ -159,15 +159,15 @@ pub fn owned_values(
         py.insert(LS_PATH.into(), s(bin)?);
         ls.insert(PYTHON_LS_ID.into(), Value::Mapping(py));
     }
-    if managed.php {
-        let cmd = canonical_base_cmd(PHP_LS_ID, &paths.tools_dir)
+    for nls in managed.node {
+        let cmd = canonical_base_cmd(nls.ls_id, &paths.tools_dir)
             .with_context(|| format!("tools root {} is not UTF-8", paths.tools_dir.display()))?;
-        let mut php = Mapping::new();
-        php.insert(
+        let mut m = Mapping::new();
+        m.insert(
             LS_BASE_CMD.into(),
             strings(&cmd.iter().map(String::as_str).collect::<Vec<_>>()),
         );
-        ls.insert(PHP_LS_ID.into(), Value::Mapping(php));
+        ls.insert(nls.ls_id.into(), Value::Mapping(m));
     }
 
     let values: [Value; 10] = [
@@ -276,7 +276,7 @@ pub fn new_auth_secret() -> String {
 
 /// Write the config for `project_root` and run the runtime preflight on it
 /// (whose C7 confines `managed.python` under the MUR tools root and accepts
-/// only the canonical `ls_base_cmd` for PHP).
+/// only the canonical `ls_base_cmd` for each managed node server).
 pub fn write_config(
     paths: &SerenaPaths,
     project_root: &Path,
