@@ -1,6 +1,6 @@
 # mur-gui-core
 
-Shared GUI core library consumed by `mur-hub-gui` (the new MuR Hub desktop
+Shared GUI core library consumed by `mur-hub-gui` (the new MUR Hub desktop
 app) and during migration also by `mur-agent-gui` (legacy per-agent app).
 
 This crate hosts code that must not fork between the two GUIs:

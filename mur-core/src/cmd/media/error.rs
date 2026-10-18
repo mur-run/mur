@@ -30,7 +30,7 @@ impl MediaError {
             MediaError::VlcHttpDown => "VLC 沒有回應，請確認它正在執行。",
             MediaError::DrmProtected => "這是有 DRM 保護的串流，我沒辦法擷取畫面或字幕喔。",
             MediaError::NoTranscript => "這支影片找不到字幕，所以我沒辦法做文字分析。",
-            MediaError::ModelOffline => "本地模型還沒就緒（MuR Hub 有啟動嗎？）。",
+            MediaError::ModelOffline => "本地模型還沒就緒（MUR Hub 有啟動嗎？）。",
             MediaError::SnapshotFailed => "我擷取畫面失敗了，稍後再試一次。",
             MediaError::SourceUnresolvable => "我解析不了這個來源，請確認連結或檔案路徑。",
             MediaError::YtdlpMissing => "要分析 YouTube 影片需要 yt-dlp，安裝後再試一次。",

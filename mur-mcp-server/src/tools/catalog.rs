@@ -214,7 +214,7 @@ pub(super) fn base_tools() -> Vec<Tool> {
         },
         Tool {
             name: "watch_start".into(),
-            description: "Begin a proactive co-watching session: MuR may briefly comment on big scene changes (runtime-only; consent-gated; say \"噓\" to mute).".into(),
+            description: "Begin a proactive co-watching session: MUR may briefly comment on big scene changes (runtime-only; consent-gated; say \"噓\" to mute).".into(),
             input_schema: ToolInputSchema {
                 schema_type: "object".into(),
                 properties: None,

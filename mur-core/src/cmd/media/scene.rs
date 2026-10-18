@@ -65,7 +65,7 @@ use mur_common::config::DEFAULT_BUNDLED_MODEL_ID;
 fn local_base_url() -> Result<String> {
     let home = crate::cmd::resolve_mur_home()?;
     mur_common::local_llm::read_base_url(&home)
-        .context("local model endpoint not available (is MuR Hub running?)")
+        .context("local model endpoint not available (is MUR Hub running?)")
 }
 
 /// Capture the current VLC frame and explain it with the local multimodal model.

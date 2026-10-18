@@ -274,7 +274,7 @@ pub enum AgentAction {
         action: AgentPermAction,
     },
     /// Export an agent to a portable `.muragent` (default, signed v2) or a
-    /// legacy `.murpkg`. Recipients open it with the MuR Hub app or run it
+    /// legacy `.murpkg`. Recipients open it with the MUR Hub app or run it
     /// headless via `mur-agent-runtime --load <file>.muragent`.
     Export {
         /// Agent name
