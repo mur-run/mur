@@ -654,7 +654,16 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
     for server in &profile.mcp_servers {
         let check_name = format!("mcp:{}", server.name);
         match crate::cmd::agent_mcp_pin::resolve_mcp_launch(&server.command) {
-            Ok(resolved) => out.push(Check::new(check_name, true, resolved.display().to_string())),
+            Ok(resolved) => {
+                let spawn_check = mcp_spawn::check(
+                    name,
+                    server,
+                    &resolved,
+                    &profile.entitlements.processes.spawn,
+                );
+                out.push(Check::new(check_name, true, resolved.display().to_string()));
+                out.extend(spawn_check);
+            }
             Err(e) => out.push(Check::new(check_name, false, e.to_string())),
         }
     }
@@ -731,6 +740,7 @@ pub fn run_agent(name: &str, json: bool) -> Result<()> {
 }
 
 mod implicit_secret;
+mod mcp_spawn;
 
 #[cfg(test)]
 mod tests;
