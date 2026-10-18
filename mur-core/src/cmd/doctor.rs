@@ -11,6 +11,18 @@ use mur_agent_runtime::bridge::beacon::{BridgePeerStatus, bridge_status_for_peer
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
+mod ast_grep_reach;
+
+/// [`ast_grep_reach::gaps`] for tests outside this module (`code_nav`).
+#[cfg(test)]
+pub(crate) fn ast_grep_gaps_for_tests(
+    profile: &mur_common::AgentProfile,
+    bin: &std::path::Path,
+    run_dir: &std::path::Path,
+) -> Vec<String> {
+    ast_grep_reach::gaps(profile, bin, run_dir)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
@@ -677,6 +689,9 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
     ));
 
     out.push(check_deny_list(&profile.entitlements.filesystem, name));
+
+    // #1984: ast-grep installed under mur home but not wired to this agent.
+    out.extend(ast_grep_reach::check(mur_home, name, &profile));
 
     if !profile.mcp_servers.is_empty() {
         // Not a fault in this agent — a granularity limit that the entitlement

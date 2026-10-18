@@ -8,6 +8,7 @@
 //! closes setup ([`smoke`], #1981).
 
 pub mod ast_grep_install;
+pub mod ast_grep_wire;
 pub mod consent;
 pub mod doctor;
 pub mod node_ls_install;
