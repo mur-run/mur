@@ -21,9 +21,6 @@ pub const TOOL_NAME: &str = "ast_grep_search";
 
 pub use mur_common::config::AST_GREP_PINNED_VERSION;
 
-/// MUR-owned run directory (cwd + empty sgconfig) under mur home.
-const RUNTIME_DIR: &str = "runtime";
-const AST_GREP_DIR: &str = "ast-grep";
 const SGCONFIG_FILE: &str = "sgconfig.yml";
 /// MUR's config file under mur home (holds `search.ast_grep`).
 const CONFIG_FILE: &str = "config.yaml";
@@ -70,7 +67,7 @@ pub struct Isolation {
 }
 
 pub fn ensure_isolation(mur_home: &Path) -> std::io::Result<Isolation> {
-    let cwd = mur_home.join(RUNTIME_DIR).join(AST_GREP_DIR);
+    let cwd = mur_common::config::ast_grep_runtime_dir(mur_home);
     std::fs::create_dir_all(&cwd)?;
     let sgconfig = cwd.join(SGCONFIG_FILE);
     std::fs::write(&sgconfig, b"")?;

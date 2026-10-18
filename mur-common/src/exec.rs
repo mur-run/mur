@@ -14,18 +14,25 @@ use std::path::{Path, PathBuf};
 
 /// File name of the MUR MCP server binary.
 #[cfg(windows)]
-const MCP_SERVER_BIN: &str = "mur-mcp-server.exe";
+pub const MCP_SERVER_BIN: &str = "mur-mcp-server.exe";
 #[cfg(not(windows))]
-const MCP_SERVER_BIN: &str = "mur-mcp-server";
+pub const MCP_SERVER_BIN: &str = "mur-mcp-server";
+
+/// Directory under mur home that holds MUR's own MCP server copy.
+const MCP_SERVERS_DIR: &str = "mcp-servers";
 
 /// Canonical location MUR keeps its own copy of the MCP server binary:
 /// `~/.mur/mcp-servers/mur-mcp-server` (honors `$MUR_HOME`). Stable across how
 /// `mur` itself was installed (brew / cargo / source) and across upgrades, so
 /// agent profiles can pin this path once and never go stale.
 pub fn bundled_mcp_server_path() -> PathBuf {
-    crate::trust::mur_home()
-        .join("mcp-servers")
-        .join(MCP_SERVER_BIN)
+    bundled_mcp_server_path_in(&crate::trust::mur_home())
+}
+
+/// [`bundled_mcp_server_path`] under an explicit mur home, for callers that
+/// already hold one (and pure planners that must not read the environment).
+pub fn bundled_mcp_server_path_in(mur_home: &Path) -> PathBuf {
+    mur_home.join(MCP_SERVERS_DIR).join(MCP_SERVER_BIN)
 }
 
 /// Ensure [`bundled_mcp_server_path`] exists and matches the `mur-mcp-server`
