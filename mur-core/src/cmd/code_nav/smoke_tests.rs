@@ -1,4 +1,5 @@
 use super::*;
+use crate::cmd::code_nav::smoke_probe::SERVER_PGID_PREFIX;
 use std::os::unix::fs::PermissionsExt;
 
 fn manifest(home: &Path, python: bool, php: bool, ts: bool) -> Manifest {
@@ -212,6 +213,74 @@ fn a_hung_probe_is_stopped_at_the_parent_deadline() {
         matches!(&r, Report::Failed { detail } if detail.contains("did not finish")),
         "{r:?}"
     );
+}
+
+/// Whether process group `pgid` still has a live member, polled briefly so a
+/// just-killed member has time to be reaped.
+fn group_alive(pgid: libc::pid_t) -> bool {
+    for _ in 0..40 {
+        // SAFETY: signal 0 only probes for existence.
+        if unsafe { libc::killpg(pgid, 0) } != 0 {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+/// The real topology: the probe and the server it starts each lead their own
+/// process group (both go through `server_command`). A probe that hangs past
+/// the parent deadline never runs its own cleanup, so the parent must take
+/// the server's group down too.
+#[test]
+fn a_hung_probe_takes_its_separately_grouped_server_down() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pgid_file = tmp.path().join("server.pgid");
+    let mut c = Command::new("/bin/sh");
+    // `set -m` gives the background job a process group of its own, as
+    // `process_group(0)` does for the real server.
+    c.arg("-c").arg(format!(
+        "set -m; sleep 30 & echo $! > '{f}'; echo \"{p}$!\"; exec sleep 30",
+        f = pgid_file.display(),
+        p = SERVER_PGID_PREFIX,
+    ));
+    let child = server_command(&mut c).spawn().unwrap();
+    let probe_pgid = child.id() as libc::pid_t;
+    let r = collect(child, Duration::from_millis(500));
+    assert!(
+        matches!(&r, Report::Failed { detail } if detail.contains("did not finish")),
+        "{r:?}"
+    );
+    let server_pgid: libc::pid_t = std::fs::read_to_string(&pgid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(server_pgid, probe_pgid, "the fake must use two groups");
+    let probe_gone = !group_alive(probe_pgid);
+    let server_gone = !group_alive(server_pgid);
+    if !server_gone {
+        // SAFETY: cleanup of the group this test created.
+        unsafe { libc::killpg(server_pgid, libc::SIGKILL) };
+    }
+    assert!(probe_gone, "probe group {probe_pgid} survived");
+    assert!(server_gone, "server group {server_pgid} survived");
+}
+
+#[test]
+fn only_a_real_announced_group_is_taken() {
+    assert_eq!(parse_server_group("server-pgid: 4242\n"), Some(4242));
+    // 0 and 1 would be our own group and init's; never signal those.
+    assert_eq!(parse_server_group("server-pgid: 0"), None);
+    assert_eq!(parse_server_group("server-pgid: 1"), None);
+    assert_eq!(parse_server_group(r#"{"status":"ok"}"#), None);
+}
+
+/// The announce line precedes the report and must not hide it.
+#[test]
+fn the_announce_line_does_not_mask_the_report() {
+    let out = format!("{SERVER_PGID_PREFIX}4242\n{{\"status\":\"ok\"}}\n");
+    assert_eq!(parse_report(out.as_bytes(), b""), Report::Ok);
 }
 
 #[test]

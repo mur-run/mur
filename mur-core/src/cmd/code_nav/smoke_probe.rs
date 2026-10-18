@@ -39,6 +39,12 @@ const STDERR_TAIL_LINES: usize = 8;
 /// The request id of our one `initialize`.
 const INIT_ID: u64 = 1;
 
+/// Prefix of the stdout line announcing the server's process group. The
+/// server leads a group of its own (see [`server_command`]), so a parent that
+/// stops a hung probe by the probe's group would miss it; this line lets the
+/// parent take the server's group down too.
+pub(crate) const SERVER_PGID_PREFIX: &str = "server-pgid: ";
+
 /// What one smoke launch proved. Serialized as the child's single stdout line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
@@ -94,7 +100,10 @@ pub fn run(agent: &str, project: &Path, cmd: &[String]) -> Report {
         .env("PATH", &path)
         .envs(scratch);
     match server_command(&mut c).spawn() {
-        Ok(child) => handshake(child, project, SMOKE_TIMEOUT),
+        Ok(child) => {
+            announce_server_group(child.id());
+            handshake(child, project, SMOKE_TIMEOUT)
+        }
         Err(e) => failed(format!("could not start {}: {e}", resolved.display())),
     }
 }
@@ -140,6 +149,23 @@ pub(crate) fn server_command(c: &mut Command) -> &mut Command {
         c.process_group(0);
     }
     c
+}
+
+/// Tell the parent which process group the server leads, before anything can
+/// hang. Not JSON, so [`super::smoke::parse_report`] skips it.
+fn announce_server_group(pid: u32) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{SERVER_PGID_PREFIX}{pid}");
+    let _ = out.flush();
+}
+
+/// The server group a probe announced on `line`, if it is one.
+pub(crate) fn parse_server_group(line: &str) -> Option<u32> {
+    line.trim()
+        .strip_prefix(SERVER_PGID_PREFIX)?
+        .parse()
+        .ok()
+        .filter(|&g| g > 1)
 }
 
 /// Kill `child` and, on Unix, its whole process group; then reap it.

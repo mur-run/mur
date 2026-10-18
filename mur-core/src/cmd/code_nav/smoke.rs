@@ -6,10 +6,11 @@
 //! servers MUR pre-installs are launched: the others serena fetches itself on
 //! first start, so there is nothing on disk yet to launch.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -17,7 +18,7 @@ use anyhow::{Context, Result};
 use super::consent::Manifest;
 use super::node_ls_install;
 use super::plan::Lang;
-use super::smoke_probe::{Report, SMOKE_TIMEOUT, server_command, stop};
+use super::smoke_probe::{Report, SMOKE_TIMEOUT, parse_server_group, server_command, stop};
 use mur_common::serena_ls_cmd::{self, ManagedNodeLs};
 
 /// How often the parent checks whether the probe has exited.
@@ -167,11 +168,24 @@ fn launch(exe: &Path, agent: &str, project: &Path, cmd: &[String], deadline: Dur
 }
 
 /// Wait at most `deadline` for `child` to exit, then parse its report. A
-/// probe still running at the deadline is stopped with its process group.
+/// probe still running at the deadline is stopped with its process group,
+/// and so is the server group it announced: the server leads a group of its
+/// own, and killing the probe skips the probe's own cleanup of it.
 pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
     drop(child.stdin.take());
-    let read = |r: Option<Box<dyn Read + Send>>| {
+    let server_group = Arc::new(AtomicU32::new(0));
+    let stdout = {
         let (tx, rx) = mpsc::channel();
+        let r = child.stdout.take();
+        let group = Arc::clone(&server_group);
+        std::thread::spawn(move || {
+            let _ = tx.send(read_stdout(r, &group));
+        });
+        rx
+    };
+    let stderr = {
+        let (tx, rx) = mpsc::channel();
+        let r = child.stderr.take();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut r) = r {
@@ -181,8 +195,6 @@ pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
         });
         rx
     };
-    let stdout = read(child.stdout.take().map(|r| Box::new(r) as _));
-    let stderr = read(child.stderr.take().map(|r| Box::new(r) as _));
     let start = Instant::now();
     let exited = loop {
         match child.try_wait() {
@@ -193,6 +205,7 @@ pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
     };
     if !exited {
         stop(&mut child);
+        kill_server_group(server_group.load(Ordering::SeqCst));
         return Report::Failed {
             detail: format!(
                 "the smoke probe did not finish within {}s and was stopped",
@@ -203,6 +216,44 @@ pub(crate) fn collect(mut child: Child, deadline: Duration) -> Report {
     let out = stdout.recv_timeout(POST_EXIT_DRAIN).unwrap_or_default();
     let err = stderr.recv_timeout(POST_EXIT_DRAIN).unwrap_or_default();
     parse_report(&out, &err)
+}
+
+/// Read the probe's stdout to EOF, recording an announced server group in
+/// `group` the moment its line arrives (the probe may then hang forever).
+fn read_stdout(r: Option<impl Read>, group: &AtomicU32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let Some(r) = r else { return buf };
+    let mut r = std::io::BufReader::new(r);
+    loop {
+        let start = buf.len();
+        match r.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                if let Some(g) = parse_server_group(&String::from_utf8_lossy(&buf[start..])) {
+                    group.store(g, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+    buf
+}
+
+/// SIGKILL process group `pgid` as announced by a probe; 0 means none was.
+/// Never our own group, and never 0/1 (filtered by [`parse_server_group`]).
+fn kill_server_group(pgid: u32) {
+    #[cfg(unix)]
+    if pgid > 1 {
+        // SAFETY: getpgrp has no preconditions.
+        let ours = unsafe { libc::getpgrp() };
+        if pgid as libc::pid_t != ours {
+            // SAFETY: a group already gone gives ESRCH, which is fine.
+            unsafe {
+                libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pgid;
 }
 
 /// The child's report: the last stdout line that parses. Anything else is a
