@@ -25,7 +25,7 @@ use super::consent::{self, Manifest};
 use super::plan::{self, Detected, Flags, Lang, LspStatus, Permission, UV};
 use super::{
     ast_grep_install, node_ls_install, pyright_install, serena_config, serena_entry,
-    serena_install, serena_project,
+    serena_install, serena_project, smoke,
 };
 use crate::cmd::browser::setup::Consent;
 
@@ -206,6 +206,29 @@ pub fn run(
     )?;
     consent::save_manifest(&manifest_path, &manifest)?;
     writeln!(out, "\nRecorded in {}", manifest_path.display())?;
+
+    // #1981 Layer 3: success means the servers start under the agent's seal,
+    // not that the files landed. Run after the manifest is saved, so a
+    // failure here keeps the installs and grants recorded above.
+    if let Some(project) = &project
+        && manifest.serena.is_some()
+    {
+        let langs: Vec<Lang> = Lang::ALL
+            .into_iter()
+            .filter(|l| {
+                manifest
+                    .languages_of(entry)
+                    .is_some_and(|s| s.contains(l.flag()))
+            })
+            .collect();
+        let targets = smoke::targets(&manifest, &langs, &mur_home);
+        let unmanaged: Vec<Lang> = langs
+            .iter()
+            .copied()
+            .filter(|l| !targets.iter().any(|t| t.lang == *l))
+            .collect();
+        smoke::verify(&agent, project, &targets, &unmanaged, out)?;
+    }
     Ok(())
 }
 
