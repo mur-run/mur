@@ -953,7 +953,9 @@ fails partway, nothing is recorded, so the next run asks again about
 everything, including steps that already succeeded. With `--with-serena`, setup
 finishes by starting each enabled language server under the agent's sandbox and
 reporting whether it answered `initialize`; without it, no server is started and
-nothing is smoke-tested.
+nothing is smoke-tested. A server that fails, or a launch that cannot be
+verified (setup run from an already-sandboxed shell, or a host where the
+sandbox does not enforce), fails setup; the installs and grants are kept.
 
 `mur code-nav doctor [--agent <name>]` checks later that what setup recorded
 still holds: each install is on disk at the pinned version, each grant is still

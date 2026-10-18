@@ -28,11 +28,22 @@ pub const SMOKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// A frame larger than this is not an `initialize` reply.
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 
+/// How long, after the server is stopped, its stderr tail is waited for. A
+/// descendant that escaped the server's process group can hold the pipe open
+/// forever; this keeps the probe's whole lifecycle bounded.
+const STDERR_DRAIN: Duration = Duration::from_secs(2);
+
 /// Lines of the server's stderr quoted back on failure.
 const STDERR_TAIL_LINES: usize = 8;
 
 /// The request id of our one `initialize`.
 const INIT_ID: u64 = 1;
+
+/// Prefix of the stdout line announcing the server's process group. The
+/// server leads a group of its own (see [`server_command`]), so a parent that
+/// stops a hung probe by the probe's group would miss it; this line lets the
+/// parent take the server's group down too.
+pub(crate) const SERVER_PGID_PREFIX: &str = "server-pgid: ";
 
 /// What one smoke launch proved. Serialized as the child's single stdout line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,25 +83,13 @@ pub fn run(agent: &str, project: &Path, cmd: &[String]) -> Report {
         .map(|d| mur_agent_runtime::agent_paths::scratch_env(d).to_vec())
         .unwrap_or_default();
 
-    if sandbox::current_process_sealed() {
-        return Report::Unverified {
-            detail: "this shell already runs inside a sandbox, and macOS refuses a second \
-                     seal; run setup from an ordinary terminal to verify"
-                .into(),
-        };
-    }
-    match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
-        Ok(s) if s.enforcing => {}
-        Ok(s) => {
-            return Report::Unverified {
-                detail: format!(
-                    "the agent's sandbox is not enforcing on this host ({}), so a launch \
-                     here proves nothing",
-                    s.platform
-                ),
-            };
-        }
-        Err(e) => return failed(format!("the agent's sandbox refused to apply: {e:#}")),
+    let sealed = sandbox::current_process_sealed();
+    let applied = (!sealed).then(|| {
+        sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[])
+            .map(|s| (s.enforcing, s.platform))
+    });
+    if let Some(r) = seal_verdict(sealed, applied) {
+        return r;
     }
 
     let resolved = mur_common::exec::resolve_command_in(&path, prog)
@@ -99,14 +98,108 @@ pub fn run(agent: &str, project: &Path, cmd: &[String]) -> Report {
     c.args(args)
         .current_dir(project)
         .env("PATH", &path)
-        .envs(scratch)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    match c.spawn() {
-        Ok(child) => handshake(child, project, SMOKE_TIMEOUT),
+        .envs(scratch);
+    match server_command(&mut c).spawn() {
+        Ok(child) => {
+            announce_server_group(child.id());
+            handshake(child, project, SMOKE_TIMEOUT)
+        }
         Err(e) => failed(format!("could not start {}: {e}", resolved.display())),
     }
+}
+
+/// Whether the seal makes a launch here meaningful. `None` means proceed.
+/// `applied` is `None` when no seal was attempted because `sealed` was true;
+/// otherwise it is the outcome of applying the seal as `(enforcing, platform)`.
+pub(crate) fn seal_verdict(
+    sealed: bool,
+    applied: Option<anyhow::Result<(bool, String)>>,
+) -> Option<Report> {
+    if sealed {
+        return Some(Report::Unverified {
+            detail: "this shell already runs inside a sandbox, and macOS refuses a second \
+                     seal; run setup from an ordinary terminal to verify"
+                .into(),
+        });
+    }
+    match applied? {
+        Ok((true, _)) => None,
+        Ok((false, platform)) => Some(Report::Unverified {
+            detail: format!(
+                "the agent's sandbox is not enforcing on this host ({platform}), so a launch \
+                 here proves nothing"
+            ),
+        }),
+        Err(e) => Some(failed(format!(
+            "the agent's sandbox refused to apply: {e:#}"
+        ))),
+    }
+}
+
+/// Piped stdio, and on Unix a process group of its own so [`stop`] can take
+/// the server's descendants with it (typescript-language-server forks
+/// `tsserver`; a descendant left alive keeps the stderr pipe open).
+pub(crate) fn server_command(c: &mut Command) -> &mut Command {
+    c.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0);
+    }
+    c
+}
+
+/// Tell the parent which process group the server leads, before anything can
+/// hang. Not JSON, so [`super::smoke::parse_report`] skips it.
+fn announce_server_group(pid: u32) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{SERVER_PGID_PREFIX}{pid}");
+    let _ = out.flush();
+}
+
+/// The server group a probe announced on `line`, if it is one.
+pub(crate) fn parse_server_group(line: &str) -> Option<u32> {
+    line.trim()
+        .strip_prefix(SERVER_PGID_PREFIX)?
+        .parse()
+        .ok()
+        .filter(|&g| g > 1)
+}
+
+/// Kill `child` and, on Unix, its whole process group; then reap it.
+pub(crate) fn stop(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id();
+        // pgid 0 would be OUR group; `spawn` never yields it, but refuse it.
+        if pgid != 0 {
+            // SAFETY: `child` was spawned with `process_group(0)` (see
+            // `server_command`), so its pid is its group id. A group already
+            // gone gives ESRCH, which is fine.
+            unsafe {
+                libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Read `r`'s last lines on a thread; the receiver yields them at EOF.
+fn spawn_tail(r: impl Read + Send + 'static) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(tail(r, STDERR_TAIL_LINES));
+    });
+    rx
+}
+
+/// `r`'s tail, or empty if it does not reach EOF within `wait`.
+#[cfg(test)]
+pub(crate) fn bounded_tail(r: impl Read + Send + 'static, wait: Duration) -> String {
+    spawn_tail(r).recv_timeout(wait).unwrap_or_default()
 }
 
 fn failed(detail: impl Into<String>) -> Report {
@@ -120,10 +213,10 @@ pub(crate) fn handshake(mut child: Child, root: &Path, timeout: Duration) -> Rep
     let (Some(mut stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
-        let _ = child.kill();
+        stop(&mut child);
         return failed("server stdio was not piped");
     };
-    let err_tail = std::thread::spawn(move || tail(stderr, STDERR_TAIL_LINES));
+    let err_tail = spawn_tail(stderr);
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -142,10 +235,9 @@ pub(crate) fn handshake(mut child: Child, root: &Path, timeout: Duration) -> Rep
 
     let sent = stdin.write_all(&frame(&initialize(root)));
     let outcome = rx.recv_timeout(timeout);
-    let _ = child.kill();
-    let _ = child.wait();
+    stop(&mut child);
     drop(stdin);
-    let quoted = err_tail.join().unwrap_or_default();
+    let quoted = err_tail.recv_timeout(STDERR_DRAIN).unwrap_or_default();
     let with_tail = |msg: String| {
         if quoted.is_empty() {
             failed(msg)

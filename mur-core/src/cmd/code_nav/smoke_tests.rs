@@ -1,4 +1,5 @@
 use super::*;
+use crate::cmd::code_nav::smoke_probe::SERVER_PGID_PREFIX;
 use std::os::unix::fs::PermissionsExt;
 
 fn manifest(home: &Path, python: bool, php: bool, ts: bool) -> Manifest {
@@ -121,4 +122,204 @@ fn blocked_dirs_name_the_binary_and_its_shebang_interpreter() {
     assert_eq!(only_py, vec![py_dir]);
 
     assert!(blocked_dirs(&cmd, &path, |_| true).is_empty());
+}
+
+fn target(lang: Lang) -> Target {
+    Target {
+        lang,
+        cmd: vec!["x".into()],
+    }
+}
+
+/// #1981: "Setup reports success only if this passes." A launch that could
+/// not be verified is not a pass — in an already-sealed shell or under a
+/// non-enforcing seal alike.
+#[test]
+fn an_unverified_launch_fails_setup() {
+    for detail in [
+        "this shell already runs inside a sandbox",
+        "the agent's sandbox is not enforcing on this host (unsupported)",
+    ] {
+        let mut out = Vec::new();
+        let err = verify_with("a", &[target(Lang::TypeScript)], &[], &mut out, |_| {
+            Report::Unverified {
+                detail: detail.into(),
+            }
+        })
+        .expect_err("unverified must not be success");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("typescript") && msg.contains("not verified"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("kept"),
+            "installs and grants are preserved: {msg}"
+        );
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(detail), "{out}");
+    }
+}
+
+#[test]
+fn every_launch_ok_is_success() {
+    let mut out = Vec::new();
+    verify_with(
+        "a",
+        &[target(Lang::Php), target(Lang::TypeScript)],
+        &[],
+        &mut out,
+        |_| Report::Ok,
+    )
+    .unwrap();
+}
+
+#[test]
+fn failed_and_unverified_are_both_named() {
+    let mut out = Vec::new();
+    let err = verify_with(
+        "a",
+        &[target(Lang::Php), target(Lang::TypeScript)],
+        &[],
+        &mut out,
+        |t| match t.lang {
+            Lang::Php => Report::Failed {
+                detail: "boom".into(),
+            },
+            _ => Report::Unverified {
+                detail: "sealed".into(),
+            },
+        },
+    )
+    .unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("php") && msg.contains("typescript"), "{msg}");
+}
+
+/// The parent bounds the probe independently of the probe's own timeout.
+#[test]
+fn a_hung_probe_is_stopped_at_the_parent_deadline() {
+    let mut c = Command::new("/bin/sh");
+    c.arg("-c").arg("sleep 30 & exec sleep 30");
+    let child = server_command(&mut c).spawn().unwrap();
+    let start = Instant::now();
+    let r = collect(child, Duration::from_millis(300));
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(
+        matches!(&r, Report::Failed { detail } if detail.contains("did not finish")),
+        "{r:?}"
+    );
+}
+
+/// Whether process group `pgid` still has a live member, polled briefly so a
+/// just-killed member has time to be reaped.
+fn group_alive(pgid: libc::pid_t) -> bool {
+    for _ in 0..40 {
+        // SAFETY: signal 0 only probes for existence.
+        if unsafe { libc::killpg(pgid, 0) } != 0 {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
+/// The real topology: the probe and the server it starts each lead their own
+/// process group (both go through `server_command`). A probe that hangs past
+/// the parent deadline never runs its own cleanup, so the parent must take
+/// the server's group down too.
+#[test]
+fn a_hung_probe_takes_its_separately_grouped_server_down() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pgid_file = tmp.path().join("server.pgid");
+    let mut c = Command::new("/bin/sh");
+    // `set -m` gives the background job a process group of its own, as
+    // `process_group(0)` does for the real server.
+    c.arg("-c").arg(format!(
+        "set -m; sleep 30 & echo $! > '{f}'; echo \"{p}$!\"; exec sleep 30",
+        f = pgid_file.display(),
+        p = SERVER_PGID_PREFIX,
+    ));
+    let child = server_command(&mut c).spawn().unwrap();
+    let probe_pgid = child.id() as libc::pid_t;
+    let r = collect(child, Duration::from_millis(500));
+    assert!(
+        matches!(&r, Report::Failed { detail } if detail.contains("did not finish")),
+        "{r:?}"
+    );
+    let server_pgid: libc::pid_t = std::fs::read_to_string(&pgid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(server_pgid, probe_pgid, "the fake must use two groups");
+    let probe_gone = !group_alive(probe_pgid);
+    let server_gone = !group_alive(server_pgid);
+    if !server_gone {
+        // SAFETY: cleanup of the group this test created.
+        unsafe { libc::killpg(server_pgid, libc::SIGKILL) };
+    }
+    assert!(probe_gone, "probe group {probe_pgid} survived");
+    assert!(server_gone, "server group {server_pgid} survived");
+}
+
+/// A probe that dies after starting the server (crash, signal, early exit)
+/// never runs its own cleanup either, so an abnormal exit must take the
+/// announced server group down just like a hang does.
+#[test]
+fn a_probe_that_exits_abnormally_takes_its_server_down() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pgid_file = tmp.path().join("server.pgid");
+    let mut c = Command::new("/bin/sh");
+    // The server's stdio goes to /dev/null so the probe's pipes close on exit,
+    // as the real server's do (its stdio is piped to the probe, not shared).
+    c.arg("-c").arg(format!(
+        "set -m; sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '{f}'; echo \"{p}$!\"; exit 3",
+        f = pgid_file.display(),
+        p = SERVER_PGID_PREFIX,
+    ));
+    let child = server_command(&mut c).spawn().unwrap();
+    let probe_pgid = child.id() as libc::pid_t;
+    let r = collect(child, Duration::from_secs(10));
+    assert!(matches!(&r, Report::Failed { .. }), "{r:?}");
+    let server_pgid: libc::pid_t = std::fs::read_to_string(&pgid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_ne!(server_pgid, probe_pgid, "the fake must use two groups");
+    let server_gone = !group_alive(server_pgid);
+    if !server_gone {
+        // SAFETY: cleanup of the group this test created.
+        unsafe { libc::killpg(server_pgid, libc::SIGKILL) };
+    }
+    assert!(server_gone, "server group {server_pgid} survived");
+}
+
+#[test]
+fn only_a_real_announced_group_is_taken() {
+    assert_eq!(parse_server_group("server-pgid: 4242\n"), Some(4242));
+    // 0 and 1 would be our own group and init's; never signal those.
+    assert_eq!(parse_server_group("server-pgid: 0"), None);
+    assert_eq!(parse_server_group("server-pgid: 1"), None);
+    assert_eq!(parse_server_group(r#"{"status":"ok"}"#), None);
+}
+
+/// The announce line precedes the report and must not hide it.
+#[test]
+fn the_announce_line_does_not_mask_the_report() {
+    let out = format!("{SERVER_PGID_PREFIX}4242\n{{\"status\":\"ok\"}}\n");
+    assert_eq!(parse_report(out.as_bytes(), b""), Report::Ok);
+}
+
+#[test]
+fn a_finished_probe_is_parsed() {
+    let mut c = Command::new("/bin/sh");
+    c.arg("-c").arg(r#"echo '{"status":"ok"}'"#);
+    let child = server_command(&mut c).spawn().unwrap();
+    assert_eq!(collect(child, Duration::from_secs(10)), Report::Ok);
 }
