@@ -377,7 +377,34 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
         out.permissions
             .extend(spawn.into_iter().map(Permission::Spawn));
     }
+    refuse_inexact(&out)?;
     Ok(out)
+}
+
+/// `--lsp-only` means "exactly this set". A requested language that is
+/// disabled would silently fall out of it — and if all are, empty the
+/// entry — so refuse before setup writes anything (#1992 review).
+fn refuse_inexact(p: &Plan) -> Result<()> {
+    if !p.exact_lsp {
+        return Ok(());
+    }
+    let blocked: Vec<String> = p
+        .lsp
+        .iter()
+        .filter_map(|r| match &r.status {
+            LspStatus::Disabled { missing } => Some(format!("{} ({missing})", r.lang.flag())),
+            _ => None,
+        })
+        .collect();
+    if blocked.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "--lsp-only sets the entry's languages exactly, but {} cannot be enabled: \
+         prerequisite not found on PATH. Install it, or drop that --lsp-only; \
+         nothing was changed",
+        blocked.join(", ")
+    )
 }
 
 /// The serena language each managed node server serves.

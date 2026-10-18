@@ -435,3 +435,49 @@ mod lane_consent {
         assert!(out.is_empty());
     }
 }
+
+/// #1992 review: an `--lsp-only` run that cannot enable every language it
+/// names must refuse before anything is written, so the entry's existing
+/// `project.yml` and manifest languages survive. Partly disabled (php lacks
+/// node/npm, lua is fine) and wholly disabled (no uv at all) both refuse.
+#[cfg(unix)]
+#[test]
+fn lsp_only_with_a_disabled_language_writes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    for with_uv in [true, false] {
+        let mut h = home_with_servers(&[]);
+        let manifest = consent::manifest_path(&h.mur_home, "carol");
+        let mut m = Manifest::default();
+        m.set_languages("serena", ["php".to_owned(), "lua".to_owned()]);
+        consent::save_manifest(&manifest, &m).unwrap();
+        let pfile = h
+            .mur_home
+            .join("agents/carol/serena-homes/serena/projects/repo/project.yml");
+        std::fs::create_dir_all(pfile.parent().unwrap()).unwrap();
+        std::fs::write(&pfile, "languages: [php, lua]\n").unwrap();
+
+        let stub = h.mur_home.parent().unwrap().join("path");
+        std::fs::create_dir_all(&stub).unwrap();
+        if with_uv {
+            let uv = stub.join(UV);
+            std::fs::write(&uv, b"#!/bin/sh\nexit 1\n").unwrap();
+            std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        h._env.set_var("PATH", &stub);
+        let before = snapshot(&h.mur_home);
+
+        let mut a = args(&h, "serena");
+        a.flags.no_ast_grep = true;
+        a.flags.lsp = vec!["php".into(), "lua".into()];
+        a.flags.exact_lsp = true;
+        let r = run(a, Consent::Given, &mut std::io::empty(), &mut Vec::new());
+
+        let e = format!("{:#}", r.expect_err("a disabled language must refuse"));
+        assert!(e.contains("php"), "uv={with_uv}: {e}");
+        assert_eq!(
+            snapshot(&h.mur_home),
+            before,
+            "uv={with_uv}: wrote before refusing"
+        );
+    }
+}

@@ -350,3 +350,32 @@ fn exact_lsp_is_carried_on_the_plan() {
     f.exact_lsp = true;
     assert!(plan(home(), &f, &all_tools()).unwrap().exact_lsp);
 }
+
+/// #1992 review: `--lsp-only` is "exactly this set". A requested language
+/// whose prerequisite is missing would silently fall out of that set, so the
+/// plan refuses instead, naming the language and what it lacks.
+#[test]
+fn exact_lsp_refuses_a_partly_disabled_set() {
+    let mut f = flags(true, &["php", "lua"]);
+    f.exact_lsp = true;
+    let d = Detected {
+        on_path: [UV.to_string()].into_iter().collect(),
+    };
+    let e = plan(home(), &f, &d).unwrap_err().to_string();
+    assert!(e.contains("php") && e.contains("node"), "{e}");
+    assert!(!e.contains("lua"), "lua can be enabled: {e}");
+    // The additive form still plans, with php as a visible disabled row.
+    f.exact_lsp = false;
+    assert!(plan(home(), &f, &d).is_ok());
+}
+
+#[test]
+fn exact_lsp_refuses_a_wholly_disabled_set() {
+    let mut f = flags(true, &["php", "lua"]);
+    f.exact_lsp = true;
+    let e = plan(home(), &f, &Detected::default())
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("php") && e.contains("lua"), "{e}");
+    assert!(e.contains(UV), "{e}");
+}
