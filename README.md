@@ -948,17 +948,14 @@ Python interpreter it installs lives under `~/.mur/tools/`, the agent's sandbox
 is granted exec only there, and serena's config is checked before every launch
 so a repo can't swap in its own language server. High-risk language servers
 (Rust, TypeScript, Go, …) stay off unless you name them with `--lsp`.
-The PHP and TypeScript servers are installed by MUR at pinned versions under
-`~/.mur/tools/` and launched as `node <entry .js>`, so serena never runs npm
-inside the sandbox. Setup ends with a smoke launch: each server MUR installed
-is started under the agent's own sandbox and must answer `initialize`. A
-failure names the server and keeps the installs, so you fix it and re-run.
-A launch that cannot be verified (setup run from an already-sandboxed shell,
-or a host where the sandbox does not enforce) also fails setup rather than
-passing silently.
 Re-runs ask only about what changed since the last successful setup. If setup
 fails partway, nothing is recorded, so the next run asks again about
-everything, including steps that already succeeded.
+everything, including steps that already succeeded. With `--with-serena`, setup
+finishes by starting each enabled language server under the agent's sandbox and
+reporting whether it answered `initialize`; without it, no server is started and
+nothing is smoke-tested. A server that fails, or a launch that cannot be
+verified (setup run from an already-sandboxed shell, or a host where the
+sandbox does not enforce), fails setup; the installs and grants are kept.
 
 To navigate a second repo, append another entry with its own `SERENA_HOME`:
 `mur code-nav setup --agent <name> --with-serena --project <repo2> --entry serena-b`.
