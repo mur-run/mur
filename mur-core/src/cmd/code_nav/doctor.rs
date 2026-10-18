@@ -332,16 +332,31 @@ fn check_entries(i: &Inputs, out: &mut Vec<Finding>) {
             Err(e) => out.push(Finding::warn(subject, format!("{e:#}"), fix)),
             Ok(have) if &have != want => {
                 let list = |s: &BTreeSet<String>| s.iter().cloned().collect::<Vec<_>>().join(",");
-                out.push(Finding::warn(
-                    subject,
-                    format!(
-                        "{} lists [{}], setup recorded [{}]",
-                        file.display(),
-                        list(&have),
-                        list(want)
-                    ),
-                    fix,
-                ));
+                let detail = format!(
+                    "{} lists [{}], setup recorded [{}]",
+                    file.display(),
+                    list(&have),
+                    list(want)
+                );
+                let missing: BTreeSet<String> = want.difference(&have).cloned().collect();
+                if missing.is_empty() {
+                    out.push(Finding::warn(subject, detail, fix));
+                } else {
+                    // A language dropped from project.yml is usually one whose
+                    // server cannot start. setup only adds languages, so its
+                    // fix would re-add it and serena would refuse to launch
+                    // again; there is no command that shrinks the recorded set.
+                    out.push(Finding {
+                        level: Level::Warn,
+                        subject,
+                        detail: format!(
+                            "{detail}; missing [{}] -- re-adding them with setup may stop \
+                             serena from starting if their servers cannot launch",
+                            list(&missing)
+                        ),
+                        fix: None,
+                    });
+                }
             }
             Ok(_) => out.push(Finding::ok(subject, format!("{}", file.display()))),
         }

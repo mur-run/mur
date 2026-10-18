@@ -221,6 +221,30 @@ fn project_yml_languages_drifting_from_the_manifest_are_flagged() {
     let w = warns(&fs);
     assert_eq!(w.len(), 1, "{fs:#?}");
     assert!(w[0].detail.contains("[python]") && w[0].detail.contains("[php,python]"));
+    // A language dropped from project.yml is usually one whose server cannot
+    // start; setup would re-add it and serena would refuse to launch again,
+    // and setup cannot shrink the recorded set. So no setup fix is offered.
+    assert_eq!(w[0].fix, None, "{fs:#?}");
+    assert!(w[0].detail.contains("missing [php]"), "{}", w[0].detail);
+}
+
+#[test]
+fn extra_project_yml_languages_get_the_rewrite_fix() {
+    let f = clean();
+    let pfile = f
+        .agent_home
+        .join(SERENA_HOME_DIR)
+        .join("projects")
+        .join(f.repo.file_name().unwrap())
+        .join(PROJECT_FILE);
+    std::fs::write(
+        &pfile,
+        "language_servers: [\"php\", \"python\", \"rust\"]\n",
+    )
+    .unwrap();
+    let fs = run_audit(&f);
+    let w = warns(&fs);
+    assert_eq!(w.len(), 1, "{fs:#?}");
     let fix = w[0].fix.as_deref().unwrap();
     assert!(
         fix.ends_with("--entry serena --lsp php --lsp python"),
