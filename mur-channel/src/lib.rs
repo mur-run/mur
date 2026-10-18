@@ -8,6 +8,7 @@ pub mod head_io;
 pub mod id;
 pub mod index;
 pub mod purpose;
+pub mod repair_marker;
 pub mod service;
 pub mod sign;
 pub mod store;
