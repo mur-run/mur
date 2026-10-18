@@ -382,6 +382,7 @@ fn populated_deny_list_is_a_quiet_pass() {
 /// `$MUR_HOME/mcp-servers`, which the seal never finds by bare name — EPERM
 /// and 0 tools. Doctor must flag it and print the exact absolute-path grant
 /// (the seal takes a path entry literally, so a `~` form would not work).
+#[cfg(unix)]
 fn doctor_with_bundled_server(allowed: Vec<String>) -> Vec<Check> {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::TempDir::new().unwrap();
@@ -417,6 +418,7 @@ fn doctor_with_bundled_server(allowed: Vec<String>) -> Vec<Check> {
     report
 }
 
+#[cfg(unix)]
 #[test]
 fn agent_doctor_flags_a_bare_grant_for_the_bundled_mcp_server() {
     let report = doctor_with_bundled_server(vec!["mur-mcp-server".into()]);
@@ -433,6 +435,7 @@ fn agent_doctor_flags_a_bare_grant_for_the_bundled_mcp_server() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn agent_doctor_is_quiet_when_the_bundled_server_is_granted() {
     let report = doctor_with_bundled_server(vec!["mur-mcp-server".into(), "{bundled}".into()]);
