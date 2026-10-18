@@ -8,6 +8,12 @@ pub enum CodeNavAction {
     /// only about what changed since the last successful setup. If setup
     /// fails partway, nothing is recorded, so the next run asks again about
     /// everything, including steps that already succeeded.
+    ///
+    /// With --with-serena, setup then starts each enabled language server
+    /// under the agent's sandbox and reports whether it answered
+    /// `initialize`. Without --with-serena no language server is started,
+    /// so nothing is smoke-tested. A failed smoke launch keeps the installs
+    /// and grants already recorded.
     Setup {
         /// Agent to set up (case-insensitive).
         #[arg(long)]
