@@ -32,6 +32,10 @@ pub enum Migration {
     Unchanged,
     /// The absolute bundled path was added and the pin advanced.
     Granted,
+    /// An earlier run wrote the grant but stopped before advancing the pin;
+    /// the pin was advanced now. Only when the profile differs from its pin by
+    /// exactly that one grant, on a profile that qualified for it.
+    Resumed,
     /// A grant was needed, but the entitlements on disk differ from their pin;
     /// left untouched for the user to review and reseal.
     SkippedUnpinned,
@@ -54,7 +58,7 @@ pub fn migrate_bundled_spawn_grant(
     let mut profile: AgentProfile = serde_yaml_ng::from_str(&yaml)?;
 
     if !needs_grant(&profile, bundled) {
-        return Ok(Migration::Unchanged);
+        return resume_interrupted(mur_home, name, &profile, bundled);
     }
     // Pin compares the unexpanded on-disk form, the same form writers pin.
     let prior = entitlements_pin::entitlements_from_yaml(&yaml, &profile_path)?;
@@ -75,11 +79,16 @@ pub fn migrate_bundled_spawn_grant(
     profile.entitlements.processes.spawn.allowed.push(abs);
     profile.updated_at = chrono::Utc::now().to_rfc3339();
     let new_yaml = serde_yaml_ng::to_string(&profile)?;
-    // temp + rename: a torn profile.yaml would brick the agent.
-    let tmp = profile_path.with_extension("tmp");
-    std::fs::write(&tmp, new_yaml.as_bytes())?;
-    std::fs::rename(&tmp, &profile_path)?;
-    entitlements_pin::write_pin(mur_home, name, &profile.entitlements)?;
+    replace_atomically(&profile_path, &new_yaml)?;
+    if let Err(e) = entitlements_pin::write_pin(mur_home, name, &profile.entitlements) {
+        // The new profile against the old pin would refuse to start; put the
+        // old profile back. If even that fails (or we never get here, e.g. a
+        // crash), `resume_interrupted` finishes the job on the next run.
+        if let Err(restore) = replace_atomically(&profile_path, &yaml) {
+            tracing::warn!(agent = name, error = %restore, "could not restore profile after a failed pin write");
+        }
+        return Err(e.into());
+    }
     tracing::info!(
         agent = name,
         path = %bundled.display(),
@@ -105,13 +114,58 @@ pub fn migrate_bundled_spawn_grant_all(mur_home: &Path, bundled: &Path) -> Vec<S
     names
         .into_iter()
         .filter(|n| match migrate_bundled_spawn_grant(mur_home, n, bundled) {
-            Ok(m) => m == Migration::Granted,
+            Ok(m) => matches!(m, Migration::Granted | Migration::Resumed),
             Err(e) => {
                 tracing::warn!(agent = %n, error = %e, "could not migrate bundled mcp spawn grant");
                 false
             }
         })
         .collect()
+}
+
+/// Finish a run that replaced the profile but never advanced the pin. Safe
+/// only because it is exact: drop the one grant this module appends, and the
+/// rest must equal the pin AND qualify for the migration. Any other change —
+/// a hand edit, a tampered allowlist — still reads as a mismatch and is left
+/// for `mur agent perm reseal`.
+fn resume_interrupted(
+    mur_home: &Path,
+    name: &str,
+    profile: &AgentProfile,
+    bundled: &Path,
+) -> anyhow::Result<Migration> {
+    let abs = bundled.to_string_lossy();
+    if profile
+        .entitlements
+        .processes
+        .spawn
+        .allowed
+        .last()
+        .map(String::as_str)
+        != Some(&*abs)
+    {
+        return Ok(Migration::Unchanged);
+    }
+    let mut before = profile.clone();
+    before.entitlements.processes.spawn.allowed.pop();
+    if !needs_grant(&before, bundled)
+        || entitlements_pin::check(mur_home, name, &before.entitlements)? != PinCheck::Match
+    {
+        return Ok(Migration::Unchanged);
+    }
+    entitlements_pin::write_pin(mur_home, name, &profile.entitlements)?;
+    tracing::info!(
+        agent = name,
+        "advanced the entitlement pin for an interrupted bundled mur-mcp-server grant (#1984)"
+    );
+    Ok(Migration::Resumed)
+}
+
+/// temp + rename: a torn profile.yaml would brick the agent.
+fn replace_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, contents.as_bytes())?;
+    std::fs::rename(&tmp, path)
 }
 
 fn needs_grant(profile: &AgentProfile, bundled: &Path) -> bool {
