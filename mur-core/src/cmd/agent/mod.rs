@@ -373,12 +373,12 @@ mod tests {
     #[test]
     fn bundle_runtime_resolves_from_macos_dir() {
         // Hub exe inside a .app → runtime sibling in Contents/MacOS.
-        let exe = Path::new("/Applications/MuR Hub.app/Contents/MacOS/mur-hub-gui");
+        let exe = Path::new("/Applications/MUR Hub.app/Contents/MacOS/mur-hub-gui");
         let got = runtime_target_in_bundle(exe, "mur-agent-runtime");
         assert_eq!(
             got.as_deref(),
             Some(Path::new(
-                "/Applications/MuR Hub.app/Contents/MacOS/mur-agent-runtime"
+                "/Applications/MUR Hub.app/Contents/MacOS/mur-agent-runtime"
             ))
         );
     }

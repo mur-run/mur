@@ -118,7 +118,7 @@ pub fn validate(archive: &MuragentArchive) -> Result<ValidationResult, MuragentE
     // Step 9: Subject hashes
     verify_subjects(&statement, &archive.files_as_vec())?;
 
-    // Step 10: Mur signature (ignored in v1)
+    // Step 10: MUR signature (ignored in v1)
     // Step 11: Revocation check (skipped in v1)
 
     let pubkey_bytes = B64

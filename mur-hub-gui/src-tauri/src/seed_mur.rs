@@ -1,7 +1,7 @@
-//! Seed the built-in "Mur" agent from the bundled template on first launch.
+//! Seed the built-in "MUR" agent from the bundled template on first launch.
 //!
 //! Idempotent: seeds only when an agent named `mur` is not already present, so it
-//! never clobbers an existing Mur or a user who deleted Mur on purpose — but,
+//! never clobbers an existing MUR or a user who deleted MUR on purpose — but,
 //! unlike a blanket "directory is empty" check, it still provides the built-in
 //! concierge to users who already have other agents.
 
@@ -9,7 +9,7 @@ use std::path::Path;
 
 use mur_common::agent::AUTHORING_DIRS;
 
-/// True if Mur is already seeded, i.e. `<mur_home>/agents/mur/profile.yaml` exists.
+/// True if MUR is already seeded, i.e. `<mur_home>/agents/mur/profile.yaml` exists.
 /// We key off the profile file (not just the directory) so a previously broken
 /// half-seeded `agents/mur` directory is treated as "not seeded" and gets healed.
 pub fn mur_seeded(mur_home: &Path) -> bool {
@@ -268,7 +268,7 @@ fn upsert_model_ref(yaml: &str, alias: &str) -> String {
     joined
 }
 
-/// Seed Mur from `template_dir` into `<mur_home>/agents/mur` iff Mur is not already
+/// Seed MUR from `template_dir` into `<mur_home>/agents/mur` iff MUR is not already
 /// seeded. Returns Ok(true) if seeding happened, Ok(false) if skipped.
 ///
 /// The copy is staged in a sibling temp directory and renamed into place so a
@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn seeds_even_when_other_agents_exist() {
-        // Existing users with other agents must still get the built-in Mur.
+        // Existing users with other agents must still get the built-in MUR.
         let home = TempDir::new().unwrap();
         std::fs::create_dir_all(home.path().join("agents/other")).unwrap();
         let tpl = TempDir::new().unwrap();

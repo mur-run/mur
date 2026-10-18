@@ -504,7 +504,7 @@ pub fn run() {
                 }
             }
 
-            // Seed the built-in "Mur" agent on first run (idempotent, by-name).
+            // Seed the built-in "MUR" agent on first run (idempotent, by-name).
             // The template is bundled under `resources/mur-agent-template`, which Tauri
             // stages at `<Resource>/resources/mur-agent-template`. Resolve that first and
             // fall back to the bare name for dev / alternate layouts; pick what exists.
@@ -528,13 +528,13 @@ pub fn run() {
                             // they can start (id / socket bind / name slug).
                             match seed_mur::repair_mur_profile(&mur_home) {
                                 Ok(true) => {
-                                    tracing::info!("repaired built-in Mur profile");
+                                    tracing::info!("repaired built-in MUR profile");
                                 }
                                 Ok(false) => {}
-                                Err(e) => tracing::warn!("repair Mur failed: {e}"),
+                                Err(e) => tracing::warn!("repair MUR failed: {e}"),
                             }
                         }
-                        Err(e) => tracing::warn!("seed Mur failed: {e}"),
+                        Err(e) => tracing::warn!("seed MUR failed: {e}"),
                     }
                     match seed_mur::seed_missing_bundled_skills(&template_dir, &mur_home) {
                         Ok(seeded) if !seeded.is_empty() => {
@@ -545,7 +545,7 @@ pub fn run() {
                     }
                 }
                 None => tracing::warn!(
-                    "seed Mur: bundled mur-agent-template resource not found; skipping"
+                    "seed MUR: bundled mur-agent-template resource not found; skipping"
                 ),
             }
 
