@@ -304,6 +304,104 @@ mod success {
     }
 }
 
+/// #1984: the ast-grep-only run (no serena) wires the agent: MUR's server
+/// attached, the pinned binary spawnable, the tool's run dir writable — and
+/// the consent table named each of them before anything was applied. A
+/// second run changes nothing.
+///
+/// Needs a verified pinned ast-grep to copy in (`MUR_AST_GREP_BIN`), so the
+/// install step is `AlreadyInstalled` and nothing is downloaded.
+#[test]
+#[ignore = "needs the pinned ast-grep binary (MUR_AST_GREP_BIN)"]
+fn ast_grep_only_setup_wires_the_agent() {
+    use crate::cmd::code_nav::ast_grep_wire::ENTRY_NAME;
+    let real = PathBuf::from(std::env::var_os("MUR_AST_GREP_BIN").expect("MUR_AST_GREP_BIN"));
+    let h = home_with_servers(&[]);
+    let bin = mur_common::config::ast_grep_binary_path(&h.mur_home);
+    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    std::fs::copy(&real, &bin).unwrap();
+
+    let ast_grep_only = || Args {
+        agent: "carol".into(),
+        project: None,
+        entry: "serena".into(),
+        flags: Flags::default(),
+    };
+    let mut out = Vec::new();
+    run(
+        ast_grep_only(),
+        Consent::Given,
+        &mut std::io::empty(),
+        &mut out,
+    )
+    .unwrap_or_else(|e| panic!("{e:#}\n{}", String::from_utf8_lossy(&out)));
+    let out = String::from_utf8(out).unwrap();
+    let table = out.split("Recorded in").next().unwrap();
+    let (spawn_bin, run_dir) = (
+        bin.display().to_string(),
+        mur_common::config::ast_grep_runtime_dir(&h.mur_home),
+    );
+    assert!(table.contains(&format!("spawn {spawn_bin}")), "{out}");
+    assert!(
+        table.contains(&format!("read-write {}", run_dir.display())),
+        "{out}"
+    );
+    assert!(table.contains(&format!("mcp {ENTRY_NAME}")), "{out}");
+
+    let profile_path = h.mur_home.join("agents/carol/profile.yaml");
+    let profile: mur_common::AgentProfile =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path).unwrap()).unwrap();
+    assert!(profile.mcp_servers.iter().any(|e| e.name == ENTRY_NAME));
+    assert!(
+        crate::cmd::doctor::ast_grep_gaps_for_tests(&profile, &bin, &run_dir).is_empty(),
+        "doctor would still flag it"
+    );
+
+    let before = snapshot(&h.mur_home);
+    let mut again = Vec::new();
+    run(
+        ast_grep_only(),
+        Consent::Impossible,
+        &mut std::io::empty(),
+        &mut again,
+    )
+    .expect("nothing new to consent to, so no terminal is needed");
+    let mut after = snapshot(&h.mur_home);
+    let mut before = before;
+    // `updated_at` is rewritten by every profile save.
+    for s in [&mut before, &mut after] {
+        s.remove(Path::new("agents/carol/profile.yaml"));
+    }
+    assert_eq!(after, before, "a re-run changed the home");
+    let reloaded: mur_common::AgentProfile =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(&profile_path).unwrap()).unwrap();
+    assert_eq!(reloaded.mcp_servers, profile.mcp_servers);
+    assert_eq!(reloaded.entitlements, profile.entitlements);
+}
+
+/// #1984: a user server already called `mur-tools` stops the run before the
+/// ast-grep download, with the home untouched.
+#[test]
+fn a_user_server_holding_the_wiring_name_is_refused_before_anything_is_written() {
+    let h = home_with_servers(&[crate::cmd::code_nav::ast_grep_wire::ENTRY_NAME]);
+    let before = snapshot(&h.mur_home);
+    let mut out = Vec::new();
+    let r = run(
+        Args {
+            agent: "carol".into(),
+            project: None,
+            entry: "serena".into(),
+            flags: Flags::default(),
+        },
+        Consent::Given,
+        &mut std::io::empty(),
+        &mut out,
+    );
+    let err = format!("{:#}", r.expect_err("the wiring slot is taken"));
+    assert!(err.contains("not MUR's server"), "{err}");
+    assert_eq!(snapshot(&h.mur_home), before, "setup wrote before refusing");
+}
+
 /// #1943: setting up a second entry must not widen the first entry's
 /// `language_servers`, and vice versa.
 #[test]

@@ -33,6 +33,17 @@ pub fn ast_grep_binary_path(mur_home: &std::path::Path) -> PathBuf {
             std::env::consts::EXE_SUFFIX
         ))
 }
+/// MUR-owned run directory for ast-grep: `<mur_home>/runtime/ast-grep`. The
+/// MCP tool writes its empty `sgconfig.yml` here on every call, so an agent
+/// running `ast_grep_search` needs read+write on it. One definition so the
+/// tool, `mur code-nav setup` (which grants it) and doctor cannot drift.
+pub fn ast_grep_runtime_dir(mur_home: &std::path::Path) -> PathBuf {
+    mur_home
+        .join(AST_GREP_RUNTIME_PARENT)
+        .join(AST_GREP_TOOL_DIR)
+}
+const AST_GREP_RUNTIME_PARENT: &str = "runtime";
+
 /// Default number of matches returned per call.
 pub const AST_GREP_DEFAULT_MAX_RESULTS: u32 = 200;
 /// Default context lines around each match (ast-grep `--context`).

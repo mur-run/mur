@@ -107,7 +107,6 @@ pub use mcp_add::{McpAddPin, cmd_mcp_add};
 pub use mcp_network::cmd_mcp_set_network;
 #[allow(unused_imports)]
 pub use peers::cmd_peers;
-pub(crate) use perm::warn_if_running;
 #[allow(unused_imports)]
 pub use perm::{
     cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_allow_read, cmd_perm_allow_spawn,
@@ -117,6 +116,7 @@ pub use perm::{
     cmd_perm_remove_path, cmd_perm_reseal, cmd_perm_set_limit, cmd_perm_set_mode,
     cmd_perm_set_tool, cmd_perm_show, grant_read, grant_spawn, grant_spawn_dir,
 };
+pub(crate) use perm::{reject_ungrantable_path, warn_if_running};
 #[allow(unused_imports)]
 pub(crate) use prompt::prompt_path_for;
 #[allow(unused_imports)]

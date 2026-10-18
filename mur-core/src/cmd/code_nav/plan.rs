@@ -216,6 +216,10 @@ pub enum Permission {
     Read(PathBuf),
     /// Directory the agent may exec anything under (a MUR-managed install).
     SpawnDir(PathBuf),
+    /// Directory the agent may read and write (created if missing, #1984).
+    ReadWrite(PathBuf),
+    /// MCP server entry added to the profile (#1984: `mur-mcp-server`).
+    Mcp { name: String, command: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

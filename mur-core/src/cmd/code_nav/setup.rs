@@ -24,7 +24,7 @@ use serde_yaml_ng::Value;
 use super::consent::{self, Manifest};
 use super::plan::{self, Detected, Flags, Lang, LspStatus, Permission, UV};
 use super::{
-    ast_grep_install, node_ls_install, pyright_install, serena_config, serena_entry,
+    ast_grep_install, ast_grep_wire, node_ls_install, pyright_install, serena_config, serena_entry,
     serena_install, serena_project, smoke,
 };
 use crate::cmd::browser::setup::Consent;
@@ -138,6 +138,12 @@ pub fn run(
 
     let plan = plan::plan(&mur_home, &args.flags, &detect())?;
     let mut permissions = plan.permissions.clone();
+    // #1984: what wiring ast-grep to the agent grants, decided (and any
+    // refusal raised) before anything is installed.
+    if plan.install.iter().any(|r| r.name == plan::AST_GREP) {
+        let slot = ast_grep_wire::preflight(&agent)?;
+        permissions.extend(ast_grep_wire::permissions(&mur_home, &slot));
+    }
     if let Some(p) = &project
         && plan
             .install
@@ -319,6 +325,7 @@ fn apply(
             )?;
             m.installed
                 .insert(consent::install_key(row.name, row.version));
+            ast_grep_wire::apply(mur_home, agent, &mut m, out)?;
         }
     }
     let Some(project) = project else {
@@ -440,6 +447,8 @@ fn apply(
             Permission::Spawn(b) => crate::cmd::agent::grant_spawn(agent, b)?,
             Permission::Read(d) => crate::cmd::agent::grant_read(agent, path_str(d)?)?,
             Permission::SpawnDir(d) => crate::cmd::agent::grant_spawn_dir(agent, path_str(d)?)?,
+            // Applied by `ast_grep_wire` right after the ast-grep install.
+            Permission::ReadWrite(_) | Permission::Mcp { .. } => continue,
         }
         m.granted.insert(consent::grant_key(p));
     }

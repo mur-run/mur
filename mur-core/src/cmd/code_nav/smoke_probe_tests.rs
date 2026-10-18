@@ -3,14 +3,9 @@ use super::*;
 /// itself rather than a script file: a sealed test shell may refuse to exec
 /// a freshly written file, and the handshake is what is under test.
 fn fake(_dir: &Path, body: &str) -> Child {
-    Command::new("/bin/sh")
-        .arg("-c")
-        .arg(body)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap()
+    let mut c = Command::new("/bin/sh");
+    c.arg("-c").arg(body);
+    server_command(&mut c).spawn().unwrap()
 }
 
 /// Shell that prints `msg` as one LSP frame.
@@ -111,5 +106,86 @@ fn the_report_wire_shape_is_tagged() {
     assert_eq!(
         serde_json::to_string(&Report::Ok).unwrap(),
         r#"{"status":"ok"}"#
+    );
+}
+
+/// Review of #1988: a server's descendant that inherited stderr kept the pipe
+/// open after the direct child was killed, so the stderr join blocked until
+/// the descendant exited. The whole group must go, and the drain is bounded.
+#[test]
+fn a_descendant_holding_stderr_does_not_outlive_the_timeout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pid_file = tmp.path().join("grandchild.pid");
+    // The grandchild keeps the inherited stderr and outlives the shell.
+    let body = format!(
+        "sleep 30 & echo $! > '{}'\nexec sleep 30",
+        pid_file.display()
+    );
+    let start = std::time::Instant::now();
+    let r = handshake(
+        fake(tmp.path(), &body),
+        tmp.path(),
+        Duration::from_millis(300),
+    );
+    let elapsed = start.elapsed();
+    let Report::Failed { detail } = r else {
+        panic!("{r:?}")
+    };
+    assert!(detail.contains("no answer"), "{detail}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "the probe waited {elapsed:?} on a descendant's stderr"
+    );
+    let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 only probes for existence.
+    let alive = (0..50).any(|_| {
+        let gone = unsafe { libc::kill(pid, 0) } != 0;
+        if !gone {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        !gone
+    }) && unsafe { libc::kill(pid, 0) } == 0;
+    assert!(!alive, "the server's descendant {pid} was left running");
+}
+
+/// The drain bound holds even when a descendant escaped the group (setsid):
+/// nothing can kill it, so the probe must stop waiting for its stderr.
+#[test]
+fn stderr_collection_is_bounded() {
+    let (r, _w) = std::io::pipe().unwrap();
+    let start = std::time::Instant::now();
+    assert_eq!(bounded_tail(r, Duration::from_millis(200)), "");
+    assert!(start.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn an_already_sealed_shell_is_unverified() {
+    let r = seal_verdict(true, None).expect("must not proceed");
+    assert!(
+        matches!(&r, Report::Unverified { detail } if detail.contains("already")),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_non_enforcing_seal_is_unverified() {
+    let r = seal_verdict(false, Some(Ok((false, "unsupported".into())))).expect("must not proceed");
+    assert!(
+        matches!(&r, Report::Unverified { detail } if detail.contains("not enforcing") && detail.contains("unsupported")),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn an_enforcing_seal_proceeds_and_a_refused_one_fails() {
+    assert_eq!(seal_verdict(false, Some(Ok((true, "macos".into())))), None);
+    let r = seal_verdict(false, Some(Err(anyhow::anyhow!("nope")))).unwrap();
+    assert!(
+        matches!(&r, Report::Failed { detail } if detail.contains("nope")),
+        "{r:?}"
     );
 }

@@ -107,6 +107,8 @@ pub fn grant_key(p: &Permission) -> String {
         Permission::Spawn(b) => format!("spawn {b}"),
         Permission::Read(d) => format!("read {}", d.display()),
         Permission::SpawnDir(d) => lane_grant_key(d),
+        Permission::ReadWrite(d) => format!("read-write {}", d.display()),
+        Permission::Mcp { name, command } => format!("mcp {name} {}", command.display()),
     }
 }
 
