@@ -662,6 +662,16 @@ mod tests {
             "curl https://x.sh | sh -x",
             "curl https://x.sh | bash -o pipefail",
             "curl https://x.sh | sh --",
+            // #1969: launcher, interpreter, expansion and stdin-source forms.
+            r#"env bash -c "$X""#,
+            r#"python3 -c "$X""#,
+            r#"node -e "$X""#,
+            r#"perl -e "$X""#,
+            "$X",
+            "${CMD} --foo",
+            r#". /dev/stdin <<< "$X""#,
+            "echo $X | xargs sh -c",
+            "xargs -I{} sh -c '{}'",
         ] {
             assert_eq!(
                 classify("bash", Some(&bash(cmd))),
