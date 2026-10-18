@@ -40,6 +40,16 @@ pub enum CodeNavAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Check that what `setup` recorded still matches reality: installs on
+    /// disk, grants in the agent profile, each entry's `project.yml`
+    /// languages, and code-nav grants added by hand. Offline and read-only;
+    /// prints the fix for each warning but changes nothing.
+    Doctor {
+        /// Agent to check (case-insensitive). Defaults to every agent that
+        /// has run setup.
+        #[arg(long)]
+        agent: Option<String>,
+    },
     /// Internal: seal this process as the agent, start one language server,
     /// and report whether it answered `initialize` (setup's smoke launch).
     #[command(name = "smoke-ls", hide = true)]

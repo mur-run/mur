@@ -9,6 +9,7 @@
 
 pub mod ast_grep_install;
 pub mod consent;
+pub mod doctor;
 pub mod node_ls_install;
 pub mod plan;
 pub mod pyright_install;
