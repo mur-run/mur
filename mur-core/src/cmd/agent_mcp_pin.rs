@@ -397,7 +397,7 @@ pub fn cmd_mcp_pin(
     // registry serves at spawn" into the version the user approved just now.
     let version_pinned = pin_package_version(entry);
 
-    let resolved = resolve_command(&entry.command)
+    let resolved = resolve_mcp_launch(&entry.command)
         .with_context(|| format!("resolve command `{}`", entry.command))?;
     let new_hash = compute_binary_sha256(&resolved)
         .with_context(|| format!("hash binary at {}", resolved.display()))?;

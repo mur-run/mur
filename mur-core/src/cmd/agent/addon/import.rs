@@ -16,7 +16,7 @@ use super::parse::{
     PluginJson, command_to_manifest, manifest_version, parse_mcp_json, skill_md_to_manifest,
 };
 use crate::cmd::agent::{load_profile_for_edit, save_profile};
-use crate::cmd::agent_mcp_pin::{build_pinned_entry, compute_binary_sha256, resolve_command};
+use crate::cmd::agent_mcp_pin::{build_pinned_entry, compute_binary_sha256, resolve_mcp_launch};
 
 /// Provenance tag plugin imported local directory (no marketplace).
 const SOURCE_LOCAL: &str = "claude-local";
@@ -256,7 +256,7 @@ pub fn cmd_addon_import(
                 continue;
             }
             // Resolve + hash the binary (rejects path-escape / missing binary).
-            let resolved = resolve_command(&srv.command)
+            let resolved = resolve_mcp_launch(&srv.command)
                 .map_err(|e| anyhow::anyhow!("MCP '{server}' command {:?}: {e}", srv.command))?;
             let sha = compute_binary_sha256(&resolved)?;
             let shellish_warn = srv
