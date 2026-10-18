@@ -49,7 +49,9 @@ pub fn cmd_mcp_add(
     // existing `mur agent mcp add foo --command not-yet-installed`
     // workflow alive for users who add the entry before installing
     // the binary.
-    let (binary_sha256, resolved_path) = match crate::cmd::agent_mcp_pin::resolve_command(command) {
+    let (binary_sha256, resolved_path) = match crate::cmd::agent_mcp_pin::resolve_mcp_launch(
+        command,
+    ) {
         Ok(p) => match crate::cmd::agent_mcp_pin::compute_binary_sha256(&p) {
             Ok(h) => (Some(h), Some(p)),
             Err(e) => {
@@ -143,21 +145,11 @@ pub fn cmd_mcp_add(
         extra: Default::default(),
     });
     // Sync spawn allowlist so the supervisor is permitted to launch this MCP.
-    if !profile
-        .entitlements
-        .processes
-        .spawn
-        .allowed
-        .iter()
-        .any(|a| a == command)
-    {
-        profile
-            .entitlements
-            .processes
-            .spawn
-            .allowed
-            .push(command.to_string());
-    }
+    crate::cmd::agent_mcp_pin::grant_mcp_spawn(
+        &mut profile.entitlements.processes.spawn.allowed,
+        command,
+        resolved_path.as_deref(),
+    );
     grant_state_paths(name, &mut profile, state_paths)?;
 
     // ── Does it actually run? ──

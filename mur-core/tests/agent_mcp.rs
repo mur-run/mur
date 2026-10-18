@@ -163,3 +163,144 @@ fn mcp_remove_and_rename() {
     let p = read_profile(mur_home.path(), "agent_x");
     assert!(p.mcp_servers.is_empty());
 }
+
+/// #1984 item 7: the runtime launches `mur-mcp-server` from MUR's bundled copy
+/// (`resolve_mcp_launch_in`), not from PATH. `mcp add` used to pin and grant
+/// the PATH copy, so the probe passed and the restarted agent got EPERM on a
+/// binary nobody had granted — 0 tools. Install time must judge the same file.
+#[test]
+fn mcp_add_pins_and_grants_the_bundled_server_the_runtime_launches() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+
+    let write_exe = |p: &std::path::Path, body: &[u8]| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let bundled = mur_home.path().join("mcp-servers").join("mur-mcp-server");
+    write_exe(&bundled, b"#!/bin/sh\n# bundled copy\n");
+    let path_dir = TempDir::new().unwrap();
+    write_exe(
+        &path_dir.path().join("mur-mcp-server"),
+        b"#!/bin/sh\n# PATH copy\n",
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_mur"))
+        .env("MUR_HOME", mur_home.path())
+        .env("PATH", path_dir.path())
+        .args([
+            "agent",
+            "mcp",
+            "add",
+            "agent_x",
+            "mur-tools",
+            "--command",
+            "mur-mcp-server",
+            "--force",
+            "--no-probe",
+        ])
+        .output()
+        .expect("spawn mur");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let p = read_profile(mur_home.path(), "agent_x");
+    let want = hex::encode(Sha256::digest(std::fs::read(&bundled).unwrap()));
+    assert_eq!(
+        p.mcp_servers[0].binary_sha256.as_deref(),
+        Some(want.as_str()),
+        "pin must be the bundled copy's hash, not the PATH copy's"
+    );
+    let allowed = &p.entitlements.processes.spawn.allowed;
+    assert!(
+        allowed.iter().any(|a| std::path::Path::new(a) == bundled),
+        "spawn.allowed must grant the bundled path the runtime execs: {allowed:?}"
+    );
+}
+
+/// `mcp pin` and `mcp inspect` must judge the same file as `mcp add` and the
+/// runtime (#1984 item 7). Hashing the PATH copy would re-pin to a binary the
+/// runtime never execs, and inspect would report drift on a clean install.
+#[test]
+fn mcp_pin_and_inspect_judge_the_bundled_server_the_runtime_launches() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+
+    let write_exe = |p: &std::path::Path, body: &[u8]| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let bundled = mur_home.path().join("mcp-servers").join("mur-mcp-server");
+    write_exe(&bundled, b"#!/bin/sh\n# bundled copy\n");
+    let path_dir = TempDir::new().unwrap();
+    write_exe(
+        &path_dir.path().join("mur-mcp-server"),
+        b"#!/bin/sh\n# PATH copy\n",
+    );
+    let mur = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mur"))
+            .env("MUR_HOME", mur_home.path())
+            .env("PATH", path_dir.path())
+            .args(args)
+            .output()
+            .expect("spawn mur")
+    };
+    let ok = |out: std::process::Output| {
+        assert!(
+            out.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    ok(mur(&[
+        "agent",
+        "mcp",
+        "add",
+        "agent_x",
+        "mur-tools",
+        "--command",
+        "mur-mcp-server",
+        "--force",
+        "--no-probe",
+    ]));
+    ok(mur(&[
+        "agent",
+        "mcp",
+        "inspect",
+        "agent_x",
+        "--server",
+        "mur-tools",
+    ]));
+    ok(mur(&[
+        "agent",
+        "mcp",
+        "pin",
+        "agent_x",
+        "mur-tools",
+        "--force",
+        "--no-probe",
+    ]));
+
+    let p = read_profile(mur_home.path(), "agent_x");
+    let want = hex::encode(Sha256::digest(std::fs::read(&bundled).unwrap()));
+    assert_eq!(
+        p.mcp_servers[0].binary_sha256.as_deref(),
+        Some(want.as_str()),
+        "re-pin must keep the bundled copy's hash, not the PATH copy's"
+    );
+}

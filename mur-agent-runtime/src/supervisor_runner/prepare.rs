@@ -117,8 +117,10 @@ pub(crate) async fn prepare_runtime(
             .iter()
             // The whole command, as the spawn resolves it: args live in
             // `args`, so a space here is part of the path
-            // (`~/Library/Application Support/…/node`), not a separator.
-            .filter_map(|s| mur_common::exec::resolve_command_in(&aug_path, &s.command).ok())
+            // (`~/Library/Application Support/…/node`), not a separator. And
+            // through the launch resolver, so rule 11 checks the bundled
+            // `mur-mcp-server` the spawn redirects to, not a PATH copy (#1984).
+            .filter_map(|s| mur_common::exec::resolve_mcp_launch_in(&aug_path, &s.command).ok())
             .collect()
     };
 

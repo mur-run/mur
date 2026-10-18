@@ -64,7 +64,7 @@ pub fn binary_status(entry: &mur_common::agent::McpServerEntry) -> InspectStatus
     if mur_common::exec::is_interpreter_command(&entry.command) {
         return InspectStatus::InterpreterUnprotected;
     }
-    let Ok(path) = resolve_command(&entry.command) else {
+    let Ok(path) = resolve_mcp_launch(&entry.command) else {
         return InspectStatus::BinaryMissing;
     };
     let Ok(actual) = compute_binary_sha256(&path) else {
@@ -179,7 +179,7 @@ pub fn inspect_one(agent: &str, entry: &mur_common::agent::McpServerEntry) -> In
         );
         return InspectStatus::InterpreterUnprotected;
     }
-    let path = match resolve_command(&entry.command) {
+    let path = match resolve_mcp_launch(&entry.command) {
         Ok(p) => p,
         Err(_) => {
             println!("  current sha256: <binary not found on PATH>");
@@ -245,7 +245,7 @@ pub fn inspect_one_probed(
 
     println!();
     println!("  Probing live MCP under this agent's sandbox…");
-    let probe_entry = match resolve_command(&entry.command) {
+    let probe_entry = match resolve_mcp_launch(&entry.command) {
         Ok(resolved) => mur_common::agent::McpServerEntry {
             command: resolved.display().to_string(),
             ..entry.clone()

@@ -376,3 +376,99 @@ fn populated_deny_list_is_a_quiet_pass() {
     assert!(c.ok);
     assert!(!c.detail.contains("advisory"), "{}", c.detail);
 }
+
+/// An agent installed before #1984 has the bare name `mur-mcp-server` in
+/// `spawn.allowed`, but the runtime execs the bundled copy under
+/// `$MUR_HOME/mcp-servers`, which the seal never finds by bare name — EPERM
+/// and 0 tools. Doctor must flag it and print the exact absolute-path grant
+/// (the seal takes a path entry literally, so a `~` form would not work).
+#[cfg(unix)]
+fn doctor_with_bundled_server(allowed: Vec<String>, allowed_dirs: Vec<String>) -> Vec<Check> {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mur_home = tmp.path().to_path_buf();
+    let bundled = mur_home.join("mcp-servers").join("mur-mcp-server");
+    std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+    std::fs::write(&bundled, b"#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&bundled, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let agent_dir = mur_home.join("agents").join("legacy");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+
+    let mut profile = mur_common::AgentProfile::default_for_tests();
+    profile.mcp_servers.push(mur_common::agent::McpServerEntry {
+        name: "mur-tools".into(),
+        command: "mur-mcp-server".into(),
+        ..Default::default()
+    });
+    profile.entitlements.processes.spawn.mode = mur_common::agent::SpawnMode::Allowlist;
+    profile.entitlements.processes.spawn.allowed = allowed
+        .into_iter()
+        .map(|s| s.replace("{bundled}", &bundled.to_string_lossy()))
+        .collect();
+    profile.entitlements.processes.spawn.allowed_dirs = allowed_dirs;
+    std::fs::write(
+        agent_dir.join("profile.yaml"),
+        serde_yaml_ng::to_string(&profile).unwrap(),
+    )
+    .unwrap();
+
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_HOME", &mur_home)
+        .set_var("HOME", &mur_home);
+    agent_doctor(&mur_home, "legacy").unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_doctor_flags_a_bare_grant_for_the_bundled_mcp_server() {
+    let report = doctor_with_bundled_server(vec!["mur-mcp-server".into()], vec![]);
+    let c = report
+        .iter()
+        .find(|c| c.name == "mcp_spawn:mur-tools")
+        .unwrap_or_else(|| panic!("expected an mcp_spawn check, got: {report:?}"));
+    assert!(!c.ok, "the runtime will hit EPERM: {c:?}");
+    assert!(
+        c.detail.contains("mur agent perm allow-spawn legacy /")
+            && c.detail.contains("mcp-servers/mur-mcp-server"),
+        "must print the exact absolute-path fix: {}",
+        c.detail
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_doctor_is_quiet_when_the_bundled_server_is_granted() {
+    let report =
+        doctor_with_bundled_server(vec!["mur-mcp-server".into(), "{bundled}".into()], vec![]);
+    assert!(
+        report.iter().all(|c| !c.name.starts_with("mcp_spawn:")),
+        "a correct grant needs no line: {report:?}"
+    );
+}
+
+/// The seal drops a guarded `allowed_dirs` root (`/`, home, a bare volume),
+/// so it does NOT cover the bundled server — doctor must still warn.
+#[cfg(unix)]
+#[test]
+fn agent_doctor_flags_a_guarded_dir_grant_the_seal_discards() {
+    let report = doctor_with_bundled_server(vec!["mur-mcp-server".into()], vec!["/".into()]);
+    assert!(
+        report
+            .iter()
+            .any(|c| c.name == "mcp_spawn:mur-tools" && !c.ok),
+        "`/` is discarded by the seal, so the spawn still fails: {report:?}"
+    );
+}
+
+/// The seal expands `~` in `allowed_dirs`, so a `~`-based build-lane grant
+/// covering the bundled copy is effective — doctor must stay quiet.
+#[cfg(unix)]
+#[test]
+fn agent_doctor_honours_a_tilde_dir_grant() {
+    let report =
+        doctor_with_bundled_server(vec!["mur-mcp-server".into()], vec!["~/mcp-servers".into()]);
+    assert!(
+        report.iter().all(|c| !c.name.starts_with("mcp_spawn:")),
+        "`~/mcp-servers` covers the bundled copy: {report:?}"
+    );
+}
