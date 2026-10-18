@@ -6,25 +6,26 @@
 
 use std::path::Path;
 
-use mur_common::agent::{McpServerEntry, SpawnEntitlement, SpawnMode};
+use mur_agent_runtime::sandbox::policy::SandboxPolicy;
+use mur_common::agent::{McpServerEntry, SpawnMode};
 
 use super::Check;
 
 /// `None` when the server is not launched from the bundled copy, or the
-/// grant already covers it; otherwise a failing check carrying the fix.
+/// sealed policy already permits it; otherwise a failing check with the fix.
 pub(super) fn check(
     agent: &str,
     server: &McpServerEntry,
     launch: &Path,
-    spawn: &SpawnEntitlement,
+    policy: &SandboxPolicy,
 ) -> Option<Check> {
     if launch != mur_common::exec::bundled_mcp_server_path() {
         return None;
     }
-    if !matches!(spawn.mode, SpawnMode::Allowlist | SpawnMode::Strict) {
+    if !matches!(policy.spawn_mode, SpawnMode::Allowlist | SpawnMode::Strict) {
         return None;
     }
-    if is_granted(launch, spawn) {
+    if is_granted(launch, policy) {
         return None;
     }
     let abs = launch.display();
@@ -40,22 +41,18 @@ pub(super) fn check(
     ))
 }
 
-/// Mirrors the seal: an entry containing a path separator is taken literally
-/// (no `~` expansion) and compared after canonicalization; `allowed_dirs`
-/// grants a whole subtree.
-fn is_granted(launch: &Path, spawn: &SpawnEntitlement) -> bool {
+/// Judged against the EFFECTIVE grants the seal compiles, not the raw
+/// profile: `from_entitlements` already expands `~`, drops guarded
+/// `allowed_dirs` roots (`/`, home, a bare volume) and missing paths, and
+/// derives toolchain prefixes. Re-deriving any of that here is how the
+/// check drifted from the seal before.
+fn is_granted(launch: &Path, policy: &SandboxPolicy) -> bool {
     let canon = std::fs::canonicalize(launch).unwrap_or_else(|_| launch.to_path_buf());
-    let same = |entry: &str| {
-        let p = Path::new(entry);
-        p == launch || std::fs::canonicalize(p).is_ok_and(|c| c == canon)
-    };
-    spawn
-        .allowed
-        .iter()
-        .filter(|e| e.contains(std::path::MAIN_SEPARATOR))
-        .any(|e| same(e))
-        || spawn
-            .allowed_dirs
-            .iter()
-            .any(|d| std::fs::canonicalize(d).is_ok_and(|dir| canon.starts_with(dir)))
+    [launch, canon.as_path()].iter().any(|p| {
+        policy.spawn_allowed_paths.iter().any(|a| a == p)
+            || policy
+                .spawn_allowed_prefixes
+                .iter()
+                .any(|d| p.starts_with(d))
+    })
 }

@@ -651,16 +651,15 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
         )),
     }
 
+    let spawn_policy = mur_agent_runtime::sandbox::policy::SandboxPolicy::from_entitlements(
+        &profile.entitlements,
+        &mur_home.join("agents").join(name),
+    );
     for server in &profile.mcp_servers {
         let check_name = format!("mcp:{}", server.name);
         match crate::cmd::agent_mcp_pin::resolve_mcp_launch(&server.command) {
             Ok(resolved) => {
-                let spawn_check = mcp_spawn::check(
-                    name,
-                    server,
-                    &resolved,
-                    &profile.entitlements.processes.spawn,
-                );
+                let spawn_check = mcp_spawn::check(name, server, &resolved, &spawn_policy);
                 out.push(Check::new(check_name, true, resolved.display().to_string()));
                 out.extend(spawn_check);
             }

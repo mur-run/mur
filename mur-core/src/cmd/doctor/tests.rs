@@ -383,7 +383,7 @@ fn populated_deny_list_is_a_quiet_pass() {
 /// and 0 tools. Doctor must flag it and print the exact absolute-path grant
 /// (the seal takes a path entry literally, so a `~` form would not work).
 #[cfg(unix)]
-fn doctor_with_bundled_server(allowed: Vec<String>) -> Vec<Check> {
+fn doctor_with_bundled_server(allowed: Vec<String>, allowed_dirs: Vec<String>) -> Vec<Check> {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::TempDir::new().unwrap();
     let mur_home = tmp.path().to_path_buf();
@@ -405,6 +405,7 @@ fn doctor_with_bundled_server(allowed: Vec<String>) -> Vec<Check> {
         .into_iter()
         .map(|s| s.replace("{bundled}", &bundled.to_string_lossy()))
         .collect();
+    profile.entitlements.processes.spawn.allowed_dirs = allowed_dirs;
     std::fs::write(
         agent_dir.join("profile.yaml"),
         serde_yaml_ng::to_string(&profile).unwrap(),
@@ -412,16 +413,15 @@ fn doctor_with_bundled_server(allowed: Vec<String>) -> Vec<Check> {
     .unwrap();
 
     let mut envg = mur_common::test_env::EnvGuard::hold();
-    envg.set_var("MUR_HOME", &mur_home);
-    let report = agent_doctor(&mur_home, "legacy").unwrap();
-    envg.unset_var("MUR_HOME");
-    report
+    envg.set_var("MUR_HOME", &mur_home)
+        .set_var("HOME", &mur_home);
+    agent_doctor(&mur_home, "legacy").unwrap()
 }
 
 #[cfg(unix)]
 #[test]
 fn agent_doctor_flags_a_bare_grant_for_the_bundled_mcp_server() {
-    let report = doctor_with_bundled_server(vec!["mur-mcp-server".into()]);
+    let report = doctor_with_bundled_server(vec!["mur-mcp-server".into()], vec![]);
     let c = report
         .iter()
         .find(|c| c.name == "mcp_spawn:mur-tools")
@@ -438,9 +438,37 @@ fn agent_doctor_flags_a_bare_grant_for_the_bundled_mcp_server() {
 #[cfg(unix)]
 #[test]
 fn agent_doctor_is_quiet_when_the_bundled_server_is_granted() {
-    let report = doctor_with_bundled_server(vec!["mur-mcp-server".into(), "{bundled}".into()]);
+    let report =
+        doctor_with_bundled_server(vec!["mur-mcp-server".into(), "{bundled}".into()], vec![]);
     assert!(
         report.iter().all(|c| !c.name.starts_with("mcp_spawn:")),
         "a correct grant needs no line: {report:?}"
+    );
+}
+
+/// The seal drops a guarded `allowed_dirs` root (`/`, home, a bare volume),
+/// so it does NOT cover the bundled server — doctor must still warn.
+#[cfg(unix)]
+#[test]
+fn agent_doctor_flags_a_guarded_dir_grant_the_seal_discards() {
+    let report = doctor_with_bundled_server(vec!["mur-mcp-server".into()], vec!["/".into()]);
+    assert!(
+        report
+            .iter()
+            .any(|c| c.name == "mcp_spawn:mur-tools" && !c.ok),
+        "`/` is discarded by the seal, so the spawn still fails: {report:?}"
+    );
+}
+
+/// The seal expands `~` in `allowed_dirs`, so a `~`-based build-lane grant
+/// covering the bundled copy is effective — doctor must stay quiet.
+#[cfg(unix)]
+#[test]
+fn agent_doctor_honours_a_tilde_dir_grant() {
+    let report =
+        doctor_with_bundled_server(vec!["mur-mcp-server".into()], vec!["~/mcp-servers".into()]);
+    assert!(
+        report.iter().all(|c| !c.name.starts_with("mcp_spawn:")),
+        "`~/mcp-servers` covers the bundled copy: {report:?}"
     );
 }
