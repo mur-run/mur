@@ -40,7 +40,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
     if !agent_home.exists() {
         bail!("agent '{name}' not found under {}", mur_home.display());
     }
-    // A start the user typed (launchd respawns never come through here) lets
+    // A start the user typed (service-manager respawns never come through here) lets
     // the runtime probe secrets an earlier start gave up on (#1980).
     super::secret::clear_pending_keychain(&agent_home);
 

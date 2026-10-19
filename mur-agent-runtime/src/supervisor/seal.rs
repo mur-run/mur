@@ -217,7 +217,7 @@ pub(super) async fn prepare_and_seal(
         for name in &profile.inner.secrets {
             use mur_common::secret::keychain_pending;
             // A previous start already timed out on this one and left a prompt
-            // on screen. Probing again raises another; under a launchd crash
+            // on screen. Probing again raises another; under a service-manager crash
             // loop that was dozens of dialogs (#1980). Skip until the user acts
             // (`/secret`, `mur agent secret`, `mur agent start|restart`).
             if keychain_pending::is_pending(agent_home, name) {

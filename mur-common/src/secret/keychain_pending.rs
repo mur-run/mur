@@ -2,14 +2,14 @@
 //!
 //! A keychain item this binary has no "Always Allow" ACL for makes macOS raise
 //! a modal prompt. The runtime gives up after a short timeout, but the prompt
-//! stays on screen. Under a launchd crash loop every respawn read again, and
+//! stays on screen. Under a service-manager crash loop every respawn read again, and
 //! each one left another dialog: dozens in a few minutes.
 //!
 //! The runtime writes one marker per timed-out secret and skips the probe on
 //! later starts. A crash loop then costs one prompt per secret, not one per
 //! process. Actions the user takes clear the markers: `mur agent secret
 //! set|delete`, murmur `/secret`, `mur agent start` and `mur agent restart`
-//! (launchd respawns go through none of these). Clearing makes the next start
+//! (service-manager respawns go through none of these). Clearing makes the next start
 //! probe again. If the prompt has since been answered with Always Allow, the
 //! read succeeds without a dialog.
 //!
