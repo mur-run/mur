@@ -61,15 +61,32 @@ pub fn edit_diff_parts(name: &str, args: &serde_json::Value) -> Option<Vec<DiffP
         return None;
     }
     let path = str_field(args, &["file_path", "path"]).unwrap_or("");
-    let old = str_field(args, &["old_string", "old_str"]);
-    // Need at least the `new` side to render anything.
-    let new = str_field(args, &["new_string", "new_str", "content"])?;
-
     let mut parts: Vec<DiffPart> = Vec::new();
     if !path.is_empty() {
         parts.push(DiffPart::Path(path.to_string()));
     }
 
+    // Batch form (`edits: [{old_string, new_string}, ...]`) — MUR's
+    // `edit_file` and Claude's `MultiEdit` both use it. One diff per entry,
+    // in order, so the card reads the way the tool applies them.
+    if let Some(edits) = args.get("edits").and_then(|v| v.as_array()) {
+        let before = parts.len();
+        for e in edits {
+            if let Some(new) = str_field(e, &["new_string", "new_str"]) {
+                push_hunks(&mut parts, str_field(e, &["old_string", "old_str"]), new);
+            }
+        }
+        return (parts.len() > before).then_some(parts);
+    }
+
+    let old = str_field(args, &["old_string", "old_str"]);
+    // Need at least the `new` side to render anything.
+    let new = str_field(args, &["new_string", "new_str", "content"])?;
+    push_hunks(&mut parts, old, new);
+    Some(parts)
+}
+
+fn push_hunks(parts: &mut Vec<DiffPart>, old: Option<&str>, new: &str) {
     match old {
         Some(old_str) => {
             // Full diff: context lines (both), removed (Left), added (Right).
@@ -88,8 +105,6 @@ pub fn edit_diff_parts(name: &str, args: &serde_json::Value) -> Option<Vec<DiffP
             }
         }
     }
-
-    Some(parts)
 }
 
 /// The diff rows as plain, unstyled, **uncapped** text lines — the form the
@@ -250,6 +265,32 @@ mod tests {
         let write = serde_json::json!({ "path": "out.txt", "content": "hello" });
         let t = text(&edit_diff_lines("write_file", &write, theme::resolve_skin("dark")).unwrap());
         assert!(t.contains("+ hello"), "expected addition, got:\n{t}");
+    }
+
+    #[test]
+    fn batch_edits_render_one_diff_per_entry() {
+        let args = serde_json::json!({
+            "path": "src/lib.rs",
+            "edits": [
+                {"old_string": "let x = 1;", "new_string": "let x = 2;"},
+                {"old_string": "let y = 3;", "new_string": "let y = 4;"}
+            ]
+        });
+        let t = super::edit_diff_text("edit_file", &args)
+            .unwrap()
+            .join("\n");
+        for want in [
+            "- let x = 1;",
+            "+ let x = 2;",
+            "- let y = 3;",
+            "+ let y = 4;",
+        ] {
+            assert!(t.contains(want), "missing {want:?} in:\n{t}");
+        }
+        assert!(
+            t.find("let x = 2;") < t.find("let y = 3;"),
+            "order kept:\n{t}"
+        );
     }
 
     #[test]

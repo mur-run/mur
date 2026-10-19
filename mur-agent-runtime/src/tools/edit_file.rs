@@ -7,6 +7,10 @@ use crate::llm::ToolDef;
 use crate::tools::fs_policy::{SessionCwd, check_write_entitlement};
 use crate::tools::{ToolError, ToolExecutor, ToolOutput};
 
+mod apply;
+mod hint;
+use apply::{apply_edits, parse_edits};
+
 pub struct EditFileTool {
     pub session_cwd: SessionCwd,
     pub fs: FilesystemEntitlement,
@@ -53,17 +57,30 @@ impl ToolExecutor for EditFileTool {
     fn def(&self) -> ToolDef {
         ToolDef {
             name: "edit_file".into(),
-            description: "Replace an exact literal substring in a UTF-8 text file (no regex). By default the old_string must match exactly once — pass expected_count to replace N known occurrences. Relative paths resolve against the shared session cwd (set by the bash tool's `cwd`); a `cd` inside a bash subprocess is NOT retained. Edits are checked against the agent's filesystem write entitlements."
+            description: "Replace exact literal substrings in a UTF-8 text file (no regex). Either pass one edit as old_string/new_string, or several as `edits` (applied in order, each one seeing the result of the previous; all-or-nothing — if any edit fails nothing is written). Each old_string must match exactly once unless that edit sets expected_count to replace N known occurrences. Relative paths resolve against the shared session cwd (set by the bash tool's `cwd`); a `cd` inside a bash subprocess is NOT retained. Edits are checked against the agent's filesystem write entitlements."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": format!("File to edit ({})", crate::tools::fs_policy::PATH_FORMS) },
-                    "old_string": { "type": "string", "description": "Exact literal text to replace" },
-                    "new_string": { "type": "string", "description": "Replacement text" },
-                    "expected_count": { "type": "integer", "description": "Exact number of occurrences to replace; omit to require exactly one" }
+                    "old_string": { "type": "string", "description": "Exact literal text to replace (single-edit form)" },
+                    "new_string": { "type": "string", "description": "Replacement text (single-edit form)" },
+                    "expected_count": { "type": "integer", "description": "Exact number of occurrences to replace; omit to require exactly one (single-edit form)" },
+                    "edits": {
+                        "type": "array",
+                        "description": "Several edits to the same file, applied in order. Use instead of old_string/new_string, not together with them.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": { "type": "string", "description": "Exact literal text to replace" },
+                                "new_string": { "type": "string", "description": "Replacement text" },
+                                "expected_count": { "type": "integer", "description": "Exact number of occurrences to replace; omit to require exactly one" }
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
                 },
-                "required": ["path", "old_string", "new_string"]
+                "required": ["path"]
             }),
         }
     }
@@ -72,17 +89,7 @@ impl ToolExecutor for EditFileTool {
         let raw = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("missing 'path' field".into()))?;
-        let old = input["old_string"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidInput("missing 'old_string' field".into()))?;
-        let new = input["new_string"]
-            .as_str()
-            .ok_or_else(|| ToolError::InvalidInput("missing 'new_string' field".into()))?;
-        if old.is_empty() {
-            return Err(ToolError::InvalidInput(
-                "'old_string' must be non-empty".into(),
-            ));
-        }
+        let edits = parse_edits(&input)?;
         let base = self.session_cwd.current();
         let joined = crate::tools::fs_policy::resolve_path(&base, raw);
         let canonical = std::fs::canonicalize(&joined).map_err(|e| {
@@ -97,25 +104,7 @@ impl ToolExecutor for EditFileTool {
                 "read", &canonical, &base, &e,
             ))
         })?;
-        let found = text.match_indices(old).count();
-        let expected = input["expected_count"].as_i64().filter(|v| *v >= 1);
-        match expected {
-            Some(n) if found as i64 != n => {
-                return Err(ToolError::InvalidInput(format!(
-                    "expected {n} occurrence(s) of old_string, found {found}"
-                )));
-            }
-            None if found == 0 => {
-                return Err(ToolError::InvalidInput("old_string not found".into()));
-            }
-            None if found > 1 => {
-                return Err(ToolError::InvalidInput(format!(
-                    "ambiguous edit: old_string matches {found} times — pass expected_count or a longer anchor"
-                )));
-            }
-            _ => {}
-        }
-        let updated = text.replace(old, new);
+        let (updated, total) = apply_edits(&text, &edits)?;
         crate::tools::atomic_write::replace_contents(&canonical, updated.as_bytes()).map_err(
             |e| {
                 ToolError::Execution(crate::tools::fs_policy::format_io_error(
@@ -123,100 +112,18 @@ impl ToolExecutor for EditFileTool {
                 ))
             },
         )?;
-        Ok(format!("replaced {found} occurrence(s) in {}", canonical.display()).into())
+        let summary = if edits.len() == 1 {
+            format!("replaced {total} occurrence(s) in {}", canonical.display())
+        } else {
+            format!(
+                "applied {} edits ({total} occurrence(s)) in {}",
+                edits.len(),
+                canonical.display()
+            )
+        };
+        Ok(summary.into())
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tool(td: &tempfile::TempDir) -> EditFileTool {
-        let root = td.path().to_str().unwrap();
-        EditFileTool::new_for_test(
-            SessionCwd::new(td.path().into()),
-            FilesystemEntitlement {
-                read: vec![],
-                write: vec![root.to_string()],
-                deny: vec![],
-            },
-        )
-    }
-
-    fn seed(td: &tempfile::TempDir, content: &str) {
-        std::fs::write(td.path().join("f.txt"), content).unwrap();
-    }
-
-    #[tokio::test]
-    async fn single_match_replaces() {
-        let td = tempfile::tempdir().unwrap();
-        seed(&td, "aaa X bbb");
-        tool(&td)
-            .execute(serde_json::json!({"path": "f.txt", "old_string": "X", "new_string": "Y"}))
-            .await
-            .unwrap();
-        assert_eq!(
-            std::fs::read_to_string(td.path().join("f.txt")).unwrap(),
-            "aaa Y bbb"
-        );
-    }
-
-    #[tokio::test]
-    async fn zero_matches_is_invalid_input() {
-        let td = tempfile::tempdir().unwrap();
-        seed(&td, "nothing here");
-        let err = tool(&td)
-            .execute(serde_json::json!({"path": "f.txt", "old_string": "X", "new_string": "Y"}))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ToolError::InvalidInput(_)));
-    }
-
-    #[tokio::test]
-    async fn missing_file_error_names_session_cwd() {
-        let td = tempfile::tempdir().unwrap();
-        let err = tool(&td)
-            .execute(serde_json::json!({"path": "nope.txt", "old_string": "X", "new_string": "Y"}))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("cannot edit"));
-        assert!(err.to_string().contains("session cwd"));
-    }
-
-    #[tokio::test]
-    async fn multi_match_without_count_is_ambiguous() {
-        let td = tempfile::tempdir().unwrap();
-        seed(&td, "X and X");
-        let err = tool(&td)
-            .execute(serde_json::json!({"path": "f.txt", "old_string": "X", "new_string": "Y"}))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("ambiguous"));
-    }
-
-    #[tokio::test]
-    async fn expected_count_replaces_all_n() {
-        let td = tempfile::tempdir().unwrap();
-        seed(&td, "X and X");
-        let r = tool(&td)
-            .execute(serde_json::json!({"path": "f.txt", "old_string": "X", "new_string": "Y", "expected_count": 2}))
-            .await
-            .unwrap();
-        assert!(r.text.contains("replaced 2"));
-        assert_eq!(
-            std::fs::read_to_string(td.path().join("f.txt")).unwrap(),
-            "Y and Y"
-        );
-    }
-
-    #[tokio::test]
-    async fn expected_count_mismatch_rejected() {
-        let td = tempfile::tempdir().unwrap();
-        seed(&td, "X and X");
-        let err = tool(&td)
-            .execute(serde_json::json!({"path": "f.txt", "old_string": "X", "new_string": "Y", "expected_count": 3}))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("expected 3"));
-    }
-}
+mod tests;
