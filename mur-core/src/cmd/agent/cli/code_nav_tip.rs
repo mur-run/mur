@@ -126,6 +126,79 @@ mod tests {
         assert_eq!(argv.last().unwrap(), "/My Projects/app", "{cmd}");
     }
 
+    /// An `App` sitting in a fresh code workspace with code-nav not set up.
+    fn app_in_workspace() -> (App, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("Cargo.toml"), b"").unwrap();
+        let mut app = App::test_fixture();
+        app.home = tmp.path().join("home");
+        app.cwd = Some(proj);
+        (app, tmp)
+    }
+
+    fn tip_count(app: &App) -> usize {
+        app.messages.iter().filter(|m| m.text == TIP).count()
+    }
+
+    #[test]
+    fn maybe_offer_tips_once_per_session_with_setup_chip() {
+        let (mut app, tmp) = app_in_workspace();
+        maybe_offer(&mut app);
+        maybe_offer(&mut app);
+        assert_eq!(tip_count(&app), 1);
+        let p = app.proposal.as_ref().expect("setup chip offered");
+        assert_eq!(p.label, CHIP_LABEL);
+        assert_eq!(
+            p.kind,
+            ProposalKind::Shell(setup_cmd(&app.agent, &tmp.path().join("proj")))
+        );
+    }
+
+    #[test]
+    fn maybe_offer_keeps_an_existing_command_chip() {
+        let (mut app, _tmp) = app_in_workspace();
+        let theirs = Proposal {
+            label: "theirs".into(),
+            kind: ProposalKind::Shell("git status".into()),
+        };
+        app.proposal = Some(theirs.clone());
+        maybe_offer(&mut app);
+        assert_eq!(tip_count(&app), 1, "tip text still shown");
+        assert_eq!(app.proposal, Some(theirs));
+    }
+
+    #[test]
+    fn maybe_offer_replaces_a_reply_ghost() {
+        let (mut app, _tmp) = app_in_workspace();
+        app.proposal = Some(Proposal {
+            label: String::new(),
+            kind: ProposalKind::Reply("hi".into()),
+        });
+        maybe_offer(&mut app);
+        let p = app.proposal.as_ref().unwrap();
+        assert!(matches!(p.kind, ProposalKind::Shell(_)), "{p:?}");
+    }
+
+    #[test]
+    fn maybe_offer_is_silent_outside_a_workspace_or_once_set_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::test_fixture();
+        app.cwd = Some(tmp.path().to_path_buf());
+        maybe_offer(&mut app);
+        assert_eq!(tip_count(&app), 0);
+        assert!(app.proposal.is_none());
+
+        let (mut app, _tmp) = app_in_workspace();
+        let m = crate::cmd::code_nav::consent::manifest_path(&app.home, &app.agent);
+        std::fs::create_dir_all(m.parent().unwrap()).unwrap();
+        std::fs::write(&m, b"{}").unwrap();
+        maybe_offer(&mut app);
+        assert_eq!(tip_count(&app), 0);
+        assert!(app.proposal.is_none());
+    }
+
     /// The keyword trigger must stay language-agnostic: code-shaped input
     /// fires it in any language; plain chat in any language does not.
     #[test]
