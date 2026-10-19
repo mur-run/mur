@@ -85,16 +85,56 @@ fn a_probe_that_died_reports_its_last_stderr_line() {
 #[test]
 fn nothing_to_launch_prints_nothing() {
     let mut out = Vec::new();
-    verify("a", Path::new("/w"), &[], &[], &mut out).unwrap();
+    verify("a", Path::new("/w"), &[], &[], Path::new("/f"), &mut out).unwrap();
     assert!(out.is_empty());
 }
 
 #[test]
 fn only_unmanaged_languages_succeeds_and_says_so() {
     let mut out = Vec::new();
-    verify("a", Path::new("/w"), &[], &[Lang::Lua], &mut out).unwrap();
+    verify(
+        "a",
+        Path::new("/w"),
+        &[],
+        &[(
+            Lang::Lua,
+            "serena could not fetch it during setup: offline".into(),
+        )],
+        Path::new("/f"),
+        &mut out,
+    )
+    .unwrap();
     let out = String::from_utf8(out).unwrap();
-    assert!(out.contains("not launched: lua"), "{out}");
+    assert!(
+        out.contains("lua: not verified — serena could not fetch it"),
+        "{out}"
+    );
+    assert!(out.contains("serena will not start"), "{out}");
+}
+
+#[test]
+fn fetch_dir_is_under_the_entry_home() {
+    let home = Path::new("/a/serena-homes/repo");
+    assert_eq!(
+        fetch_dir(home),
+        Path::new("/a/serena-homes/repo/language_servers/static")
+    );
+}
+
+/// #1993: the unverified warning names the exact grant serena's download
+/// directory needs, and stays quiet once it is granted.
+#[test]
+fn fetch_grant_names_the_download_dir_only_when_refused() {
+    let dir = Path::new("/a/serena-homes/repo/language_servers/static");
+    let hint = fetch_grant("si-te", dir, |_| false).unwrap();
+    assert!(
+        hint.contains(&format!(
+            "mur agent perm allow-spawn-dir si-te {}",
+            dir.display()
+        )),
+        "{hint}"
+    );
+    assert_eq!(fetch_grant("si-te", dir, |_| true), None);
 }
 
 /// The hint names the directory the seal refuses — the server's own and its
@@ -141,11 +181,16 @@ fn an_unverified_launch_fails_setup() {
         "the agent's sandbox is not enforcing on this host (unsupported)",
     ] {
         let mut out = Vec::new();
-        let err = verify_with("a", &[target(Lang::TypeScript)], &[], &mut out, |_| {
-            Report::Unverified {
+        let err = verify_with(
+            "a",
+            &[target(Lang::TypeScript)],
+            &[],
+            Path::new("/f"),
+            &mut out,
+            |_| Report::Unverified {
                 detail: detail.into(),
-            }
-        })
+            },
+        )
         .expect_err("unverified must not be success");
         let msg = format!("{err:#}");
         assert!(
@@ -168,6 +213,7 @@ fn every_launch_ok_is_success() {
         "a",
         &[target(Lang::Php), target(Lang::TypeScript)],
         &[],
+        Path::new("/f"),
         &mut out,
         |_| Report::Ok,
     )
@@ -181,6 +227,7 @@ fn failed_and_unverified_are_both_named() {
         "a",
         &[target(Lang::Php), target(Lang::TypeScript)],
         &[],
+        Path::new("/f"),
         &mut out,
         |t| match t.lang {
             Lang::Php => Report::Failed {

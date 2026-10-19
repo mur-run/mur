@@ -60,12 +60,14 @@ fn lsp_without_serena_is_refused() {
 }
 
 #[test]
-fn serena_defaults_enable_low_and_medium_only() {
+fn serena_defaults_enable_only_mur_installed_low_and_medium() {
     let p = plan(home(), &flags(true, &[]), &all_tools()).unwrap();
-    for l in [Lang::Python, Lang::Php, Lang::Lua, Lang::Cpp] {
+    for l in [Lang::Python, Lang::Php] {
         assert_eq!(row(&p, l).status, LspStatus::Enabled, "{l:?}");
     }
     for l in [
+        Lang::Lua,
+        Lang::Cpp,
         Lang::Rust,
         Lang::Kotlin,
         Lang::TypeScript,
@@ -378,4 +380,29 @@ fn exact_lsp_refuses_a_wholly_disabled_set() {
         .to_string();
     assert!(e.contains("php") && e.contains("lua"), "{e}");
     assert!(e.contains(UV), "{e}");
+}
+
+/// #1993: serena fetches these itself, so setup cannot smoke-launch them;
+/// the default set must never include one, whatever its tier.
+#[test]
+fn default_set_never_includes_a_serena_fetched_server() {
+    let p = plan(home(), &flags(true, &[]), &all_tools()).unwrap();
+    for r in &p.lsp {
+        if r.lang.serena_fetched() {
+            assert_ne!(r.status, LspStatus::Enabled, "{:?}", r.lang);
+        }
+    }
+}
+
+#[test]
+fn serena_fetched_servers_are_enabled_when_named() {
+    let p = plan(home(), &flags(true, &["lua", "cpp"]), &all_tools()).unwrap();
+    assert_eq!(row(&p, Lang::Lua).status, LspStatus::Enabled);
+    assert_eq!(row(&p, Lang::Cpp).status, LspStatus::Enabled);
+    assert_eq!(
+        row(&p, Lang::Python).status,
+        LspStatus::Skipped {
+            enable_flag: "--lsp python".into()
+        }
+    );
 }

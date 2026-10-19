@@ -20,4 +20,5 @@ pub mod serena_install;
 pub mod serena_project;
 pub mod setup;
 pub mod smoke;
+pub mod smoke_fetch;
 pub mod smoke_probe;

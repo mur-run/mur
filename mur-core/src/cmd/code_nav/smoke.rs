@@ -4,7 +4,11 @@
 //! The launch runs in a child `mur code-nav smoke-ls` that seals itself
 //! first ([`super::smoke_probe`] says why it cannot run in-process). Only the
 //! servers MUR pre-installs are launched: the others serena fetches itself on
-//! first start, so there is nothing on disk yet to launch.
+//! first start. Those are left out of the default set; when named with
+//! `--lsp`, setup has serena fetch them first ([`super::smoke_fetch`]) and
+//! launches what it fetched like any other target. One that could not be
+//! fetched is reported as unverified, with the exec grant serena's download
+//! directory needs (#1993).
 
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -33,6 +37,17 @@ pub const SUBCOMMAND: [&str; 2] = ["code-nav", "smoke-ls"];
 
 /// The flag serena appends to every server it launches.
 const STDIO: &str = "--stdio";
+
+/// Where serena puts the servers it downloads, under the entry's
+/// `SERENA_HOME` (`<home>/language_servers/static/<Server>/...`).
+pub const FETCH_DIR: [&str; 2] = ["language_servers", "static"];
+
+/// The directory serena downloads servers into for the entry at `home`.
+pub fn fetch_dir(serena_home: &Path) -> PathBuf {
+    FETCH_DIR
+        .iter()
+        .fold(serena_home.to_path_buf(), |p, c| p.join(c))
+}
 
 /// One server to launch: the language it serves and its exact argv.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,15 +88,16 @@ pub fn verify(
     agent: &str,
     project: &Path,
     targets: &[Target],
-    unmanaged: &[Lang],
+    unfetched: &[(Lang, String)],
+    fetch_dir: &Path,
     out: &mut dyn Write,
 ) -> Result<()> {
-    if targets.is_empty() && unmanaged.is_empty() {
+    if targets.is_empty() && unfetched.is_empty() {
         return Ok(());
     }
     let exe = std::env::current_exe().context("locate the mur binary")?;
     let deadline = SMOKE_TIMEOUT + PROBE_SLACK;
-    verify_with(agent, targets, unmanaged, out, |t| {
+    verify_with(agent, targets, unfetched, fetch_dir, out, |t| {
         launch(&exe, agent, project, &t.cmd, deadline)
     })
 }
@@ -90,11 +106,12 @@ pub fn verify(
 pub(crate) fn verify_with(
     agent: &str,
     targets: &[Target],
-    unmanaged: &[Lang],
+    unfetched: &[(Lang, String)],
+    fetch_dir: &Path,
     out: &mut dyn Write,
     mut launch: impl FnMut(&Target) -> Report,
 ) -> Result<()> {
-    if targets.is_empty() && unmanaged.is_empty() {
+    if targets.is_empty() && unfetched.is_empty() {
         return Ok(());
     }
     writeln!(out, "\nSmoke launch under agent '{agent}''s sandbox:")?;
@@ -117,13 +134,18 @@ pub(crate) fn verify_with(
             }
         }
     }
-    if !unmanaged.is_empty() {
-        let names: Vec<_> = unmanaged.iter().map(|l| l.flag()).collect();
+    for (lang, detail) in unfetched {
         writeln!(
             out,
-            "  · not launched: {} (serena downloads these itself on first start)",
-            names.join(", ")
+            "  ! {}: not verified — {detail}. If the sandbox refuses to exec it, \
+             serena will not start for this entry.",
+            lang.flag()
         )?;
+    }
+    if !unfetched.is_empty()
+        && let Some(hint) = fetch_hint(agent, fetch_dir)
+    {
+        writeln!(out, "      {hint}")?;
     }
     let mut problems = Vec::new();
     if !failed.is_empty() {
@@ -306,6 +328,40 @@ fn exec_hints(agent: &str, cmd: &[String]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// The grant serena's download directory needs, when the seal refuses exec
+/// there. macOS only, like [`exec_hints`].
+#[cfg(target_os = "macos")]
+fn fetch_hint(agent: &str, dir: &Path) -> Option<String> {
+    use mur_agent_runtime::sandbox::{SandboxPolicy, macos::exec_permitted};
+    let home = crate::cmd::agent::resolve_mur_home().ok()?;
+    let (_, profile) = crate::cmd::agent::load_profile_for_edit(agent).ok()?;
+    let policy =
+        SandboxPolicy::from_entitlements(&profile.entitlements, &home.join("agents").join(agent));
+    fetch_grant(agent, dir, |p| exec_permitted(&policy, p))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fetch_hint(_agent: &str, _dir: &Path) -> Option<String> {
+    None
+}
+
+/// The grant line for `dir`, or `None` when `permitted` already allows it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn fetch_grant(
+    agent: &str,
+    dir: &Path,
+    permitted: impl Fn(&Path) -> bool,
+) -> Option<String> {
+    (!permitted(dir)).then(|| {
+        format!(
+            "the sandbox does not let it exec under {}; grant it with: \
+             mur agent perm allow-spawn-dir {agent} {}",
+            dir.display(),
+            dir.display()
+        )
+    })
 }
 
 #[cfg(not(target_os = "macos"))]

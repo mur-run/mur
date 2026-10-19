@@ -33,7 +33,8 @@ pub enum CodeNavAction {
         #[arg(long)]
         no_ast_grep: bool,
         /// Language server to enable (repeatable). Replaces the default set
-        /// (Python, PHP, Lua, C/C++); high-risk languages need this.
+        /// (Python, PHP). Lua and C/C++, which serena downloads itself, and
+        /// the high-risk languages are enabled only when named here.
         #[arg(long, value_name = "LANG", conflicts_with = "lsp_only")]
         lsp: Vec<String>,
         /// Set this entry's language servers to exactly these (repeatable),

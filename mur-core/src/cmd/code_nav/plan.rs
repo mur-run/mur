@@ -158,6 +158,13 @@ impl Lang {
         }
     }
 
+    /// True when serena downloads this server itself on first start, so
+    /// setup has nothing on disk to smoke-launch (#1993). Matches the empty
+    /// [`Lang::prerequisites`] rows: nothing up front, fetched later.
+    pub fn serena_fetched(self) -> bool {
+        matches!(self, Lang::Lua | Lang::Cpp | Lang::Java | Lang::Kotlin)
+    }
+
     /// Text the LSP-risk table must show for this row, where the plan
     /// mandates one.
     pub fn note(self) -> Option<&'static str> {
@@ -320,7 +327,9 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
 
     let wanted = |l: Lang| {
         if requested.is_empty() {
-            l.tier() != Tier::High
+            // #1993: a server setup cannot smoke-launch must be asked for by
+            // name, or one refused exec would stop serena for the entry.
+            l.tier() != Tier::High && !l.serena_fetched()
         } else {
             requested.contains(&l)
         }
