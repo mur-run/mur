@@ -157,6 +157,7 @@ impl TaskRunner {
             active_fleet,
             active_project.as_deref(),
             active_team,
+            session_dir.as_deref(),
         );
 
         let triggered = match_prompt(&skills.triggers, user_prompt);

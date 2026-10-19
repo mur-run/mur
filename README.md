@@ -963,6 +963,17 @@ nothing is smoke-tested. A server that fails, or a launch that cannot be
 verified (setup run from an already-sandboxed shell, or a host where the
 sandbox does not enforce), fails setup; the installs and grants are kept.
 
+You don't have to remember any of this. When murmur starts in a code
+workspace (a directory with `.git`, `Cargo.toml`, `package.json`, `go.mod`,
+`pyproject.toml`, or another project marker, found by walking up from the
+working directory) and the agent has no code-nav setup, it shows a one-time
+tip with the setup command as a Tab chip, pre-filled with
+`--with-serena --project <repo root>`. Nothing runs until you review and send
+it. The same workspace check decides when the bundled `mur-search` skill
+loads, so search guidance follows where you work, not the language you type
+in. A skill can use the same gate: a `session_start` trigger with
+`workspace_markers: [...]` fires only when one of those files is found.
+
 `mur code-nav doctor [--agent <name>]` checks later that what setup recorded
 still holds: each install is on disk at the pinned version, each grant is still
 in the agent's profile, and each entry's `project.yml` lists the languages

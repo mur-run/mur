@@ -32,6 +32,8 @@ content:
     - Merge/rebase conflict → `mur-merge-conflicts`.
     - Starting feature work in a shared checkout → `mur-worktree` first.
     - Writing or editing a MUR skill → `mur-skill-authoring`.
+    - Finding code (definitions, references, callers, code shapes) while
+      working → `mur-search` before any `rg`/`ls` exploration.
     - Parallel fan-out topology questions belong to `parallel-decompose` /
       `parallel-topology-guide`; `mur-delegate-dev` executes ONE plan via
       delegation. Different jobs.

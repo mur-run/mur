@@ -125,6 +125,7 @@ impl SkillGene {
             .map(|t| Trigger {
                 kind: t.kind,
                 pattern: t.pattern.clone(),
+                workspace_markers: Vec::new(),
             })
             .collect()
     }
@@ -293,6 +294,7 @@ mod tests {
             vec![Trigger {
                 kind: TriggerKind::Command,
                 pattern: Some("/x".into()),
+                workspace_markers: Vec::new(),
             }],
         );
         let g = SkillGene::from_manifest(&m).unwrap();

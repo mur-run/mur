@@ -190,6 +190,7 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
     // A fresh send supersedes any expired-approval retry offer (#8).
     app.expired_retry = None;
     app.clear_input();
+    code_nav_tip::maybe_offer(app);
     start_turn(app, trimmed, tx);
 }
 

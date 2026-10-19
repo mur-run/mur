@@ -40,6 +40,18 @@ pub fn walk_ceilings() -> Vec<PathBuf> {
 /// either form (the file-tool gate hands in canonical paths, and macOS
 /// rewrites `/var` to `/private/var`).
 pub fn git_root_bounded<P: AsRef<Path>>(start: &Path, ceilings: &[P]) -> Option<PathBuf> {
+    marker_root_bounded(start, &[".git"], ceilings)
+}
+
+/// [`git_root_bounded`] generalized: the nearest directory holding ANY of
+/// `markers` (file or directory names, e.g. `Cargo.toml`, `package.json`),
+/// under the same ceilings. Lets a caller ask "is this a code workspace?"
+/// without baking in one ecosystem's marker.
+pub fn marker_root_bounded<S: AsRef<str>, P: AsRef<Path>>(
+    start: &Path,
+    markers: &[S],
+    ceilings: &[P],
+) -> Option<PathBuf> {
     let stops: Vec<PathBuf> = ceilings
         .iter()
         .flat_map(|c| {
@@ -54,7 +66,7 @@ pub fn git_root_bounded<P: AsRef<Path>>(start: &Path, ceilings: &[P]) -> Option<
         if is_stop(d) {
             return None;
         }
-        if d.join(".git").exists() {
+        if markers.iter().any(|m| d.join(m.as_ref()).exists()) {
             return Some(d.to_path_buf());
         }
         dir = d.parent();
@@ -65,6 +77,11 @@ pub fn git_root_bounded<P: AsRef<Path>>(start: &Path, ceilings: &[P]) -> Option<
 /// [`git_root_bounded`] with the live [`walk_ceilings`].
 pub fn git_root_of(start: &Path) -> Option<PathBuf> {
     git_root_bounded(start, &walk_ceilings())
+}
+
+/// [`marker_root_bounded`] with the live [`walk_ceilings`].
+pub fn marker_root_of<S: AsRef<str>>(start: &Path, markers: &[S]) -> Option<PathBuf> {
+    marker_root_bounded(start, markers, &walk_ceilings())
 }
 
 /// Env var name git reads to bound its own upward repo discovery.
@@ -137,6 +154,28 @@ mod tests {
 
     /// Same bound, enforced by git itself for callers that spawn
     /// `git rev-parse` instead of walking.
+    #[test]
+    fn marker_walk_finds_any_listed_marker_and_honours_the_bound() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stop = tmp.path().join("stop");
+        let proj = stop.join("proj");
+        std::fs::create_dir_all(proj.join("src")).unwrap();
+        std::fs::write(proj.join("go.mod"), b"").unwrap();
+        let m = ["Cargo.toml", "go.mod"];
+        assert_eq!(
+            marker_root_bounded(&proj.join("src"), &m, &[&stop]),
+            Some(proj.clone())
+        );
+        // Unlisted marker → not a workspace.
+        assert_eq!(
+            marker_root_bounded(&proj.join("src"), &["package.json"], &[&stop]),
+            None
+        );
+        // Marker at/above the ceiling is unreachable.
+        std::fs::write(stop.join("Cargo.toml"), b"").unwrap();
+        assert_eq!(marker_root_bounded(&stop.join("x"), &m, &[&stop]), None);
+    }
+
     #[test]
     fn spawned_git_stops_at_the_same_bound() {
         let tmp = tempfile::tempdir().unwrap();

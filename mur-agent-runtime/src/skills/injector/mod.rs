@@ -12,7 +12,6 @@
 //! CI, where cmake exists.
 
 use mur_common::config::{MemoryConfig, SkillsConfig};
-use mur_common::skill::TriggerKind;
 use mur_common::skill::loader::LoadedSkill;
 use mur_common::skill::types::{Category, HostId, Priority};
 use std::collections::HashSet;
@@ -54,6 +53,7 @@ pub fn inject_layer2(
     active_fleet: Option<&str>,
     active_project: Option<&str>,
     active_team: Option<&str>,
+    session_dir: Option<&std::path::Path>,
 ) -> InjectionResult {
     // Adaptive cutoff: when remaining context is too small, shed skills and
     // BestEffort memories — but NEVER Required ones. This used to be an early
@@ -131,7 +131,8 @@ pub fn inject_layer2(
         notes.clear();
     }
 
-    // Filter: must have at least one `SessionStart` trigger.
+    // Filter: must have at least one `SessionStart` trigger that fires here
+    // (`workspace_markers` gate it on the session's working directory).
     let mut candidates: Vec<&LoadedSkill> = visible
         .into_iter()
         .filter(|s| s.manifest.category != Category::Note)
@@ -139,7 +140,7 @@ pub fn inject_layer2(
             s.manifest
                 .triggers
                 .iter()
-                .any(|t| matches!(t.kind, TriggerKind::SessionStart))
+                .any(|t| t.fires_at_session_start(session_dir))
         })
         .collect();
 

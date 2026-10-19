@@ -69,6 +69,7 @@ triggers:
         None,
         None,
         None,
+        None,
     );
     assert!(inj.system_addendum.contains("house-rules"));
     assert!(!inj.system_addendum.contains("find-price"));
