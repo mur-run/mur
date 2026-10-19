@@ -144,3 +144,26 @@ fn record_entry_matches_the_canonical_base_cmd() {
         assert_eq!(Path::new(&cmd[1]), Record::for_tools(ls, tools).entry);
     }
 }
+
+/// #1998 review: a Vue install whose packages verify but whose `.bin` shim
+/// serena execs is gone is not complete, so setup reinstalls it.
+#[test]
+fn a_missing_required_shim_forces_a_reinstall() {
+    use mur_common::serena_ls_cmd::{VUE, VUE_LS_PIN};
+    let t = tempfile::tempdir().unwrap();
+    fake_install(&VUE, t.path(), VUE_LS_PIN);
+    for rel in VUE.required_rel {
+        let mut p = VUE.dir(t.path());
+        p.extend(*rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"").unwrap();
+    }
+    assert_eq!(installed_state(&VUE, t.path()), Installed::Verified);
+    let mut shim = VUE.dir(t.path());
+    shim.extend(VUE.required_rel[1]);
+    std::fs::remove_file(&shim).unwrap();
+    assert_eq!(installed_state(&VUE, t.path()), Installed::Missing);
+    // Not short-circuited as AlreadyInstalled: npm is attempted.
+    let e = install_with(&VUE, Path::new("/nonexistent/npm"), t.path()).unwrap_err();
+    assert!(format!("{e:#}").contains("prerequisite"), "{e:#}");
+}

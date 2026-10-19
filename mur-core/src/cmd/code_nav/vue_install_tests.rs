@@ -1,4 +1,5 @@
 use super::*;
+use mur_common::serena_vue::LS_RESOURCES_REL;
 
 fn fake_install(tools: &Path) {
     let dir = VUE.dir(tools);
@@ -107,7 +108,7 @@ fn a_parent_symlinked_out_of_serena_home_is_refused() {
     std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(&victim, &parent).unwrap();
     let e = link(&home, &tools).unwrap_err();
-    assert!(format!("{e:#}").contains("outside SERENA_HOME"), "{e:#}");
+    assert!(format!("{e:#}").contains("refusing"), "{e:#}");
     assert!(victim.join("vue-lsp/keep").exists());
 }
 
@@ -126,4 +127,22 @@ fn link_leaves_no_staging_entries() {
         .map(|e| e.unwrap().file_name())
         .collect();
     assert_eq!(names, ["vue-lsp"]);
+}
+
+/// #1998 review: an agent-planted `language_servers` symlink out of
+/// `SERENA_HOME` is refused before anything is created at its target.
+#[test]
+fn a_planted_ancestor_symlink_gets_no_dirs_created_through_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = tmp.path().join("tools");
+    let home = tmp.path().join("serena");
+    fake_install(&tools);
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::os::unix::fs::symlink(&outside, home.join(LS_RESOURCES_REL[0])).unwrap();
+    let e = link(&home, &tools).unwrap_err();
+    assert!(format!("{e:#}").contains("refusing"), "{e:#}");
+    let left: Vec<_> = std::fs::read_dir(&outside).unwrap().collect();
+    assert!(left.is_empty(), "setup wrote outside SERENA_HOME: {left:?}");
 }

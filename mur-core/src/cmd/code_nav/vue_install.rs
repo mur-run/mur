@@ -24,7 +24,11 @@
 
 use anyhow::{Context, Result, bail};
 use mur_common::serena_ls_cmd::VUE;
+#[cfg(unix)]
+use mur_common::serena_vue::{LS_RESOURCES_REL, VUE_LS_CLASS, VUE_LSP_DIR};
 pub use mur_common::serena_vue::{MARKER_FILE, marker, resources_link, ts_shim, vue_shim};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 /// File extension that marks a project as Vue.
@@ -73,71 +77,126 @@ pub enum LinkOutcome {
 /// moves the link to the new install dir.
 ///
 /// Setup runs as the user, outside the seal, on a path the agent can
-/// write. So the parent dir must canonicalize inside `serena_home` (a
-/// planted symlink cannot steer the rename or the delete elsewhere), the
-/// new link is staged beside it and renamed into place in one step, and a
-/// real directory there is first renamed aside, never deleted in place.
+/// write, so a component the agent swapped for a symlink must not steer a
+/// single write out of `serena_home` (#1998 review). `serena_home` itself
+/// is the trusted root; every dir below it is created and opened relative
+/// to its parent's fd with `O_NOFOLLOW`, so a planted symlink is refused
+/// before anything is made through it, and a later swap of the path cannot
+/// redirect the fd-relative steps. The new link is staged beside the old
+/// one and renamed into place in one step; a real directory there is
+/// renamed aside first and removed without following links inside it.
 #[cfg(unix)]
 pub fn link(serena_home: &Path, tools_dir: &Path) -> Result<LinkOutcome> {
-    let link = resources_link(serena_home);
+    use rustix::fs::{AtFlags, FileType, Mode};
     let target = VUE.dir(tools_dir);
-    let parent = link
-        .parent()
-        .context("serena resources link has no parent")?;
-    std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
-    let home_real = serena_home
-        .canonicalize()
-        .with_context(|| format!("resolve {}", serena_home.display()))?;
-    let parent_real = parent
-        .canonicalize()
-        .with_context(|| format!("resolve {}", parent.display()))?;
-    if !parent_real.starts_with(&home_real) {
-        bail!(
-            "{} resolves to {}, outside SERENA_HOME {}; refusing to touch it",
-            parent.display(),
-            parent_real.display(),
-            home_real.display()
-        );
+    std::fs::create_dir_all(serena_home)
+        .with_context(|| format!("mkdir {}", serena_home.display()))?;
+    let mut dir = rustix::fs::open(serena_home, dir_flags(), Mode::empty())
+        .with_context(|| format!("open {}", serena_home.display()))?;
+    let mut shown = serena_home.to_path_buf();
+    for name in LS_RESOURCES_REL.iter().chain([&VUE_LS_CLASS]) {
+        shown.push(name);
+        dir = descend(&dir, name, &shown)?;
     }
-    let link = parent_real.join(mur_common::serena_vue::VUE_LSP_DIR);
+    let link = VUE_LSP_DIR;
+    let shown_link = shown.join(link);
 
-    let outcome = match std::fs::symlink_metadata(&link) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            if std::fs::read_link(&link).ok().as_deref() == Some(target.as_path()) {
-                return Ok(LinkOutcome::Unchanged);
+    let outcome = match rustix::fs::statat(&dir, link, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(st) => match FileType::from_raw_mode(st.st_mode as _) {
+            FileType::Symlink => {
+                let now = rustix::fs::readlinkat(&dir, link, Vec::new()).ok();
+                if now.as_deref().map(|c| c.to_bytes()) == Some(target.as_os_str().as_bytes()) {
+                    return Ok(LinkOutcome::Unchanged);
+                }
+                LinkOutcome::Replaced
             }
-            LinkOutcome::Replaced
-        }
-        Ok(meta) if meta.is_dir() => {
-            let aside = sibling(&link, ASIDE_SUFFIX);
-            std::fs::rename(&link, &aside)
-                .with_context(|| format!("move {} aside", link.display()))?;
-            // `aside` is a real directory inside the checked parent;
-            // `remove_dir_all` does not follow symlinks inside it.
-            std::fs::remove_dir_all(&aside)
-                .with_context(|| format!("remove {}", aside.display()))?;
-            LinkOutcome::Replaced
-        }
-        Ok(_) => LinkOutcome::Replaced,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => LinkOutcome::Created,
-        Err(e) => return Err(e).with_context(|| format!("inspect {}", link.display())),
+            FileType::Directory => {
+                let aside = sibling(link, ASIDE_SUFFIX);
+                rustix::fs::renameat(&dir, link, &dir, &aside)
+                    .with_context(|| format!("move {} aside", shown_link.display()))?;
+                remove_tree_at(&dir, &aside)
+                    .with_context(|| format!("remove {}", shown.join(&aside).display()))?;
+                LinkOutcome::Replaced
+            }
+            _ => LinkOutcome::Replaced,
+        },
+        Err(rustix::io::Errno::NOENT) => LinkOutcome::Created,
+        Err(e) => return Err(e).with_context(|| format!("inspect {}", shown_link.display())),
     };
-    let stage = sibling(&link, STAGE_SUFFIX);
-    let _ = std::fs::remove_file(&stage);
-    std::os::unix::fs::symlink(&target, &stage)
-        .with_context(|| format!("link {} -> {}", stage.display(), target.display()))?;
-    if let Err(e) = std::fs::rename(&stage, &link) {
-        let _ = std::fs::remove_file(&stage);
-        return Err(e).with_context(|| format!("move link into {}", link.display()));
+    let stage = sibling(link, STAGE_SUFFIX);
+    let _ = rustix::fs::unlinkat(&dir, &stage, AtFlags::empty());
+    rustix::fs::symlinkat(&target, &dir, &stage).with_context(|| {
+        format!(
+            "link {} -> {}",
+            shown.join(&stage).display(),
+            target.display()
+        )
+    })?;
+    if let Err(e) = rustix::fs::renameat(&dir, &stage, &dir, link) {
+        let _ = rustix::fs::unlinkat(&dir, &stage, AtFlags::empty());
+        return Err(e).with_context(|| format!("move link into {}", shown_link.display()));
     }
     Ok(outcome)
 }
 
 #[cfg(unix)]
-fn sibling(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!("{suffix}-{}", std::process::id()));
-    path.with_file_name(name)
+fn dir_flags() -> rustix::fs::OFlags {
+    use rustix::fs::OFlags;
+    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC
+}
+
+/// Make `name` under `parent` if missing, then open it without following a
+/// symlink. A symlink (or anything not a directory) there is refused, and
+/// nothing has been created through it.
+#[cfg(unix)]
+fn descend(parent: &rustix::fd::OwnedFd, name: &str, shown: &Path) -> Result<rustix::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    match rustix::fs::mkdirat(parent, name, Mode::from_raw_mode(0o755)) {
+        Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+        Err(e) => return Err(e).with_context(|| format!("mkdir {}", shown.display())),
+    }
+    rustix::fs::openat(parent, name, dir_flags() | OFlags::NOFOLLOW, Mode::empty()).map_err(|e| {
+        anyhow::anyhow!(
+            "{} is not a real directory inside SERENA_HOME ({e}); refusing to touch it",
+            shown.display()
+        )
+    })
+}
+
+/// `rm -rf name` relative to `parent`, never following a symlink: links
+/// are unlinked, only real dirs are entered (opened `O_NOFOLLOW`).
+#[cfg(unix)]
+fn remove_tree_at(parent: &rustix::fd::OwnedFd, name: &str) -> rustix::io::Result<()> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    let fd = rustix::fs::openat(parent, name, dir_flags() | OFlags::NOFOLLOW, Mode::empty())?;
+    let mut entries = Vec::new();
+    for entry in rustix::fs::Dir::read_from(&fd)? {
+        let entry = entry?;
+        let n = entry.file_name().to_bytes();
+        if n != b"." && n != b".." {
+            entries.push((entry.file_name().to_owned(), entry.file_type()));
+        }
+    }
+    for (n, kind) in entries {
+        let n = n.to_string_lossy().into_owned();
+        let is_dir = match kind {
+            FileType::Directory => true,
+            FileType::Unknown => rustix::fs::statat(&fd, &n, AtFlags::SYMLINK_NOFOLLOW)
+                .is_ok_and(|st| FileType::from_raw_mode(st.st_mode as _) == FileType::Directory),
+            _ => false,
+        };
+        if is_dir {
+            remove_tree_at(&fd, &n)?;
+        } else {
+            rustix::fs::unlinkat(&fd, &n, AtFlags::empty())?;
+        }
+    }
+    rustix::fs::unlinkat(parent, name, AtFlags::REMOVEDIR)
+}
+
+#[cfg(unix)]
+fn sibling(name: &str, suffix: &str) -> String {
+    format!("{name}{suffix}-{}", std::process::id())
 }
 
 #[cfg(not(unix))]

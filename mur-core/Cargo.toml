@@ -133,6 +133,8 @@ unicode-width = "0.1"
 
 # Unix-only like the crate itself (it is an empty lib on Windows).
 [target.'cfg(unix)'.dependencies]
+# fd-relative, no-follow walks for setup writes under agent-writable dirs.
+rustix = { version = "1.1", features = ["fs"] }
 mur-git-broker = { path = "../mur-git-broker" }
 
 [features]

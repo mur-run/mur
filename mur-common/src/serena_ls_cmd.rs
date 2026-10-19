@@ -35,6 +35,11 @@ pub struct ManagedNodeLs {
     pub packages: &'static [(&'static str, &'static str)],
     /// The server's `bin` target, relative to the install dir.
     pub entry_rel: &'static [&'static str],
+    /// Further files, relative to the install dir, an install is not
+    /// complete without. Vue's `.bin` shims: serena execs them, and
+    /// without this a verified-but-shimless install could never be
+    /// repaired by re-running setup (#1998 review).
+    pub required_rel: &'static [&'static [&'static str]],
 }
 
 impl ManagedNodeLs {
@@ -46,6 +51,16 @@ impl ManagedNodeLs {
     /// `<tools_dir>/<tool_dir>/<pin>/`.
     pub fn dir(&self, tools_dir: &Path) -> PathBuf {
         tools_dir.join(self.tool_dir).join(self.pin())
+    }
+
+    /// Every file in [`Self::required_rel`], under `tools_dir`.
+    pub fn required(&self, tools_dir: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+        let dir = self.dir(tools_dir);
+        self.required_rel.iter().map(move |rel| {
+            let mut p = dir.clone();
+            p.extend(*rel);
+            p
+        })
     }
 
     /// The `.js` / `.mjs` node runs.
@@ -75,6 +90,7 @@ pub const INTELEPHENSE: ManagedNodeLs = ManagedNodeLs {
         "lib",
         "intelephense.js",
     ],
+    required_rel: &[],
 };
 
 /// serena's `ls_specific_settings` key for typescript-language-server.
@@ -91,6 +107,7 @@ pub const TYPESCRIPT: ManagedNodeLs = ManagedNodeLs {
     tool_dir: TS_LS_PACKAGE,
     packages: &[(TS_LS_PACKAGE, TS_LS_PIN), ("typescript", TYPESCRIPT_PIN)],
     entry_rel: &["node_modules", TS_LS_PACKAGE, "lib", "cli.mjs"],
+    required_rel: &[],
 };
 
 /// serena's `ls_specific_settings` key for the Vue server (#1982).
@@ -122,6 +139,10 @@ pub const VUE: ManagedNodeLs = ManagedNodeLs {
         "language-server",
         "bin",
         "vue-language-server.js",
+    ],
+    required_rel: &[
+        &crate::serena_vue::VUE_SHIM_REL,
+        &crate::serena_vue::TS_SHIM_REL,
     ],
 };
 

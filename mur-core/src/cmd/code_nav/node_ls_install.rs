@@ -93,7 +93,7 @@ pub fn install_command(ls: &ManagedNodeLs, npm: &Path, dir: &Path) -> Command {
 
 /// Judge `tools_dir` by what npm installed, not by trusting the path.
 pub fn installed_state(ls: &ManagedNodeLs, tools_dir: &Path) -> Installed {
-    if !ls.entry(tools_dir).is_file() {
+    if !ls.entry(tools_dir).is_file() || !ls.required(tools_dir).all(|p| p.exists()) {
         return Installed::Missing;
     }
     let dir = ls.dir(tools_dir);
