@@ -738,9 +738,10 @@ where
     };
 
     // Reader: server → (route) → agent or internal waiter
+    let (to_worker, worker) =
+        respond::spawn_response_worker(hook.clone(), down.clone(), to_agent_tx.clone());
     let r_server = {
         let down = down.clone();
-        let hook = hook.clone();
         let agent_pending = agent_pending.clone();
         let to_agent = to_agent_tx.clone();
         tokio::spawn(async move {
@@ -771,18 +772,11 @@ where
                     continue;
                 }
                 if is_response {
+                    // Handed to the ordered worker, never awaited here: a hook
+                    // may make its own `Downstream::call`, whose reply only
+                    // this loop can route.
                     let req = agent_pending.lock().await.remove(&id_key(&id));
-                    let out = match req {
-                        Some(req) => {
-                            let mut resp = hook.lock().await.on_response(&req, v, &down).await;
-                            if req.method == "tools/list" {
-                                merge_extra_tools(&mut resp, hook.lock().await.extra_tools());
-                            }
-                            resp
-                        }
-                        None => v,
-                    };
-                    let _ = to_agent.send(out.to_string());
+                    let _ = to_worker.send((req, v));
                 } else {
                     // server-initiated request (roots/list, sampling) → agent
                     let _ = to_agent.send(line);
@@ -805,6 +799,10 @@ where
     // The finished handle must not be polled again; only the other one.
     other.abort();
     let _ = other.await;
+    // The worker holds a `Downstream` clone and may be parked on an internal
+    // call the server will never answer now.
+    worker.abort();
+    let _ = worker.await;
     drop(down);
     drop(to_agent_tx);
     let _ = w_server.await;
@@ -838,5 +836,6 @@ fn merge_extra_tools(resp: &mut Value, extra: Vec<Value>) {
     }
 }
 
+mod respond;
 #[cfg(test)]
 mod tests;
