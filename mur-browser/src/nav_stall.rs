@@ -28,12 +28,14 @@ pub const TABS_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Marker of the current tab in `browser_tabs` output.
 const CURRENT_TAB: &str = "(current)";
 
-/// Note when the tab shows the requested URL. That only says the address
-/// changed: the document may still be loading slowly, or it may never render
-/// (an undecodable response). The tab list cannot tell the two apart, so the
-/// note names both and leaves recovery to the agent.
-pub const COMMITTED_NOTE: &str = "browser_navigate timed out, but the tab already shows the \
-     requested URL, so the server answered. Either the page is slow to finish loading, or \
+/// Note when the tab shows the requested URL. That does not even prove this
+/// navigation got a response (a reload keeps the old URL); the document may
+/// still be loading slowly, or it may never render
+/// (an undecodable response). The tab list cannot tell these apart, so the
+/// note names them all and leaves recovery to the agent.
+pub const COMMITTED_NOTE: &str = "browser_navigate timed out. The tab shows the requested URL, \
+     but that does not establish whether this navigation completed. The page may be slow to \
+     finish loading, the request may still be pending, or \
      Chromium cannot render it (seen when a response cannot be decoded, e.g. a wrong \
      Content-Encoding header). Try one browser_snapshot; if that also times out, treat the page \
      as unreadable and navigate elsewhere.";

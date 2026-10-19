@@ -87,6 +87,8 @@ fn previous_same_origin_page_is_not_a_stall() {
 fn committed_note_does_not_claim_a_decoding_failure() {
     assert!(!COMMITTED_NOTE.contains("Do not retry"));
     assert!(!COMMITTED_NOTE.contains("will hang"));
+    // A reload keeps the URL even when the new request got no response.
+    assert!(!COMMITTED_NOTE.contains("server answered"));
     assert!(COMMITTED_NOTE.contains("slow"));
     assert!(COMMITTED_NOTE.contains("Content-Encoding"));
 }
