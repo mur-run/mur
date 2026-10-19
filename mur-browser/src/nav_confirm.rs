@@ -123,7 +123,7 @@ pub fn confirmed_result(target: &str, snapshot: &Value) -> Option<Value> {
 /// Same origin (scheme, host, port). A same-origin redirect counts; a hop to
 /// another origin stays an error, since the snapshot cannot tell it apart
 /// from a page the agent did not ask for.
-fn same_origin(target: &str, page: &str) -> bool {
+pub fn same_origin(target: &str, page: &str) -> bool {
     let (Ok(t), Ok(p)) = (url::Url::parse(target), url::Url::parse(page)) else {
         return false;
     };

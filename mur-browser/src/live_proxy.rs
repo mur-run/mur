@@ -69,6 +69,15 @@ pub fn parse_proxy_url(raw: Option<&str>) -> Result<ProxyCredentials> {
 /// before the proxy ever logs it.
 pub const ROUTE_SENTINEL_ORIGIN: &str = "https://blocked.invalid";
 
+/// Playwright's default navigation timeout (`timeouts.navigation`), in ms.
+///
+/// Playwright's own default is 60 s. A main document Chromium cannot decode
+/// (`ERR_CONTENT_DECODING_FAILED`, e.g. a bogus `Content-Encoding`) never
+/// fires `domcontentloaded`, so every such navigate waits out the whole
+/// timeout; `nav_stall` then explains the failure. 15 s still covers slow
+/// pages, which have committed by then and only lack a late `load`.
+pub const NAVIGATION_TIMEOUT_MS: u64 = 15_000;
+
 /// The Playwright MCP config document carrying the proxy credentials.
 pub fn config_json(creds: &ProxyCredentials) -> serde_json::Value {
     serde_json::json!({
@@ -83,6 +92,9 @@ pub fn config_json(creds: &ProxyCredentials) -> serde_json::Value {
         },
         "network": {
             "blockedOrigins": [ROUTE_SENTINEL_ORIGIN],
+        },
+        "timeouts": {
+            "navigation": NAVIGATION_TIMEOUT_MS,
         }
     })
 }
@@ -273,6 +285,17 @@ mod tests {
         assert!(ROUTE_SENTINEL_ORIGIN.ends_with(".invalid"));
         // `allowedOrigins` would duplicate the egress proxy's allowlist.
         assert!(v["network"].get("allowedOrigins").is_none());
+    }
+
+    #[test]
+    fn config_json_shortens_the_navigation_timeout() {
+        let c = parse_proxy_url(Some(URL)).unwrap();
+        let v = config_json(&c);
+        assert_eq!(v["timeouts"]["navigation"], NAVIGATION_TIMEOUT_MS);
+        assert!(
+            v["timeouts"].get("action").is_none(),
+            "only navigation changes"
+        );
     }
 
     #[test]
