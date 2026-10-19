@@ -221,16 +221,29 @@ impl LlmClient for OllamaClient {
             let next = activity
                 .bounded(async { resp.chunk().await.map_err(|e| LlmError::from_reqwest(&e)) })
                 .await;
-            let chunk = match next {
-                Ok(Some(c)) => c,
-                Ok(None) => break,
+            let eof = match next {
+                Ok(Some(c)) => {
+                    buf.extend_from_slice(&c);
+                    false
+                }
+                Ok(None) => {
+                    // A clean end of stream flushes the last line even when
+                    // it carries no trailing newline — a server (or a proxy
+                    // that ignored `stream: true`) may send one unterminated
+                    // JSON object. Dropping it would turn a whole answer into
+                    // "empty streamed response". A Timeout cut stays unparsed:
+                    // that tail is a half-written line, not a finished one.
+                    if !buf.is_empty() {
+                        buf.push(b'\n');
+                    }
+                    true
+                }
                 Err(LlmError::Timeout) => {
                     interrupted = true;
                     break;
                 }
                 Err(e) => return Err(e),
             };
-            buf.extend_from_slice(&chunk);
             while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=nl).collect();
                 let line = &line[..line.len().saturating_sub(1)];
@@ -273,6 +286,9 @@ impl LlmClient for OllamaClient {
                         stop_reason = StopReason::MaxTokens;
                     }
                 }
+            }
+            if eof {
+                break;
             }
         }
         if interrupted {
