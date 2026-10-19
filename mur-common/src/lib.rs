@@ -77,6 +77,7 @@ pub mod schedule_claim;
 pub mod scope;
 pub mod secret;
 pub mod serena_ls_cmd;
+pub mod serena_vue;
 pub mod signal;
 pub mod skill;
 pub mod sync_types;

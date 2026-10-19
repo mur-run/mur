@@ -5,7 +5,8 @@
 //! generator (3.4), the profile entry (3.5), the consent flow that
 //! applies them (3.6, [`setup::run`]), the pre-installed pyright (3.6b), and the
 //! pre-installed intelephense (#1945), and the sealed smoke launch that
-//! closes setup ([`smoke`], #1981).
+//! closes setup ([`smoke`], #1981), and the Vue server linked into serena's
+//! resources dir ([`vue_install`], #1982).
 
 pub mod ast_grep_install;
 pub mod ast_grep_wire;
@@ -22,3 +23,4 @@ pub mod setup;
 pub mod smoke;
 pub mod smoke_fetch;
 pub mod smoke_probe;
+pub mod vue_install;

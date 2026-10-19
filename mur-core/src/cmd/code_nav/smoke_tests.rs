@@ -370,3 +370,30 @@ fn a_finished_probe_is_parsed() {
     let child = server_command(&mut c).spawn().unwrap();
     assert_eq!(collect(child, Duration::from_secs(10)), Report::Ok);
 }
+
+/// #1982: serena runs the Vue server through the `.bin` shim in its linked
+/// resources dir, so the smoke launch execs the same shim, resolved into
+/// the install.
+#[test]
+fn vue_is_launched_through_its_shim_under_the_tools_root() {
+    let home = Path::new("/h/.mur");
+    let mut m = Manifest::default();
+    let tools = node_ls_install::tools_dir(home);
+    m.vue = Some(node_ls_install::Record::for_tools(
+        &serena_ls_cmd::VUE,
+        &tools,
+    ));
+    let t = targets(&m, &[Lang::Vue], home);
+    assert_eq!(
+        t,
+        [Target {
+            lang: Lang::Vue,
+            cmd: vec![
+                "/h/.mur/tools/vue-language-server/3.1.5/node_modules/.bin/vue-language-server"
+                    .into(),
+                "--stdio".into()
+            ],
+        }]
+    );
+    assert!(targets(&Manifest::default(), &[Lang::Vue], home).is_empty());
+}

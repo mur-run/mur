@@ -81,7 +81,37 @@ pub fn audit(i: &Inputs) -> Vec<Finding> {
     check_grants(i, &mut out);
     check_unrecorded(i, &mut out);
     check_entries(i, &mut out);
+    check_vue_links(i, &mut out);
     out
+}
+
+/// #1982: each entry's `vue-lsp` link into the tools root, re-checked with
+/// the same function the runtime preflight runs. Silent for an entry with
+/// neither Vue recorded nor a link on disk.
+fn check_vue_links(i: &Inputs, out: &mut Vec<Finding>) {
+    use mur_common::serena_vue::{LinkState, check_link, resources_link};
+    let tools = i.mur_home.join(mur_common::config::MUR_TOOLS_DIR);
+    let vue = mur_common::serena_ls_cmd::VUE_LS_ID;
+    for (entry, langs) in &i.manifest.entry_languages {
+        let Ok(paths) = serena_paths_for(i.agent_home, entry) else {
+            continue;
+        };
+        let subject = format!("entry {entry} vue link");
+        let link = resources_link(&paths.home);
+        match check_link(&paths.home, &tools) {
+            Ok(LinkState::Linked) => out.push(Finding::ok(subject, link.display().to_string())),
+            Ok(LinkState::Absent) if langs.contains(vue) => out.push(Finding::warn(
+                subject,
+                format!(
+                    "{} is missing; serena would npm-install in the sandbox",
+                    link.display()
+                ),
+                setup_cmd(i),
+            )),
+            Ok(LinkState::Absent) => {}
+            Err(why) => out.push(Finding::warn(subject, why, setup_cmd(i))),
+        }
+    }
 }
 
 /// The setup run that re-verifies installs, with serena's flags when the
@@ -100,7 +130,7 @@ fn setup_cmd(i: &Inputs) -> String {
 /// Where the recorded `name@version` install must be, and the version MUR
 /// pins today. `None` for a tool doctor does not know.
 fn install_target(i: &Inputs, name: &str) -> Option<(Option<PathBuf>, &'static str)> {
-    use mur_common::serena_ls_cmd::{INTELEPHENSE, ManagedNodeLs, TYPESCRIPT};
+    use mur_common::serena_ls_cmd::{INTELEPHENSE, ManagedNodeLs, TYPESCRIPT, VUE};
     let m = i.manifest;
     let node = |ls: &ManagedNodeLs, r: &Option<super::node_ls_install::Record>| {
         (r.as_ref().map(|r| r.entry.clone()), ls.pin())
@@ -114,6 +144,7 @@ fn install_target(i: &Inputs, name: &str) -> Option<(Option<PathBuf>, &'static s
         plan::PYRIGHT => (m.pyright.as_ref().map(|r| r.bin.clone()), plan::PYRIGHT_PIN),
         plan::INTELEPHENSE => node(&INTELEPHENSE, &m.intelephense),
         plan::TS_LS => node(&TYPESCRIPT, &m.typescript),
+        plan::VUE_LS => node(&VUE, &m.vue),
         _ => return None,
     })
 }

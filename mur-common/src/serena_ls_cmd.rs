@@ -93,6 +93,38 @@ pub const TYPESCRIPT: ManagedNodeLs = ManagedNodeLs {
     entry_rel: &["node_modules", TS_LS_PACKAGE, "lib", "cli.mjs"],
 };
 
+/// serena's `ls_specific_settings` key for the Vue server (#1982).
+pub const VUE_LS_ID: &str = "vue";
+/// Directory under `<mur_home>/tools/` the Vue server is installed into.
+pub const VUE_TOOL_DIR: &str = "vue-language-server";
+pub const VUE_LS_PACKAGE: &str = "@vue/language-server";
+/// serena's `vue_language_server_version` default at the serena pin.
+pub const VUE_LS_PIN: &str = "3.1.5";
+
+/// The Vue server and its companion TypeScript server, installed together
+/// (#1982). Deliberately NOT in [`MANAGED`]: serena's Vue server has no
+/// `ls_base_cmd` hook — it always execs `vue-lsp/node_modules/.bin/*` under
+/// its own resources dir — so setup links that dir to this install instead,
+/// and no `ls_base_cmd` is ever written (or accepted by C7) for `vue`. The
+/// TypeScript pins are [`TYPESCRIPT`]'s, because serena reads both from
+/// `ls_specific_settings.typescript`, so the npm cache serves both installs.
+pub const VUE: ManagedNodeLs = ManagedNodeLs {
+    ls_id: VUE_LS_ID,
+    tool_dir: VUE_TOOL_DIR,
+    packages: &[
+        (VUE_LS_PACKAGE, VUE_LS_PIN),
+        ("typescript", TYPESCRIPT_PIN),
+        (TS_LS_PACKAGE, TS_LS_PIN),
+    ],
+    entry_rel: &[
+        "node_modules",
+        "@vue",
+        "language-server",
+        "bin",
+        "vue-language-server.js",
+    ],
+};
+
 /// Every server MUR launches through a canonical `ls_base_cmd`.
 pub const MANAGED: [ManagedNodeLs; 2] = [INTELEPHENSE, TYPESCRIPT];
 
@@ -180,6 +212,7 @@ mod tests {
             "rust",
             "typescript_vts",
             "php_phpactor",
+            VUE_LS_ID,
             "",
         ] {
             assert!(canonical_base_cmd(id, Path::new("/t")).is_none(), "{id}");

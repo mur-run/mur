@@ -36,6 +36,9 @@ pub const INTELEPHENSE: &str = mur_common::serena_ls_cmd::INTELEPHENSE_TOOL_DIR;
 /// The TypeScript server, pre-installed and launched via the canonical
 /// `ls_base_cmd` (#1981), so serena never npm-installs it in the sandbox.
 pub const TS_LS: &str = mur_common::serena_ls_cmd::TS_LS_PACKAGE;
+/// The Vue server (#1982), pre-installed and linked into serena's own
+/// resources dir, since serena offers no launch override for it.
+pub const VUE_LS: &str = mur_common::serena_ls_cmd::VUE_TOOL_DIR;
 // `<mur_home>/tools/<name>/<version>/` — the managed-tools root, shared
 // with the ast-grep resolver in `mur-mcp-server`.
 use mur_common::config::MUR_TOOLS_DIR as TOOLS_DIR;
@@ -88,6 +91,7 @@ pub enum Lang {
     Rust,
     Kotlin,
     TypeScript,
+    Vue,
     Go,
     Java,
     Swift,
@@ -96,7 +100,7 @@ pub enum Lang {
 
 impl Lang {
     /// Table order: Low, Medium, then High.
-    pub const ALL: [Lang; 11] = [
+    pub const ALL: [Lang; 12] = [
         Lang::Python,
         Lang::Php,
         Lang::Lua,
@@ -104,6 +108,7 @@ impl Lang {
         Lang::Rust,
         Lang::Kotlin,
         Lang::TypeScript,
+        Lang::Vue,
         Lang::Go,
         Lang::Java,
         Lang::Swift,
@@ -120,6 +125,7 @@ impl Lang {
             Lang::Rust => "rust",
             Lang::Kotlin => "kotlin",
             Lang::TypeScript => "typescript",
+            Lang::Vue => "vue",
             Lang::Go => "go",
             Lang::Java => "java",
             Lang::Swift => "swift",
@@ -134,6 +140,7 @@ impl Lang {
             Lang::Rust
             | Lang::Kotlin
             | Lang::TypeScript
+            | Lang::Vue
             | Lang::Go
             | Lang::Java
             | Lang::Swift
@@ -149,7 +156,7 @@ impl Lang {
     pub fn prerequisites(self) -> &'static [&'static str] {
         match self {
             Lang::Python => &["node"],
-            Lang::TypeScript | Lang::Php => &["node", NPM],
+            Lang::TypeScript | Lang::Vue | Lang::Php => &["node", NPM],
             Lang::Ruby => &["ruby", "gem"],
             Lang::Rust => &["rust-analyzer"],
             Lang::Go => &["go", "gopls"],
@@ -176,6 +183,10 @@ impl Lang {
             Lang::Kotlin => "opening a repo runs its build scripts (settings.gradle.kts)",
             Lang::TypeScript => {
                 "opening a repo runs its own TypeScript (repo node_modules/typescript)"
+            }
+            Lang::Vue => {
+                "implies --lsp typescript (its companion server); opening a repo runs its own \
+                 TypeScript (repo node_modules/typescript)"
             }
             Lang::Ruby => "provisional: bundle exec may evaluate the repo Gemfile",
             Lang::Cpp => "contained: --enable-config=false, no --query-driver",
@@ -294,11 +305,15 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
     if flags.exact_lsp && flags.lsp.is_empty() {
         bail!("--lsp-only needs at least one language");
     }
-    let requested: BTreeSet<Lang> = flags
+    let mut requested: BTreeSet<Lang> = flags
         .lsp
         .iter()
         .map(|s| Lang::parse(s))
         .collect::<Result<_>>()?;
+    // serena's Vue server always runs a companion TypeScript server (#1982).
+    if requested.contains(&Lang::Vue) {
+        requested.insert(Lang::TypeScript);
+    }
 
     let mut out = Plan {
         exact_lsp: flags.exact_lsp,
@@ -385,6 +400,25 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
         out.permissions.push(Permission::Read(dir));
     }
 
+    if enabled(&out, Lang::Vue) {
+        let ls = &mur_common::serena_ls_cmd::VUE;
+        let dir = tool_dir(mur_home, ls.tool_dir, ls.pin());
+        out.install.push(InstallRow {
+            name: ls.tool_dir,
+            version: ls.pin(),
+            dir: dir.clone(),
+            missing: None,
+        });
+        // serena has no launch override for Vue: it execs the `.bin` shim
+        // in its resources dir, which setup links here. The seal checks exec
+        // on the resolved script, so only the server's own `bin/` is granted.
+        out.permissions.push(Permission::Read(dir));
+        out.permissions
+            .push(Permission::SpawnDir(super::vue_install::exec_dir(
+                &mur_home.join(TOOLS_DIR),
+            )));
+    }
+
     if serena_missing.is_none() {
         out.permissions.push(Permission::Read(serena_dir));
         out.permissions
@@ -420,6 +454,12 @@ fn refuse_inexact(p: &Plan) -> Result<()> {
     )
 }
 
+fn enabled(p: &Plan, lang: Lang) -> bool {
+    p.lsp
+        .iter()
+        .any(|r| r.lang == lang && r.status == LspStatus::Enabled)
+}
+
 /// The serena language each managed node server serves.
 fn node_ls_lang(ls: &ManagedNodeLs) -> Option<Lang> {
     Lang::ALL.into_iter().find(|l| l.flag() == ls.ls_id)
@@ -429,11 +469,7 @@ fn node_ls_lang(ls: &ManagedNodeLs) -> Option<Lang> {
 fn managed_node_ls(p: &Plan) -> Vec<&'static ManagedNodeLs> {
     mur_common::serena_ls_cmd::MANAGED
         .iter()
-        .filter(|ls| {
-            p.lsp
-                .iter()
-                .any(|r| Some(r.lang) == node_ls_lang(ls) && r.status == LspStatus::Enabled)
-        })
+        .filter(|ls| node_ls_lang(ls).is_some_and(|l| enabled(p, l)))
         .collect()
 }
 

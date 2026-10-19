@@ -70,6 +70,12 @@ pub fn targets(m: &Manifest, langs: &[Lang], mur_home: &Path) -> Vec<Target> {
                 Lang::Python => vec![m.pyright.as_ref()?.bin.to_str()?.to_owned()],
                 Lang::Php => node(&serena_ls_cmd::INTELEPHENSE, &m.intelephense)?,
                 Lang::TypeScript => node(&serena_ls_cmd::TYPESCRIPT, &m.typescript)?,
+                // serena execs the `.bin` shim itself (#1982), so launch that.
+                Lang::Vue => {
+                    m.vue.as_ref()?;
+                    let dir = serena_ls_cmd::VUE.dir(&tools);
+                    vec![super::vue_install::vue_shim(&dir).to_str()?.to_owned()]
+                }
                 _ => return None,
             };
             cmd.push(STDIO.to_owned());

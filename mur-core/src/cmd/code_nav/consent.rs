@@ -69,6 +69,10 @@ pub struct Manifest {
     /// `ls_base_cmd` (#1981). Absent in manifests written before it existed.
     #[serde(default)]
     pub typescript: Option<super::node_ls_install::Record>,
+    /// The Vue server serena finds through its linked resources dir
+    /// (#1982). Absent in manifests written before it existed.
+    #[serde(default)]
+    pub vue: Option<super::node_ls_install::Record>,
     /// Finding 4: every disabled line, so "off" is never silent.
     pub disabled: Vec<String>,
 }
