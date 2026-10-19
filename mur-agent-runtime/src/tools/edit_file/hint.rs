@@ -12,6 +12,10 @@ const MIN_SIMILARITY: f64 = 0.5;
 /// Snippet limits so a hint never floods the context window.
 const MAX_SNIPPET_LINES: usize = 12;
 const MAX_SNIPPET_CHARS: usize = 800;
+/// Cap on each side of the first-difference quote; longer lines are shown as
+/// a window around the first differing char, with this much lead-in.
+const MAX_QUOTE_CHARS: usize = 120;
+const QUOTE_LEAD_CHARS: usize = 40;
 
 /// Best approximate occurrence of `needle` in `hay`, as char offsets.
 struct Hit {
@@ -94,6 +98,30 @@ fn clip(snippet: &str) -> String {
     out
 }
 
+/// Bound a pair of differing lines to a window around their first differing
+/// char, so a long single line cannot bypass the snippet cap.
+fn quote_pair(want: &str, got: &str) -> (String, String) {
+    let (w, g): (Vec<char>, Vec<char>) = (want.chars().collect(), got.chars().collect());
+    if w.len() <= MAX_QUOTE_CHARS && g.len() <= MAX_QUOTE_CHARS {
+        return (want.to_owned(), got.to_owned());
+    }
+    let col = w.iter().zip(&g).take_while(|(a, b)| a == b).count();
+    let start = col.saturating_sub(QUOTE_LEAD_CHARS);
+    let window = |s: &[char]| {
+        let end = s.len().min(start + MAX_QUOTE_CHARS);
+        let mut out = String::new();
+        if start > 0 {
+            out.push('…');
+        }
+        out.extend(&s[start.min(end)..end]);
+        if end < s.len() {
+            out.push('…');
+        }
+        out
+    };
+    (window(&w), window(&g))
+}
+
 /// First line where `old` and `found` disagree, for a pinpoint message.
 fn first_diff(old: &str, found: &str) -> Option<(usize, String, String)> {
     let (a, b): (Vec<_>, Vec<_>) = (old.lines().collect(), found.lines().collect());
@@ -137,6 +165,7 @@ pub(super) fn not_found_hint(text: &str, old: &str) -> String {
     let why = if squash_ws(&matched) == squash_ws(old) {
         "differs only in whitespace/indentation".to_owned()
     } else if let Some((n, want, got)) = first_diff(old, &matched) {
+        let (want, got) = quote_pair(&want, &got);
         format!("first difference at old_string line {n}: you sent {want:?}, file has {got:?}")
     } else {
         "differs inside a line".to_owned()

@@ -258,3 +258,29 @@ async fn batch_hint_matches_against_prior_edits() {
     assert!(err.contains("hello there"), "{err}");
     assert_eq!(read(&td), "hello world\n");
 }
+
+#[tokio::test]
+async fn long_single_line_hint_stays_bounded() {
+    // Two nearly identical 3,001-char lines: well under the cell budget, so a
+    // hint is produced — but the first-difference quote must not echo both
+    // lines whole (review of #2008).
+    let td = tempfile::tempdir().unwrap();
+    let file_line = format!("{}1", "x".repeat(3000));
+    let sent_line = format!("{}2", "x".repeat(3000));
+    seed(&td, &format!("{file_line}\n"));
+    let err = tool(&td)
+        .execute(serde_json::json!({"path": "f.txt",
+            "old_string": sent_line, "new_string": "Z"}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("closest match"), "{err}");
+    assert!(err.contains("first difference"), "{err}");
+    assert!(
+        err.chars().count() <= 2_000,
+        "hint too long: {} chars",
+        err.chars().count()
+    );
+    // The clipped quote is a window around the difference, not a prefix.
+    assert!(err.contains("x2\""), "{err}");
+}
