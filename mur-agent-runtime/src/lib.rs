@@ -39,6 +39,7 @@ pub mod mcp_repin;
 /// present and broken.
 #[cfg(unix)]
 pub mod mcp_shim;
+pub mod mcp_spawn_migrate;
 pub mod multi_call;
 pub mod multimodal;
 pub mod oauth;

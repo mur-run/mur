@@ -121,3 +121,22 @@ pub fn stale_cap_warnings(hitl: &mur_common::agent::HitlConfig) -> Vec<String> {
     }
     out
 }
+
+/// Before `Profile::load`: grant the bundled `mur-mcp-server` by absolute path
+/// in a profile written before #1987, so it loads, pins and seals with the
+/// grant (see `crate::mcp_spawn_migrate`). Installed agents only — an embedded
+/// agent has no pin and no trusted writer. Best-effort: a failure leaves the
+/// profile as it was, and `mur agent doctor` still names the fix.
+pub(super) fn migrate_bundled_spawn_grant(agent_home: &Path, mur_home: &Path) {
+    let Some(name) = agent_home.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    if agent_home != mur_home.join("agents").join(name) {
+        return;
+    }
+    let bundled = mur_common::exec::bundled_mcp_server_path();
+    if let Err(e) = crate::mcp_spawn_migrate::migrate_bundled_spawn_grant(mur_home, name, &bundled)
+    {
+        tracing::warn!(error = %e, "could not migrate bundled mcp spawn grant");
+    }
+}
