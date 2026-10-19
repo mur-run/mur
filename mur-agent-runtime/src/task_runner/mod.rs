@@ -23,6 +23,7 @@ mod agentic_loop;
 mod builder;
 pub use builder::DrainOutcome;
 mod conversation;
+pub(crate) mod deny_hint;
 mod helpers;
 mod run;
 mod step;
@@ -698,16 +699,19 @@ mod approver_tests {
         Arc::new(TaskRunner::new_stub_echo())
     }
 
+    const NO_RULE: super::deny_hint::AskCause = super::deny_hint::AskCause::NoAllowRule;
+
     /// The fix: a caller that cannot approve gets the denial immediately,
     /// instead of after `hitl.timeout_secs` of silence.
     #[test]
     fn a_caller_that_cannot_approve_is_denied_at_once() {
-        let d = super::decide_without_asking(Some(false), "remember").expect("must short-circuit");
+        let d = super::decide_without_asking(Some(false), "a", "remember", &NO_RULE)
+            .expect("must short-circuit");
         assert!(!d.allow);
         let why = d.reason.unwrap_or_default();
         assert!(why.contains("remember"), "must name the tool: {why}");
         assert!(
-            why.contains("murmur"),
+            why.contains("own terminal"),
             "must name where it can be approved: {why}"
         );
         assert!(
@@ -721,8 +725,8 @@ mod approver_tests {
     /// for a caller that told us it cannot answer.
     #[test]
     fn everyone_else_is_still_asked() {
-        assert!(super::decide_without_asking(Some(true), "remember").is_none());
-        assert!(super::decide_without_asking(None, "remember").is_none());
+        assert!(super::decide_without_asking(Some(true), "a", "remember", &NO_RULE).is_none());
+        assert!(super::decide_without_asking(None, "a", "remember", &NO_RULE).is_none());
     }
 
     /// A caller that declared it cannot approve must be distinguishable from

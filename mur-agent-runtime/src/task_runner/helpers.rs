@@ -258,16 +258,17 @@ pub(super) fn withdraws(entry: &crate::llm::ToolResultEntry) -> bool {
 
 pub(crate) fn decide_without_asking(
     can_approve: Option<bool>,
+    agent: &str,
     tool_name: &str,
+    cause: &super::deny_hint::AskCause,
 ) -> Option<crate::hitl::HitlDecision> {
     if can_approve != Some(false) {
         return None;
     }
     Some(crate::hitl::HitlDecision {
         allow: false,
-        reason: Some(format!(
-            "`{tool_name}` needs approval and this caller cannot give one — run it from \
-             `murmur`, or allow the tool with `mur agent perm tool-allow <agent> {tool_name}`"
+        reason: Some(super::deny_hint::cannot_approve_reason(
+            agent, tool_name, cause,
         )),
         surface: None,
     })

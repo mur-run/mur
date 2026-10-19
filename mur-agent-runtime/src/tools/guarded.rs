@@ -135,9 +135,16 @@ impl GuardedToolCall {
                 );
                 continue;
             }
-            if let Some(d) =
-                decide_without_asking(entry.as_ref().map(|(_, ok)| *ok), &call.tool_name)
-            {
+            if let Some(d) = decide_without_asking(
+                entry.as_ref().map(|(_, ok)| *ok),
+                &self.agent_name,
+                &call.tool_name,
+                &crate::task_runner::deny_hint::ask_cause(
+                    &self.tools_policy,
+                    &call.tool_name,
+                    Some(&call.input),
+                ),
+            ) {
                 self.record_bash_ceiling(task_id, call).await;
                 tracing::warn!(
                     task_id,
