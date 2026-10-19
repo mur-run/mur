@@ -412,9 +412,32 @@ pub struct Trigger {
     pub kind: TriggerKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
+    /// `session_start` only: inject only when the session's working
+    /// directory sits inside a workspace holding one of these markers
+    /// (`.git`, `Cargo.toml`, …). Empty = unconditional, as before.
+    ///
+    /// A field on an existing kind, not a new `TriggerKind`, on purpose:
+    /// `TriggerKind` has no `#[serde(other)]`, so an older runtime fails the
+    /// whole manifest on an unknown kind and drops the skill. An unknown
+    /// FIELD is ignored, so an older runtime just injects every session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_markers: Vec<String>,
 }
 
 impl Trigger {
+    /// Whether this trigger loads the skill at session start for a session
+    /// working in `cwd`. Pure apart from the marker walk (bounded by
+    /// [`crate::repo_walk::walk_ceilings`]); no cwd + markers = not loaded.
+    pub fn fires_at_session_start(&self, cwd: Option<&std::path::Path>) -> bool {
+        if !matches!(self.kind, TriggerKind::SessionStart) {
+            return false;
+        }
+        if self.workspace_markers.is_empty() {
+            return true;
+        }
+        cwd.is_some_and(|d| crate::repo_walk::marker_root_of(d, &self.workspace_markers).is_some())
+    }
+
     /// Returns the keyword string for `Keyword` triggers, `None` otherwise.
     pub fn exact_keyword(&self) -> Option<&str> {
         if matches!(self.kind, TriggerKind::Keyword) {

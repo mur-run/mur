@@ -218,6 +218,7 @@ fn exact_keyword_returns_pattern_for_keyword_triggers() {
     let t = Trigger {
         kind: TriggerKind::Keyword,
         pattern: Some("search".into()),
+        workspace_markers: Vec::new(),
     };
     assert_eq!(t.exact_keyword(), Some("search"));
 }
@@ -227,18 +228,21 @@ fn exact_keyword_returns_none_for_non_keyword_triggers() {
     let t = Trigger {
         kind: TriggerKind::Command,
         pattern: Some("run".into()),
+        workspace_markers: Vec::new(),
     };
     assert_eq!(t.exact_keyword(), None);
 
     let t = Trigger {
         kind: TriggerKind::SessionStart,
         pattern: None,
+        workspace_markers: Vec::new(),
     };
     assert_eq!(t.exact_keyword(), None);
 
     let t = Trigger {
         kind: TriggerKind::Manual,
         pattern: None,
+        workspace_markers: Vec::new(),
     };
     assert_eq!(t.exact_keyword(), None);
 }
@@ -248,6 +252,7 @@ fn exact_keyword_returns_none_when_pattern_is_none() {
     let t = Trigger {
         kind: TriggerKind::Keyword,
         pattern: None,
+        workspace_markers: Vec::new(),
     };
     assert_eq!(t.exact_keyword(), None);
 }
@@ -435,4 +440,68 @@ fn team_field_roundtrip() {
     let m: SkillManifest = serde_yaml_ng::from_str(yaml).unwrap();
     assert_eq!(m.scope, SkillScope::Team);
     assert_eq!(m.team.as_deref(), Some("org-1"));
+}
+
+/// Old→new: a trigger without `workspace_markers` parses with none, and an
+/// unknown sibling field is ignored rather than failing the manifest. The
+/// second half is what makes `workspace_markers` safe for an OLDER runtime
+/// (it ignores the field and injects every session); adding
+/// `deny_unknown_fields` to `Trigger` would silently break that.
+#[test]
+fn trigger_unknown_fields_are_ignored_and_markers_default_empty() {
+    let t: Trigger = serde_yaml_ng::from_str("type: session_start\n").unwrap();
+    assert!(t.workspace_markers.is_empty());
+    let t: Trigger =
+        serde_yaml_ng::from_str("type: session_start\nsome_future_field: [x]\n").unwrap();
+    assert!(matches!(t.kind, TriggerKind::SessionStart));
+    let t: Trigger =
+        serde_yaml_ng::from_str("type: session_start\nworkspace_markers: [.git, go.mod]\n")
+            .unwrap();
+    assert_eq!(t.workspace_markers, vec![".git", "go.mod"]);
+    // Empty markers stay off the wire so untouched skills round-trip byte-stable.
+    let plain = Trigger {
+        kind: TriggerKind::SessionStart,
+        pattern: None,
+        workspace_markers: Vec::new(),
+    };
+    assert!(
+        !serde_yaml_ng::to_string(&plain)
+            .unwrap()
+            .contains("workspace_markers")
+    );
+}
+
+#[test]
+fn session_start_markers_gate_on_the_working_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    // tempdir sits under the process temp dir, which is a walk ceiling —
+    // so build the project strictly below it.
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    let gated = Trigger {
+        kind: TriggerKind::SessionStart,
+        pattern: None,
+        workspace_markers: vec!["Cargo.toml".into()],
+    };
+    assert!(!gated.fires_at_session_start(Some(&proj.join("src"))));
+    assert!(!gated.fires_at_session_start(None));
+    std::fs::write(proj.join("Cargo.toml"), b"").unwrap();
+    assert!(gated.fires_at_session_start(Some(&proj.join("src"))));
+
+    let plain = Trigger {
+        workspace_markers: Vec::new(),
+        ..gated.clone()
+    };
+    assert!(
+        plain.fires_at_session_start(None),
+        "no markers = unconditional"
+    );
+    let kw = Trigger {
+        kind: TriggerKind::Keyword,
+        ..gated
+    };
+    assert!(
+        !kw.fires_at_session_start(Some(&proj)),
+        "only session_start fires"
+    );
 }

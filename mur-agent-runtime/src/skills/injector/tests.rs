@@ -67,6 +67,7 @@ fn required_memory_survives_top_k_regardless_of_alphabetical_order() {
         None,
         None,
         None,
+        None,
     );
 
     assert!(
@@ -105,6 +106,7 @@ fn required_set_is_never_capped_by_max_in_prompt() {
         &mem,
         0.0,
         &HashSet::new(),
+        None,
         None,
         None,
         None,
@@ -150,6 +152,7 @@ fn required_memory_ignores_the_character_cap_and_best_effort_yields() {
         &mem,
         0.0,
         &HashSet::new(),
+        None,
         None,
         None,
         None,
@@ -209,6 +212,7 @@ fn memory_notes_inject_without_a_session_start_trigger() {
         &MemoryConfig::default(),
         0.0,
         &HashSet::new(),
+        None,
         None,
         None,
         None,
@@ -283,6 +287,7 @@ fn project_scoped_skill_injects_only_when_project_matches() {
             None,
             active,
             None,
+            None,
         )
         .injected_names
     };
@@ -309,6 +314,7 @@ fn on_demand_skill_never_injects_layer2() {
         &MemoryConfig::default(),
         0.0,
         &HashSet::new(),
+        None,
         None,
         None,
         None,
@@ -346,6 +352,7 @@ fn fleet_scoped_skill_injects_only_when_fleet_matches() {
             active_fleet,
             None,
             None,
+            None,
         )
         .injected_names
     };
@@ -372,6 +379,7 @@ fn no_session_start_not_injected() {
         &MemoryConfig::default(),
         0.0,
         &HashSet::new(),
+        None,
         None,
         None,
         None,
@@ -403,6 +411,7 @@ fn trusted_before_sandboxed() {
         None,
         None,
         None,
+        None,
     );
     assert_eq!(result.injected_names.len(), 2);
     assert_eq!(result.injected_names[0], "trust");
@@ -426,6 +435,7 @@ fn required_renders_as_overriding_block_after_best_effort() {
         &MemoryConfig::default(),
         0.0,
         &HashSet::new(),
+        None,
         None,
         None,
         None,
@@ -477,6 +487,7 @@ fn required_memory_survives_adaptive_cutoff() {
         None,
         None,
         None,
+        None,
     );
     assert!(
         r.system_addendum.contains("永遠用中文回答我"),
@@ -511,6 +522,7 @@ fn adaptive_skips_when_context_too_full() {
         None,
         None,
         None,
+        None,
     );
     assert!(result.budget_skipped);
     assert!(result.injected_names.is_empty());
@@ -538,6 +550,7 @@ fn max_skills_capped() {
         &MemoryConfig::default(),
         0.0,
         &HashSet::new(),
+        None,
         None,
         None,
         None,
@@ -574,6 +587,7 @@ fn team_scoped_skill_injects_when_team_matches() {
             None,
             None,
             active_team,
+            None,
         )
         .injected_names
     };
@@ -609,6 +623,7 @@ fn team_scoped_skill_excluded_without_active_team() {
         None,
         None,
         None,
+        None,
     );
     assert!(
         result.injected_names.is_empty(),
@@ -641,7 +656,61 @@ fn recently_fired_breaks_tie_within_same_trust() {
         None,
         None,
         None,
+        None,
     );
     assert_eq!(result.injected_names.len(), 2);
     assert_eq!(result.injected_names[0], "b");
+}
+
+#[test]
+fn workspace_markers_gate_session_start_on_the_session_dir() {
+    let skills = vec![
+        loaded(
+            "code-only",
+            "a",
+            TrustLevel::Verified,
+            "triggers:\n  - type: session_start\n    workspace_markers: [Cargo.toml]\n",
+        ),
+        loaded(
+            "always",
+            "b",
+            TrustLevel::Verified,
+            "triggers:\n  - type: session_start\n",
+        ),
+    ];
+    let names = |dir: Option<&std::path::Path>| {
+        inject_layer2(
+            &skills,
+            &SkillsConfig::default(),
+            &MemoryConfig::default(),
+            0.0,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+            dir,
+        )
+        .injected_names
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let proj = tmp.path().join("proj");
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+
+    let n = names(Some(&proj.join("src")));
+    assert!(
+        !n.contains(&"code-only".to_string()),
+        "no marker yet: {n:?}"
+    );
+    assert!(n.contains(&"always".to_string()));
+    assert!(
+        !names(None).contains(&"code-only".to_string()),
+        "no cwd = not a workspace"
+    );
+
+    std::fs::write(proj.join("Cargo.toml"), b"").unwrap();
+    let n = names(Some(&proj.join("src")));
+    assert!(
+        n.contains(&"code-only".to_string()),
+        "inside a workspace: {n:?}"
+    );
 }

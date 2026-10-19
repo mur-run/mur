@@ -374,6 +374,9 @@ pub struct App {
     pub proposal: Option<mur_common::proposal::Proposal>,
     /// A chip-triggered `/restart` is running; turn submission is locked.
     pub restart_in_flight: bool,
+    /// The code-nav setup tip was already considered this session
+    /// (`code_nav_tip.rs`): shown once, or the agent is already set up.
+    pub code_nav_tip_shown: bool,
     /// A background manage op (`run_manage_bg`, #1921): its status label and
     /// start time. Keeps the spinner ticking and the status bar honest.
     pub manage_busy: Option<(String, std::time::Instant)>,
@@ -529,6 +532,7 @@ impl App {
             egress_chips: Default::default(),
             proposal: None,
             restart_in_flight: false,
+            code_nav_tip_shown: false,
             manage_busy: None,
             proposal_deadline: None,
             proposal_pinned: false,

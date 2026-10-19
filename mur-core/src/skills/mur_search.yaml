@@ -129,7 +129,15 @@ content:
     Do not restate those here; this hub only routes.
 tags: [mur, search, grep, lsp, ast-grep, semantic, builtin]
 triggers:
+  # Language-agnostic on purpose: MUR users write in every language, so no
+  # natural-language words here. Code looks the same in all of them.
+  - type: session_start
+    # Older runtimes ignore this field and inject every session (safe); a
+    # new TriggerKind would make them drop the skill instead.
+    workspace_markers: [.git, Cargo.toml, package.json, go.mod, pyproject.toml, setup.py, pom.xml, build.gradle, build.gradle.kts, Gemfile, composer.json, Package.swift, CMakeLists.txt, mix.exs, deno.json]
   - type: keyword
-    pattern: "(find (the )?(code|definition|references|callers|usages)|where (is|does) .{0,40}(defined|handled|implemented)|search (the )?(codebase|project|repo|all projects)|grep for|which file)"
+    # Tool names; `path.ext[:line]`; `a::b`; a snake_/camelCase call; rustc
+    # error codes; stack-trace frames.
+    pattern: "((?i:ast.?grep|serena|ripgrep|find_symbol|find_referencing_symbols|lsp)|\\b[\\w./-]+\\.(rs|py|ts|tsx|js|jsx|go|java|kt|swift|rb|php|cs|c|cc|cpp|h|hpp|ex|exs|scala|dart|lua|zig)(:\\d+)?\\b|\\w::\\w|\\b[a-z][a-z0-9]*(_[a-z0-9]+)+\\(|\\b[a-z]+[A-Z]\\w*\\(|\\berror\\[E\\d{4}\\]|Traceback \\(most recent call|\\bat [\\w.$<>]+\\(.*:\\d+\\))"
   - type: manual
 priority: normal

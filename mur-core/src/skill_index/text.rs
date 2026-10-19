@@ -106,14 +106,17 @@ mod tests {
             Trigger {
                 kind: TriggerKind::Keyword,
                 pattern: Some("alert".into()),
+                workspace_markers: Vec::new(),
             },
             Trigger {
                 kind: TriggerKind::Command,
                 pattern: Some("/run-cmd".into()),
+                workspace_markers: Vec::new(),
             },
             Trigger {
                 kind: TriggerKind::Keyword,
                 pattern: Some("ping".into()),
+                workspace_markers: Vec::new(),
             },
         ];
         let text = embed_manifest(&m);

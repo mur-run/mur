@@ -177,10 +177,12 @@ pub fn skill_md_to_manifest(dir_name: &str, raw: &str, p: &PluginJson) -> SkillM
         Trigger {
             kind: TriggerKind::Keyword,
             pattern: Some(name.clone()),
+            workspace_markers: Vec::new(),
         },
         Trigger {
             kind: TriggerKind::Manual,
             pattern: None,
+            workspace_markers: Vec::new(),
         },
     ];
     base_manifest(
@@ -227,6 +229,7 @@ pub fn command_to_manifest(
     let triggers = vec![Trigger {
         kind: TriggerKind::Command,
         pattern: Some(format!("/{cmd_name}")),
+        workspace_markers: Vec::new(),
     }];
     Ok(base_manifest(
         cmd_name.to_string(),

@@ -278,7 +278,7 @@ fn pane_argv(exe: &str, name: &str, resume: bool, auto: bool) -> Vec<String> {
 
 /// POSIX single-quote escaping for tmux's shell_command argument (the exe
 /// path can contain spaces, e.g. /Volumes/My Drive/...).
-fn shell_quote(s: &str) -> String {
+pub(super) fn shell_quote(s: &str) -> String {
     if !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "-_./=:".contains(c))
