@@ -346,10 +346,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // The two scopes this process can see (spec §3.4). The fleet's clock, when
     // there is one, arrives per turn in the A2A `limits` parameter.
     let limits = (boot_global_limits, profile.inner.limits.clone());
-    // #1907: denials reach clients over the same broadcast as other
-    // request-independent notices; the clone keeps a handle for `egress/grant`.
+    // #1907: denials go to the runner, which routes one naming a turn to that
+    // turn's connection only. The clone keeps a handle for `egress/grant`.
+    let (denied_tx, denied_rx) = tokio::sync::mpsc::channel(32);
     if let Some(p) = &egress_proxy {
-        p.attach_events(sock_notif_tx.clone());
+        p.attach_events(denied_tx);
     }
     let egress_for_grants = egress_proxy.clone();
     let (runner, llm_for_companion, mcp_pool, model_switch) =
@@ -378,6 +379,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         )
         .await?;
     runner.attach_live(live.clone());
+    runner.clone().drain_egress_denied(denied_rx);
     // Before the first turn: tracks a killed predecessor never closed (#1909).
     let unsettled = runner.report_unsettled_tracks(&mur_home);
     if unsettled > 0 {

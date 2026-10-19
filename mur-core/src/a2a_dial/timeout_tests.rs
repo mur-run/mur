@@ -301,3 +301,65 @@ fn poll_sees_heartbeats_as_idle_and_can_end_the_dial() {
     assert_eq!(task.as_deref(), Some("task-7"));
     let _ = server.join();
 }
+
+/// #1907 follow-up: a denial stamped for ANOTHER turn — a broadcast from a
+/// runtime that predates routing, arriving before this connection's own
+/// first frame — must neither print here nor be mistaken for this turn's id.
+/// Unstamped denials (no turn to attribute) still print, as before.
+#[test]
+fn another_turns_denial_is_neither_shown_nor_adopted_as_this_turns_id() {
+    use std::io::Write;
+    if !sockets_allowed("another_turns_denial_is_neither_shown_nor_adopted_as_this_turns_id") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let sock_path = tmp.path().join("agent.sock");
+    let listener = UnixListener::bind(&sock_path).unwrap();
+    let denied = |task: &str| {
+        let task = if task.is_empty() {
+            String::new()
+        } else {
+            format!(",\"task_id\":\"{task}\"")
+        };
+        format!(
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"egress/denied\",\"params\":{{\"agent\":\"mur\",\"server\":\"browser\",\"host\":\"h{}\",\"port\":443,\"mode\":\"restricted\",\"reason\":\"not_allowed\",\"at\":\"t\"{task}}}}}\n",
+            task.len()
+        )
+    };
+    let frames = [
+        denied("task-other"),
+        denied(""),
+        "{\"jsonrpc\":\"2.0\",\"method\":\"turn/heartbeat\",\"params\":{\"task_id\":\"task-mine\",\"at\":\"t\"}}\n".to_string(),
+        denied("task-mine"),
+        denied("task-other"),
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n".to_string(),
+    ];
+    let server = std::thread::spawn(move || {
+        if let Ok((mut conn, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            for f in frames {
+                let _ = conn.write_all(f.as_bytes());
+            }
+        }
+    });
+    write_lock(tmp.path(), "two-sessions", &sock_path, 2);
+    let mut shown: Vec<Option<String>> = vec![];
+    dial_message_streaming(
+        tmp.path(),
+        "two-sessions",
+        serde_json::json!({}),
+        |_, _, _| {},
+        |_| {},
+        |e| {
+            if let StepEvent::EgressDenied(ev) = e {
+                shown.push(ev.task_id);
+            }
+        },
+    )
+    .expect("dial");
+    let _ = server.join();
+    // Had the first `task-other` been adopted as this turn's id, it would
+    // show here and `task-mine` would not.
+    assert_eq!(shown, vec![None, Some("task-mine".to_string())]);
+}

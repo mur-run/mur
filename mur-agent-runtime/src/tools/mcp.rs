@@ -136,6 +136,8 @@ impl ToolExecutor for McpToolExecutor {
 
     async fn execute(&self, mut input: Value) -> Result<ToolOutput, ToolError> {
         inject_session_cwd(&self.tool, &mut input, self.session_cwd.as_ref());
+        // Held across the call: timeout, cancel and panic all drop it.
+        let _in_flight = self.pool.in_flight(&self.server);
         let client_arc: Arc<Mutex<McpClient>> = self
             .pool
             .client(&self.server)

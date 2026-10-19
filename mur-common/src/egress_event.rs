@@ -40,6 +40,13 @@ pub struct EgressDenied {
     pub reason: DenyReason,
     /// RFC 3339 timestamp.
     pub at: String,
+    /// The turn whose tool call was using `server` when the denial happened,
+    /// when exactly one was. Lets the runtime route the notice to that turn's
+    /// connection instead of every connection. `None` when no turn (a child
+    /// started outside a tool call) or more than one turn was using the
+    /// server — the runtime then falls back to the broadcast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
 }
 
 impl EgressDenied {
@@ -74,9 +81,12 @@ mod tests {
             mode: "restricted".into(),
             reason: DenyReason::NotAllowed,
             at: "2026-10-15T00:00:00Z".into(),
+            task_id: None,
         };
         let v = serde_json::to_value(&d).unwrap();
         assert_eq!(v["reason"], "not_allowed");
+        // A client older than this field must still parse the frame.
+        assert!(v.get("task_id").is_none());
         assert_eq!(serde_json::from_value::<EgressDenied>(v).unwrap(), d);
         assert!(d.grantable());
         let listed = EgressDenied {

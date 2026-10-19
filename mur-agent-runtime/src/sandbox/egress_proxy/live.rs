@@ -25,6 +25,36 @@ struct EventsInner {
     agent: String,
     sink: Option<mpsc::Sender<serde_json::Value>>,
     last: HashMap<(String, String), Instant>,
+    /// `server → task → open tool calls`. A denial names the task only when
+    /// exactly one task is using the server; the pool is per agent, so two
+    /// turns on the same server cannot be told apart.
+    in_flight: HashMap<String, HashMap<String, usize>>,
+}
+
+/// Marks one tool call on `server` by `task` as in flight; dropping it marks
+/// the call finished. Drop, not an explicit call, so a timeout, a cancel, or
+/// a panic unwinds the mark too.
+pub struct InFlight {
+    events: Events,
+    server: String,
+    task: String,
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        let mut g = self.events.inner.lock().unwrap();
+        if let Some(tasks) = g.in_flight.get_mut(&self.server) {
+            if let Some(n) = tasks.get_mut(&self.task) {
+                *n -= 1;
+                if *n == 0 {
+                    tasks.remove(&self.task);
+                }
+            }
+            if tasks.is_empty() {
+                g.in_flight.remove(&self.server);
+            }
+        }
+    }
 }
 
 impl Events {
@@ -32,6 +62,23 @@ impl Events {
         let e = Self::default();
         e.inner.lock().unwrap().agent = agent.to_owned();
         e
+    }
+
+    pub(super) fn in_flight(&self, server: &str, task: &str) -> InFlight {
+        *self
+            .inner
+            .lock()
+            .unwrap()
+            .in_flight
+            .entry(server.to_owned())
+            .or_default()
+            .entry(task.to_owned())
+            .or_default() += 1;
+        InFlight {
+            events: self.clone(),
+            server: server.to_owned(),
+            task: task.to_owned(),
+        }
     }
 
     /// Emit at most one event per `(server, host)` per window. Returns the
@@ -54,6 +101,10 @@ impl Events {
             return None;
         }
         g.last.insert(key, now);
+        let task_id = match g.in_flight.get(server) {
+            Some(tasks) if tasks.len() == 1 => tasks.keys().next().cloned(),
+            _ => None,
+        };
         let ev = EgressDenied {
             agent: g.agent.clone(),
             server: server.to_owned(),
@@ -66,6 +117,7 @@ impl Events {
                 DenyReason::NotAllowed
             },
             at: chrono::Utc::now().to_rfc3339(),
+            task_id,
         };
         if let Some(sink) = &g.sink {
             let n = serde_json::json!({
@@ -114,6 +166,12 @@ impl EgressProxyHandle {
     /// supervisor's notifier exists.
     pub fn attach_events(&self, sink: mpsc::Sender<serde_json::Value>) {
         self.events.inner.lock().unwrap().sink = Some(sink);
+    }
+
+    /// Mark `task`'s tool call on `server` as in flight until the guard drops,
+    /// so a denial raised meanwhile can name the task.
+    pub fn in_flight(&self, server: &str, task: &str) -> InFlight {
+        self.events.in_flight(server, task)
     }
 
     /// Let `host` through for `server` from the next connection on. Applies to
@@ -190,6 +248,42 @@ mod tests {
         let n = rx.try_recv().unwrap();
         assert_eq!(n["method"], DENIED_METHOD);
         assert_eq!(n["params"]["host"], "img.x.com");
+    }
+
+    /// A denial raised while exactly one turn's tool call is using the server
+    /// is that turn's business: it names the task so the runtime can route it
+    /// to that turn's connection instead of every connection on the socket.
+    #[test]
+    fn a_denial_names_the_one_task_using_the_server() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let _using = h.in_flight("browser", "task-a");
+        let d = h
+            .events
+            .denied("browser", "img.x.com", Some(443), false, Instant::now())
+            .unwrap();
+        assert_eq!(d.task_id.as_deref(), Some("task-a"));
+    }
+
+    /// Two turns on one shared server cannot be told apart, and a child that
+    /// nobody's tool call started belongs to no turn: both are `None`, which
+    /// the runtime reads as "broadcast, as before".
+    #[test]
+    fn a_denial_is_unattributed_when_zero_or_two_tasks_use_the_server() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let t = Instant::now();
+        let a = h.in_flight("browser", "task-a");
+        let b = h.in_flight("browser", "task-b");
+        let both = h.events.denied("browser", "one.x", None, false, t).unwrap();
+        assert_eq!(both.task_id, None);
+        drop(b);
+        let only_a = h.events.denied("browser", "two.x", None, false, t).unwrap();
+        assert_eq!(only_a.task_id.as_deref(), Some("task-a"));
+        drop(a);
+        let nobody = h
+            .events
+            .denied("browser", "three.x", None, false, t)
+            .unwrap();
+        assert_eq!(nobody.task_id, None);
     }
 
     #[test]
