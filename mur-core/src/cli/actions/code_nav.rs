@@ -34,8 +34,13 @@ pub enum CodeNavAction {
         no_ast_grep: bool,
         /// Language server to enable (repeatable). Replaces the default set
         /// (Python, PHP, Lua, C/C++); high-risk languages need this.
-        #[arg(long, value_name = "LANG")]
+        #[arg(long, value_name = "LANG", conflicts_with = "lsp_only")]
         lsp: Vec<String>,
+        /// Set this entry's language servers to exactly these (repeatable),
+        /// dropping any it listed before. Rewrites `project.yml` to match.
+        /// Use it to remove a language whose server cannot start.
+        #[arg(long, value_name = "LANG")]
+        lsp_only: Vec<String>,
         /// Confirm the printed plan without a prompt. Never adds to it.
         #[arg(long)]
         yes: bool,

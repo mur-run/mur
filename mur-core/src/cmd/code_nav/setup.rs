@@ -496,11 +496,12 @@ fn install_node_ls(
 }
 
 /// The languages `entry`'s `project.yml` lists: what this plan enables,
-/// unioned with what this entry listed before (setup never revokes). Only
+/// unioned with what this entry listed before (setup never revokes), or,
+/// with `--lsp-only` (#1992), exactly what this plan enables. Only
 /// this entry's: serena refuses to start if any listed server fails, so
 /// another project's languages must not leak in (#1943).
 pub(super) fn entry_langs(m: &Manifest, entry: &str, plan: &plan::Plan) -> Vec<Lang> {
-    let own = m.languages_of(entry);
+    let own = m.languages_of(entry).filter(|_| !plan.exact_lsp);
     Lang::ALL
         .into_iter()
         .filter(|l| {

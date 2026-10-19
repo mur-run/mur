@@ -793,3 +793,7 @@ mod tests {
 #[cfg(test)]
 #[path = "serena_hint_tests.rs"]
 mod serena_hint_tests;
+
+#[cfg(test)]
+#[path = "code_nav_tests.rs"]
+mod code_nav_tests;

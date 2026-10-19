@@ -55,6 +55,9 @@ pub struct Flags {
     pub no_ast_grep: bool,
     /// `--lsp <lang>`, repeatable. Non-empty replaces the default set.
     pub lsp: Vec<String>,
+    /// `--lsp-only` (#1992): `lsp` is the entry's exact language set, not
+    /// an addition to what it listed before.
+    pub exact_lsp: bool,
 }
 
 /// What the caller found on the host. Only `PATH` lookups for now.
@@ -246,6 +249,9 @@ pub struct Plan {
     pub permissions: Vec<Permission>,
     /// Every v1 language when serena is requested, empty otherwise.
     pub lsp: Vec<LspRow>,
+    /// From [`Flags::exact_lsp`]: the entry's languages become exactly the
+    /// enabled rows instead of their union with what it listed before.
+    pub exact_lsp: bool,
 }
 
 impl Plan {
@@ -278,13 +284,19 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
     if !flags.with_serena && !flags.lsp.is_empty() {
         bail!("--lsp only applies with --with-serena");
     }
+    if flags.exact_lsp && flags.lsp.is_empty() {
+        bail!("--lsp-only needs at least one language");
+    }
     let requested: BTreeSet<Lang> = flags
         .lsp
         .iter()
         .map(|s| Lang::parse(s))
         .collect::<Result<_>>()?;
 
-    let mut out = Plan::default();
+    let mut out = Plan {
+        exact_lsp: flags.exact_lsp,
+        ..Plan::default()
+    };
     if !flags.no_ast_grep {
         out.install.push(InstallRow {
             name: AST_GREP,
@@ -369,7 +381,34 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
         out.permissions
             .extend(spawn.into_iter().map(Permission::Spawn));
     }
+    refuse_inexact(&out)?;
     Ok(out)
+}
+
+/// `--lsp-only` means "exactly this set". A requested language that is
+/// disabled would silently fall out of it — and if all are, empty the
+/// entry — so refuse before setup writes anything (#1992 review).
+fn refuse_inexact(p: &Plan) -> Result<()> {
+    if !p.exact_lsp {
+        return Ok(());
+    }
+    let blocked: Vec<String> = p
+        .lsp
+        .iter()
+        .filter_map(|r| match &r.status {
+            LspStatus::Disabled { missing } => Some(format!("{} ({missing})", r.lang.flag())),
+            _ => None,
+        })
+        .collect();
+    if blocked.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "--lsp-only sets the entry's languages exactly, but {} cannot be enabled: \
+         prerequisite not found on PATH. Install it, or drop that --lsp-only; \
+         nothing was changed",
+        blocked.join(", ")
+    )
 }
 
 /// The serena language each managed node server serves.

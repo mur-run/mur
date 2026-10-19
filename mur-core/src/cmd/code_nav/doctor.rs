@@ -293,13 +293,27 @@ fn read_langs(path: &Path) -> Result<BTreeSet<String>> {
 }
 
 fn entry_fix(i: &Inputs, entry: &str, project: &Path, langs: &BTreeSet<String>) -> String {
+    entry_cmd(i, entry, project, "--lsp", langs)
+}
+
+/// `flag` is `--lsp` (re-add what is recorded) or `--lsp-only` (narrow the
+/// record to what is listed, #1992).
+fn entry_cmd(
+    i: &Inputs,
+    entry: &str,
+    project: &Path,
+    flag: &str,
+    langs: &BTreeSet<String>,
+) -> String {
     let mut s = format!(
         "mur code-nav setup --agent {} --with-serena --project {} --entry {entry}",
         i.agent,
         project.display()
     );
     for l in langs {
-        s.push_str(" --lsp ");
+        s.push(' ');
+        s.push_str(flag);
+        s.push(' ');
         s.push_str(l);
     }
     s
@@ -343,9 +357,12 @@ fn check_entries(i: &Inputs, out: &mut Vec<Finding>) {
                     out.push(Finding::warn(subject, detail, fix));
                 } else {
                     // A language dropped from project.yml is usually one whose
-                    // server cannot start. setup only adds languages, so its
-                    // fix would re-add it and serena would refuse to launch
-                    // again; there is no command that shrinks the recorded set.
+                    // server cannot start, so re-adding it with `--lsp` would
+                    // stop serena again (#1989). Narrow the record to what the
+                    // file lists instead (#1992). `--lsp-only` refuses an empty
+                    // set, so an empty file gets no fix.
+                    let narrow = (!have.is_empty())
+                        .then(|| entry_cmd(i, entry, project, "--lsp-only", &have));
                     out.push(Finding {
                         level: Level::Warn,
                         subject,
@@ -354,7 +371,7 @@ fn check_entries(i: &Inputs, out: &mut Vec<Finding>) {
                              serena from starting if their servers cannot launch",
                             list(&missing)
                         ),
-                        fix: None,
+                        fix: narrow,
                     });
                 }
             }

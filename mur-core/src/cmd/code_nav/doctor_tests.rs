@@ -222,10 +222,12 @@ fn project_yml_languages_drifting_from_the_manifest_are_flagged() {
     assert_eq!(w.len(), 1, "{fs:#?}");
     assert!(w[0].detail.contains("[python]") && w[0].detail.contains("[php,python]"));
     // A language dropped from project.yml is usually one whose server cannot
-    // start; setup would re-add it and serena would refuse to launch again,
-    // and setup cannot shrink the recorded set. So no setup fix is offered.
-    assert_eq!(w[0].fix, None, "{fs:#?}");
+    // start, so the fix must not re-add it (#1989): it narrows the recorded
+    // set to what project.yml lists, via --lsp-only (#1992).
     assert!(w[0].detail.contains("missing [php]"), "{}", w[0].detail);
+    let fix = w[0].fix.as_deref().expect("a narrowing fix");
+    assert!(fix.ends_with("--entry serena --lsp-only python"), "{fix}");
+    assert!(!fix.contains("php"), "{fix}");
 }
 
 #[test]
