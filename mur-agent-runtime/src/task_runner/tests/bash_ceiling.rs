@@ -55,6 +55,8 @@ struct Run {
     /// `risk` on each asked call, in order (`None` = field absent).
     asked: Vec<Option<String>>,
     records: Vec<serde_json::Value>,
+    /// `code: message` of a failed task, empty otherwise.
+    error: String,
 }
 
 /// Run one `bash` call under an exact `bash: allow` rule carrying `waiver`.
@@ -158,7 +160,15 @@ async fn run_wired(
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     });
-    let _ = runner.run_sync(spec).await;
+    let outcome = runner.run_sync(spec).await;
+    let error = match &outcome {
+        TaskOutcome::Failed(t) => t
+            .error
+            .as_ref()
+            .map(|e| format!("{}: {}", e.code, e.message))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     denier.abort();
     drop(runner);
     let mut asked = Vec::new();
@@ -181,6 +191,7 @@ async fn run_wired(
         executed: calls.load(Ordering::Relaxed),
         asked,
         records,
+        error,
     }
 }
 
@@ -296,6 +307,27 @@ async fn a_refusal_because_the_caller_cannot_approve_is_recorded() {
     assert!(r.asked.is_empty(), "{:?}", r.asked);
     assert_eq!(r.records.len(), 1, "{:?}", r.records);
     assert_eq!(r.records[0]["tier"], "network-egress");
+}
+
+/// #1997: the same refusal must say the ceiling is why, not `tool-allow` —
+/// the `bash: allow` rule is already there.
+#[tokio::test]
+async fn a_ceiling_refusal_names_the_tier_not_tool_allow() {
+    let r = run_wired(
+        "git push origin main",
+        FloorWaiver::Off,
+        None,
+        true,
+        Wiring {
+            caller_cannot_approve: true,
+            ..Wiring::default()
+        },
+    )
+    .await;
+    assert!(r.error.starts_with("hitl_denied"), "{}", r.error);
+    assert!(r.error.contains("tier `network-egress`"), "{}", r.error);
+    assert!(r.error.contains("bash ceiling `write`"), "{}", r.error);
+    assert!(!r.error.contains("tool-allow"), "{}", r.error);
 }
 
 /// Refused fail-closed because no approval channel exists: the call never
