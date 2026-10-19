@@ -53,6 +53,22 @@ pub fn parse_proxy_url(raw: Option<&str>) -> Result<ProxyCredentials> {
     })
 }
 
+/// Origin put in `network.blockedOrigins` so Playwright MCP installs a
+/// `context.route` handler. Nothing is meant to be blocked: `.invalid` is a
+/// reserved TLD (RFC 2606) that never resolves.
+///
+/// Why a route at all: proxy credentials make Playwright enable CDP
+/// `Fetch` interception (`handleAuthRequests`), so every request pauses in
+/// `Fetch.requestPaused`. Without a route handler the first navigation
+/// request stays paused and `browser_navigate` hangs until its timeout.
+/// With any route installed, Playwright continues paused requests.
+///
+/// The allowlist stays where it is — the egress proxy's `allow_hosts`. An
+/// `allowedOrigins` list here would be a second copy to keep in sync, and a
+/// host missing from it fails inside the browser (`ERR_BLOCKED_BY_CLIENT`)
+/// before the proxy ever logs it.
+pub const ROUTE_SENTINEL_ORIGIN: &str = "https://blocked.invalid";
+
 /// The Playwright MCP config document carrying the proxy credentials.
 pub fn config_json(creds: &ProxyCredentials) -> serde_json::Value {
     serde_json::json!({
@@ -64,6 +80,9 @@ pub fn config_json(creds: &ProxyCredentials) -> serde_json::Value {
                     "password": creds.password,
                 }
             }
+        },
+        "network": {
+            "blockedOrigins": [ROUTE_SENTINEL_ORIGIN],
         }
     })
 }
@@ -239,6 +258,21 @@ mod tests {
                 .unwrap()
                 .contains('@')
         );
+    }
+
+    #[test]
+    fn config_json_installs_a_route_without_a_browser_allowlist() {
+        let c = parse_proxy_url(Some(URL)).unwrap();
+        let v = config_json(&c);
+        // The sentinel only exists to make Playwright install a route; it
+        // must stay unresolvable so it can never block a real site.
+        assert_eq!(
+            v["network"]["blockedOrigins"],
+            serde_json::json!([ROUTE_SENTINEL_ORIGIN])
+        );
+        assert!(ROUTE_SENTINEL_ORIGIN.ends_with(".invalid"));
+        // `allowedOrigins` would duplicate the egress proxy's allowlist.
+        assert!(v["network"].get("allowedOrigins").is_none());
     }
 
     #[test]
