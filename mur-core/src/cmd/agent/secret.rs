@@ -6,6 +6,46 @@ use super::load_profile_for_edit;
 
 pub(crate) const SECRET_SERVICE: &str = "mur-agent";
 
+/// Clears the "keychain prompt pending" markers for an agent (#1980), so its
+/// next start probes those secrets again. Best-effort; a stale marker only
+/// means one secret stays skipped until the next user action.
+pub(crate) fn clear_pending_keychain(agent_home: &std::path::Path) {
+    let n = mur_common::secret::keychain_pending::clear_all(agent_home);
+    if n > 0 {
+        tracing::debug!(cleared = n, "cleared pending keychain markers");
+    }
+}
+
+/// What `mur agent status` says about secrets skipped at start because an
+/// earlier keychain prompt was never answered (#1980). Without it the only
+/// trace is the runtime's stderr log. `None` when nothing is pending.
+///
+/// The follow-up command must be one that works in the agent's current state:
+/// a bare `mur agent restart` is rejected, and a named one refuses an agent
+/// with no `running.lock` — exactly where a crash loop leaves it.
+pub(crate) fn keychain_pending_line(
+    agent_home: &std::path::Path,
+    agent: &str,
+    running: bool,
+) -> Option<String> {
+    let names = mur_common::secret::keychain_pending::list(agent_home);
+    let verb = if running { "restart" } else { "start" };
+    (!names.is_empty()).then(|| {
+        format!(
+            "Secrets: waiting for keychain approval: {} — in the macOS prompt choose \
+             \"Always Allow\" (not \"Allow\"), then `mur agent {verb} {agent}`",
+            names.join(", ")
+        )
+    })
+}
+
+/// Same, for one secret of a named agent. Silent when the home is unresolvable.
+pub(crate) fn clear_pending_keychain_for(agent: &str, key: &str) {
+    if let Ok(home) = super::resolve_mur_home() {
+        mur_common::secret::keychain_pending::clear(&home.join("agents").join(agent), key);
+    }
+}
+
 pub async fn cmd_secret_set(agent: &str, key: &str, value: Option<&str>) -> Result<()> {
     use mur_common::secret::keychain_set;
     let val: String = match value {
@@ -19,6 +59,7 @@ pub async fn cmd_secret_set(agent: &str, key: &str, value: Option<&str>) -> Resu
     keychain_set(SECRET_SERVICE, &acct, &val)
         .await
         .with_context(|| format!("set {SECRET_SERVICE}/{acct}"))?;
+    clear_pending_keychain_for(agent, key);
     println!("Wrote {SECRET_SERVICE}/{acct}");
     Ok(())
 }
@@ -29,6 +70,7 @@ pub async fn cmd_secret_delete(agent: &str, key: &str) -> Result<()> {
     keychain_delete(SECRET_SERVICE, &acct)
         .await
         .with_context(|| format!("delete {SECRET_SERVICE}/{acct}"))?;
+    clear_pending_keychain_for(agent, key);
     println!("Deleted {SECRET_SERVICE}/{acct}");
     Ok(())
 }
@@ -60,4 +102,34 @@ pub async fn cmd_secret_list(agent: &str) -> Result<()> {
         None => println!("agent uses inline model — no registry secret"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    #[test]
+    fn status_line_names_pending_secrets_and_the_fix() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(keychain_pending_line(home.path(), "maps", true).is_none());
+        mur_common::secret::keychain_pending::mark(home.path(), "GOOGLE_MAPS_KEY").unwrap();
+        let line = keychain_pending_line(home.path(), "maps", true).unwrap();
+        assert!(line.contains("GOOGLE_MAPS_KEY"), "{line}");
+        assert!(line.contains("Always Allow"), "{line}");
+        clear_pending_keychain(home.path());
+        assert!(keychain_pending_line(home.path(), "maps", true).is_none());
+    }
+
+    /// A bare `mur agent restart` is rejected, and a named restart refuses an
+    /// agent without `running.lock`; the hint must name a command that works.
+    #[test]
+    fn status_line_gives_a_command_that_runs_in_the_current_state() {
+        let home = tempfile::tempdir().unwrap();
+        mur_common::secret::keychain_pending::mark(home.path(), "GOOGLE_MAPS_KEY").unwrap();
+        let running = keychain_pending_line(home.path(), "maps", true).unwrap();
+        assert!(running.contains("`mur agent restart maps`"), "{running}");
+        let stopped = keychain_pending_line(home.path(), "maps", false).unwrap();
+        assert!(stopped.contains("`mur agent start maps`"), "{stopped}");
+        assert!(!stopped.contains("restart"), "{stopped}");
+    }
 }

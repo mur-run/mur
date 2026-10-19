@@ -722,6 +722,18 @@ pub fn cmd_status(name: &str) -> Result<()> {
     if let Some(up) = &row.uptime {
         println!("       Uptime: {up}");
     }
+    if let Some(line) = super::secret::keychain_pending_line(
+        &mur_home.join("agents").join(name),
+        name,
+        // restart's own guard (`select_targets_with_on_disk`): lock file present.
+        mur_home
+            .join("agents")
+            .join(name)
+            .join("running.lock")
+            .exists(),
+    ) {
+        println!("  {line}");
+    }
     Ok(())
 }
 
