@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 /// Fragments of Playwright's navigation timeout error, e.g.
-/// `Timeout 15000ms exceeded.\nCall log:\n  - navigating to "…", waiting until "domcontentloaded"`.
+/// `Timeout 20000ms exceeded.\nCall log:\n  - navigating to "…", waiting until "domcontentloaded"`.
 pub const TIMEOUT_MARKERS: [&str; 2] = ["ms exceeded", "navigating to "];
 /// Bound on the internal `browser_tabs` call. It does not wait on the page,
 /// so anything slower means the server itself is stuck.

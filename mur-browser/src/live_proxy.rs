@@ -74,9 +74,9 @@ pub const ROUTE_SENTINEL_ORIGIN: &str = "https://blocked.invalid";
 /// Playwright's own default is 60 s. A main document Chromium cannot decode
 /// (`ERR_CONTENT_DECODING_FAILED`, e.g. a bogus `Content-Encoding`) never
 /// fires `domcontentloaded`, so every such navigate waits out the whole
-/// timeout; `nav_stall` then explains the failure. 15 s still covers slow
+/// timeout; `nav_stall` then explains the failure. 20 s still covers slow
 /// pages, which have committed by then and only lack a late `load`.
-pub const NAVIGATION_TIMEOUT_MS: u64 = 15_000;
+pub const NAVIGATION_TIMEOUT_MS: u64 = 20_000;
 
 /// The Playwright MCP config document carrying the proxy credentials.
 pub fn config_json(creds: &ProxyCredentials) -> serde_json::Value {

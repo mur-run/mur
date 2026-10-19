@@ -8,7 +8,7 @@ const TARGET: &str = "http://127.0.0.1:50456/broken";
 /// Verbatim shape of `@playwright/mcp` 0.0.82's navigate timeout.
 fn timeout_error() -> Value {
     json!({"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[{"type":"text",
-        "text":format!("### Error\nTimeoutError: browserBackend.callTool: Timeout 15000ms exceeded.\n\
+        "text":format!("### Error\nTimeoutError: browserBackend.callTool: Timeout 20000ms exceeded.\n\
             Call log:\n  - navigating to \"{TARGET}\", waiting until \"domcontentloaded\"\n")}]}})
 }
 
@@ -55,7 +55,7 @@ fn same_origin_tab_gets_the_stalled_note_and_stays_an_error() {
         r["result"]["content"][1]["text"]
             .as_str()
             .unwrap()
-            .contains("Timeout 15000ms")
+            .contains("Timeout 20000ms")
     );
 }
 
