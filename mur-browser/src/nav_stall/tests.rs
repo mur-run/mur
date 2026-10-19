@@ -47,16 +47,48 @@ fn reads_the_current_tab_url() {
 }
 
 #[test]
-fn same_origin_tab_gets_the_stalled_note_and_stays_an_error() {
+fn tab_on_the_requested_url_gets_the_committed_note_and_stays_an_error() {
     let r = annotated(TARGET, &timeout_error(), &tabs_at(TARGET)).unwrap();
     assert_eq!(r["result"]["isError"], true);
-    assert_eq!(r["result"]["content"][0]["text"], STALLED_NOTE);
+    assert_eq!(r["result"]["content"][0]["text"], COMMITTED_NOTE);
     assert!(
         r["result"]["content"][1]["text"]
             .as_str()
             .unwrap()
             .contains("Timeout 20000ms")
     );
+}
+
+#[test]
+fn fragment_does_not_change_the_document() {
+    let at = format!("{TARGET}#top");
+    let r = annotated(TARGET, &timeout_error(), &tabs_at(&at)).unwrap();
+    assert_eq!(r["result"]["content"][0]["text"], COMMITTED_NOTE);
+}
+
+/// Review of #2010: the tab still shows an earlier page of the same site
+/// because the new document never committed. Same origin is not evidence
+/// that the requested page stalled, so the agent must keep its retry.
+#[test]
+fn previous_same_origin_page_is_not_a_stall() {
+    let r = annotated(
+        TARGET,
+        &timeout_error(),
+        &tabs_at("http://127.0.0.1:50456/a"),
+    )
+    .unwrap();
+    assert_eq!(r["result"]["content"][0]["text"], NOT_COMMITTED_NOTE);
+}
+
+/// A committed document whose load event is merely late looks the same from
+/// the tab list as an undecodable one, so the note may name the decoding
+/// failure only as one possible cause and must not forbid recovery.
+#[test]
+fn committed_note_does_not_claim_a_decoding_failure() {
+    assert!(!COMMITTED_NOTE.contains("Do not retry"));
+    assert!(!COMMITTED_NOTE.contains("will hang"));
+    assert!(COMMITTED_NOTE.contains("slow"));
+    assert!(COMMITTED_NOTE.contains("Content-Encoding"));
 }
 
 #[test]
@@ -114,15 +146,21 @@ async fn navigate_through_proxy(tab_url: &'static str) -> Value {
 }
 
 #[tokio::test]
-async fn proxy_explains_a_stalled_navigation() {
+async fn proxy_explains_a_committed_navigation() {
     let r = navigate_through_proxy(TARGET).await;
     assert_eq!(r["id"], 7);
     assert_eq!(r["result"]["isError"], true);
-    assert_eq!(r["result"]["content"][0]["text"], STALLED_NOTE);
+    assert_eq!(r["result"]["content"][0]["text"], COMMITTED_NOTE);
 }
 
 #[tokio::test]
 async fn proxy_explains_a_navigation_that_never_committed() {
     let r = navigate_through_proxy("about:blank").await;
+    assert_eq!(r["result"]["content"][0]["text"], NOT_COMMITTED_NOTE);
+}
+
+#[tokio::test]
+async fn proxy_keeps_retry_when_the_previous_same_origin_page_is_shown() {
+    let r = navigate_through_proxy("http://127.0.0.1:50456/a").await;
     assert_eq!(r["result"]["content"][0]["text"], NOT_COMMITTED_NOTE);
 }

@@ -10,10 +10,11 @@
 //!
 //! What this hook does: on a navigate timeout it asks the server for
 //! `browser_tabs` (which only reads the tab header and returns at once) and
-//! puts a plain explanation ahead of the original error. The response stays
-//! an error; the hook only makes it legible.
+//! puts a plain explanation ahead of the original error. The tab URL is an
+//! observation, not a diagnosis: it cannot separate a stalled document from
+//! a slow one, so the notes stay qualified. The response stays an error; the
+//! hook only makes it legible.
 
-use crate::nav_confirm::same_origin;
 use crate::proxy::{Decision, Downstream, Hook, Request};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -27,18 +28,20 @@ pub const TABS_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Marker of the current tab in `browser_tabs` output.
 const CURRENT_TAB: &str = "(current)";
 
-/// Note when the tab is on the requested origin: the response arrived but
-/// Chromium never produced a document.
-pub const STALLED_NOTE: &str = "browser_navigate timed out, but the tab is on the requested \
-     page: the server answered and Chromium never rendered it (seen when a response cannot be \
-     decoded, e.g. a wrong Content-Encoding header). browser_snapshot and other page tools will \
-     hang on this tab too. Do not retry this URL; navigate somewhere else or report the page as \
-     unreadable.";
-/// Note when the tab never left its previous page: the site did not answer
-/// in time, or is unreachable.
+/// Note when the tab shows the requested URL. That only says the address
+/// changed: the document may still be loading slowly, or it may never render
+/// (an undecodable response). The tab list cannot tell the two apart, so the
+/// note names both and leaves recovery to the agent.
+pub const COMMITTED_NOTE: &str = "browser_navigate timed out, but the tab already shows the \
+     requested URL, so the server answered. Either the page is slow to finish loading, or \
+     Chromium cannot render it (seen when a response cannot be decoded, e.g. a wrong \
+     Content-Encoding header). Try one browser_snapshot; if that also times out, treat the page \
+     as unreadable and navigate elsewhere.";
+/// Note when the tab shows any other URL, including an earlier page of the
+/// same site: the new document never committed (or redirected elsewhere).
 pub const NOT_COMMITTED_NOTE: &str = "browser_navigate timed out before the requested page \
-     loaded; the tab is still on another page. The site is slow or unreachable. Retry at most \
-     once, or report it as unavailable.";
+     loaded; the tab still shows a different URL. The site is slow or unreachable. Retry at \
+     most once, or report it as unavailable.";
 
 /// Wraps another hook; annotates navigate timeouts before the inner hook
 /// (recorder, broker redaction) sees the response.
@@ -134,8 +137,8 @@ pub fn current_tab_url(tabs: &Value) -> Option<&str> {
 /// where the current tab is, so the original error goes through untouched.
 pub fn annotated(target: &str, resp: &Value, tabs: &Value) -> Option<Value> {
     let page = current_tab_url(tabs)?;
-    let note = if same_origin(target, page) {
-        STALLED_NOTE
+    let note = if same_document(target, page) {
+        COMMITTED_NOTE
     } else {
         NOT_COMMITTED_NOTE
     };
@@ -143,6 +146,17 @@ pub fn annotated(target: &str, resp: &Value, tabs: &Value) -> Option<Value> {
     let content = out.get_mut("result")?.get_mut("content")?.as_array_mut()?;
     content.insert(0, json!({"type": "text", "text": note}));
     Some(out)
+}
+
+/// Same URL apart from the fragment. Origin alone is not enough: a timeout
+/// before commit leaves the previous page of the same site in the tab.
+pub fn same_document(target: &str, page: &str) -> bool {
+    let (Ok(mut t), Ok(mut p)) = (url::Url::parse(target), url::Url::parse(page)) else {
+        return false;
+    };
+    t.set_fragment(None);
+    p.set_fragment(None);
+    t == p
 }
 
 fn is_error(result: &Value) -> bool {
