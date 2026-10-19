@@ -55,9 +55,10 @@ fn first_run_needs_consent_for_everything() {
     let d = diff(&plan, "serena", Some(Path::new("/r")), &Manifest::default());
     assert!(!d.is_empty());
     // ast-grep, serena, pyright (Python is on by default), and
-    // intelephense (PHP is on by default; #1945).
+    // intelephense (PHP is on by default; #1945). Lua and C/C++ are
+    // serena-fetched and need `--lsp` (#1993).
     assert_eq!(d.installs.len(), 4);
-    assert_eq!(d.languages, ["python", "php", "lua", "cpp"]);
+    assert_eq!(d.languages, ["python", "php"]);
     assert_eq!(d.project.as_deref(), Some(Path::new("/r")));
 }
 
