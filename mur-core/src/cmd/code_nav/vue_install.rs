@@ -34,14 +34,19 @@ use std::path::{Path, PathBuf};
 /// File extension that marks a project as Vue.
 pub const VUE_EXT: &str = "vue";
 /// Directories never searched for `.vue` files (serena ignores them too).
-const SKIP_DIRS: [&str; 6] = [
+const SKIP_DIRS: [&str; 7] = [
     "node_modules",
+    "target",
     "dist",
     "build",
     "coverage",
     ".nuxt",
     ".output",
 ];
+/// How deep `project_has_vue` looks below the project root. A Vue app's
+/// components sit a handful of levels down; the cap bounds the walk on a
+/// large tree that holds no Vue at all.
+const MAX_SCAN_DEPTH: usize = 12;
 /// Sibling names `link` stages through, suffixed with the pid.
 const STAGE_SUFFIX: &str = ".mur-stage";
 const ASIDE_SUFFIX: &str = ".mur-old";
@@ -209,6 +214,7 @@ pub fn link(_serena_home: &Path, _tools_dir: &Path) -> Result<LinkOutcome> {
 /// detection alone.
 pub fn project_has_vue(root: &Path) -> bool {
     walkdir::WalkDir::new(root)
+        .max_depth(MAX_SCAN_DEPTH)
         .into_iter()
         .filter_entry(|e| {
             e.depth() == 0

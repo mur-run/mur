@@ -74,6 +74,26 @@ fn vue_files_are_detected_outside_skipped_dirs_only() {
     assert!(project_has_vue(root));
 }
 
+#[test]
+fn vue_files_under_a_cargo_target_dir_are_ignored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("target/debug/deps")).unwrap();
+    std::fs::write(root.join("target/debug/deps/Stray.vue"), b"").unwrap();
+    assert!(!project_has_vue(root));
+}
+
+#[test]
+fn the_vue_scan_stops_at_its_depth_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let deep = (0..MAX_SCAN_DEPTH).fold(tmp.path().to_path_buf(), |p, i| p.join(format!("d{i}")));
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("TooDeep.vue"), b"").unwrap();
+    assert!(!project_has_vue(tmp.path()));
+    std::fs::write(deep.parent().unwrap().join("JustInside.vue"), b"").unwrap();
+    assert!(project_has_vue(tmp.path()));
+}
+
 /// serena's download may hold symlinks out of `SERENA_HOME`; replacing it
 /// must not follow them.
 #[test]
