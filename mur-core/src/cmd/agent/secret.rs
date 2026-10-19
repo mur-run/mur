@@ -19,12 +19,21 @@ pub(crate) fn clear_pending_keychain(agent_home: &std::path::Path) {
 /// What `mur agent status` says about secrets skipped at start because an
 /// earlier keychain prompt was never answered (#1980). Without it the only
 /// trace is the runtime's stderr log. `None` when nothing is pending.
-pub(crate) fn keychain_pending_line(agent_home: &std::path::Path) -> Option<String> {
+///
+/// The follow-up command must be one that works in the agent's current state:
+/// a bare `mur agent restart` is rejected, and a named one refuses an agent
+/// with no `running.lock` — exactly where a crash loop leaves it.
+pub(crate) fn keychain_pending_line(
+    agent_home: &std::path::Path,
+    agent: &str,
+    running: bool,
+) -> Option<String> {
     let names = mur_common::secret::keychain_pending::list(agent_home);
+    let verb = if running { "restart" } else { "start" };
     (!names.is_empty()).then(|| {
         format!(
             "Secrets: waiting for keychain approval: {} — in the macOS prompt choose \
-             \"Always Allow\" (not \"Allow\"), then `mur agent restart`",
+             \"Always Allow\" (not \"Allow\"), then `mur agent {verb} {agent}`",
             names.join(", ")
         )
     })
@@ -102,12 +111,25 @@ mod pending_tests {
     #[test]
     fn status_line_names_pending_secrets_and_the_fix() {
         let home = tempfile::tempdir().unwrap();
-        assert!(keychain_pending_line(home.path()).is_none());
+        assert!(keychain_pending_line(home.path(), "maps", true).is_none());
         mur_common::secret::keychain_pending::mark(home.path(), "GOOGLE_MAPS_KEY").unwrap();
-        let line = keychain_pending_line(home.path()).unwrap();
+        let line = keychain_pending_line(home.path(), "maps", true).unwrap();
         assert!(line.contains("GOOGLE_MAPS_KEY"), "{line}");
         assert!(line.contains("Always Allow"), "{line}");
         clear_pending_keychain(home.path());
-        assert!(keychain_pending_line(home.path()).is_none());
+        assert!(keychain_pending_line(home.path(), "maps", true).is_none());
+    }
+
+    /// A bare `mur agent restart` is rejected, and a named restart refuses an
+    /// agent without `running.lock`; the hint must name a command that works.
+    #[test]
+    fn status_line_gives_a_command_that_runs_in_the_current_state() {
+        let home = tempfile::tempdir().unwrap();
+        mur_common::secret::keychain_pending::mark(home.path(), "GOOGLE_MAPS_KEY").unwrap();
+        let running = keychain_pending_line(home.path(), "maps", true).unwrap();
+        assert!(running.contains("`mur agent restart maps`"), "{running}");
+        let stopped = keychain_pending_line(home.path(), "maps", false).unwrap();
+        assert!(stopped.contains("`mur agent start maps`"), "{stopped}");
+        assert!(!stopped.contains("restart"), "{stopped}");
     }
 }

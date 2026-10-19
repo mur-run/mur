@@ -221,12 +221,17 @@ pub(super) async fn prepare_and_seal(
             // loop that was dozens of dialogs (#1980). Skip until the user acts
             // (`/secret`, `mur agent secret`, `mur agent start|restart`).
             if keychain_pending::is_pending(agent_home, name) {
+                // Name the agent: a bare `mur agent restart` is rejected, and a
+                // named one refuses an agent with no running.lock, which is
+                // where a crash loop leaves it — hence `start` as the fallback.
                 warn!(
                     name,
+                    agent = %profile.inner.name,
                     "skipping this secret: an earlier start is still waiting for \
                      keychain approval. Choose Always Allow (not Allow) in that \
-                     prompt, then run `mur agent restart`, or set it again with \
-                     /secret"
+                     prompt, then run `mur agent restart {0}` (or `mur agent \
+                     start {0}` if it is stopped), or set it again with /secret",
+                    profile.inner.name
                 );
                 continue;
             }
@@ -276,7 +281,9 @@ pub(super) async fn prepare_and_seal(
                          an authorisation prompt nobody is there to click. Starting \
                          without it, and later starts will not ask again until you \
                          act: choose Always Allow (not Allow) and run `mur agent \
-                         restart`, or set it again from murmur with /secret"
+                         restart {0}` (or `mur agent start {0}` if it is stopped), \
+                         or set it again from murmur with /secret",
+                        profile.inner.name
                     );
                     if let Err(e) = mur_common::secret::keychain_pending::mark(agent_home, name) {
                         warn!(name, error = %e, "could not record the pending keychain prompt; the next start will ask again");
