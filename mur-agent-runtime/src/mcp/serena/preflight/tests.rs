@@ -613,3 +613,98 @@ fn c7_canonical_entry_symlinked_out_of_tools_dir_is_refused() {
     let msg = assert_refused!(fx, C7LsExec).to_string();
     assert!(msg.contains("pwn.js"), "{msg}");
 }
+
+/// #1982: the linked Vue install, plus the version pins setup writes.
+#[cfg(unix)]
+fn installed_vue(fx: &Fx) -> PathBuf {
+    use mur_common::serena_vue::{MARKER_FILE, marker, resources_link, ts_shim, vue_shim};
+    let dir = mur_common::serena_ls_cmd::VUE.dir(&fx.paths.tools_dir);
+    for shim in [vue_shim(&dir), ts_shim(&dir)] {
+        fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        fs::write(&shim, "").unwrap();
+    }
+    fs::write(dir.join(MARKER_FILE), marker()).unwrap();
+    let link = resources_link(&fx.paths.home);
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&dir, &link).unwrap();
+    link
+}
+
+const VUE_PINS: &str = "ls_specific_settings: {vue: {vue_language_server_version: '3.1.5'}, \
+     typescript: {typescript_version: '5.9.3', typescript_language_server_version: '5.1.3'}}";
+
+#[cfg(unix)]
+#[test]
+fn c7_vue_link_with_pins_passes() {
+    let fx = Fx::new();
+    installed_vue(&fx);
+    fx.patch("ls_specific_settings: {}", VUE_PINS);
+    fs::write(
+        fx.folder.join("project.yml"),
+        "language_servers: [vue, typescript]\n",
+    )
+    .unwrap();
+    fx.run().unwrap();
+}
+
+/// Without the pins serena falls back to its own defaults; one that
+/// changes would make it npm-install through the link.
+#[cfg(unix)]
+#[test]
+fn c7_vue_link_without_pins_is_refused() {
+    let fx = Fx::new();
+    installed_vue(&fx);
+    let err = assert_refused!(fx, C7LsExec);
+    assert!(
+        err.to_string().contains("vue_language_server_version"),
+        "{err}"
+    );
+    fx.patch(
+        "ls_specific_settings: {}",
+        &VUE_PINS.replace("'5.9.3'", "'6.0.0'"),
+    );
+    let err = assert_refused!(fx, C7LsExec);
+    assert!(err.to_string().contains("typescript_version"), "{err}");
+}
+
+/// `SERENA_HOME` is agent-writable: a re-pointed link is refused.
+#[cfg(unix)]
+#[test]
+fn c7_vue_link_pointing_elsewhere_is_refused() {
+    let fx = Fx::new();
+    let link = installed_vue(&fx);
+    fx.patch("ls_specific_settings: {}", VUE_PINS);
+    let other = fx._tmp.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&other, &link).unwrap();
+    let err = assert_refused!(fx, C7LsExec);
+    assert!(
+        err.to_string().contains("re-run `mur code-nav setup"),
+        "{err}"
+    );
+}
+
+/// Vue enabled with no link means serena would npm-install in the sandbox.
+#[test]
+fn c7_vue_listed_without_link_is_refused() {
+    let fx = Fx::new();
+    fx.run().unwrap();
+    fs::write(fx.folder.join("project.yml"), "language_servers: [Vue]\n").unwrap();
+    let err = assert_refused!(fx, C7LsExec);
+    assert!(err.to_string().contains("npm-install"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn c7_vue_project_file_pin_override_is_refused() {
+    let fx = Fx::new();
+    installed_vue(&fx);
+    fx.patch("ls_specific_settings: {}", VUE_PINS);
+    fs::write(
+        fx.folder.join("project.local.yml"),
+        "ls_specific_settings: {vue: {vue_language_server_version: '9.9.9'}}\n",
+    )
+    .unwrap();
+    assert_refused!(fx, C7LsExec);
+}

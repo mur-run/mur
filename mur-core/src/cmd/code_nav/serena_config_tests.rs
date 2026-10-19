@@ -511,6 +511,7 @@ fn py(bin: &Path) -> ManagedLs<'_> {
     ManagedLs {
         python: Some(bin),
         node: &[],
+        vue: false,
     }
 }
 
@@ -536,6 +537,7 @@ fn typescript_gets_the_canonical_base_cmd_and_passes_preflight() {
     let m = ManagedLs {
         python: None,
         node: TS_ONLY,
+        vue: false,
     };
     let o = owned_values(&f.paths, &f.project, SECRET, m).unwrap();
     let ts = &o["ls_specific_settings"]["typescript"]["ls_base_cmd"];
@@ -559,7 +561,132 @@ fn typescript_without_its_install_fails_preflight() {
     let m = ManagedLs {
         python: None,
         node: TS_ONLY,
+        vue: false,
     };
     let e = write_config(&f.paths, &f.project, FIXTURE, SECRET, m).unwrap_err();
     assert!(format!("{e:#}").contains("--lsp typescript"), "{e:#}");
+}
+
+/// #1982: with Vue linked, every version serena folds into its install
+/// marker is written explicitly, beside TypeScript's `ls_base_cmd`.
+#[test]
+fn vue_pins_every_marker_version_next_to_the_ts_base_cmd() {
+    let mut f = fx();
+    fake_ts(&mut f);
+    let m = ManagedLs {
+        python: None,
+        node: TS_ONLY,
+        vue: true,
+    };
+    let o = owned_values(&f.paths, &f.project, SECRET, m).unwrap();
+    let ls = &o["ls_specific_settings"];
+    for (section, key, pin) in mur_common::serena_vue::version_settings() {
+        assert_eq!(ls[section][key].as_str(), Some(pin), "{section}.{key}");
+    }
+    assert!(ls["typescript"].get("ls_base_cmd").is_some());
+    assert!(ls["vue"].get("ls_base_cmd").is_none());
+    assert!(
+        owned(&f)["ls_specific_settings"].get("vue").is_none(),
+        "nothing for vue unless it is linked"
+    );
+}
+
+/// #1982: real serena accepts the linked Vue install as complete and never
+/// reaches for npm, and its companion TypeScript server launches from our
+/// `ls_base_cmd`. Asks serena itself (`VueLanguageServer.
+/// _setup_runtime_dependencies`, then `VueTypeScriptServer`'s provider), so
+/// a serena upgrade that moves the resources dir, changes the marker or
+/// stops honouring the pins fails here instead of in a user's sandbox.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs a pinned serena install"]
+fn real_serena_takes_the_linked_vue_install_without_npm() {
+    use mur_common::serena_vue::{resources_link, vue_shim};
+    /// Any executable that exits non-zero.
+    const FALSE_BIN: &str = "/usr/bin/false";
+    let dir =
+        PathBuf::from(std::env::var_os("MUR_SERENA_INSTALL_DIR").expect("MUR_SERENA_INSTALL_DIR"));
+    let tpl = read_pinned_template(&dir).unwrap();
+    let python = serena_venv_python(&dir);
+    let mut f = fx();
+    let ts_entry = fake_ts(&mut f);
+    let tools = f.paths.tools_dir.clone();
+    let vue_dir = mur_common::serena_ls_cmd::VUE.dir(&tools);
+    for shim in [
+        vue_shim(&vue_dir),
+        mur_common::serena_vue::ts_shim(&vue_dir),
+    ] {
+        std::fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        std::fs::write(&shim, b"").unwrap();
+    }
+    crate::cmd::code_nav::vue_install::write_marker(&tools).unwrap();
+    std::fs::create_dir_all(&f.paths.home).unwrap();
+    crate::cmd::code_nav::vue_install::link(&f.paths.home, &tools).unwrap();
+    let m = ManagedLs {
+        python: None,
+        node: TS_ONLY,
+        vue: true,
+    };
+    write_config(&f.paths, &f.project, &tpl, SECRET, m).unwrap();
+
+    // serena only checks that node and npm are on PATH; running either one
+    // means it tried to install, and `false` makes that install fail.
+    let bin = f._tmp.path().join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["node", "npm"] {
+        std::os::unix::fs::symlink(FALSE_BIN, bin.join(name)).unwrap();
+    }
+    let probe = "import json, os, sys\n\
+        from serena.config.serena_config import SerenaConfig as C\n\
+        from solidlsp.ls_config import LanguageServerConfig, LanguageServerId\n\
+        from solidlsp.settings import SolidLSPSettings\n\
+        from solidlsp.language_servers.vue_language_server import VueLanguageServer as V, VueTypeScriptServer as T\n\
+        c = C.from_config_file(generate_if_missing=False)\n\
+        s = SolidLSPSettings(solidlsp_dir=os.environ['SERENA_HOME'], project_data_path=sys.argv[1], \
+            ls_specific_settings=c.ls_specific_settings)\n\
+        cmd, tsdk, ts = V._setup_runtime_dependencies(LanguageServerConfig(ls_id=LanguageServerId.VUE), s)\n\
+        p = T.DependencyProvider(s.get_ls_specific_settings(LanguageServerId.TYPESCRIPT), sys.argv[1], ts)\n\
+        print(json.dumps({'vue': cmd, 'companion': p.create_launch_command()}))";
+    let run = || {
+        std::process::Command::new(&python)
+            .args(["-c", probe])
+            .arg(f._tmp.path().join("scratch"))
+            .env("SERENA_HOME", &f.paths.home)
+            .env("PATH", &bin)
+            .output()
+            .unwrap()
+    };
+    let out = run();
+    assert!(
+        out.status.success(),
+        "serena refused the linked install: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let got: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    let link = resources_link(&f.paths.home);
+    assert_eq!(
+        got["vue"],
+        serde_json::json!([vue_shim(&link).to_str().unwrap(), "--stdio"]),
+        "serena did not launch the shim through MUR's link"
+    );
+    let companion: Vec<String> = serde_json::from_value(got["companion"].clone()).unwrap();
+    assert_eq!(
+        &companion[..2],
+        ["node", ts_entry.to_str().unwrap()],
+        "the companion TypeScript server ignored ls_base_cmd: {companion:?}"
+    );
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        vue_dir,
+        "serena replaced the link"
+    );
+
+    // The probe can tell: with a marker serena disagrees with, it goes for
+    // npm and fails.
+    let marker = vue_dir.join(mur_common::serena_vue::MARKER_FILE);
+    std::fs::write(&marker, "0.0.0_0.0.0_0.0.0").unwrap();
+    assert!(
+        !run().status.success(),
+        "a wrong marker should make serena reinstall"
+    );
 }

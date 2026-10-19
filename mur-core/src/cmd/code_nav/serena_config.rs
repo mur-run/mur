@@ -125,6 +125,10 @@ pub struct ManagedLs<'a> {
     /// Node servers pre-installed under the tools root (intelephense #1945,
     /// TypeScript #1981); serena gets the canonical `ls_base_cmd` for each.
     pub node: &'a [ManagedNodeLs],
+    /// The Vue server is linked into serena's resources dir (#1982). Then
+    /// every version serena folds into its install marker is written
+    /// explicitly, so a changed serena default cannot trigger a reinstall.
+    pub vue: bool,
 }
 
 /// The values MUR owns, in `OWNED_KEYS` order.
@@ -168,6 +172,16 @@ pub fn owned_values(
             strings(&cmd.iter().map(String::as_str).collect::<Vec<_>>()),
         );
         ls.insert(nls.ls_id.into(), Value::Mapping(m));
+    }
+    if managed.vue {
+        for (section, key, pin) in mur_common::serena_vue::version_settings() {
+            let entry = ls
+                .entry(section.into())
+                .or_insert_with(|| Value::Mapping(Mapping::new()));
+            if let Value::Mapping(m) = entry {
+                m.insert(key.into(), pin.into());
+            }
+        }
     }
 
     let values: [Value; 10] = [

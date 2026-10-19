@@ -951,7 +951,10 @@ so a repo can't swap in its own language server. High-risk language servers
 `--lsp` only ever adds to an entry's languages; `--lsp-only <lang>` (repeatable)
 sets them to exactly that list, which is how you drop a language whose server
 won't start. If a listed language's prerequisite is missing, `--lsp-only`
-refuses and changes nothing rather than dropping it. Re-runs ask only about what changed since the last successful setup. If setup
+refuses and changes nothing rather than dropping it.
+`--lsp vue` adds Vue single-file components and implies `--lsp typescript`
+(its companion server); setup hints at it when the project has `.vue` files.
+Re-runs ask only about what changed since the last successful setup. If setup
 fails partway, nothing is recorded, so the next run asks again about
 everything, including steps that already succeeded. With `--with-serena`, setup
 finishes by starting each enabled language server under the agent's sandbox and

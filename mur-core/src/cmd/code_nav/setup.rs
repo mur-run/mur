@@ -25,7 +25,7 @@ use super::consent::{self, Manifest};
 use super::plan::{self, Detected, Flags, Lang, LspStatus, Permission, UV};
 use super::{
     ast_grep_install, ast_grep_wire, node_ls_install, pyright_install, serena_config, serena_entry,
-    serena_install, serena_project, smoke, smoke_fetch,
+    serena_install, serena_project, smoke, smoke_fetch, vue_install,
 };
 use crate::cmd::browser::setup::Consent;
 
@@ -159,6 +159,9 @@ pub fn run(
 
     writeln!(out, "mur code-nav setup for agent '{agent}'\n")?;
     consent::print_tables(out, &plan)?;
+    if let Some(hint) = vue_hint(project.as_deref(), &plan) {
+        writeln!(out, "\n{hint}")?;
+    }
     if let Some(p) = &project {
         writeln!(out, "\nserena entry `{entry}` project: {}", p.display())?;
         writeln!(
@@ -287,6 +290,22 @@ fn smoke_targets(
         }
     }
     Ok((targets, unfetched))
+}
+
+/// #1982: a project with `.vue` files but Vue off gets told how to turn it
+/// on. Vue is High tier, so detection never enables it by itself.
+pub(super) fn vue_hint(project: Option<&Path>, plan: &plan::Plan) -> Option<String> {
+    let row = plan.lsp.iter().find(|r| r.lang == Lang::Vue)?;
+    let LspStatus::Skipped { enable_flag } = &row.status else {
+        return None;
+    };
+    vue_install::project_has_vue(project?).then(|| {
+        format!(
+            "  hint: this project has .{} files; re-run with `{enable_flag}` for symbol \
+             navigation in them (implies --lsp typescript)",
+            vue_install::VUE_EXT
+        )
+    })
 }
 
 /// How `apply` asks about what the plan could not list.
@@ -442,6 +461,17 @@ fn apply(
         &mut m,
         out,
     )?;
+    // #1982: Vue is installed like the others but handed to serena by
+    // linking its resources dir; it has no `ls_base_cmd`, so it is not in
+    // `node_ls`. Its companion TypeScript server is (the plan implies it).
+    let vue = install_node_ls(
+        &mur_common::serena_ls_cmd::VUE,
+        m.vue.clone(),
+        plan,
+        mur_home,
+        &mut m,
+        out,
+    )?;
     let node_ls: Vec<_> = [
         (&intelephense, mur_common::serena_ls_cmd::INTELEPHENSE),
         (&typescript, mur_common::serena_ls_cmd::TYPESCRIPT),
@@ -452,6 +482,16 @@ fn apply(
 
     let langs = entry_langs(&m, entry, plan);
     let paths = serena_paths_for(agent_home, entry)?;
+    if vue.is_some() {
+        let tools = node_ls_install::tools_dir(mur_home);
+        vue_install::write_marker(&tools)?;
+        let l = vue_install::link(&paths.home, &tools)?;
+        writeln!(
+            out,
+            "  ✓ serena's Vue server dir ({l:?}): {}",
+            vue_install::resources_link(&paths.home).display()
+        )?;
+    }
     let ptpl = serena_project::read_pinned_project_template(&dir)?;
     let pfile = serena_project::write_project(&paths, project, &ptpl, &langs)?;
     writeln!(out, "  ✓ wrote {}", pfile.display())?;
@@ -461,6 +501,7 @@ fn apply(
     let managed = serena_config::ManagedLs {
         python: pyright.as_ref().map(|r| r.bin.as_path()),
         node: &node_ls,
+        vue: vue.is_some(),
     };
     let cfg = serena_config::write_config(&paths, project, &tpl, &secret, managed)?;
     writeln!(out, "  ✓ wrote {} (preflight passed)", cfg.display())?;
@@ -517,6 +558,7 @@ fn apply(
     m.pyright = pyright;
     m.intelephense = intelephense;
     m.typescript = typescript;
+    m.vue = vue;
     Ok(m)
 }
 

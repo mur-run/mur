@@ -71,6 +71,7 @@ fn serena_defaults_enable_only_mur_installed_low_and_medium() {
         Lang::Rust,
         Lang::Kotlin,
         Lang::TypeScript,
+        Lang::Vue,
         Lang::Go,
         Lang::Java,
         Lang::Swift,
@@ -97,6 +98,7 @@ fn tiers_match_the_merged_table() {
         (Lang::Rust, High),
         (Lang::Kotlin, High),
         (Lang::TypeScript, High),
+        (Lang::Vue, High),
         (Lang::Go, High),
         (Lang::Java, High),
         (Lang::Swift, High),
@@ -405,4 +407,71 @@ fn serena_fetched_servers_are_enabled_when_named() {
             enable_flag: "--lsp python".into()
         }
     );
+}
+
+/// #1982: serena's Vue server always starts a companion TypeScript server,
+/// so `--lsp vue` enables TypeScript too (and installs both servers).
+#[test]
+fn vue_implies_typescript_and_installs_both_servers() {
+    let p = plan(home(), &flags(true, &["vue"]), &all_tools()).unwrap();
+    assert_eq!(row(&p, Lang::Vue).status, LspStatus::Enabled);
+    assert_eq!(row(&p, Lang::TypeScript).status, LspStatus::Enabled);
+    assert!(p.install.iter().any(|r| r.name == TS_LS));
+    let r = p
+        .install
+        .iter()
+        .find(|r| r.name == VUE_LS)
+        .expect("vue row");
+    assert_eq!(r.version, "3.1.5");
+    assert_eq!(r.dir, Path::new("/mh/tools/vue-language-server/3.1.5"));
+    assert!(
+        row(&p, Lang::Vue)
+            .note
+            .unwrap()
+            .contains("--lsp typescript")
+    );
+}
+
+/// serena execs the Vue shim (no launch override), so exactly the server's
+/// own `bin/` is an exec lane; the rest of the install is read-only.
+#[test]
+fn vue_grants_exec_on_its_bin_dir_only() {
+    let p = plan(home(), &flags(true, &["vue"]), &all_tools()).unwrap();
+    let dir = Path::new("/mh/tools/vue-language-server/3.1.5");
+    assert!(p.permissions.contains(&Permission::Read(dir.to_path_buf())));
+    assert!(p.permissions.contains(&Permission::SpawnDir(
+        dir.join("node_modules/@vue/language-server/bin")
+    )));
+    assert!(
+        !p.permissions
+            .contains(&Permission::SpawnDir(dir.to_path_buf()))
+    );
+    for spawn in ["node", NPM] {
+        assert!(
+            p.permissions.contains(&Permission::Spawn(spawn.into())),
+            "{spawn}"
+        );
+    }
+}
+
+#[test]
+fn vue_needs_npm() {
+    let mut d = all_tools();
+    d.on_path.remove(NPM);
+    let p = plan(home(), &flags(true, &["vue"]), &d).unwrap();
+    assert!(matches!(
+        row(&p, Lang::Vue).status,
+        LspStatus::Disabled { .. }
+    ));
+    assert!(p.install.iter().all(|r| r.name != VUE_LS));
+}
+
+#[test]
+fn typescript_alone_installs_no_vue_server() {
+    let p = plan(home(), &flags(true, &["typescript"]), &all_tools()).unwrap();
+    assert!(p.install.iter().all(|r| r.name != VUE_LS));
+    assert!(matches!(
+        row(&p, Lang::Vue).status,
+        LspStatus::Skipped { .. }
+    ));
 }

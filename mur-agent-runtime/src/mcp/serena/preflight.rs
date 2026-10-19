@@ -158,6 +158,10 @@ macro_rules! fail {
     };
 }
 
+/// C7 for the Vue server's linked install (#1982). After `fail!`, which
+/// it uses.
+mod vue;
+
 /// Run C1–C9 against what is on disk now.
 pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaPreflightError> {
     let cfg_file = paths.config_file.as_path();
@@ -261,6 +265,8 @@ pub fn preflight(paths: &SerenaPaths, project_root: &Path) -> Result<(), SerenaP
             Some(v) => return fail!(C7LsExec, file, KEY_LS_SETTINGS, kind(v), "a mapping"),
         }
     }
+
+    vue::check(ls, cfg_file, &folder, paths)?;
 
     // C8
     let cpp = ls.and_then(|m| m.get(CPP_LS_ID));

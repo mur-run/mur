@@ -307,3 +307,36 @@ fn doctor_writes_nothing() {
     assert_eq!(bytes(&mpath), m0);
     assert_eq!(bytes(&ppath), p0);
 }
+
+/// #1982: doctor re-checks each entry's Vue link like the runtime does.
+#[cfg(unix)]
+#[test]
+fn a_vue_entry_without_its_link_is_flagged_and_an_intact_one_is_ok() {
+    use mur_common::serena_vue::{MARKER_FILE, marker, resources_link, ts_shim, vue_shim};
+    let mut f = clean();
+    f.manifest
+        .entry_languages
+        .get_mut(DEFAULT_ENTRY_NAME)
+        .unwrap()
+        .insert("vue".into());
+    let w = warns(&run_audit(&f))
+        .into_iter()
+        .find(|x| x.subject.contains("vue link"))
+        .expect("missing link flagged")
+        .clone();
+    assert!(w.detail.contains("npm-install"), "{w:?}");
+    assert!(w.fix.unwrap().contains("--with-serena"));
+
+    let tools = node_ls_install_tools(&f.mur_home);
+    let dir = mur_common::serena_ls_cmd::VUE.dir(&tools);
+    for shim in [vue_shim(&dir), ts_shim(&dir)] {
+        touch(&shim);
+    }
+    std::fs::write(dir.join(MARKER_FILE), marker()).unwrap();
+    let link = resources_link(&f.agent_home.join(SERENA_HOME_DIR));
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&dir, &link).unwrap();
+    let all = run_audit(&f);
+    let ok = all.iter().find(|x| x.subject.contains("vue link")).unwrap();
+    assert_eq!(ok.level, Level::Ok, "{ok:?}");
+}
