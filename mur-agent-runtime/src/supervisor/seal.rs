@@ -215,6 +215,21 @@ pub(super) async fn prepare_and_seal(
         // skipped with a warning rather than failing startup — the CLI enforces
         // the same floor, so this only fires for a hand-written keychain item.
         for name in &profile.inner.secrets {
+            use mur_common::secret::keychain_pending;
+            // A previous start already timed out on this one and left a prompt
+            // on screen. Probing again raises another; under a launchd crash
+            // loop that was dozens of dialogs (#1980). Skip until the user acts
+            // (`/secret`, `mur agent secret`, `mur agent start|restart`).
+            if keychain_pending::is_pending(agent_home, name) {
+                warn!(
+                    name,
+                    "skipping this secret: an earlier start is still waiting for \
+                     keychain approval. Choose Always Allow (not Allow) in that \
+                     prompt, then run `mur agent restart`, or set it again with \
+                     /secret"
+                );
+                continue;
+            }
             let r = mur_common::secret::SecretRef::Keychain {
                 service: crate::secrets::KEYCHAIN_SERVICE.to_string(),
                 account: format!("{}/{}", profile.inner.name, name),
@@ -253,14 +268,20 @@ pub(super) async fn prepare_and_seal(
                     "could not resolve a user secret before sealing; the agent \
                      will not have it until it is set again"
                 ),
-                Err(_) => warn!(
-                    name,
-                    timeout_secs = USER_SECRET_RESOLVE_TIMEOUT.as_secs(),
-                    "keychain did not answer for this secret in time — most likely \
-                     an authorisation prompt nobody is there to click. Starting \
-                     without it; approve the prompt (Always Allow) and restart, \
-                     or set it again from murmur with /secret"
-                ),
+                Err(_) => {
+                    warn!(
+                        name,
+                        timeout_secs = USER_SECRET_RESOLVE_TIMEOUT.as_secs(),
+                        "keychain did not answer for this secret in time — most likely \
+                         an authorisation prompt nobody is there to click. Starting \
+                         without it, and later starts will not ask again until you \
+                         act: choose Always Allow (not Allow) and run `mur agent \
+                         restart`, or set it again from murmur with /secret"
+                    );
+                    if let Err(e) = mur_common::secret::keychain_pending::mark(agent_home, name) {
+                        warn!(name, error = %e, "could not record the pending keychain prompt; the next start will ask again");
+                    }
+                }
             }
         }
 

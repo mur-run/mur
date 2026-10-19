@@ -12,6 +12,8 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod keychain_pending;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SecretRef {
     Env(String),

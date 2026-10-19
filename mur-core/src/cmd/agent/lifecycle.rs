@@ -722,6 +722,9 @@ pub fn cmd_status(name: &str) -> Result<()> {
     if let Some(up) = &row.uptime {
         println!("       Uptime: {up}");
     }
+    if let Some(line) = super::secret::keychain_pending_line(&mur_home.join("agents").join(name)) {
+        println!("  {line}");
+    }
     Ok(())
 }
 

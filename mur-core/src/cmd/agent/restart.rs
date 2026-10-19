@@ -239,6 +239,11 @@ pub fn cmd_restart(names: &[String], all: bool, stale: bool, dry_run: bool) -> R
         return Ok(());
     }
 
+    // A restart the user asked for is the "I answered the prompt" signal
+    // (#1980): let the next start probe the keychain again.
+    for t in &targets {
+        super::secret::clear_pending_keychain(&agents_dir.join(t));
+    }
     run_restarts(&targets, &agents_dir)?;
     if all || stale {
         report_unexamined(&agents_dir);

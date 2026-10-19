@@ -129,6 +129,8 @@ async fn write_durable(agent: &str, name: &str, value: &str) -> Result<()> {
         profile.secrets.push(name.to_string());
         save_profile(&path, &mut profile).context("profile write (secrets list)")?;
     }
+    // A fresh keychain write is a new item: the next start may probe it (#1980).
+    crate::cmd::agent::secret::clear_pending_keychain_for(agent, name);
     Ok(())
 }
 
@@ -143,6 +145,7 @@ async fn remove_durable(agent: &str, name: &str) -> Result<()> {
     if profile.secrets.len() != before {
         save_profile(&path, &mut profile).context("profile write (secrets list)")?;
     }
+    crate::cmd::agent::secret::clear_pending_keychain_for(agent, name);
     Ok(())
 }
 
