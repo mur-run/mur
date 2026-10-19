@@ -96,6 +96,28 @@ fn a_script_that_dies_quotes_its_stderr() {
     }
 }
 
+/// serena and its downloaders log to stderr while the report is still
+/// pending; more than a pipe buffer of it must not stall the fetch.
+#[test]
+fn a_chatty_stderr_does_not_stall_the_fetch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("serena");
+    // 1 MiB of stderr — far past any pipe buffer — before the report.
+    fake_python(
+        &dir,
+        r#"head -c 1048576 /dev/zero | tr '\0' x >&2
+printf '{"lua": {"ok": ["/h/lua"]}}\n'"#,
+    );
+    let got = fetch_within(&dir, tmp.path(), &[Lang::Lua], Duration::from_secs(20));
+    assert_eq!(
+        got,
+        vec![Fetched::Ready(Target {
+            lang: Lang::Lua,
+            cmd: vec!["/h/lua".into()],
+        })]
+    );
+}
+
 #[test]
 fn a_missing_interpreter_fails_without_panicking() {
     let tmp = tempfile::tempdir().unwrap();

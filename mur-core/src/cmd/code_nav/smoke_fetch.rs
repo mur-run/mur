@@ -67,10 +67,20 @@ pub fn interpreter(serena_dir: &Path) -> PathBuf {
 /// Fetch `langs` into `serena_home` with the serena install in `serena_dir`.
 /// Every language gets an answer; a script that dies fails all of them.
 pub fn fetch(serena_dir: &Path, serena_home: &Path, langs: &[Lang]) -> Vec<Fetched> {
+    fetch_within(serena_dir, serena_home, langs, FETCH_TIMEOUT)
+}
+
+/// [`fetch`] with an explicit deadline (tests use a short one).
+pub(crate) fn fetch_within(
+    serena_dir: &Path,
+    serena_home: &Path,
+    langs: &[Lang],
+    timeout: Duration,
+) -> Vec<Fetched> {
     if langs.is_empty() {
         return Vec::new();
     }
-    match run_script(&interpreter(serena_dir), serena_home, langs) {
+    match run_script(&interpreter(serena_dir), serena_home, langs, timeout) {
         Ok(stdout) => parse(&stdout, langs),
         Err(e) => all_failed(langs, &format!("{e:#}")),
     }
@@ -78,7 +88,12 @@ pub fn fetch(serena_dir: &Path, serena_home: &Path, langs: &[Lang]) -> Vec<Fetch
 
 /// Run [`SCRIPT`] in a scratch root (serena writes a `cache/` there) and
 /// return its stdout.
-fn run_script(python: &Path, serena_home: &Path, langs: &[Lang]) -> Result<String> {
+fn run_script(
+    python: &Path,
+    serena_home: &Path,
+    langs: &[Lang],
+    timeout: Duration,
+) -> Result<String> {
     let scratch = tempfile::tempdir().context("create a scratch dir for the fetch")?;
     let script = scratch.path().join(SCRIPT_NAME);
     std::fs::write(&script, SCRIPT).context("write the fetch script")?;
@@ -97,22 +112,21 @@ fn run_script(python: &Path, serena_home: &Path, langs: &[Lang]) -> Result<Strin
         .spawn()
         .with_context(|| format!("start serena's interpreter {}", python.display()))?;
 
-    let mut stdout = child.stdout.take().context("fetch stdout")?;
-    let mut stderr = child.stderr.take().context("fetch stderr")?;
+    // One reader per pipe: draining them in sequence deadlocks once the
+    // child fills the pipe we are not reading yet.
+    let stdout = child.stdout.take().context("fetch stdout")?;
+    let stderr = child.stderr.take().context("fetch stderr")?;
+    let err_reader = std::thread::spawn(move || drain(stderr));
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let (mut out, mut err) = (String::new(), String::new());
-        let _ = stdout.read_to_string(&mut out);
-        let _ = stderr.read_to_string(&mut err);
+        let out = drain(stdout);
+        let err = err_reader.join().unwrap_or_default();
         let _ = tx.send((out, err));
     });
-    let Ok((out, err)) = rx.recv_timeout(FETCH_TIMEOUT) else {
+    let Ok((out, err)) = rx.recv_timeout(timeout) else {
         let _ = child.kill();
         let _ = child.wait();
-        anyhow::bail!(
-            "the fetch did not finish within {}s",
-            FETCH_TIMEOUT.as_secs()
-        );
+        anyhow::bail!("the fetch did not finish within {}s", timeout.as_secs());
     };
     let status = child.wait().context("wait for the fetch")?;
     if out.trim().is_empty() {
@@ -122,6 +136,13 @@ fn run_script(python: &Path, serena_home: &Path, langs: &[Lang]) -> Result<Strin
         );
     }
     Ok(out)
+}
+
+/// Read a pipe to EOF, keeping whatever arrived if it errors.
+fn drain(mut pipe: impl Read) -> String {
+    let mut buf = String::new();
+    let _ = pipe.read_to_string(&mut buf);
+    buf
 }
 
 /// The script's report, one answer per requested language.
