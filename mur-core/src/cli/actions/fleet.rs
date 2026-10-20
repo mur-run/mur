@@ -43,6 +43,10 @@ pub enum FleetAction {
         /// Loop until the router converges or a bound trips (deadline / stuck / cost_usd)
         #[arg(long = "loop")]
         loop_flag: bool,
+        /// This run's goal in place of fleet.yaml's standing one (loop mode
+        /// only). fleet.yaml is left untouched.
+        #[arg(long, value_name = "TEXT", requires = "loop_flag")]
+        goal: Option<String>,
         /// Ignored since 2.79 (kept for old scripts); bounds are `mur fleet limits`
         #[arg(long)]
         max_iterations: Option<u32>,

@@ -767,6 +767,11 @@ Agent** wizard offers the same catalog as a source.
   deadline. `mur limits <fleet|agent>` prints every bound in force and which
   scope set it; every stop reaches the settlement card with its reason and the
   one-line remedy.
+- **A goal for one run, without editing the fleet** — `mur fleet run <name>
+  --loop --goal "<text>"` loops toward that goal instead of the standing one
+  in `fleet.yaml`, which is left untouched. An agent's `fleet_run` tool does
+  the same with `goal`; its new `job` field is the one-shot task (passing
+  `goal` alone used to run it as a one-shot job).
 - **Long work returns a handle; liveness is a heartbeat** — `fleet_run` and
   `parallel_jobs` answer `{run_id, status: dispatched}` within a second and
   you poll `mur_job_status <run_id>` (or `mur fleet status`); the result lands

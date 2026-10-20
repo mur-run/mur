@@ -21,6 +21,7 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                 name,
                 job,
                 loop_flag,
+                goal,
                 max_iterations,
                 deadline,
                 budget_usd,
@@ -48,7 +49,7 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
                         deadline,
                         budget_usd,
                         run_id,
-                        None,
+                        goal,
                         Some(cmd::fleet::run::RunCwd {
                             path: cwd,
                             inferred: cwd_inferred,
