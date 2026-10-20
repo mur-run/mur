@@ -97,7 +97,15 @@ fn parse_snapshot_line(line: &str) -> Option<SnapshotNode> {
 
     let name = extract_quoted(before_ref).unwrap_or_default();
     let text = if name.is_empty() {
-        words.collect::<Vec<_>>().join(" ")
+        // Bracketed tokens (`[active]`, `[checked]`, `[level=2]`) are state
+        // markers, not content. An unnamed node carries its visible text
+        // inline after the attribute brackets: `- generic [ref=e1]: hello`.
+        inline_content(line).unwrap_or_else(|| {
+            words
+                .filter(|w| !(w.starts_with('[') && w.ends_with(']')))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
     } else {
         name.clone()
     };
@@ -109,6 +117,15 @@ fn parse_snapshot_line(line: &str) -> Option<SnapshotNode> {
         test_id: extract_bracket_value(line, "data-testid="),
         label: extract_bracket_value(line, "label="),
     })
+}
+
+/// Inline text after the attribute brackets, e.g. `hello` in
+/// `- generic [ref=e1] [cursor=pointer]: hello`. A bare trailing `:` marks a
+/// container with children, not content.
+fn inline_content(line: &str) -> Option<String> {
+    let after_ref = line.split_once("[ref=")?.1;
+    let content = after_ref.split_once("]: ")?.1.trim();
+    (!content.is_empty()).then(|| content.to_string())
 }
 
 fn extract_bracket_value(line: &str, key: &str) -> Option<String> {
@@ -354,5 +371,26 @@ mod tests {
             ]
         );
         assert!(candidates_for_ref("@missing", &nodes).is_empty());
+    }
+
+    // Regression: an unnamed node's state markers (`[active]`, `[checked]`,
+    // `[level=2]`) were collected as its text, yielding `text:[active]`, while
+    // the real inline content after `]: ` was dropped.
+    #[test]
+    fn unnamed_node_text_skips_state_markers_and_reads_inline_content() {
+        let nodes = parse_snapshot(
+            "- generic [active] [ref=e1]: hello\n\
+             - checkbox [checked] [disabled] [ref=e2]\n\
+             - heading \"Title\" [level=2] [ref=e3]\n\
+             - paragraph [ref=e4]: a: b [x]",
+        );
+        let text: Vec<&str> = nodes.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(text, vec!["hello", "", "Title", "a: b [x]"]);
+        assert_eq!(nodes[0].role, "generic");
+        assert_eq!(
+            candidates_for_ref("e1", &nodes),
+            vec!["role:generic", "text:hello"]
+        );
+        assert_eq!(candidates_for_ref("e2", &nodes), vec!["role:checkbox"]);
     }
 }
