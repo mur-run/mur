@@ -136,13 +136,20 @@ impl ToolExecutor for McpToolExecutor {
 
     async fn execute(&self, mut input: Value) -> Result<ToolOutput, ToolError> {
         inject_session_cwd(&self.tool, &mut input, self.session_cwd.as_ref());
-        // Held across the call: timeout, cancel and panic all drop it.
-        let _in_flight = self.pool.in_flight(&self.server);
-        let client_arc: Arc<Mutex<McpClient>> = self
-            .pool
-            .client(&self.server)
-            .await
-            .map_err(|e| ToolError::Execution(e.to_string()))?;
+        // Held across the call and finished only once the server answered: a
+        // timeout, cancel or panic drops it unfinished, which marks the server's
+        // later denials as unattributable (the call may still be running).
+        let in_flight = self.pool.in_flight(&self.server);
+        let client_arc: Arc<Mutex<McpClient>> = match self.pool.client(&self.server).await {
+            Ok(c) => c,
+            Err(e) => {
+                // Nothing reached the server.
+                if let Some(g) = in_flight {
+                    g.finish();
+                }
+                return Err(ToolError::Execution(e.to_string()));
+            }
+        };
 
         let result = tokio::time::timeout(self.timeout, async {
             client_arc
@@ -152,8 +159,11 @@ impl ToolExecutor for McpToolExecutor {
                 .await
                 .map_err(|e| ToolError::Execution(e.to_string()))
         })
-        .await
-        .map_err(|_| {
+        .await;
+        if let (Ok(_), Some(g)) = (&result, in_flight) {
+            g.finish();
+        }
+        let result = result.map_err(|_| {
             // A timeout says we stopped waiting — it does NOT say the call
             // failed. MCP has no cancel: the server keeps running the tool.
             // Reporting this as a plain failure taught agents to "recover" by
