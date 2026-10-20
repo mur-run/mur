@@ -75,11 +75,11 @@ impl std::fmt::Display for BudgetExceeded {
 }
 
 /// An "element step" (spec 名詞): it resolves a locator and hands the ref to
-/// Playwright. `assert_text` resolves one too but only sends `{text}`, so it
+/// Playwright. `assert_text` resolves none (it only sends `{text}`), so it
 /// is never healed, never verifies a heal, and is not in the budget's
 /// denominator.
 pub fn is_element_step(action: Action) -> bool {
-    action.needs_locator() && action != Action::AssertText
+    action.needs_locator()
 }
 
 /// Lifecycle of one heal (D3).

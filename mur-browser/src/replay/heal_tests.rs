@@ -233,12 +233,14 @@ async fn declined_heal_reports_why() {
 
 #[tokio::test]
 async fn assert_text_is_never_healed() {
+    // The recorded locator is gone from the page, but assert_text never
+    // looks it up: it passes on the text check alone and is not healed.
     let run = steps(
         "- step: 1\n  intent: 確認送出\n  action: assert_text\n  value: 送出\n  locators: ['role:button[name=\"送出\"]']\n",
     );
     let mut page = Page::new(ORDER_PAGE);
     let report = replay(&run, &mut page).await;
-    assert_eq!(statuses(&report), [StepStatus::Failed]);
+    assert_eq!(statuses(&report), [StepStatus::Passed]);
     assert!(report.heals.is_empty());
 }
 

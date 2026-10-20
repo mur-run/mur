@@ -399,3 +399,20 @@ async fn stdio_caller_handshakes_and_matches_ids() {
         ["initialize", "notifications/initialized", "tools/call"]
     );
 }
+
+/// A stale locator on an `assert_text` step must not fail the step: replay
+/// only checks the text is visible, so it should not look the element up.
+#[tokio::test]
+async fn assert_text_ignores_stale_locator() {
+    let yaml = "name: s\nmode: test\nrecorded_at: 2026-09-23T00:00:00Z\nsteps:\n- step: 1\n  intent: 確認歡迎文字\n  action: assert_text\n  value: Welcome\n  locators: ['testid:gone']\n";
+    let mut fake = Fake::default();
+    let report = replay_with(&run(yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
+    assert_eq!(report.passed, 1, "{report:?}");
+    assert!(
+        fake.calls.iter().all(|(n, _)| n != "browser_snapshot"),
+        "{:?}",
+        fake.calls
+    );
+}
