@@ -136,6 +136,17 @@ pub enum SlashCmd {
     Unknown(String),
 }
 
+/// Shown when `/` is sent on its own. `parse_slash` reads it as
+/// `Unknown("")`, which the generic "unknown command: /…" line rendered as
+/// the confusing `unknown command: / — try /help`.
+pub const BARE_SLASH_HINT: &str =
+    "/ on its own is not a command — type a command name after it, or /help to list them";
+
+/// True for a line that is only `/` (surrounding whitespace allowed).
+pub fn is_bare_slash(line: &str) -> bool {
+    matches!(parse_slash(line), Some(SlashCmd::Unknown(w)) if w.is_empty())
+}
+
 /// Parse a leading-slash command. Returns `None` for ordinary chat input.
 pub fn parse_slash(line: &str) -> Option<SlashCmd> {
     let line = line.trim();
