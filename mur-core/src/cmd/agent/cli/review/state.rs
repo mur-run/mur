@@ -13,7 +13,8 @@ use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::StreamMsg;
 use crate::cmd::fleet::review::constants::{
-    REVIEW_ALREADY_ATTACHED, REVIEW_AUTO_REFUSED, REVIEW_PROMPT_OWNS_LINE, REVIEW_SLASH,
+    ABANDON_COMMAND, MURMUR_STOP_COMMAND, NOTE_COMMAND, REVIEW_ALREADY_ATTACHED,
+    REVIEW_AUTO_REFUSED, REVIEW_PROMPT_OWNS_LINE, REVIEW_SLASH, RULE_COMMAND,
 };
 use crate::cmd::fleet::review::driver::SendAnswer;
 use crate::cmd::fleet::review::murmur::bridge::Reply;
@@ -65,10 +66,11 @@ pub fn open_findings(app: &App) -> Vec<String> {
 
 /// The line typed while the session waits on the human (§5.2, §7.1, §8.4).
 pub fn answer(app: &mut App, line: &str, tx: &Sender<StreamMsg>) {
-    // A MURMUR command (`/review`, `/help`, …) is never an answer. Read as
-    // one it was silently dropped, or at `Paused — continue?` taken as "no".
-    // The prompt's own words (`/stop`, `/rule`, `/abandon`) are not MURMUR
-    // commands, so they parse as `Unknown` and still reach the prompt.
+    // A MURMUR command (`/review`, `/help`, an installed skill, …) is never
+    // an answer. Read as one it was silently dropped, or at
+    // `Paused — continue?` taken as "no". The prompt's own words (`/stop`,
+    // `/rule`, `/abandon`, `/note`) still reach the prompt, even when a skill
+    // shares the name.
     // A bare `/` is not an answer either: at `Paused — continue?` it was
     // read as "no", at the gate it was an `unknown command: /` hint.
     if crate::cmd::agent::cli::app::is_bare_slash(line) {
@@ -76,9 +78,7 @@ pub fn answer(app: &mut App, line: &str, tx: &Sender<StreamMsg>) {
         app.push_warn(crate::cmd::agent::cli::app::BARE_SLASH_HINT);
         return;
     }
-    if let Some(cmd) = crate::cmd::agent::cli::parse_slash(line)
-        && !matches!(cmd, crate::cmd::agent::cli::SlashCmd::Unknown(_))
-    {
+    if is_murmur_command(app, line) {
         let word = line.trim().trim_start_matches('/');
         let word = word.split_whitespace().next().unwrap_or_default();
         app.set_input(line);
@@ -90,6 +90,31 @@ pub fn answer(app: &mut App, line: &str, tx: &Sender<StreamMsg>) {
         Some(Awaiting::Ruling { .. }) => super::confirm::answer_ruling(app, line),
         Some(Awaiting::ResumeConfirm(_)) => super::start::answer_resume(app, line, tx),
         None => {}
+    }
+}
+
+/// The review prompts' own words. They win over a same-named skill, so an
+/// installed `/stop` skill cannot shadow the prompt's stop.
+const PROMPT_COMMANDS: [&str; 4] = [
+    MURMUR_STOP_COMMAND,
+    RULE_COMMAND,
+    ABANDON_COMMAND,
+    NOTE_COMMAND,
+];
+
+/// True when `line` would run something in MURMUR rather than answer the
+/// prompt: a built-in, or an installed skill. Skills parse as `Unknown`
+/// (they are not built-ins), so they need their own check — otherwise
+/// `Paused — continue?` read `/brainstorming` as "no" and dropped the lock.
+fn is_murmur_command(app: &App, line: &str) -> bool {
+    use crate::cmd::agent::cli::{SlashCmd, complete::matched_skill, parse_slash};
+    match parse_slash(line) {
+        None => false,
+        Some(SlashCmd::Unknown(_)) => {
+            let head = line.split_whitespace().next().unwrap_or_default();
+            !PROMPT_COMMANDS.contains(&head) && matched_skill(line, &app.skills).is_some()
+        }
+        Some(_) => true,
     }
 }
 
