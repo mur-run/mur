@@ -128,7 +128,12 @@ fn extract_quoted(s: &str) -> Option<String> {
 /// resolved from an accessibility snapshot, so replay must hand it to
 /// `browser_generate_locator` instead of guessing.
 pub fn resolve(locator: &Locator, snapshot: &[SnapshotNode]) -> Option<String> {
-    let node = snapshot.iter().find(|node| match locator {
+    let node = snapshot.iter().find(|node| matches(locator, node))?;
+    Some(node.reference.clone())
+}
+
+fn matches(locator: &Locator, node: &SnapshotNode) -> bool {
+    match locator {
         Locator::Role { role, name } => {
             node.role.eq_ignore_ascii_case(role)
                 && name.as_ref().is_none_or(|name| node.name == *name)
@@ -137,8 +142,7 @@ pub fn resolve(locator: &Locator, snapshot: &[SnapshotNode]) -> Option<String> {
         Locator::Text(text) => node.text.contains(text) || node.name.contains(text),
         Locator::Label(label) => node.label.as_deref() == Some(label) || node.name == *label,
         Locator::Css(_) => false,
-    })?;
-    Some(node.reference.clone())
+    }
 }
 
 /// Produce stable replay candidates for a ref from the latest a11y snapshot.
@@ -186,6 +190,18 @@ pub fn candidates_for_ref(reference: &str, snapshot: &[SnapshotNode]) -> Vec<Str
         Ok(Locator::Label(_)) => 2,
         Ok(Locator::Text(_)) => 3,
         _ => 4,
+    });
+    // `resolve` takes the first match, so a candidate that also matches another
+    // node would silently act on the wrong element at replay. Keep only
+    // candidates that pin exactly this node in the snapshot they came from.
+    candidates.retain(|candidate| {
+        Locator::parse(candidate).is_ok_and(|locator| {
+            snapshot
+                .iter()
+                .filter(|other| matches(&locator, other))
+                .count()
+                == 1
+        })
     });
     candidates
 }
@@ -354,5 +370,47 @@ mod tests {
             ]
         );
         assert!(candidates_for_ref("@missing", &nodes).is_empty());
+    }
+
+    #[test]
+    fn drops_bare_role_that_matches_several_nodes() {
+        let nodes = parse_snapshot(
+            r#"
+- generic [ref=e1] [data-testid=card]
+- generic [ref=e2]
+"#,
+        );
+        assert_eq!(candidates_for_ref("@e1", &nodes), vec!["testid:card"]);
+    }
+
+    #[test]
+    fn keeps_bare_role_that_is_unique_on_the_page() {
+        let nodes = parse_snapshot(
+            r#"
+- main [ref=e1]:
+  - button "Go" [ref=e2]
+"#,
+        );
+        assert_eq!(candidates_for_ref("@e1", &nodes), vec!["role:main"]);
+    }
+
+    #[test]
+    fn keeps_lone_generic_when_it_is_the_only_node() {
+        let nodes = parse_snapshot("- generic [ref=e1]\n");
+        assert_eq!(candidates_for_ref("@e1", &nodes), vec!["role:generic"]);
+    }
+
+    #[test]
+    fn drops_text_that_also_matches_a_longer_label() {
+        let nodes = parse_snapshot(
+            r#"
+- button "Save" [ref=e1]
+- button "Save draft" [ref=e2]
+"#,
+        );
+        assert_eq!(
+            candidates_for_ref("@e1", &nodes),
+            vec!["role:button[name=\"Save\"]"]
+        );
     }
 }
