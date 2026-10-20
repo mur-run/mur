@@ -70,6 +70,8 @@ use std::fmt;
 
 use super::bash_class;
 
+mod shell_flow;
+
 /// Where a command's effects land.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Destination {
@@ -139,8 +141,8 @@ impl Scope {
 const EXTRA_READONLY_HEADS: &[&str] = &[
     // `exit` and `cd` change the shell's own state, not any bytes — and both
     // are unavoidable in a remote script (`cd /srv/app || exit 1`).
-    "cd", "exit", "ps", "uptime", "free", "id", "groups", "vmstat", "iostat", "lsof", "netstat",
-    "ss", "last",
+    "cd", "exit", "test", "[", "ps", "uptime", "free", "id", "groups", "vmstat", "iostat", "lsof",
+    "netstat", "ss", "last",
 ];
 
 /// `awk` reads UNLESS its program writes. `print > "f"`, `printf >> "f"` and
@@ -476,6 +478,39 @@ pub fn classify_bash(cmd: &str) -> Option<Scope> {
     classify_inner(cmd, 0)
 }
 
+/// The text of every segment of `cmd` that is NOT proved read-only, joined by
+/// `;` — what the tier deny-list should still scan.
+///
+/// A proved read's arguments are data: `grep -c npm f` names `npm` as a
+/// search string, not a command, and must not lift the line to
+/// `NetworkEgress`. Removing a segment needs the same proof
+/// [`classify_bash`] uses, so nothing that can run a word as a command is
+/// ever removed. `None` (substitution, redirection, a heredoc, a refused
+/// loop shape) means "scan the whole command", exactly as before.
+pub fn unproven_text(cmd: &str) -> Option<String> {
+    if cmd.contains("<<") {
+        return None;
+    }
+    let segs = shell_flow::expand(segments(tokenize(cmd)?))?;
+    let rest: Vec<String> = segs
+        .iter()
+        .filter(|seg| !segment_is_readonly(seg))
+        .map(|seg| {
+            seg.iter()
+                .map(|w| {
+                    if w.quoted {
+                        format!("'{}'", w.text)
+                    } else {
+                        w.text.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
+    Some(rest.join(" ; "))
+}
+
 /// `depth` counts `ssh` hops. One is the most a grant may describe, because
 /// the operator named one host.
 fn classify_inner(cmd: &str, depth: u8) -> Option<Scope> {
@@ -483,7 +518,9 @@ fn classify_inner(cmd: &str, depth: u8) -> Option<Scope> {
         return None;
     }
     let (line, docs) = strip_heredocs(cmd)?;
-    let segs = segments(tokenize(&line)?);
+    // Loops, `if` blocks and literal bindings are rewritten into the plain
+    // commands they run; see `shell_flow`.
+    let segs = shell_flow::expand(segments(tokenize(&line)?))?;
     if segs.is_empty() {
         return None;
     }
