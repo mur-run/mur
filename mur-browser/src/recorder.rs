@@ -12,7 +12,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::{
-    locator::{SnapshotNode, candidates_for_ref, parse_snapshot},
+    locator::{Locator, SnapshotNode, candidates_for_ref, match_count, parse_snapshot},
     proxy::{Decision, Downstream, Hook, Request},
 };
 
@@ -385,11 +385,13 @@ impl RecordHook {
             .get("ref")
             .or_else(|| args.get("target"))
             .and_then(Value::as_str)
+            && self.snapshot_has_ref(reference)
         {
-            let candidates = candidates_for_ref(reference, &self.snapshot);
-            if !candidates.is_empty() {
-                return candidates;
-            }
+            // The target is known. An empty list means every candidate was
+            // ambiguous, and that verdict is final: falling back to the element
+            // description would re-admit a locator replay resolves to another
+            // node. `validate` turns the empty list into `NoLocator`.
+            return candidates_for_ref(reference, &self.snapshot);
         }
         // `browser_verify_element_visible` (0.0.82) addresses the element by
         // `{ role, accessibleName }` instead of a ref. Reuse the snapshot
@@ -406,21 +408,23 @@ impl RecordHook {
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .unwrap_or("");
-            if let Some(node) = self
+            let mut nodes = self
                 .snapshot
                 .iter()
-                .find(|n| n.role == role && n.name == name)
-            {
-                let candidates = candidates_for_ref(&node.reference, &self.snapshot);
-                if !candidates.is_empty() {
-                    return candidates;
-                }
+                .filter(|n| n.role == role && n.name == name);
+            match (nodes.next(), nodes.next()) {
+                // Exactly one node: its candidates are already unique.
+                (Some(node), None) => return candidates_for_ref(&node.reference, &self.snapshot),
+                // Several nodes share role and name: nothing pins the one the
+                // agent meant, so record nothing rather than guess.
+                (Some(_), Some(_)) => return Vec::new(),
+                (None, _) => {}
             }
-            let locator = crate::locator::Locator::Role {
+            let locator = Locator::Role {
                 role: role.to_owned(),
                 name: (!name.is_empty()).then(|| name.to_owned()),
             };
-            return vec![locator.to_string_canonical()];
+            return self.unique_or_unchecked(locator);
         }
         // A human-readable MCP element description is a conservative fallback
         // when no snapshot has been observed yet.
@@ -429,8 +433,27 @@ impl RecordHook {
             .or_else(|| args.get("name"))
             .and_then(Value::as_str)
             .filter(|s| !s.trim().is_empty())
-            .map(|s| vec![format!("text:{s}")])
+            .map(|s| self.unique_or_unchecked(Locator::Text(s.to_owned())))
             .unwrap_or_default()
+    }
+
+    fn snapshot_has_ref(&self, reference: &str) -> bool {
+        let reference = reference.trim_start_matches('@');
+        self.snapshot
+            .iter()
+            .any(|node| node.reference.trim_start_matches('@') == reference)
+    }
+
+    /// A fallback locator built from tool arguments. It is dropped only when
+    /// the snapshot proves it ambiguous (two or more nodes). Zero matches means
+    /// the snapshot cannot judge it (none observed yet, or stale after a
+    /// navigation), so it passes through unchecked as before.
+    fn unique_or_unchecked(&self, locator: Locator) -> Vec<String> {
+        if match_count(&locator, &self.snapshot) < 2 {
+            vec![locator.to_string_canonical()]
+        } else {
+            Vec::new()
+        }
     }
 
     fn cache_snapshot_response(&mut self, req: &Request, resp: &Value) {

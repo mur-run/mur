@@ -132,6 +132,15 @@ pub fn resolve(locator: &Locator, snapshot: &[SnapshotNode]) -> Option<String> {
     Some(node.reference.clone())
 }
 
+/// How many snapshot nodes `locator` would match. `resolve` acts on the first
+/// of them, so anything above 1 means replay may hit the wrong element.
+pub fn match_count(locator: &Locator, snapshot: &[SnapshotNode]) -> usize {
+    snapshot
+        .iter()
+        .filter(|node| matches(locator, node))
+        .count()
+}
+
 fn matches(locator: &Locator, node: &SnapshotNode) -> bool {
     match locator {
         Locator::Role { role, name } => {
@@ -195,13 +204,7 @@ pub fn candidates_for_ref(reference: &str, snapshot: &[SnapshotNode]) -> Vec<Str
     // node would silently act on the wrong element at replay. Keep only
     // candidates that pin exactly this node in the snapshot they came from.
     candidates.retain(|candidate| {
-        Locator::parse(candidate).is_ok_and(|locator| {
-            snapshot
-                .iter()
-                .filter(|other| matches(&locator, other))
-                .count()
-                == 1
-        })
+        Locator::parse(candidate).is_ok_and(|locator| match_count(&locator, snapshot) == 1)
     });
     candidates
 }

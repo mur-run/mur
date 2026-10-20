@@ -602,3 +602,107 @@ steps: []
     // And it survives a round trip.
     assert_eq!(from_yaml(&to_yaml(&full).unwrap()).unwrap(), full);
 }
+
+fn hook_with_snapshot(snapshot: &str) -> RecordHook {
+    let mut hook = RecordHook::new(Run {
+        name: "ambiguous".into(),
+        mode: Mode::Automation,
+        profile: None,
+        recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: vec![],
+        replayed_at: None,
+        replay_count: 0,
+        steps: vec![],
+    });
+    hook.snapshot = crate::locator::parse_snapshot(snapshot);
+    hook
+}
+
+const TWO_SAVE_BUTTONS: &str = "- button \"Save\" [ref=e1]\n- button \"Save\" [ref=e2]\n";
+
+/// A known ref whose candidates were all ambiguous must not fall back to the
+/// element description: `text:Save` would replay onto e1.
+#[test]
+fn ambiguous_ref_is_rejected_not_recorded_as_element_text() {
+    let mut hook = hook_with_snapshot(TWO_SAVE_BUTTONS);
+    let req = tools_call(
+        "browser_click",
+        serde_json::json!({"ref": "e2", "element": "Save"}),
+    );
+    assert!(hook.locator_for(&req).is_empty());
+    assert_eq!(hook.record_success(&req).unwrap_err(), Reject::NoLocator);
+    assert!(hook.run().steps.is_empty());
+}
+
+#[test]
+fn ambiguous_target_is_rejected_too() {
+    let mut hook = hook_with_snapshot(TWO_SAVE_BUTTONS);
+    let req = tools_call(
+        "browser_click",
+        serde_json::json!({"target": "@e2", "element": "Save"}),
+    );
+    assert_eq!(hook.record_success(&req).unwrap_err(), Reject::NoLocator);
+}
+
+/// `{ role, accessibleName }` naming two nodes must not rebuild the role
+/// locator the candidate filter just rejected.
+#[test]
+fn ambiguous_role_and_name_is_rejected() {
+    let mut hook = hook_with_snapshot(TWO_SAVE_BUTTONS);
+    let req = tools_call(
+        "browser_verify_element_visible",
+        serde_json::json!({"role": "button", "accessibleName": "Save"}),
+    );
+    assert!(hook.locator_for(&req).is_empty());
+    assert_eq!(hook.record_success(&req).unwrap_err(), Reject::NoLocator);
+}
+
+/// A role with no exactly-named node still goes through the uniqueness check
+/// when the snapshot can judge it: bare `role:button` hits both buttons.
+#[test]
+fn bare_role_fallback_matching_several_nodes_is_rejected() {
+    let hook = hook_with_snapshot(TWO_SAVE_BUTTONS);
+    let req = tools_call(
+        "browser_verify_element_visible",
+        serde_json::json!({"role": "button", "accessibleName": ""}),
+    );
+    assert!(hook.locator_for(&req).is_empty());
+}
+
+/// Description fallback without a ref is checked against the snapshot too.
+#[test]
+fn element_text_fallback_matching_several_nodes_is_rejected() {
+    let hook = hook_with_snapshot(TWO_SAVE_BUTTONS);
+    let req = tools_call("browser_click", serde_json::json!({"element": "Save"}));
+    assert!(hook.locator_for(&req).is_empty());
+}
+
+/// Unknown ref (stale snapshot) keeps the old unchecked fallback, which the
+/// snapshot cannot contradict because it matches nothing there.
+#[test]
+fn unknown_ref_still_falls_back_to_element_text() {
+    let hook = hook_with_snapshot("- link \"Home\" [ref=e1]\n");
+    let req = tools_call(
+        "browser_click",
+        serde_json::json!({"ref": "e9", "element": "Checkout"}),
+    );
+    assert_eq!(hook.locator_for(&req), vec!["text:Checkout"]);
+}
+
+/// The unique ref sibling still records normally.
+#[test]
+fn unique_ref_next_to_ambiguous_one_records() {
+    let mut hook = hook_with_snapshot(
+        "- button \"Save\" [ref=e1]\n- button \"Save\" [ref=e2]\n- button \"Cancel\" [ref=e3]\n",
+    );
+    let req = tools_call(
+        "browser_click",
+        serde_json::json!({"ref": "e3", "element": "Cancel"}),
+    );
+    hook.record_success(&req).unwrap();
+    assert_eq!(
+        hook.run().steps[0].locators[0],
+        "role:button[name=\"Cancel\"]"
+    );
+}
