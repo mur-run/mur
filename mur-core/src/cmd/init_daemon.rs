@@ -1,7 +1,104 @@
 //! Installs murmurd as a login-persistent service (launchd / systemd).
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
+
+/// launchd label of the murmurd job `install_launchd` registers.
+pub(crate) const LAUNCHD_LABEL: &str = "run.mur.murmurd";
+/// systemd user unit `install_systemd` registers.
+pub(crate) const SYSTEMD_UNIT: &str = "murmurd.service";
+
+/// A service manager that supervises murmurd (restarts it on exit).
+///
+/// When one is registered, the CLI must start/restart murmurd THROUGH it:
+/// a directly spawned daemon grabs the singleton lock, the supervised job
+/// then exits "already running" on every respawn (every `ThrottleInterval`,
+/// forever), and the service manager no longer controls the live daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaemonService {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Launchd,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Systemd,
+}
+
+impl std::fmt::Display for DaemonService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Launchd => "launchd",
+            Self::Systemd => "systemd",
+        })
+    }
+}
+
+impl DaemonService {
+    /// The service manager that has murmurd registered on this machine, if any.
+    pub(crate) fn detect() -> Option<Self> {
+        #[cfg(target_os = "macos")]
+        {
+            let plist = dirs::home_dir()?
+                .join("Library/LaunchAgents")
+                .join(format!("{LAUNCHD_LABEL}.plist"));
+            if plist.exists() && quiet_success("launchctl", &["print", &launchd_target()]) {
+                return Some(Self::Launchd);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if quiet_success(
+                "systemctl",
+                &["--user", "is-enabled", "--quiet", SYSTEMD_UNIT],
+            ) {
+                return Some(Self::Systemd);
+            }
+        }
+        None
+    }
+
+    /// argv that starts the supervised daemon; with `restart`, the running
+    /// instance is killed and replaced (so it picks up an upgraded binary).
+    pub(crate) fn start_argv(self, restart: bool, launchd_target: &str) -> Vec<String> {
+        let v: Vec<&str> = match (self, restart) {
+            (Self::Launchd, true) => vec!["launchctl", "kickstart", "-k", launchd_target],
+            (Self::Launchd, false) => vec!["launchctl", "kickstart", launchd_target],
+            (Self::Systemd, true) => vec!["systemctl", "--user", "restart", SYSTEMD_UNIT],
+            (Self::Systemd, false) => vec!["systemctl", "--user", "start", SYSTEMD_UNIT],
+        };
+        v.into_iter().map(String::from).collect()
+    }
+
+    /// Start (or with `restart`, restart) murmurd through the service manager.
+    pub(crate) fn start(self, restart: bool) -> Result<()> {
+        let argv = self.start_argv(restart, &launchd_target());
+        let status = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .status()
+            .with_context(|| format!("could not run `{}`", argv.join(" ")))?;
+        if !status.success() {
+            bail!("`{}` exited with {status}", argv.join(" "));
+        }
+        Ok(())
+    }
+}
+
+/// `gui/<uid>/<label>` — the launchd domain target for the murmurd job.
+fn launchd_target() -> String {
+    #[cfg(unix)]
+    let uid = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let uid = 0;
+    format!("gui/{uid}/{LAUNCHD_LABEL}")
+}
+
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn quiet_success(program: &str, args: &[&str]) -> bool {
+    std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
 
 /// Returns true if installation succeeded, false if the platform is
 /// unsupported (WSL, container, etc.) — caller prints a fallback message.
@@ -22,7 +119,7 @@ pub(crate) fn install_daemon_service(murmurd_path: &Path) -> Result<bool> {
 
 #[cfg(target_os = "macos")]
 fn install_launchd(murmurd_path: &Path) -> Result<()> {
-    let label = "run.mur.murmurd";
+    let label = LAUNCHD_LABEL;
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
     let agents_dir = home.join("Library").join("LaunchAgents");
     std::fs::create_dir_all(&agents_dir)?;
@@ -80,7 +177,7 @@ fn install_systemd(murmurd_path: &Path) -> Result<()> {
         .join("user");
     std::fs::create_dir_all(&unit_dir)?;
 
-    let unit_path = unit_dir.join("murmurd.service");
+    let unit_path = unit_dir.join(SYSTEMD_UNIT);
     let unit = format!(
         "[Unit]\nDescription=murmurd — mur pattern daemon\n\n\
          [Service]\nExecStart={bin}\n{env}Restart=always\nRestartSec=5\n\n\
@@ -95,7 +192,7 @@ fn install_systemd(murmurd_path: &Path) -> Result<()> {
         .args(["--user", "daemon-reload"])
         .status();
     let _ = std::process::Command::new("systemctl")
-        .args(["--user", "enable", "--now", "murmurd.service"])
+        .args(["--user", "enable", "--now", SYSTEMD_UNIT])
         .status();
 
     Ok(())
@@ -162,6 +259,36 @@ mod tests {
         assert_eq!(
             systemd_env_line(Some(Path::new("/data/my mur"))),
             "Environment=\"MUR_HOME=/data/my mur\"\n"
+        );
+    }
+
+    #[test]
+    fn service_start_argv_restarts_in_place() {
+        let t = "gui/501/run.mur.murmurd";
+        assert_eq!(
+            DaemonService::Launchd.start_argv(true, t),
+            ["launchctl", "kickstart", "-k", t]
+        );
+        assert_eq!(
+            DaemonService::Launchd.start_argv(false, t),
+            ["launchctl", "kickstart", t]
+        );
+        assert_eq!(
+            DaemonService::Systemd.start_argv(true, t),
+            ["systemctl", "--user", "restart", SYSTEMD_UNIT]
+        );
+        assert_eq!(
+            DaemonService::Systemd.start_argv(false, t),
+            ["systemctl", "--user", "start", SYSTEMD_UNIT]
+        );
+    }
+
+    #[test]
+    fn launchd_target_names_the_installed_label() {
+        let t = launchd_target();
+        assert!(
+            t.starts_with("gui/") && t.ends_with("/run.mur.murmurd"),
+            "{t}"
         );
     }
 

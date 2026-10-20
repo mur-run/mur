@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
 
+use crate::cmd::init_daemon::DaemonService;
+
 pub fn cmd_murmurd_status() -> Result<()> {
     let lock_path = mur_common::home::mur_home_or_err()?.join("murmurd.lock");
 
@@ -48,6 +50,12 @@ pub fn cmd_murmurd_stop() -> Result<()> {
 
     let _ = std::fs::remove_file(&lock_path);
     println!("murmurd stopped (sent SIGTERM to pid {pid})");
+    if let Some(service) = DaemonService::detect() {
+        println!(
+            "note: murmurd is supervised by {service} and will be respawned; \
+             unload the service to keep it stopped"
+        );
+    }
     Ok(())
 }
 
@@ -67,6 +75,14 @@ fn murmurd_binary() -> Result<std::path::PathBuf> {
 }
 
 pub fn cmd_murmurd_start(detach: bool) -> Result<()> {
+    // A supervised daemon must be started through its service manager: a
+    // directly spawned one takes the singleton lock and the supervised job
+    // then crash-loops on "already running" every ThrottleInterval.
+    if detach && let Some(service) = DaemonService::detect() {
+        service.start(false)?;
+        println!("murmurd started via {service}");
+        return Ok(());
+    }
     let murmurd = murmurd_binary()?;
 
     let mut cmd = std::process::Command::new(&murmurd);
@@ -117,6 +133,28 @@ pub fn cmd_murmurd_restart() -> Result<()> {
     // Resolve the replacement binary FIRST: stop-then-fail-to-start leaves
     // the daemon down, which a smoke run demonstrated the hard way.
     murmurd_binary()?;
+    match DaemonService::detect() {
+        Some(service) => {
+            // Also stop a lock holder the service does not own (e.g. one an
+            // earlier `mur daemon start` spawned): `kickstart -k` only
+            // replaces the service's own instance, and an orphan would keep
+            // the lock and the respawned job crash-looping.
+            stop_lock_holder()?;
+            service.start(true)?;
+            println!("murmurd restarted via {service}");
+            Ok(())
+        }
+        None => {
+            stop_lock_holder()?;
+            cmd_murmurd_start(true)
+        }
+    }
+}
+
+/// SIGTERM the pid in `murmurd.lock`, wait for it to exit (SIGKILL after
+/// [`MURMURD_STOP_WAIT_SECS`]), then remove the lock. A missing lock is
+/// "nothing to stop"; an unreadable one is an error, never "not running".
+fn stop_lock_holder() -> Result<()> {
     let lock_path = murmurd_lock_path()?;
     match std::fs::read_to_string(&lock_path) {
         Ok(s) => {
@@ -184,5 +222,5 @@ pub fn cmd_murmurd_restart() -> Result<()> {
             lock_path.display()
         );
     }
-    cmd_murmurd_start(true)
+    Ok(())
 }
