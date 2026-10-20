@@ -80,9 +80,12 @@ fn render_step(step: &Step) -> anyhow::Result<String> {
             let value = value.ok_or_else(|| {
                 anyhow::anyhow!("step {} (assert_text) has no expected text", step.step)
             })?;
-            // Same check replay runs (`browser_verify_text_visible`): the
-            // text is visible somewhere on the page. Any recorded locator is
-            // ignored, as replay ignores it.
+            // Deliberately the same check replay runs
+            // (`browser_verify_text_visible`): the text is visible somewhere
+            // on the page. It does NOT require a specific element's text to
+            // equal `value` — `toHaveText(<locator>)` would reintroduce the
+            // locator dependency and make the spec fail where replay passes.
+            // Any recorded locator is ignored, as replay ignores it.
             format!("  await expect(page.getByText({value}).first()).toBeVisible();\n")
         }
         Action::AssertValue => {
