@@ -41,7 +41,8 @@ fn call_for_round_trips_every_step_tool_name() {
             step.step
         );
 
-        // Goto must never carry a locator; every other action must.
+        // Goto and AssertText (a page-wide text check) never carry a
+        // locator; every other action must.
         let has_locator = args.get("ref").is_some() || args.get("element").is_some();
         assert_eq!(
             has_locator,

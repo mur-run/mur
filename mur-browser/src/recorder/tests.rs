@@ -706,3 +706,40 @@ fn unique_ref_next_to_ambiguous_one_records() {
         "role:button[name=\"Cancel\"]"
     );
 }
+
+/// `assert_text` replays as `browser_verify_text_visible {text}` — it never
+/// addresses an element, so recording must not demand (or keep) a locator.
+#[test]
+fn assert_text_needs_no_locator() {
+    let mut s = step(Action::AssertText, &[]);
+    s.value = Some("david@example.com".into());
+    assert!(validate(s, false).is_ok());
+}
+
+/// On a raw-JSON page the only node's text is the whole response body; a
+/// `text:` locator built from it would copy personal data into the yaml.
+#[test]
+fn recorded_assert_text_keeps_no_locators() {
+    let mut hook = RecordHook::new(Run {
+        name: "whoami".into(),
+        mode: Mode::Test,
+        profile: None,
+        recorded_at: chrono::Utc::now(),
+        description: None,
+        tags: vec![],
+        replayed_at: None,
+        replay_count: 0,
+        steps: vec![],
+    });
+    hook.snapshot = crate::locator::parse_snapshot(
+        "- generic [active] [ref=e1]: {\"email\":\"david@example.com\",\"name\":\"David\"}",
+    );
+    let req = tools_call(
+        "browser_verify_text_visible",
+        serde_json::json!({"text": "david@example.com", "ref": "e1"}),
+    );
+    hook.record_success(&req).unwrap();
+    let step = &hook.run().steps[0];
+    assert_eq!(step.action, Action::AssertText);
+    assert!(step.locators.is_empty(), "{:?}", step.locators);
+}
