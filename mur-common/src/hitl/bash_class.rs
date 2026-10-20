@@ -52,6 +52,7 @@ const DATE_READONLY_FLAGS: &[&str] = &[
 ];
 
 mod git;
+mod print_only;
 
 /// ripgrep flags that RUN a program: `--pre` per searched file,
 /// `--hostname-bin` for hyperlinks. `--pre-glob` only scopes `--pre`.
@@ -239,6 +240,9 @@ pub fn is_readonly_words(words: &[(&str, bool)]) -> bool {
         // `remote`) — those only when EVERY argument is a known listing flag.
         // Flag and repo-driver checks live in `git.rs`.
         "git" => git::is_readonly(toks),
+        // `sed` / `tmux` only in a print-only shape; see `print_only`.
+        "sed" => print_only::sed_prints_only(toks),
+        "tmux" => print_only::tmux_reads(toks),
         // `gh`/`glab` only for a fixed noun + read verb pair — `gh pr view`,
         // `gh issue list`, never `gh api` (arbitrary REST, can write) or the
         // auth/secret/config nouns that mix read and mutate under one name.

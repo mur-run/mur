@@ -217,7 +217,13 @@ fn leaf(name: &str) -> &str {
 
 fn classify_bash(cmd: &str) -> RiskTier {
     let cmd = cmd.trim();
-    let lower = cmd.to_ascii_lowercase();
+    // Only the segments NOT proved read-only are scanned for heads: the
+    // arguments of a proved read are data (`grep -c npm f` searches for the
+    // string `npm`, it does not run it). When the parser cannot prove
+    // anything — substitution, redirection, heredocs — the whole command is
+    // scanned, as before. `opaque_shell` always sees the whole command.
+    let scanned = dest::unproven_text(cmd).unwrap_or_else(|| cmd.to_string());
+    let lower = scanned.to_ascii_lowercase();
 
     // Most-restrictive-wins, evaluated highest tier first. Every check runs
     // against the WHOLE command, so a chained `a && sudo b` is caught by the
@@ -288,6 +294,9 @@ fn git_sub_in(cmd: &str, subs: &[&str]) -> bool {
     toks.windows(2)
         .any(|w| w[0] == "git" && subs.contains(&w[1]))
 }
+
+#[cfg(test)]
+mod readonly_regressions;
 
 #[cfg(test)]
 mod tests {
