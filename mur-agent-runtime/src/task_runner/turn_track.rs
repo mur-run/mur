@@ -646,13 +646,21 @@ mod tests {
 
         let buf = Buf::default();
         let w = buf.clone();
-        let sub = tracing_subscriber::fmt()
-            .with_writer(move || w.clone())
-            .with_max_level(tracing::Level::INFO)
-            .with_ansi(false)
-            .finish();
+        // tracing-core caches a callsite's interest when it is first hit.
+        // With one live dispatcher it asks only the hitting thread's default,
+        // so a sibling test closing a track on a subscriber-less thread
+        // caches `never` and our line vanishes. A second live dispatcher
+        // makes registration consult every live dispatcher, ours included.
+        let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+        let sub = tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .with_writer(move || w.clone())
+                .with_max_level(tracing::Level::INFO)
+                .with_ansi(false)
+                .finish(),
+        );
         let mut ledger = crate::turn_ledger::TurnLedger::default();
-        let outcome = tracing::subscriber::with_default(sub, || {
+        let outcome = tracing::dispatcher::with_default(&sub, || {
             runner.close_turn_track("t1", open, &mut ledger)
         });
         assert_eq!(outcome, TrackClose::Promoted);
