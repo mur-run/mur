@@ -5,7 +5,7 @@
 //! exists, so the event sink is attached later ([`EgressProxyHandle::attach_events`]).
 //! Until then denials are only logged — the headless path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,25 +24,46 @@ pub(super) struct Events {
 struct EventsInner {
     agent: String,
     sink: Option<mpsc::Sender<serde_json::Value>>,
-    last: HashMap<(String, String), Instant>,
+    /// Throttle, keyed by `(server, host, audience)`: a notice routed to one
+    /// turn says nothing to another, so each audience gets its own window.
+    last: HashMap<(String, String, Option<String>), Instant>,
     /// `server → task → open tool calls`. A denial names the task only when
     /// exactly one task is using the server; the pool is per agent, so two
     /// turns on the same server cannot be told apart.
     in_flight: HashMap<String, HashMap<String, usize>>,
+    /// Servers with a call we stopped waiting on (timeout, cancel, panic).
+    /// MCP has no cancel, so that work may still be running and may be the
+    /// source of any later denial: attribution is off for the server from
+    /// then on and denials broadcast, as before #1907. Never cleared — the
+    /// pool keeps one child per server for the runtime's life, and nothing
+    /// tells us when the abandoned work ends.
+    abandoned: HashSet<String>,
 }
 
-/// Marks one tool call on `server` by `task` as in flight; dropping it marks
-/// the call finished. Drop, not an explicit call, so a timeout, a cancel, or
-/// a panic unwinds the mark too.
+/// Marks one tool call on `server` by `task` as in flight. [`InFlight::finish`]
+/// when the server answered; a plain drop (timeout, cancel, panic) means the
+/// call may still be running server-side, which turns attribution off for
+/// that server.
 pub struct InFlight {
     events: Events,
     server: String,
     task: String,
+    finished: bool,
+}
+
+impl InFlight {
+    /// The server answered (success or error): its work for this call is over.
+    pub fn finish(mut self) {
+        self.finished = true;
+    }
 }
 
 impl Drop for InFlight {
     fn drop(&mut self) {
         let mut g = self.events.inner.lock().unwrap();
+        if !self.finished {
+            g.abandoned.insert(self.server.clone());
+        }
         if let Some(tasks) = g.in_flight.get_mut(&self.server) {
             if let Some(n) = tasks.get_mut(&self.task) {
                 *n -= 1;
@@ -78,10 +99,11 @@ impl Events {
             events: self.clone(),
             server: server.to_owned(),
             task: task.to_owned(),
+            finished: false,
         }
     }
 
-    /// Emit at most one event per `(server, host)` per window. Returns the
+    /// Emit at most one event per `(server, host, audience)` per window. Returns the
     /// event when one was sent, for tests and the log line.
     pub(super) fn denied(
         &self,
@@ -92,19 +114,21 @@ impl Events {
         now: Instant,
     ) -> Option<EgressDenied> {
         let mut g = self.inner.lock().unwrap();
-        let key = (server.to_owned(), host.to_owned());
-        let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
-        if g.last
-            .get(&key)
-            .is_some_and(|t| now.duration_since(*t) < window)
-        {
-            return None;
-        }
-        g.last.insert(key, now);
         let task_id = match g.in_flight.get(server) {
+            _ if g.abandoned.contains(server) => None,
             Some(tasks) if tasks.len() == 1 => tasks.keys().next().cloned(),
             _ => None,
         };
+        let key = (server.to_owned(), host.to_owned(), task_id.clone());
+        let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
+        // An entry outside its window suppresses nothing; drop it so per-turn
+        // keys do not pile up for the runtime's life. The map only ever holds
+        // the last window's emits, so the sweep stays small.
+        g.last.retain(|_, t| now.duration_since(*t) < window);
+        if g.last.contains_key(&key) {
+            return None;
+        }
+        g.last.insert(key, now);
         let ev = EgressDenied {
             agent: g.agent.clone(),
             server: server.to_owned(),
@@ -275,15 +299,105 @@ mod tests {
         let b = h.in_flight("browser", "task-b");
         let both = h.events.denied("browser", "one.x", None, false, t).unwrap();
         assert_eq!(both.task_id, None);
-        drop(b);
+        b.finish();
         let only_a = h.events.denied("browser", "two.x", None, false, t).unwrap();
         assert_eq!(only_a.task_id.as_deref(), Some("task-a"));
-        drop(a);
+        a.finish();
         let nobody = h
             .events
             .denied("browser", "three.x", None, false, t)
             .unwrap();
         assert_eq!(nobody.task_id, None);
+    }
+
+    /// The throttle is per audience: once denials are routed to one turn, a
+    /// later turn hitting the same host never saw the first notice, so it
+    /// must get its own instead of being swallowed by the other turn's window.
+    #[test]
+    fn a_second_turn_gets_its_own_notice_inside_the_window() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let t0 = Instant::now();
+        let a = h.in_flight("browser", "task-a");
+        assert!(
+            h.events
+                .denied("browser", "img.x", None, false, t0)
+                .is_some()
+        );
+        assert!(
+            h.events
+                .denied("browser", "img.x", None, false, t0 + Duration::from_secs(1))
+                .is_none(),
+            "the same turn stays throttled"
+        );
+        a.finish();
+        let _b = h.in_flight("browser", "task-b");
+        let d = h
+            .events
+            .denied("browser", "img.x", None, false, t0 + Duration::from_secs(2))
+            .expect("task-b never saw task-a's notice");
+        assert_eq!(d.task_id.as_deref(), Some("task-b"));
+    }
+
+    /// A call that stopped being waited on (timeout, cancel, panic) may still
+    /// be running in the server. A later denial could be that leftover work,
+    /// so it must not be pinned on whichever turn happens to be using the
+    /// server now: it is broadcast, as before #1907.
+    #[test]
+    fn a_call_abandoned_mid_flight_makes_later_denials_unattributed() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let t = Instant::now();
+        drop(h.in_flight("browser", "task-a")); // timed out: never finished
+        let _b = h.in_flight("browser", "task-b");
+        let d = h
+            .events
+            .denied("browser", "late.x", None, false, t)
+            .unwrap();
+        assert_eq!(d.task_id, None);
+        // Other servers are unaffected.
+        let _c = h.in_flight("fetch", "task-b");
+        let d = h.events.denied("fetch", "ok.x", None, false, t).unwrap();
+        assert_eq!(d.task_id.as_deref(), Some("task-b"));
+    }
+
+    /// Keying the throttle by audience adds an entry per turn that hits a
+    /// host. In a runtime that lives for weeks those must not pile up: an
+    /// entry whose window has passed is gone after the next denial, while an
+    /// entry still inside its window keeps suppressing duplicates.
+    #[test]
+    fn expired_throttle_entries_do_not_outlive_their_window() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
+        let t0 = Instant::now();
+        for i in 0..100 {
+            let turn = h.in_flight("browser", &format!("task-{i}"));
+            assert!(
+                h.events
+                    .denied("browser", "img.x", None, false, t0)
+                    .is_some()
+            );
+            turn.finish();
+        }
+        let live = h.in_flight("browser", "task-live");
+        let mid = t0 + window / 2;
+        assert!(
+            h.events
+                .denied("browser", "img.x", None, false, mid)
+                .is_some()
+        );
+
+        let later = t0 + window;
+        assert!(
+            h.events
+                .denied("browser", "img.x", None, false, later)
+                .is_none(),
+            "task-live's own window is still open"
+        );
+        assert_eq!(
+            h.events.inner.lock().unwrap().last.len(),
+            1,
+            "only task-live's entry is still inside its window"
+        );
+        live.finish();
     }
 
     #[test]
