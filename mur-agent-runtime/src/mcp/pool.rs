@@ -35,6 +35,14 @@ impl McpPool {
         })
     }
 
+    /// Mark the calling turn's tool call on `server` as in flight, so an
+    /// `egress/denied` raised meanwhile names that turn. `None` outside a
+    /// turn or when no server on this agent is behind the proxy.
+    pub fn in_flight(&self, server: &str) -> Option<crate::sandbox::egress_proxy::InFlight> {
+        let task = crate::tools::bash_jobs::current_task_id()?;
+        Some(self.proxy.as_ref()?.in_flight(server, &task))
+    }
+
     /// Return (or lazily spawn) the client for `server`.
     pub async fn client(&self, server: &str) -> Result<Arc<Mutex<McpClient>>, McpError> {
         let mut guard = self.clients.lock().await;

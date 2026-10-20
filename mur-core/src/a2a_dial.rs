@@ -569,6 +569,7 @@ pub fn dial_message_streaming_polled(
                     last_activity = Instant::now();
                 }
                 if task_id.is_none()
+                    && m != mur_common::egress_event::DENIED_METHOD
                     && let Some(id) = v
                         .get("params")
                         .and_then(|p| p.get("task_id"))
@@ -614,11 +615,21 @@ pub fn dial_message_streaming_polled(
             if v.get("method").and_then(Value::as_str)
                 == Some(mur_common::egress_event::DENIED_METHOD)
             {
-                if let Some(ev) = v
-                    .get("params")
-                    .and_then(|p| serde_json::from_value(p.clone()).ok())
-                {
-                    on_step(StepEvent::EgressDenied(ev));
+                if let Some(ev) = v.get("params").and_then(|p| {
+                    serde_json::from_value::<mur_common::egress_event::EgressDenied>(p.clone()).ok()
+                }) {
+                    // A denial stamped for another turn is that session's
+                    // (a pre-routing runtime broadcasts it). Unstamped ones
+                    // name no turn and still show. Until this turn's id is
+                    // known, a stamped one cannot be ours.
+                    let ours = match (&ev.task_id, &task_id) {
+                        (None, _) => true,
+                        (Some(theirs), Some(mine)) => theirs == mine,
+                        (Some(_), None) => false,
+                    };
+                    if ours {
+                        on_step(StepEvent::EgressDenied(ev));
+                    }
                 }
                 continue;
             }

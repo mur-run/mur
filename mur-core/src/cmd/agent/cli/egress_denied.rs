@@ -133,6 +133,7 @@ mod tests {
             mode: "restricted".into(),
             reason,
             at: "2026-10-15T00:00:00Z".into(),
+            task_id: None,
         }
     }
 

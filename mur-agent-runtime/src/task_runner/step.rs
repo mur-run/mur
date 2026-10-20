@@ -378,6 +378,30 @@ impl TaskRunner {
         }
     }
 
+    /// Route every `egress/denied` the proxy raises, for the agent's life.
+    /// The proxy starts before the runner exists, so it sends into `rx`.
+    pub fn drain_egress_denied(
+        self: std::sync::Arc<Self>,
+        mut rx: tokio::sync::mpsc::Receiver<serde_json::Value>,
+    ) {
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                self.route_egress_denied(frame).await;
+            }
+        });
+    }
+
+    /// Deliver one `egress/denied` frame. A denial that names a turn goes to
+    /// the connection watching that turn, like `step/*`; one that names none
+    /// (or a turn whose connection is gone) rides the broadcast as before, so
+    /// it is never dropped.
+    pub async fn route_egress_denied(&self, frame: serde_json::Value) {
+        let task = frame["params"]["task_id"].as_str().unwrap_or("");
+        if let Some(tx) = self.step_sink(task).await {
+            let _ = tx.send(frame).await;
+        }
+    }
+
     /// The notifier `step/*` frames go to: the connection watching this task,
     /// else the runner's baked notifier — the same routing `GuardedToolCall`
     /// uses for `step/started` and `step/completed`.

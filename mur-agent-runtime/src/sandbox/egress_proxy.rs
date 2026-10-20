@@ -35,7 +35,7 @@ use super::reqwest_guard::{host_allowed, host_matches_pattern};
 mod http_forward;
 mod live;
 
-pub use live::GrantError;
+pub use live::{GrantError, InFlight};
 
 /// A registered per-server policy: either a `Restricted` allowlist, or a
 /// `BroadAudited` allow-all-except-`deny` policy.
