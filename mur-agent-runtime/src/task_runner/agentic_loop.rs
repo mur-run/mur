@@ -198,7 +198,7 @@ impl TaskRunner {
                             r
                         }
                         Some(s) => client.generate_stream(req_try, s.clone()).await,
-                        None => client.generate(req_try).await,
+                        None => crate::llm::generate_unattended(client, req_try).await,
                     };
                     match result {
                         Ok(r) => break r,

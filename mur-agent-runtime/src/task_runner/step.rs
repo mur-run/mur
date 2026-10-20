@@ -74,7 +74,7 @@ impl TaskRunner {
         let start = std::time::Instant::now();
         let llm_result = match &sink {
             Some(s) => client.generate_stream(req, s.clone()).await,
-            None => client.generate(req).await,
+            None => crate::llm::generate_unattended(client, req).await,
         };
         match llm_result {
             Ok(mut resp) => {

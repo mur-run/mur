@@ -600,6 +600,25 @@ pub trait LlmClient: Send + Sync {
     }
 }
 
+/// Run a turn through `generate_stream` even when nobody is listening.
+///
+/// A non-streaming `generate` cannot be bounded by silence: nothing arrives
+/// until the whole answer is written, so the only guard left is a total
+/// request timeout somewhere on the path — and any proxy with one (the model
+/// gateway's was 600s) cuts off a long Opus answer mid-write, then the
+/// retry hits the same wall and the fallback chain takes over. Streaming
+/// keeps bytes flowing, so `StreamActivity` decides liveness instead.
+pub async fn generate_unattended(
+    client: &dyn LlmClient,
+    req: LlmRequest,
+) -> Result<LlmResponse, LlmError> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamDelta>(64);
+    let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let result = client.generate_stream(req, tx).await;
+    let _ = drain.await;
+    result
+}
+
 #[cfg(test)]
 mod tests;
 
