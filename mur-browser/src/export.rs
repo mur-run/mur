@@ -32,6 +32,15 @@ pub fn to_spec_ts(run: &Run) -> anyhow::Result<String> {
     Ok(out)
 }
 
+/// `assert_text` check, split around the value expression: polls every frame
+/// for a visible match, exactly as replay's `browser_verify_text_visible`.
+const ASSERT_TEXT_OPEN: &str = "  await expect.poll(async () => {\n    \
+    for (const frame of page.frames()) {\n      \
+    if (await frame.getByText(";
+const ASSERT_TEXT_CLOSE: &str = ").filter({ visible: true }).count() > 0) return true;\n    \
+    }\n    return false;\n  \
+    }, { message: 'text is visible in some frame' }).toBe(true);\n";
+
 /// One step's Playwright statement(s), indented for the `test(...)` body.
 fn render_step(step: &Step) -> anyhow::Result<String> {
     let value = step.value.as_deref().map(render_value_expr);
@@ -81,12 +90,16 @@ fn render_step(step: &Step) -> anyhow::Result<String> {
                 anyhow::anyhow!("step {} (assert_text) has no expected text", step.step)
             })?;
             // Deliberately the same check replay runs
-            // (`browser_verify_text_visible`): the text is visible somewhere
-            // on the page. It does NOT require a specific element's text to
-            // equal `value` — `toHaveText(<locator>)` would reintroduce the
-            // locator dependency and make the spec fail where replay passes.
-            // Any recorded locator is ignored, as replay ignores it.
-            format!("  await expect(page.getByText({value}).first()).toBeVisible();\n")
+            // (`browser_verify_text_visible`): in ANY frame, some element
+            // matching the text is visible. Two consequences, both mirrored
+            // here: visibility is filtered BEFORE picking a match (a hidden
+            // first match must not fail the step when a later one shows),
+            // and child frames count (`page.getByText` sees only the main
+            // frame). It does NOT require a specific element's text to equal
+            // `value` — `toHaveText(<locator>)` would reintroduce the locator
+            // dependency. Any recorded locator is ignored, as replay ignores
+            // it. `expect.poll` keeps Playwright's auto-retrying wait.
+            format!("{ASSERT_TEXT_OPEN}{value}{ASSERT_TEXT_CLOSE}")
         }
         Action::AssertValue => {
             let value = value.ok_or_else(|| {
@@ -260,9 +273,19 @@ mod tests {
         let run = run_with_steps(Mode::Test, vec![assert]);
         let spec = to_spec_ts(&run).expect("assert_text needs no locator");
 
+        // Mirrors replay: every frame, visibility filtered before matching.
         assert!(
-            spec.contains("await expect(page.getByText('Welcome').first()).toBeVisible();"),
+            spec.contains("for (const frame of page.frames())"),
             "{spec}"
+        );
+        assert!(
+            spec.contains("frame.getByText('Welcome').filter({ visible: true }).count() > 0"),
+            "{spec}"
+        );
+        assert!(spec.contains(").toBe(true);"), "{spec}");
+        assert!(
+            !spec.contains(".first()"),
+            "a hidden first match must not decide: {spec}"
         );
     }
 
@@ -286,7 +309,7 @@ mod tests {
         assert!(spec.contains(".press("));
         assert!(spec.contains(".hover();"));
         assert!(spec.contains("toBeVisible();"));
-        assert!(spec.contains("page.getByText('訂單確認').first()).toBeVisible();"));
+        assert!(spec.contains("frame.getByText('訂單確認').filter({ visible: true })"));
         assert!(spec.contains("toHaveValue("));
     }
 
