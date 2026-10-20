@@ -80,10 +80,10 @@ fn render_step(step: &Step) -> anyhow::Result<String> {
             let value = value.ok_or_else(|| {
                 anyhow::anyhow!("step {} (assert_text) has no expected text", step.step)
             })?;
-            format!(
-                "  await expect({}).toHaveText({value});\n",
-                locator.unwrap()
-            )
+            // Same check replay runs (`browser_verify_text_visible`): the
+            // text is visible somewhere on the page. Any recorded locator is
+            // ignored, as replay ignores it.
+            format!("  await expect(page.getByText({value}).first()).toBeVisible();\n")
         }
         Action::AssertValue => {
             let value = value.ok_or_else(|| {
@@ -250,6 +250,20 @@ mod tests {
     }
 
     #[test]
+    fn assert_text_without_locator_exports_page_text_check() {
+        let mut assert = step(1, Action::AssertText);
+        assert.value = Some("Welcome".into());
+
+        let run = run_with_steps(Mode::Test, vec![assert]);
+        let spec = to_spec_ts(&run).expect("assert_text needs no locator");
+
+        assert!(
+            spec.contains("await expect(page.getByText('Welcome').first()).toBeVisible();"),
+            "{spec}"
+        );
+    }
+
+    #[test]
     fn automation_mode_is_rejected() {
         let run = run_with_steps(Mode::Automation, vec![step(1, Action::Goto)]);
         let err = to_spec_ts(&run).expect_err("automation runs have no assertions to export");
@@ -269,7 +283,7 @@ mod tests {
         assert!(spec.contains(".press("));
         assert!(spec.contains(".hover();"));
         assert!(spec.contains("toBeVisible();"));
-        assert!(spec.contains("toHaveText("));
+        assert!(spec.contains("page.getByText('訂單確認').first()).toBeVisible();"));
         assert!(spec.contains("toHaveValue("));
     }
 

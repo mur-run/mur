@@ -33,8 +33,13 @@ pub enum Action {
 
 impl Action {
     /// Whether this action addresses an element (needs `locators`).
+    ///
+    /// `assert_text` does not: replay sends `browser_verify_text_visible
+    /// {text}`, a page-wide check, so a locator could only make the step
+    /// fail when the text is visible (stale locator) or copy page content
+    /// into the yaml (a `text:` locator on a raw-JSON page).
     pub fn needs_locator(self) -> bool {
-        !matches!(self, Action::Goto)
+        !matches!(self, Action::Goto | Action::AssertText)
     }
 
     /// Whether replay should fail the run when this step misses
@@ -477,7 +482,11 @@ impl RecordHook {
             intent_auto,
             action,
             value: Self::value_for(action, args),
-            locators: self.locator_for(req),
+            locators: if action.needs_locator() {
+                self.locator_for(req)
+            } else {
+                Vec::new()
+            },
             healed: false,
             last_hit: 0,
             ref_at_record: args

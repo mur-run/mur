@@ -523,8 +523,8 @@ fn assert_args(
             })?;
             json!({"role": node.role, "accessibleName": node.name})
         }
-        // { text } — the locator only gated that the text is on the page.
-        Action::AssertText => json!({"text": value}),
+        // `assert_text` never resolves a locator (see `needs_locator`), so
+        // it never reaches here; its `{ text }` args come from `call_for`.
         // { type, element, target, value }
         Action::AssertValue => json!({
             "type": verify_value_type(node.map(|n| n.role.as_str())),
