@@ -184,6 +184,16 @@ pub enum McpError {
     Serena(Box<crate::mcp::serena::SerenaEntryError>),
 }
 
+impl McpError {
+    /// The server answered the request — with a JSON-RPC error, but it
+    /// answered, so its work on that request is over. Every other variant is
+    /// a local or transport failure: the request may have reached the server
+    /// and may still be running there.
+    pub fn is_server_reply(&self) -> bool {
+        matches!(self, Self::Rpc(_))
+    }
+}
+
 impl InitializeInfo {
     /// Build from a JSON-RPC `result` value returned by the `initialize` method.
     /// Returns `Err(reason)` if the shape is completely wrong (empty strings are
@@ -399,7 +409,7 @@ impl StdioMcpClient {
             let v: Value = serde_json::from_str(&line)?;
             if v.get("id") == Some(&json!(id)) {
                 if let Some(err) = v.get("error") {
-                    return Err(McpError::Server(err.to_string()));
+                    return Err(McpError::Rpc(err.to_string()));
                 }
                 return Ok(v.get("result").cloned().unwrap_or(json!(null)));
             }

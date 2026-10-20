@@ -14,6 +14,22 @@ fn main() {
         };
         let id = req["id"].clone();
         let method = req["method"].as_str().unwrap_or("");
+        if method == "tools/call" && req["params"]["name"] == "garble" {
+            // A line the client cannot decode, and no reply: the call is
+            // still "running" as far as the server is concerned.
+            writeln!(stdout, "{{not json").unwrap();
+            stdout.flush().unwrap();
+            continue;
+        }
+        if method == "tools/call" && req["params"]["name"] == "rpc_error" {
+            let resp = serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": {"code": -32000, "message": "refused"}
+            });
+            writeln!(stdout, "{}", resp).unwrap();
+            stdout.flush().unwrap();
+            continue;
+        }
         let result = match method {
             "initialize" => serde_json::json!({
                 "protocolVersion": "2024-11-05",

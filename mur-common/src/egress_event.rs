@@ -14,7 +14,9 @@ pub const DENIED_METHOD: &str = "egress/denied";
 /// A2A method that adds a host to a running proxy's policy.
 pub const GRANT_METHOD: &str = "egress/grant";
 
-/// At most one [`EgressDenied`] per `(server, host)` in this window.
+/// At most one [`EgressDenied`] per `(server, host, audience)` in this window,
+/// where the audience is the turn the denial is routed to, or everyone when
+/// it is unattributed.
 pub const DENIED_EVENT_WINDOW_SECS: u64 = 60;
 
 /// Why the proxy refused.

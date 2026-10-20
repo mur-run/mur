@@ -152,31 +152,36 @@ impl ToolExecutor for McpToolExecutor {
         };
 
         let result = tokio::time::timeout(self.timeout, async {
-            client_arc
-                .lock()
-                .await
-                .call_tool(&self.tool, input)
-                .await
-                .map_err(|e| ToolError::Execution(e.to_string()))
+            client_arc.lock().await.call_tool(&self.tool, input).await
         })
         .await;
-        if let (Ok(_), Some(g)) = (&result, in_flight) {
+        // Only an answer from the server ends its work. A timeout, or an I/O,
+        // transport or decoding failure after the request went out, says
+        // nothing about whether the server is still running the call.
+        let answered = match &result {
+            Ok(Ok(_)) => true,
+            Ok(Err(e)) => e.is_server_reply(),
+            Err(_) => false,
+        };
+        if let (true, Some(g)) = (answered, in_flight) {
             g.finish();
         }
-        let result = result.map_err(|_| {
-            // A timeout says we stopped waiting — it does NOT say the call
-            // failed. MCP has no cancel: the server keeps running the tool.
-            // Reporting this as a plain failure taught agents to "recover" by
-            // re-dispatching work that was already in flight, or to burn a
-            // turn on `sleep` waiting for a result they'd been told was dead.
-            ToolError::Execution(format!(
-                "tool `{}` did not return within {:?}; MUR stopped waiting, but the server may \
+        let result = result
+            .map(|r| r.map_err(|e| ToolError::Execution(e.to_string())))
+            .map_err(|_| {
+                // A timeout says we stopped waiting — it does NOT say the call
+                // failed. MCP has no cancel: the server keeps running the tool.
+                // Reporting this as a plain failure taught agents to "recover" by
+                // re-dispatching work that was already in flight, or to burn a
+                // turn on `sleep` waiting for a result they'd been told was dead.
+                ToolError::Execution(format!(
+                    "tool `{}` did not return within {:?}; MUR stopped waiting, but the server may \
                  still be running it — treat the outcome as unknown, check for side effects \
                  before retrying. Raise `timeout_secs` for MCP server `{}` if this tool is \
                  expected to run long.",
-                self.wire_name, self.timeout, self.server
-            ))
-        })??;
+                    self.wire_name, self.timeout, self.server
+                ))
+            })??;
 
         let is_error = result
             .get("isError")

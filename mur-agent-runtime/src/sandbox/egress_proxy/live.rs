@@ -121,10 +121,11 @@ impl Events {
         };
         let key = (server.to_owned(), host.to_owned(), task_id.clone());
         let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
-        if g.last
-            .get(&key)
-            .is_some_and(|t| now.duration_since(*t) < window)
-        {
+        // An entry outside its window suppresses nothing; drop it so per-turn
+        // keys do not pile up for the runtime's life. The map only ever holds
+        // the last window's emits, so the sweep stays small.
+        g.last.retain(|_, t| now.duration_since(*t) < window);
+        if g.last.contains_key(&key) {
             return None;
         }
         g.last.insert(key, now);
@@ -356,6 +357,47 @@ mod tests {
         let _c = h.in_flight("fetch", "task-b");
         let d = h.events.denied("fetch", "ok.x", None, false, t).unwrap();
         assert_eq!(d.task_id.as_deref(), Some("task-b"));
+    }
+
+    /// Keying the throttle by audience adds an entry per turn that hits a
+    /// host. In a runtime that lives for weeks those must not pile up: an
+    /// entry whose window has passed is gone after the next denial, while an
+    /// entry still inside its window keeps suppressing duplicates.
+    #[test]
+    fn expired_throttle_entries_do_not_outlive_their_window() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
+        let t0 = Instant::now();
+        for i in 0..100 {
+            let turn = h.in_flight("browser", &format!("task-{i}"));
+            assert!(
+                h.events
+                    .denied("browser", "img.x", None, false, t0)
+                    .is_some()
+            );
+            turn.finish();
+        }
+        let live = h.in_flight("browser", "task-live");
+        let mid = t0 + window / 2;
+        assert!(
+            h.events
+                .denied("browser", "img.x", None, false, mid)
+                .is_some()
+        );
+
+        let later = t0 + window;
+        assert!(
+            h.events
+                .denied("browser", "img.x", None, false, later)
+                .is_none(),
+            "task-live's own window is still open"
+        );
+        assert_eq!(
+            h.events.inner.lock().unwrap().last.len(),
+            1,
+            "only task-live's entry is still inside its window"
+        );
+        live.finish();
     }
 
     #[test]
