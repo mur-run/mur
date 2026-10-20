@@ -122,10 +122,95 @@ fn parse_snapshot_line(line: &str) -> Option<SnapshotNode> {
 /// Inline text after the attribute brackets, e.g. `hello` in
 /// `- generic [ref=e1] [cursor=pointer]: hello`. A bare trailing `:` marks a
 /// container with children, not content.
+///
+/// The value is a YAML scalar: Playwright double-quotes and escapes any text
+/// that would otherwise be YAML-sensitive (`- paragraph [ref=e4]: "a: b [x]"`),
+/// so quoted scalars are decoded back to the visible text; plain scalars are
+/// taken verbatim.
 fn inline_content(line: &str) -> Option<String> {
     let after_ref = line.split_once("[ref=")?.1;
     let content = after_ref.split_once("]: ")?.1.trim();
-    (!content.is_empty()).then(|| content.to_string())
+    (!content.is_empty()).then(|| decode_yaml_scalar(content))
+}
+
+/// Decode a YAML flow scalar. A double-quoted or single-quoted scalar is
+/// unquoted and unescaped; anything else (a plain scalar, or a quoted one
+/// that does not decode cleanly) is returned unchanged so text is never lost.
+fn decode_yaml_scalar(raw: &str) -> String {
+    let decoded = if let Some(inner) = strip_quotes(raw, '"') {
+        decode_double_quoted(inner)
+    } else if let Some(inner) = strip_quotes(raw, '\'') {
+        decode_single_quoted(inner)
+    } else {
+        None
+    };
+    decoded.unwrap_or_else(|| raw.to_string())
+}
+
+fn strip_quotes(raw: &str, quote: char) -> Option<&str> {
+    raw.strip_prefix(quote)?.strip_suffix(quote)
+}
+
+/// Single-quoted YAML: the only escape is `''` for a literal `'`.
+fn decode_single_quoted(inner: &str) -> Option<String> {
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            // A lone quote would have terminated the scalar early.
+            chars.next_if_eq(&'\'')?;
+        }
+        out.push(c);
+    }
+    Some(out)
+}
+
+/// Double-quoted YAML escapes (YAML 1.2 §5.7). Returns `None` on an
+/// unterminated or unknown escape, or an unescaped `"` inside the body.
+fn decode_double_quoted(inner: &str) -> Option<String> {
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return None,
+            '\\' => {
+                let decoded = match chars.next()? {
+                    '0' => '\0',
+                    'a' => '\x07',
+                    'b' => '\x08',
+                    't' | '\t' => '\t',
+                    'n' => '\n',
+                    'v' => '\x0b',
+                    'f' => '\x0c',
+                    'r' => '\r',
+                    'e' => '\x1b',
+                    ' ' => ' ',
+                    '"' => '"',
+                    '/' => '/',
+                    '\\' => '\\',
+                    'N' => '\u{85}',
+                    '_' => '\u{a0}',
+                    'L' => '\u{2028}',
+                    'P' => '\u{2029}',
+                    'x' => hex_char(&mut chars, 2)?,
+                    'u' => hex_char(&mut chars, 4)?,
+                    'U' => hex_char(&mut chars, 8)?,
+                    _ => return None,
+                };
+                out.push(decoded);
+            }
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+fn hex_char(chars: &mut std::str::Chars<'_>, digits: usize) -> Option<char> {
+    let hex: String = chars.by_ref().take(digits).collect();
+    if hex.len() != digits {
+        return None;
+    }
+    char::from_u32(u32::from_str_radix(&hex, 16).ok()?)
 }
 
 fn extract_bracket_value(line: &str, key: &str) -> Option<String> {
@@ -392,5 +477,42 @@ mod tests {
             vec!["role:generic", "text:hello"]
         );
         assert_eq!(candidates_for_ref("e2", &nodes), vec!["role:checkbox"]);
+    }
+
+    // Regression (PR #2021 review): Playwright YAML-quotes inline text that
+    // contains YAML-sensitive characters, so the quotes and escapes are
+    // serialization, not visible text.
+    #[test]
+    fn quoted_inline_content_is_yaml_decoded() {
+        let nodes = parse_snapshot(
+            r#"- paragraph [ref=e1]: "a: b [x]"
+- paragraph [ref=e2]: "[draft] notes"
+- paragraph [ref=e3]: "say \"hi\" to C:\\tmp"
+- paragraph [ref=e4]: 'it''s'
+- paragraph [ref=e5]: "caf\u00e9\ttab"
+- paragraph [ref=e6]: plain "inner" text
+- paragraph [ref=e7]: "bad \q escape""#,
+        );
+        let text: Vec<&str> = nodes.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(
+            text,
+            vec![
+                "a: b [x]",
+                "[draft] notes",
+                r#"say "hi" to C:\tmp"#,
+                "it's",
+                "café\ttab",
+                r#"plain "inner" text"#,
+                r#""bad \q escape""#,
+            ]
+        );
+        assert_eq!(
+            resolve(&Locator::parse("text:a: b [x]").unwrap(), &nodes),
+            Some("e1".into())
+        );
+        assert!(
+            candidates_for_ref("e1", &nodes).contains(&"text:a: b [x]".to_string()),
+            "candidate must carry the visible text, not the YAML quotes"
+        );
     }
 }
