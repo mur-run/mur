@@ -184,3 +184,53 @@ async fn finished_renders_joins_and_detaches() {
         assert!(app.review.is_none());
     }
 }
+
+/// A MURMUR command at the send gate is refused with a warning instead of
+/// being parsed as an answer; the gate's own `/stop` still answers it.
+#[tokio::test]
+async fn a_murmur_command_at_the_gate_is_refused_not_an_answer() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app);
+    let rx = confirm(&mut app);
+
+    type_line(&mut app, "/review").await;
+
+    assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(matches!(
+        session(&app).awaiting,
+        Some(Awaiting::Confirm { .. })
+    ));
+    let text = system_lines(&app).join("\n");
+    assert!(text.contains("/review was not run"), "{text}");
+    assert_eq!(app.input_text(), "/review");
+
+    type_line(&mut app, "/stop").await;
+    assert_eq!(rx.try_recv(), Ok(SendAnswer::Stop));
+}
+
+/// A bare `/` at the send gate is neither an answer nor an
+/// `unknown command: /` hint: it gets the bare-slash warning, stays in the
+/// composer, and the gate keeps waiting.
+#[tokio::test]
+async fn a_bare_slash_at_the_gate_warns_and_keeps_asking() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app);
+    let rx = confirm(&mut app);
+
+    type_line(&mut app, "/").await;
+
+    assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(matches!(
+        session(&app).awaiting,
+        Some(Awaiting::Confirm { .. })
+    ));
+    let text = system_lines(&app).join("\n");
+    assert!(
+        text.contains(crate::cmd::agent::cli::app::BARE_SLASH_HINT),
+        "{text}"
+    );
+    assert!(!text.contains("unknown command"), "{text}");
+    assert_eq!(app.input_text(), "/");
+}

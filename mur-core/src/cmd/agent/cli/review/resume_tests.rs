@@ -413,3 +413,49 @@ async fn resume_confirm_esc_twice_releases_lock() {
     assert_eq!(system_lines(&app).last(), Some(&REVIEW_LEFT_PAUSED_NOTICE));
     assert!(lock_is_free(h, &ch));
 }
+
+/// A MURMUR command typed at `Paused — continue?` is not an answer: it was
+/// read as "no" and silently dropped the session. It is refused with a
+/// warning, the prompt keeps waiting and the line stays in the composer.
+#[tokio::test]
+async fn a_murmur_command_at_continue_is_refused_not_an_answer() {
+    let tmp = home();
+    let h = tmp.path();
+    let ch = resumable(h, PAUSED);
+    let mut app = app_at(h);
+    handle(&mut app, &format!("resume {PAUSED}"), &tx()).await;
+
+    type_line(&mut app, "/review --main a --reviewer b task").await;
+
+    let s = attached(&app);
+    assert!(matches!(s.awaiting, Some(Awaiting::ResumeConfirm(_))));
+    assert!(!lock_is_free(h, &ch), "the waiting session keeps the lock");
+    let text = system_lines(&app).join("\n");
+    assert!(!text.contains(REVIEW_LEFT_PAUSED_NOTICE), "{text}");
+    assert!(text.contains("/review was not run"), "{text}");
+    assert_eq!(app.input_text(), "/review --main a --reviewer b task");
+}
+
+/// A bare `/` at `Paused — continue?` was read as "no" and dropped the
+/// session. It now warns, keeps the prompt and the lock.
+#[tokio::test]
+async fn a_bare_slash_at_continue_warns_and_keeps_the_lock() {
+    let tmp = home();
+    let h = tmp.path();
+    let ch = resumable(h, PAUSED);
+    let mut app = app_at(h);
+    handle(&mut app, &format!("resume {PAUSED}"), &tx()).await;
+
+    type_line(&mut app, "/").await;
+
+    let s = attached(&app);
+    assert!(matches!(s.awaiting, Some(Awaiting::ResumeConfirm(_))));
+    assert!(!lock_is_free(h, &ch), "the waiting session keeps the lock");
+    let text = system_lines(&app).join("\n");
+    assert!(!text.contains(REVIEW_LEFT_PAUSED_NOTICE), "{text}");
+    assert!(
+        text.contains(crate::cmd::agent::cli::app::BARE_SLASH_HINT),
+        "{text}"
+    );
+    assert_eq!(app.input_text(), "/");
+}
