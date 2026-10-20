@@ -115,6 +115,24 @@ async fn slash_stop_stops() {
     assert_eq!(rx.try_recv(), Ok(SendAnswer::Stop));
 }
 
+/// A skill that shares a prompt word (`/stop`) must not shadow it: the
+/// prompt's own commands win over the MURMUR-command guard.
+#[tokio::test]
+async fn slash_stop_stops_even_with_a_stop_skill_installed() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    app.skills = vec![crate::cmd::agent::cli::complete::Candidate {
+        display: "/stop".into(),
+        insert: "/stop ".into(),
+        desc: String::new(),
+        has_children: false,
+    }];
+    attach(&mut app);
+    let rx = confirm(&mut app);
+    type_line(&mut app, "/stop").await;
+    assert_eq!(rx.try_recv(), Ok(SendAnswer::Stop));
+}
+
 /// AC-P3b-9: bare `q` is a broadcast note, never Stop and never Send.
 #[tokio::test]
 async fn bare_q_is_a_broadcast_note() {

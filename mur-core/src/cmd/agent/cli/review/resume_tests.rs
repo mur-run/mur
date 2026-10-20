@@ -459,3 +459,37 @@ async fn a_bare_slash_at_continue_warns_and_keeps_the_lock() {
     );
     assert_eq!(app.input_text(), "/");
 }
+
+fn skill_candidate(name: &str) -> crate::cmd::agent::cli::complete::Candidate {
+    crate::cmd::agent::cli::complete::Candidate {
+        display: format!("/{name}"),
+        insert: format!("/{name} "),
+        desc: String::new(),
+        has_children: false,
+    }
+}
+
+/// An installed skill is offered in the slash menu but parses as `Unknown`,
+/// so it slipped past the MURMUR-command guard and `Paused — continue?` read
+/// it as "no": the session detached and the lock was released. It is refused
+/// like a built-in: the prompt keeps waiting, the lock is kept and the line
+/// stays in the composer.
+#[tokio::test]
+async fn a_skill_command_at_continue_is_refused_not_an_answer() {
+    let tmp = home();
+    let h = tmp.path();
+    let ch = resumable(h, PAUSED);
+    let mut app = app_at(h);
+    app.skills = vec![skill_candidate("brainstorming")];
+    handle(&mut app, &format!("resume {PAUSED}"), &tx()).await;
+
+    type_line(&mut app, "/brainstorming the rollout").await;
+
+    let s = attached(&app);
+    assert!(matches!(s.awaiting, Some(Awaiting::ResumeConfirm(_))));
+    assert!(!lock_is_free(h, &ch), "the waiting session keeps the lock");
+    let text = system_lines(&app).join("\n");
+    assert!(!text.contains(REVIEW_LEFT_PAUSED_NOTICE), "{text}");
+    assert!(text.contains("/brainstorming was not run"), "{text}");
+    assert_eq!(app.input_text(), "/brainstorming the rollout");
+}
