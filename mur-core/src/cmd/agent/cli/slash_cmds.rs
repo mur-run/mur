@@ -583,6 +583,11 @@ pub(super) async fn handle_slash(app: &mut App, cmd: SlashCmd, tx: &mpsc::Sender
         SlashCmd::Search(args) => search::handle(app, &args, tx).await,
         SlashCmd::Monitor(args) => monitor::handle(app, &args, tx).await,
         SlashCmd::Review(raw) => super::review::handle(app, &raw, tx).await,
+        // Bare `/`: warn and put it back so the user can finish the command.
+        SlashCmd::Unknown(c) if c.is_empty() => {
+            app.set_input("/");
+            app.push_warn(super::app::BARE_SLASH_HINT);
+        }
         SlashCmd::Unknown(c) => app.push_system(format!("unknown command: /{c} — try /help")),
     }
 }

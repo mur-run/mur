@@ -13,7 +13,7 @@ use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::StreamMsg;
 use crate::cmd::fleet::review::constants::{
-    REVIEW_ALREADY_ATTACHED, REVIEW_AUTO_REFUSED, REVIEW_SLASH,
+    REVIEW_ALREADY_ATTACHED, REVIEW_AUTO_REFUSED, REVIEW_PROMPT_OWNS_LINE, REVIEW_SLASH,
 };
 use crate::cmd::fleet::review::driver::SendAnswer;
 use crate::cmd::fleet::review::murmur::bridge::Reply;
@@ -65,6 +65,26 @@ pub fn open_findings(app: &App) -> Vec<String> {
 
 /// The line typed while the session waits on the human (§5.2, §7.1, §8.4).
 pub fn answer(app: &mut App, line: &str, tx: &Sender<StreamMsg>) {
+    // A MURMUR command (`/review`, `/help`, …) is never an answer. Read as
+    // one it was silently dropped, or at `Paused — continue?` taken as "no".
+    // The prompt's own words (`/stop`, `/rule`, `/abandon`) are not MURMUR
+    // commands, so they parse as `Unknown` and still reach the prompt.
+    // A bare `/` is not an answer either: at `Paused — continue?` it was
+    // read as "no", at the gate it was an `unknown command: /` hint.
+    if crate::cmd::agent::cli::app::is_bare_slash(line) {
+        app.set_input(line);
+        app.push_warn(crate::cmd::agent::cli::app::BARE_SLASH_HINT);
+        return;
+    }
+    if let Some(cmd) = crate::cmd::agent::cli::parse_slash(line)
+        && !matches!(cmd, crate::cmd::agent::cli::SlashCmd::Unknown(_))
+    {
+        let word = line.trim().trim_start_matches('/');
+        let word = word.split_whitespace().next().unwrap_or_default();
+        app.set_input(line);
+        app.push_warn(REVIEW_PROMPT_OWNS_LINE.replace("{cmd}", word));
+        return;
+    }
     match app.review.as_ref().and_then(|s| s.awaiting.as_ref()) {
         Some(Awaiting::Confirm { .. }) => super::confirm::answer_confirm(app, line),
         Some(Awaiting::Ruling { .. }) => super::confirm::answer_ruling(app, line),

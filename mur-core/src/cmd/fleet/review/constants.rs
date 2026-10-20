@@ -345,6 +345,12 @@ pub const REVIEW_AUTO_REFUSED: &str =
 /// P3b-§3.4: a second `/review` while one is attached. `{session}` is its name.
 pub const REVIEW_ALREADY_ATTACHED: &str = "a review session is already attached: {session}";
 
+/// A MURMUR command typed while a review prompt owns the next line. It is
+/// not an answer, so it is refused rather than read as one. `{cmd}` is the
+/// command word.
+pub const REVIEW_PROMPT_OWNS_LINE: &str =
+    "/{cmd} was not run — the review prompt above is waiting for an answer; answer it first";
+
 /// P3b-§3.4: bare `/review` with nothing attached and nothing to list.
 pub const REVIEW_NO_PAUSED: &str = "no paused review sessions";
 /// P3b-§3.4: one bare-`/review` row for a session MURMUR can resume.

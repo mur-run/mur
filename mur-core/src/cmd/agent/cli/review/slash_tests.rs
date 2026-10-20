@@ -38,3 +38,22 @@ async fn typed_refused_review_puts_the_line_back() {
     );
     assert!(app.review.is_none());
 }
+
+/// A bare `/` with no review attached: the bare-slash warning, not the old
+/// `unknown command: / — try /help`, and the `/` stays in the composer.
+#[tokio::test]
+async fn typed_bare_slash_warns_instead_of_unknown_command() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    app.set_input("/");
+
+    submit(&mut app, &tx()).await;
+
+    let text = system_lines(&app).join("\n");
+    assert!(
+        text.contains(crate::cmd::agent::cli::app::BARE_SLASH_HINT),
+        "{text}"
+    );
+    assert!(!text.contains("unknown command"), "{text}");
+    assert_eq!(app.input_text(), "/");
+}
