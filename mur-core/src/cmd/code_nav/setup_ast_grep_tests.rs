@@ -7,6 +7,7 @@ use crate::cmd::code_nav::ast_grep_install::Outcome;
 use crate::cmd::code_nav::{ast_grep_wire, consent, plan};
 use std::io::BufRead;
 
+#[cfg(unix)]
 fn fake_install(dest: &Path) -> Result<Outcome> {
     std::fs::create_dir_all(dest.parent().unwrap())?;
     std::fs::write(dest, b"not the real ast-grep")?;
@@ -60,6 +61,7 @@ fn apply_run(
 
 /// A `uv` that always fails, alone on `PATH`: serena's install fails
 /// after ast-grep was wired.
+#[cfg(unix)]
 fn failing_uv(h: &mut Home) {
     use std::os::unix::fs::PermissionsExt;
     let stub = h.mur_home.parent().unwrap().join("path");
@@ -70,12 +72,14 @@ fn failing_uv(h: &mut Home) {
     h._env.set_var("PATH", &stub);
 }
 
+#[cfg(unix)]
 fn manifest_of(h: &Home) -> Manifest {
     consent::load_manifest(&consent::manifest_path(&h.mur_home, "carol")).unwrap()
 }
 
 /// The manifest on disk records every ast-grep grant the profile now
 /// holds, and a re-run's diff does not list ast-grep as new.
+#[cfg(unix)]
 fn assert_recorded(h: &Home, plan: &plan::Plan) {
     let m = manifest_of(h);
     let (_, profile) = crate::cmd::agent::load_profile_for_edit("carol").unwrap();
