@@ -519,6 +519,48 @@ async fn unique_hit_has_no_warning_even_if_a_later_candidate_is_ambiguous() {
     );
 }
 
+/// The page the step below was recorded on: one generic carrying "hello".
+const RECORDED_GENERIC: &str = "- generic [ref=e1]: hello\n";
+
+/// At replay another generic sits before it, so a bare `role:generic` would
+/// hit `e1`: the wrong element.
+const TWO_GENERICS: &str = "- generic [ref=e1]: other\n- generic [ref=e2]: hello";
+
+/// Locators come from `candidates_for_ref`, not by hand, so this guards the
+/// recorded order: `text:hello` ranks first and replay clicks the right node
+/// without an ambiguity warning.
+#[tokio::test]
+async fn recorded_generic_with_text_replays_via_text() {
+    use crate::locator::{candidates_for_ref, parse_snapshot};
+    let recorded = candidates_for_ref("e1", &parse_snapshot(RECORDED_GENERIC));
+    assert_eq!(recorded, vec!["text:hello", "role:generic"]);
+    let list = recorded
+        .iter()
+        .map(|l| format!("'{l}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let yaml = CLICK_SIGN_IN.replace(
+        "locators: ['role:button[name=\"Sign in\"]']",
+        &format!("locators: [{list}]"),
+    );
+    let mut fake = Fake {
+        snapshot: Some(TWO_GENERICS),
+        ..Fake::default()
+    };
+    let report = replay_with(&run(&yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
+    assert_eq!(report.passed, 1, "{report:?}");
+    assert_eq!(report.steps[0].locator_used.as_deref(), Some("text:hello"));
+    let click = fake
+        .calls
+        .iter()
+        .find(|(n, _)| n == "browser_click")
+        .unwrap();
+    assert_eq!(click.1["target"], "e2", "the node that carries the text");
+    assert!(report.steps[0].warning.is_none(), "{report:?}");
+}
+
 /// Reports written before this field existed still load, and a step without
 /// a warning does not grow a `warning` key.
 #[test]
