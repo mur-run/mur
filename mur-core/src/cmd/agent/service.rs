@@ -313,7 +313,12 @@ pub(crate) fn service_stderr_log(name: &str) -> std::path::PathBuf {
 /// `refusal_marker` is `mur_common::start_refusal::marker_path` for the agent:
 /// launchd keeps the job alive only while that file is absent, so a runtime
 /// that refused to start (#2015) is not respawned forever.
-fn darwin_plist(name: &str, symlink: &Path, service_path: &str, refusal_marker: &Path) -> String {
+pub(super) fn darwin_plist(
+    name: &str,
+    symlink: &Path,
+    service_path: &str,
+    refusal_marker: &Path,
+) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -356,7 +361,7 @@ fn darwin_plist(name: &str, symlink: &Path, service_path: &str, refusal_marker: 
 }
 
 #[cfg(target_os = "linux")]
-fn linux_unit(name: &str, symlink: &Path, service_path: &str) -> String {
+pub(super) fn linux_unit(name: &str, symlink: &Path, service_path: &str) -> String {
     format!(
         r#"[Unit]
 Description=murmur agent {name}

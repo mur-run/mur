@@ -609,6 +609,14 @@ Agent** wizard offers the same catalog as a source.
   Other fields (model, skills, companion) aren't pinned and can be edited
   freely. An existing agent is pinned automatically on its first start after
   the upgrade.
+- **A refused start stays down, and says why** — when an agent refuses to start
+  (changed entitlements, or a `profile.yaml` that does not parse), its
+  launchd/systemd service no longer respawns it in a loop. `mur agent status
+  <agent>` shows the reason and the fix (`mur agent perm reseal <agent>` for
+  entitlements); after fixing it, `mur agent start <agent>` brings it back. A
+  service installed by an older MUR still has the respawning policy:
+  `mur agent status` flags it, `mur agent start` updates it, or run
+  `mur agent install-service <agent>` yourself.
 - **Nobody watching is not permission** — a durable monitor acting on what it
   found asks the same way. Reading its evidence runs unattended; anything that
   would change something outside MUR parks a request pinned to that exact

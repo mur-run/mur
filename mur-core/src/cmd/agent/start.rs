@@ -85,6 +85,9 @@ pub fn cmd_start(name: &str) -> Result<()> {
             // written exactly this.
             heal_launcher(name);
             verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
+            // A plist from before #2015 respawns a refused start forever; the
+            // reload that fixes it is only safe now, when starting anyway.
+            super::service_migrate::migrate(name, &agent_home)?;
             // Before kickstart: only what this start writes may be quoted.
             let mark =
                 super::startup_error::LogMark::at_end(super::service::service_stderr_log(name));
@@ -135,6 +138,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
             // Same reasoning as the launchd leg above.
             heal_launcher(name);
             verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
+            super::service_migrate::migrate(name, &agent_home)?;
             let out = Command::new("systemctl")
                 .args(["--user", "start", &format!("mur-agent-{name}.service")])
                 .output()?;

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use mur_common::agent::*;
 use mur_common::identity::AgentIdentity;
 use mur_common::{AgentProfile as _AgentProfile, LockFile};
@@ -694,10 +694,17 @@ pub fn cmd_list(json: bool) -> Result<()> {
 pub fn cmd_status(name: &str) -> Result<()> {
     let mur_home = resolve_mur_home()?;
     let rows = collect_agents()?;
-    let row = rows
-        .iter()
-        .find(|r| r.name == name)
-        .ok_or_else(|| anyhow!("agent '{name}' not found"))?;
+    let Some(row) = rows.iter().find(|r| r.name == name) else {
+        // A profile that does not parse keeps the agent out of the table, but
+        // a runtime that refused on it left its reason behind (#2015).
+        if let Some(lines) = status_refusal::unloadable_status(name, &mur_home.join("agents")) {
+            for line in lines {
+                println!("{line}");
+            }
+            return Ok(());
+        }
+        bail!("agent '{name}' not found");
+    };
     println!("● {} - {}", row.name, row.category);
     println!(
         "   Loaded: {}",
@@ -716,6 +723,16 @@ pub fn cmd_status(name: &str) -> Result<()> {
         ""
     };
     println!("   Active: {}{stale_suffix}", row.status);
+    if let Some(r) =
+        status_refusal::refusal_for(&mur_home.join("agents").join(name), row.status == "running")
+    {
+        for line in status_refusal::refusal_lines(name, &r) {
+            println!("{line}");
+        }
+    }
+    if super::service_migrate::needs_migration(name, &mur_home.join("agents").join(name)) {
+        println!("{}", super::service_migrate::status_hint(name));
+    }
     if let Some(pid) = row.pid {
         println!("     Main PID: {pid}");
     }
@@ -1160,6 +1177,8 @@ fn is_unread(body: &str) -> bool {
         .find_map(|l| l.strip_prefix(marker).map(|v| v.trim() == "<unset>"))
         .unwrap_or(false)
 }
+
+mod status_refusal;
 
 #[cfg(test)]
 mod tests_resolve_model_ref_for_create;

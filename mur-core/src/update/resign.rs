@@ -52,6 +52,7 @@ pub fn post_upgrade(
     let daemon_running = crate::cmd::murmurd::murmurd_running();
     print_checklist(restart_agents, daemon_running);
     warn_pinned_launchers();
+    warn_unguarded_services();
 
     let agents_result = if restart_agents {
         crate::cmd::agent::restart_stale_excluding(&restart_exclusions())
@@ -165,6 +166,24 @@ fn warn_pinned_launchers() {
         names.join(", ")
     );
     println!("      repair with: mur agent runtime-doctor --fix");
+}
+
+/// Name the agents whose installed service predates #2015: their launchd
+/// `KeepAlive=true` (or systemd unit without `RestartPreventExitStatus=`)
+/// respawns a runtime that refused to start, forever. Reported, not fixed:
+/// re-installing reloads the job, and `RunAtLoad` would start an agent the
+/// user had stopped on purpose. `mur agent start` migrates on its own.
+fn warn_unguarded_services() {
+    let agents_dir = crate::paths::mur_root(None).join("agents");
+    let names = crate::cmd::agent::unguarded_services(&agents_dir);
+    if names.is_empty() {
+        return;
+    }
+    println!(
+        "  ! service installed before refusal handling (a refused start is respawned forever): {}",
+        names.join(", ")
+    );
+    println!("      update with: mur agent install-service <name>   (or `mur agent start <name>`)");
 }
 
 fn print_checklist(restart_agents: bool, daemon_running: bool) {
