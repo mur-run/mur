@@ -18,9 +18,13 @@ fn visible_fleets(names: &[String], include_review: bool) -> Vec<String> {
         .collect()
 }
 
+/// ST column glyph. All three come from the Geometric Shapes block so they
+/// render one cell wide; `⏸`/`⏹` are emoji-presentation on many terminals
+/// and would shift the column. `⏸` is also reserved for a future *pause*
+/// (#2036 part 3) — a stopped fleet is not resumable mid-run.
 fn status_symbol(stopped: bool, running: bool) -> &'static str {
     if stopped {
-        "⏸" // stopped wins over running
+        "■" // stopped wins over running
     } else if running {
         "▶"
     } else {
@@ -158,8 +162,8 @@ mod tests {
 
     #[test]
     fn status_symbol_precedence() {
-        assert_eq!(status_symbol(true, true), "⏸"); // stopped wins over running
-        assert_eq!(status_symbol(true, false), "⏸");
+        assert_eq!(status_symbol(true, true), "■"); // stopped wins over running
+        assert_eq!(status_symbol(true, false), "■");
         assert_eq!(status_symbol(false, true), "▶");
         assert_eq!(status_symbol(false, false), "●");
     }
