@@ -8,6 +8,7 @@ fn result(success: bool, exit_code: i32, out: &str) -> StepResult {
         failed_step: None,
         success,
         blocked: false,
+        stopped: false,
         tokens_used: 0,
     }
 }

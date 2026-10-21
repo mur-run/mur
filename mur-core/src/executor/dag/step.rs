@@ -12,6 +12,9 @@ pub(super) struct StepResult {
     /// distinct from `success` because a blocked step must neither trigger
     /// `on_failure` handling nor let dependents proceed as if it had run.
     pub(super) blocked: bool,
+    /// The kill-switch halted this step (#2036): it never started, or its
+    /// member turn was cancelled. Like `blocked`, never a failure to act on.
+    pub(super) stopped: bool,
     /// Real LLM tokens (input + output) this step consumed — non-zero only for
     /// delegate steps, read from the specialist's `Task.usage`. Summed into the
     /// run's `PipelineOutput.tokens_used` for real fleet budget accounting.
@@ -73,6 +76,7 @@ pub(super) async fn execute_step_inner(
                             failed_step: Some(step.description.clone()),
                             success: false,
                             blocked: false,
+                            stopped: false,
                             tokens_used: 0,
                         };
                     }
@@ -88,6 +92,7 @@ pub(super) async fn execute_step_inner(
                             failed_step: Some(step.description.clone()),
                             success: false,
                             blocked: false,
+                            stopped: false,
                             tokens_used: 0,
                         };
                     }
@@ -107,6 +112,7 @@ pub(super) async fn execute_step_inner(
                             failed_step: Some(step.description.clone()),
                             success: false,
                             blocked: false,
+                            stopped: false,
                             tokens_used: 0,
                         };
                     }
@@ -139,6 +145,7 @@ pub(super) async fn execute_step_inner(
             },
             success: exit_code == 0,
             blocked: false,
+            stopped: false,
             tokens_used: 0,
         }
     } else {
@@ -169,6 +176,7 @@ pub(super) async fn execute_step_inner(
             failed_step: None,
             success: true,
             blocked: false,
+            stopped: false,
             tokens_used: 0,
         }
     }
@@ -222,6 +230,13 @@ pub(super) async fn execute_step(
             });
         }
     };
+    // Kill-switch at the step boundary (#2036): a step not yet started when
+    // the operator stopped the run never starts — not even its Started event,
+    // so `mur job status` does not show it running.
+    if stop_requested(opts) {
+        emit(StepEventKind::Stopped, 0, Some(STOPPED_REASON.into()));
+        return stopped_result(start.elapsed().as_millis() as u64);
+    }
     emit(StepEventKind::Started, 0, None);
     // Retries reuse (run_id, step_id); without an attempt discriminator a
     // succeeding retry's events collide with the failed attempt's idem keys and
@@ -255,6 +270,7 @@ pub(super) async fn execute_step(
                 failed_step: None,
                 success: true,
                 blocked: false,
+                stopped: false,
                 tokens_used: 0,
             };
         }
@@ -321,13 +337,38 @@ pub(super) async fn execute_step(
             remaining_secs(opts.deadline_at, std::time::Instant::now()),
             &opts.needs,
         );
-        let dial = crate::a2a_dial::dial_method(
+        let dial = match dial_delegate_watched(
             mur_home,
             &canonical,
-            "channel/delegate",
+            &child_task_id,
             params,
-            crate::a2a_dial::DialMode::RequireRunning,
-        );
+            opts.stop.as_ref(),
+        )
+        .await
+        {
+            DelegateDial::Replied(r) => r,
+            DelegateDial::Stopped => {
+                // Say so in the channel: the member's reply will never land,
+                // and a reader should not wonder why the delegation dangles.
+                if let Ok(svc) = ChannelService::open(mur_home) {
+                    let _ = crate::channel_writer::append_as_writer(
+                        &svc,
+                        mur_home,
+                        cid,
+                        ROUTER_AGENT,
+                        ChannelActor::System,
+                        mur_common::channel::EventKind::Note,
+                        serde_json::json!({
+                            "text": format!("delegate to {canonical} cancelled: {STOPPED_REASON}")
+                        }),
+                        None,
+                    );
+                }
+                eprintln!("  Step {sid}: delegate to {canonical} cancelled — {STOPPED_REASON}");
+                emit(StepEventKind::Stopped, 0, Some(STOPPED_REASON.into()));
+                return stopped_result(start.elapsed().as_millis() as u64);
+            }
+        };
 
         let result = match dial {
             Ok(task) => {
@@ -356,6 +397,7 @@ pub(super) async fn execute_step(
                     failed_step: Some(step.description.clone()),
                     success: false,
                     blocked: false,
+                    stopped: false,
                     tokens_used: 0,
                 }
             }
@@ -435,6 +477,7 @@ pub(super) async fn execute_step(
                 failed_step: None,
                 success: false,
                 blocked: true,
+                stopped: false,
                 tokens_used: 0,
             };
         }
@@ -452,6 +495,7 @@ pub(super) async fn execute_step(
                 failed_step: Some(step.description.clone()),
                 success: false,
                 blocked: false,
+                stopped: false,
                 tokens_used: 0,
             };
         }
@@ -467,6 +511,7 @@ pub(super) async fn execute_step(
                 failed_step: Some(step.description.clone()),
                 success: false,
                 blocked: false,
+                stopped: false,
                 tokens_used: 0,
             };
         }
@@ -515,6 +560,7 @@ pub(super) async fn execute_step(
                 failed_step: refused.then(|| step.description.clone()),
                 success: false,
                 blocked: !refused,
+                stopped: false,
                 tokens_used: 0,
             };
         }
@@ -590,4 +636,20 @@ pub(super) const UNDELEGATED_REASON: &str =
 /// say `done` for work nobody did (#1613).
 pub(super) fn is_undelegated(step: &ProcedureStep, opts: &DagExecOptions<'_>) -> bool {
     step.delegate_to.is_some() && opts.channel_id.is_none() && step.command.is_none()
+}
+
+/// The result of a step the kill-switch halted. Exit 0 and not a success: it
+/// neither ran to completion nor failed, so it must trigger no `on_failure`
+/// handling and feed no dependent.
+pub(super) fn stopped_result(duration_ms: u64) -> StepResult {
+    StepResult {
+        exit_code: 0,
+        output_text: String::new(),
+        duration_ms,
+        failed_step: None,
+        success: false,
+        blocked: false,
+        stopped: true,
+        tokens_used: 0,
+    }
 }

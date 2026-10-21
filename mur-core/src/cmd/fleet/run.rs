@@ -518,6 +518,9 @@ pub async fn cmd_fleet_run(
         run_id: run_id.clone(),
         run_kind: Some(crate::run_status::RunKind::Fleet),
         run_label: format!("fleet {}", fleet.name),
+        // #2036: `mur fleet stop` halts this run at the next step boundary
+        // and cancels in-flight member turns — not only before it starts.
+        stop: Some(super::control::stop_signal(mur_home, name)),
         // Cap fan-out so N agents don't cascade past API rate limits.
         max_concurrency: Some(if exec_parallel {
             fanout_cap(proc.steps.len())
@@ -571,7 +574,12 @@ pub async fn cmd_fleet_run(
             }
             (Some(JobStatus::Canceled), _) => {
                 job.status = JobStatus::Canceled;
-                job.error = Some("run was canceled/rejected".to_string());
+                job.error = Some(match &exec_result {
+                    Ok(o) if o.status == mur_common::pipeline::PipelineStatus::Stopped => {
+                        "stopped by `mur fleet stop`".to_string()
+                    }
+                    _ => "run was canceled/rejected".to_string(),
+                });
             }
             // Channel said nothing terminal (empty DAG, no channel routing, or a
             // hard crash before emit): fall back to the exec_result.
@@ -581,6 +589,11 @@ pub async fn cmd_fleet_run(
             // every surface keeps showing that a human still owes it an
             // answer. Without this arm it would fall into the `Ok` case below
             // and be recorded as `done` — claiming work that never ran.
+            // No channel terminal recorded, but the kill-switch halted it.
+            (_, Ok(out)) if out.status == mur_common::pipeline::PipelineStatus::Stopped => {
+                job.status = JobStatus::Canceled;
+                job.error = Some("stopped by `mur fleet stop`".to_string());
+            }
             (_, Ok(out)) if out.status == mur_common::pipeline::PipelineStatus::Skipped => {
                 job.status = JobStatus::Blocked;
                 job.error = Some(
@@ -616,7 +629,13 @@ pub async fn cmd_fleet_run(
                 // field of its own; `None` here means "no guard reported",
                 // and a cost overrun is still detected from `spent` vs cap.
                 None,
-                o.status != mur_common::pipeline::PipelineStatus::Failed,
+                // A kill-switch stop says nothing about whether triage was
+                // right; counting it a success would flatter the gate.
+                !matches!(
+                    o.status,
+                    mur_common::pipeline::PipelineStatus::Failed
+                        | mur_common::pipeline::PipelineStatus::Stopped
+                ),
             ),
             Err(_) => (None, None, false),
         };

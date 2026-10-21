@@ -47,7 +47,7 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
     if action == DeepResearchAction::Stop {
         match crate::cmd::fleet::control::cmd_fleet_stop(&app.home, DEFAULT_FLEET_NAME) {
             Ok(()) => app.push_system(
-                "stopping deep-research — the in-flight iteration may finish before outcome becomes stopped",
+                "stopping deep-research — in-flight member turns are cancelled and no further steps start",
             ),
             Err(error) => app.push_system(format!("could not stop deep-research: {error}")),
         }

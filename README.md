@@ -752,7 +752,9 @@ Agent** wizard offers the same catalog as a source.
   its own, or when the router judges it done. `mur fleet set-loop` refuses a
   value that would be silently reinterpreted: a calendar date is not a deadline,
   a cron expression that can never fire is not a schedule. `mur fleet stop`
-  still ends everything.
+  still ends everything, and ends it now: member turns in flight are
+  cancelled, no further step starts, and the run is recorded `stopped` rather
+  than `done`.
 - **Bounded, not budgeted** — three knobs, one schema at every scope:
   `deadline`, `stuck`, `cost_usd` in `config.yaml` → `fleet.yaml` → `profile.yaml`,
   inner scope replacing the outer. Nothing else stops a run: iteration caps and

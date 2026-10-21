@@ -427,6 +427,13 @@ pub async fn run_guarded(
                     sp.state = StepState::Pending;
                     println!("⏸ {} awaiting approval", sp.id);
                 }
+                // Halted by the kill-switch: back to Pending (work not done,
+                // nothing failed), with its own line like a blocked step.
+                StepEventKind::Stopped => {
+                    sp.state = StepState::Pending;
+                    sp.ended_at = Some(now);
+                    println!("⏹ {} stopped", sp.id);
+                }
                 // Skipped only arises without a channel and a fleet run always
                 // has one; should it ever arrive, it did not fail.
                 StepEventKind::Done | StepEventKind::Failed | StepEventKind::Skipped => {
@@ -482,6 +489,10 @@ pub async fn run_guarded(
             run_kind: Some(crate::run_status::RunKind::Fleet),
             run_label: format!("fleet {name} iter {iteration}"),
             on_step: Some(on_step),
+            // #2036: the kill-switch reaches into the iteration — steps not
+            // yet started never start, and an in-flight member turn is
+            // cancelled — instead of waiting for the next iteration's check.
+            stop: Some(super::super::control::stop_signal(mur_home, name)),
             deadline_at: Some(start + bounds.deadline),
             needs: fleet.needs.clone(),
             ..Default::default()
@@ -500,6 +511,29 @@ pub async fn run_guarded(
         // Checked BEFORE synthesis on purpose: that turn is a paid LLM call,
         // and buying a summary of nothing is how the fabricated report got
         // written in the first place.
+        // #2036: the kill-switch halted this iteration. Account what it burned,
+        // mark the job canceled, and leave BEFORE synthesis — that turn is
+        // another paid call the operator just asked not to make.
+        if out.status == mur_common::pipeline::PipelineStatus::Stopped {
+            iteration += 1;
+            if let Some(job) = active_job.as_mut() {
+                job.run_id = Some(opts.run_id.clone());
+                job.finished_at = Some(chrono::Utc::now().to_rfc3339());
+                job.status = JobStatus::Canceled;
+                job.error = Some("stopped by `mur fleet stop`".to_string());
+                let _ = super::super::jobs::save_job(mur_home, name, job);
+            }
+            // Real usage only: a stopped iteration may have spent nothing,
+            // and charging it the full projection would overstate the bill.
+            spent += iteration_cost_usd(out.tokens_used, price_per_1k);
+            {
+                let mut g = lock_progress(&progress);
+                g.spend_usd = spent;
+                g.save(mur_home, name);
+                println!("{}", iteration_summary_line(&g));
+            }
+            break LoopStop::Stopped;
+        }
         if out.status == mur_common::pipeline::PipelineStatus::Failed {
             iteration += 1;
             if let Some(job) = active_job.as_mut() {
@@ -623,6 +657,13 @@ pub async fn run_guarded(
             DonePolicy::QueueEmpty => false, // the drained-queue break above is the only stop for this policy
             DonePolicy::Router => ask_router_done(mur_home, &fleet, &events).unwrap_or(false),
         };
+        // #2036: a stop requested while this iteration ran wins over
+        // convergence — otherwise a stop during the final iteration is lost
+        // and the run is recorded `done`. Checked after the router ask too,
+        // since that call can take a while.
+        if super::super::control::is_stopped(mur_home, name) {
+            break LoopStop::Stopped;
+        }
         if converged {
             break LoopStop::Converged;
         }

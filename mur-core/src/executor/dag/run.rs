@@ -198,6 +198,9 @@ pub async fn execute_dag(
         let st = match outcome {
             RunOutcome::Blocked => return,
             RunOutcome::Failed => ChannelState::Failed,
+            // The kill-switch's terminal, the same `canceled` the fleet loop
+            // writes for `LoopStop::Stopped`.
+            RunOutcome::Stopped => ChannelState::Canceled,
             RunOutcome::Done => ChannelState::Completed,
         };
         if let Some(cid) = opts.channel_id.as_deref() {
@@ -238,8 +241,18 @@ pub async fn execute_dag(
     // same and later ranks still run to completion, so an unattended run gets
     // as far as it legitimately can before it needs someone.
     let mut blocked_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Set once the kill-switch halts any step (#2036). The run then starts
+    // nothing further and ends `Stopped`, whatever else happened.
+    let mut stopped = false;
 
     for rank in 0..=max_rank {
+        // Rank boundary: a stop issued while the previous rank ran starts no
+        // step of this one. The steps themselves re-check, which covers a
+        // stop that lands while this rank is being spawned.
+        if stopped || stop_requested(opts) {
+            stopped = true;
+            break;
+        }
         let indices: Vec<usize> = (0..graph.nodes.len())
             .filter(|i| graph.nodes[*i].rank == rank)
             .collect();
@@ -296,6 +309,7 @@ pub async fn execute_dag(
         let opt_deadline_at = opts.deadline_at;
         let opt_needs = opts.needs.clone();
         let opt_on_step = composed_on_step.clone();
+        let opt_stop = opts.stop.clone();
         let mut handles = Vec::new();
         for &i in &indices {
             // Mutating the graph node (not the local clone) keeps retries
@@ -311,6 +325,7 @@ pub async fn execute_dag(
             let chan_id = opt_chan_id.clone();
             let run_id = opt_run_id.clone();
             let on_step = opt_on_step.clone();
+            let stop = opt_stop.clone();
             let hitl_tiers = opt_hitl_tiers.clone();
             let sem = sem.clone();
             let mh = mur_home.to_path_buf();
@@ -343,6 +358,7 @@ pub async fn execute_dag(
                     deadline_at: opt_deadline_at,
                     needs,
                     on_step,
+                    stop,
                 };
                 execute_step(&step, &opts_clone, i, 0, &mh).await
             }));
@@ -361,6 +377,7 @@ pub async fn execute_dag(
                         failed_step: Some("(task)".to_string()),
                         success: false,
                         blocked: false,
+                        stopped: false,
                         tokens_used: 0,
                     });
                 }
@@ -372,6 +389,14 @@ pub async fn execute_dag(
             let result = &results[ri];
             let step = &graph.nodes[indices[ri]].step;
             overall_tokens = overall_tokens.saturating_add(result.tokens_used);
+
+            // A stopped step, like a blocked one, never happened as far as
+            // the ledger and `on_failure` are concerned. It is not a failure
+            // to retry or abort on, and no dependent may consume it.
+            if result.stopped {
+                stopped = true;
+                continue;
+            }
 
             // A blocked step is neither a success to record nor a failure to
             // act on: register it so dependents inherit, and skip the ledger +
@@ -417,6 +442,13 @@ pub async fn execute_dag(
 
             if result.exit_code != 0 {
                 overall_exit_code = result.exit_code;
+                // A failure that lands after the stop (a cancelled member can
+                // answer with an error before the poll notices) is the stop's
+                // doing: no abort, no retry — the run ends `Stopped`.
+                if stop_requested(opts) {
+                    stopped = true;
+                    continue;
+                }
 
                 // Handle on_failure strategy.
                 let sid = step.id.as_deref().unwrap_or("?");
@@ -461,6 +493,12 @@ pub async fn execute_dag(
                             if backoff > 0 {
                                 sleep(Duration::from_secs(backoff as u64)).await;
                             }
+                            // A retry is a fresh paid attempt: never start
+                            // one after the kill-switch (#2036).
+                            if stop_requested(opts) {
+                                stopped = true;
+                                break;
+                            }
                             eprintln!(
                                 "  Step {sid} failed, retry {}/{}...",
                                 attempt + 1,
@@ -474,6 +512,10 @@ pub async fn execute_dag(
                             // guard never under-counts a retried delegate.
                             overall_tokens =
                                 overall_tokens.saturating_add(retry_result.tokens_used);
+                            if retry_result.stopped {
+                                stopped = true;
+                                break;
+                            }
                             if retry_result.success {
                                 results[ri] = retry_result;
                                 overall_exit_code = 0;
@@ -519,10 +561,17 @@ pub async fn execute_dag(
     }
 
     let duration_ms = start.elapsed().as_millis() as u64;
+    // The kill-switch outranks everything, including a run whose every step
+    // finished: a stop requested during the run must never read as done
+    // (#2036 — a stop during a fleet's final iteration used to end
+    // `converged`). Same rule as the review watchdog: the kill-switch wins.
+    let stopped = stopped || stop_requested(opts);
     // Blocked outranks a clean exit code: every blocked step exits 0 (nothing
     // ran, nothing failed), so reading the exit code alone would report a run
     // waiting on a human as a success.
-    let outcome = if overall_exit_code != 0 {
+    let outcome = if stopped {
+        RunOutcome::Stopped
+    } else if overall_exit_code != 0 {
         RunOutcome::Failed
     } else if !blocked_ids.is_empty() {
         RunOutcome::Blocked
@@ -538,7 +587,11 @@ pub async fn execute_dag(
         // the run record (State::Blocked) and the channel (InputRequired)
         // already carry the precise state.
         RunOutcome::Blocked => PipelineStatus::Skipped,
+        RunOutcome::Stopped => PipelineStatus::Stopped,
     };
+    if outcome == RunOutcome::Stopped {
+        eprintln!("\n⏹ Run stopped by the kill-switch — no further steps started.");
+    }
     if outcome == RunOutcome::Blocked {
         let mut ids: Vec<&String> = blocked_ids.iter().collect();
         ids.sort();
@@ -622,6 +675,7 @@ pub(super) async fn finalize_run(
             RunOutcome::Failed => crate::run_status::State::Failed,
             RunOutcome::Blocked => crate::run_status::State::Blocked,
             RunOutcome::Done => crate::run_status::State::Done,
+            RunOutcome::Stopped => crate::run_status::State::Stopped,
         };
     });
 }
