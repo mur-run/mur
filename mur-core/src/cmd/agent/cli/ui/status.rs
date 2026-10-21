@@ -52,6 +52,14 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
             format!("{spin} {label}… {}s", since.elapsed().as_secs()),
             theme.accent,
         )
+    } else if let Some(hint) = crate::cmd::agent::cli::review::prompt_hint(app) {
+        // A review prompt is blocked on the human. The MURMUR send gate prints
+        // no prompt line, so this hint is the only place its keys are named:
+        // it takes the state slot (`ready` was wrong there — the composer
+        // answers the prompt, it does not chat) and the usage readout is
+        // budgeted around it, rather than it being right-aligned advice that
+        // a full row silently drops.
+        (hint, theme.warn)
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"
@@ -190,14 +198,12 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     } else if app.ctrl_c_hint {
         Some(("Ctrl+C again to quit".to_string(), theme.muted))
     } else {
-        // P3b-§5.3: `@<unknown>` at the send gate; cached, no filesystem here.
-        crate::cmd::agent::cli::review::hint::current_hint(app)
-            .map(|h| (h, theme.warn))
-            // AC-P3b-23: the review's Esc hint for the whole attached session.
-            .or_else(|| {
-                crate::cmd::agent::cli::review::footer_right_hint(app)
-                    .map(|h| (h.to_string(), theme.muted))
-            })
+        // AC-P3b-23: the review's Esc hint for the whole attached session.
+        // A prompt's own hint (and the gate's `@<unknown>` warning) already
+        // sits in the state slot.
+        crate::cmd::agent::cli::review::footer_right_hint(app)
+            .filter(|_| crate::cmd::agent::cli::review::prompt_hint(app).is_none())
+            .map(|h| (h.to_string(), theme.muted))
     };
 
     if let Some((hint_text, hint_style)) = right_hint {

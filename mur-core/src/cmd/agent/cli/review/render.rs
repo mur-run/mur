@@ -154,6 +154,16 @@ pub fn footer_right_hint(app: &App) -> Option<&'static str> {
     Some(super::keys::footer_hint(app).unwrap_or(REVIEW_FOOTER_HINT))
 }
 
+/// The hint for a prompt the session is blocked on — the send gate, the
+/// ruling prompt, `Paused — continue?` — or `None` when nothing waits on the
+/// human. The status bar shows it in its state slot, never as droppable
+/// right-hand advice: the MURMUR gate prints no prompt line of its own. A live
+/// `@<unknown>` warning for the line being typed outranks the keys (§5.3).
+pub fn prompt_hint(app: &App) -> Option<String> {
+    app.review.as_ref()?.awaiting.as_ref()?;
+    super::hint::current_hint(app).or_else(|| super::keys::footer_hint(app).map(str::to_owned))
+}
+
 /// The status bar's left label for an attached session (§6.5).
 pub fn footer_label(app: &App) -> Option<String> {
     let s = app.review.as_ref()?;
