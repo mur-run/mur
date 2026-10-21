@@ -193,3 +193,136 @@ fn ruling_footer_shows_the_answer_hint_not_the_esc_turn_hint() {
     assert!(!row.contains(REVIEW_FOOTER_HINT), "{row}");
     assert!(row.contains(REVIEW_FOOTER_RULING), "{row}");
 }
+
+/// The row as a crowded live session draws it: a numbered channel chip, a
+/// long-running label and a full usage readout on the left, `width` columns.
+fn crowded_footer(app: &mut App, width: u16) -> String {
+    app.channel = Some(crate::cmd::agent::cli::persist::ChannelMeta {
+        id: "01a15531-c974-7ba0-985f-68a6b1028be2".into(),
+        ordinal: 12,
+    });
+    app.session_tool_allow.insert("bash".into());
+    app.monitor_total = 2;
+    app.turn_in = 48_210;
+    app.turn_out = 3_904;
+    app.session_in = 1_204_118;
+    app.session_out = 88_431;
+    app.ctx_tokens = 61_000;
+    app.pricing = crate::cmd::agent::cli::footer::Pricing {
+        in_per_1k: Some(0.003),
+        out_per_1k: Some(0.015),
+        window: Some(200_000),
+    };
+    let mut term = Terminal::new(TestBackend::new(width, 1)).unwrap();
+    term.draw(|f| crate::cmd::agent::cli::ui::render_status_for_test(f, app, f.area()))
+        .unwrap();
+    term.backend().to_string()
+}
+
+/// The MURMUR send gate prints no prompt line of its own, so the footer hint
+/// is the only place its keys are named. A full usage readout used to take
+/// the row first and the hint was dropped, leaving the gate looking idle
+/// (`ready`) with nothing saying Enter sends. Usage gives way to it instead.
+#[test]
+fn send_gate_hint_survives_a_crowded_status_bar() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    app.review.as_mut().unwrap().awaiting = Some(Awaiting::Confirm {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 140);
+
+    assert!(row.contains(REVIEW_FOOTER_GATE), "{row}");
+    assert!(row.contains("review review-ab230001"), "{row}");
+}
+
+/// Same for the ruling prompt: its keys live only in the footer too.
+#[test]
+fn ruling_hint_survives_a_crowded_status_bar() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    app.review.as_mut().unwrap().awaiting = Some(Awaiting::Ruling {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 140);
+
+    assert!(row.contains(REVIEW_FOOTER_RULING), "{row}");
+}
+
+/// Advice still yields to state: with a turn running, the Esc hint is the
+/// first thing dropped and the usage readout keeps its room.
+#[test]
+fn turn_hint_still_yields_to_usage_when_crowded() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+
+    let row = crowded_footer(&mut app, 140);
+
+    assert!(row.contains("ctx "), "{row}");
+    assert!(!row.contains(REVIEW_FOOTER_HINT), "{row}");
+}
+
+/// At 80 columns the badges, channel chip and review label alone outrun the
+/// row; they give way to the gate's keys, not the other way round.
+#[test]
+fn send_gate_keys_survive_a_narrow_crowded_status_bar() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    app.review.as_mut().unwrap().awaiting = Some(Awaiting::Confirm {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 80);
+
+    assert!(row.contains(REVIEW_FOOTER_GATE), "{row}");
+    // `TestBackend` quotes each row.
+    assert!(
+        row.starts_with("\" a "),
+        "the agent badge still leads: {row}"
+    );
+}
+
+/// The ruling prompt is the longest; it must survive 80 columns as well.
+#[test]
+fn ruling_keys_survive_a_narrow_crowded_status_bar() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    app.review.as_mut().unwrap().awaiting = Some(Awaiting::Ruling {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 80);
+
+    assert!(row.contains(REVIEW_FOOTER_RULING), "{row}");
+}
+
+/// A review name long enough to fill the row by itself is cut short (and
+/// says so with `…`) rather than pushing the keys off the edge.
+#[test]
+fn prompt_keys_survive_a_long_review_name() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    let s = app.review.as_mut().unwrap();
+    s.name = format!("review-{}", "x".repeat(160));
+    s.awaiting = Some(Awaiting::Confirm {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 140);
+
+    assert!(row.contains(REVIEW_FOOTER_GATE), "{row}");
+    assert!(row.contains('…'), "the cut label is marked: {row}");
+}

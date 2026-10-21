@@ -20,8 +20,18 @@ pub(super) const STATUS_FULL_MIN_WIDTH: u16 = 100;
 /// the status bar on a narrow terminal — two typical tool names fit.
 pub(super) const AUTO_NAMES_MAX: usize = 24;
 
+/// Gap after each leading chip (agent badge, AUTO, MONITOR, channel, review).
+const CHIP_GAP: &str = "  ";
+
+/// Fewest label characters worth keeping when the review label is cut to
+/// make room for a waiting prompt; below this it is dropped instead.
+const LABEL_CUT_MIN: usize = 6;
+
 pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
+    // A prompt the human must answer owns the row: the leading chips are
+    // fitted around it instead of pushing it off the right edge.
+    let mut protect = false;
     let (msg, style) = if let Some(req) = &app.hitl {
         // Surface the auto-deny clock: the gate expires approvals after
         // DEFAULT_TIMEOUT (300s). Reuse `created_at` rather than tracking new
@@ -52,6 +62,15 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
             format!("{spin} {label}… {}s", since.elapsed().as_secs()),
             theme.accent,
         )
+    } else if let Some(hint) = crate::cmd::agent::cli::review::prompt_hint(app) {
+        // A review prompt is blocked on the human. The MURMUR send gate prints
+        // no prompt line, so this hint is the only place its keys are named:
+        // it takes the state slot (`ready` was wrong there — the composer
+        // answers the prompt, it does not chat) and the usage readout is
+        // budgeted around it, rather than it being right-aligned advice that
+        // a full row silently drops.
+        protect = true;
+        (hint, theme.warn)
     } else {
         let ctx = if app.context_task_id.is_some() {
             " · context kept"
@@ -60,10 +79,10 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         };
         (format!("ready{ctx}"), theme.muted)
     };
-    let mut spans = vec![
-        Span::styled(format!(" {} ", app.agent), theme.badge),
-        Span::raw("  "),
-    ];
+    let mut lead = vec![Lead::new(vec![Span::styled(
+        format!(" {} ", app.agent),
+        theme.badge,
+    )])];
     // Auto-approval visibility (#8 / proposal 2). All three auto-approval
     // paths now show a badge, not just the global `auto_approve`:
     //   - `auto_approve`               → ` AUTO `   (every tool, session)
@@ -72,8 +91,7 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     // Pure display; no behaviour change. Fixes the "AUTO badge vanished in a
     // new session" illusion where `[a]`-muted tools left no visible trace.
     if app.auto_approve {
-        spans.push(Span::styled(" AUTO ", theme.badge_warn));
-        spans.push(Span::raw("  "));
+        lead.push(Lead::new(vec![Span::styled(" AUTO ", theme.badge_warn)]));
     } else if !app.session_tool_allow.is_empty() {
         // Name the muted tools when they fit. `AUTO:2` said something was
         // muted but never what, and nothing else would tell you either —
@@ -87,31 +105,29 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         } else {
             format!(" AUTO:{} ", names.len())
         };
-        spans.push(Span::styled(label, theme.badge_warn));
-        spans.push(Span::raw("  "));
+        lead.push(Lead::new(vec![Span::styled(label, theme.badge_warn)]));
     }
     // The read lane is ON by default now, so a badge on every session would be
     // pure wallpaper. It earns its place only in an `--ask` session, where it
     // is the one thing still answering for the operator — and its absence
     // there is the real signal (`--no-auto-reads`: everything stops).
     if app.auto_reads && !app.auto_approve {
-        spans.push(Span::styled(" READS ", theme.badge));
-        spans.push(Span::raw("  "));
+        lead.push(Lead::new(vec![Span::styled(" READS ", theme.badge)]));
     }
     // `MONITOR (n)` reports registered monitors, including healthy sleeping
     // ones. Conditions are rendered separately so adding a monitor always
     // changes the count without hiding alerts. Both counts are cached on App.
     if let Some(label) = crate::cmd::agent::cli::footer::monitor_label(app.monitor_total) {
-        spans.push(Span::styled(format!(" {label} "), theme.badge));
+        let mut chip = vec![Span::styled(format!(" {label} "), theme.badge)];
         if let Some(issue) =
             crate::cmd::agent::cli::footer::monitor_issue_label(app.monitor_conditions)
         {
-            spans.push(Span::styled(
+            chip.push(Span::styled(
                 format!(" {issue} "),
                 theme.error.add_modifier(Modifier::BOLD),
             ));
         }
-        spans.push(Span::raw("  "));
+        lead.push(Lead::new(chip));
     }
     if let Some(meta) = &app.channel {
         // Ordinal first, then the id. The ordinal is what you type
@@ -130,14 +146,20 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
         } else {
             format!(" ⏵ {short} ")
         };
-        spans.push(Span::styled(chip, theme.accent));
-        spans.push(Span::raw("  "));
+        lead.push(Lead::new(vec![Span::styled(chip, theme.accent)]));
     }
     // P3b-§6.5: the attached review session, from facts cached on App.
     if let Some(label) = crate::cmd::agent::cli::review::footer_label(app) {
-        spans.push(Span::styled(format!(" {label} "), theme.accent));
-        spans.push(Span::raw("  "));
+        lead.push(Lead::cuttable(label, theme.accent));
     }
+    let mut spans = if protect {
+        fit_lead(
+            lead,
+            usize::from(area.width).saturating_sub(msg.chars().count()),
+        )
+    } else {
+        lead.into_iter().flat_map(Lead::into_spans).collect()
+    };
     spans.push(Span::styled(msg, style));
 
     // Glass Box observability: tokens · cost · ctx · timer.
@@ -190,14 +212,12 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     } else if app.ctrl_c_hint {
         Some(("Ctrl+C again to quit".to_string(), theme.muted))
     } else {
-        // P3b-§5.3: `@<unknown>` at the send gate; cached, no filesystem here.
-        crate::cmd::agent::cli::review::hint::current_hint(app)
-            .map(|h| (h, theme.warn))
-            // AC-P3b-23: the review's Esc hint for the whole attached session.
-            .or_else(|| {
-                crate::cmd::agent::cli::review::footer_right_hint(app)
-                    .map(|h| (h.to_string(), theme.muted))
-            })
+        // AC-P3b-23: the review's Esc hint for the whole attached session.
+        // A prompt's own hint (and the gate's `@<unknown>` warning) already
+        // sits in the state slot.
+        crate::cmd::agent::cli::review::footer_right_hint(app)
+            .filter(|_| crate::cmd::agent::cli::review::prompt_hint(app).is_none())
+            .map(|h| (h.to_string(), theme.muted))
     };
 
     if let Some((hint_text, hint_style)) = right_hint {
@@ -217,6 +237,69 @@ pub(super) fn render_status(f: &mut Frame, app: &App, area: Rect) {
     }
 
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// One leading status-bar chip; its trailing [`CHIP_GAP`] is added on layout.
+struct Lead {
+    spans: Vec<Span<'static>>,
+    /// The bare label and style when the chip may be cut short with `…`
+    /// rather than dropped whole (the review label).
+    cut: Option<(String, Style)>,
+}
+
+impl Lead {
+    fn new(spans: Vec<Span<'static>>) -> Self {
+        Self { spans, cut: None }
+    }
+
+    fn cuttable(label: String, style: Style) -> Self {
+        let spans = vec![Span::styled(format!(" {label} "), style)];
+        Self {
+            spans,
+            cut: Some((label, style)),
+        }
+    }
+
+    fn width(&self) -> usize {
+        self.spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum::<usize>()
+            + CHIP_GAP.chars().count()
+    }
+
+    fn into_spans(self) -> impl Iterator<Item = Span<'static>> {
+        self.spans
+            .into_iter()
+            .chain(std::iter::once(Span::raw(CHIP_GAP)))
+    }
+}
+
+/// Lay the leading chips out in `room` columns, left to right: a chip that
+/// fits is kept whole, one that does not is dropped — or, for the review
+/// label, cut to the room left and marked `…`. Used only while a prompt owns
+/// the state slot, so the chips give way to its keys and never the reverse.
+fn fit_lead(lead: Vec<Lead>, room: usize) -> Vec<Span<'static>> {
+    let gap = CHIP_GAP.chars().count();
+    let mut left = room;
+    let mut out = Vec::new();
+    for chip in lead {
+        let w = chip.width();
+        if w <= left {
+            left -= w;
+            out.extend(chip.into_spans());
+        } else if let Some((label, style)) = chip.cut {
+            // ` {kept}… ` plus the gap: two pads and the ellipsis.
+            let keep = left.saturating_sub(gap + 3);
+            if keep >= LABEL_CUT_MIN {
+                let kept: String = label.chars().take(keep).collect();
+                out.push(Span::styled(format!(" {kept}… "), style));
+                out.push(Span::raw(CHIP_GAP));
+                left = 0;
+            }
+        }
+    }
+    out
 }
 
 /// Format a token count with thousands separator (e.g. 1240 → "1,240").

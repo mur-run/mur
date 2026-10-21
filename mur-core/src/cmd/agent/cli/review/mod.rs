@@ -12,7 +12,7 @@ mod state;
 
 pub use confirm::{dismiss_prompt, on_finished, on_request};
 pub use hitl::ReviewGate;
-pub use render::{footer_label, footer_right_hint};
+pub use render::{footer_label, footer_right_hint, prompt_hint};
 pub use state::handle;
 pub use state::{ReviewSession, answer, esc_state, open_findings};
 
