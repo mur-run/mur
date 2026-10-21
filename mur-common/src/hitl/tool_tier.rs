@@ -221,8 +221,10 @@ fn classify_bash(cmd: &str) -> RiskTier {
     // arguments of a proved read are data (`grep -c npm f` searches for the
     // string `npm`, it does not run it). When the parser cannot prove
     // anything — substitution, redirection, heredocs — the whole command is
-    // scanned, as before. `opaque_shell` always sees the whole command.
-    let scanned = dest::unproven_text(cmd).unwrap_or_else(|| cmd.to_string());
+    // scanned, except the bodies of heredocs written to a file: those are
+    // data (`heredoc_data`). `opaque_shell` always sees the whole command.
+    let scanned = dest::unproven_text(cmd)
+        .unwrap_or_else(|| super::heredoc_data::scan_text(cmd).into_owned());
     let lower = scanned.to_ascii_lowercase();
 
     // Most-restrictive-wins, evaluated highest tier first. Every check runs
