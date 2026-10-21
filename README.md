@@ -725,7 +725,10 @@ Agent** wizard offers the same catalog as a source.
   instead of stopping: `/rule drop F3 <why>` closes it, `/rule fix F3 <how>`
   makes it binding (main can no longer reject it), `/abandon` ends the
   session, and `q` leaves it paused. A ruling is shown to both agents in
-  their next turn, and you can also type `/rule` at any send prompt. To steer
+  their next turn, and you can also type `/rule` at any send prompt. While a
+  review prompt waits for you, a MURMUR command or skill (`/help`,
+  `/brainstorming`) or a bare `/` is not taken as the answer: it is put back
+  in the input with a hint, so it can no longer be read as "no". To steer
   without ruling, type `/note <text>` at a send prompt to tell both agents, or
   `@<agent> <text>` to tell one; the message is rebuilt and shown again with
   the note in it, so what you send is what you saw. Notes are recorded only
