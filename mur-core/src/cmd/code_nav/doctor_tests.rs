@@ -28,7 +28,11 @@ fn touch(p: &Path) {
 /// grant recorded and present, the default entry's `project.yml` listing
 /// exactly the recorded languages.
 fn clean() -> Fixture {
-    let tmp = tempfile::tempdir().unwrap();
+    // The tempdir name deliberately carries a language name: `tempfile`'s
+    // random suffix once spelled `/tmp/.tmphpSj7S` in CI and tripped an
+    // assertion that grepped the whole command line for "php". Any check on
+    // a fix string must look at its flags, never at the path.
+    let tmp = tempfile::Builder::new().prefix(".tmphp").tempdir().unwrap();
     let mur_home = tmp.path().join("mur-home");
     let agent_home = mur_home.join("agents").join(AGENT);
     let user_home = tmp.path().join("user");
@@ -226,8 +230,10 @@ fn project_yml_languages_drifting_from_the_manifest_are_flagged() {
     // set to what project.yml lists, via --lsp-only (#1992).
     assert!(w[0].detail.contains("missing [php]"), "{}", w[0].detail);
     let fix = w[0].fix.as_deref().expect("a narrowing fix");
-    assert!(fix.ends_with("--entry serena --lsp-only python"), "{fix}");
-    assert!(!fix.contains("php"), "{fix}");
+    // Judge the flags, not the whole line: the project path sits in a
+    // tempdir whose random name can itself contain "php".
+    let (_, flags) = fix.split_once(" --entry ").expect("an --entry flag");
+    assert_eq!(flags, "serena --lsp-only python", "{fix}");
 }
 
 #[test]
