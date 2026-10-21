@@ -14,7 +14,7 @@ use mur_common::limits::Stuck;
 use super::ReviewSession;
 use super::handle;
 use super::state::Awaiting;
-use super::test_fixtures::{agent, app_at, home, next, stream, system_lines, tx};
+use super::test_fixtures::{agent, app_at, home, next, skill_candidate, stream, system_lines, tx};
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::StreamMsg;
@@ -458,15 +458,6 @@ async fn a_bare_slash_at_continue_warns_and_keeps_the_lock() {
         "{text}"
     );
     assert_eq!(app.input_text(), "/");
-}
-
-fn skill_candidate(name: &str) -> crate::cmd::agent::cli::complete::Candidate {
-    crate::cmd::agent::cli::complete::Candidate {
-        display: format!("/{name}"),
-        insert: format!("/{name} "),
-        desc: String::new(),
-        has_children: false,
-    }
 }
 
 /// An installed skill is offered in the slash menu but parses as `Unknown`,

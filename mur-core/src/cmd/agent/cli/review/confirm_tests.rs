@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
 
 use super::ReviewSession;
 use super::state::Awaiting;
-use super::test_fixtures::{app_at, home, system_lines, tx};
+use super::test_fixtures::{app_at, home, skill_candidate, system_lines, tx};
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::stream::StreamMsg;
@@ -19,7 +19,8 @@ use crate::cmd::fleet::review::ledger::Ledger;
 use crate::cmd::fleet::review::loop_driver::LoopDriverStop;
 use crate::cmd::fleet::review::murmur::bridge::{DriverReq, Outcome};
 use crate::cmd::fleet::review::murmur::worker::WorkerHandle;
-use crate::cmd::fleet::review::schema::HumanNote;
+use crate::cmd::fleet::review::ruling::RulingInput;
+use crate::cmd::fleet::review::schema::{HumanNote, RulingDecision};
 use crate::cmd::fleet::review::session::render_stop_screen;
 use crate::cmd::fleet::review::wire::text_message_params;
 
@@ -121,16 +122,55 @@ async fn slash_stop_stops() {
 async fn slash_stop_stops_even_with_a_stop_skill_installed() {
     let tmp = home();
     let mut app = app_at(tmp.path());
-    app.skills = vec![crate::cmd::agent::cli::complete::Candidate {
-        display: "/stop".into(),
-        insert: "/stop ".into(),
-        desc: String::new(),
-        has_children: false,
-    }];
+    app.skills = vec![skill_candidate("stop")];
     attach(&mut app);
     let rx = confirm(&mut app);
     type_line(&mut app, "/stop").await;
     assert_eq!(rx.try_recv(), Ok(SendAnswer::Stop));
+}
+
+/// What the gate answers when `line` is typed and an installed skill is
+/// named `skill`.
+async fn gate_answer_with_skill(skill: &str, line: &str) -> Result<SendAnswer, TryRecvError> {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    app.skills = vec![skill_candidate(skill)];
+    attach(&mut app);
+    let rx = confirm(&mut app);
+    type_line(&mut app, line).await;
+    rx.try_recv()
+}
+
+/// `/note` stays the gate's note when a skill shares the name. The guard
+/// refuses every MURMUR built-in, so this also fails first if MURMUR ever
+/// ships a `/note` command of its own.
+#[tokio::test]
+async fn slash_note_queues_a_note_even_with_a_note_skill_installed() {
+    let note = HumanNote {
+        text: "check the docs too".into(),
+        target: None,
+    };
+    assert_eq!(
+        gate_answer_with_skill("note", "/note check the docs too").await,
+        Ok(SendAnswer::Note(note)),
+        "something in MURMUR now claims /note before the gate sees it"
+    );
+}
+
+/// `/rule` stays the gate's send-with-ruling when a skill shares the name,
+/// and fails first if MURMUR ever ships a `/rule` command of its own.
+#[tokio::test]
+async fn slash_rule_sends_with_a_ruling_even_with_a_rule_skill_installed() {
+    let ruling = RulingInput {
+        finding: "F1".into(),
+        decision: RulingDecision::Drop,
+        text: "not worth it".into(),
+    };
+    assert_eq!(
+        gate_answer_with_skill("rule", "/rule drop F1 not worth it").await,
+        Ok(SendAnswer::SendWithRuling(ruling)),
+        "something in MURMUR now claims /rule before the gate sees it"
+    );
 }
 
 /// AC-P3b-9: bare `q` is a broadcast note, never Stop and never Send.

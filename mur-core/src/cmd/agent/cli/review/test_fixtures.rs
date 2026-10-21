@@ -7,6 +7,7 @@ use tokio::sync::mpsc::{self, Receiver};
 
 use crate::cmd::agent::cli::Role;
 use crate::cmd::agent::cli::app::App;
+use crate::cmd::agent::cli::complete::Candidate;
 use crate::cmd::agent::cli::persist::Session;
 use crate::cmd::agent::cli::stream::{STREAM_CHANNEL_CAP, StreamMsg};
 use crate::cmd::fleet::review::constants::RUNNING_LOCK;
@@ -45,6 +46,17 @@ pub(super) fn agent(home: &Path, name: &str, running: bool) {
     .unwrap();
     if running {
         std::fs::write(dir.join(RUNNING_LOCK), "{}").unwrap();
+    }
+}
+
+/// An installed skill as the slash menu lists it: `/name` parses as
+/// `Unknown`, and `matched_skill` finds it by this `display`.
+pub(super) fn skill_candidate(name: &str) -> Candidate {
+    Candidate {
+        display: format!("/{name}"),
+        insert: format!("/{name} "),
+        desc: String::new(),
+        has_children: false,
     }
 }
 
