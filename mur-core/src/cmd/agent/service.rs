@@ -175,7 +175,12 @@ pub fn cmd_install_service(name: &str, dry_run: bool) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        let plist = darwin_plist(name, &symlink, &derive_service_path(&bin_dir));
+        let plist = darwin_plist(
+            name,
+            &symlink,
+            &derive_service_path(&bin_dir),
+            &mur_common::start_refusal::marker_path(&mur_home.join("agents").join(name)),
+        );
         if dry_run {
             print!("{plist}");
             return Ok(());
@@ -305,7 +310,10 @@ pub(crate) fn service_stderr_log(name: &str) -> std::path::PathBuf {
 }
 
 #[cfg(target_os = "macos")]
-fn darwin_plist(name: &str, symlink: &Path, service_path: &str) -> String {
+/// `refusal_marker` is `mur_common::start_refusal::marker_path` for the agent:
+/// launchd keeps the job alive only while that file is absent, so a runtime
+/// that refused to start (#2015) is not respawned forever.
+fn darwin_plist(name: &str, symlink: &Path, service_path: &str, refusal_marker: &Path) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -321,7 +329,13 @@ fn darwin_plist(name: &str, symlink: &Path, service_path: &str) -> String {
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>PathState</key>
+        <dict>
+            <key>{marker}</key>
+            <false/>
+        </dict>
+    </dict>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -337,6 +351,7 @@ fn darwin_plist(name: &str, symlink: &Path, service_path: &str) -> String {
         sym = symlink.display(),
         path = service_path,
         err = service_stderr_log(name).display(),
+        marker = refusal_marker.display(),
     )
 }
 
@@ -353,12 +368,14 @@ Environment=PATH={path}
 ExecStart={sym} start
 Restart=on-failure
 RestartSec=3
+RestartPreventExitStatus={refused}
 
 [Install]
 WantedBy=default.target
 "#,
         sym = symlink.display(),
         path = service_path,
+        refused = mur_common::start_refusal::EXIT_CODE,
     )
 }
 
@@ -373,6 +390,7 @@ mod tests {
             "aura",
             Path::new("/path/to/mur_agent_aura"),
             "/opt/homebrew/bin:/usr/bin:/bin",
+            Path::new("/m/agents/aura/start_refused.json"),
         );
         assert!(plist.contains("<key>EnvironmentVariables</key>"));
         assert!(plist.contains("<key>PATH</key>"));
@@ -432,10 +450,51 @@ mod tests {
             Path::new("/Users/x/Library/LaunchAgents/run.mur.agent.kelp.plist")
         );
 
-        let plist = darwin_plist("kelp", Path::new("/bin/mur_agent_kelp"), "/usr/bin");
+        let plist = darwin_plist(
+            "kelp",
+            Path::new("/bin/mur_agent_kelp"),
+            "/usr/bin",
+            Path::new("/m/agents/kelp/start_refused.json"),
+        );
         assert!(
             plist.contains("<string>run.mur.agent.kelp</string>"),
             "stop_service boots out gui/<uid>/run.mur.agent.kelp; the plist must declare that label"
+        );
+    }
+
+    /// #2015: an unconditional `KeepAlive=true` respawned a runtime that had
+    /// deliberately refused to start, forever. The job must stay alive only
+    /// while the refusal marker is absent.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn plist_does_not_keep_a_refused_agent_alive() {
+        let marker = Path::new("/m/agents/kelp/start_refused.json");
+        let plist = darwin_plist("kelp", Path::new("/bin/mur_agent_kelp"), "/usr/bin", marker);
+        assert!(
+            !plist.contains("<key>KeepAlive</key>\n    <true/>"),
+            "unconditional KeepAlive respawns a refused start:\n{plist}"
+        );
+        let want = format!(
+            "<key>KeepAlive</key>\n    <dict>\n        <key>PathState</key>\n        <dict>\n            <key>{}</key>\n            <false/>",
+            marker.display()
+        );
+        assert!(
+            plist.contains(&want),
+            "missing marker-gated KeepAlive:\n{plist}"
+        );
+    }
+
+    /// The systemd leg of #2015: the refusal exit code must not be restarted.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn unit_does_not_restart_a_refused_start() {
+        let unit = linux_unit("kelp", Path::new("/bin/mur_agent_kelp"), "/usr/bin");
+        assert!(
+            unit.contains(&format!(
+                "RestartPreventExitStatus={}",
+                mur_common::start_refusal::EXIT_CODE
+            )),
+            "{unit}"
         );
     }
 

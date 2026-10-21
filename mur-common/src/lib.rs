@@ -80,6 +80,7 @@ pub mod serena_ls_cmd;
 pub mod serena_vue;
 pub mod signal;
 pub mod skill;
+pub mod start_refusal;
 pub mod sync_types;
 pub mod telemetry;
 pub mod test_env;

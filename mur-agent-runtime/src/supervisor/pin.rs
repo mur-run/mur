@@ -6,9 +6,33 @@
 use std::path::Path;
 
 use mur_common::entitlements_pin::{self, PinCheck};
+use mur_common::start_refusal;
 use tracing::{debug, warn};
 
 use crate::profile::Profile;
+
+/// Refuse to start: record why for the service manager and the CLI, print the
+/// refusal, and exit with [`start_refusal::EXIT_CODE`] — which the service unit
+/// treats as "do not respawn" (#2015). Exiting `1` here made launchd restart a
+/// runtime that had refused on purpose, forever.
+pub(super) fn refuse(agent_home: &Path, line: &str) -> ! {
+    record_refusal(agent_home, line);
+    eprintln!("{line}");
+    std::process::exit(start_refusal::EXIT_CODE);
+}
+
+/// Persist the refusal to `<agent_home>/start_refused.json`. Best-effort: the
+/// exit code alone already stops systemd, so a failed write only costs launchd
+/// its marker.
+fn record_refusal(agent_home: &Path, line: &str) {
+    let at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    let refusal = start_refusal::StartRefusal::from_line(line, at_ms);
+    if let Err(e) = start_refusal::write(agent_home, &refusal) {
+        warn!(error = %e, "could not record the start refusal marker");
+    }
+}
 
 /// Outcome the caller acts on. `Refuse` carries the message to print.
 #[derive(Debug, PartialEq, Eq)]
@@ -149,5 +173,17 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         assert_eq!(verify(&load(&home), &home, other.path()), Verdict::Start);
         assert!(!entitlements_pin::pin_path(tmp.path(), "bridge_test").exists());
+    }
+
+    /// #2015: a refusal leaves the marker that stops the service manager
+    /// respawning the runtime, and says why.
+    #[test]
+    fn refusal_is_recorded_for_the_service_manager() {
+        let tmp = tempfile::tempdir().unwrap();
+        record_refusal(tmp.path(), "error[entitlements_unpinned]: x changed");
+        let got = mur_common::start_refusal::read(tmp.path()).expect("marker written");
+        assert_eq!(got.code, "entitlements_unpinned");
+        assert!(got.message.contains("x changed"));
+        assert!(got.at_unix_ms > 0);
     }
 }

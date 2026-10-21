@@ -184,6 +184,9 @@ pub fn cmd_perm_reseal(name: &str) -> Result<()> {
         Ok(PinCheck::Missing) | Err(_) => println!("{name}: pinning current entitlements"),
     }
     entitlements_pin::write_pin(&mur_home, name, &ent)?;
+    // The refusal this resolves: drop its marker so the service manager
+    // brings the agent back (#2015).
+    mur_common::start_refusal::clear(&mur_home.join("agents").join(name));
     println!("Resealed. Review with `mur agent perm {name}`; restart the agent to apply.");
     Ok(())
 }
