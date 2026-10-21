@@ -323,6 +323,7 @@ fn prompt_combines_inferred_and_grant_in_one_gate() {
     let t = DelegationTarget {
         member: "w".into(),
         dir: "/tmp/p".into(),
+        route: "/tmp/p".into(),
         inferred: true,
     };
     let s = prompt(&t, false, true, 2);
@@ -343,4 +344,109 @@ fn yaml_path_round_trips_windows_and_quoted_paths() {
         let v: std::collections::BTreeMap<String, String> = serde_yaml_ng::from_str(&doc).unwrap();
         assert_eq!(v["p"], raw);
     }
+}
+
+/// #2003: two turns' worktrees under `<main>/.worktrees/` key their grant on
+/// the main checkout, so turn N's approval matches turn N+1's request. A
+/// linked worktree outside `.worktrees/` is the user's own and stays put.
+#[test]
+fn turn_worktrees_grant_the_main_checkout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("proj");
+    std::fs::create_dir_all(&main).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    if !git(&main, &["init", "-q"]) {
+        eprintln!("skipping: git unavailable");
+        return;
+    }
+    assert!(git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]));
+    for name in ["turn-a", "turn-b"] {
+        let wt = format!(".worktrees/{name}");
+        assert!(git(&main, &["worktree", "add", "-q", "--detach", &wt]));
+    }
+    let own = tmp.path().join("own-wt");
+    assert!(git(
+        &main,
+        &["worktree", "add", "-q", "--detach", own.to_str().unwrap()]
+    ));
+
+    let main_canon = main.canonicalize().unwrap();
+    let a = targets_for(["w"], &main.join(".worktrees/turn-a"), false);
+    let b = targets_for(["w"], &main.join(".worktrees/turn-b"), false);
+    assert_eq!(a[0].dir, main_canon);
+    assert_eq!(a[0].dir, b[0].dir, "same grant root across turns");
+    assert_ne!(
+        a[0].route, b[0].route,
+        "each turn still routes to its own track"
+    );
+    assert_eq!(targets_for(["w"], &main, false)[0].dir, main_canon);
+    assert_eq!(
+        targets_for(["w"], &own, false)[0].dir,
+        own.canonicalize().unwrap()
+    );
+}
+
+/// PR #2046 review: the grant is keyed on the main checkout, but deny is
+/// judged on the track the member is really sent to. A main-checkout write
+/// grant must not wave through a turn worktree under a denied `.worktrees`.
+#[tokio::test]
+async fn deny_on_the_turn_worktree_still_blocks() {
+    let f = Fixture::new("w", &[]);
+    let main = f.project.clone();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&main)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    if !git(&["init", "-q"]) {
+        eprintln!("skipping: git unavailable");
+        return;
+    }
+    assert!(git(&["commit", "-q", "--allow-empty", "-m", "init"]));
+    assert!(git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        ".worktrees/turn-a"
+    ]));
+    let turn = main.join(".worktrees/turn-a");
+
+    let yaml = profile_yaml("w", &[&main]).replace(
+        "deny: []",
+        &format!("deny: [{}]", yaml_path(&main.join(".worktrees"))),
+    );
+    std::fs::write(f.home().join("agents/w/profile.yaml"), yaml).unwrap();
+
+    let targets = targets_for(["w"], &turn, false);
+    assert_eq!(targets[0].dir, main.canonicalize().unwrap(), "grant root");
+    assert_eq!(targets[0].route, turn.canonicalize().unwrap(), "route");
+    let out = ensure_write_grants(&f.ctx(Unanswered::Defer, false), &targets)
+        .await
+        .unwrap();
+    assert_eq!(out[0].1, GrantOutcome::Blocked(BlockReason::Denied));
+    assert!(f.requests().is_empty(), "deny is final: no offer");
+
+    // Without the deny, the main-checkout grant covers the turn silently.
+    std::fs::write(
+        f.home().join("agents/w/profile.yaml"),
+        profile_yaml("w", &[&main]),
+    )
+    .unwrap();
+    let out = ensure_write_grants(&f.ctx(Unanswered::Defer, false), &targets)
+        .await
+        .unwrap();
+    assert_eq!(out[0].1, GrantOutcome::AlreadyAllowed);
 }
