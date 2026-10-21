@@ -55,13 +55,15 @@ const SNAPSHOT: &str = "- button \"Sign in\" [ref=e7]\n- heading \"Welcome\" [re
 struct Fake {
     calls: Vec<(String, Value)>,
     fail_tool: Option<&'static str>,
+    /// Answers `browser_snapshot` instead of `SNAPSHOT` when set.
+    snapshot: Option<&'static str>,
 }
 
 impl ToolCaller for Fake {
     async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
         self.calls.push((name.to_owned(), arguments));
         let text = if name == "browser_snapshot" {
-            SNAPSHOT
+            self.snapshot.unwrap_or(SNAPSHOT)
         } else {
             "ok"
         };
@@ -415,4 +417,134 @@ async fn assert_text_ignores_stale_locator() {
         "{:?}",
         fake.calls
     );
+}
+
+/// One `click` step whose only locator is `role:button[name="Sign in"]`.
+const CLICK_SIGN_IN: &str = "name: s\nmode: test\nrecorded_at: 2026-09-23T00:00:00Z\nsteps:\n- step: 1\n  intent: 點擊登入按鈕\n  action: click\n  locators: ['role:button[name=\"Sign in\"]']\n";
+
+/// Two nodes that `CLICK_SIGN_IN`'s locator matches equally well.
+const TWO_SIGN_IN: &str = "- button \"Sign in\" [ref=e7]\n- button \"Sign in\" [ref=e8]";
+
+/// A locator that matches several nodes still replays on the first one, as
+/// before, but the step carries a warning and the summary prints it. The
+/// verdict does not change: this is a warning, not a failure.
+#[tokio::test]
+async fn ambiguous_locator_passes_with_warning() {
+    let mut fake = Fake {
+        snapshot: Some(TWO_SIGN_IN),
+        ..Fake::default()
+    };
+    let report = replay_with(
+        &run(CLICK_SIGN_IN),
+        &[],
+        ReplayOptions::default(),
+        &mut fake,
+    )
+    .await
+    .unwrap();
+    assert_eq!((report.passed, report.failed), (1, 0), "{report:?}");
+    assert_eq!(report.verdict(), "green");
+    let click = fake
+        .calls
+        .iter()
+        .find(|(n, _)| n == "browser_click")
+        .unwrap();
+    assert_eq!(click.1["target"], "e7", "still acts on the first match");
+    assert_eq!(
+        report.steps[0].warning.as_deref(),
+        Some("role:button[name=\"Sign in\"] matched 2 elements; replay used the first (e7)")
+    );
+    let summary = report.summary();
+    assert!(
+        summary.ends_with(
+            "\nwarning: step 1 — role:button[name=\"Sign in\"] matched 2 elements; replay used the first (e7)"
+        ),
+        "{summary}"
+    );
+}
+
+/// An ambiguous target is the likeliest reason a step fails, so the warning
+/// is kept on a failed step too. The failure itself is unchanged.
+#[tokio::test]
+async fn ambiguous_locator_warning_survives_a_failed_step() {
+    let mut fake = Fake {
+        snapshot: Some(TWO_SIGN_IN),
+        fail_tool: Some("browser_click"),
+        ..Fake::default()
+    };
+    let report = replay_with(
+        &run(CLICK_SIGN_IN),
+        &[],
+        ReplayOptions::default(),
+        &mut fake,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.steps[0].status, StepStatus::Failed, "{report:?}");
+    assert_eq!(report.verdict(), "red");
+    let warning = report.steps[0]
+        .warning
+        .as_deref()
+        .expect("warning kept on a failed step");
+    assert!(warning.contains("matched 2 elements"), "{warning}");
+    assert!(report.summary().contains("\nwarning: step 1 — "));
+}
+
+/// Only the locator replay actually used is counted: a later candidate that
+/// would be ambiguous (`text:Sign` hits "Sign in" and "Sign up") is never
+/// reached once the role locator hits a single node.
+#[tokio::test]
+async fn unique_hit_has_no_warning_even_if_a_later_candidate_is_ambiguous() {
+    let yaml = CLICK_SIGN_IN.replace(
+        "locators: ['role:button[name=\"Sign in\"]']",
+        "locators: ['role:button[name=\"Sign in\"]', 'text:Sign']",
+    );
+    let mut fake = Fake {
+        snapshot: Some("- button \"Sign in\" [ref=e7]\n- link \"Sign up\" [ref=e8]"),
+        ..Fake::default()
+    };
+    let report = replay_with(&run(&yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
+    assert_eq!(report.passed, 1, "{report:?}");
+    assert_eq!(
+        report.steps[0].locator_used.as_deref(),
+        Some("role:button[name=\"Sign in\"]")
+    );
+    assert!(report.steps[0].warning.is_none(), "{report:?}");
+    assert!(
+        !report.summary().contains("warning"),
+        "{}",
+        report.summary()
+    );
+}
+
+/// Reports written before this field existed still load, and a step without
+/// a warning does not grow a `warning` key.
+#[test]
+fn step_outcome_without_warning_round_trips() {
+    let outcome: StepOutcome = serde_yaml::from_str("step: 1\nstatus: passed\n").unwrap();
+    assert!(outcome.warning.is_none());
+    assert!(!serde_yaml::to_string(&outcome).unwrap().contains("warning"));
+}
+
+/// `browser_press_key` (0.0.82) takes only `{ key }` and sends it to whatever
+/// has focus, so no element was picked: "replay used the first" would be false.
+#[tokio::test]
+async fn ambiguous_press_locator_has_no_warning() {
+    let yaml = CLICK_SIGN_IN.replace("action: click", "action: press\n  value: Enter");
+    let mut fake = Fake {
+        snapshot: Some(TWO_SIGN_IN),
+        ..Fake::default()
+    };
+    let report = replay_with(&run(&yaml), &[], ReplayOptions::default(), &mut fake)
+        .await
+        .unwrap();
+    assert_eq!(report.passed, 1, "{report:?}");
+    assert!(
+        fake.calls.iter().any(|(n, _)| n == "browser_press_key"),
+        "{:?}",
+        fake.calls
+    );
+    assert!(report.steps[0].warning.is_none(), "{report:?}");
 }

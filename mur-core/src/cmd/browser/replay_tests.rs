@@ -66,6 +66,7 @@ fn report(heals: Vec<HealEvent>, failed: bool) -> ReplayReport {
             },
             locator_used: None,
             message: None,
+            warning: None,
         })
         .collect::<Vec<_>>();
     let count = |s: StepStatus| steps.iter().filter(|o| o.status == s).count() as u32;
@@ -233,4 +234,28 @@ fn heal_ratio_parser_bounds() {
     assert!(parse_heal_ratio("-0.1").is_err());
     assert!(parse_heal_ratio("NaN").is_err());
     assert!(parse_heal_ratio("abc").is_err());
+}
+
+/// A step warning is advisory: the green run still writes back and exits 0,
+/// and the warning lands in `report.md` for whoever reads it later.
+#[test]
+fn step_warning_is_saved_in_the_report_and_does_not_fail_the_run() {
+    let (temp, _) = home();
+    let mut report = report(Vec::new(), false);
+    let warning = "role:button[name=\"Pay\"] matched 2 elements; replay used the first (e9)";
+    report.steps[2].warning = Some(warning.into());
+    finish(temp.path(), RUN, recorded(), report).unwrap();
+
+    let saved = saved_report(temp.path());
+    assert_eq!(saved.verdict(), "green");
+    assert_eq!(saved.steps[2].warning.as_deref(), Some(warning));
+    assert!(saved.steps[..2].iter().all(|s| s.warning.is_none()));
+    assert!(
+        saved
+            .summary()
+            .ends_with(&format!("\nwarning: step 3 — {warning}")),
+        "{}",
+        saved.summary()
+    );
+    assert_eq!(from_yaml(&actions(temp.path())).unwrap().replay_count, 1);
 }

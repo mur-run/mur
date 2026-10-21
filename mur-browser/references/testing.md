@@ -51,7 +51,8 @@ trace for post-mortem, unlike a routine automation run where it is optional.
 
 ## Reading the replay verdict
 
-`mur browser replay` prints one summary line and writes
+`mur browser replay` prints one summary line (plus any `warning:` lines,
+see below) and writes
 `~/.mur/browser/runs/<name>/report.md`. The verdict (`ReplayReport::verdict`)
 is one of:
 
@@ -60,6 +61,24 @@ is one of:
 | `green` | all steps passed, nothing healed | export |
 | `yellow` | some steps healed, all healed steps were verified and stayed under budget | export — a healed step's locator was already rewritten in `actions.yaml` (D3) |
 | `red` | a step failed outright, or `budget_exceeded` is set | **stop** — see below, do not export |
+
+### `warning:` lines are not a verdict
+
+Below the summary line, replay may print one line per suspect step:
+
+```
+warning: step 2 — role:button[name="Save"] matched 2 elements; replay used the first (e2)
+```
+
+The recorded locator matched several elements, and replay acted on the first
+one, the same thing it always did. The verdict does not change: a green run
+with warnings is still green, and the warning is also kept on a red step (it
+is often the reason that step failed). It is saved as `warning:` on the step
+in `report.md`.
+
+Report it to the human. Do not edit the locator in `actions.yaml` by hand to
+silence it. A fresh `mur browser record` of the flow only keeps locator
+candidates that match a single element.
 
 ## A declined heal is not a retry-until-it-works loop
 
