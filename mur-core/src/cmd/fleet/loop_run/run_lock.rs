@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use chrono::Utc;
 use fs2::FileExt;
+use mur_common::fleet::valid_fleet_name;
 use mur_common::paths::{FLEET_RUN_LOCK_FILE, FLEET_RUN_OWNER_FILE, fleet_state_dir};
 
 /// A held run lock. Dropping it releases the lock.
@@ -21,6 +22,12 @@ pub struct RunLock(#[allow(dead_code)] File);
 
 /// Take the run lock for `name` without blocking, or say who holds it.
 pub fn acquire(mur_home: &Path, name: &str) -> Result<RunLock> {
+    // Validate before touching the filesystem: the name is joined into a
+    // path, so `..` or an absolute path would create files outside
+    // `fleet-state/`.
+    if !valid_fleet_name(name) {
+        bail!("invalid fleet name '{name}'");
+    }
     let dir = fleet_state_dir(mur_home, name);
     std::fs::create_dir_all(&dir)?;
     acquire_at(&dir.join(FLEET_RUN_LOCK_FILE), name)
@@ -111,5 +118,16 @@ mod tests {
         )
         .unwrap();
         acquire(home.path(), "f").expect("a live pid in the body must not block");
+    }
+
+    #[test]
+    fn an_invalid_name_is_refused_before_any_filesystem_write() {
+        let home = tempfile::tempdir().unwrap();
+        for bad in ["../escape", "/abs/path", "a/b", "", ".."] {
+            let err = acquire(home.path(), bad).expect_err(bad);
+            assert!(format!("{err:#}").contains("invalid fleet name"), "{bad}");
+        }
+        let entries = std::fs::read_dir(home.path()).unwrap().count();
+        assert_eq!(entries, 0, "no directory or file may be created");
     }
 }
