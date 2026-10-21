@@ -24,3 +24,49 @@ pub mod smoke;
 pub mod smoke_fetch;
 pub mod smoke_probe;
 pub mod vue_install;
+pub mod wizard;
+
+/// Every `mur code-nav setup` flag, as clap parsed it.
+pub struct SetupCli {
+    pub agent: Option<String>,
+    pub wizard: bool,
+    pub agents: Vec<String>,
+    pub paths: Vec<std::path::PathBuf>,
+    pub restart: bool,
+    pub with_serena: bool,
+    pub project: Option<std::path::PathBuf>,
+    pub entry: String,
+    pub no_ast_grep: bool,
+    pub lsp: Vec<String>,
+    pub lsp_only: Vec<String>,
+    pub yes: bool,
+}
+
+/// `mur code-nav setup`, with or without `--wizard`. Blocking: call it off
+/// the async runtime.
+pub fn run_setup(c: SetupCli) -> anyhow::Result<()> {
+    use std::io::IsTerminal;
+    let consent = crate::cmd::browser::setup::Consent::new(std::io::stdin().is_terminal(), c.yes);
+    let (input, out) = (&mut std::io::stdin().lock(), &mut std::io::stdout());
+    if c.wizard {
+        let args = wizard::Args {
+            agents: c.agents,
+            paths: c.paths,
+            restart: c.restart,
+        };
+        return wizard::run(args, consent, input, out);
+    }
+    let exact_lsp = !c.lsp_only.is_empty();
+    let args = setup::Args {
+        agent: anyhow::Context::context(c.agent, "--agent is required without --wizard")?,
+        project: c.project,
+        entry: c.entry,
+        flags: plan::Flags {
+            with_serena: c.with_serena,
+            no_ast_grep: c.no_ast_grep,
+            exact_lsp,
+            lsp: if exact_lsp { c.lsp_only } else { c.lsp },
+        },
+    };
+    setup::run(args, consent, input, out)
+}

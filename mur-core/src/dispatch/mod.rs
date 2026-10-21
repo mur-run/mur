@@ -323,6 +323,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::CodeNav { action } => match action {
             CodeNavAction::Setup {
                 agent,
+                wizard,
+                agents,
+                paths,
+                restart,
                 with_serena,
                 project,
                 entry,
@@ -331,32 +335,25 @@ pub async fn run(cli: Cli) -> Result<()> {
                 lsp_only,
                 yes,
             } => {
-                use std::io::IsTerminal;
-                let consent =
-                    cmd::browser::setup::Consent::new(std::io::stdin().is_terminal(), yes);
-                let args = cmd::code_nav::setup::Args {
+                let c = cmd::code_nav::SetupCli {
                     agent,
+                    wizard,
+                    agents,
+                    paths,
+                    restart,
+                    with_serena,
                     project,
                     entry,
-                    flags: cmd::code_nav::plan::Flags {
-                        with_serena,
-                        no_ast_grep,
-                        exact_lsp: !lsp_only.is_empty(),
-                        lsp: if lsp_only.is_empty() { lsp } else { lsp_only },
-                    },
+                    no_ast_grep,
+                    lsp,
+                    lsp_only,
+                    yes,
                 };
                 // The installers use blocking HTTP and `Command::status`;
                 // a blocking client inside the async runtime panics on drop.
-                tokio::task::spawn_blocking(move || {
-                    cmd::code_nav::setup::run(
-                        args,
-                        consent,
-                        &mut std::io::stdin().lock(),
-                        &mut std::io::stdout(),
-                    )
-                })
-                .await
-                .context("code-nav setup task")??
+                tokio::task::spawn_blocking(move || cmd::code_nav::run_setup(c))
+                    .await
+                    .context("code-nav setup task")??
             }
             CodeNavAction::Doctor { agent } => {
                 cmd::code_nav::doctor::run(agent.as_deref(), &mut std::io::stdout())?

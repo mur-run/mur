@@ -1004,6 +1004,33 @@ registration; one home per entry avoids that. `--entry` defaults to `serena`,
 which keeps `<agent home>/serena`; any other name gets its own
 `<agent home>/serena-homes/<name>`.
 
+**Several agents and repos at once.** `mur code-nav setup --wizard pm qa`
+lists your indexed projects (`mur project list`) for every named agent at once,
+detects each project's languages from its marker files (`Cargo.toml`,
+`package.json`, `pyproject.toml`, `.vue`, …), and prints one combined plan:
+each target with the equivalent single-agent command, the shared installs (each
+once), new grants per agent, and a project × agent matrix. One confirmation
+applies it; a second question comes only if installing turned up new exec
+lanes. Languages are picked once per project; Lua, C/C++ and the high-risk
+servers are shown but stay off until you tick them. For a narrower set on one
+agent, run the printed single-agent command with `--lsp-only`.
+
+- Projects every agent already serves start ticked; one only some agents serve
+  is labelled and left unticked. `Customize per agent?` gives each agent its
+  own list. Unticking never removes an entry — remove it with
+  `mur agent mcp remove <agent> <entry>`.
+- `Add a path…` (or `--path <dir>`, repeatable) takes a directory that is not
+  indexed. The filesystem root, your home directory itself and anything under
+  `~/.mur` are refused.
+- A repo an agent already serves under another entry name reuses that entry,
+  so its tool names don't change. A name already serving another repo gets a
+  suffixed name (`<name>-2`), never a repoint.
+- After granting, it offers to restart the running agents that changed, once
+  each. A target whose install, lane question or commit failed keeps its
+  agent from restarting, and you get the exact `mur agent restart` command.
+  With `--yes` it grants and prints that command; add `--restart` to restart
+  too. In murmur, `!mur code-nav setup --wizard …` opens in the terminal.
+
 An entry name is 1–64 characters of lower-case `a-z`, `0-9`, `_` and `-`, and
 must survive tool-name sanitizing unchanged: no trailing `_` and no `__`. It
 also must not share a tool prefix with another MCP server on the same agent

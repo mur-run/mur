@@ -59,7 +59,7 @@ pub const SERENA_ENTRY_HOMES_DIR: &str = "serena-homes";
 /// Existing single-project installs use it, so they need no migration.
 pub const DEFAULT_ENTRY_NAME: &str = "serena";
 /// Longest entry name accepted as a home directory name.
-const MAX_ENTRY_NAME_LEN: usize = 64;
+pub const MAX_ENTRY_NAME_LEN: usize = 64;
 /// serena's global config file name inside `SERENA_HOME`.
 pub const SERENA_CONFIG_FILE: &str = "serena_config.yml";
 /// MUR-owned parent of every per-project serena folder, inside

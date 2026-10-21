@@ -49,6 +49,7 @@ fn apply_run(
             agent_home: &agent_home,
             entry: "serena",
             manifest_path: &consent::manifest_path(&h.mur_home, "carol"),
+            warn_running: false,
         },
         plan,
         Some(&h.repo),

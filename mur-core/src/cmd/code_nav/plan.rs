@@ -195,6 +195,43 @@ impl Lang {
         })
     }
 
+    /// Enabled without being named: not High tier, and not fetched by serena
+    /// itself (#1993: a server setup cannot smoke-launch must be asked for by
+    /// name, or one refused exec would stop serena for the entry). The
+    /// wizard's detection proposes only these; the rest need an opt-in.
+    pub fn on_by_default(self) -> bool {
+        self.tier() != Tier::High && !self.serena_fetched()
+    }
+
+    /// Files in a project that show it uses this language (#2016). The one
+    /// table the wizard detects from; detection only proposes.
+    pub fn markers(self) -> &'static [Marker] {
+        use Marker::{Ext, Name, Prefix};
+        match self {
+            Lang::Rust => &[Name("Cargo.toml")],
+            Lang::TypeScript => &[Name("package.json"), Name("tsconfig.json")],
+            Lang::Vue => &[Ext("vue")],
+            Lang::Python => &[
+                Name("pyproject.toml"),
+                Name("setup.py"),
+                Prefix("requirements", "txt"),
+            ],
+            Lang::Php => &[Name("composer.json")],
+            Lang::Go => &[Name("go.mod")],
+            Lang::Java => &[Name("pom.xml"), Name("build.gradle")],
+            Lang::Kotlin => &[Name("build.gradle.kts"), Ext("kt")],
+            Lang::Swift => &[Name("Package.swift"), Ext("xcodeproj")],
+            Lang::Ruby => &[Name("Gemfile")],
+            Lang::Cpp => &[Name("CMakeLists.txt"), Name("compile_commands.json")],
+            Lang::Lua => &[Ext("lua")],
+        }
+    }
+
+    /// Accepts a `--lsp` value; `None` for anything [`Lang::parse`] refuses.
+    pub fn from_flag(raw: &str) -> Option<Lang> {
+        Lang::parse(raw).ok()
+    }
+
     fn parse(raw: &str) -> Result<Lang> {
         let s = raw.trim().to_ascii_lowercase();
         if let Some(l) = Lang::ALL.into_iter().find(|l| l.flag() == s) {
@@ -214,6 +251,34 @@ impl Lang {
             "--lsp {raw}: unknown language (known: {})",
             known.join(", ")
         )
+    }
+}
+
+/// One entry of [`Lang::markers`], matched against a file or directory name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Marker {
+    /// Exactly this name.
+    Name(&'static str),
+    /// `<prefix>*.<ext>`, e.g. `requirements-dev.txt`.
+    Prefix(&'static str, &'static str),
+    /// Any name ending in `.<ext>` (a directory too: `App.xcodeproj`).
+    Ext(&'static str),
+}
+
+impl Marker {
+    pub fn matches(self, name: &str) -> bool {
+        match self {
+            Marker::Name(n) => name == n,
+            Marker::Prefix(p, ext) => {
+                name.starts_with(p) && name.len() > p.len() + ext.len() && {
+                    let dot = name.len() - ext.len() - 1;
+                    name.as_bytes()[dot] == b'.' && name.ends_with(ext)
+                }
+            }
+            Marker::Ext(ext) => name
+                .rsplit_once('.')
+                .is_some_and(|(stem, e)| !stem.is_empty() && e == ext),
+        }
     }
 }
 
@@ -342,9 +407,7 @@ pub fn plan(mur_home: &Path, flags: &Flags, detected: &Detected) -> Result<Plan>
 
     let wanted = |l: Lang| {
         if requested.is_empty() {
-            // #1993: a server setup cannot smoke-launch must be asked for by
-            // name, or one refused exec would stop serena for the entry.
-            l.tier() != Tier::High && !l.serena_fetched()
+            l.on_by_default()
         } else {
             requested.contains(&l)
         }

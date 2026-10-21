@@ -27,9 +27,9 @@ use super::plan::{self, Detected, Flags, Lang, LspStatus, Permission, UV};
 use super::{ast_grep_wire, serena_entry, smoke, vue_install};
 use crate::cmd::browser::setup::Consent;
 
-mod apply;
-mod install;
-mod lanes;
+pub(super) mod apply;
+pub(super) mod install;
+pub(super) mod lanes;
 mod smoke_run;
 
 use apply::{Target, apply};
@@ -51,14 +51,14 @@ pub struct Args {
 }
 
 /// `PATH` lookup without a `which` dependency.
-fn on_path(tool: &str) -> Option<PathBuf> {
+pub(super) fn on_path(tool: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|d| d.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)))
         .find(|c| c.is_file())
 }
 
-fn detect() -> Detected {
+pub(super) fn detect() -> Detected {
     let mut tools: BTreeSet<&str> = Lang::ALL
         .iter()
         .flat_map(|l| l.prerequisites().iter().copied())
@@ -103,26 +103,13 @@ pub fn run(
         serena_entry::check_slot(&profile, entry)?;
     }
 
-    let plan = plan::plan(&mur_home, &args.flags, &detect())?;
-    let mut permissions = plan.permissions.clone();
-    // #1984: what wiring ast-grep to the agent grants, decided (and any
-    // refusal raised) before anything is installed.
-    if plan.install.iter().any(|r| r.name == plan::AST_GREP) {
-        let slot = ast_grep_wire::preflight(&agent)?;
-        permissions.extend(ast_grep_wire::permissions(&mur_home, &slot));
-    }
-    if let Some(p) = &project
-        && plan
-            .install
-            .iter()
-            .any(|r| r.name == plan::SERENA && r.missing.is_none())
-    {
-        permissions.push(Permission::Read(p.clone()));
-    }
-    let plan = plan::Plan {
-        permissions,
-        ..plan
-    };
+    let plan = target_plan(
+        &mur_home,
+        &agent,
+        &args.flags,
+        project.as_deref(),
+        &detect(),
+    )?;
 
     writeln!(out, "mur code-nav setup for agent '{agent}'\n")?;
     consent::print_tables(out, &plan)?;
@@ -174,6 +161,7 @@ pub fn run(
             agent_home: &agent_home,
             entry,
             manifest_path: &manifest_path,
+            warn_running: true,
         },
         &plan,
         project.as_deref(),
@@ -189,20 +177,73 @@ pub fn run(
     if let Some(project) = &project
         && manifest.serena.is_some()
     {
-        let langs: Vec<Lang> = Lang::ALL
-            .into_iter()
-            .filter(|l| {
-                manifest
-                    .languages_of(entry)
-                    .is_some_and(|s| s.contains(l.flag()))
-            })
-            .collect();
-        let serena_home = serena_paths_for(&agent_home, entry)?.home;
-        let (targets, unfetched) = smoke_targets(&manifest, &langs, &mur_home, &serena_home, out)?;
-        let fetch_dir = smoke::fetch_dir(&serena_home);
-        smoke::verify(&agent, project, &targets, &unfetched, &fetch_dir, out)?;
+        smoke_entry(
+            &mur_home,
+            &agent,
+            &agent_home,
+            entry,
+            project,
+            &manifest,
+            out,
+        )?;
     }
     Ok(())
+}
+
+/// The plan one target applies: [`plan::plan`] plus what wiring ast-grep
+/// grants (#1984, any refusal raised here, before anything is installed)
+/// and the read grant on serena's project. Shared with the wizard (#2016).
+pub(super) fn target_plan(
+    mur_home: &Path,
+    agent: &str,
+    flags: &Flags,
+    project: Option<&Path>,
+    detected: &Detected,
+) -> Result<plan::Plan> {
+    let plan = plan::plan(mur_home, flags, detected)?;
+    let mut permissions = plan.permissions.clone();
+    if plan.install.iter().any(|r| r.name == plan::AST_GREP) {
+        let slot = ast_grep_wire::preflight(agent)?;
+        permissions.extend(ast_grep_wire::permissions(mur_home, &slot));
+    }
+    if let Some(p) = project
+        && plan
+            .install
+            .iter()
+            .any(|r| r.name == plan::SERENA && r.missing.is_none())
+    {
+        permissions.push(Permission::Read(p.to_path_buf()));
+    }
+    Ok(plan::Plan {
+        permissions,
+        ..plan
+    })
+}
+
+/// #1981 Layer 3: success means the servers start under the agent's seal,
+/// not that the files landed. Run after the manifest is saved, so a
+/// failure here keeps the installs and grants recorded.
+pub(super) fn smoke_entry(
+    mur_home: &Path,
+    agent: &str,
+    agent_home: &Path,
+    entry: &str,
+    project: &Path,
+    manifest: &Manifest,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let langs: Vec<Lang> = Lang::ALL
+        .into_iter()
+        .filter(|l| {
+            manifest
+                .languages_of(entry)
+                .is_some_and(|s| s.contains(l.flag()))
+        })
+        .collect();
+    let serena_home = serena_paths_for(agent_home, entry)?.home;
+    let (targets, unfetched) = smoke_targets(manifest, &langs, mur_home, &serena_home, out)?;
+    let fetch_dir = smoke::fetch_dir(&serena_home);
+    smoke::verify(agent, project, &targets, &unfetched, &fetch_dir, out)
 }
 
 /// #1982: a project with `.vue` files but Vue off gets told how to turn it

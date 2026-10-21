@@ -7,7 +7,7 @@ pub struct ScannedFile {
     pub language: String,
 }
 
-const SKIP_DIRS: &[&str] = &[
+pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git",
     "node_modules",
     "target",
@@ -135,7 +135,7 @@ fn walk_dir(root: &Path, dir: &Path, gitignore_patterns: &[String], out: &mut Ve
     }
 }
 
-fn load_gitignore(project_path: &Path) -> Vec<String> {
+pub(crate) fn load_gitignore(project_path: &Path) -> Vec<String> {
     let gitignore_path = project_path.join(".gitignore");
     let content = match fs::read_to_string(gitignore_path) {
         Ok(c) => c,
@@ -150,7 +150,7 @@ fn load_gitignore(project_path: &Path) -> Vec<String> {
         .collect()
 }
 
-fn is_gitignored(rel_path: &str, patterns: &[String], is_dir: bool) -> bool {
+pub(crate) fn is_gitignored(rel_path: &str, patterns: &[String], is_dir: bool) -> bool {
     for pattern in patterns {
         if rel_path == *pattern || rel_path.starts_with(&format!("{pattern}/")) {
             return true;

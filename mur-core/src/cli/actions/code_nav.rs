@@ -16,8 +16,31 @@ pub enum CodeNavAction {
     /// and grants already recorded.
     Setup {
         /// Agent to set up (case-insensitive).
-        #[arg(long)]
-        agent: String,
+        #[arg(long, required_unless_present = "wizard")]
+        agent: Option<String>,
+        /// Guided setup for one or more agents (positional names): pick
+        /// projects from `mur project list`, detect their language servers,
+        /// and apply one combined plan after one confirmation. Then offers
+        /// to restart the agents that changed.
+        #[arg(
+            long,
+            requires = "agents",
+            conflicts_with_all = ["agent", "with_serena", "project", "entry", "lsp", "lsp_only", "no_ast_grep"]
+        )]
+        wizard: bool,
+        /// With --wizard: the agents to set up (case-insensitive).
+        #[arg(value_name = "AGENT", requires = "wizard")]
+        agents: Vec<String>,
+        /// With --wizard: a project directory to add, indexed or not
+        /// (repeatable). The filesystem root, your home directory itself and
+        /// anything under MUR's home are refused.
+        #[arg(long = "path", value_name = "DIR", requires = "wizard")]
+        paths: Vec<std::path::PathBuf>,
+        /// With --wizard: restart the running agents that changed, without
+        /// asking. Without it, --yes only grants and prints the restart
+        /// command.
+        #[arg(long, requires = "wizard")]
+        restart: bool,
         /// Also set up serena (LSP-backed symbol navigation). Off by default.
         #[arg(long)]
         with_serena: bool,
