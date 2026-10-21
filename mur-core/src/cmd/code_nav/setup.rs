@@ -26,6 +26,7 @@ use super::{ast_grep_wire, serena_entry, smoke, vue_install};
 use crate::cmd::browser::setup::Consent;
 
 mod apply;
+mod install;
 mod lanes;
 mod smoke_run;
 
@@ -175,9 +176,9 @@ pub fn run(
         project.as_deref(),
         prior,
         &mut Ask { consent, input },
+        &manifest_path,
         out,
     )?;
-    consent::save_manifest(&manifest_path, &manifest)?;
     writeln!(out, "\nRecorded in {}", manifest_path.display())?;
 
     // #1981 Layer 3: success means the servers start under the agent's seal,
