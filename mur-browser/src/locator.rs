@@ -258,7 +258,9 @@ fn matches(locator: &Locator, node: &SnapshotNode) -> bool {
 
 /// Produce stable replay candidates for a ref from the latest a11y snapshot.
 /// Order is deliberate: semantic role first, then an explicit test id, label,
-/// and finally visible text. A ref is never emitted because it is ephemeral.
+/// and visible text. A bare `role:generic` (no name) ranks last: it is still
+/// emitted so the step stays recordable and heal keeps its role anchor. A ref
+/// is never emitted because it is ephemeral.
 pub fn candidates_for_ref(reference: &str, snapshot: &[SnapshotNode]) -> Vec<String> {
     let reference = reference.trim_start_matches('@');
     let Some(node) = snapshot
@@ -296,11 +298,14 @@ pub fn candidates_for_ref(reference: &str, snapshot: &[SnapshotNode]) -> Vec<Str
     // Restore the designed priority after deduplication rather than relying on
     // the lexical sort used above.
     candidates.sort_by_key(|candidate| match Locator::parse(candidate) {
+        // A bare `generic` is an unnamed div/span: unique only on near-empty
+        // pages and ambiguous on almost every real one, so it is a fallback.
+        Ok(Locator::Role { role, name: None }) if role.eq_ignore_ascii_case("generic") => 4,
         Ok(Locator::Role { .. }) => 0,
         Ok(Locator::TestId(_)) => 1,
         Ok(Locator::Label(_)) => 2,
         Ok(Locator::Text(_)) => 3,
-        _ => 4,
+        _ => 5,
     });
     // `resolve` takes the first match, so a candidate that also matches another
     // node would silently act on the wrong element at replay. Keep only
@@ -505,6 +510,32 @@ mod tests {
         assert_eq!(candidates_for_ref("@e1", &nodes), vec!["role:generic"]);
     }
 
+    // A named generic is a real anchor: it keeps rank 0 ahead of its text.
+    #[test]
+    fn named_generic_keeps_role_rank() {
+        let nodes = parse_snapshot(
+            r#"
+- generic "Card" [ref=e1]
+- generic [ref=e2]
+"#,
+        );
+        assert_eq!(
+            candidates_for_ref("@e1", &nodes),
+            vec!["role:generic[name=\"Card\"]", "text:Card"]
+        );
+    }
+
+    // A bare generic is only a fallback: it ranks after testid, label and text.
+    #[test]
+    fn bare_generic_ranks_after_testid_label_and_text() {
+        let nodes =
+            parse_snapshot("- generic [ref=e1] [data-testid=card] [label=\"Card\"]: hello\n");
+        assert_eq!(
+            candidates_for_ref("@e1", &nodes),
+            vec!["testid:card", "label:Card", "text:hello", "role:generic"]
+        );
+    }
+
     #[test]
     fn drops_text_that_also_matches_a_longer_label() {
         let nodes = parse_snapshot(
@@ -535,7 +566,7 @@ mod tests {
         assert_eq!(nodes[0].role, "generic");
         assert_eq!(
             candidates_for_ref("e1", &nodes),
-            vec!["role:generic", "text:hello"]
+            vec!["text:hello", "role:generic"]
         );
         assert_eq!(candidates_for_ref("e2", &nodes), vec!["role:checkbox"]);
     }
