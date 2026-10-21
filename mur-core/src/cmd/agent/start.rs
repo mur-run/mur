@@ -67,6 +67,10 @@ pub fn cmd_start(name: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Taken before the service manager is poked: a refusal can land before
+    // `confirm_startup` first looks, and must still count as this start's.
+    let started_ms = now_unix_ms();
+
     // 2. Service manager owns it?
     #[cfg(target_os = "macos")]
     {
@@ -81,6 +85,9 @@ pub fn cmd_start(name: &str) -> Result<()> {
             // written exactly this.
             heal_launcher(name);
             verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
+            // A plist from before #2015 respawns a refused start forever; the
+            // reload that fixes it is only safe now, when starting anyway.
+            super::service_migrate::migrate(name, &agent_home)?;
             // Before kickstart: only what this start writes may be quoted.
             let mark =
                 super::startup_error::LogMark::at_end(super::service::service_stderr_log(name));
@@ -91,7 +98,13 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 .output()?;
             if kick.status.success() {
                 println!("started '{name}' via launchd ({label})");
-                return confirm_startup(name, &agent_home, &service_log_hint(name), Some(&mark));
+                return confirm_startup(
+                    name,
+                    &agent_home,
+                    &service_log_hint(name),
+                    Some(&mark),
+                    started_ms,
+                );
             }
             // Not loaded (e.g. after a manual bootout) — load brings it up
             // by itself thanks to RunAtLoad.
@@ -101,7 +114,13 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 .output()?;
             if load.status.success() {
                 println!("loaded + started '{name}' via launchd ({label})");
-                return confirm_startup(name, &agent_home, &service_log_hint(name), Some(&mark));
+                return confirm_startup(
+                    name,
+                    &agent_home,
+                    &service_log_hint(name),
+                    Some(&mark),
+                    started_ms,
+                );
             }
             bail!(
                 "launchd refused to start '{name}': kickstart: {} / load: {}",
@@ -119,6 +138,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
             // Same reasoning as the launchd leg above.
             heal_launcher(name);
             verify_runtime_at(&resolve_bin_dir()?.join(format!("mur_agent_{name}")))?;
+            super::service_migrate::migrate(name, &agent_home)?;
             let out = Command::new("systemctl")
                 .args(["--user", "start", &format!("mur-agent-{name}.service")])
                 .output()?;
@@ -129,7 +149,7 @@ pub fn cmd_start(name: &str) -> Result<()> {
                 );
             }
             println!("started '{name}' via systemd --user");
-            return confirm_startup(name, &agent_home, &service_log_hint(name), None);
+            return confirm_startup(name, &agent_home, &service_log_hint(name), None, started_ms);
         }
     }
 
@@ -214,6 +234,21 @@ fn live_lock_pid(agent_home: &std::path::Path) -> Option<u32> {
     pid_alive(lock.pid).then_some(lock.pid)
 }
 
+/// The refusal a runtime recorded at or after `since_unix_ms`, if any. Older
+/// markers belong to an earlier start and must not fail this one (#2015).
+fn refusal_since(
+    agent_home: &std::path::Path,
+    since_unix_ms: u64,
+) -> Option<mur_common::start_refusal::StartRefusal> {
+    mur_common::start_refusal::read(agent_home).filter(|r| r.at_unix_ms >= since_unix_ms)
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 /// Shared post-start confirmation for the service paths (no child handle to
 /// watch there): wait for a live `running.lock`, and on timeout say where to
 /// look instead of guessing a verdict.
@@ -223,12 +258,21 @@ fn confirm_startup(
     agent_home: &std::path::Path,
     log_hint: &str,
     mark: Option<&super::startup_error::LogMark>,
+    started_ms: u64,
 ) -> Result<()> {
     let deadline = Instant::now() + CONFIRM_WINDOW;
     loop {
         if let Some(pid) = live_lock_pid(agent_home) {
             println!("✓ '{name}' is up (pid {pid})");
             return Ok(());
+        }
+        // A runtime that refused to start is not coming back by itself: the
+        // service unit does not respawn it (#2015). Say why and what to do.
+        if let Some(r) = refusal_since(agent_home, started_ms) {
+            bail!(
+                "'{name}' refused to start and will not be restarted automatically:\n{}",
+                r.message
+            );
         }
         if Instant::now() >= deadline {
             // A fresh `Error:` is evidence, not a slow start: this start's
@@ -285,7 +329,27 @@ pub(super) fn tail_of(path: &std::path::Path, max_bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::tail_of;
+    use super::{refusal_since, tail_of};
+
+    #[test]
+    fn only_a_refusal_from_this_start_counts() {
+        use mur_common::start_refusal::{StartRefusal, write};
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            refusal_since(dir.path(), 0).is_none(),
+            "no marker, no refusal"
+        );
+        write(
+            dir.path(),
+            &StartRefusal::from_line("error[entitlements_unpinned]: x", 1_000),
+        )
+        .unwrap();
+        assert!(refusal_since(dir.path(), 1_000).is_some());
+        assert!(
+            refusal_since(dir.path(), 1_001).is_none(),
+            "a refusal from before this start must not fail it"
+        );
+    }
 
     #[test]
     fn tail_of_returns_last_lines_only() {

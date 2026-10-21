@@ -194,8 +194,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     let mut profile = match Profile::load(&agent_home) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error[profile_invalid]: {e}");
-            std::process::exit(1);
+            pin::refuse(&agent_home, &format!("error[profile_invalid]: {e}"));
         }
     };
     // Non-interactive model rebind for headless/server use (§7.5). Honored
@@ -216,9 +215,11 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     // 2b. #712: refuse entitlements that changed outside MUR (the agent's own
     //     bash can rewrite profile.yaml on Linux, where Landlock cannot deny it).
     if let pin::Verdict::Refuse(msg) = pin::verify(&profile, &agent_home, &mur_home) {
-        eprintln!("{msg}");
-        std::process::exit(1);
+        pin::refuse(&agent_home, &msg);
     }
+    // Past the refusal checks: a marker from an earlier refusal is stale, and
+    // leaving it would stop the service manager respawning a later crash.
+    mur_common::start_refusal::clear(&agent_home);
 
     // 3. Warn on loose entitlements
     for w in detect_warnings(&profile.inner) {

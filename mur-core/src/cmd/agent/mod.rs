@@ -66,6 +66,7 @@ mod routing;
 mod scratch_check;
 pub(crate) mod secret;
 mod service;
+mod service_migrate;
 pub mod skill;
 pub mod skill_bundle;
 pub mod skill_github;
@@ -132,6 +133,7 @@ pub use secret::{cmd_secret_delete, cmd_secret_list, cmd_secret_set};
 #[allow(unused_imports)]
 pub use service::cmd_install_service;
 pub(crate) use service::installed_service;
+pub(crate) use service_migrate::unguarded as unguarded_services;
 #[allow(unused_imports)]
 pub use skill::{
     cmd_skill_add, cmd_skill_convert, cmd_skill_list, cmd_skill_remove, cmd_skill_set_enabled,
