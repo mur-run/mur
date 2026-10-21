@@ -10,8 +10,10 @@
 //! The exec lanes are the one thing the plan cannot list: after install,
 //! any lane the manifest has not recorded is printed by path and asked
 //! about again, under the same rules, before it is granted (#1942). A run
-//! that fails part way saves no manifest, so the next run re-lists what it
-//! had already applied: conservative, never silent.
+//! that fails part way saves no manifest, except that ast-grep's install and
+//! grants are saved as soon as they reach the profile (#2018); the next run
+//! re-lists anything later that it had already applied: conservative, never
+//! silent.
 
 use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
@@ -30,9 +32,9 @@ mod install;
 mod lanes;
 mod smoke_run;
 
-#[cfg(test)]
-use apply::entry_langs;
 use apply::{Target, apply};
+#[cfg(test)]
+use apply::{apply_with, entry_langs};
 use lanes::Ask;
 #[cfg(test)]
 use lanes::consent_to_lanes;
@@ -171,12 +173,12 @@ pub fn run(
             agent: &agent,
             agent_home: &agent_home,
             entry,
+            manifest_path: &manifest_path,
         },
         &plan,
         project.as_deref(),
         prior,
         &mut Ask { consent, input },
-        &manifest_path,
         out,
     )?;
     writeln!(out, "\nRecorded in {}", manifest_path.display())?;

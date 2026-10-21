@@ -1,6 +1,7 @@
 //! Phase 2 of setup's apply (#2016): download and install, wire ast-grep,
 //! write serena's files, and resolve the exec lanes. Grants nothing for
-//! serena and saves no manifest; that is [`commit`](super::apply::commit).
+//! serena; that is [`commit`](super::apply::commit). The one manifest save
+//! here records the ast-grep wiring as soon as it reaches the profile (#2018).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,13 +48,19 @@ impl Installed<'_> {
     }
 }
 
-pub(super) fn install<'p>(
+/// Install everything `prepared` lists. `install_ast_grep` is
+/// [`ast_grep_install::install`] outside tests.
+pub(super) fn install_with<'p>(
     t: &Target<'_>,
     prepared: Prepared<'p>,
     out: &mut dyn Write,
+    install_ast_grep: &dyn Fn(&Path) -> Result<ast_grep_install::Outcome>,
 ) -> Result<Installed<'p>> {
     let Target {
-        mur_home, agent, ..
+        mur_home,
+        agent,
+        manifest_path,
+        ..
     } = *t;
     let Prepared {
         manifest: mut m,
@@ -62,7 +69,7 @@ pub(super) fn install<'p>(
     } = prepared;
     if let Some(version) = ast_grep {
         let dest = mur_common::config::ast_grep_binary_path(mur_home);
-        let o = ast_grep_install::install(&dest)?;
+        let o = install_ast_grep(&dest)?;
         writeln!(
             out,
             "  ✓ ast-grep {} ({o:?}) at {}",
@@ -72,6 +79,12 @@ pub(super) fn install<'p>(
         m.installed
             .insert(consent::install_key(plan::AST_GREP, version));
         ast_grep_wire::apply(mur_home, agent, &mut m, out)?;
+        // #2018: `ast_grep_wire::apply` saved the profile before recording
+        // its grants in `m`, so the profile now holds them. Record them
+        // durably too: a later failure must not leave the agent holding
+        // grants the manifest does not know about (the next run would ask
+        // for them again). Never before the profile save.
+        consent::save_manifest(manifest_path, &m)?;
     }
     let s = match serena {
         SerenaStep::Off => None,
