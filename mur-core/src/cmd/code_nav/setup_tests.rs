@@ -136,7 +136,7 @@ fn an_entry_name_that_sanitizes_to_another_is_refused_before_anything_is_written
 /// Everything else is laid out here, in the isolated `MUR_HOME`, so no network
 /// and no `uv` run is involved.
 #[cfg(unix)]
-mod success {
+pub(super) mod success {
     use super::*;
     use crate::cmd::code_nav::serena_config::find_resource;
     use crate::cmd::code_nav::serena_install::{
@@ -157,7 +157,7 @@ mod success {
     /// point's shebang names an interpreter inside it (so the exec lanes pass
     /// the "must stay under the tools root" check), plus a `uv` stub on a
     /// `PATH` that holds nothing else, so the plan is the same on every host.
-    fn install_fake_serena(h: &mut Home, real: &Path) {
+    pub(super) fn install_fake_serena(h: &mut Home, real: &Path) {
         let dir = serena_dir(&h.mur_home);
         let env = dir.join(UV_TOOL_SUBDIR).join(PACKAGE);
         let site = env.join("lib/python3.13/site-packages");
@@ -622,3 +622,6 @@ fn lsp_only_with_a_disabled_language_writes_nothing() {
         );
     }
 }
+
+#[path = "setup_ast_grep_tests.rs"]
+mod ast_grep_then_failure;

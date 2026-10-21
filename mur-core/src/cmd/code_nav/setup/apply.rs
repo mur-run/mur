@@ -5,22 +5,25 @@
 //! 2. [`install`](super::install::install) — downloads and installs, writes
 //!    serena's files, and resolves the exec lanes.
 //! 3. [`commit`] — the serena profile entry and grants via `save_profile`,
-//!    then the manifest. The only phase that saves the manifest.
+//!    then the manifest.
 //!
 //! The lane question sits between install and commit, so a caller with
 //! several targets can install them all, ask once, then commit each.
 //! ast-grep is wired to the agent inside install, right after its download,
-//! as before this split; recording that grant early is #2018, not this.
+//! and install saves the manifest at that point (#2018): those grants are
+//! in the profile from then on, so a later failure must not lose their
+//! record. Nothing else is recorded before commit.
 
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use super::super::ast_grep_install;
 use super::super::consent::{self, Manifest};
 use super::super::plan::{self, Lang, LspStatus, Permission};
 use super::super::serena_entry;
-use super::install::{Installed, install};
+use super::install::{Installed, install_with};
 use super::lanes::{Ask, consent_to_lanes};
 
 /// Whose profile and which serena entry a run applies to.
@@ -29,6 +32,9 @@ pub(super) struct Target<'a> {
     pub(super) agent: &'a str,
     pub(super) agent_home: &'a Path,
     pub(super) entry: &'a str,
+    /// The agent's manifest: saved once ast-grep is wired (#2018) and at
+    /// the end of [`commit`].
+    pub(super) manifest_path: &'a Path,
 }
 
 /// What [`install`] will do for one target. Built by [`prepare`].
@@ -103,17 +109,40 @@ pub(super) fn prepare<'p>(
 }
 
 /// One target, all three phases, asking about new exec lanes in between.
-/// A failure in any phase returns before the manifest is saved.
+/// A failure in any phase returns before the final manifest save; only the
+/// ast-grep step, if it was reached, is already recorded (#2018).
 pub(super) fn apply(
     t: &Target<'_>,
     plan: &plan::Plan,
     project: Option<&Path>,
     prior: Manifest,
     ask: &mut Ask<'_>,
-    manifest_path: &Path,
     out: &mut dyn Write,
 ) -> Result<Manifest> {
-    let installed = install(t, prepare(t.entry, plan, project, prior), out)?;
+    apply_with(
+        t,
+        plan,
+        project,
+        prior,
+        ask,
+        out,
+        &ast_grep_install::install,
+    )
+}
+
+/// [`apply`] with the ast-grep installer injected, so a test can reach the
+/// steps after it without a download.
+pub(super) fn apply_with(
+    t: &Target<'_>,
+    plan: &plan::Plan,
+    project: Option<&Path>,
+    prior: Manifest,
+    ask: &mut Ask<'_>,
+    out: &mut dyn Write,
+    install_ast_grep: &dyn Fn(&Path) -> Result<ast_grep_install::Outcome>,
+) -> Result<Manifest> {
+    let prepared = prepare(t.entry, plan, project, prior);
+    let installed = install_with(t, prepared, out, install_ast_grep)?;
     consent_to_lanes(
         installed.lanes(),
         &installed.manifest,
@@ -121,7 +150,7 @@ pub(super) fn apply(
         ask.input,
         out,
     )?;
-    commit(t, plan, installed, manifest_path, out)
+    commit(t, plan, installed, out)
 }
 
 /// Phase 3: the serena profile entry, its grants and exec lanes, then the
@@ -130,10 +159,14 @@ pub(super) fn commit(
     t: &Target<'_>,
     plan: &plan::Plan,
     installed: Installed<'_>,
-    manifest_path: &Path,
     out: &mut dyn Write,
 ) -> Result<Manifest> {
-    let Target { agent, entry, .. } = *t;
+    let Target {
+        agent,
+        entry,
+        manifest_path,
+        ..
+    } = *t;
     let Installed {
         manifest: mut m,
         serena,
