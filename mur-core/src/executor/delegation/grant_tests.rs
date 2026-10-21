@@ -450,3 +450,61 @@ async fn deny_on_the_turn_worktree_still_blocks() {
         .unwrap();
     assert_eq!(out[0].1, GrantOutcome::AlreadyAllowed);
 }
+
+/// #2004: a process that cannot write the member's profile (an agent-sealed
+/// `mur` child; here a read-only agent dir) is never asked to approve a grant
+/// it cannot apply, gets a fix line, and does not stop the other members.
+#[cfg(unix)]
+#[tokio::test]
+async fn unwritable_profile_blocks_before_asking_and_keeps_going() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("ro", &[]);
+    let agent_w = f.home().join("agents/w");
+    std::fs::create_dir_all(&agent_w).unwrap();
+    std::fs::write(agent_w.join("profile.yaml"), profile_yaml("w", &[])).unwrap();
+    let ro_dir = f.home().join("agents/ro");
+    std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(ro_dir.join("probe"), b"").is_ok() {
+        // Running as root: permissions are not enforced; nothing to test.
+        std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let project = f.project.clone();
+    let targets = targets_for(["ro", "w"], &project, false);
+    let out = ensure_write_grants(&f.ctx(Unanswered::Defer, false), &targets)
+        .await
+        .unwrap();
+    std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(out.len(), 2, "the second member is still evaluated");
+    assert!(
+        matches!(
+            out[0].1,
+            GrantOutcome::Blocked(BlockReason::NeedsHostGrant(_))
+        ),
+        "{:?}",
+        out[0].1
+    );
+    assert!(
+        matches!(
+            out[1].1,
+            GrantOutcome::Blocked(BlockReason::Deferred { .. })
+        ),
+        "{:?}",
+        out[1].1
+    );
+    let asked: Vec<_> = f
+        .requests()
+        .into_iter()
+        .map(|r| {
+            r.tool_input["member"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(asked, vec!["w".to_string()], "no approval asked for `ro`");
+    let msg = block_message(&out, &f.channel_id).unwrap();
+    assert!(msg.contains("mur agent perm allow-write ro"), "{msg}");
+}
