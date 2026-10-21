@@ -268,3 +268,61 @@ fn turn_hint_still_yields_to_usage_when_crowded() {
     assert!(row.contains("ctx "), "{row}");
     assert!(!row.contains(REVIEW_FOOTER_HINT), "{row}");
 }
+
+/// At 80 columns the badges, channel chip and review label alone outrun the
+/// row; they give way to the gate's keys, not the other way round.
+#[test]
+fn send_gate_keys_survive_a_narrow_crowded_status_bar() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    app.review.as_mut().unwrap().awaiting = Some(Awaiting::Confirm {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 80);
+
+    assert!(row.contains(REVIEW_FOOTER_GATE), "{row}");
+    // `TestBackend` quotes each row.
+    assert!(
+        row.starts_with("\" a "),
+        "the agent badge still leads: {row}"
+    );
+}
+
+/// The ruling prompt is the longest; it must survive 80 columns as well.
+#[test]
+fn ruling_keys_survive_a_narrow_crowded_status_bar() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    app.review.as_mut().unwrap().awaiting = Some(Awaiting::Ruling {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 80);
+
+    assert!(row.contains(REVIEW_FOOTER_RULING), "{row}");
+}
+
+/// A review name long enough to fill the row by itself is cut short (and
+/// says so with `…`) rather than pushing the keys off the edge.
+#[test]
+fn prompt_keys_survive_a_long_review_name() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app, tmp.path(), &[sent()]);
+    let s = app.review.as_mut().unwrap();
+    s.name = format!("review-{}", "x".repeat(160));
+    s.awaiting = Some(Awaiting::Confirm {
+        open: Default::default(),
+        reply: std::sync::mpsc::sync_channel(1).0,
+    });
+
+    let row = crowded_footer(&mut app, 140);
+
+    assert!(row.contains(REVIEW_FOOTER_GATE), "{row}");
+    assert!(row.contains('…'), "the cut label is marked: {row}");
+}
