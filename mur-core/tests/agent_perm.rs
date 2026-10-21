@@ -343,3 +343,40 @@ fn allow_write_refuses_the_launch_chain_and_overbroad_roots() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// #2044: a profile reverted by hand matches the pin again, so `reseal` has
+/// nothing to pin — but it must still drop the refusal marker, or the service
+/// manager never starts the agent again.
+#[test]
+fn reseal_clears_refusal_marker_when_pin_already_matches() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_r");
+    let first = run(mur_home.path(), &["agent", "perm", "reseal", "agent_r"]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let agent_home = mur_home.path().join("agents/agent_r");
+    let refusal = mur_common::start_refusal::StartRefusal::from_line(
+        "error[entitlements_unpinned]: changed",
+        1,
+    );
+    mur_common::start_refusal::write(&agent_home, &refusal).unwrap();
+
+    let out = run(mur_home.path(), &["agent", "perm", "reseal", "agent_r"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body = String::from_utf8(out.stdout).unwrap();
+    assert!(body.contains("nothing to reseal"), "{body}");
+    assert!(body.contains("Cleared the start refusal"), "{body}");
+    assert!(
+        mur_common::start_refusal::read(&agent_home).is_none(),
+        "marker must be gone: {body}"
+    );
+}

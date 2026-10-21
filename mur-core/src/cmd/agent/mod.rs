@@ -118,6 +118,9 @@ pub use perm::{
     cmd_perm_set_tool, cmd_perm_show, grant_read, grant_spawn, grant_spawn_dir,
 };
 pub(crate) use perm::{reject_ungrantable_path, warn_if_running};
+// Only `cli::perm_hint_tests` (bin crate) reads it.
+#[allow(unused_imports)]
+pub(crate) use perm::reseal_summary;
 #[allow(unused_imports)]
 pub(crate) use prompt::prompt_path_for;
 #[allow(unused_imports)]

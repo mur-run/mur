@@ -72,7 +72,7 @@ pub(crate) fn cmd_agent_rollback(name: &str, to: u32) -> Result<()> {
 /// What `mur agent rollback` tells the user: the new revision, any changed
 /// entitlement keys (a rollback can widen them), and a reseal hint when the
 /// pin was left behind so the agent would refuse to start.
-fn rollback_summary(
+pub(crate) fn rollback_summary(
     name: &str,
     to: u32,
     out: &crate::store::versioned::agent::RollbackOutcome,
@@ -84,7 +84,7 @@ fn rollback_summary(
     )];
     if !out.changed_entitlements.is_empty() {
         lines.push(format!(
-            "Entitlements changed: {}. Review with `mur agent perm {name}`.",
+            "Entitlements changed: {}. Review with `mur agent perm show {name}`.",
             out.changed_entitlements.join(", ")
         ));
     }

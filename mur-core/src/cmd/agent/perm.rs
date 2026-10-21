@@ -167,28 +167,70 @@ pub fn cmd_perm_set_limit(name: &str, key: &str, value: u64) -> Result<()> {
 pub fn cmd_perm_reseal(name: &str) -> Result<()> {
     use mur_common::entitlements_pin::{self, PinCheck};
     let mur_home = resolve_mur_home()?;
-    let path = mur_home.join("agents").join(name).join("profile.yaml");
+    let agent_home = mur_home.join("agents").join(name);
+    let path = agent_home.join("profile.yaml");
     let yaml = fs::read_to_string(&path).map_err(|_| anyhow!("agent '{name}' not found"))?;
     let ent = entitlements_pin::entitlements_from_yaml(&yaml, &path)?;
-    match entitlements_pin::check(&mur_home, name, &ent) {
-        Ok(PinCheck::Match) => {
-            println!("{name}: entitlements already match the pin; nothing to reseal");
-            return Ok(());
-        }
+    let matched = match entitlements_pin::check(&mur_home, name, &ent) {
+        Ok(PinCheck::Match) => true,
         Ok(PinCheck::Mismatch { changed }) => {
             println!(
                 "{name}: accepting changed entitlements: {}",
                 changed.join(", ")
             );
+            false
         }
-        Ok(PinCheck::Missing) | Err(_) => println!("{name}: pinning current entitlements"),
+        Ok(PinCheck::Missing) | Err(_) => {
+            println!("{name}: pinning current entitlements");
+            false
+        }
+    };
+    if !matched {
+        entitlements_pin::write_pin(&mur_home, name, &ent)?;
     }
-    entitlements_pin::write_pin(&mur_home, name, &ent)?;
-    // The refusal this resolves: drop its marker so the service manager
-    // brings the agent back (#2015).
-    mur_common::start_refusal::clear(&mur_home.join("agents").join(name));
-    println!("Resealed. Review with `mur agent perm {name}`; restart the agent to apply.");
+    // Drop the refusal marker on every path, including Match: a profile
+    // reverted by hand matches the pin again, but the marker it left keeps
+    // the service manager from ever starting the agent (#2015, #2044).
+    let cleared = mur_common::start_refusal::clear(&agent_home);
+    let has_service = super::service::installed_service(name).is_some();
+    for line in reseal_summary(name, matched, cleared, has_service) {
+        println!("{line}");
+    }
     Ok(())
+}
+
+/// What `reseal` tells the user after the pin is settled. Every backticked
+/// `mur ...` here must parse — `cli::perm_hint_tests` holds it to that (#2045).
+pub(crate) fn reseal_summary(
+    name: &str,
+    matched: bool,
+    cleared: bool,
+    has_service: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if matched {
+        lines.push(format!(
+            "{name}: entitlements already match the pin; nothing to reseal"
+        ));
+    } else {
+        lines.push(format!(
+            "Resealed. Review with `mur agent perm show {name}`."
+        ));
+    }
+    match (cleared, has_service) {
+        (true, true) => lines.push(
+            "Cleared the start refusal; the service manager starts the agent on its own."
+                .to_string(),
+        ),
+        (true, false) => lines.push(format!(
+            "Cleared the start refusal; start it with `mur agent start {name}`."
+        )),
+        (false, _) if !matched => lines.push(format!(
+            "If it is running, apply with `mur agent restart {name}`."
+        )),
+        (false, _) => {}
+    }
+    lines
 }
 
 #[cfg(test)]

@@ -795,6 +795,10 @@ mod tests {
 mod serena_hint_tests;
 
 #[cfg(test)]
+#[path = "perm_hint_tests.rs"]
+mod perm_hint_tests;
+
+#[cfg(test)]
 #[path = "code_nav_tests.rs"]
 mod code_nav_tests;
 
