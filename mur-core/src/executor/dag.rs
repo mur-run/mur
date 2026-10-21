@@ -13,12 +13,15 @@
 mod graph;
 mod run;
 mod step;
+mod stop;
 
 use crate::channel_writer::ROUTER_AGENT;
 pub(crate) use graph::validate_steps;
 use graph::*;
 pub use run::*;
 use step::*;
+pub use stop::StopSignal;
+use stop::*;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -153,6 +156,11 @@ pub struct DagExecOptions<'a> {
     /// it MUST be cheap and MUST NOT panic. Purely observational — never
     /// affects control flow. `None` = zero behavior change.
     pub on_step: Option<std::sync::Arc<dyn Fn(StepEvent) + Send + Sync>>,
+    /// The launching scope's kill-switch (#2036). Polled at every step
+    /// boundary and, while a delegated member turn is in flight, every
+    /// second — a trip cancels the member's task and ends the run
+    /// `Stopped`. `None` = nothing can stop the run from outside.
+    pub stop: Option<StopSignal>,
 }
 
 impl DagExecOptions<'_> {
@@ -184,18 +192,21 @@ impl<'a> Default for DagExecOptions<'a> {
             deadline_at: None,
             needs: Vec::new(),
             on_step: None,
+            stop: None,
         }
     }
 }
 
 /// How a DAG run ended. `Blocked` is deliberately not a failure: nothing went
 /// wrong, the run simply reached an action that needs a human and stopped
-/// there. It is also not terminal — an approval resumes it.
+/// there. It is also not terminal — an approval resumes it. `Stopped` is the
+/// operator's kill-switch: neither done nor a failure of the work.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum RunOutcome {
     Done,
     Failed,
     Blocked,
+    Stopped,
 }
 
 /// Step-lifecycle event kind for `DagExecOptions.on_step`.
@@ -209,6 +220,9 @@ pub enum StepEventKind {
     /// Reported success without doing its work: a `delegate_to` step run
     /// without a channel prints its description and calls no member (#1613).
     Skipped,
+    /// Halted by the kill-switch (#2036): never started, or its member turn
+    /// was cancelled mid-flight. Not a failure of the work.
+    Stopped,
 }
 
 /// The default policy when the caller did not state one: nothing can answer an
@@ -286,6 +300,7 @@ fn apply_step_event(record: &mut crate::run_status::RunState, event: &StepEvent)
         StepEventKind::Done => (crate::run_status::State::Done, None, Some(now)),
         StepEventKind::Failed => (crate::run_status::State::Failed, None, Some(now)),
         StepEventKind::Skipped => (crate::run_status::State::Skipped, None, Some(now)),
+        StepEventKind::Stopped => (crate::run_status::State::Stopped, None, Some(now)),
         // Not ended: a blocked step is expected to run once approved, so it
         // keeps no end stamp (`mur job status` shows it as still outstanding).
         StepEventKind::Blocked => (crate::run_status::State::Blocked, None, None),
@@ -493,10 +508,14 @@ fn delegate_result(
         failed_step: (!landed).then(|| step_description.to_string()),
         success: landed,
         blocked: false,
+        stopped: false,
         // Real tokens the specialist's turn consumed, from Task.usage.
         tokens_used: extract_usage_tokens(task),
     }
 }
+#[cfg(test)]
+#[path = "dag/stop_tests.rs"]
+mod stop_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

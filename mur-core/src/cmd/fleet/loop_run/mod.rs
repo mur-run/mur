@@ -549,4 +549,6 @@ pub async fn cmd_fleet_run_loop(
 }
 
 #[cfg(test)]
+mod stop_tests;
+#[cfg(test)]
 mod tests;

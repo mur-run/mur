@@ -27,6 +27,9 @@ pub enum PipelineStatus {
     Success,
     Failed,
     Skipped,
+    /// Halted by the launching scope's kill-switch (`mur fleet stop`, #2036)
+    /// before the work finished. Neither a success nor a failure of the work.
+    Stopped,
 }
 
 /// Output produced by a single pipeline stage.
