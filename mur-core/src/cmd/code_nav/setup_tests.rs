@@ -302,6 +302,49 @@ mod success {
         assert!(other.join("serena_config.yml").is_file());
         assert_ne!(own, other);
     }
+
+    /// #2016 §3, normative: declining the exec-lane ask leaves serena's
+    /// files on disk, but no serena entry, no lane grant and no manifest
+    /// record. (ast-grep is off here; its wiring is not under test.)
+    #[test]
+    #[ignore = "needs a pinned serena install for its templates (MUR_SERENA_INSTALL_DIR)"]
+    fn declining_the_lanes_leaves_files_but_records_nothing() {
+        let real = PathBuf::from(
+            std::env::var_os("MUR_SERENA_INSTALL_DIR").expect("MUR_SERENA_INSTALL_DIR"),
+        );
+        let mut h = home_with_servers(&[]);
+        install_fake_serena(&mut h, &real);
+        let profile = h.mur_home.join("agents/carol/profile.yaml");
+        let before = std::fs::read(&profile).unwrap();
+
+        let mut a = args(&h, "repo-b");
+        a.flags.no_ast_grep = true;
+        a.flags.lsp = vec!["lua".into()];
+        let mut out = Vec::new();
+        // `yes` to the plan, then `no` to the lanes found after install.
+        let r = run(a, Consent::Ask, &mut "yes\nno\n".as_bytes(), &mut out);
+
+        let out = String::from_utf8(out).unwrap();
+        let err = format!("{:#}", r.expect_err("declined lanes fail the run"));
+        assert!(err.contains("exec lanes not approved"), "{err}\n{out}");
+        let own = h.mur_home.join("agents/carol/serena-homes/repo-b");
+        let repo = std::fs::canonicalize(&h.repo).unwrap();
+        let pfile = own
+            .join("projects")
+            .join(repo.file_name().unwrap())
+            .join("project.yml");
+        assert!(own.join("serena_config.yml").is_file(), "config: {out}");
+        assert!(pfile.is_file(), "project.yml: {out}");
+        assert_eq!(
+            std::fs::read(&profile).unwrap(),
+            before,
+            "no entry and no grant reach the profile"
+        );
+        assert!(
+            !consent::manifest_path(&h.mur_home, "carol").exists(),
+            "no manifest record"
+        );
+    }
 }
 
 /// #1984: the ast-grep-only run (no serena) wires the agent: MUR's server
