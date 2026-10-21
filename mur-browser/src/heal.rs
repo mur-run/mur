@@ -552,6 +552,22 @@ mod tests {
         );
     }
 
+    // The anchor is the first Role anywhere in the list, so a bare generic
+    // ranked last still anchors the heal; the write-back uses the new order.
+    #[test]
+    fn heal_anchors_on_generic_ranked_last() {
+        let step = step("Open the card", &["text:hello", "role:generic"]);
+        let snap = parse_snapshot(
+            r#"
+- generic [ref=e1]: hello world
+- button "Close" [ref=e2]
+"#,
+        );
+        let hit = find_heal(&step, &snap).expect("generic anchor should heal onto e1");
+        assert_eq!(hit.reference, "e1");
+        assert_eq!(hit.to, vec!["text:hello world", "role:generic"]);
+    }
+
     #[test]
     fn heal_new_locators_never_carry_a_ref() {
         let step = step("Search the docs", &["role:searchbox[name=\"Search\"]"]);
