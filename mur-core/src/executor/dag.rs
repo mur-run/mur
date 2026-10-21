@@ -514,6 +514,9 @@ fn delegate_result(
     }
 }
 #[cfg(test)]
+#[path = "dag/rerun_delegation_tests.rs"]
+mod rerun_delegation_tests;
+#[cfg(test)]
 #[path = "dag/stop_tests.rs"]
 mod stop_tests;
 #[cfg(test)]

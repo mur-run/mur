@@ -282,8 +282,24 @@ pub(super) async fn execute_step(
         let start = std::time::Instant::now();
         let canonical = crate::a2a_dial::canonicalize_agent_name(mur_home, target);
         let child_task_id = format!("ct-{}", uuid::Uuid::now_v7());
-        let deleg_key = idem_key(cid, &opts.run_id, &sid, &key("delegate"));
-        let reply_key = idem_key(cid, &opts.run_id, &sid, &key("reply"));
+        // Each dispatch gets its own delegate/reply keys, discriminated by the
+        // fresh child task id. `(run_id, step_id, attempt)` alone repeats when a
+        // step is dispatched again under the same run (crash-rerun / resume of a
+        // step with no recorded ToolResult): the dedup-aware writer would drop
+        // the new Delegation and the specialist's new reply. The `result` key
+        // stays deterministic so the resume cursor above still finds it.
+        let deleg_key = idem_key(
+            cid,
+            &opts.run_id,
+            &sid,
+            &format!("{}#{child_task_id}", key("delegate")),
+        );
+        let reply_key = idem_key(
+            cid,
+            &opts.run_id,
+            &sid,
+            &format!("{}#{child_task_id}", key("reply")),
+        );
 
         // Sub-goal text: explicit intent, else the step description.
         let goal_text = step
