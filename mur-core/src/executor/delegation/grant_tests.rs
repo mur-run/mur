@@ -344,3 +344,47 @@ fn yaml_path_round_trips_windows_and_quoted_paths() {
         assert_eq!(v["p"], raw);
     }
 }
+
+/// #2003: two turns' worktrees under `<main>/.worktrees/` key their grant on
+/// the main checkout, so turn N's approval matches turn N+1's request. A
+/// linked worktree outside `.worktrees/` is the user's own and stays put.
+#[test]
+fn turn_worktrees_grant_the_main_checkout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("proj");
+    std::fs::create_dir_all(&main).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    if !git(&main, &["init", "-q"]) {
+        eprintln!("skipping: git unavailable");
+        return;
+    }
+    assert!(git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]));
+    for name in ["turn-a", "turn-b"] {
+        let wt = format!(".worktrees/{name}");
+        assert!(git(&main, &["worktree", "add", "-q", "--detach", &wt]));
+    }
+    let own = tmp.path().join("own-wt");
+    assert!(git(
+        &main,
+        &["worktree", "add", "-q", "--detach", own.to_str().unwrap()]
+    ));
+
+    let main_canon = main.canonicalize().unwrap();
+    let a = targets_for(["w"], &main.join(".worktrees/turn-a"), false);
+    let b = targets_for(["w"], &main.join(".worktrees/turn-b"), false);
+    assert_eq!(a[0].dir, main_canon);
+    assert_eq!(a, b, "same grant target across turns");
+    assert_eq!(targets_for(["w"], &main, false)[0].dir, main_canon);
+    assert_eq!(
+        targets_for(["w"], &own, false)[0].dir,
+        own.canonicalize().unwrap()
+    );
+}

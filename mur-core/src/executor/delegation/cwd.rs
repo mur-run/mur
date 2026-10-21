@@ -83,6 +83,32 @@ pub fn routing_target(work_dir: &Path) -> PathBuf {
     discover_repo_root(work_dir).unwrap_or_else(|_| work_dir.to_path_buf())
 }
 
+/// The durable directory a write grant is keyed on (#2003). A MUR track —
+/// a per-turn or fleet worktree at `<main>/.worktrees/<name>` — is throwaway:
+/// its path changes every turn, so a grant (and its approval's action hash)
+/// bound to it is never reused and leaves a dead entry in the profile. Such a
+/// path maps to the main checkout, whose grant also covers every track under
+/// it. Anything else is returned unchanged.
+pub fn grant_root(dir: &Path) -> PathBuf {
+    main_checkout_of_track(dir).unwrap_or_else(|| dir.to_path_buf())
+}
+
+fn main_checkout_of_track(dir: &Path) -> Option<PathBuf> {
+    let out = mur_common::repo_walk::bound_git(&mut std::process::Command::new("git"))
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let common = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let main = std::fs::canonicalize(common.parent()?).ok()?;
+    let dir = std::fs::canonicalize(dir).ok()?;
+    dir.starts_with(main.join(mur_track::turn::WORKTREES_DIR))
+        .then_some(main)
+}
+
 /// The line appended to a delegated prompt telling the member where the work
 /// is. Repo root when `work_dir` is inside a git checkout, the directory
 /// itself otherwise — a member with no idea which tree to touch is how a build

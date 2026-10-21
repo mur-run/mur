@@ -96,13 +96,16 @@ pub struct GrantContext<'a> {
 }
 
 /// Build the unique target list for a fan-out: one entry per member, all
-/// routed to `dir`. `members` may repeat (N jobs to one member).
+/// routed to `dir`. `members` may repeat (N jobs to one member). A MUR track
+/// (`<main>/.worktrees/<name>`) is keyed on its main checkout so an approval
+/// survives the next turn's fresh worktree (#2003).
 pub fn targets_for<'m>(
     members: impl IntoIterator<Item = &'m str>,
     dir: &Path,
     inferred: bool,
 ) -> Vec<DelegationTarget> {
-    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dir = super::cwd::grant_root(dir);
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
     let mut seen = HashSet::new();
     members
         .into_iter()
