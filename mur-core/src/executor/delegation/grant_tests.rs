@@ -323,6 +323,7 @@ fn prompt_combines_inferred_and_grant_in_one_gate() {
     let t = DelegationTarget {
         member: "w".into(),
         dir: "/tmp/p".into(),
+        route: "/tmp/p".into(),
         inferred: true,
     };
     let s = prompt(&t, false, true, 2);
@@ -381,10 +382,71 @@ fn turn_worktrees_grant_the_main_checkout() {
     let a = targets_for(["w"], &main.join(".worktrees/turn-a"), false);
     let b = targets_for(["w"], &main.join(".worktrees/turn-b"), false);
     assert_eq!(a[0].dir, main_canon);
-    assert_eq!(a, b, "same grant target across turns");
+    assert_eq!(a[0].dir, b[0].dir, "same grant root across turns");
+    assert_ne!(
+        a[0].route, b[0].route,
+        "each turn still routes to its own track"
+    );
     assert_eq!(targets_for(["w"], &main, false)[0].dir, main_canon);
     assert_eq!(
         targets_for(["w"], &own, false)[0].dir,
         own.canonicalize().unwrap()
     );
+}
+
+/// PR #2046 review: the grant is keyed on the main checkout, but deny is
+/// judged on the track the member is really sent to. A main-checkout write
+/// grant must not wave through a turn worktree under a denied `.worktrees`.
+#[tokio::test]
+async fn deny_on_the_turn_worktree_still_blocks() {
+    let f = Fixture::new("w", &[]);
+    let main = f.project.clone();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&main)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    if !git(&["init", "-q"]) {
+        eprintln!("skipping: git unavailable");
+        return;
+    }
+    assert!(git(&["commit", "-q", "--allow-empty", "-m", "init"]));
+    assert!(git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        ".worktrees/turn-a"
+    ]));
+    let turn = main.join(".worktrees/turn-a");
+
+    let yaml = profile_yaml("w", &[&main]).replace(
+        "deny: []",
+        &format!("deny: [{}]", yaml_path(&main.join(".worktrees"))),
+    );
+    std::fs::write(f.home().join("agents/w/profile.yaml"), yaml).unwrap();
+
+    let targets = targets_for(["w"], &turn, false);
+    assert_eq!(targets[0].dir, main.canonicalize().unwrap(), "grant root");
+    assert_eq!(targets[0].route, turn.canonicalize().unwrap(), "route");
+    let out = ensure_write_grants(&f.ctx(Unanswered::Defer, false), &targets)
+        .await
+        .unwrap();
+    assert_eq!(out[0].1, GrantOutcome::Blocked(BlockReason::Denied));
+    assert!(f.requests().is_empty(), "deny is final: no offer");
+
+    // Without the deny, the main-checkout grant covers the turn silently.
+    std::fs::write(
+        f.home().join("agents/w/profile.yaml"),
+        profile_yaml("w", &[&main]),
+    )
+    .unwrap();
+    let out = ensure_write_grants(&f.ctx(Unanswered::Defer, false), &targets)
+        .await
+        .unwrap();
+    assert_eq!(out[0].1, GrantOutcome::AlreadyAllowed);
 }

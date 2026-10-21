@@ -36,8 +36,13 @@ use crate::hitl::gate::{ActionRequest, GatePolicy, gate};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DelegationTarget {
     pub member: String,
-    /// Canonical.
+    /// Canonical grant root: what is approved, hashed, and written to the
+    /// profile. For a MUR track this is its main checkout (#2003).
     pub dir: PathBuf,
+    /// Canonical directory the member is actually dispatched to. Existence
+    /// and `deny` are checked here, never on `dir`: normalizing to the grant
+    /// root must not hide a deny on the track itself.
+    pub route: PathBuf,
     /// The directory was guessed from the caller's session cwd, not stated.
     /// Always asks, even when the member may already write there (D2).
     pub inferred: bool,
@@ -104,7 +109,8 @@ pub fn targets_for<'m>(
     dir: &Path,
     inferred: bool,
 ) -> Vec<DelegationTarget> {
-    let dir = super::cwd::grant_root(dir);
+    let route = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dir = super::cwd::grant_root(&route);
     let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
     let mut seen = HashSet::new();
     members
@@ -113,6 +119,7 @@ pub fn targets_for<'m>(
         .map(|m| DelegationTarget {
             member: m.to_string(),
             dir: dir.clone(),
+            route: route.clone(),
             inferred,
         })
         .collect()
@@ -204,7 +211,9 @@ async fn ensure_one(ctx: &GrantContext<'_>, t: &DelegationTarget) -> Result<Gran
         Ok(p) => p,
         Err(e) => return Ok(Blocked(BlockReason::Profile(format!("{e:#}")))),
     };
-    let verdict = write_verdict(&profile.entitlements.filesystem, &t.dir);
+    // Judge the directory the member will really work in: a deny on the
+    // track wins even though the grant itself is keyed on the main checkout.
+    let verdict = write_verdict(&profile.entitlements.filesystem, &t.route);
     let allowed = match verdict {
         WriteVerdict::Missing => return Ok(Blocked(BlockReason::TargetMissing)),
         WriteVerdict::Denied => return Ok(Blocked(BlockReason::Denied)),
@@ -363,6 +372,7 @@ fn record(ctx: &GrantContext<'_>, t: &DelegationTarget, outcome: &GrantOutcome) 
         "kind": "delegation.write_grant",
         "member": t.member,
         "dir": t.dir,
+        "route": t.route,
         "inferred": t.inferred,
         "outcome": outcome_label,
     });
