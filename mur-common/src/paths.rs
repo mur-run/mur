@@ -36,6 +36,15 @@ pub const FLEET_STATE: &str = "fleet-state";
 /// the CLI and the runtime's `fleet_run` live-run guard, so named once here.
 pub const FLEET_PROGRESS_FILE: &str = ".run_progress.json";
 
+/// Exclusive advisory lock held for the life of a fleet run, inside
+/// [`fleet_state_dir`]. Liveness is whether the lock can be taken, never a
+/// stored pid. The holder's self-description lives in [`FLEET_RUN_OWNER_FILE`]
+/// because Windows locks are mandatory and a held file cannot be read.
+pub const FLEET_RUN_LOCK_FILE: &str = "run.lock";
+
+/// Display-only owner record (pid, start time, host) beside the run lock.
+pub const FLEET_RUN_OWNER_FILE: &str = "run.owner";
+
 /// Every directory an in-sandbox fleet run must be able to write.
 ///
 /// Add here FIRST, then use it. A directory the runner writes but this list

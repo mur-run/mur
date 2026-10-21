@@ -27,6 +27,9 @@ pub async fn run_guarded(
     goal_override: Option<String>,
     cwd: Option<RunCwd>,
 ) -> Result<(LoopStop, u32, f64)> {
+    // One live run per fleet, taken before any admission check and held (via
+    // the guard) until this function returns or the process dies.
+    let _run_lock = run_lock::acquire(mur_home, name)?;
     let mut fleet = store::load_fleet(mur_home, name)?;
     if let Some(goal) = goal_override {
         fleet.goal = goal;
