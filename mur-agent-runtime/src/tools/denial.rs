@@ -385,7 +385,7 @@ pub(super) fn spawn_denied_hint(bin: &str, agent: &str, routes: &ExecRoutes) -> 
             .collect();
         format!(
             "DELEGATE it instead of asking the user: \
-             fleet_run(fleet={}, goal=<this exact command, with absolute paths>). \
+             fleet_run(fleet={}, job=<this exact command, with absolute paths>). \
              Best first: {}.",
             format_args!("\"{}\"", routes.ready[0].name),
             named.join(", ")
@@ -645,6 +645,10 @@ mod tests {
         };
         let h = spawn_denied_hint("/Users/d/.cargo/bin/cargo", "mur", &routes);
         assert!(h.contains("fleet_run(fleet=\"builder\""), "{h}");
+        assert!(
+            h.contains(", job=<this exact command"),
+            "one-shot, not a loop: {h}"
+        );
         assert!(h.contains("via rustsmith"), "{h}");
         assert!(h.contains("mur agent perm allow-spawn mur cargo"), "{h}");
         assert!(!h.contains("secret-powerful"), "blocked fleet leaked: {h}");

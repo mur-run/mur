@@ -371,7 +371,10 @@ async fn fleet_run_passes_session_cwd_on_argv_not_process_cwd() {
         .await
         .unwrap();
     let argv = argv_of(&argv_log).await;
-    assert!(argv.starts_with("fleet run coder build it"), "{argv}");
+    assert!(
+        argv.starts_with("fleet run coder --loop --goal=build it"),
+        "{argv}"
+    );
     assert!(
         argv.contains(&format!("--cwd {} --cwd-inferred", project.display())),
         "{argv}"
@@ -430,4 +433,65 @@ async fn fleet_run_rejects_relative_cwd() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("absolute"), "{err}");
+}
+
+/// `goal` overrides the run's goal (loop + `--goal=`), `job` is one-shot,
+/// both together queue the job and loop toward the goal; nothing → plain
+/// loop on the standing goal. deep-research keeps its own verb.
+#[test]
+fn child_args_maps_goal_and_job() {
+    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        child_args("coder", Some("ship it"), None),
+        v(&["fleet", "run", "coder", "--loop", "--goal=ship it"])
+    );
+    assert_eq!(
+        child_args("coder", None, Some("fix #1")),
+        v(&["fleet", "run", "coder", "fix #1"])
+    );
+    assert_eq!(
+        child_args("coder", Some("ship it"), Some("fix #1")),
+        v(&[
+            "fleet",
+            "run",
+            "coder",
+            "fix #1",
+            "--loop",
+            "--goal=ship it"
+        ])
+    );
+    assert_eq!(
+        child_args("coder", None, None),
+        v(&["fleet", "run", "coder", "--loop"])
+    );
+    // A goal that looks like a flag stays one value.
+    assert_eq!(
+        child_args("coder", Some("--yes"), None),
+        v(&["fleet", "run", "coder", "--loop", "--goal=--yes"])
+    );
+    assert_eq!(
+        child_args(DEEP_RESEARCH, Some("why"), None),
+        v(&[DEEP_RESEARCH, "why"])
+    );
+}
+
+#[tokio::test]
+async fn deep_research_refuses_a_job() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(
+        tmp.path(),
+        "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
+    );
+    let tool = FleetRunTool {
+        mur_home: tmp.path().to_path_buf(),
+        agent_name: "mur".into(),
+        signing: None,
+        key_version: 0,
+        session_cwd: None,
+    };
+    let err = tool
+        .execute(serde_json::json!({"fleet": "deep-research", "job": "x"}))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("`goal`"), "{err}");
 }

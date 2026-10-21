@@ -797,3 +797,7 @@ mod serena_hint_tests;
 #[cfg(test)]
 #[path = "code_nav_tests.rs"]
 mod code_nav_tests;
+
+#[cfg(test)]
+#[path = "fleet_goal_tests.rs"]
+mod fleet_goal_tests;

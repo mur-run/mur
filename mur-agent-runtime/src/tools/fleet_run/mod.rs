@@ -73,8 +73,10 @@ impl ToolExecutor for FleetRunTool {
 {run_id, status: dispatched}. Poll mur_job_status <run_id> (or mur fleet status <fleet>) \
 for progress; the result lands in the fleet's channel, not in this reply. `mur fleet jobs \
 <fleet> --since <run_id>` scopes the job list to just this dispatch — without --since, \
-counts include every job already in the fleet's queue, not only this run's. For the \
-deep-research fleet pass the research question as `goal`. Only fleets allowlisted in the \
+counts include every job already in the fleet's queue, not only this run's. `goal` is this \
+run's goal in place of the fleet's standing one (the run loops toward it; fleet.yaml is not \
+changed); `job` is one task run once. For the deep-research fleet pass the research question \
+as `goal`. Only fleets allowlisted in the \
 user's config can be run; the run is bounded by the fleet's limits (deadline / stuck / \
 cost_usd) and by `mur fleet stop`."
                 .into(),
@@ -87,7 +89,11 @@ cost_usd) and by `mur fleet stop`."
                     },
                     "goal": {
                         "type": "string",
-                        "description": "Research question / job text. For deep-research this becomes the research goal; for other fleets it runs as a one-shot job."
+                        "description": "This run's goal, used in place of the fleet's standing goal for this run only (fleet.yaml is not changed). The fleet loops until the router converges on it or a limit trips. For deep-research: the research question."
+                    },
+                    "job": {
+                        "type": "string",
+                        "description": "One task to run once, ahead of the fleet's queue. With `goal` as well, it is queued first and the loop drains it. Not for deep-research."
                     },
                     "cwd": {
                         "type": "string",
@@ -107,6 +113,10 @@ cost_usd) and by `mur fleet stop`."
             .to_string();
         let goal = input
             .get("goal")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let job = input
+            .get("job")
             .and_then(|v| v.as_str())
             .map(str::to_string);
         // Explicit target wins; otherwise the session cwd, flagged as a guess.
@@ -133,6 +143,11 @@ cost_usd) and by `mur fleet stop`."
             return Err(ToolError::InvalidInput(format!(
                 "invalid fleet name: {fleet}"
             )));
+        }
+        if fleet == DEEP_RESEARCH && job.is_some() {
+            return Err(ToolError::InvalidInput(
+                "deep-research takes its question as `goal`, not `job`".into(),
+            ));
         }
 
         // Deny-by-default authorization gate (re-checked here even though
@@ -200,11 +215,7 @@ cost_usd) and by `mur fleet stop`."
         // what the caller polls. One path segment under ~/.mur/runs/.
         let run_id = format!("fleet-{fleet}-{}", uuid::Uuid::now_v7());
         // Argv only — never a shell — so goal text cannot inject.
-        let mut args: Vec<String> = match (&fleet[..], &goal) {
-            (DEEP_RESEARCH, Some(g)) => vec![DEEP_RESEARCH.into(), g.clone()],
-            (_, Some(g)) => vec!["fleet".into(), "run".into(), fleet.clone(), g.clone()],
-            (_, None) => vec!["fleet".into(), "run".into(), fleet.clone(), "--loop".into()],
-        };
+        let mut args = child_args(&fleet, goal.as_deref(), job.as_deref());
         args.push("--run-id".into());
         args.push(run_id.clone());
         // `mur deep-research` has no `--cwd`: research has no target tree.
@@ -298,6 +309,31 @@ cost_usd) and by `mur fleet stop`."
         }
         Ok(reply.to_string().into())
     }
+}
+
+/// The `mur` argv for one dispatch (before `--run-id` / `--cwd`).
+///
+/// `goal` rides as `--goal=<text>` — one token, so text starting with `-`
+/// cannot be read as a flag — and is a run-scoped override: `fleet.yaml`'s
+/// standing goal is left alone. `job` alone is a one-shot run; with `goal`
+/// it is queued first and the loop drains it.
+fn child_args(fleet: &str, goal: Option<&str>, job: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = match (fleet, goal) {
+        (DEEP_RESEARCH, Some(g)) => return vec![DEEP_RESEARCH.into(), g.into()],
+        _ => vec!["fleet".into(), "run".into(), fleet.into()],
+    };
+    if let Some(j) = job {
+        args.push(j.into());
+    }
+    match (goal, job) {
+        (Some(g), _) => {
+            args.push("--loop".into());
+            args.push(format!("--goal={g}"));
+        }
+        (None, None) => args.push("--loop".into()),
+        (None, Some(_)) => {}
+    }
+    args
 }
 
 #[cfg(test)]
