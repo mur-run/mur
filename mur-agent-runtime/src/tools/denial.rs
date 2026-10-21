@@ -645,7 +645,10 @@ mod tests {
         };
         let h = spawn_denied_hint("/Users/d/.cargo/bin/cargo", "mur", &routes);
         assert!(h.contains("fleet_run(fleet=\"builder\""), "{h}");
-        assert!(h.contains(", job=<this exact command"), "one-shot, not a loop: {h}");
+        assert!(
+            h.contains(", job=<this exact command"),
+            "one-shot, not a loop: {h}"
+        );
         assert!(h.contains("via rustsmith"), "{h}");
         assert!(h.contains("mur agent perm allow-spawn mur cargo"), "{h}");
         assert!(!h.contains("secret-powerful"), "blocked fleet leaked: {h}");
