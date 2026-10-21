@@ -49,6 +49,11 @@ pub struct StepOutcome {
     pub locator_used: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Something suspect about the step, whatever its status. Today only an
+    /// ambiguous target: the locator replay used matched several snapshot
+    /// nodes and replay acted on the first. Never changes status or verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,7 +104,8 @@ impl ReplayReport {
         }
     }
 
-    /// Summary for the CLI: one line, plus a heal breakdown when any healed.
+    /// Summary for the CLI: one line, plus a heal breakdown when any healed
+    /// and a `warning:` line per step that carries a warning.
     pub fn summary(&self) -> String {
         let mut out = format!(
             "{} {}: {}/{} passed, {} failed, {} healed",
@@ -119,6 +125,11 @@ impl ReplayReport {
                 count(HealStatus::Unverified),
                 self.written_back
             ));
+        }
+        for outcome in &self.steps {
+            if let Some(warning) = &outcome.warning {
+                out.push_str(&format!("\nwarning: step {} — {warning}", outcome.step));
+            }
         }
         out
     }
@@ -158,6 +169,7 @@ pub fn dry_run(run: &Run, allow: &[String]) -> Result<ReplayReport> {
             status: StepStatus::Skipped,
             locator_used: None,
             message: None,
+            warning: None,
         })
         .collect();
     Ok(ReplayReport::new(run, steps, Vec::new()))
@@ -224,7 +236,8 @@ pub async fn replay_with<C: ToolCaller + Send>(
             outcomes.push(skipped(step, None));
             continue;
         }
-        let outcome = match run_step(step, opts, caller).await {
+        let mut warning = None;
+        let mut outcome = match run_step(step, opts, caller, &mut warning).await {
             Ok(hit) => {
                 let status = if hit.heal.is_some() {
                     StepStatus::Healed
@@ -252,6 +265,7 @@ pub async fn replay_with<C: ToolCaller + Send>(
                     status,
                     locator_used: hit.locator,
                     message: None,
+                    warning: None,
                 };
                 if let Some(mut event) = hit.heal {
                     outcome.message = Some(heal_note(&event));
@@ -293,10 +307,22 @@ pub async fn replay_with<C: ToolCaller + Send>(
                         status: StepStatus::Failed,
                         locator_used: None,
                         message: Some(format!("{} — {error:#}", step.intent)),
+                        warning: None,
                     }
                 }
             }
         };
+        // Kept whatever the status: an ambiguous target matters most when the
+        // step then fails. Logged at `info` like `log_heal`: the summary is
+        // what the user reads, and the CLI's `warn` filter would print it twice.
+        if let Some(warning) = &warning {
+            tracing::info!(
+                step = outcome.step,
+                warning = warning.as_str(),
+                "browser replay warning"
+            );
+        }
+        outcome.warning = warning;
         tracing::debug!(
             step = outcome.step,
             action = ?step.action,
@@ -381,6 +407,7 @@ fn skipped(step: &Step, message: Option<String>) -> StepOutcome {
         status: StepStatus::Skipped,
         locator_used: None,
         message,
+        warning: None,
     }
 }
 
@@ -417,10 +444,14 @@ impl std::fmt::Display for StepError {
 
 /// Run one step. A `LocateMiss` on an element step is healed here when
 /// `opts.heal` is on; the healed ref is used for this call only.
+///
+/// `warning` is filled as soon as the target resolves ambiguously, before
+/// the tool call, so it is kept even when the call then fails.
 async fn run_step<C: ToolCaller + Send>(
     step: &Step,
     opts: ReplayOptions,
     caller: &mut C,
+    warning: &mut Option<String>,
 ) -> Result<Hit, StepError> {
     let (tool, mut args) = call_for(step)?;
     let mut hit = Hit {
@@ -431,9 +462,17 @@ async fn run_step<C: ToolCaller + Send>(
         let snapshot = caller.call_tool("browser_snapshot", json!({})).await?;
         let nodes = locator::parse_snapshot(&tool_text(ensure_ok("browser_snapshot", &snapshot)?));
         let reference = match resolve_target(step, &nodes) {
-            Ok((locator, reference)) => {
-                hit.locator = Some(locator);
-                reference
+            Ok(target) => {
+                // `browser_press_key` (0.0.82) takes only `{ key }`: the key
+                // goes to whatever has focus, so no element was picked.
+                if target.matches > 1 && step.action != Action::Press {
+                    *warning = Some(format!(
+                        "{} matched {} elements; replay used the first ({})",
+                        target.locator, target.matches, target.reference
+                    ));
+                }
+                hit.locator = Some(target.locator);
+                target.reference
             }
             Err(StepError::LocateMiss(miss)) if opts.heal && heal::is_element_step(step.action) => {
                 let found = heal::find_heal(step, &nodes).map_err(|declined| {
@@ -472,27 +511,44 @@ async fn run_step<C: ToolCaller + Send>(
     Ok(hit)
 }
 
-/// Resolve `locators[]` in priority order against the snapshot; returns the
-/// raw locator that hit and the `target` to send.
-fn resolve_target(
-    step: &Step,
-    nodes: &[locator::SnapshotNode],
-) -> Result<(String, String), StepError> {
+/// A resolved step target: the raw locator that hit, the `target` to send,
+/// and how many snapshot nodes that locator matches.
+struct Target {
+    locator: String,
+    reference: String,
+    /// Above 1: `reference` is the first match and may be the wrong element.
+    matches: usize,
+}
+
+/// Resolve `locators[]` in priority order against the snapshot. The first
+/// locator that hits wins even when it matches several nodes, exactly as
+/// before; the count only lets the caller warn about it.
+fn resolve_target(step: &Step, nodes: &[locator::SnapshotNode]) -> Result<Target, StepError> {
     step.locators
         .iter()
         .find_map(|raw| {
             let parsed = Locator::parse(raw).ok()?;
-            locator::resolve(&parsed, nodes).map(|r| (raw.clone(), r))
+            locator::resolve(&parsed, nodes).map(|reference| Target {
+                locator: raw.clone(),
+                reference,
+                matches: locator::match_count(&parsed, nodes),
+            })
         })
         // Real Playwright snapshots never carry data-testid, so a testid
         // cannot hit above. Only when nothing verifiable hit, hand the
         // first testid to Playwright as a selector; 0.0.82 resolves
-        // non-ref `target`s itself and errors if nothing matches.
+        // non-ref `target`s itself and errors if nothing matches. Its
+        // actions are strict, so a selector matching several elements
+        // fails the step instead of silently picking one: never ambiguous.
         .or_else(|| {
             step.locators
                 .iter()
                 .find_map(|raw| match Locator::parse(raw) {
-                    Ok(Locator::TestId(id)) => Some((raw.clone(), testid_selector(&id))),
+                    Ok(Locator::TestId(id)) => Some(Target {
+                        locator: raw.clone(),
+                        reference: testid_selector(&id),
+                        matches: 1,
+                    }),
                     _ => None,
                 })
         })
