@@ -255,7 +255,7 @@ pub fn diff(plan: &Plan, entry: &str, project: Option<&Path>, m: &Manifest) -> D
     }
 }
 
-fn tier_label(t: Tier) -> &'static str {
+pub(super) fn tier_label(t: Tier) -> &'static str {
     match t {
         Tier::Low => "low",
         Tier::MediumContained => "medium (contained)",

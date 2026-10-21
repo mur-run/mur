@@ -54,7 +54,7 @@ fn serena_legacy_home_recovery_command_parses() {
         else {
             panic!("`{cmd}` is not `code-nav setup`");
         };
-        assert_eq!(agent, "carol");
+        assert_eq!(agent.as_deref(), Some("carol"));
         assert!(with_serena);
         assert_eq!(entry, "code-nav");
         assert_eq!(project, Some(repo), "`{cmd}`");

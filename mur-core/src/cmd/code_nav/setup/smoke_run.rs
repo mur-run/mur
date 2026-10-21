@@ -11,7 +11,7 @@ use super::super::plan::Lang;
 use super::super::{serena_install, smoke, smoke_fetch};
 
 /// Servers to launch, and the ones that could not be, with why.
-pub(super) type SmokeTargets = (Vec<smoke::Target>, Vec<(Lang, String)>);
+pub(in super::super) type SmokeTargets = (Vec<smoke::Target>, Vec<(Lang, String)>);
 
 /// Why a server neither MUR nor setup's fetch provides goes unlaunched.
 const NOT_MANAGED: &str = "serena starts it from a system install setup does not manage";
@@ -19,7 +19,7 @@ const NOT_MANAGED: &str = "serena starts it from a system install setup does not
 /// What setup's smoke launch starts for `langs`: MUR's own installs, plus the
 /// servers serena fetches itself, fetched now into the entry's `serena_home`
 /// (#1993). The second list is what could not be launched, and why.
-pub(super) fn smoke_targets(
+pub(in super::super) fn smoke_targets(
     manifest: &Manifest,
     langs: &[Lang],
     mur_home: &Path,

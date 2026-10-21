@@ -27,28 +27,31 @@ use super::install::{Installed, install_with};
 use super::lanes::{Ask, consent_to_lanes};
 
 /// Whose profile and which serena entry a run applies to.
-pub(super) struct Target<'a> {
-    pub(super) mur_home: &'a Path,
-    pub(super) agent: &'a str,
-    pub(super) agent_home: &'a Path,
-    pub(super) entry: &'a str,
+pub(in super::super) struct Target<'a> {
+    pub(in super::super) mur_home: &'a Path,
+    pub(in super::super) agent: &'a str,
+    pub(in super::super) agent_home: &'a Path,
+    pub(in super::super) entry: &'a str,
     /// The agent's manifest: saved once ast-grep is wired (#2018) and at
     /// the end of [`commit`].
-    pub(super) manifest_path: &'a Path,
+    pub(in super::super) manifest_path: &'a Path,
+    /// Print the "restart required" warning after granting. The wizard
+    /// turns it off: it offers the restart itself (#2016).
+    pub(in super::super) warn_running: bool,
 }
 
 /// What [`install`] will do for one target. Built by [`prepare`].
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Prepared<'p> {
+pub(in super::super) struct Prepared<'p> {
     /// The prior manifest, with this plan's disabled lines.
-    pub(super) manifest: Manifest,
+    pub(in super::super) manifest: Manifest,
     /// The ast-grep version to install and wire, if the plan has it.
-    pub(super) ast_grep: Option<&'static str>,
-    pub(super) serena: SerenaStep<'p>,
+    pub(in super::super) ast_grep: Option<&'static str>,
+    pub(in super::super) serena: SerenaStep<'p>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum SerenaStep<'p> {
+pub(in super::super) enum SerenaStep<'p> {
     /// No `--with-serena`: ast-grep only.
     Off,
     /// The plan has serena but uv is not on PATH: say so, set nothing up.
@@ -57,18 +60,18 @@ pub(super) enum SerenaStep<'p> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct SerenaPlan<'p> {
-    pub(super) project: &'p Path,
-    pub(super) pyright: bool,
-    pub(super) intelephense: bool,
-    pub(super) typescript: bool,
-    pub(super) vue: bool,
+pub(in super::super) struct SerenaPlan<'p> {
+    pub(in super::super) project: &'p Path,
+    pub(in super::super) pyright: bool,
+    pub(in super::super) intelephense: bool,
+    pub(in super::super) typescript: bool,
+    pub(in super::super) vue: bool,
     /// What this entry's `project.yml` will list ([`entry_langs`]).
-    pub(super) langs: Vec<Lang>,
+    pub(in super::super) langs: Vec<Lang>,
 }
 
 /// Phase 1. Pure: reads only `plan` and `prior`.
-pub(super) fn prepare<'p>(
+pub(in super::super) fn prepare<'p>(
     entry: &str,
     plan: &plan::Plan,
     project: Option<&'p Path>,
@@ -111,7 +114,7 @@ pub(super) fn prepare<'p>(
 /// One target, all three phases, asking about new exec lanes in between.
 /// A failure in any phase returns before the final manifest save; only the
 /// ast-grep step, if it was reached, is already recorded (#2018).
-pub(super) fn apply(
+pub(in super::super) fn apply(
     t: &Target<'_>,
     plan: &plan::Plan,
     project: Option<&Path>,
@@ -155,7 +158,7 @@ pub(super) fn apply_with(
 
 /// Phase 3: the serena profile entry, its grants and exec lanes, then the
 /// manifest. Call only once the lanes in `installed` are consented to.
-pub(super) fn commit(
+pub(in super::super) fn commit(
     t: &Target<'_>,
     plan: &plan::Plan,
     installed: Installed<'_>,
@@ -199,7 +202,9 @@ pub(super) fn commit(
             writeln!(out, "  ✓ exec lane {}", lane.display())?;
         }
         writeln!(out, "  ✓ permissions granted")?;
-        crate::cmd::agent::warn_if_running(agent);
+        if t.warn_running {
+            crate::cmd::agent::warn_if_running(agent);
+        }
 
         m.set_languages(entry, s.langs.iter().map(|l| l.flag().to_owned()));
         m.set_project(entry, s.project);
@@ -218,7 +223,7 @@ pub(super) fn commit(
 /// with `--lsp-only` (#1992), exactly what this plan enables. Only
 /// this entry's: serena refuses to start if any listed server fails, so
 /// another project's languages must not leak in (#1943).
-pub(super) fn entry_langs(m: &Manifest, entry: &str, plan: &plan::Plan) -> Vec<Lang> {
+pub(in super::super) fn entry_langs(m: &Manifest, entry: &str, plan: &plan::Plan) -> Vec<Lang> {
     let own = m.languages_of(entry).filter(|_| !plan.exact_lsp);
     Lang::ALL
         .into_iter()

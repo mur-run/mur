@@ -21,31 +21,40 @@ use super::lanes::interpreter_lanes;
 use super::on_path;
 
 /// What [`install`] did, for the lane question and [`commit`](super::apply::commit).
-pub(super) struct Installed<'p> {
+pub(in super::super) struct Installed<'p> {
     /// The prior manifest plus this run's installs and ast-grep grants.
-    pub(super) manifest: Manifest,
+    pub(in super::super) manifest: Manifest,
     /// `None` when serena was not set up (no project, or no uv).
-    pub(super) serena: Option<SerenaInstalled<'p>>,
+    pub(in super::super) serena: Option<SerenaInstalled<'p>>,
 }
 
-pub(super) struct SerenaInstalled<'p> {
-    pub(super) project: &'p Path,
-    pub(super) record: serena_install::Record,
-    pub(super) pyright: Option<pyright_install::Record>,
-    pub(super) intelephense: Option<node_ls_install::Record>,
-    pub(super) typescript: Option<node_ls_install::Record>,
-    pub(super) vue: Option<node_ls_install::Record>,
-    pub(super) langs: Vec<Lang>,
+pub(in super::super) struct SerenaInstalled<'p> {
+    pub(in super::super) project: &'p Path,
+    pub(in super::super) record: serena_install::Record,
+    pub(in super::super) pyright: Option<pyright_install::Record>,
+    pub(in super::super) intelephense: Option<node_ls_install::Record>,
+    pub(in super::super) typescript: Option<node_ls_install::Record>,
+    pub(in super::super) vue: Option<node_ls_install::Record>,
+    pub(in super::super) langs: Vec<Lang>,
     /// The interpreter dirs serena's (and pyright's) entry points need,
     /// deduplicated; not yet consented to or granted.
-    pub(super) lanes: Vec<PathBuf>,
+    pub(in super::super) lanes: Vec<PathBuf>,
 }
 
 impl Installed<'_> {
     /// The exec lanes to ask about before commit; empty without serena.
-    pub(super) fn lanes(&self) -> &[PathBuf] {
+    pub(in super::super) fn lanes(&self) -> &[PathBuf] {
         self.serena.as_ref().map_or(&[], |s| &s.lanes)
     }
+}
+
+/// Install everything `prepared` lists with the real ast-grep installer.
+pub(in super::super) fn install<'p>(
+    t: &Target<'_>,
+    prepared: Prepared<'p>,
+    out: &mut dyn Write,
+) -> Result<Installed<'p>> {
+    install_with(t, prepared, out, &ast_grep_install::install)
 }
 
 /// Install everything `prepared` lists. `install_ast_grep` is

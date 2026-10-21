@@ -56,15 +56,15 @@ pub fn interpreter_lanes(serena_bin: &Path, tools_root: &Path) -> Result<Vec<Pat
 }
 
 /// How `apply` asks about what the plan could not list.
-pub(super) struct Ask<'a> {
-    pub(super) consent: Consent,
-    pub(super) input: &'a mut dyn BufRead,
+pub(in super::super) struct Ask<'a> {
+    pub(in super::super) consent: Consent,
+    pub(in super::super) input: &'a mut dyn BufRead,
 }
 
 /// #1942: exec lanes are known only after install, so the plan diff never
 /// saw them. Any lane the manifest has not recorded is shown by its path
 /// and consented to under the same rules as the plan, before it is granted.
-pub(super) fn consent_to_lanes(
+pub(in super::super) fn consent_to_lanes(
     lanes: &[PathBuf],
     m: &Manifest,
     consent: Consent,

@@ -23,12 +23,17 @@ const INTERACTIVE_PREFIXES: &[&[&str]] = &[
     // The review-pair wizard asks for names and models and refuses a
     // non-tty stdin (unless `--no-interactive`, see `PIPED_OPT_OUTS`).
     &["mur", "fleet", "review-setup"],
+    // Pickers for projects, languages and entry names, then `yes` (#2016);
+    // `--yes` opts out (see `PIPED_OPT_OUTS`).
+    &["mur", "code-nav", "setup", "--wizard"],
 ];
 
 /// Flags that make an otherwise interactive command safe on piped stdio, so
 /// a scripted run keeps its output in the transcript: (prefix, opt-out flag).
-const PIPED_OPT_OUTS: &[(&[&str], &str)] =
-    &[(&["mur", "fleet", "review-setup"], "--no-interactive")];
+const PIPED_OPT_OUTS: &[(&[&str], &str)] = &[
+    (&["mur", "fleet", "review-setup"], "--no-interactive"),
+    (&["mur", "code-nav", "setup", "--wizard"], "--yes"),
+];
 
 /// Whether `cmd` must be run with the terminal handed over.
 ///
@@ -132,6 +137,13 @@ mod tests {
         assert!(!needs_terminal("mur agent turn list mur"));
         assert!(!needs_terminal("mur deep-research \"some question\""));
         assert!(!needs_terminal("mur deep-research"));
+    }
+
+    #[test]
+    fn code_nav_wizard_needs_the_terminal() {
+        assert!(needs_terminal("mur code-nav setup --wizard pm qa"));
+        assert!(!needs_terminal("mur code-nav setup --wizard pm --yes"));
+        assert!(!needs_terminal("mur code-nav setup --agent pm --yes"));
     }
 
     #[test]
