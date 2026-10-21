@@ -8,7 +8,8 @@ use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 use super::ReviewSession;
-use super::test_fixtures::{app_at, home, system_lines, tx};
+use super::state::Awaiting;
+use super::test_fixtures::{app_at, home, skill_candidate, system_lines, tx};
 use crate::cmd::agent::cli::ReviewEsc;
 use crate::cmd::agent::cli::app::App;
 use crate::cmd::agent::cli::events::handle_event;
@@ -83,6 +84,101 @@ async fn ruling_req_shows_text_and_replies_verbatim() {
     type_line(&mut app, "/stop").await;
     assert_eq!(rx.try_recv().unwrap(), "/stop");
     assert!(app.review.is_some(), "/stop did not end the session here");
+}
+
+/// What the driver receives when `line` is typed at the ruling prompt and an
+/// installed skill is named `skill`.
+async fn ruling_reply_with_skill(skill: &str, line: &str) -> Result<String, TryRecvError> {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    app.skills = vec![skill_candidate(skill)];
+    attach(&mut app);
+    let rx = ruling(&mut app);
+    type_line(&mut app, line).await;
+    rx.try_recv()
+}
+
+/// `/rule` reaches the driver when a skill shares the name. The guard refuses
+/// every MURMUR built-in, so this also fails first if MURMUR ever ships a
+/// `/rule` command of its own.
+#[tokio::test]
+async fn slash_rule_reaches_the_ruling_prompt_even_with_a_rule_skill_installed() {
+    let line = "/rule fix F2 it still leaks";
+    assert_eq!(
+        ruling_reply_with_skill("rule", line).await,
+        Ok(line.to_string()),
+        "something in MURMUR now claims /rule before the ruling prompt sees it"
+    );
+}
+
+/// `/abandon` reaches the driver when a skill shares the name, and fails
+/// first if MURMUR ever ships an `/abandon` command of its own.
+#[tokio::test]
+async fn slash_abandon_reaches_the_ruling_prompt_even_with_an_abandon_skill_installed() {
+    assert_eq!(
+        ruling_reply_with_skill("abandon", "/abandon").await,
+        Ok("/abandon".to_string()),
+        "something in MURMUR now claims /abandon before the ruling prompt sees it"
+    );
+}
+
+/// Types `line` at an open ruling prompt and checks it did not answer it:
+/// the driver saw nothing, the prompt still waits, `warning` was shown and
+/// the line is back in the composer. The next line still answers.
+async fn assert_refused_at_ruling(app: &mut App, line: &str, warning: &str) {
+    let rx = ruling(app);
+
+    type_line(app, line).await;
+
+    assert_eq!(
+        rx.try_recv(),
+        Err(TryRecvError::Empty),
+        "{line:?} reached the driver"
+    );
+    let awaiting = app.review.as_ref().and_then(|s| s.awaiting.as_ref());
+    assert!(
+        matches!(awaiting, Some(Awaiting::Ruling { .. })),
+        "{line:?}"
+    );
+    let text = system_lines(app).join("\n");
+    assert!(text.contains(warning), "{text}");
+    assert_eq!(app.input_text(), line);
+
+    type_line(app, "q").await;
+    assert_eq!(rx.try_recv(), Ok("q".to_string()));
+}
+
+/// A MURMUR built-in at the ruling prompt is refused with a warning instead
+/// of going to the driver as the ruling.
+#[tokio::test]
+async fn a_murmur_command_at_the_ruling_prompt_is_refused_not_an_answer() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app);
+    assert_refused_at_ruling(&mut app, "/review", "/review was not run").await;
+}
+
+/// An installed skill parses as `Unknown`, so it rides on the guard's own
+/// skill check; at the ruling prompt it is refused like a built-in.
+#[tokio::test]
+async fn a_skill_command_at_the_ruling_prompt_is_refused_not_an_answer() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    app.skills = vec![skill_candidate("brainstorming")];
+    attach(&mut app);
+    let line = "/brainstorming the rollout";
+    assert_refused_at_ruling(&mut app, line, "/brainstorming was not run").await;
+}
+
+/// A bare `/` at the ruling prompt gets the bare-slash warning instead of
+/// going to the driver, as at the gate and at `Paused — continue?`.
+#[tokio::test]
+async fn a_bare_slash_at_the_ruling_prompt_warns_and_keeps_asking() {
+    let tmp = home();
+    let mut app = app_at(tmp.path());
+    attach(&mut app);
+    let hint = crate::cmd::agent::cli::app::BARE_SLASH_HINT;
+    assert_refused_at_ruling(&mut app, "/", hint).await;
 }
 
 /// The empty string is EOF to the driver (leave paused). A bare Enter is not
