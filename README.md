@@ -641,7 +641,12 @@ Agent** wizard offers the same catalog as a source.
   <dir>` — and an agent can finally verify its own work. Narrow by
   construction: `/`, `/usr`, `/opt`, your home directory and a bare mount point
   are refused, and filesystem and network entitlements still bound whatever
-  runs.
+  runs. A granted directory that doesn't exist yet (a fresh build output) works
+  as soon as the build creates it, and that includes the build output inside
+  every git worktree of the granted repo, as long as the worktree itself was
+  registered before the agent started. A worktree added with `git worktree
+  add` *after* that isn't covered until the agent restarts: the sandbox is
+  sealed once, at start, and does not widen itself afterwards.
 - **A grant that never reached the kernel** — a filesystem entitlement only
   takes effect if its path exists when the agent starts, so granting a
   directory you hadn't created yet used to succeed at the CLI, survive a
