@@ -24,6 +24,20 @@ pub fn cmd_murmurd_status() -> Result<()> {
 }
 
 pub fn cmd_murmurd_stop() -> Result<()> {
+    // A supervised daemon is stopped THROUGH its service manager: a bare
+    // SIGTERM is undone by KeepAlive / Restart=always a few seconds later.
+    if let Supervision::Owns(service) = Supervision::detect() {
+        service.stop()?;
+        // Also reaps a lock holder the service does not own (an earlier
+        // `mur daemon start` spawn), waits for exit, and clears the lock.
+        stop_lock_holder()?;
+        println!(
+            "murmurd stopped via {service}; it stays down until the next login \
+             or `mur daemon start`"
+        );
+        return Ok(());
+    }
+
     let lock_path = mur_common::home::mur_home_or_err()?.join("murmurd.lock");
 
     let s = match std::fs::read_to_string(&lock_path) {
@@ -50,12 +64,6 @@ pub fn cmd_murmurd_stop() -> Result<()> {
 
     let _ = std::fs::remove_file(&lock_path);
     println!("murmurd stopped (sent SIGTERM to pid {pid})");
-    if let Supervision::Owns(service) = Supervision::detect() {
-        println!(
-            "note: murmurd is supervised by {service} and will be respawned; \
-             unload the service to keep it stopped"
-        );
-    }
     Ok(())
 }
 
