@@ -148,9 +148,8 @@ pub fn clear_pause_refusal(mur_home: &Path, run_id: &str) {
     let _ = std::fs::remove_file(refusal_path(mur_home, run_id));
 }
 
-/// Remove a run's checkpoint (idempotent).
-// Used by `stop`-while-paused and `resume` (rollout step 4); tests use it now.
-#[allow(dead_code)]
+/// Remove a run's checkpoint (idempotent). Used by `resume` once the run is
+/// running again, and by `stop` of a paused run.
 pub fn remove(mur_home: &Path, run_id: &str) {
     let _ = std::fs::remove_file(checkpoint_path(mur_home, run_id));
 }

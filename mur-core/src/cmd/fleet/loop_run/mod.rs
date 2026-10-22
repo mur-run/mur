@@ -6,7 +6,7 @@
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use mur_common::channel::{ChannelActor, ChannelEvent};
@@ -22,11 +22,15 @@ use super::store;
 use crate::executor::delegation::cwd::{RunCwd, routing_note};
 
 pub(crate) mod checkpoint;
+mod clock;
 mod guarded;
 mod observer;
 mod pause;
 mod pause_events;
+mod preflight;
+pub mod resume;
 pub(crate) mod run_lock;
+mod run_record;
 pub(crate) mod synth;
 
 pub use guarded::*;

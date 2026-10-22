@@ -31,19 +31,16 @@ pub(super) struct PauseSnapshot<'a> {
     /// iterations, which resume plans afresh. (Every fleet procedure is built
     /// with no `variables`, so the steps are the whole procedure.)
     pub procedure: &'a [ProcedureStep],
+    /// The policy the run is enforcing — persisted as is, never re-derived
+    /// from `fleet.yaml` and the TTY, which a terminal resume would loosen.
+    pub hitl: mur_common::hitl::Unanswered,
 }
 
 /// Write the checkpoint, then the `run_paused` note. An `Err` means NO
 /// checkpoint exists and the caller must not report the run paused.
 pub(super) fn record_pause(svc: &mur_channel::ChannelService, s: &PauseSnapshot<'_>) -> Result<()> {
     let iteration_run_id = format!("{}-{}", s.run_id, s.iteration);
-    let hitl = s
-        .fleet
-        .hitl
-        .as_ref()
-        .and_then(|h| h.mode)
-        .unwrap_or_else(crate::executor::dag::default_unanswered);
-    let hitl_unanswered = serde_json::to_value(hitl)?
+    let hitl_unanswered = serde_json::to_value(s.hitl)?
         .as_str()
         .unwrap_or("defer")
         .to_string();
