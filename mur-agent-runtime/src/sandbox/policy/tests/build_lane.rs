@@ -75,13 +75,23 @@ fn guarded_paths_are_refused_through_the_parent_plus_leaf_form() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
     // `$HOME` reached as a pending leaf: parent exists, home itself does not.
-    let fake_home = tmp.path().join("fake-home");
+    // The resolver canonicalizes the parent (macOS `/var` -> `/private/var`,
+    // Windows `\\?\` prefix), so the home it is compared with must be built from
+    // the canonical parent too.
+    let fake_home = canon(tmp.path()).join("fake-home");
     assert!(!fake_home.exists());
     assert_eq!(
         resolve_build_lane_dir(&fake_home, &fake_home.clone()).err(),
         Some(REASON_TOO_BROAD),
         "a pending path equal to home is not a build lane"
     );
+    guarded_unix_roots_are_refused(tmp.path());
+}
+
+/// The Unix-rooted half: `/usr`, `/opt` and `/Volumes/<mount>` mean nothing on
+/// Windows, where they are neither absolute nor guarded.
+#[cfg(unix)]
+fn guarded_unix_roots_are_refused(scratch: &Path) {
     // The pending leaf directly under `/`: `/` + `usr`-style names.
     assert!(
         resolve_build_lane_dir(Path::new("/definitely-not-a-real-top-level"), &home_dir())
@@ -112,7 +122,7 @@ fn guarded_paths_are_refused_through_the_parent_plus_leaf_form() {
             "/opt".into(),
             "/Volumes/no-such-mount".into(),
         ],
-        &tmp.path().join("agent-home"),
+        &scratch.join("agent-home"),
     );
     for bad in ["/", "/usr", "/opt", "/Volumes/no-such-mount"] {
         assert!(
@@ -122,6 +132,9 @@ fn guarded_paths_are_refused_through_the_parent_plus_leaf_form() {
         );
     }
 }
+
+#[cfg(not(unix))]
+fn guarded_unix_roots_are_refused(_scratch: &Path) {}
 
 #[test]
 fn a_leaf_cannot_escape_the_canonical_parent() {
