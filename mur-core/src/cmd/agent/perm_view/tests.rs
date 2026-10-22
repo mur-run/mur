@@ -38,6 +38,9 @@ fn sealed(profile: &mur_common::AgentProfile, dropped: Vec<DroppedGrant>) -> San
         granted_digest: mur_common::agent::filesystem_grants_digest(
             &profile.entitlements.filesystem,
         ),
+        granted_spawn_dirs_digest: Some(mur_common::agent::spawn_dirs_digest(
+            &profile.entitlements.processes.spawn.allowed_dirs,
+        )),
         dropped,
     }
 }
@@ -249,6 +252,9 @@ fn sealed_rec(p: &mur_common::AgentProfile, enforcing: bool) -> SandboxRecord {
         }
         .into(),
         granted_digest: filesystem_grants_digest(&p.entitlements.filesystem),
+        granted_spawn_dirs_digest: Some(mur_common::agent::spawn_dirs_digest(
+            &p.entitlements.processes.spawn.allowed_dirs,
+        )),
         dropped: vec![],
     }
 }
@@ -353,4 +359,81 @@ fn round_trips_through_json() {
     assert_eq!(back, v);
     assert!(s.contains("\"enforcement\":\"enforcing\""), "{s}");
     assert!(s.contains("\"status\":\"effective\""), "{s}");
+}
+
+// ── build-lane grants vs the seal (#2030) ─────────────────────────────
+
+fn spawn_dir_profile(dirs: &[&str]) -> mur_common::AgentProfile {
+    let mut p = mur_common::AgentProfile::default_for_tests();
+    p.entitlements.processes.spawn.allowed_dirs = dirs.iter().map(|s| s.to_string()).collect();
+    p
+}
+
+/// A directory added to `allowed_dirs` after the agent started never reached
+/// the sandbox. It must not tick, and the drift warning must fire — the
+/// filesystem digest alone is blind to this edit.
+#[test]
+fn a_build_lane_added_after_the_seal_is_not_effective_and_drift_is_flagged() {
+    let sealed_with = spawn_dir_profile(&["/work/a"]);
+    let l = lock_with(Some(sealed(&sealed_with, vec![])));
+
+    let now = spawn_dir_profile(&["/work/a", "/work/added-later"]);
+    let v = permissions_view(&now, Some(&l));
+
+    assert!(v.grants_drifted);
+    assert_eq!(v.processes.dir_grants.len(), 2);
+    for g in &v.processes.dir_grants {
+        assert_eq!(g.status, GrantStatus::Unverified, "{}", g.raw);
+    }
+}
+
+#[test]
+fn an_unchanged_build_lane_is_effective_and_not_drifted() {
+    let p = spawn_dir_profile(&["/work/a"]);
+    let l = lock_with(Some(sealed(&p, vec![])));
+    let v = permissions_view(&p, Some(&l));
+    assert!(!v.grants_drifted);
+    assert_eq!(v.processes.dir_grants[0].status, GrantStatus::Effective);
+}
+
+/// A lock sealed by a runtime that predates the digest cannot establish
+/// anything about build-lane grants, so nothing may tick and no drift is
+/// claimed (there is nothing to compare against).
+#[test]
+fn a_lock_without_the_spawn_digest_leaves_build_lanes_unverified() {
+    let p = spawn_dir_profile(&["/work/a"]);
+    let mut rec = sealed(&p, vec![]);
+    rec.granted_spawn_dirs_digest = None;
+    let v = permissions_view(&p, Some(&lock_with(Some(rec))));
+    assert!(!v.grants_drifted);
+    assert_eq!(v.processes.dir_grants[0].status, GrantStatus::Unverified);
+}
+
+/// The configured directory is valid but a linked-worktree candidate derived
+/// from it was rejected. The runtime records the candidate by its own path;
+/// the listing has to carry it and the reason.
+#[test]
+fn a_dropped_linked_worktree_candidate_is_listed_with_its_reason() {
+    let p = spawn_dir_profile(&["/work/main/target"]);
+    let rec = sealed(
+        &p,
+        vec![DroppedGrant {
+            path: "/work/wt/target".into(),
+            verb: "spawn".into(),
+            reason: "not a directory".into(),
+        }],
+    );
+    let v = permissions_view(&p, Some(&lock_with(Some(rec))));
+
+    let rows = &v.processes.dir_grants;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].raw, "/work/main/target");
+    assert_eq!(rows[0].status, GrantStatus::Effective);
+    assert_eq!(rows[1].raw, "/work/wt/target");
+    assert_eq!(
+        rows[1].status,
+        GrantStatus::Dropped {
+            reason: "not a directory".into()
+        }
+    );
 }

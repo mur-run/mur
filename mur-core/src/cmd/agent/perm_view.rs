@@ -8,6 +8,7 @@
 use mur_common::LockFile;
 use mur_common::agent::{
     McpNetMode, NetworkOutboundMode, SpawnMode, ToolPolicy, filesystem_grants_digest,
+    spawn_dirs_digest,
 };
 use mur_common::bridge::llm_entitlement::LlmMode;
 use mur_common::hitl::RiskTier;
@@ -139,6 +140,69 @@ pub struct PermissionsView {
     pub fail_closed_on_sandbox_error: bool,
 }
 
+/// Build-lane rows (`processes.spawn.allowed_dirs`) checked against the seal.
+///
+/// Not [`permissions_view`]'s `grants` closure: that one reads "absent from the
+/// dropped list" as "effective", which is only true if the grant was in the
+/// profile when the sandbox sealed. Build-lane grants have their own digest, so
+/// a row is `Effective` only when the seal both recorded that digest and still
+/// agrees with the profile; otherwise it is `Unverified`. A dropped record
+/// always wins — it is a fact about the seal, whatever the profile says now.
+///
+/// The runtime also drops linked-worktree candidates derived from a configured
+/// directory (`worktrees_of`), which are not in the profile as strings. They
+/// are listed after the configured rows so the reason is not lost.
+fn dir_grants(
+    dirs: &[String],
+    sandbox: Option<&mur_common::agent::SandboxRecord>,
+    digest_matches: Option<bool>,
+) -> Vec<PathGrantView> {
+    let dropped_for = |path: &str| {
+        sandbox.and_then(|sb| {
+            sb.dropped
+                .iter()
+                .find(|d| d.verb == "spawn" && d.path == path)
+        })
+    };
+    let mut rows: Vec<PathGrantView> = dirs
+        .iter()
+        .map(|raw| {
+            let expanded = mur_agent_runtime::sandbox::policy::expand_entitlement_path(raw)
+                .display()
+                .to_string();
+            let status = match (sandbox, dropped_for(&expanded)) {
+                (None, _) => GrantStatus::Unverified,
+                (Some(_), Some(d)) => GrantStatus::Dropped {
+                    reason: d.reason.clone(),
+                },
+                (Some(_), None) if digest_matches == Some(true) => GrantStatus::Effective,
+                (Some(_), None) => GrantStatus::Unverified,
+            };
+            PathGrantView {
+                raw: raw.clone(),
+                expanded,
+                status,
+            }
+        })
+        .collect();
+
+    if let Some(sb) = sandbox {
+        for d in sb.dropped.iter().filter(|d| d.verb == "spawn") {
+            if rows.iter().any(|r| r.expanded == d.path) {
+                continue;
+            }
+            rows.push(PathGrantView {
+                raw: d.path.clone(),
+                expanded: d.path.clone(),
+                status: GrantStatus::Dropped {
+                    reason: d.reason.clone(),
+                },
+            });
+        }
+    }
+    rows
+}
+
 pub fn permissions_view(
     profile: &mur_common::AgentProfile,
     lock: Option<&LockFile>,
@@ -151,8 +215,16 @@ pub fn permissions_view(
         (Some(_), Some(sb)) if !sb.enforcing => Enforcement::Advisory,
         (Some(_), Some(_)) => Enforcement::Enforcing,
     };
-    let grants_drifted =
-        sandbox.is_some_and(|sb| sb.granted_digest != filesystem_grants_digest(&ent.filesystem));
+    let spawn_dirs = &ent.processes.spawn.allowed_dirs;
+    // `Some(false)` only when the seal recorded a digest and it still matches.
+    // A lock sealed before the digest existed (`None`) cannot say whether a
+    // build-lane grant reached the kernel, so it must not read as "matches".
+    let spawn_dirs_match = sandbox
+        .and_then(|sb| sb.granted_spawn_dirs_digest.as_deref())
+        .map(|sealed| sealed == spawn_dirs_digest(spawn_dirs));
+    let grants_drifted = sandbox
+        .is_some_and(|sb| sb.granted_digest != filesystem_grants_digest(&ent.filesystem))
+        || spawn_dirs_match == Some(false);
 
     let grants = |verb: &str, list: &[String]| -> Vec<PathGrantView> {
         list.iter()
@@ -240,7 +312,7 @@ pub fn permissions_view(
             spawn_mode: ent.processes.spawn.mode,
             allowed: ent.processes.spawn.allowed.clone(),
             allowed_dirs: ent.processes.spawn.allowed_dirs.clone(),
-            dir_grants: grants("spawn", &ent.processes.spawn.allowed_dirs),
+            dir_grants: dir_grants(spawn_dirs, sandbox, spawn_dirs_match),
         },
         tools: ent
             .tools
