@@ -552,22 +552,38 @@ impl SandboxPolicy {
         // shims and test binaries at hash-suffixed paths that do not exist
         // until the build creates them. Fail closed the same way the literal
         // list does: an entry that is missing, is not a directory, or cannot
-        // be canonicalized is dropped rather than widened.
+        // be canonicalized is dropped rather than widened. The drop is also
+        // recorded (#2030): it lasts for the life of the process, and a
+        // missing directory that is created later (the normal fleet order:
+        // start members, then create worktrees and target dirs) otherwise
+        // surfaces only as a bare `Operation not permitted` from the build.
         for dir in &ent.processes.spawn.allowed_dirs {
             let expanded = expand(dir);
             let mut candidates = vec![expanded.clone()];
             candidates.extend(mur_common::worktree::worktrees_of(&expanded));
             for candidate in candidates {
                 let Ok(canon) = std::fs::canonicalize(&candidate) else {
+                    drop_build_lane_grant(
+                        &mut dropped,
+                        &candidate,
+                        "did not exist when the agent started, and grants are resolved only \
+                         then; create it, then restart the agent to apply",
+                    );
                     continue;
                 };
                 if !canon.is_dir() {
+                    drop_build_lane_grant(&mut dropped, &candidate, "not a directory");
                     continue;
                 }
                 // A grant of `/`, `/usr`, the home directory, or a bare
                 // `/Volumes/<mount>` is not a build lane; it is every binary
                 // reachable under it. Same guard the derived prefixes use.
                 if is_guarded_prefix(&canon, &home) {
+                    drop_build_lane_grant(
+                        &mut dropped,
+                        &candidate,
+                        "too broad to be a build lane (it would allow every binary under it)",
+                    );
                     continue;
                 }
                 if !spawn_allowed_prefixes.contains(&canon) {
