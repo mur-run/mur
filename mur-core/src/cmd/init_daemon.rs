@@ -88,11 +88,13 @@ impl DaemonService {
     fn registered() -> Option<(Self, Option<PathBuf>)> {
         #[cfg(target_os = "macos")]
         {
-            let plist = dirs::home_dir()?
-                .join("Library/LaunchAgents")
-                .join(format!("{LAUNCHD_LABEL}.plist"));
-            if let Ok(body) = std::fs::read_to_string(&plist)
-                && quiet_success("launchctl", &["print", &launchd_target()])
+            // The descriptor on disk is the test, NOT "the job is loaded":
+            // `stop` boots the job out, and the next `start` must still
+            // route through launchd (and reload it) instead of spawning an
+            // unsupervised daemon that the job then crash-loops against at
+            // the next login.
+            if let Some(plist) = launchd_plist_path()
+                && let Ok(body) = std::fs::read_to_string(&plist)
             {
                 return Some((Self::Launchd, launchd_plist_mur_home(&body)));
             }
@@ -133,27 +135,128 @@ impl DaemonService {
         v.into_iter().map(String::from).collect()
     }
 
+    /// argv that stops the supervised daemon so the service manager does not
+    /// respawn it. The stop lasts until the next login: the descriptor stays
+    /// on disk with `RunAtLoad` / `WantedBy=default.target`.
+    pub(crate) fn stop_argv(self, launchd_target: &str) -> Vec<String> {
+        let v: Vec<&str> = match self {
+            Self::Launchd => vec!["launchctl", "bootout", launchd_target],
+            Self::Systemd => vec!["systemctl", "--user", "stop", SYSTEMD_UNIT],
+        };
+        v.into_iter().map(String::from).collect()
+    }
+
+    /// argv tried when [`Self::start_argv`] fails. `kickstart` only works on
+    /// a loaded job, and `stop` unloads it, so launchd needs `bootstrap`
+    /// (the plist's `RunAtLoad` then starts the daemon). Not the legacy
+    /// `load -w`: it exits 0 even when it prints `Load failed`, so a failed
+    /// start would be reported as success. systemd's `start` loads the unit
+    /// itself, so it has no fallback.
+    pub(crate) fn load_fallback_argv(self, domain: &str, plist: &Path) -> Option<Vec<String>> {
+        match self {
+            Self::Launchd => Some(vec![
+                "launchctl".into(),
+                "bootstrap".into(),
+                domain.into(),
+                plist.display().to_string(),
+            ]),
+            Self::Systemd => None,
+        }
+    }
+
     /// Start (or with `restart`, restart) murmurd through the service manager.
     pub(crate) fn start(self, restart: bool) -> Result<()> {
         let argv = self.start_argv(restart, &launchd_target());
-        let status = std::process::Command::new(&argv[0])
-            .args(&argv[1..])
-            .status()
-            .with_context(|| format!("could not run `{}`", argv.join(" ")))?;
-        if !status.success() {
-            bail!("`{}` exited with {status}", argv.join(" "));
-        }
-        Ok(())
+        let primary = run_argv(&argv);
+        let Err(primary_err) = primary else {
+            return Ok(());
+        };
+        let Some(fallback) =
+            launchd_plist_path().and_then(|p| self.load_fallback_argv(&launchd_domain(), &p))
+        else {
+            return Err(primary_err);
+        };
+        run_argv(&fallback).map_err(|fallback_err| {
+            anyhow::anyhow!("{primary_err:#}; fallback also failed: {fallback_err:#}")
+        })
     }
+
+    /// Stop murmurd through the service manager so it stays stopped.
+    /// `launchctl bootout` / `systemctl stop` also fail when the job is simply
+    /// not loaded, which is the state we want, so a failure only counts when
+    /// the manager still reports the job as loaded afterwards.
+    pub(crate) fn stop(self) -> Result<()> {
+        let argv = self.stop_argv(&launchd_target());
+        match run_argv(&argv) {
+            Ok(()) => Ok(()),
+            Err(err) => stop_outcome(err, || self.is_loaded()),
+        }
+    }
+
+    /// Whether the service manager currently has the job loaded.
+    fn is_loaded(self) -> bool {
+        match self {
+            Self::Launchd => quiet_success("launchctl", &["print", &launchd_target()]),
+            Self::Systemd => quiet_success("systemctl", &["--user", "is-active", SYSTEMD_UNIT]),
+        }
+    }
+}
+
+fn run_argv(argv: &[String]) -> Result<()> {
+    let out = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .output()
+        .with_context(|| format!("could not run `{}`", argv.join(" ")))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        bail!(
+            "`{}` exited with {}: {}",
+            argv.join(" "),
+            out.status,
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+/// A failed stop is an error only if the job is still loaded; an already
+/// unloaded job is the state `stop` wants. `is_loaded` is only consulted on
+/// failure.
+fn stop_outcome(err: anyhow::Error, is_loaded: impl FnOnce() -> bool) -> Result<()> {
+    if is_loaded() { Err(err) } else { Ok(()) }
+}
+
+/// Run a probe command with output discarded; true only on exit 0.
+fn quiet_success(program: &str, args: &[&str]) -> bool {
+    std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The launchd plist `mur init` writes for murmurd. `None` without a home dir.
+fn launchd_plist_path() -> Option<PathBuf> {
+    Some(
+        dirs::home_dir()?
+            .join("Library/LaunchAgents")
+            .join(format!("{LAUNCHD_LABEL}.plist")),
+    )
 }
 
 /// `gui/<uid>/<label>` — the launchd domain target for the murmurd job.
 fn launchd_target() -> String {
+    format!("{}/{LAUNCHD_LABEL}", launchd_domain())
+}
+
+/// The per-user GUI launchd domain, `gui/<uid>`.
+fn launchd_domain() -> String {
     #[cfg(unix)]
     let uid = unsafe { libc::getuid() };
     #[cfg(not(unix))]
     let uid = 0;
-    format!("gui/{uid}/{LAUNCHD_LABEL}")
+    format!("gui/{uid}")
 }
 
 /// Value of `key` in `systemctl show` output (`Key=value` lines).
@@ -254,16 +357,6 @@ fn launchd_plist_mur_home(plist: &str) -> Option<PathBuf> {
     (!v.is_empty()).then(|| PathBuf::from(v))
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn quiet_success(program: &str, args: &[&str]) -> bool {
-    std::process::Command::new(program)
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
 /// Returns true if installation succeeded, false if the platform is
 /// unsupported (WSL, container, etc.) — caller prints a fallback message.
 pub(crate) fn install_daemon_service(murmurd_path: &Path) -> Result<bool> {
@@ -321,15 +414,38 @@ fn install_launchd(murmurd_path: &Path) -> Result<()> {
     );
     std::fs::write(&plist_path, &plist)?;
 
-    // Load/reload the agent (ignore errors — user may not have launchctl in PATH)
-    let _ = std::process::Command::new("launchctl")
-        .args(["unload", &plist_path.to_string_lossy()])
-        .status();
-    let _ = std::process::Command::new("launchctl")
-        .args(["load", "-w", &plist_path.to_string_lossy()])
-        .status();
+    // Reload the job so the rewritten plist takes effect. `bootout` fails
+    // when nothing is loaded yet (first install), which is fine. A failed
+    // `bootstrap` is reported but does not fail `mur init`: the plist is
+    // written and loads at next login.
+    let [bootout, bootstrap] = launchd_reload_argvs(&launchd_domain(), &plist_path);
+    let _ = run_argv(&bootout);
+    if let Err(e) = run_argv(&bootstrap) {
+        eprintln!(
+            "warning: murmurd service written to {} but not loaded: {e:#}\n  \
+             retry with `mur daemon start`",
+            plist_path.display()
+        );
+    }
 
     Ok(())
+}
+
+/// argv pair that reloads the murmurd job: `bootout` of the old instance,
+/// then `bootstrap` of the plist. Not the legacy `unload` / `load -w`, which
+/// exit 0 even when they print `Load failed`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn launchd_reload_argvs(domain: &str, plist: &Path) -> [Vec<String>; 2] {
+    [
+        vec![
+            "launchctl".into(),
+            "bootout".into(),
+            format!("{domain}/{LAUNCHD_LABEL}"),
+        ],
+        DaemonService::Launchd
+            .load_fallback_argv(domain, plist)
+            .expect("launchd always has a bootstrap argv"),
+    ]
 }
 
 #[cfg(target_os = "linux")]
@@ -412,6 +528,17 @@ pub(crate) fn murmurd_bin_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_stop_of_unloaded_job_is_success() {
+        assert!(stop_outcome(anyhow::anyhow!("not loaded"), || false).is_ok());
+    }
+
+    #[test]
+    fn failed_stop_of_loaded_job_is_an_error() {
+        let err = stop_outcome(anyhow::anyhow!("bootout denied"), || true).unwrap_err();
+        assert!(err.to_string().contains("bootout denied"));
+    }
 
     #[test]
     fn service_units_carry_mur_home_only_when_set() {
@@ -523,6 +650,57 @@ mod tests {
         assert_eq!(
             DaemonService::Systemd.start_argv(false, t),
             ["systemctl", "--user", "start", SYSTEMD_UNIT]
+        );
+    }
+
+    #[test]
+    fn service_stop_goes_through_the_service_manager() {
+        let t = "gui/501/run.mur.murmurd";
+        assert_eq!(
+            DaemonService::Launchd.stop_argv(t),
+            ["launchctl", "bootout", t]
+        );
+        assert_eq!(
+            DaemonService::Systemd.stop_argv(t),
+            ["systemctl", "--user", "stop", SYSTEMD_UNIT]
+        );
+    }
+
+    #[test]
+    fn launchd_start_falls_back_to_bootstrap_because_stop_unloads_the_job() {
+        let plist = Path::new("/h/Library/LaunchAgents/run.mur.murmurd.plist");
+        // `bootstrap`, not `load -w`: the latter exits 0 on "Load failed".
+        assert_eq!(
+            DaemonService::Launchd
+                .load_fallback_argv("gui/501", plist)
+                .unwrap(),
+            [
+                "launchctl",
+                "bootstrap",
+                "gui/501",
+                "/h/Library/LaunchAgents/run.mur.murmurd.plist"
+            ]
+        );
+        assert!(
+            DaemonService::Systemd
+                .load_fallback_argv("gui/501", plist)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn launchd_install_reloads_with_bootout_then_bootstrap() {
+        let plist = Path::new("/h/Library/LaunchAgents/run.mur.murmurd.plist");
+        let [out, boot] = launchd_reload_argvs("gui/501", plist);
+        assert_eq!(out, ["launchctl", "bootout", "gui/501/run.mur.murmurd"]);
+        assert_eq!(
+            boot,
+            [
+                "launchctl",
+                "bootstrap",
+                "gui/501",
+                "/h/Library/LaunchAgents/run.mur.murmurd.plist"
+            ]
         );
     }
 
