@@ -326,6 +326,76 @@ fn is_guarded_prefix(path: &Path, home: &Path) -> bool {
     }
     false
 }
+/// What a build-lane candidate resolves to at seal time.
+enum BuildLaneDir {
+    /// The directory exists: its canonical path.
+    Live(PathBuf),
+    /// The directory does not exist yet but its parent does: the canonical
+    /// parent joined with the literal leaf (#2058).
+    Pending(PathBuf),
+}
+
+const REASON_NOT_A_DIR: &str = "not a directory";
+const REASON_TOO_BROAD: &str =
+    "too broad to be a build lane (it would allow every binary under it)";
+const REASON_MISSING: &str = "did not exist when the agent started, and neither did its parent \
+     directory; create the directory, then restart the agent to apply";
+const REASON_UNSAFE_LEAF: &str = "does not exist and its last component is not a plain name \
+     (`..`, `.`, a root, or a dangling symlink), so it cannot be granted ahead of time";
+
+/// Resolve one `allowed_dirs` candidate for the seal.
+///
+/// An existing directory is granted by its canonical path. A missing one is
+/// granted as the canonical PARENT plus the literal leaf, so a worktree or
+/// target directory created after the agent started works without a restart
+/// (#2058). Only the one level: a missing parent still drops the grant.
+///
+/// The guarded-prefix check runs on the JOINED path, never on the parent: a
+/// trusted parent must not imply a safe child (`/Volumes` + `X` is a bare mount,
+/// `/` + `usr` is `/usr`). The leaf must be a single plain name, and a path that
+/// already exists as a dangling symlink is refused, because whatever it points
+/// at once it resolves is not something the operator named.
+fn resolve_build_lane_dir(candidate: &Path, home: &Path) -> Result<BuildLaneDir, &'static str> {
+    if let Ok(canon) = std::fs::canonicalize(candidate) {
+        if !canon.is_dir() {
+            return Err(REASON_NOT_A_DIR);
+        }
+        if is_guarded_prefix(&canon, home) {
+            return Err(REASON_TOO_BROAD);
+        }
+        return Ok(BuildLaneDir::Live(canon));
+    }
+    // canonicalize failed. A dangling symlink is still "something there".
+    if std::fs::symlink_metadata(candidate).is_ok() {
+        return Err(REASON_UNSAFE_LEAF);
+    }
+    let (Some(parent), Some(leaf)) = (candidate.parent(), candidate.file_name()) else {
+        return Err(REASON_UNSAFE_LEAF);
+    };
+    // `file_name()` already returns None for `..`, but be explicit: the leaf
+    // must be exactly one Normal component, and no `..` may hide earlier.
+    let mut leaf_parts = Path::new(leaf).components();
+    let single_name = matches!(leaf_parts.next(), Some(std::path::Component::Normal(_)))
+        && leaf_parts.next().is_none();
+    let has_parent_dir = candidate
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir));
+    if !single_name || has_parent_dir {
+        return Err(REASON_UNSAFE_LEAF);
+    }
+    let Ok(canon_parent) = std::fs::canonicalize(parent) else {
+        return Err(REASON_MISSING);
+    };
+    if !canon_parent.is_dir() {
+        return Err(REASON_MISSING);
+    }
+    let joined = canon_parent.join(leaf);
+    if is_guarded_prefix(&joined, home) {
+        return Err(REASON_TOO_BROAD);
+    }
+    Ok(BuildLaneDir::Pending(joined))
+}
+
 /// Record a build-lane (`processes.spawn.allowed_dirs`) grant the seal refused,
 /// and warn once with the path and the reason (#2030).
 ///

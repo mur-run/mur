@@ -293,7 +293,9 @@ fn build_lane_records_every_grant_it_drops_with_a_reason() {
     std::fs::create_dir_all(&live).expect("mkdir live");
     let a_file = tmp.path().join("not-a-dir");
     std::fs::write(&a_file, b"x").expect("write file");
-    let missing = tmp.path().join("created-after-seal");
+    // Its parent does not exist either, so there is nothing to anchor a grant
+    // to (a missing LEAF under a live parent is granted ahead of time, #2058).
+    let missing = tmp.path().join("no-such-parent").join("created-after-seal");
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
 
     let mut ent = minimal_entitlements();
