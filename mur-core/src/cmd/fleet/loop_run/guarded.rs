@@ -1,4 +1,5 @@
 use super::pause::{emit_stop_event, refuse_pause};
+use super::preflight::{SpendPlan, spend_plan};
 use super::*;
 
 /// Inner guarded loop: runs iterations until a stop reason fires. Returns
@@ -74,55 +75,12 @@ pub async fn run_guarded(
         );
     }
     let bounds = fleet_bounds(mur_home, &fleet, deadline.as_deref(), budget_usd)?;
-    let deadline = Some(bounds.deadline);
-    println!(
-        "  bounds: deadline {} ← {}; stuck {}",
-        crate::cmd::limits::fmt_dur(bounds.deadline),
-        bounds.deadline_source.label(),
-        match bounds.stuck {
-            mur_common::limits::Stuck::Off => "off".to_string(),
-            mur_common::limits::Stuck::After(d) => crate::cmd::limits::fmt_dur(d),
-        }
-    );
-    let billing = super::super::billing::fleet_billing(mur_home, &fleet);
-    let configured_budget = bounds.cost_usd.filter(|&b| b > 0.0);
-    let budget = budget_for(configured_budget, &billing);
-    if configured_budget.is_some_and(|b| b > 0.0) && budget.is_none() {
-        println!(
-            "  ℹ budget_usd ignored — fleet '{name}' runs on local/subscription models and cannot spend; \
-             its bound is the deadline"
-        );
-    }
-    if !billing.unknown.is_empty() {
-        let who: Vec<String> = billing
-            .unknown
-            .iter()
-            .map(|(a, m)| format!("{a} ({m})"))
-            .collect();
-        println!(
-            "  ⚠ billing unknown for {} — treated as metered. Mark a local model with `billing: local` in models.yaml",
-            who.join(", ")
-        );
-    }
-    let price_per_1k = fleet_price_per_1k(mur_home);
-    if let (rate, GuardRate::Default) = price_per_1k
-        && budget.is_some()
-    {
-        // Enforcing on a guess is better than not enforcing, but silently
-        // enforcing on one turns "stopped on budget" into a number the user
-        // has no way to reconcile against a real bill.
-        println!(
-            "  ⚠ budget enforced at the default ${rate}/1k — no model in models.yaml \
-             carries a rate, so spend is a guess. `mur model add` records a real one."
-        );
-    }
-    let price_per_1k = price_per_1k.0;
-    if let Some(line) = no_cap_notice(&billing, budget, deadline, price_per_1k) {
-        println!("  {line}");
-    }
-    // Forward estimate before any real data (and the fail-safe fallback when an
-    // iteration reports no token usage), so spend can never silently under-count.
-    let projection = estimate_iteration_cost_usd(fleet.members.len(), price_per_1k);
+    let SpendPlan {
+        billing,
+        budget,
+        price_per_1k,
+        projection,
+    } = spend_plan(mur_home, &fleet, name, &bounds);
     // Real cumulative spend, accumulated from each iteration's actual token usage.
     let mut spent = 0.0_f64;
     // Resolve and gate before the clock starts, so an approval wait does not
@@ -197,40 +155,8 @@ pub async fn run_guarded(
     }));
     lock_progress(&progress).save(mur_home, name);
 
-    // The loop is one run with a handle (spec §3.6): recorded now so
-    // `mur_job_status <run_id>` answers while it runs, beaten every interval,
-    // and closed with the state the stop implies. Best-effort like
-    // progress.json — a ledger failure never stops the loop. No sidecar: the
-    // parent has no single first channel seq; `mur fleet status` keeps
-    // finding the per-iteration runs through theirs.
-    let runs_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml")).runs;
-    let now = chrono::Utc::now();
-    let record = crate::run_status::RunState {
-        schema: crate::run_status::RUN_SCHEMA,
-        run_id: run_id.clone(),
-        channel_id: Some(fleet.channel_id.clone()),
-        kind: crate::run_status::RunKind::Fleet,
-        label: format!("fleet {name} loop"),
-        pid: std::process::id(),
-        started_at: now,
-        last_heartbeat_at: Some(now),
-        state: crate::run_status::State::Running,
-        steps: vec![],
-        blocked_on: None,
-        binary_version: env!("CARGO_PKG_VERSION").to_string(),
-        build_sha: mur_common::build::SHORT_SHA.to_string(),
-    };
-    let loop_beat = match crate::run_status::store::save(mur_home, &record) {
-        Ok(()) => Some(crate::run_status::heartbeat::Heartbeat::spawn(
-            mur_home.to_path_buf(),
-            run_id.clone(),
-            std::time::Duration::from_secs(runs_cfg.heartbeat_interval_secs),
-        )),
-        Err(error) => {
-            tracing::warn!(run_id = %run_id, %error, "fleet loop: run record not written; mur_job_status will not see this loop");
-            None
-        }
-    };
+    // The loop is one run with a handle (spec §3.6); see `run_record`.
+    let loop_beat = run_record::open(mur_home, &fleet, name, &run_id);
 
     // ── Pre-dispatch triage ────────────────────────────────────────────────
     // Once for the whole loop, not once per iteration: the goal does not

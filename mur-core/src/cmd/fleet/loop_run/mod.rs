@@ -26,7 +26,9 @@ mod guarded;
 mod observer;
 mod pause;
 mod pause_events;
+mod preflight;
 pub(crate) mod run_lock;
+mod run_record;
 pub(crate) mod synth;
 
 pub use guarded::*;
