@@ -577,7 +577,18 @@ pub fn render(ledger: &TurnLedger) -> String {
             // GREEN and the parenthetical lost the argument to the colour. Not
             // `✘` either — verification was not attempted and failed, it was
             // never run, which is a warning about the evidence, not a failure.
-            out.push_str("  ⚠ verified   nothing ran — no evidence this works\n");
+            //
+            // `verified()` empty means "no recognised gate run succeeded", not
+            // "no tool ran" (#2031): a turn of 19 reads and edits used to be
+            // reported as nothing. Only a truly empty ledger says that.
+            if ledger.actions.is_empty() {
+                out.push_str("  ⚠ verified   nothing ran — no evidence this works\n");
+            } else {
+                out.push_str(&format!(
+                    "  ⚠ verified   {} tool call(s) ran, but no build/test passed — no evidence this works\n",
+                    ledger.actions.len()
+                ));
+            }
         }
     } else {
         // One line per action: the glyph carries "verified"; a group header
