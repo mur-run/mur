@@ -65,6 +65,30 @@ fn acquire_at(path: &Path, name: &str) -> Result<RunLock> {
     }
 }
 
+/// Is a run of `name` holding the lock right now? Probes with a try-lock and
+/// releases it at once, so it never blocks and never leaves the lock held.
+/// `false` when the lock file does not exist (no run has ever taken it).
+pub fn is_held(mur_home: &Path, name: &str) -> bool {
+    if !valid_fleet_name(name) {
+        return false;
+    }
+    let path = fleet_state_dir(mur_home, name).join(FLEET_RUN_LOCK_FILE);
+    let Ok(f) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+    else {
+        return false;
+    };
+    match f.try_lock_exclusive() {
+        Ok(()) => {
+            let _ = FileExt::unlock(&f);
+            false
+        }
+        Err(e) => e.raw_os_error() == fs2::lock_contended_error().raw_os_error(),
+    }
+}
+
 fn owner_path(lock: &Path) -> PathBuf {
     lock.with_file_name(FLEET_RUN_OWNER_FILE)
 }

@@ -30,9 +30,56 @@ pub(crate) const STOP_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// What a stopped step says about itself, in the step event and its output.
 pub(crate) const STOPPED_REASON: &str = "stopped: the kill-switch was engaged (`mur fleet stop`)";
 
-/// True when the run has a stop signal and it is set.
+/// What a step halted by a pause says about itself.
+pub const PAUSED_REASON: &str =
+    "paused: `mur fleet pause` halted this run at a safe point; it resumes from here";
+
+/// Why a run was halted from outside. `Stop` is the kill-switch and ends the
+/// run for good; `Pause` halts it the same way but leaves it resumable, so the
+/// executor must close the channel differently (pause/resume design §5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HaltReason {
+    Stop,
+    Pause,
+}
+
+/// "Should this run halt, and why?" Same cost contract as [`StopSignal`]: it
+/// is polled once a second per in-flight delegate. Stop MUST be reported ahead
+/// of pause when both are set.
+pub type HaltSignal = Arc<dyn Fn() -> Option<HaltReason> + Send + Sync>;
+
+/// Why the run should halt right now, if it should. The plain `stop` signal
+/// is always a [`HaltReason::Stop`] and is read first, so a stop outranks a
+/// pause whichever signal carried it.
+pub(super) fn halt_reason(opts: &DagExecOptions<'_>) -> Option<HaltReason> {
+    if opts.stop.as_ref().is_some_and(|s| s()) {
+        return Some(HaltReason::Stop);
+    }
+    opts.halt.as_ref().and_then(|h| h())
+}
+
+/// True when either signal says the run should halt.
 pub(super) fn stop_requested(opts: &DagExecOptions<'_>) -> bool {
-    opts.stop.as_ref().is_some_and(|s| s())
+    halt_reason(opts).is_some()
+}
+
+/// What a halted step reports, matched to why it halted.
+pub(super) fn halted_reason_text(opts: &DagExecOptions<'_>) -> &'static str {
+    match halt_reason(opts) {
+        Some(HaltReason::Pause) => PAUSED_REASON,
+        _ => STOPPED_REASON,
+    }
+}
+
+/// Both signals folded into the one boolean an in-flight delegate polls.
+pub(super) fn watch_signal(opts: &DagExecOptions<'_>) -> Option<StopSignal> {
+    if opts.stop.is_none() && opts.halt.is_none() {
+        return None;
+    }
+    let (stop, halt) = (opts.stop.clone(), opts.halt.clone());
+    Some(Arc::new(move || {
+        stop.as_ref().is_some_and(|s| s()) || halt.as_ref().is_some_and(|h| h().is_some())
+    }))
 }
 
 /// How a watched delegate dial ended.

@@ -500,10 +500,15 @@ impl FleetRail {
         let jobs_line_text = match crate::cmd::fleet::jobs::list_jobs_raw(home, &self.fleet) {
             Ok(mut jobs) => {
                 let now_utc = Utc::now();
+                let paused_job = crate::cmd::fleet::jobs::paused_job_id(home, &self.fleet);
                 for j in jobs.iter_mut() {
-                    if let Some((s, _)) =
-                        crate::cmd::fleet::jobs::reconcile_running(j, channel_terminal, now_utc)
-                    {
+                    let paused = paused_job.as_deref() == Some(j.id.as_str());
+                    if let Some((s, _)) = crate::cmd::fleet::jobs::reconcile_running(
+                        j,
+                        channel_terminal,
+                        now_utc,
+                        paused,
+                    ) {
                         j.status = s;
                     }
                 }

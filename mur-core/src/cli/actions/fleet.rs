@@ -239,6 +239,11 @@ pub enum FleetAction {
         /// Fleet name
         name: String,
     },
+    /// Pause a running fleet run at a safe point; `resume` continues it
+    Pause {
+        /// Fleet name
+        name: String,
+    },
     /// Start a fleet: clear the kill-switch
     Start {
         /// Fleet name

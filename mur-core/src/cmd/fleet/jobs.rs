@@ -82,6 +82,8 @@ pub(crate) fn channel_terminal_status(events: &[ChannelEvent]) -> Option<JobStat
 ///     StateChange, adopt it (this is what `mur fleet run` also does, so a job
 ///     whose run crashed *after* the channel finished but *before* it stamped
 ///     the yaml still ends up correct).
+///  0. **Paused** — a job the fleet's pause checkpoint names is left alone,
+///     ahead of both rules below.
 ///  2. **Orphan staleness** — a job still `running` `RUNNING_GRACE_SECS` after
 ///     `started_at`, with no terminal channel signal, has no live run: its
 ///     process died (the four-day `019f69d8`). Mark `failed(orphaned)`.
@@ -89,8 +91,17 @@ pub(crate) fn reconcile_running(
     job: &Job,
     channel: Option<JobStatus>,
     now: chrono::DateTime<chrono::Utc>,
+    paused: bool,
 ) -> Option<(JobStatus, String)> {
     if job.status != JobStatus::Running {
+        return None;
+    }
+    // A paused run's job stays `Running` on purpose and its process is gone, so
+    // both rules below would wrongly end it: channel truth (the pause writes no
+    // terminal event, but an older iteration may have) and the 6h orphan check.
+    // The caller has already matched the job to the checkpoint (pause/resume
+    // design §5.5).
+    if paused {
         return None;
     }
     if let Some(term) = channel {
@@ -124,6 +135,17 @@ pub(crate) fn reconcile_running(
     None
 }
 
+/// The id of the job a paused run of `fleet` holds, if the fleet is paused and
+/// its checkpoint names one. Matching on the job id (not the run id) sidesteps
+/// the per-iteration vs outer run id mismatch.
+pub(crate) fn paused_job_id(mur_home: &Path, fleet: &str) -> Option<String> {
+    let run_id = super::control::paused_run_id(mur_home, fleet)?;
+    super::loop_run::checkpoint::load(mur_home, &run_id)
+        .ok()
+        .flatten()
+        .and_then(|cp| cp.job_id)
+}
+
 /// Sweep a fleet's jobs and converge any zombie `running` records to their true
 /// terminal state (#10). Called lazily by [`list_jobs`], so `mur fleet show`
 /// and `mur fleet jobs` always report truth, and orphaned runs (crash/kill)
@@ -142,8 +164,10 @@ fn reconcile_jobs(mur_home: &Path, fleet: &str, jobs: &mut [Job]) {
             .and_then(|evs| channel_terminal_status(&evs))
     });
     let now = chrono::Utc::now();
+    let paused_job = paused_job_id(mur_home, fleet);
     for job in jobs.iter_mut() {
-        if let Some((status, reason)) = reconcile_running(job, channel_status, now) {
+        let paused = paused_job.as_deref() == Some(job.id.as_str());
+        if let Some((status, reason)) = reconcile_running(job, channel_status, now, paused) {
             job.status = status;
             if status == JobStatus::Failed || status == JobStatus::Canceled {
                 job.error.get_or_insert(reason);
@@ -340,6 +364,115 @@ pub fn cmd_fleet_jobs(mur_home: &Path, fleet: &str, all: bool, since: Option<&st
 mod tests {
     use super::*;
     use mur_common::fleet::JobStatus;
+
+    fn running_job(id: &str, started: &str) -> Job {
+        Job {
+            id: id.into(),
+            text: "t".into(),
+            source: "cli".into(),
+            status: JobStatus::Running,
+            created_at: started.into(),
+            started_at: Some(started.into()),
+            finished_at: None,
+            run_id: Some("run-0".into()),
+            result: None,
+            error: None,
+        }
+    }
+
+    /// A paused job survives both rules that would otherwise end it: a terminal
+    /// channel state, and being older than the 6h orphan window.
+    #[test]
+    fn a_paused_job_is_left_alone_by_both_reconcile_rules() {
+        let now = chrono::Utc::now();
+        let old = (now - chrono::Duration::hours(24)).to_rfc3339();
+        let job = running_job("j1", &old);
+        assert_eq!(
+            reconcile_running(&job, Some(JobStatus::Canceled), now, true),
+            None,
+            "channel truth must not cancel a paused job"
+        );
+        assert_eq!(
+            reconcile_running(&job, None, now, true),
+            None,
+            "the 6h orphan rule must not fail a paused job"
+        );
+    }
+
+    /// Negative control: the same job, not paused, is adopted / orphaned as
+    /// before, so the test above is not satisfied by a function that always
+    /// returns `None`.
+    #[test]
+    fn the_same_job_without_a_pause_is_still_adopted_and_orphaned() {
+        let now = chrono::Utc::now();
+        let old = (now - chrono::Duration::hours(24)).to_rfc3339();
+        let job = running_job("j1", &old);
+        let adopted = reconcile_running(&job, Some(JobStatus::Canceled), now, false);
+        assert_eq!(adopted.map(|(s, _)| s), Some(JobStatus::Canceled));
+        let orphaned = reconcile_running(&job, None, now, false);
+        assert_eq!(orphaned.map(|(s, _)| s), Some(JobStatus::Failed));
+    }
+
+    /// End to end through `list_jobs`: the sentinel and the checkpoint's
+    /// `job_id` are what mark the job paused, and the job is not rewritten.
+    #[test]
+    fn list_jobs_keeps_the_job_a_checkpoint_names_running() {
+        use crate::cmd::fleet::loop_run::checkpoint::{self, CHECKPOINT_SCHEMA, Checkpoint};
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        crate::cmd::fleet::create::cmd_fleet_create(
+            h,
+            "dev",
+            vec!["pm".into()],
+            None,
+            Some("g".into()),
+            None,
+        )
+        .unwrap();
+        let old = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let held = running_job("held", &old);
+        let other = running_job("other", &old);
+        save_job(h, "dev", &held).unwrap();
+        save_job(h, "dev", &other).unwrap();
+        checkpoint::save(
+            h,
+            &Checkpoint {
+                schema: CHECKPOINT_SCHEMA,
+                run_id: "r1".into(),
+                iteration_run_id: "r1-0".into(),
+                fleet: "dev".into(),
+                iteration: 0,
+                spent_usd: 0.0,
+                active_elapsed_ms: 0,
+                stuck_elapsed_ms: 0,
+                start_seq: 0,
+                job_id: Some("held".into()),
+                goal_override: None,
+                deadline_ms: 1,
+                stuck_ms: None,
+                cost_usd: None,
+                hitl_unanswered: "defer".into(),
+                target_cwd: None,
+                procedure: vec![],
+                paused_at: "t".into(),
+                binary_version: "v".into(),
+            },
+        )
+        .unwrap();
+        std::fs::write(
+            crate::cmd::fleet::control::paused_path(h, "dev"),
+            "run_id: r1\nrequested_at: t\n",
+        )
+        .unwrap();
+        let jobs = list_jobs(h, "dev").unwrap();
+        let by_id = |id: &str| jobs.iter().find(|j| j.id == id).unwrap().status;
+        assert_eq!(by_id("held"), JobStatus::Running);
+        assert_eq!(
+            by_id("other"),
+            JobStatus::Failed,
+            "an unrelated zombie still self-heals"
+        );
+    }
 
     #[test]
     fn visible_jobs_hides_terminal_unless_all() {

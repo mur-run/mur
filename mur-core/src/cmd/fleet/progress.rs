@@ -87,6 +87,10 @@ pub struct RunProgress {
     /// ever runs (outcome `"failed"`); loop-internal failures use `stuck`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Set when the run paused (`mur fleet pause`); `finished_at` stays null
+    /// because a paused run is not finished. Cleared by a resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_at: Option<String>,
 }
 
 pub struct Totals {
@@ -219,7 +223,7 @@ pub enum ProgressPhase {
 
 /// Single source of truth for outcome→state, shared by the panel, the
 /// `mur_job_status` fallback (Task 4), and the murmur ticker (Task 5).
-/// Mirrors `loop_run::outcome_label`'s nine terms plus the wrapper-only
+/// Mirrors `loop_run::outcome_label`'s terms plus the wrapper-only
 /// `"failed"` term; anything else is treated as failed.
 ///
 /// Not yet called outside tests and [`progress_phase`] — Tasks 4/5 are its
@@ -230,6 +234,8 @@ pub fn state_for_outcome(outcome: &str) -> &'static str {
         "converged" | "max-iterations" | "deadline" | "budget" | "queue-drained" => "done",
         "stopped" | "commander-killed" => "stopped",
         "awaiting-approval" => "blocked",
+        // Not an ending: the run continues on `mur fleet resume`.
+        "paused" => "paused",
         "stuck" | "failed" => "failed",
         _ => "failed",
     }
@@ -377,6 +383,7 @@ mod tests {
             ],
             artifact_path: None,
             error: None,
+            paused_at: None,
         }
     }
 

@@ -96,6 +96,7 @@ fn record_preflight_failure(mur_home: &Path, run_id: &str, question: &str, error
         steps: vec![],
         artifact_path: None,
         error: None,
+        paused_at: None,
     });
     progress.outcome = Some("failed".to_string());
     progress.error = Some(error_summary.to_string());
@@ -534,6 +535,7 @@ mod tests {
             steps: vec![],
             artifact_path: None,
             error: None,
+            paused_at: None,
         }
     }
 }

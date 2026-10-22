@@ -137,6 +137,10 @@ pub fn due_fleets(mur_home: &Path, now_unix: u64) -> Result<Vec<String>> {
         if bounded
             && is_due(trigger, read_last_run(mur_home, &name), now_unix)
             && !mur_core::cmd::fleet::control::is_stopped(mur_home, &name)
+            // A paused fleet is waiting for an operator's `resume`; a fresh
+            // run would be refused, and starting one is exactly the bug a
+            // pause exists to prevent (pause/resume design §5.5).
+            && !mur_core::cmd::fleet::control::is_paused_any(mur_home, &name)
             && !commander_halted
         {
             due.push(name);

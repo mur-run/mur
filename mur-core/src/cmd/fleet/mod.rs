@@ -16,6 +16,7 @@ pub mod labels;
 pub mod list;
 pub mod loop_run;
 pub mod partition_cmd;
+pub mod pause;
 pub mod plan;
 pub mod progress;
 pub mod review;
