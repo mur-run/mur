@@ -42,7 +42,7 @@ pub fn map(s: RunStatus, now: DateTime<Utc>, abandon_grace: chrono::Duration) ->
         State::Skipped => Observation::terminal(Outcome::Succeeded, "run state: skipped"),
         State::Failed => Observation::terminal(Outcome::Failed, "run state: failed"),
         State::Stopped => Observation::terminal(Outcome::Cancelled, "run state: stopped"),
-        State::Running | State::Blocked => match s.liveness {
+        State::Running | State::Blocked | State::Paused => match s.liveness {
             // The process is gone and nothing wrote a terminal state: we do
             // not know what happened, and saying `failed` would be a guess.
             // Within the grace window that stays `unknown` (a result may yet
