@@ -107,7 +107,7 @@ pub(super) async fn submit(app: &mut App, tx: &mpsc::Sender<StreamMsg>) {
             });
             return;
         }
-        let (child, pid) = match shell::spawn(cmd).await {
+        let (child, pid) = match shell::spawn(cmd, app.shell_term_size()).await {
             Ok(v) => v,
             Err(e) => {
                 // Nothing to cancel and nothing to stream: one finished card.

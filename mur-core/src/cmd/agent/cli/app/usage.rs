@@ -235,6 +235,20 @@ impl App {
         markdown::body_cols(self.width, self.theme.inner_padding)
     }
 
+    /// The geometry a `!command` child should see: the width its card paints
+    /// at (pane minus horizontal padding on both sides — a shell card has no
+    /// body indent) and the real terminal height. Read per spawn, so a resize
+    /// is picked up by the next command. `None` when there is no terminal to
+    /// ask, in which case the child keeps its own default.
+    pub fn shell_term_size(&self) -> Option<super::super::shell::TermSize> {
+        let (_, rows) = crossterm::terminal::size().ok()?;
+        let cols = self
+            .width
+            .saturating_sub(2 * u16::from(self.theme.inner_padding))
+            .max(1);
+        Some(super::super::shell::TermSize { cols, rows })
+    }
+
     /// Re-render every cached reply at the current width. A table decided
     /// its column widths when the reply finished; after a resize the pane is
     /// a different width and the cache would either overflow or leave a
