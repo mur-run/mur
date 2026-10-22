@@ -10,7 +10,7 @@ use mur_common::agent::{HITL_CHANNEL_FILE, HITL_HEAD_DIR};
 use mur_common::hitl::HitlResponse;
 use mur_common::identity::AgentIdentity;
 
-use super::store::{ChannelDecisionStore, DecisionStore, Settled};
+use super::store::{ChannelDecisionStore, DecisionStore, Listing, Settled};
 
 const AGENT: &str = "qa";
 
@@ -346,6 +346,42 @@ fn a_reader_waits_for_a_writer_that_holds_the_append_lock() {
             .expect("reader resumes");
         assert_eq!(got.unwrap(), 1);
     });
+}
+
+// --- #2033: reporting an untrusted log ----------------------------------
+
+#[tokio::test]
+async fn list_report_names_the_reason_and_channel_for_a_headless_log() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    s.record(resp("h1", true, "a", 5)).await;
+    // The state an install upgraded across #1890 is in: records, no head.
+    std::fs::remove_dir_all(heads_dir(tmp.path())).unwrap();
+
+    match s.list_report().unwrap() {
+        Listing::Unavailable {
+            reason,
+            channel_id: got,
+        } => {
+            assert!(reason.contains("no signed head"), "{reason}");
+            assert_eq!(got, channel_id(tmp.path()));
+        }
+        other => panic!("expected Unavailable, got {other:?}"),
+    }
+    // Fail closed is unchanged: the gate still replays nothing.
+    assert_eq!(s.lookup("h1").await, None);
+    assert!(s.list().is_err());
+}
+
+#[tokio::test]
+async fn list_report_lists_a_trusted_log_normally() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    s.record(resp("h1", true, "a", 5)).await;
+    match s.list_report().unwrap() {
+        Listing::Live(v) => assert_eq!(v.len(), 1),
+        other => panic!("expected Live, got {other:?}"),
+    }
 }
 
 // --- what is NOT detected, written down as a test ----------------------

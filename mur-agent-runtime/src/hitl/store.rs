@@ -45,6 +45,14 @@ pub trait DecisionStore: Send + Sync {
     async fn record(&self, resp: HitlResponse);
 }
 
+/// What `hitl/list` can report: the live decisions, or why there are none to
+/// trust.
+#[derive(Debug)]
+pub enum Listing {
+    Live(Vec<LiveDecision>),
+    Unavailable { reason: String, channel_id: String },
+}
+
 pub struct ChannelDecisionStore {
     mur_home: PathBuf,
     agent: String,
@@ -108,6 +116,26 @@ impl ChannelDecisionStore {
                 .then(a.action_hash.cmp(&b.action_hash))
         });
         Ok(v)
+    }
+
+    /// Like [`Self::list`], but an untrusted log is reported as
+    /// [`Listing::Unavailable`] (reason + channel id) rather than an error, so
+    /// `hitl/list` can say why the memory is empty and what to run. The gate
+    /// still sees no decisions from such a log; only the reporting differs.
+    pub fn list_report(&self) -> Result<Listing> {
+        match self.list() {
+            Ok(decisions) => Ok(Listing::Live(decisions)),
+            Err(e) => match e.downcast_ref::<IntegrityError>() {
+                Some(ie) => {
+                    let svc = ChannelService::open(&self.mur_home)?;
+                    Ok(Listing::Unavailable {
+                        reason: ie.0.clone(),
+                        channel_id: self.channel_id(&svc)?,
+                    })
+                }
+                None => Err(e),
+            },
+        }
     }
 
     /// Revoke live decisions by appending ONE signed revocation; no existing
