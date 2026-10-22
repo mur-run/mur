@@ -305,6 +305,7 @@ pub async fn execute_dag(
         let opt_needs = opts.needs.clone();
         let opt_on_step = composed_on_step.clone();
         let opt_stop = opts.stop.clone();
+        let opt_halt = opts.halt.clone();
         let mut handles = Vec::new();
         for &i in &indices {
             // Mutating the graph node (not the local clone) keeps retries
@@ -321,6 +322,7 @@ pub async fn execute_dag(
             let run_id = opt_run_id.clone();
             let on_step = opt_on_step.clone();
             let stop = opt_stop.clone();
+            let halt = opt_halt.clone();
             let hitl_tiers = opt_hitl_tiers.clone();
             let sem = sem.clone();
             let mh = mur_home.to_path_buf();
@@ -354,6 +356,7 @@ pub async fn execute_dag(
                     needs,
                     on_step,
                     stop,
+                    halt,
                 };
                 execute_step(&step, &opts_clone, i, 0, &mh).await
             }));
@@ -565,7 +568,13 @@ pub async fn execute_dag(
     // ran, nothing failed), so reading the exit code alone would report a run
     // waiting on a human as a success.
     let outcome = if stopped {
-        RunOutcome::Stopped
+        // A halt is a pause only when the signal still says so: a stop that
+        // landed too (checked first inside `halt_reason`) wins, and a halt
+        // whose signal has since cleared stays the conservative `Stopped`.
+        match halt_reason(opts) {
+            Some(HaltReason::Pause) => RunOutcome::Paused,
+            _ => RunOutcome::Stopped,
+        }
     } else if overall_exit_code != 0 {
         RunOutcome::Failed
     } else if !blocked_ids.is_empty() {
@@ -582,13 +591,17 @@ pub async fn execute_dag(
         // the run record (State::Blocked) and the channel (InputRequired)
         // already carry the precise state.
         RunOutcome::Blocked => PipelineStatus::Skipped,
-        // Same stand-in as `Blocked`: the pause is carried by the run record
-        // (State::Paused), not by this serialized enum.
-        RunOutcome::Paused => PipelineStatus::Skipped,
+        // A pause halts exactly as a stop does, so the caller sees the same
+        // status and re-reads the sentinels to tell them apart (design
+        // §5.2). The run record (State::Paused) carries the distinction.
+        RunOutcome::Paused => PipelineStatus::Stopped,
         RunOutcome::Stopped => PipelineStatus::Stopped,
     };
     if outcome == RunOutcome::Stopped {
         eprintln!("\n⏹ Run stopped by the kill-switch — no further steps started.");
+    }
+    if outcome == RunOutcome::Paused {
+        eprintln!("\n⏸ Run paused by `mur fleet pause` — no further steps started.");
     }
     if outcome == RunOutcome::Blocked {
         let mut ids: Vec<&String> = blocked_ids.iter().collect();

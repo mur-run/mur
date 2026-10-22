@@ -20,8 +20,8 @@ pub(crate) use graph::validate_steps;
 use graph::*;
 pub use run::*;
 use step::*;
-pub use stop::StopSignal;
 use stop::*;
+pub use stop::{HaltReason, HaltSignal, PAUSED_REASON, StopSignal};
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -161,6 +161,11 @@ pub struct DagExecOptions<'a> {
     /// second — a trip cancels the member's task and ends the run
     /// `Stopped`. `None` = nothing can stop the run from outside.
     pub stop: Option<StopSignal>,
+    /// A halt that may be a pause rather than a stop (pause/resume design
+    /// §5.1). Polled exactly like `stop`; the difference is only how the run
+    /// ends: `Pause` leaves the channel open and the run resumable. `None` =
+    /// nothing can pause the run from outside.
+    pub halt: Option<HaltSignal>,
 }
 
 impl DagExecOptions<'_> {
@@ -193,6 +198,7 @@ impl<'a> Default for DagExecOptions<'a> {
             needs: Vec::new(),
             on_step: None,
             stop: None,
+            halt: None,
         }
     }
 }
@@ -209,7 +215,6 @@ enum RunOutcome {
     Failed,
     Blocked,
     Stopped,
-    #[allow(dead_code)] // not wired yet: constructed by the pause path (rollout step 3)
     Paused,
 }
 
@@ -517,6 +522,9 @@ fn delegate_result(
         tokens_used: extract_usage_tokens(task),
     }
 }
+#[cfg(test)]
+#[path = "dag/pause_halt_tests.rs"]
+mod pause_halt_tests;
 #[cfg(test)]
 #[path = "dag/pause_outcome_tests.rs"]
 mod pause_outcome_tests;

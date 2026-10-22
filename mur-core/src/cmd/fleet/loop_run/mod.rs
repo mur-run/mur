@@ -19,12 +19,14 @@ use super::progress::{
 };
 use super::run::build_fleet_procedure;
 use super::store;
-use crate::executor::dag::{StepEvent, StepEventKind};
 use crate::executor::delegation::cwd::{RunCwd, routing_note};
 
+pub(crate) mod checkpoint;
 mod guarded;
+mod observer;
+mod pause;
 mod pause_events;
-mod run_lock;
+pub(crate) mod run_lock;
 pub(crate) mod synth;
 
 pub use guarded::*;
@@ -85,6 +87,9 @@ pub enum LoopStop {
     Budget,
     /// Kill-switch engaged via `mur fleet stop`.
     Stopped,
+    /// `mur fleet pause`: the run halted at a safe point and left a
+    /// checkpoint. Not terminal — `mur fleet resume` continues it.
+    Paused,
     /// A commander governance kill (or zero budget-ceiling) halted the loop.
     CommanderKilled,
     /// `done_when: queue-empty` and an iteration found no queued job — the
@@ -403,6 +408,7 @@ fn outcome_label(stop: LoopStop) -> &'static str {
         LoopStop::Stuck => "stuck",
         LoopStop::Budget => "budget",
         LoopStop::Stopped => "stopped",
+        LoopStop::Paused => "paused",
         LoopStop::CommanderKilled => "commander-killed",
         LoopStop::QueueDrained => "queue-drained",
         LoopStop::AwaitingApproval => "awaiting-approval",
@@ -435,6 +441,7 @@ pub fn calibration_stop_reason(stop: LoopStop) -> Option<&'static str> {
         LoopStop::Converged
         | LoopStop::QueueDrained
         | LoopStop::Stopped
+        | LoopStop::Paused
         | LoopStop::CommanderKilled
         | LoopStop::AwaitingApproval
         // Not an overrun either: the work itself failed while every guard
@@ -470,6 +477,9 @@ pub fn stop_remedy(stop: LoopStop, fleet: &str) -> Option<String> {
             "raise it: mur fleet limits {fleet} --cost-usd <USD>  (fleet.yaml limits.cost_usd)"
         ),
         LoopStop::Stopped => format!("cleared by: mur fleet start {fleet}"),
+        LoopStop::Paused => format!(
+            "continue it: mur fleet resume {fleet}  (or discard it: mur fleet stop {fleet})"
+        ),
         LoopStop::CommanderKilled => {
             format!("a commander directive halted {fleet} — inspect it: mur commander status")
         }
@@ -491,6 +501,7 @@ pub fn loop_terminal_state(stop: LoopStop) -> crate::run_status::State {
     match stop {
         LoopStop::Converged | LoopStop::QueueDrained => State::Done,
         LoopStop::AwaitingApproval => State::Blocked,
+        LoopStop::Paused => State::Paused,
         LoopStop::Stopped | LoopStop::CommanderKilled => State::Stopped,
         LoopStop::MaxIterations
         | LoopStop::Deadline
@@ -505,6 +516,9 @@ fn terminal_state_for(stop: LoopStop) -> &'static str {
         LoopStop::Converged | LoopStop::QueueDrained => "completed",
         LoopStop::Stopped | LoopStop::CommanderKilled => "canceled",
         LoopStop::AwaitingApproval => "input-required",
+        // Never written: a pause leaves the channel open (design §5.2).
+        // `emit_stop_event` returns before using this for `Paused`.
+        LoopStop::Paused => "working",
         LoopStop::MaxIterations
         | LoopStop::Deadline
         | LoopStop::Stuck
@@ -550,6 +564,8 @@ pub async fn cmd_fleet_run_loop(
     Ok(())
 }
 
+#[cfg(test)]
+mod pause_tests;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(test)]

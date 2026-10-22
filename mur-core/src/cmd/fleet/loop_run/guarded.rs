@@ -1,3 +1,4 @@
+use super::pause::{emit_stop_event, refuse_pause};
 use super::*;
 
 /// Inner guarded loop: runs iterations until a stop reason fires. Returns
@@ -31,6 +32,13 @@ pub async fn run_guarded(
     // the guard) until this function returns or the process dies.
     let _run_lock = run_lock::acquire(mur_home, name)?;
     let mut fleet = store::load_fleet(mur_home, name)?;
+    // Kept for the checkpoint: `fleet.goal` is overwritten below, and a resume
+    // must carry the run-scoped goal, never `fleet.yaml`'s.
+    let goal_override_text = goal_override.clone();
+    let target_cwd_text = cwd
+        .as_ref()
+        .and_then(|c| c.path.as_ref())
+        .map(|p| p.display().to_string());
     if let Some(goal) = goal_override {
         fleet.goal = goal;
     }
@@ -185,6 +193,7 @@ pub async fn run_guarded(
         steps: vec![],
         artifact_path: None,
         error: None,
+        paused_at: None,
     }));
     lock_progress(&progress).save(mur_home, name);
 
@@ -308,9 +317,33 @@ pub async fn run_guarded(
             commander_ceiling = gov.budget_ceiling;
         }
 
-        // Kill-switch: a `mur fleet stop` between iterations halts here.
+        // Kill-switch: a `mur fleet stop` between iterations halts here. Stop
+        // is read before pause everywhere (design §6).
         if super::super::control::is_stopped(mur_home, name) {
             break LoopStop::Stopped;
+        }
+        // A pause taken between iterations: nothing is in flight, so the
+        // iteration to re-enter is this one and no procedure is stored.
+        if super::super::control::is_paused(mur_home, name, &run_id) {
+            let snap = pause::PauseSnapshot {
+                mur_home,
+                fleet: &fleet,
+                run_id: &run_id,
+                iteration,
+                spent_usd: spent,
+                active_elapsed: start.elapsed(),
+                stuck_elapsed: last_progress.elapsed(),
+                start_seq,
+                job_id: None,
+                goal_override: goal_override_text.as_deref(),
+                bounds: &bounds,
+                target_cwd: target_cwd_text.as_deref(),
+                procedure: &[],
+            };
+            match pause::record_pause(&svc, &snap) {
+                Ok(()) => break LoopStop::Paused,
+                Err(error) => refuse_pause(mur_home, &run_id, &error),
+            }
         }
         if let Some(stop) = check_guards(
             iteration,
@@ -404,74 +437,26 @@ pub async fn run_guarded(
                 .collect();
             g.save(mur_home, name);
         }
-        // Display-only step observer: mutate the shared progress + print one log
-        // line per completed step. Best-effort throughout — the closure never
-        // panics (poison-safe lock) and never affects execution.
-        let step_progress = progress.clone();
-        let step_home = mur_home.to_path_buf();
-        let step_fleet = name.to_string();
-        let on_step: Arc<dyn Fn(StepEvent) + Send + Sync> = Arc::new(move |e: StepEvent| {
-            let mut g = step_progress.lock().unwrap_or_else(|x| x.into_inner());
-            let Some(sp) = g.steps.iter_mut().find(|s| s.id == e.id) else {
-                return;
-            };
-            let now = chrono::Utc::now().to_rfc3339();
-            match e.kind {
-                StepEventKind::Started => {
-                    sp.state = StepState::Running;
-                    sp.started_at = Some(now);
-                }
-                StepEventKind::Blocked => {
-                    // Waiting on a human. Not Running (nothing is executing)
-                    // and not Failed (nothing went wrong): park it back at
-                    // Pending, which is what it is — work still to do — and
-                    // say so on its own line so the rail is not silent about
-                    // why the fleet stopped short.
-                    sp.state = StepState::Pending;
-                    println!("⏸ {} awaiting approval", sp.id);
-                }
-                // Halted by the kill-switch: back to Pending (work not done,
-                // nothing failed), with its own line like a blocked step.
-                StepEventKind::Stopped => {
-                    sp.state = StepState::Pending;
-                    sp.ended_at = Some(now);
-                    println!("⏹ {} stopped", sp.id);
-                }
-                // Skipped only arises without a channel and a fleet run always
-                // has one; should it ever arrive, it did not fail.
-                StepEventKind::Done | StepEventKind::Failed | StepEventKind::Skipped => {
-                    let done = e.kind != StepEventKind::Failed;
-                    sp.state = if done {
-                        StepState::Done
-                    } else {
-                        StepState::Failed
-                    };
-                    if e.tokens_used > 0 {
-                        sp.cost_usd = Some(iteration_cost_usd(e.tokens_used, price_per_1k));
-                    }
-                    // `✓ s2 research dr_worker_2 $0.08 42s`
-                    let mark = if done { '✓' } else { '✗' };
-                    let phase = sp.phase.label();
-                    let worker = sp.worker.clone().unwrap_or_default();
-                    let cost = sp.cost_usd.map(|c| format!(" ${c:.2}")).unwrap_or_default();
-                    let elapsed = sp
-                        .started_at
-                        .as_deref()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .and_then(|st| {
-                            chrono::DateTime::parse_from_rfc3339(&now)
-                                .ok()
-                                .map(|en| (en - st).num_seconds())
-                        })
-                        .filter(|s| *s >= 0)
-                        .map(|s| format!(" {s}s"))
-                        .unwrap_or_default();
-                    sp.ended_at = Some(now);
-                    println!("  {mark} {} {phase} {worker}{cost}{elapsed}", e.id);
-                }
-            }
-            g.save(&step_home, &step_fleet);
-        });
+        let on_step = observer::step_observer(
+            progress.clone(),
+            mur_home.to_path_buf(),
+            name.to_string(),
+            price_per_1k,
+        );
+        let pausable = checkpoint::procedure_fits(&proc.steps);
+        if !pausable {
+            refuse_pause(
+                mur_home,
+                &run_id,
+                &format!(
+                    "iteration {} plans more than the {}-byte checkpoint limit; `mur fleet stop` is the way out",
+                    iteration + 1,
+                    checkpoint::CHECKPOINT_PROCEDURE_MAX_BYTES
+                ),
+            );
+        } else {
+            checkpoint::clear_pause_refusal(mur_home, &run_id);
+        }
         let opts = crate::executor::dag::DagExecOptions {
             // Fail-closed on the unattended loop path: never blanket-approve.
             // (No risk tier on fan-out steps today; this guards future
@@ -496,6 +481,11 @@ pub async fn run_guarded(
             // yet started never start, and an in-flight member turn is
             // cancelled — instead of waiting for the next iteration's check.
             stop: Some(super::super::control::stop_signal(mur_home, name)),
+            // A pause reaches the in-flight iteration by the same route, but
+            // only when the checkpoint could carry this iteration's plan; a
+            // procedure over the cap makes the pause refused, not the run
+            // unresumable (design §4).
+            halt: pausable.then(|| super::super::control::halt_signal(mur_home, name, &run_id)),
             deadline_at: Some(start + bounds.deadline),
             needs: fleet.needs.clone(),
             ..Default::default()
@@ -517,6 +507,51 @@ pub async fn run_guarded(
         // #2036: the kill-switch halted this iteration. Account what it burned,
         // mark the job canceled, and leave BEFORE synthesis — that turn is
         // another paid call the operator just asked not to make.
+        if out.status == mur_common::pipeline::PipelineStatus::Stopped
+            && !super::super::control::is_stopped(mur_home, name)
+            && super::super::control::is_paused(mur_home, name, &run_id)
+        {
+            // A pause, not a stop: the iteration is unfinished and will be
+            // re-entered on resume, so it is NOT counted, the job stays
+            // `Running` under its per-iteration run id, and real burn is still
+            // charged (design §5.2). Synthesis is skipped for the same reason
+            // as on a stop.
+            if let Some(job) = active_job.as_mut() {
+                job.run_id = Some(opts.run_id.clone());
+                let _ = super::super::jobs::save_job(mur_home, name, job);
+            }
+            spent += iteration_cost_usd(out.tokens_used, price_per_1k);
+            {
+                let mut g = lock_progress(&progress);
+                g.spend_usd = spent;
+                g.save(mur_home, name);
+                println!("{}", iteration_summary_line(&g));
+            }
+            let snap = pause::PauseSnapshot {
+                mur_home,
+                fleet: &fleet,
+                run_id: &run_id,
+                iteration,
+                spent_usd: spent,
+                active_elapsed: start.elapsed(),
+                stuck_elapsed: last_progress.elapsed(),
+                start_seq,
+                job_id: active_job.as_ref().map(|j| j.id.as_str()),
+                goal_override: goal_override_text.as_deref(),
+                bounds: &bounds,
+                target_cwd: target_cwd_text.as_deref(),
+                procedure: &proc.steps,
+            };
+            match pause::record_pause(&svc, &snap) {
+                Ok(()) => break LoopStop::Paused,
+                Err(error) => {
+                    // No checkpoint exists, so the run must not read as
+                    // paused. Say so and let the operator stop it.
+                    refuse_pause(mur_home, &run_id, &error);
+                    break LoopStop::IterationFailed;
+                }
+            }
+        }
         if out.status == mur_common::pipeline::PipelineStatus::Stopped {
             iteration += 1;
             if let Some(job) = active_job.as_mut() {
@@ -676,7 +711,14 @@ pub async fn run_guarded(
     // record (overwritten by the next run). Best-effort.
     let run_id = {
         let mut g = lock_progress(&progress);
-        g.finished_at = Some(chrono::Utc::now().to_rfc3339());
+        // A paused run is not finished: `finished_at` stays null so the panel
+        // and the live-run gate do not read it as over, and `paused_at` says
+        // when it stopped (design §5.5).
+        if stop == LoopStop::Paused {
+            g.paused_at = Some(chrono::Utc::now().to_rfc3339());
+        } else {
+            g.finished_at = Some(chrono::Utc::now().to_rfc3339());
+        }
         g.outcome = Some(outcome_label(stop).to_string());
         g.iteration = iteration;
         g.spend_usd = spent;
@@ -704,7 +746,9 @@ pub async fn run_guarded(
     // The loop path carries the best evidence in the codebase: a real
     // cumulative `spent` and a stop reason the guards themselves produced.
     // `run_id` matches the gate call above, which is what pairs the halves.
-    if triage_cfg.enabled {
+    // A pause is not an outcome: the run continues on resume, and scoring it
+    // now would pair the verdict against a half-finished run.
+    if triage_cfg.enabled && stop != LoopStop::Paused {
         crate::executor::triage_gate::record_outcome(
             mur_home,
             &run_id,
@@ -716,38 +760,4 @@ pub async fn run_guarded(
     }
 
     Ok((stop, iteration, spent))
-}
-
-/// One System `state-change` carrying why the loop stopped and the way out.
-/// `from` is always `working`: a loop that is ending was running.
-fn emit_stop_event(
-    svc: &mur_channel::ChannelService,
-    mur_home: &Path,
-    fleet: &Fleet,
-    stop: LoopStop,
-    iterations: u32,
-    spent_usd: f64,
-    run_id: &str,
-) {
-    let payload = serde_json::json!({
-        "from": "working",
-        "to": terminal_state_for(stop),
-        "stop_reason": outcome_label(stop),
-        "remedy": stop_remedy(stop, &fleet.name),
-        "iterations": iterations,
-        "spent_usd": spent_usd,
-        "run_id": run_id,
-    });
-    if let Err(e) = crate::channel_writer::append_as_writer(
-        svc,
-        mur_home,
-        &fleet.channel_id,
-        fleet.router_or_concierge(),
-        ChannelActor::System,
-        mur_common::channel::EventKind::StateChange,
-        payload,
-        None,
-    ) {
-        tracing::warn!(fleet = %fleet.name, error = %e, "could not write the stop reason to the channel");
-    }
 }

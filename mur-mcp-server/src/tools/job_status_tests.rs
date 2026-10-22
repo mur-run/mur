@@ -225,6 +225,7 @@ async fn mur_job_status_appends_only_matching_fleet_progress() {
         }],
         artifact_path: None,
         error: None,
+        paused_at: None,
     };
     progress.save(mur_home, "deep-research");
 

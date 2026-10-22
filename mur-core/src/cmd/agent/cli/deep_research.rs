@@ -189,6 +189,7 @@ mod tests {
             steps: vec![],
             artifact_path: None,
             error: None,
+            paused_at: None,
         };
         progress.save(tmp.path(), DEFAULT_FLEET_NAME);
 

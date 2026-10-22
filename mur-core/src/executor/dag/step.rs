@@ -234,7 +234,11 @@ pub(super) async fn execute_step(
     // the operator stopped the run never starts — not even its Started event,
     // so `mur job status` does not show it running.
     if stop_requested(opts) {
-        emit(StepEventKind::Stopped, 0, Some(STOPPED_REASON.into()));
+        emit(
+            StepEventKind::Stopped,
+            0,
+            Some(halted_reason_text(opts).into()),
+        );
         return stopped_result(start.elapsed().as_millis() as u64);
     }
     emit(StepEventKind::Started, 0, None);
@@ -353,12 +357,13 @@ pub(super) async fn execute_step(
             remaining_secs(opts.deadline_at, std::time::Instant::now()),
             &opts.needs,
         );
+        let watch = watch_signal(opts);
         let dial = match dial_delegate_watched(
             mur_home,
             &canonical,
             &child_task_id,
             params,
-            opts.stop.as_ref(),
+            watch.as_ref(),
         )
         .await
         {
@@ -375,13 +380,14 @@ pub(super) async fn execute_step(
                         ChannelActor::System,
                         mur_common::channel::EventKind::Note,
                         serde_json::json!({
-                            "text": format!("delegate to {canonical} cancelled: {STOPPED_REASON}")
+                            "text": format!("delegate to {canonical} cancelled: {}", halted_reason_text(opts))
                         }),
                         None,
                     );
                 }
-                eprintln!("  Step {sid}: delegate to {canonical} cancelled — {STOPPED_REASON}");
-                emit(StepEventKind::Stopped, 0, Some(STOPPED_REASON.into()));
+                let why = halted_reason_text(opts);
+                eprintln!("  Step {sid}: delegate to {canonical} cancelled — {why}");
+                emit(StepEventKind::Stopped, 0, Some(why.into()));
                 return stopped_result(start.elapsed().as_millis() as u64);
             }
         };
