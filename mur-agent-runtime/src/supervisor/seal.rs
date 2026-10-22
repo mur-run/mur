@@ -319,6 +319,20 @@ pub(super) async fn prepare_and_seal(
     let granted_spawn_dirs_digest = Some(mur_common::agent::spawn_dirs_digest(
         &profile.inner.entitlements.processes.spawn.allowed_dirs,
     ));
+    // ssh-agent proxy classification, strictly BEFORE the seal: the probe
+    // child installs the agent's profile on itself, which macOS refuses inside
+    // an already-sealed parent. Bounded by PROBE_TIMEOUT; never gates start.
+    super::ssh_proxy_class::record_at_start(
+        agent_home,
+        !profile.inner.entitlements.ssh.is_empty(),
+        &crate::sandbox::build_policy(
+            &profile.inner.entitlements,
+            agent_home,
+            &extra_ports,
+            &loopback_ports,
+            &extra_write_paths,
+        ),
+    );
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,

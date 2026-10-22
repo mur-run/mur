@@ -83,6 +83,39 @@ pub fn apply(
     loopback_ports: &[u16],
     extra_write_paths: &[std::path::PathBuf],
 ) -> anyhow::Result<SandboxStatus> {
+    let policy = build_policy(
+        entitlements,
+        agent_home,
+        extra_ports,
+        loopback_ports,
+        extra_write_paths,
+    );
+    // E2 (#1875): judged on the finished policy, before anything is installed.
+    // Same `<mur_home>` derivation as the `channels` grant in `policy/build.rs`.
+    let mur_home = agent_home
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(mur_common::home::mur_home);
+    protected::check_protected_writes(&policy, &mur_home)?;
+    let dropped = policy.dropped.clone();
+    let mut status = apply_policy(&policy)?;
+    status.dropped = dropped;
+    // Store for attestation. OnceLock: if called twice, second call is ignored.
+    let _ = SANDBOX_STATUS.set(status.clone());
+    Ok(status)
+}
+
+/// The exact policy [`apply`] installs, without installing it. The ssh-agent
+/// bypass probe runs its child under this, so it judges the profile the
+/// kernel will enforce rather than a look-alike.
+pub fn build_policy(
+    entitlements: &Entitlements,
+    agent_home: &Path,
+    extra_ports: &[u16],
+    loopback_ports: &[u16],
+    extra_write_paths: &[std::path::PathBuf],
+) -> SandboxPolicy {
     let mut policy = SandboxPolicy::from_entitlements(entitlements, agent_home);
     // An agent must always be able to reach its own configured local LLM.
     policy.allow_extra_ports(extra_ports);
@@ -98,20 +131,7 @@ pub fn apply(
     // …and to write the shared runtime media state it owns (co-watching:
     // watch.json + VLC snapshot dir), which lives outside agent_home.
     policy.allow_extra_write_paths(extra_write_paths);
-    // E2 (#1875): judged on the finished policy, before anything is installed.
-    // Same `<mur_home>` derivation as the `channels` grant in `policy/build.rs`.
-    let mur_home = agent_home
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(mur_common::home::mur_home);
-    protected::check_protected_writes(&policy, &mur_home)?;
-    let dropped = policy.dropped.clone();
-    let mut status = apply_policy(&policy)?;
-    status.dropped = dropped;
-    // Store for attestation. OnceLock: if called twice, second call is ignored.
-    let _ = SANDBOX_STATUS.set(status.clone());
-    Ok(status)
+    policy
 }
 
 #[cfg(target_os = "linux")]

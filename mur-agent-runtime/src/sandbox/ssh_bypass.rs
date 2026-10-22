@@ -140,5 +140,8 @@ pub fn classify(inputs: Inputs<'_>) -> Classification {
 #[cfg(unix)]
 pub mod probe;
 
+#[cfg(unix)]
+pub mod child;
+
 #[cfg(test)]
 mod tests;

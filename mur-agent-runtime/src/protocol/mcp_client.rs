@@ -292,6 +292,11 @@ impl StdioMcpClient {
         if let Some((k, v)) = crate::sandbox::sealed_child_env(crate::sandbox::last_status()) {
             std_cmd.env(k, v);
         }
+        // Same rule as bash (`bash_env.rs`): the runtime's inherited
+        // ssh-agent socket is never handed to a tool child. An MCP server that
+        // runs commands would otherwise sign with the user's real agent,
+        // around the ssh-agent proxy.
+        strip_inherited_ssh_agent(&mut std_cmd);
         // Last, so neither an inherited nor a policy env var can move
         // `SERENA_HOME`, and the fixed `--project` follows the entry's args.
         for k in &serena.env_remove {
@@ -529,11 +534,35 @@ pub(crate) fn scratch_env_for(policy: &SandboxPolicy) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// The env var carrying the user's ssh-agent socket, which an MCP child
+/// must never inherit from the runtime.
+const INHERITED_SSH_AGENT_ENV: &str = "SSH_AUTH_SOCK";
+
+fn strip_inherited_ssh_agent(cmd: &mut std::process::Command) {
+    cmd.env_remove(INHERITED_SSH_AGENT_ENV);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mur_common::agent::{McpNetMode, McpServerNetwork};
     use std::collections::HashMap;
+
+    #[test]
+    fn mcp_child_never_inherits_the_ssh_agent_socket() {
+        let mut cmd = std::process::Command::new("true");
+        cmd.env(INHERITED_SSH_AGENT_ENV, "/tmp/agent.sock");
+        strip_inherited_ssh_agent(&mut cmd);
+        let got: Vec<_> = cmd
+            .get_envs()
+            .filter(|(k, _)| *k == INHERITED_SSH_AGENT_ENV)
+            .collect();
+        // `None` value = explicitly removed, so the inherited one is dropped too.
+        assert_eq!(
+            got,
+            vec![(std::ffi::OsStr::new(INHERITED_SSH_AGENT_ENV), None)]
+        );
+    }
 
     #[test]
     fn stderr_tail_quotes_the_last_lines_and_nothing_when_silent() {

@@ -1,12 +1,39 @@
 use super::{SandboxPolicy, SandboxStatus};
-use anyhow::Context;
 use mur_common::agent::SpawnMode;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
-    let profile = build_sbpl_profile(policy);
-    let profile_c = CString::new(profile).context("SBPL profile to CString")?;
+    if let Err(msg) = init_profile(&build_sbpl_profile(policy)) {
+        // Report the fact (not enforcing), not a decision this layer does not
+        // make: the supervisor consults `fail_closed_on_sandbox_error` and may
+        // refuse to start rather than continue advisory-only.
+        tracing::warn!(
+            error = %msg,
+            "macOS sandbox_init failed; sandbox NOT enforcing — \
+             fail_closed_on_sandbox_error decides whether startup continues"
+        );
+        return Ok(SandboxStatus {
+            platform: "macos-sbpl-failed".to_string(),
+            effective_abi: None,
+            enforcing: false,
+            dropped: Vec::new(),
+        });
+    }
+
+    Ok(SandboxStatus {
+        platform: "macos-sbpl".to_string(),
+        effective_abi: None,
+        enforcing: true,
+        dropped: Vec::new(),
+    })
+}
+
+/// Install SBPL `profile` on the current process. The one `sandbox_init` call
+/// site: the seal and the ssh-agent bypass probe child both go through it, so
+/// the probe cannot install a profile differently from the seal.
+pub(crate) fn init_profile(profile: &str) -> Result<(), String> {
+    let profile_c = CString::new(profile).map_err(|e| format!("SBPL profile to CString: {e}"))?;
 
     let mut error_buf: *mut libc::c_char = std::ptr::null_mut();
     // parameters is a null-terminated array of (key, value, ..., NULL) pairs.
@@ -32,28 +59,9 @@ pub fn apply_macos(policy: &SandboxPolicy) -> anyhow::Result<SandboxStatus> {
             unsafe { sandbox_free_error(error_buf) };
             s
         };
-        // Report the fact (not enforcing), not a decision this layer does not
-        // make: the supervisor consults `fail_closed_on_sandbox_error` and may
-        // refuse to start rather than continue advisory-only.
-        tracing::warn!(
-            error = %msg,
-            "macOS sandbox_init failed; sandbox NOT enforcing — \
-             fail_closed_on_sandbox_error decides whether startup continues"
-        );
-        return Ok(SandboxStatus {
-            platform: "macos-sbpl-failed".to_string(),
-            effective_abi: None,
-            enforcing: false,
-            dropped: Vec::new(),
-        });
+        return Err(msg);
     }
-
-    Ok(SandboxStatus {
-        platform: "macos-sbpl".to_string(),
-        effective_abi: None,
-        enforcing: true,
-        dropped: Vec::new(),
-    })
+    Ok(())
 }
 
 /// Standard macOS locations a process must be able to write to in order to

@@ -52,6 +52,7 @@ mod dispatch;
 mod identity;
 mod pin;
 mod seal;
+mod ssh_proxy_class;
 pub use seal::extra_write_paths;
 mod test_bridge;
 
@@ -91,6 +92,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("mcp-shim: --task-id is required"))?;
         return crate::mcp_shim::run(std::path::PathBuf::from(socket), task_id).await;
     }
+    #[cfg(unix)]
+    crate::sandbox::ssh_bypass::child::exit_if_probe(&argv);
     if crate::subcommand::has_flag(&argv, &["--help", "-h"]) {
         let exe = argv
             .first()
