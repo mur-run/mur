@@ -5,13 +5,11 @@
 //! `EventKind` variant exists, the events ride inside `EventKind::Note` as
 //! `Note.payload == {"fleet_run": {"v": 1, "type": "<kind>", ...}}`. They are
 //! deliberately NOT `StateChange`s, so `channel_terminal_status` (`jobs.rs`)
-//! and `run_status::rebuild` ignore them and a paused job is never read as
-//! canceled. A `Note` with no `"fleet_run"` key is an ordinary note; one that
-//! HAS the key but does not deserialize is damage, not an ignorable note.
-//!
-//! Types only: nothing writes or reads these yet (rollout step 3 writes
-//! `run_paused`, step 4 writes `run_resumed` and folds both).
-#![allow(dead_code)] // wired in rollout steps 3-4
+//! ignores them and a paused job is never read as canceled.
+//! `run_status::rebuild` does read them, but only as the non-terminal
+//! `Paused` / `Running`. A `Note` with no `"fleet_run"` key is an
+//! ordinary note; one that HAS the key but does not deserialize is damage, not
+//! an ignorable note.
 
 use serde::{Deserialize, Serialize};
 

@@ -415,9 +415,17 @@ pub(crate) fn end_paused_run(mur_home: &Path, name: &str) -> bool {
             job.error = Some("stopped by `mur fleet stop` while paused".to_string());
             let _ = crate::cmd::fleet::jobs::save_job(mur_home, name, &job);
         }
-        let _ = crate::run_status::store::update(mur_home, &run_id, |r| {
-            r.state = crate::run_status::State::Stopped
-        });
+        // The loop's record AND the paused iteration's: `mur fleet status`
+        // shows the iteration, which otherwise stayed `paused` forever.
+        let iteration_run_id = checkpoint::load(mur_home, &run_id)
+            .ok()
+            .flatten()
+            .map(|cp| cp.iteration_run_id);
+        for id in std::iter::once(run_id.as_str()).chain(iteration_run_id.as_deref()) {
+            let _ = crate::run_status::store::update(mur_home, id, |r| {
+                r.state = crate::run_status::State::Stopped
+            });
+        }
         if let Some((mut p, _)) = crate::cmd::fleet::progress::load(mur_home, name)
             && p.run_id == run_id
         {
@@ -425,11 +433,52 @@ pub(crate) fn end_paused_run(mur_home: &Path, name: &str) -> bool {
             p.outcome = Some("stopped".to_string());
             p.save(mur_home, name);
         }
+        announce_discard(mur_home, name, &run_id);
     }
     checkpoint::remove(mur_home, &run_id);
     checkpoint::clear_pause_refusal(mur_home, &run_id);
     let _ = std::fs::remove_file(control::paused_path(mur_home, name));
     paused
+}
+
+/// The channel's record that the paused run is over: one terminal `canceled`
+/// `StateChange` per run id the pause left open — the iteration's (whose
+/// `run.json` the rebuild folds) and the loop's, the same pair a run stopped
+/// while live would have written. Without it the channel's last word is
+/// `run_paused`, and anything rebuilt from the channel reports a discarded
+/// run as still going. Best-effort, like every stop announcement.
+fn announce_discard(mur_home: &Path, name: &str, run_id: &str) {
+    let Ok(fleet) = store::load_fleet(mur_home, name) else {
+        return;
+    };
+    let Ok(svc) = mur_channel::ChannelService::open(mur_home) else {
+        return;
+    };
+    let mut ids = vec![run_id.to_string()];
+    if let Ok(Some(cp)) = checkpoint::load(mur_home, run_id) {
+        ids.insert(0, cp.iteration_run_id);
+    }
+    for id in ids {
+        let payload = serde_json::json!({
+            "from": "working",
+            "to": super::terminal_state_for(LoopStop::Stopped),
+            "stop_reason": super::outcome_label(LoopStop::Stopped),
+            "remedy": super::stop_remedy(LoopStop::Stopped, name),
+            "run_id": id,
+        });
+        if let Err(error) = crate::channel_writer::append_as_writer(
+            &svc,
+            mur_home,
+            &fleet.channel_id,
+            fleet.router_or_concierge(),
+            mur_common::channel::ChannelActor::System,
+            EventKind::StateChange,
+            payload,
+            None,
+        ) {
+            tracing::warn!(fleet = %name, %error, "could not write the discarded run's end to the channel");
+        }
+    }
 }
 
 #[cfg(test)]

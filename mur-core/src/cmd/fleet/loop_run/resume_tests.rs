@@ -388,3 +388,45 @@ fn repeated_pause_cycles_never_loosen_the_frozen_hitl_policy() {
     assert_eq!(effective_hitl(Some(Wait), Some(Defer), Wait), Defer);
     assert_eq!(effective_hitl(Some(Wait), None, Defer), Wait);
 }
+
+/// `stop` on a paused run must leave the channel saying so: before this the
+/// channel's last word was `run_paused`, and a status rebuilt from it read
+/// `running` forever (the `resume-smoke` field report).
+#[test]
+fn stop_while_paused_ends_both_run_ids_on_the_channel() {
+    let home = paused_home(None);
+    let svc = mur_channel::ChannelService::open(home.path()).unwrap();
+    svc.create_for_fleet("dev", "mur", &["pm".to_string()])
+        .unwrap();
+    let iter_run = format!("{RUN}-2");
+    let sc = crate::run_status::Sidecar {
+        schema: crate::run_status::SIDECAR_SCHEMA,
+        channel_id: "fleet-dev".into(),
+        kind: crate::run_status::RunKind::Fleet,
+        first_seq: 0,
+    };
+
+    let mut iter_rec = crate::run_status::store::load(home.path(), RUN)
+        .unwrap()
+        .unwrap();
+    iter_rec.run_id = iter_run.clone();
+    crate::run_status::store::save(home.path(), &iter_rec).unwrap();
+
+    control::cmd_fleet_stop(home.path(), "dev").unwrap();
+
+    let rec = crate::run_status::store::load(home.path(), &iter_run)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.state,
+        crate::run_status::State::Stopped,
+        "the iteration's record too"
+    );
+    for id in [RUN, iter_run.as_str()] {
+        assert_eq!(
+            crate::run_status::rebuild::run_tail_state(home.path(), &sc, id).unwrap(),
+            Some(crate::run_status::State::Stopped),
+            "{id} must end on the channel"
+        );
+    }
+}
