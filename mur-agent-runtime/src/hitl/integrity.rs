@@ -35,15 +35,46 @@ use mur_common::identity::AgentIdentity;
 
 /// The log's integrity could not be established. Carries the reason so
 /// `hitl/list` can say why the memory is unavailable instead of showing it empty.
+///
+/// Two kinds, because they need different handling at the reporting edge
+/// (#2033): a *verdict* ("the log is not what the seal says") is something
+/// `mur channel repair` can act on, while an *I/O* failure (the log or head
+/// could not even be read) is an internal error the operator must see as one.
+/// Both fail closed for the gate.
 #[derive(Debug)]
-pub struct IntegrityError(pub String);
+pub struct IntegrityError {
+    pub reason: String,
+    io: bool,
+}
+
+impl IntegrityError {
+    fn verdict(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            io: false,
+        }
+    }
+
+    fn io(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            io: true,
+        }
+    }
+
+    /// True when the check could not run (unreadable file), as opposed to
+    /// running and finding the log untrustworthy.
+    pub fn is_io(&self) -> bool {
+        self.io
+    }
+}
 
 impl std::fmt::Display for IntegrityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "remembered approvals are unavailable: decision log integrity check failed ({})",
-            self.0
+            self.reason
         )
     }
 }
@@ -104,7 +135,7 @@ pub fn verify(
     channel_id: &str,
     pubkey: &[u8; 32],
 ) -> Result<(), IntegrityError> {
-    let bad = |why: String| IntegrityError(why);
+    let bad = |why: String| IntegrityError::verdict(why);
     // An unfinished `mur channel repair` may have left an empty log and no
     // head, which would otherwise pass below as a never-written channel.
     if mur_channel::repair_marker::is_pending(mur_home, channel_id) {
@@ -112,9 +143,18 @@ pub fn verify(
     }
     let log = log_path(mur_home, channel_id)
         .and_then(|p| read_log(&p))
-        .map_err(|e| bad(format!("{e:#}")))?;
-    let head = read_head(&heads_dir(mur_home, agent), channel_id)
-        .map_err(|e| bad(format!("head unreadable: {e:#}")))?;
+        .map_err(|e| IntegrityError::io(format!("{e:#}")))?;
+    let head = read_head(&heads_dir(mur_home, agent), channel_id).map_err(|e| {
+        let why = format!("head unreadable: {e:#}");
+        // Only a head that read fine but does not parse is a damaged seal that
+        // repair can act on; anything else (unreadable path, bad channel id)
+        // is an internal failure and must stay one.
+        if e.root_cause().is::<serde_json::Error>() {
+            IntegrityError::verdict(why)
+        } else {
+            IntegrityError::io(why)
+        }
+    })?;
     let Some(head) = head else {
         return if log.is_empty() {
             Ok(())

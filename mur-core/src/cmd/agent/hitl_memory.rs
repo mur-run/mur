@@ -29,6 +29,16 @@ struct Row {
 #[derive(Debug, Deserialize)]
 struct ListResult {
     decisions: Vec<Row>,
+    /// Set when the decision log could not be verified: why, and which channel
+    /// to repair (#2033). `decisions` is empty then, and stays empty.
+    #[serde(default)]
+    unavailable: Option<Unavailable>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Unavailable {
+    reason: String,
+    channel_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,7 +68,10 @@ pub fn cmd_hitl_list(agent: &str, json: bool) -> Result<()> {
         return Ok(());
     }
     let list: ListResult = serde_json::from_value(v)?;
-    print!("{}", render(&list.decisions, chrono::Utc::now()));
+    match &list.unavailable {
+        Some(u) => print!("{}", render_unavailable(&canonicalize_for_msg(agent), u)),
+        None => print!("{}", render(&list.decisions, chrono::Utc::now())),
+    }
     Ok(())
 }
 
@@ -93,6 +106,32 @@ fn forget_params(hash: Option<&str>, all: bool, denies_only: bool) -> Result<ser
         (None, false, false) => anyhow::bail!("give a hash prefix, --all, or --denies-only"),
         _ => anyhow::bail!("use only one of a hash prefix, --all, or --denies-only"),
     }
+}
+
+fn canonicalize_for_msg(agent: &str) -> String {
+    resolve_mur_home()
+        .map(|home| canonicalize_agent_name(&home, agent))
+        .unwrap_or_else(|_| agent.to_string())
+}
+
+/// Plain explanation for a log that cannot be trusted, with the recovery
+/// command ready to copy. Nothing is auto-allowed meanwhile (#2033).
+fn render_unavailable(agent: &str, u: &Unavailable) -> String {
+    // Only this one reason is the benign upgrade state; any other (a record
+    // missing, a head that does not match) must not be waved off as expected.
+    let note = if u.reason.contains("no signed head") {
+        " (expected after upgrading past #1890)"
+    } else {
+        ""
+    };
+    format!(
+        "remembered approvals for '{agent}' are unavailable: {reason}{note}.\n\
+         Gated calls will ask again; nothing is auto-allowed.\n\
+         To start a fresh signed log now: stop the agent, then run \
+         `mur channel repair {channel}` in a terminal.\n",
+        reason = u.reason,
+        channel = u.channel_id,
+    )
 }
 
 fn short(h: &str) -> &str {
@@ -176,6 +215,35 @@ mod tests {
         assert!(out.contains("in 6d"));
         assert!(out.contains("edit_file: Cargo.toml"));
         assert!(out.contains(NO_LABEL));
+    }
+
+    #[test]
+    fn render_unavailable_gives_reason_channel_and_repair_command() {
+        let out = render_unavailable(
+            "dr_worker_2",
+            &Unavailable {
+                reason: "log has records but no signed head".into(),
+                channel_id: "chan-42".into(),
+            },
+        );
+        assert!(out.contains("'dr_worker_2'"));
+        assert!(out.contains("log has records but no signed head"));
+        assert!(out.contains("`mur channel repair chan-42`"));
+        assert!(out.contains("nothing is auto-allowed"));
+        assert!(!out.contains("-32603") && !out.contains("internal:"));
+    }
+
+    #[test]
+    fn list_result_parses_with_and_without_unavailable() {
+        let plain: ListResult =
+            serde_json::from_value(serde_json::json!({"decisions": []})).unwrap();
+        assert!(plain.unavailable.is_none());
+        let bad: ListResult = serde_json::from_value(serde_json::json!({
+            "decisions": [],
+            "unavailable": {"reason": "r", "channel_id": "c"}
+        }))
+        .unwrap();
+        assert_eq!(bad.unavailable.unwrap().channel_id, "c");
     }
 
     #[test]

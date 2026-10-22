@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::hitl::store::ChannelDecisionStore;
+use crate::hitl::store::{ChannelDecisionStore, Listing};
 use crate::protocol::a2a_server::{HandlerError, MethodHandler, RequestContext};
 
 /// `hitl/forget` params: exactly one of these.
@@ -46,15 +46,27 @@ fn internal(e: anyhow::Error) -> HandlerError {
     HandlerError::Internal(format!("{e:#}"))
 }
 
+/// An untrusted log is a normal state, not a runtime fault: no decisions, plus
+/// the reason and channel id so the caller can show the way out (#2033).
+fn listing_json(listing: Listing) -> Value {
+    match listing {
+        Listing::Live(decisions) => json!({ "decisions": decisions }),
+        Listing::Unavailable { reason, channel_id } => json!({
+            "decisions": [],
+            "unavailable": { "reason": reason, "channel_id": channel_id },
+        }),
+    }
+}
+
 #[async_trait]
 impl MethodHandler for HitlListHandler {
     async fn handle(&self, _p: Option<Value>, _c: &RequestContext) -> Result<Value, HandlerError> {
         let store = self.store.clone();
-        let live = tokio::task::spawn_blocking(move || store.list())
+        let listing = tokio::task::spawn_blocking(move || store.list_report())
             .await
             .map_err(|e| HandlerError::Internal(e.to_string()))?
             .map_err(internal)?;
-        Ok(json!({ "decisions": live }))
+        Ok(listing_json(listing))
     }
 }
 
@@ -109,6 +121,67 @@ impl MethodHandler for HitlForgetHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn list_handler_keeps_io_failure_internal() {
+        use mur_common::identity::AgentIdentity;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(ChannelDecisionStore::new(
+            tmp.path().to_path_buf(),
+            "qa".into(),
+            Arc::new(AgentIdentity::generate()),
+            0,
+        ));
+        use crate::hitl::store::DecisionStore;
+        store
+            .record(mur_common::hitl::HitlResponse {
+                hitl_id: "a".into(),
+                action_hash: "h1".into(),
+                allow: true,
+                reason: String::new(),
+                surface: "hub".into(),
+                issued_at: Some(chrono::Utc::now()),
+                label: None,
+            })
+            .await;
+        let heads = tmp
+            .path()
+            .join("agents/qa")
+            .join(mur_common::agent::HITL_HEAD_DIR);
+        let head = std::fs::read_dir(&heads)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::remove_file(&head).unwrap();
+        std::fs::create_dir(&head).unwrap();
+
+        let err = HitlListHandler::new(store)
+            .handle(None, &RequestContext::default())
+            .await
+            .expect_err("unreadable head is not a successful listing");
+        assert!(matches!(err, HandlerError::Internal(_)), "{err:?}");
+    }
+
+    #[test]
+    fn unavailable_listing_is_a_result_with_reason_and_channel() {
+        let v = listing_json(Listing::Unavailable {
+            reason: "log has records but no signed head".into(),
+            channel_id: "c1".into(),
+        });
+        assert_eq!(v["decisions"], json!([]));
+        assert_eq!(v["unavailable"]["channel_id"], "c1");
+        assert_eq!(
+            v["unavailable"]["reason"],
+            "log has records but no signed head"
+        );
+        assert!(
+            listing_json(Listing::Live(vec![]))
+                .get("unavailable")
+                .is_none()
+        );
+    }
 
     #[test]
     fn forget_needs_exactly_one_target() {
