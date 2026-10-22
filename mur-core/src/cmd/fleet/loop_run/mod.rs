@@ -404,6 +404,33 @@ fn lock_progress(p: &Mutex<RunProgress>) -> std::sync::MutexGuard<'_, RunProgres
 }
 
 /// Map the loop's stop reason to the progress file's `outcome` string.
+/// The iteration number the progress file records when the loop ends. A
+/// finished run records how many iterations completed; a paused one is still
+/// in flight and records the 1-based iteration it is in, matching both the
+/// in-run meaning and the summary line printed at the pause (#2068).
+fn progress_iteration(stop: LoopStop, completed: u32) -> u32 {
+    if stop == LoopStop::Paused {
+        completed + 1
+    } else {
+        completed
+    }
+}
+
+/// The last line of a foreground loop (`run` and `resume` share it). A pause
+/// does not count the interrupted iteration, so "stopped after 0
+/// iteration(s)" under "iteration 1 paused" read as a contradiction (#2068);
+/// it names the iteration it is in and how many completed instead.
+pub(crate) fn loop_end_line(name: &str, stop: LoopStop, completed: u32, cost: &str) -> String {
+    if stop == LoopStop::Paused {
+        format!(
+            "fleet '{name}' paused in iteration {} ({completed} completed), cost {cost}",
+            progress_iteration(stop, completed)
+        )
+    } else {
+        format!("fleet '{name}' loop stopped after {completed} iteration(s), cost {cost}: {stop:?}")
+    }
+}
+
 fn outcome_label(stop: LoopStop) -> &'static str {
     match stop {
         LoopStop::Converged => "converged",
@@ -561,9 +588,13 @@ pub async fn cmd_fleet_run_loop(
     // same place, or this line can contradict the panel again.
     let billable = super::progress::load_view(mur_home, name).and_then(|v| v.progress.billable);
     println!(
-        "fleet '{}' loop stopped after {iteration} iteration(s), cost {}: {stop:?}",
-        name,
-        super::progress::fmt_spend(spent, billable)
+        "{}",
+        loop_end_line(
+            name,
+            stop,
+            iteration,
+            &super::progress::fmt_spend(spent, billable)
+        )
     );
     Ok(())
 }

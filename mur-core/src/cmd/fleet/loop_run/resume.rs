@@ -302,9 +302,13 @@ pub async fn cmd_fleet_resume(mur_home: &Path, name: &str) -> Result<()> {
     let billable =
         crate::cmd::fleet::progress::load_view(mur_home, name).and_then(|v| v.progress.billable);
     println!(
-        "fleet '{}' loop stopped after {iteration} iteration(s), cost {}: {stop:?}",
-        name,
-        crate::cmd::fleet::progress::fmt_spend(spent, billable)
+        "{}",
+        super::loop_end_line(
+            name,
+            stop,
+            iteration,
+            &crate::cmd::fleet::progress::fmt_spend(spent, billable)
+        )
     );
     if stop == LoopStop::Paused {
         println!("Paused again. Continue with `mur fleet resume {name}`.");
