@@ -403,7 +403,6 @@ fn lock_progress(p: &Mutex<RunProgress>) -> std::sync::MutexGuard<'_, RunProgres
     p.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Map the loop's stop reason to the progress file's `outcome` string.
 /// The iteration number the progress file records when the loop ends. A
 /// finished run records how many iterations completed; a paused one is still
 /// in flight and records the 1-based iteration it is in, matching both the
@@ -431,6 +430,7 @@ pub(crate) fn loop_end_line(name: &str, stop: LoopStop, completed: u32, cost: &s
     }
 }
 
+/// Map the loop's stop reason to the progress file's `outcome` string.
 fn outcome_label(stop: LoopStop) -> &'static str {
     match stop {
         LoopStop::Converged => "converged",
