@@ -326,16 +326,25 @@ fn build_lane_records_every_grant_it_drops_with_a_reason() {
             .expect("a plain file must be recorded")
             .contains("not a directory")
     );
-    assert!(
-        reason_for(std::path::Path::new("/"))
-            .expect("a guarded grant must be recorded")
-            .contains("too broad")
-    );
-    assert!(
-        reason_for(&home)
-            .expect("the home directory must be recorded")
-            .contains("too broad")
-    );
+    // `is_guarded_prefix` names Unix roots (`/`, `/usr`, `$HOME`), and only the
+    // macOS SBPL renderer reads `spawn_allowed_prefixes`, so there is nothing to
+    // guard on Windows. CI showed the `/` record missing there (#2057), so these
+    // two cases are Unix-only.
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert!(
+            reason_for(std::path::Path::new("/"))
+                .expect("a guarded grant must be recorded")
+                .contains("too broad")
+        );
+        assert!(
+            reason_for(&home)
+                .expect("the home directory must be recorded")
+                .contains("too broad")
+        );
+    }
+    #[cfg(target_os = "windows")]
+    let _ = &home;
     assert!(
         reason_for(&live).is_none(),
         "a grant that took effect must not be reported as dropped: {:?}",
