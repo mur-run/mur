@@ -19,6 +19,8 @@ mod cjk_tail_tests;
 #[cfg(test)]
 mod cjk_wrap_tests;
 #[cfg(test)]
+mod fence_head_tests;
+#[cfg(test)]
 mod ghost_tests;
 #[cfg(test)]
 mod scrub_tests;
