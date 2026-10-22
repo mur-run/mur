@@ -239,30 +239,41 @@ fn a_pending_grant_renders_as_an_exec_subpath_in_the_sbpl_profile() {
     );
 }
 
-/// A real repo with one linked worktree, or `None` when git is unavailable.
+/// A real repo with one linked worktree, or `None` only when git itself is
+/// not installed. Any other setup failure panics with git's stderr, so a
+/// broken fixture fails the test instead of silently skipping it.
 fn repo_with_worktree(tmp: &Path) -> Option<(PathBuf, PathBuf)> {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        return None;
+    }
     let main = tmp.join("main");
-    std::fs::create_dir_all(&main).ok()?;
-    let git = |args: &[&str]| -> bool {
-        std::process::Command::new("git")
+    std::fs::create_dir_all(&main).expect("create main repo dir");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
             .args(args)
             .current_dir(&main)
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
-    if !git(&["init", "-q"]) {
-        return None;
-    }
-    let _ = git(&["config", "user.email", "t@example.com"]);
-    let _ = git(&["config", "user.name", "t"]);
-    std::fs::write(main.join("f.txt"), "x").ok()?;
-    let _ = git(&["add", "f.txt"]);
-    let _ = git(&["commit", "-qm", "init"]);
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(main.join("f.txt"), "x").expect("write fixture file");
+    git(&["add", "f.txt"]);
+    git(&["commit", "-qm", "init"]);
     let wt = tmp.join("wt");
-    if !git(&["worktree", "add", "-q", wt.to_str()?, "-b", "feat"]) {
-        return None;
-    }
+    let wt_str = wt.to_str().expect("utf-8 tempdir path");
+    git(&["worktree", "add", "-q", wt_str, "-b", "feat"]);
     Some((main, wt))
 }
 
@@ -273,7 +284,7 @@ fn repo_with_worktree(tmp: &Path) -> Option<(PathBuf, PathBuf)> {
 fn a_missing_target_under_a_linked_worktree_is_granted() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let Some((main, wt)) = repo_with_worktree(tmp.path()) else {
-        eprintln!("skipping: git unavailable or worktree creation failed");
+        eprintln!("skipping: git is not installed");
         return;
     };
     let target = main.join("target");
@@ -311,7 +322,7 @@ fn a_missing_target_under_a_linked_worktree_is_granted() {
 fn a_pruned_worktree_gets_no_pending_grant() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let Some((main, wt)) = repo_with_worktree(tmp.path()) else {
-        eprintln!("skipping: git unavailable or worktree creation failed");
+        eprintln!("skipping: git is not installed");
         return;
     };
     let wt_canon = canon(&wt);
