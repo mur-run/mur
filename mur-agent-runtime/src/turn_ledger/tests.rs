@@ -27,10 +27,15 @@ fn a_read_with_nothing_run_is_not_evidence() {
     let mut l = TurnLedger::default();
     l.record(act("read_file", "src/a.rs", Outcome::Ok));
     // A successful read (or a sed/grep/cat, same shape) is not evidence
-    // that anything works — it must report as nothing having run.
+    // that anything works. But the read DID run, so the card must say a tool
+    // ran with no gate passing, not "nothing ran" (#2031).
     assert!(l.verified().is_empty());
     let card = render(&l);
-    assert!(card.contains("nothing ran"), "{card}");
+    assert!(
+        card.contains("1 tool call(s) ran, but no build/test passed"),
+        "{card}"
+    );
+    assert!(!card.contains("nothing ran"), "{card}");
 }
 
 #[test]
@@ -50,7 +55,10 @@ fn a_runner_name_inside_a_grep_pattern_is_not_evidence() {
     l.record(act("bash", "grep -rn \"cargo test\" src/", Outcome::Ok));
     assert!(l.verified().is_empty());
     let card = render(&l);
-    assert!(card.contains("nothing ran"), "{card}");
+    assert!(
+        card.contains("1 tool call(s) ran, but no build/test passed"),
+        "{card}"
+    );
 }
 
 #[test]
@@ -216,7 +224,8 @@ fn render_states_an_empty_verified_column_instead_of_hiding_it() {
     let card = render(&l);
     // The whole feature in one assertion: nine edits and no test run must
     // not read as success.
-    assert!(card.contains("nothing ran"), "{card}");
+    assert!(card.contains("no build/test passed"), "{card}");
+    assert!(!card.contains("nothing ran"), "{card}");
     assert!(card.contains("1 file(s)"), "{card}");
     // The bug was the GLYPH, not the words: `✔` is painted with
     // `theme.success`, so the row rendered green while denying it works.
@@ -611,4 +620,26 @@ fn render_marks_a_changed_count_that_no_diff_backs() {
     let card = render(&backed);
     assert!(card.contains("~ changed    1 file(s)\n"), "{card}");
     assert!(!card.contains("tool-reported"), "{card}");
+}
+
+/// #2031: 19 tool calls and no gate used to print "nothing ran".
+#[test]
+fn many_tools_without_a_gate_are_counted_not_denied() {
+    let mut l = TurnLedger::default();
+    for i in 0..19 {
+        l.record(act("read_file", &format!("src/{i}.rs"), Outcome::Ok));
+    }
+    let card = render(&l);
+    assert!(
+        card.contains("19 tool call(s) ran, but no build/test passed"),
+        "{card}"
+    );
+    assert!(card.contains("⚠ verified"), "{card}");
+    assert!(!card.contains("nothing ran"), "{card}");
+}
+
+#[test]
+fn an_empty_ledger_still_says_nothing_ran() {
+    let card = render(&TurnLedger::default());
+    assert!(card.contains("nothing ran"), "{card}");
 }
