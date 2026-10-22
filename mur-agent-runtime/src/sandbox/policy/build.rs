@@ -560,7 +560,9 @@ impl SandboxPolicy {
         for dir in &ent.processes.spawn.allowed_dirs {
             let expanded = expand(dir);
             let mut candidates = vec![expanded.clone()];
-            candidates.extend(mur_common::worktree::worktrees_of(&expanded));
+            // The leaf form: `<worktree>/target` is usually created by the
+            // first build, after the member started (#2058 follow-up).
+            candidates.extend(mur_common::worktree::worktree_leaves_of(&expanded));
             for candidate in candidates {
                 match resolve_build_lane_dir(&candidate, &home) {
                     Ok(BuildLaneDir::Live(canon)) => {

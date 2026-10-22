@@ -126,6 +126,31 @@ fn worktree_root_of(start: &Path) -> Option<PathBuf> {
 /// undiscoverable worktree must degrade to "not granted" (fail-closed), never
 /// to a panic inside the gate.
 pub fn worktrees_of(main_path: &Path) -> Vec<PathBuf> {
+    expand_into_worktrees(main_path, true)
+}
+
+/// Like [`worktrees_of`], but the mapped path itself need not exist yet — only
+/// the linked worktree's root must.
+///
+/// For a build-lane directory such as `<main>/target`, the usual order in a
+/// fleet is: start the member, create the worktree, and only then run the
+/// first build that creates `<worktree>/target`. [`worktrees_of`] drops that
+/// path because it is not on disk, so the pending-leaf grant (#2058) never saw
+/// it. This variant keeps it; the caller must still resolve each result
+/// through its own fail-closed check (`resolve_build_lane_dir`) — a leaf whose
+/// parent is missing or guarded is refused there, not here.
+///
+/// The worktree root is still required to exist, so a pruned or moved
+/// worktree contributes nothing. Only worktrees registered when this runs are
+/// enumerated; one added after the sandbox seals is not covered.
+pub fn worktree_leaves_of(main_path: &Path) -> Vec<PathBuf> {
+    expand_into_worktrees(main_path, false)
+}
+
+/// Shared walk behind [`worktrees_of`] and [`worktree_leaves_of`].
+/// `require_leaf` decides whether the mapped path must exist; the worktree
+/// root must exist either way.
+fn expand_into_worktrees(main_path: &Path, require_leaf: bool) -> Vec<PathBuf> {
     let Some(main_root) = worktree_root_of(main_path) else {
         return Vec::new();
     };
@@ -154,9 +179,13 @@ pub fn worktrees_of(main_path: &Path) -> Vec<PathBuf> {
         let Some(root) = dot_git.parent() else {
             continue;
         };
+        // Fail closed on a pruned/moved worktree, whichever variant asked.
+        if std::fs::metadata(root).is_err() {
+            continue;
+        }
         let mapped = root.join(relative);
-        // Fail closed on a pruned/moved worktree or missing relative path.
-        if std::fs::metadata(&mapped).is_ok() {
+        // Fail closed on a missing relative path unless the caller opted in.
+        if !require_leaf || std::fs::metadata(&mapped).is_ok() {
             out.push(mapped);
         }
     }
@@ -291,6 +320,52 @@ mod tests {
         let tmp2 = tempfile::tempdir().unwrap();
         assert!(main_checkout_of(tmp2.path()).is_none());
         assert!(worktrees_of(tmp2.path()).is_empty());
+    }
+
+    /// #2058 follow-up: `<main>/target` is not on disk yet, so the strict
+    /// expansion drops it, while the leaf expansion keeps `<worktree>/target`.
+    #[test]
+    fn leaves_of_keeps_a_missing_leaf_under_a_live_worktree() {
+        let Some((_tmp, main, wt)) = repo_with_worktree() else {
+            eprintln!("skipping: git unavailable or worktree creation failed");
+            return;
+        };
+        let target = main.join("target");
+        assert!(!target.exists() && !wt.join("target").exists());
+        assert!(worktrees_of(&target).is_empty(), "strict form stays strict");
+        let found = worktree_leaves_of(&target);
+        assert_eq!(found.len(), 1, "expected one leaf: {found:?}");
+        assert_eq!(found[0].file_name(), Some(std::ffi::OsStr::new("target")));
+        assert_eq!(
+            std::fs::canonicalize(found[0].parent().unwrap()).unwrap(),
+            std::fs::canonicalize(&wt).unwrap()
+        );
+    }
+
+    /// A deleted worktree must contribute nothing even in the lenient form.
+    #[test]
+    fn leaves_of_skips_a_pruned_worktree() {
+        let Some((_tmp, main, wt)) = repo_with_worktree() else {
+            eprintln!("skipping: git unavailable or worktree creation failed");
+            return;
+        };
+        std::fs::remove_dir_all(&wt).unwrap();
+        assert!(worktree_leaves_of(&main.join("target")).is_empty());
+    }
+
+    /// When the leaf does exist, both forms agree.
+    #[test]
+    fn leaves_of_matches_strict_form_when_leaf_exists() {
+        let Some((_tmp, main, wt)) = repo_with_worktree() else {
+            eprintln!("skipping: git unavailable or worktree creation failed");
+            return;
+        };
+        std::fs::create_dir_all(main.join("target")).unwrap();
+        std::fs::create_dir_all(wt.join("target")).unwrap();
+        assert_eq!(
+            worktree_leaves_of(&main.join("target")),
+            worktrees_of(&main.join("target"))
+        );
     }
 
     #[test]
