@@ -116,6 +116,48 @@ fn every_state_liveness_cell() {
     }
 }
 
+/// A paused run has exited on purpose: its dead pid must not read `Dead`,
+/// and a heartbeat far past the abandon grace must not make it `abandoned`.
+/// Not terminal, though: it can still resume.
+#[test]
+fn a_paused_run_with_a_dead_pid_is_not_dead_or_abandoned() {
+    let now = Utc::now();
+    let long_ago = abandon::grace(stale_after()).num_seconds() * 10;
+    for beat in [Some(1), Some(STALE_AFTER_SECS + 1), Some(long_ago), None] {
+        let s = classify(
+            run(State::Paused, dead_pid(), beat, now),
+            now,
+            stale_after(),
+        );
+        assert_eq!(s.liveness, Liveness::NotApplicable, "beat {beat:?}");
+        assert!(!s.abandoned, "beat {beat:?}");
+        assert!(!s.state.is_terminal(), "a paused run can resume");
+    }
+}
+
+/// Negative control for the arm above: the identical record in `Running`
+/// IS dead and, past the grace, abandoned. Without this the test above would
+/// pass even if `classify` ignored the pid entirely.
+#[test]
+fn the_same_dead_pid_running_is_dead_and_abandoned() {
+    let now = Utc::now();
+    let long_ago = abandon::grace(stale_after()).num_seconds() * 10;
+    let s = classify(
+        run(State::Running, dead_pid(), Some(long_ago), now),
+        now,
+        stale_after(),
+    );
+    assert_eq!(s.liveness, Liveness::Dead);
+    assert!(s.abandoned);
+}
+
+#[test]
+fn paused_serializes_kebab_and_round_trips() {
+    assert_eq!(serde_json::to_string(&State::Paused).unwrap(), "\"paused\"");
+    let back: State = serde_json::from_str("\"paused\"").unwrap();
+    assert_eq!(back, State::Paused);
+}
+
 /// Negative control for the reported defect. A test that only asserts a
 /// live process reports `alive` proves nothing: freezing the heartbeat
 /// while the process stays up MUST flip the verdict.

@@ -50,6 +50,11 @@ pub enum State {
     Done,
     Failed,
     Stopped,
+    /// A fleet run paused by `mur fleet pause`: its process has exited and a
+    /// checkpoint is waiting for `mur fleet resume`. NOT terminal (the run can
+    /// continue) and NOT live (the pid is gone), so `classify` answers
+    /// `Liveness::NotApplicable` for it rather than `Dead`/`abandoned`.
+    Paused,
     /// Step-only: the step reported success without doing its work — a
     /// `delegate_to` step run without a channel only prints (#1613). Never a
     /// run's state; terminal so it is not shown as outstanding.
@@ -101,7 +106,7 @@ pub enum Liveness {
     /// Process up, but the record was rebuilt from the channel and carries no
     /// heartbeat. Reporting this is required; synthesizing one is forbidden.
     Unknown,
-    /// The run finished. A finished run's absent process is not a fault.
+    /// The run finished, or is paused. Neither one's absent process is a fault.
     #[serde(rename = "n/a")]
     NotApplicable,
 }
@@ -186,7 +191,10 @@ pub fn classify(run: RunState, now: DateTime<Utc>, stale_after: chrono::Duration
     // reads *alive*; `OpenProcess(0, …)` fails on Windows, so it reads
     // *dead*). Checking the absent heartbeat first makes `unknown` the
     // answer on every platform.
-    let liveness = if run.state.is_terminal() {
+    // A paused run has exited on purpose, so its absent pid is not a fault.
+    // This arm must stay ahead of the heartbeat/pid arms: otherwise the dead
+    // pid reads `Dead` and the run is reported `abandoned` after the grace.
+    let liveness = if run.state.is_terminal() || run.state == State::Paused {
         Liveness::NotApplicable
     } else {
         match run.last_heartbeat_at {

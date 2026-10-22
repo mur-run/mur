@@ -195,13 +195,8 @@ pub async fn execute_dag(
         // (the gate put it there) and must stay that way, or the surfaces that
         // read channel state would show a finished run while a human still
         // owes it an answer.
-        let st = match outcome {
-            RunOutcome::Blocked => return,
-            RunOutcome::Failed => ChannelState::Failed,
-            // The kill-switch's terminal, the same `canceled` the fleet loop
-            // writes for `LoopStop::Stopped`.
-            RunOutcome::Stopped => ChannelState::Canceled,
-            RunOutcome::Done => ChannelState::Completed,
+        let Some(st) = terminal_channel_state(outcome) else {
+            return;
         };
         if let Some(cid) = opts.channel_id.as_deref() {
             let _ = ChannelService::open(mur_home).and_then(|svc| {
@@ -587,6 +582,9 @@ pub async fn execute_dag(
         // the run record (State::Blocked) and the channel (InputRequired)
         // already carry the precise state.
         RunOutcome::Blocked => PipelineStatus::Skipped,
+        // Same stand-in as `Blocked`: the pause is carried by the run record
+        // (State::Paused), not by this serialized enum.
+        RunOutcome::Paused => PipelineStatus::Skipped,
         RunOutcome::Stopped => PipelineStatus::Stopped,
     };
     if outcome == RunOutcome::Stopped {
@@ -624,6 +622,23 @@ pub async fn execute_dag(
         duration_ms,
         tokens_used: overall_tokens,
     })
+}
+
+/// The terminal channel state a run outcome writes, or `None` when the outcome
+/// is not terminal and the channel must be left exactly as it is.
+///
+/// `Paused` is `None`: a `canceled` here would make the first orphan-reconcile
+/// cancel the paused job. The loop records the pause with a `run_paused` note
+/// instead (pause/resume design §5.2).
+pub(super) fn terminal_channel_state(outcome: RunOutcome) -> Option<ChannelState> {
+    match outcome {
+        RunOutcome::Blocked | RunOutcome::Paused => None,
+        RunOutcome::Failed => Some(ChannelState::Failed),
+        // The kill-switch's terminal, the same `canceled` the fleet loop
+        // writes for `LoopStop::Stopped`.
+        RunOutcome::Stopped => Some(ChannelState::Canceled),
+        RunOutcome::Done => Some(ChannelState::Completed),
+    }
 }
 
 /// Stop the run's heartbeat and stamp its terminal state.
@@ -676,6 +691,7 @@ pub(super) async fn finalize_run(
             RunOutcome::Blocked => crate::run_status::State::Blocked,
             RunOutcome::Done => crate::run_status::State::Done,
             RunOutcome::Stopped => crate::run_status::State::Stopped,
+            RunOutcome::Paused => crate::run_status::State::Paused,
         };
     });
 }

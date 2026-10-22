@@ -200,13 +200,17 @@ impl<'a> Default for DagExecOptions<'a> {
 /// How a DAG run ended. `Blocked` is deliberately not a failure: nothing went
 /// wrong, the run simply reached an action that needs a human and stopped
 /// there. It is also not terminal — an approval resumes it. `Stopped` is the
-/// operator's kill-switch: neither done nor a failure of the work.
+/// operator's kill-switch: neither done nor a failure of the work. `Paused` is
+/// the operator's pause: like `Blocked` it is not terminal and leaves the
+/// channel as it is, but it ends the process and waits for a resume.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum RunOutcome {
     Done,
     Failed,
     Blocked,
     Stopped,
+    #[allow(dead_code)] // not wired yet: constructed by the pause path (rollout step 3)
+    Paused,
 }
 
 /// Step-lifecycle event kind for `DagExecOptions.on_step`.
@@ -513,6 +517,9 @@ fn delegate_result(
         tokens_used: extract_usage_tokens(task),
     }
 }
+#[cfg(test)]
+#[path = "dag/pause_outcome_tests.rs"]
+mod pause_outcome_tests;
 #[cfg(test)]
 #[path = "dag/rerun_delegation_tests.rs"]
 mod rerun_delegation_tests;
