@@ -238,3 +238,106 @@ fn a_pending_grant_renders_as_an_exec_subpath_in_the_sbpl_profile() {
         "the parent must not be granted"
     );
 }
+
+/// A real repo with one linked worktree, or `None` only when git itself is
+/// not installed. Any other setup failure panics with git's stderr, so a
+/// broken fixture fails the test instead of silently skipping it.
+fn repo_with_worktree(tmp: &Path) -> Option<(PathBuf, PathBuf)> {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        return None;
+    }
+    let main = tmp.join("main");
+    std::fs::create_dir_all(&main).expect("create main repo dir");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&main)
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(main.join("f.txt"), "x").expect("write fixture file");
+    git(&["add", "f.txt"]);
+    git(&["commit", "-qm", "init"]);
+    let wt = tmp.join("wt");
+    let wt_str = wt.to_str().expect("utf-8 tempdir path");
+    git(&["worktree", "add", "-q", wt_str, "-b", "feat"]);
+    Some((main, wt))
+}
+
+/// #2058 acceptance: a fleet job in a worktree whose `target/` the first
+/// build has not created yet. The worktree is registered before the seal; its
+/// `target/` appears after. The grant must already cover it.
+#[test]
+fn a_missing_target_under_a_linked_worktree_is_granted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let Some((main, wt)) = repo_with_worktree(tmp.path()) else {
+        eprintln!("skipping: git is not installed");
+        return;
+    };
+    let target = main.join("target");
+    assert!(!target.exists() && !wt.join("target").exists());
+
+    let policy = seal_with(
+        vec![target.to_string_lossy().to_string()],
+        &tmp.path().join("agent-home"),
+    );
+    std::fs::create_dir_all(wt.join("target")).expect("created after the seal");
+
+    let want = canon(&wt).join("target");
+    assert!(
+        policy.spawn_allowed_prefixes.contains(&want),
+        "the worktree's pending target/ must be granted: {:?}",
+        policy.spawn_allowed_prefixes
+    );
+    assert_eq!(want, canon(&wt.join("target")));
+    assert!(
+        policy
+            .spawn_allowed_prefixes
+            .contains(&canon(&main).join("target")),
+        "the configured directory itself is still granted: {:?}",
+        policy.spawn_allowed_prefixes
+    );
+    assert!(
+        !policy.dropped.iter().any(|d| d.verb == "spawn"),
+        "{:?}",
+        policy.dropped
+    );
+}
+
+/// A worktree deleted from disk contributes no grant, pending or not.
+#[test]
+fn a_pruned_worktree_gets_no_pending_grant() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let Some((main, wt)) = repo_with_worktree(tmp.path()) else {
+        eprintln!("skipping: git is not installed");
+        return;
+    };
+    let wt_canon = canon(&wt);
+    std::fs::remove_dir_all(&wt).expect("remove worktree");
+
+    let policy = seal_with(
+        vec![main.join("target").to_string_lossy().to_string()],
+        &tmp.path().join("agent-home"),
+    );
+    assert!(
+        !policy
+            .spawn_allowed_prefixes
+            .iter()
+            .any(|p| p.starts_with(&wt_canon)),
+        "{:?}",
+        policy.spawn_allowed_prefixes
+    );
+}
