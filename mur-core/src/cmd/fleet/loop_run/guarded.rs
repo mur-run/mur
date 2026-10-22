@@ -29,9 +29,64 @@ pub async fn run_guarded(
     goal_override: Option<String>,
     cwd: Option<RunCwd>,
 ) -> Result<(LoopStop, u32, f64)> {
+    if max_iterations.is_some() {
+        println!(
+            "  ℹ --max-iterations is ignored since 2.79 — the bounds are deadline / stuck / cost_usd (mur fleet limits {name})"
+        );
+    }
+    run_guarded_inner(
+        mur_home,
+        name,
+        deadline,
+        budget_usd,
+        run_id,
+        goal_override,
+        cwd,
+        None,
+    )
+    .await
+}
+
+/// [`run_guarded`] that may continue a paused run instead of starting one
+/// (pause/resume design §5.4). `resume: None` is a fresh run.
+pub(crate) async fn run_guarded_from(
+    mur_home: &Path,
+    name: &str,
+    goal_override: Option<String>,
+    cwd: Option<RunCwd>,
+    resume: Option<super::resume::ResumeFrom>,
+) -> Result<(LoopStop, u32, f64)> {
+    run_guarded_inner(mur_home, name, None, None, None, goal_override, cwd, resume).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_guarded_inner(
+    mur_home: &Path,
+    name: &str,
+    deadline: Option<String>,
+    budget_usd: Option<f64>,
+    run_id: Option<String>,
+    goal_override: Option<String>,
+    cwd: Option<RunCwd>,
+    mut resume: Option<super::resume::ResumeFrom>,
+) -> Result<(LoopStop, u32, f64)> {
     // One live run per fleet, taken before any admission check and held (via
     // the guard) until this function returns or the process dies.
     let _run_lock = run_lock::acquire(mur_home, name)?;
+    // With the lock held: a fresh run over a paused one is refused (it would
+    // orphan the paused run and reset its limits, design §8.4); a resume
+    // re-checks the kill-switch, which may have landed since `admit` (§6).
+    match &resume {
+        None => super::resume::refuse_fresh_run_over_pause(mur_home, name)?,
+        Some(r) => {
+            if super::super::control::is_stopped(mur_home, name) {
+                anyhow::bail!(
+                    "fleet '{name}' was stopped before run {} could resume; stop wins over resume",
+                    r.run_id
+                );
+            }
+        }
+    }
     let mut fleet = store::load_fleet(mur_home, name)?;
     // Kept for the checkpoint: `fleet.goal` is overwritten below, and a resume
     // must carry the run-scoped goal, never `fleet.yaml`'s.
@@ -60,11 +115,6 @@ pub async fn run_guarded(
         Ok(())
     })();
 
-    if max_iterations.is_some() {
-        println!(
-            "  ℹ --max-iterations is ignored since 2.79 — the bounds are deadline / stuck / cost_usd (mur fleet limits {name})"
-        );
-    }
     if fleet
         .loop_cfg
         .as_ref()
@@ -75,6 +125,10 @@ pub async fn run_guarded(
         );
     }
     let bounds = fleet_bounds(mur_home, &fleet, deadline.as_deref(), budget_usd)?;
+    let bounds = match &resume {
+        Some(r) => super::resume::tighten(bounds, r),
+        None => bounds,
+    };
     let SpendPlan {
         billing,
         budget,
@@ -82,7 +136,7 @@ pub async fn run_guarded(
         projection,
     } = spend_plan(mur_home, &fleet, name, &bounds);
     // Real cumulative spend, accumulated from each iteration's actual token usage.
-    let mut spent = 0.0_f64;
+    let mut spent = resume.as_ref().map_or(0.0, |r| r.spent_usd);
     // Resolve and gate before the clock starts, so an approval wait does not
     // eat the deadline. Gated once for the whole run: members and the target
     // are fixed for its lifetime. A queued job is claimed per iteration, so a
@@ -99,7 +153,10 @@ pub async fn run_guarded(
         }
         None => None,
     };
-    let start = Instant::now();
+    let start = match &resume {
+        Some(r) => clock::Stopwatch::resumed(r.active_elapsed),
+        None => clock::Stopwatch::fresh(),
+    };
     let svc = mur_channel::ChannelService::open(mur_home)?;
     let mut last_seq = svc
         .load_events(&fleet.channel_id)?
@@ -109,9 +166,15 @@ pub async fn run_guarded(
     // Baseline for the structured `done_when: marker:<TEXT>` check: only events
     // produced during THIS run (seq > start_seq) count, so a marker left in the
     // channel by a previous run can't make the loop converge instantly.
-    let start_seq = last_seq;
-    let mut iteration = 0u32;
-    let mut last_progress = Instant::now();
+    // A resume keeps the original baseline, so a marker written before the
+    // pause by this same run still counts.
+    let start_seq = resume.as_ref().map_or(last_seq, |r| r.start_seq);
+    let mut iteration = resume.as_ref().map_or(0, |r| r.iteration);
+    // Stuck-detection is not reset by a pause: the age carries over.
+    let mut last_progress = match &resume {
+        Some(r) => clock::Stopwatch::resumed(r.stuck_elapsed),
+        None => clock::Stopwatch::fresh(),
+    };
 
     // Load commander keys once; empty = governance inert.
     let commander_keys = crate::cmd::commander::accepted_pubkeys(mur_home);
@@ -121,7 +184,7 @@ pub async fn run_guarded(
     // `mur deep-research` panel render from. Every write is best-effort — a
     // failure must never fail, slow, or change the loop (see RunProgress::save).
     // The loop's handle: minted by the caller that will poll it, else fresh.
-    let run_id = match run_id {
+    let run_id = match resume.as_ref().map(|r| r.run_id.clone()).or(run_id) {
         Some(id) => {
             if !crate::run_status::valid_run_id(&id) {
                 anyhow::bail!(
@@ -139,14 +202,14 @@ pub async fn run_guarded(
         started_at: chrono::Utc::now().to_rfc3339(),
         finished_at: None,
         outcome: None,
-        iteration: 0,
+        iteration,
         model: fleet
             .members
             .first()
             .and_then(|m| mur_common::agent::AgentProfile::load(mur_home, m).ok())
             .and_then(|p| p.model_ref),
         budget_usd: budget,
-        spend_usd: 0.0,
+        spend_usd: spent,
         billable: Some(billing.billable),
         steps: vec![],
         artifact_path: None,
@@ -157,6 +220,16 @@ pub async fn run_guarded(
 
     // The loop is one run with a handle (spec §3.6); see `run_record`.
     let loop_beat = run_record::open(mur_home, &fleet, name, &run_id);
+    // The HITL policy a resumed run keeps (None on a fresh run).
+    let hitl_override = resume.as_ref().map(|r| r.hitl_unanswered);
+    if let Some(r) = &resume {
+        // Record `Running` (above), write `run_resumed`, THEN drop `.paused`:
+        // a crash in between leaves the run resumable again or running,
+        // never neither (design §5.4 step 6).
+        super::resume::record_resumed(&svc, mur_home, &fleet, r);
+        let _ = std::fs::remove_file(super::super::control::paused_path(mur_home, name));
+        checkpoint::remove(mur_home, &run_id);
+    }
 
     // ── Pre-dispatch triage ────────────────────────────────────────────────
     // Once for the whole loop, not once per iteration: the goal does not
@@ -169,7 +242,7 @@ pub async fn run_guarded(
     let triage_cfg = mur_common::config::Config::load_or_default(&mur_home.join("config.yaml"))
         .triage
         .clone();
-    if triage_cfg.enabled {
+    if triage_cfg.enabled && resume.is_none() {
         let g = crate::executor::triage_gate::gate(
             mur_home,
             &run_id,
@@ -302,7 +375,19 @@ pub async fn run_guarded(
         // Router plans this iteration (seeing prior state); falls back to broadcast.
         let pre_events = svc.load_events(&fleet.channel_id).unwrap_or_default();
         // Drain job queue: oldest queued job is this iteration's goal; else standing goal.
-        let (iter_goal, mut active_job) = iteration_goal(mur_home, name, &fleet.goal)?;
+        // A resumed iteration reuses the job it claimed and the plan it was
+        // running; it neither claims again nor asks the router again (§5.4).
+        let reentry = resume.take();
+        let (iter_goal, mut active_job) = match reentry.as_ref() {
+            Some(r) => super::resume::reentered_goal(mur_home, name, &fleet.goal, r)?,
+            None => iteration_goal(mur_home, name, &fleet.goal)?,
+        };
+        let stored_plan = reentry.filter(|r| !r.procedure.is_empty()).map(|r| {
+            mur_common::skill::manifest::Procedure {
+                variables: vec![],
+                steps: r.procedure,
+            }
+        });
 
         // `done_when: queue-empty` — a drained queue IS the completion
         // condition. Checked here, ahead of `plan_via_router` and every other
@@ -327,8 +412,13 @@ pub async fn run_guarded(
             goal: dispatch_goal.clone(),
             ..fleet.clone()
         };
-        // Static `procedure:` first (never falls back); else router, else broadcast.
-        let proc = match super::super::plan::static_procedure(&planning_fleet, &dispatch_goal)? {
+        // The stored plan of a resumed iteration; else static `procedure:`
+        // (never falls back); else router, else broadcast.
+        let static_plan = match stored_plan {
+            Some(p) => Some(p),
+            None => super::super::plan::static_procedure(&planning_fleet, &dispatch_goal)?,
+        };
+        let proc = match static_plan {
             Some(p) => p,
             None => super::super::plan::plan_via_router(
                 mur_home,
@@ -390,7 +480,9 @@ pub async fn run_guarded(
             yes: false,
             // Fleet-declared approval policy (`hitl.mode`); `None` keeps the
             // TTY-derived default. Tightening only — nothing here approves.
-            hitl_unanswered: fleet.hitl.as_ref().and_then(|h| h.mode),
+            // A resume passes the policy frozen at the original start, so a
+            // resume from a terminal cannot turn `defer` into `wait` (§8.2a).
+            hitl_unanswered: hitl_override.or(fleet.hitl.as_ref().and_then(|h| h.mode)),
             hitl_auto_approve_tiers: fleet
                 .hitl
                 .as_ref()
@@ -412,7 +504,7 @@ pub async fn run_guarded(
             // procedure over the cap makes the pause refused, not the run
             // unresumable (design §4).
             halt: pausable.then(|| super::super::control::halt_signal(mur_home, name, &run_id)),
-            deadline_at: Some(start + bounds.deadline),
+            deadline_at: Some(start.deadline_at(bounds.deadline)),
             needs: fleet.needs.clone(),
             ..Default::default()
         };
@@ -597,7 +689,7 @@ pub async fn run_guarded(
             .any(|e| e.seq > last_seq && matches!(e.actor, ChannelActor::Agent { .. }));
         last_seq = events.last().map(|e| e.seq).unwrap_or(last_seq);
         if progressed {
-            last_progress = Instant::now();
+            last_progress = clock::Stopwatch::fresh();
         }
 
         // Convergence: three policies, dispatched from the same `done_when`

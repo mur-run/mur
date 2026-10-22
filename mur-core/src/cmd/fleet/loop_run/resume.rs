@@ -1,0 +1,394 @@
+//! `mur fleet resume <name>` (pause/resume design §5.4, §6, §7, §8.2a).
+//!
+//! Resume reads the run the `.paused` sentinel names, refuses anything a
+//! resume must not continue (a live run, a stop, a commander halt, a missing
+//! or foreign checkpoint, a record that is not `Paused`), then re-enters the
+//! loop through `run_guarded_from` with the state the checkpoint carried.
+//!
+//! The checkpoint is written by the run itself, so it is never trusted to
+//! widen anything: bounds are `min`-ed with what `fleet.yaml` allows now,
+//! counters are `max`-ed with the signed `run_paused` event, and the HITL
+//! policy is never loosened from `defer`.
+
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{Result, bail};
+use mur_common::channel::{ChannelEvent, EventKind};
+use mur_common::hitl::Unanswered;
+use mur_common::skill::manifest::ProcedureStep;
+
+use super::checkpoint::{self, Checkpoint};
+use super::pause_events::{FleetRunPayload, NoteClassification, classify_note_payload};
+use super::{FleetBounds, LoopStop, run_lock};
+use crate::cmd::fleet::{control, store};
+use crate::executor::delegation::cwd::RunCwd;
+
+/// What the loop re-enters with instead of fresh state (design §5.4 step 5).
+#[derive(Debug, Clone)]
+pub struct ResumeFrom {
+    pub run_id: String,
+    /// The iteration to re-enter (0-based); not counted twice.
+    pub iteration: u32,
+    pub spent_usd: f64,
+    pub active_elapsed: Duration,
+    pub stuck_elapsed: Duration,
+    pub start_seq: u64,
+    /// The job the paused iteration claimed; re-used, never re-claimed.
+    pub job_id: Option<String>,
+    /// The paused iteration's planned steps. Empty when the pause came between
+    /// iterations: that iteration is then planned afresh, as nothing ran.
+    pub procedure: Vec<ProcedureStep>,
+    pub hitl_unanswered: Unanswered,
+    /// The bounds the checkpoint froze. The loop `min`s them with the bounds
+    /// it resolves now (see [`tighten`]).
+    pub deadline: Duration,
+    pub stuck: mur_common::limits::Stuck,
+    pub cost_usd: Option<f64>,
+}
+
+/// Each bound is the tighter of the frozen and the current one (design §5.3):
+/// a limit lowered during the pause bites, and a checkpoint edited to loosen
+/// one cannot, because `fleet.yaml` is operator-only.
+pub(super) fn tighten(now: FleetBounds, r: &ResumeFrom) -> FleetBounds {
+    use mur_common::limits::Stuck;
+    let stuck = match (now.stuck, r.stuck) {
+        (Stuck::After(a), Stuck::After(b)) => Stuck::After(a.min(b)),
+        (Stuck::After(a), Stuck::Off) | (Stuck::Off, Stuck::After(a)) => Stuck::After(a),
+        (Stuck::Off, Stuck::Off) => Stuck::Off,
+    };
+    let cost_usd = match (now.cost_usd, r.cost_usd) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    FleetBounds {
+        deadline: now.deadline.min(r.deadline),
+        stuck,
+        cost_usd,
+        ..now
+    }
+}
+
+/// The stricter of two unanswered-gate policies: `deny` > `defer` > `wait`.
+/// `wait` is the loosest because it lets a gate time out into a denial while
+/// nobody may be watching (design §8.2a).
+fn stricter(a: Unanswered, b: Unanswered) -> Unanswered {
+    fn rank(u: Unanswered) -> u8 {
+        match u {
+            Unanswered::Wait => 0,
+            Unanswered::Defer => 1,
+            Unanswered::Deny => 2,
+        }
+    }
+    if rank(a) >= rank(b) { a } else { b }
+}
+
+fn parse_unanswered(s: &str) -> Result<Unanswered> {
+    serde_json::from_value(serde_json::Value::String(s.to_string()))
+        .map_err(|_| anyhow::anyhow!("checkpoint names an unknown HITL policy `{s}`"))
+}
+
+/// The latest signed `run_paused` for `run_id` on the fleet's channel: its
+/// `(spent_usd, active_elapsed_ms, iteration)`. Only router-signed events
+/// count — the checkpoint is what an untrusted run wrote, this is what the
+/// trusted writer recorded beside it.
+fn signed_pause_counters(
+    mur_home: &Path,
+    channel_id: &str,
+    events: &[ChannelEvent],
+    run_id: &str,
+) -> Option<(f64, u64, u32)> {
+    events
+        .iter()
+        .rev()
+        .filter(|e| e.kind == EventKind::Note && e.sig.is_some())
+        .find_map(|e| match classify_note_payload(&e.payload) {
+            NoteClassification::FleetRun(env) => match env.payload {
+                FleetRunPayload::RunPaused {
+                    run_id: id,
+                    spent_usd,
+                    active_elapsed_ms,
+                    iteration,
+                    ..
+                } if id == run_id
+                    && crate::channel_verify::verify_event(mur_home, channel_id, e, true) =>
+                {
+                    Some((spent_usd, active_elapsed_ms, iteration))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
+/// Build the resume state from a checkpoint and the channel (design §5.3):
+/// counters never move down, HITL is never loosened.
+pub(super) fn resume_from(
+    cp: &Checkpoint,
+    signed: Option<(f64, u64, u32)>,
+    unattended_now: bool,
+) -> Result<ResumeFrom> {
+    let (mut spent, mut active_ms, mut iteration) =
+        (cp.spent_usd, cp.active_elapsed_ms, cp.iteration);
+    if let Some((s, a, i)) = signed {
+        spent = spent.max(s);
+        active_ms = active_ms.max(a);
+        iteration = iteration.max(i);
+    }
+    let mut hitl = parse_unanswered(&cp.hitl_unanswered)?;
+    // A run that started unattended resolved `defer`; a resume from a terminal
+    // would resolve `wait`. Never loosen: the stricter of the frozen policy and
+    // what this process would pick on its own.
+    if unattended_now {
+        hitl = stricter(hitl, Unanswered::Defer);
+    }
+    Ok(ResumeFrom {
+        run_id: cp.run_id.clone(),
+        iteration,
+        spent_usd: spent,
+        active_elapsed: Duration::from_millis(active_ms),
+        stuck_elapsed: Duration::from_millis(cp.stuck_elapsed_ms),
+        start_seq: cp.start_seq,
+        job_id: cp.job_id.clone(),
+        // A signed counter ahead of the checkpoint means the checkpoint is not
+        // the latest word on this iteration; re-plan rather than replay a
+        // procedure for an iteration it does not describe.
+        procedure: if iteration == cp.iteration {
+            cp.procedure.clone()
+        } else {
+            vec![]
+        },
+        hitl_unanswered: hitl,
+        deadline: Duration::from_millis(cp.deadline_ms),
+        stuck: match cp.stuck_ms {
+            Some(ms) => mur_common::limits::Stuck::After(Duration::from_millis(ms)),
+            None => mur_common::limits::Stuck::Off,
+        },
+        cost_usd: cp.cost_usd,
+    })
+}
+
+/// Why a fleet cannot be resumed right now, checked in the order of design
+/// §5.4 steps 1-4. `Ok` carries the checkpoint to continue from.
+pub(super) fn admit(mur_home: &Path, name: &str) -> Result<Checkpoint> {
+    let stopped = control::is_stopped(mur_home, name);
+    let Some(run_id) = control::paused_run_id(mur_home, name) else {
+        if stopped {
+            bail!(stopped_message(name));
+        }
+        bail!("fleet '{name}' has no paused run; use `mur fleet run`");
+    };
+    if run_lock::is_held(mur_home, name) {
+        bail!(
+            "a run of '{name}' is live; it is not paused yet — wait for it, or check `mur fleet status {name}`"
+        );
+    }
+    if stopped {
+        bail!(stopped_message(name));
+    }
+    let gov = crate::cmd::commander::governance_state(mur_home, name);
+    match gov {
+        Ok(g) if g.killed => bail!(
+            "fleet '{name}' was halted by a commander directive and cannot be resumed — inspect it: mur commander status"
+        ),
+        Ok(g) if matches!(g.budget_ceiling, Some(c) if c == 0.0) => bail!(
+            "fleet '{name}' has a zero commander budget ceiling and cannot be resumed — inspect it: mur commander status"
+        ),
+        Ok(_) => {}
+        Err(e) => bail!(
+            "fleet '{name}': governance could not be read ({e:#}), so it is not resumed (fail-closed)"
+        ),
+    }
+    let cp = match checkpoint::load(mur_home, &run_id) {
+        Ok(Some(cp)) => cp,
+        Ok(None) => bail!(
+            "fleet '{name}': run {run_id} has no checkpoint, so there is nothing to resume from — `mur fleet stop {name}` discards it"
+        ),
+        Err(e) => bail!("fleet '{name}': {e:#} — `mur fleet stop {name}` discards the paused run"),
+    };
+    if cp.run_id != run_id || cp.fleet != name {
+        bail!(
+            "fleet '{name}': the checkpoint of run {run_id} names another run — `mur fleet stop {name}` discards it"
+        );
+    }
+    match crate::run_status::store::load(mur_home, &run_id) {
+        Ok(Some(r)) if r.state == crate::run_status::State::Paused => {}
+        Ok(Some(r)) => bail!(
+            "fleet '{name}': run {run_id} is `{:?}`, not paused — nothing to resume",
+            r.state
+        ),
+        Ok(None) => bail!(
+            "fleet '{name}': run record missing for {run_id}; `mur fleet stop {name}` to discard"
+        ),
+        Err(e) => bail!(
+            "fleet '{name}': run record of {run_id} is unreadable ({e:#}); `mur fleet stop {name}` to discard"
+        ),
+    }
+    Ok(cp)
+}
+
+fn stopped_message(name: &str) -> String {
+    format!(
+        "fleet '{name}' is stopped — `mur fleet start` clears the kill-switch but does not revive a paused run"
+    )
+}
+
+/// `mur fleet resume <name>`: continue the paused run in the foreground.
+pub async fn cmd_fleet_resume(mur_home: &Path, name: &str) -> Result<()> {
+    let fleet = store::load_fleet(mur_home, name)?;
+    let cp = admit(mur_home, name)?;
+    let events = mur_channel::ChannelService::open(mur_home)?
+        .load_events(&fleet.channel_id)
+        .unwrap_or_default();
+    let signed = signed_pause_counters(mur_home, &fleet.channel_id, &events, &cp.run_id);
+    let unattended = !std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let from = resume_from(&cp, signed, unattended)?;
+    println!(
+        "Resuming fleet '{name}' (run {}) at iteration {}, {} spent, paused by mur {}…",
+        from.run_id,
+        from.iteration + 1,
+        crate::cmd::limits::fmt_dur(from.active_elapsed),
+        cp.binary_version
+    );
+    let cwd = cp.target_cwd.as_ref().map(|p| RunCwd {
+        path: Some(p.into()),
+        inferred: false,
+    });
+    let (stop, iteration, spent) =
+        super::run_guarded_from(mur_home, name, cp.goal_override.clone(), cwd, Some(from)).await?;
+    let billable =
+        crate::cmd::fleet::progress::load_view(mur_home, name).and_then(|v| v.progress.billable);
+    println!(
+        "fleet '{}' loop stopped after {iteration} iteration(s), cost {}: {stop:?}",
+        name,
+        crate::cmd::fleet::progress::fmt_spend(spent, billable)
+    );
+    if stop == LoopStop::Paused {
+        println!("Paused again. Continue with `mur fleet resume {name}`.");
+    }
+    Ok(())
+}
+
+/// The goal and job a re-entered iteration runs. The checkpoint's job is
+/// re-used as it stands — still `Running`, never claimed again — so the queue
+/// does not hand this iteration a second job (design §5.4). A job that has
+/// since left `Running` (cancelled by hand) is not revived: the iteration
+/// falls back to the standing goal.
+pub(super) fn reentered_goal(
+    mur_home: &Path,
+    name: &str,
+    standing_goal: &str,
+    r: &ResumeFrom,
+) -> Result<(String, Option<mur_common::fleet::Job>)> {
+    let Some(job_id) = r.job_id.as_deref() else {
+        return Ok((standing_goal.to_string(), None));
+    };
+    let job = crate::cmd::fleet::jobs::list_jobs_raw(mur_home, name)?
+        .into_iter()
+        .find(|j| j.id == job_id && j.status == mur_common::fleet::JobStatus::Running);
+    Ok(match job {
+        Some(j) => (j.text.clone(), Some(j)),
+        None => (standing_goal.to_string(), None),
+    })
+}
+
+/// Write `run_resumed` (design §5.6). Best-effort like `run_paused`: the run
+/// record is the state that matters.
+pub(super) fn record_resumed(
+    svc: &mur_channel::ChannelService,
+    mur_home: &Path,
+    fleet: &mur_common::fleet::Fleet,
+    r: &ResumeFrom,
+) {
+    let payload = FleetRunPayload::RunResumed {
+        run_id: r.run_id.clone(),
+        iteration_run_id: format!("{}-{}", r.run_id, r.iteration),
+        iteration: r.iteration,
+        spent_usd: r.spent_usd,
+        active_elapsed_ms: u64::try_from(r.active_elapsed.as_millis()).unwrap_or(u64::MAX),
+    }
+    .to_note_payload();
+    if let Err(error) = crate::channel_writer::append_as_writer(
+        svc,
+        mur_home,
+        &fleet.channel_id,
+        fleet.router_or_concierge(),
+        mur_common::channel::ChannelActor::System,
+        EventKind::Note,
+        payload,
+        None,
+    ) {
+        tracing::warn!(fleet = %fleet.name, %error, "could not write run_resumed to the channel");
+    }
+}
+
+/// A fresh run while a run of this fleet is paused would orphan it and reset
+/// its limits (design §8.4). Checked with the run lock held, so it is not
+/// check-then-act. A sentinel whose run is not `Paused` is a leftover of a
+/// crash (design §8.5) and is removed.
+pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result<()> {
+    let Some(run_id) = control::paused_run_id(mur_home, name) else {
+        return Ok(());
+    };
+    let paused = crate::run_status::store::load(mur_home, &run_id)
+        .ok()
+        .flatten()
+        .is_some_and(|r| r.state == crate::run_status::State::Paused);
+    if paused {
+        bail!(
+            "fleet '{name}' has a paused run ({run_id}): continue it with `mur fleet resume {name}`, or discard it with `mur fleet stop {name}`"
+        );
+    }
+    let _ = std::fs::remove_file(control::paused_path(mur_home, name));
+    Ok(())
+}
+
+/// `mur fleet stop` on a paused run (design §6): no loop process is alive to
+/// see the kill-switch, so the operator command ends the run itself. Called
+/// after `.stopped` is written. Best-effort per piece; returns whether a
+/// paused run was ended.
+pub(crate) fn end_paused_run(mur_home: &Path, name: &str) -> bool {
+    let Some(run_id) = control::paused_run_id(mur_home, name) else {
+        return false;
+    };
+    // A live run still holds the lock: it sees `.stopped` itself and ends
+    // `Stopped` on its own path. Touch nothing.
+    if run_lock::is_held(mur_home, name) {
+        return false;
+    }
+    let paused = crate::run_status::store::load(mur_home, &run_id)
+        .ok()
+        .flatten()
+        .is_some_and(|r| r.state == crate::run_status::State::Paused);
+    if paused {
+        if let Ok(Some(cp)) = checkpoint::load(mur_home, &run_id)
+            && let Some(job_id) = cp.job_id
+            && let Ok(jobs) = crate::cmd::fleet::jobs::list_jobs_raw(mur_home, name)
+            && let Some(mut job) = jobs.into_iter().find(|j| j.id == job_id)
+            && job.status == mur_common::fleet::JobStatus::Running
+        {
+            job.status = mur_common::fleet::JobStatus::Canceled;
+            job.finished_at = Some(chrono::Utc::now().to_rfc3339());
+            job.error = Some("stopped by `mur fleet stop` while paused".to_string());
+            let _ = crate::cmd::fleet::jobs::save_job(mur_home, name, &job);
+        }
+        let _ = crate::run_status::store::update(mur_home, &run_id, |r| {
+            r.state = crate::run_status::State::Stopped
+        });
+        if let Some((mut p, _)) = crate::cmd::fleet::progress::load(mur_home, name)
+            && p.run_id == run_id
+        {
+            p.finished_at = Some(chrono::Utc::now().to_rfc3339());
+            p.outcome = Some("stopped".to_string());
+            p.save(mur_home, name);
+        }
+    }
+    checkpoint::remove(mur_home, &run_id);
+    checkpoint::clear_pause_refusal(mur_home, &run_id);
+    let _ = std::fs::remove_file(control::paused_path(mur_home, name));
+    paused
+}
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;

@@ -202,6 +202,9 @@ pub(super) async fn run_fleet(action: FleetAction) -> Result<()> {
             }
             FleetAction::Stop { name } => cmd::fleet::control::cmd_fleet_stop(&mur_home, &name)?,
             FleetAction::Pause { name } => cmd::fleet::pause::cmd_fleet_pause(&mur_home, &name)?,
+            FleetAction::Resume { name } => {
+                cmd::fleet::loop_run::resume::cmd_fleet_resume(&mur_home, &name).await?
+            }
             FleetAction::Start { name } => cmd::fleet::control::cmd_fleet_start(&mur_home, &name)?,
             FleetAction::Export {
                 name,

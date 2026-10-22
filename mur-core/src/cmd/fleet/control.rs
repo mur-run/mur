@@ -81,7 +81,11 @@ pub fn halt_signal(mur_home: &Path, name: &str, run_id: &str) -> crate::executor
 /// validates the name (slug) and that the fleet exists.
 pub fn cmd_fleet_stop(mur_home: &Path, name: &str) -> Result<()> {
     let _ = store::load_fleet(mur_home, name)?;
+    // `.stopped` first: a resume racing this sees it and refuses (design §6).
     std::fs::write(stopped_path(mur_home, name), "stopped\n")?;
+    if super::loop_run::resume::end_paused_run(mur_home, name) {
+        println!("Fleet '{name}': the paused run is discarded and its job canceled.");
+    }
     println!(
         "Fleet '{name}' stopped: auto-run disabled; a running run starts no further steps and cancels member turns in flight. Re-enable with `mur fleet start {name}`."
     );
