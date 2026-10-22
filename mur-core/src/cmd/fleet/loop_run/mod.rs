@@ -26,7 +26,7 @@ mod clock;
 mod guarded;
 mod observer;
 mod pause;
-mod pause_events;
+pub(crate) mod pause_events;
 mod preflight;
 pub mod resume;
 pub(crate) mod run_lock;

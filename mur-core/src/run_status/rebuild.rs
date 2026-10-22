@@ -49,9 +49,60 @@ fn channel_state_to_run_state(to: &str) -> Option<State> {
     }
 }
 
+/// The state one of `run_id`'s own events puts the run in, if any: a
+/// `StateChange` (mapped through [`channel_state_to_run_state`]) or a fleet
+/// pause/resume note. The notes carry the run ids nested under `fleet_run`,
+/// not at the top level, so [`matches_run`] cannot see them; they are claimed
+/// when either their loop `run_id` or their `iteration_run_id` is this run.
+/// Without this a paused run rebuilt from the channel read as `running`,
+/// since a pause deliberately writes no `StateChange` (design §5.2).
+fn event_state(ev: &ChannelEvent, sidecar: &Sidecar, run_id: &str) -> Option<State> {
+    use crate::cmd::fleet::loop_run::pause_events::{
+        FleetRunPayload, NoteClassification, classify_note_payload,
+    };
+    match ev.kind {
+        EventKind::StateChange if matches_run(ev, sidecar, run_id) => ev
+            .payload
+            .get("to")
+            .and_then(|v| v.as_str())
+            .and_then(channel_state_to_run_state),
+        EventKind::Note if ev.seq >= sidecar.first_seq => {
+            let NoteClassification::FleetRun(env) = classify_note_payload(&ev.payload) else {
+                return None;
+            };
+            let (state, loop_id, iter_id) = match &env.payload {
+                FleetRunPayload::RunPaused {
+                    run_id: l,
+                    iteration_run_id: i,
+                    ..
+                } => (State::Paused, l, i),
+                FleetRunPayload::RunResumed {
+                    run_id: l,
+                    iteration_run_id: i,
+                    ..
+                } => (State::Running, l, i),
+            };
+            (loop_id == run_id || iter_id == run_id).then_some(state)
+        }
+        _ => None,
+    }
+}
+
+/// The last of this run's own state-bearing events and its timestamp.
+fn tail(
+    events: &[ChannelEvent],
+    sidecar: &Sidecar,
+    run_id: &str,
+) -> Option<(State, chrono::DateTime<chrono::Utc>)> {
+    events
+        .iter()
+        .filter_map(|ev| event_state(ev, sidecar, run_id).map(|s| (s, ev.ts)))
+        .next_back()
+}
+
 /// The run's tail state per the channel: the LAST of this run's own
-/// `StateChange` events, mapped to the stored state. `Ok(None)` when the
-/// channel does not exist or carries no matching event.
+/// state-bearing events (see [`event_state`]), mapped to the stored state.
+/// `Ok(None)` when the channel does not exist or carries no matching event.
 ///
 /// Shared by [`from_channel`] (the rebuild's state) and `status_of`
 /// (reconciliation of a parseable cache with the channel) — one fold
@@ -63,13 +114,7 @@ pub fn run_tail_state(mur_home: &Path, sidecar: &Sidecar, run_id: &str) -> Resul
     // I/O fault propagates: collapsing it would make `status_of` report the
     // cache's stale answer as if the channel had nothing newer to say.
     let events = svc.load_events(&sidecar.channel_id)?;
-    Ok(events
-        .iter()
-        .filter(|ev| matches_run(ev, sidecar, run_id))
-        .filter(|ev| ev.kind == EventKind::StateChange)
-        .filter_map(|ev| ev.payload.get("to").and_then(|v| v.as_str()))
-        .filter_map(channel_state_to_run_state)
-        .next_back())
+    Ok(tail(&events, sidecar, run_id).map(|(state, _)| state))
 }
 
 /// Derive a `RunState` from the sidecar's channel, folding only this run's
@@ -93,7 +138,8 @@ pub fn from_channel(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<
     // shared channel the two can be arbitrarily far apart.
     let started_at = first.ts;
 
-    let state = run_tail_state(mur_home, sidecar, run_id)?.unwrap_or(State::Running);
+    let tail = tail(&events, sidecar, run_id);
+    let state = tail.map_or(State::Running, |(state, _)| state);
 
     let mut steps: Vec<StepState> = Vec::new();
     for ev in &own {
@@ -122,14 +168,19 @@ pub fn from_channel(mur_home: &Path, run_id: &str, sidecar: &Sidecar) -> Result<
             }
         }
     }
-    if state.is_terminal() {
-        let ended_at = own
-            .iter()
-            .filter(|ev| ev.kind == EventKind::StateChange)
-            .map(|ev| ev.ts)
-            .next_back();
+    // A terminal run's open steps end with it. A paused run's do too: the
+    // pause cancels member turns in flight, and resume starts fresh ones.
+    let step_end = if state.is_terminal() {
+        Some(state)
+    } else if state == State::Paused {
+        Some(State::Stopped)
+    } else {
+        None
+    };
+    if let Some(step_state) = step_end {
+        let ended_at = tail.map(|(_, ts)| ts);
         for s in steps.iter_mut().filter(|s| s.ended_at.is_none()) {
-            s.state = state;
+            s.state = step_state;
             s.ended_at = ended_at;
         }
     }
@@ -495,5 +546,90 @@ mod tests {
             from_channel(mur_home, "run-a", &at).unwrap().is_some(),
             "a first_seq at the run's own first event must claim it"
         );
+    }
+
+    /// A fleet pause/resume note in the shape `pause.rs` / `resume.rs` write.
+    fn fleet_run_note(svc: &mur_channel::ChannelService, id: &str, kind: &str, iter_run: &str) {
+        let note = serde_json::json!({ "fleet_run": {
+            "v": 1, "type": kind, "run_id": "loop", "iteration_run_id": iter_run,
+            "iteration": 0, "spent_usd": 0.0, "active_elapsed_ms": 1, "reason": "operator",
+        }});
+        svc.append(id, ChannelActor::System, EventKind::Note, note, None)
+            .expect("append note");
+    }
+
+    /// The `resume-smoke` field report: a paused iteration rebuilt from the
+    /// channel read `running` with a `running` step, because the pause writes
+    /// no `StateChange` and its note nests the run id under `fleet_run`.
+    #[test]
+    fn rebuild_of_a_paused_iteration_is_paused_with_its_step_ended() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let id = svc
+            .create_for_fleet("dev", "mur", &["pm".to_string()])
+            .unwrap()
+            .id;
+        svc.transition(
+            &id,
+            ChannelState::Working,
+            ChannelActor::System,
+            Some("loop-0"),
+        )
+        .unwrap();
+        svc.append_delegation(&id, "pm", "ct-1", None, Some("loop-0"))
+            .unwrap();
+        fleet_run_note(&svc, &id, "run_paused", "loop-0");
+
+        let sc = sidecar(&id, RunKind::Fleet);
+        let rebuilt = from_channel(tmp.path(), "loop-0", &sc).unwrap().unwrap();
+        assert_eq!(rebuilt.state, State::Paused);
+        assert_eq!(
+            rebuilt.steps[0].state,
+            State::Stopped,
+            "the pause ended the turn"
+        );
+        assert!(rebuilt.steps[0].ended_at.is_some());
+        assert_eq!(
+            run_tail_state(tmp.path(), &sc, "loop").unwrap(),
+            Some(State::Paused)
+        );
+        let status = classify(rebuilt, chrono::Utc::now(), chrono::Duration::seconds(30));
+        assert_eq!(status.liveness, Liveness::NotApplicable);
+
+        // A later resume reopens it; a stop after that ends it.
+        fleet_run_note(&svc, &id, "run_resumed", "loop-0");
+        assert_eq!(
+            run_tail_state(tmp.path(), &sc, "loop-0").unwrap(),
+            Some(State::Running)
+        );
+        svc.transition(
+            &id,
+            ChannelState::Canceled,
+            ChannelActor::System,
+            Some("loop-0"),
+        )
+        .unwrap();
+        assert_eq!(
+            run_tail_state(tmp.path(), &sc, "loop-0").unwrap(),
+            Some(State::Stopped)
+        );
+    }
+
+    /// Another run's pause note on a shared channel is not this run's.
+    #[test]
+    fn a_pause_note_for_another_run_is_not_claimed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+        let id = svc
+            .create_for_fleet("dev", "mur", &["pm".to_string()])
+            .unwrap()
+            .id;
+        svc.append_delegation(&id, "pm", "ct-1", None, Some("mine"))
+            .unwrap();
+        fleet_run_note(&svc, &id, "run_paused", "other-0");
+        let rebuilt = from_channel(tmp.path(), "mine", &sidecar(&id, RunKind::Fleet))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rebuilt.state, State::Running);
     }
 }
