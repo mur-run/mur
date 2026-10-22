@@ -47,6 +47,7 @@ fn make_fake_executable(dir: &Path, name: &str) -> PathBuf {
     path
 }
 
+mod build_lane;
 mod fs_grants;
 mod network;
 mod resolve;

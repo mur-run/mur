@@ -562,32 +562,27 @@ impl SandboxPolicy {
             let mut candidates = vec![expanded.clone()];
             candidates.extend(mur_common::worktree::worktrees_of(&expanded));
             for candidate in candidates {
-                let Ok(canon) = std::fs::canonicalize(&candidate) else {
-                    drop_build_lane_grant(
-                        &mut dropped,
-                        &candidate,
-                        "did not exist when the agent started, and grants are resolved only \
-                         then; create it, then restart the agent to apply",
-                    );
-                    continue;
-                };
-                if !canon.is_dir() {
-                    drop_build_lane_grant(&mut dropped, &candidate, "not a directory");
-                    continue;
-                }
-                // A grant of `/`, `/usr`, the home directory, or a bare
-                // `/Volumes/<mount>` is not a build lane; it is every binary
-                // reachable under it. Same guard the derived prefixes use.
-                if is_guarded_prefix(&canon, &home) {
-                    drop_build_lane_grant(
-                        &mut dropped,
-                        &candidate,
-                        "too broad to be a build lane (it would allow every binary under it)",
-                    );
-                    continue;
-                }
-                if !spawn_allowed_prefixes.contains(&canon) {
-                    spawn_allowed_prefixes.push(canon);
+                match resolve_build_lane_dir(&candidate, &home) {
+                    Ok(BuildLaneDir::Live(canon)) => {
+                        if !spawn_allowed_prefixes.contains(&canon) {
+                            spawn_allowed_prefixes.push(canon);
+                        }
+                    }
+                    // Not there yet, but its parent is: the grant is
+                    // installed against the canonical parent plus the literal
+                    // leaf, so the directory works once something creates it
+                    // (#2058). Not recorded as dropped: nothing was lost.
+                    Ok(BuildLaneDir::Pending(joined)) => {
+                        tracing::info!(
+                            path = %joined.display(),
+                            "build-lane grant (processes.spawn.allowed_dirs) covers a \
+                             directory that does not exist yet"
+                        );
+                        if !spawn_allowed_prefixes.contains(&joined) {
+                            spawn_allowed_prefixes.push(joined);
+                        }
+                    }
+                    Err(reason) => drop_build_lane_grant(&mut dropped, &candidate, reason),
                 }
             }
         }
