@@ -1,5 +1,6 @@
 //! Resume (pause/resume design §5.4, §6, §7, §8.2a, §10).
 
+use super::super::pause_events::RunBounds;
 use super::*;
 use crate::cmd::fleet::loop_run::checkpoint::{CHECKPOINT_SCHEMA, Checkpoint};
 use mur_common::fleet::{Fleet, JobStatus};
@@ -122,12 +123,73 @@ fn bounds_are_the_tighter_of_checkpoint_and_fleet_yaml() {
     assert_eq!(t.cost_usd, Some(5.0));
 }
 
+fn signed(spent: f64, active_ms: u64, iteration: u32, b: Option<RunBounds>) -> SignedPause {
+    SignedPause {
+        spent_usd: spent,
+        active_elapsed_ms: active_ms,
+        iteration,
+        bounds: b,
+    }
+}
+
+/// Rev 3 §14 item 1: the run started at $5; the operator raised `fleet.yaml`
+/// to $20 during the pause and the run edited its checkpoint to $20. The
+/// signed original bound holds — the checkpoint is not the authority.
+#[test]
+fn a_raised_fleet_yaml_plus_an_edited_checkpoint_cannot_widen_the_original_bounds() {
+    let original = RunBounds {
+        deadline_ms: 600_000,
+        stuck_ms: Some(300_000),
+        cost_usd: Some(5.0),
+    };
+    let mut edited = cp(None);
+    edited.cost_usd = Some(20.0);
+    edited.deadline_ms = 86_400_000;
+    edited.stuck_ms = None;
+    let r = resume_from(&edited, Some(signed(1.5, 60_000, 2, Some(original))), false).unwrap();
+    assert!(r.bounds_authenticated);
+    let t = tighten(bounds(86_400, Stuck::Off, Some(20.0)), &r);
+    assert_eq!(t.cost_usd, Some(5.0));
+    assert_eq!(t.deadline, Duration::from_millis(600_000));
+    assert_eq!(t.stuck, Stuck::After(Duration::from_millis(300_000)));
+}
+
+/// The `null` hole: the checkpoint edited to "no cap" and the cap removed
+/// from `fleet.yaml` must not leave the run unbounded.
+#[test]
+fn a_checkpoint_edited_to_null_cannot_drop_a_signed_cost_cap() {
+    let original = RunBounds {
+        deadline_ms: 600_000,
+        stuck_ms: Some(300_000),
+        cost_usd: Some(5.0),
+    };
+    let mut edited = cp(None);
+    edited.cost_usd = None;
+    let r = resume_from(&edited, Some(signed(1.5, 60_000, 2, Some(original))), false).unwrap();
+    let t = tighten(bounds(86_400, Stuck::Off, None), &r);
+    assert_eq!(t.cost_usd, Some(5.0));
+}
+
+/// A `run_paused` without bounds (or none at all): the checkpoint is the only
+/// record, and the resume says so.
+#[test]
+fn without_signed_bounds_the_checkpoint_is_used_and_flagged_unauthenticated() {
+    let r = resume_from(&cp(None), Some(signed(1.5, 60_000, 2, None)), false).unwrap();
+    assert!(!r.bounds_authenticated);
+    assert_eq!(r.cost_usd, Some(5.0));
+    assert!(
+        !resume_from(&cp(None), None, false)
+            .unwrap()
+            .bounds_authenticated
+    );
+}
+
 #[test]
 fn counters_never_move_down_and_the_signed_note_wins_over_an_edited_checkpoint() {
     let mut edited = cp(None);
     edited.spent_usd = 0.01; // a run lowering its own spend
     edited.active_elapsed_ms = 1;
-    let r = resume_from(&edited, Some((1.5, 60_000, 2)), false).unwrap();
+    let r = resume_from(&edited, Some(signed(1.5, 60_000, 2, None)), false).unwrap();
     assert_eq!(r.spent_usd, 1.5);
     assert_eq!(r.active_elapsed, Duration::from_millis(60_000));
     assert_eq!(r.iteration, 2);
@@ -142,7 +204,7 @@ fn counters_never_move_down_and_the_signed_note_wins_over_an_edited_checkpoint()
 
 #[test]
 fn a_signed_iteration_ahead_of_the_checkpoint_replans_instead_of_replaying() {
-    let r = resume_from(&cp(None), Some((1.5, 60_000, 3)), false).unwrap();
+    let r = resume_from(&cp(None), Some(signed(1.5, 60_000, 3, None)), false).unwrap();
     assert_eq!(r.iteration, 3);
     assert!(r.procedure.is_empty());
 }

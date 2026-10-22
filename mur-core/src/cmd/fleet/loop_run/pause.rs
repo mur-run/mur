@@ -6,7 +6,7 @@
 //! claims a pause that has nothing to resume from.
 
 use super::checkpoint::{self, CHECKPOINT_SCHEMA, Checkpoint};
-use super::pause_events::{FleetRunPayload, PauseReason};
+use super::pause_events::{FleetRunPayload, PauseReason, RunBounds};
 use super::*;
 use mur_common::skill::manifest::ProcedureStep;
 
@@ -78,6 +78,11 @@ pub(super) fn record_pause(svc: &mur_channel::ChannelService, s: &PauseSnapshot<
         spent_usd: s.spent_usd,
         active_elapsed_ms: cp.active_elapsed_ms,
         reason: PauseReason::Operator,
+        bounds: Some(RunBounds {
+            deadline_ms: cp.deadline_ms,
+            stuck_ms: cp.stuck_ms,
+            cost_usd: cp.cost_usd,
+        }),
     }
     .to_note_payload();
     // Best-effort: the checkpoint is the record that matters, and resume

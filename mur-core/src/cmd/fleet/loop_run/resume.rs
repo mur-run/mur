@@ -6,9 +6,9 @@
 //! loop through `run_guarded_from` with the state the checkpoint carried.
 //!
 //! The checkpoint is written by the run itself, so it is never trusted to
-//! widen anything: bounds are `min`-ed with what `fleet.yaml` allows now,
-//! counters are `max`-ed with the signed `run_paused` event, and the HITL
-//! policy is never loosened from `defer`.
+//! widen anything: bounds come from the signed `run_paused` event and are
+//! `min`-ed with what `fleet.yaml` allows now, counters are `max`-ed with that
+//! event, and the HITL policy is never loosened from `defer`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -19,7 +19,7 @@ use mur_common::hitl::Unanswered;
 use mur_common::skill::manifest::ProcedureStep;
 
 use super::checkpoint::{self, Checkpoint};
-use super::pause_events::{FleetRunPayload, NoteClassification, classify_note_payload};
+use super::pause_events::{FleetRunPayload, NoteClassification, RunBounds, classify_note_payload};
 use super::{FleetBounds, LoopStop, run_lock};
 use crate::cmd::fleet::{control, store};
 use crate::executor::delegation::cwd::RunCwd;
@@ -40,20 +40,26 @@ pub struct ResumeFrom {
     /// iterations: that iteration is then planned afresh, as nothing ran.
     pub procedure: Vec<ProcedureStep>,
     pub hitl_unanswered: Unanswered,
-    /// The bounds the checkpoint froze. The loop `min`s them with the bounds
-    /// it resolves now (see [`tighten`]).
+    /// The bounds the run resolved at its original start — from the signed
+    /// `run_paused` when it carries them, else the checkpoint. The loop `min`s
+    /// them with the bounds it resolves now (see [`tighten`]).
     pub deadline: Duration,
     pub stuck: mur_common::limits::Stuck,
     pub cost_usd: Option<f64>,
+    /// Whether the bounds above came from a signed event. `false` means the
+    /// run-written checkpoint was all there was; resume warns.
+    pub bounds_authenticated: bool,
     /// The admitted checkpoint's `paused_at`. Re-checked under the run lock:
     /// a newer pause writes a new one, so a stale admission cannot reopen the
     /// run with obsolete counters.
     pub paused_at: String,
 }
 
-/// Each bound is the tighter of the frozen and the current one (design §5.3):
-/// a limit lowered during the pause bites, and a checkpoint edited to loosen
-/// one cannot, because `fleet.yaml` is operator-only.
+/// Each bound is the tighter of the original and the current one (design
+/// §5.3): a limit lowered during the pause bites, and neither a raised
+/// `fleet.yaml` nor an edited checkpoint widens the original, because the
+/// original is read from the signed `run_paused`. A cap set on either side is
+/// never dropped to "unbounded".
 pub(super) fn tighten(now: FleetBounds, r: &ResumeFrom) -> FleetBounds {
     use mur_common::limits::Stuck;
     let stuck = match (now.stuck, r.stuck) {
@@ -109,16 +115,25 @@ fn parse_unanswered(s: &str) -> Result<Unanswered> {
         .map_err(|_| anyhow::anyhow!("checkpoint names an unknown HITL policy `{s}`"))
 }
 
-/// The latest signed `run_paused` for `run_id` on the fleet's channel: its
-/// `(spent_usd, active_elapsed_ms, iteration)`. Only router-signed events
-/// count — the checkpoint is what an untrusted run wrote, this is what the
-/// trusted writer recorded beside it.
-fn signed_pause_counters(
+/// What the latest signed `run_paused` for a run recorded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct SignedPause {
+    pub spent_usd: f64,
+    pub active_elapsed_ms: u64,
+    pub iteration: u32,
+    /// The original bounds; `None` on an event written before rev 3.
+    pub bounds: Option<RunBounds>,
+}
+
+/// The latest signed `run_paused` for `run_id` on the fleet's channel. Only
+/// router-signed events count — the checkpoint is what an untrusted run
+/// wrote, this is what the trusted writer recorded beside it.
+fn signed_pause(
     mur_home: &Path,
     channel_id: &str,
     events: &[ChannelEvent],
     run_id: &str,
-) -> Option<(f64, u64, u32)> {
+) -> Option<SignedPause> {
     events
         .iter()
         .rev()
@@ -130,11 +145,17 @@ fn signed_pause_counters(
                     spent_usd,
                     active_elapsed_ms,
                     iteration,
+                    bounds,
                     ..
                 } if id == run_id
                     && crate::channel_verify::verify_event(mur_home, channel_id, e, true) =>
                 {
-                    Some((spent_usd, active_elapsed_ms, iteration))
+                    Some(SignedPause {
+                        spent_usd,
+                        active_elapsed_ms,
+                        iteration,
+                        bounds,
+                    })
                 }
                 _ => None,
             },
@@ -146,16 +167,22 @@ fn signed_pause_counters(
 /// counters never move down, HITL is never loosened.
 pub(super) fn resume_from(
     cp: &Checkpoint,
-    signed: Option<(f64, u64, u32)>,
+    signed: Option<SignedPause>,
     unattended_now: bool,
 ) -> Result<ResumeFrom> {
     let (mut spent, mut active_ms, mut iteration) =
         (cp.spent_usd, cp.active_elapsed_ms, cp.iteration);
-    if let Some((s, a, i)) = signed {
-        spent = spent.max(s);
-        active_ms = active_ms.max(a);
-        iteration = iteration.max(i);
+    if let Some(s) = signed {
+        spent = spent.max(s.spent_usd);
+        active_ms = active_ms.max(s.active_elapsed_ms);
+        iteration = iteration.max(s.iteration);
     }
+    let original = signed.and_then(|s| s.bounds);
+    let b = original.unwrap_or(RunBounds {
+        deadline_ms: cp.deadline_ms,
+        stuck_ms: cp.stuck_ms,
+        cost_usd: cp.cost_usd,
+    });
     let mut hitl = parse_unanswered(&cp.hitl_unanswered)?;
     // A run that started unattended resolved `defer`; a resume from a terminal
     // would resolve `wait`. Never loosen: the stricter of the frozen policy and
@@ -180,12 +207,13 @@ pub(super) fn resume_from(
             vec![]
         },
         hitl_unanswered: hitl,
-        deadline: Duration::from_millis(cp.deadline_ms),
-        stuck: match cp.stuck_ms {
+        deadline: Duration::from_millis(b.deadline_ms),
+        stuck: match b.stuck_ms {
             Some(ms) => mur_common::limits::Stuck::After(Duration::from_millis(ms)),
             None => mur_common::limits::Stuck::Off,
         },
-        cost_usd: cp.cost_usd,
+        cost_usd: b.cost_usd,
+        bounds_authenticated: original.is_some(),
         paused_at: cp.paused_at.clone(),
     })
 }
@@ -283,9 +311,14 @@ pub async fn cmd_fleet_resume(mur_home: &Path, name: &str) -> Result<()> {
     let events = mur_channel::ChannelService::open(mur_home)?
         .load_events(&fleet.channel_id)
         .unwrap_or_default();
-    let signed = signed_pause_counters(mur_home, &fleet.channel_id, &events, &cp.run_id);
+    let signed = signed_pause(mur_home, &fleet.channel_id, &events, &cp.run_id);
     let unattended = !std::io::IsTerminal::is_terminal(&std::io::stdin());
     let from = resume_from(&cp, signed, unattended)?;
+    if !from.bounds_authenticated {
+        println!(
+            "  ⚠ no signed run_paused carries this run's original limits; resuming under the checkpoint's copy, tightened by fleet.yaml (check `mur fleet limits {name}`)"
+        );
+    }
     println!(
         "Resuming fleet '{name}' (run {}) at iteration {}, {} spent, paused by mur {}…",
         from.run_id,
