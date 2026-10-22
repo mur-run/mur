@@ -59,6 +59,13 @@ pub enum BlockReason {
     Ungrantable(String),
     /// The member's profile could not be read.
     Profile(String),
+    /// A grant is needed but this process cannot write the member's profile —
+    /// typically a `mur` child sealed by an agent's `fleet_run`, whose seal
+    /// deliberately excludes `agents/` (#712). The user must apply the grant
+    /// from their own shell (#2004).
+    NeedsHostGrant(String),
+    /// The grant was approved but writing it failed.
+    GrantWriteFailed(String),
     /// Nobody answered and nobody was made to wait: the request is parked on
     /// the channel; `mur channel approve <channel> <hitl_id>` releases it.
     Deferred { hitl_id: String },
@@ -171,6 +178,16 @@ pub fn block_message(
             ),
             BlockReason::Ungrantable(why) => format!("{member}: `{dir}` cannot be granted: {why}"),
             BlockReason::Profile(why) => format!("{member}: cannot read profile: {why}"),
+            BlockReason::NeedsHostGrant(why) => format!(
+                "{member}: needs a write grant for `{dir}`, but this process cannot edit agent \
+                 profiles ({why}) — it is likely running inside an agent's sandbox. From your own \
+                 terminal run `mur agent perm allow-write {member} {dir}`, then re-run (or run \
+                 the whole dispatch there, e.g. `mur fleet run <fleet> --cwd {dir} ...`)."
+            ),
+            BlockReason::GrantWriteFailed(why) => format!(
+                "{member}: approved, but writing the grant for `{dir}` failed ({why}). From your \
+                 own terminal run `mur agent perm allow-write {member} {dir}`, then re-run."
+            ),
             BlockReason::Deferred { hitl_id } => format!(
                 "{member}: needs approval to write `{dir}` — parked. \
                  Approve with `mur channel approve {channel_id} {hitl_id}`, then re-run."
@@ -228,6 +245,10 @@ async fn ensure_one(ctx: &GrantContext<'_>, t: &DelegationTarget) -> Result<Gran
     if !allowed && let Some(why) = ungrantable(ctx.mur_home, &t.member, &t.dir) {
         return Ok(Blocked(BlockReason::Ungrantable(why)));
     }
+    // Same principle: never ask for a grant this process cannot write (#2004).
+    if !allowed && let Err(why) = probe_writable(&profile_path) {
+        return Ok(Blocked(BlockReason::NeedsHostGrant(why)));
+    }
     let service = crate::cmd::agent::installed_service(&t.member).is_some();
     let running = member_running(ctx.mur_home, &t.member);
 
@@ -269,7 +290,11 @@ async fn ensure_one(ctx: &GrantContext<'_>, t: &DelegationTarget) -> Result<Gran
         return Ok(GrantOutcome::AlreadyAllowed);
     }
 
-    write_grant(&profile_path, profile, &t.dir)?;
+    // Blocked, not `?`: the remaining members must still be evaluated and
+    // recorded on the channel.
+    if let Err(e) = write_grant(&profile_path, profile, &t.dir) {
+        return Ok(Blocked(BlockReason::GrantWriteFailed(format!("{e:#}"))));
+    }
     if !running {
         return Ok(GrantOutcome::Granted { restarted: false });
     }
@@ -341,6 +366,32 @@ fn ungrantable(mur_home: &Path, member: &str, dir: &Path) -> Option<String> {
         );
     }
     None
+}
+
+/// Can this process create a file next to `profile_path`? `save_profile`
+/// writes `profile.yaml.tmp` there and renames it, so this is the exact
+/// permission it needs. A kernel sandbox denial (EPERM) and a POSIX one
+/// (EACCES) both show up here, before anyone is asked to approve.
+fn probe_writable(profile_path: &Path) -> std::result::Result<(), String> {
+    let dir = profile_path.parent().unwrap_or(Path::new("."));
+    let probe = dir.join(format!(".grant-probe-{}", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        // A stale probe from a crashed run of this pid still proves the
+        // directory accepted a create once; treat it as writable.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(e) => Err(format!("cannot write {}: {e}", dir.display())),
+    }
 }
 
 fn member_running(mur_home: &Path, member: &str) -> bool {
