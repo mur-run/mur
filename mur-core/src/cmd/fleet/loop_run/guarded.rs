@@ -75,17 +75,11 @@ async fn run_guarded_inner(
     let _run_lock = run_lock::acquire(mur_home, name)?;
     // With the lock held: a fresh run over a paused one is refused (it would
     // orphan the paused run and reset its limits, design §8.4); a resume
-    // re-checks the kill-switch, which may have landed since `admit` (§6).
+    // re-runs admission — a stop (§6) or another resume may have landed
+    // since `admit` — and must still hold the pause it admitted.
     match &resume {
         None => super::resume::refuse_fresh_run_over_pause(mur_home, name)?,
-        Some(r) => {
-            if super::super::control::is_stopped(mur_home, name) {
-                anyhow::bail!(
-                    "fleet '{name}' was stopped before run {} could resume; stop wins over resume",
-                    r.run_id
-                );
-            }
-        }
+        Some(r) => super::resume::revalidate_under_lock(mur_home, name, r)?,
     }
     let mut fleet = store::load_fleet(mur_home, name)?;
     // Kept for the checkpoint: `fleet.goal` is overwritten below, and a resume
@@ -220,8 +214,13 @@ async fn run_guarded_inner(
 
     // The loop is one run with a handle (spec §3.6); see `run_record`.
     let loop_beat = run_record::open(mur_home, &fleet, name, &run_id);
-    // The HITL policy a resumed run keeps (None on a fresh run).
-    let hitl_override = resume.as_ref().map(|r| r.hitl_unanswered);
+    // The HITL policy this run enforces — and persists on every pause, so a
+    // pause/resume cycle can never loosen it (design §8.2a).
+    let hitl = super::resume::effective_hitl(
+        fleet.hitl.as_ref().and_then(|h| h.mode),
+        resume.as_ref().map(|r| r.hitl_unanswered),
+        crate::executor::dag::default_unanswered(),
+    );
     if let Some(r) = &resume {
         // Record `Running` (above), write `run_resumed`, THEN drop `.paused`:
         // a crash in between leaves the run resumable again or running,
@@ -338,6 +337,7 @@ async fn run_guarded_inner(
                 bounds: &bounds,
                 target_cwd: target_cwd_text.as_deref(),
                 procedure: &[],
+                hitl,
             };
             match pause::record_pause(&svc, &snap) {
                 Ok(()) => break LoopStop::Paused,
@@ -480,9 +480,10 @@ async fn run_guarded_inner(
             yes: false,
             // Fleet-declared approval policy (`hitl.mode`); `None` keeps the
             // TTY-derived default. Tightening only — nothing here approves.
-            // A resume passes the policy frozen at the original start, so a
-            // resume from a terminal cannot turn `defer` into `wait` (§8.2a).
-            hitl_unanswered: hitl_override.or(fleet.hitl.as_ref().and_then(|h| h.mode)),
+            // `hitl` above: `fleet.yaml`'s mode, or on a resume the frozen
+            // policy tightened by it, so a terminal resume cannot turn
+            // `defer` into `wait` (§8.2a).
+            hitl_unanswered: Some(hitl),
             hitl_auto_approve_tiers: fleet
                 .hitl
                 .as_ref()
@@ -559,6 +560,7 @@ async fn run_guarded_inner(
                 bounds: &bounds,
                 target_cwd: target_cwd_text.as_deref(),
                 procedure: &proc.steps,
+                hitl,
             };
             match pause::record_pause(&svc, &snap) {
                 Ok(()) => break LoopStop::Paused,

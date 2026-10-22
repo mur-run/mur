@@ -335,3 +335,56 @@ async fn a_resumed_run_keeps_its_original_started_at() {
     assert_eq!(after.state, crate::run_status::State::Running);
     assert_eq!(after.pid, std::process::id());
 }
+
+/// Review of #2067: two `resume`s can both pass `admit` before either holds
+/// the lock. The later one must not reopen the run from its stale snapshot
+/// once the earlier one resumed and paused again (new `paused_at`) or ended.
+#[test]
+fn a_stale_admission_cannot_reopen_a_superseded_pause() {
+    let home = paused_home(None);
+    let a = resume_from(&admit(home.path(), "dev").unwrap(), None, false).unwrap();
+    let b = resume_from(&admit(home.path(), "dev").unwrap(), None, false).unwrap();
+
+    // `a` wins the lock, runs further and pauses again: a newer checkpoint.
+    revalidate_under_lock(home.path(), "dev", &a).expect("first resume is current");
+    let mut newer = cp(None);
+    newer.spent_usd = 3.0;
+    newer.active_elapsed_ms = 120_000;
+    newer.paused_at = "2026-10-22T01:00:00Z".into();
+    checkpoint::save(home.path(), &newer).unwrap();
+
+    let err = revalidate_under_lock(home.path(), "dev", &b).unwrap_err();
+    assert!(format!("{err}").contains("no longer current"), "{err}");
+
+    // `a` finished instead: the pause is gone, and `b` is refused too.
+    let _ = std::fs::remove_file(control::paused_path(home.path(), "dev"));
+    record(home.path(), crate::run_status::State::Done);
+    assert!(revalidate_under_lock(home.path(), "dev", &b).is_err());
+}
+
+/// Review of #2067: start unattended (frozen `defer`) → resume from a terminal
+/// → pause → resume from a terminal. The policy every pause persists is the
+/// one enforced, so no cycle turns `defer` into `wait`; a stricter mode set
+/// in `fleet.yaml` since still tightens it.
+#[test]
+fn repeated_pause_cycles_never_loosen_the_frozen_hitl_policy() {
+    use mur_common::hitl::Unanswered::{Defer, Deny, Wait};
+    // Start unattended, no `hitl.mode`: the process default is `defer`.
+    let mut policy = effective_hitl(None, None, Defer);
+    for _ in 0..3 {
+        // A terminal resume reads back what the last pause persisted …
+        let mut c = cp(None);
+        c.hitl_unanswered = serde_json::to_value(policy)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .into();
+        let r = resume_from(&c, None, false).unwrap();
+        // … and the resumed run (terminal default `wait`) enforces/persists:
+        policy = effective_hitl(None, Some(r.hitl_unanswered), Wait);
+        assert_eq!(policy, Defer, "a terminal resume must keep `defer`");
+    }
+    assert_eq!(effective_hitl(Some(Deny), Some(Defer), Wait), Deny);
+    assert_eq!(effective_hitl(Some(Wait), Some(Defer), Wait), Defer);
+    assert_eq!(effective_hitl(Some(Wait), None, Defer), Wait);
+}

@@ -45,6 +45,10 @@ pub struct ResumeFrom {
     pub deadline: Duration,
     pub stuck: mur_common::limits::Stuck,
     pub cost_usd: Option<f64>,
+    /// The admitted checkpoint's `paused_at`. Re-checked under the run lock:
+    /// a newer pause writes a new one, so a stale admission cannot reopen the
+    /// run with obsolete counters.
+    pub paused_at: String,
 }
 
 /// Each bound is the tighter of the frozen and the current one (design §5.3):
@@ -72,7 +76,7 @@ pub(super) fn tighten(now: FleetBounds, r: &ResumeFrom) -> FleetBounds {
 /// The stricter of two unanswered-gate policies: `deny` > `defer` > `wait`.
 /// `wait` is the loosest because it lets a gate time out into a denial while
 /// nobody may be watching (design §8.2a).
-fn stricter(a: Unanswered, b: Unanswered) -> Unanswered {
+pub(super) fn stricter(a: Unanswered, b: Unanswered) -> Unanswered {
     fn rank(u: Unanswered) -> u8 {
         match u {
             Unanswered::Wait => 0,
@@ -81,6 +85,23 @@ fn stricter(a: Unanswered, b: Unanswered) -> Unanswered {
         }
     }
     if rank(a) >= rank(b) { a } else { b }
+}
+
+/// The unanswered-gate policy a run enforces, and what every pause of it must
+/// persist. A fresh run takes `fleet.yaml`'s mode or the process default; a
+/// resumed one keeps the policy it was frozen with, tightened by a stricter
+/// mode set since — never loosened, across any number of pause cycles.
+pub(super) fn effective_hitl(
+    fleet_mode: Option<Unanswered>,
+    resumed: Option<Unanswered>,
+    process_default: Unanswered,
+) -> Unanswered {
+    match (resumed, fleet_mode) {
+        (Some(frozen), Some(now)) => stricter(frozen, now),
+        (Some(frozen), None) => frozen,
+        (None, Some(now)) => now,
+        (None, None) => process_default,
+    }
 }
 
 fn parse_unanswered(s: &str) -> Result<Unanswered> {
@@ -165,12 +186,39 @@ pub(super) fn resume_from(
             None => mur_common::limits::Stuck::Off,
         },
         cost_usd: cp.cost_usd,
+        paused_at: cp.paused_at.clone(),
     })
 }
 
 /// Why a fleet cannot be resumed right now, checked in the order of design
 /// §5.4 steps 1-4. `Ok` carries the checkpoint to continue from.
 pub(super) fn admit(mur_home: &Path, name: &str) -> Result<Checkpoint> {
+    if control::paused_run_id(mur_home, name).is_some() && run_lock::is_held(mur_home, name) {
+        bail!(
+            "a run of '{name}' is live; it is not paused yet — wait for it, or check `mur fleet status {name}`"
+        );
+    }
+    admit_state(mur_home, name)
+}
+
+/// Re-run admission with the run lock held, and require that the pause is
+/// still the one the caller admitted. Two `resume`s can both pass [`admit`]
+/// before either takes the lock; the later one would otherwise reopen the run
+/// from a snapshot a newer pause (or a finish) has superseded, rolling back
+/// spend and elapsed time.
+pub(super) fn revalidate_under_lock(mur_home: &Path, name: &str, r: &ResumeFrom) -> Result<()> {
+    let cp = admit_state(mur_home, name)?;
+    if cp.run_id != r.run_id || cp.paused_at != r.paused_at {
+        bail!(
+            "fleet '{name}': the pause this resume admitted is no longer current (another resume took it) — check `mur fleet status {name}`"
+        );
+    }
+    Ok(())
+}
+
+/// Every admission check except "is a run live": [`admit`] asks that before
+/// taking the lock, [`revalidate_under_lock`] holds the lock itself.
+fn admit_state(mur_home: &Path, name: &str) -> Result<Checkpoint> {
     let stopped = control::is_stopped(mur_home, name);
     let Some(run_id) = control::paused_run_id(mur_home, name) else {
         if stopped {
@@ -178,11 +226,6 @@ pub(super) fn admit(mur_home: &Path, name: &str) -> Result<Checkpoint> {
         }
         bail!("fleet '{name}' has no paused run; use `mur fleet run`");
     };
-    if run_lock::is_held(mur_home, name) {
-        bail!(
-            "a run of '{name}' is live; it is not paused yet — wait for it, or check `mur fleet status {name}`"
-        );
-    }
     if stopped {
         bail!(stopped_message(name));
     }
