@@ -60,8 +60,8 @@ mod run;
 pub use interactive::{handover_argv, needs_terminal, review_redirect_named};
 
 pub use run::{
-    SHELL_CARD_MAX_BYTES, SHELL_MAX_BYTES, SIGKILL_NUM, SIGTERM_NUM, ShellEnd, cap_tail, run,
-    signal_group, spawn, spawn_argv,
+    SHELL_CARD_MAX_BYTES, SHELL_MAX_BYTES, SIGKILL_NUM, SIGTERM_NUM, ShellEnd, TermSize, cap_tail,
+    run, signal_group, spawn, spawn_argv,
 };
 
 use tokio::sync::oneshot;
@@ -295,7 +295,7 @@ mod tests {
 
         // A group that ignores SIGTERM, so only the SIGKILL can end it —
         // which is the whole point: a polite signal would pass either way.
-        let (child, pid) = spawn("trap '' TERM; sleep 60 & echo $!; wait")
+        let (child, pid) = spawn("trap '' TERM; sleep 60 & echo $!; wait", None)
             .await
             .expect("spawn");
         let (tx, mut rx) = mpsc::channel(64);

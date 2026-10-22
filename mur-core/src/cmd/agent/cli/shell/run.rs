@@ -150,12 +150,42 @@ pub fn signal_group(pid: u32, _sig: i32) {
         .status();
 }
 
+/// The terminal geometry a child should believe it has.
+///
+/// The child's streams are pipes, so it has no tty to query and tools such as
+/// `tput` or `ls` fall back to 80x24. `COLUMNS`/`LINES` are the override those
+/// tools honour without a tty; no PTY is introduced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermSize {
+    /// Columns the transcript card renders output at.
+    pub cols: u16,
+    /// Rows of the real terminal.
+    pub rows: u16,
+}
+
+impl TermSize {
+    /// The `(name, value)` pairs exported to the child.
+    pub fn env(self) -> [(&'static str, String); 2] {
+        [
+            ("COLUMNS", self.cols.to_string()),
+            ("LINES", self.rows.to_string()),
+        ]
+    }
+}
+
 /// Start `cmd` under the user's shell, as its own process group.
+///
+/// `size`, when known, is exported as `COLUMNS`/`LINES`. A `COLUMNS=120 cmd`
+/// assignment inside `cmd` still wins, since it applies after the inherited
+/// environment.
 ///
 /// Synchronous and separate from [`run`] so the caller holds the pid before
 /// the child moves into a task: the quit path signals the group directly and
 /// cannot wait for an async hop (§3.5).
-pub async fn spawn(cmd: &str) -> std::io::Result<(tokio::process::Child, u32)> {
+pub async fn spawn(
+    cmd: &str,
+    size: Option<TermSize>,
+) -> std::io::Result<(tokio::process::Child, u32)> {
     use tokio::process::Command;
     #[cfg(unix)]
     let (shell, flag) = (
@@ -175,6 +205,9 @@ pub async fn spawn(cmd: &str) -> std::io::Result<(tokio::process::Child, u32)> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    if let Some(size) = size {
+        command.envs(size.env());
+    }
     // D5: its own group, so a kill reaches `cargo`'s children and not just
     // the shell. A refusal fails the spawn — never an ungrouped child, which
     // would make every later kill lie about what it ended.
@@ -422,7 +455,7 @@ mod tests {
     async fn drive(cmd: &str) -> (String, ShellEnd) {
         let (tx, mut rx) = mpsc::channel(256);
         let (_c_tx, c_rx) = oneshot::channel();
-        let (child, pid) = spawn(cmd).await.expect("spawn");
+        let (child, pid) = spawn(cmd, None).await.expect("spawn");
         let end = run(child, pid, 1, tx, c_rx).await;
         let mut text = String::new();
         while let Ok(m) = rx.try_recv() {
@@ -431,6 +464,73 @@ mod tests {
             }
         }
         (text, end)
+    }
+
+    /// Drive a command spawned with an explicit terminal size.
+    #[cfg(unix)]
+    async fn drive_sized(cmd: &str, size: Option<TermSize>) -> String {
+        let (tx, mut rx) = mpsc::channel(256);
+        let (_c_tx, c_rx) = oneshot::channel();
+        let (child, pid) = spawn(cmd, size).await.expect("spawn");
+        run(child, pid, 1, tx, c_rx).await;
+        let mut text = String::new();
+        while let Ok(m) = rx.try_recv() {
+            if let StreamMsg::ShellOutput { chunk, .. } = m {
+                text.push_str(&chunk);
+            }
+        }
+        text
+    }
+
+    /// #2032: a supplied size reaches the child as `COLUMNS`/`LINES`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_exports_the_supplied_terminal_size() {
+        let size = TermSize {
+            cols: 137,
+            rows: 41,
+        };
+        let text = drive_sized("echo \"$COLUMNS x $LINES\"", Some(size)).await;
+        assert!(text.contains("137 x 41"), "{text}");
+    }
+
+    /// A `COLUMNS=… cmd` assignment inside the command still beats ours.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_explicit_assignment_in_the_command_wins() {
+        let size = TermSize {
+            cols: 137,
+            rows: 41,
+        };
+        let text = drive_sized("COLUMNS=99 sh -c 'echo $COLUMNS'", Some(size)).await;
+        assert!(text.contains("99") && !text.contains("137"), "{text}");
+    }
+
+    /// With no size known we export nothing of our own: what the child's
+    /// environment holds for `COLUMNS` is exactly what the parent's does.
+    /// (`printenv`, not `$COLUMNS`: zsh invents an 80 for the latter.)
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_size_exports_nothing() {
+        let parent = std::env::var("COLUMNS").unwrap_or_default();
+        let text = drive_sized("printenv COLUMNS; true", None).await;
+        assert_eq!(text.trim(), parent, "{text}");
+    }
+
+    /// stdin stays null and the streams stay pipes: no PTY is introduced.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sizing_does_not_give_the_child_a_tty() {
+        let size = TermSize {
+            cols: 100,
+            rows: 30,
+        };
+        let text = drive_sized(
+            "[ -t 0 ] && echo tty0; [ -t 1 ] && echo tty1; echo done",
+            Some(size),
+        )
+        .await;
+        assert!(text.contains("done") && !text.contains("tty"), "{text}");
     }
 
     #[cfg(unix)]
@@ -461,7 +561,9 @@ mod tests {
     async fn output_arrives_before_the_command_ends() {
         let (tx, mut rx) = mpsc::channel(256);
         let (_c_tx, c_rx) = oneshot::channel();
-        let (child, pid) = spawn("echo one; sleep 0.6; echo two").await.expect("spawn");
+        let (child, pid) = spawn("echo one; sleep 0.6; echo two", None)
+            .await
+            .expect("spawn");
         let task = tokio::spawn(run(child, pid, 1, tx, c_rx));
         let first = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
@@ -486,7 +588,7 @@ mod tests {
     async fn the_last_chunk_is_forwarded_before_run_returns() {
         let (tx, mut rx) = mpsc::channel(256);
         let (_c_tx, c_rx) = oneshot::channel();
-        let (child, pid) = spawn("echo FINAL").await.expect("spawn");
+        let (child, pid) = spawn("echo FINAL", None).await.expect("spawn");
         let end = run(child, pid, 1, tx, c_rx).await;
         assert_eq!(end, ShellEnd::Exited(0));
         // `run` has returned: everything it will ever send is already queued,
@@ -526,7 +628,9 @@ mod tests {
     async fn cancel_kills_the_group_promptly() {
         let (tx, mut rx) = mpsc::channel(256);
         let (c_tx, c_rx) = oneshot::channel();
-        let (child, pid) = spawn("sleep 60 & echo $!; wait").await.expect("spawn");
+        let (child, pid) = spawn("sleep 60 & echo $!; wait", None)
+            .await
+            .expect("spawn");
         let task = tokio::spawn(run(child, pid, 1, tx, c_rx));
         let chunk = loop {
             match tokio::time::timeout(Duration::from_secs(5), rx.recv())

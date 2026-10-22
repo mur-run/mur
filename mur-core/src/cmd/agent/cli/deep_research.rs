@@ -88,8 +88,12 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
             return;
         }
     };
-    let env = [("MUR_RUN_ID", run_id.as_str())];
-    let (child, pid) = match shell::spawn_argv(&executable, &argv, &env).await {
+    let mut env = vec![("MUR_RUN_ID".to_string(), run_id.clone())];
+    if let Some(size) = app.shell_term_size() {
+        env.extend(size.env().map(|(k, v)| (k.to_string(), v)));
+    }
+    let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let (child, pid) = match shell::spawn_argv(&executable, &argv, &env_refs).await {
         Ok(value) => value,
         Err(error) => {
             app.begin_shell(&display);
