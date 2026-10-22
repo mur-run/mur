@@ -66,7 +66,7 @@ impl GateB {
             &self.identity.verifying_key_bytes(),
         )
         .err()
-        .map(|e| e.0)
+        .map(|e| e.reason)
     }
 
     /// The agent-sealed head, if one can be read (for the repair record).
