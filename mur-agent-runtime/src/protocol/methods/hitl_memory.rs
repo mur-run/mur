@@ -122,6 +122,48 @@ impl MethodHandler for HitlForgetHandler {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn list_handler_keeps_io_failure_internal() {
+        use mur_common::identity::AgentIdentity;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(ChannelDecisionStore::new(
+            tmp.path().to_path_buf(),
+            "qa".into(),
+            Arc::new(AgentIdentity::generate()),
+            0,
+        ));
+        use crate::hitl::store::DecisionStore;
+        store
+            .record(mur_common::hitl::HitlResponse {
+                hitl_id: "a".into(),
+                action_hash: "h1".into(),
+                allow: true,
+                reason: String::new(),
+                surface: "hub".into(),
+                issued_at: Some(chrono::Utc::now()),
+                label: None,
+            })
+            .await;
+        let heads = tmp
+            .path()
+            .join("agents/qa")
+            .join(mur_common::agent::HITL_HEAD_DIR);
+        let head = std::fs::read_dir(&heads)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::remove_file(&head).unwrap();
+        std::fs::create_dir(&head).unwrap();
+
+        let err = HitlListHandler::new(store)
+            .handle(None, &RequestContext::default())
+            .await
+            .expect_err("unreadable head is not a successful listing");
+        assert!(matches!(err, HandlerError::Internal(_)), "{err:?}");
+    }
+
     #[test]
     fn unavailable_listing_is_a_result_with_reason_and_channel() {
         let v = listing_json(Listing::Unavailable {

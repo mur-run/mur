@@ -126,14 +126,15 @@ impl ChannelDecisionStore {
         match self.list() {
             Ok(decisions) => Ok(Listing::Live(decisions)),
             Err(e) => match e.downcast_ref::<IntegrityError>() {
-                Some(ie) => {
+                // An unreadable log/head is an internal error, not a verdict.
+                Some(ie) if !ie.is_io() => {
                     let svc = ChannelService::open(&self.mur_home)?;
                     Ok(Listing::Unavailable {
-                        reason: ie.0.clone(),
+                        reason: ie.reason.clone(),
                         channel_id: self.channel_id(&svc)?,
                     })
                 }
-                None => Err(e),
+                _ => Err(e),
             },
         }
     }

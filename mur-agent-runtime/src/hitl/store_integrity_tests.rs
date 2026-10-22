@@ -384,6 +384,46 @@ async fn list_report_lists_a_trusted_log_normally() {
     }
 }
 
+#[tokio::test]
+async fn list_report_keeps_an_unreadable_head_an_error() {
+    // The head path exists but cannot be read as a file: the check could not
+    // run, which is an internal failure, not a verdict `channel repair` fixes.
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    s.record(resp("h1", true, "a", 5)).await;
+    let head = std::fs::read_dir(heads_dir(tmp.path()))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    std::fs::remove_file(&head).unwrap();
+    std::fs::create_dir(&head).unwrap();
+
+    let err = s
+        .list_report()
+        .expect_err("an I/O failure must stay an error");
+    assert!(err.to_string().contains("head unreadable"), "{err:#}");
+}
+
+#[tokio::test]
+async fn list_report_reports_a_corrupt_head_as_unavailable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = store(tmp.path());
+    s.record(resp("h1", true, "a", 5)).await;
+    let head = std::fs::read_dir(heads_dir(tmp.path()))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    std::fs::write(&head, b"not json").unwrap();
+    assert!(matches!(
+        s.list_report().unwrap(),
+        Listing::Unavailable { .. }
+    ));
+}
+
 // --- what is NOT detected, written down as a test ----------------------
 
 #[tokio::test]
