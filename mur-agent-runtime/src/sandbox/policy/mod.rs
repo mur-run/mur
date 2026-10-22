@@ -326,6 +326,28 @@ fn is_guarded_prefix(path: &Path, home: &Path) -> bool {
     }
     false
 }
+/// Record a build-lane (`processes.spawn.allowed_dirs`) grant the seal refused,
+/// and warn once with the path and the reason (#2030).
+///
+/// Both, not either: `running.lock` is what `mur agent` can show the operator,
+/// the log line is what a person grepping `stderr.log` finds.
+fn drop_build_lane_grant(
+    dropped: &mut Vec<mur_common::agent::DroppedGrant>,
+    path: &Path,
+    reason: &str,
+) {
+    tracing::warn!(
+        path = %path.display(),
+        reason,
+        "build-lane grant (processes.spawn.allowed_dirs) is inactive"
+    );
+    dropped.push(mur_common::agent::DroppedGrant {
+        path: path.display().to_string(),
+        verb: "spawn".into(),
+        reason: reason.into(),
+    });
+}
+
 pub(super) fn system_exec_paths(home: &Path) -> Vec<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     {

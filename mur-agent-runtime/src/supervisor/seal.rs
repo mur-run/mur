@@ -316,6 +316,9 @@ pub(super) async fn prepare_and_seal(
         .collect();
     let granted_digest =
         mur_common::agent::filesystem_grants_digest(&profile.inner.entitlements.filesystem);
+    let granted_spawn_dirs_digest = Some(mur_common::agent::spawn_dirs_digest(
+        &profile.inner.entitlements.processes.spawn.allowed_dirs,
+    ));
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,
@@ -344,6 +347,7 @@ pub(super) async fn prepare_and_seal(
                 enforcing: status.enforcing,
                 mode: status.platform,
                 granted_digest,
+                granted_spawn_dirs_digest,
                 dropped: status.dropped,
             })
         }
@@ -370,6 +374,7 @@ pub(super) async fn prepare_and_seal(
                 enforcing: false,
                 mode: "advisory-only".into(),
                 granted_digest,
+                granted_spawn_dirs_digest,
                 dropped: Vec::new(),
             })
         }

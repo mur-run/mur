@@ -335,6 +335,25 @@ pub fn filesystem_grants_digest(fs: &FilesystemEntitlement) -> String {
     format!("sha256:{:x}", h.finalize())
 }
 
+/// Digest of the build-lane grants (`processes.spawn.allowed_dirs`).
+///
+/// Kept apart from [`filesystem_grants_digest`] on purpose: folding these into
+/// that one would change the digest of every agent already running, and each
+/// would then report drift it does not have. Order-insensitive, like its
+/// sibling.
+pub fn spawn_dirs_digest(dirs: &[String]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut sorted = dirs.to_vec();
+    sorted.sort();
+    let mut h = Sha256::new();
+    for p in sorted {
+        h.update(b"s\0");
+        h.update(p.as_bytes());
+        h.update(b"\0");
+    }
+    format!("sha256:{:x}", h.finalize())
+}
+
 /// What the sandbox actually installed, recorded at the moment it sealed.
 ///
 /// A seatbelt profile cannot be widened after `sandbox_init`, so this is fixed
@@ -355,6 +374,12 @@ pub struct SandboxRecord {
     /// without anyone tracking that — and unlike `card_digest` it does not move
     /// when an unrelated field does, so it cannot raise a false alarm.
     pub granted_digest: String,
+    /// Digest of `processes.spawn.allowed_dirs` as sealed (#2030). `None` = a
+    /// lock written before this field existed: whether a build-lane grant
+    /// reached the kernel cannot be established from it, and readers must say
+    /// so rather than assume it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_spawn_dirs_digest: Option<String>,
     /// Grants that did not reach the kernel. Empty is the normal case.
     #[serde(default)]
     pub dropped: Vec<DroppedGrant>,
@@ -459,11 +484,30 @@ mod tests {
     }
 
     #[test]
+    fn spawn_dirs_digest_ignores_order_and_tracks_membership() {
+        let a = vec!["/a".to_string(), "/b".to_string()];
+        let reordered = vec!["/b".to_string(), "/a".to_string()];
+        let grown = vec!["/a".to_string(), "/b".to_string(), "/c".to_string()];
+        assert_eq!(spawn_dirs_digest(&a), spawn_dirs_digest(&reordered));
+        assert_ne!(spawn_dirs_digest(&a), spawn_dirs_digest(&grown));
+        // An empty list is a real, comparable state, not "unknown".
+        assert_ne!(spawn_dirs_digest(&[]), spawn_dirs_digest(&a));
+    }
+
+    #[test]
+    fn a_lock_sealed_before_the_spawn_digest_existed_loads_as_none() {
+        let old = r#"{"enforcing":true,"mode":"macos-sbpl","granted_digest":"sha256:x"}"#;
+        let rec: SandboxRecord = serde_json::from_str(old).expect("old record must load");
+        assert!(rec.granted_spawn_dirs_digest.is_none());
+    }
+
+    #[test]
     fn the_sandbox_block_round_trips() {
         let rec = SandboxRecord {
             enforcing: false,
             mode: "advisory-only".into(),
             granted_digest: "sha256:x".into(),
+            granted_spawn_dirs_digest: Some("sha256:y".into()),
             dropped: vec![DroppedGrant {
                 path: "/gone".into(),
                 verb: "write".into(),

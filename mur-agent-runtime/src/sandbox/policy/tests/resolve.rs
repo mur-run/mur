@@ -281,6 +281,77 @@ fn build_lane_grants_a_directory_prefix_and_fails_closed() {
     );
 }
 
+/// A build-lane grant the seal discards must be recorded, not just skipped:
+/// the drop is permanent for the life of the process, and the operator's only
+/// symptom is a bare `Operation not permitted` from the build (#2030). Each
+/// reason is distinguishable, because the fix differs: create the directory and
+/// restart, versus pick a narrower directory.
+#[test]
+fn build_lane_records_every_grant_it_drops_with_a_reason() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let live = tmp.path().join("live");
+    std::fs::create_dir_all(&live).expect("mkdir live");
+    let a_file = tmp.path().join("not-a-dir");
+    std::fs::write(&a_file, b"x").expect("write file");
+    let missing = tmp.path().join("created-after-seal");
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+
+    let mut ent = minimal_entitlements();
+    ent.processes.spawn.mode = SpawnMode::Allowlist;
+    ent.processes.spawn.allowed_dirs = vec![
+        live.to_string_lossy().to_string(),
+        missing.to_string_lossy().to_string(),
+        a_file.to_string_lossy().to_string(),
+        "/".to_string(),
+        home.to_string_lossy().to_string(),
+    ];
+
+    let policy = SandboxPolicy::from_entitlements(&ent, &tmp.path().join("agent-home"));
+    let reason_for = |path: &std::path::Path| -> Option<String> {
+        let want = path.to_string_lossy();
+        policy
+            .dropped
+            .iter()
+            .find(|d| d.verb == "spawn" && d.path == want)
+            .map(|d| d.reason.clone())
+    };
+
+    let missing_reason = reason_for(&missing).expect("a missing grant must be recorded");
+    assert!(
+        missing_reason.contains("did not exist") && missing_reason.contains("restart"),
+        "the reason must say how to recover: {missing_reason}"
+    );
+    assert!(
+        reason_for(&a_file)
+            .expect("a plain file must be recorded")
+            .contains("not a directory")
+    );
+    // `is_guarded_prefix` names Unix roots (`/`, `/usr`, `$HOME`), and only the
+    // macOS SBPL renderer reads `spawn_allowed_prefixes`, so there is nothing to
+    // guard on Windows. CI showed the `/` record missing there (#2057), so these
+    // two cases are Unix-only.
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert!(
+            reason_for(std::path::Path::new("/"))
+                .expect("a guarded grant must be recorded")
+                .contains("too broad")
+        );
+        assert!(
+            reason_for(&home)
+                .expect("the home directory must be recorded")
+                .contains("too broad")
+        );
+    }
+    #[cfg(target_os = "windows")]
+    let _ = &home;
+    assert!(
+        reason_for(&live).is_none(),
+        "a grant that took effect must not be reported as dropped: {:?}",
+        policy.dropped
+    );
+}
+
 #[test]
 fn build_lane_grants_the_matching_path_in_linked_worktrees() {
     let tmp = tempfile::tempdir().expect("tempdir");
