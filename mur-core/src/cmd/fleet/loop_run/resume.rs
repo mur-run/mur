@@ -294,7 +294,7 @@ fn admit_state(mur_home: &Path, name: &str) -> Result<Checkpoint> {
         );
     }
     match crate::run_status::store::load(mur_home, &run_id) {
-        Ok(Some(r)) if r.state == crate::run_status::State::Paused => {}
+        Ok(Some(r)) if awaits_resume(r.state, true) => {}
         Ok(Some(r)) => bail!(
             "fleet '{name}': run {run_id} is `{:?}`, not paused — nothing to resume",
             r.state
@@ -379,8 +379,15 @@ pub(super) fn reentered_goal(
     })
 }
 
+/// The idempotency key of the `run_resumed` that ends one pause.
+pub(super) fn resumed_key(r: &ResumeFrom) -> String {
+    format!("run_resumed:{}:{}", r.run_id, r.paused_at)
+}
+
 /// Write `run_resumed` (design §5.6). Best-effort like `run_paused`: the run
-/// record is the state that matters.
+/// record is the state that matters. Keyed by the pause it ends, so a resume
+/// repeated after a crash (§5.4 step 6) records it once, and the next pause
+/// cycle — a new `paused_at` — gets its own.
 pub(super) fn record_resumed(
     svc: &mur_channel::ChannelService,
     mur_home: &Path,
@@ -403,25 +410,49 @@ pub(super) fn record_resumed(
         mur_common::channel::ChannelActor::System,
         EventKind::Note,
         payload,
-        None,
+        Some(resumed_key(r)),
     ) {
         tracing::warn!(fleet = %fleet.name, %error, "could not write run_resumed to the channel");
     }
 }
 
+/// Whether a run in `state` still waits for `mur fleet resume`: `Paused`, or
+/// `Running` with its checkpoint still on disk — a resume that crashed after
+/// flipping the record and before deleting the checkpoint, which it deletes
+/// last (design §5.4 step 6, rev 3 §14 item 3). Only meaningful with no live
+/// owner: every caller asks with the run lock held or after `is_held` said no,
+/// so a `Running` record here has a dead pid.
+pub(super) fn awaits_resume(state: crate::run_status::State, checkpoint_present: bool) -> bool {
+    use crate::run_status::State;
+    match state {
+        State::Paused => true,
+        State::Running => checkpoint_present,
+        _ => false,
+    }
+}
+
+/// [`awaits_resume`] for `run_id`, read from its record and checkpoint.
+fn pending_resume(mur_home: &Path, run_id: &str) -> bool {
+    crate::run_status::store::load(mur_home, run_id)
+        .ok()
+        .flatten()
+        .is_some_and(|r| {
+            awaits_resume(
+                r.state,
+                checkpoint::load(mur_home, run_id).ok().flatten().is_some(),
+            )
+        })
+}
+
 /// A fresh run while a run of this fleet is paused would orphan it and reset
 /// its limits (design §8.4). Checked with the run lock held, so it is not
-/// check-then-act. A sentinel whose run is not `Paused` is a leftover of a
-/// crash (design §8.5) and is removed.
+/// check-then-act. An interrupted resume counts as paused; any other run the
+/// sentinel names is a leftover of a crash (design §8.5) and is removed.
 pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result<()> {
     let Some(run_id) = control::paused_run_id(mur_home, name) else {
         return Ok(());
     };
-    let paused = crate::run_status::store::load(mur_home, &run_id)
-        .ok()
-        .flatten()
-        .is_some_and(|r| r.state == crate::run_status::State::Paused);
-    if paused {
+    if pending_resume(mur_home, &run_id) {
         bail!(
             "fleet '{name}' has a paused run ({run_id}): continue it with `mur fleet resume {name}`, or discard it with `mur fleet stop {name}`"
         );
@@ -443,10 +474,7 @@ pub(crate) fn end_paused_run(mur_home: &Path, name: &str) -> bool {
     if run_lock::is_held(mur_home, name) {
         return false;
     }
-    let paused = crate::run_status::store::load(mur_home, &run_id)
-        .ok()
-        .flatten()
-        .is_some_and(|r| r.state == crate::run_status::State::Paused);
+    let paused = pending_resume(mur_home, &run_id);
     if paused {
         if let Ok(Some(cp)) = checkpoint::load(mur_home, &run_id)
             && let Some(job_id) = cp.job_id
