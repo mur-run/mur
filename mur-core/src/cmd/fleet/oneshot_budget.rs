@@ -13,6 +13,9 @@
 //! each with a different model, so the runtime reports the turn split by
 //! answering model (`usage.by_model`). Each share is priced at its own
 //! model's input and output rates and billed by its own model's billing mode.
+//! The cached part of a share's prompt is priced at the model's cache-read
+//! and cache-write rates; a model with no cache rate recorded prices it at
+//! the input rate, which over- rather than under-states spend.
 //!
 //! A share names its model by `models.yaml` key, which the runtime stamps
 //! wherever it knows it. Without a key (an older runtime) the provider's model
@@ -213,7 +216,12 @@ impl OneShotBudget {
         if !super::billing::agent_bills(Some(entry.billing_or_inferred())) {
             return 0.0;
         }
-        match entry.projected_cost(share.input, share.output) {
+        match entry.cost_with_cache(
+            share.input,
+            share.cache_read,
+            share.cache_write,
+            share.output,
+        ) {
             Some(c) => c,
             None => {
                 let label = share

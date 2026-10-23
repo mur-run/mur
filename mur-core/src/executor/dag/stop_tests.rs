@@ -291,3 +291,125 @@ async fn a_stop_mid_turn_cancels_the_member_task_and_returns_promptly() {
         "cancel must name the delegation's own task id"
     );
 }
+
+/// #2083 P3: a delegation whose dial fails after the member ran the turn is
+/// not counted as free. The step's usage comes from the member's `tasks/get`
+/// for the delegation's own task id.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_delegate_dial_still_reports_what_the_member_spent() {
+    if std::env::var("MUR_TEST_SOCKETS").as_deref() != Ok("1") {
+        eprintln!("skipping a_failed_delegate_dial_still_reports: set MUR_TEST_SOCKETS=1");
+        return;
+    }
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let svc = ChannelService::open(home).unwrap();
+    let ch = svc.create_for_workflow("t").unwrap();
+
+    // Fake member: the delegate reply is lost (an RPC error stands in for a
+    // timeout or a cut socket), but the turn ran and `tasks/get` says so.
+    let sock = home.join("m.sock");
+    let listener = UnixListener::bind(&sock).unwrap();
+    let agent_dir = home.join("agents").join("member");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(
+        agent_dir.join("running.lock"),
+        serde_json::json!({
+            "schema": 1, "uuid": "u", "name": "member", "pid": 1, "ppid": 1,
+            "started_at": "t", "binary_version": "test", "proto_version": 1,
+            "transports": { "stdio": true, "unix_socket": sock.to_str().unwrap() },
+            "card_digest": "d", "capabilities": [],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<(String, serde_json::Value)>();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(conn) = conn else { break };
+            let mut w = conn.try_clone().unwrap();
+            let mut line = String::new();
+            if BufReader::new(conn).read_line(&mut line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let req: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let method = req["method"].as_str().unwrap_or("").to_string();
+            let _ = tx.send((method.clone(), req["params"].clone()));
+            let reply = if method == "tasks/get" {
+                serde_json::json!({"jsonrpc":"2.0","id":req["id"],"result":{
+                    "id": req["params"]["id"], "state": "failed",
+                    "usage": {
+                        "input_tokens": 7_000, "output_tokens": 300,
+                        "by_model": [{
+                            "registry_key": "opus", "model": "claude-opus-4",
+                            "input_tokens": 7_000, "output_tokens": 300,
+                            "cache_read_input_tokens": 6_000,
+                            "cache_creation_input_tokens": 0,
+                        }],
+                    },
+                }})
+            } else {
+                serde_json::json!({"jsonrpc":"2.0","id":req["id"],
+                    "error":{"code":-32000,"message":"reply lost"}})
+            };
+            let _ = writeln!(w, "{reply}");
+        }
+    });
+
+    let seen_usage = Arc::new(std::sync::Mutex::new(None::<TokenUsage>));
+    let on_step: Arc<dyn Fn(StepEvent) + Send + Sync> = {
+        let seen = seen_usage.clone();
+        Arc::new(move |e: StepEvent| {
+            if matches!(e.kind, StepEventKind::Failed) {
+                *seen.lock().unwrap() = Some(e.usage);
+            }
+        })
+    };
+    let proc = Procedure {
+        variables: vec![],
+        steps: vec![ProcedureStep {
+            id: Some("s1".into()),
+            description: "research".into(),
+            delegate_to: Some("member".into()),
+            ..Default::default()
+        }],
+    };
+    let out = execute_dag(
+        home,
+        "t",
+        &proc,
+        &DagExecOptions {
+            channel_id: Some(ch.id.clone()),
+            run_id: "r".into(),
+            on_step: Some(on_step),
+            ..DagExecOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out.tokens_used, 7_300,
+        "the failed step's spend reaches the run"
+    );
+    let usage = seen_usage.lock().unwrap().clone().expect("a Failed event");
+    assert_eq!(usage.by_model.len(), 1);
+    assert_eq!(usage.by_model[0].cache_read, 6_000);
+
+    let seen: Vec<_> = rx.try_iter().collect();
+    let delegated = seen
+        .iter()
+        .find(|(m, _)| m == "channel/delegate")
+        .expect("delegated");
+    let asked = seen
+        .iter()
+        .find(|(m, _)| m == "tasks/get")
+        .expect("tasks/get sent after the dial failed");
+    assert_eq!(
+        asked.1["id"], delegated.1["task_id"],
+        "usage is asked for under the delegation's own task id"
+    );
+}

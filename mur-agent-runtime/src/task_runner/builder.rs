@@ -61,6 +61,7 @@ impl TaskRunner {
             turn_counter: AtomicU64::new(0),
             cumulative_input_tokens: AtomicU64::new(0),
             cumulative_output_tokens: AtomicU64::new(0),
+            task_usage: Default::default(),
             last_input_tokens: AtomicU64::new(0),
             last_turn_truncated: AtomicBool::new(false),
             hook_chain: None,

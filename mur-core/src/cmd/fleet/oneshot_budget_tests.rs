@@ -23,6 +23,8 @@ fn share(key: Option<&str>, model: Option<&str>, input: u64, output: u64) -> Mod
         model: model.map(str::to_string),
         input,
         output,
+        cache_read: 0,
+        cache_write: 0,
     }
 }
 
@@ -541,5 +543,56 @@ fn a_cap_arms_the_guard_even_when_every_primary_is_free() {
         OneShotBudget::for_fleet(home, &fleet, None).is_none()
             && OneShotBudget::for_fleet(home, &fleet, Some(0.0)).is_none(),
         "no positive cap, no guard"
+    );
+}
+
+/// #2083 P3: a share's cached prompt tokens are priced at the model's cache
+/// rates, not the full input rate — and a model with no cache rate recorded
+/// keeps the input rate, the upper bound.
+#[test]
+fn cached_prompt_tokens_are_priced_at_the_cache_rates() {
+    let opus = |read, write| ModelEntry {
+        model: "claude-opus-4".into(),
+        cache_read_cost_per_1k: read,
+        cache_write_cost_per_1k: write,
+        ..model(BillingMode::UsageBilled, Some(0.005), Some(0.025))
+    };
+    let agents = HashMap::from([("api".to_string(), agent(true, None))]);
+    // 100k prompt: 90k read from cache, 5k written, 5k uncached; 1k out.
+    let cached_share = || ModelShare {
+        cache_read: 90_000,
+        cache_write: 5_000,
+        ..share(Some("opus"), Some("claude-opus-4"), 100_000, 1_000)
+    };
+
+    let priced = OneShotBudget::new(
+        100.0,
+        1.0,
+        "router".into(),
+        agents.clone(),
+        BTreeMap::from([("opus".to_string(), opus(Some(0.0005), Some(0.00625)))]),
+    );
+    priced.record_turn(Some("api"), &turn(vec![cached_share()]));
+    // 5k*0.005 + 90k*0.0005 + 5k*0.00625 + 1k*0.025 (per 1k)
+    let want = 0.025 + 0.045 + 0.03125 + 0.025;
+    assert!(
+        (priced.spent_usd() - want).abs() < 1e-9,
+        "{}",
+        priced.spent_usd()
+    );
+
+    let unpriced = OneShotBudget::new(
+        100.0,
+        1.0,
+        "router".into(),
+        agents,
+        BTreeMap::from([("opus".to_string(), opus(None, None))]),
+    );
+    unpriced.record_turn(Some("api"), &turn(vec![cached_share()]));
+    let full = 100.0 * 0.005 + 0.025;
+    assert!(
+        (unpriced.spent_usd() - full).abs() < 1e-9,
+        "{}",
+        unpriced.spent_usd()
     );
 }

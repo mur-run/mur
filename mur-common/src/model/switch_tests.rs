@@ -357,6 +357,33 @@ fn projected_cost_uses_four_to_one_workload_and_legacy_rates() {
 }
 
 #[test]
+fn cost_with_cache_prices_each_part_of_the_prompt_at_its_own_rate() {
+    let e = ModelEntry {
+        input_cost_per_1k: Some(1.0),
+        output_cost_per_1k: Some(10.0),
+        cache_read_cost_per_1k: Some(0.1),
+        cache_write_cost_per_1k: Some(1.25),
+        ..Default::default()
+    };
+    // 10k prompt = 2k uncached + 6k read + 2k written; 1k out.
+    let c = e.cost_with_cache(10_000, 6_000, 2_000, 1_000).unwrap();
+    assert!((c - (2.0 + 0.6 + 2.5 + 10.0)).abs() < 1e-9, "{c}");
+    // No cache rates recorded: every prompt token at the input rate, as before.
+    let plain = ModelEntry {
+        cache_read_cost_per_1k: None,
+        cache_write_cost_per_1k: None,
+        ..e.clone()
+    };
+    assert_eq!(
+        plain.cost_with_cache(10_000, 6_000, 2_000, 1_000),
+        plain.projected_cost(10_000, 1_000)
+    );
+    // A split larger than the prompt never prices a token twice.
+    let c = e.cost_with_cache(1_000, 5_000, 5_000, 0).unwrap();
+    assert!((c - 0.1).abs() < 1e-9, "{c}");
+}
+
+#[test]
 fn pick_cheap_model_uses_projected_four_to_one_cost() {
     let mut reg = ModelRegistry::default();
     reg.models.insert(

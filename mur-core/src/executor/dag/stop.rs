@@ -164,3 +164,38 @@ async fn cancel_member_task(mur_home: &Path, member: &str, task_id: &str) {
         }
     }
 }
+
+/// What a member's delegated turn really spent, asked for after the dial
+/// itself failed (#2083). The member keeps each finished turn's usage under
+/// the delegation's own task id and `tasks/get` returns it, so a reply lost
+/// to a dial timeout or a cut-off socket is not counted as free. Zero when
+/// the member cannot be reached, or its turn has not finished yet.
+pub(super) async fn recover_delegate_usage(
+    mur_home: &Path,
+    member: &str,
+    task_id: &str,
+) -> super::TokenUsage {
+    let home = mur_home.to_path_buf();
+    let (m, id) = (member.to_string(), task_id.to_string());
+    let got = tokio::task::spawn_blocking(move || {
+        crate::a2a_dial::dial_method(
+            &home,
+            &m,
+            "tasks/get",
+            serde_json::json!({ "id": id }),
+            crate::a2a_dial::DialMode::RequireRunning,
+        )
+    })
+    .await;
+    match got {
+        Ok(Ok(task)) => super::extract_usage(&task),
+        Ok(Err(error)) => {
+            tracing::warn!(member, task_id, %error, "delegate usage: tasks/get failed");
+            super::TokenUsage::default()
+        }
+        Err(error) => {
+            tracing::warn!(member, task_id, %error, "delegate usage: tasks/get task failed");
+            super::TokenUsage::default()
+        }
+    }
+}

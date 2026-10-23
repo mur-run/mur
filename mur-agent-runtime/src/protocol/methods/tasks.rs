@@ -27,7 +27,15 @@ impl MethodHandler for TasksGetHandler {
             .and_then(|p| p.get("id").and_then(|v| v.as_str().map(String::from)))
             .ok_or_else(|| HandlerError::InvalidParams("missing id".into()))?;
         match self.runner.get_state(&id) {
-            Some(state) => Ok(json!({"id": id, "state": state})),
+            Some(state) => {
+                let mut out = json!({"id": id, "state": state});
+                // Present once the turn has ended: what it really spent, so a
+                // caller whose reply was lost can still account it (#2083).
+                if let Some(usage) = self.runner.get_usage(&id) {
+                    out["usage"] = usage;
+                }
+                Ok(out)
+            }
             None => Err(HandlerError::TaskNotFound(id)),
         }
     }

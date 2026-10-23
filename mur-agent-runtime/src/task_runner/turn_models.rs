@@ -19,8 +19,13 @@ pub(crate) struct ModelShare {
     pub registry_key: Option<String>,
     /// The provider's model name (`LlmResponse::model`).
     pub model: String,
+    /// The whole prompt, cached or not (`LlmResponse::input_tokens`).
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// The part of `input_tokens` served from the provider's prompt cache.
+    pub cache_read_input_tokens: u64,
+    /// The part of `input_tokens` written to the provider's prompt cache.
+    pub cache_creation_input_tokens: u64,
 }
 
 /// One turn's per-answering-model usage ledger.
@@ -84,12 +89,20 @@ impl TurnModels {
                     model: resp.model.clone(),
                     input_tokens: 0,
                     output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                 });
                 shares.last_mut().expect("just pushed")
             }
         };
         share.input_tokens = share.input_tokens.saturating_add(resp.input_tokens);
         share.output_tokens = share.output_tokens.saturating_add(resp.output_tokens);
+        share.cache_read_input_tokens = share
+            .cache_read_input_tokens
+            .saturating_add(resp.cache_read_input_tokens);
+        share.cache_creation_input_tokens = share
+            .cache_creation_input_tokens
+            .saturating_add(resp.cache_creation_input_tokens);
     }
 
     /// The provider name of this turn's most recent call — what
@@ -120,6 +133,12 @@ impl TurnModels {
                     "model": s.model,
                     "input_tokens": s.input_tokens,
                     "output_tokens": s.output_tokens,
+                    // Cached prompt tokens are billed at their own rates
+                    // (a read is ~0.1x input, a write ~1.25x), so a guard
+                    // pricing the whole prompt at the input rate misstates
+                    // every cache-heavy turn (#2083).
+                    "cache_read_input_tokens": s.cache_read_input_tokens,
+                    "cache_creation_input_tokens": s.cache_creation_input_tokens,
                 })
             })
             .collect()
@@ -132,12 +151,23 @@ mod tests {
     use crate::llm::StopReason;
 
     fn resp(key: Option<&str>, model: &str, i: u64, o: u64) -> LlmResponse {
+        cached(key, model, i, o, 0, 0)
+    }
+
+    fn cached(
+        key: Option<&str>,
+        model: &str,
+        i: u64,
+        o: u64,
+        read: u64,
+        write: u64,
+    ) -> LlmResponse {
         LlmResponse {
             text: String::new(),
             input_tokens: i,
             output_tokens: o,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: write,
+            cache_read_input_tokens: read,
             model: model.into(),
             registry_key: key.map(str::to_string),
             tool_calls: vec![],
@@ -207,5 +237,35 @@ mod tests {
         assert_eq!(a.to_json().as_array().unwrap().len(), 1);
         assert_eq!(b.totals(), (500, 50), "B: b1 only");
         assert_eq!(b.to_json()[0]["registry_key"], "local");
+    }
+
+    #[tokio::test]
+    async fn each_share_carries_its_prompt_cache_split() {
+        let t = ledger();
+        scope(t.clone(), async {
+            record(&cached(
+                Some("opus"),
+                "claude-opus-4",
+                10_000,
+                100,
+                8_000,
+                1_000,
+            ));
+            record(&cached(
+                Some("opus"),
+                "claude-opus-4",
+                12_000,
+                100,
+                11_000,
+                0,
+            ));
+            record(&resp(Some("local"), "qwen3", 500, 50));
+        })
+        .await;
+        let j = t.to_json();
+        assert_eq!(j[0]["input_tokens"], 22_000, "input stays the whole prompt");
+        assert_eq!(j[0]["cache_read_input_tokens"], 19_000);
+        assert_eq!(j[0]["cache_creation_input_tokens"], 1_000);
+        assert_eq!(j[1]["cache_read_input_tokens"], 0);
     }
 }

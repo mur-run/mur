@@ -28,6 +28,7 @@ mod helpers;
 mod run;
 mod step;
 mod system_prompt;
+mod task_usage;
 mod turn_models;
 mod turn_track;
 mod unsettled;
@@ -180,11 +181,10 @@ pub struct TaskRunner {
     recently_fired: Mutex<VecDeque<(u64, String)>>,
     turn_counter: AtomicU64,
     cumulative_input_tokens: AtomicU64,
-    /// Parallel to `cumulative_input_tokens` (runner-lifetime, shared across
-    /// tasks). Not used by the loop's own input-only token budget; it exists so
-    /// `run_sync_inner` can snapshot-delta both counters and report a turn's
-    /// real input+output token usage in `Task.usage` (fleet cost accounting).
+    /// Runner-lifetime output twin of the above; `Task.usage` reads per-turn ledgers.
     cumulative_output_tokens: AtomicU64,
+    /// Final `Task.usage` per recent task id, for `tasks/get` (see `task_usage`).
+    task_usage: task_usage::TaskUsageStore,
     /// Input-token count of the most recent single LLM call. Approximates the
     /// current context window fill, unlike the cumulative total. Read by the
     /// `token_usage` closure to populate `context_tokens` in per-turn usage JSON

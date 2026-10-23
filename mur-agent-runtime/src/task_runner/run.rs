@@ -250,6 +250,8 @@ impl TaskRunner {
         let result = match result {
             None => {
                 self.set_state(&id, TaskState::Cancelled);
+                let usage = token_usage();
+                self.task_usage.insert(&id, usage.clone());
                 return TaskOutcome::Cancelled(Task {
                     id,
                     state: TaskState::Cancelled,
@@ -258,7 +260,7 @@ impl TaskRunner {
                     completed_at: Some(now),
                     error: None,
                     artifacts: None,
-                    usage: Some(token_usage()),
+                    usage: Some(usage),
                 });
             }
             Some(r) => r,
@@ -317,6 +319,9 @@ impl TaskRunner {
                     let u = usage.get_or_insert_with(|| serde_json::json!({}));
                     u["artifacts"] = serde_json::to_value(arts).unwrap_or_default();
                 }
+                if let Some(u) = &usage {
+                    self.task_usage.insert(&id, u.clone());
+                }
                 TaskOutcome::Completed(Task {
                     id,
                     state: TaskState::Completed,
@@ -340,6 +345,8 @@ impl TaskRunner {
                     "task failed"
                 );
                 self.set_state(&id, TaskState::Failed);
+                let usage = token_usage();
+                self.task_usage.insert(&id, usage.clone());
                 TaskOutcome::Failed(Task {
                     id,
                     state: TaskState::Failed,
@@ -347,10 +354,10 @@ impl TaskRunner {
                     created_at: now.clone(),
                     completed_at: Some(now),
                     error: Some(err),
-                    // Account tokens already burned before the failure (a long
                     artifacts: None,
+                    // Account tokens already burned before the failure (a long
                     // agentic turn can error after real spend) — never drop it.
-                    usage: Some(token_usage()),
+                    usage: Some(usage),
                 })
             }
         }
@@ -462,6 +469,11 @@ impl TaskRunner {
             }
         }
         reg.insert(id.to_string(), state);
+    }
+
+    /// The final `Task.usage` of a recent turn, for `tasks/get` (#2083).
+    pub fn get_usage(&self, id: &str) -> Option<serde_json::Value> {
+        self.task_usage.get(id)
     }
 
     pub fn get_state(&self, id: &str) -> Option<TaskState> {

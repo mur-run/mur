@@ -178,9 +178,10 @@ pub(crate) fn price_table(model: &str) -> Option<(f64, f64, f64, f64)> {
 /// one exists. The built-in table is the offline seed for ids that never made
 /// it into the registry (raw model strings in old telemetry, deleted entries).
 ///
-/// Registry entries carry no cache rates, and an unknown discount is priced at
-/// the full input rate rather than at zero: over-charging a cached token is
-/// visible in a report, under-charging one silently overspends a budget.
+/// A registry entry's cache rates are used when recorded; an unknown discount
+/// is priced at the full input rate rather than at zero: over-charging a
+/// cached token is visible in a report, under-charging one silently
+/// overspends a budget.
 pub(crate) fn resolve_rates(
     model: &str,
     registry: Option<&ModelRegistry>,
@@ -197,8 +198,13 @@ pub(crate) fn resolve_rates(
         // An entry with no rates at all (a local runtime, say) is "unknown",
         // not "free" — fall through rather than report a confident $0.
         if let (Some(i), Some(o)) = (input, output) {
+            let per_1m = |r: Option<f64>| r.unwrap_or(i) * 1000.0;
+            let (cw, cr) = (
+                per_1m(entry.cache_write_cost_per_1k),
+                per_1m(entry.cache_read_cost_per_1k),
+            );
             let (i, o) = (i * 1000.0, o * 1000.0);
-            return Some(((i, o, i, i), RateSource::Registry));
+            return Some(((i, o, cw, cr), RateSource::Registry));
         }
     }
     price_table(model).map(|r| (r, RateSource::Builtin))

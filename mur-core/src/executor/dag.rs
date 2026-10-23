@@ -272,8 +272,13 @@ pub struct ModelShare {
     pub registry_key: Option<String>,
     /// The provider's name for that model.
     pub model: Option<String>,
+    /// The whole prompt, cached or not.
     pub input: u64,
     pub output: u64,
+    /// The part of `input` served from the provider's prompt cache.
+    pub cache_read: u64,
+    /// The part of `input` written to the provider's prompt cache.
+    pub cache_write: u64,
 }
 
 impl TokenUsage {
@@ -296,6 +301,10 @@ impl TokenUsage {
             model: self.model_ref.clone(),
             input: self.input,
             output: self.output,
+            // An older runtime reports no split: the whole prompt is priced
+            // at the input rate, the upper bound.
+            cache_read: 0,
+            cache_write: 0,
         }]
     }
 }
@@ -478,6 +487,8 @@ pub fn extract_usage(task: &serde_json::Value) -> TokenUsage {
                     model: text(s, "model"),
                     input: num(s, "input_tokens"),
                     output: num(s, "output_tokens"),
+                    cache_read: num(s, "cache_read_input_tokens"),
+                    cache_write: num(s, "cache_creation_input_tokens"),
                 })
                 .collect()
         })

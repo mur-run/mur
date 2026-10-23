@@ -402,7 +402,7 @@ pub(super) async fn execute_step(
                 delegate_result(&task, &step.description, start.elapsed().as_millis() as u64)
             }
             Err(e) => {
-                // Nothing partial is attributed; record a failure Note + fail the
+                // No reply text is attributed; record a failure Note + fail the
                 // step so the DAG's on_failure (Abort/Skip/Retry) decides.
                 if let Ok(svc) = ChannelService::open(mur_home) {
                     let _ = crate::channel_writer::append_as_writer(
@@ -417,6 +417,10 @@ pub(super) async fn execute_step(
                     );
                 }
                 eprintln!("  Step {sid}: delegate to {canonical} failed: {e:#}");
+                // The member may have run (and billed) the turn even though
+                // its reply never reached us: ask it what the turn spent.
+                let usage =
+                    super::stop::recover_delegate_usage(mur_home, &canonical, &child_task_id).await;
                 StepResult {
                     exit_code: 1,
                     output_text: format!("delegate failed: {e}"),
@@ -425,7 +429,7 @@ pub(super) async fn execute_step(
                     success: false,
                     blocked: false,
                     stopped: false,
-                    usage: TokenUsage::default(),
+                    usage,
                 }
             }
         };

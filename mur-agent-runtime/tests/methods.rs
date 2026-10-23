@@ -24,6 +24,33 @@ async fn message_send_returns_completed_task() {
     assert_eq!(result["state"], "completed");
 }
 
+/// #2083: a finished turn's usage is readable by id, so a caller whose
+/// reply was lost (a dial timeout) can still account what the turn spent.
+#[tokio::test]
+async fn tasks_get_carries_a_finished_turns_usage() {
+    let runner = Arc::new(TaskRunner::new_stub_echo());
+    let send = MessageSendHandler::new(runner.clone());
+    let task = send
+        .handle(
+            Some(json!({
+                "message": {"role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+            })),
+            &RequestContext::none(),
+        )
+        .await
+        .unwrap();
+    let id = task["id"].as_str().unwrap().to_string();
+    let got = TasksGetHandler::new(runner)
+        .handle(Some(json!({"id": id})), &RequestContext::none())
+        .await
+        .unwrap();
+    assert_eq!(got["state"], "completed");
+    assert_eq!(
+        got["usage"], task["usage"],
+        "the same usage the reply carried"
+    );
+}
+
 #[tokio::test]
 async fn tasks_get_returns_not_found_for_unknown_id() {
     let runner = Arc::new(TaskRunner::new_stub_echo());

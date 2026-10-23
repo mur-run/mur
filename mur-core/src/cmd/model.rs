@@ -257,6 +257,12 @@ pub fn apply_fetched_prices(mut entry: ModelEntry, fetched: Option<PriceInfo>) -
         if entry.output_cost_per_1k.is_none() {
             entry.output_cost_per_1k = Some(p.output_per_1k);
         }
+        if entry.cache_read_cost_per_1k.is_none() {
+            entry.cache_read_cost_per_1k = p.cache_read_per_1k;
+        }
+        if entry.cache_write_cost_per_1k.is_none() {
+            entry.cache_write_cost_per_1k = p.cache_write_per_1k;
+        }
         if entry.context_window.is_none() {
             entry.context_window = p.context_window;
         }
