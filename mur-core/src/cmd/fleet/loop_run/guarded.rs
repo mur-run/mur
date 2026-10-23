@@ -222,9 +222,9 @@ async fn run_guarded_inner(
         crate::executor::dag::default_unanswered(),
     );
     if let Some(r) = &resume {
-        // Record `Running` (above), write `run_resumed`, THEN drop `.paused`:
-        // a crash in between leaves the run resumable again or running,
-        // never neither (design §5.4 step 6).
+        // Record `Running` (above), write `run_resumed`, drop `.paused`, and
+        // the checkpoint LAST: until it goes, admission reads a `Running`
+        // record beside it as an interrupted resume (design §5.4 step 6).
         super::resume::record_resumed(&svc, mur_home, &fleet, r);
         let _ = std::fs::remove_file(super::super::control::paused_path(mur_home, name));
         checkpoint::remove(mur_home, &run_id);
