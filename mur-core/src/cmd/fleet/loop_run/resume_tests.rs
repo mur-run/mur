@@ -307,8 +307,22 @@ fn a_fresh_run_over_a_paused_one_is_refused() {
 fn a_sentinel_left_by_a_crash_does_not_block_a_fresh_run_and_is_removed() {
     let home = paused_home(None);
     record(home.path(), crate::run_status::State::Failed);
+    checkpoint::remove(home.path(), RUN);
     refuse_fresh_run_over_pause(home.path(), "dev").expect("stale sentinel is ignored");
     assert!(!control::paused_path(home.path(), "dev").exists());
+}
+
+/// Design §8.5: a sentinel is stale only if the record is not `Paused` AND
+/// no checkpoint exists. A checkpoint beside a settled record is still a
+/// pause nobody discarded; a fresh run must not erase its pointer.
+#[test]
+fn a_sentinel_beside_a_checkpoint_is_never_removed_by_a_fresh_run() {
+    let home = paused_home(None);
+    record(home.path(), crate::run_status::State::Failed);
+    let err = refuse_fresh_run_over_pause(home.path(), "dev").unwrap_err();
+    assert!(format!("{err}").contains("mur fleet stop dev"), "{err}");
+    assert!(control::paused_path(home.path(), "dev").exists());
+    assert!(checkpoint::load(home.path(), RUN).unwrap().is_some());
 }
 
 #[tokio::test]
