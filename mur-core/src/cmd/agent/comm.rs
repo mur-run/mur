@@ -77,24 +77,11 @@ fn send_waiting(
     mut params: serde_json::Value,
     wait: std::time::Duration,
 ) -> Result<serde_json::Value> {
-    let lock = home.join("agents").join(name).join("running.lock");
-    if let Ok(bytes) = std::fs::read(&lock)
-        && let Ok(l) = serde_json::from_slice::<mur_common::LockFile>(&bytes)
-        && l.proto_version < mur_common::build::HITL_PARK_MIN_PROTO
-    {
-        // An older runtime ignores the param and refuses at once — the flag
-        // would silently do nothing. Say so before spending a turn.
-        anyhow::bail!(
-            "agent '{name}' is running a runtime too old to wait for approvals (proto {}); \
-             run 'mur agent restart {name}' after 'mur update', or drop --wait-approval",
-            l.proto_version
-        );
-    }
+    let agent = refuse_old_runtime(home, name)?;
     params[mur_common::hitl::WAIT_APPROVAL_PARAM] = serde_json::json!(wait.as_secs());
-    let agent = crate::a2a_dial::canonicalize_agent_name(home, name);
     crate::a2a_dial::dial_message_streaming(
         home,
-        name,
+        &agent,
         params,
         |_, _, _| {},
         |hitl| {
@@ -104,6 +91,26 @@ fn send_waiting(
         },
         |_| {},
     )
+}
+
+/// Resolve `typed` the way the dial will (agent names are case-insensitive)
+/// and refuse up front if that agent's runtime predates parked approvals —
+/// an older runtime ignores the wait param and refuses at once, so the flag
+/// would silently do nothing. Returns the canonical name to dial.
+fn refuse_old_runtime(home: &std::path::Path, typed: &str) -> Result<String> {
+    let agent = crate::a2a_dial::canonicalize_agent_name(home, typed);
+    let lock = home.join("agents").join(&agent).join("running.lock");
+    if let Ok(bytes) = std::fs::read(&lock)
+        && let Ok(l) = serde_json::from_slice::<mur_common::LockFile>(&bytes)
+        && l.proto_version < mur_common::build::HITL_PARK_MIN_PROTO
+    {
+        anyhow::bail!(
+            "agent '{agent}' is running a runtime too old to wait for approvals (proto {}); \
+             run 'mur agent restart {agent}' after 'mur update', or drop --wait-approval",
+            l.proto_version
+        );
+    }
+    Ok(agent)
 }
 
 /// Translate a raw JSON-RPC failure into something the operator can act on.
@@ -244,5 +251,40 @@ mod wait_tests {
     fn zero_and_nonsense_are_refused_before_sending() {
         assert!(parse_wait("0").is_err());
         assert!(parse_wait("soon").is_err());
+    }
+}
+
+#[cfg(test)]
+mod old_runtime_tests {
+    use super::refuse_old_runtime;
+
+    fn home_with_agent(dir: &str, proto: u32) -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let agent = home.path().join("agents").join(dir);
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join("profile.yaml"), "name: mur\n").unwrap();
+        let lock = serde_json::json!({
+            "schema": 1, "uuid": "u", "name": dir, "pid": 1, "ppid": 1,
+            "started_at": "2026-01-01T00:00:00Z", "binary_version": "x",
+            "transports": {"stdio": false, "unix_socket": null, "tcp": null, "webhook": null},
+            "card_digest": "", "capabilities": [], "proto_version": proto,
+        });
+        std::fs::write(agent.join("running.lock"), lock.to_string()).unwrap();
+        home
+    }
+
+    #[test]
+    fn mixed_case_name_still_hits_the_old_runtime_check() {
+        let home = home_with_agent("mur", mur_common::build::HITL_PARK_MIN_PROTO - 1);
+        let e = refuse_old_runtime(home.path(), "Mur")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("too old"), "{e}");
+    }
+
+    #[test]
+    fn a_current_runtime_passes() {
+        let home = home_with_agent("mur", mur_common::build::HITL_PARK_MIN_PROTO);
+        refuse_old_runtime(home.path(), "Mur").unwrap();
     }
 }
