@@ -386,6 +386,8 @@ mod tests {
             Some(mur_core::model_prices::PriceInfo {
                 input_per_1k: 0.00125,
                 output_per_1k: 0.01,
+                cache_read_per_1k: None,
+                cache_write_per_1k: None,
                 context_window: Some(400_000),
             }),
         );

@@ -70,19 +70,11 @@ impl TaskRunner {
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), tx_cancel);
 
-        // Snapshot the runner-lifetime token counters so we can report THIS
-        // turn's real input+output usage as a delta in `Task.usage`. Same
-        // snapshot-delta approach (and concurrency caveat — concurrent turns on
-        // one runner can inflate a delta) the agentic loop's own token budget
-        // already uses; fine for the serial-delegate fleet path.
-        let tok_in0 = self.cumulative_input_tokens.load(Ordering::Relaxed);
-        let tok_out0 = self.cumulative_output_tokens.load(Ordering::Relaxed);
-        // Clear the previous turn's model_ref so a stub/misconfigured backend
-        // (which never calls a real model) reports none rather than stale data.
-        *self
-            .last_model_ref
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
+        // THIS turn's ledger: every LLM call made while `generation` is polled
+        // records into it (task-local, see `turn_models::scope`), so a turn
+        // overlapping this one on the same runner can neither erase nor add to
+        // what this turn reports in `Task.usage` (#2083).
+        let models = std::sync::Arc::new(turn_models::TurnModels::default());
         // Same for the truncation flag: it describes THIS turn only.
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
@@ -199,6 +191,7 @@ impl TaskRunner {
         // future is dropped (Rust async cancellation aborts the in-flight LLM
         // call) and we return a Cancelled task so message/send terminates the
         // stream cleanly.
+        let generation = turn_models::scope(models.clone(), generation);
         let result: Option<Result<(Message, Option<LoopExit>), TaskError>> = tokio::select! {
             r = generation => Some(r),
             _ = &mut rx_cancel => None,
@@ -214,20 +207,12 @@ impl TaskRunner {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
 
-        // Real token usage for THIS turn (delta of the runner-lifetime counters
-        // from the pre-generation snapshot). Reported on EVERY outcome — a turn
-        // that burned tokens then failed or was cancelled must still be
-        // accounted, or the fleet budget guard would under-count (the dangerous
-        // direction for a spend cap).
+        // Real token usage for THIS turn, from its own ledger. Reported on
+        // EVERY outcome — a turn that burned tokens then failed or was
+        // cancelled must still be accounted, or the fleet budget guard would
+        // under-count (the dangerous direction for a spend cap).
         let token_usage = || {
-            let input_tokens = self
-                .cumulative_input_tokens
-                .load(Ordering::Relaxed)
-                .saturating_sub(tok_in0);
-            let output_tokens = self
-                .cumulative_output_tokens
-                .load(Ordering::Relaxed)
-                .saturating_sub(tok_out0);
+            let (input_tokens, output_tokens) = models.totals();
             // `model_ref` = the winning model of the most recent successful LLM
             // call this turn (None for stub/misconfigured backends). `route_reason`
             // is a best-effort label derived from `spec.intent` alone — NOT the
@@ -238,11 +223,7 @@ impl TaskRunner {
             // this field is worth). "smart-background" here means "this request
             // was tagged Background and therefore eligible for Smart routing",
             // not "Smart definitely picked the cheap model".
-            let model_ref = self
-                .last_model_ref
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
+            let model_ref = models.last_model();
             let route_reason = match spec.intent {
                 RequestIntent::Interactive => "interactive",
                 RequestIntent::Background(_) => "smart-background",
@@ -252,6 +233,10 @@ impl TaskRunner {
                 "output_tokens": output_tokens,
                 "context_tokens": self.last_input_tokens.load(Ordering::Relaxed),
                 "model_ref": model_ref,
+                // The totals above split by the model that answered each call:
+                // a routed turn mixes models, and pricing the sum at any one of
+                // their rates is wrong for the rest (#2083).
+                "by_model": models.to_json(),
                 "route_reason": route_reason,
             });
             // Additive: present (true) only when the final generation was cut
@@ -267,6 +252,8 @@ impl TaskRunner {
         let result = match result {
             None => {
                 self.set_state(&id, TaskState::Cancelled);
+                let usage = token_usage();
+                self.task_usage.insert(&id, usage.clone());
                 return TaskOutcome::Cancelled(Task {
                     id,
                     state: TaskState::Cancelled,
@@ -275,7 +262,7 @@ impl TaskRunner {
                     completed_at: Some(now),
                     error: None,
                     artifacts: None,
-                    usage: Some(token_usage()),
+                    usage: Some(usage),
                 });
             }
             Some(r) => r,
@@ -334,6 +321,9 @@ impl TaskRunner {
                     let u = usage.get_or_insert_with(|| serde_json::json!({}));
                     u["artifacts"] = serde_json::to_value(arts).unwrap_or_default();
                 }
+                if let Some(u) = &usage {
+                    self.task_usage.insert(&id, u.clone());
+                }
                 TaskOutcome::Completed(Task {
                     id,
                     state: TaskState::Completed,
@@ -357,6 +347,8 @@ impl TaskRunner {
                     "task failed"
                 );
                 self.set_state(&id, TaskState::Failed);
+                let usage = token_usage();
+                self.task_usage.insert(&id, usage.clone());
                 TaskOutcome::Failed(Task {
                     id,
                     state: TaskState::Failed,
@@ -364,10 +356,10 @@ impl TaskRunner {
                     created_at: now.clone(),
                     completed_at: Some(now),
                     error: Some(err),
-                    // Account tokens already burned before the failure (a long
                     artifacts: None,
+                    // Account tokens already burned before the failure (a long
                     // agentic turn can error after real spend) — never drop it.
-                    usage: Some(token_usage()),
+                    usage: Some(usage),
                 })
             }
         }
@@ -479,6 +471,11 @@ impl TaskRunner {
             }
         }
         reg.insert(id.to_string(), state);
+    }
+
+    /// The final `Task.usage` of a recent turn, for `tasks/get` (#2083).
+    pub fn get_usage(&self, id: &str) -> Option<serde_json::Value> {
+        self.task_usage.get(id)
     }
 
     pub fn get_state(&self, id: &str) -> Option<TaskState> {

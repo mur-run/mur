@@ -201,6 +201,7 @@ impl LlmClient for DirtyThenCleanStub {
             model: "dirty-then-clean-stub".into(),
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
+            registry_key: None,
         })
     }
 

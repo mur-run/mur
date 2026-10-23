@@ -331,6 +331,7 @@ mod tests {
                 input: serde_json::json!({"command": "echo hi"}),
             }],
             stop_reason: crate::llm::StopReason::ToolUse,
+            registry_key: None,
         };
         let done = crate::llm::LlmResponse {
             cache_creation_input_tokens: 0,
@@ -341,6 +342,7 @@ mod tests {
             model: "test".into(),
             tool_calls: vec![],
             stop_reason: crate::llm::StopReason::EndTurn,
+            registry_key: None,
         };
         // A notifier nobody reads: exactly the shape that turned the missing
         // mark into a ten-minute wait instead of an immediate refusal.
@@ -433,6 +435,7 @@ mod tests {
                 input: serde_json::json!({"command": "sleep"}),
             }],
             stop_reason: crate::llm::StopReason::ToolUse,
+            registry_key: None,
         };
         let done = crate::llm::LlmResponse {
             cache_creation_input_tokens: 0,
@@ -443,6 +446,7 @@ mod tests {
             model: "test".into(),
             tool_calls: vec![],
             stop_reason: crate::llm::StopReason::EndTurn,
+            registry_key: None,
         };
         let runner = Arc::new(
             TaskRunner::with_llm(Arc::new(crate::llm::stub::SequenceLlm::new(vec![
@@ -515,6 +519,7 @@ mod tests {
                 model: "never".into(),
                 tool_calls: vec![],
                 stop_reason: crate::llm::StopReason::EndTurn,
+                registry_key: None,
             })
         }
         fn model_name(&self) -> &str {

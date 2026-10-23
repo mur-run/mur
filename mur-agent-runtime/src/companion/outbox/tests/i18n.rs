@@ -143,6 +143,7 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
                     model: "flip".into(),
                     tool_calls: vec![],
                     stop_reason: StopReason::EndTurn,
+                    registry_key: None,
                 });
             }
             // Generation call: return a body that passes linter but triggers
@@ -156,6 +157,7 @@ async fn translate_429_pauses_then_resumes_after_resume_at() {
                 model: "flip".into(),
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
+                registry_key: None,
             })
         }
         fn model_name(&self) -> &str {
@@ -280,6 +282,7 @@ async fn translate_4_failures_drops_locale_unresolved() {
                 model: "always-rl".into(),
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
+                registry_key: None,
             })
         }
         fn model_name(&self) -> &str {
@@ -403,6 +406,7 @@ async fn translate_429_with_retry_after_honours_header_not_backoff() {
                 model: "header".into(),
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
+                registry_key: None,
             })
         }
         fn model_name(&self) -> &str {

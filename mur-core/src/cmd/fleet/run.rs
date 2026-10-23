@@ -393,6 +393,9 @@ pub async fn cmd_fleet_run(
             "warning: --worktree has no effect -- fleet '{name}' has no parallel: config block, so Tier 1 worktree isolation cannot activate; falling back to normal delegation"
         );
     }
+    // The router's planning turn is billable work of this run, but it runs
+    // before the DAG and so never reaches the step observer (#2083).
+    let mut router_usage = crate::executor::dag::TokenUsage::default();
     let (proc, parallel_run) = if exec_parallel {
         let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
         let repo_root = discover_repo_root(&work_dir)?;
@@ -433,11 +436,19 @@ pub async fn cmd_fleet_run(
         // router plans which members do what, falling back to broadcast-to-all.
         let p = match super::plan::static_procedure(&routed_fleet, &routed_goal)? {
             Some(p) => p,
-            None => super::plan::plan_via_router(mur_home, &routed_fleet, &routed_goal, &events)
-                .unwrap_or_else(|| {
+            None => {
+                let (plan, usage) = super::plan::plan_via_router_metered(
+                    mur_home,
+                    &routed_fleet,
+                    &routed_goal,
+                    &events,
+                );
+                router_usage = usage;
+                plan.unwrap_or_else(|| {
                     build_fleet_procedure(&routed_goal, &fleet.members, fleet.parallel.as_ref())
                         .expect("members validated by caller guard")
-                }),
+                })
+            }
         };
         (p, None)
     };
@@ -459,6 +470,16 @@ pub async fn cmd_fleet_run(
     // A one-shot run is unattended too: its members inherit the fleet's
     // resolved deadline (spec §3.4).
     let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;
+    // #2083: `cost_usd` binds a one-shot run too, on actual billable spend.
+    // Armed whenever a positive cap is set, even on all-free primaries: a
+    // fallback can still route a turn to a metered model.
+    let budget = super::oneshot_budget::OneShotBudget::for_fleet(mur_home, &fleet, bounds.cost_usd);
+    // Bill the planning turn before any member step can start: if the router
+    // alone reached the cap, the stop signal is already tripped and the DAG
+    // halts at its first step boundary, ending `Stopped` like any other cap.
+    if let Some(b) = &budget {
+        b.record_router(&router_usage);
+    }
 
     // ── Pre-dispatch triage ────────────────────────────────────────────────
     // Ask whether this goal fits the budget it is about to be handed, BEFORE
@@ -520,7 +541,12 @@ pub async fn cmd_fleet_run(
         run_label: format!("fleet {}", fleet.name),
         // #2036: `mur fleet stop` halts this run at the next step boundary
         // and cancels in-flight member turns — not only before it starts.
-        stop: Some(super::control::stop_signal(mur_home, name)),
+        // #2083: so does reaching `cost_usd`, through the same signal.
+        stop: Some(match &budget {
+            Some(b) => b.stop_signal(super::control::stop_signal(mur_home, name)),
+            None => super::control::stop_signal(mur_home, name),
+        }),
+        on_step: budget.as_ref().map(|b| b.observer()),
         // Cap fan-out so N agents don't cascade past API rate limits.
         max_concurrency: Some(if exec_parallel {
             fanout_cap(proc.steps.len())
@@ -576,7 +602,7 @@ pub async fn cmd_fleet_run(
                 job.status = JobStatus::Canceled;
                 job.error = Some(match &exec_result {
                     Ok(o) if o.status == mur_common::pipeline::PipelineStatus::Stopped => {
-                        "stopped by `mur fleet stop`".to_string()
+                        stop_text(budget.as_deref())
                     }
                     _ => "run was canceled/rejected".to_string(),
                 });
@@ -592,7 +618,7 @@ pub async fn cmd_fleet_run(
             // No channel terminal recorded, but the kill-switch halted it.
             (_, Ok(out)) if out.status == mur_common::pipeline::PipelineStatus::Stopped => {
                 job.status = JobStatus::Canceled;
-                job.error = Some("stopped by `mur fleet stop`".to_string());
+                job.error = Some(stop_text(budget.as_deref()));
             }
             (_, Ok(out)) if out.status == mur_common::pipeline::PipelineStatus::Skipped => {
                 job.status = JobStatus::Blocked;
@@ -621,9 +647,11 @@ pub async fn cmd_fleet_run(
         let (price_per_1k, _) = super::loop_run::fleet_price_per_1k(mur_home);
         let (spent, stop_reason, success) = match &exec_result {
             Ok(o) => (
-                Some(super::loop_run::iteration_cost_usd(
-                    o.tokens_used,
-                    price_per_1k,
+                // Billable spend when a cap is live (#2083); otherwise the
+                // flat all-tokens figure triage has always scored against.
+                Some(budget.as_ref().map_or_else(
+                    || super::loop_run::iteration_cost_usd(o.tokens_used, price_per_1k),
+                    |b| b.spent_usd(),
                 )),
                 // The DAG surfaces a guard stop through the step text, not a
                 // field of its own; `None` here means "no guard reported",
@@ -708,6 +736,14 @@ pub async fn cmd_fleet_run(
         }
     }
     Ok(())
+}
+
+/// Who stopped a one-shot run: the cost cap (#2083) or the kill-switch.
+fn stop_text(budget: Option<&super::oneshot_budget::OneShotBudget>) -> String {
+    match budget.filter(|b| b.tripped()) {
+        Some(b) => b.stop_reason(),
+        None => "stopped by `mur fleet stop`".to_string(),
+    }
 }
 
 #[cfg(test)]

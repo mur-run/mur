@@ -164,6 +164,7 @@ impl LlmClient for OllamaClient {
             model: self.model.clone(),
             tool_calls: vec![],
             stop_reason,
+            registry_key: None,
         })
     }
 
@@ -315,6 +316,7 @@ impl LlmClient for OllamaClient {
             model: self.model.clone(),
             tool_calls: vec![],
             stop_reason,
+            registry_key: None,
         })
     }
 }

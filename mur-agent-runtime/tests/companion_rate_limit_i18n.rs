@@ -66,6 +66,7 @@ impl LlmClient for DynamicStubLlm {
                     model: "dynamic-stub".into(),
                     tool_calls: vec![],
                     stop_reason: StopReason::EndTurn,
+                    registry_key: None,
                 })
             }
             DynamicStubModeTag::EnglishOnceThenChinese => {
@@ -91,6 +92,7 @@ impl LlmClient for DynamicStubLlm {
                     model: "dynamic-stub".into(),
                     tool_calls: vec![],
                     stop_reason: StopReason::EndTurn,
+                    registry_key: None,
                 })
             }
         }
@@ -316,6 +318,7 @@ impl LlmClient for MismatchAlwaysFailsTranslateLlm {
             model: "mismatch-fail-stub".into(),
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
+            registry_key: None,
         })
     }
 

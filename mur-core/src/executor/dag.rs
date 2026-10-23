@@ -247,20 +247,81 @@ pub(crate) fn default_unanswered() -> mur_common::hitl::Unanswered {
     }
 }
 
+/// Tokens one agent turn consumed, as its `Task.usage` reported them.
+///
+/// Input and output are kept apart because they are priced apart: a cost
+/// guard that folds them into one count has to bill all of it at the dearer
+/// rate, and overstates the spend of every turn that mostly reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+    /// The provider's name for the model of the turn's last call
+    /// (`usage.model_ref` — a name, despite the field, not a registry key).
+    /// `None` from stub backends.
+    pub model_ref: Option<String>,
+    /// The totals split by the model that answered each call
+    /// (`usage.by_model`). Empty from runtimes that predate the split.
+    pub by_model: Vec<ModelShare>,
+}
+
+/// One answering model's share of a turn's tokens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelShare {
+    /// The `models.yaml` key the runtime routed to, when it knew it.
+    pub registry_key: Option<String>,
+    /// The provider's name for that model.
+    pub model: Option<String>,
+    /// The whole prompt, cached or not.
+    pub input: u64,
+    pub output: u64,
+    /// The part of `input` served from the provider's prompt cache.
+    pub cache_read: u64,
+    /// The part of `input` written to the provider's prompt cache.
+    pub cache_write: u64,
+}
+
+impl TokenUsage {
+    pub fn total(&self) -> u64 {
+        self.input.saturating_add(self.output)
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.total() == 0
+    }
+
+    /// The turn's shares, or — from a runtime that predates the split — the
+    /// whole turn as one share named only by its provider model name.
+    pub fn shares(&self) -> Vec<ModelShare> {
+        if !self.by_model.is_empty() {
+            return self.by_model.clone();
+        }
+        vec![ModelShare {
+            registry_key: None,
+            model: self.model_ref.clone(),
+            input: self.input,
+            output: self.output,
+            // An older runtime reports no split: the whole prompt is priced
+            // at the input rate, the upper bound.
+            cache_read: 0,
+            cache_write: 0,
+        }]
+    }
+}
+
 /// Display-only step lifecycle event for progress observers. The callback
 /// runs on executor worker tasks: it MUST be cheap and MUST NOT panic.
 #[derive(Debug, Clone)]
 pub struct StepEvent {
     pub id: String,
     /// The delegate target agent, when this step is a delegation. `None`
-    /// otherwise. ponytail: currently redundant with the progress step's
-    /// `worker` (both come from `step.delegate_to`); kept as part of the
-    /// generic observer contract. Drop it if no consumer ever reads it.
-    #[allow(dead_code)]
+    /// otherwise. The one-shot cost guard reads it to tell billable members
+    /// from local / subscription ones (#2083).
     pub agent: Option<String>,
     pub kind: StepEventKind,
-    /// Per-step delegate token usage (0 for non-delegate or unknown).
-    pub tokens_used: u64,
+    /// Per-step delegate token usage, input and output apart (zero for a
+    /// non-delegate step or a reply that carried no usage).
+    pub usage: TokenUsage,
     /// Why the step ended this way. Set on `Failed` and `Skipped`.
     pub error: Option<String>,
 }
@@ -400,17 +461,44 @@ fn extract_agent_reply(task: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-/// Sum the real token usage a specialist reported in its `Task.usage`
-/// (`input_tokens + output_tokens`). 0 when absent — older runtimes, stub
-/// backends, or a reply that carried no usage — so accounting degrades to the
-/// projection rather than under-counting silently.
-fn extract_usage_tokens(task: &serde_json::Value) -> u64 {
-    let usage = match task.get("usage") {
-        Some(u) => u,
-        None => return 0,
+/// The real token usage an agent reported in its `Task.usage`. Zero when
+/// absent — older runtimes, stub backends, or a reply that carried no usage —
+/// so accounting degrades to the projection rather than under-counting
+/// silently.
+pub fn extract_usage(task: &serde_json::Value) -> TokenUsage {
+    let Some(usage) = task.get("usage") else {
+        return TokenUsage::default();
     };
-    let field = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
-    field("input_tokens").saturating_add(field("output_tokens"))
+    let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    let text = |v: &serde_json::Value, k: &str| {
+        v.get(k)
+            .and_then(|v| v.as_str())
+            .filter(|m| !m.is_empty())
+            .map(str::to_string)
+    };
+    let by_model = usage
+        .get("by_model")
+        .and_then(|v| v.as_array())
+        .map(|shares| {
+            shares
+                .iter()
+                .map(|s| ModelShare {
+                    registry_key: text(s, "registry_key"),
+                    model: text(s, "model"),
+                    input: num(s, "input_tokens"),
+                    output: num(s, "output_tokens"),
+                    cache_read: num(s, "cache_read_input_tokens"),
+                    cache_write: num(s, "cache_creation_input_tokens"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    TokenUsage {
+        input: num(usage, "input_tokens"),
+        output: num(usage, "output_tokens"),
+        model_ref: text(usage, "model_ref"),
+        by_model,
+    }
 }
 
 /// Why a runtime guard cut a delegated turn short, if one did.
@@ -519,7 +607,7 @@ fn delegate_result(
         blocked: false,
         stopped: false,
         // Real tokens the specialist's turn consumed, from Task.usage.
-        tokens_used: extract_usage_tokens(task),
+        usage: extract_usage(task),
     }
 }
 #[cfg(test)]

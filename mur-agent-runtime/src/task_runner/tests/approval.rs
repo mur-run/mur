@@ -41,6 +41,7 @@ fn fleet_run_call_response(call_id: &str) -> crate::llm::LlmResponse {
             input: serde_json::json!({"fleet": "deep-research"}),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     }
 }
 
@@ -561,6 +562,7 @@ async fn repeated_calls_to_a_withdrawn_tool_settle_the_turn() {
             input: serde_json::json!({ "fleet": format!("probe-{n}") }),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     };
     let responses = vec![
         varied(0),

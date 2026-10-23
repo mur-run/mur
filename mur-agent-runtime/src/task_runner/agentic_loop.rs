@@ -303,10 +303,7 @@ impl TaskRunner {
                 .store(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
             self.cumulative_output_tokens
                 .fetch_add(resp.output_tokens, std::sync::atomic::Ordering::Relaxed);
-            *self
-                .last_model_ref
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(resp.model.clone());
+            super::turn_models::record(&resp);
 
             // Truncation guard: a turn that hit the output-token ceiling AND
             // carries tool_calls was cut off MID-tool_use — the tool_use

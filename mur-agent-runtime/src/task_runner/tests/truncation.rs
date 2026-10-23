@@ -195,6 +195,7 @@ fn interrupted_text_response(text: &str) -> crate::llm::LlmResponse {
         model: "test".into(),
         tool_calls: vec![],
         stop_reason: crate::llm::StopReason::Interrupted,
+        registry_key: None,
     }
 }
 
@@ -378,6 +379,7 @@ impl crate::llm::LlmClient for TextThenEmptyStreamLlm {
                 input: serde_json::json!({"replies": ["照 A 做"]}),
             }],
             stop_reason: crate::llm::StopReason::ToolUse,
+            registry_key: None,
         })
     }
     fn model_name(&self) -> &str {
@@ -549,6 +551,7 @@ impl crate::llm::LlmClient for AnswerThenFollowUpLlm {
             } else {
                 crate::llm::StopReason::EndTurn
             },
+            registry_key: None,
         })
     }
     fn model_name(&self) -> &str {

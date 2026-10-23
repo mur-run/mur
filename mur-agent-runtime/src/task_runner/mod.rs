@@ -28,6 +28,8 @@ mod helpers;
 mod run;
 mod step;
 mod system_prompt;
+mod task_usage;
+mod turn_models;
 mod turn_track;
 mod unsettled;
 
@@ -179,29 +181,20 @@ pub struct TaskRunner {
     recently_fired: Mutex<VecDeque<(u64, String)>>,
     turn_counter: AtomicU64,
     cumulative_input_tokens: AtomicU64,
-    /// Parallel to `cumulative_input_tokens` (runner-lifetime, shared across
-    /// tasks). Not used by the loop's own input-only token budget; it exists so
-    /// `run_sync_inner` can snapshot-delta both counters and report a turn's
-    /// real input+output token usage in `Task.usage` (fleet cost accounting).
+    /// Runner-lifetime output twin of the above; `Task.usage` reads per-turn ledgers.
     cumulative_output_tokens: AtomicU64,
+    /// Final `Task.usage` per recent task id, for `tasks/get` (see `task_usage`).
+    task_usage: task_usage::TaskUsageStore,
     /// Input-token count of the most recent single LLM call. Approximates the
     /// current context window fill, unlike the cumulative total. Read by the
     /// `token_usage` closure to populate `context_tokens` in per-turn usage JSON
     /// so the CLI glass-box bar can show a live context gauge.
     last_input_tokens: AtomicU64,
-    /// `model_ref` of the most recent successful LLM response, read by the
-    /// `token_usage` closure to populate `Task.usage.model_ref`. Reset to
-    /// `None` at the start of each `run_sync_inner` turn so a stub/misconfigured
-    /// backend (which never calls a real model) reports no model rather than a
-    /// stale one from a previous turn. Same runner-lifetime concurrency caveat
-    /// as `cumulative_input_tokens`: overlapping turns on one runner can race
-    /// this value; acceptable for a best-effort telemetry field.
-    last_model_ref: Mutex<Option<String>>,
     /// True when the most recent LLM response of the current turn was cut off
     /// at the provider's max_tokens ceiling (`StopReason::MaxTokens`). Read by
     /// the `token_usage` closure to add `"truncated": true` to `Task.usage`;
-    /// reset alongside `last_model_ref` at the start of each `run_sync_inner`
-    /// turn. Same runner-lifetime concurrency caveat as `last_model_ref`.
+    /// reset at the start of each `run_sync_inner` turn. Overlapping turns on
+    /// one runner can race it (advisory only; not used for spend).
     last_turn_truncated: AtomicBool,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,

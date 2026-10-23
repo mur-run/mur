@@ -79,6 +79,7 @@ impl LlmClient for StubLlm {
             model: "stub".into(),
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
+            registry_key: None,
         })
     }
     fn model_name(&self) -> &str {

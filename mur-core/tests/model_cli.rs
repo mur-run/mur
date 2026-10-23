@@ -43,6 +43,8 @@ fn fetched_prices_fill_only_empty_fields() {
         Some(PriceInfo {
             input_per_1k: 0.005,
             output_per_1k: 0.025,
+            cache_read_per_1k: None,
+            cache_write_per_1k: None,
             context_window: Some(200_000),
         }),
     );

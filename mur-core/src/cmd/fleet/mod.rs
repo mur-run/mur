@@ -15,6 +15,7 @@ pub mod judge_cmd;
 pub mod labels;
 pub mod list;
 pub mod loop_run;
+pub mod oneshot_budget;
 pub mod partition_cmd;
 pub mod pause;
 pub mod plan;

@@ -78,6 +78,16 @@ pub struct ModelEntry {
     /// New field for split input/output cost tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_cost_per_1k: Option<f64>,
+    /// Estimated USD cost per 1000 prompt tokens served from the provider's
+    /// prompt cache. `None` = unknown: cost accounting then prices a cached
+    /// token at the full input rate, which is an upper bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_cost_per_1k: Option<f64>,
+    /// Estimated USD cost per 1000 prompt tokens written to the provider's
+    /// prompt cache (Anthropic bills these above the input rate). `None` =
+    /// unknown: priced at the input rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_cost_per_1k: Option<f64>,
     /// Model context window size in tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
@@ -191,11 +201,38 @@ impl ModelEntry {
     /// Projected USD cost for a token workload. A known rate on only one side
     /// is used for the other side; no rates remains unknown rather than free.
     pub fn projected_cost(&self, input_tokens: u64, output_tokens: u64) -> Option<f64> {
+        self.cost_with_cache(input_tokens, 0, 0, output_tokens)
+    }
+
+    /// USD cost of real usage whose prompt is split by cache use.
+    ///
+    /// `input_tokens` is the whole prompt, cached or not — what
+    /// `LlmResponse::input_tokens` reports — and `cache_read` / `cache_write`
+    /// are the parts of it served from and written to the provider cache. A
+    /// cache rate the entry lacks falls back to its input rate. A split larger
+    /// than the prompt is clamped, so no token is priced twice. `None` when
+    /// the entry has no rates at all.
+    pub fn cost_with_cache(
+        &self,
+        input_tokens: u64,
+        cache_read: u64,
+        cache_write: u64,
+        output_tokens: u64,
+    ) -> Option<f64> {
         let (input, output) = self.effective_costs();
         let fallback = input.or(output)?;
         let input = input.unwrap_or(fallback);
         let output = output.unwrap_or(fallback);
-        Some(input_tokens as f64 / 1_000.0 * input + output_tokens as f64 / 1_000.0 * output)
+        let read = cache_read.min(input_tokens);
+        let write = cache_write.min(input_tokens - read);
+        let uncached = input_tokens - read - write;
+        let per_1k = |tokens: u64, rate: f64| tokens as f64 / 1_000.0 * rate;
+        Some(
+            per_1k(uncached, input)
+                + per_1k(read, self.cache_read_cost_per_1k.unwrap_or(input))
+                + per_1k(write, self.cache_write_cost_per_1k.unwrap_or(input))
+                + per_1k(output_tokens, output),
+        )
     }
 
     /// Catalog vendor names to try for this entry, most specific first.

@@ -21,6 +21,9 @@ pub const TIMEOUT_SECS: u64 = 10; // used by Task 2 (fetch/cache)
 pub struct PriceInfo {
     pub input_per_1k: f64,
     pub output_per_1k: f64,
+    /// Prompt-cache read / write rates, when the catalog lists them.
+    pub cache_read_per_1k: Option<f64>,
+    pub cache_write_per_1k: Option<f64>,
     pub context_window: Option<u64>,
 }
 
@@ -44,6 +47,10 @@ struct RawCost {
     input: Option<f64>,
     #[serde(default)]
     output: Option<f64>,
+    #[serde(default)]
+    cache_read: Option<f64>,
+    #[serde(default)]
+    cache_write: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +117,8 @@ impl Catalog {
         Some(PriceInfo {
             input_per_1k: cost.input? / PER_MILLION,
             output_per_1k: cost.output? / PER_MILLION,
+            cache_read_per_1k: cost.cache_read.map(|r| r / PER_MILLION),
+            cache_write_per_1k: cost.cache_write.map(|r| r / PER_MILLION),
             context_window: raw.limit.as_ref().and_then(|l| l.context),
         })
     }
@@ -193,6 +202,8 @@ pub fn lookup(
         return Some(PriceInfo {
             input_per_1k: 0.0,
             output_per_1k: 0.0,
+            cache_read_per_1k: Some(0.0),
+            cache_write_per_1k: Some(0.0),
             context_window: None,
         });
     }
@@ -236,7 +247,7 @@ mod tests {
       "anthropic": {
         "id": "anthropic",
         "models": {
-          "claude-opus-4-8": { "cost": { "input": 5, "output": 25 }, "limit": { "context": 200000 } }
+          "claude-opus-4-8": { "cost": { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 }, "limit": { "context": 200000 } }
         }
       },
       "deepseek": {
@@ -255,6 +266,13 @@ mod tests {
         assert!((p.input_per_1k - 0.005).abs() < 1e-12);
         assert!((p.output_per_1k - 0.025).abs() < 1e-12);
         assert_eq!(p.context_window, Some(200_000));
+        assert!((p.cache_read_per_1k.unwrap() - 0.0005).abs() < 1e-12);
+        assert!((p.cache_write_per_1k.unwrap() - 0.00625).abs() < 1e-12);
+        let ds = cat.lookup("deepseek", "deepseek-v4-flash").unwrap();
+        assert_eq!(
+            ds.cache_read_per_1k, None,
+            "unlisted cache rate stays unknown"
+        );
     }
 
     #[test]
@@ -290,6 +308,8 @@ mod tests {
             PriceInfo {
                 input_per_1k: 0.0,
                 output_per_1k: 0.0,
+                cache_read_per_1k: Some(0.0),
+                cache_write_per_1k: Some(0.0),
                 context_window: None
             }
         );

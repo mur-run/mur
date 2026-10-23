@@ -96,6 +96,7 @@ mod tests {
                 model: "recorder".into(),
                 tool_calls: vec![],
                 stop_reason: StopReason::EndTurn,
+                registry_key: None,
             })
         }
 
