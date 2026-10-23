@@ -51,6 +51,10 @@ pub enum AuditReason {
     /// The live probe could not give a clean answer (timeout, spawn or
     /// sandbox failure, unexpected errno). Never upgraded to boundary.
     ProbeInconclusive,
+    /// The probe child was confined, but the supervisor's own sandbox did not
+    /// install or is not enforcing (advisory-only start), so the agent itself
+    /// is not held to the profile the probe measured.
+    SupervisorNotEnforcing,
 }
 
 impl AuditReason {
@@ -64,6 +68,7 @@ impl AuditReason {
             Self::UpstreamMatchesAllowPattern => "upstream_matches_allow_pattern",
             Self::ProbeReachable => "probe_reachable",
             Self::ProbeInconclusive => "probe_inconclusive",
+            Self::SupervisorNotEnforcing => "supervisor_not_enforcing",
         }
     }
 }

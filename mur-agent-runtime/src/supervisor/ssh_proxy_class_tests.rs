@@ -107,8 +107,54 @@ fn allowlist_explanation_names_the_root() {
 #[test]
 fn no_keys_records_off_without_probing() {
     let home = tempfile::tempdir().unwrap();
-    record_at_start(home.path(), false, &restricted_policy());
+    let provisional = classify_before_seal(false, &restricted_policy());
+    finalize(home.path(), provisional, true);
     let s = ssh_proxy_status::read(home.path()).unwrap();
     assert_eq!(s.state, SshProxyState::Off);
     assert!(s.at_unix_ms > 0);
+}
+
+fn boundary_at(at: u64) -> SshProxyStatus {
+    SshProxyStatus {
+        at_unix_ms: at,
+        ..status_for(&Classification::Boundary)
+    }
+}
+
+#[test]
+fn boundary_says_the_proxy_is_not_active_yet() {
+    // Phase 1 installs no proxy: the probe measures a potential boundary,
+    // it does not mean signatures are mediated.
+    let e = status_for(&Classification::Boundary).explanation;
+    assert!(e.contains("no proxy is active yet"), "{e}");
+    assert!(!e.contains("every signature"), "{e}");
+}
+
+#[test]
+fn boundary_survives_an_enforcing_supervisor() {
+    let s = settle(boundary_at(7), true);
+    assert_eq!((s.state, s.code), (SshProxyState::Boundary, None));
+}
+
+// Probe denied, supervisor sandbox failed, advisory-only start allowed: the
+// recorded state must not still say boundary.
+#[test]
+fn probe_denied_but_advisory_only_supervisor_is_audit_only() {
+    let home = tempfile::tempdir().unwrap();
+    let got = finalize(home.path(), boundary_at(7), false);
+    assert_eq!(got.state, SshProxyState::AuditOnly);
+    assert_eq!(got.code.as_deref(), Some("supervisor_not_enforcing"));
+    assert_eq!(got.at_unix_ms, 7, "settling keeps the start's timestamp");
+    let persisted = ssh_proxy_status::read(home.path()).unwrap();
+    assert_eq!(persisted.state, SshProxyState::AuditOnly);
+    assert_eq!(persisted.code.as_deref(), Some("supervisor_not_enforcing"));
+}
+
+#[test]
+fn settling_never_upgrades_or_rewrites_other_states() {
+    let a = status_for(&Classification::AuditOnly(AuditReason::ProbeReachable));
+    for enforcing in [true, false] {
+        let s = settle(a.clone(), enforcing);
+        assert_eq!(s.code.as_deref(), Some("probe_reachable"));
+    }
 }

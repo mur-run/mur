@@ -323,8 +323,9 @@ pub(super) async fn prepare_and_seal(
     // ssh-agent proxy classification, strictly BEFORE the seal: the probe
     // child installs the agent's profile on itself, which macOS refuses inside
     // an already-sealed parent. Bounded by PROBE_TIMEOUT; never gates start.
-    let ssh_proxy = super::ssh_proxy_class::record_at_start(
-        agent_home,
+    // Provisional: it is persisted and announced only after the seal below,
+    // once we know whether this process is actually confined.
+    let ssh_proxy = super::ssh_proxy_class::classify_before_seal(
         !profile.inner.entitlements.ssh.is_empty(),
         &crate::sandbox::build_policy(
             &profile.inner.entitlements,
@@ -334,18 +335,6 @@ pub(super) async fn prepare_and_seal(
             &extra_write_paths,
         ),
     );
-    // Same facts on the agent's channel (plan Task 1.5). Best-effort: the log
-    // line and the status file already carry them, so a busy store must not
-    // fail the start.
-    let signer = super::start_notice::Signer {
-        mur_home,
-        agent: &profile.inner.name,
-        identity,
-        key_version: profile.inner.identity.key_version,
-    };
-    if let Err(e) = super::start_notice::append_ssh_proxy(&signer, &ssh_proxy) {
-        warn!(error = %e, "could not post the ssh-agent proxy classification to the agent's channel");
-    }
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,
@@ -406,6 +395,27 @@ pub(super) async fn prepare_and_seal(
             })
         }
     };
+
+    // The probe proved its child was confined, not this process: settle the
+    // classification against the sandbox we really got, then record it.
+    let ssh_proxy = super::ssh_proxy_class::finalize(
+        agent_home,
+        ssh_proxy,
+        sandbox_record.as_ref().is_some_and(|r| r.enforcing),
+    );
+    // Same facts on the agent's channel (plan Task 1.5). Best-effort: the log
+    // line and the status file already carry them, so a busy store must not
+    // fail the start. The channel grant survives the seal (see
+    // `mur_channel::anchor`), as the HITL store relies on too.
+    let signer = super::start_notice::Signer {
+        mur_home,
+        agent: &profile.inner.name,
+        identity,
+        key_version: profile.inner.identity.key_version,
+    };
+    if let Err(e) = super::start_notice::append_ssh_proxy(&signer, &ssh_proxy) {
+        warn!(error = %e, "could not post the ssh-agent proxy classification to the agent's channel");
+    }
 
     Ok(Sealed {
         egress_proxy,

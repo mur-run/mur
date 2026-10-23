@@ -18,14 +18,10 @@ use std::path::{Path, PathBuf};
 /// would see, which is exactly the one the classification is about.
 pub(super) const UPSTREAM_ENV: &str = "SSH_AUTH_SOCK";
 
-/// Classify this start and persist the result. Best-effort: a write failure
-/// is logged, never fatal. Returns what was recorded so the caller can put
-/// the same facts on the agent's channel.
-pub(super) fn record_at_start(
-    agent_home: &Path,
-    has_ssh_keys: bool,
-    policy: &SandboxPolicy,
-) -> SshProxyStatus {
+/// Classify this start, without persisting it. Must run before the seal (see
+/// the module doc); the result is provisional until [`finalize`] has seen
+/// whether the supervisor's own sandbox actually installed.
+pub(super) fn classify_before_seal(has_ssh_keys: bool, policy: &SandboxPolicy) -> SshProxyStatus {
     let status = if has_ssh_keys {
         let upstream = std::env::var_os(UPSTREAM_ENV).map(PathBuf::from);
         let class = classify_at_start(policy, upstream.as_deref(), &mut live_probe);
@@ -38,15 +34,43 @@ pub(super) fn record_at_start(
             at_unix_ms: 0,
         }
     };
-    let status = SshProxyStatus {
+    SshProxyStatus {
         at_unix_ms: now_unix_ms(),
         ..status
-    };
+    }
+}
+
+/// Settle the classification against the sandbox the supervisor really got,
+/// then log and persist it. The probe proves its child was confined, not that
+/// this process is: when the seal failed or is advisory-only, a boundary is
+/// downgraded. Best-effort: a write failure is logged, never fatal. Returns
+/// what was recorded so the caller can put the same facts on the channel.
+pub(super) fn finalize(
+    agent_home: &Path,
+    provisional: SshProxyStatus,
+    supervisor_enforcing: bool,
+) -> SshProxyStatus {
+    let status = settle(provisional, supervisor_enforcing);
     log_status(&status);
     if let Err(e) = ssh_proxy_status::write(agent_home, &status) {
         tracing::warn!(error = %e, "could not record the ssh-agent proxy classification");
     }
     status
+}
+
+/// The pure part of [`finalize`]: never keep `boundary` for an unconfined
+/// supervisor. Other states already claim nothing, so they pass through.
+pub(super) fn settle(s: SshProxyStatus, supervisor_enforcing: bool) -> SshProxyStatus {
+    if s.state != SshProxyState::Boundary || supervisor_enforcing {
+        return s;
+    }
+    let r = AuditReason::SupervisorNotEnforcing;
+    SshProxyStatus {
+        state: SshProxyState::AuditOnly,
+        code: Some(r.as_str().to_string()),
+        explanation: explanation(&r),
+        ..s
+    }
 }
 
 /// Run the static table and, on `Candidate` only, confirm it with `probe`.
@@ -135,8 +159,8 @@ pub(super) fn status_for(class: &Classification) -> SshProxyStatus {
         Classification::Boundary => (
             SshProxyState::Boundary,
             None,
-            "this agent's sandbox refuses connect(2) to the upstream ssh-agent; \
-             every signature goes through the proxy"
+            "a probe under this agent's sandbox could not connect(2) to the upstream \
+             ssh-agent, so a proxy could be a boundary here; no proxy is active yet"
                 .to_string(),
         ),
         Classification::AuditOnly(r) => (
@@ -185,6 +209,11 @@ pub(super) fn explanation(reason: &AuditReason) -> String {
         }
         AuditReason::ProbeInconclusive => {
             "the sandbox probe gave no clean answer, so MUR does not claim a boundary".into()
+        }
+        AuditReason::SupervisorNotEnforcing => {
+            "the probe was confined, but this agent's own sandbox is not enforcing \
+             (advisory-only start), so the agent can dial the upstream ssh-agent"
+                .into()
         }
     }
 }
