@@ -20,6 +20,10 @@ pub struct HitlDecision {
     /// Which surface answered ("hub", "cli", "ios"); `None` when the responder
     /// did not say, recorded as "unknown" — never guessed.
     pub surface: Option<String>,
+    /// #2085: refused only because nobody who can answer is attached and
+    /// nothing is remembered — "needs a human", not "a human said no". Always
+    /// paired with `allow: false`; the call never runs.
+    pub awaiting_human: bool,
 }
 
 /// Shared map from hitl_id → oneshot sender for approval decisions.

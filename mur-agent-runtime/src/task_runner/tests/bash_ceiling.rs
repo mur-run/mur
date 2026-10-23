@@ -155,6 +155,7 @@ async fn run_wired(
                     allow: false,
                     reason: Some("test denies".into()),
                     surface: None,
+                    awaiting_human: false,
                 });
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -324,7 +325,8 @@ async fn a_ceiling_refusal_names_the_tier_not_tool_allow() {
         },
     )
     .await;
-    assert!(r.error.starts_with("hitl_denied"), "{}", r.error);
+    // #2085: nobody decided yet, so "needs a human", not "denied".
+    assert!(r.error.starts_with("hitl_approval_required"), "{}", r.error);
     assert!(r.error.contains("tier `network-egress`"), "{}", r.error);
     assert!(r.error.contains("bash ceiling `write`"), "{}", r.error);
     assert!(!r.error.contains("tool-allow"), "{}", r.error);

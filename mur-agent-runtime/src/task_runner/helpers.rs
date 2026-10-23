@@ -271,6 +271,7 @@ pub(crate) fn decide_without_asking(
             agent, tool_name, cause,
         )),
         surface: None,
+        awaiting_human: true,
     })
 }
 
@@ -295,6 +296,24 @@ pub(crate) fn denied_args_preview(input: &serde_json::Value) -> String {
         end -= 1;
     }
     format!("{}… ({} bytes total)", &red[..end], red.len())
+}
+
+/// #2085: the `TaskError` code for an `Ask` call nobody attached can
+/// answer and nothing remembered settles. Distinct from `hitl_denied` (a
+/// human, or a remembered decision, said no) and `recoverable: true`: approve
+/// it from an interactive surface, then resend.
+pub(crate) const HITL_APPROVAL_REQUIRED: &str = "hitl_approval_required";
+
+/// Message for [`HITL_APPROVAL_REQUIRED`]. The remembered decision written
+/// by that approval is what lets the resend through — no permission changes.
+pub(crate) fn approval_required_message(reason: Option<&str>) -> String {
+    let why = reason.map(str::trim).filter(|r| !r.is_empty());
+    let resend = "approve it once there (the answer is remembered for this exact call), \
+                  then resend the same request";
+    match why {
+        Some(r) => format!("tool call needs approval: {r}; {resend}"),
+        None => format!("tool call needs approval; {resend}"),
+    }
 }
 
 pub(crate) fn deny_message(reason: Option<&str>) -> String {

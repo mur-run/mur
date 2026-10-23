@@ -200,6 +200,7 @@ async fn an_approved_ask_tool_result_is_masked_too() {
                     // The test stands in for a surface that did not name
                     // itself; recorded as unknown, never guessed.
                     surface: None,
+                    awaiting_human: false,
                 });
             }
         }
