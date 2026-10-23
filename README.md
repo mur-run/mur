@@ -558,9 +558,9 @@ Agent** wizard offers the same catalog as a source.
   than one prompt each — every call is still decided on its own, and there is
   no approve-all. A settled decision is remembered by action hash for 7 days,
   so the same call stops being asked twice, and an explicit no outranks any
-  standing grant. `mur agent hitl list <agent>` shows what is being remembered
-  (with a redacted label of the tool and target), and `mur agent hitl forget
-  <agent> <hash>`, `--all`, or `--denies-only` (drops remembered no's, keeps
+  standing grant. `mur agent hitl <agent> list` shows what is being remembered
+  (with a redacted label of the tool and target), and `mur agent hitl <agent> forget
+  <hash>`, `--all`, or `--denies-only` (drops remembered no's, keeps
   the yes's) makes it ask again; a review session never remembers its answers.
   A headless `mur agent send` fails fast with `hitl_approval_required` when a
   call needs a human; add `--wait-approval[=30m]` and it parks the call
