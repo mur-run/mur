@@ -195,10 +195,31 @@ fn the_token_never_appears_in_argv_or_the_environment() {
 }
 
 #[test]
-fn an_oversized_token_stops_before_git_is_run_and_nothing_is_pushed() {
+fn an_oversized_token_stops_at_intake_before_git_is_run_and_nothing_is_pushed() {
+    // The prefetch needs the credential too, so an unusable one is caught before approval: no
+    // pending row, nothing fetched with it, nothing pushed.
     let r = rig(&"x".repeat(mur_git_broker::askpass::MAX_TOKEN_BYTES + 1));
-    let (k, h) = submit(&r);
-    let err = r.b.on_approval(&k, proof("e1", "r1", &h)).unwrap_err();
+    let mut d = action_for(&r.e.old, &r.e.new, "refs/heads/agent/x");
+    d.request_id = "r1".into();
+    let k = key("r1");
+    let pack = range_pack(&r.e.work, &r.e.new, Some(&r.e.old), false);
+    let p =
+        r.e.records
+            .0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .enrollments[0]
+            .policy();
+    d.canonical_remote_endpoint = URL.into();
+    d.remote_policy_digest = p.remote_digest();
+    d.ref_policy_digest = p.digest();
+    d.enrollment_epoch = EPOCH;
+    d.repo_identity = IDENTITY.into();
+    let err = r.b.submit_request(&k, &d, &pack).unwrap_err();
     assert!(
         matches!(
             err,
@@ -206,6 +227,7 @@ fn an_oversized_token_stops_before_git_is_run_and_nothing_is_pushed() {
         ),
         "{err:?}"
     );
+    assert!(r.b.store().get(&k).unwrap().is_none(), "no pending row");
     assert!(
         !r.out.join("env").exists(),
         "fail-closed: no push without the credential"

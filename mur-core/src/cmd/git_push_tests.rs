@@ -54,6 +54,7 @@ fn enroll_args(f: &Fx, agent: &str) -> GitPushAction {
         ref_prefix: None,
         path: Some(f.repo.clone()),
         object_format: None,
+        auth: EnrollAuth::default(),
     }
 }
 
@@ -130,6 +131,7 @@ fn a_changed_policy_updates_in_place_and_says_what_it_voids() {
         ref_prefix: None,
         path: None,
         object_format: None,
+        auth: EnrollAuth::default(),
     };
     let (code, out) = go(&f, changed);
     assert_eq!(code, 0, "{out}");
@@ -152,6 +154,7 @@ fn a_short_base_ref_is_refused_with_a_hint_and_writes_nothing() {
         ref_prefix: None,
         path: Some(f.repo.clone()),
         object_format: None,
+        auth: EnrollAuth::default(),
     };
     let err = run_to(&f.home, a, &mut Vec::new()).unwrap_err().to_string();
     assert!(err.contains("refs/heads/main"), "{err}");
@@ -173,6 +176,7 @@ fn only_file_endpoints_are_accepted() {
         ref_prefix: None,
         path: Some(f.repo.clone()),
         object_format: None,
+        auth: EnrollAuth::default(),
     };
     assert!(run_to(&f.home, a, &mut Vec::new()).is_err());
     assert_eq!(files(&f), (None, None));
@@ -190,6 +194,7 @@ fn a_new_repo_without_a_path_is_explained() {
         ref_prefix: None,
         path: None,
         object_format: None,
+        auth: EnrollAuth::default(),
     };
     let err = run_to(&f.home, a, &mut Vec::new()).unwrap_err().to_string();
     assert!(err.contains("--path"), "{err}");
@@ -208,6 +213,7 @@ fn a_different_path_for_a_known_repo_points_at_repo_move() {
         ref_prefix: None,
         path: Some(f.home.join("elsewhere")),
         object_format: None,
+        auth: EnrollAuth::default(),
     };
     let err = run_to(&f.home, a, &mut Vec::new()).unwrap_err().to_string();
     assert!(err.contains("repo move"), "{err}");
@@ -470,6 +476,7 @@ fn concurrent_enrolls_do_not_lose_a_record() {
                         ref_prefix: None,
                         path: Some(repo),
                         object_format: None,
+                        auth: EnrollAuth::default(),
                     },
                     &mut Vec::new(),
                 )
@@ -486,4 +493,185 @@ fn concurrent_enrolls_do_not_lose_a_record() {
         book.enrollments[0].epoch, book.enrollments[1].epoch,
         "the lock must also keep two concurrent enrolls from minting the same epoch"
     );
+}
+
+const HTTPS: &str = "https://git.example.com/o/r.git";
+
+fn https_args(f: &Fx, auth: EnrollAuth) -> GitPushAction {
+    GitPushAction::Enroll {
+        agent: "alice".into(),
+        repo: "mur".into(),
+        remote: "origin".into(),
+        endpoint: HTTPS.into(),
+        base_refs: vec![],
+        ref_prefix: None,
+        path: Some(f.repo.clone()),
+        object_format: None,
+        auth,
+    }
+}
+
+/// A token file the broker would accept: 0600, owned by us, under `<mur_home>/secrets/`.
+fn plant_secret(f: &Fx, mode: u32) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = f.home.join(SECRETS_DIR);
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("git-token");
+    std::fs::write(&p, "ghp_example_token\n").unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    p.display().to_string()
+}
+
+fn with_credential(secret: String) -> EnrollAuth {
+    EnrollAuth {
+        username: Some("x-access-token".into()),
+        secret: Some(secret),
+        allow_unauthenticated: false,
+    }
+}
+
+#[test]
+fn an_https_endpoint_without_a_credential_is_refused_and_says_how_to_fix_it() {
+    let f = fx();
+    let (code, out) = go(&f, https_args(&f, EnrollAuth::default()));
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("--username and --secret"), "{out}");
+    assert!(out.contains("--allow-unauthenticated"), "{out}");
+    assert!(out.contains("nothing was written"), "{out}");
+    assert_eq!(files(&f), (None, None));
+}
+
+#[test]
+fn allow_unauthenticated_enrolls_an_https_endpoint_with_no_credential() {
+    let f = fx();
+    let auth = EnrollAuth {
+        allow_unauthenticated: true,
+        ..EnrollAuth::default()
+    };
+    let (code, out) = go(&f, https_args(&f, auth));
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        load(&f.home).unwrap().unwrap().enrollments[0]
+            .credential
+            .is_none()
+    );
+    let (_, list) = go(&f, GitPushAction::List { json: false });
+    assert!(list.contains("unauthenticated"), "{list}");
+}
+
+#[test]
+fn a_credential_is_written_to_the_enrollment_and_listed_without_the_token() {
+    let f = fx();
+    let secret = plant_secret(&f, 0o600);
+    let (code, out) = go(&f, https_args(&f, with_credential(secret.clone())));
+    assert_eq!(code, 0, "{out}");
+    let cred = load(&f.home).unwrap().unwrap().enrollments[0]
+        .credential
+        .clone()
+        .expect("credential stored");
+    assert_eq!(cred.username.as_str(), "x-access-token");
+    assert_eq!(cred.secret_path.as_str(), secret);
+
+    let (_, json) = go(&f, GitPushAction::List { json: true });
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v[0]["credential"]["username"], "x-access-token");
+    assert_eq!(v[0]["credential"]["secret_path"], secret.as_str());
+    let (_, text) = go(&f, GitPushAction::List { json: false });
+    assert!(text.contains("as x-access-token"), "{text}");
+    for out in [&json, &text] {
+        assert!(!out.contains("ghp_example_token"), "token leaked: {out}");
+    }
+}
+
+#[test]
+fn a_secret_file_the_broker_would_not_open_is_refused_and_nothing_is_written() {
+    let f = fx();
+    let secret = plant_secret(&f, 0o644);
+    let (code, out) = go(&f, https_args(&f, with_credential(secret)));
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("bad_mode"), "{out}");
+    assert!(out.contains("nothing was written"), "{out}");
+    assert_eq!(files(&f), (None, None));
+}
+
+#[test]
+fn a_malformed_username_or_secret_path_is_refused_before_any_check() {
+    let f = fx();
+    for (user, secret, needle) in [
+        ("has space", "/abs/t", "--username"),
+        ("u", "relative/t", "--secret"),
+        ("u", "~/.mur/secrets/t", "--secret"),
+    ] {
+        let auth = EnrollAuth {
+            username: Some(user.into()),
+            secret: Some(secret.into()),
+            allow_unauthenticated: false,
+        };
+        let (code, out) = go(&f, https_args(&f, auth));
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains(needle), "{needle}: {out}");
+        assert_eq!(files(&f), (None, None));
+    }
+}
+
+#[test]
+fn https_only_flags_on_a_file_endpoint_are_refused() {
+    let f = fx();
+    let GitPushAction::Enroll { .. } = enroll_args(&f, "alice") else {
+        unreachable!()
+    };
+    for auth in [
+        EnrollAuth {
+            allow_unauthenticated: true,
+            ..EnrollAuth::default()
+        },
+        with_credential("/abs/t".into()),
+    ] {
+        let mut a = enroll_args(&f, "alice");
+        if let GitPushAction::Enroll { auth: slot, .. } = &mut a {
+            *slot = auth;
+        }
+        let (code, out) = go(&f, a);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("only apply to an https://"), "{out}");
+    }
+    assert_eq!(files(&f), (None, None));
+}
+
+#[derive(clap::Parser, Debug)]
+struct Cli {
+    #[command(subcommand)]
+    action: GitPushAction,
+}
+
+#[test]
+fn the_command_line_pairs_username_with_secret_and_keeps_them_apart_from_the_opt_in() {
+    use clap::Parser;
+    let base = [
+        "mur",
+        "enroll",
+        "--agent",
+        "a",
+        "--repo",
+        "r",
+        "--remote",
+        "o",
+        "--endpoint",
+        HTTPS,
+    ];
+    let parse = |extra: &[&str]| Cli::try_parse_from(base.iter().chain(extra));
+    assert!(parse(&["--username", "u"]).is_err());
+    assert!(parse(&["--secret", "/s"]).is_err());
+    assert!(
+        parse(&[
+            "--allow-unauthenticated",
+            "--username",
+            "u",
+            "--secret",
+            "/s"
+        ])
+        .is_err()
+    );
+    assert!(parse(&["--username", "u", "--secret", "/s"]).is_ok());
+    assert!(parse(&["--allow-unauthenticated"]).is_ok());
 }

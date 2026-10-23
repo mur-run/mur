@@ -20,6 +20,21 @@ use crate::{
     repo::PrivateRepo,
     request_file::RequestFile,
 };
+
+/// Audit kind: a credential was handed to a pre-approval (read-only) prefetch. Kept apart from
+/// the push, which only ever happens after approval, so the two can be told apart.
+pub const AUDIT_PREFETCH_WITH_CREDENTIAL: &str = "prefetch_with_credential";
+/// Audit kind: a human approval was accepted and spent on this request.
+pub const AUDIT_APPROVAL_ACCEPTED: &str = "approval_accepted";
+/// Audit kind: a credential was handed to the post-approval push.
+pub const AUDIT_PUSH_WITH_CREDENTIAL: &str = "push_with_credential";
+/// Audit kind prefix for the state a request ended in after approval, e.g. `ended:succeeded`.
+pub const AUDIT_ENDED_PREFIX: &str = "ended:";
+
+/// The audit kind for a request that ended in `state`.
+pub fn audit_ended(state: State) -> String {
+    format!("{AUDIT_ENDED_PREFIX}{}", state.as_str())
+}
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
@@ -140,7 +155,7 @@ impl Broker {
             }
             Err(e) => {
                 if matches!(e, BrokerError::PrefetchRejected(_)) {
-                    let _ = self.store.audit(&key.agent_id, e.code(), now);
+                    let _ = self.store.audit(key, e.code(), now);
                 }
                 let _ = self.store.discard_validated(key);
                 self.cleanup(key);
@@ -180,7 +195,31 @@ impl Broker {
         let l = &self.cfg.limits;
         let reader = (self.cfg.reader)(&bound.remote_url);
         let repo = PrivateRepo::create(&self.dir_for(key), doc.object_format, &self.cfg.git_bin)?;
-        run_prefetch(&self.gate, &*reader, &repo, doc, &bound.policy, l)?;
+        // A private remote refuses an anonymous read, so the prefetch (which runs before any
+        // approval) needs the enrollment's credential too. It is read-only: the same origin-bound
+        // askpass wiring as the push, with redirects off. The secret lives only for this call and
+        // is read again, fresh, at approval; nothing carries it from intake to execute.
+        {
+            // `file://` never prompts, so its credential is not even read before approval.
+            let network = !bound
+                .remote_url
+                .starts_with(crate::constants::ENDPOINT_FILE_SCHEME);
+            let secret = if network {
+                self.open_secret(bound)?
+            } else {
+                None
+            };
+            let token_auth = self.token_auth(bound, secret)?;
+            if token_auth.is_some() {
+                let now = self.cfg.clock.now();
+                let _ = self.store.audit(key, AUDIT_PREFETCH_WITH_CREDENTIAL, now);
+            }
+            let auth: &dyn RemoteAuth = match &token_auth {
+                Some(t) => t,
+                None => &*self.cfg.auth,
+            };
+            run_prefetch(&self.gate, &*reader, &repo, doc, &bound.policy, l, auth)?;
+        }
         // Prefetch writes refs, so the control files are frozen only after it, and before the
         // agent's bytes reach the parser.
         let frozen = repo.freeze()?;
@@ -220,6 +259,7 @@ impl Broker {
             Err(BrokerError::PolicyChanged | BrokerError::NotEnrolled) => {
                 self.store
                     .transition(key, State::PendingApproval, State::PolicyChanged)?;
+                self.audit_end(key, State::PolicyChanged);
                 self.cleanup(key);
                 return Err(BrokerError::PolicyChanged);
             }
@@ -229,14 +269,14 @@ impl Broker {
         // that cannot be used leaves the request pending and the same approval usable once it is
         // fixed. `?` here and on `accept_approval` drop the secret (`SecretString` zeroizes on
         // drop), so no early return leaves it behind.
-        let secret = bound
-            .credential
-            .as_ref()
-            .map(|c| self.cfg.credentials.open(&c.secret_path))
-            .transpose()?;
+        let secret = self.open_secret(&bound)?;
         let clock = &*self.cfg.clock;
         accept_approval(&self.store, key, &proof, clock)?;
+        let _ = self.store.audit(key, AUDIT_APPROVAL_ACCEPTED, clock.now());
         if let Err(e) = begin_execution(&self.store, key, clock) {
+            if e == BrokerError::ApprovalExpired {
+                self.audit_end(key, State::ApprovalExpired);
+            }
             self.cleanup(key);
             return Err(e);
         }
@@ -249,8 +289,17 @@ impl Broker {
             Err(e) => (State::Failed, Err(e)),
         };
         self.store.transition(key, State::Executing, state)?;
+        self.audit_end(key, state);
         self.cleanup(key);
         out
+    }
+
+    /// Best effort, like every audit write here: a failed audit never changes an outcome that
+    /// already happened.
+    fn audit_end(&self, key: &RequestKey, state: State) {
+        let _ = self
+            .store
+            .audit(key, &audit_ended(state), self.cfg.clock.now());
     }
 
     /// A verified human denial arrived. Ends the pending row as `denied` and drops its private
@@ -258,6 +307,7 @@ impl Broker {
     pub fn on_denial(&self, key: &RequestKey) -> Result<(), BrokerError> {
         self.store
             .transition(key, State::PendingApproval, State::Denied)?;
+        self.audit_end(key, State::Denied);
         self.cleanup(key);
         Ok(())
     }
@@ -276,25 +326,12 @@ impl Broker {
             .frozen_digest(key)?
             .ok_or_else(|| storage("missing frozen digest"))?;
         let repo = PrivateRepo::open(&self.dir_for(key), &self.cfg.git_bin)?;
-        let token_auth = match (secret, &bound.credential) {
-            (Some(secret), Some(c)) => {
-                let built = TokenAuth::new(
-                    secret,
-                    c.username.as_str(),
-                    &bound.remote_url,
-                    self.cfg.askpass_bin.clone(),
-                );
-                // `file://` has no password prompt, so a credential on it is simply unused. For an
-                // https remote `None` cannot happen (enrollment refuses userinfo, `open` caps the
-                // size); if it does, push with no credential would only fail later and less
-                // clearly, so stop here instead.
-                if built.is_none() && bound.remote_url.starts_with("https://") {
-                    return Err(BrokerError::CredentialUnreadable("credential_unusable"));
-                }
-                built
-            }
-            _ => None,
-        };
+        let token_auth = self.token_auth(bound, secret)?;
+        if token_auth.is_some() {
+            let _ = self
+                .store
+                .audit(key, AUDIT_PUSH_WITH_CREDENTIAL, self.cfg.clock.now());
+        }
         let auth: &dyn RemoteAuth = match &token_auth {
             Some(t) => t,
             None => &*self.cfg.auth,
@@ -307,5 +344,47 @@ impl Broker {
             &self.cfg.limits,
             &digest,
         )
+    }
+}
+
+impl Broker {
+    /// The binding's secret, if it carries a credential. `SecretString` zeroizes on drop.
+    fn open_secret(&self, bound: &Bound) -> Result<Option<SecretString>, BrokerError> {
+        bound
+            .credential
+            .as_ref()
+            .map(|c| self.cfg.credentials.open(&c.secret_path))
+            .transpose()
+    }
+
+    /// The askpass wiring for `secret` on the bound remote, shared by prefetch and push so both
+    /// are bound to the same origin by the same code.
+    fn token_auth(
+        &self,
+        bound: &Bound,
+        secret: Option<SecretString>,
+    ) -> Result<Option<TokenAuth>, BrokerError> {
+        let (Some(secret), Some(c)) = (secret, &bound.credential) else {
+            return Ok(None);
+        };
+        let url = &bound.remote_url;
+        let askpass = self.cfg.askpass_bin.clone();
+        #[cfg(any(test, feature = "test-support"))]
+        if url.starts_with(crate::constants::ENDPOINT_LOOPBACK_HTTP_PREFIX) {
+            return Ok(TokenAuth::new_plain_http_for_test(
+                secret,
+                c.username.as_str(),
+                url,
+                askpass,
+            ));
+        }
+        let built = TokenAuth::new(secret, c.username.as_str(), url, askpass);
+        // `file://` has no password prompt, so a credential on it is simply unused. For an https
+        // remote `None` cannot happen (enrollment refuses userinfo, `open` caps the size); if it
+        // does, going on with no credential would only fail later and less clearly, so stop here.
+        if built.is_none() && url.starts_with(crate::constants::ENDPOINT_HTTPS_SCHEME) {
+            return Err(BrokerError::CredentialUnreadable("credential_unusable"));
+        }
+        Ok(built)
     }
 }

@@ -128,9 +128,15 @@ pub struct CountingReader {
     n: Arc<AtomicUsize>,
 }
 impl RemoteReader for CountingReader {
-    fn fetch(&self, r: &PrivateRepo, s: &[String], b: &PrefetchBudget) -> Result<(), BrokerError> {
+    fn fetch(
+        &self,
+        r: &PrivateRepo,
+        s: &[String],
+        b: &PrefetchBudget,
+        a: &dyn RemoteAuth,
+    ) -> Result<(), BrokerError> {
         self.n.fetch_add(1, Ordering::SeqCst);
-        self.inner.fetch(r, s, b)
+        self.inner.fetch(r, s, b, a)
     }
 }
 pub fn env() -> Env {
