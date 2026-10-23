@@ -25,10 +25,13 @@
 //! estimate, not a bill, and the run says so the first time it happens. Only a
 //! reply that names no model at all is priced as the agent's profile model.
 //!
-//! **Billability.** Only billable work counts. A fleet that cannot spend (all
-//! local or subscription) gets no cap at all ([`super::loop_run::budget_for`]).
-//! A share answered by a local or subscription model adds nothing: those
-//! tokens are not on anyone's bill.
+//! **Billability.** Only billable work counts: a share answered by a local or
+//! subscription model adds nothing, because those tokens are not on anyone's
+//! bill. The guard is armed whenever a positive cap is set, even on a fleet
+//! whose primaries are all free. Its billability cannot be judged in advance,
+//! because a fallback chain or routing can hand any turn to a metered model.
+//! Unlike the loop's projection ([`super::loop_run::budget_for`]), counting
+//! actual shares cannot stop a run on money nobody is paying.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -81,11 +84,12 @@ pub struct OneShotBudget {
 }
 
 impl OneShotBudget {
-    /// The guard for `fleet`, or `None` when nothing caps this run: no
-    /// `cost_usd` resolved, or the fleet cannot spend.
+    /// The guard for `fleet`, or `None` when no positive `cost_usd` caps this
+    /// run. Never `None` because the primaries are free: a fallback or routed
+    /// model can be metered, and per-share billing already leaves free usage
+    /// uncounted (#2083 re-review).
     pub fn for_fleet(mur_home: &Path, fleet: &Fleet, cost_usd: Option<f64>) -> Option<Arc<Self>> {
-        let billing = super::billing::fleet_billing(mur_home, fleet);
-        let cap = super::loop_run::budget_for(cost_usd.filter(|&c| c > 0.0), &billing)?;
+        let cap = cost_usd.filter(|&c| c > 0.0)?;
         let lookup = super::billing::billing_lookup(mur_home);
         let router = fleet.router_or_concierge().to_string();
         let agents = std::iter::once(&router)

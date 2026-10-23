@@ -471,7 +471,8 @@ pub async fn cmd_fleet_run(
     // resolved deadline (spec §3.4).
     let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;
     // #2083: `cost_usd` binds a one-shot run too, on actual billable spend.
-    // `None` for a fleet that cannot spend (local / subscription only).
+    // Armed whenever a positive cap is set, even on all-free primaries: a
+    // fallback can still route a turn to a metered model.
     let budget = super::oneshot_budget::OneShotBudget::for_fleet(mur_home, &fleet, bounds.cost_usd);
     // Bill the planning turn before any member step can start: if the router
     // alone reached the cap, the stop signal is already tripped and the DAG

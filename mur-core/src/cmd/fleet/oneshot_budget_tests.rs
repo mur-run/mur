@@ -461,3 +461,85 @@ fn the_runtime_split_survives_extraction() {
         ]
     );
 }
+
+/// The shipped agent template with `name` and `model_ref` swapped in (a
+/// hand-trimmed profile fails to parse, and the billing lookup's `.ok()`
+/// would turn that into "unknown" — metered — passing for the wrong reason).
+/// Line-by-line so a CRLF checkout still matches.
+fn write_agent(home: &std::path::Path, name: &str, model_ref: &str, chain: &[&str]) {
+    let tmpl = std::fs::read_to_string(
+        env!("CARGO_MANIFEST_DIR").to_string()
+            + "/../mur-hub-gui/src-tauri/resources/mur-agent-template/profile.yaml",
+    )
+    .expect("shipped agent template");
+    let mut replaced = false;
+    let chain = if chain.is_empty() {
+        String::new()
+    } else {
+        format!("\nfallback_chain: [{}]", chain.join(", "))
+    };
+    let yaml: Vec<String> = tmpl
+        .lines()
+        .map(|line| {
+            if !replaced && line == "name: mur" {
+                replaced = true;
+                format!("name: {name}\nmodel_ref: {model_ref}{chain}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    assert!(replaced, "template's `name: mur` line not found");
+    let dir = home.join("agents").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("profile.yaml"), yaml.join("\n") + "\n").unwrap();
+}
+
+/// Re-review of #2086: every primary is free, one member falls back to a
+/// metered API. The guard must still be armed — judged by primaries alone it
+/// was `None`, and the fallback's spend had nobody to count it.
+#[test]
+fn a_cap_arms_the_guard_even_when_every_primary_is_free() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    std::fs::write(
+        home.join("models.yaml"),
+        "schema_version: 1\nmodels:\n  \
+         local:\n    provider: ollama\n    model: qwen3\n    billing: local\n  \
+         api:\n    provider: openai\n    model: gpt-x\n    billing: usage_billed\n    \
+         input_cost_per_1k: 1.0\n    output_cost_per_1k: 1.0\n",
+    )
+    .unwrap();
+    write_agent(home, "router", "local", &[]);
+    write_agent(home, "worker", "local", &["api"]);
+    let fleet: mur_common::fleet::Fleet = serde_yaml_ng::from_str(
+        "name: dev\ngoal: g\nrouter: router\nmembers: [worker]\nchannel_id: fleet-dev\n",
+    )
+    .unwrap();
+    assert!(
+        !super::super::billing::fleet_billing(home, &fleet).billable,
+        "precondition: judged by primaries, this fleet cannot spend"
+    );
+
+    let b =
+        OneShotBudget::for_fleet(home, &fleet, Some(5.0)).expect("a positive cap arms the guard");
+    // The worker's local turns are free…
+    b.record(&StepEvent {
+        usage: turn(vec![share(Some("local"), Some("qwen3"), 900_000, 90_000)]),
+        ..ev("worker", StepEventKind::Done, 0)
+    });
+    assert_eq!(b.spent_usd(), 0.0);
+    // …its fallback to the metered API is not.
+    b.record(&StepEvent {
+        usage: turn(vec![share(Some("api"), Some("gpt-x"), 4_000, 1_000)]),
+        ..ev("worker", StepEventKind::Done, 0)
+    });
+    assert!((b.spent_usd() - 5.0).abs() < 1e-9, "{}", b.spent_usd());
+    assert!(b.tripped(), "the fallback's spend reached the cap");
+
+    assert!(
+        OneShotBudget::for_fleet(home, &fleet, None).is_none()
+            && OneShotBudget::for_fleet(home, &fleet, Some(0.0)).is_none(),
+        "no positive cap, no guard"
+    );
+}
