@@ -1,4 +1,7 @@
-use super::pause::{emit_stop_event, refuse_pause};
+use std::ops::ControlFlow;
+
+use super::guarded_steps::{commander_gate, finish_run};
+use super::pause::refuse_pause;
 use super::preflight::{SpendPlan, spend_plan};
 use super::*;
 
@@ -280,46 +283,14 @@ async fn run_guarded_inner(
     let stop = loop {
         // Commander governance (highest priority). Fail-closed: a channel read
         // error halts rather than running ungoverned.
-        let mut commander_ceiling: Option<f64> = None;
-        if governed {
-            let events = match svc.load_events(&fleet.channel_id) {
-                Ok(e) => e,
-                Err(_) => {
-                    // Fail-closed: cannot read governance ⇒ halt, but label the
-                    // audit as a read error, not a confirmed commander kill.
-                    // Reachable only via a mid-loop FS-level read fault: a missing
-                    // channel reads as Ok(empty) and corrupt lines are silently
-                    // skipped (store::load_events filter_map), so only a genuine
-                    // read failure errors here. The same fault AT ENTRY surfaces via
-                    // the `?` on the last_seq load above → run_guarded returns Err →
-                    // the caller never runs the loop (also fail-closed). Not
-                    // unit-tested: portable FS-fault injection is brittle (mirrors
-                    // the daemon's analogous Err arm in fleet_tick::due_fleets).
-                    emit_governance_audit(mur_home, name, "read_error", "fail_closed", "", "");
-                    break LoopStop::CommanderKilled;
-                }
-            };
-            let gov = mur_channel::governance::fold_governance(
-                &events,
-                &fleet.channel_id,
-                name,
-                &commander_keys,
-            );
-            if gov.killed {
-                let nonce = gov.kill_nonce.as_deref().unwrap_or("");
-                let csum = directive_content_sha256(&events, nonce, &fleet.channel_id);
-                emit_governance_audit(mur_home, name, "kill", "halted", nonce, &csum);
-                break LoopStop::CommanderKilled;
+        let commander_ceiling = if governed {
+            match commander_gate(mur_home, name, &svc, &fleet.channel_id, &commander_keys) {
+                ControlFlow::Continue(ceiling) => ceiling,
+                ControlFlow::Break(stop) => break stop,
             }
-            // A zero budget ceiling is a budget halt (spec §6), not a kill.
-            if matches!(gov.budget_ceiling, Some(c) if c == 0.0) {
-                let nonce = gov.budget_nonce.as_deref().unwrap_or("");
-                let csum = directive_content_sha256(&events, nonce, &fleet.channel_id);
-                emit_governance_audit(mur_home, name, "budget_ceiling", "capped", nonce, &csum);
-                break LoopStop::Budget;
-            }
-            commander_ceiling = gov.budget_ceiling;
-        }
+        } else {
+            None
+        };
 
         // Kill-switch: a `mur fleet stop` between iterations halts here. Stop
         // is read before pause everywhere (design §6).
@@ -733,57 +704,20 @@ async fn run_guarded_inner(
         }
     };
 
-    // Stamp the terminal state onto the progress file — kept as the last-run
-    // record (overwritten by the next run). Best-effort.
-    let run_id = {
-        let mut g = lock_progress(&progress);
-        // A paused run is not finished: `finished_at` stays null so the panel
-        // and the live-run gate do not read it as over, and `paused_at` says
-        // when it stopped (design §5.5).
-        if stop == LoopStop::Paused {
-            g.paused_at = Some(chrono::Utc::now().to_rfc3339());
-        } else {
-            g.finished_at = Some(chrono::Utc::now().to_rfc3339());
-        }
-        g.outcome = Some(outcome_label(stop).to_string());
-        g.iteration = iteration;
-        g.spend_usd = spent;
-        g.save(mur_home, name);
-        g.run_id.clone()
-    };
-    // And onto the channel, where the rail, murmur and the Hub are looking.
-    // Until this existed the reason lived only in progress.json, and every
-    // surface said "finished" for a run that had hit a cap. Signed as the
-    // writer like every other event this run wrote; best-effort like the
-    // progress file — a stop must never fail because its announcement did.
-    emit_stop_event(&svc, mur_home, &fleet, stop, iteration, spent, &run_id);
-    // Stop the beat BEFORE the terminal write so a late tick cannot
-    // resurrect `running` (see Heartbeat::stop).
-    if let Some(b) = loop_beat {
-        b.stop().await;
-    }
-    let terminal = loop_terminal_state(stop);
-    if let Err(error) = crate::run_status::store::update(mur_home, &run_id, |r| r.state = terminal)
-    {
-        tracing::warn!(run_id = %run_id, %error, "fleet loop: terminal state not recorded");
-    }
-
-    // ── Close the triage loop ──────────────────────────────────────────────
-    // The loop path carries the best evidence in the codebase: a real
-    // cumulative `spent` and a stop reason the guards themselves produced.
-    // `run_id` matches the gate call above, which is what pairs the halves.
-    // A pause is not an outcome: the run continues on resume, and scoring it
-    // now would pair the verdict against a half-finished run.
-    if triage_cfg.enabled && stop != LoopStop::Paused {
-        crate::executor::triage_gate::record_outcome(
-            mur_home,
-            &run_id,
-            Some(spent),
-            start.elapsed(),
-            calibration_stop_reason(stop).map(str::to_string),
-            matches!(stop, LoopStop::Converged | LoopStop::QueueDrained),
-        );
-    }
+    finish_run(
+        mur_home,
+        name,
+        &fleet,
+        &svc,
+        &progress,
+        loop_beat,
+        triage_cfg.enabled,
+        &start,
+        stop,
+        iteration,
+        spent,
+    )
+    .await;
 
     Ok((stop, iteration, spent))
 }
