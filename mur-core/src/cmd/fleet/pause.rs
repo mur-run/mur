@@ -85,31 +85,31 @@ fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
 
     let deadline = Instant::now() + PAUSE_WAIT;
     loop {
-        // The checkpoint exists only once the loop wrote it, and the run
-        // lock is released only once the process has exited: both together
-        // mean the run is halted and resumable.
-        if !run_lock::is_held(mur_home, name)
-            && checkpoint::load(mur_home, run_id).ok().flatten().is_some()
-        {
-            println!(
-                "Fleet '{name}' paused. Continue with `mur fleet resume {name}`, or discard with `mur fleet stop {name}`."
-            );
-            return Ok(());
-        }
-        if let Some(why) = checkpoint::pause_refusal(mur_home, run_id) {
-            let _ = std::fs::remove_file(&sentinel);
-            bail!("fleet '{name}' cannot be paused, the run keeps going: {why}");
-        }
-        if control::is_stopped(mur_home, name) {
-            let _ = std::fs::remove_file(&sentinel);
-            bail!("fleet '{name}' was stopped while pausing; stop wins over pause");
-        }
-        if !run_lock::is_held(mur_home, name) {
-            // The run ended without a checkpoint (it finished first, or died).
-            let _ = std::fs::remove_file(&sentinel);
-            bail!(
-                "fleet '{name}': the run finished before the pause took effect — nothing to resume"
-            );
+        match poll(mur_home, name, run_id, &mut || {
+            run_lock::is_held(mur_home, name)
+        }) {
+            Poll::Paused => {
+                println!(
+                    "Fleet '{name}' paused. Continue with `mur fleet resume {name}`, or discard with `mur fleet stop {name}`."
+                );
+                return Ok(());
+            }
+            Poll::Refused(why) => {
+                let _ = std::fs::remove_file(&sentinel);
+                bail!("fleet '{name}' cannot be paused, the run keeps going: {why}");
+            }
+            Poll::Stopped => {
+                let _ = std::fs::remove_file(&sentinel);
+                bail!("fleet '{name}' was stopped while pausing; stop wins over pause");
+            }
+            Poll::Finished => {
+                // The run ended without a checkpoint (it finished first, or died).
+                let _ = std::fs::remove_file(&sentinel);
+                bail!(
+                    "fleet '{name}': the run finished before the pause took effect — nothing to resume"
+                );
+            }
+            Poll::Waiting => {}
         }
         if Instant::now() >= deadline {
             // Leave the sentinel: the run may still reach a safe point, and
@@ -121,6 +121,43 @@ fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
         }
         std::thread::sleep(PAUSE_POLL);
     }
+}
+
+/// What one look at the run found while `pause` waits.
+#[derive(Debug, PartialEq, Eq)]
+enum Poll {
+    Paused,
+    Refused(String),
+    Stopped,
+    Finished,
+    Waiting,
+}
+
+/// One poll of the pausing run. `is_held` is the run-lock probe, injected so a
+/// test can release the lock at an exact point.
+fn poll(mur_home: &Path, name: &str, run_id: &str, is_held: &mut dyn FnMut() -> bool) -> Poll {
+    // The checkpoint exists only once the loop wrote it, and the run
+    // lock is released only once the process has exited: both together
+    // mean the run is halted and resumable.
+    if !is_held() && checkpoint::load(mur_home, run_id).ok().flatten().is_some() {
+        return Poll::Paused;
+    }
+    if let Some(why) = checkpoint::pause_refusal(mur_home, run_id) {
+        return Poll::Refused(why);
+    }
+    if control::is_stopped(mur_home, name) {
+        return Poll::Stopped;
+    }
+    if !is_held() {
+        // Re-read before concluding (design §8.5): the loop may have
+        // checkpointed and released the lock between the first look and
+        // this one. That run paused; it did not finish.
+        if checkpoint::load(mur_home, run_id).ok().flatten().is_some() {
+            return Poll::Paused;
+        }
+        return Poll::Finished;
+    }
+    Poll::Waiting
 }
 
 #[cfg(test)]
@@ -173,6 +210,62 @@ mod tests {
             "fleet 'dev' is stopped; stop wins over pause"
         );
         assert!(!control::paused_path(home.path(), "dev").exists());
+    }
+
+    fn checkpoint_for(run_id: &str) -> checkpoint::Checkpoint {
+        checkpoint::Checkpoint {
+            schema: checkpoint::CHECKPOINT_SCHEMA,
+            run_id: run_id.into(),
+            iteration_run_id: format!("{run_id}-0"),
+            fleet: "dev".into(),
+            iteration: 0,
+            spent_usd: 0.0,
+            active_elapsed_ms: 0,
+            stuck_elapsed_ms: 0,
+            start_seq: 0,
+            job_id: None,
+            goal_override: None,
+            deadline_ms: 60_000,
+            stuck_ms: None,
+            cost_usd: None,
+            hitl_unanswered: "defer".into(),
+            target_cwd: None,
+            procedure: vec![],
+            paused_at: "t".into(),
+            binary_version: "test".into(),
+        }
+    }
+
+    /// Design §8.5 / §10 "Stale sentinel": the lock is held on the first
+    /// look, then the loop checkpoints and releases it before the second.
+    /// That run paused; `pause` must say so, not "finished".
+    #[test]
+    fn a_run_that_checkpoints_while_pause_looks_is_reported_paused() {
+        let home = tempfile::tempdir().unwrap();
+        save_dev(home.path());
+        let mut calls = 0;
+        let mut is_held = || {
+            calls += 1;
+            if calls == 1 {
+                return true;
+            }
+            checkpoint::save(home.path(), &checkpoint_for("r1")).unwrap();
+            false
+        };
+        assert_eq!(poll(home.path(), "dev", "r1", &mut is_held), Poll::Paused);
+    }
+
+    /// Negative control: the lock goes away with no checkpoint — finished.
+    #[test]
+    fn a_run_that_exits_without_a_checkpoint_is_reported_finished() {
+        let home = tempfile::tempdir().unwrap();
+        save_dev(home.path());
+        let mut calls = 0;
+        let mut is_held = || {
+            calls += 1;
+            calls == 1
+        };
+        assert_eq!(poll(home.path(), "dev", "r1", &mut is_held), Poll::Finished);
     }
 
     #[test]
