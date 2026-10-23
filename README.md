@@ -189,6 +189,18 @@ mur model import ~/from-laptop/models.yaml    # merge another machine's registry
                                               #   reports which secret refs need a key here)
 ```
 
+**Prompt-cache rates.** Beside `input_cost_per_1k` / `output_cost_per_1k`, an entry can carry `cache_read_cost_per_1k` and `cache_write_cost_per_1k` — what the provider charges for prompt tokens served from, and written to, its prompt cache. `mur model add` and `mur model connect` fill them from the models.dev catalog when it lists them. Cost accounting (a fleet's `cost_usd` cap, the conversation cost report) then prices each part of the prompt at its own rate. An entry without them prices cached tokens at the full input rate — an upper bound, never an undercount — so an entry registered before these fields existed keeps that behaviour until you re-add it.
+
+```yaml
+claude_sonnet:
+  provider: anthropic
+  model: claude-sonnet-4-5
+  input_cost_per_1k: 0.003
+  output_cost_per_1k: 0.015
+  cache_read_cost_per_1k: 0.0003     # cache hits
+  cache_write_cost_per_1k: 0.00375   # cache writes
+```
+
 Setting up a second machine is copying `models.yaml` and running `mur model import`: the file holds
 secret *references*, never key material, so it is safe to move around — and the import tells you
 exactly which refs still need a key on the new machine.
