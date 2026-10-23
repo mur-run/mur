@@ -19,7 +19,8 @@ use fs2::FileExt;
 use mur_common::agent::AgentProfile;
 use mur_common::git_push::{broker_dir, enrollments_path, private_dir, registry_path};
 use mur_common::hitl::approval_token::SECRETS_DIR;
-use mur_git_broker::constants::ALLOWED_REF_PREFIX;
+use mur_git_broker::constants::{ALLOWED_REF_PREFIX, ENDPOINT_HTTPS_SCHEME};
+use mur_git_broker::credential::{Credential, SecretPath, Username};
 use mur_git_broker::doctor::{AgentFacts, EnrollmentProblem, check_enrollment};
 use mur_git_broker::enrollment::{Endpoint, EnrollOutcome, EnrollRequest, Enrollments, NewRepo};
 use mur_git_broker::oid::ObjectFormat;
@@ -68,6 +69,8 @@ pub enum GitPushAction {
         /// Object format of that repo (only with `--path`). Default sha1.
         #[arg(long, value_enum)]
         object_format: Option<Format>,
+        #[command(flatten)]
+        auth: EnrollAuth,
     },
     /// Remove one enrollment. A repo with none left is removed too.
     Revoke {
@@ -99,6 +102,22 @@ pub enum GitPushAction {
     },
 }
 
+/// How an `https://` endpoint logs in. A `file://` endpoint takes none of these.
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct EnrollAuth {
+    /// Username for an `https://` endpoint (the part before `@`). Needs `--secret`.
+    #[arg(long, requires = "secret")]
+    pub username: Option<String>,
+    /// Absolute path of the token file for an `https://` endpoint: a 0600 file you own, under
+    /// `~/.mur/secrets/`. Needs `--username`.
+    #[arg(long, requires = "username")]
+    pub secret: Option<String>,
+    /// Enroll an `https://` endpoint with no credential, for a remote that accepts anonymous
+    /// pushes. Without this, an `https://` endpoint with no `--username`/`--secret` is refused.
+    #[arg(long, conflicts_with_all = ["username", "secret"])]
+    pub allow_unauthenticated: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum RepoAction {
     /// Point an existing repo id at a new directory.
@@ -126,6 +145,7 @@ pub fn run_to(mur_home: &Path, action: GitPushAction, out: &mut dyn Write) -> Re
             ref_prefix,
             path,
             object_format,
+            auth,
         } => enroll(
             mur_home,
             out,
@@ -138,6 +158,7 @@ pub fn run_to(mur_home: &Path, action: GitPushAction, out: &mut dyn Write) -> Re
                 ref_prefix,
                 path,
                 object_format,
+                auth,
             },
         ),
         GitPushAction::Revoke {
@@ -167,6 +188,53 @@ struct EnrollArgs {
     ref_prefix: Option<String>,
     path: Option<PathBuf>,
     object_format: Option<Format>,
+    auth: EnrollAuth,
+}
+
+/// The credential to store for `endpoint`, or why the flags do not fit it. `Ok(None)` means
+/// "enroll with no credential", which only a `file://` endpoint or an explicit
+/// `--allow-unauthenticated` gets: an https push with no credential is refused by most hosts,
+/// and finding that out after a human has spent an approval on it (approvals are never retried)
+/// is the expensive way.
+fn credential_for(endpoint: &Endpoint, auth: &EnrollAuth) -> Result<Option<Credential>, String> {
+    let https = endpoint.as_str().starts_with(ENDPOINT_HTTPS_SCHEME);
+    let given = auth.username.is_some() || auth.secret.is_some() || auth.allow_unauthenticated;
+    if !https {
+        return if given {
+            Err(
+                "--username, --secret and --allow-unauthenticated only apply to an https:// \
+                 endpoint"
+                    .into(),
+            )
+        } else {
+            Ok(None)
+        };
+    }
+    match (&auth.username, &auth.secret) {
+        (Some(user), Some(secret)) => {
+            let username = Username::parse(user).map_err(|_| {
+                format!("--username {user:?} must be 1+ characters of [A-Za-z0-9._-]")
+            })?;
+            let secret_path = SecretPath::parse(secret).map_err(|_| {
+                format!(
+                    "--secret {secret:?} must be an absolute path with no `~`, `$`, `.` or `..` \
+                     segments (nothing is expanded)"
+                )
+            })?;
+            Ok(Some(Credential {
+                secret_path,
+                username,
+            }))
+        }
+        (None, None) if auth.allow_unauthenticated => Ok(None),
+        (None, None) => Err(format!(
+            "endpoint {} is https:// but has no credential; give --username and --secret, or \
+             --allow-unauthenticated if the remote accepts anonymous pushes",
+            endpoint.as_str()
+        )),
+        // clap's `requires` keeps these off the command line; a direct caller still gets told.
+        _ => Err("--username and --secret go together".into()),
+    }
 }
 
 /// Held for the whole read → check → write of a mutation. The file is never read: the
@@ -314,6 +382,14 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
              (lowercase DNS name, no user@, no IP address, no explicit :443)"
         )
     })?;
+    let credential = match credential_for(&endpoint, &a.auth) {
+        Ok(c) => c,
+        Err(why) => {
+            writeln!(out, "refused: {why}")?;
+            writeln!(out, "nothing was written")?;
+            return Ok(1);
+        }
+    };
     let ref_prefix = a
         .ref_prefix
         .unwrap_or_else(|| format!("{ALLOWED_REF_PREFIX}{agent}/"));
@@ -329,7 +405,7 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
         canonical_remote_endpoint: endpoint.as_str().to_string(),
         creation_base_refs: a.base_refs.clone(),
         ref_prefix: ref_prefix.clone(),
-        credential: None,
+        credential: credential.clone(),
     };
     let problems = check_enrollment(
         &policy,
@@ -357,7 +433,7 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
             endpoint,
             ref_prefix,
             creation_base_refs: a.base_refs,
-            credential: None,
+            credential,
             new_repo,
         })
         .map_err(|e| match e.to_string().as_str() {
@@ -452,6 +528,14 @@ struct Line<'a> {
     creation_base_refs: &'a [String],
     epoch: u64,
     repo_path: String,
+    /// Where the token is and whose it is. Never the token: `Credential` holds no secret.
+    credential: Option<LineCredential<'a>>,
+}
+
+#[derive(Serialize)]
+struct LineCredential<'a> {
+    username: &'a str,
+    secret_path: &'a str,
 }
 
 fn list(mur_home: &Path, out: &mut dyn Write, json: bool) -> Result<i32> {
@@ -472,6 +556,10 @@ fn list(mur_home: &Path, out: &mut dyn Write, json: bool) -> Result<i32> {
                 creation_base_refs: &e.creation_base_refs,
                 epoch: e.epoch,
                 repo_path: repo.path.display().to_string(),
+                credential: e.credential.as_ref().map(|c| LineCredential {
+                    username: c.username.as_str(),
+                    secret_path: c.secret_path.as_str(),
+                }),
             })
         })
         .collect();
@@ -481,9 +569,14 @@ fn list(mur_home: &Path, out: &mut dyn Write, json: bool) -> Result<i32> {
         writeln!(out, "no enrollments")?;
     } else {
         for l in &lines {
+            let auth = match &l.credential {
+                Some(c) => format!("  as {}", c.username),
+                None if l.endpoint.starts_with(ENDPOINT_HTTPS_SCHEME) => "  unauthenticated".into(),
+                None => String::new(),
+            };
             writeln!(
                 out,
-                "{} → {}/{}  {}  prefix {}  base {:?}",
+                "{} → {}/{}  {}{auth}  prefix {}  base {:?}",
                 l.agent, l.repo, l.remote, l.endpoint, l.ref_prefix, l.creation_base_refs
             )?;
         }

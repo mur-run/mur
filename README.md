@@ -879,10 +879,13 @@ Agent** wizard offers the same catalog as a source.
   a `code`: `agent_not_allowlisted` (agent missing from `git_push.agents`),
   `not_enrolled`, or `enrollment_unavailable`. `mur git-push doctor` warns when
   the broker is on with an empty `git_push.agents`, or when that list names an
-  agent that does not exist. Use `file://` remotes for now: `enroll` accepts an
-  `https://` endpoint but cannot attach a credential yet, so such pushes go out
-  unauthenticated — tracked in
-  [#2073](https://github.com/mur-run/mur/issues/2073).
+  agent that does not exist. An `https://` endpoint needs a login:
+  `--username <user> --secret <path>`, where the token file is `0600`, owned
+  by you, and under `~/.mur/secrets/` (enroll refuses, and writes nothing, if
+  the broker could not open it). An `https://` endpoint with no credential is
+  refused unless you pass `--allow-unauthenticated`, for a remote that takes
+  anonymous pushes; otherwise the push would only fail after you had spent an
+  approval on it. `mur git-push list` shows the username, never the token.
 - **Deletion safety** — destructive file actions go through a trash with a
   cancel window and explicit restore (`mur agent trash`); nothing is
   hard-deleted on a timer.
