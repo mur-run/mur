@@ -159,6 +159,16 @@ async fn a_pause_during_an_iteration_checkpoints_and_leaves_the_job_running() {
     assert!(p.finished_at.is_none(), "a paused run is not finished");
     assert!(p.paused_at.is_some());
     assert_eq!(p.outcome.as_deref(), Some("paused"));
+    // #2068: the progress file, the summary line and the end line all name
+    // the same iteration — the one in flight — and none calls it done.
+    assert_eq!(
+        p.iteration, 1,
+        "a paused run records the iteration it is in"
+    );
+    let summary = crate::cmd::fleet::progress::iteration_paused_line(&p);
+    assert!(summary.starts_with("iteration 1 paused:"), "{summary}");
+    let end = super::loop_end_line("dev", stop, iterations, "$0.00");
+    assert!(end.contains("paused in iteration 1 (0 completed)"), "{end}");
 
     // No terminal StateChange: the first reconcile must not cancel the job.
     let events = mur_channel::ChannelService::open(&home)
@@ -349,4 +359,20 @@ async fn a_paused_run_resumes_under_its_run_id_and_finishes() {
         })
         .count();
     assert_eq!(resumed, 1, "exactly one run_resumed note");
+}
+
+/// #2068: only a pause changes the end line; every other stop keeps the
+/// "stopped after N iteration(s)" form scripts and docs already quote.
+#[test]
+fn only_a_pause_rewords_the_loop_end_line() {
+    let end = super::loop_end_line("dev", LoopStop::Stopped, 2, "$0.10");
+    assert_eq!(
+        end,
+        "fleet 'dev' loop stopped after 2 iteration(s), cost $0.10: Stopped"
+    );
+    let paused = super::loop_end_line("dev", LoopStop::Paused, 2, "$0.10");
+    assert_eq!(
+        paused,
+        "fleet 'dev' paused in iteration 3 (2 completed), cost $0.10"
+    );
 }

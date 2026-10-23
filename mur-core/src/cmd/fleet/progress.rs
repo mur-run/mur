@@ -276,9 +276,20 @@ pub fn fmt_spend(spend_usd: f64, billable: Option<bool>) -> String {
 }
 
 pub fn iteration_summary_line(p: &RunProgress) -> String {
+    summary_line(p, "done")
+}
+
+/// The summary for an iteration a pause interrupted. It is not finished — it
+/// is re-entered on resume — so calling it "done" next to a pending step
+/// contradicted itself (#2068).
+pub fn iteration_paused_line(p: &RunProgress) -> String {
+    summary_line(p, "paused")
+}
+
+fn summary_line(p: &RunProgress, verb: &str) -> String {
     let t = p.totals();
     format!(
-        "iteration {} done: {}✓ {}✗ {} pending · spend {}{} · model {}",
+        "iteration {} {verb}: {}✓ {}✗ {} pending · spend {}{} · model {}",
         p.iteration,
         t.done,
         t.failed,
@@ -401,6 +412,14 @@ mod tests {
         assert!(line.contains("1 pending"));
         assert!(line.contains("$0.31/$2.00"));
         assert!(line.contains("claude_haiku"));
+    }
+
+    #[test]
+    fn a_paused_iteration_is_not_called_done() {
+        let line = iteration_paused_line(&sample());
+        assert!(line.starts_with("iteration 2 paused:"), "{line}");
+        assert!(!line.contains("done"), "{line}");
+        assert!(line.contains("1 pending"), "{line}");
     }
 
     #[test]

@@ -544,7 +544,7 @@ async fn run_guarded_inner(
                 let mut g = lock_progress(&progress);
                 g.spend_usd = spent;
                 g.save(mur_home, name);
-                println!("{}", iteration_summary_line(&g));
+                println!("{}", crate::cmd::fleet::progress::iteration_paused_line(&g));
             }
             let snap = pause::PauseSnapshot {
                 mur_home,
@@ -740,7 +740,9 @@ async fn run_guarded_inner(
             g.finished_at = Some(chrono::Utc::now().to_rfc3339());
         }
         g.outcome = Some(outcome_label(stop).to_string());
-        g.iteration = iteration;
+        // Unfinished, so a paused run keeps the in-flight meaning: the
+        // iteration it is in (1-based), as the summary line just printed.
+        g.iteration = progress_iteration(stop, iteration);
         g.spend_usd = spent;
         g.save(mur_home, name);
         g.run_id.clone()
