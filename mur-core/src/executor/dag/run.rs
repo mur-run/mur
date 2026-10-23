@@ -277,7 +277,7 @@ pub async fn execute_dag(
                     id: sid.clone(),
                     agent: step.delegate_to.clone(),
                     kind: StepEventKind::Blocked,
-                    tokens_used: 0,
+                    usage: TokenUsage::default(),
                     error: Some("depends on a step awaiting approval".into()),
                 });
             }
@@ -376,7 +376,7 @@ pub async fn execute_dag(
                         success: false,
                         blocked: false,
                         stopped: false,
-                        tokens_used: 0,
+                        usage: TokenUsage::default(),
                     });
                 }
             }
@@ -386,7 +386,7 @@ pub async fn execute_dag(
         for ri in 0..results.len() {
             let result = &results[ri];
             let step = &graph.nodes[indices[ri]].step;
-            overall_tokens = overall_tokens.saturating_add(result.tokens_used);
+            overall_tokens = overall_tokens.saturating_add(result.usage.total());
 
             // A stopped step, like a blocked one, never happened as far as
             // the ledger and `on_failure` are concerned. It is not a failure
@@ -509,7 +509,7 @@ pub async fn execute_dag(
                             // accumulation); count every attempt so the budget
                             // guard never under-counts a retried delegate.
                             overall_tokens =
-                                overall_tokens.saturating_add(retry_result.tokens_used);
+                                overall_tokens.saturating_add(retry_result.usage.total());
                             if retry_result.stopped {
                                 stopped = true;
                                 break;

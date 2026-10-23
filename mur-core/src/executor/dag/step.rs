@@ -15,10 +15,11 @@ pub(super) struct StepResult {
     /// The kill-switch halted this step (#2036): it never started, or its
     /// member turn was cancelled. Like `blocked`, never a failure to act on.
     pub(super) stopped: bool,
-    /// Real LLM tokens (input + output) this step consumed — non-zero only for
-    /// delegate steps, read from the specialist's `Task.usage`. Summed into the
-    /// run's `PipelineOutput.tokens_used` for real fleet budget accounting.
-    pub(super) tokens_used: u64,
+    /// Real LLM tokens this step consumed, input and output kept apart so a
+    /// cost guard can price each side at its own rate — non-zero only for
+    /// delegate steps, read from the specialist's `Task.usage`. Its total is
+    /// summed into the run's `PipelineOutput.tokens_used`.
+    pub(super) usage: TokenUsage,
 }
 
 /// Core step execution: run the command, handle approval, return result.
@@ -77,7 +78,7 @@ pub(super) async fn execute_step_inner(
                             success: false,
                             blocked: false,
                             stopped: false,
-                            tokens_used: 0,
+                            usage: TokenUsage::default(),
                         };
                     }
                     Err(_) => {
@@ -93,7 +94,7 @@ pub(super) async fn execute_step_inner(
                             success: false,
                             blocked: false,
                             stopped: false,
-                            tokens_used: 0,
+                            usage: TokenUsage::default(),
                         };
                     }
                 },
@@ -113,7 +114,7 @@ pub(super) async fn execute_step_inner(
                             success: false,
                             blocked: false,
                             stopped: false,
-                            tokens_used: 0,
+                            usage: TokenUsage::default(),
                         };
                     }
                 },
@@ -146,7 +147,7 @@ pub(super) async fn execute_step_inner(
             success: exit_code == 0,
             blocked: false,
             stopped: false,
-            tokens_used: 0,
+            usage: TokenUsage::default(),
         }
     } else {
         // ── Intent-mode (no command) ──
@@ -177,7 +178,7 @@ pub(super) async fn execute_step_inner(
             success: true,
             blocked: false,
             stopped: false,
-            tokens_used: 0,
+            usage: TokenUsage::default(),
         }
     }
 }
@@ -219,13 +220,13 @@ pub(super) async fn execute_step(
     let observer_agent = step.delegate_to.clone();
     // Display-only step lifecycle emit: MUST be cheap and MUST NOT panic
     // (plain Fn, never `?`'d — see `DagExecOptions.on_step` doc).
-    let emit = |kind: StepEventKind, tokens_used: u64, error: Option<String>| {
+    let emit = |kind: StepEventKind, usage: TokenUsage, error: Option<String>| {
         if let Some(cb) = &opts.on_step {
             cb(StepEvent {
                 id: sid.clone(),
                 agent: observer_agent.clone(),
                 kind,
-                tokens_used,
+                usage,
                 error,
             });
         }
@@ -236,12 +237,12 @@ pub(super) async fn execute_step(
     if stop_requested(opts) {
         emit(
             StepEventKind::Stopped,
-            0,
+            TokenUsage::default(),
             Some(halted_reason_text(opts).into()),
         );
         return stopped_result(start.elapsed().as_millis() as u64);
     }
-    emit(StepEventKind::Started, 0, None);
+    emit(StepEventKind::Started, TokenUsage::default(), None);
     // Retries reuse (run_id, step_id); without an attempt discriminator a
     // succeeding retry's events collide with the failed attempt's idem keys and
     // are dropped by the dedup-aware writer. attempt 0 keeps the original keys
@@ -266,7 +267,7 @@ pub(super) async fn execute_step(
             })
         {
             eprintln!("  Step {sid}: already completed (resume) — skipping");
-            emit(StepEventKind::Done, 0, None);
+            emit(StepEventKind::Done, TokenUsage::default(), None);
             return StepResult {
                 exit_code: 0,
                 output_text: String::new(),
@@ -275,7 +276,7 @@ pub(super) async fn execute_step(
                 success: true,
                 blocked: false,
                 stopped: false,
-                tokens_used: 0,
+                usage: TokenUsage::default(),
             };
         }
     }
@@ -387,7 +388,11 @@ pub(super) async fn execute_step(
                 }
                 let why = halted_reason_text(opts);
                 eprintln!("  Step {sid}: delegate to {canonical} cancelled — {why}");
-                emit(StepEventKind::Stopped, 0, Some(why.into()));
+                emit(
+                    StepEventKind::Stopped,
+                    TokenUsage::default(),
+                    Some(why.into()),
+                );
                 return stopped_result(start.elapsed().as_millis() as u64);
             }
         };
@@ -420,7 +425,7 @@ pub(super) async fn execute_step(
                     success: false,
                     blocked: false,
                     stopped: false,
-                    tokens_used: 0,
+                    usage: TokenUsage::default(),
                 }
             }
         };
@@ -430,7 +435,7 @@ pub(super) async fn execute_step(
             } else {
                 StepEventKind::Failed
             },
-            result.tokens_used,
+            result.usage.clone(),
             step_failure_reason(&result),
         );
         return result;
@@ -491,7 +496,7 @@ pub(super) async fn execute_step(
                 "  Step {sid}: awaiting approval — {} (approve: mur channel approve {cid} <hitl_id>)",
                 decision.reason
             );
-            emit(StepEventKind::Blocked, 0, None);
+            emit(StepEventKind::Blocked, TokenUsage::default(), None);
             return StepResult {
                 exit_code: 0,
                 output_text: decision.reason.clone(),
@@ -500,14 +505,14 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: true,
                 stopped: false,
-                tokens_used: 0,
+                usage: TokenUsage::default(),
             };
         }
         if !decision.allow {
             eprintln!("  Step {sid}: gate denied ({})", decision.reason);
             emit(
                 StepEventKind::Failed,
-                0,
+                TokenUsage::default(),
                 Some(format!("hitl: {}", decision.reason)),
             );
             return StepResult {
@@ -518,14 +523,18 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: false,
                 stopped: false,
-                tokens_used: 0,
+                usage: TokenUsage::default(),
             };
         }
         // Re-verify the pin at the execute boundary (fail-closed on drift).
         let now_hash = crate::hitl::pin::action_hash("sh", &input, cid, &sid, "mur");
         if !decision.action_hash.is_empty() && now_hash != decision.action_hash {
             eprintln!("  Step {sid}: hitl_drift at execute boundary — refusing");
-            emit(StepEventKind::Failed, 0, Some("hitl_drift".into()));
+            emit(
+                StepEventKind::Failed,
+                TokenUsage::default(),
+                Some("hitl_drift".into()),
+            );
             return StepResult {
                 exit_code: 1,
                 output_text: "hitl_drift".into(),
@@ -534,7 +543,7 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: false,
                 stopped: false,
-                tokens_used: 0,
+                usage: TokenUsage::default(),
             };
         }
     } else if step.needs_approval {
@@ -572,7 +581,7 @@ pub(super) async fn execute_step(
                 } else {
                     StepEventKind::Blocked
                 },
-                0,
+                TokenUsage::default(),
                 refused.then(|| "needs_approval: declined".to_string()),
             );
             return StepResult {
@@ -583,7 +592,7 @@ pub(super) async fn execute_step(
                 success: false,
                 blocked: !refused,
                 stopped: false,
-                tokens_used: 0,
+                usage: TokenUsage::default(),
             };
         }
     }
@@ -631,7 +640,11 @@ pub(super) async fn execute_step(
     }
 
     if result.success && is_undelegated(step, opts) {
-        emit(StepEventKind::Skipped, 0, Some(UNDELEGATED_REASON.into()));
+        emit(
+            StepEventKind::Skipped,
+            TokenUsage::default(),
+            Some(UNDELEGATED_REASON.into()),
+        );
     } else {
         emit(
             if result.success {
@@ -639,7 +652,7 @@ pub(super) async fn execute_step(
             } else {
                 StepEventKind::Failed
             },
-            result.tokens_used,
+            result.usage.clone(),
             step_failure_reason(&result),
         );
     }
@@ -672,6 +685,6 @@ pub(super) fn stopped_result(duration_ms: u64) -> StepResult {
         success: false,
         blocked: false,
         stopped: true,
-        tokens_used: 0,
+        usage: TokenUsage::default(),
     }
 }

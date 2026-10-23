@@ -9,7 +9,7 @@ fn result(success: bool, exit_code: i32, out: &str) -> StepResult {
         success,
         blocked: false,
         stopped: false,
-        tokens_used: 0,
+        usage: TokenUsage::default(),
     }
 }
 
@@ -163,7 +163,15 @@ fn a_guard_stopped_delegate_is_not_a_success() {
     // Not `blocked`: that means "waiting on a human, nothing ran", and it
     // skips the ledger + on_failure. This turn ran and spent 95K tokens.
     assert!(!r.blocked);
-    assert_eq!(r.tokens_used, 95_200, "spend is still accounted");
+    assert_eq!(
+        r.usage,
+        TokenUsage {
+            input: 95_000,
+            output: 200,
+            model_ref: None
+        },
+        "spend is still accounted, each side apart"
+    );
 }
 
 /// A runtime that refuses to start reports WHY in `Task.error.message`

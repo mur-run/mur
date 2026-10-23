@@ -393,6 +393,9 @@ pub async fn cmd_fleet_run(
             "warning: --worktree has no effect -- fleet '{name}' has no parallel: config block, so Tier 1 worktree isolation cannot activate; falling back to normal delegation"
         );
     }
+    // The router's planning turn is billable work of this run, but it runs
+    // before the DAG and so never reaches the step observer (#2083).
+    let mut router_usage = crate::executor::dag::TokenUsage::default();
     let (proc, parallel_run) = if exec_parallel {
         let cfg = fleet.parallel.as_ref().expect("guarded by exec_parallel");
         let repo_root = discover_repo_root(&work_dir)?;
@@ -433,11 +436,19 @@ pub async fn cmd_fleet_run(
         // router plans which members do what, falling back to broadcast-to-all.
         let p = match super::plan::static_procedure(&routed_fleet, &routed_goal)? {
             Some(p) => p,
-            None => super::plan::plan_via_router(mur_home, &routed_fleet, &routed_goal, &events)
-                .unwrap_or_else(|| {
+            None => {
+                let (plan, usage) = super::plan::plan_via_router_metered(
+                    mur_home,
+                    &routed_fleet,
+                    &routed_goal,
+                    &events,
+                );
+                router_usage = usage;
+                plan.unwrap_or_else(|| {
                     build_fleet_procedure(&routed_goal, &fleet.members, fleet.parallel.as_ref())
                         .expect("members validated by caller guard")
-                }),
+                })
+            }
         };
         (p, None)
     };
@@ -462,6 +473,12 @@ pub async fn cmd_fleet_run(
     // #2083: `cost_usd` binds a one-shot run too, on actual billable spend.
     // `None` for a fleet that cannot spend (local / subscription only).
     let budget = super::oneshot_budget::OneShotBudget::for_fleet(mur_home, &fleet, bounds.cost_usd);
+    // Bill the planning turn before any member step can start: if the router
+    // alone reached the cap, the stop signal is already tripped and the DAG
+    // halts at its first step boundary, ending `Stopped` like any other cap.
+    if let Some(b) = &budget {
+        b.record_router(&router_usage);
+    }
 
     // ── Pre-dispatch triage ────────────────────────────────────────────────
     // Ask whether this goal fits the budget it is about to be handed, BEFORE

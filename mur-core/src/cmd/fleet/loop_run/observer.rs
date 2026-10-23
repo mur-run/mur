@@ -58,8 +58,8 @@ pub(super) fn step_observer(
                 } else {
                     StepState::Failed
                 };
-                if e.tokens_used > 0 {
-                    sp.cost_usd = Some(iteration_cost_usd(e.tokens_used, price_per_1k));
+                if !e.usage.is_zero() {
+                    sp.cost_usd = Some(iteration_cost_usd(e.usage.total(), price_per_1k));
                 }
                 // `✓ s2 research dr_worker_2 $0.08 42s`
                 let mark = if done { '✓' } else { '✗' };

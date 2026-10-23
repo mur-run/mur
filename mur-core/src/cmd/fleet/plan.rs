@@ -15,6 +15,8 @@ use mur_common::skill::manifest::{Procedure, ProcedureStep};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::executor::dag::TokenUsage;
+
 /// Upper bound on plan size — a runaway plan falls back to broadcast.
 const MAX_PLAN_STEPS: usize = 32;
 
@@ -191,24 +193,40 @@ pub fn plan_via_router(
     goal: &str,
     events: &[ChannelEvent],
 ) -> Option<Procedure> {
+    plan_via_router_metered(mur_home, fleet, goal, events).0
+}
+
+/// [`plan_via_router`], plus the tokens the router's turn consumed. The usage
+/// is returned even when the plan is not — a turn whose reply did not parse
+/// was still paid for — so a cost guard can bill it (#2083).
+pub fn plan_via_router_metered(
+    mur_home: &Path,
+    fleet: &Fleet,
+    goal: &str,
+    events: &[ChannelEvent],
+) -> (Option<Procedure>, TokenUsage) {
     if fleet.members.len() <= 1 {
-        return None;
+        return (None, TokenUsage::default());
     }
     let prompt = build_plan_prompt(mur_home, fleet, events);
     let params = json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": prompt }] }
     });
     let mut out = String::new();
-    crate::a2a_dial::dial_message_streaming(
+    let Ok(task) = crate::a2a_dial::dial_message_streaming(
         mur_home,
         fleet.router_or_concierge(),
         params,
         |delta, _thinking, _id| out.push_str(delta),
         |_hitl| {},
         |_step| {},
+    ) else {
+        return (None, TokenUsage::default());
+    };
+    (
+        parse_router_plan(&out, &fleet.members, goal),
+        crate::executor::dag::extract_usage(&task),
     )
-    .ok()?;
-    parse_router_plan(&out, &fleet.members, goal)
 }
 
 /// How many of a member's skills to name before truncating. A router prompt
