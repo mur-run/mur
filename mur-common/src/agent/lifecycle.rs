@@ -142,6 +142,13 @@ pub const SCHEDULE_CHANNEL_FILE: &str = "schedule-channel";
 /// channel that no longer loads.
 pub const HITL_CHANNEL_FILE: &str = "hitl-channel";
 
+/// Marker file in the agent's home naming the channel that records the
+/// agent's start-time notices (e.g. the ssh-agent proxy classification). Same
+/// shape as `SCHEDULE_CHANNEL_FILE`. Kept apart from `HITL_CHANNEL_FILE` on
+/// purpose: that channel's signed head is integrity-checked by the gate, and a
+/// notice stream has no business advancing it.
+pub const START_CHANNEL_FILE: &str = "start-channel";
+
 /// Directory in the agent's home holding the signed head of the decision
 /// channel (`<agent_home>/hitl-heads/<channel_id>.head`, #1859). It is how gate
 /// B tells "a record was written and then deleted" from "never written".

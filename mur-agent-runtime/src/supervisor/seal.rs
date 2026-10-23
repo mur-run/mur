@@ -20,6 +20,7 @@ pub(super) async fn prepare_and_seal(
     profile: &Profile,
     agent_home: &Path,
     mur_home: &Path,
+    identity: &mur_common::identity::AgentIdentity,
 ) -> anyhow::Result<Sealed> {
     // 3c. Self-heal MUR's own copy of the MCP server binary. When an enabled
     //     MCP server points at the bundled location (~/.mur/mcp-servers/...),
@@ -319,6 +320,21 @@ pub(super) async fn prepare_and_seal(
     let granted_spawn_dirs_digest = Some(mur_common::agent::spawn_dirs_digest(
         &profile.inner.entitlements.processes.spawn.allowed_dirs,
     ));
+    // ssh-agent proxy classification, strictly BEFORE the seal: the probe
+    // child installs the agent's profile on itself, which macOS refuses inside
+    // an already-sealed parent. Bounded by PROBE_TIMEOUT; never gates start.
+    // Provisional: it is persisted and announced only after the seal below,
+    // once we know whether this process is actually confined.
+    let ssh_proxy = super::ssh_proxy_class::classify_before_seal(
+        !profile.inner.entitlements.ssh.is_empty(),
+        &crate::sandbox::build_policy(
+            &profile.inner.entitlements,
+            agent_home,
+            &extra_ports,
+            &loopback_ports,
+            &extra_write_paths,
+        ),
+    );
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,
@@ -379,6 +395,27 @@ pub(super) async fn prepare_and_seal(
             })
         }
     };
+
+    // The probe proved its child was confined, not this process: settle the
+    // classification against the sandbox we really got, then record it.
+    let ssh_proxy = super::ssh_proxy_class::finalize(
+        agent_home,
+        ssh_proxy,
+        sandbox_record.as_ref().is_some_and(|r| r.enforcing),
+    );
+    // Same facts on the agent's channel (plan Task 1.5). Best-effort: the log
+    // line and the status file already carry them, so a busy store must not
+    // fail the start. The channel grant survives the seal (see
+    // `mur_channel::anchor`), as the HITL store relies on too.
+    let signer = super::start_notice::Signer {
+        mur_home,
+        agent: &profile.inner.name,
+        identity,
+        key_version: profile.inner.identity.key_version,
+    };
+    if let Err(e) = super::start_notice::append_ssh_proxy(&signer, &ssh_proxy) {
+        warn!(error = %e, "could not post the ssh-agent proxy classification to the agent's channel");
+    }
 
     Ok(Sealed {
         egress_proxy,

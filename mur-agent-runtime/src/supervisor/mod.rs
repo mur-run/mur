@@ -52,6 +52,8 @@ mod dispatch;
 mod identity;
 mod pin;
 mod seal;
+mod ssh_proxy_class;
+mod start_notice;
 pub use seal::extra_write_paths;
 mod test_bridge;
 
@@ -91,6 +93,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("mcp-shim: --task-id is required"))?;
         return crate::mcp_shim::run(std::path::PathBuf::from(socket), task_id).await;
     }
+    #[cfg(unix)]
+    crate::sandbox::ssh_bypass::child::exit_if_probe(&argv);
     if crate::subcommand::has_flag(&argv, &["--help", "-h"]) {
         let exe = argv
             .first()
@@ -285,7 +289,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         secrets,
         approval_token,
         sandbox_record,
-    } = seal::prepare_and_seal(&profile, &agent_home, &mur_home).await?;
+    } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity).await?;
     // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
     //    read per turn. Built after the seal: both stay readable.
     let live = crate::live_profile::LiveSettings::new(
