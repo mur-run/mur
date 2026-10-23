@@ -626,11 +626,48 @@ fn every_crash_point_of_a_resume_is_resumable_again_or_finished() {
     };
     assert_eq!(resumed(&svc), 1, "run_resumed is idempotent per pause");
 
-    // 3. Crash after `.paused` went: the resume is done; the run is an
-    //    ordinary crashed run, and nothing offers to resume it twice.
-    std::fs::remove_file(control::paused_path(h, "dev")).unwrap();
-    assert!(format!("{}", admit(h, "dev").unwrap_err()).contains("no paused run"));
+    // Up to here the checkpoint is on disk, and so is `.paused`: the run is
+    // resumable again, blocks a fresh run, and `stop` ends it.
+    assert!(
+        refuse_fresh_run_over_pause(h, "dev").is_err(),
+        "an interrupted resume blocks a fresh run"
+    );
+
+    // 3. Crash after the checkpoint went (the commit point) and before
+    //    `.paused`: the resume committed; the run is an ordinary crashed run.
+    //    Nothing offers to resume it twice, and the stale sentinel goes.
+    checkpoint::remove(h, RUN);
+    assert!(
+        control::paused_path(h, "dev").exists(),
+        "sentinel goes last"
+    );
+    assert!(format!("{}", admit(h, "dev").unwrap_err()).contains("no checkpoint"));
     refuse_fresh_run_over_pause(h, "dev").expect("a fresh run is not blocked");
+    assert!(
+        !control::paused_path(h, "dev").exists(),
+        "stale sentinel removed"
+    );
+}
+
+/// The reverse window cannot exist: the checkpoint goes before `.paused`, so
+/// a crash never leaves a checkpoint that no recovery path can find (#2075
+/// review). If it did, `stop` must still discard it.
+#[test]
+fn stop_in_an_interrupted_resume_ends_the_run_and_drops_both_files() {
+    use crate::run_status::State;
+    let home = paused_home(Some("job-1"));
+    let h = home.path();
+    record(h, State::Running);
+    assert!(end_paused_run(h, "dev"), "the interrupted resume is ended");
+    assert!(checkpoint::load(h, RUN).unwrap().is_none());
+    assert!(!control::paused_path(h, "dev").exists());
+    assert_eq!(
+        crate::run_status::store::load(h, RUN)
+            .unwrap()
+            .unwrap()
+            .state,
+        State::Stopped
+    );
 }
 
 #[test]
