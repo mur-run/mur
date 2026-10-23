@@ -59,6 +59,21 @@ pub fn read(agent_home: &Path) -> Option<SshProxyStatus> {
     serde_json::from_slice(&bytes).ok()
 }
 
+impl SshProxyStatus {
+    /// `off`, `boundary`, or `audit-only (<code>)`. The one rendering of the
+    /// value, shared by `mur agent status` and the start notice on the
+    /// agent's channel so the two can never word it differently.
+    pub fn label(&self) -> String {
+        match self.state {
+            SshProxyState::Off => "off".to_string(),
+            SshProxyState::Boundary => "boundary".to_string(),
+            SshProxyState::AuditOnly => {
+                format!("audit-only ({})", self.code.as_deref().unwrap_or("unknown"))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -53,6 +53,7 @@ mod identity;
 mod pin;
 mod seal;
 mod ssh_proxy_class;
+mod start_notice;
 pub use seal::extra_write_paths;
 mod test_bridge;
 
@@ -288,7 +289,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         secrets,
         approval_token,
         sandbox_record,
-    } = seal::prepare_and_seal(&profile, &agent_home, &mur_home).await?;
+    } = seal::prepare_and_seal(&profile, &agent_home, &mur_home, &identity).await?;
     // 4. Hot-reloaded settings (profile.yaml hot fields + global limits),
     //    read per turn. Built after the seal: both stay readable.
     let live = crate::live_profile::LiveSettings::new(

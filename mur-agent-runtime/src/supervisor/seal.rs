@@ -20,6 +20,7 @@ pub(super) async fn prepare_and_seal(
     profile: &Profile,
     agent_home: &Path,
     mur_home: &Path,
+    identity: &mur_common::identity::AgentIdentity,
 ) -> anyhow::Result<Sealed> {
     // 3c. Self-heal MUR's own copy of the MCP server binary. When an enabled
     //     MCP server points at the bundled location (~/.mur/mcp-servers/...),
@@ -322,7 +323,7 @@ pub(super) async fn prepare_and_seal(
     // ssh-agent proxy classification, strictly BEFORE the seal: the probe
     // child installs the agent's profile on itself, which macOS refuses inside
     // an already-sealed parent. Bounded by PROBE_TIMEOUT; never gates start.
-    super::ssh_proxy_class::record_at_start(
+    let ssh_proxy = super::ssh_proxy_class::record_at_start(
         agent_home,
         !profile.inner.entitlements.ssh.is_empty(),
         &crate::sandbox::build_policy(
@@ -333,6 +334,18 @@ pub(super) async fn prepare_and_seal(
             &extra_write_paths,
         ),
     );
+    // Same facts on the agent's channel (plan Task 1.5). Best-effort: the log
+    // line and the status file already carry them, so a busy store must not
+    // fail the start.
+    let signer = super::start_notice::Signer {
+        mur_home,
+        agent: &profile.inner.name,
+        identity,
+        key_version: profile.inner.identity.key_version,
+    };
+    if let Err(e) = super::start_notice::append_ssh_proxy(&signer, &ssh_proxy) {
+        warn!(error = %e, "could not post the ssh-agent proxy classification to the agent's channel");
+    }
     let sandbox_record = match crate::sandbox::apply(
         &profile.inner.entitlements,
         agent_home,

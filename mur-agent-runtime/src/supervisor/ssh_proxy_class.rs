@@ -19,8 +19,13 @@ use std::path::{Path, PathBuf};
 pub(super) const UPSTREAM_ENV: &str = "SSH_AUTH_SOCK";
 
 /// Classify this start and persist the result. Best-effort: a write failure
-/// is logged, never fatal.
-pub(super) fn record_at_start(agent_home: &Path, has_ssh_keys: bool, policy: &SandboxPolicy) {
+/// is logged, never fatal. Returns what was recorded so the caller can put
+/// the same facts on the agent's channel.
+pub(super) fn record_at_start(
+    agent_home: &Path,
+    has_ssh_keys: bool,
+    policy: &SandboxPolicy,
+) -> SshProxyStatus {
     let status = if has_ssh_keys {
         let upstream = std::env::var_os(UPSTREAM_ENV).map(PathBuf::from);
         let class = classify_at_start(policy, upstream.as_deref(), &mut live_probe);
@@ -41,6 +46,7 @@ pub(super) fn record_at_start(agent_home: &Path, has_ssh_keys: bool, policy: &Sa
     if let Err(e) = ssh_proxy_status::write(agent_home, &status) {
         tracing::warn!(error = %e, "could not record the ssh-agent proxy classification");
     }
+    status
 }
 
 /// Run the static table and, on `Candidate` only, confirm it with `probe`.

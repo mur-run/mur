@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use mur_common::ssh_proxy_status::{self, SshProxyState, SshProxyStatus};
+use mur_common::ssh_proxy_status::{self, SshProxyStatus};
 
 /// The line for the agent at `agent_home`, or `None` when the runtime has not
 /// recorded one (an agent last started by an older runtime).
@@ -13,19 +13,13 @@ pub(super) fn line_for(agent_home: &Path) -> Option<String> {
 }
 
 pub(super) fn render(s: &SshProxyStatus) -> String {
-    let value = match s.state {
-        SshProxyState::Off => "off".to_string(),
-        SshProxyState::Boundary => "boundary".to_string(),
-        SshProxyState::AuditOnly => {
-            format!("audit-only ({})", s.code.as_deref().unwrap_or("unknown"))
-        }
-    };
-    format!("    ssh_proxy: {value} — {}", s.explanation)
+    format!("    ssh_proxy: {} — {}", s.label(), s.explanation)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mur_common::ssh_proxy_status::SshProxyState;
 
     fn status(state: SshProxyState, code: Option<&str>) -> SshProxyStatus {
         SshProxyStatus {
