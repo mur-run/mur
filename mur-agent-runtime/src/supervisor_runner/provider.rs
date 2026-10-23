@@ -466,6 +466,12 @@ pub async fn build_provider_runner(
         return Ok(
             match crate::llm::client_builder::build_client_from_entry(&entry, profile, &mur_home) {
                 Ok(client) => {
+                    // Stamp the registry key so spend accounting prices the
+                    // entry that answered, not a guess from its provider name.
+                    let client = match profile.inner.model_ref.as_deref() {
+                        Some(key) => crate::llm::keyed::KeyedLlmClient::wrap(client, key),
+                        None => client,
+                    };
                     // Hot-switch seam (murmur /model): wrap the client so
                     // `model/set` can replace it between turns, and hand the
                     // dispatcher a per-ref builder that reuses the exact boot
@@ -486,6 +492,7 @@ pub async fn build_provider_runner(
                                 &profile_for_switch,
                                 &mur_home_for_switch,
                             )
+                            .map(|c| crate::llm::keyed::KeyedLlmClient::wrap(c, model_ref))
                         });
                     let handle = Arc::new(crate::llm::switchable::ModelSwitchHandle {
                         switchable: switchable.clone(),

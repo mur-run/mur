@@ -349,6 +349,7 @@ mod tests {
                 model: "slow".into(),
                 tool_calls: vec![],
                 stop_reason: crate::llm::StopReason::EndTurn,
+                registry_key: None,
             })
         }
         fn model_name(&self) -> &str {

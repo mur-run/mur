@@ -65,6 +65,7 @@ impl LlmClient for BannedThenCleanStub {
             model: "banned-then-clean".into(),
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
+            registry_key: None,
         })
     }
 
@@ -89,6 +90,7 @@ impl LlmClient for AlwaysDirty {
             model: "always-dirty".into(),
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
+            registry_key: None,
         })
     }
 

@@ -79,10 +79,7 @@ impl TaskRunner {
         let tok_out0 = self.cumulative_output_tokens.load(Ordering::Relaxed);
         // Clear the previous turn's model_ref so a stub/misconfigured backend
         // (which never calls a real model) reports none rather than stale data.
-        *self
-            .last_model_ref
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
+        self.turn_models.reset();
         // Same for the truncation flag: it describes THIS turn only.
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
@@ -236,11 +233,7 @@ impl TaskRunner {
             // this field is worth). "smart-background" here means "this request
             // was tagged Background and therefore eligible for Smart routing",
             // not "Smart definitely picked the cheap model".
-            let model_ref = self
-                .last_model_ref
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
+            let model_ref = self.turn_models.last_model();
             let route_reason = match spec.intent {
                 RequestIntent::Interactive => "interactive",
                 RequestIntent::Background(_) => "smart-background",
@@ -250,6 +243,10 @@ impl TaskRunner {
                 "output_tokens": output_tokens,
                 "context_tokens": self.last_input_tokens.load(Ordering::Relaxed),
                 "model_ref": model_ref,
+                // The totals above split by the model that answered each call:
+                // a routed turn mixes models, and pricing the sum at any one of
+                // their rates is wrong for the rest (#2083).
+                "by_model": self.turn_models.to_json(),
                 "route_reason": route_reason,
             });
             // Additive: present (true) only when the final generation was cut

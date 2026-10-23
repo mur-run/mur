@@ -324,6 +324,7 @@ async fn tool_use_stop_without_calls_fails_instead_of_fabricating() {
         model: "test".into(),
         tool_calls: vec![],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     }];
     let runner = Arc::new(
         TaskRunner::with_llm(Arc::new(SequenceLlm::new(responses)))

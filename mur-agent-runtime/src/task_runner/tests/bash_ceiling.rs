@@ -47,6 +47,7 @@ fn bash_call(cmd: &str) -> crate::llm::LlmResponse {
             input: serde_json::json!({ "command": cmd }),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     }
 }
 

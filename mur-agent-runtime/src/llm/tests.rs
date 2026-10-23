@@ -140,6 +140,7 @@ fn llm_response_defaults() {
         model: "claude-3".into(),
         tool_calls: vec![],
         stop_reason: StopReason::EndTurn,
+        registry_key: None,
     };
     assert!(r.tool_calls.is_empty());
     assert_eq!(r.stop_reason, StopReason::EndTurn);

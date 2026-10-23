@@ -230,6 +230,7 @@ impl LlmClient for CapturingLlm {
             model: "capturing-stub".to_string(),
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
+            registry_key: None,
         })
     }
     fn model_name(&self) -> &str {

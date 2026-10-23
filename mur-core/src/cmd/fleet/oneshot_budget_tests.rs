@@ -10,8 +10,29 @@ fn ev(agent: &str, kind: StepEventKind, tokens: u64) -> StepEvent {
             input: tokens,
             output: 0,
             model_ref: None,
+            by_model: vec![],
         },
         error: None,
+    }
+}
+
+/// A share answered by registry entry `key` (`model` = its provider name).
+fn share(key: Option<&str>, model: Option<&str>, input: u64, output: u64) -> ModelShare {
+    ModelShare {
+        registry_key: key.map(str::to_string),
+        model: model.map(str::to_string),
+        input,
+        output,
+    }
+}
+
+/// A turn made of `shares`, as a current runtime reports it.
+fn turn(shares: Vec<ModelShare>) -> TokenUsage {
+    TokenUsage {
+        input: shares.iter().map(|s| s.input).sum(),
+        output: shares.iter().map(|s| s.output).sum(),
+        model_ref: shares.last().and_then(|s| s.model.clone()),
+        by_model: shares,
     }
 }
 
@@ -228,11 +249,7 @@ fn a_turn_is_priced_at_its_own_models_input_and_output_rates() {
     let b = OneShotBudget::new(1.0, 0.075, "router".into(), agents, models);
     b.record_turn(
         Some("api"),
-        &TokenUsage {
-            input: 100_000,
-            output: 10_000,
-            model_ref: Some("cheap".into()),
-        },
+        &turn(vec![share(Some("cheap"), None, 100_000, 10_000)]),
     );
     // 100k in at $0.001 + 10k out at $0.004 = $0.14, not 110k at $0.075.
     assert!((b.spent_usd() - 0.14).abs() < 1e-9, "{}", b.spent_usd());
@@ -249,11 +266,7 @@ fn the_reported_model_beats_the_profile_model() {
     let b = budget();
     b.record_turn(
         Some("local"),
-        &TokenUsage {
-            input: 3_000,
-            output: 2_000,
-            model_ref: Some("router-model".into()),
-        },
+        &turn(vec![share(Some("router-model"), None, 3_000, 2_000)]),
     );
     assert!((b.spent_usd() - 5.0).abs() < 1e-9);
     assert!(b.tripped());
@@ -268,6 +281,7 @@ fn a_metered_router_counts_even_when_every_member_is_local() {
         input: 4_000,
         output: 1_000,
         model_ref: None,
+        by_model: vec![],
     });
     assert!((b.spent_usd() - 5.0).abs() < 1e-9);
     assert!(b.tripped(), "the router alone reached the cap");
@@ -299,6 +313,7 @@ async fn a_router_that_reached_the_cap_stops_the_run_before_any_step() {
         input: 5_000,
         output: 1_000,
         model_ref: None,
+        by_model: vec![],
     });
     let out = execute_dag(
         tmp.path(),
@@ -315,4 +330,134 @@ async fn a_router_that_reached_the_cap_stops_the_run_before_any_step() {
     assert_eq!(out.status, PipelineStatus::Stopped);
     assert!(!marker.exists(), "no member step may start past the cap");
     assert!(b.stop_reason().starts_with(BUDGET_STOP_REASON));
+}
+
+/// Two aliases serving one provider name at different billing — the shape a
+/// subscription agent with a metered API fallback has.
+fn sonnet_budget() -> OneShotBudget {
+    let sonnet = |billing| ModelEntry {
+        model: "claude-sonnet-4".into(),
+        ..model(billing, Some(1.0), Some(1.0))
+    };
+    let agents = HashMap::from([("sub".to_string(), agent(false, Some("sonnet-sub")))]);
+    let models = BTreeMap::from([
+        ("sonnet-sub".to_string(), sonnet(BillingMode::Subscription)),
+        ("sonnet-api".to_string(), sonnet(BillingMode::UsageBilled)),
+    ]);
+    OneShotBudget::new(5.0, 1.0, "router".into(), agents, models)
+}
+
+/// Re-review of #2086: the runtime's registry key, not the provider name,
+/// names the model. A subscription agent that fell back to the metered alias
+/// is billed, even though both aliases report the same provider name.
+#[test]
+fn the_registry_key_decides_when_it_differs_from_the_provider_name() {
+    let b = sonnet_budget();
+    b.record_turn(
+        Some("sub"),
+        &turn(vec![share(
+            Some("sonnet-api"),
+            Some("claude-sonnet-4"),
+            2_000,
+            1_000,
+        )]),
+    );
+    assert!((b.spent_usd() - 3.0).abs() < 1e-9, "{}", b.spent_usd());
+    b.record_turn(
+        Some("sub"),
+        &turn(vec![share(
+            Some("sonnet-sub"),
+            Some("claude-sonnet-4"),
+            9_000,
+            9_000,
+        )]),
+    );
+    assert!(
+        (b.spent_usd() - 3.0).abs() < 1e-9,
+        "the subscription alias stays free"
+    );
+}
+
+/// Re-review of #2086: a provider name the guard cannot pin to one entry is
+/// never given the profile's classification. Here the profile is a
+/// subscription — substituting it would discard metered spend.
+#[test]
+fn an_ambiguous_provider_name_counts_as_metered_not_as_the_profile_model() {
+    let b = sonnet_budget();
+    // An older runtime: no split, no key, only the provider name.
+    b.record_turn(
+        Some("sub"),
+        &TokenUsage {
+            input: 4_000,
+            output: 1_000,
+            model_ref: Some("claude-sonnet-4".into()),
+            by_model: vec![],
+        },
+    );
+    assert!((b.spent_usd() - 5.0).abs() < 1e-9, "{}", b.spent_usd());
+    assert!(b.tripped());
+}
+
+/// A provider name only one entry serves does identify it.
+#[test]
+fn a_provider_name_served_by_exactly_one_entry_resolves() {
+    let agents = HashMap::from([("api".to_string(), agent(true, None))]);
+    let models = BTreeMap::from([(
+        "opus".to_string(),
+        ModelEntry {
+            model: "claude-opus-4".into(),
+            ..model(BillingMode::UsageBilled, Some(0.01), Some(0.05))
+        },
+    )]);
+    let b = OneShotBudget::new(5.0, 1.0, "router".into(), agents, models);
+    b.record_turn(
+        Some("api"),
+        &turn(vec![share(None, Some("claude-opus-4"), 10_000, 2_000)]),
+    );
+    assert!((b.spent_usd() - 0.2).abs() < 1e-9, "{}", b.spent_usd());
+}
+
+/// Re-review of #2086: one delegated turn answered by two differently billed
+/// models. The metered share counts at its own rate even though the turn's
+/// last call was local — pricing the sum at the last model would discard it.
+#[test]
+fn a_turn_split_across_models_bills_each_share_at_its_own_model() {
+    let b = budget();
+    b.record_turn(
+        Some("local"),
+        &turn(vec![
+            share(Some("router-model"), Some("gpt-x"), 3_000, 1_000),
+            share(Some("ollama"), Some("qwen3"), 500_000, 50_000),
+        ]),
+    );
+    assert!((b.spent_usd() - 4.0).abs() < 1e-9, "{}", b.spent_usd());
+    b.record_turn(
+        Some("local"),
+        &turn(vec![
+            share(Some("ollama"), Some("qwen3"), 1_000, 0),
+            share(Some("router-model"), Some("gpt-x"), 500, 500),
+        ]),
+    );
+    assert!((b.spent_usd() - 5.0).abs() < 1e-9, "{}", b.spent_usd());
+    assert!(b.tripped());
+}
+
+/// `extract_usage` reads the runtime's split off the wire.
+#[test]
+fn the_runtime_split_survives_extraction() {
+    let task = serde_json::json!({"usage": {
+        "input_tokens": 3, "output_tokens": 2, "model_ref": "qwen3",
+        "by_model": [
+            {"registry_key": "router-model", "model": "gpt-x", "input_tokens": 2, "output_tokens": 1},
+            {"registry_key": null, "model": "qwen3", "input_tokens": 1, "output_tokens": 1}
+        ]
+    }});
+    let u = crate::executor::dag::extract_usage(&task);
+    assert_eq!(
+        u.shares(),
+        vec![
+            share(Some("router-model"), Some("gpt-x"), 2, 1),
+            share(None, Some("qwen3"), 1, 1),
+        ]
+    );
 }

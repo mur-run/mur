@@ -64,6 +64,7 @@ fn mk_resp(text: &str) -> LlmResponse {
         model: text.to_string(),
         tool_calls: vec![],
         stop_reason: StopReason::EndTurn,
+        registry_key: None,
     }
 }
 

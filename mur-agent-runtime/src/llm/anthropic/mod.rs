@@ -417,6 +417,7 @@ impl Usage {
             model,
             tool_calls,
             stop_reason,
+            registry_key: None,
         }
     }
 }

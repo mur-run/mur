@@ -81,6 +81,7 @@ fn end_turn() -> LlmResponse {
         model: "test".into(),
         tool_calls: vec![],
         stop_reason: StopReason::EndTurn,
+        registry_key: None,
     }
 }
 

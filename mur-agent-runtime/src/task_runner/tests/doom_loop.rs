@@ -340,6 +340,7 @@ async fn doom_loop_fires_when_only_the_description_varies() {
             }),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     };
     let responses = vec![
         call(0),
@@ -402,6 +403,7 @@ async fn different_commands_sharing_a_description_do_not_trip_the_guard() {
             }),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     };
     let responses = vec![
         call(0),
@@ -459,6 +461,7 @@ async fn doom_loop_fires_against_the_real_bash_tool() {
             input: serde_json::json!({"command": "echo LOOPTEST"}),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     };
     let responses = vec![
         call(0),

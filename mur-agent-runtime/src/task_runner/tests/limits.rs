@@ -27,6 +27,7 @@ impl crate::llm::LlmClient for CountingToolLlm {
                 input: serde_json::json!({"command": "echo loop"}),
             }],
             stop_reason: crate::llm::StopReason::ToolUse,
+            registry_key: None,
         })
     }
     fn model_name(&self) -> &str {
@@ -187,6 +188,7 @@ fn runner_with_scripted_tool_calls_repeating(
                 input: serde_json::json!({"path": "x"}),
             }],
             stop_reason: crate::llm::StopReason::ToolUse,
+            registry_key: None,
         })
         .collect();
     responses.push(end_turn_response("DONE"));
@@ -341,6 +343,7 @@ fn bash_call(id: &str, command: &str, timeout_secs: u64) -> crate::llm::LlmRespo
             input: serde_json::json!({"command": command, "timeout_secs": timeout_secs}),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     }
 }
 

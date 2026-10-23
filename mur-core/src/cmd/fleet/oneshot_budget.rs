@@ -9,18 +9,26 @@
 //! member turns (#2036), so the run ends `Stopped` — the same terminal path
 //! as `mur fleet stop`.
 //!
-//! **Pricing.** A turn is priced at the input and output rates of the model
-//! that answered it (`usage.model_ref`, else the agent's profile model), each
-//! side at its own rate. Only a model with no rate in `models.yaml` falls back
-//! to the guard's conservative flat rate on its whole token count — and the
-//! run says so the first time it happens, because spend priced that way is an
-//! upper estimate, not a bill.
+//! **Pricing.** A turn is many LLM calls, and routing or fallback can answer
+//! each with a different model, so the runtime reports the turn split by
+//! answering model (`usage.by_model`). Each share is priced at its own
+//! model's input and output rates and billed by its own model's billing mode.
+//!
+//! A share names its model by `models.yaml` key, which the runtime stamps
+//! wherever it knows it. Without a key (an older runtime) the provider's model
+//! name is matched against the registry, and accepted only when exactly one
+//! entry serves that name — an alias is not a provider name, and two aliases
+//! can serve one name at different prices. A share whose model still cannot
+//! be resolved is never given some other model's classification: it counts as
+//! metered at the guard's conservative flat rate, with a warning. So does a
+//! resolved metered model with no rate. Spend priced that way is an upper
+//! estimate, not a bill, and the run says so the first time it happens. Only a
+//! reply that names no model at all is priced as the agent's profile model.
 //!
 //! **Billability.** Only billable work counts. A fleet that cannot spend (all
 //! local or subscription) gets no cap at all ([`super::loop_run::budget_for`]).
-//! A turn answered by a local or subscription model adds nothing: those tokens
-//! are not on anyone's bill. A turn whose model and agent cannot be resolved
-//! counts as metered, as everywhere else.
+//! A share answered by a local or subscription model adds nothing: those
+//! tokens are not on anyone's bill.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -30,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use mur_common::fleet::Fleet;
 use mur_common::model::ModelEntry;
 
-use crate::executor::dag::{StepEvent, StepEventKind, StopSignal, TokenUsage};
+use crate::executor::dag::{ModelShare, StepEvent, StepEventKind, StopSignal, TokenUsage};
 
 /// What the run tells the job record and the operator when the cap stopped it.
 pub const BUDGET_STOP_REASON: &str = "stopped: cost_usd reached";
@@ -38,11 +46,10 @@ pub const BUDGET_STOP_REASON: &str = "stopped: cost_usd reached";
 /// What the guard knows about one agent of the fleet before any turn runs.
 #[derive(Debug, Clone, Default)]
 pub struct AgentBilling {
-    /// Does its work cost money? Used only when the turn's own model cannot
-    /// be resolved.
+    /// Does its work cost money? Used only for a reply that names no model
+    /// and an agent whose profile model is not in the registry.
     pub bills: bool,
-    /// The profile's `model_ref`: the rate to use when a turn does not say
-    /// which model answered it.
+    /// The profile's `model_ref`: the model assumed when a reply names none.
     pub model_ref: Option<String>,
 }
 
@@ -51,6 +58,14 @@ struct Spend {
     usd: f64,
     /// Models already warned about as priced at the flat fallback rate.
     guessed: HashSet<String>,
+}
+
+enum Resolved<'a> {
+    Entry(&'a ModelEntry),
+    /// The reply named a model the registry cannot pin down.
+    Unresolved(String),
+    /// The reply named no model, and the profile's is not in the registry.
+    ProfileUnknown,
 }
 
 /// The live cost guard of one one-shot run.
@@ -158,40 +173,12 @@ impl OneShotBudget {
             return;
         }
         let info = agent.and_then(|a| self.agents.get(a));
-        // The model that actually answered beats the profile's: a fallback
-        // chain may have routed the turn elsewhere.
-        let model_ref = usage
-            .model_ref
-            .as_deref()
-            .filter(|m| self.models.contains_key(*m))
-            .or_else(|| info.and_then(|i| i.model_ref.as_deref()));
-        let entry = model_ref.and_then(|m| self.models.get(m));
-        let billable = match entry {
-            Some(e) => super::billing::agent_bills(Some(e.billing_or_inferred())),
-            None => info.is_none_or(|i| i.bills),
-        };
-        if !billable {
-            return;
-        }
-        let priced = entry.and_then(|e| e.projected_cost(usage.input, usage.output));
-        let cost = priced.unwrap_or_else(|| {
-            super::loop_run::iteration_cost_usd(usage.total(), self.fallback_per_1k)
-        });
+        let cost: f64 = usage
+            .shares()
+            .iter()
+            .map(|share| self.price_share(info, share))
+            .sum();
         let mut s = self.spend();
-        if priced.is_none() {
-            let label = model_ref
-                .or(usage.model_ref.as_deref())
-                .unwrap_or("an unresolved model")
-                .to_string();
-            if s.guessed.insert(label.clone()) {
-                eprintln!(
-                    "  ⚠ cost_usd: {label} has no rate in models.yaml — its tokens are counted at \
-                     the guard's conservative ${}/1k, so spend is an upper estimate. \
-                     `mur model add` records a real rate.",
-                    self.fallback_per_1k
-                );
-            }
-        }
         s.usd += cost;
         if s.usd >= self.cap && !self.tripped.swap(true, Ordering::SeqCst) {
             eprintln!(
@@ -199,6 +186,82 @@ impl OneShotBudget {
                 s.usd, self.cap
             );
         }
+    }
+
+    /// What one answering model's share of a turn cost.
+    fn price_share(&self, info: Option<&AgentBilling>, share: &ModelShare) -> f64 {
+        if share.input == 0 && share.output == 0 {
+            return 0.0;
+        }
+        let entry = match self.resolve(info, share) {
+            Resolved::Entry(e) => e,
+            Resolved::Unresolved(label) => return self.flat(&label, share, "is not in"),
+            Resolved::ProfileUnknown => {
+                // No model reported and none configured that the registry
+                // knows: the agent's own billing class is all there is.
+                return if info.is_none_or(|i| i.bills) {
+                    self.flat("an unnamed model", share, "is not in")
+                } else {
+                    0.0
+                };
+            }
+        };
+        if !super::billing::agent_bills(Some(entry.billing_or_inferred())) {
+            return 0.0;
+        }
+        match entry.projected_cost(share.input, share.output) {
+            Some(c) => c,
+            None => {
+                let label = share
+                    .registry_key
+                    .clone()
+                    .or_else(|| share.model.clone())
+                    .unwrap_or_else(|| "the profile model".into());
+                self.flat(&label, share, "has no rate in")
+            }
+        }
+    }
+
+    /// Which registry entry answered `share`.
+    fn resolve(&self, info: Option<&AgentBilling>, share: &ModelShare) -> Resolved<'_> {
+        if let Some(key) = &share.registry_key {
+            return match self.models.get(key) {
+                Some(e) => Resolved::Entry(e),
+                None => Resolved::Unresolved(key.clone()),
+            };
+        }
+        if let Some(name) = &share.model {
+            // Exactly one entry may serve the name; otherwise the guard cannot
+            // tell which alias — and which price — answered.
+            let mut serving = self.models.values().filter(|e| &e.model == name);
+            return match (serving.next(), serving.next()) {
+                (Some(e), None) => Resolved::Entry(e),
+                _ => Resolved::Unresolved(name.clone()),
+            };
+        }
+        match info
+            .and_then(|i| i.model_ref.as_deref())
+            .and_then(|m| self.models.get(m))
+        {
+            Some(e) => Resolved::Entry(e),
+            None => Resolved::ProfileUnknown,
+        }
+    }
+
+    /// Conservative pricing: metered, at the flat rate, said once per model.
+    fn flat(&self, label: &str, share: &ModelShare, why: &str) -> f64 {
+        if self.spend().guessed.insert(label.to_string()) {
+            eprintln!(
+                "  ⚠ cost_usd: {label} {why} models.yaml — its tokens are counted as metered at \
+                 the guard's conservative ${}/1k, so spend is an upper estimate. \
+                 `mur model add` records a real rate.",
+                self.fallback_per_1k
+            );
+        }
+        super::loop_run::iteration_cost_usd(
+            share.input.saturating_add(share.output),
+            self.fallback_per_1k,
+        )
     }
 
     /// The step observer to hand the DAG executor.

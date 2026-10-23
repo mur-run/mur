@@ -328,7 +328,10 @@ impl FallbackLlmClient {
                     return (outcome, meta);
                 }
                 match outcome {
-                    Ok(resp) => {
+                    Ok(mut resp) => {
+                        // The chain knows which registry entry answered; the
+                        // provider client only knows its provider name.
+                        resp.registry_key = Some(model_ref.clone());
                         let meta = RoutingMeta {
                             attempts,
                             escalations,
@@ -667,3 +670,6 @@ pub fn estimate_input_tokens(req: &LlmRequest) -> u32 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod registry_key_tests;

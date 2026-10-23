@@ -28,6 +28,7 @@ mod helpers;
 mod run;
 mod step;
 mod system_prompt;
+mod turn_models;
 mod turn_track;
 mod unsettled;
 
@@ -189,19 +190,17 @@ pub struct TaskRunner {
     /// `token_usage` closure to populate `context_tokens` in per-turn usage JSON
     /// so the CLI glass-box bar can show a live context gauge.
     last_input_tokens: AtomicU64,
-    /// `model_ref` of the most recent successful LLM response, read by the
-    /// `token_usage` closure to populate `Task.usage.model_ref`. Reset to
-    /// `None` at the start of each `run_sync_inner` turn so a stub/misconfigured
-    /// backend (which never calls a real model) reports no model rather than a
-    /// stale one from a previous turn. Same runner-lifetime concurrency caveat
-    /// as `cumulative_input_tokens`: overlapping turns on one runner can race
-    /// this value; acceptable for a best-effort telemetry field.
-    last_model_ref: Mutex<Option<String>>,
+    /// Per-answering-model usage of the current turn: feeds
+    /// `Task.usage.model_ref` (most recent call) and `Task.usage.by_model`
+    /// (each model's share, for spend accounting). Reset at the start of each
+    /// `run_sync_inner` turn. Same runner-lifetime concurrency caveat as
+    /// `cumulative_input_tokens`: overlapping turns on one runner can race it.
+    turn_models: turn_models::TurnModels,
     /// True when the most recent LLM response of the current turn was cut off
     /// at the provider's max_tokens ceiling (`StopReason::MaxTokens`). Read by
     /// the `token_usage` closure to add `"truncated": true` to `Task.usage`;
-    /// reset alongside `last_model_ref` at the start of each `run_sync_inner`
-    /// turn. Same runner-lifetime concurrency caveat as `last_model_ref`.
+    /// reset alongside `turn_models` at the start of each `run_sync_inner`
+    /// turn. Same runner-lifetime concurrency caveat as `turn_models`.
     last_turn_truncated: AtomicBool,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,

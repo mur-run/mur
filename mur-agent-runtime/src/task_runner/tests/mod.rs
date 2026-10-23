@@ -16,6 +16,7 @@ fn tool_call_response(call_id: &str, command: &str) -> crate::llm::LlmResponse {
             input: serde_json::json!({"command": command}),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     }
 }
 
@@ -29,6 +30,7 @@ fn end_turn_response(text: &str) -> crate::llm::LlmResponse {
         model: "test".into(),
         tool_calls: vec![],
         stop_reason: crate::llm::StopReason::EndTurn,
+        registry_key: None,
     }
 }
 
@@ -52,6 +54,7 @@ fn truncated_tool_call_response(call_id: &str) -> crate::llm::LlmResponse {
             input: serde_json::json!({}),
         }],
         stop_reason: crate::llm::StopReason::MaxTokens,
+        registry_key: None,
     }
 }
 
@@ -70,6 +73,7 @@ fn truncated_thinking_only_response() -> crate::llm::LlmResponse {
         model: "test".into(),
         tool_calls: vec![],
         stop_reason: crate::llm::StopReason::MaxTokens,
+        registry_key: None,
     }
 }
 
@@ -86,6 +90,7 @@ fn truncated_text_response(text: &str) -> crate::llm::LlmResponse {
         model: "test".into(),
         tool_calls: vec![],
         stop_reason: crate::llm::StopReason::MaxTokens,
+        registry_key: None,
     }
 }
 
@@ -177,6 +182,7 @@ fn build_tool_call_response(call_id: &str) -> crate::llm::LlmResponse {
             input: serde_json::json!({}),
         }],
         stop_reason: crate::llm::StopReason::ToolUse,
+        registry_key: None,
     }
 }
 

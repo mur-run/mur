@@ -256,9 +256,24 @@ pub(crate) fn default_unanswered() -> mur_common::hitl::Unanswered {
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
-    /// The model that answered the turn, as the runtime reported it
-    /// (`usage.model_ref`). `None` from older runtimes and stub backends.
+    /// The provider's name for the model of the turn's last call
+    /// (`usage.model_ref` — a name, despite the field, not a registry key).
+    /// `None` from stub backends.
     pub model_ref: Option<String>,
+    /// The totals split by the model that answered each call
+    /// (`usage.by_model`). Empty from runtimes that predate the split.
+    pub by_model: Vec<ModelShare>,
+}
+
+/// One answering model's share of a turn's tokens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelShare {
+    /// The `models.yaml` key the runtime routed to, when it knew it.
+    pub registry_key: Option<String>,
+    /// The provider's name for that model.
+    pub model: Option<String>,
+    pub input: u64,
+    pub output: u64,
 }
 
 impl TokenUsage {
@@ -268,6 +283,20 @@ impl TokenUsage {
 
     pub fn is_zero(&self) -> bool {
         self.total() == 0
+    }
+
+    /// The turn's shares, or — from a runtime that predates the split — the
+    /// whole turn as one share named only by its provider model name.
+    pub fn shares(&self) -> Vec<ModelShare> {
+        if !self.by_model.is_empty() {
+            return self.by_model.clone();
+        }
+        vec![ModelShare {
+            registry_key: None,
+            model: self.model_ref.clone(),
+            input: self.input,
+            output: self.output,
+        }]
     }
 }
 
@@ -431,15 +460,33 @@ pub fn extract_usage(task: &serde_json::Value) -> TokenUsage {
     let Some(usage) = task.get("usage") else {
         return TokenUsage::default();
     };
-    let field = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
-    TokenUsage {
-        input: field("input_tokens"),
-        output: field("output_tokens"),
-        model_ref: usage
-            .get("model_ref")
+    let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    let text = |v: &serde_json::Value, k: &str| {
+        v.get(k)
             .and_then(|v| v.as_str())
             .filter(|m| !m.is_empty())
-            .map(str::to_string),
+            .map(str::to_string)
+    };
+    let by_model = usage
+        .get("by_model")
+        .and_then(|v| v.as_array())
+        .map(|shares| {
+            shares
+                .iter()
+                .map(|s| ModelShare {
+                    registry_key: text(s, "registry_key"),
+                    model: text(s, "model"),
+                    input: num(s, "input_tokens"),
+                    output: num(s, "output_tokens"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    TokenUsage {
+        input: num(usage, "input_tokens"),
+        output: num(usage, "output_tokens"),
+        model_ref: text(usage, "model_ref"),
+        by_model,
     }
 }
 

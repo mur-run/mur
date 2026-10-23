@@ -430,6 +430,7 @@ impl LlmClient for OpenAiClient {
             model: self.model.clone(),
             tool_calls,
             stop_reason,
+            registry_key: None,
         })
     }
 
@@ -668,6 +669,7 @@ impl LlmClient for OpenAiClient {
             model: self.model.clone(),
             tool_calls,
             stop_reason,
+            registry_key: None,
         })
     }
 }

@@ -90,6 +90,7 @@ impl LlmClient for Fixed {
             model: self.name.to_string(),
             tool_calls: vec![],
             stop_reason: StopReason::EndTurn,
+            registry_key: None,
         })
     }
 

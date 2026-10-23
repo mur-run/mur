@@ -168,7 +168,8 @@ fn a_guard_stopped_delegate_is_not_a_success() {
         TokenUsage {
             input: 95_000,
             output: 200,
-            model_ref: None
+            model_ref: None,
+            by_model: vec![],
         },
         "spend is still accounted, each side apart"
     );

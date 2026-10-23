@@ -14,6 +14,7 @@ pub mod claude;
 pub(crate) mod client_builder;
 pub mod codex;
 pub mod fallback;
+pub mod keyed;
 pub mod loopback;
 mod max_tokens;
 pub mod ollama;
@@ -294,7 +295,15 @@ pub struct LlmResponse {
     /// Zero on every call of a turn means caching is silently off — the API
     /// never errors for a missed cache, the bill just stays high.
     pub cache_read_input_tokens: u64,
+    /// The provider's name for the model that answered (`claude-opus-4-…`).
     pub model: String,
+    /// The `models.yaml` key of the model that answered, when the client
+    /// knows it: the fallback chain stamps its winning candidate, a
+    /// registry-backed single client its own key. Not the same thing as
+    /// `model` — an alias need not match the provider's name, and two aliases
+    /// can serve one name at different prices — so cost accounting keys on
+    /// this, never on `model`.
+    pub registry_key: Option<String>,
     pub tool_calls: Vec<ToolCallResult>,
     pub stop_reason: StopReason,
 }
