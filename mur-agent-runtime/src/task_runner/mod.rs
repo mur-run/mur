@@ -190,12 +190,6 @@ pub struct TaskRunner {
     /// `token_usage` closure to populate `context_tokens` in per-turn usage JSON
     /// so the CLI glass-box bar can show a live context gauge.
     last_input_tokens: AtomicU64,
-    /// Per-answering-model usage of the current turn: feeds
-    /// `Task.usage.model_ref` (most recent call) and `Task.usage.by_model`
-    /// (each model's share, for spend accounting). Runner-lifetime and never
-    /// reset: each `run_sync_inner` turn snapshot-deltas it like
-    /// `cumulative_input_tokens`, so overlapping turns can only over-count.
-    turn_models: turn_models::TurnModels,
     /// True when the most recent LLM response of the current turn was cut off
     /// at the provider's max_tokens ceiling (`StopReason::MaxTokens`). Read by
     /// the `token_usage` closure to add `"truncated": true` to `Task.usage`;

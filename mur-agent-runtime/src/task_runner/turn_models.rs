@@ -7,7 +7,8 @@
 //! ledger keeps each answering model's share apart so `Task.usage.by_model`
 //! can be priced call-for-call by whoever reads it.
 
-use std::sync::Mutex;
+use std::future::Future;
+use std::sync::{Arc, Mutex};
 
 use crate::llm::LlmResponse;
 
@@ -22,16 +23,15 @@ pub(crate) struct ModelShare {
     pub output_tokens: u64,
 }
 
-/// Runner-lifetime, per-answering-model token counters. Never reset: a turn
-/// takes a [`TurnMark`] when it starts and reports the difference when it
-/// ends, exactly like the runner's `cumulative_*_tokens` snapshot-delta.
+/// One turn's per-answering-model usage ledger.
 ///
-/// Why not a per-turn ledger reset at turn start: two turns can overlap on one
-/// runner (a router plan may hand one member two parallel steps; a user can
-/// chat with a member mid-run), and a reset by the second turn would erase the
-/// first turn's in-flight calls — an under-count, the dangerous direction for a
-/// spend cap. A snapshot delta can only over-count under overlap (each turn
-/// also sees the other's calls), which a cap tolerates.
+/// Owned by exactly one turn: `run_sync_inner` creates it, runs the turn's
+/// generation inside [`scope`], and every LLM call made in that future lands
+/// here through [`record`]. A runner-wide ledger cannot do this — overlapping
+/// turns on one runner (two parallel plan steps on one member, a user chat
+/// mid-run) would either erase each other's calls (reset at turn start) or
+/// count each other's calls (snapshot delta), and the fleet guard sums every
+/// turn's report, so both directions misstate actual spend (#2083).
 #[derive(Debug, Default)]
 pub(crate) struct TurnModels {
     inner: Mutex<Ledger>,
@@ -40,17 +40,28 @@ pub(crate) struct TurnModels {
 #[derive(Debug, Default)]
 struct Ledger {
     shares: Vec<ModelShare>,
-    /// Calls recorded so far (runner lifetime).
-    calls: u64,
     /// Provider name of the most recent call, whichever share it joined.
     last: Option<String>,
 }
 
-/// Where a turn started: the cumulative shares and call count at that moment.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct TurnMark {
-    shares: Vec<ModelShare>,
-    calls: u64,
+tokio::task_local! {
+    /// The ledger of the turn whose generation future is being polled.
+    static CURRENT: Arc<TurnModels>;
+}
+
+/// Run `fut` (one turn's generation) with `ledger` as the ledger every LLM
+/// call inside it records into. The caller keeps its own `Arc`, so the
+/// ledger stays readable after a cancelled turn drops `fut`.
+pub(crate) async fn scope<F: Future>(ledger: Arc<TurnModels>, fut: F) -> F::Output {
+    CURRENT.scope(ledger, fut).await
+}
+
+/// Account one successful LLM call to the turn it was made in. A call made
+/// outside any turn scope belongs to no turn and is not reported by any.
+pub(crate) fn record(resp: &LlmResponse) {
+    if CURRENT.try_with(|ledger| ledger.record(resp)).is_err() {
+        tracing::debug!(model = %resp.model, "LLM call outside a turn scope; not in any Task.usage");
+    }
 }
 
 impl TurnModels {
@@ -58,20 +69,8 @@ impl TurnModels {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Mark the start of a turn; pass the mark to [`Self::last_model_since`]
-    /// and [`Self::to_json_since`] when the turn ends.
-    pub fn mark(&self) -> TurnMark {
-        let ledger = self.lock();
-        TurnMark {
-            shares: ledger.shares.clone(),
-            calls: ledger.calls,
-        }
-    }
-
-    /// Account one successful LLM call.
-    pub fn record(&self, resp: &LlmResponse) {
+    fn record(&self, resp: &LlmResponse) {
         let mut ledger = self.lock();
-        ledger.calls = ledger.calls.saturating_add(1);
         ledger.last = Some(resp.model.clone());
         let shares = &mut ledger.shares;
         let at = shares
@@ -93,40 +92,34 @@ impl TurnModels {
         share.output_tokens = share.output_tokens.saturating_add(resp.output_tokens);
     }
 
-    /// The provider name of the most recent call since `mark` — what
-    /// `Task.usage.model_ref` has always carried. `None` when no call landed
-    /// since the mark (a stub backend reports no model, not a stale one).
-    pub fn last_model_since(&self, mark: &TurnMark) -> Option<String> {
-        let ledger = self.lock();
-        if ledger.calls > mark.calls {
-            ledger.last.clone()
-        } else {
-            None
-        }
+    /// The provider name of this turn's most recent call — what
+    /// `Task.usage.model_ref` has always carried. `None` when the turn made
+    /// no call (a stub backend reports no model, not a stale one).
+    pub fn last_model(&self) -> Option<String> {
+        self.lock().last.clone()
     }
 
-    /// `Task.usage.by_model`: each answering model's usage since `mark`, one
-    /// entry per model in first-seen order; models with no usage since the
-    /// mark are left out.
-    pub fn to_json_since(&self, mark: &TurnMark) -> serde_json::Value {
+    /// This turn's `(input, output)` totals: the sum of its shares.
+    pub fn totals(&self) -> (u64, u64) {
+        self.lock().shares.iter().fold((0, 0), |(i, o), s| {
+            (
+                i.saturating_add(s.input_tokens),
+                o.saturating_add(s.output_tokens),
+            )
+        })
+    }
+
+    /// `Task.usage.by_model`: one entry per answering model, first-seen order.
+    pub fn to_json(&self) -> serde_json::Value {
         self.lock()
             .shares
             .iter()
-            .filter_map(|s| {
-                let before = mark
-                    .shares
-                    .iter()
-                    .find(|b| b.registry_key == s.registry_key && b.model == s.model);
-                let (i0, o0) = before.map_or((0, 0), |b| (b.input_tokens, b.output_tokens));
-                let input_tokens = s.input_tokens.saturating_sub(i0);
-                let output_tokens = s.output_tokens.saturating_sub(o0);
-                (input_tokens > 0 || output_tokens > 0).then(|| {
-                    serde_json::json!({
-                        "registry_key": s.registry_key,
-                        "model": s.model,
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                    })
+            .map(|s| {
+                serde_json::json!({
+                    "registry_key": s.registry_key,
+                    "model": s.model,
+                    "input_tokens": s.input_tokens,
+                    "output_tokens": s.output_tokens,
                 })
             })
             .collect()
@@ -152,19 +145,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn keeps_each_answering_model_apart_and_sums_repeats() {
-        let t = TurnModels::default();
-        let m = t.mark();
-        t.record(&resp(Some("opus"), "claude-opus-4", 1_000, 100));
-        t.record(&resp(Some("local"), "qwen3", 500, 50));
-        t.record(&resp(Some("opus"), "claude-opus-4", 2_000, 200));
+    fn ledger() -> Arc<TurnModels> {
+        Arc::new(TurnModels::default())
+    }
+
+    #[tokio::test]
+    async fn keeps_each_answering_model_apart_and_sums_repeats() {
+        let t = ledger();
+        scope(t.clone(), async {
+            record(&resp(Some("opus"), "claude-opus-4", 1_000, 100));
+            record(&resp(Some("local"), "qwen3", 500, 50));
+            record(&resp(Some("opus"), "claude-opus-4", 2_000, 200));
+        })
+        .await;
         assert_eq!(
-            t.last_model_since(&m).as_deref(),
+            t.last_model().as_deref(),
             Some("claude-opus-4"),
             "model_ref is the most recent call, not the most recent new model"
         );
-        let j = t.to_json_since(&m);
+        assert_eq!(t.totals(), (3_500, 350));
+        let j = t.to_json();
         assert_eq!(j.as_array().unwrap().len(), 2);
         assert_eq!(j[0]["registry_key"], "opus");
         assert_eq!(j[0]["input_tokens"], 3_000);
@@ -172,52 +172,40 @@ mod tests {
         assert_eq!(j[1]["registry_key"], "local");
     }
 
-    #[test]
-    fn a_later_turn_reports_only_its_own_calls() {
-        let t = TurnModels::default();
-        t.record(&resp(Some("opus"), "claude-opus-4", 1_000, 100));
-        let m = t.mark();
-        assert!(
-            t.last_model_since(&m).is_none(),
-            "a turn with no calls reports no model, not the previous turn's"
-        );
-        assert_eq!(t.to_json_since(&m), serde_json::json!([]));
-        t.record(&resp(Some("opus"), "claude-opus-4", 40, 4));
-        let j = t.to_json_since(&m);
-        assert_eq!(j.as_array().unwrap().len(), 1);
-        assert_eq!(j[0]["input_tokens"], 40);
-        assert_eq!(j[0]["output_tokens"], 4);
+    #[tokio::test]
+    async fn a_turn_with_no_calls_reports_nothing() {
+        let t = ledger();
+        scope(t.clone(), async {}).await;
+        assert!(t.last_model().is_none(), "no model, not a stale one");
+        assert_eq!(t.totals(), (0, 0));
+        assert_eq!(t.to_json(), serde_json::json!([]));
     }
 
-    /// #2083 review: turn B starting while turn A is mid-flight on the same
-    /// runner must not erase A's calls. Overlap may over-count (each turn
-    /// sees the other's calls) but never drops one.
-    #[test]
-    fn overlapping_turns_never_lose_a_call() {
-        let t = TurnModels::default();
-        let a = t.mark();
-        t.record(&resp(Some("opus"), "claude-opus-4", 1_000, 100)); // a1
-        let b = t.mark(); // B starts while A is still running
-        t.record(&resp(Some("local"), "qwen3", 500, 50)); // b1
-        t.record(&resp(Some("opus"), "claude-opus-4", 2_000, 200)); // a2
+    /// #2083 review: two turns interleaving on one runner each report exactly
+    /// their own calls — no call lost, none counted twice — and a call made
+    /// outside any turn (unrelated work) is charged to neither.
+    #[tokio::test]
+    async fn overlapping_turns_count_each_call_exactly_once() {
+        let (a, b) = (ledger(), ledger());
+        let (a_go, a_wait) = tokio::sync::oneshot::channel::<()>();
+        let (b_go, b_wait) = tokio::sync::oneshot::channel::<()>();
+        let turn_a = scope(a.clone(), async move {
+            record(&resp(Some("opus"), "claude-opus-4", 1_000, 100)); // a1
+            b_go.send(()).unwrap(); // B starts while A is mid-flight
+            a_wait.await.unwrap();
+            record(&resp(Some("opus"), "claude-opus-4", 2_000, 200)); // a2
+        });
+        let turn_b = scope(b.clone(), async move {
+            b_wait.await.unwrap();
+            record(&resp(Some("local"), "qwen3", 500, 50)); // b1
+            a_go.send(()).unwrap();
+        });
+        tokio::join!(turn_a, turn_b);
+        record(&resp(Some("opus"), "claude-opus-4", 9_999, 999)); // no turn
 
-        let ja = t.to_json_since(&a);
-        let jb = t.to_json_since(&b);
-        let sum = |j: &serde_json::Value, key: &str| -> u64 {
-            j.as_array()
-                .unwrap()
-                .iter()
-                .filter(|s| s["registry_key"] == key)
-                .map(|s| s["input_tokens"].as_u64().unwrap())
-                .sum()
-        };
-        assert_eq!(sum(&ja, "opus"), 3_000, "A keeps a1 and a2");
-        assert_eq!(sum(&ja, "local"), 500, "A over-counts B's call: safe");
-        assert_eq!(sum(&jb, "opus"), 2_000);
-        assert_eq!(sum(&jb, "local"), 500);
-        assert!(
-            sum(&ja, "opus") + sum(&jb, "opus") >= 3_000,
-            "no opus call is missing from the union of both turns"
-        );
+        assert_eq!(a.totals(), (3_000, 300), "A: a1 + a2, nothing of B's");
+        assert_eq!(a.to_json().as_array().unwrap().len(), 1);
+        assert_eq!(b.totals(), (500, 50), "B: b1 only");
+        assert_eq!(b.to_json()[0]["registry_key"], "local");
     }
 }

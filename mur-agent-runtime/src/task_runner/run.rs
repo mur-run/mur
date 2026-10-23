@@ -70,16 +70,11 @@ impl TaskRunner {
             .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), tx_cancel);
 
-        // Snapshot the runner-lifetime token counters so we can report THIS
-        // turn's real input+output usage as a delta in `Task.usage`. Same
-        // snapshot-delta approach (and concurrency caveat — concurrent turns on
-        // one runner can inflate a delta) the agentic loop's own token budget
-        // already uses; fine for the serial-delegate fleet path.
-        let tok_in0 = self.cumulative_input_tokens.load(Ordering::Relaxed);
-        let tok_out0 = self.cumulative_output_tokens.load(Ordering::Relaxed);
-        // Per-model share snapshot, same delta approach: never reset, so an
-        // overlapping turn on this runner can't erase this one's calls (#2083).
-        let models0 = self.turn_models.mark();
+        // THIS turn's ledger: every LLM call made while `generation` is polled
+        // records into it (task-local, see `turn_models::scope`), so a turn
+        // overlapping this one on the same runner can neither erase nor add to
+        // what this turn reports in `Task.usage` (#2083).
+        let models = std::sync::Arc::new(turn_models::TurnModels::default());
         // Same for the truncation flag: it describes THIS turn only.
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
@@ -194,6 +189,7 @@ impl TaskRunner {
         // future is dropped (Rust async cancellation aborts the in-flight LLM
         // call) and we return a Cancelled task so message/send terminates the
         // stream cleanly.
+        let generation = turn_models::scope(models.clone(), generation);
         let result: Option<Result<(Message, Option<LoopExit>), TaskError>> = tokio::select! {
             r = generation => Some(r),
             _ = &mut rx_cancel => None,
@@ -209,20 +205,12 @@ impl TaskRunner {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
 
-        // Real token usage for THIS turn (delta of the runner-lifetime counters
-        // from the pre-generation snapshot). Reported on EVERY outcome — a turn
-        // that burned tokens then failed or was cancelled must still be
-        // accounted, or the fleet budget guard would under-count (the dangerous
-        // direction for a spend cap).
+        // Real token usage for THIS turn, from its own ledger. Reported on
+        // EVERY outcome — a turn that burned tokens then failed or was
+        // cancelled must still be accounted, or the fleet budget guard would
+        // under-count (the dangerous direction for a spend cap).
         let token_usage = || {
-            let input_tokens = self
-                .cumulative_input_tokens
-                .load(Ordering::Relaxed)
-                .saturating_sub(tok_in0);
-            let output_tokens = self
-                .cumulative_output_tokens
-                .load(Ordering::Relaxed)
-                .saturating_sub(tok_out0);
+            let (input_tokens, output_tokens) = models.totals();
             // `model_ref` = the winning model of the most recent successful LLM
             // call this turn (None for stub/misconfigured backends). `route_reason`
             // is a best-effort label derived from `spec.intent` alone — NOT the
@@ -233,7 +221,7 @@ impl TaskRunner {
             // this field is worth). "smart-background" here means "this request
             // was tagged Background and therefore eligible for Smart routing",
             // not "Smart definitely picked the cheap model".
-            let model_ref = self.turn_models.last_model_since(&models0);
+            let model_ref = models.last_model();
             let route_reason = match spec.intent {
                 RequestIntent::Interactive => "interactive",
                 RequestIntent::Background(_) => "smart-background",
@@ -246,7 +234,7 @@ impl TaskRunner {
                 // The totals above split by the model that answered each call:
                 // a routed turn mixes models, and pricing the sum at any one of
                 // their rates is wrong for the rest (#2083).
-                "by_model": self.turn_models.to_json_since(&models0),
+                "by_model": models.to_json(),
                 "route_reason": route_reason,
             });
             // Additive: present (true) only when the final generation was cut

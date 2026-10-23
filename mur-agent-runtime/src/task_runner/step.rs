@@ -105,7 +105,7 @@ impl TaskRunner {
                     }
                 }
                 let latency_ms = start.elapsed().as_millis() as u64;
-                self.turn_models.record(&resp);
+                super::turn_models::record(&resp);
                 let _prev = self
                     .cumulative_input_tokens
                     .fetch_add(resp.input_tokens, Ordering::Relaxed);
@@ -496,7 +496,7 @@ impl TaskRunner {
         };
         let text = match client.generate(req).await {
             Ok(resp) => {
-                self.turn_models.record(&resp);
+                super::turn_models::record(&resp);
                 self.cumulative_input_tokens
                     .fetch_add(resp.input_tokens, std::sync::atomic::Ordering::Relaxed);
                 self.last_input_tokens
