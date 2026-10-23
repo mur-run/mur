@@ -81,8 +81,10 @@ fn find_git() -> Result<PathBuf, BrokerError> {
         .ok_or_else(|| storage("git not found"))
 }
 
-/// A broker whose every decision re-reads `enrollments.yaml`. Remotes are `file://` only here,
-/// so no credentials are applied.
+/// A broker whose every decision re-reads `enrollments.yaml`. A remote enrolled with a
+/// credential gets it from `credentials` for both the pre-approval prefetch (read-only) and the
+/// post-approval push, each through its own short-lived askpass; `auth` (`NoAuth`) is only the
+/// fallback for remotes enrolled without one, e.g. `file://`.
 pub fn open_broker(mur_home: &Path) -> Result<Broker, BrokerError> {
     use std::os::unix::fs::DirBuilderExt;
     let private = private_dir(mur_home);
