@@ -11,6 +11,7 @@
 //! is for skill-based DAG workflows only.
 
 mod graph;
+mod late_usage;
 mod run;
 mod step;
 mod stop;
@@ -610,6 +611,9 @@ fn delegate_result(
         usage: extract_usage(task),
     }
 }
+#[cfg(test)]
+#[path = "dag/late_usage_tests.rs"]
+mod late_usage_tests;
 #[cfg(test)]
 #[path = "dag/pause_halt_tests.rs"]
 mod pause_halt_tests;

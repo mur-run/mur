@@ -418,9 +418,40 @@ pub(super) async fn execute_step(
                 }
                 eprintln!("  Step {sid}: delegate to {canonical} failed: {e:#}");
                 // The member may have run (and billed) the turn even though
-                // its reply never reached us: ask it what the turn spent.
-                let usage =
-                    super::stop::recover_delegate_usage(mur_home, &canonical, &child_task_id).await;
+                // its reply never reached us: ask it what the turn spent,
+                // cancelling and waiting out a turn still running (#2090).
+                let wait =
+                    super::late_usage::wait_budget(opts.deadline_at, std::time::Instant::now());
+                let usage = match super::late_usage::recover_delegate_usage(
+                    mur_home,
+                    &canonical,
+                    &child_task_id,
+                    wait,
+                )
+                .await
+                {
+                    super::late_usage::Recovered::Known(u) => u,
+                    super::late_usage::Recovered::Unknown(why) => {
+                        let text = format!(
+                            "delegate to {canonical}: spend unknown — {why}; this step is counted as \
+                             zero toward cost_usd"
+                        );
+                        if let Ok(svc) = ChannelService::open(mur_home) {
+                            let _ = crate::channel_writer::append_as_writer(
+                                &svc,
+                                mur_home,
+                                cid,
+                                ROUTER_AGENT,
+                                ChannelActor::System,
+                                mur_common::channel::EventKind::Note,
+                                serde_json::json!({ "text": text }),
+                                None,
+                            );
+                        }
+                        eprintln!("  ⚠ Step {sid}: {text}");
+                        TokenUsage::default()
+                    }
+                };
                 StepResult {
                     exit_code: 1,
                     output_text: format!("delegate failed: {e}"),
