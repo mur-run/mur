@@ -285,6 +285,7 @@ impl TaskRunner {
             agent_name: self.agent_name.clone(),
             decision_store: self.decision_store.clone(),
             hitl_timeout_secs: self.hitl_timeout_secs,
+            parking: self.parking.clone(),
             pending_approvals: self.pending_approvals.clone(),
             shim_trust: Some(self.shim_trust.clone()),
             sandbox_enforcing: self.sandbox_enforcing,

@@ -1,4 +1,5 @@
-//! `mur agent hitl ...` — gate B's remembered approval decisions (#1806).
+//! `mur agent hitl ...` — gate B's remembered approval decisions (#1806),
+//! and the approvals a headless turn is waiting on right now (#2085).
 
 use clap::Subcommand;
 
@@ -26,5 +27,23 @@ pub enum AgentHitlAction {
         /// Forget only remembered denials; remembered allows keep replaying
         #[arg(long)]
         denies_only: bool,
+    },
+    /// List the tool calls waiting for a human right now — from a
+    /// `mur agent send --wait-approval` turn. Needs the agent running.
+    Pending {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Approve a waiting tool call so its turn continues. The answer is
+    /// remembered for that exact call, like an approval given in chat.
+    Approve {
+        /// Id (or unique prefix) from `mur agent hitl <agent> pending`
+        id: String,
+    },
+    /// Deny a waiting tool call. Its turn ends with `hitl_denied`.
+    Deny {
+        /// Id (or unique prefix) from `mur agent hitl <agent> pending`
+        id: String,
     },
 }

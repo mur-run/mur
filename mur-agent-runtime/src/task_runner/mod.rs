@@ -209,6 +209,9 @@ pub struct TaskRunner {
     pending_approvals: Option<HitlApprovals>,
     /// One-time shim tickets for CLI-spawn turns (`hitl::shim_ticket`).
     shim_trust: crate::hitl::shim_ticket::ShimTrust,
+    /// #2085: headless turns that chose to wait for an approval, and the
+    /// calls they are waiting on (`hitl/pending`).
+    parking: crate::hitl::parked::Parking,
     /// P3: settled chat-gate decisions (gate B memory). `None` = ask every time.
     decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     /// The agent's own name, for `chat_action_hash`. Empty until the supervisor

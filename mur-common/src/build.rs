@@ -9,7 +9,7 @@ pub const SHORT_SHA: &str = env!("MUR_GIT_SHA");
 /// method (added method, changed params/result contract). Carried in
 /// `running.lock` AgentCard; dial refuses a method whose
 /// `method_min_proto` exceeds the peer's advertised proto.
-pub const A2A_PROTO_VERSION: u32 = 3;
+pub const A2A_PROTO_VERSION: u32 = 4;
 
 /// The first proto whose runtimes emit `turn/heartbeat` (spec 2026-09-12
 /// execution-limits §3.6). The dial gives such a peer a 90 s idle timeout.
@@ -18,12 +18,17 @@ pub const HEARTBEAT_MIN_PROTO: u32 = 2;
 /// The first proto serving `hitl/list` and `hitl/forget` (#1806).
 pub const HITL_MEMORY_MIN_PROTO: u32 = 3;
 
+/// The first proto serving `hitl/pending` and honouring `wait_approval_secs`
+/// on `message/send` (#2085).
+pub const HITL_PARK_MIN_PROTO: u32 = 4;
+
 /// Minimum proto a peer must advertise to accept the dialed `method`. `0` means
 /// always available (never gated). Add an entry per method introduced/changed.
 pub fn method_min_proto(method: &str) -> u32 {
     match method {
         "channel/delegate" => 1,
         crate::hitl::HITL_LIST_METHOD | crate::hitl::HITL_FORGET_METHOD => HITL_MEMORY_MIN_PROTO,
+        crate::hitl::HITL_PENDING_METHOD => HITL_PARK_MIN_PROTO,
         _ => 0,
     }
 }
@@ -50,6 +55,8 @@ mod tests {
         assert_eq!(method_min_proto("agent/card"), 0);
         assert_eq!(method_min_proto("hitl/forget"), HITL_MEMORY_MIN_PROTO);
         const { assert!(A2A_PROTO_VERSION >= HITL_MEMORY_MIN_PROTO) };
+        assert_eq!(method_min_proto("hitl/pending"), HITL_PARK_MIN_PROTO);
+        const { assert!(A2A_PROTO_VERSION >= HITL_PARK_MIN_PROTO) };
         // The current proto is at least the highest gated method.
         const { assert!(A2A_PROTO_VERSION >= 1) };
     }

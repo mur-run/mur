@@ -7,9 +7,16 @@ use crate::a2a_dial::{DialMode, dial_method};
 
 use super::resolve_mur_home;
 
-pub fn cmd_send(name: &str, message_json: &str, output_artifact_path: Option<&str>) -> Result<()> {
+pub fn cmd_send(
+    name: &str,
+    message_json: &str,
+    output_artifact_path: Option<&str>,
+    wait_approval: Option<&str>,
+) -> Result<()> {
     let msg: serde_json::Value =
         serde_json::from_str(message_json).context("parse --message JSON")?;
+    // Parsed before anything is sent: a typo must not cost a turn.
+    let wait = wait_approval.map(parse_wait).transpose()?;
     let home = resolve_mur_home()?;
     // Required-budget gate (plan §9), same refusal the TUI and --plain apply.
     // A script is still a turn: the runtime injects every Required memory
@@ -26,17 +33,84 @@ pub fn cmd_send(name: &str, message_json: &str, output_artifact_path: Option<&st
     if let Some(path) = output_artifact_path {
         params["output_artifact_path"] = serde_json::json!(path);
     }
-    // `message/send` to an ephemeral runtime is meaningless — the task
-    // would die with the process. Require the agent be running.
-    let result = dial_method(
-        &home,
-        name,
-        "message/send",
-        params,
-        DialMode::RequireRunning,
-    )?;
+    let result = match wait {
+        None => {
+            // `message/send` to an ephemeral runtime is meaningless — the task
+            // would die with the process. Require the agent be running.
+            dial_method(
+                &home,
+                name,
+                "message/send",
+                params,
+                DialMode::RequireRunning,
+            )?
+        }
+        Some(wait) => send_waiting(&home, name, params, wait)?,
+    };
     println!("{}", serde_json::to_string(&result)?);
     Ok(())
+}
+
+/// #2085: `--wait-approval[=DURATION]`. Empty = the default wait.
+fn parse_wait(raw: &str) -> Result<std::time::Duration> {
+    if raw.trim().is_empty() {
+        return Ok(std::time::Duration::from_secs(
+            mur_common::hitl::DEFAULT_WAIT_APPROVAL_SECS,
+        ));
+    }
+    match mur_common::limits::parse_duration(raw) {
+        Some(d) if !d.is_zero() => Ok(d),
+        _ => anyhow::bail!(
+            "--wait-approval: '{raw}' is not a duration; use e.g. 30s, 10m, 1h (or omit the value for 30m)"
+        ),
+    }
+}
+
+/// Send and stay on the line while a parked approval waits. Streaming, not a
+/// plain dial, for two reasons: the approval request arrives as a
+/// notification, which is where the approve command gets printed (stderr, so
+/// stdout stays the one JSON result); and the runtime's heartbeat keeps the
+/// dial's idle timeout from firing while nobody has answered yet.
+fn send_waiting(
+    home: &std::path::Path,
+    name: &str,
+    mut params: serde_json::Value,
+    wait: std::time::Duration,
+) -> Result<serde_json::Value> {
+    let agent = refuse_old_runtime(home, name)?;
+    params[mur_common::hitl::WAIT_APPROVAL_PARAM] = serde_json::json!(wait.as_secs());
+    crate::a2a_dial::dial_message_streaming(
+        home,
+        &agent,
+        params,
+        |_, _, _| {},
+        |hitl| {
+            for line in super::hitl_pending::approve_hint(&agent, &hitl) {
+                eprintln!("{line}");
+            }
+        },
+        |_| {},
+    )
+}
+
+/// Resolve `typed` the way the dial will (agent names are case-insensitive)
+/// and refuse up front if that agent's runtime predates parked approvals —
+/// an older runtime ignores the wait param and refuses at once, so the flag
+/// would silently do nothing. Returns the canonical name to dial.
+fn refuse_old_runtime(home: &std::path::Path, typed: &str) -> Result<String> {
+    let agent = crate::a2a_dial::canonicalize_agent_name(home, typed);
+    let lock = home.join("agents").join(&agent).join("running.lock");
+    if let Ok(bytes) = std::fs::read(&lock)
+        && let Ok(l) = serde_json::from_slice::<mur_common::LockFile>(&bytes)
+        && l.proto_version < mur_common::build::HITL_PARK_MIN_PROTO
+    {
+        anyhow::bail!(
+            "agent '{agent}' is running a runtime too old to wait for approvals (proto {}); \
+             run 'mur agent restart {agent}' after 'mur update', or drop --wait-approval",
+            l.proto_version
+        );
+    }
+    Ok(agent)
 }
 
 /// Translate a raw JSON-RPC failure into something the operator can act on.
@@ -152,5 +226,65 @@ mod dial_tests {
         let raw = anyhow::anyhow!("agent 'mur' is not running (no /x/running.lock)");
         let out = explain_dial_error("mur", "tasks/list", raw).to_string();
         assert_eq!(out, "agent 'mur' is not running (no /x/running.lock)");
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::parse_wait;
+    use std::time::Duration;
+
+    #[test]
+    fn a_bare_flag_waits_the_default() {
+        assert_eq!(
+            parse_wait("").unwrap(),
+            Duration::from_secs(mur_common::hitl::DEFAULT_WAIT_APPROVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn a_duration_is_honoured() {
+        assert_eq!(parse_wait("10m").unwrap(), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn zero_and_nonsense_are_refused_before_sending() {
+        assert!(parse_wait("0").is_err());
+        assert!(parse_wait("soon").is_err());
+    }
+}
+
+#[cfg(test)]
+mod old_runtime_tests {
+    use super::refuse_old_runtime;
+
+    fn home_with_agent(dir: &str, proto: u32) -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let agent = home.path().join("agents").join(dir);
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join("profile.yaml"), "name: mur\n").unwrap();
+        let lock = serde_json::json!({
+            "schema": 1, "uuid": "u", "name": dir, "pid": 1, "ppid": 1,
+            "started_at": "2026-01-01T00:00:00Z", "binary_version": "x",
+            "transports": {"stdio": false, "unix_socket": null, "tcp": null, "webhook": null},
+            "card_digest": "", "capabilities": [], "proto_version": proto,
+        });
+        std::fs::write(agent.join("running.lock"), lock.to_string()).unwrap();
+        home
+    }
+
+    #[test]
+    fn mixed_case_name_still_hits_the_old_runtime_check() {
+        let home = home_with_agent("mur", mur_common::build::HITL_PARK_MIN_PROTO - 1);
+        let e = refuse_old_runtime(home.path(), "Mur")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("too old"), "{e}");
+    }
+
+    #[test]
+    fn a_current_runtime_passes() {
+        let home = home_with_agent("mur", mur_common::build::HITL_PARK_MIN_PROTO);
+        refuse_old_runtime(home.path(), "Mur").unwrap();
     }
 }

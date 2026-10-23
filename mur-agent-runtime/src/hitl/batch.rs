@@ -12,6 +12,7 @@ use super::store::{DecisionStore, Settled, chat_action_hash};
 use super::{HitlApprovals, HitlDecision};
 
 /// One `Ask` call awaiting a decision.
+#[derive(Clone)]
 pub struct PendingCall {
     pub call_id: String,
     pub step_id: String,
@@ -36,9 +37,20 @@ pub struct BatchGate<'a> {
     /// written (#1783). A review session's answer must not become the agent's
     /// standing policy, and a standing policy must not answer for the review.
     pub remember: bool,
+    /// #2085: list each asked call in `hitl/pending` while it waits, for a
+    /// headless turn whose answer comes from another terminal. `None` = an
+    /// attached client is the audience; nothing to list.
+    pub parking: Option<&'a super::parked::Parking>,
 }
 
 const TIMED_OUT: &str = "timed out";
+
+/// True for the decision [`BatchGate::ask`] gives a call nobody answered in
+/// time — no human said anything, so a headless caller reports it as still
+/// needing approval rather than as a denial (#2085).
+pub fn is_timeout(d: &HitlDecision) -> bool {
+    !d.allow && d.reason.as_deref() == Some(TIMED_OUT)
+}
 
 impl BatchGate<'_> {
     /// Resolve every pending call. Returns `call_id → decision`; every input
@@ -97,6 +109,19 @@ impl BatchGate<'_> {
                 if let Some(t) = self.shim_trust {
                     t.record_owner(&hitl_id, self.task_id);
                 }
+                if let Some(p) = self.parking {
+                    let now = chrono::Utc::now();
+                    p.park(super::parked::ParkedCall {
+                        hitl_id: hitl_id.clone(),
+                        task_id: self.task_id.to_string(),
+                        tool_name: c.tool_name.clone(),
+                        label: mur_common::hitl::label::decision_label(&c.tool_name, &c.tool_input),
+                        parked_at: now,
+                        expires_at: now
+                            + chrono::Duration::from_std(self.timeout)
+                                .unwrap_or(chrono::Duration::MAX),
+                    });
+                }
                 wire.push(serde_json::json!({
                     "hitl_id": hitl_id,
                     "step_id": c.step_id,
@@ -143,6 +168,9 @@ impl BatchGate<'_> {
             let waited = tokio::time::timeout_at(deadline, rx).await;
             if let Some(t) = self.shim_trust {
                 t.forget_owner(&hitl_id);
+            }
+            if let Some(p) = self.parking {
+                p.unpark(&hitl_id);
             }
             let decision = match waited {
                 Ok(Ok(d)) => d,
@@ -283,6 +311,7 @@ mod tests {
             store: None,
             remember: true,
             shim_trust: None,
+            parking: None,
         };
         let g2 = BatchGate {
             task_id: "task-1",
@@ -292,6 +321,7 @@ mod tests {
             store: None,
             remember: true,
             shim_trust: None,
+            parking: None,
         };
         let (a, b) = tokio::join!(g1.resolve(vec![call("yes")]), g2.resolve(vec![call("no")]));
 
@@ -326,6 +356,7 @@ mod tests {
             store: None,
             remember: true,
             shim_trust: None,
+            parking: None,
         };
         let mut risky = call("a");
         risky.risk = Some(mur_common::hitl::RiskTier::Destructive);
@@ -387,6 +418,7 @@ mod tests {
                 store: Some(&store),
                 remember,
                 shim_trust: None,
+                parking: None,
             };
             let out = gate.resolve(vec![call("a")]).await;
             drop(tx);

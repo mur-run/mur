@@ -105,6 +105,7 @@ async fn rig_with(trust: crate::hitl::shim_ticket::ShimTrust) -> Rig {
             store: None,
             remember: true,
             shim_trust: Some(&gate_trust),
+            parking: None,
         };
         gate.resolve(vec![PendingCall {
             call_id: "c1".into(),
