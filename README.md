@@ -562,6 +562,13 @@ Agent** wizard offers the same catalog as a source.
   (with a redacted label of the tool and target), and `mur agent hitl forget
   <agent> <hash>`, `--all`, or `--denies-only` (drops remembered no's, keeps
   the yes's) makes it ask again; a review session never remembers its answers.
+  A headless `mur agent send` fails fast with `hitl_approval_required` when a
+  call needs a human; add `--wait-approval[=30m]` and it parks the call
+  instead, printing the approve/deny lines on stderr. `mur agent hitl <agent>
+  pending` lists what is waiting, and `approve <id>` / `deny <id>` (a unique
+  id prefix is enough) answer it. The wait is capped by the flag (default 30m)
+  and by the agent's deadline; nobody answering is the same recoverable
+  `hitl_approval_required`, never recorded as a decision.
   *Always* writes the narrowest exact tool rule; where a call reaches outside
   its entitlements the card offers that grant as a separate control, never
   folded into the rule. Reads never have to stop the run: `read_file` and
@@ -1096,7 +1103,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret · hitl (list · forget) ·
+│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
