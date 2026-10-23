@@ -152,6 +152,7 @@ impl BatchGate<'_> {
                         allow: false,
                         reason: Some(TIMED_OUT.into()),
                         surface: None,
+                        awaiting_human: false,
                     }
                 }
             };
@@ -188,6 +189,7 @@ fn remembered(allow: bool) -> HitlDecision {
             "denied earlier".into()
         }),
         surface: None,
+        awaiting_human: false,
     }
 }
 
@@ -259,6 +261,7 @@ mod tests {
                                 allow: want_allow,
                                 reason: None,
                                 surface: Some("test".into()),
+                                awaiting_human: false,
                             });
                             answered += 1;
                         }
@@ -372,6 +375,7 @@ mod tests {
                     allow: true,
                     reason: None,
                     surface: Some("cli".into()),
+                    awaiting_human: false,
                 });
                 true
             });

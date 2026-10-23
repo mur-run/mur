@@ -210,6 +210,7 @@ mod conversation;
 mod doom_loop;
 mod drain_and_retry;
 mod egress_routing;
+mod headless_approval;
 mod limits;
 mod live_reload;
 mod system_prompt;

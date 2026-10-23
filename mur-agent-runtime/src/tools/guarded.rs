@@ -12,13 +12,14 @@
 //! See `docs/superpowers/specs/2026-09-16-mur-tool-mcp-server-design.md`.
 
 mod bash_ceiling;
+mod headless;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::hitl::HitlApprovals;
 use crate::task_runner::{
-    approval_risk, call_floor, cap_step_output, decide_without_asking, denied_args_preview,
+    HITL_APPROVAL_REQUIRED, approval_required_message, approval_risk, call_floor, cap_step_output,
     deny_message, effective_call_policy, step_notification, task_error,
 };
 use mur_common::a2a::TaskError;
@@ -75,6 +76,7 @@ fn refuse_unsandboxed(agent_name: &str, tool_name: &str) -> crate::hitl::HitlDec
              sandbox is not enforcing — see `mur agent perm list-paths {agent}`"
         )),
         surface: None,
+        awaiting_human: false,
     }
 }
 
@@ -135,26 +137,6 @@ impl GuardedToolCall {
                 );
                 continue;
             }
-            if let Some(d) = decide_without_asking(
-                entry.as_ref().map(|(_, ok)| *ok),
-                &self.agent_name,
-                &call.tool_name,
-                &crate::task_runner::deny_hint::ask_cause(
-                    &self.tools_policy,
-                    &call.tool_name,
-                    Some(&call.input),
-                ),
-            ) {
-                self.record_bash_ceiling(task_id, call).await;
-                tracing::warn!(
-                    task_id,
-                    tool = %call.tool_name,
-                    args = %denied_args_preview(&call.input),
-                    "tool call refused: caller cannot approve"
-                );
-                out.insert(call.call_id.clone(), d);
-                continue;
-            }
             let step_id = uuid::Uuid::now_v7().to_string();
             step_ids.insert(call.call_id.clone(), step_id.clone());
             pending.push(crate::hitl::batch::pending(
@@ -163,6 +145,15 @@ impl GuardedToolCall {
                 call,
                 approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)),
             ));
+        }
+        // #2085: a caller that cannot approve is refused only AFTER the
+        // decision store had its say, so an answer the human already gave
+        // (e.g. from `mur agent cli --ask`) serves a headless `mur agent
+        // send` too. Before the sink check: this caller never needs one.
+        if entry.as_ref().map(|(_, ok)| *ok) == Some(false) {
+            self.settle_headless(task_id, calls, pending, &mut out)
+                .await;
+            return (out, step_ids);
         }
         if pending.is_empty() {
             return (out, step_ids);
@@ -179,6 +170,7 @@ impl GuardedToolCall {
                         allow: false,
                         reason: Some("no approval channel available".into()),
                         surface: None,
+                        awaiting_human: false,
                     },
                 );
             }
@@ -371,7 +363,15 @@ impl GuardedToolCall {
                         allow: false,
                         reason: Some("no approval decision for this call".into()),
                         surface: None,
+                        awaiting_human: false,
                     });
+                    if decision.awaiting_human {
+                        return Err(task_error(
+                            HITL_APPROVAL_REQUIRED,
+                            approval_required_message(decision.reason.as_deref()),
+                            true,
+                        ));
+                    }
                     if !decision.allow {
                         return Err(task_error(
                             "hitl_denied",
