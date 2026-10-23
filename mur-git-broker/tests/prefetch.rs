@@ -1,5 +1,6 @@
 #![cfg(unix)]
 // tests/prefetch.rs — real git; remote is a local bare repo.
+use mur_git_broker::push::{NoAuth, RemoteAuth};
 use mur_git_broker::{error::BrokerError, oid::*, policy::*, prefetch::*, repo::PrivateRepo};
 use std::{
     path::Path,
@@ -62,7 +63,13 @@ fn permit_drop_releases_the_slot() {
 /// Counts calls; never touches the network.
 struct CountingReader(AtomicUsize);
 impl RemoteReader for CountingReader {
-    fn fetch(&self, _: &PrivateRepo, _: &[String], _: &PrefetchBudget) -> Result<(), BrokerError> {
+    fn fetch(
+        &self,
+        _: &PrivateRepo,
+        _: &[String],
+        _: &PrefetchBudget,
+        _: &dyn RemoteAuth,
+    ) -> Result<(), BrokerError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -85,6 +92,7 @@ fn no_specs_means_the_reader_is_not_called() {
         &a,
         &p,
         &BrokerLimits::default(),
+        &NoAuth,
     )
     .unwrap();
     assert_eq!(r.0.load(Ordering::SeqCst), 0);
@@ -117,6 +125,7 @@ fn successful_update_prefetch_makes_old_sha_present() {
         &a,
         &policy(),
         &BrokerLimits::default(),
+        &NoAuth,
     )
     .unwrap();
     let out = repo
@@ -164,6 +173,7 @@ fn byte_budget_is_enforced() {
         &a,
         &policy(),
         &l,
+        &NoAuth,
     );
     assert!(
         matches!(&e, Err(BrokerError::PrefetchRejected(m)) if m == "byte budget"),
@@ -181,6 +191,7 @@ fn wall_clock_budget_kills_a_slow_fetch() {
             repo: &PrivateRepo,
             _: &[String],
             b: &PrefetchBudget,
+            _: &dyn RemoteAuth,
         ) -> Result<(), BrokerError> {
             let mut c = std::process::Command::new("/bin/sleep");
             c.arg("30");
@@ -205,6 +216,7 @@ fn wall_clock_budget_kills_a_slow_fetch() {
         &a,
         &policy(),
         &l,
+        &NoAuth,
     );
     assert!(matches!(e, Err(BrokerError::PrefetchRejected(_))));
     assert!(start.elapsed() < Duration::from_secs(5));
@@ -218,6 +230,7 @@ fn disk_budget_is_enforced_after_fetch() {
             r: &PrivateRepo,
             _: &[String],
             _: &PrefetchBudget,
+            _: &dyn RemoteAuth,
         ) -> Result<(), BrokerError> {
             std::fs::write(r.path().join("objects/pack/junk"), vec![0u8; 4096]).unwrap();
             Ok(())
@@ -236,6 +249,7 @@ fn disk_budget_is_enforced_after_fetch() {
         &a,
         &policy(),
         &l,
+        &NoAuth,
     );
     assert!(matches!(e, Err(BrokerError::PrefetchRejected(_))));
 }

@@ -55,7 +55,7 @@ impl TokenAuth {
 
     /// Like [`Self::new`] but for `http://`, so a test can run real git against a local plain
     /// server (the credential flow does not depend on TLS). Never compiled into a release build.
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_plain_http_for_test(
         secret: SecretString,
         username: &str,

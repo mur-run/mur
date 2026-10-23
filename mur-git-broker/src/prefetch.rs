@@ -7,6 +7,7 @@ use crate::{
     error::BrokerError,
     git::{GitError, GitRunner, run_watched},
     policy::{BrokerLimits, RemotePolicy},
+    push::RemoteAuth,
     repo::PrivateRepo,
 };
 use std::{
@@ -34,12 +35,16 @@ impl From<&BrokerLimits> for PrefetchBudget {
 
 /// Reads refs from the remote into the private repo. A trait so tests (and the push executor's
 /// own fetch-free paths) never need a network.
+///
+/// `auth` is the enrollment's own credential wiring (the same [`RemoteAuth`] the push gets), or
+/// `NoAuth`. It runs before approval, so it must stay read-only: a reader fetches, nothing else.
 pub trait RemoteReader: Send + Sync {
     fn fetch(
         &self,
         repo: &PrivateRepo,
         specs: &[String],
         budget: &PrefetchBudget,
+        auth: &dyn RemoteAuth,
     ) -> Result<(), BrokerError>;
 }
 
@@ -108,6 +113,7 @@ impl RemoteReader for GitFetchReader {
         repo: &PrivateRepo,
         specs: &[String],
         budget: &PrefetchBudget,
+        auth: &dyn RemoteAuth,
     ) -> Result<(), BrokerError> {
         let runner = GitRunner::new(self.git_bin.clone(), repo.path().to_path_buf());
         // No `--filter`: partial clone is rejected by the repo inspection. `--` keeps a hostile
@@ -117,8 +123,12 @@ impl RemoteReader for GitFetchReader {
         args.extend(specs.iter().map(String::as_str));
         let objects = repo.path().join("objects");
         let mut over_budget = || dir_bytes(&objects) > budget.bytes;
+        let mut cmd = runner.command(&args);
+        // After the runner's env_clear, as for the push: git asks only on a 401, so an
+        // anonymously readable remote never sees the token.
+        auth.apply(&mut cmd);
         let out = run_watched(
-            runner.command(&args),
+            cmd,
             budget.wall,
             Duration::from_millis(PREFETCH_WATCH_INTERVAL_MS),
             &mut over_budget,
@@ -153,6 +163,7 @@ pub fn run_prefetch(
     action: &ActionDocument,
     policy: &RemotePolicy,
     limits: &BrokerLimits,
+    auth: &dyn RemoteAuth,
 ) -> Result<(), BrokerError> {
     let specs = prefetch_specs(action, policy);
     if specs.is_empty() {
@@ -160,7 +171,7 @@ pub fn run_prefetch(
     }
     let _permit = gate.acquire()?;
     let budget = PrefetchBudget::from(limits);
-    reader.fetch(repo, &specs, &budget)?;
+    reader.fetch(repo, &specs, &budget, auth)?;
     if dir_bytes(repo.path()) > budget.disk_bytes {
         return Err(BrokerError::PrefetchRejected("disk budget".into()));
     }
