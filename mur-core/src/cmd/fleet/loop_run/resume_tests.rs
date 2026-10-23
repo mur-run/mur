@@ -284,7 +284,7 @@ fn admit_refuses_a_foreign_schema_and_suggests_stop() {
 #[test]
 fn admit_refuses_a_record_that_is_not_paused_or_is_missing() {
     let home = paused_home(None);
-    record(home.path(), crate::run_status::State::Running);
+    record(home.path(), crate::run_status::State::Failed);
     let err = admit(home.path(), "dev").unwrap_err();
     assert!(format!("{err}").contains("not paused"), "{err}");
 
@@ -537,4 +537,96 @@ fn a_member_signed_pause_cannot_supply_the_original_bounds() {
         Some(5.0),
         "a forged note must not replace the router-signed bounds"
     );
+}
+
+/// rev 3 §14 item 3: a resume that crashed after flipping the record to
+/// `Running` and before deleting the checkpoint (deleted last) leaves the
+/// sentinel, the checkpoint, and a `Running` record with a dead pid. Every crash point of
+/// §5.4 step 6 is walked: each is either resumable again or finished.
+#[test]
+fn every_crash_point_of_a_resume_is_resumable_again_or_finished() {
+    use crate::run_status::State;
+    let home = paused_home(Some("job-1"));
+    let h = home.path();
+    let svc = mur_channel::ChannelService::open(h).unwrap();
+    svc.create_for_fleet("dev", "mur", &["pm".to_string()])
+        .unwrap();
+    let from = resume_from(&cp(Some("job-1")), None, false).unwrap();
+
+    // 1. Crash after `Running`.
+    record(h, State::Running);
+    assert_eq!(
+        admit(h, "dev")
+            .expect("interrupted resume is admitted")
+            .run_id,
+        RUN
+    );
+    revalidate_under_lock(h, "dev", &from).expect("and still current under the lock");
+
+    // 2. Crash after `run_resumed`; the repeat writes it again, recorded once.
+    record_resumed(&svc, h, &fleet(), &from);
+    admit(h, "dev").expect("still admitted");
+    record_resumed(&svc, h, &fleet(), &from);
+    let resumed = |svc: &mur_channel::ChannelService| {
+        svc.load_events("fleet-dev")
+            .unwrap()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    classify_note_payload(&e.payload),
+                    NoteClassification::FleetRun(env)
+                        if matches!(env.payload, FleetRunPayload::RunResumed { .. })
+                )
+            })
+            .count()
+    };
+    assert_eq!(resumed(&svc), 1, "run_resumed is idempotent per pause");
+
+    // 3. Crash after `.paused` went: the resume is done; the run is an
+    //    ordinary crashed run, and nothing offers to resume it twice.
+    std::fs::remove_file(control::paused_path(h, "dev")).unwrap();
+    assert!(format!("{}", admit(h, "dev").unwrap_err()).contains("no paused run"));
+    refuse_fresh_run_over_pause(h, "dev").expect("a fresh run is not blocked");
+}
+
+#[test]
+fn a_new_pause_cycle_gets_its_own_run_resumed() {
+    let a = resume_from(&cp(None), None, false).unwrap();
+    let mut later = cp(None);
+    later.paused_at = "2026-10-22T01:00:00Z".into();
+    let b = resume_from(&later, None, false).unwrap();
+    assert_ne!(resumed_key(&a), resumed_key(&b));
+}
+
+#[test]
+fn an_interrupted_resume_blocks_a_fresh_run_and_keeps_its_sentinel() {
+    let home = paused_home(None);
+    record(home.path(), crate::run_status::State::Running);
+    let err = refuse_fresh_run_over_pause(home.path(), "dev").unwrap_err();
+    assert!(format!("{err}").contains("mur fleet resume dev"), "{err}");
+    assert!(control::paused_path(home.path(), "dev").exists());
+}
+
+#[test]
+fn a_running_record_without_its_checkpoint_is_not_an_interrupted_resume() {
+    let home = paused_home(None);
+    record(home.path(), crate::run_status::State::Running);
+    checkpoint::remove(home.path(), RUN);
+    let err = admit(home.path(), "dev").unwrap_err();
+    assert!(format!("{err}").contains("no checkpoint"), "{err}");
+    refuse_fresh_run_over_pause(home.path(), "dev").expect("leftover sentinel");
+    assert!(!control::paused_path(home.path(), "dev").exists());
+}
+
+#[test]
+fn stop_ends_an_interrupted_resume_like_a_paused_run() {
+    let home = paused_home(None);
+    record(home.path(), crate::run_status::State::Running);
+    assert!(end_paused_run(home.path(), "dev"));
+    let rec = crate::run_status::store::load(home.path(), RUN)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.state, crate::run_status::State::Stopped);
+    assert!(checkpoint::load(home.path(), RUN).unwrap().is_none());
+    assert!(!control::paused_path(home.path(), "dev").exists());
 }
