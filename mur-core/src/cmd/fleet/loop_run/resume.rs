@@ -128,6 +128,11 @@ pub(super) struct SignedPause {
 /// The latest signed `run_paused` for `run_id` on the fleet's channel. Only
 /// router-signed events count — the checkpoint is what an untrusted run
 /// wrote, this is what the trusted writer recorded beside it.
+///
+/// `verify_event` is not enough: it checks an event against its OWN actor's
+/// key, so a member signing a forged pause as itself would pass and its
+/// bounds would replace the originals. `is_router_signed` requires a
+/// non-agent actor and the router's key — the identity `pause` writes with.
 fn signed_pause(
     mur_home: &Path,
     channel_id: &str,
@@ -148,7 +153,7 @@ fn signed_pause(
                     bounds,
                     ..
                 } if id == run_id
-                    && crate::channel_verify::verify_event(mur_home, channel_id, e, true) =>
+                    && crate::hitl::authority::is_router_signed(mur_home, channel_id, e) =>
                 {
                     Some(SignedPause {
                         spent_usd,

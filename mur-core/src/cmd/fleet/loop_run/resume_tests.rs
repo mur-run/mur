@@ -492,3 +492,49 @@ fn stop_while_paused_ends_both_run_ids_on_the_channel() {
         );
     }
 }
+
+/// A member can sign a note with its own key; that must not make it the
+/// authority on a paused run's original bounds (#2072 review). The legitimate
+/// router-signed pause records $5; later forgeries claim $20.
+#[test]
+fn a_member_signed_pause_cannot_supply_the_original_bounds() {
+    use mur_common::channel::ChannelActor;
+    let tmp = tempfile::tempdir().unwrap();
+    let router = crate::channel_writer::plant_writer_identity(tmp.path());
+    let pm = crate::channel_writer::plant_identity_for(tmp.path(), "pm");
+    let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+    let ch = svc.create_for_workflow("dev").unwrap();
+    let pause = |cost: f64| {
+        FleetRunPayload::RunPaused {
+            run_id: RUN.into(),
+            iteration_run_id: format!("{RUN}-2"),
+            iteration: 2,
+            spent_usd: 1.5,
+            active_elapsed_ms: 60_000,
+            reason: super::super::pause_events::PauseReason::Operator,
+            bounds: Some(RunBounds {
+                deadline_ms: 600_000,
+                stuck_ms: Some(300_000),
+                cost_usd: Some(cost),
+            }),
+        }
+        .to_note_payload()
+    };
+    let note = |id: &mur_common::identity::AgentIdentity, actor: ChannelActor, cost| {
+        svc.append_signed(&ch.id, id, 0, actor, EventKind::Note, pause(cost), None)
+            .unwrap();
+    };
+    note(&router, ChannelActor::System, 5.0);
+    // The member speaking as itself, validly signed with its own key …
+    note(&pm, ChannelActor::Agent { id: "pm".into() }, 20.0);
+    // … and claiming to be the system while signing with its own key.
+    note(&pm, ChannelActor::System, 20.0);
+
+    let events = svc.load_events(&ch.id).unwrap();
+    let got = signed_pause(tmp.path(), &ch.id, &events, RUN).expect("the router's pause");
+    assert_eq!(
+        got.bounds.and_then(|b| b.cost_usd),
+        Some(5.0),
+        "a forged note must not replace the router-signed bounds"
+    );
+}
