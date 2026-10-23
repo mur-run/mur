@@ -377,19 +377,28 @@ fn a_rejected_credential_fails_intake_without_echoing_the_token() {
     assert_eq!(remote_ref(&r), r.e.old);
 }
 
-/// Handing a credential to the pre-approval prefetch is audited under its own kind, apart from
-/// the push.
+/// Every credential use is audited under its own kind, tied to the request: the pre-approval
+/// prefetch, the accepted approval, the push, and how the request ended.
 #[test]
-fn a_credentialed_prefetch_is_audited_as_such() {
+fn a_credentialed_request_leaves_a_full_audit_trail() {
+    use mur_git_broker::broker::{
+        AUDIT_APPROVAL_ACCEPTED, AUDIT_PREFETCH_WITH_CREDENTIAL, AUDIT_PUSH_WITH_CREDENTIAL,
+        audit_ended,
+    };
     let r = rig(true);
-    submit(&r).unwrap();
+    let (k, h) = submit(&r).unwrap();
     assert_eq!(
-        r.b.store()
-            .audit_count(
-                "alice",
-                mur_git_broker::broker::AUDIT_PREFETCH_WITH_CREDENTIAL
-            )
-            .unwrap(),
-        1
+        r.b.store().audit_trail(&k).unwrap(),
+        vec![AUDIT_PREFETCH_WITH_CREDENTIAL]
+    );
+    r.b.on_approval(&k, proof("e1", "r1", &h)).unwrap();
+    assert_eq!(
+        r.b.store().audit_trail(&k).unwrap(),
+        vec![
+            AUDIT_PREFETCH_WITH_CREDENTIAL.to_string(),
+            AUDIT_APPROVAL_ACCEPTED.to_string(),
+            AUDIT_PUSH_WITH_CREDENTIAL.to_string(),
+            audit_ended(State::Succeeded),
+        ]
     );
 }

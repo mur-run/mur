@@ -371,6 +371,40 @@ fn happy_path_submit_then_approve_pushes() {
     );
 }
 
+/// Without a credential nothing is audited as a credential use, but the approval and the end
+/// state still are, under the request's own id.
+#[test]
+fn approval_and_end_state_are_audited_without_a_credential() {
+    use mur_git_broker::broker::{AUDIT_APPROVAL_ACCEPTED, audit_ended};
+    let e = env();
+    let b = broker(&e, policy());
+    let (k, d, pack) = req(&e, "r1");
+    let h = b.submit_request(&k, &d, &pack).unwrap();
+    assert!(b.store().audit_trail(&k).unwrap().is_empty());
+    b.on_approval(&k, proof("e1", "r1", &h)).unwrap();
+    assert_eq!(
+        b.store().audit_trail(&k).unwrap(),
+        vec![
+            AUDIT_APPROVAL_ACCEPTED.to_string(),
+            audit_ended(State::Succeeded)
+        ]
+    );
+}
+
+#[test]
+fn a_denial_is_audited() {
+    use mur_git_broker::broker::audit_ended;
+    let e = env();
+    let b = broker(&e, policy());
+    let (k, d, pack) = req(&e, "r1");
+    b.submit_request(&k, &d, &pack).unwrap();
+    b.on_denial(&k).unwrap();
+    assert_eq!(
+        b.store().audit_trail(&k).unwrap(),
+        vec![audit_ended(State::Denied)]
+    );
+}
+
 #[test]
 fn resubmit_with_original_id_does_not_reimport_or_renotify() {
     let e = env();
@@ -416,6 +450,11 @@ fn policy_digest_change_voids_a_pending_request() {
     assert_eq!(r.unwrap_err(), BrokerError::PolicyChanged);
     assert_eq!(state(b.store(), &k), State::PolicyChanged);
     assert_eq!(
+        b.store().audit_trail(&k).unwrap(),
+        vec![mur_git_broker::broker::audit_ended(State::PolicyChanged)],
+        "voided before the approval was spent"
+    );
+    assert_eq!(
         git(&e.remote, &["rev-parse", "refs/heads/agent/x"]),
         e.old,
         "nothing pushed"
@@ -442,6 +481,14 @@ fn stale_remote_at_approval_time_ends_stale_old_sha_and_is_not_retried() {
     let r = b.on_approval(&k, proof("e1", "r1", &h));
     assert_eq!(r.unwrap_err(), BrokerError::StaleOldSha);
     assert_eq!(state(b.store(), &k), State::StaleOldSha);
+    assert_eq!(
+        b.store()
+            .audit_trail(&k)
+            .unwrap()
+            .last()
+            .map(String::as_str),
+        Some(mur_git_broker::broker::audit_ended(State::StaleOldSha).as_str())
+    );
     assert!(
         b.on_approval(&k, proof("e2", "r1", &h)).is_err(),
         "terminal; a second approval is inert"

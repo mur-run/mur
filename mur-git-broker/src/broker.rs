@@ -24,6 +24,17 @@ use crate::{
 /// Audit kind: a credential was handed to a pre-approval (read-only) prefetch. Kept apart from
 /// the push, which only ever happens after approval, so the two can be told apart.
 pub const AUDIT_PREFETCH_WITH_CREDENTIAL: &str = "prefetch_with_credential";
+/// Audit kind: a human approval was accepted and spent on this request.
+pub const AUDIT_APPROVAL_ACCEPTED: &str = "approval_accepted";
+/// Audit kind: a credential was handed to the post-approval push.
+pub const AUDIT_PUSH_WITH_CREDENTIAL: &str = "push_with_credential";
+/// Audit kind prefix for the state a request ended in after approval, e.g. `ended:succeeded`.
+pub const AUDIT_ENDED_PREFIX: &str = "ended:";
+
+/// The audit kind for a request that ended in `state`.
+pub fn audit_ended(state: State) -> String {
+    format!("{AUDIT_ENDED_PREFIX}{}", state.as_str())
+}
 use secrecy::SecretString;
 use sha2::{Digest, Sha256};
 use std::{
@@ -144,7 +155,7 @@ impl Broker {
             }
             Err(e) => {
                 if matches!(e, BrokerError::PrefetchRejected(_)) {
-                    let _ = self.store.audit(&key.agent_id, e.code(), now);
+                    let _ = self.store.audit(key, e.code(), now);
                 }
                 let _ = self.store.discard_validated(key);
                 self.cleanup(key);
@@ -201,9 +212,7 @@ impl Broker {
             let token_auth = self.token_auth(bound, secret)?;
             if token_auth.is_some() {
                 let now = self.cfg.clock.now();
-                let _ = self
-                    .store
-                    .audit(&key.agent_id, AUDIT_PREFETCH_WITH_CREDENTIAL, now);
+                let _ = self.store.audit(key, AUDIT_PREFETCH_WITH_CREDENTIAL, now);
             }
             let auth: &dyn RemoteAuth = match &token_auth {
                 Some(t) => t,
@@ -250,6 +259,7 @@ impl Broker {
             Err(BrokerError::PolicyChanged | BrokerError::NotEnrolled) => {
                 self.store
                     .transition(key, State::PendingApproval, State::PolicyChanged)?;
+                self.audit_end(key, State::PolicyChanged);
                 self.cleanup(key);
                 return Err(BrokerError::PolicyChanged);
             }
@@ -262,7 +272,11 @@ impl Broker {
         let secret = self.open_secret(&bound)?;
         let clock = &*self.cfg.clock;
         accept_approval(&self.store, key, &proof, clock)?;
+        let _ = self.store.audit(key, AUDIT_APPROVAL_ACCEPTED, clock.now());
         if let Err(e) = begin_execution(&self.store, key, clock) {
+            if e == BrokerError::ApprovalExpired {
+                self.audit_end(key, State::ApprovalExpired);
+            }
             self.cleanup(key);
             return Err(e);
         }
@@ -275,8 +289,17 @@ impl Broker {
             Err(e) => (State::Failed, Err(e)),
         };
         self.store.transition(key, State::Executing, state)?;
+        self.audit_end(key, state);
         self.cleanup(key);
         out
+    }
+
+    /// Best effort, like every audit write here: a failed audit never changes an outcome that
+    /// already happened.
+    fn audit_end(&self, key: &RequestKey, state: State) {
+        let _ = self
+            .store
+            .audit(key, &audit_ended(state), self.cfg.clock.now());
     }
 
     /// A verified human denial arrived. Ends the pending row as `denied` and drops its private
@@ -284,6 +307,7 @@ impl Broker {
     pub fn on_denial(&self, key: &RequestKey) -> Result<(), BrokerError> {
         self.store
             .transition(key, State::PendingApproval, State::Denied)?;
+        self.audit_end(key, State::Denied);
         self.cleanup(key);
         Ok(())
     }
@@ -303,6 +327,11 @@ impl Broker {
             .ok_or_else(|| storage("missing frozen digest"))?;
         let repo = PrivateRepo::open(&self.dir_for(key), &self.cfg.git_bin)?;
         let token_auth = self.token_auth(bound, secret)?;
+        if token_auth.is_some() {
+            let _ = self
+                .store
+                .audit(key, AUDIT_PUSH_WITH_CREDENTIAL, self.cfg.clock.now());
+        }
         let auth: &dyn RemoteAuth = match &token_auth {
             Some(t) => t,
             None => &*self.cfg.auth,

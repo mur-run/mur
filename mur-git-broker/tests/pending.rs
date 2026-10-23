@@ -326,3 +326,26 @@ fn recover_marks_executing_rows_outcome_unknown_and_is_idempotent() {
     s.recover().unwrap();
     assert_eq!(s.get(&k).unwrap().unwrap().state, OutcomeUnknown);
 }
+
+/// A store written before audit rows carried a `request_id` opens, keeps its old rows, and
+/// records the id from then on.
+#[test]
+fn an_old_audit_table_gains_request_id_on_open() {
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("pending.sqlite");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+                                 agent_id TEXT NOT NULL, ts INTEGER NOT NULL);
+             INSERT INTO audit (kind, agent_id, ts) VALUES ('queue_full', 'alice', 1);",
+        )
+        .unwrap();
+    }
+    let s = PendingStore::open(&path).unwrap();
+    assert_eq!(s.audit_count("alice", "queue_full").unwrap(), 1);
+    s.audit(&key("alice", "r1"), "probe", t0()).unwrap();
+    assert_eq!(s.audit_trail(&key("alice", "r1")).unwrap(), vec!["probe"]);
+    drop(s);
+    PendingStore::open(&path).expect("reopening an upgraded store is a no-op");
+}

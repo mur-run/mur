@@ -201,13 +201,24 @@ impl PendingStore {
                  PRIMARY KEY (agent_id, task_id, request_id)
              );
              CREATE TABLE IF NOT EXISTS audit (
-                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
-                 kind     TEXT NOT NULL,
-                 agent_id TEXT NOT NULL,
-                 ts       INTEGER NOT NULL
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 kind       TEXT NOT NULL,
+                 agent_id   TEXT NOT NULL,
+                 ts         INTEGER NOT NULL,
+                 request_id TEXT
              );",
         )
         .map_err(storage)?;
+        // Stores created before `request_id` existed get the column added; their old rows keep
+        // NULL there.
+        let has_request_id = conn
+            .prepare("SELECT 1 FROM pragma_table_info('audit') WHERE name='request_id'")
+            .and_then(|mut s| s.exists([]))
+            .map_err(storage)?;
+        if !has_request_id {
+            conn.execute("ALTER TABLE audit ADD COLUMN request_id TEXT", [])
+                .map_err(storage)?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -292,8 +303,13 @@ impl PendingStore {
 
         if let Some(err) = rejection {
             tx.execute(
-                "INSERT INTO audit (kind, agent_id, ts) VALUES (?1, ?2, ?3)",
-                params![err.code(), key.agent_id, now.timestamp_millis()],
+                "INSERT INTO audit (kind, agent_id, ts, request_id) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    err.code(),
+                    key.agent_id,
+                    now.timestamp_millis(),
+                    key.request_id
+                ],
             )
             .map_err(storage)?;
             tx.commit().map_err(storage)?;
@@ -460,15 +476,33 @@ impl PendingStore {
         Ok(())
     }
 
-    /// Record a refused or failed request in the audit table.
-    pub fn audit(&self, agent: &str, kind: &str, now: DateTime<Utc>) -> Result<(), BrokerError> {
+    /// Record one event for a request in the audit table: an intake refusal, a credential handed
+    /// to git, an accepted approval, or the state a request ended in.
+    pub fn audit(
+        &self,
+        key: &RequestKey,
+        kind: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), BrokerError> {
         self.lock()?
             .execute(
-                "INSERT INTO audit (kind, agent_id, ts) VALUES (?1, ?2, ?3)",
-                params![kind, agent, now.timestamp_millis()],
+                "INSERT INTO audit (kind, agent_id, ts, request_id) VALUES (?1, ?2, ?3, ?4)",
+                params![kind, key.agent_id, now.timestamp_millis(), key.request_id],
             )
             .map_err(storage)?;
         Ok(())
+    }
+
+    /// The audit kinds recorded for one request, oldest first.
+    pub fn audit_trail(&self, key: &RequestKey) -> Result<Vec<String>, BrokerError> {
+        let guard = self.lock()?;
+        let mut stmt = guard
+            .prepare("SELECT kind FROM audit WHERE agent_id=?1 AND request_id=?2 ORDER BY id")
+            .map_err(storage)?;
+        stmt.query_map(params![key.agent_id, key.request_id], |r| r.get(0))
+            .map_err(storage)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(storage)
     }
 
     pub fn get(&self, key: &RequestKey) -> Result<Option<Row>, BrokerError> {
