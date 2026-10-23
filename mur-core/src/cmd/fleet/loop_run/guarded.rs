@@ -222,12 +222,18 @@ async fn run_guarded_inner(
         crate::executor::dag::default_unanswered(),
     );
     if let Some(r) = &resume {
-        // Record `Running` (above), write `run_resumed`, drop `.paused`, and
-        // the checkpoint LAST: until it goes, admission reads a `Running`
-        // record beside it as an interrupted resume (design §5.4 step 6).
+        // Record `Running` (above), write `run_resumed`, drop the checkpoint,
+        // and `.paused` LAST. Deleting the checkpoint is the one commit point:
+        // every recovery path finds a run through `.paused`, so a checkpoint
+        // must never outlive it (design §5.4 step 6). Before the commit a
+        // `Running` record beside both reads as an interrupted resume; after
+        // it, the run is an ordinary crashed run and `.paused` is a stale
+        // leftover the next run or `stop` removes (§8.5). The checkpoint can
+        // not wait for the first resumed iteration: after that it would roll
+        // spend and elapsed time back.
         super::resume::record_resumed(&svc, mur_home, &fleet, r);
-        let _ = std::fs::remove_file(super::super::control::paused_path(mur_home, name));
         checkpoint::remove(mur_home, &run_id);
+        let _ = std::fs::remove_file(super::super::control::paused_path(mur_home, name));
     }
 
     // ── Pre-dispatch triage ────────────────────────────────────────────────
