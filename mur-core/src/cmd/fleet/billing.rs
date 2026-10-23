@@ -48,13 +48,8 @@ pub fn fleet_billing_with(
 /// `fleet_billing_with` against the real `~/.mur`: each agent's
 /// `profile.yaml` `model_ref` → `models.yaml` entry → `billing_or_inferred`.
 pub fn fleet_billing(mur_home: &Path, fleet: &Fleet) -> FleetBilling {
-    let registry = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml")).ok();
-    let mut out = fleet_billing_with(fleet, |agent| {
-        let profile = mur_common::agent::AgentProfile::load(mur_home, agent).ok()?;
-        let model_ref = profile.model_ref?;
-        let entry = registry.as_ref()?.models.get(&model_ref)?;
-        Some(entry.billing_or_inferred())
-    });
+    let lookup = billing_lookup(mur_home);
+    let mut out = fleet_billing_with(fleet, &lookup);
     // Fill in the model_ref for the unknowns so the note can name it.
     for (agent, model_ref) in out.unknown.iter_mut() {
         if let Ok(p) = mur_common::agent::AgentProfile::load(mur_home, agent)
@@ -64,6 +59,29 @@ pub fn fleet_billing(mur_home: &Path, fleet: &Fleet) -> FleetBilling {
         }
     }
     out
+}
+
+/// One agent's billing against the real `~/.mur`: `profile.yaml` `model_ref`
+/// → `models.yaml` entry → `billing_or_inferred`. `None` = unresolvable,
+/// which every caller MUST treat as metered.
+pub fn billing_lookup(mur_home: &Path) -> impl Fn(&str) -> Option<BillingMode> + '_ {
+    let registry = mur_common::model::ModelRegistry::load_from(&mur_home.join("models.yaml")).ok();
+    move |agent| {
+        let profile = mur_common::agent::AgentProfile::load(mur_home, agent).ok()?;
+        let model_ref = profile.model_ref?;
+        let entry = registry.as_ref()?.models.get(&model_ref)?;
+        Some(entry.billing_or_inferred())
+    }
+}
+
+/// Does this agent's work cost money? Metered, or unresolvable (the
+/// conservative reading, as in [`fleet_billing_with`]). Local and subscription
+/// agents do not: their tokens are never counted against a `cost_usd` cap.
+pub fn agent_bills(mode: Option<BillingMode>) -> bool {
+    !matches!(
+        mode,
+        Some(BillingMode::Local) | Some(BillingMode::Subscription)
+    )
 }
 
 #[cfg(test)]

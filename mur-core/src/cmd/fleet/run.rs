@@ -459,6 +459,9 @@ pub async fn cmd_fleet_run(
     // A one-shot run is unattended too: its members inherit the fleet's
     // resolved deadline (spec §3.4).
     let bounds = super::loop_run::fleet_bounds(mur_home, &fleet, None, None)?;
+    // #2083: `cost_usd` binds a one-shot run too, on actual billable spend.
+    // `None` for a fleet that cannot spend (local / subscription only).
+    let budget = super::oneshot_budget::OneShotBudget::for_fleet(mur_home, &fleet, bounds.cost_usd);
 
     // ── Pre-dispatch triage ────────────────────────────────────────────────
     // Ask whether this goal fits the budget it is about to be handed, BEFORE
@@ -520,7 +523,12 @@ pub async fn cmd_fleet_run(
         run_label: format!("fleet {}", fleet.name),
         // #2036: `mur fleet stop` halts this run at the next step boundary
         // and cancels in-flight member turns — not only before it starts.
-        stop: Some(super::control::stop_signal(mur_home, name)),
+        // #2083: so does reaching `cost_usd`, through the same signal.
+        stop: Some(match &budget {
+            Some(b) => b.stop_signal(super::control::stop_signal(mur_home, name)),
+            None => super::control::stop_signal(mur_home, name),
+        }),
+        on_step: budget.as_ref().map(|b| b.observer()),
         // Cap fan-out so N agents don't cascade past API rate limits.
         max_concurrency: Some(if exec_parallel {
             fanout_cap(proc.steps.len())
@@ -576,7 +584,7 @@ pub async fn cmd_fleet_run(
                 job.status = JobStatus::Canceled;
                 job.error = Some(match &exec_result {
                     Ok(o) if o.status == mur_common::pipeline::PipelineStatus::Stopped => {
-                        "stopped by `mur fleet stop`".to_string()
+                        stop_text(budget.as_deref())
                     }
                     _ => "run was canceled/rejected".to_string(),
                 });
@@ -592,7 +600,7 @@ pub async fn cmd_fleet_run(
             // No channel terminal recorded, but the kill-switch halted it.
             (_, Ok(out)) if out.status == mur_common::pipeline::PipelineStatus::Stopped => {
                 job.status = JobStatus::Canceled;
-                job.error = Some("stopped by `mur fleet stop`".to_string());
+                job.error = Some(stop_text(budget.as_deref()));
             }
             (_, Ok(out)) if out.status == mur_common::pipeline::PipelineStatus::Skipped => {
                 job.status = JobStatus::Blocked;
@@ -621,9 +629,11 @@ pub async fn cmd_fleet_run(
         let (price_per_1k, _) = super::loop_run::fleet_price_per_1k(mur_home);
         let (spent, stop_reason, success) = match &exec_result {
             Ok(o) => (
-                Some(super::loop_run::iteration_cost_usd(
-                    o.tokens_used,
-                    price_per_1k,
+                // Billable spend when a cap is live (#2083); otherwise the
+                // flat all-tokens figure triage has always scored against.
+                Some(budget.as_ref().map_or_else(
+                    || super::loop_run::iteration_cost_usd(o.tokens_used, price_per_1k),
+                    |b| b.spent_usd(),
                 )),
                 // The DAG surfaces a guard stop through the step text, not a
                 // field of its own; `None` here means "no guard reported",
@@ -708,6 +718,14 @@ pub async fn cmd_fleet_run(
         }
     }
     Ok(())
+}
+
+/// Who stopped a one-shot run: the cost cap (#2083) or the kill-switch.
+fn stop_text(budget: Option<&super::oneshot_budget::OneShotBudget>) -> String {
+    match budget.filter(|b| b.tripped()) {
+        Some(b) => b.stop_reason(),
+        None => "stopped by `mur fleet stop`".to_string(),
+    }
 }
 
 #[cfg(test)]

@@ -253,10 +253,8 @@ pub(crate) fn default_unanswered() -> mur_common::hitl::Unanswered {
 pub struct StepEvent {
     pub id: String,
     /// The delegate target agent, when this step is a delegation. `None`
-    /// otherwise. ponytail: currently redundant with the progress step's
-    /// `worker` (both come from `step.delegate_to`); kept as part of the
-    /// generic observer contract. Drop it if no consumer ever reads it.
-    #[allow(dead_code)]
+    /// otherwise. The one-shot cost guard reads it to tell billable members
+    /// from local / subscription ones (#2083).
     pub agent: Option<String>,
     pub kind: StepEventKind,
     /// Per-step delegate token usage (0 for non-delegate or unknown).

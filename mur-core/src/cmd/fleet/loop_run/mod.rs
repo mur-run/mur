@@ -327,7 +327,10 @@ fn iteration_goal(
 /// spend, none for a fleet that cannot (spec D4). Enforcing a dollar ceiling
 /// on local models stopped real runs on a projection of money nobody was
 /// paying — the failure mode this exists to remove.
-fn budget_for(fleet_budget: Option<f64>, billing: &super::billing::FleetBilling) -> Option<f64> {
+pub(in crate::cmd::fleet) fn budget_for(
+    fleet_budget: Option<f64>,
+    billing: &super::billing::FleetBilling,
+) -> Option<f64> {
     if billing.billable { fleet_budget } else { None }
 }
 
