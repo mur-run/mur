@@ -130,6 +130,7 @@ pub fn extend_scratch_env(env: &mut Vec<(String, String)>, dir: &Path) {
 }
 
 pub mod prune;
+pub mod sccache_server;
 
 #[cfg(test)]
 mod tests;

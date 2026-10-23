@@ -257,6 +257,8 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             }
             crate::agent_paths::extend_scratch_env(&mut env, d);
         }
+        // Parallel first compiles race to start the agent's own server (#1860).
+        crate::agent_paths::sccache_server::ensure_for(&command, &env).await;
         let spool_dir = self.working_dir.join("jobs");
         let job_id = self
             .jobs

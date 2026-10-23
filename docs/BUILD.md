@@ -127,20 +127,27 @@ error: failed to run custom build command for `whisper-rs-sys v0.15.0`
   sccache: error: Server startup failed: File exists (os error 17)
 ```
 
-**Likely cause** — no sccache server is running on `SCCACHE_SERVER_UDS` yet,
-so the parallel CMake compiles of ggml each try to start one, and the losers
-fail when the socket file already exists. (Inferred from the error; not traced
-in sccache itself.)
+**Cause** — no sccache server is listening on `SCCACHE_SERVER_UDS` yet, so
+the parallel CMake compiles of ggml each try to start one and the losers fail.
+MUR agents get a socket of their own (#1860), so the first build in a fresh
+agent or worktree always starts from no server. Reproduced with sccache 0.14:
+16 parallel `sccache cc -c` with no server fail 1 in 16 every round; with the
+server started first, 0 in 16. A socket file left behind by a killed server is
+not the cause — `--start-server` succeeds over it.
 
-**Fix** — start the server once before building, with the same environment
-the build will use:
+**Fix** — the agent bash tool now starts the server on the agent's socket
+before any command that runs `cargo` or `sccache`, when nothing is listening
+there. Outside an agent, or with an older runtime, start it once yourself
+with the same environment the build will use:
 
 ```bash
 sccache --start-server
 cargo nextest run --workspace --no-fail-fast
 ```
 
-`sccache --show-stats` succeeding is a quick check that the server is up.
+`sccache --show-stats` succeeding is a quick check that the server is up. The
+server exits after `SCCACHE_IDLE_TIMEOUT` seconds idle (sccache default 600);
+the agent re-checks before each build, so that needs no action.
 
 ### `ort-sys` build script fails inside a sandbox (ONNX Runtime cache dir)
 
