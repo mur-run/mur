@@ -77,9 +77,9 @@ impl TaskRunner {
         // already uses; fine for the serial-delegate fleet path.
         let tok_in0 = self.cumulative_input_tokens.load(Ordering::Relaxed);
         let tok_out0 = self.cumulative_output_tokens.load(Ordering::Relaxed);
-        // Clear the previous turn's model_ref so a stub/misconfigured backend
-        // (which never calls a real model) reports none rather than stale data.
-        self.turn_models.reset();
+        // Per-model share snapshot, same delta approach: never reset, so an
+        // overlapping turn on this runner can't erase this one's calls (#2083).
+        let models0 = self.turn_models.mark();
         // Same for the truncation flag: it describes THIS turn only.
         self.last_turn_truncated.store(false, Ordering::Relaxed);
 
@@ -233,7 +233,7 @@ impl TaskRunner {
             // this field is worth). "smart-background" here means "this request
             // was tagged Background and therefore eligible for Smart routing",
             // not "Smart definitely picked the cheap model".
-            let model_ref = self.turn_models.last_model();
+            let model_ref = self.turn_models.last_model_since(&models0);
             let route_reason = match spec.intent {
                 RequestIntent::Interactive => "interactive",
                 RequestIntent::Background(_) => "smart-background",
@@ -246,7 +246,7 @@ impl TaskRunner {
                 // The totals above split by the model that answered each call:
                 // a routed turn mixes models, and pricing the sum at any one of
                 // their rates is wrong for the rest (#2083).
-                "by_model": self.turn_models.to_json(),
+                "by_model": self.turn_models.to_json_since(&models0),
                 "route_reason": route_reason,
             });
             // Additive: present (true) only when the final generation was cut

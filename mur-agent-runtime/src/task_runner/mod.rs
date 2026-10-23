@@ -192,15 +192,15 @@ pub struct TaskRunner {
     last_input_tokens: AtomicU64,
     /// Per-answering-model usage of the current turn: feeds
     /// `Task.usage.model_ref` (most recent call) and `Task.usage.by_model`
-    /// (each model's share, for spend accounting). Reset at the start of each
-    /// `run_sync_inner` turn. Same runner-lifetime concurrency caveat as
-    /// `cumulative_input_tokens`: overlapping turns on one runner can race it.
+    /// (each model's share, for spend accounting). Runner-lifetime and never
+    /// reset: each `run_sync_inner` turn snapshot-deltas it like
+    /// `cumulative_input_tokens`, so overlapping turns can only over-count.
     turn_models: turn_models::TurnModels,
     /// True when the most recent LLM response of the current turn was cut off
     /// at the provider's max_tokens ceiling (`StopReason::MaxTokens`). Read by
     /// the `token_usage` closure to add `"truncated": true` to `Task.usage`;
-    /// reset alongside `turn_models` at the start of each `run_sync_inner`
-    /// turn. Same runner-lifetime concurrency caveat as `turn_models`.
+    /// reset at the start of each `run_sync_inner` turn. Overlapping turns on
+    /// one runner can race it (advisory only; not used for spend).
     last_turn_truncated: AtomicBool,
     hook_chain: Option<Arc<HookChain>>,
     hook_ctx: Option<HookCtx>,
