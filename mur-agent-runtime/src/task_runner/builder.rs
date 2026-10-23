@@ -69,6 +69,7 @@ impl TaskRunner {
             hook_cancel: None,
             pending_approvals: None,
             shim_trust: Default::default(),
+            parking: Default::default(),
             decision_store: None,
             agent_name: String::new(),
             notifier: None,
@@ -321,6 +322,19 @@ impl TaskRunner {
         self.shim_trust.clone()
     }
 
+    /// What `hitl/pending` lists (#2085). Shared with the gate that parks.
+    pub fn parking(&self) -> crate::hitl::parked::Parking {
+        self.parking.clone()
+    }
+
+    /// #2085: let this headless turn's undecided `Ask` calls wait up to
+    /// `wait` for a human (clamped to the turn's deadline once it is known)
+    /// instead of being refused at once. Closed by
+    /// [`Self::unregister_client_notifier`].
+    pub fn open_approval_window(&self, task_id: &str, wait: std::time::Duration) {
+        self.parking.open_window(task_id, wait);
+    }
+
     pub fn with_pending_approvals(mut self, pa: HitlApprovals) -> Self {
         self.pending_approvals = Some(pa);
         self
@@ -498,6 +512,7 @@ impl TaskRunner {
         self.client_notifiers.lock().await.remove(task_id);
         self.approval_sinks.lock().await.remove(task_id);
         self.one_shot_approvals.lock().await.remove(task_id);
+        self.parking.close_window(task_id);
     }
 
     /// Make this turn's tool approvals one-shot (#1783): the gate always asks

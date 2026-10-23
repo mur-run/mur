@@ -119,6 +119,13 @@ pub enum AgentAction {
         /// content (issue #715 Part B).
         #[arg(long)]
         output_artifact_path: Option<String>,
+        /// When a tool call needs approval, wait for a human to answer it
+        /// (`mur agent hitl <agent> approve <id>`) instead of failing at once
+        /// with `hitl_approval_required`. Optional max wait (`30s`, `10m`,
+        /// `1h`; default 30m); the agent's deadline still wins if sooner.
+        /// Nobody answering in time is the same `hitl_approval_required`.
+        #[arg(long, value_name = "DURATION", num_args = 0..=1, default_missing_value = "")]
+        wait_approval: Option<String>,
     },
     /// Dial an agent's Unix socket and print its A2A Agent Card
     Card {

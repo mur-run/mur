@@ -5,6 +5,7 @@
 pub mod authority;
 pub mod batch;
 pub mod integrity;
+pub mod parked;
 pub mod remembered;
 pub mod shim_ticket;
 pub mod store;

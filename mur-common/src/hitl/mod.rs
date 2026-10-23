@@ -244,6 +244,20 @@ pub struct HitlResponse {
 pub const HITL_LIST_METHOD: &str = "hitl/list";
 pub const HITL_FORGET_METHOD: &str = "hitl/forget";
 
+/// #2085: lists the approvals a running agent is waiting on right now, so a
+/// human can answer one from another terminal (`mur agent hitl pending`).
+pub const HITL_PENDING_METHOD: &str = "hitl/pending";
+
+/// #2085: `message/send` param. With `can_approve: false`, an `Ask` call
+/// nobody has decided is parked for at most this many seconds (clamped to the
+/// turn's deadline) instead of refused at once; `mur agent hitl approve`
+/// answers it. Absent = refuse at once, the #2087 behaviour.
+pub const WAIT_APPROVAL_PARAM: &str = "wait_approval_secs";
+
+/// How long `mur agent send --wait-approval` (no value) parks a call. The
+/// turn's deadline still wins when it comes first.
+pub const DEFAULT_WAIT_APPROVAL_SECS: u64 = 30 * 60;
+
 /// Key inside an `EventKind::Note` payload that marks a gate-B revocation.
 /// A `Note` rather than a new `EventKind` so a reader built before #1806
 /// still parses the channel (an unknown kind would fail the whole line).

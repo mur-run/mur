@@ -278,5 +278,9 @@ pub(super) fn build_dispatcher(
         mur_common::hitl::HITL_FORGET_METHOD,
         Box::new(crate::protocol::methods::hitl_memory::HitlForgetHandler::new(decisions)),
     );
+    d.register(
+        mur_common::hitl::HITL_PENDING_METHOD,
+        Box::new(crate::protocol::methods::hitl_pending::HitlPendingHandler::new(runner.parking())),
+    );
     d
 }

@@ -4,6 +4,7 @@ pub mod channel_delegate;
 pub mod effort_set;
 pub mod egress_grant;
 pub mod hitl_memory;
+pub mod hitl_pending;
 pub mod memory_reload;
 pub mod message_send;
 pub mod model_set;

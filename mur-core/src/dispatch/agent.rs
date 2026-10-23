@@ -37,7 +37,13 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
             name,
             message,
             output_artifact_path,
-        } => cmd::agent::cmd_send(&name, &message, output_artifact_path.as_deref())?,
+            wait_approval,
+        } => cmd::agent::cmd_send(
+            &name,
+            &message,
+            output_artifact_path.as_deref(),
+            wait_approval.as_deref(),
+        )?,
         AgentAction::Card { name } => cmd::agent::cmd_card(&name)?,
         AgentAction::Dial {
             name,
@@ -557,6 +563,15 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
                 all,
                 denies_only,
             } => cmd::agent::cmd_hitl_forget(&agent, hash.as_deref(), all, denies_only)?,
+            crate::cli::AgentHitlAction::Pending { json } => {
+                cmd::agent::cmd_hitl_pending(&agent, json)?
+            }
+            crate::cli::AgentHitlAction::Approve { id } => {
+                cmd::agent::cmd_hitl_answer(&agent, &id, true)?
+            }
+            crate::cli::AgentHitlAction::Deny { id } => {
+                cmd::agent::cmd_hitl_answer(&agent, &id, false)?
+            }
         },
         AgentAction::Secret { agent, action } => match action {
             AgentSecretAction::Set { key, value } => {

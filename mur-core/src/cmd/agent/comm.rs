@@ -7,9 +7,16 @@ use crate::a2a_dial::{DialMode, dial_method};
 
 use super::resolve_mur_home;
 
-pub fn cmd_send(name: &str, message_json: &str, output_artifact_path: Option<&str>) -> Result<()> {
+pub fn cmd_send(
+    name: &str,
+    message_json: &str,
+    output_artifact_path: Option<&str>,
+    wait_approval: Option<&str>,
+) -> Result<()> {
     let msg: serde_json::Value =
         serde_json::from_str(message_json).context("parse --message JSON")?;
+    // Parsed before anything is sent: a typo must not cost a turn.
+    let wait = wait_approval.map(parse_wait).transpose()?;
     let home = resolve_mur_home()?;
     // Required-budget gate (plan §9), same refusal the TUI and --plain apply.
     // A script is still a turn: the runtime injects every Required memory
@@ -26,17 +33,77 @@ pub fn cmd_send(name: &str, message_json: &str, output_artifact_path: Option<&st
     if let Some(path) = output_artifact_path {
         params["output_artifact_path"] = serde_json::json!(path);
     }
-    // `message/send` to an ephemeral runtime is meaningless — the task
-    // would die with the process. Require the agent be running.
-    let result = dial_method(
-        &home,
-        name,
-        "message/send",
-        params,
-        DialMode::RequireRunning,
-    )?;
+    let result = match wait {
+        None => {
+            // `message/send` to an ephemeral runtime is meaningless — the task
+            // would die with the process. Require the agent be running.
+            dial_method(
+                &home,
+                name,
+                "message/send",
+                params,
+                DialMode::RequireRunning,
+            )?
+        }
+        Some(wait) => send_waiting(&home, name, params, wait)?,
+    };
     println!("{}", serde_json::to_string(&result)?);
     Ok(())
+}
+
+/// #2085: `--wait-approval[=DURATION]`. Empty = the default wait.
+fn parse_wait(raw: &str) -> Result<std::time::Duration> {
+    if raw.trim().is_empty() {
+        return Ok(std::time::Duration::from_secs(
+            mur_common::hitl::DEFAULT_WAIT_APPROVAL_SECS,
+        ));
+    }
+    match mur_common::limits::parse_duration(raw) {
+        Some(d) if !d.is_zero() => Ok(d),
+        _ => anyhow::bail!(
+            "--wait-approval: '{raw}' is not a duration; use e.g. 30s, 10m, 1h (or omit the value for 30m)"
+        ),
+    }
+}
+
+/// Send and stay on the line while a parked approval waits. Streaming, not a
+/// plain dial, for two reasons: the approval request arrives as a
+/// notification, which is where the approve command gets printed (stderr, so
+/// stdout stays the one JSON result); and the runtime's heartbeat keeps the
+/// dial's idle timeout from firing while nobody has answered yet.
+fn send_waiting(
+    home: &std::path::Path,
+    name: &str,
+    mut params: serde_json::Value,
+    wait: std::time::Duration,
+) -> Result<serde_json::Value> {
+    let lock = home.join("agents").join(name).join("running.lock");
+    if let Ok(bytes) = std::fs::read(&lock)
+        && let Ok(l) = serde_json::from_slice::<mur_common::LockFile>(&bytes)
+        && l.proto_version < mur_common::build::HITL_PARK_MIN_PROTO
+    {
+        // An older runtime ignores the param and refuses at once — the flag
+        // would silently do nothing. Say so before spending a turn.
+        anyhow::bail!(
+            "agent '{name}' is running a runtime too old to wait for approvals (proto {}); \
+             run 'mur agent restart {name}' after 'mur update', or drop --wait-approval",
+            l.proto_version
+        );
+    }
+    params[mur_common::hitl::WAIT_APPROVAL_PARAM] = serde_json::json!(wait.as_secs());
+    let agent = crate::a2a_dial::canonicalize_agent_name(home, name);
+    crate::a2a_dial::dial_message_streaming(
+        home,
+        name,
+        params,
+        |_, _, _| {},
+        |hitl| {
+            for line in super::hitl_pending::approve_hint(&agent, &hitl) {
+                eprintln!("{line}");
+            }
+        },
+        |_| {},
+    )
 }
 
 /// Translate a raw JSON-RPC failure into something the operator can act on.
@@ -152,5 +219,30 @@ mod dial_tests {
         let raw = anyhow::anyhow!("agent 'mur' is not running (no /x/running.lock)");
         let out = explain_dial_error("mur", "tasks/list", raw).to_string();
         assert_eq!(out, "agent 'mur' is not running (no /x/running.lock)");
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::parse_wait;
+    use std::time::Duration;
+
+    #[test]
+    fn a_bare_flag_waits_the_default() {
+        assert_eq!(
+            parse_wait("").unwrap(),
+            Duration::from_secs(mur_common::hitl::DEFAULT_WAIT_APPROVAL_SECS)
+        );
+    }
+
+    #[test]
+    fn a_duration_is_honoured() {
+        assert_eq!(parse_wait("10m").unwrap(), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn zero_and_nonsense_are_refused_before_sending() {
+        assert!(parse_wait("0").is_err());
+        assert!(parse_wait("soon").is_err());
     }
 }

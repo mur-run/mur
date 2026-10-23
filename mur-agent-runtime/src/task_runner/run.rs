@@ -161,6 +161,8 @@ impl TaskRunner {
                         // limits: value fails the task naming the key (§4).
                         let settings = self.turn_settings();
                         let bounds = self.bounds_for(&spec, &settings)?;
+                        // #2085: a parked approval must not outlive the turn.
+                        self.parking.clamp_window(&id, bounds.deadline);
                         self.run_agentic_loop(
                             &id,
                             client.as_ref(),

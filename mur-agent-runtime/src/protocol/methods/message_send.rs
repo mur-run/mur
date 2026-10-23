@@ -75,6 +75,16 @@ impl MessageSendHandler {
 /// `params.limits.deadline_secs`, when the caller sent one. Negative or
 /// non-integer values read as absent — the resolver then applies the scopes,
 /// which is the safe direction (a bound, not none).
+/// #2085: how long a headless caller will wait for a human to answer an
+/// approval. Only meaningful with `can_approve: false`; zero or absent means
+/// refuse at once (the #2087 behaviour).
+pub(crate) fn wait_approval(p: &Value) -> Option<std::time::Duration> {
+    p.get(mur_common::hitl::WAIT_APPROVAL_PARAM)
+        .and_then(|v| v.as_u64())
+        .filter(|s| *s > 0)
+        .map(std::time::Duration::from_secs)
+}
+
 pub(crate) fn caller_deadline_secs(p: &Value) -> Option<u64> {
     p.get("limits")
         .and_then(|l| l.get("deadline_secs"))
@@ -229,6 +239,11 @@ impl MethodHandler for MessageSendHandler {
                     .await;
                 if !remember_decisions {
                     self.runner.mark_one_shot_approvals(&turn_task_id).await;
+                }
+                // An attended caller is asked directly; the window is for the
+                // one that cannot answer but is willing to wait for someone who can.
+                if !can_approve && let Some(wait) = wait_approval(&p) {
+                    self.runner.open_approval_window(&turn_task_id, wait);
                 }
                 // Steering channel: only when this turn has a task id to address
                 // it by. Without an id the sender would be immediately dropped,

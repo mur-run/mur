@@ -41,6 +41,8 @@ pub struct GuardedToolCall {
     pub(crate) agent_name: String,
     pub(crate) decision_store: Option<Arc<dyn crate::hitl::store::DecisionStore>>,
     pub(crate) hitl_timeout_secs: u32,
+    /// #2085: headless turns allowed to wait for an approval.
+    pub(crate) parking: crate::hitl::parked::Parking,
     pub(crate) pending_approvals: Option<HitlApprovals>,
     pub(crate) shim_trust: Option<crate::hitl::shim_ticket::ShimTrust>,
     /// B1 sandbox enforcing on this boot. `false` refuses every `Ask` tool
@@ -150,8 +152,8 @@ impl GuardedToolCall {
         // decision store had its say, so an answer the human already gave
         // (e.g. from `mur agent cli --ask`) serves a headless `mur agent
         // send` too. Before the sink check: this caller never needs one.
-        if entry.as_ref().map(|(_, ok)| *ok) == Some(false) {
-            self.settle_headless(task_id, calls, pending, &mut out)
+        if let Some((sink, false)) = &entry {
+            self.settle_headless(task_id, calls, pending, sink, &mut out)
                 .await;
             return (out, step_ids);
         }
@@ -184,6 +186,7 @@ impl GuardedToolCall {
             store: self.decision_store.as_ref(),
             shim_trust: self.shim_trust.as_ref(),
             remember: !self.one_shot_approvals.lock().await.contains(task_id),
+            parking: None,
         };
         let (settled, ask) = gate.recall(pending).await;
         out.extend(settled);
