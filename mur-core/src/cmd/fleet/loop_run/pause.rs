@@ -87,11 +87,16 @@ pub(super) fn record_pause(svc: &mur_channel::ChannelService, s: &PauseSnapshot<
     .to_note_payload();
     // Best-effort: the checkpoint is the record that matters, and resume
     // works from it alone if the note is missing.
+    //
+    // Signed with the trusted writer's key, NOT the fleet's router: resume
+    // authenticates this note through `is_router_signed`, which verifies a
+    // `System` actor against `ROUTER_AGENT`. Signing with a custom router
+    // (`router: orchestrator`) would write a note its own resume rejects.
     if let Err(error) = crate::channel_writer::append_as_writer(
         svc,
         s.mur_home,
         &s.fleet.channel_id,
-        s.fleet.router_or_concierge(),
+        crate::channel_writer::ROUTER_AGENT,
         ChannelActor::System,
         mur_common::channel::EventKind::Note,
         payload,

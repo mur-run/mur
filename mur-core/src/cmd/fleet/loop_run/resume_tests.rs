@@ -538,3 +538,47 @@ fn a_member_signed_pause_cannot_supply_the_original_bounds() {
         "a forged note must not replace the router-signed bounds"
     );
 }
+
+/// A fleet with a custom `router:` must be able to authenticate its own
+/// pause (#2072 review). `record_pause` used to sign with the fleet's router
+/// while `is_router_signed` verifies a `System` actor against
+/// `ROUTER_AGENT`, so every non-`mur` router fell back to the unverified
+/// checkpoint. Goes through the real writer, not a hand-signed note.
+#[test]
+fn a_custom_router_fleet_reads_back_its_own_signed_pause() {
+    let tmp = tempfile::tempdir().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
+    // The custom router has a key of its own; it must not be the one used.
+    crate::channel_writer::plant_identity_for(tmp.path(), "pm");
+    let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+    let ch = svc.create_for_workflow("dev").unwrap();
+    let mut f = fleet();
+    f.router = Some("pm".into());
+    f.channel_id = ch.id.clone();
+    let b = bounds(600, Stuck::After(Duration::from_secs(300)), Some(5.0));
+    super::super::pause::record_pause(
+        &svc,
+        &super::super::pause::PauseSnapshot {
+            mur_home: tmp.path(),
+            fleet: &f,
+            run_id: RUN,
+            iteration: 2,
+            spent_usd: 1.5,
+            active_elapsed: Duration::from_secs(60),
+            stuck_elapsed: Duration::from_secs(5),
+            start_seq: 0,
+            job_id: None,
+            goal_override: None,
+            bounds: &b,
+            target_cwd: None,
+            procedure: &[],
+            hitl: mur_common::hitl::Unanswered::Defer,
+        },
+    )
+    .unwrap();
+
+    let events = svc.load_events(&ch.id).unwrap();
+    let got = signed_pause(tmp.path(), &ch.id, &events, RUN)
+        .expect("a custom-router fleet's own pause must verify");
+    assert_eq!(got.bounds.and_then(|b| b.cost_usd), Some(5.0));
+}

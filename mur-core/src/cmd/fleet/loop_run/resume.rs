@@ -6,9 +6,12 @@
 //! loop through `run_guarded_from` with the state the checkpoint carried.
 //!
 //! The checkpoint is written by the run itself, so it is never trusted to
-//! widen anything: bounds come from the signed `run_paused` event and are
-//! `min`-ed with what `fleet.yaml` allows now, counters are `max`-ed with that
-//! event, and the HITL policy is never loosened from `defer`.
+//! widen anything: bounds come from the `run_paused` event signed with the
+//! trusted writer's key (`ROUTER_AGENT`, whatever the fleet's `router:`) and
+//! are `min`-ed with what `fleet.yaml` allows now, counters are `max`-ed with
+//! that event, and the HITL policy is never loosened from `defer`. When no
+//! such event verifies (no writer identity, note lost), the checkpoint's
+//! bounds are used and resume warns — still `min`-ed with `fleet.yaml`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -56,9 +59,11 @@ pub struct ResumeFrom {
 }
 
 /// Each bound is the tighter of the original and the current one (design
-/// §5.3): a limit lowered during the pause bites, and neither a raised
-/// `fleet.yaml` nor an edited checkpoint widens the original, because the
-/// original is read from the signed `run_paused`. A cap set on either side is
+/// §5.3): a limit lowered during the pause bites, and a raised `fleet.yaml`
+/// never widens the original. An edited checkpoint cannot widen it either
+/// when the original came from the router-signed `run_paused`
+/// ([`ResumeFrom::bounds_authenticated`]); without that event the checkpoint
+/// is the original and only `fleet.yaml` caps it. A cap set on either side is
 /// never dropped to "unbounded".
 pub(super) fn tighten(now: FleetBounds, r: &ResumeFrom) -> FleetBounds {
     use mur_common::limits::Stuck;
@@ -132,7 +137,8 @@ pub(super) struct SignedPause {
 /// `verify_event` is not enough: it checks an event against its OWN actor's
 /// key, so a member signing a forged pause as itself would pass and its
 /// bounds would replace the originals. `is_router_signed` requires a
-/// non-agent actor and the router's key — the identity `pause` writes with.
+/// non-agent actor and `ROUTER_AGENT`'s key — the identity `record_pause`
+/// writes with for every fleet, including one with a custom `router:`.
 fn signed_pause(
     mur_home: &Path,
     channel_id: &str,
