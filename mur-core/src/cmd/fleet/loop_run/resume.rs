@@ -440,8 +440,10 @@ fn pending_resume(mur_home: &Path, run_id: &str) -> bool {
 
 /// A fresh run while a run of this fleet is paused would orphan it and reset
 /// its limits (design §8.4). Checked with the run lock held, so it is not
-/// check-then-act. An interrupted resume counts as paused; any other run the
-/// sentinel names is a leftover of a crash (design §8.5) and is removed.
+/// check-then-act. An interrupted resume counts as paused. A sentinel is
+/// removed as a crash leftover only when the record is not paused AND no
+/// checkpoint exists (design §8.5): a checkpoint is a pause nobody discarded,
+/// so only `mur fleet stop` may drop it.
 pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result<()> {
     let Some(run_id) = control::paused_run_id(mur_home, name) else {
         return Ok(());
@@ -449,6 +451,11 @@ pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result
     if pending_resume(mur_home, &run_id) {
         bail!(
             "fleet '{name}' has a paused run ({run_id}): continue it with `mur fleet resume {name}`, or discard it with `mur fleet stop {name}`"
+        );
+    }
+    if checkpoint::load(mur_home, &run_id).ok().flatten().is_some() {
+        bail!(
+            "fleet '{name}' holds a checkpoint for run {run_id}, whose record is not paused, so it cannot be resumed: discard it with `mur fleet stop {name}`"
         );
     }
     let _ = std::fs::remove_file(control::paused_path(mur_home, name));
