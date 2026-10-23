@@ -24,6 +24,7 @@ use crate::executor::delegation::cwd::{RunCwd, routing_note};
 pub(crate) mod checkpoint;
 mod clock;
 mod guarded;
+mod guarded_steps;
 mod observer;
 mod pause;
 pub(crate) mod pause_events;
