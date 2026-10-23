@@ -6,7 +6,7 @@
 //! claims a pause that has nothing to resume from.
 
 use super::checkpoint::{self, CHECKPOINT_SCHEMA, Checkpoint};
-use super::pause_events::{FleetRunPayload, PauseReason};
+use super::pause_events::{FleetRunPayload, PauseReason, RunBounds};
 use super::*;
 use mur_common::skill::manifest::ProcedureStep;
 
@@ -78,15 +78,25 @@ pub(super) fn record_pause(svc: &mur_channel::ChannelService, s: &PauseSnapshot<
         spent_usd: s.spent_usd,
         active_elapsed_ms: cp.active_elapsed_ms,
         reason: PauseReason::Operator,
+        bounds: Some(RunBounds {
+            deadline_ms: cp.deadline_ms,
+            stuck_ms: cp.stuck_ms,
+            cost_usd: cp.cost_usd,
+        }),
     }
     .to_note_payload();
     // Best-effort: the checkpoint is the record that matters, and resume
     // works from it alone if the note is missing.
+    //
+    // Signed with the trusted writer's key, NOT the fleet's router: resume
+    // authenticates this note through `is_router_signed`, which verifies a
+    // `System` actor against `ROUTER_AGENT`. Signing with a custom router
+    // (`router: orchestrator`) would write a note its own resume rejects.
     if let Err(error) = crate::channel_writer::append_as_writer(
         svc,
         s.mur_home,
         &s.fleet.channel_id,
-        s.fleet.router_or_concierge(),
+        crate::channel_writer::ROUTER_AGENT,
         ChannelActor::System,
         mur_common::channel::EventKind::Note,
         payload,

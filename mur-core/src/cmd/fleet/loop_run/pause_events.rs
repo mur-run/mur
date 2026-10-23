@@ -27,6 +27,18 @@ pub enum PauseReason {
     Operator,
 }
 
+/// The bounds a run resolved at its original start (rev 3, §5.3). Carried on
+/// the signed `run_paused` so resume has an authority for them that the run
+/// itself cannot edit — the checkpoint copies are convenience only.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RunBounds {
+    pub deadline_ms: u64,
+    /// `None` = stuck detection off.
+    pub stuck_ms: Option<u64>,
+    /// `None` = no cost cap.
+    pub cost_usd: Option<f64>,
+}
+
 /// One pause/resume event. `spent_usd` and `active_elapsed_ms` are cumulative
 /// and are adopted with `max()` on resume (§5.3), so nothing moves down.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,6 +51,10 @@ pub enum FleetRunPayload {
         spent_usd: f64,
         active_elapsed_ms: u64,
         reason: PauseReason,
+        /// Absent on events written before rev 3; resume then falls back to
+        /// the checkpoint and warns (§5.3).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bounds: Option<RunBounds>,
     },
     RunResumed {
         run_id: String,
@@ -100,6 +116,11 @@ mod tests {
             spent_usd: 1.84,
             active_elapsed_ms: 412_000,
             reason: PauseReason::Operator,
+            bounds: Some(RunBounds {
+                deadline_ms: 1_800_000,
+                stuck_ms: None,
+                cost_usd: Some(5.0),
+            }),
         }
     }
 
@@ -112,6 +133,19 @@ mod tests {
         match classify_note_payload(&note) {
             NoteClassification::FleetRun(env) => assert_eq!(env.payload, paused()),
             other => panic!("expected FleetRun, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_run_paused_without_bounds_still_reads_as_a_fleet_run_event() {
+        let mut note = paused().to_note_payload();
+        note["fleet_run"].as_object_mut().unwrap().remove("bounds");
+        match classify_note_payload(&note) {
+            NoteClassification::FleetRun(FleetRunEnvelope {
+                payload: FleetRunPayload::RunPaused { bounds, .. },
+                ..
+            }) => assert_eq!(bounds, None),
+            other => panic!("expected RunPaused, got {other:?}"),
         }
     }
 

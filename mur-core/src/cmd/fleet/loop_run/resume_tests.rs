@@ -1,5 +1,6 @@
 //! Resume (pause/resume design §5.4, §6, §7, §8.2a, §10).
 
+use super::super::pause_events::RunBounds;
 use super::*;
 use crate::cmd::fleet::loop_run::checkpoint::{CHECKPOINT_SCHEMA, Checkpoint};
 use mur_common::fleet::{Fleet, JobStatus};
@@ -122,12 +123,73 @@ fn bounds_are_the_tighter_of_checkpoint_and_fleet_yaml() {
     assert_eq!(t.cost_usd, Some(5.0));
 }
 
+fn signed(spent: f64, active_ms: u64, iteration: u32, b: Option<RunBounds>) -> SignedPause {
+    SignedPause {
+        spent_usd: spent,
+        active_elapsed_ms: active_ms,
+        iteration,
+        bounds: b,
+    }
+}
+
+/// Rev 3 §14 item 1: the run started at $5; the operator raised `fleet.yaml`
+/// to $20 during the pause and the run edited its checkpoint to $20. The
+/// signed original bound holds — the checkpoint is not the authority.
+#[test]
+fn a_raised_fleet_yaml_plus_an_edited_checkpoint_cannot_widen_the_original_bounds() {
+    let original = RunBounds {
+        deadline_ms: 600_000,
+        stuck_ms: Some(300_000),
+        cost_usd: Some(5.0),
+    };
+    let mut edited = cp(None);
+    edited.cost_usd = Some(20.0);
+    edited.deadline_ms = 86_400_000;
+    edited.stuck_ms = None;
+    let r = resume_from(&edited, Some(signed(1.5, 60_000, 2, Some(original))), false).unwrap();
+    assert!(r.bounds_authenticated);
+    let t = tighten(bounds(86_400, Stuck::Off, Some(20.0)), &r);
+    assert_eq!(t.cost_usd, Some(5.0));
+    assert_eq!(t.deadline, Duration::from_millis(600_000));
+    assert_eq!(t.stuck, Stuck::After(Duration::from_millis(300_000)));
+}
+
+/// The `null` hole: the checkpoint edited to "no cap" and the cap removed
+/// from `fleet.yaml` must not leave the run unbounded.
+#[test]
+fn a_checkpoint_edited_to_null_cannot_drop_a_signed_cost_cap() {
+    let original = RunBounds {
+        deadline_ms: 600_000,
+        stuck_ms: Some(300_000),
+        cost_usd: Some(5.0),
+    };
+    let mut edited = cp(None);
+    edited.cost_usd = None;
+    let r = resume_from(&edited, Some(signed(1.5, 60_000, 2, Some(original))), false).unwrap();
+    let t = tighten(bounds(86_400, Stuck::Off, None), &r);
+    assert_eq!(t.cost_usd, Some(5.0));
+}
+
+/// A `run_paused` without bounds (or none at all): the checkpoint is the only
+/// record, and the resume says so.
+#[test]
+fn without_signed_bounds_the_checkpoint_is_used_and_flagged_unauthenticated() {
+    let r = resume_from(&cp(None), Some(signed(1.5, 60_000, 2, None)), false).unwrap();
+    assert!(!r.bounds_authenticated);
+    assert_eq!(r.cost_usd, Some(5.0));
+    assert!(
+        !resume_from(&cp(None), None, false)
+            .unwrap()
+            .bounds_authenticated
+    );
+}
+
 #[test]
 fn counters_never_move_down_and_the_signed_note_wins_over_an_edited_checkpoint() {
     let mut edited = cp(None);
     edited.spent_usd = 0.01; // a run lowering its own spend
     edited.active_elapsed_ms = 1;
-    let r = resume_from(&edited, Some((1.5, 60_000, 2)), false).unwrap();
+    let r = resume_from(&edited, Some(signed(1.5, 60_000, 2, None)), false).unwrap();
     assert_eq!(r.spent_usd, 1.5);
     assert_eq!(r.active_elapsed, Duration::from_millis(60_000));
     assert_eq!(r.iteration, 2);
@@ -142,7 +204,7 @@ fn counters_never_move_down_and_the_signed_note_wins_over_an_edited_checkpoint()
 
 #[test]
 fn a_signed_iteration_ahead_of_the_checkpoint_replans_instead_of_replaying() {
-    let r = resume_from(&cp(None), Some((1.5, 60_000, 3)), false).unwrap();
+    let r = resume_from(&cp(None), Some(signed(1.5, 60_000, 3, None)), false).unwrap();
     assert_eq!(r.iteration, 3);
     assert!(r.procedure.is_empty());
 }
@@ -429,4 +491,94 @@ fn stop_while_paused_ends_both_run_ids_on_the_channel() {
             "{id} must end on the channel"
         );
     }
+}
+
+/// A member can sign a note with its own key; that must not make it the
+/// authority on a paused run's original bounds (#2072 review). The legitimate
+/// router-signed pause records $5; later forgeries claim $20.
+#[test]
+fn a_member_signed_pause_cannot_supply_the_original_bounds() {
+    use mur_common::channel::ChannelActor;
+    let tmp = tempfile::tempdir().unwrap();
+    let router = crate::channel_writer::plant_writer_identity(tmp.path());
+    let pm = crate::channel_writer::plant_identity_for(tmp.path(), "pm");
+    let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+    let ch = svc.create_for_workflow("dev").unwrap();
+    let pause = |cost: f64| {
+        FleetRunPayload::RunPaused {
+            run_id: RUN.into(),
+            iteration_run_id: format!("{RUN}-2"),
+            iteration: 2,
+            spent_usd: 1.5,
+            active_elapsed_ms: 60_000,
+            reason: super::super::pause_events::PauseReason::Operator,
+            bounds: Some(RunBounds {
+                deadline_ms: 600_000,
+                stuck_ms: Some(300_000),
+                cost_usd: Some(cost),
+            }),
+        }
+        .to_note_payload()
+    };
+    let note = |id: &mur_common::identity::AgentIdentity, actor: ChannelActor, cost| {
+        svc.append_signed(&ch.id, id, 0, actor, EventKind::Note, pause(cost), None)
+            .unwrap();
+    };
+    note(&router, ChannelActor::System, 5.0);
+    // The member speaking as itself, validly signed with its own key …
+    note(&pm, ChannelActor::Agent { id: "pm".into() }, 20.0);
+    // … and claiming to be the system while signing with its own key.
+    note(&pm, ChannelActor::System, 20.0);
+
+    let events = svc.load_events(&ch.id).unwrap();
+    let got = signed_pause(tmp.path(), &ch.id, &events, RUN).expect("the router's pause");
+    assert_eq!(
+        got.bounds.and_then(|b| b.cost_usd),
+        Some(5.0),
+        "a forged note must not replace the router-signed bounds"
+    );
+}
+
+/// A fleet with a custom `router:` must be able to authenticate its own
+/// pause (#2072 review). `record_pause` used to sign with the fleet's router
+/// while `is_router_signed` verifies a `System` actor against
+/// `ROUTER_AGENT`, so every non-`mur` router fell back to the unverified
+/// checkpoint. Goes through the real writer, not a hand-signed note.
+#[test]
+fn a_custom_router_fleet_reads_back_its_own_signed_pause() {
+    let tmp = tempfile::tempdir().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
+    // The custom router has a key of its own; it must not be the one used.
+    crate::channel_writer::plant_identity_for(tmp.path(), "pm");
+    let svc = mur_channel::ChannelService::open(tmp.path()).unwrap();
+    let ch = svc.create_for_workflow("dev").unwrap();
+    let mut f = fleet();
+    f.router = Some("pm".into());
+    f.channel_id = ch.id.clone();
+    let b = bounds(600, Stuck::After(Duration::from_secs(300)), Some(5.0));
+    super::super::pause::record_pause(
+        &svc,
+        &super::super::pause::PauseSnapshot {
+            mur_home: tmp.path(),
+            fleet: &f,
+            run_id: RUN,
+            iteration: 2,
+            spent_usd: 1.5,
+            active_elapsed: Duration::from_secs(60),
+            stuck_elapsed: Duration::from_secs(5),
+            start_seq: 0,
+            job_id: None,
+            goal_override: None,
+            bounds: &b,
+            target_cwd: None,
+            procedure: &[],
+            hitl: mur_common::hitl::Unanswered::Defer,
+        },
+    )
+    .unwrap();
+
+    let events = svc.load_events(&ch.id).unwrap();
+    let got = signed_pause(tmp.path(), &ch.id, &events, RUN)
+        .expect("a custom-router fleet's own pause must verify");
+    assert_eq!(got.bounds.and_then(|b| b.cost_usd), Some(5.0));
 }
