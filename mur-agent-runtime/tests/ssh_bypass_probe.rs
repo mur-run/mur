@@ -3,7 +3,7 @@
 //!
 //! The probe child installs a profile on itself, which macOS refuses inside
 //! an already-sandboxed process, so every test skips loudly from a sealed
-//! shell (#1697).
+//! shell (#1697) and fails under CI, where runners are never sealed.
 #![cfg(target_os = "macos")]
 
 use mur_agent_runtime::sandbox::SandboxPolicy;
@@ -18,9 +18,25 @@ use std::process::{Command, Stdio};
 
 const BIN: &str = env!("CARGO_BIN_EXE_mur-agent-runtime");
 
+/// Set to a non-empty value by CI providers (GitHub Actions, GitLab,
+/// Buildkite, ...). Same convention as `sandbox_build_lane.rs`.
+const CI_ENV_VAR: &str = "CI";
+
+fn in_ci() -> bool {
+    std::env::var_os(CI_ENV_VAR).is_some_and(|v| !v.is_empty() && v != "false" && v != "0")
+}
+
+/// Skip from a sealed local shell, but fail under CI: CI runners are not
+/// sandboxed, and nextest's ci profile drops a passing test's stderr, so a
+/// silent skip there would be a green check that measured nothing.
 fn sealed(test: &str) -> bool {
     let sealed = mur_agent_runtime::sandbox::current_process_sealed();
     if sealed {
+        assert!(
+            !in_ci(),
+            "{test}: process is sandboxed under CI, so the probe cannot run; \
+             CI runners are expected to be unsealed (#1697)"
+        );
         eprintln!(
             "SKIP {test}: this process is already sandboxed, so the probe child \
              cannot install a profile (#1697)"
