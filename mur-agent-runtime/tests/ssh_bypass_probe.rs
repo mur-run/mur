@@ -39,12 +39,27 @@ fn listener() -> (tempfile::TempDir, PathBuf, UnixListener) {
     (dir, sock, l)
 }
 
+/// Arbitrary loopback port: its only job is to keep the profile out of the
+/// "true Off" arm, which emits no unix-socket allow rules at all. Without it
+/// every dial is denied and neither test below measures the carve-out.
+const LOOPBACK_PORT: u16 = 1;
+
 fn restricted(scratch: Option<&Path>) -> SandboxPolicy {
     SandboxPolicy {
         net_allow_ports: Some(vec![]),
+        net_allow_loopback_ports: vec![LOOPBACK_PORT],
         scratch_dir: scratch.map(Path::to_path_buf),
         ..Default::default()
     }
+}
+
+/// Guard the setup itself: the profile must carry the scoped unix-socket
+/// carve-out, or a `Denied` proves nothing about the allowlist.
+fn assert_has_unix_carve_out(profile: &str) {
+    assert!(
+        profile.contains("(remote unix-socket (subpath "),
+        "profile has no unix-socket subpath allow; the test is not measuring the carve-out:\n{profile}"
+    );
 }
 
 #[test]
@@ -75,6 +90,7 @@ fn an_upstream_outside_every_allow_rule_is_denied() {
     }
     let (_d, sock, _l) = listener();
     let profile = build_sbpl_profile(&restricted(None));
+    assert_has_unix_carve_out(&profile);
     assert_eq!(
         run_probe(Path::new(BIN), &profile, &sock, PROBE_TIMEOUT),
         ProbeOutcome::Denied
@@ -88,6 +104,13 @@ fn an_upstream_under_an_allowed_root_is_reachable() {
     }
     let (_d, sock, _l) = listener();
     let profile = build_sbpl_profile(&restricted(sock.parent()));
+    assert!(
+        profile.contains(&format!(
+            "(remote unix-socket (subpath \"{}\"))",
+            sock.parent().unwrap().display()
+        )),
+        "profile does not allow the scratch dir the socket lives in:\n{profile}"
+    );
     assert_eq!(
         run_probe(Path::new(BIN), &profile, &sock, PROBE_TIMEOUT),
         ProbeOutcome::Connected
