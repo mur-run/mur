@@ -46,7 +46,7 @@ fn http_host(url: &str) -> Option<String> {
     parsed.host_str().map(normalise).filter(|h| !h.is_empty())
 }
 
-fn host_matches(host: &str, entry: &str) -> bool {
+pub(crate) fn host_matches(host: &str, entry: &str) -> bool {
     let entry = normalise(entry);
     if entry.is_empty() {
         return false;

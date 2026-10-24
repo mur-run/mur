@@ -30,7 +30,7 @@ use mur_browser::{
     auth::{Handoff, ProfileMeta, save_profile},
     export::to_spec_ts,
     paths,
-    proxy::{BrokerHook, capture_storage_state, playwright_command, run_stdio},
+    proxy::{BrokerHook, capture_storage_state, playwright_command, run_stdio_exporting},
     recorder::{Mode, RecordHook, Run, from_yaml},
     state::KeychainStateKeyStore,
 };
@@ -176,7 +176,28 @@ pub async fn record(
         actions = %paths::run_actions(&mur_home, run).display(),
         "browser record started"
     );
-    let result = run_stdio(server, hook).await;
+    // A profile session hands its rotated state back on exit (`refresh`).
+    let scratch = match profile {
+        Some(_) => Some(mur_browser::refresh::scratch_dir(&mur_home)?),
+        None => None,
+    };
+    let export = scratch
+        .as_ref()
+        .map(|dir| mur_browser::refresh::export_path(dir.path()));
+    let result = run_stdio_exporting(server, hook, export.clone()).await;
+    if let (Some(site), Some(export)) = (profile, &export) {
+        mur_browser::refresh::report(
+            site,
+            mur_browser::refresh::refresh_profile(
+                &mur_home,
+                site,
+                export,
+                chrono::Utc::now(),
+                &mur_browser::state::KeychainStateKeyStore,
+            ),
+        );
+    }
+    drop(scratch);
     // Removes the token-bearing config directory (no-op for test/automation)
     // and the decrypted session file.
     drop(live_config);
@@ -429,14 +450,30 @@ fn profile_statuses(home: &std::path::Path) -> Result<Vec<String>> {
                         meta_path.display()
                     )
                 })?;
-                match meta.earliest_cookie_expires {
-                    Some(expiry) => format!("{site} (cookie expires {expiry})"),
-                    None => format!("{site} (authenticated {})", meta.last_auth),
-                }
+                profile_label(&site, &meta)
             };
             Ok(label)
         })
         .collect()
+}
+
+/// `mur browser status` label for a profile with metadata. The expiry shown
+/// is the login cookie's ([`mur_browser::session`]); one that fell within the
+/// rotating-token window of its capture was written before that filter
+/// existed (a 30-minute `__cf_bm`), so it is not shown as the session's end.
+fn profile_label(site: &str, meta: &ProfileMeta) -> String {
+    let captured = meta.last_refresh.unwrap_or(meta.last_auth);
+    let expiry = meta
+        .earliest_cookie_expires
+        .filter(|expiry| *expiry - captured >= mur_browser::session::MIN_SESSION_COOKIE_LIFETIME);
+    let refreshed = meta
+        .last_refresh
+        .map(|at| format!(", refreshed {at}"))
+        .unwrap_or_default();
+    match expiry {
+        Some(expiry) => format!("{site} (cookie expires {expiry}{refreshed})"),
+        None => format!("{site} (authenticated {}{refreshed})", meta.last_auth),
+    }
 }
 
 fn runs_dir() -> Result<PathBuf> {
@@ -479,12 +516,39 @@ fn profile_statuses_reports_cookie_expiry_from_metadata() {
             last_auth: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             earliest_cookie_expires: chrono::DateTime::from_timestamp(1_700_100_000, 0),
             allow_domains: Vec::new(),
+            last_refresh: None,
         },
     )
     .unwrap();
     assert_eq!(
         profile_statuses(temp.path()).unwrap(),
         vec!["example (cookie expires 2023-11-16 02:00:00 UTC)"]
+    );
+}
+
+#[test]
+fn legacy_rotating_cookie_expiry_is_not_shown_as_the_session_end() {
+    // Shape of a profile saved before the session-cookie filter: the expiry
+    // is a `__cf_bm` 29 minutes after login, while the login still works.
+    let meta = ProfileMeta {
+        url: "https://chat.example.test/sign_in".into(),
+        last_auth: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        earliest_cookie_expires: chrono::DateTime::from_timestamp(1_700_001_740, 0),
+        allow_domains: vec!["example.test".into()],
+        last_refresh: None,
+    };
+    assert_eq!(
+        profile_label("ex", &meta),
+        "ex (authenticated 2023-11-14 22:13:20 UTC)"
+    );
+    let refreshed = ProfileMeta {
+        last_refresh: chrono::DateTime::from_timestamp(1_700_050_000, 0),
+        earliest_cookie_expires: chrono::DateTime::from_timestamp(1_700_100_000, 0),
+        ..meta
+    };
+    assert_eq!(
+        profile_label("ex", &refreshed),
+        "ex (cookie expires 2023-11-16 02:00:00 UTC, refreshed 2023-11-15 12:06:40 UTC)"
     );
 }
 

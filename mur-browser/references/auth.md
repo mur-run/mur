@@ -82,14 +82,31 @@ Run with `--reauth` when `mur browser status` shows any of:
 - `<site> (metadata missing)` — state exists but `meta.yaml` is missing;
   the profile cannot be trusted.
 - `<site> (cookie expires <timestamp>)` where the timestamp is already in
-  the past — `earliest_cookie_expires` has elapsed, so the session is
-  likely dead.
+  the past — the login cookie's expiry has elapsed, so the session is
+  likely dead. Only cookies that can carry the login count: analytics and
+  anti-bot tokens (`__cf_bm`, `_ga*`, …) and anything living under an hour
+  are ignored, so a rotating 30-minute token no longer looks like expiry.
 
 Also reauth when a downstream mode reports that a run landed on a login
 page while using this profile — but only with a human present (rule 2).
 
-A profile showing `(authenticated <timestamp>)` has no cookie expiry
-recorded; treat it as valid until a downstream mode observes a logout.
+A profile showing `(authenticated <timestamp>)` has no login-cookie expiry
+(the session lives in localStorage or a browser-session cookie); treat it
+as valid until a downstream mode observes a logout.
+
+Profiles refresh themselves: after a green `mur browser replay` or a
+`mur browser record --profile` session, the browser's latest storage state
+is re-encrypted into the profile, so rotated tokens are kept. The export
+must still hold every login key of the saved profile — each allowed-domain
+cookie that is neither tracking/anti-bot, short-lived, nor expired, and each
+allowed-origin localStorage key; values may rotate, names must stay, and
+a value cleared to `""`, `null` or `undefined` counts as missing. A logout
+that removes the token, or blanks it in place while preferences (`theme`),
+consent or device-ID cookies stay behind, therefore keeps the saved profile
+unchanged. When a site merely drops some non-login key, refresh is skipped
+too (safe side); run
+`mur browser auth --reauth` to re-baseline. The label then ends with
+`, refreshed <timestamp>`.
 
 ## Reading `mur browser status`
 
@@ -118,7 +135,8 @@ profiles at all.
 - `~/.mur/browser/profiles/<site>/state.json.age` — age-encrypted
   Playwright storageState, mode 0600.
 - `~/.mur/browser/profiles/<site>/meta.yaml` — `last_auth`, login URL,
-  `earliest_cookie_expires`; written only after the state file is saved.
+  `earliest_cookie_expires` (login cookies only), `last_refresh`; written
+  only after the state file is saved.
 
 Downstream modes reference the profile by `<site>` name only. Never read,
 decrypt, print, or copy `state.json.age`; the raw storageState must not

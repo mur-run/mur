@@ -34,6 +34,10 @@ pub struct ProfileMeta {
     /// means unrestricted, which is also what pre-allowlist meta files load as.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_domains: Vec<String>,
+    /// When a finished session last wrote its rotated state back
+    /// ([`crate::refresh`]). `last_auth` stays the human login time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_refresh: Option<DateTime<Utc>>,
 }
 
 /// Persist a verified Playwright storage-state document and its non-secret
@@ -54,8 +58,13 @@ pub fn save_profile(
     let meta = ProfileMeta {
         url: url.to_owned(),
         last_auth: now,
-        earliest_cookie_expires: earliest_cookie_expiry(storage_state)?,
+        earliest_cookie_expires: crate::session::session_cookie_expiry(
+            storage_state,
+            allow_domains,
+            now,
+        )?,
         allow_domains: allow_domains.to_vec(),
+        last_refresh: None,
     };
     write_meta(meta_path, &meta)?;
     handoff.saved()?;
@@ -77,22 +86,6 @@ pub fn write_meta(path: &Path, meta: &ProfileMeta) -> Result<()> {
         let _ = std::fs::remove_file(&temp);
     })?;
     Ok(())
-}
-
-fn earliest_cookie_expiry(storage_state: &[u8]) -> Result<Option<DateTime<Utc>>> {
-    let value: serde_json::Value = serde_json::from_slice(storage_state)?;
-    let cookies = value
-        .get("cookies")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            anyhow::anyhow!("browser storage state must contain an array field \"cookies\"")
-        })?;
-    Ok(cookies
-        .iter()
-        .filter_map(|cookie| cookie.get("expires").and_then(serde_json::Value::as_f64))
-        .filter(|expires| *expires > 0.0 && expires.is_finite())
-        .filter_map(|expires| DateTime::from_timestamp(expires as i64, 0))
-        .min())
 }
 
 /// State machine guarding an authentication handoff.
@@ -197,7 +190,7 @@ impl Handoff {
 /// Validate the subset of Playwright's `storageState` schema that proves a
 /// browser transport actually captured a storage-state document. Arbitrary
 /// JSON (for example `{}`) must never become a reusable authenticated profile.
-fn validate_storage_state(storage_state: &[u8]) -> Result<()> {
+pub(crate) fn validate_storage_state(storage_state: &[u8]) -> Result<()> {
     let value: serde_json::Value = serde_json::from_slice(storage_state)
         .map_err(|error| anyhow::anyhow!("browser storage state is not valid JSON: {error}"))?;
     let object = value
@@ -292,7 +285,7 @@ mod tests {
         handoff.handoff().unwrap();
         handoff.continue_after_login().unwrap();
         handoff.verified().unwrap();
-        let state = br#"{"cookies":[{"expires":1700100000}],"origins":[]}"#;
+        let state = br#"{"cookies":[{"name":"sid","domain":"example.test","expires":1700100000},{"name":"__cf_bm","domain":".example.test","expires":1700001800}],"origins":[]}"#;
 
         let meta = save_profile(
             &mut handoff,
@@ -337,6 +330,7 @@ mod tests {
             last_auth: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             earliest_cookie_expires: None,
             allow_domains: Vec::new(),
+            last_refresh: None,
         };
         let yaml = serde_yaml::to_string(&meta).unwrap();
         assert!(!yaml.contains("allow_domains"), "{yaml}");

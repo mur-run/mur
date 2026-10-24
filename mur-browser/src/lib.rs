@@ -31,8 +31,10 @@ pub mod nav_stall;
 pub mod paths;
 pub mod proxy;
 pub mod recorder;
+pub mod refresh;
 pub mod replay;
 pub mod server;
+pub mod session;
 pub mod state;
 pub mod summary;
 

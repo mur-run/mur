@@ -88,7 +88,7 @@ async fn ambiguous_click_hits_the_first_match_and_warns() {
             step(3, Action::AssertText, Some("clicked first"), &[]),
         ],
     };
-    let report = replay_live(&run, &[], ReplayOptions::default(), None)
+    let report = replay_live(&run, &[], ReplayOptions::default(), None, None)
         .await
         .expect("replay ran");
 
