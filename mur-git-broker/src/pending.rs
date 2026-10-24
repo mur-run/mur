@@ -105,6 +105,14 @@ pub const ALLOWED_EDGES: &[(State, State)] = &[
 /// States that count against `max_pending_per_agent`.
 const LIVE_STATES: &str = "'validated','pending_approval','approved','executing'";
 
+/// Audit columns added after the table first shipped; `open` adds any a store is missing.
+const AUDIT_ADDED_COLUMNS: [&str; 3] = ["request_id", "credential", "task_id"];
+
+/// Matches the audit rows of one request: `?1` agent, `?2` task, `?3` request. A row written
+/// before `task_id` existed has it NULL and cannot be attributed to a task, so it stays visible
+/// to every task of that agent and request id rather than vanishing from the audit history.
+const AUDIT_ROWS_OF: &str = "agent_id=?1 AND (task_id=?2 OR task_id IS NULL) AND request_id=?3";
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RequestKey {
     pub agent_id: String,
@@ -215,28 +223,23 @@ impl PendingStore {
                  agent_id   TEXT NOT NULL,
                  ts         INTEGER NOT NULL,
                  request_id TEXT,
-                 credential TEXT
+                 credential TEXT,
+                 task_id    TEXT
              );",
         )
         .map_err(storage)?;
-        // Stores created before `request_id` existed get the column added; their old rows keep
-        // NULL there.
-        let has_request_id = conn
-            .prepare("SELECT 1 FROM pragma_table_info('audit') WHERE name='request_id'")
-            .and_then(|mut s| s.exists([]))
-            .map_err(storage)?;
-        if !has_request_id {
-            conn.execute("ALTER TABLE audit ADD COLUMN request_id TEXT", [])
+        // Stores created before a column existed get it added; their old rows keep NULL there.
+        // A row written before `task_id` existed stays NULL there (see `AUDIT_ROWS_OF`);
+        // `credential` records which enrolled login was selected.
+        for column in AUDIT_ADDED_COLUMNS {
+            let present = conn
+                .prepare("SELECT 1 FROM pragma_table_info('audit') WHERE name=?1")
+                .and_then(|mut s| s.exists([column]))
                 .map_err(storage)?;
-        }
-        // Likewise `credential` (which enrolled login was selected); old rows keep NULL.
-        let has_credential = conn
-            .prepare("SELECT 1 FROM pragma_table_info('audit') WHERE name='credential'")
-            .and_then(|mut s| s.exists([]))
-            .map_err(storage)?;
-        if !has_credential {
-            conn.execute("ALTER TABLE audit ADD COLUMN credential TEXT", [])
-                .map_err(storage)?;
+            if !present {
+                conn.execute(&format!("ALTER TABLE audit ADD COLUMN {column} TEXT"), [])
+                    .map_err(storage)?;
+            }
         }
         Ok(Self {
             conn: Mutex::new(conn),
@@ -322,12 +325,14 @@ impl PendingStore {
 
         if let Some(err) = rejection {
             tx.execute(
-                "INSERT INTO audit (kind, agent_id, ts, request_id) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO audit (kind, agent_id, ts, request_id, task_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     err.code(),
                     key.agent_id,
                     now.timestamp_millis(),
-                    key.request_id
+                    key.request_id,
+                    key.task_id
                 ],
             )
             .map_err(storage)?;
@@ -505,8 +510,15 @@ impl PendingStore {
     ) -> Result<(), BrokerError> {
         self.lock()?
             .execute(
-                "INSERT INTO audit (kind, agent_id, ts, request_id) VALUES (?1, ?2, ?3, ?4)",
-                params![kind, key.agent_id, now.timestamp_millis(), key.request_id],
+                "INSERT INTO audit (kind, agent_id, ts, request_id, task_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    kind,
+                    key.agent_id,
+                    now.timestamp_millis(),
+                    key.request_id,
+                    key.task_id
+                ],
             )
             .map_err(storage)?;
         Ok(())
@@ -523,13 +535,14 @@ impl PendingStore {
     ) -> Result<(), BrokerError> {
         self.lock()?
             .execute(
-                "INSERT INTO audit (kind, agent_id, ts, request_id, credential)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO audit (kind, agent_id, ts, request_id, task_id, credential)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     kind,
                     key.agent_id,
                     now.timestamp_millis(),
                     key.request_id,
+                    key.task_id,
                     role.as_str()
                 ],
             )
@@ -537,17 +550,18 @@ impl PendingStore {
         Ok(())
     }
 
-    /// The audit rows for one request with their credential role, oldest first. A stored role
-    /// this build does not know is a storage error, never a silent `None`.
+    /// The audit rows for one request (see [`AUDIT_ROWS_OF`]) with their credential role,
+    /// oldest first. A stored role this build does not
+    /// know is a storage error, never a silent `None`.
     pub fn audit_events(&self, key: &RequestKey) -> Result<Vec<AuditEvent>, BrokerError> {
         let guard = self.lock()?;
         let mut stmt = guard
-            .prepare(
-                "SELECT kind, credential FROM audit WHERE agent_id=?1 AND request_id=?2 ORDER BY id",
-            )
+            .prepare(&format!(
+                "SELECT kind, credential FROM audit WHERE {AUDIT_ROWS_OF} ORDER BY id"
+            ))
             .map_err(storage)?;
         let rows = stmt
-            .query_map(params![key.agent_id, key.request_id], |r| {
+            .query_map(params![key.agent_id, key.task_id, key.request_id], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
             })
             .map_err(storage)?
@@ -563,16 +577,20 @@ impl PendingStore {
             .collect()
     }
 
-    /// The audit kinds recorded for one request, oldest first.
+    /// The audit kinds recorded for one request (see [`AUDIT_ROWS_OF`]), oldest first.
     pub fn audit_trail(&self, key: &RequestKey) -> Result<Vec<String>, BrokerError> {
         let guard = self.lock()?;
         let mut stmt = guard
-            .prepare("SELECT kind FROM audit WHERE agent_id=?1 AND request_id=?2 ORDER BY id")
+            .prepare(&format!(
+                "SELECT kind FROM audit WHERE {AUDIT_ROWS_OF} ORDER BY id"
+            ))
             .map_err(storage)?;
-        stmt.query_map(params![key.agent_id, key.request_id], |r| r.get(0))
-            .map_err(storage)?
-            .collect::<Result<Vec<String>, _>>()
-            .map_err(storage)
+        stmt.query_map(params![key.agent_id, key.task_id, key.request_id], |r| {
+            r.get(0)
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(storage)
     }
 
     pub fn get(&self, key: &RequestKey) -> Result<Option<Row>, BrokerError> {
