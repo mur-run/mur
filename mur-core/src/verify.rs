@@ -213,9 +213,11 @@ fn extract_file_paths(line: &str) -> Vec<String> {
     // the file; the location suffix is not part of the path.
     let line_suffix_re = Regex::new(r":\d+(?:[-:]\d+)?$").unwrap();
     for cap in backtick_re.captures_iter(line) {
-        let text = line_suffix_re.replace(&cap[1], "");
-        if looks_like_path(&text) && !paths.iter().any(|p| p == text.as_ref()) {
-            paths.push(text.into_owned());
+        for token in backtick_path_tokens(&cap[1]) {
+            let text = line_suffix_re.replace(token, "");
+            if looks_like_path(&text) && !paths.iter().any(|p| p == text.as_ref()) {
+                paths.push(text.into_owned());
+            }
         }
     }
 
@@ -225,7 +227,10 @@ fn extract_file_paths(line: &str) -> Vec<String> {
         r"(?:^|\s|[(\[])([a-zA-Z_][a-zA-Z0-9_\-.]*/[a-zA-Z0-9_\-./]*\.[a-zA-Z]{1,10})(?:\s|[)\].,;:]|$)",
     )
     .unwrap();
-    for cap in bare_re.captures_iter(line) {
+    // Backtick spans were judged whole above; scanning their insides again
+    // would turn a command's arguments back into path claims.
+    let outside_spans = backtick_re.replace_all(line, " ");
+    for cap in bare_re.captures_iter(&outside_spans) {
         let text = cap[1].to_string();
         if looks_like_path(&text) && !paths.contains(&text) {
             paths.push(text);
@@ -233,6 +238,55 @@ fn extract_file_paths(line: &str) -> Vec<String> {
     }
 
     paths
+}
+
+/// Split one backtick span into the words that each name a path.
+///
+/// A path never contains whitespace in these docs, so a span with spaces is
+/// one of three shapes:
+/// - a path list — paths joined by separator symbols
+///   (`capture/ → store/ → inject/`): every path is a claim;
+/// - a path-led command or description (`scripts/run.sh --out gen/x.json`,
+///   `run.sh [--flag]`, `src/main.rs — entry point`): only the leading path
+///   is a claim, since later arguments may name files the command creates;
+/// - any other command or prose (`cargo build -p x`): no claim.
+fn backtick_path_tokens(span: &str) -> Vec<&str> {
+    let words: Vec<&str> = span.split_whitespace().collect();
+    let Some(&first) = words.first() else {
+        return Vec::new();
+    };
+    if !looks_like_path(first) {
+        return Vec::new();
+    }
+    if is_path_list(&words) {
+        return words.into_iter().filter(|w| !is_separator(w)).collect();
+    }
+    vec![first]
+}
+
+/// Characters that make a symbol word a shell operator (`>`, `>>`, `|`,
+/// `&&`, `;`, `<`) rather than a list separator: the path after a
+/// redirection or pipe is the command's output or next stage, not a claim.
+const SHELL_OPERATOR_CHARS: &[char] = &['<', '>', '|', '&', ';'];
+
+/// A word made only of punctuation/symbols (`→`, `,`, `·`, `—`, `+`), and
+/// not a shell operator.
+fn is_separator(word: &str) -> bool {
+    !word.chars().any(char::is_alphanumeric) && !word.contains(SHELL_OPERATOR_CHARS)
+}
+
+/// Paths alternating with separators, starting and ending on a path. Two
+/// adjacent paths (`run.sh out/x.json`) read as a command with an argument.
+fn is_path_list(words: &[&str]) -> bool {
+    words.len() >= 3
+        && words.len() % 2 == 1
+        && words.iter().enumerate().all(|(i, w)| {
+            if i % 2 == 0 {
+                looks_like_path(w)
+            } else {
+                is_separator(w)
+            }
+        })
 }
 
 /// Heuristic: does this string look like a file path?

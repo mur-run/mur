@@ -246,3 +246,73 @@ fn docs_openspec_paths_look_like_paths() {
     assert!(looks_like_path("docs/openspec/changes"));
     assert!(looks_like_path("openspec/changes"));
 }
+
+#[test]
+fn backtick_span_with_prose_yields_each_path_word() {
+    let paths = extract_file_paths("Modules: `capture/ → store/ → retrieve/ → inject/`.");
+    assert_eq!(paths, ["capture/", "store/", "retrieve/", "inject/"]);
+}
+
+#[test]
+fn backtick_span_drops_trailing_flags_and_descriptions() {
+    let paths = extract_file_paths(
+        "Run `scripts/setup.sh [--all-worktrees]` or `src/main.rs — entry point`.",
+    );
+    assert_eq!(paths, ["scripts/setup.sh", "src/main.rs"]);
+}
+
+#[test]
+fn backtick_command_line_yields_no_path() {
+    let paths = extract_file_paths(
+        "Then `cargo test -p mur-core/src/lib.rs`, `mur verify docs/x.md` and `mur verify docs/x.md --all`.",
+    );
+    assert!(paths.is_empty(), "{paths:?}");
+}
+
+#[test]
+fn path_led_command_claims_only_the_script_not_its_arguments() {
+    let paths = extract_file_paths(
+        "Run `scripts/setup.sh --output generated/result.json` or `scripts/gen.sh out/x.json`.",
+    );
+    assert_eq!(paths, ["scripts/setup.sh", "scripts/gen.sh"]);
+}
+
+#[test]
+fn path_led_command_output_is_not_reported_missing() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("scripts")).unwrap();
+    std::fs::write(root.path().join("scripts/setup.sh"), "").unwrap();
+    let claims = parse_claims("`scripts/setup.sh --output generated/result.json`", "a.md");
+    for claim in &claims {
+        let result = verify_claim(claim, root.path());
+        assert!(
+            !matches!(result, VerifyResult::Invalid(_)),
+            "{claim:?}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn shell_operators_are_not_path_list_separators() {
+    let paths = extract_file_paths(
+        "Run `scripts/setup.sh > generated/result.json`, `scripts/a.sh >> logs/out.txt`, \
+         `scripts/a.sh | tools/filter.sh` or `scripts/a.sh && scripts/b.sh`.",
+    );
+    assert_eq!(paths, ["scripts/setup.sh", "scripts/a.sh"]);
+}
+
+#[test]
+fn redirected_output_is_not_reported_missing() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("scripts")).unwrap();
+    std::fs::write(root.path().join("scripts/setup.sh"), "").unwrap();
+    let claims = parse_claims("`scripts/setup.sh > generated/result.json`", "a.md");
+    assert!(!claims.is_empty());
+    for claim in &claims {
+        let result = verify_claim(claim, root.path());
+        assert!(
+            !matches!(result, VerifyResult::Invalid(_)),
+            "{claim:?}: {result:?}"
+        );
+    }
+}
