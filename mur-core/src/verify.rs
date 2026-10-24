@@ -264,9 +264,15 @@ fn backtick_path_tokens(span: &str) -> Vec<&str> {
     vec![first]
 }
 
-/// A word made only of punctuation/symbols (`→`, `,`, `·`, `—`, `+`).
+/// Characters that make a symbol word a shell operator (`>`, `>>`, `|`,
+/// `&&`, `;`, `<`) rather than a list separator: the path after a
+/// redirection or pipe is the command's output or next stage, not a claim.
+const SHELL_OPERATOR_CHARS: &[char] = &['<', '>', '|', '&', ';'];
+
+/// A word made only of punctuation/symbols (`→`, `,`, `·`, `—`, `+`), and
+/// not a shell operator.
 fn is_separator(word: &str) -> bool {
-    !word.chars().any(char::is_alphanumeric)
+    !word.chars().any(char::is_alphanumeric) && !word.contains(SHELL_OPERATOR_CHARS)
 }
 
 /// Paths alternating with separators, starting and ending on a path. Two

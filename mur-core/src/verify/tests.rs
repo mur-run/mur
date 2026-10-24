@@ -291,3 +291,28 @@ fn path_led_command_output_is_not_reported_missing() {
         );
     }
 }
+
+#[test]
+fn shell_operators_are_not_path_list_separators() {
+    let paths = extract_file_paths(
+        "Run `scripts/setup.sh > generated/result.json`, `scripts/a.sh >> logs/out.txt`, \
+         `scripts/a.sh | tools/filter.sh` or `scripts/a.sh && scripts/b.sh`.",
+    );
+    assert_eq!(paths, ["scripts/setup.sh", "scripts/a.sh"]);
+}
+
+#[test]
+fn redirected_output_is_not_reported_missing() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("scripts")).unwrap();
+    std::fs::write(root.path().join("scripts/setup.sh"), "").unwrap();
+    let claims = parse_claims("`scripts/setup.sh > generated/result.json`", "a.md");
+    assert!(!claims.is_empty());
+    for claim in &claims {
+        let result = verify_claim(claim, root.path());
+        assert!(
+            !matches!(result, VerifyResult::Invalid(_)),
+            "{claim:?}: {result:?}"
+        );
+    }
+}
