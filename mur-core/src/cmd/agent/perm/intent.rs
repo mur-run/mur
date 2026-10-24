@@ -33,13 +33,12 @@ pub fn cmd_perm_set_intent_check(
                     entry.provider
                 );
             }
-            let local = mur_common::model::provider_is_local(&entry.provider);
             Some((
                 IntentCheckConfig {
                     model_ref: r.to_string(),
                     timeout_ms,
                 },
-                (!local).then(|| entry.provider.clone()),
+                egress_note(&entry.provider),
             ))
         }
     };
@@ -57,12 +56,42 @@ pub fn cmd_perm_set_intent_check(
         ),
         None => println!("{name}: intent check off — static tiers only"),
     }
-    if let Some(provider) = egress {
-        println!(
-            "note: `{provider}` is not a local provider — each checked bash command \
-             is sent to it. Pick a local model to keep commands on this machine."
-        );
+    if let Some(note) = egress {
+        println!("{note}");
     }
     warn_if_running(name);
     Ok(())
+}
+
+/// The disclosure printed when the intent-check model is not on this machine,
+/// or `None` for a local provider. Locality is `provider_is_local`'s call.
+fn egress_note(provider: &str) -> Option<String> {
+    (!mur_common::model::provider_is_local(provider)).then(|| {
+        format!(
+            "note: `{provider}` is not a local provider — each checked bash command \
+             is sent to it. Pick a local model to keep commands on this machine."
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::egress_note;
+
+    #[test]
+    fn cloud_provider_gets_a_disclosure_naming_it() {
+        let note = egress_note("anthropic").expect("cloud provider must be disclosed");
+        assert!(
+            note.contains("`anthropic` is not a local provider"),
+            "{note}"
+        );
+        assert!(note.contains("each checked bash command"), "{note}");
+    }
+
+    #[test]
+    fn local_provider_gets_no_disclosure() {
+        assert_eq!(egress_note("ollama"), None);
+        // provider_is_local lowercases; the note must follow it, not re-decide.
+        assert_eq!(egress_note("Ollama"), None);
+    }
 }
