@@ -9,8 +9,9 @@
 //! The browser exports its state into a private scratch directory under the
 //! browser root (the sealed live server can write there and nowhere else),
 //! and [`refresh_profile`] re-encrypts it — but only when the export still
-//! holds session material for the profile's domains. A logged-out or blank
-//! context must never overwrite a working login.
+//! carries every login key of the saved profile ([`session::retains_login`]);
+//! leftover preferences or consent cookies are not proof of a login. A
+//! logged-out or blank context must never overwrite a working login.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -118,12 +119,16 @@ fn refresh_inner(
     let mut meta: auth::ProfileMeta = serde_yaml::from_str(&yaml)
         .with_context(|| format!("parse browser profile metadata {}", meta_path.display()))?;
     auth::validate_storage_state(&state)?;
-    if !session::has_session_data(&state, &meta.allow_domains) {
+    let state_path = paths::profile_state(mur_home, site);
+    let saved = crate::state::read_state(&state_path, store)
+        .context("read the saved profile state to compare logins")?;
+    let saved_at = meta.last_refresh.unwrap_or(meta.last_auth);
+    if !session::retains_login(&saved, saved_at, &state, &meta.allow_domains, now) {
         return Ok(Outcome::Skipped(
-            "the session holds no login data for this profile (logged out?)".into(),
+            "the session no longer holds the saved login (logged out?)".into(),
         ));
     }
-    crate::state::write_state(&paths::profile_state(mur_home, site), &state, store)?;
+    crate::state::write_state(&state_path, &state, store)?;
     meta.earliest_cookie_expires =
         session::session_cookie_expiry(&state, &meta.allow_domains, now)?;
     meta.last_refresh = Some(now);
@@ -233,6 +238,33 @@ mod tests {
         assert_eq!(
             read_state(&paths::profile_state(home.path(), "ex"), &store).unwrap(),
             OLD
+        );
+        assert_eq!(meta(home.path()).last_refresh, None);
+        assert!(!export.exists());
+    }
+
+    #[test]
+    fn logout_that_keeps_preferences_leaves_the_encrypted_profile_unchanged() {
+        let home = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        setup(home.path(), &store);
+        let before = std::fs::read(paths::profile_state(home.path(), "ex")).unwrap();
+        let dir = scratch_dir(home.path()).unwrap();
+        let export = export_path(dir.path());
+        std::fs::write(
+            &export,
+            br#"{"cookies":[],"origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"theme","value":"dark"}]}]}"#,
+        )
+        .unwrap();
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+
+        let got = refresh_profile(home.path(), "ex", &export, now, &store).unwrap();
+
+        assert!(matches!(got, Outcome::Skipped(_)));
+        assert_eq!(
+            std::fs::read(paths::profile_state(home.path(), "ex")).unwrap(),
+            before,
+            "encrypted profile must be byte-for-byte unchanged"
         );
         assert_eq!(meta(home.path()).last_refresh, None);
         assert!(!export.exists());

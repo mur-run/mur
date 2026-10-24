@@ -5,12 +5,13 @@
 //! lives 30 minutes and rotates) used to dominate `earliest_cookie_expires`,
 //! so `mur browser status` showed a profile "expiring" half an hour after a
 //! login that was still good for weeks. This module keeps only the cookies
-//! that can plausibly carry the login, and answers whether a state still has
-//! any session material at all (the write-back guard in [`crate::refresh`]).
+//! that can plausibly carry the login, and answers whether an exported state
+//! still carries the saved login (the write-back guard in [`crate::refresh`]).
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// Cookie names that never carry a login: analytics and bot-mitigation
 /// tokens, matched exactly.
@@ -59,39 +60,97 @@ pub fn session_cookie_expiry(
         .min())
 }
 
-/// True when the state still holds something a login could live in for the
-/// profile's domains: a session-candidate cookie, or non-empty localStorage
-/// on an allowed origin. A state with neither is a logged-out or fresh
-/// context and must never replace a saved profile.
-pub fn has_session_data(storage_state: &[u8], allow_domains: &[String]) -> bool {
-    let Ok(value) = serde_json::from_slice::<Value>(storage_state) else {
-        return false;
-    };
-    let cookie = value
-        .get("cookies")
-        .and_then(Value::as_array)
-        .is_some_and(|cookies| {
-            cookies
-                .iter()
-                .any(|cookie| is_session_candidate(cookie, allow_domains))
-        });
-    let storage = value
+/// One place a login may live: a session-candidate cookie or a localStorage
+/// key on an allowed origin, identified by name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LoginKey {
+    Cookie(String),
+    Storage(String),
+}
+
+/// The login keys of a state captured at `captured_at`, still meaningful at
+/// `now`: session-candidate cookies (minus rotating short-lived ones and ones
+/// already expired) and localStorage keys on allowed origins.
+pub fn login_keys(
+    storage_state: &[u8],
+    allow_domains: &[String],
+    captured_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<BTreeSet<LoginKey>> {
+    let value = serde_json::from_slice::<Value>(storage_state).ok()?;
+    let floor = captured_at + MIN_SESSION_COOKIE_LIFETIME;
+    let mut keys = BTreeSet::new();
+    for cookie in value.get("cookies").and_then(Value::as_array)? {
+        if !is_session_candidate(cookie, allow_domains) {
+            continue;
+        }
+        let expires = cookie
+            .get("expires")
+            .and_then(Value::as_f64)
+            .unwrap_or(-1.0);
+        // `-1` is a browser-session cookie: no expiry, often the login itself.
+        if expires > 0.0 && expires.is_finite() {
+            let Some(at) = DateTime::from_timestamp(expires as i64, 0) else {
+                continue;
+            };
+            if at < floor || at <= now {
+                continue;
+            }
+        }
+        if let Some(name) = cookie.get("name").and_then(Value::as_str) {
+            keys.insert(LoginKey::Cookie(name.to_owned()));
+        }
+    }
+    for origin in value
         .get("origins")
         .and_then(Value::as_array)
-        .is_some_and(|origins| {
-            origins.iter().any(|origin| {
-                let allowed = origin
-                    .get("origin")
-                    .and_then(Value::as_str)
-                    .is_some_and(|url| crate::guard::is_allowed(url, allow_domains));
-                let filled = origin
-                    .get("localStorage")
-                    .and_then(Value::as_array)
-                    .is_some_and(|items| !items.is_empty());
-                allowed && filled
-            })
-        });
-    cookie || storage
+        .into_iter()
+        .flatten()
+    {
+        let allowed = origin
+            .get("origin")
+            .and_then(Value::as_str)
+            .is_some_and(|url| crate::guard::is_allowed(url, allow_domains));
+        if !allowed {
+            continue;
+        }
+        let items = origin.get("localStorage").and_then(Value::as_array);
+        for item in items.into_iter().flatten() {
+            if let Some(name) = item.get("name").and_then(Value::as_str) {
+                keys.insert(LoginKey::Storage(name.to_owned()));
+            }
+        }
+    }
+    Some(keys)
+}
+
+/// Positive login check for write-back. Site storage alone proves nothing (a
+/// logged-out page keeps `theme=dark`, consent and device-ID cookies), so the
+/// reference is the saved profile, captured right after a confirmed login:
+/// the export must still hold **every** login key the saved state has. A
+/// logout removes the token, so a key goes missing and the profile is kept.
+/// When the saved state has no identifiable keys, login cannot be
+/// established and the answer is `false` as well.
+pub fn retains_login(
+    saved: &[u8],
+    saved_at: DateTime<Utc>,
+    export: &[u8],
+    allow_domains: &[String],
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(required) = login_keys(saved, allow_domains, saved_at, now) else {
+        return false;
+    };
+    // The export is judged as captured now; its cookies only need to exist.
+    let Some(present) = login_keys(
+        export,
+        allow_domains,
+        now - MIN_SESSION_COOKIE_LIFETIME,
+        now,
+    ) else {
+        return false;
+    };
+    !required.is_empty() && required.is_subset(&present)
 }
 
 fn is_session_candidate(cookie: &Value, allow_domains: &[String]) -> bool {
@@ -174,19 +233,104 @@ mod tests {
         assert_eq!(got.unwrap(), Some(at(NOW + 86_400)));
     }
 
+    const SAVED: &[u8] = br#"{"cookies":[
+            {"name":"__cf_bm","domain":".example.com","expires":1700001800},
+            {"name":"consent","domain":".example.com","expires":1800000000}],
+        "origins":[{"origin":"https://chat.example.com","localStorage":[
+            {"name":"userToken","value":"old"},{"name":"theme","value":"dark"}]}]}"#;
+
     #[test]
-    fn local_storage_on_an_allowed_origin_is_session_data() {
-        let state = br#"{"cookies":[{"name":"__cf_bm","domain":".example.com"}],
-            "origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"userToken","value":"x"}]}]}"#;
-        assert!(has_session_data(state, &allow(&["example.com"])));
+    fn rotated_login_is_retained() {
+        let export =
+            br#"{"cookies":[{"name":"consent","domain":".example.com","expires":1800000000}],
+            "origins":[{"origin":"https://chat.example.com","localStorage":[
+                {"name":"userToken","value":"new"},{"name":"theme","value":"dark"}]}]}"#;
+        assert!(retains_login(
+            SAVED,
+            at(NOW),
+            export,
+            &allow(&["example.com"]),
+            at(NOW + 60)
+        ));
     }
 
     #[test]
-    fn empty_or_logged_out_state_has_no_session_data() {
-        assert!(!has_session_data(br#"{"cookies":[],"origins":[]}"#, &[]));
-        let only_bot = br#"{"cookies":[{"name":"__cf_bm","domain":".example.com"}],
-            "origins":[{"origin":"https://evil.test","localStorage":[{"name":"t","value":"x"}]}]}"#;
-        assert!(!has_session_data(only_bot, &allow(&["example.com"])));
-        assert!(!has_session_data(b"not json", &[]));
+    fn logout_leaving_preferences_and_consent_is_not_a_login() {
+        let export = br#"{"cookies":[{"name":"consent","domain":".example.com","expires":1800000000}],
+            "origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"theme","value":"dark"}]}]}"#;
+        assert!(!retains_login(
+            SAVED,
+            at(NOW),
+            export,
+            &allow(&["example.com"]),
+            at(NOW + 60)
+        ));
+        let only_theme = br#"{"cookies":[],
+            "origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"theme","value":"dark"}]}]}"#;
+        assert!(!retains_login(
+            SAVED,
+            at(NOW),
+            only_theme,
+            &allow(&["example.com"]),
+            at(NOW + 60)
+        ));
+    }
+
+    #[test]
+    fn blank_garbage_or_keyless_states_never_establish_login() {
+        let allowed = allow(&["example.com"]);
+        let blank = br#"{"cookies":[],"origins":[]}"#;
+        assert!(!retains_login(SAVED, at(NOW), blank, &allowed, at(NOW)));
+        assert!(!retains_login(
+            SAVED,
+            at(NOW),
+            b"not json",
+            &allowed,
+            at(NOW)
+        ));
+        // Nothing identifiable in the saved state: refuse rather than guess.
+        assert!(!retains_login(blank, at(NOW), SAVED, &allowed, at(NOW)));
+    }
+
+    #[test]
+    fn rotating_or_expired_saved_cookies_are_not_required() {
+        // __cf_bm (30 min) is not required; consent expired before `now`.
+        let saved = br#"{"cookies":[
+                {"name":"HWWAFSESTIME","domain":"chat.example.com","expires":1700000600},
+                {"name":"old","domain":".example.com","expires":1700090000},
+                {"name":"sid","domain":".example.com","expires":-1}],
+            "origins":[]}"#;
+        let export =
+            br#"{"cookies":[{"name":"sid","domain":".example.com","expires":-1}],"origins":[]}"#;
+        assert!(retains_login(
+            saved,
+            at(NOW),
+            export,
+            &allow(&["example.com"]),
+            at(1_700_100_000)
+        ));
+        let gone = br#"{"cookies":[],"origins":[]}"#;
+        assert!(!retains_login(
+            saved,
+            at(NOW),
+            gone,
+            &allow(&["example.com"]),
+            at(1_700_100_000)
+        ));
+    }
+
+    #[test]
+    fn other_origins_do_not_count() {
+        let export =
+            br#"{"cookies":[{"name":"consent","domain":".example.com","expires":1800000000}],
+            "origins":[{"origin":"https://evil.test","localStorage":[
+                {"name":"userToken","value":"x"},{"name":"theme","value":"dark"}]}]}"#;
+        assert!(!retains_login(
+            SAVED,
+            at(NOW),
+            export,
+            &allow(&["example.com"]),
+            at(NOW + 60)
+        ));
     }
 }

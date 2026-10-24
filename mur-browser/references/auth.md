@@ -96,9 +96,15 @@ as valid until a downstream mode observes a logout.
 
 Profiles refresh themselves: after a green `mur browser replay` or a
 `mur browser record --profile` session, the browser's latest storage state
-is re-encrypted into the profile, so rotated tokens are kept. A state with
-no login data for the profile's domains (logged out, blank) never
-overwrites it. The label then ends with `, refreshed <timestamp>`.
+is re-encrypted into the profile, so rotated tokens are kept. The export
+must still hold every login key of the saved profile — each allowed-domain
+cookie that is neither tracking/anti-bot, short-lived, nor expired, and each
+allowed-origin localStorage key; values may rotate, names must stay. A
+logout that leaves preferences (`theme`), consent or device-ID cookies
+behind drops the token, so the saved profile is kept unchanged. When a site
+merely drops some non-login key, refresh is skipped too (safe side); run
+`mur browser auth --reauth` to re-baseline. The label then ends with
+`, refreshed <timestamp>`.
 
 ## Reading `mur browser status`
 
