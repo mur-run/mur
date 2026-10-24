@@ -75,9 +75,33 @@ pub async fn replay(
                     .tempfile()?;
                 std::io::Write::write_all(&mut file, &state)?;
                 drop(state);
-                mur_browser::replay::replay_live(&run, &allow, opts, Some(file.path())).await?
+                let scratch = mur_browser::refresh::scratch_dir(&home)?;
+                let export = mur_browser::refresh::export_path(scratch.path());
+                let report = mur_browser::replay::replay_live(
+                    &run,
+                    &allow,
+                    opts,
+                    Some(file.path()),
+                    Some(&export),
+                )
+                .await?;
+                // A red run may have ended on an error or logout page; only a
+                // green one is trusted to carry a live session back.
+                if report.failed == 0 {
+                    mur_browser::refresh::report(
+                        site,
+                        mur_browser::refresh::refresh_profile(
+                            &home,
+                            site,
+                            &export,
+                            chrono::Utc::now(),
+                            &KeychainStateKeyStore,
+                        ),
+                    );
+                }
+                report
             }
-            None => mur_browser::replay::replay_live(&run, &allow, opts, None).await?,
+            None => mur_browser::replay::replay_live(&run, &allow, opts, None, None).await?,
         }
     };
 

@@ -316,13 +316,9 @@ impl Downstream {
 }
 
 fn storage_state_export_code(state_path: &std::path::Path) -> Result<String> {
-    // Serialize the path as a JavaScript string literal, rather than
-    // interpolating it directly into code. The directory is private and
-    // is removed immediately after its contents are encrypted.
-    let path = serde_json::to_string(&state_path.to_string_lossy())?;
-    Ok(format!(
-        "async (page) => {{ await page.context().storageState({{ path: {path} }}); return 'storage state saved'; }}"
-    ))
+    // The directory is private and removed right after its contents are
+    // encrypted; the path is quoted as a JS literal by `refresh`.
+    crate::refresh::export_code(state_path)
 }
 
 fn ensure_response_succeeded<'a>(method: &str, response: &'a Value) -> Result<&'a Value> {
@@ -334,7 +330,7 @@ fn ensure_response_succeeded<'a>(method: &str, response: &'a Value) -> Result<&'
         .ok_or_else(|| anyhow::anyhow!("{method} returned neither result nor error"))
 }
 
-fn ensure_tool_succeeded<'a>(tool: &str, response: &'a Value) -> Result<&'a Value> {
+pub(crate) fn ensure_tool_succeeded<'a>(tool: &str, response: &'a Value) -> Result<&'a Value> {
     let result = ensure_response_succeeded(tool, response)?;
     // MCP tool failures are successful JSON-RPC responses carrying
     // `result.isError`, rather than JSON-RPC `error`. Do not prompt a human to
@@ -443,19 +439,31 @@ impl AsyncRead for ChannelReader {
 
 /// Spawn the server and relay between our stdin/stdout and it.
 /// Returns when the agent closes stdin or the server exits.
-pub async fn run_stdio<H: Hook>(mut cmd: Command, hook: H) -> Result<()> {
+pub async fn run_stdio<H: Hook>(cmd: Command, hook: H) -> Result<()> {
+    run_stdio_exporting(cmd, hook, None).await
+}
+
+/// [`run_stdio`], plus: when the agent hangs up while the server is still
+/// alive, ask the browser to export its storage state to `export` first
+/// (see [`crate::refresh`]), so a profile session can be written back.
+pub async fn run_stdio_exporting<H: Hook>(
+    mut cmd: Command,
+    hook: H,
+    export: Option<std::path::PathBuf>,
+) -> Result<()> {
     let mut child: Child = cmd
         .spawn()
         .context("spawn downstream MCP server (is `node` on PATH and in the spawn allowlist?)")?;
     tracing::info!(pid = child.id(), "downstream MCP server started");
     let child_in = child.stdin.take().context("child stdin")?;
     let child_out = child.stdout.take().context("child stdout")?;
-    let result = run_io(
+    let result = run_io_inner(
         detached_reader(std::io::stdin()),
         tokio::io::stdout(),
         child_in,
         child_out,
         hook,
+        export.as_deref(),
     )
     .await;
     // Already exited means the server hung up first; say how, since its
@@ -629,10 +637,28 @@ where
 /// * `server_out`— the server's stdout
 pub async fn run_io<H, AI, AO, SI, SO>(
     agent_in: AI,
+    agent_out: AO,
+    server_in: SI,
+    server_out: SO,
+    hook: H,
+) -> Result<()>
+where
+    H: Hook,
+    AI: AsyncRead + Unpin + Send + 'static,
+    AO: AsyncWrite + Unpin + Send + 'static,
+    SI: AsyncWrite + Unpin + Send + 'static,
+    SO: AsyncRead + Unpin + Send + 'static,
+{
+    run_io_inner(agent_in, agent_out, server_in, server_out, hook, None).await
+}
+
+async fn run_io_inner<H, AI, AO, SI, SO>(
+    agent_in: AI,
     mut agent_out: AO,
     mut server_in: SI,
     server_out: SO,
     hook: H,
+    export: Option<&std::path::Path>,
 ) -> Result<()>
 where
     H: Hook,
@@ -791,11 +817,16 @@ where
     // channel to close, the server's stdin open, and the server alive — a
     // deadlock whenever the agent hangs up first.
     let (mut r_agent, mut r_server) = (r_agent, r_server);
-    let (other, reason) = tokio::select! {
-        _ = &mut r_agent => (r_server, "agent closed stdin"),
-        _ = &mut r_server => (r_agent, "server closed stdout"),
+    let (other, reason, agent_left) = tokio::select! {
+        _ = &mut r_agent => (r_server, "agent closed stdin", true),
+        _ = &mut r_server => (r_agent, "server closed stdout", false),
     };
     tracing::info!(reason, "session ended");
+    // Only when the agent left first is the server still up, with its reader
+    // (`other`) routing internal replies, so the export can be answered.
+    if let (Some(path), true) = (export, agent_left && !other.is_finished()) {
+        crate::refresh::export_via(&down, path).await;
+    }
     // The finished handle must not be polled again; only the other one.
     other.abort();
     let _ = other.await;

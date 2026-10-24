@@ -116,14 +116,39 @@ pub(super) fn live_args(storage_state: Option<&std::path::Path>) -> Vec<String> 
     args
 }
 
+/// Best-effort, bounded state export over the replay connection.
+async fn export_state<C: ToolCaller + Send>(caller: &mut C, path: &std::path::Path) {
+    let result = async {
+        let args = crate::refresh::export_arguments(path)?;
+        let call = caller.call_tool("browser_run_code_unsafe", args);
+        let result = tokio::time::timeout(crate::refresh::EXPORT_TIMEOUT, call)
+            .await
+            .context("storage-state export timed out")??;
+        if result
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            bail!("browser_run_code_unsafe failed: {result}");
+        }
+        anyhow::Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::info!(error = %format!("{error:#}"), "post-replay storage-state export skipped");
+    }
+}
+
 /// Spawn a headless, isolated Playwright MCP server and replay `run` on it.
 /// `storage_state` is a decrypted profile state file the caller owns and
-/// deletes afterwards.
+/// deletes afterwards. With `export`, the browser's state after the run is
+/// written there (best effort) so the caller can refresh the profile.
 pub async fn replay_live(
     run: &Run,
     allow: &[String],
     opts: ReplayOptions,
     storage_state: Option<&std::path::Path>,
+    export: Option<&std::path::Path>,
 ) -> Result<ReplayReport> {
     check_navigation(run, allow)?;
     let args = live_args(storage_state);
@@ -134,7 +159,11 @@ pub async fn replay_live(
     let stdout = child.stdout.take().context("child stdout")?;
     let result = async {
         let mut caller = StdioCaller::connect(stdin, stdout).await?;
-        replay_with(run, allow, opts, &mut caller).await
+        let report = replay_with(run, allow, opts, &mut caller).await;
+        if let Some(path) = export {
+            export_state(&mut caller, path).await;
+        }
+        report
     }
     .await;
     let _ = child.kill().await;
