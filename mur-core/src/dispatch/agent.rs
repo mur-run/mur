@@ -451,6 +451,12 @@ pub(super) async fn run_agent(action: AgentAction) -> Result<()> {
                 cmd::agent::cmd_perm_set_limit(&name, &key, value)?
             }
             AgentPermAction::Reseal { name } => cmd::agent::cmd_perm_reseal(&name)?,
+            AgentPermAction::IntentCheck {
+                name,
+                model_ref,
+                timeout_ms,
+                off: _,
+            } => cmd::agent::cmd_perm_set_intent_check(&name, model_ref.as_deref(), timeout_ms)?,
             AgentPermAction::ToolAllow { name, pattern } => cmd::agent::cmd_perm_set_tool(
                 &name,
                 mur_common::agent::ToolPolicy::Allow,

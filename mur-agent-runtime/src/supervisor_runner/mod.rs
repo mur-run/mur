@@ -332,6 +332,7 @@ pub(crate) fn needs_routing_client(refs: usize, routing_on: bool, smart_on: bool
     refs > 1 || routing_on || smart_on
 }
 mod boot_config;
+mod intent_boot;
 mod prepare;
 mod provider;
 

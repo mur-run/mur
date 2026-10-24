@@ -8,11 +8,13 @@ use mur_common::agent::{NetworkOutboundMode, SpawnMode};
 
 use super::{load_profile_for_edit, pid_alive, resolve_mur_home, save_profile};
 
+mod intent;
 mod network;
 mod paths;
 mod spawn;
 pub(super) mod tools;
 
+pub use intent::cmd_perm_set_intent_check;
 pub(crate) use network::{add_port, is_base_port};
 pub use network::{
     cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_deny_host, cmd_perm_deny_port,

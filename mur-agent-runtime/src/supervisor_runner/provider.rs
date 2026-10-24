@@ -402,7 +402,15 @@ pub async fn build_provider_runner(
     // Per-call usage (`Event::LlmCall`) goes to the same writer as the hook
     // spans. Cloned because the routing path below consumes `telemetry`.
     let llm_telemetry = telemetry.clone();
+    // Layer 3, built once and shared by both tracks: a spawned CLI's tool
+    // calls come back through the same gate. A ref that does not build is
+    // logged and left off — off means the static tier, the pre-B behaviour.
+    let intent = super::intent_boot::intent_checker(profile, &mur_home);
     let build_base = |base: TaskRunner| {
+        let base = match &intent {
+            Some(c) => base.with_intent_checker(c.clone()),
+            None => base,
+        };
         crate::supervisor_runner::build_runner(
             base.with_llm_telemetry(llm_telemetry.clone(), entry.provider.clone())
                 .with_scratch_dir(scratch_dir.clone()),

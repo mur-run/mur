@@ -10,7 +10,7 @@ use mur_core::cmd::agent::{
     cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_allow_read, cmd_perm_allow_spawn,
     cmd_perm_allow_spawn_dir, cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host,
     cmd_perm_deny_path, cmd_perm_deny_port, cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir,
-    cmd_perm_remove_path, cmd_perm_set_mode, cmd_perm_set_tool,
+    cmd_perm_remove_path, cmd_perm_set_intent_check, cmd_perm_set_mode, cmd_perm_set_tool,
 };
 
 fn err(e: anyhow::Error) -> String {
@@ -121,6 +121,15 @@ pub fn agent_perm_set_tool(
 #[tauri::command]
 pub fn agent_perm_clear_tool(name: String, pattern: String) -> Result<AgentDetail, String> {
     cmd_perm_clear_tool(&name, &pattern).map_err(err)?;
+    get_agent_detail(name)
+}
+
+/// Layer-3 intent check: an empty `model_ref` turns it off. The CLI refuses
+/// a ref the registry does not know, or one that runs through an external
+/// CLI, and that refusal is what the UI shows.
+#[tauri::command]
+pub fn agent_perm_set_intent_check(name: String, model_ref: String) -> Result<AgentDetail, String> {
+    cmd_perm_set_intent_check(&name, Some(model_ref.as_str()), None).map_err(err)?;
     get_agent_detail(name)
 }
 

@@ -102,6 +102,11 @@ pub struct HitlConfig {
     /// are enforced at different seams and must not be confusable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autonomy: Option<crate::hitl::Autonomy>,
+    /// Layer 3 of the tier gate: a model reads each `bash` call the static
+    /// classifier could only tier as `Write` and may RAISE that tier, never
+    /// lower it. `None` = off (the default). See `crate::hitl::intent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent_check: Option<crate::hitl::intent::IntentCheckConfig>,
 }
 
 fn default_hitl_timeout_secs() -> u32 {
@@ -115,6 +120,7 @@ impl Default for HitlConfig {
             max_iterations: None,
             max_tokens: None,
             autonomy: None,
+            intent_check: None,
         }
     }
 }

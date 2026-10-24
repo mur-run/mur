@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { enforcementTone, permCommands } from "./permissionsModel";
+import { intentCandidates } from "./PermissionEditors";
 
 describe("enforcementTone", () => {
   it("only a sealed, enforcing sandbox is ok; advisory is attention; the rest muted", () => {
@@ -18,6 +19,7 @@ describe("permCommands", () => {
     expect(c.spawn).toBe("mur agent perm allow-spawn aura <program>");
     expect(c.tools).toBe("mur agent perm set-tool aura <tool> allow|ask|deny");
     expect(c.mcp).toBe("mur agent mcp set-network aura <server> --allow-host <host>");
+    expect(c.intent).toBe("mur agent perm intent-check aura <model_ref>|--off");
   });
 });
 
@@ -36,5 +38,13 @@ describe("editing model", () => {
   it("says restart only when the agent is running", () => {
     expect(afterWriteHint(true)).toBe("perm.restartHint");
     expect(afterWriteHint(false)).toBe("perm.saved");
+  });
+});
+
+describe("intentCandidates", () => {
+  it("drops CLI-backed models the runtime cannot side-call, sorted by ref", () => {
+    const m = (ref_name: string, provider: string) => ({ ref_name, provider, model: ref_name, capabilities: [] });
+    const out = intentCandidates([m("z_local", "openai"), m("cli_sonnet", "cli:claude"), m("a_haiku", "anthropic")]);
+    expect(out.map((x) => x.ref_name)).toEqual(["a_haiku", "z_local"]);
   });
 });

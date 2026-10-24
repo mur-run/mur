@@ -411,3 +411,22 @@ fn pinned_block_is_standalone_user_at_index_1_before_prior_turns() {
     );
     assert_eq!(out[2]["content"], "u1");
 }
+
+#[test]
+fn low_effort_turns_a_local_qwen3_thinking_off() {
+    use mur_common::llm::Effort;
+    let mut body = json!({});
+    apply_effort(&mut body, "Qwen3.5-4B-MLX-4bit", Some(Effort::Low));
+    assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+    assert!(body.get("reasoning_effort").is_none());
+
+    let mut body = json!({});
+    apply_effort(&mut body, "gpt-5", Some(Effort::Low));
+    assert_eq!(body["reasoning_effort"], "low");
+    assert!(body.get("chat_template_kwargs").is_none());
+
+    // No effort asked for: nothing is sent, Qwen3 keeps its own default.
+    let mut body = json!({});
+    apply_effort(&mut body, "Qwen3.5-4B-MLX-4bit", None);
+    assert_eq!(body, json!({}));
+}

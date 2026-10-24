@@ -409,6 +409,26 @@ pub fn openai_reasoning_effort(model: &str, want: Effort) -> Option<&'static str
     })
 }
 
+/// Qwen3's thinking switch (`chat_template_kwargs.enable_thinking`) for
+/// `want`, or `None` when `model` is not a Qwen3 switch model.
+///
+/// Gated on the `qwen3` prefix, not on [`EffortShape::Binary`] alone: GLM is
+/// also Binary but spells its switch `thinking: {type}`, and sending Qwen's
+/// kwarg to it would be ignored at best. `on_at` from the table decides the
+/// position, so the threshold has one owner.
+pub fn qwen_enable_thinking(model: &str, want: Effort) -> Option<bool> {
+    const QWEN_SWITCH: &str = "qwen3";
+    let m = model.to_lowercase();
+    let bare = m.rsplit('/').next().unwrap_or(&m);
+    if !bare.starts_with(QWEN_SWITCH) {
+        return None;
+    }
+    match effort_shape(model) {
+        EffortShape::Binary { on_at } => Some(want >= on_at),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +517,22 @@ mod tests {
         assert!(matches!(effort_shape("magistral-medium-latest"), AlwaysOn));
         assert!(matches!(effort_shape("gpt-4o"), None));
         assert!(matches!(effort_shape("llama3.2:3b"), None));
+    }
+
+    #[test]
+    fn qwen_thinking_switch_follows_the_table_threshold() {
+        assert_eq!(
+            qwen_enable_thinking("Qwen3.5-4B-MLX-4bit", Effort::Low),
+            Some(false)
+        );
+        assert_eq!(
+            qwen_enable_thinking("qwen/qwen3-32b", Effort::High),
+            Some(true)
+        );
+        // GLM is a switch too, but not this spelling of one.
+        assert_eq!(qwen_enable_thinking("glm-4.6", Effort::Low), None);
+        assert_eq!(qwen_enable_thinking("gpt-5", Effort::Low), None);
+        assert_eq!(qwen_enable_thinking("llama3.2:3b", Effort::Low), None);
     }
 
     /// The three cases the design turns on. Each must fail if its guard is removed.

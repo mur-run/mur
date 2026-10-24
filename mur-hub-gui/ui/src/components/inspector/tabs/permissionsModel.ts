@@ -19,6 +19,7 @@ export function permCommands(agent: string) {
     spawn: `mur agent perm allow-spawn ${agent} <program>`,
     tools: `mur agent perm set-tool ${agent} <tool> allow|ask|deny`,
     mcp: `mur agent mcp set-network ${agent} <server> --allow-host <host>`,
+    intent: `mur agent perm intent-check ${agent} <model_ref>|--off`,
   };
 }
 

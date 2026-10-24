@@ -8,6 +8,7 @@ pub mod builtin_tier;
 pub mod dest;
 pub mod floor_waiver;
 mod heredoc_data;
+pub mod intent;
 pub mod label;
 mod opaque_shell;
 pub mod pin;
