@@ -45,6 +45,60 @@ pub(super) fn bounded(idle: Duration, deadline: Option<Instant>) -> Option<Durat
     (!left.is_zero()).then(|| left.min(idle))
 }
 
+/// A unix stream whose every underlying read and write re-arms the socket
+/// timeout to [`bounded`]: the idle timeout, cut to what is left of the
+/// deadline. `SO_RCVTIMEO` bounds one blocking call, not a frame — a peer
+/// trickling bytes without a newline would otherwise stretch one
+/// `read_line` past the deadline, one short read at a time. Past the
+/// deadline a call fails with `TimedOut` before touching the socket.
+#[cfg(unix)]
+pub(super) struct Bounded {
+    pub(super) stream: std::os::unix::net::UnixStream,
+    pub(super) idle: Duration,
+    pub(super) deadline: Option<Instant>,
+}
+
+#[cfg(unix)]
+impl Bounded {
+    fn arm(&self, write: bool) -> std::io::Result<()> {
+        let Some(t) = bounded(self.idle, self.deadline) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "deadline passed",
+            ));
+        };
+        if write {
+            self.stream.set_write_timeout(Some(t))
+        } else {
+            self.stream.set_read_timeout(Some(t))
+        }
+    }
+
+    /// Whether the deadline, if any, has passed.
+    pub(super) fn expired(&self) -> bool {
+        self.deadline.is_some_and(|d| Instant::now() >= d)
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Read for Bounded {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.arm(false)?;
+        self.stream.read(buf)
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Write for Bounded {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.arm(true)?;
+        self.stream.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 pub(super) fn passed(agent_name: &str, request: &Value) -> anyhow::Error {
     let method = request.get("method").and_then(Value::as_str).unwrap_or("?");
     anyhow!("agent '{agent_name}': {method} did not finish before its deadline")

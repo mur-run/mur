@@ -186,20 +186,23 @@ fn dial_socket(
         let idle = dial_io_timeout_for(proto);
         let timeout = deadline::bounded(idle, deadline)
             .ok_or_else(|| deadline::passed(agent_name, request))?;
-        let mut stream = std::os::unix::net::UnixStream::connect(&sock)
+        let stream = std::os::unix::net::UnixStream::connect(&sock)
             .with_context(|| format!("connect {sock}"))?;
         // Bound both directions: without these, a stalled or crashed peer
         // (or one silently waiting on a HITL prompt) blocks `mur agent send`
         // forever with no feedback (dogfood issue: hung for 5+ minutes).
-        stream
-            .set_write_timeout(Some(timeout))
-            .context("set write timeout")?;
-        stream
-            .set_read_timeout(Some(timeout))
-            .context("set read timeout")?;
+        // `Bounded` re-arms the timeout before every socket call, so an idle
+        // silence and the deadline are both enforced per read, never per frame.
+        let mut writer = deadline::Bounded {
+            stream: stream.try_clone()?,
+            idle,
+            deadline,
+        };
         let line = format!("{}\n", serde_json::to_string(request)?);
-        stream.write_all(line.as_bytes()).map_err(|e| {
-            if is_io_timeout(&e) {
+        writer.write_all(line.as_bytes()).map_err(|e| {
+            if is_io_timeout(&e) && writer.expired() {
+                deadline::passed(agent_name, request)
+            } else if is_io_timeout(&e) {
                 anyhow!(
                     "agent '{agent_name}' did not accept the request within {}s (write timed out); \
                      check `mur agent logs {agent_name}`",
@@ -209,12 +212,16 @@ fn dial_socket(
                 anyhow!(e).context("write request")
             }
         })?;
-        stream.flush().context("flush request")?;
-        let reader = BufReader::new(stream.try_clone()?);
+        writer.flush().context("flush request")?;
+        let reader = BufReader::new(deadline::Bounded {
+            stream,
+            idle,
+            deadline,
+        });
         let mut last_frame: Option<(String, String)> = None;
         for line in reader.lines() {
             let line = line.map_err(|e| {
-                if is_io_timeout(&e) && deadline.is_some_and(|d| Instant::now() >= d) {
+                if is_io_timeout(&e) && writer.expired() {
                     deadline::passed(agent_name, request)
                 } else if is_io_timeout(&e) {
                     timeout_error(
@@ -228,24 +235,20 @@ fn dial_socket(
                     anyhow!(e).context("read response line")
                 }
             })?;
-            let v: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            note_frame(&mut last_frame, &v);
-            if v.get("id") == Some(request_id) {
-                if let Some(err) = v.get("error") {
-                    bail!("agent '{agent_name}' returned error: {err}");
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                note_frame(&mut last_frame, &v);
+                if v.get("id") == Some(request_id) {
+                    if let Some(err) = v.get("error") {
+                        bail!("agent '{agent_name}' returned error: {err}");
+                    }
+                    return Ok(v.get("result").cloned().unwrap_or(Value::Null));
                 }
-                return Ok(v.get("result").cloned().unwrap_or(Value::Null));
             }
-            // A frame resets the idle timer, never the deadline.
-            if deadline.is_some() {
-                let next = deadline::bounded(idle, deadline)
-                    .ok_or_else(|| deadline::passed(agent_name, request))?;
-                stream
-                    .set_read_timeout(Some(next))
-                    .context("set read timeout")?;
+            // Every non-answer frame, malformed ones included, checks the
+            // deadline: lines already buffered never reach the socket, so
+            // `Bounded` alone cannot stop a burst of them.
+            if writer.expired() {
+                return Err(deadline::passed(agent_name, request));
             }
         }
         bail!("EOF before matching response from '{agent_name}'");
