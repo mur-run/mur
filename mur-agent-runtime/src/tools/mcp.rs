@@ -136,16 +136,16 @@ impl ToolExecutor for McpToolExecutor {
 
     async fn execute(&self, mut input: Value) -> Result<ToolOutput, ToolError> {
         inject_session_cwd(&self.tool, &mut input, self.session_cwd.as_ref());
-        // Held across the call and finished only once the server answered: a
-        // timeout, cancel or panic drops it unfinished, which marks the server's
-        // later denials as unattributable (the call may still be running).
+        // Held across the call and resolved only once the server answered: a
+        // timeout, cancel or panic drops it unresolved, which keeps this turn a
+        // suspect for the server's later denials (the call may still be running).
         let in_flight = self.pool.in_flight(&self.server);
         let client_arc: Arc<Mutex<McpClient>> = match self.pool.client(&self.server).await {
             Ok(c) => c,
             Err(e) => {
                 // Nothing reached the server.
                 if let Some(g) = in_flight {
-                    g.finish();
+                    g.settle();
                 }
                 return Err(ToolError::Execution(e.to_string()));
             }
@@ -158,13 +158,14 @@ impl ToolExecutor for McpToolExecutor {
         // Only an answer from the server ends its work. A timeout, or an I/O,
         // transport or decoding failure after the request went out, says
         // nothing about whether the server is still running the call.
-        let answered = match &result {
-            Ok(Ok(_)) => true,
-            Ok(Err(e)) => e.is_server_reply(),
-            Err(_) => false,
-        };
-        if let (true, Some(g)) = (answered, in_flight) {
-            g.finish();
+        // A result means the tool ran, so what it started (a page) may still
+        // be loading; a JSON-RPC error means it never ran.
+        if let Some(g) = in_flight {
+            match &result {
+                Ok(Ok(_)) => g.finish(),
+                Ok(Err(e)) if e.is_server_reply() => g.settle(),
+                _ => {}
+            }
         }
         let result = result
             .map(|r| r.map_err(|e| ToolError::Execution(e.to_string())))

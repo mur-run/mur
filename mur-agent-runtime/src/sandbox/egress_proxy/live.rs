@@ -49,8 +49,8 @@ struct EventsInner {
     /// stays a candidate owner, even while another turn uses the server.
     abandoned: Recent,
     /// Turns whose call the server answered. Their page may still be loading,
-    /// so while nobody is using the server they remain candidate owners until
-    /// [`ATTRIBUTION_GRACE`] passes.
+    /// and another turn starting a call does not stop that traffic, so they
+    /// remain candidate owners until [`ATTRIBUTION_GRACE`] passes.
     finished: Recent,
 }
 
@@ -64,25 +64,20 @@ fn sweep(map: &mut Recent, now: Instant) {
 
 impl EventsInner {
     /// The turns that could have caused a denial on `server` at `now`:
-    /// everyone using it, every turn that abandoned a call on it recently,
-    /// and — only when nobody is using it — every turn that finished a call
-    /// on it recently. Sorted, for a stable log line.
+    /// everyone using it, and every turn that ended a call on it (abandoned
+    /// or answered) within the grace. A finished turn's page keeps loading
+    /// while another turn uses the server, so it stays a suspect then too;
+    /// the pool is per agent and requests carry no page owner, so overlap is
+    /// ambiguous and broadcasts. Sorted, for a stable log line.
     fn candidates(&mut self, server: &str, now: Instant) -> BTreeSet<String> {
         sweep(&mut self.abandoned, now);
         sweep(&mut self.finished, now);
         let mut s: BTreeSet<String> = BTreeSet::new();
         let active = self.in_flight.get(server);
         s.extend(active.into_iter().flat_map(|t| t.keys().cloned()));
-        let idle = s.is_empty();
-        s.extend(
-            self.abandoned
-                .get(server)
-                .into_iter()
-                .flat_map(|t| t.keys().cloned()),
-        );
-        if idle {
+        for ended in [&self.abandoned, &self.finished] {
             s.extend(
-                self.finished
+                ended
                     .get(server)
                     .into_iter()
                     .flat_map(|t| t.keys().cloned()),
@@ -92,21 +87,41 @@ impl EventsInner {
     }
 }
 
+/// How a tool call ended, as far as its trailing traffic is concerned.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// Dropped unresolved (timeout, cancel, panic): it may still be running.
+    Abandoned,
+    /// The tool ran and returned; what it started (a page) may still load.
+    Finished,
+    /// The tool never ran (unreachable server, JSON-RPC error): no traffic.
+    Settled,
+}
+
 /// Marks one tool call on `server` by `task` as in flight. [`InFlight::finish`]
-/// when the server answered; a plain drop (timeout, cancel, panic) means the
-/// call may still be running server-side, so the task stays a candidate owner
+/// when the tool returned a result, [`InFlight::settle`] when it never ran; a
+/// plain drop (timeout, cancel, panic) means the call may still be running
+/// server-side. Finished and abandoned calls leave the task a candidate owner
 /// of that server's denials for [`ATTRIBUTION_GRACE`].
 pub struct InFlight {
     events: Events,
     server: String,
     task: String,
-    finished: bool,
+    ending: Ending,
 }
 
 impl InFlight {
-    /// The server answered (success or error): its work for this call is over.
+    /// The tool returned a result (an `isError` one included): the call is
+    /// over, but the work it started — a page still loading — may not be.
     pub fn finish(mut self) {
-        self.finished = true;
+        self.ending = Ending::Finished;
+    }
+
+    /// The tool never ran — the request did not reach the server, or the
+    /// server refused it at the protocol level — so nothing it started can
+    /// be behind a later denial.
+    pub fn settle(mut self) {
+        self.ending = Ending::Settled;
     }
 }
 
@@ -114,15 +129,17 @@ impl Drop for InFlight {
     fn drop(&mut self) {
         let mut g = self.events.inner.lock().unwrap();
         let now = Instant::now();
-        let ended = if self.finished {
-            &mut g.finished
-        } else {
-            &mut g.abandoned
+        let ended = match self.ending {
+            Ending::Abandoned => Some(&mut g.abandoned),
+            Ending::Finished => Some(&mut g.finished),
+            Ending::Settled => None,
         };
-        ended
-            .entry(self.server.clone())
-            .or_default()
-            .insert(self.task.clone(), now);
+        if let Some(ended) = ended {
+            ended
+                .entry(self.server.clone())
+                .or_default()
+                .insert(self.task.clone(), now);
+        }
         if let Some(tasks) = g.in_flight.get_mut(&self.server) {
             if let Some(n) = tasks.get_mut(&self.task) {
                 *n -= 1;
@@ -158,7 +175,7 @@ impl Events {
             events: self.clone(),
             server: server.to_owned(),
             task: task.to_owned(),
-            finished: false,
+            ending: Ending::Abandoned,
         }
     }
 
@@ -371,8 +388,11 @@ mod tests {
         let both = h.events.denied("browser", "one.x", None, false, t).unwrap();
         assert_eq!(both.task_id, None);
         b.finish();
-        let only_a = h.events.denied("browser", "two.x", None, false, t).unwrap();
-        assert_eq!(only_a.task_id.as_deref(), Some("task-a"));
+        let a_and_trailing_b = h.events.denied("browser", "two.x", None, false, t).unwrap();
+        assert_eq!(
+            a_and_trailing_b.task_id, None,
+            "b's page may still be loading"
+        );
         a.finish();
         let nobody = h
             .events
@@ -434,12 +454,36 @@ mod tests {
         assert!(h.events.inner.lock().unwrap().abandoned.is_empty());
     }
 
-    /// A finished call is only a suspect while the server is idle: once
-    /// another turn is using it, that turn's denials are its own.
+    /// Review on #2106: turn A's page keeps loading after its call returns,
+    /// and turn B starting a call does not stop it. A denial then could be
+    /// either turn's, so it must broadcast, never be stamped with B's id
+    /// (which would route A's own denial away from A). Once A's grace has
+    /// passed, B is the only suspect again.
     #[test]
-    fn a_finished_turn_does_not_dilute_the_turn_now_using_the_server() {
+    fn a_finished_turns_trailing_traffic_is_not_stamped_with_another_turn() {
         let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let t0 = Instant::now();
         h.in_flight("browser", "task-a").finish();
+        let _b = h.in_flight("browser", "task-b");
+        let d = h
+            .events
+            .denied("browser", "challenge.x", None, false, t0)
+            .expect("an ambiguous denial still notifies");
+        assert_eq!(d.task_id, None, "A or B: ambiguous, so broadcast");
+        let later = t0 + ATTRIBUTION_GRACE + Duration::from_secs(1);
+        let d = h
+            .events
+            .denied("browser", "img.x", None, false, later)
+            .unwrap();
+        assert_eq!(d.task_id.as_deref(), Some("task-b"));
+    }
+
+    /// A call the server refused (or never received) started nothing, so it
+    /// leaves no suspect behind: the next turn's denials stay its own.
+    #[test]
+    fn a_settled_call_leaves_no_trailing_suspect() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        h.in_flight("browser", "task-a").settle();
         let _b = h.in_flight("browser", "task-b");
         let d = h
             .events
@@ -450,7 +494,8 @@ mod tests {
 
     /// The throttle is per audience: once denials are routed to one turn, a
     /// later turn hitting the same host never saw the first notice, so it
-    /// must get its own instead of being swallowed by the other turn's window.
+    /// must get one instead of being swallowed by the other turn's window.
+    /// While task-a's page may still be loading that notice is a broadcast.
     #[test]
     fn a_second_turn_gets_its_own_notice_inside_the_window() {
         let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
@@ -473,7 +518,10 @@ mod tests {
             .events
             .denied("browser", "img.x", None, false, t0 + Duration::from_secs(2))
             .expect("task-b never saw task-a's notice");
-        assert_eq!(d.task_id.as_deref(), Some("task-b"));
+        assert_eq!(
+            d.task_id, None,
+            "task-a's trailing traffic is still a suspect"
+        );
     }
 
     /// A call that stopped being waited on (timeout, cancel, panic) may still
@@ -507,12 +555,10 @@ mod tests {
         let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
         let t0 = Instant::now();
         for i in 0..100 {
-            let turn = h.in_flight("browser", &format!("task-{i}"));
-            assert!(
-                h.events
-                    .denied("browser", "img.x", None, false, t0)
-                    .is_some()
-            );
+            // One server each, so every turn is the sole suspect of its own.
+            let server = format!("srv-{i}");
+            let turn = h.in_flight(&server, &format!("task-{i}"));
+            assert!(h.events.denied(&server, "img.x", None, false, t0).is_some());
             turn.finish();
         }
         let live = h.in_flight("browser", "task-live");
