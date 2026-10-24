@@ -92,14 +92,15 @@ impl EventsInner {
 enum Ending {
     /// Dropped unresolved (timeout, cancel, panic): it may still be running.
     Abandoned,
-    /// The tool ran and returned; what it started (a page) may still load.
+    /// The server answered (a result or a JSON-RPC error); what the tool
+    /// started before answering (a page) may still load.
     Finished,
-    /// The tool never ran (unreachable server, JSON-RPC error): no traffic.
+    /// The request never reached the server: no traffic can follow.
     Settled,
 }
 
 /// Marks one tool call on `server` by `task` as in flight. [`InFlight::finish`]
-/// when the tool returned a result, [`InFlight::settle`] when it never ran; a
+/// when the server answered, [`InFlight::settle`] when it was never asked; a
 /// plain drop (timeout, cancel, panic) means the call may still be running
 /// server-side. Finished and abandoned calls leave the task a candidate owner
 /// of that server's denials for [`ATTRIBUTION_GRACE`].
@@ -111,15 +112,17 @@ pub struct InFlight {
 }
 
 impl InFlight {
-    /// The tool returned a result (an `isError` one included): the call is
-    /// over, but the work it started — a page still loading — may not be.
+    /// The server answered — a result (an `isError` one included) or a
+    /// JSON-RPC error. The call is over, but work the tool started before
+    /// answering — a page still loading — may not be: an error does not
+    /// prove the tool never ran.
     pub fn finish(mut self) {
         self.ending = Ending::Finished;
     }
 
-    /// The tool never ran — the request did not reach the server, or the
-    /// server refused it at the protocol level — so nothing it started can
-    /// be behind a later denial.
+    /// The request never reached the server (no client could be obtained),
+    /// so nothing it started can be behind a later denial. Only for failures
+    /// known to precede execution; any answer from the server is `finish`.
     pub fn settle(mut self) {
         self.ending = Ending::Settled;
     }
@@ -478,8 +481,8 @@ mod tests {
         assert_eq!(d.task_id.as_deref(), Some("task-b"));
     }
 
-    /// A call the server refused (or never received) started nothing, so it
-    /// leaves no suspect behind: the next turn's denials stay its own.
+    /// A call that never reached the server started nothing, so it leaves
+    /// no suspect behind: the next turn's denials stay its own.
     #[test]
     fn a_settled_call_leaves_no_trailing_suspect() {
         let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());

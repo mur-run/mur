@@ -158,12 +158,13 @@ impl ToolExecutor for McpToolExecutor {
         // Only an answer from the server ends its work. A timeout, or an I/O,
         // transport or decoding failure after the request went out, says
         // nothing about whether the server is still running the call.
-        // A result means the tool ran, so what it started (a page) may still
-        // be loading; a JSON-RPC error means it never ran.
+        // An answer — a result or a JSON-RPC error — ends the call but not
+        // what it started: an error can come after the tool already began a
+        // navigation, so both keep this turn a suspect for the grace.
         if let Some(g) = in_flight {
             match &result {
                 Ok(Ok(_)) => g.finish(),
-                Ok(Err(e)) if e.is_server_reply() => g.settle(),
+                Ok(Err(e)) if e.is_server_reply() => g.finish(),
                 _ => {}
             }
         }

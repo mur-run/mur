@@ -186,9 +186,10 @@ pub enum McpError {
 
 impl McpError {
     /// The server answered the request — with a JSON-RPC error, but it
-    /// answered, so its work on that request is over. Every other variant is
-    /// a local or transport failure: the request may have reached the server
-    /// and may still be running there.
+    /// answered, so it is no longer running that request (though what the
+    /// tool started before failing, e.g. a page load, may still be going).
+    /// Every other variant is a local or transport failure: the request may
+    /// have reached the server and may still be running there.
     pub fn is_server_reply(&self) -> bool {
         matches!(self, Self::Rpc(_))
     }
