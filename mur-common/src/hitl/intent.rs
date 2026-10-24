@@ -19,7 +19,13 @@
 //!
 //! Only [`should_check`] calls: `bash` with a command whose static tier is
 //! exactly `Write`. `Read` is a proof from the audited list (a model has
-//! nothing to add), and anything above `Write` already asks.
+//! nothing to add), and anything above `Write` already asks. Non-`bash` tools
+//! and command-less calls that fall to `Write` are not checked either, and a
+//! call misclassified as `Read` is fixed in layer 2 (`bash_class` / `dest`),
+//! never by widening this predicate.
+//!
+//! The model sees the command string only, not what a script it names does.
+//! Fail-open and off by default: nothing may rely on this layer for safety.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -148,6 +154,31 @@ mod tests {
             raise(RiskTier::Write, Some(RiskTier::NetworkEgress)),
             RiskTier::NetworkEgress
         );
+    }
+
+    /// Every tier, not a sample: a new `RiskTier` variant fails to compile
+    /// here until someone decides whether the model is asked about it.
+    #[test]
+    fn only_the_write_tier_is_ever_checked() {
+        let b = json!({ "command": "python3 sync.py" });
+        for tier in [
+            RiskTier::Read,
+            RiskTier::Write,
+            RiskTier::NetworkEgress,
+            RiskTier::Spend,
+            RiskTier::Destructive,
+            RiskTier::Privileged,
+        ] {
+            let expected = match tier {
+                RiskTier::Write => true,
+                RiskTier::Read
+                | RiskTier::NetworkEgress
+                | RiskTier::Spend
+                | RiskTier::Destructive
+                | RiskTier::Privileged => false,
+            };
+            assert_eq!(should_check("bash", Some(&b), tier), expected, "{tier:?}");
+        }
     }
 
     #[test]

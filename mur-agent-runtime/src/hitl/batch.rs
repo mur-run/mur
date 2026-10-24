@@ -19,8 +19,10 @@ pub struct PendingCall {
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub action_hash: String,
-    /// #1600: the strictest `risk:` the profile declares for this tool, sent
-    /// so the CLI's session lanes gate on the same tier. `None` = undeclared.
+    /// #1600: the tier the CLI's session lanes gate on. Gate B fills it with
+    /// `approval_risk(..)` (the profile's strictest declared `risk:`) maxed
+    /// with any layer-3 intent raise, so it is the FINAL tier, not the
+    /// profile-declared one. `None` = undeclared and not raised.
     pub risk: Option<mur_common::hitl::RiskTier>,
 }
 
