@@ -138,10 +138,17 @@ fn a_split_prefetch_redirect_is_not_followed_and_never_carries_either_token() {
         evil_seen.lock().unwrap().is_empty(),
         "the redirect was followed"
     );
-    assert!(
-        redirect_seen.lock().unwrap().iter().all(|a| !a),
-        "a token was sent unprompted"
-    );
+    {
+        let redirect_seen = redirect_seen.lock().unwrap();
+        assert!(
+            !redirect_seen.is_empty(),
+            "the redirector never served a request, so nothing was proven"
+        );
+        assert!(
+            redirect_seen.iter().all(|a| !a),
+            "a token was sent unprompted"
+        );
+    }
 }
 
 /// A rejected read credential is refused by the remote; neither token is echoed in the error, the
@@ -163,6 +170,10 @@ fn a_rejected_read_credential_fails_intake_without_echoing_either_token() {
             "the write login reached the wire during a failed prefetch: {seen:#?}"
         );
         assert!(seen.iter().all(|s| !s.leaked_token_in_line), "{seen:#?}");
+        assert!(
+            seen.iter().any(|s| s.carried == Carried::Wrong),
+            "the bad read login was never offered, so the refusal proved nothing: {seen:#?}"
+        );
     }
     assert!(r.b.store().get(&key("r1")).unwrap().is_none());
     assert_eq!(remote_ref(&r), r.e.old);
