@@ -251,9 +251,11 @@ impl TaskRunner {
         let now = chrono::Utc::now().to_rfc3339();
         let result = match result {
             None => {
-                self.set_state(&id, TaskState::Cancelled);
+                // Usage before the terminal state: `tasks/get` reads them
+                // apart, and an ended turn must never look usage-less (#2090).
                 let usage = token_usage();
                 self.task_usage.insert(&id, usage.clone());
+                self.set_state(&id, TaskState::Cancelled);
                 return TaskOutcome::Cancelled(Task {
                     id,
                     state: TaskState::Cancelled,
@@ -269,7 +271,6 @@ impl TaskRunner {
         };
         match result {
             Ok((reply, stop)) => {
-                self.set_state(&id, TaskState::Completed);
                 // Persist this turn into multi-turn chat memory keyed by `id`, so
                 // the next send (context.task_id == id) recalls it. Only on
                 // success — a failed/cancelled turn must not leave a dangling
@@ -324,6 +325,8 @@ impl TaskRunner {
                 if let Some(u) = &usage {
                     self.task_usage.insert(&id, u.clone());
                 }
+                // Only now: an ended turn's usage is already readable (#2090).
+                self.set_state(&id, TaskState::Completed);
                 TaskOutcome::Completed(Task {
                     id,
                     state: TaskState::Completed,
@@ -346,9 +349,9 @@ impl TaskRunner {
                     error = %err.message,
                     "task failed"
                 );
-                self.set_state(&id, TaskState::Failed);
                 let usage = token_usage();
                 self.task_usage.insert(&id, usage.clone());
+                self.set_state(&id, TaskState::Failed);
                 TaskOutcome::Failed(Task {
                     id,
                     state: TaskState::Failed,
