@@ -24,6 +24,8 @@ pub(super) fn run_plain(
     // thing and the code did another.
     let session_allow: RefCell<std::collections::HashSet<String>> =
         RefCell::new(Default::default());
+    // One denial notice per (server, host) per session, as in the TUI.
+    let egress_seen: RefCell<super::egress_denied::EgressChips> = RefCell::new(Default::default());
 
     loop {
         if interactive {
@@ -252,6 +254,9 @@ pub(super) fn run_plain(
                     StepEvent::Tokens { .. } => {}
                     // No chips in plain mode: the text form carries the command.
                     StepEvent::EgressDenied(ev) => {
+                        if !egress_seen.borrow_mut().first_notice(&ev) {
+                            return;
+                        }
                         let _ = writeln!(
                             out2.borrow_mut(),
                             "⚠ {}",

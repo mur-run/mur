@@ -18,6 +18,24 @@ pub struct EgressChips {
     pub dismissed: HashSet<String>,
     /// Every host denied this session, per server — for the wildcard hint.
     pub denied: std::collections::HashMap<String, BTreeSet<String>>,
+    /// (server, host) pairs whose notice line is already in the transcript.
+    /// A page load hits the same host many times (sub-resources, retries);
+    /// one line per pair is enough — the chips still refresh every time.
+    noticed: HashSet<(String, String)>,
+}
+
+impl EgressChips {
+    /// True the first time this session sees `ev`'s (server, host) pair.
+    pub fn first_notice(&mut self, ev: &EgressDenied) -> bool {
+        self.noticed.insert((ev.server.clone(), ev.host.clone()))
+    }
+
+    /// The transcript was cleared (`/new`, channel switch): its notice lines
+    /// are gone, so every host is noticed afresh. `dismissed`/`denied` are
+    /// the user's answers, not screen state, and stay.
+    pub fn forget_notices(&mut self) {
+        self.noticed.clear();
+    }
 }
 
 /// The registrable-ish parent of `host`: everything after the first label.
@@ -155,6 +173,18 @@ mod tests {
                 "/browser allow --dismiss img.shop.example.com",
             ]
         );
+    }
+
+    #[test]
+    fn repeated_denials_of_one_host_notice_once() {
+        let mut st = EgressChips::default();
+        let e = ev("browser", "gator.volces.com", DenyReason::NotAllowed);
+        assert!(st.first_notice(&e));
+        assert!(!st.first_notice(&e));
+        assert!(!st.first_notice(&e));
+        // Another host, or the same host on another server, still notices.
+        assert!(st.first_notice(&ev("browser", "x.volces.com", DenyReason::NotAllowed)));
+        assert!(st.first_notice(&ev("fetch", "gator.volces.com", DenyReason::NotAllowed)));
     }
 
     #[test]
