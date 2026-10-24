@@ -801,7 +801,13 @@ Agent** wizard offers the same catalog as a source.
   write, a channel event, a tool call that differs from the last one), and a
   delegated member inherits the fleet's *remaining* clock, not a fresh one. A
   cost cap applies only to a metered model; a local fleet is bounded by its
-  deadline. `mur limits <fleet|agent>` prints every bound in force and which
+  deadline. A one-shot `mur fleet run` checks the cap against actual billable
+  spend, including a delegated turn whose connection failed: the member is
+  asked what it spent, a turn still running is cancelled and its final usage
+  waited for (up to 2 minutes, or the run's remaining deadline), and a spend
+  that still can't be learned is posted to the run's channel as
+  `spend unknown` rather than counted as zero in silence.
+  `mur limits <fleet|agent>` prints every bound in force and which
   scope set it; every stop reaches the settlement card with its reason and the
   one-line remedy.
 - **A goal for one run, without editing the fleet** — `mur fleet run <name>
