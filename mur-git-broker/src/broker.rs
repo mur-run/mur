@@ -68,11 +68,18 @@ pub struct BrokerConfig {
     pub clock: Arc<dyn Clock>,
 }
 
+/// Test seam (`test-support` / `cfg(test)` only): called with the auth the push is about to run
+/// with, the push-phase counterpart of what a `RemoteReader` sees in the prefetch.
+#[cfg(any(test, feature = "test-support"))]
+pub type PushObserver = Box<dyn Fn(&dyn RemoteAuth) + Send + Sync>;
+
 pub struct Broker {
     cfg: BrokerConfig,
     store: PendingStore,
     gate: PrefetchGate,
     notifications: Mutex<Vec<String>>,
+    #[cfg(any(test, feature = "test-support"))]
+    push_observer: Option<PushObserver>,
 }
 
 fn storage(e: impl std::fmt::Display) -> BrokerError {
@@ -92,7 +99,15 @@ impl Broker {
             store,
             gate,
             notifications: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "test-support"))]
+            push_observer: None,
         })
+    }
+
+    /// Test seam: observe the auth handed to the push after approval.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observe_push_auth(&mut self, f: PushObserver) {
+        self.push_observer = Some(f);
     }
 
     pub fn store(&self) -> &PendingStore {
@@ -345,6 +360,10 @@ impl Broker {
             Some(t) => t,
             None => &*self.cfg.auth,
         };
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(observe) = &self.push_observer {
+            observe(auth);
+        }
         push(
             &repo,
             doc,

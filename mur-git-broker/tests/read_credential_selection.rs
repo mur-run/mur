@@ -38,6 +38,21 @@ impl CredentialSource for Recording {
     }
 }
 
+/// The username and origin the askpass wiring of `a` would hand to git.
+fn login_of(a: &dyn RemoteAuth) -> (String, String) {
+    let mut probe = Command::new("git");
+    a.apply(&mut probe);
+    let get = |k: &str| -> String {
+        probe
+            .get_envs()
+            .find(|(n, _)| *n == std::ffi::OsStr::new(k))
+            .and_then(|(_, v)| v.map(OsString::from))
+            .map(|v| v.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    (get(USER_ENV), get(ORIGIN_ENV))
+}
+
 /// Fetches from the local remote and remembers the username and origin of the auth it was given.
 struct CapturingReader {
     inner: GitFetchReader,
@@ -51,20 +66,7 @@ impl RemoteReader for CapturingReader {
         b: &PrefetchBudget,
         a: &dyn RemoteAuth,
     ) -> Result<(), BrokerError> {
-        let mut probe = Command::new("git");
-        a.apply(&mut probe);
-        let get = |k: &str| -> String {
-            probe
-                .get_envs()
-                .find(|(n, _)| *n == std::ffi::OsStr::new(k))
-                .and_then(|(_, v)| v.map(OsString::from))
-                .map(|v| v.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        };
-        self.logins
-            .lock()
-            .unwrap()
-            .push((get(USER_ENV), get(ORIGIN_ENV)));
+        self.logins.lock().unwrap().push(login_of(a));
         self.inner.fetch(r, s, b, &NoAuth)
     }
 }
@@ -73,7 +75,10 @@ struct Rig {
     e: Env,
     b: Broker,
     opened: Arc<Mutex<Vec<String>>>,
+    /// Prefetch-phase (username, origin) pairs.
     logins: Arc<Mutex<Vec<(String, String)>>>,
+    /// Push-phase (username, origin) pairs, from the auth the push is about to run with.
+    push_logins: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 fn cred(path: &str, user: &str) -> Credential {
@@ -94,7 +99,7 @@ fn rig(read: bool) -> Rig {
     let opened: Arc<Mutex<Vec<String>>> = Arc::default();
     let logins: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
     let (remote, seen) = (e.remote.to_str().unwrap().to_string(), logins.clone());
-    let b = Broker::new(BrokerConfig {
+    let mut b = Broker::new(BrokerConfig {
         store_path: e.t.path().join("pending.sqlite"),
         work_root: e.t.path().join("work-root"),
         limits: BrokerLimits::default(),
@@ -116,11 +121,15 @@ fn rig(read: bool) -> Rig {
         clock: e.clock.clone(),
     })
     .unwrap();
+    let push_logins: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let sink = push_logins.clone();
+    b.observe_push_auth(Box::new(move |a| sink.lock().unwrap().push(login_of(a))));
     Rig {
         e,
         b,
         opened,
         logins,
+        push_logins,
     }
 }
 
@@ -195,6 +204,38 @@ fn the_prefetch_login_username_belongs_to_the_secret_opened() {
             assert_eq!(origin, &format!("http://{user}@127.0.0.1:1"), "read={read}");
         }
     }
+}
+
+/// Spec §7.6 (both phases): with a split enrollment the prefetch is logged in as the read login
+/// and the push as the write login, each matching the secret opened for it; with one credential
+/// both phases use the same username.
+#[test]
+fn askpass_username_matches_the_opened_secret_in_each_phase() {
+    let origin = |u: &str| format!("http://{u}@127.0.0.1:1");
+    let pairs = |m: &Arc<Mutex<Vec<(String, String)>>>| m.lock().unwrap().clone();
+
+    let r = rig(true);
+    let (k, h) = submit(&r);
+    let _ = r.b.on_approval(&k, proof("e1", "r1", &h)); // the push itself cannot connect here
+    assert_eq!(opened(&r), vec![READ_PATH, WRITE_PATH]);
+    assert_eq!(
+        pairs(&r.logins),
+        vec![(READ_USER.into(), origin(READ_USER))]
+    );
+    assert_eq!(
+        pairs(&r.push_logins),
+        vec![(WRITE_USER.into(), origin(WRITE_USER))]
+    );
+
+    let r = rig(false);
+    let (k, h) = submit(&r);
+    let _ = r.b.on_approval(&k, proof("e1", "r1", &h));
+    assert_eq!(opened(&r), vec![WRITE_PATH, WRITE_PATH]);
+    assert_eq!(
+        pairs(&r.logins),
+        vec![(WRITE_USER.into(), origin(WRITE_USER))]
+    );
+    assert_eq!(pairs(&r.push_logins), pairs(&r.logins));
 }
 
 /// Spec §7.5: the audit row carries `read` / `write` / `shared`.
