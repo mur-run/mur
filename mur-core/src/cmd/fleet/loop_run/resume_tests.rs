@@ -325,6 +325,31 @@ fn a_sentinel_beside_a_checkpoint_is_never_removed_by_a_fresh_run() {
     assert!(checkpoint::load(home.path(), RUN).unwrap().is_some());
 }
 
+/// An unreadable checkpoint still exists: `checkpoint::load` failing is not
+/// `Ok(None)`. Treating it as absent would drop the sentinel and orphan the
+/// checkpoint without the `mur fleet stop` design §8.5 requires.
+#[test]
+fn a_sentinel_beside_an_unreadable_checkpoint_is_never_removed_by_a_fresh_run() {
+    let unsupported = |home: &Path| {
+        let mut c = cp(None);
+        c.schema = CHECKPOINT_SCHEMA + 1;
+        checkpoint::save(home, &c).unwrap();
+    };
+    let malformed = |home: &Path| {
+        std::fs::write(checkpoint::checkpoint_path(home, RUN), b"{ not json").unwrap();
+    };
+    for corrupt in [&unsupported as &dyn Fn(&Path), &malformed] {
+        let home = paused_home(None);
+        record(home.path(), crate::run_status::State::Failed);
+        corrupt(home.path());
+        assert!(checkpoint::load(home.path(), RUN).is_err());
+        let err = refuse_fresh_run_over_pause(home.path(), "dev").unwrap_err();
+        assert!(format!("{err}").contains("mur fleet stop dev"), "{err}");
+        assert!(control::paused_path(home.path(), "dev").exists());
+        assert!(checkpoint::checkpoint_path(home.path(), RUN).exists());
+    }
+}
+
 #[tokio::test]
 async fn run_guarded_refuses_a_fresh_run_over_a_paused_one() {
     let home = paused_home(None);
