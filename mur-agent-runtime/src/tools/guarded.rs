@@ -12,6 +12,7 @@
 //! See `docs/superpowers/specs/2026-09-16-mur-tool-mcp-server-design.md`.
 
 mod bash_ceiling;
+mod intent_raise;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,6 +50,9 @@ pub struct GuardedToolCall {
     /// (`telemetry/*.jsonl`). `None` on runners built without telemetry; the
     /// `info!` line in `record_bash_ceiling` is then the only trace.
     pub(crate) telemetry: Option<tokio::sync::mpsc::Sender<crate::telemetry_writer::Event>>,
+    /// Layer 3 (`profile.yaml hitl.intent_check`): may RAISE a `bash` call's
+    /// tier, never lower it. `None` = off.
+    pub(crate) intent: Option<Arc<crate::hitl::intent::IntentChecker>>,
 }
 
 /// D2 / D2b: with the B1 sandbox not enforcing, the agent can read its own
@@ -117,11 +121,16 @@ impl GuardedToolCall {
         let mut out = HashMap::new();
         let mut step_ids = HashMap::new();
         let entry = self.approval_sinks.lock().await.get(task_id).cloned();
+        let raised = self.intent_raises(calls).await;
         for call in calls {
-            if !known.contains(&call.tool_name)
-                || effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input))
-                    != ToolPolicy::Ask
-            {
+            let lift = raised.get(&call.call_id).copied();
+            let policy =
+                effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input));
+            // An intent raise turns an `Allow` into an ask: the model saw
+            // something the static floor could not. It never turns an ask
+            // into an allow — there is no path here that skips one.
+            let asks = policy == ToolPolicy::Ask || (policy == ToolPolicy::Allow && lift.is_some());
+            if !known.contains(&call.tool_name) || !asks {
                 continue;
             }
             // #1814: a refusal is a stop too — doctor's job is "how often
@@ -161,7 +170,7 @@ impl GuardedToolCall {
                 &self.agent_name,
                 step_id,
                 call,
-                approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)),
+                approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)).max(lift),
             ));
         }
         if pending.is_empty() {
@@ -254,6 +263,14 @@ impl GuardedToolCall {
             use mur_common::agent::ToolPolicy;
             let policy =
                 effective_call_policy(&self.tools_policy, &call.tool_name, Some(&call.input));
+            // `gate_response` decides nothing for an `Allow` call unless the
+            // intent check raised it; a decision present means it asked, and
+            // the answer — allow or deny — must be honoured, not skipped.
+            let policy = if policy == ToolPolicy::Allow && decision.is_some() {
+                ToolPolicy::Ask
+            } else {
+                policy
+            };
             if policy == ToolPolicy::Allow
                 && let Some(floor) =
                     call_floor(&self.tools_policy, &call.tool_name, Some(&call.input))

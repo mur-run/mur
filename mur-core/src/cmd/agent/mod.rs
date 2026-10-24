@@ -113,8 +113,8 @@ pub use perm::{
     cmd_perm_allow_spawn_dir, cmd_perm_allow_write, cmd_perm_clear_tool, cmd_perm_deny_host,
     cmd_perm_deny_path, cmd_perm_deny_port, cmd_perm_deny_spawn, cmd_perm_deny_spawn_dir,
     cmd_perm_list_hosts, cmd_perm_list_paths, cmd_perm_list_ports, cmd_perm_list_tools,
-    cmd_perm_remove_path, cmd_perm_reseal, cmd_perm_set_limit, cmd_perm_set_mode,
-    cmd_perm_set_tool, cmd_perm_show, grant_read, grant_spawn, grant_spawn_dir,
+    cmd_perm_remove_path, cmd_perm_reseal, cmd_perm_set_intent_check, cmd_perm_set_limit,
+    cmd_perm_set_mode, cmd_perm_set_tool, cmd_perm_show, grant_read, grant_spawn, grant_spawn_dir,
 };
 pub(crate) use perm::{reject_ungrantable_path, warn_if_running};
 #[allow(unused_imports)]

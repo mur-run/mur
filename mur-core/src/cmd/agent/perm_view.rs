@@ -133,6 +133,9 @@ pub struct PermissionsView {
     pub llm: LlmMode,
     pub limits: LimitsView,
     pub fail_closed_on_sandbox_error: bool,
+    /// Layer-3 intent check (`hitl.intent_check`): the model that may raise
+    /// a `bash` call's tier. `None` = off.
+    pub intent_check: Option<mur_common::hitl::intent::IntentCheckConfig>,
 }
 
 pub fn permissions_view(
@@ -254,6 +257,7 @@ pub fn permissions_view(
             processes: ent.limits.processes,
         },
         fail_closed_on_sandbox_error: ent.fail_closed_on_sandbox_error,
+        intent_check: profile.hitl.intent_check.clone(),
     }
 }
 

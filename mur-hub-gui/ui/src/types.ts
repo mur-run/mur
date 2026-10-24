@@ -151,6 +151,8 @@ export interface PermissionsView {
   llm: "allowed" | "off";
   limits: LimitsView;
   fail_closed_on_sandbox_error: boolean;
+  /** Layer-3 intent check; `null` = off. The model may only raise a tier. */
+  intent_check: { model_ref: string; timeout_ms?: number | null } | null;
 }
 
 export interface AgentDetail {

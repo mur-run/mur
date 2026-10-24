@@ -4,7 +4,8 @@ import type { AgentDetail, McpNetView, PathGrantView, PermissionsView } from "..
 import { useT } from "../../../i18n";
 import { enforcementTone, outboundModeForCli, permCommands } from "./permissionsModel";
 import {
-  AddDir, AddFolder, AddHost, AddPort, AddProgram, AddRule, OutboundSelect, PolicySelect, RemoveBtn, SpawnSelect,
+  AddDir, AddFolder, AddHost, AddPort, AddProgram, AddRule, IntentCheckSelect, OutboundSelect, PolicySelect, RemoveBtn,
+  SpawnSelect,
   usePermWrite, type PermWrite,
 } from "./PermissionEditors";
 
@@ -93,6 +94,11 @@ export function PermissionsTab({
           </ul>
         )}
         <AddRule write={write} />
+      </Block>
+
+      <Block title={t("perm.intent")} cmd={cmd.intent}>
+        <p className="field-muted perm__muted">{t("perm.intent.note")}</p>
+        <IntentCheckSelect value={v.intent_check?.model_ref ?? ""} write={write} />
       </Block>
 
       <Block title={t("perm.limits")}>

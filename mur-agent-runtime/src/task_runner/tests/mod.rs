@@ -209,6 +209,7 @@ mod continuation;
 mod conversation;
 mod doom_loop;
 mod drain_and_retry;
+mod intent_gate;
 mod limits;
 mod live_reload;
 mod system_prompt;

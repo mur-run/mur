@@ -77,6 +77,7 @@ impl TaskRunner {
             one_shot_approvals: Default::default(),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
+            intent: None,
             // Fail closed: an unset sandbox state refuses every `Ask` tool.
             // Production sets it from the B1 seal (`build_runner`).
             sandbox_enforcing: false,
@@ -539,6 +540,12 @@ impl TaskRunner {
 
     pub fn with_hitl_timeout_secs(mut self, secs: u32) -> Self {
         self.hitl_timeout_secs = secs;
+        self
+    }
+
+    /// Layer 3: a model that may raise a `bash` call's tier, never lower it.
+    pub fn with_intent_checker(mut self, c: Arc<crate::hitl::intent::IntentChecker>) -> Self {
+        self.intent = Some(c);
         self
     }
 
