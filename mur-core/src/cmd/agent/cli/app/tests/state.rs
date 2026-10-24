@@ -532,6 +532,31 @@ fn start_new_session_renotices_denied_hosts() {
     assert!(a.egress_chips.first_notice(&ev));
 }
 
+/// A channel switch also replaces the transcript, so it re-notices too.
+#[test]
+fn switch_channel_renotices_denied_hosts() {
+    use mur_common::egress_event::{DenyReason, EgressDenied};
+    let home = tempdir().unwrap();
+    let mut a = app_at(&home);
+    a.begin_user_turn("q");
+    a.finish_agent_turn("a".into(), Some("t1".into()));
+    let first_id = a.channel.as_ref().expect("channel after turn").id.clone();
+    let ev = EgressDenied {
+        agent: "a".into(),
+        server: "browser".into(),
+        host: "gator.volces.com".into(),
+        port: Some(443),
+        mode: "restricted".into(),
+        reason: DenyReason::NotAllowed,
+        at: "2026-10-15T00:00:00Z".into(),
+        task_id: None,
+    };
+    assert!(a.egress_chips.first_notice(&ev));
+    assert!(!a.egress_chips.first_notice(&ev));
+    a.switch_channel(&first_id).unwrap();
+    assert!(a.egress_chips.first_notice(&ev));
+}
+
 /// P3b-§3.1: `/review` keeps the raw rest of the line — the `/review`
 /// grammar (`--`, quoted task words) is `review/args.rs`'s, not this parser's.
 #[test]

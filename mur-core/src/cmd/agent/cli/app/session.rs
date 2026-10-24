@@ -1,5 +1,6 @@
 //! Session, channel, follow and shell-card methods on `App`, moved out of `app/mod.rs` for CLAUDE.md §4's 800-line rule.
-//! Pure movement: every item below is verbatim.
+//! Moved verbatim, except that clearing the transcript (`/new`, channel switch)
+//! now also forgets which egress denials were already noticed.
 
 use super::*;
 
