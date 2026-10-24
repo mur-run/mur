@@ -132,6 +132,10 @@ fn clean() -> Fixture {
     }
 }
 
+fn node_ls_install_tools(mur_home: &Path) -> PathBuf {
+    super::super::node_ls_install::tools_dir(mur_home)
+}
+
 fn run_audit(f: &Fixture) -> Vec<Finding> {
     audit(&Inputs {
         agent: AGENT,
