@@ -125,7 +125,7 @@ impl GuardedToolCall {
         let mut out = HashMap::new();
         let mut step_ids = HashMap::new();
         let entry = self.approval_sinks.lock().await.get(task_id).cloned();
-        let raised = self.intent_raises(calls).await;
+        let raised = self.intent_raises(task_id, calls).await;
         for call in calls {
             let lift = raised.get(&call.call_id).copied();
             let policy =

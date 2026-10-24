@@ -405,7 +405,7 @@ pub async fn build_provider_runner(
     // Layer 3, built once and shared by both tracks: a spawned CLI's tool
     // calls come back through the same gate. A ref that does not build is
     // logged and left off — off means the static tier, the pre-B behaviour.
-    let intent = super::intent_boot::intent_checker(profile, &mur_home);
+    let intent = super::intent_boot::intent_checker(profile, &mur_home, llm_telemetry.clone());
     let build_base = |base: TaskRunner| {
         let base = match &intent {
             Some(c) => base.with_intent_checker(c.clone()),

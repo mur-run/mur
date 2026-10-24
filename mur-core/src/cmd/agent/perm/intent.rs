@@ -74,9 +74,38 @@ fn egress_note(provider: &str) -> Option<String> {
     })
 }
 
+/// The `perm show` block for layer 3. It lives under `hitl.intent_check`, not
+/// `entitlements`, so the entitlement dump never shows it; this does — `off`
+/// when unset, else the model and the wait that applies.
+pub(super) fn show_block(cfg: Option<&IntentCheckConfig>) -> String {
+    match cfg {
+        None => "intent_check: off\n".to_string(),
+        Some(c) => format!(
+            "intent_check:\n  model_ref: {}\n  timeout_ms: {}\n",
+            c.model_ref,
+            c.timeout().as_millis()
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::egress_note;
+    use super::{IntentCheckConfig, egress_note, show_block};
+
+    #[test]
+    fn show_block_says_off_or_names_the_model_and_effective_timeout() {
+        assert_eq!(show_block(None), "intent_check: off\n");
+        let c = IntentCheckConfig {
+            model_ref: "qwen_local".into(),
+            timeout_ms: None,
+        };
+        let b = show_block(Some(&c));
+        assert!(b.contains("model_ref: qwen_local"), "{b}");
+        assert!(
+            b.contains(&format!("timeout_ms: {}", c.timeout().as_millis())),
+            "an unset timeout shows the default that applies: {b}"
+        );
+    }
 
     #[test]
     fn cloud_provider_gets_a_disclosure_naming_it() {

@@ -13,6 +13,7 @@ impl GuardedToolCall {
     /// one response's calls should not pay the model's latency N times.
     pub(super) async fn intent_raises(
         &self,
+        task_id: &str,
         calls: &[crate::llm::ToolCallResult],
     ) -> HashMap<String, RiskTier> {
         let Some(checker) = &self.intent else {
@@ -20,7 +21,9 @@ impl GuardedToolCall {
         };
         let rated = futures::future::join_all(calls.iter().map(|c| async move {
             let base = mur_common::hitl::tool_tier::classify(&c.tool_name, Some(&c.input));
-            let tier = checker.tier_for(&c.tool_name, &c.input, base).await;
+            let tier = checker
+                .tier_for(task_id, &c.tool_name, &c.input, base)
+                .await;
             (tier > base).then(|| (c.call_id.clone(), tier))
         }))
         .await;

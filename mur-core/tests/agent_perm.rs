@@ -380,3 +380,40 @@ fn reseal_clears_refusal_marker_when_pin_already_matches() {
         "marker must be gone: {body}"
     );
 }
+
+/// Review on #2115: the layer-3 checker lives under `hitl.intent_check`, not
+/// `entitlements`, so `perm show` must surface it separately — off when
+/// unset, and the model plus timeout when on.
+#[test]
+fn perm_show_reports_the_intent_check_state() {
+    let mur_home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    mur_create(mur_home.path(), bin_dir.path(), "agent_x");
+
+    let show = |home: &std::path::Path| {
+        let out = run(home, &["agent", "perm", "show", "agent_x"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    let off = show(mur_home.path());
+    assert!(off.contains("intent_check: off"), "disabled: {off}");
+
+    let path = mur_home.path().join("agents/agent_x/profile.yaml");
+    let mut p = read_profile(mur_home.path(), "agent_x");
+    p.hitl.intent_check = Some(mur_common::hitl::intent::IntentCheckConfig {
+        model_ref: "qwen_local".into(),
+        timeout_ms: Some(1500),
+    });
+    std::fs::write(&path, serde_yaml_ng::to_string(&p).unwrap()).unwrap();
+
+    let on = show(mur_home.path());
+    assert!(on.contains("intent_check:"), "enabled: {on}");
+    assert!(on.contains("model_ref: qwen_local"), "enabled: {on}");
+    assert!(on.contains("timeout_ms: 1500"), "enabled: {on}");
+    assert!(!on.contains("intent_check: off"), "enabled: {on}");
+}
