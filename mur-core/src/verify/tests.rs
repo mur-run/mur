@@ -316,3 +316,75 @@ fn redirected_output_is_not_reported_missing() {
         );
     }
 }
+
+#[test]
+fn missing_gitignored_path_is_skipped_not_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    git2::Repository::init(root.path()).unwrap();
+    std::fs::write(root.path().join(".gitignore"), "/docs/private\n").unwrap();
+
+    for path in [
+        "docs/private/",
+        "docs/private/specs/",
+        "docs/private/specs/a.md",
+    ] {
+        let result = verify_file_path(path, root.path());
+        assert!(
+            matches!(result, VerifyResult::Skipped(_)),
+            "{path}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn missing_tracked_location_is_still_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    git2::Repository::init(root.path()).unwrap();
+    std::fs::write(root.path().join(".gitignore"), "/docs/private\n").unwrap();
+
+    let result = verify_file_path("docs/public/gone.md", root.path());
+    assert!(matches!(result, VerifyResult::Invalid(_)), "{result:?}");
+}
+
+#[test]
+fn missing_path_outside_a_git_repo_is_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    let result = verify_file_path("docs/private/a.md", root.path());
+    assert!(matches!(result, VerifyResult::Invalid(_)), "{result:?}");
+}
+
+/// Track `rel` in a fresh repo whose `.gitignore` covers it, then delete it
+/// from the working tree — the shape of a force-added file that went missing.
+fn repo_with_force_added_then_deleted(rel: &str) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(root.path()).unwrap();
+    std::fs::write(root.path().join(".gitignore"), "/docs/private\n").unwrap();
+    let abs = root.path().join(rel);
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    std::fs::write(&abs, "").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(rel)).unwrap();
+    index.write().unwrap();
+    std::fs::remove_file(&abs).unwrap();
+    root
+}
+
+#[test]
+fn missing_force_added_file_under_ignored_dir_is_invalid() {
+    let root = repo_with_force_added_then_deleted("docs/private/tracked.md");
+    let result = verify_file_path("docs/private/tracked.md", root.path());
+    assert!(matches!(result, VerifyResult::Invalid(_)), "{result:?}");
+}
+
+#[test]
+fn missing_ignored_dir_holding_tracked_files_is_invalid() {
+    let root = repo_with_force_added_then_deleted("docs/private/specs/a.md");
+    std::fs::remove_dir_all(root.path().join("docs/private")).unwrap();
+    for path in ["docs/private/specs/", "docs/private/"] {
+        let result = verify_file_path(path, root.path());
+        assert!(
+            matches!(result, VerifyResult::Invalid(_)),
+            "{path}: {result:?}"
+        );
+    }
+}
