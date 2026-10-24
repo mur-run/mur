@@ -463,10 +463,17 @@ pub(super) fn refuse_fresh_run_over_pause(mur_home: &Path, name: &str) -> Result
             "fleet '{name}' has a paused run ({run_id}): continue it with `mur fleet resume {name}`, or discard it with `mur fleet stop {name}`"
         );
     }
-    if checkpoint::load(mur_home, &run_id).ok().flatten().is_some() {
-        bail!(
+    // Only a checkpoint that is provably absent (`Ok(None)`) makes the
+    // sentinel stale. An unreadable one still exists; dropping the sentinel
+    // over it would orphan it without the `mur fleet stop` §8.5 requires.
+    match checkpoint::load(mur_home, &run_id) {
+        Ok(None) => {}
+        Ok(Some(_)) => bail!(
             "fleet '{name}' holds a checkpoint for run {run_id}, whose record is not paused, so it cannot be resumed: discard it with `mur fleet stop {name}`"
-        );
+        ),
+        Err(e) => bail!(
+            "fleet '{name}': the checkpoint of run {run_id} cannot be read ({e:#}), so the pause is kept: discard it with `mur fleet stop {name}`"
+        ),
     }
     let _ = std::fs::remove_file(control::paused_path(mur_home, name));
     Ok(())
