@@ -553,6 +553,17 @@ Agent** wizard offers the same catalog as a source.
   this time only). Hosts on a research-mode deny list are never offered. Live
   grants need the same approval token as a tool approval, so the agent cannot
   grant itself a host.
+- **A browser login that stays logged in** — `mur browser auth` hands the
+  sign-in to you in a real browser and saves the session as an encrypted
+  profile. After a green `mur browser replay` or a `mur browser record
+  --profile` session, the browser's latest state is re-encrypted into that
+  profile, so a site that rotates its tokens doesn't log you out next run. The
+  write-back only happens when every login key of the saved profile is still
+  there: a logout that deletes the token, or blanks it to `""`, `null` or
+  `undefined` while theme and consent cookies stay behind, leaves the saved
+  profile untouched. `mur browser status` shows the login cookie's expiry —
+  analytics and anti-bot cookies such as `__cf_bm` no longer count — and when
+  the profile was last refreshed.
 - **Human-in-the-loop** — tool calls pause for your approval in Hub. In
   `mur agent cli` a session starts with auto-approve ON (the status bar's
   `AUTO` badge says so); `--ask` or `/auto off` makes it ask first. AUTO only
@@ -1159,7 +1170,7 @@ mur
 ├── code-nav     setup · doctor   (ast-grep + opt-in serena LSP navigation for an agent, sandboxed under ~/.mur/tools)
 ├── daemon       start · stop · restart · status · serve · sleep
 ├── dashboard    terminal dashboard
-├── browser      record · replay · auth · broker · list · show · export · status   (browser work through Playwright MCP;
+├── browser      record · replay · auth · broker · list · show · export · status · doctor · setup · prune   (browser work through Playwright MCP;
 │                `list` tables recorded runs with a summary, domain, steps and run count — `--json` for all fields)
 ├── channel      approve · verify · repair · backfill-purpose   (HITL approval; verify checks a log against its signed head, repair restarts a damaged one)
 ├── commander    pin · status · directive   (governance: pin the operator key, issue and inspect directives)
