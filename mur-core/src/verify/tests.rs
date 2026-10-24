@@ -263,7 +263,31 @@ fn backtick_span_drops_trailing_flags_and_descriptions() {
 
 #[test]
 fn backtick_command_line_yields_no_path() {
-    let paths =
-        extract_file_paths("Then `cargo test -p mur-core/src/lib.rs` and `mur verify docs/x.md`.");
+    let paths = extract_file_paths(
+        "Then `cargo test -p mur-core/src/lib.rs`, `mur verify docs/x.md` and `mur verify docs/x.md --all`.",
+    );
     assert!(paths.is_empty(), "{paths:?}");
+}
+
+#[test]
+fn path_led_command_claims_only_the_script_not_its_arguments() {
+    let paths = extract_file_paths(
+        "Run `scripts/setup.sh --output generated/result.json` or `scripts/gen.sh out/x.json`.",
+    );
+    assert_eq!(paths, ["scripts/setup.sh", "scripts/gen.sh"]);
+}
+
+#[test]
+fn path_led_command_output_is_not_reported_missing() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("scripts")).unwrap();
+    std::fs::write(root.path().join("scripts/setup.sh"), "").unwrap();
+    let claims = parse_claims("`scripts/setup.sh --output generated/result.json`", "a.md");
+    for claim in &claims {
+        let result = verify_claim(claim, root.path());
+        assert!(
+            !matches!(result, VerifyResult::Invalid(_)),
+            "{claim:?}: {result:?}"
+        );
+    }
 }
