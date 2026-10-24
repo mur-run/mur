@@ -20,7 +20,9 @@ use mur_common::AgentProfile;
 use super::consent::{self, Manifest};
 use super::plan;
 use super::serena_config::project_folder;
+use super::serena_install::Installed;
 use super::serena_project::{PROJECT_FILE, PROJECT_OWNED_KEYS};
+use super::{ast_grep_install, node_ls_install, pyright_install, serena_install};
 
 /// The shared npm cache a manual workaround grants; #1981 installs into
 /// MUR's own cache under the tools root instead.
@@ -73,6 +75,9 @@ pub struct Inputs<'a> {
     pub user_home: &'a Path,
     pub manifest: &'a Manifest,
     pub profile: &'a AgentProfile,
+    /// The ast-grep build pinned for this host; `None` where MUR pins none,
+    /// so its version cannot be verified offline.
+    pub ast_grep_pin: Option<ast_grep_install::Pinned>,
 }
 
 pub fn audit(i: &Inputs) -> Vec<Finding> {
@@ -189,9 +194,59 @@ fn check_installs(i: &Inputs, out: &mut Vec<Finding>) {
                 setup_cmd(i),
             ));
         } else {
-            out.push(Finding::ok(subject, path.display().to_string()));
+            out.push(match on_disk_state(i, name) {
+                Some(Installed::Verified) => Finding::ok(subject, path.display().to_string()),
+                Some(Installed::Mismatch) => Finding::warn(
+                    subject,
+                    format!(
+                        "{} is present but what is installed is not {name}@{pin}",
+                        path.display()
+                    ),
+                    setup_cmd(i),
+                ),
+                Some(Installed::Missing) => Finding::warn(
+                    subject,
+                    format!(
+                        "{} is present but its version record is missing",
+                        path.display()
+                    ),
+                    setup_cmd(i),
+                ),
+                None => Finding::ok(
+                    subject,
+                    format!(
+                        "{} (present; version not verifiable offline on this platform)",
+                        path.display()
+                    ),
+                ),
+            });
         }
     }
+}
+
+/// The installed artifact's own version, judged the way setup judges it
+/// (npm `package.json`, uv dist-info, binary hash) against the pin. `None`
+/// when there is no offline way to tell.
+fn on_disk_state(i: &Inputs, name: &str) -> Option<Installed> {
+    use mur_common::serena_ls_cmd::{INTELEPHENSE, TYPESCRIPT};
+    let tools = node_ls_install::tools_dir(i.mur_home);
+    Some(match name {
+        plan::AST_GREP => {
+            let dest = mur_common::config::ast_grep_binary_path(i.mur_home);
+            match ast_grep_install::installed_state(&dest, i.ast_grep_pin.as_ref()?) {
+                ast_grep_install::Installed::Verified => Installed::Verified,
+                ast_grep_install::Installed::Mismatch => Installed::Mismatch,
+                ast_grep_install::Installed::Missing => Installed::Missing,
+            }
+        }
+        plan::SERENA => serena_install::installed_state(&serena_install::serena_dir(i.mur_home)),
+        plan::PYRIGHT => {
+            pyright_install::installed_state(&pyright_install::pyright_dir(i.mur_home))
+        }
+        plan::INTELEPHENSE => node_ls_install::installed_state(&INTELEPHENSE, &tools),
+        plan::TS_LS => node_ls_install::installed_state(&TYPESCRIPT, &tools),
+        _ => return None,
+    })
 }
 
 /// A recorded grant: its kind, its value, and the profile list holding it.
@@ -430,21 +485,29 @@ pub fn print(out: &mut dyn Write, agent: &str, findings: &[Finding]) -> Result<u
     Ok(bad)
 }
 
-/// Agents with a manifest, by file stem.
-fn manifest_agents(mur_home: &Path) -> Vec<String> {
+/// Agents with a manifest, by file stem. Only an absent manifest directory
+/// means "nothing set up"; any other read error is an error, not empty.
+fn manifest_agents(mur_home: &Path) -> Result<Vec<String>> {
     let mut dir = mur_home.to_path_buf();
     dir.extend(consent::MANIFEST_DIR);
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return Vec::new();
+    let rd = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("read {}", dir.display())),
     };
-    let mut names: Vec<String> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .filter_map(|p| p.file_stem()?.to_str().map(str::to_owned))
-        .collect();
+    let mut names = Vec::new();
+    for e in rd {
+        let p = e
+            .with_context(|| format!("read an entry of {}", dir.display()))?
+            .path();
+        if p.extension().is_some_and(|x| x == "json")
+            && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+        {
+            names.push(stem.to_owned());
+        }
+    }
     names.sort();
-    names
+    Ok(names)
 }
 
 /// One agent. A missing manifest means setup never ran; a corrupt one is
@@ -453,6 +516,7 @@ fn doctor_agent(
     mur_home: &Path,
     user_home: &Path,
     agent: &str,
+    ast_grep_pin: Option<&ast_grep_install::Pinned>,
     out: &mut dyn Write,
 ) -> Result<usize> {
     let path = consent::manifest_path(mur_home, agent);
@@ -489,6 +553,7 @@ fn doctor_agent(
         user_home,
         manifest: &manifest,
         profile: &profile,
+        ast_grep_pin: ast_grep_pin.cloned(),
     });
     print(out, agent, &findings)
 }
@@ -509,15 +574,16 @@ pub fn run(agent: Option<&str>, out: &mut dyn Write) -> Result<()> {
             }
             vec![a]
         }
-        None => manifest_agents(&mur_home),
+        None => manifest_agents(&mur_home)?,
     };
     if agents.is_empty() {
         writeln!(out, "no agent has run `mur code-nav setup` yet")?;
         return Ok(());
     }
+    let pin = ast_grep_install::pinned_for_host();
     let mut bad = 0;
     for a in &agents {
-        bad += doctor_agent(&mur_home, &user_home, a, out)?;
+        bad += doctor_agent(&mur_home, &user_home, a, pin.as_ref(), out)?;
     }
     writeln!(
         out,

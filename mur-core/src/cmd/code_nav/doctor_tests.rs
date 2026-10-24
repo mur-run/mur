@@ -17,6 +17,35 @@ struct Fixture {
     repo: PathBuf,
     manifest: Manifest,
     profile: AgentProfile,
+    ast_grep_pin: Option<ast_grep_install::Pinned>,
+}
+
+const AST_GREP_BIN: &[u8] = b"#!/bin/sh\necho ast-grep\n";
+
+fn sha(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(b))
+}
+
+/// What `uv tool install` leaves for serena at `version`: the entry point,
+/// the dist-info with the pinned commit, a uv-managed interpreter.
+fn fake_serena(dir: &Path, version: &str) {
+    use serena_install::{PACKAGE, PYTHON_SUBDIR, PYVENV_CFG, SERENA_GIT_REV, SERENA_GIT_URL};
+    let env = dir.join(serena_install::UV_TOOL_SUBDIR).join(PACKAGE);
+    let site = env
+        .join("lib/python3.12/site-packages")
+        .join(format!("serena_agent-{version}.dist-info"));
+    std::fs::create_dir_all(&site).unwrap();
+    std::fs::write(
+        site.join("direct_url.json"),
+        format!(
+            r#"{{"url":"{SERENA_GIT_URL}","vcs_info":{{"vcs":"git","commit_id":"{SERENA_GIT_REV}"}}}}"#
+        ),
+    )
+    .unwrap();
+    let home = dir.join(PYTHON_SUBDIR).join("cpython/bin");
+    std::fs::write(env.join(PYVENV_CFG), format!("home = {}\n", home.display())).unwrap();
+    touch(&serena_install::serena_binary_path_in(dir));
 }
 
 fn touch(p: &Path) {
@@ -40,12 +69,18 @@ fn clean() -> Fixture {
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::create_dir_all(&user_home).unwrap();
 
-    touch(&mur_common::config::ast_grep_binary_path(&mur_home));
-    let serena_dir = node_ls_install_tools(&mur_home)
-        .join(plan::SERENA)
-        .join(plan::SERENA_PIN);
+    let ag = mur_common::config::ast_grep_binary_path(&mur_home);
+    touch(&ag);
+    std::fs::write(&ag, AST_GREP_BIN).unwrap();
+    let ast_grep_pin = Some(ast_grep_install::Pinned {
+        target: "test-target",
+        zip_sha256: String::new(),
+        member: "ast-grep",
+        bin_sha256: sha(AST_GREP_BIN),
+    });
+    let serena_dir = serena_install::serena_dir(&mur_home);
     let serena = serena_install::Record::for_dir(&serena_dir);
-    touch(&serena.bin);
+    fake_serena(&serena_dir, plan::SERENA_PIN);
 
     let langs: BTreeSet<String> = ["php".to_string(), "python".to_string()].into();
     let pfile = agent_home
@@ -93,11 +128,8 @@ fn clean() -> Fixture {
         repo,
         manifest,
         profile,
+        ast_grep_pin,
     }
-}
-
-fn node_ls_install_tools(mur_home: &Path) -> PathBuf {
-    super::super::node_ls_install::tools_dir(mur_home)
 }
 
 fn run_audit(f: &Fixture) -> Vec<Finding> {
@@ -108,6 +140,7 @@ fn run_audit(f: &Fixture) -> Vec<Finding> {
         user_home: &f.user_home,
         manifest: &f.manifest,
         profile: &f.profile,
+        ast_grep_pin: f.ast_grep_pin.clone(),
     })
 }
 
@@ -137,6 +170,59 @@ fn a_deleted_install_names_the_path_and_the_setup_command() {
     let fix = w[0].fix.as_deref().unwrap();
     assert!(fix.starts_with(&format!("mur code-nav setup --agent {AGENT} --with-serena")));
     assert!(fix.contains(&f.repo.display().to_string()));
+}
+
+#[test]
+fn an_install_upgraded_in_place_is_flagged_though_its_path_exists() {
+    let f = clean();
+    let dir = serena_install::serena_dir(&f.mur_home);
+    // Same entry point, but the env now holds another serena version.
+    std::fs::remove_dir_all(dir.join(serena_install::UV_TOOL_SUBDIR)).unwrap();
+    fake_serena(&dir, "0.0.1");
+    let fs = run_audit(&f);
+    let w = warns(&fs);
+    assert_eq!(w.len(), 1, "{fs:#?}");
+    assert!(w[0].subject.starts_with("install serena@"));
+    assert!(w[0].detail.contains("is not serena@"), "{}", w[0].detail);
+    assert!(
+        w[0].fix
+            .as_deref()
+            .unwrap()
+            .starts_with("mur code-nav setup")
+    );
+}
+
+#[test]
+fn a_replaced_ast_grep_binary_is_flagged_by_its_hash() {
+    let f = clean();
+    std::fs::write(
+        mur_common::config::ast_grep_binary_path(&f.mur_home),
+        b"other",
+    )
+    .unwrap();
+    let w = run_audit(&f)
+        .into_iter()
+        .filter(|x| x.level != Level::Ok)
+        .collect::<Vec<_>>();
+    assert_eq!(w.len(), 1, "{w:#?}");
+    assert!(w[0].subject.starts_with("install ast-grep@"));
+}
+
+#[test]
+fn no_offline_pin_says_the_version_is_unverified_not_healthy() {
+    let mut f = clean();
+    f.ast_grep_pin = None;
+    let fs = run_audit(&f);
+    let ag = fs
+        .iter()
+        .find(|x| x.subject.starts_with("install ast-grep@"))
+        .unwrap();
+    assert_eq!(ag.level, Level::Ok);
+    assert!(
+        ag.detail.contains("not verifiable offline"),
+        "{}",
+        ag.detail
+    );
 }
 
 #[test]
@@ -273,7 +359,14 @@ fn persist(f: &Fixture) {
 
 fn doctor(f: &Fixture) -> (usize, String) {
     let mut out = Vec::new();
-    let n = doctor_agent(&f.mur_home, &f.user_home, AGENT, &mut out).unwrap();
+    let n = doctor_agent(
+        &f.mur_home,
+        &f.user_home,
+        AGENT,
+        f.ast_grep_pin.as_ref(),
+        &mut out,
+    )
+    .unwrap();
     (n, String::from_utf8(out).unwrap())
 }
 
@@ -286,6 +379,26 @@ fn a_corrupt_manifest_is_an_error_not_nothing_set_up() {
     assert_eq!(n, 1);
     assert!(out.contains("error manifest"), "{out}");
     assert!(!out.contains("has not run"), "{out}");
+}
+
+#[test]
+fn an_absent_manifest_dir_lists_no_agents() {
+    let f = clean();
+    assert!(manifest_agents(&f.mur_home).unwrap().is_empty());
+}
+
+#[test]
+fn an_unreadable_manifest_dir_is_an_error_not_nothing_set_up() {
+    let f = clean();
+    let mut dir = f.mur_home.clone();
+    dir.extend(consent::MANIFEST_DIR);
+    // A file where the directory should be: read_dir fails, but not NotFound.
+    touch(&dir);
+    let e = manifest_agents(&f.mur_home).unwrap_err();
+    assert!(
+        format!("{e:#}").contains(&dir.display().to_string()),
+        "{e:#}"
+    );
 }
 
 #[test]
