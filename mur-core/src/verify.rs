@@ -272,6 +272,7 @@ fn looks_like_path(s: &str) -> bool {
         || s.starts_with("./")
         || s.starts_with("plans/")
         || s.starts_with("openspec/")
+        || s.starts_with("docs/openspec/")
         || s.starts_with("research/")
         || s.starts_with("dashboard/");
 
@@ -684,6 +685,44 @@ pub fn verify_docs(project_root: &Path) -> anyhow::Result<Vec<VerifiedClaim>> {
     Ok(all_results)
 }
 
+/// Directories (relative to the project root) scanned for `.md` docs, with
+/// how many directory levels below each to descend. OpenSpec nests specs as
+/// `specs/<cap>/spec.md` and `changes/<id>/specs/<cap>/spec.md`, so it needs
+/// more depth than the flat `plans/` and `research/` trees. Both the
+/// conventional `openspec/` and the `docs/openspec/` location are scanned.
+const DOC_SCAN_DIRS: &[(&str, usize)] = &[
+    ("plans", 1),
+    ("research", 1),
+    ("openspec", 4),
+    ("docs/openspec", 4),
+];
+
+/// Directory names never descended into: archived OpenSpec changes are a
+/// historical record whose paths are expected to have gone stale.
+const DOC_SCAN_SKIP_DIRS: &[&str] = &["archive"];
+
+/// Push every `.md` file in `dir` and up to `max_depth` levels below it.
+fn collect_md_files(dir: &Path, max_depth: usize, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            let skipped = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| DOC_SCAN_SKIP_DIRS.contains(&n));
+            if max_depth > 0 && !skipped {
+                collect_md_files(&path, max_depth - 1, files);
+            }
+        } else if path.extension().is_some_and(|e| e == "md") {
+            files.push(path);
+        }
+    }
+}
+
 /// Find documentation files worth scanning.
 fn find_doc_files(project_root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
@@ -704,30 +743,9 @@ fn find_doc_files(project_root: &Path) -> Vec<PathBuf> {
         }
     }
 
-    // Also scan plans/ and openspec/ for .md files (one level deep)
-    for dir_name in &["plans", "openspec", "research"] {
-        let dir = project_root.join(dir_name);
-        if dir.is_dir()
-            && let Ok(entries) = std::fs::read_dir(&dir)
-        {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "md") {
-                    files.push(path);
-                    continue;
-                }
-                if path.is_dir()
-                    && let Ok(sub) = std::fs::read_dir(&path)
-                {
-                    for s in sub.flatten() {
-                        let sp = s.path();
-                        if sp.extension().is_some_and(|e| e == "md") {
-                            files.push(sp);
-                        }
-                    }
-                }
-            }
-        }
+    // Also scan doc directories for .md files, each down to its own depth.
+    for (dir_name, max_depth) in DOC_SCAN_DIRS {
+        collect_md_files(&project_root.join(dir_name), *max_depth, &mut files);
     }
 
     files
