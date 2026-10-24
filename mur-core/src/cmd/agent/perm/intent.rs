@@ -33,13 +33,21 @@ pub fn cmd_perm_set_intent_check(
                     entry.provider
                 );
             }
-            Some(IntentCheckConfig {
-                model_ref: r.to_string(),
-                timeout_ms,
-            })
+            let local = mur_common::model::provider_is_local(&entry.provider);
+            Some((
+                IntentCheckConfig {
+                    model_ref: r.to_string(),
+                    timeout_ms,
+                },
+                (!local).then(|| entry.provider.clone()),
+            ))
         }
     };
     let (path, mut profile) = load_profile_for_edit(name)?;
+    let (cfg, egress) = match cfg {
+        Some((c, egress)) => (Some(c), egress),
+        None => (None, None),
+    };
     let on = cfg.as_ref().map(|c| c.model_ref.clone());
     profile.hitl.intent_check = cfg;
     save_profile(&path, &mut profile)?;
@@ -48,6 +56,12 @@ pub fn cmd_perm_set_intent_check(
             "{name}: intent check on with `{r}` — it may make a bash call ask, never skip one"
         ),
         None => println!("{name}: intent check off — static tiers only"),
+    }
+    if let Some(provider) = egress {
+        println!(
+            "note: `{provider}` is not a local provider — each checked bash command \
+             is sent to it. Pick a local model to keep commands on this machine."
+        );
     }
     warn_if_running(name);
     Ok(())

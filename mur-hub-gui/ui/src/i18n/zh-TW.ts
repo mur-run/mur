@@ -220,7 +220,7 @@ export const zhTW: Table = {
   "perm.tools.none": "沒有工具規則 — 每個工具都會詢問（預設）。",
   "perm.llm": "LLM 呼叫：{mode}",
   "perm.intent": "意圖檢查（只能升級）",
-  "perm.intent.note": "模型會讀每一條靜態規則判成一般寫入的 bash 指令，必要時讓它先詢問。它永遠不能讓指令跳過詢問。選本機模型，指令就不會離開這台電腦。",
+  "perm.intent.note": "模型會讀每一條靜態規則判成一般寫入的 bash 指令，必要時讓它先詢問。它永遠不能讓指令跳過詢問。雲端模型會收到每一條被檢查的指令；選本機模型，指令就不會離開這台電腦。",
   "perm.intent.off": "關閉 — 只用靜態規則",
   "perm.limits": "限制",
   "perm.limits.value": "記憶體 {memory} MB · {fds} fds · {procs} 個行程",

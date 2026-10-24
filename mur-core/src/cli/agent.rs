@@ -944,7 +944,8 @@ pub enum AgentPermAction {
     /// call skip a prompt. `--off` turns it off
     IntentCheck {
         name: String,
-        /// `~/.mur/models.yaml` ref; a local model keeps commands on this machine
+        /// `~/.mur/models.yaml` ref. A cloud model receives every checked
+        /// command; a local model keeps commands on this machine
         #[arg(required_unless_present = "off", conflicts_with = "off")]
         model_ref: Option<String>,
         /// Wait this long for the model before keeping the static tier
