@@ -376,3 +376,194 @@ fn only_a_pause_rewords_the_loop_end_line() {
         "fleet 'dev' paused in iteration 3 (2 completed), cost $0.10"
     );
 }
+
+/// #2068, the between-iterations boundary (guarded.rs, the `is_paused` check
+/// at the top of the loop): a pause that lands after iteration 1 completed
+/// records iteration 2 as the one it is in, stores no procedure, and the
+/// resume re-plans and runs exactly that iteration.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_pause_between_iterations_names_the_next_one_and_resumes_there() {
+    if std::env::var("MUR_TEST_SOCKETS").as_deref() != Ok("1") {
+        eprintln!("skipping a_pause_between_iterations: set MUR_TEST_SOCKETS=1");
+        return;
+    }
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const RUN: &str = "between-run";
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().to_path_buf();
+    // Router-judged convergence: the done ask after each completed iteration
+    // is the seam where the operator's pause lands between iterations.
+    let fleet = Fleet {
+        name: "dev".into(),
+        display_name: String::new(),
+        goal: "research question".into(),
+        router: None,
+        members: vec!["member".into()],
+        team_id: None,
+        channel_id: "fleet-dev".into(),
+        procedure: vec![FleetStep {
+            id: "s1".into(),
+            member: "member".into(),
+            task: String::new(),
+            depends_on: vec![],
+        }],
+        rules: vec![],
+        skills: vec![],
+        loop_cfg: Some(FleetLoop {
+            done_when: "the router says so".into(),
+            ..serde_yaml::from_str("{}").unwrap()
+        }),
+        parallel: None,
+        hitl: None,
+        requires_programs: vec![],
+        limits: None,
+        needs: vec![],
+    };
+    crate::cmd::fleet::store::save_fleet(&home, &fleet).unwrap();
+    mur_channel::ChannelService::open(&home)
+        .unwrap()
+        .create_for_fleet("dev", "mur", &["member".into()])
+        .unwrap();
+
+    // One fake socket answers as both the member and the router (`mur`).
+    let sock = home.join("m.sock");
+    let listener = UnixListener::bind(&sock).unwrap();
+    for agent in ["member", "mur"] {
+        let dir = home.join("agents").join(agent);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("running.lock"),
+            serde_json::json!({
+                "schema": 1, "uuid": "u", "name": agent, "pid": 1, "ppid": 1,
+                "started_at": "t", "binary_version": "test", "proto_version": 1,
+                "transports": { "stdio": true, "unix_socket": sock.to_str().unwrap() },
+                "card_digest": "d", "capabilities": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let turns = std::sync::Arc::new(AtomicUsize::new(0));
+    let asks = std::sync::Arc::new(AtomicUsize::new(0));
+    let (seen_turns, seen_asks) = (turns.clone(), asks.clone());
+    let member_home = home.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(conn) = conn else { break };
+            let mut w = conn.try_clone().unwrap();
+            let mut line = String::new();
+            if BufReader::new(conn).read_line(&mut line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let req: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if req["method"] == "channel/delegate" {
+                seen_turns.fetch_add(1, Ordering::SeqCst);
+            } else if req["method"] == "message/send" {
+                // The router's done ask. First run: the operator pauses while
+                // it is being asked, and the router says nothing conclusive.
+                // Resumed run: the router says DONE.
+                if seen_asks.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::fs::write(
+                        crate::cmd::fleet::control::paused_path(&member_home, "dev"),
+                        format!("run_id: {RUN}\nrequested_at: t\n"),
+                    )
+                    .unwrap();
+                } else {
+                    let delta = serde_json::json!({
+                        "jsonrpc": "2.0", "method": "message/delta",
+                        "params": { "text": "DONE" },
+                    });
+                    let _ = writeln!(w, "{delta}");
+                }
+            }
+            let task = serde_json::json!({
+                "id": req["params"]["task_id"],
+                "status": { "state": "completed" },
+                "messages": [{ "role": "agent", "parts": [{ "kind": "text", "text": "findings" }] }],
+            });
+            let reply = serde_json::json!({"jsonrpc":"2.0","id":req["id"],"result":task});
+            let _ = writeln!(w, "{reply}");
+        }
+    });
+
+    let (stop, iterations, _) = run_guarded(
+        &home,
+        "dev",
+        Some(5),
+        None,
+        None,
+        Some(RUN.into()),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(stop, LoopStop::Paused, "the pause is taken at the loop top");
+    assert_eq!(iterations, 1, "iteration 1 completed before the pause");
+    assert_eq!(
+        turns.load(Ordering::SeqCst),
+        1,
+        "iteration 2 never dispatched"
+    );
+
+    // Checkpoint: re-enter iteration index 1, nothing in flight to replay.
+    let cp = checkpoint::load(&home, RUN)
+        .unwrap()
+        .expect("checkpoint written at the boundary");
+    assert_eq!(cp.iteration, 1);
+    assert_eq!(cp.iteration_run_id, format!("{RUN}-1"));
+    assert!(
+        cp.procedure.is_empty(),
+        "a boundary pause stores no procedure"
+    );
+    assert!(cp.job_id.is_none());
+
+    // Progress, end line: both name iteration 2, the one the run is in.
+    let (p, _) = crate::cmd::fleet::progress::load(&home, "dev").expect("progress written");
+    assert_eq!(p.outcome.as_deref(), Some("paused"));
+    assert!(p.finished_at.is_none());
+    assert_eq!(p.iteration, 2, "the next iteration, 1-based");
+    let end = super::loop_end_line("dev", stop, iterations, "$0.00");
+    assert!(end.contains("paused in iteration 2 (1 completed)"), "{end}");
+
+    // Resume re-plans the empty procedure and runs exactly iteration 2.
+    let cp = resume::admit(&home, "dev").expect("resumable");
+    let from = resume::resume_from(&cp, None, true).unwrap();
+    assert_eq!(from.iteration, 1);
+    let (stop, iterations, _) = run_guarded_from(&home, "dev", None, None, Some(from))
+        .await
+        .unwrap();
+    assert_eq!(stop, LoopStop::Converged);
+    assert_eq!(iterations, 2, "no iteration counted twice or skipped");
+    assert_eq!(
+        turns.load(Ordering::SeqCst),
+        2,
+        "one dispatch per iteration"
+    );
+    let rec = crate::run_status::store::load(&home, RUN).unwrap().unwrap();
+    assert_eq!(rec.state, crate::run_status::State::Done);
+    let (p, _) = crate::cmd::fleet::progress::load(&home, "dev").unwrap();
+    assert_eq!(
+        p.iteration, 2,
+        "a finished run records completed iterations"
+    );
+}
+
+/// #2068, a pause before the first iteration: nothing completed, so the run
+/// is in iteration 1 — never "iteration 0". A fresh run has no seam to plant
+/// the sentinel before its loop (a pre-written one is a crash leftover and is
+/// removed, design §8.5), so this pins the shared formatting directly.
+#[test]
+fn a_pause_before_the_first_iteration_reads_iteration_one() {
+    assert_eq!(super::progress_iteration(LoopStop::Paused, 0), 1);
+    assert_eq!(super::progress_iteration(LoopStop::Stopped, 0), 0);
+    let end = super::loop_end_line("dev", LoopStop::Paused, 0, "$0.00");
+    assert_eq!(
+        end,
+        "fleet 'dev' paused in iteration 1 (0 completed), cost $0.00"
+    );
+}
