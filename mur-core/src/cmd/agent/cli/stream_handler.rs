@@ -1,5 +1,6 @@
 //! Stream-message handling, moved out of `mod.rs` for CLAUDE.md §4's
-//! 800-line rule. Pure movement: verbatim.
+//! 800-line rule. Moved verbatim, except that an egress denial now adds its
+//! notice line only once per (server, host).
 
 use super::*;
 
@@ -285,3 +286,86 @@ fn on_egress_denied(app: &mut App, ev: mur_common::egress_event::EgressDenied) {
 }
 
 // ── OS notifications ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mur_common::egress_event::{DenyReason, EgressDenied};
+
+    /// No profile exists for this agent under a temp home, so the allow-list
+    /// lookup yields nothing and only the chip/notice logic is exercised.
+    const AGENT: &str = "egress-notice-test-agent";
+
+    fn app_at(home: &tempfile::TempDir) -> App {
+        let session = Session::create(home.path(), AGENT).unwrap();
+        App::new(
+            home.path().to_path_buf(),
+            AGENT.into(),
+            session,
+            &super::super::theme::ANSI,
+        )
+    }
+
+    fn denied(server: &str, host: &str) -> EgressDenied {
+        EgressDenied {
+            agent: AGENT.into(),
+            server: server.into(),
+            host: host.into(),
+            port: Some(443),
+            mode: "restricted".into(),
+            reason: DenyReason::NotAllowed,
+            at: "2026-10-15T00:00:00Z".into(),
+            task_id: None,
+        }
+    }
+
+    fn deliver(app: &mut App, ev: EgressDenied) {
+        let (tx, _rx) = mpsc::channel(1);
+        handle_stream(app, StreamMsg::EgressDenied(ev), &tx);
+    }
+
+    fn notices_for(app: &App, host: &str) -> usize {
+        app.messages
+            .iter()
+            .filter(|m| m.role == Role::System && m.text.contains(host))
+            .count()
+    }
+
+    #[test]
+    fn repeated_browser_denials_leave_one_line_but_keep_chips() {
+        let home = tempfile::tempdir().unwrap();
+        let mut app = app_at(&home);
+        for _ in 0..3 {
+            app.pending_suggestions.clear();
+            deliver(&mut app, denied("browser", "gator.volces.com"));
+            assert!(
+                !app.pending_suggestions.is_empty(),
+                "every denial refreshes the chooser"
+            );
+        }
+        assert_eq!(notices_for(&app, "gator.volces.com"), 1);
+        deliver(&mut app, denied("browser", "cdn.example.com"));
+        assert_eq!(notices_for(&app, "cdn.example.com"), 1);
+    }
+
+    #[test]
+    fn repeated_non_browser_denials_leave_one_line_and_no_chips() {
+        let home = tempfile::tempdir().unwrap();
+        let mut app = app_at(&home);
+        for _ in 0..3 {
+            deliver(&mut app, denied("fetch", "api.example.com"));
+        }
+        assert_eq!(notices_for(&app, "api.example.com"), 1);
+        assert!(app.pending_suggestions.is_empty());
+    }
+
+    #[test]
+    fn dismissed_browser_host_stays_silent() {
+        let home = tempfile::tempdir().unwrap();
+        let mut app = app_at(&home);
+        app.egress_chips.dismissed.insert("gator.volces.com".into());
+        deliver(&mut app, denied("browser", "gator.volces.com"));
+        assert_eq!(notices_for(&app, "gator.volces.com"), 0);
+        assert!(app.pending_suggestions.is_empty());
+    }
+}
