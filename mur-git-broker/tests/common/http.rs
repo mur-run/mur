@@ -14,47 +14,150 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-
+/// The one credential of a single-credential enrollment: `bot:TOKEN` for both phases.
 pub const TOKEN: &str = "s3cr3t-token-value";
 pub const USER: &str = "bot";
-
-pub struct Fixed(String);
 pub const WRONG: &str = "wrong-token-value";
-impl CredentialSource for Fixed {
-    fn open(&self, _: &SecretPath) -> Result<SecretString, BrokerError> {
-        Ok(SecretString::from(self.0.clone()))
+/// A split enrollment: `reader:READ_TOKEN` prefetches, `bot:WRITE_TOKEN` pushes.
+pub const READ_TOKEN: &str = "r3ad-only-token-value";
+pub const WRITE_TOKEN: &str = "wr1te-only-token-value";
+pub const READER: &str = "reader";
+pub const WRITE_PATH: &str = "/secrets/deploy-token";
+pub const READ_PATH: &str = "/secrets/read-token";
+
+/// Hands out the secret keyed by the path a credential points at, like the real source does.
+pub struct Keyed(Vec<(&'static str, String)>);
+impl CredentialSource for Keyed {
+    fn open(&self, p: &SecretPath) -> Result<SecretString, BrokerError> {
+        self.0
+            .iter()
+            .find(|(path, _)| *path == p.as_str())
+            .map(|(_, secret)| SecretString::from(secret.clone()))
+            .ok_or(BrokerError::CredentialUnreadable("not_found"))
     }
 }
 
-/// What the server saw: the request line and whether the right Basic credential came with it.
+/// Which credential a request carried, judged against the logins the server was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Carried {
+    Nothing,
+    Read,
+    Write,
+    /// An `Authorization` header that is neither login.
+    Wrong,
+}
+
+/// The part of the git protocol a request belongs to, told apart by URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leg {
+    /// `git-upload-pack` or `info/refs?service=git-upload-pack`: the pre-approval prefetch.
+    Prefetch,
+    /// `git-receive-pack` or `info/refs?service=git-receive-pack`: the push.
+    Push,
+    Other,
+}
+
+fn leg_of(line: &str) -> Leg {
+    if line.contains("git-upload-pack") {
+        Leg::Prefetch
+    } else if line.contains("git-receive-pack") {
+        Leg::Push
+    } else {
+        Leg::Other
+    }
+}
+
+#[derive(Clone)]
+pub struct Login {
+    header: String,
+    token: &'static str,
+}
+impl Login {
+    fn new(user: &str, token: &'static str) -> Self {
+        let header = format!("Basic {}", b64(format!("{user}:{token}").as_bytes()));
+        Self { header, token }
+    }
+}
+
+/// The logins the server accepts. With no `read` login the one `write` login serves both legs.
+#[derive(Clone)]
+pub struct Logins {
+    read: Option<Login>,
+    write: Login,
+}
+impl Logins {
+    pub fn single() -> Self {
+        Self {
+            read: None,
+            write: Login::new(USER, TOKEN),
+        }
+    }
+    pub fn split() -> Self {
+        Self {
+            read: Some(Login::new(READER, READ_TOKEN)),
+            write: Login::new(USER, WRITE_TOKEN),
+        }
+    }
+    fn classify(&self, header: Option<&str>) -> Carried {
+        match header {
+            None => Carried::Nothing,
+            Some(h) if self.read.as_ref().is_some_and(|r| r.header == h) => Carried::Read,
+            Some(h) if self.write.header == h => Carried::Write,
+            Some(_) => Carried::Wrong,
+        }
+    }
+    /// Whether `c` is the login this leg is supposed to authenticate with.
+    fn accepts(&self, leg: Leg, c: Carried) -> bool {
+        match leg {
+            Leg::Prefetch if self.read.is_some() => c == Carried::Read,
+            Leg::Prefetch | Leg::Push => c == Carried::Write,
+            Leg::Other => matches!(c, Carried::Read | Carried::Write),
+        }
+    }
+    fn leaks(&self, line: &str) -> bool {
+        line.contains(self.write.token)
+            || self.read.as_ref().is_some_and(|r| line.contains(r.token))
+    }
+}
+
+/// What the server saw: the request line, which leg it belongs to, and which login came with it.
 #[derive(Debug, Clone)]
 pub struct Seen {
     #[allow(dead_code)] // shown in failure messages
     pub line: String,
+    pub leg: Leg,
+    pub carried: Carried,
+    /// The request carried the login its leg should use.
     pub authed: bool,
+    /// Either token appears in the request line.
     pub leaked_token_in_line: bool,
 }
 
 /// Serves every repo under `root` through `git-http-backend`. With `require_auth`, a request
-/// without `Authorization: Basic base64(bot:TOKEN)` is answered `401` and never reaches the
-/// backend.
-pub fn serve(root: PathBuf, require_auth: bool) -> (u16, Arc<Mutex<Vec<Seen>>>) {
+/// whose leg does not carry its own `Authorization: Basic` login is answered `401` and never
+/// reaches the backend.
+pub fn serve(root: PathBuf, require_auth: bool, logins: Logins) -> (u16, Arc<Mutex<Vec<Seen>>>) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
-    let want = format!("Basic {}", b64(format!("{USER}:{TOKEN}").as_bytes()));
     std::thread::spawn(move || {
         for conn in l.incoming() {
             let Ok(s) = conn else { return };
-            let (root, log, want) = (root.clone(), log.clone(), want.clone());
-            std::thread::spawn(move || handle(s, &root, require_auth, &want, &log));
+            let (root, log, logins) = (root.clone(), log.clone(), logins.clone());
+            std::thread::spawn(move || handle(s, &root, require_auth, &logins, &log));
         }
     });
     (port, seen)
 }
 
-pub fn handle(s: TcpStream, root: &Path, require_auth: bool, want: &str, log: &Mutex<Vec<Seen>>) {
+pub fn handle(
+    s: TcpStream,
+    root: &Path,
+    require_auth: bool,
+    logins: &Logins,
+    log: &Mutex<Vec<Seen>>,
+) {
     let mut r = BufReader::new(s.try_clone().unwrap());
     let mut line = String::new();
     if r.read_line(&mut line).is_err() {
@@ -76,11 +179,15 @@ pub fn handle(s: TcpStream, root: &Path, require_auth: bool, want: &str, log: &M
         header("transfer-encoding").is_none(),
         "chunked request bodies are not handled by this test server"
     );
-    let authed = header("authorization").as_deref() == Some(want);
+    let leg = leg_of(&line);
+    let carried = logins.classify(header("authorization").as_deref());
+    let authed = logins.accepts(leg, carried);
     log.lock().unwrap().push(Seen {
         line: line.clone(),
+        leg,
+        carried,
         authed,
-        leaked_token_in_line: line.contains(TOKEN),
+        leaked_token_in_line: logins.leaks(&line),
     });
     let mut out = s;
     if require_auth && !authed {
@@ -191,16 +298,49 @@ pub fn rig(require_auth: bool) -> Rig {
 
 /// `enrolled`: the URL the enrollment binds, when it is not the git server itself.
 pub fn rig_with(require_auth: bool, secret: &str, enrolled: Option<String>) -> Rig {
+    rig_core(require_auth, None, secret, enrolled)
+}
+
+/// Like [`rig_with`] on a split enrollment: `reader` opens `read_secret` for the prefetch and
+/// `bot` opens `write_secret` for the push. The server accepts `reader:READ_TOKEN` for
+/// `upload-pack` and `bot:WRITE_TOKEN` for `receive-pack`.
+pub fn rig_split(
+    require_auth: bool,
+    read_secret: &str,
+    write_secret: &str,
+    enrolled: Option<String>,
+) -> Rig {
+    rig_core(require_auth, Some(read_secret), write_secret, enrolled)
+}
+
+fn cred(path: &str, user: &str) -> Credential {
+    Credential {
+        secret_path: SecretPath::parse(path).unwrap(),
+        username: Username::parse(user).unwrap(),
+    }
+}
+
+fn rig_core(
+    require_auth: bool,
+    read_secret: Option<&str>,
+    write_secret: &str,
+    enrolled: Option<String>,
+) -> Rig {
     let e = env();
-    let (port, seen) = serve(e.t.path().to_path_buf(), require_auth);
+    let logins = if read_secret.is_some() {
+        Logins::split()
+    } else {
+        Logins::single()
+    };
+    let (port, seen) = serve(e.t.path().to_path_buf(), require_auth, logins);
     let url = enrolled.unwrap_or_else(|| format!("http://127.0.0.1:{port}/remote.git"));
     let mut p = policy();
     p.canonical_remote_endpoint = url.clone();
     let mut records = records_for(&url, &p);
-    records.enrollments[0].credential = Some(Credential {
-        secret_path: SecretPath::parse("/secrets/deploy-token").unwrap(),
-        username: Username::parse(USER).unwrap(),
-    });
+    records.enrollments[0].credential = Some(cred(WRITE_PATH, USER));
+    records.enrollments[0].read_credential = read_secret.map(|_| cred(READ_PATH, READER));
+    let mut secrets = vec![(WRITE_PATH, write_secret.to_owned())];
+    secrets.extend(read_secret.map(|s| (READ_PATH, s.to_owned())));
     *e.records.0.lock().unwrap() = Ok(Some(records));
     let b = Broker::new(BrokerConfig {
         store_path: e.t.path().join("pending.sqlite"),
@@ -217,7 +357,7 @@ pub fn rig_with(require_auth: bool, secret: &str, enrolled: Option<String>) -> R
         spawn: Box::new(RlimitSpawn),
         auth: Box::new(NoAuth),
         askpass_bin: PathBuf::from(env!("CARGO_BIN_EXE_askpass-probe")),
-        credentials: Box::new(Fixed(secret.into())),
+        credentials: Box::new(Keyed(secrets)),
         clock: e.clock.clone(),
     })
     .unwrap();

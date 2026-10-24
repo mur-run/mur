@@ -66,7 +66,7 @@ fn an_anonymous_readable_remote_is_never_sent_the_token() {
 #[test]
 fn a_prefetch_redirect_is_not_followed_and_never_carries_the_token() {
     let t = tempfile::tempdir().unwrap();
-    let (evil_port, evil_seen) = serve(t.path().to_path_buf(), false);
+    let (evil_port, evil_seen) = serve(t.path().to_path_buf(), false, Logins::single());
     let (port, redirect_seen) = redirector(format!(
         "http://127.0.0.1:{evil_port}/remote.git/info/refs?service=git-upload-pack"
     ));
