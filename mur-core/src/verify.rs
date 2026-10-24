@@ -509,6 +509,20 @@ pub fn verify_claim(claim: &Claim, project_root: &Path) -> VerifyResult {
     }
 }
 
+/// Does the repo at `project_root` gitignore `rel_path`?
+///
+/// Matches the rules against the path string, so it works for a path that
+/// does not exist and for one under a symlinked directory — both cases where
+/// `git check-ignore` refuses. Not a git repo, or an unreadable ignore set,
+/// answers `false` so the claim is still reported.
+fn is_gitignored(project_root: &Path, rel_path: &str) -> bool {
+    let Ok(repo) = git2::Repository::open(project_root) else {
+        return false;
+    };
+    let rel = rel_path.trim_start_matches("./").trim_end_matches('/');
+    repo.is_path_ignored(rel).unwrap_or(false)
+}
+
 /// Verify a file path claim.
 fn verify_file_path(path_str: &str, project_root: &Path) -> VerifyResult {
     // Expand ~ to home dir
@@ -583,6 +597,13 @@ fn verify_file_path(path_str: &str, project_root: &Path) -> VerifyResult {
     // on Linux yet missing on macOS/Windows. Existence still confirms it.
     if path_str.starts_with("~/") {
         return VerifyResult::Skipped("home path not present on this host".into());
+    }
+
+    // A missing path the repo gitignores is local-only by design (a linked-in
+    // private docs clone, local specs): a clean checkout never has it, so its
+    // absence is not staleness.
+    if !path_str.starts_with('/') && is_gitignored(project_root, cleaned) {
+        return VerifyResult::Skipped("gitignored local path".into());
     }
 
     VerifyResult::Invalid(format!("path not found: {}", check_path.display()))

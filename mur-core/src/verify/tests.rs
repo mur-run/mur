@@ -316,3 +316,39 @@ fn redirected_output_is_not_reported_missing() {
         );
     }
 }
+
+#[test]
+fn missing_gitignored_path_is_skipped_not_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    git2::Repository::init(root.path()).unwrap();
+    std::fs::write(root.path().join(".gitignore"), "/docs/private\n").unwrap();
+
+    for path in [
+        "docs/private/",
+        "docs/private/specs/",
+        "docs/private/specs/a.md",
+    ] {
+        let result = verify_file_path(path, root.path());
+        assert!(
+            matches!(result, VerifyResult::Skipped(_)),
+            "{path}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn missing_tracked_location_is_still_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    git2::Repository::init(root.path()).unwrap();
+    std::fs::write(root.path().join(".gitignore"), "/docs/private\n").unwrap();
+
+    let result = verify_file_path("docs/public/gone.md", root.path());
+    assert!(matches!(result, VerifyResult::Invalid(_)), "{result:?}");
+}
+
+#[test]
+fn missing_path_outside_a_git_repo_is_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    let result = verify_file_path("docs/private/a.md", root.path());
+    assert!(matches!(result, VerifyResult::Invalid(_)), "{result:?}");
+}
