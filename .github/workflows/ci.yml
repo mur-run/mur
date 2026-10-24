@@ -224,6 +224,19 @@ jobs:
           # unavailable) must fail, not skip — a skip there is a green that
           # proved nothing. The gated tests are #[cfg(unix)], so Windows ignores it.
           MUR_TEST_REQUIRE_SANDBOX: "1"
+      - name: Socket-backed regression tests (Unix)
+        # These tests early-return unless MUR_TEST_SOCKETS=1 (some sandboxes
+        # forbid AF_UNIX connects), so the workspace run above passes them
+        # without executing a line. Hosted Unix runners allow the sockets, so
+        # run this narrow set with the opt-in: a green here means the bodies ran.
+        # Reuses the test binaries built above; only these tests execute.
+        if: runner.os != 'Windows'
+        run: >-
+          cargo nextest run -p mur-core --lib --locked --profile ci
+          -E 'test(/cmd::fleet::loop_run::pause_tests::|a2a_dial::timeout_tests::|executor::dag::late_usage_tests::/)'
+        env:
+          RUST_MIN_STACK: "16777216"
+          MUR_TEST_SOCKETS: "1"
 
   clippy:
     name: Clippy
