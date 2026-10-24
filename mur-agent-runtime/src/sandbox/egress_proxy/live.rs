@@ -5,7 +5,7 @@
 //! exists, so the event sink is attached later ([`EgressProxyHandle::attach_events`]).
 //! Until then denials are only logged — the headless path.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,18 @@ use mur_common::egress_event::{DENIED_EVENT_WINDOW_SECS, DENIED_METHOD, DenyReas
 use tokio::sync::mpsc;
 
 use super::{EgressProxyHandle, Registry};
+use crate::tools::mcp::MCP_TOOL_TIMEOUT;
+
+/// How long a turn stays a candidate owner of a server's denials after its
+/// call ended (answered or abandoned). A browser page keeps loading after
+/// `page.goto` returns — challenge iframes, lazy assets — so denials trail
+/// the call; and an abandoned call may still be running server-side for up
+/// to another tool timeout. Two timeouts covers both without keeping a turn
+/// on the hook for the runtime's life.
+const ATTRIBUTION_GRACE: Duration = Duration::from_secs(MCP_TOOL_TIMEOUT.as_secs() * 2);
+
+/// `server → task → when`, for turns whose call ended within the grace.
+type Recent = HashMap<String, HashMap<String, Instant>>;
 
 /// Where denials go once a client-facing notifier exists.
 #[derive(Clone, Default)]
@@ -31,19 +43,59 @@ struct EventsInner {
     /// exactly one task is using the server; the pool is per agent, so two
     /// turns on the same server cannot be told apart.
     in_flight: HashMap<String, HashMap<String, usize>>,
-    /// Servers with a call we stopped waiting on (timeout, cancel, panic).
+    /// Turns with a call we stopped waiting on (timeout, cancel, panic).
     /// MCP has no cancel, so that work may still be running and may be the
-    /// source of any later denial: attribution is off for the server from
-    /// then on and denials broadcast, as before #1907. Never cleared — the
-    /// pool keeps one child per server for the runtime's life, and nothing
-    /// tells us when the abandoned work ends.
-    abandoned: HashSet<String>,
+    /// source of a later denial: until [`ATTRIBUTION_GRACE`] passes the turn
+    /// stays a candidate owner, even while another turn uses the server.
+    abandoned: Recent,
+    /// Turns whose call the server answered. Their page may still be loading,
+    /// so while nobody is using the server they remain candidate owners until
+    /// [`ATTRIBUTION_GRACE`] passes.
+    finished: Recent,
+}
+
+/// Forget entries older than the grace, and servers left with none.
+fn sweep(map: &mut Recent, now: Instant) {
+    map.retain(|_, tasks| {
+        tasks.retain(|_, t| now.saturating_duration_since(*t) < ATTRIBUTION_GRACE);
+        !tasks.is_empty()
+    });
+}
+
+impl EventsInner {
+    /// The turns that could have caused a denial on `server` at `now`:
+    /// everyone using it, every turn that abandoned a call on it recently,
+    /// and — only when nobody is using it — every turn that finished a call
+    /// on it recently. Sorted, for a stable log line.
+    fn candidates(&mut self, server: &str, now: Instant) -> BTreeSet<String> {
+        sweep(&mut self.abandoned, now);
+        sweep(&mut self.finished, now);
+        let mut s: BTreeSet<String> = BTreeSet::new();
+        let active = self.in_flight.get(server);
+        s.extend(active.into_iter().flat_map(|t| t.keys().cloned()));
+        let idle = s.is_empty();
+        s.extend(
+            self.abandoned
+                .get(server)
+                .into_iter()
+                .flat_map(|t| t.keys().cloned()),
+        );
+        if idle {
+            s.extend(
+                self.finished
+                    .get(server)
+                    .into_iter()
+                    .flat_map(|t| t.keys().cloned()),
+            );
+        }
+        s
+    }
 }
 
 /// Marks one tool call on `server` by `task` as in flight. [`InFlight::finish`]
 /// when the server answered; a plain drop (timeout, cancel, panic) means the
-/// call may still be running server-side, which turns attribution off for
-/// that server.
+/// call may still be running server-side, so the task stays a candidate owner
+/// of that server's denials for [`ATTRIBUTION_GRACE`].
 pub struct InFlight {
     events: Events,
     server: String,
@@ -61,9 +113,16 @@ impl InFlight {
 impl Drop for InFlight {
     fn drop(&mut self) {
         let mut g = self.events.inner.lock().unwrap();
-        if !self.finished {
-            g.abandoned.insert(self.server.clone());
-        }
+        let now = Instant::now();
+        let ended = if self.finished {
+            &mut g.finished
+        } else {
+            &mut g.abandoned
+        };
+        ended
+            .entry(self.server.clone())
+            .or_default()
+            .insert(self.task.clone(), now);
         if let Some(tasks) = g.in_flight.get_mut(&self.server) {
             if let Some(n) = tasks.get_mut(&self.task) {
                 *n -= 1;
@@ -114,10 +173,21 @@ impl Events {
         now: Instant,
     ) -> Option<EgressDenied> {
         let mut g = self.inner.lock().unwrap();
-        let task_id = match g.in_flight.get(server) {
-            _ if g.abandoned.contains(server) => None,
-            Some(tasks) if tasks.len() == 1 => tasks.keys().next().cloned(),
-            _ => None,
+        let candidates = g.candidates(server, now);
+        let task_id = match candidates.len() {
+            1 => candidates.into_iter().next(),
+            _ => {
+                // Broadcast. Say why, so the next leak is a log grep away.
+                tracing::debug!(
+                    server,
+                    host,
+                    ?candidates,
+                    active = g.in_flight.get(server).map_or(0, HashMap::len),
+                    abandoned = g.abandoned.get(server).map_or(0, HashMap::len),
+                    "egress denial unattributed: broadcasting to every connection"
+                );
+                None
+            }
         };
         let key = (server.to_owned(), host.to_owned(), task_id.clone());
         let window = Duration::from_secs(DENIED_EVENT_WINDOW_SECS);
@@ -288,9 +358,10 @@ mod tests {
         assert_eq!(d.task_id.as_deref(), Some("task-a"));
     }
 
-    /// Two turns on one shared server cannot be told apart, and a child that
-    /// nobody's tool call started belongs to no turn: both are `None`, which
-    /// the runtime reads as "broadcast, as before".
+    /// Two turns on one shared server cannot be told apart — while both use
+    /// it, and after both finished, while either page may still be loading —
+    /// and a child that no turn ever called belongs to no turn: all `None`,
+    /// which the runtime reads as "broadcast, as before".
     #[test]
     fn a_denial_is_unattributed_when_zero_or_two_tasks_use_the_server() {
         let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
@@ -307,7 +378,74 @@ mod tests {
             .events
             .denied("browser", "three.x", None, false, t)
             .unwrap();
-        assert_eq!(nobody.task_id, None);
+        assert_eq!(nobody.task_id, None, "a and b both finished recently");
+        let never = h.events.denied("fetch", "four.x", None, false, t).unwrap();
+        assert_eq!(never.task_id, None, "no turn ever called fetch");
+    }
+
+    /// The leak in the screenshot: `page.goto` returns, the call finishes,
+    /// and the page keeps loading (a Cloudflare challenge iframe). With no
+    /// call in flight the denial used to broadcast to every session; it
+    /// belongs to the turn that just used the server, until the grace ends.
+    #[test]
+    fn a_denial_trailing_a_finished_call_goes_to_that_turn() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let t0 = Instant::now();
+        h.in_flight("browser", "task-a").finish();
+        let d = h
+            .events
+            .denied("browser", "challenges.x", None, false, t0)
+            .unwrap();
+        assert_eq!(d.task_id.as_deref(), Some("task-a"));
+        let late = t0 + ATTRIBUTION_GRACE + Duration::from_secs(1);
+        let d = h
+            .events
+            .denied("browser", "stale.x", None, false, late)
+            .unwrap();
+        assert_eq!(d.task_id, None, "past the grace nobody owns it");
+        assert!(h.events.inner.lock().unwrap().finished.is_empty());
+    }
+
+    /// One timeout used to switch attribution off for the server until the
+    /// runtime restarted, so every later denial broadcast. The abandoned
+    /// turn stays a suspect only for the grace; after that the turn using
+    /// the server owns its denials again.
+    #[test]
+    fn an_abandoned_call_stops_blocking_attribution_after_the_grace() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        let t0 = Instant::now();
+        drop(h.in_flight("browser", "task-a")); // timed out
+        let alone = h
+            .events
+            .denied("browser", "one.x", None, false, t0)
+            .unwrap();
+        assert_eq!(
+            alone.task_id.as_deref(),
+            Some("task-a"),
+            "its leftover work is the only suspect"
+        );
+        let _b = h.in_flight("browser", "task-b");
+        let late = t0 + ATTRIBUTION_GRACE + Duration::from_secs(1);
+        let d = h
+            .events
+            .denied("browser", "two.x", None, false, late)
+            .unwrap();
+        assert_eq!(d.task_id.as_deref(), Some("task-b"));
+        assert!(h.events.inner.lock().unwrap().abandoned.is_empty());
+    }
+
+    /// A finished call is only a suspect while the server is idle: once
+    /// another turn is using it, that turn's denials are its own.
+    #[test]
+    fn a_finished_turn_does_not_dilute_the_turn_now_using_the_server() {
+        let h = EgressProxyHandle::for_test("127.0.0.1:1".parse().unwrap());
+        h.in_flight("browser", "task-a").finish();
+        let _b = h.in_flight("browser", "task-b");
+        let d = h
+            .events
+            .denied("browser", "img.x", None, false, Instant::now())
+            .unwrap();
+        assert_eq!(d.task_id.as_deref(), Some("task-b"));
     }
 
     /// The throttle is per audience: once denials are routed to one turn, a
