@@ -515,12 +515,26 @@ pub fn verify_claim(claim: &Claim, project_root: &Path) -> VerifyResult {
 /// does not exist and for one under a symlinked directory — both cases where
 /// `git check-ignore` refuses. Not a git repo, or an unreadable ignore set,
 /// answers `false` so the claim is still reported.
+///
+/// Ignore rules do not untrack: a file force-added under an ignored directory
+/// (or a directory holding one) is tracked, so its absence is real breakage.
+/// An unreadable index also answers `false`.
 fn is_gitignored(project_root: &Path, rel_path: &str) -> bool {
     let Ok(repo) = git2::Repository::open(project_root) else {
         return false;
     };
     let rel = rel_path.trim_start_matches("./").trim_end_matches('/');
-    repo.is_path_ignored(rel).unwrap_or(false)
+    if !repo.is_path_ignored(rel).unwrap_or(false) {
+        return false;
+    }
+    let Ok(index) = repo.index() else {
+        return false;
+    };
+    let dir_prefix = format!("{rel}/");
+    !index.iter().any(|entry| {
+        let path = String::from_utf8_lossy(&entry.path);
+        path == rel || path.starts_with(&dir_prefix)
+    })
 }
 
 /// Verify a file path claim.
