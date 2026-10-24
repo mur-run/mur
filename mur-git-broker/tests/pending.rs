@@ -349,3 +349,87 @@ fn an_old_audit_table_gains_request_id_on_open() {
     drop(s);
     PendingStore::open(&path).expect("reopening an upgraded store is a no-op");
 }
+
+/// Spec §7.11: a store with the pre-change audit schema (it has `request_id` but no `credential`)
+/// gains the column once; old rows read back with no role; new rows survive close and reopen.
+#[test]
+fn an_old_audit_table_gains_the_credential_column_once_and_keeps_its_rows() {
+    use mur_git_broker::credential_role::CredentialRole;
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("pending.sqlite");
+    let k = key("alice", "r1");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+                                 agent_id TEXT NOT NULL, ts INTEGER NOT NULL, request_id TEXT);
+             INSERT INTO audit (kind, agent_id, ts, request_id)
+                 VALUES ('prefetch_with_credential', 'alice', 1, 'r1');",
+        )
+        .unwrap();
+    }
+    let column_count = |p: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(p)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('audit') WHERE name='credential'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(column_count(&path), 0, "fixture is the old schema");
+    let s = PendingStore::open(&path).unwrap();
+    assert_eq!(column_count(&path), 1);
+    let old = s.audit_events(&k).unwrap();
+    assert_eq!(old.len(), 1);
+    assert_eq!(old[0].kind, "prefetch_with_credential");
+    assert_eq!(old[0].credential, None);
+    for (kind, role) in [
+        ("a", CredentialRole::Read),
+        ("b", CredentialRole::Write),
+        ("c", CredentialRole::Shared),
+    ] {
+        s.audit_with_role(&k, kind, role, t0()).unwrap();
+    }
+    s.audit(&k, "plain", t0()).unwrap();
+    drop(s);
+    let s = PendingStore::open(&path).expect("reopening twice adds nothing");
+    assert_eq!(column_count(&path), 1);
+    let got: Vec<_> = s
+        .audit_events(&k)
+        .unwrap()
+        .into_iter()
+        .map(|e| (e.kind, e.credential))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("prefetch_with_credential".to_string(), None),
+            ("a".into(), Some(CredentialRole::Read)),
+            ("b".into(), Some(CredentialRole::Write)),
+            ("c".into(), Some(CredentialRole::Shared)),
+            ("plain".into(), None),
+        ]
+    );
+    // `audit_trail` still reports kinds only.
+    assert_eq!(s.audit_trail(&k).unwrap().len(), 5);
+}
+
+/// An unknown stored role is a storage error, not a silent `None`.
+#[test]
+fn an_unknown_stored_credential_role_fails_closed() {
+    let (t, s) = store();
+    let k = key("alice", "r1");
+    s.audit(&k, "x", t0()).unwrap();
+    drop(s);
+    rusqlite::Connection::open(t.path().join("pending.sqlite"))
+        .unwrap()
+        .execute("UPDATE audit SET credential='admin'", [])
+        .unwrap();
+    let s = PendingStore::open(&t.path().join("pending.sqlite")).unwrap();
+    assert!(matches!(
+        s.audit_events(&k).unwrap_err(),
+        BrokerError::Storage(_)
+    ));
+}
