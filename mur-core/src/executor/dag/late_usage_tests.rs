@@ -21,8 +21,9 @@ fn sockets_enabled(test: &str) -> bool {
 }
 
 /// A fake running member named `member` under `home`. `reply` answers each
-/// request with the JSON-RPC `result` (or a `{"error": …}` object); every
-/// request is also sent down the returned channel.
+/// request with the JSON-RPC `result` (or a `{"error": …}` object, or
+/// [`stall`] to hold the connection open without answering); every request
+/// is also sent down the returned channel.
 fn fake_member(home: &Path, reply: Reply) -> Receiver<(String, serde_json::Value)> {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
@@ -55,6 +56,10 @@ fn fake_member(home: &Path, reply: Reply) -> Receiver<(String, serde_json::Value
             let method = req["method"].as_str().unwrap_or("").to_string();
             let _ = tx.send((method.clone(), req["params"].clone()));
             let out = reply(&method, &req["params"]);
+            if out.get(STALL).is_some() {
+                std::thread::sleep(Duration::from_secs(60));
+                continue;
+            }
             let msg = match out.get("error") {
                 Some(err) => serde_json::json!({"jsonrpc":"2.0","id":req["id"],"error":err}),
                 None => serde_json::json!({"jsonrpc":"2.0","id":req["id"],"result":out}),
@@ -63,6 +68,13 @@ fn fake_member(home: &Path, reply: Reply) -> Receiver<(String, serde_json::Value
         }
     });
     rx
+}
+
+const STALL: &str = "__stall";
+
+/// A member that took the request and went silent.
+fn stall() -> serde_json::Value {
+    serde_json::json!({ STALL: true })
 }
 
 fn lost_reply() -> serde_json::Value {
@@ -114,19 +126,60 @@ async fn a_turn_still_running_is_cancelled_and_its_usage_waited_for() {
     assert_eq!(cancel.1["id"], "ct-1");
 }
 
+fn not_found(params: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"error": {
+        "code": -32000,
+        "message": format!("task not found: {}", params["id"].as_str().unwrap_or("")),
+    }})
+}
+
+/// The member's registry is in memory and capped, so a missing record can be
+/// a turn that ran and billed before a restart or an eviction.
 #[tokio::test]
-async fn a_turn_the_member_never_started_spent_nothing() {
-    if !sockets_enabled("a_turn_the_member_never_started") {
+async fn a_turn_the_member_has_no_record_of_is_unknown_not_zero() {
+    if !sockets_enabled("a_turn_the_member_has_no_record_of") {
         return;
     }
     let tmp = tempfile::TempDir::new().unwrap();
     let _rx = fake_member(
         tmp.path(),
         Box::new(|method, params| match method {
-            "tasks/get" => serde_json::json!({"error": {
-                "code": -32000,
-                "message": format!("task not found: {}", params["id"].as_str().unwrap_or("")),
-            }}),
+            "tasks/get" => not_found(params),
+            _ => lost_reply(),
+        }),
+    );
+
+    let got =
+        late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::from_secs(10))
+            .await;
+
+    assert!(
+        matches!(got, late_usage::Recovered::Unknown(_)),
+        "got {got:?}"
+    );
+}
+
+/// A runtime that marks the turn ended a moment before it records the usage:
+/// the probe that lands in between must keep asking, not give up.
+#[tokio::test]
+async fn an_ended_turn_whose_usage_lands_late_is_still_counted() {
+    if !sockets_enabled("an_ended_turn_whose_usage_lands_late") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let asked = Mutex::new(0u32);
+    let _rx = fake_member(
+        tmp.path(),
+        Box::new(move |method, params| match method {
+            "tasks/get" => {
+                let mut n = asked.lock().unwrap();
+                *n += 1;
+                if *n == 1 {
+                    serde_json::json!({"id": params["id"], "state": "completed"})
+                } else {
+                    serde_json::json!({"id": params["id"], "state": "completed", "usage": spent()})
+                }
+            }
             _ => lost_reply(),
         }),
     );
@@ -136,9 +189,70 @@ async fn a_turn_the_member_never_started_spent_nothing() {
             .await;
 
     match got {
-        late_usage::Recovered::Known(u) => assert!(u.is_zero()),
-        other => panic!("a turn that never ran is a known zero, got {other:?}"),
+        late_usage::Recovered::Known(u) => assert_eq!(u.total(), 4_200),
+        other => panic!("expected the late usage, got {other:?}"),
     }
+}
+
+/// Recovery must end by its bound even when a call to the member hangs: the
+/// socket itself is held to the deadline, not just the await on it.
+async fn assert_bounded_against(reply: Reply, test: &str) {
+    if !sockets_enabled(test) {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let _rx = fake_member(tmp.path(), reply);
+    let wait = Duration::from_millis(1_500);
+
+    let started = std::time::Instant::now();
+    let got = late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", wait).await;
+
+    assert!(
+        matches!(got, late_usage::Recovered::Unknown(_)),
+        "got {got:?}"
+    );
+    assert!(
+        started.elapsed() < wait + Duration::from_secs(2),
+        "a stalled call overran the bound: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_stalled_tasks_get_is_cut_off_at_the_bound() {
+    assert_bounded_against(Box::new(|_, _| stall()), "a_stalled_tasks_get").await;
+}
+
+#[tokio::test]
+async fn a_stalled_tasks_cancel_is_cut_off_at_the_bound() {
+    assert_bounded_against(
+        Box::new(|method, params| match method {
+            "tasks/get" => serde_json::json!({"id": params["id"], "state": "working"}),
+            _ => stall(),
+        }),
+        "a_stalled_tasks_cancel",
+    )
+    .await;
+}
+
+/// A run already past its deadline asks the member nothing.
+#[tokio::test]
+async fn an_expired_deadline_makes_no_call() {
+    if !sockets_enabled("an_expired_deadline_makes_no_call") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let rx = fake_member(tmp.path(), working_until_cancelled());
+
+    let got =
+        late_usage::recover_delegate_usage(tmp.path(), "member", "ct-1", Duration::ZERO).await;
+
+    assert!(
+        matches!(got, late_usage::Recovered::Unknown(_)),
+        "got {got:?}"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(rx.try_iter().count(), 0, "no request may reach the member");
 }
 
 #[tokio::test]
@@ -187,11 +301,11 @@ async fn an_unrecoverable_spend_is_warned_about_in_the_channel() {
     let home = tmp.path();
     let svc = ChannelService::open(home).unwrap();
     let ch = svc.create_for_workflow("t").unwrap();
-    // An older runtime: the turn ended but `tasks/get` carries no usage.
+    // The member lost its record of the turn (a restart, say).
     let _rx = fake_member(
         home,
         Box::new(|method, params| match method {
-            "tasks/get" => serde_json::json!({"id": params["id"], "state": "completed"}),
+            "tasks/get" => not_found(params),
             _ => lost_reply(),
         }),
     );

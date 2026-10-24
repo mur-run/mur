@@ -363,3 +363,88 @@ fn another_turns_denial_is_neither_shown_nor_adopted_as_this_turns_id() {
     // show here and `task-mine` would not.
     assert_eq!(shown, vec![None, Some("task-mine".to_string())]);
 }
+
+/// Serve one connection: read the request, then run `talk` on the stream
+/// until the client hangs up (writes then fail and `talk` returns).
+fn serve_once(
+    sock_path: &std::path::Path,
+    talk: impl FnOnce(std::os::unix::net::UnixStream) + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    let listener = UnixListener::bind(sock_path).unwrap();
+    std::thread::spawn(move || {
+        if let Ok((mut conn, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = conn.read(&mut buf);
+            talk(conn);
+        }
+    })
+}
+
+/// Dial `peer` with a deadline `bound` from now, asserting the dial ITSELF
+/// returns a deadline error within tolerance — not an outer await giving up
+/// while the blocking call runs on. The idle timeout (5 s) is far above the
+/// bound, so only the deadline can end it in time.
+fn assert_dial_stops_at_deadline(home: &std::path::Path, peer: &str, bound: Duration) {
+    let mut envg = mur_common::test_env::EnvGuard::hold();
+    envg.set_var("MUR_A2A_IO_TIMEOUT_SECS", "5");
+    let start = Instant::now();
+    let result = dial_method_until(
+        home,
+        peer,
+        "tasks/get",
+        serde_json::json!({"id": "t"}),
+        start + bound,
+    );
+    let elapsed = start.elapsed();
+    envg.unset_var("MUR_A2A_IO_TIMEOUT_SECS");
+    let err = result.expect_err("a peer that never answers must not succeed");
+    assert!(
+        err.to_string().contains("before its deadline"),
+        "expected a deadline error, got: {err:#}"
+    );
+    assert!(
+        elapsed < bound + Duration::from_millis(500),
+        "the dial outlived its {bound:?} deadline: returned after {elapsed:?}"
+    );
+}
+
+/// #2090 review: a peer trickling bytes without ever finishing a line keeps
+/// every single socket read short, so `SO_RCVTIMEO` alone never fires while
+/// one `read_line` assembles the frame. The deadline must still end it.
+#[test]
+fn a_peer_trickling_a_line_that_never_ends_is_cut_off_at_the_deadline() {
+    use std::io::Write;
+    if !sockets_allowed("a_peer_trickling_a_line_that_never_ends") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let sock_path = tmp.path().join("agent.sock");
+    let server = serve_once(&sock_path, |mut conn| {
+        while conn.write_all(b"x").is_ok() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    write_lock(tmp.path(), "trickle", &sock_path, 2);
+    assert_dial_stops_at_deadline(tmp.path(), "trickle", Duration::from_millis(800));
+    let _ = server.join();
+}
+
+/// #2090 review: complete but malformed lines are skipped by the frame loop;
+/// a steady stream of them must not bypass the deadline either.
+#[test]
+fn a_peer_streaming_malformed_frames_is_cut_off_at_the_deadline() {
+    use std::io::Write;
+    if !sockets_allowed("a_peer_streaming_malformed_frames") {
+        return;
+    }
+    let tmp = tempfile::TempDir::new().unwrap();
+    let sock_path = tmp.path().join("agent.sock");
+    let server = serve_once(&sock_path, |mut conn| {
+        while conn.write_all(b"{not json\n").is_ok() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    write_lock(tmp.path(), "garbled", &sock_path, 2);
+    assert_dial_stops_at_deadline(tmp.path(), "garbled", Duration::from_millis(800));
+    let _ = server.join();
+}
