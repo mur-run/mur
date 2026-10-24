@@ -246,3 +246,24 @@ fn docs_openspec_paths_look_like_paths() {
     assert!(looks_like_path("docs/openspec/changes"));
     assert!(looks_like_path("openspec/changes"));
 }
+
+#[test]
+fn backtick_span_with_prose_yields_each_path_word() {
+    let paths = extract_file_paths("Modules: `capture/ → store/ → retrieve/ → inject/`.");
+    assert_eq!(paths, ["capture/", "store/", "retrieve/", "inject/"]);
+}
+
+#[test]
+fn backtick_span_drops_trailing_flags_and_descriptions() {
+    let paths = extract_file_paths(
+        "Run `scripts/setup.sh [--all-worktrees]` or `src/main.rs — entry point`.",
+    );
+    assert_eq!(paths, ["scripts/setup.sh", "src/main.rs"]);
+}
+
+#[test]
+fn backtick_command_line_yields_no_path() {
+    let paths =
+        extract_file_paths("Then `cargo test -p mur-core/src/lib.rs` and `mur verify docs/x.md`.");
+    assert!(paths.is_empty(), "{paths:?}");
+}

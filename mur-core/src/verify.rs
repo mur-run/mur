@@ -213,9 +213,11 @@ fn extract_file_paths(line: &str) -> Vec<String> {
     // the file; the location suffix is not part of the path.
     let line_suffix_re = Regex::new(r":\d+(?:[-:]\d+)?$").unwrap();
     for cap in backtick_re.captures_iter(line) {
-        let text = line_suffix_re.replace(&cap[1], "");
-        if looks_like_path(&text) && !paths.iter().any(|p| p == text.as_ref()) {
-            paths.push(text.into_owned());
+        for token in backtick_path_tokens(&cap[1]) {
+            let text = line_suffix_re.replace(token, "");
+            if looks_like_path(&text) && !paths.iter().any(|p| p == text.as_ref()) {
+                paths.push(text.into_owned());
+            }
         }
     }
 
@@ -233,6 +235,25 @@ fn extract_file_paths(line: &str) -> Vec<String> {
     }
 
     paths
+}
+
+/// Split one backtick span into the pieces that may each name a path.
+///
+/// A path never contains whitespace in these docs, so a span with spaces is
+/// either prose around paths (`capture/ → store/`, `run.sh [--flag]`,
+/// `src/main.rs — entry point`) or a command line (`cargo build -p x`).
+/// Only the first shape is a path claim: when the span's first word looks
+/// like a path, every path-like word in it is a claim; when it does not, the
+/// span is a command or prose and yields nothing.
+fn backtick_path_tokens(span: &str) -> Vec<&str> {
+    let mut words = span.split_whitespace();
+    let Some(first) = words.next() else {
+        return Vec::new();
+    };
+    if !looks_like_path(first) {
+        return Vec::new();
+    }
+    std::iter::once(first).chain(words).collect()
 }
 
 /// Heuristic: does this string look like a file path?
