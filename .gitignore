@@ -50,6 +50,9 @@ AGENTS.md
 /docs/superpowers
 # Local OpenSpec change specs; not part of the public source tree.
 /docs/openspec
+# Legacy location, kept so older checkouts that still hold local specs under
+# openspec/ do not expose them to `git status` / `git add -A`.
+openspec/
 /docs/plans/
 /docs/mur-函數清單與競品分析.md
 
