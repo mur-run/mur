@@ -3,6 +3,9 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
+mod service_home;
+use service_home::ServiceHome;
+
 /// launchd label of the murmurd job `install_launchd` registers.
 pub(crate) const LAUNCHD_LABEL: &str = "run.mur.murmurd";
 /// systemd user unit `install_systemd` registers.
@@ -46,6 +49,14 @@ pub(crate) enum Supervision {
         service: DaemonService,
         service_home: PathBuf,
     },
+    /// A service is registered and live, but which MUR home it runs cannot be
+    /// proven (`reason` says why). Neither routing through it nor starting a
+    /// direct daemon is safe: one may act on another home's daemon, the other
+    /// may fight the service for this home's lock.
+    Unknown {
+        service: DaemonService,
+        reason: String,
+    },
 }
 
 impl Supervision {
@@ -54,16 +65,23 @@ impl Supervision {
         let Some(caller) = mur_common::home::try_mur_home() else {
             return Self::None;
         };
-        let Some((service, unit_env_home)) = DaemonService::registered() else {
+        let Some((service, home)) = DaemonService::registered() else {
             return Self::None;
         };
-        let Some(service_home) = mur_common::home::resolve_from(
-            unit_env_home.map(Into::into),
-            dirs::home_dir().as_deref(),
-        ) else {
-            return Self::None;
+        let env_home = match home {
+            ServiceHome::Known(h) => h,
+            ServiceHome::Unknown(reason) => return Self::Unknown { service, reason },
         };
-        Self::classify(service, service_home, &caller)
+        match mur_common::home::resolve_from(env_home.map(Into::into), dirs::home_dir().as_deref())
+        {
+            Some(service_home) => Self::classify(service, service_home, &caller),
+            None => Self::Unknown {
+                service,
+                reason: "the service sets no MUR_HOME and there is no home directory to \
+                         resolve the default from"
+                    .into(),
+            },
+        }
     }
 
     /// Pure ownership rule: the service owns the caller's daemon only when
@@ -83,39 +101,46 @@ impl Supervision {
 
 impl DaemonService {
     /// The service manager that has murmurd registered and live on this
-    /// machine, plus the `MUR_HOME` baked into its unit (`None` = the unit
-    /// sets none, so the daemon uses the default home).
-    fn registered() -> Option<(Self, Option<PathBuf>)> {
+    /// machine, plus the `MUR_HOME` it effectively runs with (see
+    /// [`service_home`] for why that is not just the unit file's value).
+    fn registered() -> Option<(Self, ServiceHome)> {
         #[cfg(target_os = "macos")]
         {
             let plist = dirs::home_dir()?
                 .join("Library/LaunchAgents")
                 .join(format!("{LAUNCHD_LABEL}.plist"));
-            if let Ok(body) = std::fs::read_to_string(&plist)
+            // Bytes, not `read_to_string`: a binary plist (e.g. after
+            // `plutil -convert binary1`) is still a registered job and must
+            // come back as `Unknown`, not as "no service".
+            if let Ok(body) = std::fs::read(&plist)
                 && quiet_success("launchctl", &["print", &launchd_target()])
             {
-                return Some((Self::Launchd, launchd_plist_mur_home(&body)));
+                let home =
+                    service_home::launchd_service_home(&String::from_utf8_lossy(&body), || {
+                        command_stdout("launchctl", &["getenv", mur_common::home::MUR_HOME_ENV])
+                    });
+                return Some((Self::Launchd, home));
             }
         }
         #[cfg(target_os = "linux")]
         {
-            let out = std::process::Command::new("systemctl")
-                .args([
+            let show = command_stdout(
+                "systemctl",
+                &[
                     "--user",
                     "show",
-                    "--property=LoadState,ActiveState,UnitFileState,FragmentPath",
+                    "--property=LoadState,ActiveState,UnitFileState,MainPID,Environment,\
+                     EnvironmentFiles,UnsetEnvironment",
                     SYSTEMD_UNIT,
-                ])
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()?;
-            let show = String::from_utf8_lossy(&out.stdout);
-            if out.status.success() && systemd_owns_unit(&show) {
-                let unit = show_property(&show, "FragmentPath")
-                    .filter(|p| !p.is_empty())
-                    .and_then(|p| std::fs::read_to_string(p).ok())
-                    .unwrap_or_default();
-                return Some((Self::Systemd, systemd_unit_mur_home(&unit)));
+                ],
+            )?;
+            if systemd_owns_unit(&show) {
+                let home = service_home::systemd_service_home(
+                    &show,
+                    |pid| std::fs::read(format!("/proc/{pid}/environ")).ok(),
+                    || command_stdout("systemctl", &["--user", "show-environment"]),
+                );
+                return Some((Self::Systemd, home));
             }
         }
         None
@@ -182,25 +207,6 @@ fn systemd_owns_unit(show: &str) -> bool {
     enabled || live
 }
 
-/// `MUR_HOME` set by a systemd unit's `Environment=` lines (last wins), with
-/// systemd's double-quote / backslash quoting undone.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn systemd_unit_mur_home(unit: &str) -> Option<PathBuf> {
-    let prefix = format!("{}=", mur_common::home::MUR_HOME_ENV);
-    let mut found = None;
-    for line in unit.lines() {
-        let Some(rest) = line.trim().strip_prefix("Environment=") else {
-            continue;
-        };
-        for word in split_systemd_words(rest) {
-            if let Some(v) = word.strip_prefix(&prefix) {
-                found = (!v.is_empty()).then(|| PathBuf::from(v));
-            }
-        }
-    }
-    found
-}
-
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn split_systemd_words(s: &str) -> Vec<String> {
     let (mut words, mut cur, mut quoted, mut any) = (Vec::new(), String::new(), false, false);
@@ -252,6 +258,19 @@ fn launchd_plist_mur_home(plist: &str) -> Option<PathBuf> {
         .replace("&apos;", "'")
         .replace("&amp;", "&");
     (!v.is_empty()).then(|| PathBuf::from(v))
+}
+
+/// stdout of a successful `program args…` run (stderr discarded), else `None`.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -446,15 +465,15 @@ mod tests {
             systemd_env_line(Some(Path::new("/data/my \"mur\"")))
         );
         assert_eq!(
-            systemd_unit_mur_home(&unit),
-            Some(PathBuf::from("/data/my \"mur\""))
+            service_home::systemd_env_mur_home(&unit).as_deref(),
+            Some("/data/my \"mur\"")
         );
         assert_eq!(
-            systemd_unit_mur_home("Environment=FOO=1 MUR_HOME=/x\n"),
-            Some(PathBuf::from("/x"))
+            service_home::systemd_env_mur_home("Environment=FOO=1 MUR_HOME=/x\n").as_deref(),
+            Some("/x")
         );
         assert_eq!(
-            systemd_unit_mur_home("[Service]\nExecStart=/bin/murmurd\n"),
+            service_home::systemd_env_mur_home("[Service]\nExecStart=/bin/murmurd\n"),
             None
         );
     }

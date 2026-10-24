@@ -50,11 +50,16 @@ pub fn cmd_murmurd_stop() -> Result<()> {
 
     let _ = std::fs::remove_file(&lock_path);
     println!("murmurd stopped (sent SIGTERM to pid {pid})");
-    if let Supervision::Owns(service) = Supervision::detect() {
-        println!(
+    match Supervision::detect() {
+        Supervision::Owns(service) => println!(
             "note: murmurd is supervised by {service} and will be respawned; \
              unload the service to keep it stopped"
-        );
+        ),
+        Supervision::Unknown { service, reason } => println!(
+            "note: a {service} murmurd service is registered and may respawn \
+             the daemon; MUR cannot tell which MUR home it serves ({reason})"
+        ),
+        Supervision::Other { .. } | Supervision::None => {}
     }
     Ok(())
 }
@@ -84,6 +89,9 @@ pub fn cmd_murmurd_start(detach: bool) -> Result<()> {
                 service.start(false)?;
                 println!("murmurd started via {service}");
                 return Ok(());
+            }
+            Supervision::Unknown { service, reason } => {
+                return Err(unknown_service_home(service, &reason));
             }
             other => note_foreign_service(&other),
         }
@@ -139,6 +147,8 @@ pub fn cmd_murmurd_restart() -> Result<()> {
     // the daemon down, which a smoke run demonstrated the hard way.
     murmurd_binary()?;
     match Supervision::detect() {
+        // Refuse before stopping anything: the old daemon stays up.
+        Supervision::Unknown { service, reason } => Err(unknown_service_home(service, &reason)),
         Supervision::Owns(service) => {
             // Also stop a lock holder the service does not own (e.g. one an
             // earlier `mur daemon start` spawned): `kickstart -k` only
@@ -157,6 +167,22 @@ pub fn cmd_murmurd_restart() -> Result<()> {
             cmd_murmurd_start(true)
         }
     }
+}
+
+/// Refusal for a live service whose MUR home cannot be proven. Guessing is
+/// worse than stopping: routing through it may restart another home's
+/// daemon, and a direct daemon may fight it for this home's lock.
+fn unknown_service_home(
+    service: crate::cmd::init_daemon::DaemonService,
+    reason: &str,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "a {service} murmurd service is registered, but MUR cannot tell which MUR \
+         home it serves: {reason}. Refusing to start or restart murmurd for {} \
+         rather than guess. Reinstall the service with `mur init` under this \
+         MUR_HOME, or control it with {service} directly",
+        mur_common::home::mur_home_lossy().display()
+    )
 }
 
 /// Say so when a murmurd service exists but serves another MUR home, so a
@@ -251,4 +277,20 @@ fn stop_lock_holder() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cmd::init_daemon::DaemonService;
+
+    #[test]
+    fn unknown_service_home_refusal_names_the_service_and_reason() {
+        let msg =
+            unknown_service_home(DaemonService::Systemd, "the unit loads an EnvironmentFile=")
+                .to_string();
+        assert!(msg.contains("systemd murmurd service"), "{msg}");
+        assert!(msg.contains("the unit loads an EnvironmentFile="), "{msg}");
+        assert!(msg.contains("Refusing"), "{msg}");
+    }
 }
