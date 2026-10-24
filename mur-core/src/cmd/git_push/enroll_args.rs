@@ -126,3 +126,55 @@ pub(super) fn credentials_for(endpoint: &Endpoint, auth: &EnrollAuth) -> Result<
         _ => Err("--username and --secret go together".into()),
     }
 }
+
+/// What one enrollment was enrolled with, enough to print the `enroll` command that recreates it.
+pub(super) struct Reenroll<'a> {
+    pub agent: &'a str,
+    pub repo: &'a str,
+    pub remote: &'a str,
+    pub endpoint: &'a str,
+    pub ref_prefix: &'a str,
+    pub base_refs: &'a [String],
+    pub credential: Option<&'a Credential>,
+}
+
+/// `s` as one shell word: bare when it is made of safe characters, otherwise single-quoted.
+fn shell_word(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_-./:@%+=,".contains(c));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
+impl Reenroll<'_> {
+    /// The copy-pasteable command that re-enrolls this record with a read login added. Every value
+    /// comes from the record; only the read login, which does not exist yet, is a placeholder.
+    /// The record's ref prefix and base refs are repeated so re-running it changes nothing else.
+    pub fn command_with_read_login(&self) -> String {
+        let mut c = format!(
+            "mur git-push enroll --agent {} --repo {} --remote {} --endpoint {} --ref-prefix {}",
+            shell_word(self.agent),
+            shell_word(self.repo),
+            shell_word(self.remote),
+            shell_word(self.endpoint),
+            shell_word(self.ref_prefix),
+        );
+        for r in self.base_refs {
+            c.push_str(&format!(" --base-ref {}", shell_word(r)));
+        }
+        let (user, secret) = match self.credential {
+            Some(w) => (
+                shell_word(w.username.as_str()),
+                shell_word(w.secret_path.as_str()),
+            ),
+            None => ("<USER>".into(), "<SECRET_PATH>".into()),
+        };
+        c.push_str(&format!(" --username {user} --secret {secret}"));
+        c.push_str(" --read-username <READ_USER> --read-secret <READ_SECRET_PATH>");
+        c
+    }
+}

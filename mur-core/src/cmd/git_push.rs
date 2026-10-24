@@ -28,7 +28,7 @@ use serde::Serialize;
 
 mod enroll_args;
 pub use enroll_args::EnrollAuth;
-use enroll_args::credentials_for;
+use enroll_args::{Reenroll, credentials_for};
 
 const LOCK_FILE: &str = "enrollments.lock";
 const HEADS_PREFIX: &str = "refs/heads/";
@@ -256,7 +256,7 @@ fn facts_for(mur_home: &Path, name: &str) -> AgentFacts {
     }
 }
 
-fn describe(p: &EnrollmentProblem) -> String {
+fn describe(p: &EnrollmentProblem, again: &Reenroll<'_>) -> String {
     use EnrollmentProblem::*;
     match p {
         BaseRefNotFullHead(r) => format!("--base-ref {r:?} is not a full refs/heads/<name>"),
@@ -293,12 +293,12 @@ fn describe(p: &EnrollmentProblem) -> String {
         CredentialSameSecret => "the read and write secrets are the same token; a read credential \
              must be a different token"
             .to_string(),
-        CredentialShared => {
-            "reads and writes share one credential, so the prefetch opens the push \
-             secret before approval; to keep it unopened until a human approves, re-enroll with \
-             --read-username and --read-secret (a different token, scoped read-only on the host)"
-                .to_string()
-        }
+        CredentialShared => format!(
+            "reads and writes share one credential, so the prefetch opens the push secret \
+             before approval; to keep it unopened until a human approves, re-enroll with a \
+             different token scoped read-only on the host: {}",
+            again.command_with_read_login()
+        ),
         AgentMayRunUnsandboxed(a) => format!(
             "agent {a} may run without its sandbox (fail_closed_on_sandbox_error is false or its \
              sandbox is not enforcing) and could rewrite the enrollment"
@@ -361,6 +361,15 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
         credential: logins.credential.clone(),
         read_credential: logins.read_credential.clone(),
     };
+    let again = Reenroll {
+        agent: &agent,
+        repo: &a.repo,
+        remote: &a.remote,
+        endpoint: endpoint.as_str(),
+        ref_prefix: &ref_prefix,
+        base_refs: &a.base_refs,
+        credential: logins.credential.as_ref(),
+    };
     let problems = check_enrollment(
         &policy,
         &endpoint,
@@ -370,11 +379,11 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
     );
     let (refusals, notes): (Vec<_>, Vec<_>) = problems.iter().partition(|p| p.is_refusal());
     for n in &notes {
-        writeln!(out, "note: {}", describe(n))?;
+        writeln!(out, "note: {}", describe(n, &again))?;
     }
     if !refusals.is_empty() {
         for r in &refusals {
-            writeln!(out, "refused: {}", describe(r))?;
+            writeln!(out, "refused: {}", describe(r, &again))?;
         }
         writeln!(out, "nothing was written")?;
         return Ok(1);
@@ -581,6 +590,15 @@ fn doctor(mur_home: &Path, out: &mut dyn Write, json: bool, fix: bool) -> Result
         })
     };
     for e in &book_ref.enrollments {
+        let again = Reenroll {
+            agent: &e.agent,
+            repo: &e.repo_id,
+            remote: &e.remote_id,
+            endpoint: e.endpoint.as_str(),
+            ref_prefix: &e.ref_prefix,
+            base_refs: &e.creation_base_refs,
+            credential: e.credential.as_ref(),
+        };
         for p in check_enrollment(
             &e.policy(),
             &e.endpoint,
@@ -592,7 +610,13 @@ fn doctor(mur_home: &Path, out: &mut dyn Write, json: bool, fix: bool) -> Result
                 refused = true;
             }
             let sev = if p.is_refusal() { "refuse" } else { "note" };
-            push(&e.agent, &e.repo_id, &e.remote_id, sev, describe(&p));
+            push(
+                &e.agent,
+                &e.repo_id,
+                &e.remote_id,
+                sev,
+                describe(&p, &again),
+            );
         }
         if !agents.iter().any(|a| a.name == e.agent) {
             refused = true;

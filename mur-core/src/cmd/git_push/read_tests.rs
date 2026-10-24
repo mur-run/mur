@@ -379,3 +379,60 @@ fn doctor_fails_on_a_hand_edited_record_with_the_same_secret_twice() {
     assert!(out.contains("same token"), "{out}");
     assert!(!out.contains(TOKEN) && !out.contains(READ_TOKEN), "{out}");
 }
+
+/// Spec §6: the shared hint carries the whole re-enroll command, built from the enrollment's own
+/// values, with placeholders only for the read login that does not exist yet.
+#[test]
+fn the_shared_hint_prints_the_reenroll_command_with_the_enrollments_real_values() {
+    let f = fx();
+    let w = plant(&f, "write", TOKEN, 0o600);
+    let mut args = https_args(&f, with_credential(w.clone()));
+    if let GitPushAction::Enroll {
+        base_refs,
+        ref_prefix,
+        ..
+    } = &mut args
+    {
+        *base_refs = vec!["refs/heads/main".into()];
+        *ref_prefix = Some("refs/heads/agent/alice/work/".into());
+    }
+    let (code, out) = go(&f, args);
+    assert_eq!(code, 0, "{out}");
+    let want = format!(
+        "mur git-push enroll --agent alice --repo mur --remote origin --endpoint {HTTPS} \
+         --ref-prefix refs/heads/agent/alice/work/ --base-ref refs/heads/main \
+         --username x-access-token --secret {w} \
+         --read-username <READ_USER> --read-secret <READ_SECRET_PATH>"
+    );
+    assert!(out.contains(&want), "want {want}\n got {out}");
+    // The doctor renders the same line from the stored record, still at `note`, exit code 0.
+    let (code, out) = doctor_out(&f);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("note"), "{out}");
+    assert!(out.contains(&want), "want {want}\n got {out}");
+    assert!(!EnrollmentProblem::CredentialShared.is_refusal());
+}
+
+#[test]
+fn reenroll_quotes_a_value_that_is_not_shell_safe() {
+    use mur_git_broker::credential::{Credential, SecretPath, Username};
+    let w = Credential {
+        secret_path: SecretPath::parse("/home/u/my secrets/tok").unwrap(),
+        username: Username::parse("bot").unwrap(),
+    };
+    let cmd = enroll_args::Reenroll {
+        agent: "alice",
+        repo: "mur",
+        remote: "origin",
+        endpoint: "https://git.example.com/o'r.git",
+        ref_prefix: "refs/heads/agent/alice/",
+        base_refs: &[],
+        credential: Some(&w),
+    }
+    .command_with_read_login();
+    assert!(
+        cmd.contains(r"--endpoint 'https://git.example.com/o'\''r.git'"),
+        "{cmd}"
+    );
+    assert!(cmd.contains("--secret '/home/u/my secrets/tok'"), "{cmd}");
+}
