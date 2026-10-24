@@ -4,7 +4,6 @@
 /target-*/
 .DS_Store
 CLAUDE.md
-openspec/
 research/
 .augment/
 .claude/*
@@ -49,6 +48,8 @@ AGENTS.md
 # docs/superpowers/ so tooling that writes plans/specs there keeps working;
 # none of it is part of the public source tree.
 /docs/superpowers
+# Local OpenSpec change specs; not part of the public source tree.
+/docs/openspec
 /docs/plans/
 /docs/mur-函數清單與競品分析.md
 
