@@ -29,6 +29,13 @@ impl EgressChips {
     pub fn first_notice(&mut self, ev: &EgressDenied) -> bool {
         self.noticed.insert((ev.server.clone(), ev.host.clone()))
     }
+
+    /// The transcript was cleared (`/new`, channel switch): its notice lines
+    /// are gone, so every host is noticed afresh. `dismissed`/`denied` are
+    /// the user's answers, not screen state, and stay.
+    pub fn forget_notices(&mut self) {
+        self.noticed.clear();
+    }
 }
 
 /// The registrable-ish parent of `host`: everything after the first label.

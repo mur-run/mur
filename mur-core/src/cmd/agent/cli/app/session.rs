@@ -33,6 +33,7 @@ impl App {
         self.last_ctrl_c_at = None;
         self.ctrl_c_hint = false;
         self.wants_screen_wipe = true;
+        self.egress_chips.forget_notices();
         self.push_system("started a new conversation");
     }
 
@@ -53,6 +54,7 @@ impl App {
         self.clear_own_hitl();
         self.hitl_queue.clear();
         self.wants_screen_wipe = true;
+        self.egress_chips.forget_notices();
         self.load_history(turns);
         self.refresh_channel();
         Ok(())
