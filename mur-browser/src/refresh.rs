@@ -271,6 +271,34 @@ mod tests {
     }
 
     #[test]
+    fn logout_that_clears_the_token_value_leaves_the_encrypted_profile_unchanged() {
+        let home = tempfile::tempdir().unwrap();
+        let store = MemoryStore::default();
+        setup(home.path(), &store);
+        let before = std::fs::read(paths::profile_state(home.path(), "ex")).unwrap();
+        let dir = scratch_dir(home.path()).unwrap();
+        let export = export_path(dir.path());
+        // `localStorage.setItem("userToken", "")`: the key stays, the token is gone.
+        std::fs::write(
+            &export,
+            br#"{"cookies":[],"origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"userToken","value":""},{"name":"theme","value":"dark"}]}]}"#,
+        )
+        .unwrap();
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+
+        let got = refresh_profile(home.path(), "ex", &export, now, &store).unwrap();
+
+        assert!(matches!(got, Outcome::Skipped(_)));
+        assert_eq!(
+            std::fs::read(paths::profile_state(home.path(), "ex")).unwrap(),
+            before,
+            "encrypted profile must be byte-for-byte unchanged"
+        );
+        assert_eq!(meta(home.path()).last_refresh, None);
+        assert!(!export.exists());
+    }
+
+    #[test]
     fn export_code_quotes_hostile_paths() {
         let code = export_code(Path::new("/private/a\"b\\c/storage-state.json")).unwrap();
         assert!(

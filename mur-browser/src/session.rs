@@ -61,7 +61,8 @@ pub fn session_cookie_expiry(
 }
 
 /// One place a login may live: a session-candidate cookie or a localStorage
-/// key on an allowed origin, identified by name.
+/// key on an allowed origin, identified by name and holding a non-cleared
+/// value.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LoginKey {
     Cookie(String),
@@ -97,7 +98,9 @@ pub fn login_keys(
                 continue;
             }
         }
-        if let Some(name) = cookie.get("name").and_then(Value::as_str) {
+        if let Some(name) = cookie.get("name").and_then(Value::as_str)
+            && holds_value(cookie)
+        {
             keys.insert(LoginKey::Cookie(name.to_owned()));
         }
     }
@@ -116,7 +119,9 @@ pub fn login_keys(
         }
         let items = origin.get("localStorage").and_then(Value::as_array);
         for item in items.into_iter().flatten() {
-            if let Some(name) = item.get("name").and_then(Value::as_str) {
+            if let Some(name) = item.get("name").and_then(Value::as_str)
+                && holds_value(item)
+            {
                 keys.insert(LoginKey::Storage(name.to_owned()));
             }
         }
@@ -127,8 +132,9 @@ pub fn login_keys(
 /// Positive login check for write-back. Site storage alone proves nothing (a
 /// logged-out page keeps `theme=dark`, consent and device-ID cookies), so the
 /// reference is the saved profile, captured right after a confirmed login:
-/// the export must still hold **every** login key the saved state has. A
-/// logout removes the token, so a key goes missing and the profile is kept.
+/// the export must still hold **every** login key the saved state has, each
+/// with a non-cleared value. A logout removes or blanks the token, so a key
+/// goes missing and the profile is kept.
 /// When the saved state has no identifiable keys, login cannot be
 /// established and the answer is `false` as well.
 pub fn retains_login(
@@ -151,6 +157,20 @@ pub fn retains_login(
         return false;
     };
     !required.is_empty() && required.is_subset(&present)
+}
+
+/// Values a site writes when it clears a credential in place instead of
+/// removing the key (`setItem("userToken", "")`, `String(null)`, ...).
+const CLEARED_VALUES: &[&str] = &["", "null", "undefined"];
+
+/// Whether an entry still carries something: a key whose value was cleared
+/// is not login material, so a logout that blanks the token without removing
+/// it drops the key from the set and fails [`retains_login`].
+fn holds_value(entry: &Value) -> bool {
+    entry
+        .get("value")
+        .and_then(Value::as_str)
+        .is_some_and(|v| !CLEARED_VALUES.contains(&v.trim()))
 }
 
 fn is_session_candidate(cookie: &Value, allow_domains: &[String]) -> bool {
@@ -206,7 +226,7 @@ mod tests {
     #[test]
     fn short_lived_unknown_cookies_are_treated_as_rotating_tokens() {
         let state = format!(
-            r#"{{"cookies":[{{"name":"HWWAFSESTIME","domain":"chat.example.com","expires":{}}}],"origins":[]}}"#,
+            r#"{{"cookies":[{{"name":"HWWAFSESTIME","value":"v","domain":"chat.example.com","expires":{}}}],"origins":[]}}"#,
             NOW + 600
         );
         let got = session_cookie_expiry(state.as_bytes(), &[], at(NOW)).unwrap();
@@ -216,7 +236,7 @@ mod tests {
     #[test]
     fn cookies_outside_the_allowlist_are_ignored() {
         let state = format!(
-            r#"{{"cookies":[{{"name":"sid","domain":".tracker.test","expires":{}}}],"origins":[]}}"#,
+            r#"{{"cookies":[{{"name":"sid","value":"v","domain":".tracker.test","expires":{}}}],"origins":[]}}"#,
             NOW + 86_400
         );
         let got = session_cookie_expiry(state.as_bytes(), &allow(&["example.com"]), at(NOW));
@@ -226,7 +246,7 @@ mod tests {
     #[test]
     fn parent_domain_cookie_counts_for_a_subdomain_entry() {
         let state = format!(
-            r#"{{"cookies":[{{"name":"sid","domain":".example.com","expires":{}}}],"origins":[]}}"#,
+            r#"{{"cookies":[{{"name":"sid","value":"v","domain":".example.com","expires":{}}}],"origins":[]}}"#,
             NOW + 86_400
         );
         let got = session_cookie_expiry(state.as_bytes(), &allow(&["chat.example.com"]), at(NOW));
@@ -235,14 +255,14 @@ mod tests {
 
     const SAVED: &[u8] = br#"{"cookies":[
             {"name":"__cf_bm","domain":".example.com","expires":1700001800},
-            {"name":"consent","domain":".example.com","expires":1800000000}],
+            {"name":"consent","value":"v","domain":".example.com","expires":1800000000}],
         "origins":[{"origin":"https://chat.example.com","localStorage":[
             {"name":"userToken","value":"old"},{"name":"theme","value":"dark"}]}]}"#;
 
     #[test]
     fn rotated_login_is_retained() {
         let export =
-            br#"{"cookies":[{"name":"consent","domain":".example.com","expires":1800000000}],
+            br#"{"cookies":[{"name":"consent","value":"v","domain":".example.com","expires":1800000000}],
             "origins":[{"origin":"https://chat.example.com","localStorage":[
                 {"name":"userToken","value":"new"},{"name":"theme","value":"dark"}]}]}"#;
         assert!(retains_login(
@@ -256,7 +276,7 @@ mod tests {
 
     #[test]
     fn logout_leaving_preferences_and_consent_is_not_a_login() {
-        let export = br#"{"cookies":[{"name":"consent","domain":".example.com","expires":1800000000}],
+        let export = br#"{"cookies":[{"name":"consent","value":"v","domain":".example.com","expires":1800000000}],
             "origins":[{"origin":"https://chat.example.com","localStorage":[{"name":"theme","value":"dark"}]}]}"#;
         assert!(!retains_login(
             SAVED,
@@ -272,6 +292,34 @@ mod tests {
             at(NOW),
             only_theme,
             &allow(&["example.com"]),
+            at(NOW + 60)
+        ));
+    }
+
+    #[test]
+    fn logout_that_clears_but_keeps_the_token_key_is_not_a_login() {
+        let allowed = allow(&["example.com"]);
+        for cleared in [r#""""#, r#""  ""#, "null", r#""null""#, r#""undefined""#] {
+            let export = format!(
+                r#"{{"cookies":[],"origins":[{{"origin":"https://chat.example.com","localStorage":[
+                    {{"name":"userToken","value":{cleared}}},{{"name":"theme","value":"dark"}}]}}]}}"#
+            );
+            assert!(
+                !retains_login(SAVED, at(NOW), export.as_bytes(), &allowed, at(NOW + 60)),
+                "cleared value {cleared} must not count as a login"
+            );
+        }
+        let cleared_cookie =
+            br#"{"cookies":[{"name":"sid","value":"","domain":".example.com","expires":-1}],
+            "origins":[]}"#;
+        let saved_cookie =
+            br#"{"cookies":[{"name":"sid","value":"abc","domain":".example.com","expires":-1}],
+            "origins":[]}"#;
+        assert!(!retains_login(
+            saved_cookie,
+            at(NOW),
+            cleared_cookie,
+            &allowed,
             at(NOW + 60)
         ));
     }
@@ -296,12 +344,12 @@ mod tests {
     fn rotating_or_expired_saved_cookies_are_not_required() {
         // __cf_bm (30 min) is not required; consent expired before `now`.
         let saved = br#"{"cookies":[
-                {"name":"HWWAFSESTIME","domain":"chat.example.com","expires":1700000600},
-                {"name":"old","domain":".example.com","expires":1700090000},
-                {"name":"sid","domain":".example.com","expires":-1}],
+                {"name":"HWWAFSESTIME","value":"v","domain":"chat.example.com","expires":1700000600},
+                {"name":"old","value":"v","domain":".example.com","expires":1700090000},
+                {"name":"sid","value":"v","domain":".example.com","expires":-1}],
             "origins":[]}"#;
         let export =
-            br#"{"cookies":[{"name":"sid","domain":".example.com","expires":-1}],"origins":[]}"#;
+            br#"{"cookies":[{"name":"sid","value":"v","domain":".example.com","expires":-1}],"origins":[]}"#;
         assert!(retains_login(
             saved,
             at(NOW),
@@ -322,7 +370,7 @@ mod tests {
     #[test]
     fn other_origins_do_not_count() {
         let export =
-            br#"{"cookies":[{"name":"consent","domain":".example.com","expires":1800000000}],
+            br#"{"cookies":[{"name":"consent","value":"v","domain":".example.com","expires":1800000000}],
             "origins":[{"origin":"https://evil.test","localStorage":[
                 {"name":"userToken","value":"x"},{"name":"theme","value":"dark"}]}]}"#;
         assert!(!retains_login(
