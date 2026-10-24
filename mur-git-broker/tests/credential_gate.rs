@@ -202,3 +202,67 @@ fn a_failed_accept_after_a_successful_open_leaves_the_request_pending() {
         "only r2 pushed"
     );
 }
+
+/// Spec §7.4: adding, changing or removing the read credential is a policy change. The records
+/// are re-stamped the way `Enrollments::enroll` does (new epoch), so a request pended under the
+/// old policy ends `policy_changed` and no secret is opened for it.
+#[test]
+fn changing_the_read_credential_voids_a_pending_request_and_opens_nothing() {
+    let read = |path: &str, user: &str| {
+        Some(Credential {
+            secret_path: SecretPath::parse(path).unwrap(),
+            username: Username::parse(user).unwrap(),
+        })
+    };
+    let changes: [(Option<Credential>, Option<Credential>); 3] = [
+        (None, read("/secrets/read-a", "reader")),
+        (
+            read("/secrets/read-a", "reader"),
+            read("/secrets/read-b", "reader"),
+        ),
+        (read("/secrets/read-a", "reader"), None),
+    ];
+    for (from, to) in changes {
+        let fake = Fake::new(Ok(()));
+        let (e, b) = with_credential(&fake);
+        set_records(&e, |recs| {
+            recs.enrollments[0].read_credential = from.clone()
+        });
+        let (k, h) = pended(&e, &b);
+        let opened_at_intake = fake.calls().len();
+        set_records(&e, |recs| {
+            recs.enrollments[0].read_credential = to.clone();
+            recs.enrollments[0].epoch = recs.next_epoch;
+            recs.next_epoch += 1;
+        });
+        let r = b.on_approval(&k, proof("e1", "r1", &h));
+        assert_eq!(
+            r.unwrap_err(),
+            BrokerError::PolicyChanged,
+            "{from:?} -> {to:?}"
+        );
+        assert_eq!(state(b.store(), &k), State::PolicyChanged);
+        assert_eq!(
+            fake.calls().len(),
+            opened_at_intake,
+            "a void request opened a secret"
+        );
+    }
+}
+
+/// Even without a new epoch, the digests alone catch a read credential that moved.
+#[test]
+fn a_read_credential_edited_in_place_without_a_new_epoch_still_voids_the_request() {
+    let fake = Fake::new(Ok(()));
+    let (e, b) = with_credential(&fake);
+    let (k, h) = pended(&e, &b);
+    set_records(&e, |recs| {
+        recs.enrollments[0].read_credential = Some(Credential {
+            secret_path: SecretPath::parse("/secrets/sneaky").unwrap(),
+            username: Username::parse("reader").unwrap(),
+        });
+    });
+    let r = b.on_approval(&k, proof("e1", "r1", &h));
+    assert_eq!(r.unwrap_err(), BrokerError::PolicyChanged);
+    assert!(fake.calls().is_empty(), "a void request opened a secret");
+}
