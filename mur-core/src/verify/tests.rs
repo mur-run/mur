@@ -190,3 +190,59 @@ fn test_verify_path_with_line_suffix_is_valid() {
         VerifyResult::Valid
     ));
 }
+
+#[test]
+fn find_doc_files_scans_nested_docs_openspec_but_not_its_archive() {
+    let root = tempfile::tempdir().unwrap();
+    let write = |rel: &str| {
+        let p = root.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, "# doc\n").unwrap();
+    };
+    write("docs/openspec/specs/cap/spec.md");
+    write("docs/openspec/changes/add-x/proposal.md");
+    write("docs/openspec/changes/add-x/specs/cap/spec.md");
+    write("docs/openspec/changes/archive/old/proposal.md");
+    write("openspec/specs/legacy/spec.md");
+    write("docs/superpowers/plans/2026-01-01-plan.md");
+    write("docs/superpowers/plans/archive/old-plan.md");
+    write("docs/superpowers/specs/design.md");
+
+    let rel: Vec<String> = find_doc_files(root.path())
+        .iter()
+        .map(|p| {
+            // Normalise to `/` so the assertions hold on Windows, where
+            // `join("docs/openspec")` yields mixed separators.
+            p.strip_prefix(root.path())
+                .unwrap()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect();
+
+    for want in [
+        "docs/openspec/specs/cap/spec.md",
+        "docs/openspec/changes/add-x/proposal.md",
+        "docs/openspec/changes/add-x/specs/cap/spec.md",
+        "openspec/specs/legacy/spec.md",
+        "docs/superpowers/plans/2026-01-01-plan.md",
+    ] {
+        assert!(rel.iter().any(|r| r == want), "missing {want} in {rel:?}");
+    }
+    assert!(
+        !rel.iter().any(|r| r.contains("docs/superpowers/specs")),
+        "superpowers specs are not scanned: {rel:?}"
+    );
+    assert!(
+        !rel.iter().any(|r| r.contains("/archive/")),
+        "archive must be skipped: {rel:?}"
+    );
+}
+
+#[test]
+fn docs_openspec_paths_look_like_paths() {
+    assert!(looks_like_path("docs/openspec/changes"));
+    assert!(looks_like_path("openspec/changes"));
+}
