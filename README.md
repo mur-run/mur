@@ -1278,7 +1278,7 @@ known, when the next check is, and the single next step.
 `unknown` — the API rate-limited us, the run is not found yet, the process is
 gone without an exit record — is reported as exactly that, never as `failed`.
 Deadlines (stalled 20m · soft 3h · hard 8h) count from when the work really
-started. Design: `docs/superpowers/specs/2026-09-11-durable-monitor-design.md`.
+started. Full surface notes: `docs/architecture/runtime-overview.md` (the `mur monitor` section).
 
 Inside a murmur session the footer shows `monitor(n)` only when something
 needs attention — exhausted, parked awaiting an action, stalled, or
