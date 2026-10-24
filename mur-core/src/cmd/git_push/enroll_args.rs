@@ -1,4 +1,4 @@
-//! The `enroll` login flags and how they become the credential stored on the record.
+//! The `enroll` login flags and how they become the credentials stored on the record.
 
 use mur_git_broker::constants::ENDPOINT_HTTPS_SCHEME;
 use mur_git_broker::credential::{Credential, SecretPath, Username};
@@ -7,64 +7,122 @@ use mur_git_broker::enrollment::Endpoint;
 /// How an `https://` endpoint logs in. A `file://` endpoint takes none of these.
 #[derive(Debug, Clone, Default, clap::Args)]
 pub struct EnrollAuth {
-    /// Username for an `https://` endpoint (the part before `@`). Needs `--secret`.
+    /// Write (push) credential: the username for an `https://` endpoint (the part before `@`).
+    /// Needs `--secret`.
     #[arg(long, requires = "secret")]
     pub username: Option<String>,
-    /// Absolute path of the token file for an `https://` endpoint: a 0600 file you own, under
-    /// `~/.mur/secrets/`. Needs `--username`.
+    /// Write (push) credential: absolute path of the token file for an `https://` endpoint, a
+    /// 0600 file you own under `~/.mur/secrets/`. The file must already exist; enroll never
+    /// writes it. Needs `--username`.
     #[arg(long, requires = "username")]
     pub secret: Option<String>,
+    /// Read credential: the username for the read-only fetch that runs before a human approves.
+    /// Needs `--read-secret` and `--username`. Optional; without it the write credential is used
+    /// for both.
+    #[arg(long, requires_all = ["read_secret", "username"], conflicts_with = "allow_unauthenticated")]
+    pub read_username: Option<String>,
+    /// Read credential: absolute path of an existing 0600 token file under `~/.mur/secrets/`,
+    /// a different token from `--secret`. With it the push token is not opened until a human
+    /// approves. mur only selects which file is opened; it cannot check what the host lets the
+    /// read token do, so making it read-only is up to you. Needs `--read-username`.
+    #[arg(long, requires_all = ["read_username", "username"], conflicts_with = "allow_unauthenticated")]
+    pub read_secret: Option<String>,
     /// Enroll an `https://` endpoint with no credential, for a remote that accepts anonymous
     /// pushes. Without this, an `https://` endpoint with no `--username`/`--secret` is refused.
     #[arg(long, conflicts_with_all = ["username", "secret"])]
     pub allow_unauthenticated: bool,
 }
 
-/// The credential to store for `endpoint`, or why the flags do not fit it. `Ok(None)` means
-/// "enroll with no credential", which only a `file://` endpoint or an explicit
+/// The logins to store for an endpoint: the write credential and the optional read credential.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct Logins {
+    pub credential: Option<Credential>,
+    pub read_credential: Option<Credential>,
+}
+
+/// One `--<user_flag>` / `--<secret_flag>` pair as a credential, or why it is malformed.
+fn login(
+    (user_flag, secret_flag): (&str, &str),
+    user: &str,
+    secret: &str,
+) -> Result<Credential, String> {
+    let username = Username::parse(user)
+        .map_err(|_| format!("{user_flag} {user:?} must be 1+ characters of [A-Za-z0-9._-]"))?;
+    let secret_path = SecretPath::parse(secret).map_err(|_| {
+        format!(
+            "{secret_flag} {secret:?} must be an absolute path with no `~`, `$`, `.` or `..` \
+             segments (nothing is expanded)"
+        )
+    })?;
+    Ok(Credential {
+        secret_path,
+        username,
+    })
+}
+
+/// The logins to store for `endpoint`, or why the flags do not fit it. No credential at all
+/// (`Logins::default()`) is what only a `file://` endpoint or an explicit
 /// `--allow-unauthenticated` gets: an https push with no credential is refused by most hosts,
 /// and finding that out after a human has spent an approval on it (approvals are never retried)
 /// is the expensive way.
-pub(super) fn credential_for(
-    endpoint: &Endpoint,
-    auth: &EnrollAuth,
-) -> Result<Option<Credential>, String> {
+///
+/// Only the shape of the flags is checked here. Whether a secret file is usable, and whether the
+/// read and write secrets are the same token, is the doctor's `credential_problems`, which
+/// `enroll` runs on the result.
+pub(super) fn credentials_for(endpoint: &Endpoint, auth: &EnrollAuth) -> Result<Logins, String> {
     let https = endpoint.as_str().starts_with(ENDPOINT_HTTPS_SCHEME);
-    let given = auth.username.is_some() || auth.secret.is_some() || auth.allow_unauthenticated;
+    let read_given = auth.read_username.is_some() || auth.read_secret.is_some();
+    let given = auth.username.is_some()
+        || auth.secret.is_some()
+        || read_given
+        || auth.allow_unauthenticated;
     if !https {
         return if given {
             Err(
-                "--username, --secret and --allow-unauthenticated only apply to an https:// \
-                 endpoint"
+                "--username, --secret, --read-username, --read-secret and --allow-unauthenticated \
+                 only apply to an https:// endpoint"
                     .into(),
             )
         } else {
-            Ok(None)
+            Ok(Logins::default())
         };
     }
-    match (&auth.username, &auth.secret) {
+    // clap keeps these combinations off the command line; a direct caller still gets told.
+    if read_given && auth.allow_unauthenticated {
+        return Err(
+            "--read-username and --read-secret cannot be combined with --allow-unauthenticated \
+             (an unauthenticated enrollment has no credential to split)"
+                .into(),
+        );
+    }
+    let read = match (&auth.read_username, &auth.read_secret) {
+        (Some(_), None) => return Err("--read-username needs --read-secret".into()),
+        (None, Some(_)) => return Err("--read-secret needs --read-username".into()),
         (Some(user), Some(secret)) => {
-            let username = Username::parse(user).map_err(|_| {
-                format!("--username {user:?} must be 1+ characters of [A-Za-z0-9._-]")
-            })?;
-            let secret_path = SecretPath::parse(secret).map_err(|_| {
-                format!(
-                    "--secret {secret:?} must be an absolute path with no `~`, `$`, `.` or `..` \
-                     segments (nothing is expanded)"
-                )
-            })?;
-            Ok(Some(Credential {
-                secret_path,
-                username,
-            }))
+            if auth.username.is_none() || auth.secret.is_none() {
+                return Err(
+                    "--read-username and --read-secret need --username and --secret: a read \
+                     credential only splits an enrollment that has a write credential"
+                        .into(),
+                );
+            }
+            Some((user, secret))
         }
-        (None, None) if auth.allow_unauthenticated => Ok(None),
+        (None, None) => None,
+    };
+    match (&auth.username, &auth.secret) {
+        (Some(user), Some(secret)) => Ok(Logins {
+            credential: Some(login(("--username", "--secret"), user, secret)?),
+            read_credential: read
+                .map(|(u, s)| login(("--read-username", "--read-secret"), u, s))
+                .transpose()?,
+        }),
+        (None, None) if auth.allow_unauthenticated => Ok(Logins::default()),
         (None, None) => Err(format!(
             "endpoint {} is https:// but has no credential; give --username and --secret, or \
              --allow-unauthenticated if the remote accepts anonymous pushes",
             endpoint.as_str()
         )),
-        // clap's `requires` keeps these off the command line; a direct caller still gets told.
         _ => Err("--username and --secret go together".into()),
     }
 }

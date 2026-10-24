@@ -911,6 +911,17 @@ Agent** wizard offers the same catalog as a source.
   refused unless you pass `--allow-unauthenticated`, for a remote that takes
   anonymous pushes; otherwise the push would only fail after you had spent an
   approval on it. `mur git-push list` shows the username, never the token.
+  By default that one login serves both phases, so the push token is opened
+  for the read-only fetch that runs before a human approves. To keep it
+  unopened until then, add a second, read-only login:
+  `--read-username <user> --read-secret <path>` (same file rules; it needs
+  `--username`/`--secret`, and a different token). mur only selects which
+  file is opened for each phase; it cannot check what the host lets a token
+  do, so making the read token read-only is up to you. Enroll never writes a
+  secret, and it refuses a read token that is the same as the push token
+  (same file, a link, or equal contents). Adding, changing or removing the
+  read login is a policy change: pending pushes end as `policy_changed`.
+  `mur git-push doctor` notes an https enrollment that still shares one login.
 - **Deletion safety** — destructive file actions go through a trash with a
   cancel window and explicit restore (`mur agent trash`); nothing is
   hard-deleted on a timer.

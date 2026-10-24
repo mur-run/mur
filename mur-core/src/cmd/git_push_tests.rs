@@ -526,7 +526,7 @@ fn with_credential(secret: String) -> EnrollAuth {
     EnrollAuth {
         username: Some("x-access-token".into()),
         secret: Some(secret),
-        allow_unauthenticated: false,
+        ..EnrollAuth::default()
     }
 }
 
@@ -605,7 +605,7 @@ fn a_malformed_username_or_secret_path_is_refused_before_any_check() {
         let auth = EnrollAuth {
             username: Some(user.into()),
             secret: Some(secret.into()),
-            allow_unauthenticated: false,
+            ..EnrollAuth::default()
         };
         let (code, out) = go(&f, https_args(&f, auth));
         assert_eq!(code, 1, "{out}");
@@ -675,3 +675,6 @@ fn the_command_line_pairs_username_with_secret_and_keeps_them_apart_from_the_opt
     assert!(parse(&["--username", "u", "--secret", "/s"]).is_ok());
     assert!(parse(&["--allow-unauthenticated"]).is_ok());
 }
+
+#[path = "git_push/read_tests.rs"]
+mod read_tests;

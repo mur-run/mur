@@ -28,7 +28,7 @@ use serde::Serialize;
 
 mod enroll_args;
 pub use enroll_args::EnrollAuth;
-use enroll_args::credential_for;
+use enroll_args::credentials_for;
 
 const LOCK_FILE: &str = "enrollments.lock";
 const HEADS_PREFIX: &str = "refs/heads/";
@@ -48,6 +48,9 @@ impl From<Format> for ObjectFormat {
 }
 
 #[derive(Debug, Subcommand)]
+// Parsed once per process and matched immediately; the size gap is `Enroll`'s flag set, and
+// boxing it would only add an indirection at every construction site.
+#[allow(clippy::large_enum_variant)]
 pub enum GitPushAction {
     /// Allow an agent to ask for pushes to a remote. Refuses, and writes nothing, if the doctor objects.
     Enroll {
@@ -287,6 +290,15 @@ fn describe(p: &EnrollmentProblem) -> String {
              it could replace the credential",
             path.display()
         ),
+        CredentialSameSecret => "the read and write secrets are the same token; a read credential \
+             must be a different token"
+            .to_string(),
+        CredentialShared => {
+            "reads and writes share one credential, so the prefetch opens the push \
+             secret before approval; to keep it unopened until a human approves, re-enroll with \
+             --read-username and --read-secret (a different token, scoped read-only on the host)"
+                .to_string()
+        }
         AgentMayRunUnsandboxed(a) => format!(
             "agent {a} may run without its sandbox (fail_closed_on_sandbox_error is false or its \
              sandbox is not enforcing) and could rewrite the enrollment"
@@ -323,8 +335,8 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
              (lowercase DNS name, no user@, no IP address, no explicit :443)"
         )
     })?;
-    let credential = match credential_for(&endpoint, &a.auth) {
-        Ok(c) => c,
+    let logins = match credentials_for(&endpoint, &a.auth) {
+        Ok(l) => l,
         Err(why) => {
             writeln!(out, "refused: {why}")?;
             writeln!(out, "nothing was written")?;
@@ -346,7 +358,8 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
         canonical_remote_endpoint: endpoint.as_str().to_string(),
         creation_base_refs: a.base_refs.clone(),
         ref_prefix: ref_prefix.clone(),
-        credential: credential.clone(),
+        credential: logins.credential.clone(),
+        read_credential: logins.read_credential.clone(),
     };
     let problems = check_enrollment(
         &policy,
@@ -374,7 +387,8 @@ fn enroll(mur_home: &Path, out: &mut dyn Write, a: EnrollArgs) -> Result<i32> {
             endpoint,
             ref_prefix,
             creation_base_refs: a.base_refs,
-            credential,
+            credential: logins.credential,
+            read_credential: logins.read_credential,
             new_repo,
         })
         .map_err(|e| match e.to_string().as_str() {
@@ -471,6 +485,8 @@ struct Line<'a> {
     repo_path: String,
     /// Where the token is and whose it is. Never the token: `Credential` holds no secret.
     credential: Option<LineCredential<'a>>,
+    /// The login used before approval, when the enrollment has one. Never the token.
+    read_credential: Option<LineCredential<'a>>,
 }
 
 #[derive(Serialize)]
@@ -501,6 +517,10 @@ fn list(mur_home: &Path, out: &mut dyn Write, json: bool) -> Result<i32> {
                     username: c.username.as_str(),
                     secret_path: c.secret_path.as_str(),
                 }),
+                read_credential: e.read_credential.as_ref().map(|c| LineCredential {
+                    username: c.username.as_str(),
+                    secret_path: c.secret_path.as_str(),
+                }),
             })
         })
         .collect();
@@ -511,7 +531,10 @@ fn list(mur_home: &Path, out: &mut dyn Write, json: bool) -> Result<i32> {
     } else {
         for l in &lines {
             let auth = match &l.credential {
-                Some(c) => format!("  as {}", c.username),
+                Some(c) => match &l.read_credential {
+                    Some(r) => format!("  as {}  reads as {}", c.username, r.username),
+                    None => format!("  as {}", c.username),
+                },
                 None if l.endpoint.starts_with(ENDPOINT_HTTPS_SCHEME) => "  unauthenticated".into(),
                 None => String::new(),
             };
