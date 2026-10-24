@@ -690,11 +690,14 @@ pub fn verify_docs(project_root: &Path) -> anyhow::Result<Vec<VerifiedClaim>> {
 /// `specs/<cap>/spec.md` and `changes/<id>/specs/<cap>/spec.md`, so it needs
 /// more depth than the flat `plans/` and `research/` trees. Both the
 /// conventional `openspec/` and the `docs/openspec/` location are scanned.
+/// `docs/superpowers/plans` holds the plans; `docs/superpowers/specs` is
+/// deliberately not scanned.
 const DOC_SCAN_DIRS: &[(&str, usize)] = &[
     ("plans", 1),
     ("research", 1),
     ("openspec", 4),
     ("docs/openspec", 4),
+    ("docs/superpowers/plans", 1),
 ];
 
 /// Directory names never descended into: archived OpenSpec changes are a

@@ -204,14 +204,21 @@ fn find_doc_files_scans_nested_docs_openspec_but_not_its_archive() {
     write("docs/openspec/changes/add-x/specs/cap/spec.md");
     write("docs/openspec/changes/archive/old/proposal.md");
     write("openspec/specs/legacy/spec.md");
+    write("docs/superpowers/plans/2026-01-01-plan.md");
+    write("docs/superpowers/plans/archive/old-plan.md");
+    write("docs/superpowers/specs/design.md");
 
     let rel: Vec<String> = find_doc_files(root.path())
         .iter()
         .map(|p| {
+            // Normalise to `/` so the assertions hold on Windows, where
+            // `join("docs/openspec")` yields mixed separators.
             p.strip_prefix(root.path())
                 .unwrap()
-                .to_string_lossy()
-                .into_owned()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
         })
         .collect();
 
@@ -220,9 +227,14 @@ fn find_doc_files_scans_nested_docs_openspec_but_not_its_archive() {
         "docs/openspec/changes/add-x/proposal.md",
         "docs/openspec/changes/add-x/specs/cap/spec.md",
         "openspec/specs/legacy/spec.md",
+        "docs/superpowers/plans/2026-01-01-plan.md",
     ] {
         assert!(rel.iter().any(|r| r == want), "missing {want} in {rel:?}");
     }
+    assert!(
+        !rel.iter().any(|r| r.contains("docs/superpowers/specs")),
+        "superpowers specs are not scanned: {rel:?}"
+    );
     assert!(
         !rel.iter().any(|r| r.contains("/archive/")),
         "archive must be skipped: {rel:?}"
