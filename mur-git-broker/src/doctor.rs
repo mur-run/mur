@@ -5,11 +5,13 @@
 //! The inputs about agents are collected by the caller (`mur-core` can compute sandbox grants;
 //! this crate sits below it and must not).
 
-use crate::constants::ALLOWED_REF_PREFIX;
+use crate::constants::{ALLOWED_REF_PREFIX, ENDPOINT_HTTPS_SCHEME};
 use crate::credential_source::{CredentialSource, FileCredentials};
 use crate::enrollment::Endpoint;
 use crate::policy::RemotePolicy;
+use secrecy::{ExposeSecret, SecretString};
 use std::path::{Path, PathBuf};
+use subtle::ConstantTimeEq;
 
 /// What the doctor needs to know about one agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +62,13 @@ pub enum EnrollmentProblem {
     /// An agent can write to (or above, or inside) the secrets directory, and could then swap
     /// the credential for one of its own.
     SecretsWritableByAgent { agent: String, path: PathBuf },
+    /// The read and write secrets hold the same token (same file, a link to it, or equal
+    /// contents), so the read credential could not keep the push token unopened before approval.
+    /// Carries no payload, so it cannot carry a secret.
+    CredentialSameSecret,
+    /// A network enrollment has a credential and no read credential: prefetch opens the push
+    /// secret before approval. Advice, never a refusal.
+    CredentialShared,
 }
 
 impl EnrollmentProblem {
@@ -67,7 +76,9 @@ impl EnrollmentProblem {
     pub fn is_refusal(&self) -> bool {
         !matches!(
             self,
-            Self::GrantCoversBrokerDir(_) | Self::EndpointPathChecksNotApplicable(_)
+            Self::GrantCoversBrokerDir(_)
+                | Self::EndpointPathChecksNotApplicable(_)
+                | Self::CredentialShared
         )
     }
 }
@@ -170,11 +181,24 @@ pub fn credential_problems(
         return Vec::new();
     };
     let mut out = Vec::new();
-    // The secret is read and dropped at once; only the refusal reason is kept.
-    if let Err(crate::error::BrokerError::CredentialUnreadable(why)) =
-        FileCredentials::new(secrets_root).open(&cred.secret_path)
+    let source = FileCredentials::new(secrets_root);
+    // Each secret is opened on its own, so each failure is reported on its own. Values live only
+    // until the comparison below and are never printed; only refusal reasons are kept.
+    let write = source.open(&cred.secret_path);
+    let read = policy
+        .read_credential
+        .as_ref()
+        .map(|r| source.open(&r.secret_path));
+    for opened in std::iter::once(&write).chain(read.as_ref()) {
+        if let Err(crate::error::BrokerError::CredentialUnreadable(why)) = opened {
+            out.push(EnrollmentProblem::CredentialUnusable(why));
+        }
+    }
+    // Compared only when both opened: an unusable secret is never reported as the same secret.
+    if let (Ok(w), Some(Ok(r))) = (&write, &read)
+        && same_secret(w, r)
     {
-        out.push(EnrollmentProblem::CredentialUnusable(why));
+        out.push(EnrollmentProblem::CredentialSameSecret);
     }
     let real = std::fs::canonicalize(secrets_root).unwrap_or_else(|_| secrets_root.to_path_buf());
     for a in agents {
@@ -191,6 +215,26 @@ pub fn credential_problems(
     out
 }
 
+/// Do two secrets hold the same value? Different lengths differ at once (a length is not secret);
+/// equal lengths are compared in constant time.
+fn same_secret(a: &SecretString, b: &SecretString) -> bool {
+    let (a, b) = (a.expose_secret().as_bytes(), b.expose_secret().as_bytes());
+    a.len() == b.len() && bool::from(a.ct_eq(b))
+}
+
+/// A network enrollment whose one credential serves both phases. Nothing for a local endpoint
+/// (it opens nothing before approval), an anonymous one, or a split enrollment.
+pub fn shared_credential_note(policy: &RemotePolicy) -> Vec<EnrollmentProblem> {
+    let network = policy
+        .canonical_remote_endpoint
+        .starts_with(ENDPOINT_HTTPS_SCHEME);
+    if network && policy.credential.is_some() && policy.read_credential.is_none() {
+        vec![EnrollmentProblem::CredentialShared]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Everything the doctor checks for one enrollment.
 pub fn check_enrollment(
     policy: &RemotePolicy,
@@ -204,6 +248,7 @@ pub fn check_enrollment(
     out.extend(endpoint_problems(endpoint, agents));
     out.extend(grant_problems(&grants, broker_dir));
     out.extend(credential_problems(policy, secrets_root, agents));
+    out.extend(shared_credential_note(policy));
     out
 }
 
@@ -362,6 +407,7 @@ mod tests {
             creation_base_refs: vec!["main".into(), "refs/heads/ok".into()],
             ref_prefix: "refs/heads/".into(),
             credential: None,
+            read_credential: None,
         };
         assert_eq!(
             policy_problems(&p),
@@ -387,6 +433,7 @@ mod tests {
                 secret_path: SecretPath::parse(secret.to_str().unwrap()).unwrap(),
                 username: Username::parse("bot").unwrap(),
             }),
+            read_credential: None,
         }
     }
     fn secret(root: &Path, mode: u32) -> PathBuf {
