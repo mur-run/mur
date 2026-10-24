@@ -3,6 +3,8 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
+mod probe;
+
 /// launchd label of the murmurd job `install_launchd` registers.
 pub(crate) const LAUNCHD_LABEL: &str = "run.mur.murmurd";
 /// systemd user unit `install_systemd` registers.
@@ -193,11 +195,12 @@ impl DaemonService {
         }
     }
 
-    /// Whether the service manager currently has the job loaded.
-    fn is_loaded(self) -> bool {
+    /// Whether the service manager still has the job loaded (or, for
+    /// systemd, will respawn it). `Err` when the probe cannot tell.
+    fn is_loaded(self) -> Result<bool> {
         match self {
-            Self::Launchd => quiet_success("launchctl", &["print", &launchd_target()]),
-            Self::Systemd => quiet_success("systemctl", &["--user", "is-active", SYSTEMD_UNIT]),
+            Self::Launchd => probe::launchd_loaded(),
+            Self::Systemd => probe::systemd_running(),
         }
     }
 }
@@ -219,21 +222,18 @@ fn run_argv(argv: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// A failed stop is an error only if the job is still loaded; an already
-/// unloaded job is the state `stop` wants. `is_loaded` is only consulted on
-/// failure.
-fn stop_outcome(err: anyhow::Error, is_loaded: impl FnOnce() -> bool) -> Result<()> {
-    if is_loaded() { Err(err) } else { Ok(()) }
-}
-
-/// Run a probe command with output discarded; true only on exit 0.
-fn quiet_success(program: &str, args: &[&str]) -> bool {
-    std::process::Command::new(program)
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+/// A failed stop is an error unless the job is provably unloaded, which is
+/// the state `stop` wants. A probe that cannot tell keeps the error (with the
+/// probe's reason attached) rather than reporting a stop that may not have
+/// happened. `is_loaded` is only consulted on failure.
+fn stop_outcome(err: anyhow::Error, is_loaded: impl FnOnce() -> Result<bool>) -> Result<()> {
+    match is_loaded() {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(err),
+        Err(probe_err) => Err(err.context(format!(
+            "and could not confirm murmurd is unloaded: {probe_err:#}"
+        ))),
+    }
 }
 
 /// The launchd plist `mur init` writes for murmurd. `None` without a home dir.
@@ -531,13 +531,23 @@ mod tests {
 
     #[test]
     fn failed_stop_of_unloaded_job_is_success() {
-        assert!(stop_outcome(anyhow::anyhow!("not loaded"), || false).is_ok());
+        assert!(stop_outcome(anyhow::anyhow!("not loaded"), || Ok(false)).is_ok());
     }
 
     #[test]
     fn failed_stop_of_loaded_job_is_an_error() {
-        let err = stop_outcome(anyhow::anyhow!("bootout denied"), || true).unwrap_err();
+        let err = stop_outcome(anyhow::anyhow!("bootout denied"), || Ok(true)).unwrap_err();
         assert!(err.to_string().contains("bootout denied"));
+    }
+
+    #[test]
+    fn failed_stop_with_failed_probe_is_an_error() {
+        let err = stop_outcome(anyhow::anyhow!("bootout denied"), || {
+            Err(anyhow::anyhow!("probe crashed"))
+        })
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("bootout denied") && msg.contains("probe crashed"));
     }
 
     #[test]
