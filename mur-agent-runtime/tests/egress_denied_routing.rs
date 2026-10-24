@@ -94,17 +94,19 @@ async fn a_denied_fetch_inside_a_turns_tool_call_names_that_turn() {
     pool.shutdown().await;
 }
 
-/// A JSON-RPC error IS the server's answer: its work for the call is over,
-/// so the next turn's denials are still attributed.
+/// A JSON-RPC error ends the call but does not prove the tool never ran: a
+/// browser tool can start a navigation and then fail internally. When the
+/// next turn's call then sees a denial, it may be A's page still loading, so
+/// it must broadcast rather than land on task-b alone.
 #[tokio::test]
-async fn a_jsonrpc_error_reply_ends_the_call() {
+async fn a_jsonrpc_error_keeps_the_turn_a_suspect_for_trailing_traffic() {
     let (pool, mut rx) = proxied_pool().await;
     let err = call_as("task-a", &tool(&pool, "rpc_error"), serde_json::json!({}))
         .await
-        .expect_err("the server refused");
+        .expect_err("the server failed");
     assert!(err.to_string().contains("refused"), "{err}");
     let ev = denied_fetch_as("task-b", &pool, &mut rx, "blocked.example").await;
-    assert_eq!(ev.task_id.as_deref(), Some("task-b"));
+    assert_eq!(ev.task_id, None, "task-a's page may be the source");
     pool.shutdown().await;
 }
 
