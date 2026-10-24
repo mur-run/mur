@@ -33,84 +33,10 @@ pub enum DialMode {
     ForceEphemeral,
 }
 
-/// Idle read/write timeout for a peer that does NOT beat (proto < 2). Sits
-/// above the runtime's default HITL wait (300 s) plus generation headroom;
-/// never raise it — a beating peer is what makes a short timeout safe (spec
-/// 2026-09-12 execution-limits D7).
-const LEGACY_DIAL_IO_TIMEOUT: Duration = Duration::from_secs(600);
-/// Idle timeout for a peer that beats every 30 s (spec §3.6): three missed
-/// beats. Every heartbeat, delta and step frame resets it.
-const HEARTBEAT_DIAL_IO_TIMEOUT: Duration = Duration::from_secs(90);
-
-/// The idle timeout for THIS peer, from its running.lock: the env override
-/// (`MUR_A2A_IO_TIMEOUT_SECS`, tests) wins; else a runtime that advertises
-/// heartbeats gets the short one and anything older keeps the long one, so a
-/// fleet mid-upgrade never starts failing at 90 s on a router that is merely
-/// thinking.
-fn dial_io_timeout_for(proto: u32) -> Duration {
-    if let Some(d) = std::env::var("MUR_A2A_IO_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(Duration::from_secs)
-    {
-        return d;
-    }
-    if proto >= mur_common::build::HEARTBEAT_MIN_PROTO {
-        HEARTBEAT_DIAL_IO_TIMEOUT
-    } else {
-        LEGACY_DIAL_IO_TIMEOUT
-    }
-}
-
-/// What a read timeout means, in words that fit the peer: a beating peer
-/// that went silent STOPPED RESPONDING (and we say when it last spoke); a
-/// legacy peer merely did not answer in time.
-fn timeout_error(
-    agent_name: &str,
-    proto: u32,
-    timeout: Duration,
-    last_frame: Option<&(String, String)>,
-    legacy_wording: &str,
-) -> anyhow::Error {
-    if proto >= mur_common::build::HEARTBEAT_MIN_PROTO {
-        anyhow!(
-            "agent '{agent_name}' stopped responding — no frame for {}s (last: {}); \
-             check `mur agent logs {agent_name}`",
-            timeout.as_secs(),
-            last_frame
-                .map(|(m, at)| format!("{at} · {m}"))
-                .unwrap_or_else(|| "none since the request".into())
-        )
-    } else {
-        anyhow!(
-            "agent '{agent_name}' {legacy_wording} {}s; check `mur agent logs {agent_name}`",
-            timeout.as_secs()
-        )
-    }
-}
-
-/// Remember the last non-response frame the peer sent — its method and its
-/// own timestamp when it carries one — for the timeout message.
-fn note_frame(last_frame: &mut Option<(String, String)>, v: &Value) {
-    if let Some(m) = v.get("method").and_then(Value::as_str) {
-        let at = v
-            .get("params")
-            .and_then(|p| p.get("at"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-        *last_frame = Some((m.to_string(), at));
-    }
-}
-
-/// True if `err` looks like a socket read/write timeout (`SO_RCVTIMEO`/
-/// `SO_SNDTIMEO` firing), as opposed to a genuine connection error.
-fn is_io_timeout(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-    )
-}
+mod idle;
+#[cfg(test)]
+use idle::{HEARTBEAT_DIAL_IO_TIMEOUT, LEGACY_DIAL_IO_TIMEOUT};
+use idle::{dial_io_timeout_for, is_io_timeout, note_frame, timeout_error};
 
 /// Resolve a user-typed agent name to the canonical on-disk agent name,
 /// matching case-insensitively. CLI users shouldn't have to remember the
@@ -151,6 +77,17 @@ pub fn dial_method(
     method: &str,
     params: Value,
     mode: DialMode,
+) -> Result<Value> {
+    dial_method_inner(home, agent_name, method, params, mode, None)
+}
+
+fn dial_method_inner(
+    home: &Path,
+    agent_name: &str,
+    method: &str,
+    params: Value,
+    mode: DialMode,
+    deadline: Option<Instant>,
 ) -> Result<Value> {
     // Case-insensitive name resolution: `mur agent send mur` works the same as
     // `... Mur`. Returns the canonical (on-disk) name so the runtime's
@@ -202,7 +139,7 @@ pub fn dial_method(
             lock_path.display()
         ),
         (DialMode::ForceEphemeral, _) => dial_ephemeral(home, agent_name, &request, &request_id),
-        (_, true) => dial_socket(&lock_path, agent_name, &request, &request_id),
+        (_, true) => dial_socket(&lock_path, agent_name, &request, &request_id, deadline),
         (_, false) => match dial_ephemeral(home, agent_name, &request, &request_id) {
             Ok(v) => Ok(v),
             // Race: another runtime (e.g. the Hub's auto-start) came up between
@@ -217,7 +154,7 @@ pub fn dial_method(
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 if lock_path.exists() {
-                    dial_socket(&lock_path, agent_name, &request, &request_id)
+                    dial_socket(&lock_path, agent_name, &request, &request_id, deadline)
                 } else {
                     Err(e)
                 }
@@ -232,6 +169,7 @@ fn dial_socket(
     agent_name: &str,
     request: &Value,
     request_id: &Value,
+    deadline: Option<Instant>,
 ) -> Result<Value> {
     let bytes = fs::read(lock_path).with_context(|| format!("read {}", lock_path.display()))?;
     let lock: LockFile = serde_json::from_slice(&bytes).context("parse running.lock")?;
@@ -245,7 +183,9 @@ fn dial_socket(
     #[cfg(unix)]
     {
         use std::io::{BufRead, BufReader, Write};
-        let timeout = dial_io_timeout_for(proto);
+        let idle = dial_io_timeout_for(proto);
+        let timeout = deadline::bounded(idle, deadline)
+            .ok_or_else(|| deadline::passed(agent_name, request))?;
         let mut stream = std::os::unix::net::UnixStream::connect(&sock)
             .with_context(|| format!("connect {sock}"))?;
         // Bound both directions: without these, a stalled or crashed peer
@@ -274,7 +214,9 @@ fn dial_socket(
         let mut last_frame: Option<(String, String)> = None;
         for line in reader.lines() {
             let line = line.map_err(|e| {
-                if is_io_timeout(&e) {
+                if is_io_timeout(&e) && deadline.is_some_and(|d| Instant::now() >= d) {
+                    deadline::passed(agent_name, request)
+                } else if is_io_timeout(&e) {
                     timeout_error(
                         agent_name,
                         proto,
@@ -296,6 +238,14 @@ fn dial_socket(
                     bail!("agent '{agent_name}' returned error: {err}");
                 }
                 return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+            }
+            // A frame resets the idle timer, never the deadline.
+            if deadline.is_some() {
+                let next = deadline::bounded(idle, deadline)
+                    .ok_or_else(|| deadline::passed(agent_name, request))?;
+                stream
+                    .set_read_timeout(Some(next))
+                    .context("set read timeout")?;
             }
         }
         bail!("EOF before matching response from '{agent_name}'");
@@ -772,6 +722,9 @@ fn dial_ephemeral(
     let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
     bail!("ephemeral runtime for '{agent_name}' exited before responding:\n{tail}");
 }
+
+mod deadline;
+pub use deadline::dial_method_until;
 
 #[cfg(test)]
 mod tests;
