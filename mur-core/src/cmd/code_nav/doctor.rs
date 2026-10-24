@@ -228,7 +228,7 @@ fn check_installs(i: &Inputs, out: &mut Vec<Finding>) {
 /// (npm `package.json`, uv dist-info, binary hash) against the pin. `None`
 /// when there is no offline way to tell.
 fn on_disk_state(i: &Inputs, name: &str) -> Option<Installed> {
-    use mur_common::serena_ls_cmd::{INTELEPHENSE, TYPESCRIPT};
+    use mur_common::serena_ls_cmd::{INTELEPHENSE, TYPESCRIPT, VUE};
     let tools = node_ls_install::tools_dir(i.mur_home);
     Some(match name {
         plan::AST_GREP => {
@@ -245,6 +245,8 @@ fn on_disk_state(i: &Inputs, name: &str) -> Option<Installed> {
         }
         plan::INTELEPHENSE => node_ls_install::installed_state(&INTELEPHENSE, &tools),
         plan::TS_LS => node_ls_install::installed_state(&TYPESCRIPT, &tools),
+        // Vue's server and its companion TypeScript packages, all pinned.
+        plan::VUE_LS => node_ls_install::installed_state(&VUE, &tools),
         _ => return None,
     })
 }

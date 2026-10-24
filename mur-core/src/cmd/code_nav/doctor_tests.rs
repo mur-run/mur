@@ -463,3 +463,64 @@ fn a_vue_entry_without_its_link_is_flagged_and_an_intact_one_is_ok() {
     let ok = all.iter().find(|x| x.subject.contains("vue link")).unwrap();
     assert_eq!(ok.level, Level::Ok, "{ok:?}");
 }
+
+/// Lay out a managed npm install of `ls` with every package at `version_of`.
+fn fake_node_ls(
+    tools: &Path,
+    ls: &mur_common::serena_ls_cmd::ManagedNodeLs,
+    version_of: impl Fn(&str, &str) -> String,
+) {
+    touch(&ls.entry(tools));
+    for req in ls.required(tools) {
+        touch(&req);
+    }
+    let dir = ls.dir(tools);
+    for (pkg, pin) in ls.packages {
+        let manifest = dir.join("node_modules").join(pkg).join("package.json");
+        touch(&manifest);
+        let json = serde_json::json!({ "name": pkg, "version": version_of(pkg, pin) });
+        std::fs::write(manifest, json.to_string()).unwrap();
+    }
+}
+
+fn vue_finding(f: &Fixture) -> Finding {
+    run_audit(f)
+        .into_iter()
+        .find(|x| x.subject.starts_with(&format!("install {}@", plan::VUE_LS)))
+        .expect("vue install audited")
+}
+
+/// #2111 review: a recorded Vue install is judged by every pinned package,
+/// the companion TypeScript ones included, not just by its entry path.
+#[test]
+fn a_vue_install_drifted_in_place_is_flagged_though_its_entry_exists() {
+    use mur_common::serena_ls_cmd::VUE;
+    let mut f = clean();
+    let tools = node_ls_install_tools(&f.mur_home);
+    let record = super::super::node_ls_install::Record::for_tools(&VUE, &tools);
+    f.manifest.vue = Some(record);
+    f.manifest
+        .installed
+        .insert(consent::install_key(plan::VUE_LS, VUE.pin()));
+
+    fake_node_ls(&tools, &VUE, |_, pin| pin.to_string());
+    let ok = vue_finding(&f);
+    assert_eq!(ok.level, Level::Ok, "{ok:?}");
+    assert!(!ok.detail.contains("not verifiable"), "{ok:?}");
+
+    // Each package drifting alone, entry point untouched, is a mismatch.
+    for (drifted, _) in VUE.packages {
+        fake_node_ls(&tools, &VUE, |pkg, pin| {
+            if pkg == *drifted {
+                "0.0.1".into()
+            } else {
+                pin.to_string()
+            }
+        });
+        assert!(VUE.entry(&tools).is_file());
+        let w = vue_finding(&f);
+        assert_ne!(w.level, Level::Ok, "{drifted} drift: {w:?}");
+        assert!(w.detail.contains("is not"), "{drifted} drift: {w:?}");
+        assert!(w.fix.as_deref().unwrap().starts_with("mur code-nav setup"));
+    }
+}
