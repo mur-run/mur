@@ -433,3 +433,83 @@ fn an_unknown_stored_credential_role_fails_closed() {
         BrokerError::Storage(_)
     ));
 }
+
+/// Requests are identified by `(agent_id, task_id, request_id)`; two tasks of the same agent
+/// reusing a request id must not share an audit trail, through either reader.
+#[test]
+fn audit_trails_are_isolated_per_task() {
+    use mur_git_broker::credential_role::CredentialRole;
+    let (_t, s) = store();
+    let a = key("alice", "r1");
+    let mut b = key("alice", "r1");
+    b.task_id = "t2".into();
+    assert_ne!(a.task_id, b.task_id, "fixture needs two distinct tasks");
+    s.audit(&a, "rejected", t0()).unwrap();
+    s.audit_with_role(&b, "push_with_credential", CredentialRole::Write, t0())
+        .unwrap();
+    assert_eq!(s.audit_trail(&a).unwrap(), vec!["rejected"]);
+    assert_eq!(s.audit_trail(&b).unwrap(), vec!["push_with_credential"]);
+    let events = s.audit_events(&b).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].credential, Some(CredentialRole::Write));
+}
+
+/// An intake refusal is audited under the refused request's task, not its siblings'.
+#[test]
+fn an_intake_refusal_is_audited_under_its_own_task() {
+    let (_t, s) = store();
+    let l = BrokerLimits {
+        max_pending_per_agent: 1,
+        ..BrokerLimits::default()
+    };
+    submit(&s, "alice", "r0", &"b".repeat(40), t0(), &l).unwrap();
+    let _ = submit(&s, "alice", "r1", &"b".repeat(40), t0(), &l);
+    let refused = key("alice", "r1");
+    let mut sibling = key("alice", "r1");
+    sibling.task_id = "t2".into();
+    assert_eq!(s.audit_trail(&refused).unwrap(), vec!["queue_full"]);
+    assert!(s.audit_trail(&sibling).unwrap().is_empty());
+}
+
+/// A store whose audit rows predate `task_id` gains the column once on open. Its old rows
+/// cannot be attributed to a task, so they stay visible under that agent and request id
+/// (history is never dropped); rows written afterwards are attributed to their own task only.
+#[test]
+fn an_audit_table_without_task_id_gains_it_and_keeps_old_rows_visible() {
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("pending.sqlite");
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+                                 agent_id TEXT NOT NULL, ts INTEGER NOT NULL, request_id TEXT,
+                                 credential TEXT);
+             INSERT INTO audit (kind, agent_id, ts, request_id)
+                 VALUES ('ended:succeeded', 'alice', 1, 'r1');",
+        )
+        .unwrap();
+    }
+    let task_id_columns = |p: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(p)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('audit') WHERE name='task_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(task_id_columns(&path), 0, "fixture is the old schema");
+    let s = PendingStore::open(&path).unwrap();
+    assert_eq!(task_id_columns(&path), 1);
+    let a = key("alice", "r1");
+    let mut b = key("alice", "r1");
+    b.task_id = "t2".into();
+    assert_eq!(s.audit_count("alice", "ended:succeeded").unwrap(), 1);
+    s.audit(&a, "probe", t0()).unwrap();
+    assert_eq!(s.audit_trail(&a).unwrap(), vec!["ended:succeeded", "probe"]);
+    assert_eq!(s.audit_trail(&b).unwrap(), vec!["ended:succeeded"]);
+    drop(s);
+    PendingStore::open(&path).expect("reopening an upgraded store is a no-op");
+    assert_eq!(task_id_columns(&path), 1);
+}
