@@ -18,6 +18,7 @@ fn policy(base: &[&str], prefix: &str) -> RemotePolicy {
         creation_base_refs: base.iter().map(|s| s.to_string()).collect(),
         ref_prefix: prefix.into(),
         credential: None,
+        read_credential: None,
     }
 }
 

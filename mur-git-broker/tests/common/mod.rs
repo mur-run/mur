@@ -85,6 +85,7 @@ pub fn policy() -> RemotePolicy {
         creation_base_refs: vec!["refs/heads/main".into()],
         ref_prefix: ALLOWED_REF_PREFIX.into(),
         credential: None,
+        read_credential: None,
     }
 }
 pub fn action_for(old: &str, new: &str, r#ref: &str) -> ActionDocument {

@@ -11,6 +11,7 @@ pub mod binding;
 pub mod broker;
 pub mod constants;
 pub mod credential;
+pub mod credential_role;
 pub mod credential_source;
 pub mod doctor;
 pub mod endpoint;

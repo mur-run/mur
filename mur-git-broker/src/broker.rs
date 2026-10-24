@@ -10,6 +10,8 @@ use crate::{
     approval::{ApprovalProof, Clock, accept_approval, begin_execution},
     askpass::TokenAuth,
     binding::{Bound, EnrollmentSource, Mismatch, bind, build_action},
+    credential::Credential,
+    credential_role::{Phase, select},
     credential_source::CredentialSource,
     error::BrokerError,
     import::{ParserSpawn, import_pack},
@@ -66,11 +68,18 @@ pub struct BrokerConfig {
     pub clock: Arc<dyn Clock>,
 }
 
+/// Test seam (`test-support` / `cfg(test)` only): called with the auth the push is about to run
+/// with, the push-phase counterpart of what a `RemoteReader` sees in the prefetch.
+#[cfg(any(test, feature = "test-support"))]
+pub type PushObserver = Box<dyn Fn(&dyn RemoteAuth) + Send + Sync>;
+
 pub struct Broker {
     cfg: BrokerConfig,
     store: PendingStore,
     gate: PrefetchGate,
     notifications: Mutex<Vec<String>>,
+    #[cfg(any(test, feature = "test-support"))]
+    push_observer: Option<PushObserver>,
 }
 
 fn storage(e: impl std::fmt::Display) -> BrokerError {
@@ -90,7 +99,15 @@ impl Broker {
             store,
             gate,
             notifications: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "test-support"))]
+            push_observer: None,
         })
+    }
+
+    /// Test seam: observe the auth handed to the push after approval.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observe_push_auth(&mut self, f: PushObserver) {
+        self.push_observer = Some(f);
     }
 
     pub fn store(&self) -> &PendingStore {
@@ -204,15 +221,16 @@ impl Broker {
             let network = !bound
                 .remote_url
                 .starts_with(crate::constants::ENDPOINT_FILE_SCHEME);
-            let secret = if network {
-                self.open_secret(bound)?
-            } else {
-                None
-            };
-            let token_auth = self.token_auth(bound, secret)?;
-            if token_auth.is_some() {
+            let selected = network.then(|| select(bound, Phase::Prefetch)).flatten();
+            let secret = selected
+                .map(|(cred, _)| self.open_secret(cred))
+                .transpose()?;
+            let token_auth = self.token_auth(bound, selected.map(|(c, _)| c), secret)?;
+            if let (Some(_), Some((_, role))) = (&token_auth, selected) {
                 let now = self.cfg.clock.now();
-                let _ = self.store.audit(key, AUDIT_PREFETCH_WITH_CREDENTIAL, now);
+                let _ = self
+                    .store
+                    .audit_with_role(key, AUDIT_PREFETCH_WITH_CREDENTIAL, role, now);
             }
             let auth: &dyn RemoteAuth = match &token_auth {
                 Some(t) => t,
@@ -269,7 +287,9 @@ impl Broker {
         // that cannot be used leaves the request pending and the same approval usable once it is
         // fixed. `?` here and on `accept_approval` drop the secret (`SecretString` zeroizes on
         // drop), so no early return leaves it behind.
-        let secret = self.open_secret(&bound)?;
+        let secret = select(&bound, Phase::Push)
+            .map(|(cred, _)| self.open_secret(cred))
+            .transpose()?;
         let clock = &*self.cfg.clock;
         accept_approval(&self.store, key, &proof, clock)?;
         let _ = self.store.audit(key, AUDIT_APPROVAL_ACCEPTED, clock.now());
@@ -326,16 +346,24 @@ impl Broker {
             .frozen_digest(key)?
             .ok_or_else(|| storage("missing frozen digest"))?;
         let repo = PrivateRepo::open(&self.dir_for(key), &self.cfg.git_bin)?;
-        let token_auth = self.token_auth(bound, secret)?;
-        if token_auth.is_some() {
-            let _ = self
-                .store
-                .audit(key, AUDIT_PUSH_WITH_CREDENTIAL, self.cfg.clock.now());
+        let selected = select(bound, Phase::Push);
+        let token_auth = self.token_auth(bound, selected.map(|(c, _)| c), secret)?;
+        if let (Some(_), Some((_, role))) = (&token_auth, selected) {
+            let _ = self.store.audit_with_role(
+                key,
+                AUDIT_PUSH_WITH_CREDENTIAL,
+                role,
+                self.cfg.clock.now(),
+            );
         }
         let auth: &dyn RemoteAuth = match &token_auth {
             Some(t) => t,
             None => &*self.cfg.auth,
         };
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(observe) = &self.push_observer {
+            observe(auth);
+        }
         push(
             &repo,
             doc,
@@ -348,13 +376,10 @@ impl Broker {
 }
 
 impl Broker {
-    /// The binding's secret, if it carries a credential. `SecretString` zeroizes on drop.
-    fn open_secret(&self, bound: &Bound) -> Result<Option<SecretString>, BrokerError> {
-        bound
-            .credential
-            .as_ref()
-            .map(|c| self.cfg.credentials.open(&c.secret_path))
-            .transpose()
+    /// The secret `cred` points at, which the caller selected for its phase. `SecretString`
+    /// zeroizes on drop.
+    fn open_secret(&self, cred: &Credential) -> Result<SecretString, BrokerError> {
+        self.cfg.credentials.open(&cred.secret_path)
     }
 
     /// The askpass wiring for `secret` on the bound remote, shared by prefetch and push so both
@@ -362,9 +387,10 @@ impl Broker {
     fn token_auth(
         &self,
         bound: &Bound,
+        cred: Option<&Credential>,
         secret: Option<SecretString>,
     ) -> Result<Option<TokenAuth>, BrokerError> {
-        let (Some(secret), Some(c)) = (secret, &bound.credential) else {
+        let (Some(secret), Some(c)) = (secret, cred) else {
             return Ok(None);
         };
         let url = &bound.remote_url;

@@ -7,12 +7,21 @@
 use crate::{
     action::ActionDocument,
     constants::{PENDING_DB_BUSY_WAIT_MS, PENDING_DB_MODE},
+    credential_role::CredentialRole,
     error::BrokerError,
     policy::BrokerLimits,
 };
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{os::unix::fs::PermissionsExt, path::Path, sync::Mutex};
+
+/// One audit row as read back: its kind and, for a credential use, which enrolled login the
+/// broker selected (`None` for every other row and for rows written before the column existed).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AuditEvent {
+    pub kind: String,
+    pub credential: Option<CredentialRole>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
@@ -205,7 +214,8 @@ impl PendingStore {
                  kind       TEXT NOT NULL,
                  agent_id   TEXT NOT NULL,
                  ts         INTEGER NOT NULL,
-                 request_id TEXT
+                 request_id TEXT,
+                 credential TEXT
              );",
         )
         .map_err(storage)?;
@@ -217,6 +227,15 @@ impl PendingStore {
             .map_err(storage)?;
         if !has_request_id {
             conn.execute("ALTER TABLE audit ADD COLUMN request_id TEXT", [])
+                .map_err(storage)?;
+        }
+        // Likewise `credential` (which enrolled login was selected); old rows keep NULL.
+        let has_credential = conn
+            .prepare("SELECT 1 FROM pragma_table_info('audit') WHERE name='credential'")
+            .and_then(|mut s| s.exists([]))
+            .map_err(storage)?;
+        if !has_credential {
+            conn.execute("ALTER TABLE audit ADD COLUMN credential TEXT", [])
                 .map_err(storage)?;
         }
         Ok(Self {
@@ -491,6 +510,57 @@ impl PendingStore {
             )
             .map_err(storage)?;
         Ok(())
+    }
+
+    /// Like [`Self::audit`], also recording which enrolled credential the broker selected. The
+    /// role is the selection, never a verified permission of the token.
+    pub fn audit_with_role(
+        &self,
+        key: &RequestKey,
+        kind: &str,
+        role: CredentialRole,
+        now: DateTime<Utc>,
+    ) -> Result<(), BrokerError> {
+        self.lock()?
+            .execute(
+                "INSERT INTO audit (kind, agent_id, ts, request_id, credential)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    kind,
+                    key.agent_id,
+                    now.timestamp_millis(),
+                    key.request_id,
+                    role.as_str()
+                ],
+            )
+            .map_err(storage)?;
+        Ok(())
+    }
+
+    /// The audit rows for one request with their credential role, oldest first. A stored role
+    /// this build does not know is a storage error, never a silent `None`.
+    pub fn audit_events(&self, key: &RequestKey) -> Result<Vec<AuditEvent>, BrokerError> {
+        let guard = self.lock()?;
+        let mut stmt = guard
+            .prepare(
+                "SELECT kind, credential FROM audit WHERE agent_id=?1 AND request_id=?2 ORDER BY id",
+            )
+            .map_err(storage)?;
+        let rows = stmt
+            .query_map(params![key.agent_id, key.request_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            })
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)?;
+        rows.into_iter()
+            .map(|(kind, role)| {
+                Ok(AuditEvent {
+                    kind,
+                    credential: role.as_deref().map(CredentialRole::parse).transpose()?,
+                })
+            })
+            .collect()
     }
 
     /// The audit kinds recorded for one request, oldest first.

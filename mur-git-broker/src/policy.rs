@@ -48,15 +48,23 @@ pub struct RemotePolicy {
     /// Login for a network endpoint (path and username, never the secret). `None` for a local
     /// endpoint and for every policy that predates credentials.
     pub credential: Option<Credential>,
+    /// Login used before approval (prefetch). `None` means `credential` is used for both.
+    pub read_credential: Option<Credential>,
 }
 impl RemotePolicy {
-    /// Add the credential's identity to a digest input. Only when present, so a policy without
-    /// one hashes the exact JSON it did before credentials existed and old approvals still verify.
+    /// Add the credentials' identities to a digest input. Each only when present, so a policy
+    /// without one hashes the exact JSON it did before that field existed and old approvals still
+    /// verify. The read credential is its own key: swapping the two logins changes the digest.
     fn with_credential(&self, mut v: serde_json::Value) -> serde_json::Value {
-        if let Some(c) = &self.credential {
-            v["credential"] = serde_json::json!({
-                "secret_path": c.secret_path.as_str(), "username": c.username.as_str(),
-            });
+        for (key, cred) in [
+            ("credential", &self.credential),
+            ("read_credential", &self.read_credential),
+        ] {
+            if let Some(c) = cred {
+                v[key] = serde_json::json!({
+                    "secret_path": c.secret_path.as_str(), "username": c.username.as_str(),
+                });
+            }
         }
         v
     }
@@ -113,6 +121,7 @@ mod tests {
             creation_base_refs: vec!["refs/heads/main".into()],
             ref_prefix: ALLOWED_REF_PREFIX.into(),
             credential: None,
+            read_credential: None,
         }
     }
     #[test]
@@ -177,6 +186,51 @@ mod tests {
             p.remote_digest(),
             "3d00dc20aa8f273b3d34a663b6e5375e955479f1b160b9f37319096c2e51fe5f"
         );
+    }
+    #[test]
+    fn a_policy_with_only_a_write_credential_keeps_the_digests_it_had_before_read_credentials() {
+        // Pinned from the code at 08ba2bfe1, before `read_credential` was a field: a policy that
+        // carries a credential and no read credential must hash the exact JSON it did, so an
+        // approval signed then still verifies.
+        let mut p = policy();
+        p.credential = Some(cred("/s/t", "bot"));
+        assert_eq!(
+            p.digest(),
+            "b0d4f03145d94e3750983305ae59821e1e2352f784fbcbabdcecdc859b856d16"
+        );
+        assert_eq!(
+            p.remote_digest(),
+            "95ad59e74a631d23b42281f76d66e1bdd98e98a926186b40ab793460ae6f85dc"
+        );
+    }
+    #[test]
+    fn a_read_credential_changes_both_digests_and_each_of_its_fields_counts() {
+        let mut base = policy();
+        base.credential = Some(cred("/s/t", "bot"));
+        let mut with_read = base.clone();
+        with_read.read_credential = Some(cred("/s/r", "reader"));
+        let mut other_path = base.clone();
+        other_path.read_credential = Some(cred("/s/r2", "reader"));
+        let mut other_user = base.clone();
+        other_user.read_credential = Some(cred("/s/r", "reader2"));
+        let all = [&base, &with_read, &other_path, &other_user];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a.digest(), b.digest());
+                assert_ne!(a.remote_digest(), b.remote_digest());
+            }
+        }
+    }
+    #[test]
+    fn the_read_credential_is_its_own_key_not_a_swap_with_the_write_credential() {
+        let mut a = policy();
+        a.credential = Some(cred("/s/t", "bot"));
+        a.read_credential = Some(cred("/s/r", "reader"));
+        let mut swapped = policy();
+        swapped.credential = Some(cred("/s/r", "reader"));
+        swapped.read_credential = Some(cred("/s/t", "bot"));
+        assert_ne!(a.digest(), swapped.digest());
+        assert_ne!(a.remote_digest(), swapped.remote_digest());
     }
     #[test]
     fn adding_a_credential_changes_both_digests() {
