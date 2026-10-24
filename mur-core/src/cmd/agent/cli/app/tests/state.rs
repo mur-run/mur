@@ -508,6 +508,30 @@ fn start_new_session_clears_last_sent() {
     assert!(!a.esc_hint);
 }
 
+/// A fresh transcript has no notice lines, so a host noticed in the old
+/// conversation must be noticed again in the new one.
+#[test]
+fn start_new_session_renotices_denied_hosts() {
+    use mur_common::egress_event::{DenyReason, EgressDenied};
+    let home = tempdir().unwrap();
+    let mut a = app_at(&home);
+    let ev = EgressDenied {
+        agent: "a".into(),
+        server: "browser".into(),
+        host: "gator.volces.com".into(),
+        port: Some(443),
+        mode: "restricted".into(),
+        reason: DenyReason::NotAllowed,
+        at: "2026-10-15T00:00:00Z".into(),
+        task_id: None,
+    };
+    assert!(a.egress_chips.first_notice(&ev));
+    assert!(!a.egress_chips.first_notice(&ev));
+    let s = Session::create(home.path(), "a").unwrap();
+    a.start_new_session(s);
+    assert!(a.egress_chips.first_notice(&ev));
+}
+
 /// P3b-§3.1: `/review` keeps the raw rest of the line — the `/review`
 /// grammar (`--`, quoted task words) is `review/args.rs`'s, not this parser's.
 #[test]

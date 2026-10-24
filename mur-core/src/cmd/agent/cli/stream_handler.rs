@@ -276,7 +276,9 @@ fn on_egress_denied(app: &mut App, ev: mur_common::egress_event::EgressDenied) {
     if chips.is_none() && app.egress_chips.dismissed.contains(&ev.host) {
         return;
     }
-    app.push_system(ed::text_fallback(&ev));
+    if app.egress_chips.first_notice(&ev) {
+        app.push_system(ed::text_fallback(&ev));
+    }
     if let Some(c) = chips {
         app.pending_suggestions = c;
     }
