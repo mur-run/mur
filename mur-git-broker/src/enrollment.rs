@@ -53,6 +53,9 @@ pub struct EnrollmentRecord {
     /// omitted again on write when `None`, so those files round-trip byte for byte.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<Credential>,
+    /// Login used before approval (prefetch). `None` means `credential` is used for both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_credential: Option<Credential>,
     pub epoch: u64,
 }
 
@@ -64,6 +67,7 @@ impl EnrollmentRecord {
             creation_base_refs: self.creation_base_refs.clone(),
             ref_prefix: self.ref_prefix.clone(),
             credential: self.credential.clone(),
+            read_credential: self.read_credential.clone(),
         }
     }
     fn same_key(&self, agent: &str, repo_id: &str, remote_id: &str) -> bool {
@@ -81,6 +85,7 @@ pub struct EnrollRequest {
     pub ref_prefix: String,
     pub creation_base_refs: Vec<String>,
     pub credential: Option<Credential>,
+    pub read_credential: Option<Credential>,
     pub new_repo: Option<NewRepo>,
 }
 #[derive(Debug, Clone)]
@@ -204,6 +209,7 @@ impl Enrollments {
             ref_prefix: req.ref_prefix,
             creation_base_refs: bases,
             credential: req.credential,
+            read_credential: req.read_credential,
             epoch: 0,
         };
         rec.policy().validate_enrollment()?;
@@ -390,6 +396,7 @@ mod tests {
             ref_prefix: format!("{ALLOWED_REF_PREFIX}{agent}/"),
             creation_base_refs: vec!["refs/heads/main".into()],
             credential: None,
+            read_credential: None,
             new_repo: Some(NewRepo {
                 path: "/work/mur".into(),
                 object_format: ObjectFormat::Sha1,
@@ -623,6 +630,84 @@ mod tests {
             // Put a credential back so the next iteration changes it again.
             e.enroll(https_req("alice", Some(cred("/h/.mur/secrets/a", "u"))))
                 .unwrap();
+        }
+    }
+
+    fn split_req(agent: &str, write: Credential, read: Option<Credential>) -> EnrollRequest {
+        EnrollRequest {
+            read_credential: read,
+            ..https_req(agent, Some(write))
+        }
+    }
+
+    #[test]
+    fn adding_changing_and_removing_the_read_credential_each_update_with_a_new_epoch() {
+        let write = cred("/h/.mur/secrets/w", "bot");
+        let read = cred("/h/.mur/secrets/r", "reader");
+        let mut e = fresh();
+        assert_eq!(
+            e.enroll(split_req("alice", write.clone(), None)).unwrap(),
+            EnrollOutcome::Created
+        );
+        let steps = [
+            Some(read.clone()),
+            Some(cred("/h/.mur/secrets/r2", "reader")),
+            Some(cred("/h/.mur/secrets/r2", "reader2")),
+            None,
+        ];
+        for step in steps {
+            let before = e.enrollments[0].epoch;
+            assert_eq!(
+                e.enroll(split_req("alice", write.clone(), step.clone()))
+                    .unwrap(),
+                EnrollOutcome::Updated,
+                "{step:?}"
+            );
+            assert!(e.enrollments[0].epoch > before);
+            assert_eq!(e.enrollments[0].read_credential, step);
+            // The same request again is a no-op.
+            let same = e.enrollments[0].epoch;
+            assert_eq!(
+                e.enroll(split_req("alice", write.clone(), step)).unwrap(),
+                EnrollOutcome::Unchanged
+            );
+            assert_eq!(e.enrollments[0].epoch, same);
+        }
+    }
+
+    #[test]
+    fn a_record_without_a_read_credential_serializes_byte_identical_to_before() {
+        let mut e = fresh();
+        e.enroll(https_req("alice", Some(cred("/h/.mur/secrets/w", "bot"))))
+            .unwrap();
+        let y = serde_yaml_ng::to_string(&e).unwrap();
+        assert!(!y.contains("read_credential"), "{y}");
+        let back: Enrollments = serde_yaml_ng::from_str(&y).unwrap();
+        assert_eq!(back.enrollments[0].read_credential, None);
+        assert_eq!(serde_yaml_ng::to_string(&back).unwrap(), y);
+    }
+
+    #[test]
+    fn a_read_credential_is_written_and_a_bad_one_fails_the_load_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("enrollments.yaml");
+        let mut e = fresh();
+        e.enroll(split_req(
+            "alice",
+            cred("/h/.mur/secrets/w", "bot"),
+            Some(cred("/h/.mur/secrets/r", "reader")),
+        ))
+        .unwrap();
+        let good = serde_yaml_ng::to_string(&e).unwrap();
+        assert!(good.contains("read_credential"), "{good}");
+        for (from, to) in [
+            ("/h/.mur/secrets/r", "../r"),
+            ("username: reader", "username: 'a b'"),
+            ("username: reader", "token: hunter2"),
+        ] {
+            assert!(good.contains(from), "{from}");
+            std::fs::write(&p, good.replace(from, to)).unwrap();
+            assert!(Enrollments::load(&p).is_err(), "{to}");
         }
     }
 

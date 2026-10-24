@@ -106,6 +106,7 @@ fn enroll_with(w: &World, credential: Option<Credential>) {
         ref_prefix: PREFIX.into(),
         creation_base_refs: vec![],
         credential,
+        read_credential: None,
         new_repo: Some(NewRepo {
             path: w.work.clone(),
             object_format: ObjectFormat::Sha1,
@@ -494,6 +495,7 @@ fn an_allow_after_a_revoke_and_re_enroll_ends_policy_changed_and_pushes_nothing(
         ref_prefix: rec.ref_prefix,
         creation_base_refs: rec.creation_base_refs,
         credential: rec.credential,
+        read_credential: rec.read_credential,
         new_repo: None,
     })
     .unwrap();

@@ -101,6 +101,7 @@ pub fn records_for(endpoint: &str, p: &RemotePolicy) -> Enrollments {
         ref_prefix: p.ref_prefix.clone(),
         creation_base_refs: p.creation_base_refs.clone(),
         credential: None,
+        read_credential: None,
         epoch: EPOCH,
     });
     e

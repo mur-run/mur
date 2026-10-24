@@ -56,6 +56,9 @@ pub struct Bound {
     pub policy: RemotePolicy,
     /// Where the secret lives and who it belongs to; never the secret. Safe under `Debug`.
     pub credential: Option<Credential>,
+    /// Where the pre-approval (prefetch) secret lives; `None` means `credential` serves both
+    /// phases. Copied from the enrollment record like `credential`, not from the policy.
+    pub read_credential: Option<Credential>,
 }
 
 /// The document for a verified request, stamped with the *current* epoch and identity. The agent
@@ -113,6 +116,7 @@ pub fn bind(e: &Enrollments, doc: &ActionDocument) -> Result<Bound, Mismatch> {
         remote_url: b.enrollment.endpoint.as_str().to_string(),
         policy: p,
         credential: b.enrollment.credential.clone(),
+        read_credential: b.enrollment.read_credential.clone(),
     })
 }
 
@@ -136,6 +140,7 @@ mod tests {
             ref_prefix: "refs/heads/agent/alice/".into(),
             creation_base_refs: vec![],
             credential: c,
+            read_credential: None,
             new_repo: Some(NewRepo {
                 path: "/work/mur".into(),
                 object_format: ObjectFormat::Sha1,
@@ -166,6 +171,12 @@ mod tests {
             username: Username::parse("x-access-token").unwrap(),
         }
     }
+    fn read_cred() -> Credential {
+        Credential {
+            secret_path: SecretPath::parse("/h/.mur/secrets/gh-read").unwrap(),
+            username: Username::parse("reader").unwrap(),
+        }
+    }
 
     #[test]
     fn bind_carries_the_credential_record_from_the_enrollment() {
@@ -176,6 +187,67 @@ mod tests {
             assert_eq!(bound.credential, c);
             assert_eq!(bound.remote_url, "https://git.example.com/o/r.git");
         }
+    }
+
+    #[test]
+    fn bind_carries_the_read_credential_record_from_the_enrollment() {
+        let mut e = Enrollments::empty(100);
+        e.enroll(EnrollRequest {
+            agent: "alice".into(),
+            repo_id: "mur".into(),
+            remote_id: "origin".into(),
+            endpoint: Endpoint::parse("https://git.example.com/o/r.git").unwrap(),
+            ref_prefix: "refs/heads/agent/alice/".into(),
+            creation_base_refs: vec![],
+            credential: Some(cred()),
+            read_credential: Some(read_cred()),
+            new_repo: Some(NewRepo {
+                path: "/work/mur".into(),
+                object_format: ObjectFormat::Sha1,
+            }),
+        })
+        .unwrap();
+        let bound = bind(&e, &build_action(&e, &request()).unwrap()).unwrap();
+        assert_eq!(bound.credential, Some(cred()));
+        assert_eq!(bound.read_credential, Some(read_cred()));
+    }
+
+    /// Spec §7.10: enroll with both, save, reload into a fresh `Enrollments`; the reloaded
+    /// policy and `Bound` carry the same credentials and the policy digest is unchanged.
+    #[test]
+    fn a_split_enrollment_survives_save_and_reload_with_the_same_policy_and_binding() {
+        let mut e = Enrollments::empty(100);
+        e.enroll(EnrollRequest {
+            agent: "alice".into(),
+            repo_id: "mur".into(),
+            remote_id: "origin".into(),
+            endpoint: Endpoint::parse("https://git.example.com/o/r.git").unwrap(),
+            ref_prefix: "refs/heads/agent/alice/".into(),
+            creation_base_refs: vec![],
+            credential: Some(cred()),
+            read_credential: Some(read_cred()),
+            new_repo: Some(NewRepo {
+                path: "/work/mur".into(),
+                object_format: ObjectFormat::Sha1,
+            }),
+        })
+        .unwrap();
+        let before = e.find("alice", "mur", "origin").unwrap().policy();
+        let dir = tempfile::tempdir().unwrap();
+        e.save(dir.path()).unwrap();
+        let back = Enrollments::load(&mur_common::git_push::enrollments_path(dir.path()))
+            .unwrap()
+            .unwrap();
+        let after = back.find("alice", "mur", "origin").unwrap().policy();
+        assert_eq!(after.credential, Some(cred()));
+        assert_eq!(after.read_credential, Some(read_cred()));
+        assert_eq!(after.digest(), before.digest());
+        assert_eq!(after.remote_digest(), before.remote_digest());
+        let doc = build_action(&back, &request()).unwrap();
+        let bound = bind(&back, &doc).unwrap();
+        assert_eq!(bound.credential, after.credential);
+        assert_eq!(bound.read_credential, after.read_credential);
+        assert_eq!(bound.policy, after);
     }
 
     #[test]
