@@ -525,6 +525,14 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                         completion_accept(app);
                         return;
                     }
+                    // A reply chooser offers replies for an empty composer;
+                    // once there is a draft, Enter sends the draft (#2125).
+                    KeyCode::Enter
+                        if app.completion.as_ref().is_some_and(|c| c.spaced)
+                            && !app.input_text().is_empty() =>
+                    {
+                        app.completion = None;
+                    }
                     KeyCode::Enter => {
                         // Enter accepts the candidate; if it is a leaf (no
                         // submenu) we also send right away instead of forcing a

@@ -307,6 +307,43 @@ async fn tab_inserts_the_chip_even_with_the_reply_chooser_open() {
     assert!(a.proposal.is_none());
 }
 
+/// Regression (#2125): Tab inserted the chip's command, but the reply chooser
+/// stayed open and Enter then sent option 1 instead of the command.
+#[tokio::test]
+async fn enter_after_tab_sends_the_inserted_command_not_option_one() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = App::test_fixture();
+    offer(&mut a, shell_chip());
+    chooser(&mut a);
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    assert!(
+        a.completion.is_none(),
+        "chooser closes once the chip is inserted"
+    );
+    assert_eq!(a.input_text(), "!git status");
+}
+
+/// Defence in depth (#2125): a draft in the composer always wins Enter over
+/// a reply chooser that is somehow still open.
+#[tokio::test]
+async fn enter_with_a_draft_never_picks_a_chooser_reply() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = App::test_fixture();
+    chooser(&mut a);
+    a.set_input("my own words");
+    handle_event(&mut a, Event::Key(press(KeyCode::Enter)), &tx).await;
+    assert!(a.completion.is_none());
+    assert_ne!(
+        a.input_text(),
+        "yes",
+        "chooser reply must not replace the draft"
+    );
+    assert!(
+        a.messages.iter().all(|m| m.text != "yes"),
+        "option 1 was never sent"
+    );
+}
+
 #[tokio::test]
 async fn chooser_keeps_enter_and_digits_when_a_chip_is_up() {
     let (tx, _rx) = mpsc::channel(8);
