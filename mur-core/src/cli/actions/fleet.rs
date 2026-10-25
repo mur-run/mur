@@ -244,10 +244,14 @@ pub enum FleetAction {
         /// Fleet name
         name: String,
     },
-    /// Continue a paused fleet run in the foreground, under its original run id
+    /// Continue a paused fleet run under its original run id (foreground unless --detach)
     Resume {
         /// Fleet name
         name: String,
+        /// Continue in a detached child of this shell (own session, stdin
+        /// closed, output to ~/.mur/runs/<run_id>/resume.log) and return
+        #[arg(long)]
+        detach: bool,
     },
     /// Start a fleet: clear the kill-switch
     Start {

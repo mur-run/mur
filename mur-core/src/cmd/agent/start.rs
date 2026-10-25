@@ -313,7 +313,7 @@ fn service_log_hint(name: &str) -> String {
 ///
 /// Shared with `restart`'s crash-loop report: both answer "the start failed,
 /// what does its log say?", and two copies would drift on the line cap.
-pub(super) fn tail_of(path: &std::path::Path, max_bytes: u64) -> String {
+pub(crate) fn tail_of(path: &std::path::Path, max_bytes: u64) -> String {
     let Ok(mut f) = fs::File::open(path) else {
         return "(log not readable)".into();
     };

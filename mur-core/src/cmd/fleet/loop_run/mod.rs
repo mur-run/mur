@@ -30,6 +30,7 @@ mod pause;
 pub(crate) mod pause_events;
 mod preflight;
 pub mod resume;
+pub mod resume_detach;
 pub(crate) mod run_lock;
 mod run_record;
 pub(crate) mod synth;
