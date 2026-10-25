@@ -16,6 +16,7 @@ use mur_common::proposal::Proposal;
 
 use super::browser_live_cmd::LIVE_ENTRY;
 use super::browser_live_preview::render_preview;
+use super::browser_profile_hint::{self as profile_hint, SavedProfile};
 use super::manage::Managed;
 
 pub(super) const ALLOW_USAGE: &str =
@@ -56,6 +57,8 @@ pub(super) trait AllowOps {
     fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<()>;
     /// Dial `egress/grant` on the running agent. `Err` text is shown as-is.
     fn grant_live(&mut self, host: &str, session: bool) -> Result<(), String>;
+    /// Saved `mur browser auth` profiles, for the #2100 hint. Best-effort.
+    fn saved_profiles(&mut self) -> Vec<SavedProfile>;
 }
 
 fn confirm_chip(host: &str) -> Option<Proposal> {
@@ -81,6 +84,7 @@ pub(super) fn run_allow(
         );
     };
     let before = entry.network.clone().unwrap_or_default();
+    let entry = entry.clone();
     match before.mode {
         McpNetMode::Restricted => {}
         McpNetMode::BroadAudited => anyhow::bail!(
@@ -91,26 +95,34 @@ pub(super) fn run_allow(
             "`{LIVE_ENTRY}` is not host-scoped (mode {other:?}); `/browser live <host>` scopes it first"
         ),
     }
+    let mut reachable = before.allow_hosts.clone();
+    if !reachable.contains(&a.host) {
+        reachable.push(a.host.clone());
+    }
     if a.session {
         return match ops.grant_live(&a.host, true) {
-            Ok(()) => Ok((
+            Ok(()) => Ok(with_profile_hint(
                 format!(
                     "`{}` allowed for this session — gone when the agent restarts. \
                      Retry the page; the blocked request itself is not replayed.",
                     a.host
                 ),
-                None,
+                &entry,
+                &reachable,
+                ops,
             )),
             Err(e) => anyhow::bail!("could not allow `{}` on the running agent: {e}", a.host),
         };
     }
     if before.allow_hosts.contains(&a.host) {
-        return Ok((
+        return Ok(with_profile_hint(
             format!(
                 "`{}` is already on the browser's allow-list — nothing changed",
                 a.host
             ),
-            None,
+            &entry,
+            &reachable,
+            ops,
         ));
     }
     let mut after = before.clone();
@@ -148,7 +160,28 @@ pub(super) fn run_allow(
             format!("saved, but the running agent was not reached ({e}) — restart it to apply")
         }
     };
-    Ok((format!("`{}` always allowed: {live}", a.host), None))
+    Ok(with_profile_hint(
+        format!("`{}` always allowed: {live}", a.host),
+        &entry,
+        &reachable,
+        ops,
+    ))
+}
+
+/// Append the #2100 hint: the host is reachable now, but if the entry has
+/// no `--profile` and a saved login covers it, the page will still be the
+/// logged-out one. Only outcome paths call this, never the preview, so the
+/// confirm chip there is never displaced.
+fn with_profile_hint(
+    text: String,
+    entry: &McpServerEntry,
+    hosts: &[String],
+    ops: &mut impl AllowOps,
+) -> Managed {
+    match profile_hint::hint(entry, hosts, &ops.saved_profiles()) {
+        Some(h) => (format!("{text}\n{}", h.text), h.chip),
+        None => (text, None),
+    }
 }
 
 /// Profile- and socket-backed [`AllowOps`].
@@ -188,12 +221,39 @@ impl AllowOps for ProfileAllowOps<'_> {
         .map(|_| ())
         .map_err(|e| format!("{e:#}"))
     }
+    fn saved_profiles(&mut self) -> Vec<SavedProfile> {
+        profile_hint::load_saved_profiles(&self.home)
+    }
 }
 
-/// `/browser status`: the same table as `mur agent network`.
-pub(super) fn run_status(agent: &str) -> anyhow::Result<Managed> {
+/// `/browser status`: the same table as `mur agent network`, plus which
+/// saved login the `browser` entry launches with (#2100).
+pub(super) fn run_status(agent: &str, home: &std::path::Path) -> anyhow::Result<Managed> {
     let (_, p) = crate::cmd::agent::load_profile_for_edit(agent)?;
-    Ok((crate::cmd::agent::network_view::render(&p), None))
+    let table = crate::cmd::agent::network_view::render(&p);
+    Ok(status_tail(
+        table,
+        &p.mcp_servers,
+        &profile_hint::load_saved_profiles(home),
+    ))
+}
+
+/// The profile line and hint under the network table; the table alone when
+/// the agent has no `browser` entry (nothing launches, nothing to attach).
+fn status_tail(table: String, servers: &[McpServerEntry], saved: &[SavedProfile]) -> Managed {
+    let Some(entry) = servers.iter().find(|e| e.name == LIVE_ENTRY) else {
+        return (table, None);
+    };
+    let text = format!("{table}\n{}", profile_hint::status_line(entry));
+    let hosts = entry
+        .network
+        .as_ref()
+        .map(|n| n.allow_hosts.clone())
+        .unwrap_or_default();
+    match profile_hint::hint(entry, &hosts, saved) {
+        Some(h) => (format!("{text}\n{}", h.text), h.chip),
+        None => (text, None),
+    }
 }
 
 #[cfg(test)]

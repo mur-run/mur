@@ -1,3 +1,4 @@
+use super::super::browser_profile_hint::SavedProfile;
 use super::*;
 use mur_common::agent::McpServerNetwork;
 
@@ -7,6 +8,7 @@ struct Fake {
     saved: Option<Vec<McpServerEntry>>,
     live: Vec<(String, bool)>,
     live_err: Option<String>,
+    profiles: Vec<SavedProfile>,
 }
 
 impl AllowOps for Fake {
@@ -20,6 +22,9 @@ impl AllowOps for Fake {
     fn grant_live(&mut self, host: &str, session: bool) -> Result<(), String> {
         self.live.push((host.to_owned(), session));
         self.live_err.clone().map_or(Ok(()), Err)
+    }
+    fn saved_profiles(&mut self) -> Vec<SavedProfile> {
+        self.profiles.clone()
     }
 }
 
@@ -121,4 +126,72 @@ fn already_allowed_is_a_no_op() {
     let (text, chip) = run_allow("mur", &s(&["--yes", "a.example.com"]), &mut f).unwrap();
     assert!(text.contains("nothing changed"), "{text}");
     assert!(f.saved.is_none() && chip.is_none());
+}
+
+fn deepseek() -> Vec<SavedProfile> {
+    vec![SavedProfile {
+        site: "deepseek".into(),
+        domains: s(&["chat.deepseek.com"]),
+    }]
+}
+
+#[test]
+fn allow_hints_at_a_saved_profile_the_entry_does_not_launch_with() {
+    // #2100: `mur browser setup` made the entry sessionless; allowing the
+    // host must say the saved login is not attached, and how to attach it.
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    f.profiles = deepseek();
+    let (text, chip) = run_allow("mur", &s(&["--yes", "chat.deepseek.com"]), &mut f).unwrap();
+    assert!(text.contains("always allowed"), "{text}");
+    assert!(
+        text.contains("/browser live chat.deepseek.com --profile deepseek"),
+        "{text}"
+    );
+    assert!(format!("{chip:?}").contains("--profile deepseek"));
+}
+
+#[test]
+fn allow_hint_also_covers_the_session_and_already_allowed_paths() {
+    let mut f = fake(McpNetMode::Restricted, &["chat.deepseek.com"]);
+    f.profiles = deepseek();
+    let (text, _) = run_allow("mur", &s(&["--yes", "chat.deepseek.com"]), &mut f).unwrap();
+    assert!(text.contains("--profile deepseek"), "{text}");
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    f.profiles = deepseek();
+    let (text, _) = run_allow("mur", &s(&["--session", "chat.deepseek.com"]), &mut f).unwrap();
+    assert!(text.contains("--profile deepseek"), "{text}");
+}
+
+#[test]
+fn allow_stays_quiet_when_the_profile_is_attached_or_unrelated() {
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    f.servers[0].args = s(&["browser", "record", "--profile", "deepseek"]);
+    f.profiles = deepseek();
+    let (text, _) = run_allow("mur", &s(&["--yes", "chat.deepseek.com"]), &mut f).unwrap();
+    assert!(!text.contains("no saved profile"), "{text}");
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    f.profiles = deepseek();
+    let (text, chip) = run_allow("mur", &s(&["--yes", "a.example.com"]), &mut f).unwrap();
+    assert!(!text.contains("no saved profile"), "{text}");
+    assert!(chip.is_none());
+}
+
+#[test]
+fn status_names_the_attached_profile_and_hints_when_none() {
+    let f = fake(McpNetMode::Restricted, &["chat.deepseek.com"]);
+    let (text, chip) = status_tail("TABLE".into(), &f.servers, &deepseek());
+    assert!(text.starts_with("TABLE\nbrowser profile: none"), "{text}");
+    assert!(
+        text.contains("/browser live chat.deepseek.com --profile deepseek"),
+        "{text}"
+    );
+    assert!(chip.is_some());
+    let mut f = fake(McpNetMode::Restricted, &["chat.deepseek.com"]);
+    f.servers[0].args = s(&["--profile", "deepseek"]);
+    let (text, chip) = status_tail("TABLE".into(), &f.servers, &deepseek());
+    assert_eq!(text, "TABLE\nbrowser profile: `deepseek`");
+    assert!(chip.is_none());
+    // No browser entry: the table alone.
+    let (text, _) = status_tail("TABLE".into(), &[], &deepseek());
+    assert_eq!(text, "TABLE");
 }
