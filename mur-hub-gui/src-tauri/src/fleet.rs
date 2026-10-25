@@ -239,8 +239,7 @@ pub fn fleet_list() -> Result<Vec<FleetSummary>, String> {
                 active_jobs,
                 stopped,
                 // A goal-mode loop queues no job but holds the run lock.
-                running: !stopped
-                    && (active_jobs > 0 || crate::fleet_pause::pausable(&name)),
+                running: !stopped && (active_jobs > 0 || crate::fleet_pause::pausable(&name)),
                 pause: crate::fleet_pause::phase_str(&name),
                 labels: registry.labels_of(&fleet.name).to_vec(),
             });
