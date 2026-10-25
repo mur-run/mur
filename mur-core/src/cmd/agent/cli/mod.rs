@@ -111,7 +111,8 @@ use tokio::time::Instant as TokioInstant;
 
 use self::app::{
     App, ChannelRef, ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, RenderMode, ReviewEsc, Role,
-    SlashCmd, arm_input_debounce, esc_action, overlay_key_action, parse_slash, take_due_input,
+    SlashCmd, apply_overlay_scroll, arm_input_debounce, esc_action, overlay_key_action,
+    parse_slash, take_due_input,
 };
 use self::persist::Session;
 use self::shell::{ShellRoute, route_shell_output, shell_block};
@@ -449,6 +450,7 @@ fn scrollback_dump(app: &mut App) {
     let path = std::env::temp_dir().join(format!("mur-transcript-{}.txt", app.agent));
     let _ = std::fs::write(&path, &text);
     app.overlay_text = Some(text);
+    app.overlay_scroll = 0;
     app.overlay_open = true;
     // Heavy overlay → borrow the alt-screen. `sync_surface` performs the
     // actual EnterAlternateScreen before the next draw.

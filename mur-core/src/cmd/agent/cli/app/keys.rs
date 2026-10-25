@@ -102,20 +102,56 @@ pub enum OverlayKeyAction {
     Close,
     /// Close the overlay, then request the app quit (Ctrl+D while reading).
     CloseAndQuit,
+    /// Move the overlay viewport; the overlay stays open.
+    Scroll(OverlayScroll),
     /// Swallow the key — never inserted into the composer.
     Ignore,
 }
 
-/// Pure function — no IO, fully testable. The transcript overlay only
-/// recognises Esc/Enter (return to chat) and Ctrl+D (quit); every other key
-/// is swallowed so it can never leak into the input box once the overlay
-/// closes.
+/// One viewport move inside the transcript overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayScroll {
+    LineUp,
+    LineDown,
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+}
+
+/// Pure function — no IO, fully testable. The transcript overlay recognises
+/// Esc/Enter (return to chat), Ctrl+D (quit) and the scroll keys (↑↓ / k j,
+/// PgUp PgDn / Space b, Home End / g G); every other key is swallowed so it
+/// can never leak into the input box once the overlay closes.
 pub fn overlay_key_action(code: KeyCode, modifiers: KeyModifiers) -> OverlayKeyAction {
     if code == KeyCode::Char('d') && modifiers.contains(KeyModifiers::CONTROL) {
         return OverlayKeyAction::CloseAndQuit;
     }
     match code {
         KeyCode::Esc | KeyCode::Enter => OverlayKeyAction::Close,
+        _ if modifiers.contains(KeyModifiers::CONTROL) => OverlayKeyAction::Ignore,
+        KeyCode::Up | KeyCode::Char('k') => OverlayKeyAction::Scroll(OverlayScroll::LineUp),
+        KeyCode::Down | KeyCode::Char('j') => OverlayKeyAction::Scroll(OverlayScroll::LineDown),
+        KeyCode::PageUp | KeyCode::Char('b') => OverlayKeyAction::Scroll(OverlayScroll::PageUp),
+        KeyCode::PageDown | KeyCode::Char(' ') => OverlayKeyAction::Scroll(OverlayScroll::PageDown),
+        KeyCode::Home | KeyCode::Char('g') => OverlayKeyAction::Scroll(OverlayScroll::Top),
+        KeyCode::End | KeyCode::Char('G') => OverlayKeyAction::Scroll(OverlayScroll::Bottom),
         _ => OverlayKeyAction::Ignore,
+    }
+}
+
+/// New overlay offset after `step`. The offset counts lines up from the
+/// bottom (0 = newest, the view the overlay opens on), matching the main
+/// transcript's `scroll_back`. `page` is the visible text height; `Top`
+/// saturates and the renderer clamps it to the real maximum.
+pub fn apply_overlay_scroll(offset: u16, step: OverlayScroll, page: u16) -> u16 {
+    let page = page.max(1);
+    match step {
+        OverlayScroll::LineUp => offset.saturating_add(1),
+        OverlayScroll::LineDown => offset.saturating_sub(1),
+        OverlayScroll::PageUp => offset.saturating_add(page),
+        OverlayScroll::PageDown => offset.saturating_sub(page),
+        OverlayScroll::Top => u16::MAX,
+        OverlayScroll::Bottom => 0,
     }
 }

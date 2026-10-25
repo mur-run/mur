@@ -356,6 +356,10 @@ pub(super) async fn handle_event(app: &mut App, ev: Event, tx: &mpsc::Sender<Str
                         leave_fullscreen(app);
                         request_quit(app, tx);
                     }
+                    OverlayKeyAction::Scroll(step) => {
+                        app.overlay_scroll =
+                            apply_overlay_scroll(app.overlay_scroll, step, app.overlay_page);
+                    }
                     OverlayKeyAction::Ignore => {}
                 }
                 return;

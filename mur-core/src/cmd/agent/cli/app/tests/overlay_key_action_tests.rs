@@ -1,6 +1,7 @@
 //! `overlay_key_action_tests`, one module per file so no file passes CLAUDE.md §4's
 //! 800-line rule. Pure movement: dedented by one level, nothing else.
 
+use super::super::keys::OverlayScroll;
 use super::super::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -45,11 +46,52 @@ fn other_chars_are_ignored_never_inserted() {
 }
 
 #[test]
-fn arrow_keys_are_ignored() {
+fn scroll_keys_map_to_scroll_steps() {
+    use OverlayScroll::*;
+    for (code, step) in [
+        (KeyCode::Up, LineUp),
+        (KeyCode::Char('k'), LineUp),
+        (KeyCode::Down, LineDown),
+        (KeyCode::Char('j'), LineDown),
+        (KeyCode::PageUp, PageUp),
+        (KeyCode::Char('b'), PageUp),
+        (KeyCode::PageDown, PageDown),
+        (KeyCode::Char(' '), PageDown),
+        (KeyCode::Home, Top),
+        (KeyCode::Char('g'), Top),
+        (KeyCode::End, Bottom),
+        (KeyCode::Char('G'), Bottom),
+    ] {
+        assert_eq!(
+            overlay_key_action(code, KeyModifiers::NONE),
+            OverlayKeyAction::Scroll(step),
+            "{code:?}"
+        );
+    }
+}
+
+#[test]
+fn ctrl_letters_never_scroll() {
     assert_eq!(
-        overlay_key_action(KeyCode::Down, KeyModifiers::NONE),
+        overlay_key_action(KeyCode::Char('k'), KeyModifiers::CONTROL),
         OverlayKeyAction::Ignore
     );
+}
+
+#[test]
+fn scroll_offset_counts_up_from_bottom() {
+    assert_eq!(apply_overlay_scroll(0, OverlayScroll::LineUp, 20), 1);
+    assert_eq!(apply_overlay_scroll(0, OverlayScroll::LineDown, 20), 0);
+    assert_eq!(apply_overlay_scroll(5, OverlayScroll::PageUp, 20), 25);
+    assert_eq!(apply_overlay_scroll(5, OverlayScroll::PageDown, 20), 0);
+    assert_eq!(apply_overlay_scroll(5, OverlayScroll::Top, 20), u16::MAX);
+    assert_eq!(apply_overlay_scroll(500, OverlayScroll::Bottom, 20), 0);
+}
+
+#[test]
+fn zero_page_still_moves_one_line() {
+    // Before the first render `overlay_page` is 0; PgUp must not be a no-op.
+    assert_eq!(apply_overlay_scroll(0, OverlayScroll::PageUp, 0), 1);
 }
 
 #[test]

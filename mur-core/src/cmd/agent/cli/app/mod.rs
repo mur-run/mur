@@ -261,6 +261,12 @@ pub struct App {
     /// Plain-text transcript rendered full-screen while `overlay_open` is
     /// true. `None` when the overlay is closed.
     pub overlay_text: Option<String>,
+    /// Overlay viewport offset in lines up from the bottom (0 = newest).
+    /// Separate from `scroll_back` so reading the overlay never moves the
+    /// chat pane underneath it.
+    pub overlay_scroll: u16,
+    /// Overlay text rows, captured each render so PgUp/PgDn move a screenful.
+    pub overlay_page: u16,
     /// Armed-at timestamp for the Ctrl+C two-press-to-quit confirmation when
     /// the composer is empty and idle. Mirrors `last_esc_at`.
     pub last_ctrl_c_at: Option<std::time::Instant>,
@@ -494,6 +500,8 @@ impl App {
             flushed_raw: false,
             overlay_open: false,
             overlay_text: None,
+            overlay_scroll: 0,
+            overlay_page: 0,
             last_ctrl_c_at: None,
             ctrl_c_hint: false,
             shell: Default::default(),
@@ -760,7 +768,8 @@ mod slash;
 mod transcript;
 mod usage;
 pub(super) use keys::{
-    ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, ReviewEsc, esc_action, overlay_key_action,
+    ESC_DOUBLE_WINDOW, EscAction, OverlayKeyAction, ReviewEsc, apply_overlay_scroll, esc_action,
+    overlay_key_action,
 };
 pub(super) use msg::{ChatMsg, Role, Severity};
 pub(super) use slash::{BARE_SLASH_HINT, ChannelRef, SlashCmd, is_bare_slash, parse_slash};
