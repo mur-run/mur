@@ -323,6 +323,38 @@ async fn enter_after_tab_sends_the_inserted_command_not_option_one() {
     assert_eq!(a.input_text(), "!git status");
 }
 
+/// #2125, end to end: Tab then Enter must reach the `!command` execution
+/// path. The chip's command needs the real terminal, so `submit` parks a
+/// handover request instead of spawning anything — observable, and harmless.
+#[tokio::test]
+async fn tab_then_enter_submits_the_chip_command() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = App::test_fixture();
+    let cmd = "mur channel repair";
+    offer(
+        &mut a,
+        Proposal {
+            label: "repair".into(),
+            kind: ProposalKind::Shell(cmd.into()),
+        },
+    );
+    chooser(&mut a);
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    handle_event(&mut a, Event::Key(press(KeyCode::Enter)), &tx).await;
+    let bang = format!("!{cmd}");
+    assert_eq!(
+        a.pending_handover.as_ref().map(|h| h.label.as_str()),
+        Some(bang.as_str()),
+        "Enter ran the inserted command"
+    );
+    assert_eq!(a.sent_history.last(), Some(&bang));
+    assert!(a.input_text().is_empty(), "the draft was consumed");
+    assert!(
+        a.messages.iter().all(|m| m.text != "yes"),
+        "option 1 was never sent"
+    );
+}
+
 /// Defence in depth (#2125): a draft in the composer always wins Enter over
 /// a reply chooser that is somehow still open.
 #[tokio::test]
