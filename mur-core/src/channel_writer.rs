@@ -663,4 +663,53 @@ mod tests {
             "handoff path must not even touch channel-heads/"
         );
     }
+    /// #2116 regression: the daemon launches a fleet whose router is NOT the
+    /// agent that asked for it, from outside every sandbox and with no stdin
+    /// handoff. Its writes must be signed by the ROUTER (read from disk) and
+    /// verify under signature enforcement — never fall to "writing UNSIGNED".
+    #[test]
+    fn a_cross_router_run_outside_the_seal_signs_as_the_router() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let router_home = home.join("agents").join("orchestrator");
+        std::fs::create_dir_all(&router_home).unwrap();
+        let router = AgentIdentity::generate();
+        router.save(&router_home).unwrap();
+        // The requester has a key too; it must NOT be the one that signs.
+        let requester_home = home.join("agents").join("mur");
+        std::fs::create_dir_all(&requester_home).unwrap();
+        AgentIdentity::generate().save(&requester_home).unwrap();
+
+        let key = writer_key(home, "orchestrator")
+            .unwrap()
+            .expect("router key");
+        assert!(matches!(key.source, KeySource::Disk), "no handoff in play");
+        assert_eq!(
+            key.id.verifying_key_bytes(),
+            router.verifying_key_bytes(),
+            "signed by the router, not the requester"
+        );
+
+        let svc = ChannelService::open(home).unwrap();
+        let ch = svc.create_for_workflow("council").unwrap();
+        let actor = ChannelActor::Agent {
+            id: "orchestrator".into(),
+        };
+        let ev = append_as_writer(
+            &svc,
+            home,
+            &ch.id,
+            "orchestrator",
+            actor,
+            EventKind::Message,
+            serde_json::json!({"text": "verdict"}),
+            None,
+        )
+        .unwrap();
+        assert!(ev.sig.is_some(), "a cross-router event must be signed");
+        assert!(
+            crate::channel_verify::verify_event(home, &ch.id, &ev, true),
+            "and verify with MUR_CHANNEL_REQUIRE_SIG semantics"
+        );
+    }
 }

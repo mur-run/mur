@@ -256,6 +256,32 @@ pub struct FleetRunConfig {
     pub fleets: Vec<String>,
 }
 
+/// Daemon-side settings for cross-router fleet dispatch (#2116). Stored under
+/// `fleet_dispatch:` in `~/.mur/config.yaml`; an absent block means defaults.
+/// WHO may dispatch WHAT is still [`FleetRunConfig`] — this only tunes timing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FleetDispatchConfig {
+    /// How often the daemon sweeps `inbox/fleet-dispatch-requests/`, in seconds.
+    /// Short by default: an agent is waiting on the run it just dispatched.
+    pub poll_secs: u64,
+    /// Reject requests older than this (replay blunting), in seconds.
+    pub request_max_age_secs: u64,
+    /// A daemon heartbeat older than this is treated as "daemon down" by the
+    /// requesting agent, which then refuses instead of queueing into nothing.
+    pub heartbeat_stale_secs: u64,
+}
+
+impl Default for FleetDispatchConfig {
+    fn default() -> Self {
+        Self {
+            poll_secs: 3,
+            request_max_age_secs: 300,
+            heartbeat_stale_secs: 60,
+        }
+    }
+}
+
 /// Gate for the git push broker (`git_push:` in `~/.mur/config.yaml`).
 /// Deny-by-default on BOTH axes, like [`FleetRunConfig`]: `enabled` is the
 /// broker-wide switch (off: the daemon sweeper does not run and no agent gets

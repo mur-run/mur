@@ -5,7 +5,7 @@ const PROGRESS_STALE_AFTER_SECS: u64 = 600;
 
 /// Return the active run id when this fleet's single progress slot still
 /// describes a fresh, unfinished run. Corrupt or old files are inert.
-pub(super) fn live_run_id(mur_home: &std::path::Path, fleet: &str) -> Option<String> {
+pub fn live_run_id(mur_home: &std::path::Path, fleet: &str) -> Option<String> {
     let path = mur_common::paths::fleet_state_dir(mur_home, fleet)
         .join(mur_common::paths::FLEET_PROGRESS_FILE);
     let body = std::fs::read(&path).ok()?;

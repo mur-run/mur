@@ -9,6 +9,7 @@
 //! pulling LanceDB + Arrow into every agent process.
 
 pub mod backend;
+pub mod fleet_dispatch_request;
 pub mod snapshot_request;
 pub mod turn;
 pub mod zfs_protocol;

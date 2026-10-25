@@ -290,6 +290,10 @@ pub struct Config {
     #[serde(default)]
     pub fleet_run: FleetRunConfig,
 
+    /// Daemon-side dispatch of cross-router fleets (`fleet_dispatch:`, #2116).
+    #[serde(default)]
+    pub fleet_dispatch: FleetDispatchConfig,
+
     // --- git push broker (agent-side tools + daemon sweeper) ---
     #[serde(default)]
     pub git_push: GitPushConfig,
