@@ -485,11 +485,13 @@ pub async fn capture_storage_state(url: &str, browser: &str) -> Result<Vec<u8>> 
     let output_arg = format!("--output-dir={}", output.display());
     let browser_arg = format!("--browser={browser}");
     // @playwright/mcp runs headed by default; its CLI has no `--headed` flag.
-    let mut child = match playwright_command(&["--isolated".into(), browser_arg, output_arg])
-        .and_then(|mut cmd| {
-            cmd.spawn()
-                .context("spawn headed Playwright MCP server (is `node` on PATH and in the spawn allowlist?)")
-        }) {
+    let mut args = vec!["--isolated".into(), browser_arg, output_arg];
+    args.extend(crate::chromium::system_headed_extra_args(browser));
+    let mut child = match playwright_command(&args).and_then(|mut cmd| {
+        cmd.spawn().context(
+            "spawn headed Playwright MCP server (is `node` on PATH and in the spawn allowlist?)",
+        )
+    }) {
         Ok(child) => child,
         Err(error) => {
             // No state exists yet, but do not leave private scratch directories

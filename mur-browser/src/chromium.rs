@@ -140,8 +140,9 @@ pub fn headless_exe_args(browsers: Option<&Path>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Env var holding extra `@playwright/mcp` launch flags for headless
-/// launches, split like a shell command line so a quoted value with spaces
+/// Env var holding extra `@playwright/mcp` launch flags for Chromium
+/// launches (headless ones, plus a headed `mur browser auth` on a
+/// Chromium-family engine), split like a shell command line so a quoted value with spaces
 /// (`--user-agent="Mozilla/5.0 (...)"`) stays one argument. A sandboxed host
 /// needs `--no-sandbox` (Chromium's own sandbox cannot start inside an outer
 /// one), and there is otherwise no way to reach the browser command line
@@ -188,6 +189,32 @@ pub fn launch_extra_args(raw: Option<&str>, sealed: bool) -> Vec<String> {
 /// [`launch_extra_args`] for this process's environment.
 pub fn system_extra_args() -> Vec<String> {
     launch_extra_args(
+        std::env::var(EXTRA_ARGS_ENV).ok().as_deref(),
+        sealed_marker(std::env::var(SEALED_ENV).ok().as_deref()),
+    )
+}
+
+/// Playwright `--browser` names that launch a Chromium build. Only these take
+/// [`EXTRA_ARGS_ENV`]: it holds Chromium flags, and Firefox has no Chromium
+/// sandbox to stand down.
+const CHROMIUM_FAMILY: [&str; 3] = ["chromium", "chrome", "msedge"];
+
+/// Extra flags for a headed `mur browser auth` launch of `browser`: the same
+/// [`launch_extra_args`] every headless launch gets, for Chromium-family
+/// engines only. No `--executable-path` — the headless shell has no window
+/// for a human to sign in through.
+pub fn headed_extra_args(browser: &str, raw: Option<&str>, sealed: bool) -> Vec<String> {
+    if CHROMIUM_FAMILY.contains(&browser) {
+        launch_extra_args(raw, sealed)
+    } else {
+        Vec::new()
+    }
+}
+
+/// [`headed_extra_args`] for this process's environment.
+pub fn system_headed_extra_args(browser: &str) -> Vec<String> {
+    headed_extra_args(
+        browser,
         std::env::var(EXTRA_ARGS_ENV).ok().as_deref(),
         sealed_marker(std::env::var(SEALED_ENV).ok().as_deref()),
     )
@@ -330,6 +357,23 @@ mod tests {
             launch_extra_args(Some("--disable-gpu"), false),
             ["--disable-gpu"]
         );
+    }
+
+    #[test]
+    fn headed_chromium_family_gets_the_extra_args() {
+        for browser in CHROMIUM_FAMILY {
+            assert_eq!(
+                headed_extra_args(browser, Some("--disable-gpu"), true),
+                ["--no-sandbox", "--disable-gpu"],
+                "{browser}"
+            );
+        }
+        assert!(headed_extra_args("chromium", None, false).is_empty());
+    }
+
+    #[test]
+    fn headed_firefox_launches_untouched() {
+        assert!(headed_extra_args("firefox", Some("--disable-gpu"), true).is_empty());
     }
 
     #[test]
