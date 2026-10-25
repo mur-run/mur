@@ -544,6 +544,18 @@ Agent** wizard offers the same catalog as a source.
   entries that are not hostnames (a sentence pasted into `/browser live`, say);
   `mur doctor --fix` previews and removes them, and flags a server left with no
   hosts instead of quietly changing its mode.
+- **A remote MCP server's credential stays with its own host** — each remote
+  (HTTP) MCP server's client may only reach the host in its `url` and its
+  OAuth token endpoint, fixed when it connects. Its bearer token is never sent
+  anywhere else, including after a redirect, on the session-close request, or
+  during a token refresh; loopback is admitted only when the server's own
+  `url` is on loopback. **Behavior changes:** a server that redirects to a host
+  outside that set now fails to connect, even when the agent's outbound mode
+  is unrestricted; and an agent with `network.outbound.mode: off` now refuses
+  to connect its remote MCP servers, saying why, instead of letting them
+  through. `mur agent doctor` lists every enabled remote server on an `off`
+  agent with the fix: set the mode to `restricted` (each server's own host is
+  still admitted for its client) or disable the server.
 - **Grant a host when it is blocked** — when the browser is refused a host, the
   chat shows *this time* / *always* / *no* choices after the turn. *This time*
   lets it through until the agent restarts and writes nothing; *always* shows
