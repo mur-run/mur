@@ -65,7 +65,15 @@ pub fn find_latest_run_for_channel(
 /// `job::print_status` renderer.
 pub fn cmd_fleet_status(mur_home: &Path, name: &str, out: &mut dyn std::io::Write) -> Result<()> {
     let fleet = super::store::load_fleet(mur_home, name)?;
-    let Some(status) = find_latest_run_for_channel(mur_home, &fleet.channel_id)? else {
+    let pause_target = super::control::paused_run_id(mur_home, name);
+    let targeted = pause_target
+        .as_deref()
+        .and_then(|id| pause_targeted_run(mur_home, &fleet.channel_id, id));
+    let latest = match targeted {
+        Some(status) => Some(status),
+        None => find_latest_run_for_channel(mur_home, &fleet.channel_id)?,
+    };
+    let Some(status) = latest else {
         anyhow::bail!(
             "no run recorded for fleet `{name}` (channel `{}`) — try `mur fleet run {name}`",
             fleet.channel_id
@@ -73,7 +81,6 @@ pub fn cmd_fleet_status(mur_home: &Path, name: &str, out: &mut dyn std::io::Writ
     };
     crate::cmd::job::print_status(out, &status);
     crate::cmd::job::print_paused(out, mur_home, &status);
-    let pause_target = super::control::paused_run_id(mur_home, name);
     if let Some(note) = pausing_note(
         pause_target.as_deref(),
         super::control::is_stopped(mur_home, name),
@@ -82,6 +89,35 @@ pub fn cmd_fleet_status(mur_home: &Path, name: &str, out: &mut dyn std::io::Writ
         let _ = writeln!(out, "{note}");
     }
     Ok(())
+}
+
+/// The run the pause sentinel names, when it is this fleet's and not over.
+///
+/// The sentinel names the OUTER loop run, and the outer record has no sidecar
+/// (`loop_run/run_record.rs`), so [`find_latest_run_for_channel`] only ever
+/// finds an iteration: its id never matches the sentinel and its record holds
+/// none of the outer checkpoint's spend. Read the named record directly. A
+/// stale sentinel (another channel, a finished run, an unreadable record)
+/// yields `None`, and the sidecar lookup answers as before.
+fn pause_targeted_run(
+    mur_home: &Path,
+    channel_id: &str,
+    run_id: &str,
+) -> Option<crate::run_status::RunStatus> {
+    let status = match crate::run_status::status_of(mur_home, run_id) {
+        Ok(Some(status)) => status,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(
+                run_id,
+                error = format!("{error:#}"),
+                "unreadable record for the pause-targeted run — showing the fleet's latest instead"
+            );
+            return None;
+        }
+    };
+    (status.run.channel_id.as_deref() == Some(channel_id) && !status.state.is_terminal())
+        .then_some(status)
 }
 
 /// The "pausing…" line (pause/resume design §5.5): `.paused` names this run
@@ -354,6 +390,68 @@ mod tests {
         let text = status_text(mur_home);
         assert!(text.contains("state     paused\n"), "{text}");
         assert!(!text.contains("pausing"), "{text}");
+    }
+
+    /// Production layout (§5.5): the sentinel names the OUTER run, which has
+    /// no sidecar; the newest sidecar-indexed run is an iteration. Status must
+    /// follow the sentinel to the outer record, so the pending pause reads
+    /// "pausing…" and, once paused, the outer checkpoint's spend shows.
+    #[test]
+    fn fleet_status_follows_the_sentinel_to_the_sidecarless_outer_run() {
+        use crate::cmd::fleet::loop_run::checkpoint;
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        super::super::store::save_fleet(mur_home, &sample_fleet("dev", "fleet-dev")).unwrap();
+        let start = chrono::Utc::now() - chrono::Duration::minutes(10);
+        // The outer loop record: as `run_record::open` writes it, no sidecar.
+        store::save(
+            mur_home,
+            &RunState {
+                schema: RUN_SCHEMA,
+                run_id: "r".to_string(),
+                channel_id: Some("fleet-dev".to_string()),
+                kind: RunKind::Fleet,
+                label: "fleet dev loop".to_string(),
+                pid: std::process::id(),
+                started_at: start,
+                last_heartbeat_at: Some(chrono::Utc::now()),
+                state: State::Running,
+                steps: vec![],
+                blocked_on: None,
+                binary_version: "0.0.0-test".to_string(),
+                build_sha: "deadbee".to_string(),
+            },
+        )
+        .unwrap();
+        // The current iteration, sidecar-indexed and newer.
+        save_run(mur_home, "r-3", "fleet-dev", chrono::Utc::now());
+        store::update(mur_home, "r-3", |r| r.state = State::Running).unwrap();
+
+        request_pause(mur_home, "dev", "r");
+        let text = status_text(mur_home);
+        assert!(text.contains("pause     requested — pausing…"), "{text}");
+
+        store::update(mur_home, "r", |r| r.state = State::Paused).unwrap();
+        checkpoint::save(mur_home, &checkpoint::sample_for_test("r")).unwrap();
+        let text = status_text(mur_home);
+        assert!(text.contains("state     paused\n"), "{text}");
+        assert!(text.contains("$1.84 of $5.00"), "{text}");
+        assert!(text.contains("`mur fleet resume dev`"), "{text}");
+    }
+
+    /// A sentinel naming a finished run is stale: status falls back to the
+    /// sidecar lookup instead of resurrecting the old record.
+    #[test]
+    fn a_stale_sentinel_for_a_finished_run_falls_back_to_the_latest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        super::super::store::save_fleet(mur_home, &sample_fleet("dev", "fleet-dev")).unwrap();
+        let base = chrono::Utc::now();
+        save_run(mur_home, "run-old", "fleet-dev", base - chrono::Duration::hours(1));
+        save_run(mur_home, "run-new", "fleet-dev", base);
+        request_pause(mur_home, "dev", "run-old");
+        let text = status_text(mur_home);
+        assert!(text.contains("run-new"), "{text}");
     }
 
     /// A stale sentinel for another run, or one that lost to `stop`, never

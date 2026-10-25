@@ -185,19 +185,36 @@ pub fn paused_line(mur_home: &Path, s: &RunStatus) -> Option<String> {
         return None;
     }
     use crate::cmd::fleet::loop_run::checkpoint;
-    let fleet = &s.run.label;
+    // Never the record's `label`: it is display text (`fleet <name> loop`),
+    // and a command built from it does not run.
+    let stop_hint = |what: String| match fleet_of_record(mur_home, s) {
+        Some(fleet) => format!("{what} — `mur fleet stop {fleet}` discards the run"),
+        None => format!("{what} — the run's fleet could not be resolved"),
+    };
     Some(match checkpoint::load(mur_home, &s.run.run_id) {
         Ok(Some(cp)) => format!(
-            "{} — `mur fleet resume {fleet}` continues it",
-            checkpoint::summary_line(&cp)
+            "{} — `mur fleet resume {}` continues it",
+            checkpoint::summary_line(&cp),
+            cp.fleet
         ),
-        Ok(None) => {
-            format!("no checkpoint to resume from — `mur fleet stop {fleet}` discards the run")
-        }
-        Err(e) => {
-            format!("unreadable checkpoint ({e:#}) — `mur fleet stop {fleet}` discards the run")
-        }
+        Ok(None) => stop_hint("no checkpoint to resume from".to_string()),
+        Err(e) => stop_hint(format!("unreadable checkpoint ({e:#})")),
     })
+}
+
+/// The fleet a run record belongs to, resolved from its channel: the persisted
+/// fleet whose `channel_id` it is, else the `fleet-<name>` convention. `None`
+/// when the record names no channel or the channel names no fleet.
+fn fleet_of_record(mur_home: &Path, s: &RunStatus) -> Option<String> {
+    let channel = s.run.channel_id.as_deref()?;
+    let store = crate::cmd::fleet::store::list_fleets(mur_home).unwrap_or_default();
+    store
+        .into_iter()
+        .find(|name| {
+            crate::cmd::fleet::store::load_fleet(mur_home, name)
+                .is_ok_and(|f| f.channel_id == channel)
+        })
+        .or_else(|| mur_common::fleet::fleet_name_from_channel_id(channel).map(str::to_string))
 }
 
 /// Write [`paused_line`] under the `print_status` block, when there is one.
@@ -342,7 +359,8 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let mut s = status(State::Paused, 0, None);
         s.run.kind = RunKind::Fleet;
-        s.run.label = "dev".into();
+        s.run.label = "fleet dev loop".into();
+        s.run.channel_id = Some("fleet-dev".into());
 
         let line = paused_line(home.path(), &s).unwrap();
         assert!(line.contains("no checkpoint"), "{line}");
@@ -369,6 +387,44 @@ mod tests {
         s.state = State::Paused;
         s.run.kind = RunKind::Job;
         assert!(paused_line(home.path(), &s).is_none());
+    }
+
+    /// The recovery commands name the fleet, never the record's display label:
+    /// a real outer-loop record is labelled `fleet <name> loop`
+    /// (`loop_run/run_record.rs`), and `mur fleet resume fleet dev loop` is not
+    /// a command. With a checkpoint the name is `cp.fleet`; without one it is
+    /// resolved from the record's channel.
+    #[test]
+    fn paused_line_names_the_fleet_not_the_production_label() {
+        use crate::cmd::fleet::loop_run::checkpoint;
+        let home = tempfile::tempdir().unwrap();
+        let mut s = status(State::Paused, 0, None);
+        s.run.kind = RunKind::Fleet;
+        s.run.label = "fleet dev loop".into();
+        s.run.channel_id = Some("fleet-dev".into());
+
+        let line = paused_line(home.path(), &s).unwrap();
+        assert!(line.contains("`mur fleet stop dev`"), "{line}");
+        assert!(!line.contains("fleet dev loop"), "{line}");
+
+        checkpoint::save(home.path(), &checkpoint::sample_for_test("r")).unwrap();
+        let line = paused_line(home.path(), &s).unwrap();
+        assert!(line.contains("`mur fleet resume dev`"), "{line}");
+        assert!(!line.contains("fleet dev loop"), "{line}");
+    }
+
+    /// No checkpoint and no channel that names a fleet: say the fleet could
+    /// not be resolved instead of printing a command built from the label.
+    #[test]
+    fn paused_line_without_a_resolvable_fleet_names_no_command() {
+        let home = tempfile::tempdir().unwrap();
+        let mut s = status(State::Paused, 0, None);
+        s.run.kind = RunKind::Fleet;
+        s.run.label = "fleet dev loop".into();
+        s.run.channel_id = None;
+        let line = paused_line(home.path(), &s).unwrap();
+        assert!(line.contains("no checkpoint"), "{line}");
+        assert!(!line.contains("mur fleet stop"), "{line}");
     }
 
     /// `print_status` is the shared renderer for `mur job status` AND

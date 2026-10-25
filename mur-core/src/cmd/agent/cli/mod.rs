@@ -266,7 +266,7 @@ fn help_text() -> String {
         "  memory    /remember <text> (when relevant) · /instruct <text> (every turn) · /memories · /forget <name|last>",
         "            /pin <name> · /unpin <name> · /instruct-edit <name> <text>",
         "  review    /review --main <agent> --reviewer <agent> <task…> (main/reviewer loop in this pane) · /review resume <session> · /review (paused sessions)",
-        "  research  /deep-research [question|status|stop|setup]  run the research fleet (/research)",
+        "  research  /deep-research [question|status|stop|pause|resume|setup]  run the research fleet (/research)",
         "  search    /search <query> [--all] [--limit N] [--lines N] [--send] · /search --expand <id>[,<id>] (full content for a hit)",
         "  more      /panel [tab] (Hub companion window) · /help · /quit (or /exit)",
         "  !cmd      run a local shell command; its output is sent to the agent as your message · Tab completes commands and paths",

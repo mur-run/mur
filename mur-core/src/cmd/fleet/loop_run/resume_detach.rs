@@ -66,7 +66,7 @@ fn child_command(exe: &Path, mur_home: &Path, name: &str, log: &std::fs::File) -
 /// What the confirm window saw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Startup {
-    /// The child holds the run lock: the run is live.
+    /// OUR child holds the run lock: the run is live.
     Running,
     /// The child exited inside the window.
     Exited(ExitStatus),
@@ -74,15 +74,20 @@ enum Startup {
     Unconfirmed,
 }
 
-fn watch_startup(child: &mut Child, mur_home: &Path, name: &str) -> Startup {
-    let deadline = Instant::now() + CONFIRM_WINDOW;
+/// Watch the spawned child until it takes the run lock, exits, or `window`
+/// elapses. The lock must be held by THIS child's pid: two resumes can pass
+/// admission together, and the loser's child must not borrow the winner's lock
+/// as its own start — it exits on the refused lock and reads as `Exited`.
+fn watch_startup(child: &mut Child, mur_home: &Path, name: &str, window: Duration) -> Startup {
+    let pid = child.id();
+    let deadline = Instant::now() + window;
     loop {
         // Exit first: a run that finished inside the window released the lock
         // already, and a child that died must never read as running.
         if let Ok(Some(status)) = child.try_wait() {
             return Startup::Exited(status);
         }
-        if run_lock::is_held(mur_home, name) {
+        if run_lock::is_held_by(mur_home, name, pid) {
             return Startup::Running;
         }
         if Instant::now() >= deadline {
@@ -122,22 +127,24 @@ pub fn resume_detached(mur_home: &Path, name: &str, exe: &Path) -> Result<String
     let pid = child.id();
     let log_shown = log_path.display();
     let run_id = &cp.run_id;
-    Ok(match watch_startup(&mut child, mur_home, name) {
-        Startup::Running => format!(
-            "Resumed fleet '{name}' (run {run_id}) in the background, pid {pid}.\n  log:    {log_shown}\n  watch:  mur fleet status {name}\n  pause:  mur fleet pause {name}   stop: mur fleet stop {name}"
-        ),
-        Startup::Exited(status) if status.success() => {
-            format!("Fleet '{name}' (run {run_id}) resumed and already ended — see {log_shown}")
-        }
-        Startup::Exited(status) => bail!(
-            "the detached resume of '{name}' exited during startup ({status}).\n--- last lines of {log_shown} ---\n{}",
-            crate::cmd::agent::start::tail_of(&log_path, LOG_TAIL_BYTES)
-        ),
-        Startup::Unconfirmed => format!(
-            "Resuming fleet '{name}' (run {run_id}) in the background, pid {pid} — not confirmed within {}s.\n  Check `mur fleet status {name}` or `tail {log_shown}`.",
-            CONFIRM_WINDOW.as_secs()
-        ),
-    })
+    Ok(
+        match watch_startup(&mut child, mur_home, name, CONFIRM_WINDOW) {
+            Startup::Running => format!(
+                "Resumed fleet '{name}' (run {run_id}) in the background, pid {pid}.\n  log:    {log_shown}\n  watch:  mur fleet status {name}\n  pause:  mur fleet pause {name}   stop: mur fleet stop {name}"
+            ),
+            Startup::Exited(status) if status.success() => {
+                format!("Fleet '{name}' (run {run_id}) resumed and already ended — see {log_shown}")
+            }
+            Startup::Exited(status) => bail!(
+                "the detached resume of '{name}' exited during startup ({status}).\n--- last lines of {log_shown} ---\n{}",
+                crate::cmd::agent::start::tail_of(&log_path, LOG_TAIL_BYTES)
+            ),
+            Startup::Unconfirmed => format!(
+                "Resuming fleet '{name}' (run {run_id}) in the background, pid {pid} — not confirmed within {}s.\n  Check `mur fleet status {name}` or `tail {log_shown}`.",
+                CONFIRM_WINDOW.as_secs()
+            ),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -173,7 +180,21 @@ mod tests {
     fn a_child_that_dies_reads_as_exited_never_running() {
         let dir = tempfile::tempdir().unwrap();
         let mut child = Command::new("false").spawn().unwrap();
-        let got = watch_startup(&mut child, dir.path(), "dev");
+        let got = watch_startup(&mut child, dir.path(), "dev", CONFIRM_WINDOW);
         assert!(matches!(got, Startup::Exited(s) if !s.success()), "{got:?}");
+    }
+
+    /// Two resumes raced: another process holds the fleet's lock while our
+    /// child is still alive. That lock is not our child's start.
+    #[cfg(unix)]
+    #[test]
+    fn another_holders_lock_never_confirms_our_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let _winner = run_lock::acquire(dir.path(), "dev").unwrap();
+        let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+        let got = watch_startup(&mut child, dir.path(), "dev", Duration::from_millis(600));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(got, Startup::Unconfirmed);
     }
 }

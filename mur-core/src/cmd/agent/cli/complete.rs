@@ -319,6 +319,8 @@ const DEEP_RESEARCH_SUBS: &[(&str, &str)] = &[
     ("ask", "research a question"),
     ("status", "show the fleet panel"),
     ("stop", "write the kill-switch"),
+    ("pause", "checkpoint the run at the next step"),
+    ("resume", "continue a paused run in the background"),
     ("setup", "how to run the wizard"),
 ];
 const PANEL_TABS: &[(&str, &str)] = &[

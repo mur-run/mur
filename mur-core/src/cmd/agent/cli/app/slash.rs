@@ -100,7 +100,7 @@ pub enum SlashCmd {
     Browser(Vec<String>),
     /// `/open` — what is still outstanding, observed and reported kept apart.
     Open,
-    /// `/deep-research [ask <question>|<question>|status|stop|setup]` — research
+    /// `/deep-research [ask <question>|<question>|status|stop|pause|resume|setup]` — research
     /// fleet control. Aliased as `/research`; bare text is the question.
     DeepResearch(Vec<String>),
     /// `/search <query> [--all] [--limit N] [--send]` — search indexed project code.
