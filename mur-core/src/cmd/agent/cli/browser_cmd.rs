@@ -88,7 +88,11 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
         return;
     }
     if route == Route::Status {
-        run_manage(app, |agent| super::browser_allow_cmd::run_status(&agent)).await;
+        let home = app.home.clone();
+        run_manage(app, move |agent| {
+            super::browser_allow_cmd::run_status(&agent, &home)
+        })
+        .await;
         return;
     }
     // `--add` path is the pre-live behavior, kept byte-for-byte.

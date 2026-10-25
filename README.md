@@ -553,6 +553,13 @@ Agent** wizard offers the same catalog as a source.
   this time only). Hosts on a research-mode deny list are never offered. Live
   grants need the same approval token as a tool approval, so the agent cannot
   grant itself a host.
+- **A reachable site can still be logged out** — allowing a host opens the
+  network, not a session: the browser only carries cookies when its entry was
+  set up with `/browser live <hosts> --profile <site>`. When it was not and
+  `mur browser auth` saved a profile for that host, `/browser allow` says so
+  and offers the exact `/browser live … --profile <site>` command;
+  `/browser status` shows which profile the browser launches with (or
+  `none`).
 - **A browser login that stays logged in** — `mur browser auth` hands the
   sign-in to you in a real browser and saves the session as an encrypted
   profile. After a green `mur browser replay` or a `mur browser record
