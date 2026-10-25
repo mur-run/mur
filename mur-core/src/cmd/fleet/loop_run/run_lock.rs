@@ -4,8 +4,9 @@
 //! Liveness is decided ONLY by whether the lock can be taken. The kernel
 //! drops the lock when the holder exits for any reason, SIGKILL included, so
 //! a dead run never looks alive and a recycled pid cannot fake liveness. The
-//! pid in `run.owner` is display only. Same approach as the review driver's
-//! lock (`review/run_lock.rs`), over a different file.
+//! pid in `run.owner` never decides liveness: it is shown to the operator, and
+//! [`is_held_by`] uses it only to tell WHICH live holder took the lock. Same
+//! approach as the review driver's lock (`review/run_lock.rs`), over a different file.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -89,6 +90,26 @@ pub fn is_held(mur_home: &Path, name: &str) -> bool {
     }
 }
 
+/// Is the lock held right now, by the process `pid`? Liveness still comes from
+/// the try-lock alone; the owner file only says who took it. `false` while the
+/// holder has not written its owner file yet, so a caller polls.
+///
+/// `mur fleet resume --detach` needs this, not [`is_held`]: when two resumes
+/// race, the loser's child must not read the winner's lock as its own start.
+pub fn is_held_by(mur_home: &Path, name: &str, pid: u32) -> bool {
+    if !is_held(mur_home, name) {
+        return false;
+    }
+    let lock = fleet_state_dir(mur_home, name).join(FLEET_RUN_LOCK_FILE);
+    owner_pid(&lock) == Some(pid)
+}
+
+fn owner_pid(lock: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(owner_path(lock)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("pid")?.as_u64().and_then(|p| u32::try_from(p).ok())
+}
+
 fn owner_path(lock: &Path) -> PathBuf {
     lock.with_file_name(FLEET_RUN_OWNER_FILE)
 }
@@ -142,6 +163,21 @@ mod tests {
         )
         .unwrap();
         acquire(home.path(), "f").expect("a live pid in the body must not block");
+    }
+
+    #[test]
+    fn is_held_by_names_the_holder_only() {
+        let home = tempfile::tempdir().unwrap();
+        let me = std::process::id();
+        assert!(!is_held_by(home.path(), "f", me), "no lock file yet");
+        let lock = acquire(home.path(), "f").unwrap();
+        assert!(is_held_by(home.path(), "f", me));
+        assert!(!is_held_by(home.path(), "f", me.wrapping_add(1)));
+        drop(lock);
+        assert!(
+            !is_held_by(home.path(), "f", me),
+            "a stale owner file is not a holder"
+        );
     }
 
     #[test]

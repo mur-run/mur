@@ -50,11 +50,15 @@ export interface FleetHeaderProps {
 }
 
 /** Header actions (spec §4.4): Run ▾ (loop / send job / worktree), Stop or
- *  Start, and ⋯ (Export, Import, Delete). Rendered into DetailPage's
+ *  Start, Pause / Resume (pause/resume design §4), and ⋯ (Export, Import,
+ *  Delete). Stop on a paused fleet discards the run, as `mur fleet stop` does. Rendered into DetailPage's
  *  `actions` slot; the loop and send-job forms open as popovers below it. */
 export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: FleetHeaderProps) {
   const { t } = useT();
   const { busy, setBusy, call } = useFleetCall(onRefresh);
+  // Pause waits for the run's next safe point, which can take a while. It
+  // keeps its own flag so Stop -- the kill-switch -- never greys out behind it.
+  const [pauseWaiting, setPauseWaiting] = useState(false);
   const [worktree, setWorktree] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendInput, setSendInput] = useState("");
@@ -70,6 +74,33 @@ export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: Fle
   async function handleRun() {
     showToast(t("fleet.runStarted"));
     await call("fleet_run", { name: detail.name, worktree });
+  }
+
+  async function handlePause() {
+    setPauseWaiting(true);
+    onRefresh(); // the status reads "pausing" as soon as the sentinel lands
+    try {
+      await invoke("fleet_pause", { name: detail.name });
+      showToast(t("fleet.paused"), 4000);
+    } catch (err) {
+      showToast(String(err), 6000);
+    } finally {
+      setPauseWaiting(false);
+      onRefresh();
+    }
+  }
+
+  async function handleResume() {
+    setBusy("fleet_resume");
+    try {
+      const msg = await invoke<string>("fleet_resume", { name: detail.name });
+      showToast(msg.split("\n")[0], 4000);
+    } catch (err) {
+      showToast(String(err), 6000);
+    } finally {
+      setBusy(null);
+      onRefresh();
+    }
   }
 
   async function handleSend() {
@@ -135,6 +166,8 @@ export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: Fle
   const disabled = busy !== null;
   const stopped = detail.stopped;
   const startStopClass = stopped ? "btn btn--primary" : "btn btn--secondary";
+  const paused = !stopped && detail.pause === "paused";
+  const pausing = !stopped && (pauseWaiting || detail.pause === "pausing");
 
   return (
     <>
@@ -143,7 +176,7 @@ export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: Fle
         onPrimary={() => {
           void handleRun();
         }}
-        disabled={disabled || stopped}
+        disabled={disabled || stopped || paused}
         menuLabel={t("fleet.runOptions")}
         items={[
           {
@@ -169,6 +202,19 @@ export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: Fle
             : []),
         ]}
       />
+      {paused ? (
+        <button type="button" className="btn btn--primary" title={t("fleet.resumeHint")} onClick={() => { void handleResume(); }} disabled={disabled}>
+          {t("fleet.resume")}
+        </button>
+      ) : pausing ? (
+        <button type="button" className="btn btn--secondary" disabled>
+          {t("fleet.pausing")}
+        </button>
+      ) : detail.pausable && !stopped ? (
+        <button type="button" className="btn btn--secondary" title={t("fleet.pauseHint")} onClick={() => { void handlePause(); }} disabled={disabled}>
+          {t("fleet.pause")}
+        </button>
+      ) : null}
       {stopped ? (
         <button type="button" className={startStopClass} onClick={() => call("fleet_start", { name: detail.name })} disabled={disabled}>
           {t("fleet.start")}

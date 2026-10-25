@@ -18,6 +18,7 @@ function fleet(name: string, labels: string[] = []): FleetSummary {
     active_jobs: 0,
     stopped: false,
     running: false,
+    pause: "none",
     labels,
   };
 }

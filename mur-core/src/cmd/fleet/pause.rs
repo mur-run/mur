@@ -56,22 +56,78 @@ fn verdict(mur_home: &Path, name: &str) -> Verdict {
     Verdict::Pause { run_id: p.run_id }
 }
 
-/// `mur fleet pause <name>`.
-pub fn cmd_fleet_pause(mur_home: &Path, name: &str) -> Result<()> {
-    let _ = store::load_fleet(mur_home, name)?;
-    match verdict(mur_home, name) {
-        Verdict::Refuse(msg) => bail!("{msg}"),
-        Verdict::AlreadyPaused => {
-            println!(
-                "Fleet '{name}' is already paused. Continue it with `mur fleet resume {name}`."
-            );
-            Ok(())
-        }
-        Verdict::Pause { run_id } => request_pause(mur_home, name, &run_id),
+/// Would `mur fleet pause <name>` act right now? The same verdict the command
+/// uses, so a surface offering Pause cannot disagree with the CLI. It reads the
+/// run lock, not the job queue: a goal-mode loop (Hub Run, deep-research)
+/// holds the lock without ever creating a job record.
+#[allow(dead_code)] // consumed by mur-hub-gui (workspace-excluded Pause button)
+pub fn pausable(mur_home: &Path, name: &str) -> bool {
+    matches!(verdict(mur_home, name), Verdict::Pause { .. })
+}
+
+/// Where a fleet stands with respect to pause, for surfaces that render it
+/// (the Hub's buttons and status pill). One derivation, so the Hub and
+/// `mur fleet list` cannot disagree about when a pause has landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PausePhase {
+    /// No pause in play.
+    None,
+    /// `.paused` names a live run that has not reached a safe point yet
+    /// (design §5.5: still `Running`, `list` keeps showing `▶`).
+    Pausing,
+    /// `.paused` names a run whose record reads `Paused`: resumable.
+    Paused,
+}
+
+/// [`PausePhase`] of `name`. A stopped fleet is never `Pausing` (stop wins),
+/// and a sentinel whose run is gone without reaching `Paused` reads `None` —
+/// nothing is on its way to a safe point.
+pub fn phase(mur_home: &Path, name: &str) -> PausePhase {
+    let Some(run_id) = control::paused_run_id(mur_home, name) else {
+        return PausePhase::None;
+    };
+    let state = crate::run_status::store::load(mur_home, &run_id)
+        .ok()
+        .flatten()
+        .map(|r| r.state);
+    if state == Some(crate::run_status::State::Paused) {
+        PausePhase::Paused
+    } else if !control::is_stopped(mur_home, name) && run_lock::is_held(mur_home, name) {
+        PausePhase::Pausing
+    } else {
+        PausePhase::None
     }
 }
 
-fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
+/// `mur fleet pause <name>`.
+pub fn cmd_fleet_pause(mur_home: &Path, name: &str) -> Result<()> {
+    let done = pause_fleet(mur_home, name, &mut |line| println!("{line}"))?;
+    println!("{done}");
+    Ok(())
+}
+
+/// Pause `name` and wait for the safe point, without writing to stdout.
+/// `progress` receives the interim "pausing…" line; the returned string is
+/// the final operator message. For callers that own the terminal (murmur's
+/// TUI), where a `println!` would tear the screen. Blocks for up to
+/// [`PAUSE_WAIT`], so async callers must run it on a blocking thread.
+pub fn pause_fleet(mur_home: &Path, name: &str, progress: &mut dyn FnMut(&str)) -> Result<String> {
+    let _ = store::load_fleet(mur_home, name)?;
+    match verdict(mur_home, name) {
+        Verdict::Refuse(msg) => bail!("{msg}"),
+        Verdict::AlreadyPaused => Ok(format!(
+            "Fleet '{name}' is already paused. Continue it with `mur fleet resume {name}`."
+        )),
+        Verdict::Pause { run_id } => request_pause(mur_home, name, &run_id, progress),
+    }
+}
+
+fn request_pause(
+    mur_home: &Path,
+    name: &str,
+    run_id: &str,
+    progress: &mut dyn FnMut(&str),
+) -> Result<String> {
     checkpoint::clear_pause_refusal(mur_home, run_id);
     let sentinel = control::paused_path(mur_home, name);
     let body = format!(
@@ -81,7 +137,7 @@ fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
     let tmp = sentinel.with_extension("tmp");
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, &sentinel)?;
-    println!("Pausing fleet '{name}' (run {run_id})…");
+    progress(&format!("Pausing fleet '{name}' (run {run_id})…"));
 
     let deadline = Instant::now() + PAUSE_WAIT;
     loop {
@@ -89,10 +145,9 @@ fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
             run_lock::is_held(mur_home, name)
         }) {
             Poll::Paused => {
-                println!(
+                return Ok(format!(
                     "Fleet '{name}' paused. Continue with `mur fleet resume {name}`, or discard with `mur fleet stop {name}`."
-                );
-                return Ok(());
+                ));
             }
             Poll::Refused(why) => {
                 let _ = std::fs::remove_file(&sentinel);
@@ -266,6 +321,79 @@ mod tests {
             calls == 1
         };
         assert_eq!(poll(home.path(), "dev", "r1", &mut is_held), Poll::Finished);
+    }
+
+    #[test]
+    fn phase_is_paused_only_once_the_record_says_so() {
+        use crate::run_status::{RUN_SCHEMA, RunKind, RunState, State};
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        save_dev(h);
+        assert_eq!(phase(h, "dev"), PausePhase::None, "no sentinel");
+        std::fs::write(control::paused_path(h, "dev"), "run_id: r1\n").unwrap();
+        // Sentinel, no live run, no Paused record: nothing is pausing.
+        assert_eq!(phase(h, "dev"), PausePhase::None);
+        let now = chrono::Utc::now();
+        let rec = RunState {
+            schema: RUN_SCHEMA,
+            run_id: "r1".into(),
+            channel_id: None,
+            kind: RunKind::Fleet,
+            label: "fleet dev loop".into(),
+            pid: 1,
+            started_at: now,
+            last_heartbeat_at: Some(now),
+            state: State::Paused,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: "test".into(),
+            build_sha: String::new(),
+        };
+        crate::run_status::store::save(h, &rec).unwrap();
+        assert_eq!(phase(h, "dev"), PausePhase::Paused);
+        // A sentinel for another run never reads as this fleet being paused
+        // by r1's record.
+        std::fs::write(control::paused_path(h, "dev"), "run_id: r2\n").unwrap();
+        assert_eq!(phase(h, "dev"), PausePhase::None);
+    }
+
+    /// A goal-mode loop holds the run lock and writes progress but queues no
+    /// job: it must still read as pausable, or the Hub never offers Pause.
+    #[test]
+    fn a_goal_loop_with_no_jobs_is_pausable_while_it_holds_the_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        save_dev(h);
+        assert!(!pausable(h, "dev"), "no run");
+        let progress = crate::cmd::fleet::progress::RunProgress {
+            schema_version: 1,
+            run_id: "r1".into(),
+            question: "g".into(),
+            started_at: "t".into(),
+            finished_at: None,
+            outcome: None,
+            iteration: 0,
+            model: None,
+            budget_usd: None,
+            spend_usd: 0.0,
+            billable: None,
+            steps: vec![],
+            artifact_path: None,
+            error: None,
+            paused_at: None,
+        };
+        progress.save(h, "dev");
+        assert!(
+            super::super::jobs::list_jobs(h, "dev")
+                .unwrap_or_default()
+                .is_empty()
+        );
+        assert!(!pausable(h, "dev"), "progress alone is not a live run");
+        let lock = run_lock::acquire(h, "dev").unwrap();
+        assert!(pausable(h, "dev"));
+        control::cmd_fleet_stop(h, "dev").unwrap();
+        assert!(!pausable(h, "dev"), "stop wins over pause");
+        drop(lock);
     }
 
     #[test]

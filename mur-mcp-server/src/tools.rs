@@ -532,6 +532,10 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 status.run.started_at.to_rfc3339(),
                 status.run.steps.len()
             );
+            if let Some(line) = mur_core::cmd::job::paused_line(&mur_home, &status) {
+                output.push_str("\npaused: ");
+                output.push_str(&line);
+            }
             if status.run.kind == mur_core::run_status::RunKind::Fleet
                 && let Some(view) =
                     mur_core::cmd::fleet::progress::load_view(&mur_home, &status.run.label)

@@ -13,6 +13,8 @@ use crate::cmd::deep_research::status::DEFAULT_FLEET_NAME;
 pub enum DeepResearchAction {
     Status,
     Stop,
+    Pause,
+    Resume,
     Setup,
     Ask(String),
 }
@@ -22,6 +24,8 @@ pub fn classify(args: &[String]) -> DeepResearchAction {
         [] => DeepResearchAction::Status,
         [word] if word == "status" => DeepResearchAction::Status,
         [word] if word == "stop" => DeepResearchAction::Stop,
+        [word] if word == "pause" => DeepResearchAction::Pause,
+        [word] if word == "resume" => DeepResearchAction::Resume,
         [word] if word == "setup" => DeepResearchAction::Setup,
         [word] if word == "ask" => DeepResearchAction::Ask(String::new()),
         [word, rest @ ..] if word == "ask" => DeepResearchAction::Ask(rest.join(" ")),
@@ -30,7 +34,13 @@ pub fn classify(args: &[String]) -> DeepResearchAction {
 }
 
 fn uses_shell_slot(action: &DeepResearchAction) -> bool {
-    !matches!(action, DeepResearchAction::Stop | DeepResearchAction::Setup)
+    !matches!(
+        action,
+        DeepResearchAction::Stop
+            | DeepResearchAction::Pause
+            | DeepResearchAction::Resume
+            | DeepResearchAction::Setup
+    )
 }
 
 /// Dispatch without involving the conversational model. Commands use the
@@ -53,6 +63,43 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
         }
         return;
     }
+    // Pause writes the same kind of out-of-band sentinel as stop, but then
+    // waits (up to two minutes) for the run to reach a safe point. That wait
+    // runs on a blocking thread so murmur keeps taking input — above all
+    // `/deep-research stop`, the kill-switch — while the pause is pending.
+    if action == DeepResearchAction::Pause {
+        app.push_system(
+            "pausing deep-research — in-flight member turns are cancelled and redone on resume; `/deep-research resume` continues it",
+        );
+        let home = app.home.clone();
+        spawn_reporting(tx, "could not pause deep-research", move || {
+            crate::cmd::fleet::pause::pause_fleet(&home, DEFAULT_FLEET_NAME, &mut |_| {})
+        });
+        return;
+    }
+    // Resume never takes the shell slot: it re-executes `mur fleet resume`
+    // detached (stdin null, so an unanswered HITL gate defers) and the run's
+    // output goes to its resume.log. The confirm window blocks for a few
+    // seconds, so it runs off the UI task and reports back as a note.
+    if action == DeepResearchAction::Resume {
+        let executable = match std::env::current_exe() {
+            Ok(path) => super::multiplex::canonical_mur_exe(path),
+            Err(error) => {
+                app.push_system(format!("could not locate mur executable: {error}"));
+                return;
+            }
+        };
+        app.push_system("resuming deep-research in the background…");
+        let home = app.home.clone();
+        spawn_reporting(tx, "could not resume deep-research", move || {
+            crate::cmd::fleet::loop_run::resume_detach::resume_detached(
+                &home,
+                DEFAULT_FLEET_NAME,
+                &executable,
+            )
+        });
+        return;
+    }
     if uses_shell_slot(&action) && app.shell.is_running() {
         app.push_system("a local command is already running — Ctrl-C to stop it");
         return;
@@ -65,7 +112,9 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
             vec!["deep-research".to_string()],
             "mur deep-research".to_string(),
         ),
-        DeepResearchAction::Stop => unreachable!("handled out of band above"),
+        DeepResearchAction::Stop | DeepResearchAction::Pause | DeepResearchAction::Resume => {
+            unreachable!("handled out of band above")
+        }
         DeepResearchAction::Ask(question) if question.is_empty() => {
             app.push_system("usage: /deep-research ask <question>");
             return;
@@ -126,6 +175,28 @@ pub(super) async fn handle(app: &mut App, args: &[String], tx: &mpsc::Sender<Str
     });
 }
 
+/// Run a blocking control operation off the UI task and report its outcome
+/// as a [`StreamMsg::Note`]. Returns at once: the handler that calls this
+/// must not hold murmur's input loop while the operation waits.
+fn spawn_reporting<F>(
+    tx: &mpsc::Sender<StreamMsg>,
+    failure: &'static str,
+    op: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: FnOnce() -> anyhow::Result<String> + Send + 'static,
+{
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let note = match tokio::task::spawn_blocking(op).await {
+            Ok(Ok(message)) => message,
+            Ok(Err(error)) => format!("{failure}: {error}"),
+            Err(error) => format!("{failure}: {error}"),
+        };
+        let _ = tx.send(StreamMsg::Note(note)).await;
+    })
+}
+
 fn mark_interrupted_stopped(home: &Path, run_id: &str) {
     let Some((mut progress, _)) = crate::cmd::fleet::progress::load(home, DEFAULT_FLEET_NAME)
     else {
@@ -153,6 +224,12 @@ mod tests {
         assert_eq!(classify(&[]), Status);
         assert_eq!(classify(&s(&["status"])), Status);
         assert_eq!(classify(&s(&["stop"])), Stop);
+        assert_eq!(classify(&s(&["pause"])), Pause);
+        assert_eq!(classify(&s(&["resume"])), Resume);
+        assert_eq!(
+            classify(&s(&["pause", "the", "war"])),
+            Ask("pause the war".to_string())
+        );
         assert_eq!(classify(&s(&["setup"])), Setup);
         assert_eq!(
             classify(&s(&["status", "of", "X"])),
@@ -167,6 +244,8 @@ mod tests {
     #[test]
     fn stop_is_out_of_band_but_status_and_ask_use_the_shell_slot() {
         assert!(!uses_shell_slot(&DeepResearchAction::Stop));
+        assert!(!uses_shell_slot(&DeepResearchAction::Pause));
+        assert!(!uses_shell_slot(&DeepResearchAction::Resume));
         assert!(uses_shell_slot(&DeepResearchAction::Status));
         assert!(uses_shell_slot(&DeepResearchAction::Ask("q".into())));
     }
@@ -200,6 +279,75 @@ mod tests {
             .0;
         assert_eq!(progress.outcome.as_deref(), Some("stopped"));
         assert!(progress.finished_at.is_some());
+    }
+
+    /// Review of #2120: a pending pause must not hold murmur's input loop.
+    /// The operation is still blocked when `spawn_reporting` returns, another
+    /// control command (the kill-switch) runs meanwhile, and the outcome
+    /// arrives later as a note.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_pending_pause_leaves_the_kill_switch_usable() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (tx, mut rx) = mpsc::channel(4);
+        let task = spawn_reporting(&tx, "could not pause", move || {
+            release_rx.recv().unwrap();
+            Ok("paused".to_string())
+        });
+
+        // The handler already returned; the pause is still waiting.
+        assert!(rx.try_recv().is_err());
+        let home = tempfile::tempdir().unwrap();
+        crate::cmd::fleet::store::save_fleet(
+            home.path(),
+            &mur_common::fleet::Fleet {
+                name: DEFAULT_FLEET_NAME.into(),
+                display_name: String::new(),
+                goal: "g".into(),
+                router: None,
+                members: vec!["pm".into()],
+                channel_id: format!("fleet-{DEFAULT_FLEET_NAME}"),
+                procedure: vec![],
+                team_id: None,
+                rules: vec![],
+                skills: vec![],
+                loop_cfg: None,
+                parallel: None,
+                hitl: None,
+                requires_programs: vec![],
+                limits: None,
+                needs: vec![],
+            },
+        )
+        .unwrap();
+        crate::cmd::fleet::control::cmd_fleet_stop(home.path(), DEFAULT_FLEET_NAME).unwrap();
+        assert!(crate::cmd::fleet::control::is_stopped(
+            home.path(),
+            DEFAULT_FLEET_NAME
+        ));
+        assert!(rx.try_recv().is_err(), "pause must still be pending");
+
+        release_tx.send(()).unwrap();
+        task.await.unwrap();
+        match rx.recv().await {
+            Some(StreamMsg::Note(note)) => assert_eq!(note, "paused"),
+            _ => panic!("expected the pause outcome as a note"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_operation_reports_its_prefix() {
+        let (tx, mut rx) = mpsc::channel(1);
+        spawn_reporting(&tx, "could not pause deep-research", || {
+            anyhow::bail!("no running run")
+        })
+        .await
+        .unwrap();
+        match rx.recv().await {
+            Some(StreamMsg::Note(note)) => {
+                assert_eq!(note, "could not pause deep-research: no running run")
+            }
+            _ => panic!("expected a note"),
+        }
     }
 
     #[test]
