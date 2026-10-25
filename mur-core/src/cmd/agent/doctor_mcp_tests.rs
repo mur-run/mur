@@ -146,3 +146,32 @@ fn bundled_mcp_server_is_judged_instead_of_a_path_copy() {
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].resolved, bundled);
 }
+
+#[test]
+fn off_agent_with_a_remote_server_is_reported() {
+    let mut prof = AgentProfile::default_for_tests();
+    prof.mcp_servers = vec![
+        McpServerEntry {
+            name: "remote".into(),
+            url: Some("https://mcp.example.com/mcp".into()),
+            ..Default::default()
+        },
+        McpServerEntry {
+            name: "local".into(),
+            command: "node".into(),
+            ..Default::default()
+        },
+    ];
+    prof.entitlements.network.outbound.mode = NetworkOutboundMode::Off;
+    let lines = off_remote_lines("a", &prof);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("'remote'") && lines[0].contains("`off`"),
+        "{}",
+        lines[0]
+    );
+
+    // Same servers under any other mode: nothing to report.
+    prof.entitlements.network.outbound.mode = NetworkOutboundMode::Restricted;
+    assert!(off_remote_lines("a", &prof).is_empty());
+}

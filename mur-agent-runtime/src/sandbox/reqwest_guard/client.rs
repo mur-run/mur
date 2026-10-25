@@ -69,6 +69,12 @@ impl GuardedHttpClient {
         self.checked(url).map(|u| self.client.get(u))
     }
 
+    /// Start a DELETE, or refuse the URL. MCP's session teardown carries the
+    /// bearer, so it needs the same check as every POST.
+    pub fn delete(&self, url: &str) -> Result<reqwest::RequestBuilder, String> {
+        self.checked(url).map(|u| self.client.delete(u))
+    }
+
     fn checked(&self, url: &str) -> Result<reqwest::Url, String> {
         let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL '{url}': {e}"))?;
         self.guard.check_url(&parsed)?;
@@ -146,6 +152,21 @@ mod guarded_client_tests {
             err.contains("not in this agent's outbound allowlist"),
             "{err}"
         );
+    }
+
+    /// `delete` is checked like `post` and `get`, and reaches a permitted host.
+    #[tokio::test]
+    async fn delete_is_guarded_and_delivered() {
+        let c = guarded(HostGuard::exact(vec!["mcp.example.com".into()]));
+        assert!(c.delete("http://203.0.113.5/mcp").is_err());
+        let (addr, rx) = echo_listener().await;
+        let c = guarded(HostGuard::exact(vec!["127.0.0.1".into()]));
+        c.delete(&format!("http://{addr}/mcp"))
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rx.await.unwrap(), "DELETE /mcp HTTP/1.1");
     }
 
     /// And an IP literal that IS named stays reachable — the check is an

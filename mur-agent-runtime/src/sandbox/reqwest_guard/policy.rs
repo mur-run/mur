@@ -60,6 +60,11 @@ enum Policy {
     Allowlist(Vec<String>),
     /// `Off`: nothing, loopback included.
     DenyAll,
+    /// One remote MCP server: exactly these hosts, compared literally, with
+    /// **no** loopback exemption — a redirect to `127.0.0.1` must not receive
+    /// that server's bearer. A server that really is on loopback names it as
+    /// its own `url` host and is admitted that way.
+    Exact(Vec<String>),
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +91,14 @@ impl HostGuard {
         }
     }
 
+    /// Exactly `hosts` and nothing else: no wildcard, no loopback exemption.
+    /// For a client that carries one MCP server's credentials (#D6).
+    pub fn exact(hosts: Vec<String>) -> Self {
+        Self {
+            policy: Policy::Exact(hosts.iter().map(|h| bare_host(h).to_string()).collect()),
+        }
+    }
+
     /// Apply this guard to a whole URL, before the request is sent.
     ///
     /// This is the only layer that sees the **real destination**. The DNS
@@ -104,10 +117,15 @@ impl HostGuard {
             return Ok(()); // no host — nothing to match, handled elsewhere
         };
         if !self.is_allowed(host) {
+            let scope = match self.policy {
+                Policy::Exact(_) => "this MCP server's host set (its url and OAuth token endpoint)",
+                _ => {
+                    "this agent's outbound allowlist \
+                     (entitlements.network.outbound.allow_hosts)"
+                }
+            };
             return Err(format!(
-                "request to '{url}' blocked: host '{host}' is not in this \
-                 agent's outbound allowlist \
-                 (entitlements.network.outbound.allow_hosts)"
+                "request to '{url}' blocked: host '{host}' is not in {scope}"
             ));
         }
         Ok(())
@@ -138,8 +156,18 @@ impl HostGuard {
                         .iter()
                         .any(|pattern| host_matches_pattern(host, pattern))
             }
+            Policy::Exact(list) => {
+                let host = bare_host(host);
+                list.iter().any(|h| h.eq_ignore_ascii_case(host))
+            }
         }
     }
+}
+
+/// `url::Url::host_str` keeps an IPv6 literal's brackets; the DNS resolver
+/// gets it without. Compare the bare form so both entry points agree.
+fn bare_host(host: &str) -> &str {
+    host.trim_start_matches('[').trim_end_matches(']')
 }
 
 /// Is this URL's host this machine? Mirrors `llm::loopback::host_is_loopback`,
@@ -404,6 +432,46 @@ mod loopback_regression_tests {
             g.check_url(&reqwest::Url::parse("http://127.0.0.1:8088/v1/messages").unwrap())
                 .is_ok()
         );
+    }
+
+    /// `exact` has no loopback exemption: an MCP bearer must not follow a
+    /// redirect to this machine unless the server itself lives there.
+    #[test]
+    fn exact_refuses_loopback_unless_named() {
+        let g = HostGuard::exact(vec!["mcp.example.com".into()]);
+        for u in [
+            "http://127.0.0.1:9/",
+            "http://localhost:9/",
+            "http://[::1]:9/",
+        ] {
+            let err = g.check_url(&reqwest::Url::parse(u).unwrap()).unwrap_err();
+            assert!(err.contains("MCP server's host set"), "{u}: {err}");
+        }
+        assert!(!g.is_allowed("localhost"));
+        let local = HostGuard::exact(vec!["127.0.0.1".into(), "[::1]".into()]);
+        assert!(
+            local
+                .check_url(&reqwest::Url::parse("http://127.0.0.1:9/").unwrap())
+                .is_ok()
+        );
+        assert!(
+            local
+                .check_url(&reqwest::Url::parse("http://[::1]:9/").unwrap())
+                .is_ok()
+        );
+        assert!(local.is_allowed("::1"), "resolver form, no brackets");
+    }
+
+    /// Literal, case-insensitive; a listed name is not a wildcard for its
+    /// subdomains, and the SSRF screen still runs first.
+    #[test]
+    fn exact_is_literal_and_still_ssrf_screened() {
+        let g = HostGuard::exact(vec!["MCP.example.com".into(), "169.254.169.254".into()]);
+        assert!(g.is_allowed("mcp.example.com"));
+        assert!(!g.is_allowed("evil.mcp.example.com"));
+        assert!(!g.is_allowed("example.com"));
+        let meta = reqwest::Url::parse("http://169.254.169.254/latest").unwrap();
+        assert!(g.check_url(&meta).unwrap_err().contains("SSRF"));
     }
 
     /// `Off` means no network at all, and that has to include loopback —

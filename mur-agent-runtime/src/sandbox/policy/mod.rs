@@ -202,6 +202,17 @@ impl Default for SandboxPolicy {
 }
 
 impl SandboxPolicy {
+    /// `network.outbound.mode: off`. The only posture that denies general TCP
+    /// (`Some([])`), names no host (`Some([])`) AND refuses loopback carve-outs —
+    /// ProxyOnly shares the first two and differs on the third, Restricted
+    /// always has ports. No widening step changes this: the in-process-proxy
+    /// reopen fires only when loopback is allowed.
+    pub fn network_off(&self) -> bool {
+        matches!(&self.net_allow_ports, Some(p) if p.is_empty())
+            && matches!(&self.net_allow_hosts, Some(h) if h.is_empty())
+            && !self.net_loopback_allowed
+    }
+
     /// The agent home this policy was built for, read-only, or `None` for a
     /// policy not built from one (`Default`, some tests). Taken from the
     /// launch chain, which `from_entitlements` already roots there, so no
