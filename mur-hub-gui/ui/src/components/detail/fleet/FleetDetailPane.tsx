@@ -114,7 +114,7 @@ export function FleetDetailPane({
       title={detail.display_name}
       status={fleetStatusOf(summary)}
       meta={fleetMeta(detail, t, setTab)}
-      actions={<FleetHeader detail={detail} running={summary.running} onRefresh={refresh} onDelete={onDeleted} onOpenInWindow={onOpenInWindow} />}
+      actions={<FleetHeader detail={detail} onRefresh={refresh} onDelete={onDeleted} onOpenInWindow={onOpenInWindow} />}
       tabs={FLEET_TABS.map((id) => ({ id, label: t(FLEET_TAB_LABEL_KEY[id]) }))}
       activeTab={tab}
       onTab={goTo}

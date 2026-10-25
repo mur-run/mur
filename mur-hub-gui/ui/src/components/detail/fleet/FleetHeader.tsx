@@ -43,8 +43,6 @@ export function fleetMeta(detail: Detail, t: T, onGoTo: (tab: FleetTabId) => voi
 
 export interface FleetHeaderProps {
   detail: Detail;
-  /** A run is live (from the list summary): Pause is offered only then. */
-  running: boolean;
   onRefresh: () => void;
   onDelete: () => void;
   /** Dashboard only: the ⋯ "Open in window" item. Undefined inside a window. */
@@ -55,7 +53,7 @@ export interface FleetHeaderProps {
  *  Start, Pause / Resume (pause/resume design §4), and ⋯ (Export, Import,
  *  Delete). Stop on a paused fleet discards the run, as `mur fleet stop` does. Rendered into DetailPage's
  *  `actions` slot; the loop and send-job forms open as popovers below it. */
-export function FleetHeader({ detail, running, onRefresh, onDelete, onOpenInWindow }: FleetHeaderProps) {
+export function FleetHeader({ detail, onRefresh, onDelete, onOpenInWindow }: FleetHeaderProps) {
   const { t } = useT();
   const { busy, setBusy, call } = useFleetCall(onRefresh);
   // Pause waits for the run's next safe point, which can take a while. It
@@ -212,7 +210,7 @@ export function FleetHeader({ detail, running, onRefresh, onDelete, onOpenInWind
         <button type="button" className="btn btn--secondary" disabled>
           {t("fleet.pausing")}
         </button>
-      ) : running && !stopped ? (
+      ) : detail.pausable && !stopped ? (
         <button type="button" className="btn btn--secondary" title={t("fleet.pauseHint")} onClick={() => { void handlePause(); }} disabled={disabled}>
           {t("fleet.pause")}
         </button>

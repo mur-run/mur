@@ -5,8 +5,8 @@
 //! drops the lock when the holder exits for any reason, SIGKILL included, so
 //! a dead run never looks alive and a recycled pid cannot fake liveness. The
 //! pid in `run.owner` never decides liveness: it is shown to the operator, and
-//! [`is_held_by`] uses it only to tell WHICH live holder took the lock. Same approach as the review driver's
-//! lock (`review/run_lock.rs`), over a different file.
+//! [`is_held_by`] uses it only to tell WHICH live holder took the lock. Same
+//! approach as the review driver's lock (`review/run_lock.rs`), over a different file.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};

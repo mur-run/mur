@@ -18,6 +18,12 @@ pub(crate) fn phase_str(name: &str) -> &'static str {
     }
 }
 
+/// Whether Pause should be offered: `mur fleet pause`'s own verdict, so the
+/// button tracks the run lock and shows for a goal-mode loop with no jobs.
+pub(crate) fn pausable(name: &str) -> bool {
+    pause::pausable(&mur_home_path(), name)
+}
+
 /// The `mur` a detached resume re-executes. The Hub's own executable is the
 /// Hub, so `current_exe()` is wrong here. The bundled sibling comes first: it
 /// is the same build as the core this Hub links, so it knows `fleet resume`;

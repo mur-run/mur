@@ -68,6 +68,9 @@ pub struct FleetDetail {
     pub stopped: bool,
     /// `"none" | "pausing" | "paused"`, as in [`FleetSummary::pause`].
     pub pause: &'static str,
+    /// `mur fleet pause` would act now: a live run holds the lock. Not
+    /// `FleetSummary::running`, which counts jobs and so misses goal loops.
+    pub pausable: bool,
     pub loop_cfg: Option<FleetLoopView>,
     pub parallel_summary: Option<ParallelSummaryView>,
     /// The Hub renders what the CLI resolves (spec §10): every execution
@@ -235,7 +238,9 @@ pub fn fleet_list() -> Result<Vec<FleetSummary>, String> {
                 member_count: fleet.members.len(),
                 active_jobs,
                 stopped,
-                running: active_jobs > 0 && !stopped,
+                // A goal-mode loop queues no job but holds the run lock.
+                running: !stopped
+                    && (active_jobs > 0 || crate::fleet_pause::pausable(&name)),
                 pause: crate::fleet_pause::phase_str(&name),
                 labels: registry.labels_of(&fleet.name).to_vec(),
             });
@@ -314,6 +319,7 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
         channel_id: fleet.channel_id.clone(),
         stopped,
         pause: crate::fleet_pause::phase_str(&name),
+        pausable: crate::fleet_pause::pausable(&name),
         loop_cfg,
         parallel_summary,
         limits,

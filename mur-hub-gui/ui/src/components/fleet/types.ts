@@ -55,6 +55,9 @@ export interface FleetDetail {
   channel_id: string;
   stopped: boolean;
   pause: PausePhase;
+  /** `mur fleet pause` would act now (a live run holds the lock), including a
+   *  goal-mode loop that queued no job. Pause is offered only then. */
+  pausable: boolean;
   loop_cfg: FleetLoopView | null;
   parallel_summary: ParallelSummary | null;
   limits: LimitsView;

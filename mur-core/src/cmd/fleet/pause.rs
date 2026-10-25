@@ -56,6 +56,15 @@ fn verdict(mur_home: &Path, name: &str) -> Verdict {
     Verdict::Pause { run_id: p.run_id }
 }
 
+/// Would `mur fleet pause <name>` act right now? The same verdict the command
+/// uses, so a surface offering Pause cannot disagree with the CLI. It reads the
+/// run lock, not the job queue: a goal-mode loop (Hub Run, deep-research)
+/// holds the lock without ever creating a job record.
+#[allow(dead_code)] // consumed by mur-hub-gui (workspace-excluded Pause button)
+pub fn pausable(mur_home: &Path, name: &str) -> bool {
+    matches!(verdict(mur_home, name), Verdict::Pause { .. })
+}
+
 /// Where a fleet stands with respect to pause, for surfaces that render it
 /// (the Hub's buttons and status pill). One derivation, so the Hub and
 /// `mur fleet list` cannot disagree about when a pause has landed.
@@ -346,6 +355,45 @@ mod tests {
         // by r1's record.
         std::fs::write(control::paused_path(h, "dev"), "run_id: r2\n").unwrap();
         assert_eq!(phase(h, "dev"), PausePhase::None);
+    }
+
+    /// A goal-mode loop holds the run lock and writes progress but queues no
+    /// job: it must still read as pausable, or the Hub never offers Pause.
+    #[test]
+    fn a_goal_loop_with_no_jobs_is_pausable_while_it_holds_the_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        save_dev(h);
+        assert!(!pausable(h, "dev"), "no run");
+        let progress = crate::cmd::fleet::progress::RunProgress {
+            schema_version: 1,
+            run_id: "r1".into(),
+            question: "g".into(),
+            started_at: "t".into(),
+            finished_at: None,
+            outcome: None,
+            iteration: 0,
+            model: None,
+            budget_usd: None,
+            spend_usd: 0.0,
+            billable: None,
+            steps: vec![],
+            artifact_path: None,
+            error: None,
+            paused_at: None,
+        };
+        progress.save(h, "dev");
+        assert!(
+            super::super::jobs::list_jobs(h, "dev")
+                .unwrap_or_default()
+                .is_empty()
+        );
+        assert!(!pausable(h, "dev"), "progress alone is not a live run");
+        let lock = run_lock::acquire(h, "dev").unwrap();
+        assert!(pausable(h, "dev"));
+        control::cmd_fleet_stop(h, "dev").unwrap();
+        assert!(!pausable(h, "dev"), "stop wins over pause");
+        drop(lock);
     }
 
     #[test]

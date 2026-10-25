@@ -29,15 +29,15 @@ const CONFIRM_POLL: Duration = Duration::from_millis(200);
 /// Bytes of `resume.log` shown when the child dies during startup.
 const LOG_TAIL_BYTES: u64 = 4096;
 
-/// Win32 process-creation flags (`winbase.h`): no console is inherited or
-/// created, and the child gets its own process group, so neither a closing
-/// console window nor Ctrl+C in the parent's ends the resumed run.
+/// Win32 process-creation flags (`winbase.h`): `DETACHED_PROCESS` gives the
+/// child no console (it neither inherits the parent's nor gets a new window),
+/// and its own process group keeps Ctrl+C in the parent's console from ending
+/// the resumed run. `CREATE_NO_WINDOW` is not added: Win32 ignores it when
+/// `DETACHED_PROCESS` is set.
 #[cfg(windows)]
 const DETACHED_PROCESS: u32 = 0x0000_0008;
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// `<mur_home>/runs/<run_id>/resume.log`.
 pub fn resume_log_path(mur_home: &Path, run_id: &str) -> PathBuf {
@@ -73,7 +73,7 @@ fn child_command(exe: &Path, mur_home: &Path, name: &str, log: &std::fs::File) -
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
     Ok(cmd)
 }
