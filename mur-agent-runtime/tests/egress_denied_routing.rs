@@ -50,6 +50,7 @@ fn tool(pool: &Arc<McpPool>, tool: &str) -> McpToolExecutor {
         pool: pool.clone(),
         timeout: Duration::from_secs(10),
         session_cwd: None,
+        serena_project: None,
     }
 }
 

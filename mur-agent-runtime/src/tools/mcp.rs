@@ -122,6 +122,24 @@ pub struct McpToolExecutor {
     /// (`CWD_ROUTED_TOOLS`) when the model names no target. `None` in
     /// contexts with no session (tests, headless probes).
     pub session_cwd: Option<SessionCwd>,
+    /// The fixed `project:` of a serena entry, `None` for every other
+    /// server. Set, its results carry the base-checkout note while the
+    /// turn works in a track of that repo (`serena::base_note`).
+    pub serena_project: Option<std::path::PathBuf>,
+}
+
+impl McpToolExecutor {
+    /// The base-checkout note for this call, if it applies.
+    fn base_note(&self) -> Option<String> {
+        let project = self.serena_project.as_deref()?;
+        let session = self.session_cwd.as_ref()?;
+        let task = crate::tools::bash_jobs::current_task_id()?;
+        let track = session.track_of(&task);
+        crate::mcp::serena::base_note(
+            project,
+            track.as_ref().map(|(p, t)| (p.as_path(), t.as_path())),
+        )
+    }
 }
 
 #[async_trait]
@@ -189,7 +207,11 @@ impl ToolExecutor for McpToolExecutor {
             .get("isError")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let text = render_mcp_result(&result);
+        let mut text = render_mcp_result(&result);
+        if !is_error && let Some(note) = self.base_note() {
+            text.push_str("\n\n");
+            text.push_str(&note);
+        }
         if is_error {
             // An error result carries no images: the error path is a String,
             // and a failed call has nothing to show. A refusal is not a
