@@ -5,6 +5,12 @@ use super::daemon_request::{daemon_alive, write_request};
 use super::*;
 use mur_track::fleet_dispatch_request::{FLEET_DISPATCH_REQUEST_DIR, FleetDispatchRequest};
 
+/// An absolute cwd on every CI platform: `/work` is not absolute on Windows.
+#[cfg(windows)]
+const WORK: &str = r"C:\work";
+#[cfg(not(windows))]
+const WORK: &str = "/work";
+
 fn home_with(router: Option<&str>) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
@@ -64,7 +70,7 @@ async fn cross_router_fleet_writes_a_signed_request_instead_of_spawning() {
     let id = mur_common::identity::AgentIdentity::generate();
     let pk = id.verifying_key_bytes();
     let out = tool(home, Some(id))
-        .execute(serde_json::json!({"fleet": "council", "goal": "decide", "cwd": "/work"}))
+        .execute(serde_json::json!({"fleet": "council", "goal": "decide", "cwd": WORK}))
         .await
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(&out.text).unwrap();
@@ -84,7 +90,7 @@ async fn cross_router_fleet_writes_a_signed_request_instead_of_spawning() {
     assert_eq!(req.dispatch.requested_by, "mur");
     assert_eq!(req.dispatch.run_id, run_id, "the handle is the run's id");
     assert_eq!(req.dispatch.goal.as_deref(), Some("decide"));
-    assert_eq!(req.dispatch.cwd.as_deref(), Some("/work"));
+    assert_eq!(req.dispatch.cwd.as_deref(), Some(WORK));
     assert!(!req.dispatch.cwd_inferred);
 }
 

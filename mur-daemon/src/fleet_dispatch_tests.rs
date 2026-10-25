@@ -44,13 +44,19 @@ fn fixture(allow: &str) -> Fixture {
     Fixture { tmp, requester }
 }
 
+/// An absolute cwd on every CI platform: `/work` is not absolute on Windows.
+#[cfg(windows)]
+const WORK: &str = r"C:\work";
+#[cfg(not(windows))]
+const WORK: &str = "/work";
+
 fn dispatch(fleet: &str, n: u32) -> FleetDispatch {
     FleetDispatch {
         requested_by: "mur".into(),
         fleet: fleet.into(),
         goal: Some("decide".into()),
         job: None,
-        cwd: Some("/work".into()),
+        cwd: Some(WORK.into()),
         cwd_inferred: false,
         run_id: format!("fleet-{fleet}-{n}"),
     }
@@ -141,7 +147,7 @@ fn verified_request_launches_without_a_handoff_and_records_provenance() {
     let mut lines = out.lines();
     assert_eq!(
         lines.next().unwrap(),
-        "fleet run council --loop --goal=decide --run-id fleet-council-1 --cwd /work"
+        format!("fleet run council --loop --goal=decide --run-id fleet-council-1 --cwd {WORK}")
     );
     // The point of #2116: no stdin handoff, so the child reads the ROUTER's
     // key from disk instead of being handed the requester's.
