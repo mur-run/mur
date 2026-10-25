@@ -48,7 +48,7 @@ use mur_common::AgentProfile;
 use mur_common::multimodal::ProvenanceLedger;
 use mur_common::permissions::{GrantDecision, GrantStore, ScopeKey};
 
-mod entry;
+pub mod entry;
 
 /// Turn-flag raised by `on_prompt_submit` when at least one untrusted
 /// multimodal artifact was attached to the current turn. Read by
@@ -99,7 +99,11 @@ pub fn verify_mcp_supply_chain(
     // recover anything: the agent stayed down over a server it would not have
     // launched (field report, 2026-09-15).
     for entry in &profile.enabled_mcp_servers() {
-        entry::verify_entry_pin(entry, profile)?;
+        // Boot refuses only on a hard fail; skips and soft fails were
+        // already logged by the verifier and never blocked startup.
+        if let entry::PinOutcome::HardFail(refusal) = entry::verify_entry_pin(entry, profile) {
+            return Err(refusal);
+        }
     }
     Ok(())
 }

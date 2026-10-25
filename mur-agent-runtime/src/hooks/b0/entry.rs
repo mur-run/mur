@@ -5,12 +5,30 @@
 use mur_common::AgentProfile;
 use mur_common::agent::McpServerEntry;
 
-/// Install-time pin verification for one enabled MCP entry. Same contract as
-/// the caller: a returned `Err` refuses startup; soft failures only warn.
-pub(super) fn verify_entry_pin(
-    entry: &McpServerEntry,
-    profile: &AgentProfile,
-) -> Result<(), String> {
+/// Result of the install-time pin check for one MCP entry.
+///
+/// Boot and reload share [`verify_entry_pin`] and differ only in how they act
+/// on this: boot refuses on [`PinOutcome::HardFail`] and continues on the
+/// rest; reload hot-applies a changed `command` only on
+/// [`PinOutcome::Verified`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinOutcome {
+    /// The binary hash, or the vendored lockfile hash, matches the approval.
+    Verified,
+    /// Nothing to verify: an unpinned (pre-M9) entry, or an
+    /// interpreter-launched one whose binary pin does not cover the server.
+    Skipped,
+    /// Could not check (command unresolvable, file missing or unreadable).
+    SoftFail(String),
+    /// The pinned binary or vendored tree differs from what was approved.
+    /// The string is the user-facing refusal.
+    HardFail(String),
+}
+
+/// Install-time pin verification for one enabled MCP entry. Never refuses on
+/// its own; the caller decides what each [`PinOutcome`] means. Soft failures
+/// and skips are logged here so boot and reload report them identically.
+pub fn verify_entry_pin(entry: &McpServerEntry, profile: &AgentProfile) -> PinOutcome {
     // A vendored package is the one interpreter-launched shape that CAN be
     // verified: MUR installed it into a directory it owns, so the lockfile
     // recorded at approval still describes the tree unless something
@@ -18,25 +36,24 @@ pub(super) fn verify_entry_pin(
     // otherwise wave through the very case made verifiable on purpose.
     if let Some(pkg) = &entry.package {
         let lock = pkg.lockfile_path();
-        match crate::hooks::b0_helpers::binary_sha256(&lock) {
+        return match crate::hooks::b0_helpers::binary_sha256(&lock) {
             Ok(actual) if actual.eq_ignore_ascii_case(&pkg.lockfile_sha256) => {
                 tracing::debug!(mcp = %entry.name, "B0 rule 6: vendored package verified");
+                PinOutcome::Verified
             }
-            Ok(_) => {
-                return Err(format!(
-                    "B0 rule 6: vendored MCP `{}` ({}@{}) no longer matches the tree \
+            Ok(_) => PinOutcome::HardFail(format!(
+                "B0 rule 6: vendored MCP `{}` ({}@{}) no longer matches the tree \
                      installed at approval time — re-run `mur agent mcp vendor {} {}` \
                      to reinstall and re-approve, or `mur agent mcp remove {} {}` \
                      to uninstall.",
-                    entry.name,
-                    pkg.name,
-                    pkg.version,
-                    profile.name,
-                    entry.name,
-                    profile.name,
-                    entry.name,
-                ));
-            }
+                entry.name,
+                pkg.name,
+                pkg.version,
+                profile.name,
+                entry.name,
+                profile.name,
+                entry.name,
+            )),
             Err(reason) => {
                 // Install gone or unreadable. Same call as a missing binary
                 // below: far more likely "the user deleted it" than an
@@ -47,14 +64,14 @@ pub(super) fn verify_entry_pin(
                     reason = %reason,
                     "B0 rule 6: vendored package lockfile unreadable; continuing",
                 );
+                PinOutcome::SoftFail(format!("vendored lockfile unreadable: {reason}"))
             }
-        }
-        return Ok(());
+        };
     }
     let Some(expected) = &entry.binary_sha256 else {
         // Pre-M9 entry — skip silently; the cookbook documents
         // `mur agent mcp pin <name> <server-id>` as the migration verb.
-        return Ok(());
+        return PinOutcome::Skipped;
     };
     // An interpreter-launched server (`npx @scope/pkg`, `python -m …`) pins
     // the *interpreter*, not the server. Refusing startup on that hash
@@ -69,7 +86,7 @@ pub(super) fn verify_entry_pin(
             "B0 rule 6: interpreter-launched MCP — binary pin does not cover the server code, \
              not enforced (see `mur doctor`)",
         );
-        return Ok(());
+        return PinOutcome::Skipped;
     }
     // Resolve against the SAME augmented PATH the spawn uses
     // (`protocol/mcp_client.rs`, `supervisor_runner/prepare.rs`), so the file
@@ -105,13 +122,16 @@ pub(super) fn verify_entry_pin(
                 error = %e,
                 "B0 rule 6: pin verify soft-failed (command not resolvable); continuing",
             );
-            return Ok(());
+            return PinOutcome::SoftFail(format!("command not resolvable: {e}"));
         }
     };
     match crate::hooks::b0_helpers::verify_mcp_binary_hash(expected, &path) {
-        Ok(()) => tracing::debug!(mcp = %entry.name, "B0 rule 6: pin verified"),
+        Ok(()) => {
+            tracing::debug!(mcp = %entry.name, "B0 rule 6: pin verified");
+            PinOutcome::Verified
+        }
         Err(crate::hooks::b0_helpers::PinDriftReason::BinaryDrift { .. }) => {
-            return Err(format!(
+            PinOutcome::HardFail(format!(
                 "B0 rule 6: MCP `{}` changed since install — \
                  run `mur agent mcp inspect {} --server {}` to review the \
                  drift and `mur agent mcp pin {} {}` to re-approve, \
@@ -123,7 +143,7 @@ pub(super) fn verify_entry_pin(
                 entry.name,
                 profile.name,
                 entry.name,
-            ));
+            ))
         }
         Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryMissing { .. })
         | Err(soft @ crate::hooks::b0_helpers::PinDriftReason::BinaryReadError { .. }) => {
@@ -132,7 +152,11 @@ pub(super) fn verify_entry_pin(
                 reason = %soft,
                 "B0 rule 6: pin verify soft-failed; continuing",
             );
+            PinOutcome::SoftFail(soft.to_string())
         }
     }
-    Ok(())
 }
+
+#[cfg(test)]
+#[path = "entry_tests.rs"]
+mod tests;
