@@ -604,6 +604,21 @@ Agent** wizard offers the same catalog as a source.
   `git ls-files` and a bare `git diff` are not, so `--ask` asks first. Put
   the prompt back on reads with `--no-auto-reads`, the strictest setting; the
   old `--auto-reads` still parses and does nothing.
+- **A second opinion that can only add a prompt** — the static classifier
+  rates an unknown command head as a plain write, so `python3 upload.py` runs
+  under AUTO without asking. `mur agent perm intent-check <agent> <model_ref>`
+  has a model read each `bash` call rated exactly write, and it may raise that
+  call to network-egress, spend, destructive or privileged so it asks. The
+  final tier is `max(static, model)`: a wrong or prompt-injected answer can
+  make a call ask that would have run, never run one that would have asked.
+  A reply that times out (`--timeout-ms`, default 4000), errors, or doesn't
+  parse keeps the static tier. Off by default; `--off` turns it off again, and
+  `mur agent perm show <agent>` (or Hub's Permissions section) shows the
+  model in use. A cloud model receives every checked command, and the CLI says
+  so when you pick one; a local model keeps them on this machine. Its tokens
+  count toward the task's usage and the fleet's cost limit. It sees the command
+  string only, not what a named script does, and a call the static classifier
+  already rated a read is never sent to it.
 - **Tamper-evident approvals** — every channel log is hash-chained, and its
   signed head lives outside the agent's sandbox, so an agent that deletes a
   line (say, your later "no") or truncates the log is caught. The gate only
@@ -1146,7 +1161,7 @@ mur
 ├── init / doctor / update / stats / verify
 ├── agent        create · start · stop · restart · remove · cli · send · card · dial · who · limits ·
 │                export · install · install-service · addon · companion · voice · pair ·
-│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret · hitl (list · forget · pending · approve · deny) ·
+│                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal · intent-check) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
 ├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
