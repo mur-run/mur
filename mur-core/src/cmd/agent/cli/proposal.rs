@@ -80,6 +80,11 @@ pub(super) fn handle_key_with(
             Some(text) => {
                 app.set_input(&text);
                 app.proposal = None;
+                // The inserted command is now the draft; a reply chooser left
+                // open would still own Enter and send option 1 instead (#2125).
+                if app.completion.as_ref().is_some_and(|c| c.spaced) {
+                    app.completion = None;
+                }
                 true
             }
             // Executable chips have nothing to insert; Tab keeps its

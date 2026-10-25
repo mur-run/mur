@@ -307,6 +307,28 @@ async fn tab_inserts_the_chip_even_with_the_reply_chooser_open() {
     assert!(a.proposal.is_none());
 }
 
+/// #2125: after Tab put the chip's command in the composer, Enter must send
+/// that command — not the chooser's option 1.
+#[tokio::test]
+async fn enter_after_tab_sends_the_chip_command_not_option_one() {
+    let (tx, _rx) = mpsc::channel(8);
+    let mut a = App::test_fixture();
+    offer(&mut a, shell_chip());
+    chooser(&mut a);
+    handle_event(&mut a, Event::Key(press(KeyCode::Tab)), &tx).await;
+    assert!(
+        a.completion.is_none(),
+        "chooser closed once the chip is inserted"
+    );
+    handle_event(&mut a, Event::Key(press(KeyCode::Enter)), &tx).await;
+    let sent: Vec<&str> = a.messages.iter().map(|m| m.text.as_str()).collect();
+    assert!(
+        !sent.contains(&"yes"),
+        "option 1 must not be sent: {sent:?}"
+    );
+    assert!(a.input_text().is_empty(), "the command left the composer");
+}
+
 #[tokio::test]
 async fn chooser_keeps_enter_and_digits_when_a_chip_is_up() {
     let (tx, _rx) = mpsc::channel(8);
