@@ -372,8 +372,9 @@ fn flat_rate(per_1k: f64) -> ModelEntry {
 
 /// The registry's dearest rate on each side, so an unpriced model is never
 /// cheaper than anything it could stand in for — without charging its prompt
-/// at an output rate. A side no entry prices takes the other side's rate; a
-/// cache read with no recorded rate anywhere is priced as input.
+/// at an output rate. A side no entry prices takes the other side's rate. Each
+/// entry's cache rates count at what that entry would actually charge: its
+/// recorded cache rate, or its input rate when none is recorded.
 fn dearest_rates(models: &BTreeMap<String, ModelEntry>) -> Option<ModelEntry> {
     let dearest = |side: fn(&ModelEntry) -> Option<f64>| {
         models
@@ -388,11 +389,19 @@ fn dearest_rates(models: &BTreeMap<String, ModelEntry>) -> Option<ModelEntry> {
         (None, None) => return None,
         (i, o) => (i.or(o), o.or(i)),
     };
+    // A model with no cache rate bills cached tokens at its own input rate
+    // (`cost_with_cache`), so that effective rate must feed the ceiling too —
+    // otherwise one discounted-cache entry drags the fallback for every
+    // unpriced model below what a priced model would actually charge.
+    fn own_input(m: &ModelEntry) -> Option<f64> {
+        let (i, o) = m.effective_costs();
+        i.or(o)
+    }
     Some(ModelEntry {
         input_cost_per_1k: input,
         output_cost_per_1k: output,
-        cache_read_cost_per_1k: dearest(|m| m.cache_read_cost_per_1k),
-        cache_write_cost_per_1k: dearest(|m| m.cache_write_cost_per_1k),
+        cache_read_cost_per_1k: dearest(|m| m.cache_read_cost_per_1k.or_else(|| own_input(m))),
+        cache_write_cost_per_1k: dearest(|m| m.cache_write_cost_per_1k.or_else(|| own_input(m))),
         ..Default::default()
     })
 }

@@ -647,7 +647,11 @@ fn dearest_rates_takes_each_side_on_its_own() {
     let r = dearest_rates(&models).unwrap();
     assert_eq!(r.input_cost_per_1k, Some(0.005));
     assert_eq!(r.output_cost_per_1k, Some(0.015));
-    assert_eq!(r.cache_read_cost_per_1k, None, "no entry records one");
+    assert_eq!(
+        r.cache_read_cost_per_1k,
+        Some(0.005),
+        "no entry records one, so each caches at its own input rate"
+    );
 
     let only_output = BTreeMap::from([(
         "o".to_string(),
@@ -660,4 +664,52 @@ fn dearest_rates_takes_each_side_on_its_own() {
         "one side stands in for the other"
     );
     assert!(dearest_rates(&BTreeMap::new()).is_none());
+}
+
+/// PR #2132 review: a model with no cache rate is billed cached tokens at its
+/// input rate, so that effective rate — not only explicit cache fields — must
+/// feed the ceiling. Otherwise one discounted-cache entry drags the fallback
+/// for every unpriced model far below what a priced model would cost.
+#[test]
+fn dearest_cache_rates_include_the_input_rate_a_missing_cache_rate_falls_back_to() {
+    let no_cache = model(BillingMode::UsageBilled, Some(0.005), Some(0.025));
+    let discounted = ModelEntry {
+        cache_read_cost_per_1k: Some(0.0001),
+        cache_write_cost_per_1k: Some(0.00125),
+        ..model(BillingMode::UsageBilled, Some(0.001), Some(0.004))
+    };
+    let models = BTreeMap::from([
+        ("no_cache".to_string(), no_cache.clone()),
+        ("discounted".to_string(), discounted),
+    ]);
+    let r = dearest_rates(&models).unwrap();
+    assert_eq!(
+        r.cache_read_cost_per_1k,
+        Some(0.005),
+        "no_cache reads at input"
+    );
+    assert_eq!(
+        r.cache_write_cost_per_1k,
+        Some(0.005),
+        "no_cache writes at input"
+    );
+
+    // An explicit cache-write premium above every input rate still wins.
+    let premium = ModelEntry {
+        cache_write_cost_per_1k: Some(0.00625),
+        ..model(BillingMode::UsageBilled, Some(0.004), Some(0.02))
+    };
+    let models = BTreeMap::from([
+        ("no_cache".to_string(), no_cache),
+        ("premium".to_string(), premium),
+    ]);
+    let r = dearest_rates(&models).unwrap();
+    assert_eq!(r.cache_read_cost_per_1k, Some(0.005));
+    assert_eq!(r.cache_write_cost_per_1k, Some(0.00625));
+
+    // Same ceiling end to end: the unpriced turn is never cheaper than it
+    // would be on the priced model whose cache falls back to input.
+    let fallback = r.clone();
+    let on_priced = fallback.cost_with_cache(1_000, 1_000, 0, 0).unwrap();
+    assert!((on_priced - 0.005).abs() < 1e-12, "{on_priced}");
 }
