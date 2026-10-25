@@ -37,10 +37,14 @@ pub const PAUSED_REASON: &str =
 /// Why a run was halted from outside. `Stop` is the kill-switch and ends the
 /// run for good; `Pause` halts it the same way but leaves it resumable, so the
 /// executor must close the channel differently (pause/resume design §5.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `Limit` is a run limit (e.g. `cost_usd`) that ended the run as `Stop`
+/// does; it carries the text halted steps report, so a limit is never
+/// mistaken for an operator's `mur fleet stop` (#2130).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HaltReason {
     Stop,
     Pause,
+    Limit(String),
 }
 
 /// "Should this run halt, and why?" Same cost contract as [`StopSignal`]: it
@@ -64,10 +68,11 @@ pub(super) fn stop_requested(opts: &DagExecOptions<'_>) -> bool {
 }
 
 /// What a halted step reports, matched to why it halted.
-pub(super) fn halted_reason_text(opts: &DagExecOptions<'_>) -> &'static str {
+pub(super) fn halted_reason_text(opts: &DagExecOptions<'_>) -> String {
     match halt_reason(opts) {
-        Some(HaltReason::Pause) => PAUSED_REASON,
-        _ => STOPPED_REASON,
+        Some(HaltReason::Pause) => PAUSED_REASON.to_string(),
+        Some(HaltReason::Limit(why)) => why,
+        _ => STOPPED_REASON.to_string(),
     }
 }
 

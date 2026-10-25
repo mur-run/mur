@@ -413,3 +413,50 @@ async fn a_failed_delegate_dial_still_reports_what_the_member_spent() {
         "usage is asked for under the delegation's own task id"
     );
 }
+
+/// #2130: a run limit halts with its own reason, and the kill-switch still
+/// outranks it. A halted step used to say "the kill-switch was engaged"
+/// whatever stopped it, sending a cost-cap stop hunting for a `mur fleet stop`
+/// nobody ran.
+#[test]
+fn a_limit_halt_reports_its_own_reason_and_a_stop_outranks_it() {
+    const WHY: &str = "stopped: cost_usd reached ($31.00 spent of $30.00)";
+    let (f, stop) = flag();
+    let opts = DagExecOptions {
+        stop: Some(stop),
+        halt: Some(Arc::new(|| Some(HaltReason::Limit(WHY.into())))),
+        ..DagExecOptions::default()
+    };
+    assert_eq!(halt_reason(&opts), Some(HaltReason::Limit(WHY.into())));
+    assert_eq!(halted_reason_text(&opts), WHY);
+    f.store(true, Ordering::SeqCst);
+    assert_eq!(halt_reason(&opts), Some(HaltReason::Stop));
+    assert_eq!(halted_reason_text(&opts), STOPPED_REASON);
+}
+
+/// A limit halt ends the run `Stopped` and starts nothing further, like the
+/// kill-switch it used to masquerade as.
+#[tokio::test]
+async fn a_limit_halt_ends_the_run_stopped() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let marker = tmp.path().join("ran");
+    let proc = Procedure {
+        variables: vec![],
+        steps: vec![echo_step("s0", &[], &format!("touch {}", marker.display()))],
+    };
+    let out = execute_dag(
+        tmp.path(),
+        "t",
+        &proc,
+        &DagExecOptions {
+            halt: Some(Arc::new(|| {
+                Some(HaltReason::Limit("stopped: limit".into()))
+            })),
+            ..DagExecOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.status, PipelineStatus::Stopped);
+    assert!(!marker.exists());
+}

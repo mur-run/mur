@@ -598,7 +598,12 @@ pub async fn execute_dag(
         RunOutcome::Stopped => PipelineStatus::Stopped,
     };
     if outcome == RunOutcome::Stopped {
-        eprintln!("\n⏹ Run stopped by the kill-switch — no further steps started.");
+        match halt_reason(opts) {
+            Some(HaltReason::Limit(why)) => {
+                eprintln!("\n⏹ Run {why} — no further steps started.")
+            }
+            _ => eprintln!("\n⏹ Run stopped by the kill-switch — no further steps started."),
+        }
     }
     if outcome == RunOutcome::Paused {
         eprintln!("\n⏸ Run paused by `mur fleet pause` — no further steps started.");

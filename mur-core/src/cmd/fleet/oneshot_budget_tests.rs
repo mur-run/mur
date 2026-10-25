@@ -91,14 +91,16 @@ fn budget() -> Arc<OneShotBudget> {
 #[test]
 fn trips_on_actual_billable_spend_and_halts_the_run() {
     let b = budget();
-    let stop = b.stop_signal(Arc::new(|| false));
+    let halt = b.halt_signal();
     b.record(&ev("api", StepEventKind::Done, 3_000));
-    assert!(!b.tripped() && !stop(), "$3 of $5 is under the cap");
-    b.record(&ev("api", StepEventKind::Failed, 2_000));
     assert!(
-        b.tripped() && stop(),
-        "$5 reaches the cap and halts the DAG"
+        !b.tripped() && halt().is_none(),
+        "$3 of $5 is under the cap"
     );
+    b.record(&ev("api", StepEventKind::Failed, 2_000));
+    assert!(b.tripped(), "$5 reaches the cap");
+    // #2130: the halt carries the cap's reason, never the kill-switch's.
+    assert_eq!(halt(), Some(HaltReason::Limit(b.stop_reason())));
     assert!(b.stop_reason().starts_with(BUDGET_STOP_REASON));
 }
 
@@ -127,12 +129,12 @@ fn non_terminal_events_carry_no_spend() {
 }
 
 #[test]
-fn the_kill_switch_still_stops_an_untripped_budget() {
+fn an_untripped_budget_never_halts() {
     let b = budget();
-    let stop = b.stop_signal(Arc::new(|| true));
+    b.record(&ev("api", StepEventKind::Done, 1_000));
     assert!(
-        stop() && !b.tripped(),
-        "the stop is the operator's, not the cap's"
+        b.halt_signal()().is_none(),
+        "the kill-switch is the run's `stop` signal; the cap only halts once tripped"
     );
 }
 
@@ -176,7 +178,7 @@ async fn reaching_the_cap_stops_the_dag_before_the_next_rank() {
         "t",
         &proc,
         &DagExecOptions {
-            stop: Some(b.stop_signal(Arc::new(|| false))),
+            halt: Some(b.halt_signal()),
             on_step: Some(feed),
             ..DagExecOptions::default()
         },
@@ -220,7 +222,7 @@ async fn the_same_run_on_local_members_finishes() {
         "t",
         &proc,
         &DagExecOptions {
-            stop: Some(b.stop_signal(Arc::new(|| false))),
+            halt: Some(b.halt_signal()),
             on_step: Some(feed),
             ..DagExecOptions::default()
         },
@@ -322,7 +324,7 @@ async fn a_router_that_reached_the_cap_stops_the_run_before_any_step() {
         "t",
         &proc,
         &DagExecOptions {
-            stop: Some(b.stop_signal(Arc::new(|| false))),
+            halt: Some(b.halt_signal()),
             on_step: Some(b.observer()),
             ..DagExecOptions::default()
         },
@@ -595,4 +597,67 @@ fn cached_prompt_tokens_are_priced_at_the_cache_rates() {
         "{}",
         unpriced.spent_usd()
     );
+}
+
+/// #2130 regression, with the issue's own numbers: a heavily cached turn on
+/// an unpriced model, priced at the registry's dearest rates. The old flat
+/// fallback billed every token at the dearest OUTPUT rate: $63.39.
+#[test]
+fn an_unpriced_cached_turn_is_priced_per_side_not_at_the_output_rate() {
+    let opus = ModelEntry {
+        cache_read_cost_per_1k: Some(0.0005),
+        ..model(BillingMode::UsageBilled, Some(0.005), Some(0.025))
+    };
+    let models = BTreeMap::from([
+        ("opus".to_string(), opus),
+        (
+            "flash".to_string(),
+            model(BillingMode::UsageBilled, None, None),
+        ),
+    ]);
+    let fallback = dearest_rates(&models).expect("the registry prices opus");
+    let agents = HashMap::from([("api".to_string(), agent(true, Some("flash")))]);
+    let b =
+        OneShotBudget::new(30.0, 0.025, "router".into(), agents, models).with_fallback(fallback);
+    let cached = ModelShare {
+        cache_read: 2_427_648,
+        ..share(Some("flash"), None, 2_497_380, 38_380)
+    };
+    b.record_turn(Some("api"), &turn(vec![cached]));
+    // 69,732 uncached in at $0.005 + 2,427,648 cached at $0.0005 + 38,380 out
+    // at $0.025, per 1k.
+    let want = 69.732 * 0.005 + 2_427.648 * 0.0005 + 38.38 * 0.025;
+    assert!((b.spent_usd() - want).abs() < 1e-9, "{}", b.spent_usd());
+    assert!(b.spent_usd() < 3.0 && !b.tripped(), "{}", b.spent_usd());
+}
+
+#[test]
+fn dearest_rates_takes_each_side_on_its_own() {
+    let models = BTreeMap::from([
+        (
+            "a".to_string(),
+            model(BillingMode::UsageBilled, Some(0.003), Some(0.015)),
+        ),
+        (
+            "b".to_string(),
+            model(BillingMode::UsageBilled, Some(0.005), Some(0.01)),
+        ),
+        ("free".to_string(), model(BillingMode::Local, None, None)),
+    ]);
+    let r = dearest_rates(&models).unwrap();
+    assert_eq!(r.input_cost_per_1k, Some(0.005));
+    assert_eq!(r.output_cost_per_1k, Some(0.015));
+    assert_eq!(r.cache_read_cost_per_1k, None, "no entry records one");
+
+    let only_output = BTreeMap::from([(
+        "o".to_string(),
+        model(BillingMode::UsageBilled, None, Some(0.02)),
+    )]);
+    let r = dearest_rates(&only_output).unwrap();
+    assert_eq!(
+        r.input_cost_per_1k,
+        Some(0.02),
+        "one side stands in for the other"
+    );
+    assert!(dearest_rates(&BTreeMap::new()).is_none());
 }
