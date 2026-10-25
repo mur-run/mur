@@ -10,6 +10,8 @@
 
 use std::path::Path;
 
+use mur_track::turn::strip_verbatim;
+
 /// The note to append to a serena result, or `None` when the answer is
 /// already about the directory the turn works in.
 ///
@@ -17,10 +19,16 @@ use std::path::Path;
 /// `SessionCwd::track_of`. The note applies only when that track was cut
 /// from the same repository the entry serves — either path containing the
 /// other, since an entry may point at a subdirectory of the repo root.
+///
+/// Both sides are compared without the Windows `\\?\` verbatim prefix:
+/// code-nav setup stores `std::fs::canonicalize` output (verbatim), while
+/// tracks come from `mur_track::turn::canonicalize` (prefix stripped), and
+/// `starts_with` treats the two prefixes as different components.
 pub fn base_note(entry_project: &Path, track: Option<(&Path, &Path)>) -> Option<String> {
     let (track_project, track_dir) = track?;
-    let same_repo =
-        entry_project.starts_with(track_project) || track_project.starts_with(entry_project);
+    let entry = strip_verbatim(entry_project.to_path_buf());
+    let project = strip_verbatim(track_project.to_path_buf());
+    let same_repo = entry.starts_with(&project) || project.starts_with(&entry);
     if !same_repo {
         return None;
     }
@@ -62,6 +70,26 @@ mod tests {
             )
             .is_some()
         );
+    }
+
+    /// Regression: a verbatim entry path (`std::fs::canonicalize`) must match
+    /// its prefix-free track project (`mur_track::turn::canonicalize`).
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_entry_matches_plain_track_project() {
+        let note = base_note(
+            Path::new(r"\\?\C:\repo"),
+            Some((
+                Path::new(r"C:\repo"),
+                Path::new(r"C:\repo\.worktrees\turn-1"),
+            )),
+        );
+        assert!(note.is_some());
+        let note = base_note(
+            Path::new(r"C:\repo\app"),
+            Some((Path::new(r"\\?\C:\repo"), Path::new(r"C:\t"))),
+        );
+        assert!(note.is_some());
     }
 
     #[test]
