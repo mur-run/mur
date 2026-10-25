@@ -48,8 +48,10 @@ pub enum BrowserAction {
         #[arg(long)]
         reauth: bool,
         /// Browser engine to use (Chrome, Chromium, Firefox, or Edge).
-        /// Without this flag, MUR detects installed engines and asks when
-        /// more than one is available.
+        /// Without this flag, MUR uses Playwright's Chromium build when it is
+        /// installed; otherwise it picks from the engines it can actually
+        /// launch (Playwright builds, plus installed Chrome or Edge) and asks
+        /// when more than one remains.
         #[arg(long, value_enum)]
         browser: Option<BrowserEngine>,
         /// Domain this profile may navigate to (repeatable). Subdomains are
