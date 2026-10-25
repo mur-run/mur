@@ -163,6 +163,22 @@ fn allow_hint_also_covers_the_session_and_already_allowed_paths() {
 }
 
 #[test]
+fn session_hint_warns_that_following_it_makes_the_host_permanent() {
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    f.profiles = deepseek();
+    let (text, _) = run_allow("mur", &s(&["--session", "chat.deepseek.com"]), &mut f).unwrap();
+    assert!(
+        text.contains("also keeps `chat.deepseek.com` allowed after a restart"),
+        "{text}"
+    );
+    // The permanent path has nothing temporary to warn about.
+    let mut f = fake(McpNetMode::Restricted, &[]);
+    f.profiles = deepseek();
+    let (text, _) = run_allow("mur", &s(&["--yes", "chat.deepseek.com"]), &mut f).unwrap();
+    assert!(!text.contains("after a restart"), "{text}");
+}
+
+#[test]
 fn allow_stays_quiet_when_the_profile_is_attached_or_unrelated() {
     let mut f = fake(McpNetMode::Restricted, &[]);
     f.servers[0].args = s(&["browser", "record", "--profile", "deepseek"]);
