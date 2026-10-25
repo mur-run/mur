@@ -801,6 +801,15 @@ Agent** wizard offers the same catalog as a source.
   still ends everything, and ends it now: member turns in flight are
   cancelled, no further step starts, and the run is recorded `stopped` rather
   than `done`.
+- **Pause a run, resume the same run** — `mur fleet pause <name>` halts a
+  running loop as promptly as `stop`, but keeps it resumable: `mur fleet resume
+  <name>` continues under the same run id, with the same spend, the same
+  consumed deadline and the same claimed job, and work already paid for is not
+  redone. Paused time does not count against the deadline, and a resumed run
+  never gets wider limits than it had. `--detach` resumes in the background
+  (log in `~/.mur/runs/<run_id>/resume.log`). `stop` still wins: it ends a
+  paused run for good. `mur fleet list` marks a paused fleet `▮`; the Hub and
+  murmur's `/deep-research pause|resume` reach the same commands.
 - **Bounded, not budgeted** — three knobs, one schema at every scope:
   `deadline`, `stuck`, `cost_usd` in `config.yaml` → `fleet.yaml` → `profile.yaml`,
   inner scope replacing the outer. Nothing else stops a run: iteration caps and
@@ -1149,7 +1158,7 @@ mur
 │                schedule (add · proposals · accept) · perm (incl. list-paths · remove-path · set-mode proxy_only · reseal) · secret · hitl (list · forget · pending · approve · deny) ·
 │                fallback · smart · routing · effort · trash · rollback · turn (list · undo) … (40+)
 ├── capability   install · list · show · remove   (MCP + skills + programs bundled → an agent)
-├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since]   (squads of agents over a shared channel)
+├── fleet        create · list · show · status · run [--run-id] · review · review-setup · review-resume · prune-reviews · set-loop · limits · send · jobs [--since] · stop · start · pause · resume [--detach]   (squads of agents over a shared channel)
 ├── limits       <fleet|agent> [--json] · --global · --deadline · --stuck · --cost-usd · --unset   (every execution bound in force, with its source; global scope: ~/.mur/limits/global.yaml)
 ├── monitor      add · list · show · cancel · retry   (durable monitors for work that outlives the turn: CI runs, MUR runs, subprocesses)
 ├── official     list · install   (official agents/fleets from the app.mur.run catalog)

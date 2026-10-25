@@ -447,7 +447,12 @@ mod tests {
         let mur_home = tmp.path();
         super::super::store::save_fleet(mur_home, &sample_fleet("dev", "fleet-dev")).unwrap();
         let base = chrono::Utc::now();
-        save_run(mur_home, "run-old", "fleet-dev", base - chrono::Duration::hours(1));
+        save_run(
+            mur_home,
+            "run-old",
+            "fleet-dev",
+            base - chrono::Duration::hours(1),
+        );
         save_run(mur_home, "run-new", "fleet-dev", base);
         request_pause(mur_home, "dev", "run-old");
         let text = status_text(mur_home);
