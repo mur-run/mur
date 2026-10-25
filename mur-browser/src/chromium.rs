@@ -124,27 +124,40 @@ pub fn headless_shell_exe(dir: &Path) -> Option<PathBuf> {
 }
 
 /// `--executable-path=<shell>` for a headless launch, or nothing (the
-/// package then launches full Chromium, as before).
+/// package then launches full Chromium, as before). On the shell it also
+/// carries `--user-agent=<regular Chrome UA>`: the shell's own
+/// `HeadlessChrome` token gets a `403` from UA-filtering CDNs (#2099). An
+/// explicit `--user-agent` in [`EXTRA_ARGS_ENV`] comes later on the command
+/// line and wins.
 pub fn headless_exe_args(browsers: Option<&Path>) -> Vec<String> {
     browsers
         .and_then(headless_shell_exe)
-        .map(|exe| vec![format!("--executable-path={}", exe.display())])
+        .map(|exe| {
+            let mut args = vec![format!("--executable-path={}", exe.display())];
+            args.extend(crate::user_agent::shell_user_agent_args(&exe));
+            args
+        })
         .unwrap_or_default()
 }
 
-/// Env var holding extra Chromium flags for headless launches, whitespace
-/// separated. A sandboxed host needs `--no-sandbox` (Chromium's own sandbox
-/// cannot start inside an outer one), and there is otherwise no way to reach
-/// the browser command line from outside.
+/// Env var holding extra `@playwright/mcp` launch flags for headless
+/// launches, split like a shell command line so a quoted value with spaces
+/// (`--user-agent="Mozilla/5.0 (...)"`) stays one argument. A sandboxed host
+/// needs `--no-sandbox` (Chromium's own sandbox cannot start inside an outer
+/// one), and there is otherwise no way to reach the browser command line
+/// from outside.
 pub const EXTRA_ARGS_ENV: &str = "MUR_BROWSER_CHROMIUM_ARGS";
 
 /// Parse [`EXTRA_ARGS_ENV`]. Unset or blank yields nothing, so the default
-/// launch is exactly what it was before.
+/// launch is exactly what it was before. Unbalanced quotes fall back to plain
+/// whitespace splitting (the pre-#2099 behaviour) with a warning, rather than
+/// dropping the host's flags — `--no-sandbox` may be what lets it launch.
 pub fn extra_args(raw: Option<&str>) -> Vec<String> {
-    raw.unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect()
+    let raw = raw.unwrap_or_default();
+    shell_words::split(raw).unwrap_or_else(|e| {
+        tracing::warn!("{EXTRA_ARGS_ENV}: {e}; splitting on whitespace instead");
+        raw.split_whitespace().map(str::to_owned).collect()
+    })
 }
 
 /// Set to `1` by the agent runtime on every MCP child it spawns while its own
@@ -271,6 +284,28 @@ mod tests {
         assert_eq!(
             extra_args(Some("  --no-sandbox   --disable-gpu\t--foo ")),
             ["--no-sandbox", "--disable-gpu", "--foo"]
+        );
+    }
+
+    #[test]
+    fn quoted_extra_args_keep_their_spaces() {
+        assert_eq!(
+            extra_args(Some(
+                r#"--no-sandbox --user-agent="Mozilla/5.0 (X11; Linux x86_64)""#
+            )),
+            [
+                "--no-sandbox",
+                "--user-agent=Mozilla/5.0 (X11; Linux x86_64)"
+            ]
+        );
+        assert_eq!(extra_args(Some("--ua='a b'")), ["--ua=a b"]);
+    }
+
+    #[test]
+    fn unbalanced_quotes_still_split_on_whitespace() {
+        assert_eq!(
+            extra_args(Some(r#"--no-sandbox --user-agent="oops"#)),
+            ["--no-sandbox", r#"--user-agent="oops"#]
         );
     }
 
