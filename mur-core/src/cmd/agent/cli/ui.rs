@@ -43,7 +43,7 @@ use super::complete;
 /// (Ctrl+O). Enter and Esc both return to chat; Ctrl+D quits outright, same
 /// as the composer — the overlay never lets a keypress fall through
 /// unhandled into the input box.
-const OVERLAY_HINT: &str = " press Enter or Esc to return · Ctrl+D quit ";
+const OVERLAY_HINT: &str = " ↑↓ PgUp PgDn Home End scroll · Enter or Esc return · Ctrl+D quit ";
 
 /// Rows the composer spends on chrome: its top rule plus the blank row under
 /// the text (`app::COMPOSER_PAD_BELOW`).
@@ -152,9 +152,10 @@ fn render_chip(f: &mut Frame, app: &App, area: Rect, what: &str, hint: &str) {
 /// Draw the full-screen transcript overlay (Ctrl+O): the plain-text
 /// transcript (native select/copy/search works because we never leave raw
 /// mode or the alt-screen — this is just another ratatui frame) plus a
-/// footer hint. Scroll follows the normal `scroll_back`/PageUp/PageDown
-/// state so the same keys work here as in the regular transcript pane.
-fn render_overlay(f: &mut Frame, app: &App) {
+/// footer hint. Scroll uses its own `overlay_scroll` (lines up from the
+/// bottom), driven by `apply_overlay_scroll`; this clamps it and records the
+/// page height for the next PgUp/PgDn.
+fn render_overlay(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -162,16 +163,26 @@ fn render_overlay(f: &mut Frame, app: &App) {
         .split(area);
 
     let text = app.overlay_text.as_deref().unwrap_or("");
-    let total_lines = text.lines().count() as u16;
-    let visible = chunks[0].height;
+    let total_lines = u16::try_from(text.lines().count()).unwrap_or(u16::MAX);
+    // The bordered block eats a row top and bottom; measuring the outer
+    // height hid the last two transcript lines under the border.
+    let visible = chunks[0].height.saturating_sub(2);
     let max_scroll = total_lines.saturating_sub(visible);
-    let scroll = app.scroll_back.min(max_scroll);
+    let scroll = app.overlay_scroll.min(max_scroll);
+    // Write the clamp back so PgDn after overshooting the top moves at once.
+    app.overlay_scroll = scroll;
+    app.overlay_page = visible;
     // scroll_back counts lines up from the bottom; ratatui's Paragraph scroll
     // counts down from the top, so invert it.
     let top_offset = max_scroll.saturating_sub(scroll);
 
     f.render_widget(Clear, area);
-    let block = Block::default().borders(Borders::ALL).title(" transcript ");
+    let title = if scroll > 0 {
+        format!(" transcript · {scroll} lines below · End to follow ")
+    } else {
+        " transcript ".to_string()
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
     f.render_widget(
         Paragraph::new(Text::raw(text))
             .block(block)
