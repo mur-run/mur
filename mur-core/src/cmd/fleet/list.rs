@@ -18,18 +18,49 @@ fn visible_fleets(names: &[String], include_review: bool) -> Vec<String> {
         .collect()
 }
 
-/// ST column glyph. All three come from the Geometric Shapes block so they
+/// What the ST column shows for one fleet. Built once by
+/// [`fleet_row_state`], so the precedence `Stopped > Paused > Running > Idle`
+/// is decided in one place (pause/resume design §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FleetRowState {
+    Stopped,
+    Paused,
+    Running,
+    Idle,
+}
+
+/// ST column glyph. All four come from the Geometric Shapes block so they
 /// render one cell wide; `⏸`/`⏹` are emoji-presentation on many terminals
-/// and would shift the column. `⏸` is also reserved for a future *pause*
-/// (#2036 part 3) — a stopped fleet is not resumable mid-run.
-fn status_symbol(stopped: bool, running: bool) -> &'static str {
-    if stopped {
-        "■" // stopped wins over running
-    } else if running {
-        "▶"
-    } else {
-        "●" // idle
+/// and would shift the column, which is why a paused fleet is `▮` (U+25AE).
+fn status_symbol(state: FleetRowState) -> &'static str {
+    match state {
+        FleetRowState::Stopped => "■",
+        FleetRowState::Paused => "▮",
+        FleetRowState::Running => "▶",
+        FleetRowState::Idle => "●",
     }
+}
+
+/// `.stopped` wins; then a `.paused` sentinel counts only once its run record
+/// reads `Paused` — a sentinel whose loop is still checkpointing is still a
+/// running run (design §5.5).
+fn fleet_row_state(stopped: bool, paused_run: bool, running_job: bool) -> FleetRowState {
+    if stopped {
+        FleetRowState::Stopped
+    } else if paused_run {
+        FleetRowState::Paused
+    } else if running_job {
+        FleetRowState::Running
+    } else {
+        FleetRowState::Idle
+    }
+}
+
+/// Whether `.paused` names a run whose record has reached `State::Paused`.
+fn has_paused_run(mur_home: &Path, name: &str) -> bool {
+    control::paused_run_id(mur_home, name)
+        .and_then(|id| crate::run_status::store::load(mur_home, &id).ok().flatten())
+        .is_some_and(|r| r.state == crate::run_status::State::Paused)
 }
 
 pub(crate) fn truncate_goal(goal: &str, width: usize) -> String {
@@ -83,7 +114,11 @@ pub fn cmd_fleet_list(mur_home: &Path, include_review: bool) -> Result<()> {
             .count();
         rows.push(Row {
             name: f.name.clone(),
-            st: status_symbol(control::is_stopped(mur_home, n), running),
+            st: status_symbol(fleet_row_state(
+                control::is_stopped(mur_home, n),
+                has_paused_run(mur_home, n),
+                running,
+            )),
             mem: f.members.len(),
             queued,
             router: f.router_or_concierge().to_string(),
@@ -161,11 +196,55 @@ mod tests {
     }
 
     #[test]
-    fn status_symbol_precedence() {
-        assert_eq!(status_symbol(true, true), "■"); // stopped wins over running
-        assert_eq!(status_symbol(true, false), "■");
-        assert_eq!(status_symbol(false, true), "▶");
-        assert_eq!(status_symbol(false, false), "●");
+    fn row_state_precedence() {
+        use FleetRowState::*;
+        assert_eq!(fleet_row_state(true, true, true), Stopped);
+        assert_eq!(fleet_row_state(false, true, true), Paused); // job stays Running while paused
+        assert_eq!(fleet_row_state(false, false, true), Running);
+        assert_eq!(fleet_row_state(false, false, false), Idle);
+    }
+
+    #[test]
+    fn status_symbols_are_distinct_single_chars() {
+        use FleetRowState::*;
+        let glyphs: Vec<_> = [Stopped, Paused, Running, Idle].map(status_symbol).into();
+        assert_eq!(glyphs, ["■", "▮", "▶", "●"]);
+        assert!(glyphs.iter().all(|g| g.chars().count() == 1));
+    }
+
+    #[test]
+    fn paused_sentinel_counts_only_once_the_record_is_paused() {
+        use crate::run_status::{State, store};
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(control::paused_path(h, "dev").parent().unwrap()).unwrap();
+        std::fs::write(
+            control::paused_path(h, "dev"),
+            "run_id: r1\nrequested_at: x\n",
+        )
+        .unwrap();
+        assert!(!has_paused_run(h, "dev"), "no record yet");
+        let now = chrono::Utc::now();
+        let mut rec = crate::run_status::RunState {
+            schema: crate::run_status::RUN_SCHEMA,
+            run_id: "r1".into(),
+            channel_id: None,
+            kind: crate::run_status::RunKind::Fleet,
+            label: "fleet dev loop".into(),
+            pid: 1,
+            started_at: now,
+            last_heartbeat_at: Some(now),
+            state: State::Running,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: "test".into(),
+            build_sha: String::new(),
+        };
+        store::save(h, &rec).unwrap();
+        assert!(!has_paused_run(h, "dev"), "still checkpointing");
+        rec.state = State::Paused;
+        store::save(h, &rec).unwrap();
+        assert!(has_paused_run(h, "dev"));
     }
 
     #[test]
