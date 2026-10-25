@@ -67,10 +67,18 @@ impl Bounded {
                 "deadline passed",
             ));
         };
-        if write {
+        let armed = if write {
             self.stream.set_write_timeout(Some(t))
         } else {
             self.stream.set_read_timeout(Some(t))
+        };
+        match armed {
+            // Darwin refuses `SO_RCVTIMEO`/`SO_SNDTIMEO` with `EINVAL` once the
+            // peer has hung up. The call that follows cannot block then — it
+            // drains what is buffered, hits EOF, or fails with `EPIPE` — so
+            // the timeout has nothing left to bound.
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+            other => other,
         }
     }
 
@@ -117,5 +125,27 @@ mod tests {
         let near = bounded(idle, Some(Instant::now() + Duration::from_secs(2))).unwrap();
         assert!(near <= Duration::from_secs(2) && !near.is_zero());
         assert_eq!(bounded(idle, Some(Instant::now())), None);
+    }
+
+    /// Darwin fails `setsockopt(SO_RCVTIMEO)` with `EINVAL` once the peer has
+    /// closed; the reply already buffered must still be read, not lost to
+    /// the re-arm (macOS CI, after #2113).
+    #[cfg(unix)]
+    #[test]
+    fn a_reply_from_a_peer_that_already_hung_up_is_still_read() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
+        let (mut peer, ours) = UnixStream::pair().unwrap();
+        peer.write_all(b"{\"ok\":1}\n").unwrap();
+        peer.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(peer);
+        std::thread::sleep(Duration::from_millis(50));
+        let reader = BufReader::new(Bounded {
+            stream: ours,
+            idle: Duration::from_secs(5),
+            deadline: Some(Instant::now() + Duration::from_secs(5)),
+        });
+        let lines: Vec<String> = reader.lines().collect::<std::io::Result<_>>().unwrap();
+        assert_eq!(lines, vec!["{\"ok\":1}".to_string()]);
     }
 }
