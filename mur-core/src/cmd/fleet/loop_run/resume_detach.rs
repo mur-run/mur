@@ -29,6 +29,16 @@ const CONFIRM_POLL: Duration = Duration::from_millis(200);
 /// Bytes of `resume.log` shown when the child dies during startup.
 const LOG_TAIL_BYTES: u64 = 4096;
 
+/// Win32 process-creation flags (`winbase.h`): no console is inherited or
+/// created, and the child gets its own process group, so neither a closing
+/// console window nor Ctrl+C in the parent's ends the resumed run.
+#[cfg(windows)]
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// `<mur_home>/runs/<run_id>/resume.log`.
 pub fn resume_log_path(mur_home: &Path, run_id: &str) -> PathBuf {
     crate::run_status::store::runs_dir(mur_home)
@@ -60,7 +70,27 @@ fn child_command(exe: &Path, mur_home: &Path, name: &str, log: &std::fs::File) -
             });
         }
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    }
     Ok(cmd)
+}
+
+/// Hand a still-running child to a thread that waits on it, so a long-lived
+/// caller (the Hub, murmur) reaps it when the run ends instead of keeping a
+/// zombie until it exits. In the CLI the process exits first and the child is
+/// reparented as usual; the thread simply dies with it.
+fn reap_in_background(mut child: Child) {
+    let spawned = std::thread::Builder::new()
+        .name("mur-resume-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    if let Err(e) = spawned {
+        tracing::debug!("could not start the resume reaper thread: {e}");
+    }
 }
 
 /// What the confirm window saw.
@@ -127,24 +157,28 @@ pub fn resume_detached(mur_home: &Path, name: &str, exe: &Path) -> Result<String
     let pid = child.id();
     let log_shown = log_path.display();
     let run_id = &cp.run_id;
-    Ok(
-        match watch_startup(&mut child, mur_home, name, CONFIRM_WINDOW) {
-            Startup::Running => format!(
-                "Resumed fleet '{name}' (run {run_id}) in the background, pid {pid}.\n  log:    {log_shown}\n  watch:  mur fleet status {name}\n  pause:  mur fleet pause {name}   stop: mur fleet stop {name}"
-            ),
-            Startup::Exited(status) if status.success() => {
-                format!("Fleet '{name}' (run {run_id}) resumed and already ended — see {log_shown}")
-            }
-            Startup::Exited(status) => bail!(
-                "the detached resume of '{name}' exited during startup ({status}).\n--- last lines of {log_shown} ---\n{}",
-                crate::cmd::agent::start::tail_of(&log_path, LOG_TAIL_BYTES)
-            ),
-            Startup::Unconfirmed => format!(
-                "Resuming fleet '{name}' (run {run_id}) in the background, pid {pid} — not confirmed within {}s.\n  Check `mur fleet status {name}` or `tail {log_shown}`.",
-                CONFIRM_WINDOW.as_secs()
-            ),
-        },
-    )
+    let startup = watch_startup(&mut child, mur_home, name, CONFIRM_WINDOW);
+    // An exited child was already reaped by `try_wait`; a live one is waited
+    // on in the background.
+    if !matches!(startup, Startup::Exited(_)) {
+        reap_in_background(child);
+    }
+    Ok(match startup {
+        Startup::Running => format!(
+            "Resumed fleet '{name}' (run {run_id}) in the background, pid {pid}.\n  log:    {log_shown}\n  watch:  mur fleet status {name}\n  pause:  mur fleet pause {name}   stop: mur fleet stop {name}"
+        ),
+        Startup::Exited(status) if status.success() => {
+            format!("Fleet '{name}' (run {run_id}) resumed and already ended — see {log_shown}")
+        }
+        Startup::Exited(status) => bail!(
+            "the detached resume of '{name}' exited during startup ({status}).\n--- last lines of {log_shown} ---\n{}",
+            crate::cmd::agent::start::tail_of(&log_path, LOG_TAIL_BYTES)
+        ),
+        Startup::Unconfirmed => format!(
+            "Resuming fleet '{name}' (run {run_id}) in the background, pid {pid} — not confirmed within {}s.\n  Check `mur fleet status {name}` or `tail {log_shown}`.",
+            CONFIRM_WINDOW.as_secs()
+        ),
+    })
 }
 
 #[cfg(test)]
@@ -182,6 +216,22 @@ mod tests {
         let mut child = Command::new("false").spawn().unwrap();
         let got = watch_startup(&mut child, dir.path(), "dev", CONFIRM_WINDOW);
         assert!(matches!(got, Startup::Exited(s) if !s.success()), "{got:?}");
+    }
+
+    /// A child left running is reaped once it ends: `kill(pid, 0)` still
+    /// succeeds on a zombie, so ESRCH proves the background wait collected it.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_child_is_reaped_when_it_ends() {
+        let child = Command::new("sleep").arg("0.2").spawn().unwrap();
+        let pid = child.id() as libc::pid_t;
+        reap_in_background(child);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only probes for existence; nothing is delivered.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(Instant::now() < deadline, "pid {pid} was never reaped");
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Two resumes raced: another process holds the fleet's lock while our
