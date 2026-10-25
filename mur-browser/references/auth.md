@@ -20,9 +20,11 @@ first whenever they need an authenticated profile.
    does not exist, report the error and stop. Do **not** start
    `mur browser auth` on your own — the login handoff requires a person.
 3. **Always pass `--browser <engine>`.** Without it, `select_browser`
-   detects installed engines and, when more than one is present, prompts
-   interactively on stderr/stdin. That prompt hangs or fails in an agent
-   session. Pick an engine explicitly every time.
+   uses Playwright's Chromium build when present; otherwise it collects the
+   engines it can launch (Playwright builds, plus installed Chrome or Edge)
+   and, when more than one remains, prompts interactively on stderr/stdin.
+   That prompt hangs or fails in an agent session. Pick an engine
+   explicitly every time.
 
 ## Command table
 

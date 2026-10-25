@@ -9,6 +9,10 @@
 //! application, which is what the first message implied, changed nothing. The
 //! check that decides is the one the launch uses, and it names the command that
 //! actually fixes it.
+//!
+//! Auto-selection no longer scans app bundles for own-build engines (#2097),
+//! so this now guards an explicit `--browser` and a chromium whose cache state
+//! could not be read.
 
 use std::path::Path;
 
