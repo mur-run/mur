@@ -19,6 +19,7 @@ pub mod detail_window;
 mod exec_busy;
 pub mod export_muragent;
 pub mod fleet;
+pub mod fleet_pause;
 mod geometry;
 pub mod hitl;
 pub mod import_muragent;
@@ -821,6 +822,8 @@ pub fn run() {
             fleet::fleet_delete,
             fleet::fleet_stop,
             fleet::fleet_start,
+            fleet_pause::fleet_pause,
+            fleet_pause::fleet_resume,
             fleet::fleet_run,
             fleet::fleet_run_loop,
             fleet::fleet_set_loop,

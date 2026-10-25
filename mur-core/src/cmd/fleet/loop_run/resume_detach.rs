@@ -94,8 +94,18 @@ fn watch_startup(child: &mut Child, mur_home: &Path, name: &str) -> Startup {
 
 /// `mur fleet resume <name> --detach`.
 pub fn cmd_fleet_resume_detached(mur_home: &Path, name: &str) -> Result<()> {
-    // Admit here so a refusal reads in this terminal, not in a log. The child
-    // admits again (and again under the lock) — this check grants nothing.
+    let exe = std::env::current_exe().context("locate the mur binary")?;
+    println!("{}", resume_detached(mur_home, name, &exe)?);
+    Ok(())
+}
+
+/// The detached resume, with the `mur` binary to re-execute given explicitly:
+/// the CLI passes itself, the Hub passes the `mur` it resolved (its own
+/// executable is the Hub, not `mur`). Returns what to tell the operator; a
+/// child that died during startup is an `Err` carrying the log tail.
+pub fn resume_detached(mur_home: &Path, name: &str, exe: &Path) -> Result<String> {
+    // Admit here so a refusal reads where the operator is, not in a log. The
+    // child admits again (and again under the lock) — this check grants nothing.
     let cp = resume::admit(mur_home, name)?;
     let log_path = resume_log_path(mur_home, &cp.run_id);
     if let Some(dir) = log_path.parent() {
@@ -106,32 +116,28 @@ pub fn cmd_fleet_resume_detached(mur_home: &Path, name: &str) -> Result<()> {
         .append(true)
         .open(&log_path)
         .with_context(|| format!("open {}", log_path.display()))?;
-    let exe = std::env::current_exe().context("locate the mur binary")?;
-    let mut child = child_command(&exe, mur_home, name, &log)?
+    let mut child = child_command(exe, mur_home, name, &log)?
         .spawn()
         .with_context(|| format!("spawn {}", exe.display()))?;
     let pid = child.id();
     let log_shown = log_path.display();
-    match watch_startup(&mut child, mur_home, name) {
-        Startup::Running => println!(
-            "Resumed fleet '{name}' (run {}) in the background, pid {pid}.\n  log:    {log_shown}\n  watch:  mur fleet status {name}\n  pause:  mur fleet pause {name}   stop: mur fleet stop {name}",
-            cp.run_id
+    let run_id = &cp.run_id;
+    Ok(match watch_startup(&mut child, mur_home, name) {
+        Startup::Running => format!(
+            "Resumed fleet '{name}' (run {run_id}) in the background, pid {pid}.\n  log:    {log_shown}\n  watch:  mur fleet status {name}\n  pause:  mur fleet pause {name}   stop: mur fleet stop {name}"
         ),
-        Startup::Exited(status) if status.success() => println!(
-            "Fleet '{name}' (run {}) resumed and already ended — see {log_shown}",
-            cp.run_id
-        ),
+        Startup::Exited(status) if status.success() => {
+            format!("Fleet '{name}' (run {run_id}) resumed and already ended — see {log_shown}")
+        }
         Startup::Exited(status) => bail!(
             "the detached resume of '{name}' exited during startup ({status}).\n--- last lines of {log_shown} ---\n{}",
             crate::cmd::agent::start::tail_of(&log_path, LOG_TAIL_BYTES)
         ),
-        Startup::Unconfirmed => println!(
-            "Resuming fleet '{name}' (run {}) in the background, pid {pid} — not confirmed within {}s.\n  Check `mur fleet status {name}` or `tail {log_shown}`.",
-            cp.run_id,
+        Startup::Unconfirmed => format!(
+            "Resuming fleet '{name}' (run {run_id}) in the background, pid {pid} — not confirmed within {}s.\n  Check `mur fleet status {name}` or `tail {log_shown}`.",
             CONFIRM_WINDOW.as_secs()
         ),
-    }
-    Ok(())
+    })
 }
 
 #[cfg(test)]

@@ -2,6 +2,10 @@
  *  (the CLI, an agent's `fleet_run`) queue jobs with no event to this window. */
 export const JOBS_POLL_MS = 5_000;
 
+/** Where a fleet stands with respect to pause (pause/resume design §5.5):
+ *  `pausing` = asked, the run has not reached a safe point yet. */
+export type PausePhase = "none" | "pausing" | "paused";
+
 export interface FleetSummary {
   name: string;
   display_name: string;
@@ -10,6 +14,7 @@ export interface FleetSummary {
   active_jobs: number;
   stopped: boolean;
   running: boolean;
+  pause: PausePhase;
   /** Label ids, primary first. Empty means ungrouped. */
   labels: string[];
 }
@@ -49,6 +54,7 @@ export interface FleetDetail {
   members: string[];
   channel_id: string;
   stopped: boolean;
+  pause: PausePhase;
   loop_cfg: FleetLoopView | null;
   parallel_summary: ParallelSummary | null;
   limits: LimitsView;

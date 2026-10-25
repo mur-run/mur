@@ -16,6 +16,7 @@
 .status-dot--restarting, .status-pill--restarting { color: var(--status-restarting); }
 .status-dot--failed, .status-pill--failed { color: var(--status-failed); }
 .status-dot--stopped, .status-pill--stopped { color: var(--status-stopped); }
+.status-dot--paused, .status-pill--paused { color: var(--status-paused); }
 .needs-you {
   display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 6px;
   border-radius: var(--radius-full); font-size: var(--text-xs); font-weight: var(--fw-semi);

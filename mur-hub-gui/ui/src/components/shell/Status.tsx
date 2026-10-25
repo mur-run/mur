@@ -4,7 +4,7 @@ import type { RuntimeState } from "../../types";
 
 /** The only status vocabulary in the Hub (spec §4.5). Amber on a BADGE means
  *  "needs you"; amber on a PILL means restarting. They never share a shape. */
-export type StatusKind = "running" | "idle" | "restarting" | "stopped" | "failed";
+export type StatusKind = "running" | "idle" | "restarting" | "stopped" | "failed" | "paused";
 
 /** Agent runtime → kind. A stopped agent is the ordinary not-running state and
  *  reads as idle; the red `stopped` kind is reserved for a fleet kill-switch. */
@@ -21,8 +21,12 @@ export function statusOf(rt: RuntimeState | undefined): StatusKind {
   }
 }
 
-export function fleetStatusOf(f: { stopped: boolean; running: boolean }): StatusKind {
+/** Same precedence as `mur fleet list`: stop wins, then a pause that has
+ *  landed. A pause still on its way reads as running — it is. `pause` is
+ *  optional so callers without it keep the old three-way answer. */
+export function fleetStatusOf(f: { stopped: boolean; running: boolean; pause?: string }): StatusKind {
   if (f.stopped) return "stopped";
+  if (f.pause === "paused") return "paused";
   return f.running ? "running" : "idle";
 }
 
@@ -32,6 +36,7 @@ const LABEL_KEY: Record<StatusKind, TranslationKey> = {
   restarting: "status.restarting",
   stopped: "status.stopped",
   failed: "status.failed",
+  paused: "status.paused",
 };
 
 export function StatusDot({ kind, title }: { kind: StatusKind; title?: string }) {

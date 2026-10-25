@@ -58,9 +58,7 @@ fn fleet_row_state(stopped: bool, paused_run: bool, running_job: bool) -> FleetR
 
 /// Whether `.paused` names a run whose record has reached `State::Paused`.
 fn has_paused_run(mur_home: &Path, name: &str) -> bool {
-    control::paused_run_id(mur_home, name)
-        .and_then(|id| crate::run_status::store::load(mur_home, &id).ok().flatten())
-        .is_some_and(|r| r.state == crate::run_status::State::Paused)
+    super::pause::phase(mur_home, name) == super::pause::PausePhase::Paused
 }
 
 pub(crate) fn truncate_goal(goal: &str, width: usize) -> String {

@@ -23,6 +23,8 @@ pub struct FleetSummary {
     pub active_jobs: usize,
     pub stopped: bool,
     pub running: bool,
+    /// `"none" | "pausing" | "paused"` (pause/resume design §5.5).
+    pub pause: &'static str,
     /// Label ids, primary first. Empty means the fleet is ungrouped.
     pub labels: Vec<String>,
 }
@@ -64,6 +66,8 @@ pub struct FleetDetail {
     pub members: Vec<String>,
     pub channel_id: String,
     pub stopped: bool,
+    /// `"none" | "pausing" | "paused"`, as in [`FleetSummary::pause`].
+    pub pause: &'static str,
     pub loop_cfg: Option<FleetLoopView>,
     pub parallel_summary: Option<ParallelSummaryView>,
     /// The Hub renders what the CLI resolves (spec §10): every execution
@@ -232,6 +236,7 @@ pub fn fleet_list() -> Result<Vec<FleetSummary>, String> {
                 active_jobs,
                 stopped,
                 running: active_jobs > 0 && !stopped,
+                pause: crate::fleet_pause::phase_str(&name),
                 labels: registry.labels_of(&fleet.name).to_vec(),
             });
         }
@@ -308,6 +313,7 @@ pub fn fleet_detail(name: String) -> Result<FleetDetail, String> {
         members: fleet.members.clone(),
         channel_id: fleet.channel_id.clone(),
         stopped,
+        pause: crate::fleet_pause::phase_str(&name),
         loop_cfg,
         parallel_summary,
         limits,

@@ -18,6 +18,12 @@ describe("fleetStatusOf", () => {
     expect(fleetStatusOf({ stopped: false, running: true })).toBe("running");
     expect(fleetStatusOf({ stopped: false, running: false })).toBe("idle");
   });
+
+  it("a landed pause reads paused; stop still wins; pausing is still running", () => {
+    expect(fleetStatusOf({ stopped: false, running: true, pause: "paused" })).toBe("paused");
+    expect(fleetStatusOf({ stopped: true, running: true, pause: "paused" })).toBe("stopped");
+    expect(fleetStatusOf({ stopped: false, running: true, pause: "pausing" })).toBe("running");
+  });
 });
 
 describe("markup", () => {

@@ -56,6 +56,40 @@ fn verdict(mur_home: &Path, name: &str) -> Verdict {
     Verdict::Pause { run_id: p.run_id }
 }
 
+/// Where a fleet stands with respect to pause, for surfaces that render it
+/// (the Hub's buttons and status pill). One derivation, so the Hub and
+/// `mur fleet list` cannot disagree about when a pause has landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PausePhase {
+    /// No pause in play.
+    None,
+    /// `.paused` names a live run that has not reached a safe point yet
+    /// (design §5.5: still `Running`, `list` keeps showing `▶`).
+    Pausing,
+    /// `.paused` names a run whose record reads `Paused`: resumable.
+    Paused,
+}
+
+/// [`PausePhase`] of `name`. A stopped fleet is never `Pausing` (stop wins),
+/// and a sentinel whose run is gone without reaching `Paused` reads `None` —
+/// nothing is on its way to a safe point.
+pub fn phase(mur_home: &Path, name: &str) -> PausePhase {
+    let Some(run_id) = control::paused_run_id(mur_home, name) else {
+        return PausePhase::None;
+    };
+    let state = crate::run_status::store::load(mur_home, &run_id)
+        .ok()
+        .flatten()
+        .map(|r| r.state);
+    if state == Some(crate::run_status::State::Paused) {
+        PausePhase::Paused
+    } else if !control::is_stopped(mur_home, name) && run_lock::is_held(mur_home, name) {
+        PausePhase::Pausing
+    } else {
+        PausePhase::None
+    }
+}
+
 /// `mur fleet pause <name>`.
 pub fn cmd_fleet_pause(mur_home: &Path, name: &str) -> Result<()> {
     let _ = store::load_fleet(mur_home, name)?;
@@ -266,6 +300,40 @@ mod tests {
             calls == 1
         };
         assert_eq!(poll(home.path(), "dev", "r1", &mut is_held), Poll::Finished);
+    }
+
+    #[test]
+    fn phase_is_paused_only_once_the_record_says_so() {
+        use crate::run_status::{RUN_SCHEMA, RunKind, RunState, State};
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        save_dev(h);
+        assert_eq!(phase(h, "dev"), PausePhase::None, "no sentinel");
+        std::fs::write(control::paused_path(h, "dev"), "run_id: r1\n").unwrap();
+        // Sentinel, no live run, no Paused record: nothing is pausing.
+        assert_eq!(phase(h, "dev"), PausePhase::None);
+        let now = chrono::Utc::now();
+        let rec = RunState {
+            schema: RUN_SCHEMA,
+            run_id: "r1".into(),
+            channel_id: None,
+            kind: RunKind::Fleet,
+            label: "fleet dev loop".into(),
+            pid: 1,
+            started_at: now,
+            last_heartbeat_at: Some(now),
+            state: State::Paused,
+            steps: vec![],
+            blocked_on: None,
+            binary_version: "test".into(),
+            build_sha: String::new(),
+        };
+        crate::run_status::store::save(h, &rec).unwrap();
+        assert_eq!(phase(h, "dev"), PausePhase::Paused);
+        // A sentinel for another run never reads as this fleet being paused
+        // by r1's record.
+        std::fs::write(control::paused_path(h, "dev"), "run_id: r2\n").unwrap();
+        assert_eq!(phase(h, "dev"), PausePhase::None);
     }
 
     #[test]
