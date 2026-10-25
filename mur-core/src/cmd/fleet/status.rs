@@ -72,7 +72,34 @@ pub fn cmd_fleet_status(mur_home: &Path, name: &str, out: &mut dyn std::io::Writ
         );
     };
     crate::cmd::job::print_status(out, &status);
+    let pause_target = super::control::paused_run_id(mur_home, name);
+    if let Some(note) = pausing_note(
+        pause_target.as_deref(),
+        super::control::is_stopped(mur_home, name),
+        &status,
+    ) {
+        let _ = writeln!(out, "{note}");
+    }
     Ok(())
+}
+
+/// The "pausing…" line (pause/resume design §5.5): `.paused` names this run
+/// but its record has not reached `State::Paused` yet, so the loop is still
+/// on its way to a safe point. `mur fleet list` keeps showing `▶` for the same
+/// window; this line is what explains it. Nothing when stop already won, when
+/// the sentinel is for another run, or when the process is gone (`abandoned`
+/// says the true thing there, and a dead run is not pausing).
+fn pausing_note(
+    pause_target: Option<&str>,
+    stopped: bool,
+    status: &crate::run_status::RunStatus,
+) -> Option<&'static str> {
+    let targets_this_run = pause_target.is_some_and(|id| id == status.run.run_id);
+    (targets_this_run
+        && !stopped
+        && !status.abandoned
+        && status.state == crate::run_status::State::Running)
+        .then_some("pause     requested — pausing… (the run stops at its next safe point)")
 }
 
 #[cfg(test)]
@@ -287,6 +314,68 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("state     abandoned\n"), "{text}");
         assert!(!text.contains("state     running"), "{text}");
+    }
+
+    /// Write the pause sentinel the way `mur fleet pause` does.
+    fn request_pause(mur_home: &Path, fleet: &str, run_id: &str) {
+        let path = super::super::control::paused_path(mur_home, fleet);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("run_id: {run_id}\n")).unwrap();
+    }
+
+    fn status_text(mur_home: &Path) -> String {
+        let mut out = Vec::new();
+        cmd_fleet_status(mur_home, "dev", &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// §5.5: sentinel written, run still `Running` → "pausing…". Once the
+    /// record reads `Paused` the state line says so and the note goes away.
+    #[test]
+    fn fleet_status_says_pausing_until_the_record_is_paused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        super::super::store::save_fleet(mur_home, &sample_fleet("dev", "fleet-dev")).unwrap();
+        save_run(mur_home, "run-1", "fleet-dev", chrono::Utc::now());
+        store::update(mur_home, "run-1", |r| r.state = State::Running).unwrap();
+
+        assert!(
+            !status_text(mur_home).contains("pausing"),
+            "no sentinel yet"
+        );
+
+        request_pause(mur_home, "dev", "run-1");
+        let text = status_text(mur_home);
+        assert!(text.contains("state     running\n"), "{text}");
+        assert!(text.contains("pause     requested — pausing…"), "{text}");
+
+        store::update(mur_home, "run-1", |r| r.state = State::Paused).unwrap();
+        let text = status_text(mur_home);
+        assert!(text.contains("state     paused\n"), "{text}");
+        assert!(!text.contains("pausing"), "{text}");
+    }
+
+    /// A stale sentinel for another run, or one that lost to `stop`, never
+    /// claims the shown run is pausing.
+    #[test]
+    fn pausing_note_ignores_other_runs_and_a_stopped_fleet() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mur_home = tmp.path();
+        super::super::store::save_fleet(mur_home, &sample_fleet("dev", "fleet-dev")).unwrap();
+        save_run(mur_home, "run-1", "fleet-dev", chrono::Utc::now());
+        store::update(mur_home, "run-1", |r| r.state = State::Running).unwrap();
+        let status = crate::run_status::status_of(mur_home, "run-1")
+            .unwrap()
+            .unwrap();
+
+        assert!(pausing_note(Some("run-old"), false, &status).is_none());
+        assert!(pausing_note(Some("run-1"), true, &status).is_none());
+        assert!(pausing_note(None, false, &status).is_none());
+        assert!(pausing_note(Some("run-1"), false, &status).is_some());
+
+        let mut dead = status.clone();
+        dead.abandoned = true;
+        assert!(pausing_note(Some("run-1"), false, &dead).is_none());
     }
 
     fn dead_pid() -> u32 {
