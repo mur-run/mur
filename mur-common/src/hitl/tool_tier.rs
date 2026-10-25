@@ -33,10 +33,22 @@
 //!   high-tier word is treated as that high tier rather than parsed.
 //!
 //! This is layer 2 of three. Layer 1 is the sandbox/entitlement floor, which
-//! is unaffected by any of this and denies regardless. Layer 3 — an intent
-//! classifier that may raise a tier but never lower one — is deliberately not
-//! here: adding a model on top of a gate this leaky would be using it to patch
-//! static logic it cannot see.
+//! is unaffected by any of this and denies regardless. Layer 3
+//! (`crate::hitl::intent`) is a model that may raise a tier but never lower
+//! one. It NARROWS this module's blind spot; it does not close it:
+//!
+//! - **It sees the command string only.** For `python3 sync.py` it reads
+//!   those three words, never what `sync.py` does.
+//! - **It sees only `bash` calls with a command whose tier here is exactly
+//!   `Write`.** Non-`bash` tools, and calls that fall to `Write` without a
+//!   command (the `_ => RiskTier::Write` arm of `classify`), are never asked.
+//! - **A wrong `Read` is out of its reach by design.** A call misclassified as
+//!   `Read` is fixed in `bash_class` / `dest`, never by widening
+//!   `intent::should_check`. Once a static misclassification is shown, it is
+//!   fixed here; that the model sometimes catches it does not count as fixed.
+//! - **It is fail-open and off by default.** No answer, a timeout or an error
+//!   keeps the tier from this module, and no profile has it unless asked. No
+//!   safety property may depend on it.
 
 use crate::hitl::RiskTier;
 use serde_json::Value;

@@ -939,6 +939,21 @@ pub enum AgentPermAction {
     /// after a hand edit of `entitlements:`; the agent refuses to start on
     /// entitlements that changed outside MUR until you reseal
     Reseal { name: String },
+    /// Layer-3 tier check: a model reads each `bash` call the static
+    /// classifier tiers `write` and may make it ask. It can never make a
+    /// call skip a prompt. `--off` turns it off
+    IntentCheck {
+        name: String,
+        /// `~/.mur/models.yaml` ref. A cloud model receives every checked
+        /// command; a local model keeps commands on this machine
+        #[arg(required_unless_present = "off", conflicts_with = "off")]
+        model_ref: Option<String>,
+        /// Wait this long for the model before keeping the static tier
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+        #[arg(long)]
+        off: bool,
+    },
 }
 
 #[derive(Subcommand)]

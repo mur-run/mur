@@ -287,6 +287,7 @@ impl TaskRunner {
             shim_trust: Some(self.shim_trust.clone()),
             sandbox_enforcing: self.sandbox_enforcing,
             telemetry: self.telemetry.clone(),
+            intent: self.intent.clone(),
         }
     }
 

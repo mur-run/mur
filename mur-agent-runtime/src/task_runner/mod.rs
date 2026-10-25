@@ -29,7 +29,7 @@ mod run;
 mod step;
 mod system_prompt;
 mod task_usage;
-mod turn_models;
+pub(crate) mod turn_models;
 mod turn_track;
 mod unsettled;
 
@@ -235,6 +235,8 @@ pub struct TaskRunner {
     /// loop picks it up at the next iteration boundary.
     steering: Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::mpsc::Sender<String>>>>,
     hitl_timeout_secs: u32,
+    /// Layer-3 intent check (`hitl.intent_check`); raises tiers only.
+    intent: Option<Arc<crate::hitl::intent::IntentChecker>>,
     /// B1 sandbox enforcing? `false` refuses every `Ask` tool (D2 / D2b).
     sandbox_enforcing: bool,
     /// The two scopes this process can see — `config.yaml limits:` and the

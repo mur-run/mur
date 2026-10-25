@@ -8,11 +8,13 @@ use mur_common::agent::{NetworkOutboundMode, SpawnMode};
 
 use super::{load_profile_for_edit, pid_alive, resolve_mur_home, save_profile};
 
+mod intent;
 mod network;
 mod paths;
 mod spawn;
 pub(super) mod tools;
 
+pub use intent::cmd_perm_set_intent_check;
 pub(crate) use network::{add_port, is_base_port};
 pub use network::{
     cmd_perm_allow_host, cmd_perm_allow_port, cmd_perm_deny_host, cmd_perm_deny_port,
@@ -67,7 +69,10 @@ fn print_outbound_picture(profile: &mur_common::AgentProfile) {
 pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
     let (_path, profile) = load_profile_for_edit(name)?;
     let v = serde_yaml_ng::to_string(&profile.entitlements).context("serialize entitlements")?;
-    if let Some(sec) = section {
+    let intent_block = intent::show_block(profile.hitl.intent_check.as_ref());
+    if section == Some("intent_check") {
+        print!("{intent_block}");
+    } else if let Some(sec) = section {
         // Print only the requested top-level YAML section if present.
         let mut emit = false;
         for line in v.lines() {
@@ -86,6 +91,7 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
         }
     } else {
         print!("{v}");
+        print!("{intent_block}");
     }
     if !profile.mcp_servers.is_empty() {
         eprintln!();

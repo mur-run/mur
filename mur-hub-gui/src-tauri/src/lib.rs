@@ -783,6 +783,7 @@ pub fn run() {
             perm_admin::agent_perm_deny_spawn_dir,
             perm_admin::agent_perm_set_tool,
             perm_admin::agent_perm_clear_tool,
+            perm_admin::agent_perm_set_intent_check,
             mcp_skills::agent_skill_toggle,
             mcp_skills::agent_mcp_toggle,
             mcp_skills::agent_addon_import,

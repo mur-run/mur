@@ -363,6 +363,29 @@ fn parse_response_body(
     Ok((text, tool_calls, stop_reason))
 }
 
+/// Effort, in whichever spelling this model family understands. Absent for
+/// models with no reasoning control rather than sent and ignored.
+///
+/// Two spellings exist on an OpenAI-shaped endpoint: `reasoning_effort` for
+/// the OpenAI reasoning families, and Qwen3's on/off switch
+/// `chat_template_kwargs.enable_thinking`. Without the second, a local Qwen3
+/// asked for `Low` effort still thinks — and a small `max_tokens` budget
+/// (the HITL intent check sends 16) is spent entirely on chain-of-thought,
+/// so the answer never arrives.
+fn apply_effort(
+    body: &mut serde_json::Value,
+    model: &str,
+    effort: Option<mur_common::llm::Effort>,
+) {
+    let Some(e) = effort else { return };
+    if let Some(level) = mur_common::llm::openai_reasoning_effort(model, e) {
+        body["reasoning_effort"] = json!(level);
+    }
+    if let Some(on) = mur_common::llm::qwen_enable_thinking(model, e) {
+        body["chat_template_kwargs"] = json!({ "enable_thinking": on });
+    }
+}
+
 #[async_trait]
 impl LlmClient for OpenAiClient {
     fn model_name(&self) -> &str {
@@ -375,14 +398,7 @@ impl LlmClient for OpenAiClient {
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
         }
-        // Effort, narrowed to what this model family understands. Absent for
-        // local and non-reasoning models rather than sent and ignored.
-        if let Some(e) = req
-            .effort
-            .and_then(|e| mur_common::llm::openai_reasoning_effort(&self.model, e))
-        {
-            body["reasoning_effort"] = json!(e);
-        }
+        apply_effort(&mut body, &self.model, req.effort);
         if let Some(m) = req.max_tokens {
             body["max_tokens"] = json!(m);
         }
@@ -449,14 +465,7 @@ impl LlmClient for OpenAiClient {
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
         }
-        // Effort, narrowed to what this model family understands. Absent for
-        // local and non-reasoning models rather than sent and ignored.
-        if let Some(e) = req
-            .effort
-            .and_then(|e| mur_common::llm::openai_reasoning_effort(&self.model, e))
-        {
-            body["reasoning_effort"] = json!(e);
-        }
+        apply_effort(&mut body, &self.model, req.effort);
         if let Some(m) = req.max_tokens {
             body["max_tokens"] = json!(m);
         }

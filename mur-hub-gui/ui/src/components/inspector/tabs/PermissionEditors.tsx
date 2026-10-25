@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { AgentDetail, ToolPolicy } from "../../../types";
+import type { AgentDetail, ModelOption, ToolPolicy } from "../../../types";
 import { useT } from "../../../i18n";
 import type { TranslationKey } from "../../../i18n/types";
 import { OUTBOUND_MODES, SPAWN_MODES, TOOL_POLICIES, afterWriteHint } from "./permissionsModel";
@@ -212,4 +212,39 @@ export function AddDir({ write }: { write: PermWrite }) {
       <button type="button" className="btn btn--sm btn--secondary" disabled={write.busy} onClick={() => void add()}>{t("perm.addDir")}</button>
     </div>
   );
+}
+
+/** Layer-3 intent check: pick the model that may RAISE a bash call's tier,
+ *  or off. CLI-backed models are left out — the runtime has no client to ask
+ *  them a side question — and the CLI refuses them too, so this list is a
+ *  convenience, not the check. */
+export function IntentCheckSelect({ value, write }: { value: string; write: PermWrite }) {
+  const { t } = useT();
+  const [models, setModels] = useState<ModelOption[]>([]);
+  useEffect(() => {
+    invoke<ModelOption[]>("list_models")
+      .then((m) => setModels(intentCandidates(m)))
+      .catch(() => setModels([]));
+  }, []);
+  const known = value === "" || models.some((m) => m.ref_name === value);
+  return (
+    <select
+      className="perm__select"
+      value={value}
+      disabled={write.busy}
+      aria-label={t("perm.intent")}
+      onChange={(e) => void write.run("agent_perm_set_intent_check", { modelRef: e.target.value })}
+    >
+      <option value="">{t("perm.intent.off")}</option>
+      {!known && <option value={value}>{value}</option>}
+      {models.map((m) => <option key={m.ref_name} value={m.ref_name}>{m.ref_name} · {m.model}</option>)}
+    </select>
+  );
+}
+
+/** Registry models the runtime can build a side-call client for. */
+export function intentCandidates(models: ModelOption[]): ModelOption[] {
+  return models
+    .filter((m) => !m.provider.startsWith("cli:"))
+    .sort((a, b) => a.ref_name.localeCompare(b.ref_name));
 }
