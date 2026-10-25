@@ -109,6 +109,7 @@ pub(super) fn run_allow(
                 ),
                 &entry,
                 &reachable,
+                Some(&a.host),
                 ops,
             )),
             Err(e) => anyhow::bail!("could not allow `{}` on the running agent: {e}", a.host),
@@ -122,6 +123,7 @@ pub(super) fn run_allow(
             ),
             &entry,
             &reachable,
+            None,
             ops,
         ));
     }
@@ -164,6 +166,7 @@ pub(super) fn run_allow(
         format!("`{}` always allowed: {live}", a.host),
         &entry,
         &reachable,
+        None,
         ops,
     ))
 }
@@ -172,14 +175,27 @@ pub(super) fn run_allow(
 /// no `--profile` and a saved login covers it, the page will still be the
 /// logged-out one. Only outcome paths call this, never the preview, so the
 /// confirm chip there is never displaced.
+/// `session_host`: set on the `--session` path. The suggested
+/// `/browser live` writes every listed host to the saved allow-list, so
+/// following it turns that session-only grant into a permanent one — say so.
 fn with_profile_hint(
     text: String,
     entry: &McpServerEntry,
     hosts: &[String],
+    session_host: Option<&str>,
     ops: &mut impl AllowOps,
 ) -> Managed {
     match profile_hint::hint(entry, hosts, &ops.saved_profiles()) {
-        Some(h) => (format!("{text}\n{}", h.text), h.chip),
+        Some(h) => {
+            let mut out = format!("{text}\n{}", h.text);
+            if let Some(host) = session_host {
+                out.push_str(&format!(
+                    "\nNote: that command saves the allow-list, so it also keeps `{host}` \
+                     allowed after a restart."
+                ));
+            }
+            (out, h.chip)
+        }
         None => (text, None),
     }
 }
