@@ -7,9 +7,11 @@
 //! all see the same paths. The pure preflight (C1–C9) is in [`preflight`];
 //! [`verify_entries`] is the startup gate (2.4); spawn wiring is 2.5–2.6.
 
+mod base_note;
 mod preflight;
 pub mod rewrite;
 
+pub use base_note::base_note;
 pub use preflight::{SerenaPreflightError, preflight};
 
 use mur_common::agent::{McpServerEntry, McpServerKind};

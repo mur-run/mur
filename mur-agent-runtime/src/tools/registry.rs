@@ -116,12 +116,17 @@ pub async fn build_tools(
             let name = entry.name.clone();
             let timeout_secs = entry.timeout_secs;
             let kind = entry.kind;
+            // A serena entry is pinned to its `project:`; its results get the
+            // base-checkout note while a turn works in a track of that repo.
+            let serena_project = (kind == Some(mur_common::agent::McpServerKind::Serena))
+                .then(|| entry.project.clone())
+                .flatten();
             async move {
                 let sanitized = sanitize_server(&name);
                 match pool.list_tools(&name).await {
                     Ok(tools) => {
                         let tools = crate::mcp::serena::admit_tools(kind, tools);
-                        Ok((name, sanitized, tools, timeout_secs))
+                        Ok((name, sanitized, tools, timeout_secs, serena_project))
                     }
                     Err(e) => {
                         tracing::warn!(server = %name, "mcp tools/list failed: {e:#}");
@@ -139,7 +144,7 @@ pub async fn build_tools(
     }
 
     for item in discovered.into_iter().flatten() {
-        let (server, sanitized, tools, timeout_secs) = item;
+        let (server, sanitized, tools, timeout_secs, serena_project) = item;
         let timeout = timeout_secs
             .map(|s| std::time::Duration::from_secs(s as u64))
             .unwrap_or(super::mcp::MCP_TOOL_TIMEOUT);
@@ -162,6 +167,7 @@ pub async fn build_tools(
                 pool: pool.clone(),
                 timeout,
                 session_cwd: session_cwd.clone(),
+                serena_project: serena_project.clone(),
             });
             map.insert(wname, exec);
         }
@@ -176,6 +182,7 @@ type Discovered = Result<
         String,
         Vec<crate::protocol::mcp_client::ToolInfo>,
         Option<u32>,
+        Option<std::path::PathBuf>,
     ),
     (String, String),
 >;
@@ -187,7 +194,7 @@ fn record_status(path: &std::path::Path, discovered: &[Discovered]) {
     let servers = discovered
         .iter()
         .map(|d| match d {
-            Ok((name, _, tools, _)) => McpServerStatus {
+            Ok((name, _, tools, _, _)) => McpServerStatus {
                 name: name.clone(),
                 tools: tools.len(),
                 error: None,
