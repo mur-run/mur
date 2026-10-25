@@ -372,9 +372,9 @@ fn flat_rate(per_1k: f64) -> ModelEntry {
 
 /// The registry's dearest rate on each side, so an unpriced model is never
 /// cheaper than anything it could stand in for — without charging its prompt
-/// at an output rate. A side no entry prices takes the other side's rate. Each
-/// entry's cache rates count at what that entry would actually charge: its
-/// recorded cache rate, or its input rate when none is recorded.
+/// at an output rate. Every rate counts at what its entry would actually
+/// charge (`cost_with_cache`): a one-sided entry prices its missing side at
+/// the side it has, and a missing cache rate falls back to its input rate.
 fn dearest_rates(models: &BTreeMap<String, ModelEntry>) -> Option<ModelEntry> {
     let dearest = |side: fn(&ModelEntry) -> Option<f64>| {
         models
@@ -383,20 +383,28 @@ fn dearest_rates(models: &BTreeMap<String, ModelEntry>) -> Option<ModelEntry> {
             .filter(|r| *r > 0.0)
             .reduce(f64::max)
     };
-    let input = dearest(|m| m.effective_costs().0);
-    let output = dearest(|m| m.effective_costs().1);
+    // Resolve each entry's own (input, output) pair before maximising, the
+    // way `cost_with_cache` does. Maximising recorded sides first lets a
+    // cheap fully-priced entry set the output ceiling while a dearer
+    // input-only entry actually bills output at its (higher) input rate.
+    fn own_pair(m: &ModelEntry) -> Option<(f64, f64)> {
+        let (i, o) = m.effective_costs();
+        let fallback = i.or(o)?;
+        Some((i.unwrap_or(fallback), o.unwrap_or(fallback)))
+    }
+    fn own_input(m: &ModelEntry) -> Option<f64> {
+        own_pair(m).map(|(i, _)| i)
+    }
+    let input = dearest(own_input);
+    let output = dearest(|m| own_pair(m).map(|(_, o)| o));
     let (input, output) = match (input, output) {
         (None, None) => return None,
         (i, o) => (i.or(o), o.or(i)),
     };
-    // A model with no cache rate bills cached tokens at its own input rate
-    // (`cost_with_cache`), so that effective rate must feed the ceiling too —
-    // otherwise one discounted-cache entry drags the fallback for every
-    // unpriced model below what a priced model would actually charge.
-    fn own_input(m: &ModelEntry) -> Option<f64> {
-        let (i, o) = m.effective_costs();
-        i.or(o)
-    }
+    // A model with no cache rate bills cached tokens at its own input rate,
+    // so that effective rate feeds the cache ceiling too — otherwise one
+    // discounted-cache entry drags the fallback for every unpriced model
+    // below what a priced model would actually charge.
     Some(ModelEntry {
         input_cost_per_1k: input,
         output_cost_per_1k: output,

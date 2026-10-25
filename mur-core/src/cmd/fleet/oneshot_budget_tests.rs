@@ -713,3 +713,34 @@ fn dearest_cache_rates_include_the_input_rate_a_missing_cache_rate_falls_back_to
     let on_priced = fallback.cost_with_cache(1_000, 1_000, 0, 0).unwrap();
     assert!((on_priced - 0.005).abs() < 1e-12, "{on_priced}");
 }
+
+/// PR #2132 review: a one-sided entry bills its missing side at the side it
+/// has, so the ceiling must resolve each entry's pair before maximising —
+/// a cheap fully-priced entry must not set the ceiling for that side.
+#[test]
+fn dearest_rates_resolve_one_sided_entries_before_maximising() {
+    let full = || model(BillingMode::UsageBilled, Some(0.001), Some(0.002));
+
+    let input_only = BTreeMap::from([
+        (
+            "a".to_string(),
+            model(BillingMode::UsageBilled, Some(0.02), None),
+        ),
+        ("b".to_string(), full()),
+    ]);
+    let r = dearest_rates(&input_only).unwrap();
+    assert_eq!(r.input_cost_per_1k, Some(0.02));
+    assert_eq!(r.output_cost_per_1k, Some(0.02), "a bills output at input");
+
+    let output_only = BTreeMap::from([
+        (
+            "a".to_string(),
+            model(BillingMode::UsageBilled, None, Some(0.02)),
+        ),
+        ("b".to_string(), full()),
+    ]);
+    let r = dearest_rates(&output_only).unwrap();
+    assert_eq!(r.input_cost_per_1k, Some(0.02), "a bills input at output");
+    assert_eq!(r.output_cost_per_1k, Some(0.02));
+    assert_eq!(r.cache_read_cost_per_1k, Some(0.02), "and caches at it");
+}
