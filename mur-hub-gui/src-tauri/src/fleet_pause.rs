@@ -31,12 +31,13 @@ fn mur_binary() -> Result<PathBuf, String> {
         .ok_or_else(|| "cannot find the `mur` binary to resume with".to_string())
 }
 
-/// Pause the fleet's live run. Waits for the safe point like the CLI does
-/// (up to its own bound), so it runs off the async workers.
+/// Pause the fleet's live run; returns the operator message. Waits for the
+/// safe point like the CLI does (up to its own bound), so it runs off the
+/// async workers. Uses the stdout-free core entry: the Hub owns no terminal.
 #[tauri::command]
-pub async fn fleet_pause(name: String) -> Result<(), String> {
+pub async fn fleet_pause(name: String) -> Result<String, String> {
     let home = mur_home_path();
-    tokio::task::spawn_blocking(move || pause::cmd_fleet_pause(&home, &name))
+    tokio::task::spawn_blocking(move || pause::pause_fleet(&home, &name, &mut |_| {}))
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())

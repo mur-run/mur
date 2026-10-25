@@ -92,20 +92,33 @@ pub fn phase(mur_home: &Path, name: &str) -> PausePhase {
 
 /// `mur fleet pause <name>`.
 pub fn cmd_fleet_pause(mur_home: &Path, name: &str) -> Result<()> {
+    let done = pause_fleet(mur_home, name, &mut |line| println!("{line}"))?;
+    println!("{done}");
+    Ok(())
+}
+
+/// Pause `name` and wait for the safe point, without writing to stdout.
+/// `progress` receives the interim "pausing…" line; the returned string is
+/// the final operator message. For callers that own the terminal (murmur's
+/// TUI), where a `println!` would tear the screen. Blocks for up to
+/// [`PAUSE_WAIT`], so async callers must run it on a blocking thread.
+pub fn pause_fleet(mur_home: &Path, name: &str, progress: &mut dyn FnMut(&str)) -> Result<String> {
     let _ = store::load_fleet(mur_home, name)?;
     match verdict(mur_home, name) {
         Verdict::Refuse(msg) => bail!("{msg}"),
-        Verdict::AlreadyPaused => {
-            println!(
-                "Fleet '{name}' is already paused. Continue it with `mur fleet resume {name}`."
-            );
-            Ok(())
-        }
-        Verdict::Pause { run_id } => request_pause(mur_home, name, &run_id),
+        Verdict::AlreadyPaused => Ok(format!(
+            "Fleet '{name}' is already paused. Continue it with `mur fleet resume {name}`."
+        )),
+        Verdict::Pause { run_id } => request_pause(mur_home, name, &run_id, progress),
     }
 }
 
-fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
+fn request_pause(
+    mur_home: &Path,
+    name: &str,
+    run_id: &str,
+    progress: &mut dyn FnMut(&str),
+) -> Result<String> {
     checkpoint::clear_pause_refusal(mur_home, run_id);
     let sentinel = control::paused_path(mur_home, name);
     let body = format!(
@@ -115,7 +128,7 @@ fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
     let tmp = sentinel.with_extension("tmp");
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, &sentinel)?;
-    println!("Pausing fleet '{name}' (run {run_id})…");
+    progress(&format!("Pausing fleet '{name}' (run {run_id})…"));
 
     let deadline = Instant::now() + PAUSE_WAIT;
     loop {
@@ -123,10 +136,9 @@ fn request_pause(mur_home: &Path, name: &str, run_id: &str) -> Result<()> {
             run_lock::is_held(mur_home, name)
         }) {
             Poll::Paused => {
-                println!(
+                return Ok(format!(
                     "Fleet '{name}' paused. Continue with `mur fleet resume {name}`, or discard with `mur fleet stop {name}`."
-                );
-                return Ok(());
+                ));
             }
             Poll::Refused(why) => {
                 let _ = std::fs::remove_file(&sentinel);
