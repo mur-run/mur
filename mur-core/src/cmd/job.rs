@@ -175,6 +175,38 @@ pub fn print_status(w: &mut dyn std::io::Write, s: &RunStatus) {
     }
 }
 
+/// The `paused` detail line for a paused fleet run, or `None` for any other
+/// run. Shared by `mur job status`, `mur fleet status`, and `mur_job_status`
+/// so the frozen spend reads the same everywhere (pause/resume design §5.5).
+/// A paused record without a readable checkpoint says so and names the way
+/// out, instead of going quiet.
+pub fn paused_line(mur_home: &Path, s: &RunStatus) -> Option<String> {
+    if s.state != State::Paused || s.run.kind != crate::run_status::RunKind::Fleet {
+        return None;
+    }
+    use crate::cmd::fleet::loop_run::checkpoint;
+    let fleet = &s.run.label;
+    Some(match checkpoint::load(mur_home, &s.run.run_id) {
+        Ok(Some(cp)) => format!(
+            "{} — `mur fleet resume {fleet}` continues it",
+            checkpoint::summary_line(&cp)
+        ),
+        Ok(None) => {
+            format!("no checkpoint to resume from — `mur fleet stop {fleet}` discards the run")
+        }
+        Err(e) => {
+            format!("unreadable checkpoint ({e:#}) — `mur fleet stop {fleet}` discards the run")
+        }
+    })
+}
+
+/// Write [`paused_line`] under the `print_status` block, when there is one.
+pub fn print_paused(w: &mut dyn std::io::Write, mur_home: &Path, s: &RunStatus) {
+    if let Some(line) = paused_line(mur_home, s) {
+        let _ = writeln!(w, "paused    {line}");
+    }
+}
+
 pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
     match action {
         JobAction::List { all } => {
@@ -205,6 +237,7 @@ pub fn run(mur_home: &Path, action: JobAction) -> Result<()> {
                 anyhow::bail!("no run recorded for `{run_id}` (try `mur job list --all`)");
             };
             print_status(&mut std::io::stdout(), &s);
+            print_paused(&mut std::io::stdout(), mur_home, &s);
             Ok(())
         }
         JobAction::Stop { run_id } => {
@@ -298,6 +331,44 @@ mod tests {
             c.wait().unwrap();
             pid
         }
+    }
+
+    /// §5.5: a paused fleet run shows its frozen spend and how to continue;
+    /// a paused record with no checkpoint names `stop` instead; any other
+    /// run prints nothing extra.
+    #[test]
+    fn paused_line_shows_frozen_spend_or_the_way_out() {
+        use crate::cmd::fleet::loop_run::checkpoint;
+        let home = tempfile::tempdir().unwrap();
+        let mut s = status(State::Paused, 0, None);
+        s.run.kind = RunKind::Fleet;
+        s.run.label = "dev".into();
+
+        let line = paused_line(home.path(), &s).unwrap();
+        assert!(line.contains("no checkpoint"), "{line}");
+        assert!(line.contains("mur fleet stop dev"), "{line}");
+
+        checkpoint::save(home.path(), &checkpoint::sample_for_test("r")).unwrap();
+        let line = paused_line(home.path(), &s).unwrap();
+        assert!(
+            line.contains("$1.84 of $5.00 · 6m52s of 30m active"),
+            "{line}"
+        );
+        assert!(line.contains("mur fleet resume dev"), "{line}");
+
+        let mut out = Vec::new();
+        print_paused(&mut out, home.path(), &s);
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .starts_with("paused    paused at ")
+        );
+
+        s.state = State::Running;
+        assert!(paused_line(home.path(), &s).is_none());
+        s.state = State::Paused;
+        s.run.kind = RunKind::Job;
+        assert!(paused_line(home.path(), &s).is_none());
     }
 
     /// `print_status` is the shared renderer for `mur job status` AND

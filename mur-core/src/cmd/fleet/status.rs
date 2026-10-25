@@ -72,6 +72,7 @@ pub fn cmd_fleet_status(mur_home: &Path, name: &str, out: &mut dyn std::io::Writ
         );
     };
     crate::cmd::job::print_status(out, &status);
+    crate::cmd::job::print_paused(out, mur_home, &status);
     let pause_target = super::control::paused_run_id(mur_home, name);
     if let Some(note) = pausing_note(
         pause_target.as_deref(),

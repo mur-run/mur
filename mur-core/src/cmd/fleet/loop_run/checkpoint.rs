@@ -119,6 +119,34 @@ pub fn load(mur_home: &Path, run_id: &str) -> Result<Option<Checkpoint>> {
     Ok(Some(cp))
 }
 
+/// `6m52s`, `30m`, `1h05m`: a frozen run budget as people read it.
+fn human_ms(ms: u64) -> String {
+    let secs = ms / 1000;
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    match (h, m, s) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, 0) => format!("{m}m"),
+        (0, m, s) => format!("{m}m{s:02}s"),
+        (h, m, _) => format!("{h}h{m:02}m"),
+    }
+}
+
+/// The frozen spend a paused run carries, as `mur job status` shows it
+/// (design §5.5): `paused at <t> · $1.84 of $5.00 · 6m52s of 30m active`.
+/// An unbounded cost reads `$1.84 spent` — never a made-up ceiling.
+pub fn summary_line(cp: &Checkpoint) -> String {
+    let cost = match cp.cost_usd {
+        Some(cap) => format!("${:.2} of ${cap:.2}", cp.spent_usd),
+        None => format!("${:.2} spent", cp.spent_usd),
+    };
+    format!(
+        "paused at {} · {cost} · {} of {} active",
+        cp.paused_at,
+        human_ms(cp.active_elapsed_ms),
+        human_ms(cp.deadline_ms)
+    )
+}
+
 /// Marker the run leaves when it cannot honour a pause (design §4: "the pause
 /// is refused and the run keeps going"). The run cannot touch `fleets/`, where
 /// the `.paused` sentinel lives, so it says so here and `mur fleet pause`,
@@ -154,36 +182,62 @@ pub fn remove(mur_home: &Path, run_id: &str) {
     let _ = std::fs::remove_file(checkpoint_path(mur_home, run_id));
 }
 
+/// A filled-in checkpoint for tests in other modules.
+#[cfg(test)]
+pub(crate) fn sample_for_test(run_id: &str) -> Checkpoint {
+    Checkpoint {
+        schema: CHECKPOINT_SCHEMA,
+        run_id: run_id.into(),
+        iteration_run_id: format!("{run_id}-3"),
+        fleet: "dev".into(),
+        iteration: 3,
+        spent_usd: 1.84,
+        active_elapsed_ms: 412_000,
+        stuck_elapsed_ms: 30_000,
+        start_seq: 1288,
+        job_id: Some("job-1".into()),
+        goal_override: None,
+        deadline_ms: 1_800_000,
+        stuck_ms: Some(300_000),
+        cost_usd: Some(5.0),
+        hitl_unanswered: "defer".into(),
+        target_cwd: None,
+        procedure: vec![ProcedureStep {
+            id: Some("s0".into()),
+            description: "do the thing".into(),
+            ..Default::default()
+        }],
+        paused_at: "2026-10-22T00:00:00Z".into(),
+        binary_version: "0.0.0-test".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn sample(run_id: &str) -> Checkpoint {
-        Checkpoint {
-            schema: CHECKPOINT_SCHEMA,
-            run_id: run_id.into(),
-            iteration_run_id: format!("{run_id}-3"),
-            fleet: "dev".into(),
-            iteration: 3,
-            spent_usd: 1.84,
-            active_elapsed_ms: 412_000,
-            stuck_elapsed_ms: 30_000,
-            start_seq: 1288,
-            job_id: Some("job-1".into()),
-            goal_override: None,
-            deadline_ms: 1_800_000,
-            stuck_ms: Some(300_000),
-            cost_usd: Some(5.0),
-            hitl_unanswered: "defer".into(),
-            target_cwd: None,
-            procedure: vec![ProcedureStep {
-                id: Some("s0".into()),
-                description: "do the thing".into(),
-                ..Default::default()
-            }],
-            paused_at: "2026-10-22T00:00:00Z".into(),
-            binary_version: "0.0.0-test".into(),
-        }
+        sample_for_test(run_id)
+    }
+
+    #[test]
+    fn summary_line_shows_frozen_spend_against_its_bounds() {
+        let cp = sample("r1");
+        assert_eq!(
+            summary_line(&cp),
+            "paused at 2026-10-22T00:00:00Z · $1.84 of $5.00 · 6m52s of 30m active"
+        );
+        let unbounded = Checkpoint {
+            cost_usd: None,
+            active_elapsed_ms: 3_900_000,
+            deadline_ms: 7_200_000,
+            ..cp
+        };
+        assert_eq!(
+            summary_line(&unbounded),
+            "paused at 2026-10-22T00:00:00Z · $1.84 spent · 1h05m of 2h00m active"
+        );
+        assert_eq!(human_ms(42_000), "42s");
     }
 
     #[test]
