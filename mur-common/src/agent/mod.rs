@@ -12,6 +12,7 @@ mod lifecycle;
 mod mcp;
 mod mcp_status;
 mod reload;
+mod reload_mcp;
 mod transport;
 
 pub use companion::*;
