@@ -133,11 +133,14 @@ pub(super) fn emit_stop_event(
         "spent_usd": spent_usd,
         "run_id": run_id,
     });
+    // Signed by `ROUTER_AGENT`, not the fleet's router: `channel_verify`
+    // checks every `System` actor against `ROUTER_AGENT`, so a custom
+    // router's key writes an event its own channel rejects (#2116).
     if let Err(e) = crate::channel_writer::append_as_writer(
         svc,
         mur_home,
         &fleet.channel_id,
-        fleet.router_or_concierge(),
+        crate::channel_writer::ROUTER_AGENT,
         ChannelActor::System,
         mur_common::channel::EventKind::StateChange,
         payload,
