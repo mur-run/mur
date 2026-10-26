@@ -15,10 +15,6 @@ use mur_track::fleet_dispatch_request::{
 
 use super::{FleetRunTool, ToolError, ToolOutput, dispatched_reply};
 
-/// Name of the daemon's heartbeat file under the MUR home (`mur-daemon`
-/// rewrites it every 10 s). Read, never written, from here.
-const DAEMON_LOCK_FILE: &str = "murmurd.lock";
-
 pub(super) fn dispatch_via_daemon(
     tool: &FleetRunTool,
     dispatch: FleetDispatch,
@@ -78,12 +74,18 @@ pub(super) fn write_request(mur_home: &Path, req: &FleetDispatchRequest) -> anyh
 
 /// Is the daemon's heartbeat fresh? A pid probe is not used: whether a sealed
 /// process may signal another is up to the sandbox, the heartbeat is not.
+///
+/// Reads [`mur_common::paths::daemon_heartbeat_path`], not `murmurd.lock`:
+/// the sandbox grants a read on the heartbeat DIRECTORY (Landlock pins a file
+/// grant to one inode), and only a daemon that sweeps the request inbox
+/// writes it — an older daemon correctly reads as down.
 pub(super) fn daemon_alive(
     mur_home: &Path,
     stale_secs: u64,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    let Ok(body) = std::fs::read_to_string(mur_home.join(DAEMON_LOCK_FILE)) else {
+    let Ok(body) = std::fs::read_to_string(mur_common::paths::daemon_heartbeat_path(mur_home))
+    else {
         return false;
     };
     serde_json::from_str::<serde_json::Value>(&body)

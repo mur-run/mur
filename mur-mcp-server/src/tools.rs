@@ -532,6 +532,15 @@ async fn dispatch_tool(name: &str, arguments: &Value) -> Result<Value, String> {
                 status.run.started_at.to_rfc3339(),
                 status.run.steps.len()
             );
+            // Why a step failed is the point of polling a failed run; a
+            // rejected daemon dispatch (#2116) carries its reason here.
+            for step in status.run.steps.iter().filter(|s| s.error.is_some()) {
+                output.push_str(&format!(
+                    "\nstep {} failed: {}",
+                    step.id,
+                    step.error.as_deref().unwrap_or_default().replace('\n', " ")
+                ));
+            }
             if let Some(line) = mur_core::cmd::job::paused_line(&mur_home, &status) {
                 output.push_str("\npaused: ");
                 output.push_str(&line);

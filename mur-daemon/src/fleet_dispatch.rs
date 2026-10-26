@@ -38,6 +38,11 @@ pub fn spawn(mur_dir: PathBuf) {
                 .as_ref()
                 .map(|c| c.fleet_dispatch.poll_secs)
                 .unwrap_or_else(|_| mur_common::config::FleetDispatchConfig::default().poll_secs);
+            // Beat BEFORE sweeping: an agent checks this to know a request
+            // will be served, and a sweep that errors is still a live sweeper.
+            if let Err(e) = write_heartbeat(&mur_dir, chrono::Utc::now()) {
+                tracing::warn!(error = %e, "fleet-dispatch: heartbeat write failed");
+            }
             match &cfg {
                 Ok(cfg) => {
                     if let Err(e) = sweep(&mur_dir, &dir, cfg, &mur_bin()) {
@@ -53,6 +58,31 @@ pub fn spawn(mur_dir: PathBuf) {
             tokio::time::sleep(std::time::Duration::from_secs(period.max(1))).await;
         }
     });
+}
+
+/// Stamp the agent-readable heartbeat ([`mur_common::paths::daemon_heartbeat_path`]).
+///
+/// Written here, by the sweeper, and not by the lock-file loop: its meaning is
+/// "requests in the inbox are being served", which only this loop can promise.
+/// tmp + rename inside the granted directory, so a sealed reader always sees a
+/// whole file and the directory grant keeps covering the replaced inode.
+pub(crate) fn write_heartbeat(
+    mur_dir: &Path,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
+    let path = mur_common::paths::daemon_heartbeat_path(mur_dir);
+    let dir = path.parent().context("heartbeat path has no parent")?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{}.tmp", mur_common::paths::DAEMON_HEARTBEAT_FILE));
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec(&serde_json::json!({
+            "pid": std::process::id(),
+            "heartbeat_at": now.to_rfc3339(),
+        }))?,
+    )?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
 }
 
 /// The `mur` CLI to launch: `MUR_BIN` if set, else the `mur` beside this

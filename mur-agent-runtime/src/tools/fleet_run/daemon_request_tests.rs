@@ -33,8 +33,10 @@ fn home_with(router: Option<&str>) -> tempfile::TempDir {
 }
 
 fn beat(home: &std::path::Path, at: chrono::DateTime<chrono::Utc>) {
+    let path = mur_common::paths::daemon_heartbeat_path(home);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
-        home.join("murmurd.lock"),
+        &path,
         serde_json::json!({"pid": 1, "started_at": at, "heartbeat_at": at}).to_string(),
     )
     .unwrap();
@@ -150,11 +152,11 @@ fn daemon_alive_reads_the_heartbeat_not_the_pid() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     let now = chrono::Utc::now();
-    assert!(!daemon_alive(home, 60, now), "no lock file");
+    assert!(!daemon_alive(home, 60, now), "no heartbeat file");
     beat(home, now - chrono::Duration::seconds(30));
     assert!(daemon_alive(home, 60, now));
     assert!(!daemon_alive(home, 10, now));
-    std::fs::write(home.join("murmurd.lock"), "not json").unwrap();
+    std::fs::write(mur_common::paths::daemon_heartbeat_path(home), "not json").unwrap();
     assert!(!daemon_alive(home, 60, now));
 }
 

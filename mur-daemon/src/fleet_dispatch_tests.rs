@@ -338,3 +338,73 @@ fn two_requests_for_one_fleet_in_one_sweep_launch_once() {
     assert_eq!(b.status, FleetDispatchStatus::Rejected);
     assert!(b.reason.unwrap().contains("earlier in this sweep"));
 }
+
+/// Review finding on #2133: submission → rejection → polling the returned
+/// handle must report the reason, not "no run recorded". Drives the real
+/// agent tool, the real sweep, and the same `status_of` `mur_job_status` reads.
+#[tokio::test]
+async fn a_rejected_dispatch_polls_as_failed_with_its_reason() {
+    use mur_agent_runtime::tools::ToolExecutor;
+    // Allowed when submitted, revoked before the sweep: the daemon must
+    // re-check from config, and the handle must say why it never started.
+    let f = fixture("council");
+    write_heartbeat(f.home(), Utc::now()).unwrap();
+    let _env = mur_common::test_env::EnvGuard::set([("MUR_BIN", "/nonexistent/mur")]);
+    let tool = mur_agent_runtime::tools::fleet_run::FleetRunTool {
+        mur_home: f.home().to_path_buf(),
+        agent_name: "mur".into(),
+        signing: Some(std::sync::Arc::new(
+            AgentIdentity::load(&f.home().join("agents/mur")).unwrap(),
+        )),
+        key_version: 0,
+        session_cwd: None,
+    };
+    let out = tool
+        .execute(serde_json::json!({"fleet": "council", "goal": "decide", "cwd": WORK}))
+        .await
+        .unwrap();
+    let reply: serde_json::Value = serde_json::from_str(&out.text).unwrap();
+    assert_eq!(reply["via"], "daemon");
+    let run_id = reply["run_id"].as_str().unwrap().to_string();
+
+    std::fs::write(
+        f.home().join("config.yaml"),
+        "fleet_run:\n  agents: [mur]\n  fleets: [own]\n",
+    )
+    .unwrap();
+    sweep(
+        f.home(),
+        &f.home().join(FLEET_DISPATCH_REQUEST_DIR),
+        &cfg(f.home()),
+        Path::new("/nonexistent/mur"),
+    )
+    .unwrap();
+
+    let status = mur_core::run_status::status_of(f.home(), &run_id)
+        .unwrap()
+        .expect("a rejected handle must poll as a run, not 'no run recorded'");
+    assert_eq!(status.state, mur_core::run_status::State::Failed);
+    assert_eq!(status.run.run_id, run_id);
+    let reason = status.run.steps[0].error.as_deref().unwrap();
+    assert!(reason.contains("may not run fleet 'council'"), "{reason}");
+}
+
+#[test]
+fn heartbeat_is_a_whole_file_replaced_in_its_granted_directory() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let at = Utc::now();
+    write_heartbeat(tmp.path(), at).unwrap();
+    write_heartbeat(tmp.path(), at).unwrap();
+    let path = mur_common::paths::daemon_heartbeat_path(tmp.path());
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(v["heartbeat_at"], at.to_rfc3339());
+    let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        names,
+        vec![mur_common::paths::DAEMON_HEARTBEAT_FILE],
+        "no tmp left behind"
+    );
+}
