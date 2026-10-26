@@ -6,9 +6,9 @@
 //! that recorded the open may itself be gone (service-manager logs often live under
 //! a temp dir). So every open track gets a small marker file in the agent
 //! home, removed when the track closes. A marker found at boot is a track
-//! nobody settled: it is reported on every boot until the worktree is gone,
-//! and the worktree is never deleted — it may hold the only copy of the
-//! turn's edits.
+//! nobody settled: it is reported on every boot until the worktree is gone.
+//! This module never deletes a worktree; `track_reclaim` may, but only after
+//! saving its diff as a patch (#2152), and the next boot then sees it absent.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
