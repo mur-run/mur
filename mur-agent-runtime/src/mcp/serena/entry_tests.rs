@@ -57,6 +57,26 @@ impl Fx {
     ) -> Result<Vec<SerenaEntryError>, SerenaEntryError> {
         verify_entries(entries, &self.agent_home)
     }
+
+    /// #2136: per-entry failures no longer abort startup; they come back
+    /// in the skip list. Returns the one skipped error naming `entry`.
+    fn skipped(&self, entries: &[McpServerEntry], entry: &str) -> SerenaEntryError {
+        skipped_entry(verify_entries(entries, &self.agent_home), entry)
+    }
+}
+
+fn skipped_entry(
+    got: Result<Vec<SerenaEntryError>, SerenaEntryError>,
+    entry: &str,
+) -> SerenaEntryError {
+    let skipped = got.expect("a per-entry failure must not abort startup");
+    let want = format!("`{entry}`");
+    let mut hits: Vec<_> = skipped
+        .into_iter()
+        .filter(|e| e.to_string().contains(&want))
+        .collect();
+    assert_eq!(hits.len(), 1, "expected one skipped `{entry}`: {hits:?}");
+    hits.remove(0)
 }
 
 #[test]
@@ -82,7 +102,7 @@ fn entries_without_kind_are_untouched() {
 fn project_absent_or_relative_is_refused() {
     let fx = Fx::new();
     for project in [None, Some(PathBuf::from("repo"))] {
-        let err = fx.verify(&[fx.serena(project)]).unwrap_err();
+        let err = fx.skipped(&[fx.serena(project)], "code-nav");
         assert!(matches!(err, SerenaEntryError::Project { .. }), "{err}");
         let msg = err.to_string();
         assert!(msg.contains("`code-nav`"), "{msg}");
@@ -108,15 +128,21 @@ fn missing_project_skips_the_entry_without_failing_startup() {
     assert!(msg.contains("does not exist"), "{msg}");
 }
 
-/// Skipping one entry must not exempt the others from the full gate.
+/// Skipping one entry must not exempt the others from the full gate:
+/// each bad sibling is reported on its own.
 #[test]
 fn a_skipped_entry_does_not_hide_a_bad_sibling() {
     let fx = Fx::new();
     let gone = fx.serena(Some(fx.repo.join("does-not-exist")));
     let mut bad = fx.serena(None);
     bad.name = "second".into();
-    let err = fx.verify(&[gone, bad]).unwrap_err();
-    assert!(err.to_string().contains("`second`"), "{err}");
+    let skipped = fx.verify(&[gone, bad]).unwrap();
+    assert_eq!(skipped.len(), 2, "{skipped:?}");
+    assert!(
+        matches!(&skipped[1], SerenaEntryError::Project { entry, .. } if entry == "second"),
+        "{:?}",
+        skipped[1]
+    );
 }
 
 /// The spawn gate stays fail-closed: a skipped entry still spawns nothing.
@@ -132,13 +158,13 @@ fn missing_project_still_refuses_to_spawn() {
 }
 
 /// A path that exists but is a file is a config mistake, not a vanished
-/// mount: it still refuses startup.
+/// mount: it is reported as `Project`, not `ProjectMissing`.
 #[test]
 fn project_that_is_a_file_is_refused() {
     let fx = Fx::new();
     let file = fx.repo.join("a.txt");
     fs::write(&file, b"x").unwrap();
-    let err = fx.verify(&[fx.serena(Some(file))]).unwrap_err();
+    let err = fx.skipped(&[fx.serena(Some(file))], "code-nav");
     assert!(matches!(err, SerenaEntryError::Project { .. }), "{err}");
 }
 
@@ -154,7 +180,7 @@ fn preflight_failure_names_entry_and_check() {
         text.replace("web_dashboard: false", "web_dashboard: true"),
     )
     .unwrap();
-    let err = fx.verify(&[fx.serena(Some(fx.repo.clone()))]).unwrap_err();
+    let err = fx.skipped(&[fx.serena(Some(fx.repo.clone()))], "code-nav");
     assert!(
         matches!(
             &err,
@@ -168,13 +194,45 @@ fn preflight_failure_names_entry_and_check() {
     assert!(msg.contains("serena C6"), "{msg}");
 }
 
+/// #2136: a preflight failure (here C6) is entry-scoped like #1979's
+/// missing project. Startup keeps going with the healthy sibling, the bad
+/// entry is reported, and the spawn gate still refuses it.
+#[test]
+fn a_failing_preflight_skips_only_its_entry() {
+    let fx = Fx::new();
+    let cfg = serena_paths_for(&fx.agent_home, "code-nav")
+        .unwrap()
+        .config_file;
+    let text = fs::read_to_string(&cfg).unwrap();
+    fs::write(
+        &cfg,
+        text.replace("web_dashboard: false", "web_dashboard: true"),
+    )
+    .unwrap();
+    let bad = fx.serena(Some(fx.repo.clone()));
+    let plain = McpServerEntry {
+        name: "fs".into(),
+        command: "mcp-fs".into(),
+        ..Default::default()
+    };
+    let skipped = fx.verify(&[bad.clone(), plain]).unwrap();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert!(
+        matches!(&skipped[0], SerenaEntryError::Preflight { entry, .. } if entry == "code-nav"),
+        "{:?}",
+        skipped[0]
+    );
+    let err = launch_additions(&bad, Some(&fx.agent_home)).unwrap_err();
+    assert!(matches!(err, SerenaEntryError::Preflight { .. }), "{err}");
+}
+
 #[test]
 fn second_serena_entry_is_checked_too() {
     let fx = Fx::new();
     let ok = fx.serena(Some(fx.repo.clone()));
     let mut bad = fx.serena(None);
     bad.name = "second".into();
-    let err = fx.verify(&[ok, bad]).unwrap_err();
+    let err = fx.skipped(&[ok, bad], "second");
     assert!(err.to_string().contains("`second`"), "{err}");
 }
 
@@ -351,7 +409,7 @@ fn two_entries_are_verified_against_their_own_homes() {
     let first = fx.serena(Some(fx.repo.clone()));
     let mut second = fx.serena(Some(fx.repo.clone()));
     second.name = "other".into();
-    let err = fx.verify(&[first, second]).unwrap_err();
+    let err = fx.skipped(&[first, second], "other");
     let msg = err.to_string();
     assert!(msg.contains("`other`"), "{msg}");
     // Compare against the platform's own rendering: Windows joins with `\`.
@@ -442,7 +500,10 @@ fn a_custom_named_entry_on_a_legacy_home_gets_a_recovery_message() {
         ..Default::default()
     };
     for err in [
-        verify_entries(std::slice::from_ref(&entry), &agent_home).unwrap_err(),
+        skipped_entry(
+            verify_entries(std::slice::from_ref(&entry), &agent_home),
+            "code-nav",
+        ),
         launch_additions(&entry, Some(&agent_home)).unwrap_err(),
     ] {
         assert!(matches!(err, SerenaEntryError::LegacyHome { .. }), "{err}");
@@ -465,6 +526,6 @@ fn the_default_entry_on_a_legacy_home_is_not_a_migration_case() {
     };
     // Its home IS the legacy one, so it reaches preflight (and fails there
     // on the missing config), not the recovery message.
-    let err = verify_entries(&[entry], &agent_home).unwrap_err();
+    let err = skipped_entry(verify_entries(&[entry], &agent_home), DEFAULT_ENTRY_NAME);
     assert!(matches!(err, SerenaEntryError::Preflight { .. }), "{err}");
 }
