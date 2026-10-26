@@ -10,7 +10,9 @@
 //! Same gate as murmur and the runtime executor: [`vet`] re-runs here, so a
 //! proposal the model was told was rejected is never shown.
 
-use mur_common::proposal::{KIND_RESTART, KIND_SHELL, KIND_SLASH, PROPOSE_TOOL, ProposalKind, vet};
+use mur_common::proposal::{
+    KIND_RESTART, KIND_SHELL, KIND_SLASH, PROPOSE_TOOL, Proposal, ProposalKind, attached, vet,
+};
 use mur_core::a2a_dial::StepEvent;
 use serde::Serialize;
 use tauri::State;
@@ -57,6 +59,22 @@ pub fn chip_from_step(agent: &str, step: &StepEvent) -> Option<ChipPayload> {
             return None;
         }
     };
+    payload(agent, p)
+}
+
+/// The chip the runtime attached to a finished turn's reply (e.g. an MCP edit
+/// only a restart applies), vetted like a `propose` call.
+pub fn chip_from_task(agent: &str, task: &serde_json::Value) -> Option<ChipPayload> {
+    let reply = task
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("agent"))?;
+    payload(agent, attached(reply.get("parts")?)?)
+}
+
+fn payload(agent: &str, p: Proposal) -> Option<ChipPayload> {
     let (kind, command) = match p.kind {
         ProposalKind::Shell(cmd) => (KIND_SHELL, Some(cmd)),
         ProposalKind::Slash(cmd) => (KIND_SLASH, Some(format!("/{cmd}"))),
@@ -96,6 +114,21 @@ mod tests {
             name: name.into(),
             args,
         }
+    }
+
+    #[test]
+    fn a_restart_attached_to_the_reply_becomes_a_chip() {
+        let task = json!({ "messages": [{ "role": "agent", "parts": [
+            { "kind": "text", "text": "needs a restart" },
+            { "kind": "data", "mimeType": mur_common::proposal::PROPOSAL_MIME,
+              "data": { "label": "restart to apply", "kind": "restart" } }
+        ]}]});
+        let chip = chip_from_task("mur", &task).expect("chip");
+        assert_eq!(chip.kind, KIND_RESTART);
+        assert_eq!(chip.command, None);
+        let plain = json!({ "messages": [{ "role": "agent", "parts": [
+            { "kind": "text", "text": "hi" }]}]});
+        assert!(chip_from_task("mur", &plain).is_none());
     }
 
     #[test]

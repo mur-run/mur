@@ -52,7 +52,9 @@ fn standing_notices_cover_refusals_and_mcp_restarts_only() {
         &servers,
         "bob",
     );
-    assert_eq!(n.len(), 2, "{n:?}");
+    assert_eq!(n.len(), 2);
+    assert!(!n[0].needs_restart && n[1].needs_restart);
+    let n: Vec<String> = n.into_iter().map(|s| s.text).collect();
     assert!(
         n[0].contains("`fetch` reload refused: pin mismatch"),
         "{}",
@@ -66,7 +68,8 @@ fn standing_notices_cover_refusals_and_mcp_restarts_only() {
     assert!(n[1].contains("mur agent restart bob"), "{}", n[1]);
     let set = standing_notices(&view(&[], &["mcp_servers"]), &servers, "bob");
     assert_eq!(set.len(), 1);
-    assert!(set[0].contains("added or removed"), "{}", set[0]);
+    assert!(set[0].needs_restart);
+    assert!(set[0].text.contains("added or removed"), "{}", set[0].text);
 }
 
 #[test]

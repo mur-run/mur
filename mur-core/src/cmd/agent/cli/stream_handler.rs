@@ -112,7 +112,14 @@ pub(super) fn handle_stream(app: &mut App, msg: StreamMsg, tx: &mpsc::Sender<Str
             }
             app.maybe_step_hint();
             match stream::task_outcome(&task) {
-                Ok((reply, task_id)) => app.finish_agent_turn(reply, task_id),
+                Ok((reply, task_id)) => {
+                    app.finish_agent_turn(reply, task_id);
+                    // A chip the runtime attached (e.g. an MCP edit only a
+                    // restart applies); `vet`ted like a `propose` call.
+                    if let Some(p) = stream::attached_proposal(&task) {
+                        proposal::offer(app, p);
+                    }
+                }
                 Err(cause) => app.fail_turn(&cause),
             }
             app.reveal_suggestions();

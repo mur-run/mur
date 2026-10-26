@@ -301,3 +301,26 @@ async fn the_next_turn_offers_the_reloaded_tools_and_its_reply_says_so() {
     assert!(seen[2].contains(&snap), "{:?}", seen[2]);
     r.pool.shutdown().await;
 }
+
+/// Spec §8: an edit only a restart applies carries the restart chip, once
+/// while it stands; a refusal never does (a restart reads the same profile).
+#[tokio::test]
+async fn a_restart_notice_asks_for_the_chip_once_and_a_refusal_never_does() {
+    let r = rig(&[]).await;
+    let cold = || ReloadView {
+        refusals: Default::default(),
+        cold: vec!["mcp_servers.mock.network.mode".into()],
+    };
+    let first = r.refresh.refresh(&r.tools, &[], cold).await;
+    assert!(first.restart, "{:?}", first.notices);
+    assert!(!r.refresh.refresh(&r.tools, &[], cold).await.restart);
+
+    let refused = || ReloadView {
+        refusals: [("mock".to_string(), "pin mismatch".to_string())].into(),
+        cold: vec![],
+    };
+    let out = r.refresh.refresh(&r.tools, &[], refused).await;
+    assert_eq!(out.notices.len(), 1, "{:?}", out.notices);
+    assert!(!out.restart);
+    r.pool.shutdown().await;
+}

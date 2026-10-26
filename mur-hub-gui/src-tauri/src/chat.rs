@@ -108,6 +108,8 @@ pub async fn agent_chat_send(
     let persist_channel = channel_id;
     let persist_user_text = text.clone();
     let user_task_id = task_id.clone();
+    let chip_app = app.clone();
+    let chip_agent = name.clone();
 
     let mut params = json!({
         "message": { "role": "user", "parts": [{ "kind": "text", "text": text }] },
@@ -179,6 +181,11 @@ pub async fn agent_chat_send(
 
     if reply.is_empty() {
         return Err("the agent returned no reply".into());
+    }
+    // A chip the runtime attached to the reply (an MCP edit only a restart
+    // applies) — same event as a streamed `propose`.
+    if let Some(chip) = crate::proposal_chip::chip_from_task(&chip_agent, &task) {
+        let _ = chip_app.emit(crate::proposal_chip::PROPOSAL_EVENT, chip);
     }
     // Task 6: the runtime attaches `model_ref`/`route_reason` (plus token
     // counts) to `Task.usage`. Pass it through verbatim — both back to the

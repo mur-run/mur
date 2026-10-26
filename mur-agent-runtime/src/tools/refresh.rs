@@ -36,6 +36,19 @@ pub struct ReloadView {
 pub struct Refreshed {
     pub tools: Option<Vec<Arc<dyn ToolExecutor>>>,
     pub notices: Vec<String>,
+    /// A notice said this turn is one only a restart applies, so the reply
+    /// carries a restart chip (spec §8). Not set for a refusal or a config
+    /// that failed to start: a restart reads the same profile.
+    pub restart: bool,
+}
+
+/// Label of the restart chip a reply carries with a restart notice.
+pub const RESTART_LABEL: &str = "restart to apply the MCP change";
+
+/// A notice that holds until the profile changes.
+struct Standing {
+    text: String,
+    needs_restart: bool,
 }
 
 /// One server as last listed.
@@ -163,11 +176,12 @@ impl McpRefresh {
         servers.sort_unstable();
         let standing = standing_notices(&view(), &servers, &self.agent);
         for n in &standing {
-            if !state.said.contains(n) {
-                out.notices.push(n.clone());
+            if !state.said.contains(&n.text) {
+                out.notices.push(n.text.clone());
+                out.restart |= n.needs_restart;
             }
         }
-        state.said = standing.into_iter().collect();
+        state.said = standing.into_iter().map(|n| n.text).collect();
         out
     }
 }
@@ -238,19 +252,21 @@ fn name_diff(server: &str, before: &Listed, after: &Listed) -> Option<String> {
 
 /// Notices that stay true until the profile changes: refused edits and MCP
 /// edits that need a restart. `servers` is sorted.
-fn standing_notices(view: &ReloadView, servers: &[String], agent: &str) -> Vec<String> {
+fn standing_notices(view: &ReloadView, servers: &[String], agent: &str) -> Vec<Standing> {
     let restart = format!("`mur agent restart {agent}`");
-    let mut out: Vec<String> = view
+    let mut out: Vec<Standing> = view
         .refusals
         .iter()
-        .map(|(s, why)| {
-            format!("MCP `{s}` reload refused: {why}; still running the previous config.")
+        .map(|(s, why)| Standing {
+            text: format!("MCP `{s}` reload refused: {why}; still running the previous config."),
+            needs_restart: false,
         })
         .collect();
     if view.cold.iter().any(|p| p == "mcp_servers") {
-        out.push(format!(
-            "MCP servers were added or removed; that needs a restart: {restart}."
-        ));
+        out.push(Standing {
+            text: format!("MCP servers were added or removed; that needs a restart: {restart}."),
+            needs_restart: true,
+        });
     }
     for s in servers {
         let head = format!("mcp_servers.{s}.");
@@ -260,11 +276,14 @@ fn standing_notices(view: &ReloadView, servers: &[String], agent: &str) -> Vec<S
             .filter_map(|p| p.strip_prefix(&head))
             .collect();
         if !fields.is_empty() {
-            out.push(format!(
-                "MCP `{s}` edit to {} needs a restart; still running the previous config. \
-                 Run {restart}.",
-                fields.join(", ")
-            ));
+            out.push(Standing {
+                text: format!(
+                    "MCP `{s}` edit to {} needs a restart; still running the previous config. \
+                     Run {restart}.",
+                    fields.join(", ")
+                ),
+                needs_restart: true,
+            });
         }
     }
     out

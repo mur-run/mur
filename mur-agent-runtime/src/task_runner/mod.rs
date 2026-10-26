@@ -303,7 +303,7 @@ pub struct TaskRunner {
     /// Cleared when the turn's reply is built; bounded by turn lifetime.
     refused_cwd: Mutex<HashMap<String, RefusedCwd>>,
     /// Turn → its MCP hot-reload notices, for the reply footer (`mcp_reload`).
-    mcp_notices: Mutex<HashMap<String, Vec<String>>>,
+    mcp_notices: Mutex<HashMap<String, mcp_reload::McpNotices>>,
     /// Reads the working project's `AGENTS.md` / `CLAUDE.md` into the prompt,
     /// through the same entitlement gate as `read_file`. `None` (stubs, tests)
     /// or no `session_cwd` means no block.

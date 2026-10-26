@@ -295,7 +295,7 @@ impl TaskRunner {
                     None => reply,
                 };
                 let reply = match mcp_notices {
-                    Some(note) => append_note(reply, &note),
+                    Some(n) => n.apply(reply),
                     None => reply,
                 };
                 let reply = if let Some(ref arts) = artifacts {
@@ -506,7 +506,7 @@ impl TaskRunner {
 }
 
 /// Append a runtime note to the reply's last text part (or as a new part).
-fn append_note(mut reply: Message, note: &str) -> Message {
+pub(super) fn append_note(mut reply: Message, note: &str) -> Message {
     match reply.parts.iter_mut().rev().find_map(|p| match p {
         MessagePart::Text { text } => Some(text),
         _ => None,
