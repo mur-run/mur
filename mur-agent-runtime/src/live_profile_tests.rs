@@ -264,3 +264,51 @@ fn a_verified_mcp_command_change_is_served_and_a_tampered_one_is_refused() {
     // The reload itself succeeded; only the one entry was held back.
     assert!(live.state().last_reload_error.is_none());
 }
+
+/// [`with_probe`] with `probe`'s args and any extra lines for its entry, plus
+/// optional further servers.
+fn probe_with(command: &Path, pin: &str, args: &str, entry_extra: &str, more: &str) -> String {
+    format!(
+        "{}    args: [{args}]\n{entry_extra}{more}",
+        with_probe(command, pin)
+    )
+}
+
+#[test]
+fn a_cold_mcp_edit_after_a_hot_one_keeps_the_hot_entry() {
+    let bins = tempfile::tempdir().unwrap();
+    let a = bins.path().join("a");
+    std::fs::write(&a, b"a").unwrap();
+    let pin = sha(b"a");
+    let (d, live) = home_with(&probe_with(&a, &pin, "--old", "", ""));
+    let profile = d.path().join("profile.yaml");
+    let args = |live: &LiveProfile| live.mcp_entry("probe").unwrap().args;
+
+    write(&profile, &probe_with(&a, &pin, "--new", "", ""));
+    assert_eq!(args(&live), ["--new"]);
+
+    // A cold field on the same entry: a restart is pending, `--new` stays.
+    write(
+        &profile,
+        &probe_with(&a, &pin, "--new", "    future_key: true\n", ""),
+    );
+    assert_eq!(args(&live), ["--new"]);
+    assert!(
+        live.state()
+            .pending_cold_restart
+            .contains(&"mcp_servers.probe.future_key".to_string()),
+        "{:?}",
+        live.state()
+    );
+
+    // Adding a server is a restart too, and must not roll `probe` back either.
+    let other = format!("  - name: other\n    command: {}\n", a.display());
+    write(&profile, &probe_with(&a, &pin, "--new", "", &other));
+    assert_eq!(args(&live), ["--new"]);
+    assert!(live.mcp_entry("other").is_none());
+    assert!(
+        live.state()
+            .pending_cold_restart
+            .contains(&"mcp_servers".to_string())
+    );
+}

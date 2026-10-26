@@ -21,7 +21,7 @@ use std::path::Path;
 pub type Refusals = BTreeMap<String, String>;
 
 /// The entries to serve, and the refusals. `candidate` is the overlay
-/// (`base.with_hot_fields_from(fresh).mcp_servers`), `served` what the last good
+/// (`base.with_hot_fields_over(served, fresh).mcp_servers`), `served` what the last good
 /// reload served. Only an entry whose `command` differs from its served one is
 /// checked; `permitted` is the seal's exec predicate.
 pub fn gate_entries(

@@ -68,24 +68,38 @@ pub(super) fn diff_mcp_servers(old: &AgentProfile, new: &AgentProfile, diff: &mu
     }
 }
 
-/// `entries` whose changes [`diff_mcp_servers`] would report hot, taken from
-/// `newer`; every other entry keeps the value in `base`. Order follows `base`.
+/// The entries a reload serves: an entry whose change from `base` (boot)
+/// [`diff_mcp_servers`] would report hot is taken from `newer`; an unchanged
+/// one is boot's; a cold one keeps what `served` (the last reload) holds, so a
+/// cold edit never rolls back a hot edit already applied. Classifying against
+/// boot keeps every cold field at its boot value. A changed set of names is a
+/// restart (D3), so nothing in it is applied and `served` stays.
+/// Order follows `base`.
 pub(super) fn overlay_hot_entries(
     base: &[McpServerEntry],
+    served: &[McpServerEntry],
     newer: &[McpServerEntry],
 ) -> Vec<McpServerEntry> {
+    let kept = |e: &McpServerEntry| {
+        served
+            .iter()
+            .find(|s| s.name == e.name)
+            .unwrap_or(e)
+            .clone()
+    };
     let (Some(a), Some(b)) = (by_name(base), by_name(newer)) else {
-        return base.to_vec();
+        return base.iter().map(kept).collect();
     };
     if !a.keys().eq(b.keys()) {
-        return base.to_vec();
+        return base.iter().map(kept).collect();
     }
     base.iter()
         .map(|e| {
             let n = b[e.name.as_str()];
             match classify_entry(e, n) {
                 EntryChange::Hot => n.clone(),
-                EntryChange::Same | EntryChange::Cold(_) => e.clone(),
+                EntryChange::Same => e.clone(),
+                EntryChange::Cold(_) => kept(e),
             }
         })
         .collect()

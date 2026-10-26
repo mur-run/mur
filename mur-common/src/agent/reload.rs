@@ -127,6 +127,18 @@ impl AgentProfile {
     /// so a changed locked field cannot reach a reader by any route — the
     /// running process keeps the boot value until a restart.
     pub fn with_hot_fields_from(&self, newer: &AgentProfile) -> AgentProfile {
+        self.with_hot_fields_over(&self.mcp_servers, newer)
+    }
+
+    /// [`Self::with_hot_fields_from`] for a process that has already reloaded:
+    /// `served` is the `mcp_servers` the last reload served. A cold MCP edit
+    /// keeps that entry instead of falling back to boot's, so it cannot undo
+    /// a hot edit (args, hosts) applied earlier.
+    pub fn with_hot_fields_over(
+        &self,
+        served: &[super::McpServerEntry],
+        newer: &AgentProfile,
+    ) -> AgentProfile {
         let mut out = self.clone();
         out.limits = newer.limits.clone();
         out.disabled_skills = newer.disabled_skills.clone();
@@ -134,7 +146,7 @@ impl AgentProfile {
         out.hitl.autonomy = newer.hitl.autonomy;
         out.lifecycle.schedule = newer.lifecycle.schedule.clone();
         out.lifecycle.idle_triggers = newer.lifecycle.idle_triggers.clone();
-        out.mcp_servers = overlay_hot_entries(&self.mcp_servers, &newer.mcp_servers);
+        out.mcp_servers = overlay_hot_entries(&self.mcp_servers, served, &newer.mcp_servers);
         out
     }
 }

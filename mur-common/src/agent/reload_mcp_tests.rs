@@ -205,3 +205,70 @@ fn duplicate_names_fall_back_to_cold() {
     assert_eq!(d.cold, vec!["mcp_servers"]);
     assert!(d.hot.is_empty());
 }
+
+/// `boot` with `served` already live (an earlier hot reload) and `newer` on disk.
+fn overlay(
+    boot: &[McpServerEntry],
+    served: &[McpServerEntry],
+    newer: &[McpServerEntry],
+) -> Vec<McpServerEntry> {
+    profile(boot.to_vec())
+        .with_hot_fields_over(served, &profile(newer.to_vec()))
+        .mcp_servers
+}
+
+fn with_args(name: &str, args: &[&str]) -> McpServerEntry {
+    let mut e = entry(name);
+    e.args = args.iter().map(|s| s.to_string()).collect();
+    e
+}
+
+#[test]
+fn a_cold_edit_keeps_the_served_entry_not_boot() {
+    let served = with_args("a", &["--new"]);
+    let mut cold = served.clone();
+    cold.url = Some("https://example.com/mcp".into());
+    assert_eq!(
+        overlay(&[entry("a")], std::slice::from_ref(&served), &[cold]),
+        vec![served]
+    );
+}
+
+#[test]
+fn a_cold_network_edit_keeps_the_served_host_restriction() {
+    let net = |hosts: &[&str], mode| McpServerNetwork {
+        mode,
+        deny_hosts: hosts.iter().map(|h| h.to_string()).collect(),
+        ..Default::default()
+    };
+    let mut boot = entry("a");
+    boot.network = Some(net(&[], McpNetMode::Restricted));
+    let mut served = boot.clone();
+    served.network = Some(net(&["evil.example"], McpNetMode::Restricted));
+    let mut cold = served.clone();
+    cold.network = Some(net(&["evil.example"], McpNetMode::BroadAudited));
+    assert_eq!(
+        overlay(&[boot], std::slice::from_ref(&served), &[cold]),
+        vec![served]
+    );
+}
+
+#[test]
+fn adding_or_removing_a_server_keeps_served_hot_entries() {
+    let served = vec![with_args("a", &["--new"]), entry("b")];
+    let added = vec![with_args("a", &["--new"]), entry("b"), entry("c")];
+    let boot = vec![entry("a"), entry("b")];
+    assert_eq!(overlay(&boot, &served, &added), served);
+    // The set changed, so nothing in it is hot — not even `a`'s new args.
+    let removed = vec![with_args("a", &["--newer"])];
+    assert_eq!(overlay(&boot, &served, &removed), served);
+}
+
+#[test]
+fn reverting_to_the_boot_value_is_applied() {
+    let served = with_args("a", &["--new"]);
+    assert_eq!(
+        overlay(&[entry("a")], &[served], &[entry("a")]),
+        vec![entry("a")]
+    );
+}

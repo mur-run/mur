@@ -13,9 +13,11 @@
 //!   good snapshot serving; the error is kept for `doctor` and logged once per
 //!   file stamp, not once per turn.
 //! - **Only hot fields are applied.** The profile a reader sees is the boot
-//!   profile with [`AgentProfile::with_hot_fields_from`] laid over it, so a
+//!   profile with [`AgentProfile::with_hot_fields_over`] laid over it, so a
 //!   change to entitlements, sandbox, identity or transport cannot reach a
 //!   reader by any route; it is recorded as pending a cold restart instead.
+//!   A cold MCP edit keeps the entry the last reload served, so it never
+//!   rolls back a hot entry edit applied earlier.
 
 use mur_common::AgentProfile;
 use mur_common::agent::{RELOAD_STATE_FILE, ReloadState};
@@ -223,8 +225,8 @@ impl LiveProfile {
             }
             *pending.lock().unwrap_or_else(|e| e.into_inner()) =
                 AgentProfile::reload_diff(&base, &fresh).cold;
-            let mut out = base.with_hot_fields_from(&fresh);
             let mut served = served.lock().unwrap_or_else(|e| e.into_inner());
+            let mut out = base.with_hot_fields_over(&served, &fresh);
             let (entries, refused) = mcp::gate_entries(
                 &base,
                 &served,
