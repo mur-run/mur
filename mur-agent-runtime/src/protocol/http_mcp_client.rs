@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::mcp_client::{InitializeInfo, McpError, ToolInfo};
 use super::mcp_sse::{jsonrpc_result_for, parse_sse_events};
+use crate::sandbox::reqwest_guard::{GuardedHttpClient, HostGuard};
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -32,7 +33,10 @@ pub struct RefreshCtx {
 }
 
 pub struct HttpMcpClient {
-    http: reqwest::Client,
+    /// The only HTTP capability this client has: every POST, the session
+    /// DELETE, every redirect hop and the OAuth refresh are host-checked
+    /// against this entry's own set (#D6).
+    http: GuardedHttpClient,
     url: String,
     /// Mutable under `&self` so the refresh-on-401 path can swap in a new token.
     bearer: Mutex<Option<String>>,
@@ -40,6 +44,24 @@ pub struct HttpMcpClient {
     next_id: AtomicI64,
     /// Refresh context; `None` when no OAuth refresh token is available.
     refresh: Option<RefreshCtx>,
+}
+
+/// The hosts one remote entry may reach: its `url` host, plus its OAuth
+/// `token_endpoint` host when it has one. Frozen on the client at connect, so
+/// one entry's bearer or refresh token cannot reach another entry's server.
+/// An unparsable URL contributes nothing; the request itself then fails on it.
+pub fn entry_hosts(url: &str, token_endpoint: Option<&str>) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for u in std::iter::once(url).chain(token_endpoint) {
+        if let Some(h) = reqwest::Url::parse(u)
+            .ok()
+            .and_then(|p| p.host_str().map(str::to_string))
+            && !hosts.iter().any(|x| x.eq_ignore_ascii_case(&h))
+        {
+            hosts.push(h);
+        }
+    }
+    hosts
 }
 
 /// Build a JSON-RPC 2.0 request object.
@@ -56,13 +78,16 @@ impl HttpMcpClient {
     /// Create a client pointed at `url`.  `bearer` is attached as
     /// `Authorization: Bearer <token>` on every request when present.
     /// `refresh` carries the material needed to refresh the token on a 401.
+    /// `guard` is this entry's host set (see [`entry_hosts`]).
     pub async fn connect(
         url: &str,
         bearer: Option<String>,
         refresh: Option<RefreshCtx>,
+        guard: HostGuard,
     ) -> Result<Self, McpError> {
-        let http = reqwest::Client::builder()
-            .build()
+        // `.no_proxy()`: a proxied request resolves the proxy's host, so the
+        // guard would never see the real destination (#1297).
+        let http = GuardedHttpClient::build(reqwest::Client::builder().no_proxy(), guard)
             .map_err(|e| McpError::Transport(e.to_string()))?;
         Ok(Self {
             http,
@@ -81,6 +106,7 @@ impl HttpMcpClient {
             let mut req = self
                 .http
                 .post(&self.url)
+                .map_err(McpError::Transport)?
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json, text/event-stream")
                 .header("MCP-Protocol-Version", PROTOCOL_VERSION)
@@ -197,9 +223,10 @@ impl HttpMcpClient {
     /// Send an HTTP DELETE to terminate the session (best-effort).
     pub async fn shutdown(self) {
         if let Some(sid) = self.session_id.into_inner().unwrap() {
-            let mut req = self
-                .http
-                .delete(&self.url)
+            let Ok(req) = self.http.delete(&self.url) else {
+                return;
+            };
+            let mut req = req
                 .header("Mcp-Session-Id", sid)
                 .header("MCP-Protocol-Version", PROTOCOL_VERSION);
             if let Some(tok) = self.bearer.into_inner().unwrap() {
@@ -211,14 +238,5 @@ impl HttpMcpClient {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_jsonrpc_request() {
-        let r = jsonrpc_request(3, "tools/list", serde_json::json!({}));
-        assert_eq!(r["jsonrpc"], "2.0");
-        assert_eq!(r["id"], 3);
-        assert_eq!(r["method"], "tools/list");
-    }
-}
+#[path = "http_mcp_client_tests.rs"]
+mod tests;

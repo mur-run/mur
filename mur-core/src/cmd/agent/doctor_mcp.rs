@@ -10,9 +10,12 @@
 //!   one hop, and ask whether the seal lets each exec in that chain — the
 //!   command, the shebang's `env`, and `<x>` — happen. Catches a
 //!   version-manager shim's `node` the allowlist never granted before the
-//!   agent even starts.
+//!   agent even starts. Also flags a remote (`url`) server on an agent whose
+//!   `network.outbound.mode` is `off`: the runtime refuses to connect it.
 
-use mur_common::agent::{AgentProfile, MCP_STATUS_FILE, McpServerEntry, McpStatus};
+use mur_common::agent::{
+    AgentProfile, MCP_STATUS_FILE, McpServerEntry, McpStatus, NetworkOutboundMode,
+};
 use std::path::{Path, PathBuf};
 
 /// Lines describing failed servers recorded by the running process `pid`.
@@ -170,6 +173,7 @@ pub fn predictions(mur_home: &std::path::Path) -> Vec<String> {
         };
         let blocked = predicted(&prof, &mur_home.join("agents").join(&name));
         out.extend(predicted_lines(&name, &blocked));
+        out.extend(off_remote_lines(&name, &prof));
     }
     out
 }
@@ -184,6 +188,29 @@ pub fn predicted_lines(name: &str, blocked: &[Blocked]) -> Vec<String> {
                 b.server,
                 b.wanted,
                 b.resolved.display()
+            )
+        })
+        .collect()
+}
+
+/// One line per enabled remote MCP server on an agent whose outbound mode is
+/// `off`. Each remote entry's client is host-guarded, and `off` admits no
+/// host, so the runtime refuses the connect instead of reaching the server.
+pub fn off_remote_lines(name: &str, profile: &AgentProfile) -> Vec<String> {
+    if profile.entitlements.network.outbound.mode != NetworkOutboundMode::Off {
+        return Vec::new();
+    }
+    profile
+        .enabled_mcp_servers()
+        .iter()
+        .filter_map(|e| e.url.as_ref().map(|u| (e, u)))
+        .map(|(e, url)| {
+            format!(
+                "  {name}: remote MCP server '{}' ({url}) will NOT connect: \
+                 network.outbound.mode is `off`, which blocks every outbound connection\n    \
+                 fix: set network.outbound.mode to `restricted` (the server's own host is admitted \
+                 for its client), or disable the server",
+                e.name
             )
         })
         .collect()

@@ -403,14 +403,21 @@ async fn exchange_code(
 }
 
 /// Refresh an access token using a stored refresh token (RFC 6749 §6).
+///
+/// Takes the MCP entry's own [`GuardedHttpClient`], so the refresh token can
+/// only reach a host in that entry's set — never another entry's issuer, and
+/// never a redirect target outside it.
+///
+/// [`GuardedHttpClient`]: crate::sandbox::reqwest_guard::GuardedHttpClient
 pub async fn refresh(
-    http: &reqwest::Client,
+    http: &crate::sandbox::reqwest_guard::GuardedHttpClient,
     token_endpoint: &str,
     client_id: &str,
     refresh_token: &str,
 ) -> anyhow::Result<Tokens> {
     let body = http
         .post(token_endpoint)
+        .map_err(anyhow::Error::msg)?
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),

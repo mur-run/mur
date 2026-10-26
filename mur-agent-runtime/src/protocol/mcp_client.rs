@@ -69,10 +69,26 @@ impl McpClient {
         proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
     ) -> Result<Self, McpError> {
         if let Some(url) = &entry.url {
+            use super::http_mcp_client::{HttpMcpClient, entry_hosts};
+            // `Off` is air-gapped for the runtime's own clients too. Refuse
+            // here with the reason, rather than handing back a client whose
+            // every request dies on `HostGuard::off()` with a generic error.
+            if policy.network_off() {
+                return Err(McpError::Transport(format!(
+                    "remote MCP server `{}` refused: entitlements.network.outbound.mode \
+                     is `off`, which blocks every outbound connection",
+                    entry.name
+                )));
+            }
+            let token_endpoint = match &entry.auth {
+                Some(McpAuth::Oauth(o)) => Some(o.token_endpoint.as_str()),
+                _ => None,
+            };
+            let guard =
+                crate::sandbox::reqwest_guard::HostGuard::exact(entry_hosts(url, token_endpoint));
             let bearer = resolve_bearer(&entry.auth).await?;
             let refresh = build_refresh_ctx(&entry.auth).await;
-            let client =
-                super::http_mcp_client::HttpMcpClient::connect(url, bearer, refresh).await?;
+            let client = HttpMcpClient::connect(url, bearer, refresh, guard).await?;
             Ok(McpClient::Http(Box::new(client)))
         } else {
             let client = StdioMcpClient::spawn(entry, policy, proxy).await?;
