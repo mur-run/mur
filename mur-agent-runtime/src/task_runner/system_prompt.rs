@@ -169,7 +169,7 @@ impl TaskRunner {
                 continue;
             };
             let inventory = McpInventory::from_tool_names(
-                self.tools.iter().map(|t| t.name().to_string()).collect(),
+                self.tools().iter().map(|t| t.name().to_string()).collect(),
             );
             let Some(mut body) = layer3_body(&loaded.manifest, &inventory) else {
                 continue;

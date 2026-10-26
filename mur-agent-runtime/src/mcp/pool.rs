@@ -68,9 +68,15 @@ impl McpPool {
         self.attach_live(Box::new(move |server| profile.mcp_entry(server)));
     }
 
+    /// The servers this agent booted with, in no particular order. The set
+    /// never changes under a running agent (D3).
+    pub fn servers(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+
     /// The entry `server` should run under now: the live one when attached,
     /// else the boot one. `None` for a server this agent did not boot with.
-    fn current_entry(&self, server: &str) -> Option<McpServerEntry> {
+    pub fn current_entry(&self, server: &str) -> Option<McpServerEntry> {
         let boot = self.entries.get(server)?;
         Some(
             self.live

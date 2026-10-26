@@ -144,36 +144,80 @@ pub async fn build_tools(
     }
 
     for item in discovered.into_iter().flatten() {
-        let (server, sanitized, tools, timeout_secs, serena_project) = item;
-        let timeout = timeout_secs
-            .map(|s| std::time::Duration::from_secs(s as u64))
-            .unwrap_or(super::mcp::MCP_TOOL_TIMEOUT);
-        for t in tools {
+        let (server, _, tools, timeout_secs, serena_project) = item;
+        let listed = ListedServer {
+            server: &server,
+            timeout_secs,
+            serena_project,
+        };
+        for exec in server_executors(&listed, tools, rules, &pool, session_cwd.as_ref()) {
+            defs.push(exec.def());
+            map.insert(exec.name().to_string(), exec);
+        }
+    }
+
+    (defs, map)
+}
+
+/// What a server's executors are built from besides its tool list.
+pub(crate) struct ListedServer<'a> {
+    pub server: &'a str,
+    pub timeout_secs: Option<u32>,
+    /// A serena entry's fixed `project:`; `None` for every other server.
+    pub serena_project: Option<std::path::PathBuf>,
+}
+
+impl<'a> ListedServer<'a> {
+    pub fn of(entry: &'a McpServerEntry) -> Self {
+        Self {
+            server: &entry.name,
+            timeout_secs: entry.timeout_secs,
+            serena_project: (entry.kind == Some(mur_common::agent::McpServerKind::Serena))
+                .then(|| entry.project.clone())
+                .flatten(),
+        }
+    }
+}
+
+/// One executor per tool `server` listed, minus the ones a `ToolRule` denies.
+/// Shared by boot discovery and the per-turn refresh after a hot reload, so a
+/// re-listed server is filtered by exactly the rules boot applied.
+pub(crate) fn server_executors(
+    listed: &ListedServer<'_>,
+    tools: Vec<crate::protocol::mcp_client::ToolInfo>,
+    rules: &[ToolRule],
+    pool: &Arc<McpPool>,
+    session_cwd: Option<&SessionCwd>,
+) -> Vec<Arc<dyn ToolExecutor>> {
+    let sanitized = sanitize_server(listed.server);
+    let timeout = listed
+        .timeout_secs
+        .map(|s| std::time::Duration::from_secs(s as u64))
+        .unwrap_or(super::mcp::MCP_TOOL_TIMEOUT);
+    tools
+        .into_iter()
+        .filter_map(|t| {
             let wname = wire_name(&sanitized, &t.name);
             if resolve_tool_policy(rules, &wname) == ToolPolicy::Deny {
-                continue;
+                return None;
             }
             let def = ToolDef {
                 name: wname.clone(),
                 description: t.description.clone(),
                 input_schema: t.input_schema.clone(),
             };
-            defs.push(def.clone());
-            let exec: Arc<dyn ToolExecutor> = Arc::new(McpToolExecutor {
-                wire_name: wname.clone(),
-                server: server.clone(),
-                tool: t.name.clone(),
+            Some(Arc::new(McpToolExecutor {
+                wire_name: wname,
+                server: listed.server.to_string(),
+                tool: t.name,
                 def,
                 pool: pool.clone(),
                 timeout,
-                session_cwd: session_cwd.clone(),
-                serena_project: serena_project.clone(),
-            });
-            map.insert(wname, exec);
-        }
-    }
-
-    (defs, map)
+                session_cwd: session_cwd.cloned(),
+                serena_project: listed.serena_project.clone(),
+            }) as Arc<dyn ToolExecutor>)
+        })
+        .collect()
 }
 
 type Discovered = Result<

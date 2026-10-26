@@ -83,6 +83,7 @@ impl TaskRunner {
         // Eager, before the prompt names the working directory: the model
         // must be handed the track path, never the project (spec §4.1).
         self.begin_turn_track(&id).await;
+        self.refresh_mcp_tools(&id).await;
         let generation = async {
             match &self.backend {
                 RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
@@ -199,6 +200,10 @@ impl TaskRunner {
 
         // Whatever way the turn ended, its track must not outlive it.
         self.sweep_turn_track(&id).await;
+        // Taken on every outcome so the table never grows; only a successful
+        // reply carries them. A failed turn's notices are not repeated: refusals
+        // stay in `mur agent doctor`.
+        let mcp_notices = self.take_mcp_notices(&id);
 
         // Always remove the cancel entry (success, failure, or cancel) to avoid
         // leaking senders in `cancel_signals`.
@@ -286,6 +291,10 @@ impl TaskRunner {
                 // or restart), so it goes in the reply they read — same
                 // footer discipline as a refused write in bash's output.
                 let reply = match self.take_refused_cwd_hint(&id) {
+                    Some(note) => append_note(reply, &note),
+                    None => reply,
+                };
+                let reply = match mcp_notices {
                     Some(note) => append_note(reply, &note),
                     None => reply,
                 };

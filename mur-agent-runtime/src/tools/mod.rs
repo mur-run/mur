@@ -19,6 +19,7 @@ pub mod open_item;
 pub(crate) mod propose;
 pub mod read_file;
 pub mod recall;
+pub mod refresh;
 pub mod registry;
 pub mod remember;
 pub mod remind;

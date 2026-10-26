@@ -25,6 +25,7 @@ pub use builder::DrainOutcome;
 mod conversation;
 pub(crate) mod deny_hint;
 mod helpers;
+mod mcp_reload;
 mod run;
 mod step;
 mod system_prompt;
@@ -250,7 +251,13 @@ pub struct TaskRunner {
     /// Strict by default; only a profile that says `autonomy: continue` gets
     /// the nudge.
     autonomy: mur_common::hitl::Autonomy,
-    tools: Vec<Arc<dyn crate::tools::ToolExecutor>>,
+    /// The tool set, replaced whole by the per-turn MCP refresh (`mcp_refresh`)
+    /// after a hot reload. Readers take a snapshot ([`Self::tools`]), never a
+    /// lock held across a call.
+    tools: std::sync::RwLock<Arc<Vec<Arc<dyn crate::tools::ToolExecutor>>>>,
+    /// Re-lists a hot-reloaded MCP server at turn start. `None`: no MCP
+    /// servers, or a stub runner.
+    mcp_refresh: Option<Arc<crate::tools::refresh::McpRefresh>>,
     tools_policy: Vec<mur_common::agent::ToolRule>,
     socket_path: Option<std::path::PathBuf>,
     /// Credentials the user handed the agent. Names go into the system prompt;
@@ -295,6 +302,8 @@ pub struct TaskRunner {
     /// by the reply footer (so the user sees the command that fixes it).
     /// Cleared when the turn's reply is built; bounded by turn lifetime.
     refused_cwd: Mutex<HashMap<String, RefusedCwd>>,
+    /// Turn → its MCP hot-reload notices, for the reply footer (`mcp_reload`).
+    mcp_notices: Mutex<HashMap<String, Vec<String>>>,
     /// Reads the working project's `AGENTS.md` / `CLAUDE.md` into the prompt,
     /// through the same entitlement gate as `read_file`. `None` (stubs, tests)
     /// or no `session_cwd` means no block.
