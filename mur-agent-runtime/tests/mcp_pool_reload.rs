@@ -49,3 +49,57 @@ async fn a_server_the_live_profile_does_not_know_falls_back_to_boot() {
     pool.client("mock").await.expect("boot entry still serves");
     pool.shutdown().await;
 }
+
+fn restricted(mut e: McpServerEntry, host: &str) -> McpServerEntry {
+    e.network = Some(mur_common::agent::McpServerNetwork {
+        mode: mur_common::agent::McpNetMode::Restricted,
+        allow_hosts: vec![host.into()],
+        deny_hosts: vec![],
+        authorization: None,
+    });
+    e
+}
+
+/// A retired generation's proxy token stays valid while a call still holds
+/// that client, and is revoked once the last reference drops, so a hot host
+/// edit cannot leave the old allowlist usable forever.
+#[tokio::test]
+async fn a_retired_generation_keeps_its_token_until_its_last_reference_drops() {
+    use mur_agent_runtime::sandbox::egress_proxy::start_egress_proxy;
+    let proxy = start_egress_proxy("mock").await.unwrap();
+    let boot = restricted(mock(&[]), "a.example");
+    let pool = McpPool::new(
+        vec![boot.clone()],
+        SandboxPolicy::default(),
+        Some(proxy.clone()),
+    );
+    let served = Arc::new(Mutex::new(boot));
+    let source = served.clone();
+    pool.attach_live(Box::new(move |name| {
+        let e = source.lock().unwrap().clone();
+        (e.name == name).then_some(e)
+    }));
+
+    let old = pool.client("mock").await.expect("first generation");
+    assert_eq!(proxy.tokens_for("mock"), 1);
+
+    *served.lock().unwrap() = restricted(mock(&[]), "b.example");
+    let new = pool.client("mock").await.expect("second generation");
+    assert!(!Arc::ptr_eq(&old, &new));
+    assert_eq!(
+        proxy.tokens_for("mock"),
+        2,
+        "in-flight old generation keeps its token"
+    );
+
+    drop(old);
+    assert_eq!(
+        proxy.tokens_for("mock"),
+        1,
+        "old token revoked with its last reference"
+    );
+
+    drop(new);
+    pool.shutdown().await;
+    assert_eq!(proxy.tokens_for("mock"), 0);
+}

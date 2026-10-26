@@ -47,6 +47,10 @@ pub struct StdioMcpClient {
     stderr: Mutex<Option<std::process::ChildStderr>>,
     next_id: Mutex<u64>,
     pub server_name: String,
+    /// The egress proxy token this child was handed, revoked when this
+    /// client generation drops. Declared last so it is revoked after the
+    /// child is killed and reaped in `Drop`.
+    _proxy_lease: Option<crate::sandbox::egress_proxy::TokenLease>,
 }
 
 /// Dispatch enum over stdio and HTTP MCP transports.
@@ -300,7 +304,8 @@ impl StdioMcpClient {
         // Per-server egress: set HTTP_PROXY ONLY on this child's env (never the
         // runtime's) when the server declares a Restricted policy. Empty
         // otherwise ⇒ byte-for-byte the previous behavior.
-        for (k, v) in proxy_env_for(entry, proxy) {
+        let (proxy_env, proxy_lease) = proxy_lease_for(entry, proxy);
+        for (k, v) in proxy_env {
             std_cmd.env(k, v);
         }
         for (k, v) in scratch_env_for(policy) {
@@ -335,6 +340,7 @@ impl StdioMcpClient {
             stderr: Mutex::new(raw_stderr),
             next_id: Mutex::new(1),
             server_name: entry.name.clone(),
+            _proxy_lease: proxy_lease,
         })
     }
 
@@ -498,27 +504,44 @@ impl Drop for StdioMcpClient {
 /// AND a proxy is available. NEVER set these on the runtime's own environment —
 /// only on the child `Command` (Global Constraint: env isolation, so the
 /// agent's own LLM/cc-proxy path is never affected).
+///
+/// Test-only: the token is revoked as soon as this returns. A spawn uses
+/// [`proxy_lease_for`], which hands the lease to the client so the token lives
+/// exactly as long as that client generation.
+#[cfg(test)]
 pub fn proxy_env_for(
     entry: &McpServerEntry,
     proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
 ) -> Vec<(String, String)> {
+    proxy_lease_for(entry, proxy).0
+}
+
+/// [`proxy_env_for`] plus the lease on the token the env carries. `None`
+/// exactly when the env is empty.
+pub fn proxy_lease_for(
+    entry: &McpServerEntry,
+    proxy: Option<&crate::sandbox::egress_proxy::EgressProxyHandle>,
+) -> (
+    Vec<(String, String)>,
+    Option<crate::sandbox::egress_proxy::TokenLease>,
+) {
     let (Some(net), Some(proxy)) = (entry.network.as_ref(), proxy) else {
-        return vec![];
+        return (vec![], None);
     };
     let broad = match net.mode {
         mur_common::agent::McpNetMode::Restricted => false,
         mur_common::agent::McpNetMode::BroadAudited => true,
         mur_common::agent::McpNetMode::Inherit | mur_common::agent::McpNetMode::Off => {
-            return vec![];
+            return (vec![], None);
         }
     };
-    let token = proxy.register_server(
+    let lease = proxy.lease_server(
         &entry.name,
         net.allow_hosts.clone(),
         net.deny_hosts.clone(),
         broad,
     );
-    let url = format!("http://{token}:x@{}", proxy.addr);
+    let url = format!("http://{}:x@{}", lease.token(), proxy.addr);
     let no_proxy = "127.0.0.1,localhost,::1".to_string();
     let mut env = vec![
         ("HTTP_PROXY".into(), url.clone()),
@@ -538,7 +561,7 @@ pub fn proxy_env_for(
     if !net.deny_hosts.is_empty() {
         env.push((ENV_MCP_DENY_HOSTS.to_string(), net.deny_hosts.join(",")));
     }
-    env
+    (env, Some(lease))
 }
 
 /// `TMPDIR`/`TMP`/`TEMP` for an MCP server child: the policy's granted

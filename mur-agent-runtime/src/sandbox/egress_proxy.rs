@@ -33,8 +33,10 @@ use tokio::net::{TcpListener, TcpStream};
 use super::reqwest_guard::{host_allowed, host_matches_pattern};
 
 mod http_forward;
+mod lease;
 mod live;
 
+pub use lease::TokenLease;
 pub use live::{GrantError, InFlight};
 
 /// A registered per-server policy: either a `Restricted` allowlist, or a
@@ -566,6 +568,17 @@ mod tests {
             !head.to_ascii_lowercase().contains("proxy-authorization"),
             "credentials must not leak upstream: {head}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_revoked_token_is_denied_on_its_next_request() {
+        let (up, _seen) = http_upstream().await;
+        let proxy = start_egress_proxy("test").await.unwrap();
+        let lease = proxy.lease_server("browser", vec!["127.0.0.1".to_string()], vec![], false);
+        let token = lease.token().to_owned();
+        drop(lease);
+        let resp = http_via(proxy.addr, &token, &format!("http://{up}/")).await;
+        assert!(resp.starts_with("HTTP/1.1 403"), "{resp}");
     }
 
     #[tokio::test]
