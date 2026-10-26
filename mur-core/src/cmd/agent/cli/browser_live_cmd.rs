@@ -1,9 +1,11 @@
 //! `/browser live <host>...`: persist a live-mode browser MCP entry on this
 //! agent and scope its egress to exactly the given hosts.
 //!
-//! MCP has no hot reload, so the entry only takes effect after a restart; the
-//! restart is offered as a chip, never run automatically (it would end the
-//! very session that typed the command).
+//! Editing an existing entry (hosts, `--profile`) hot-reloads: the agent's
+//! next turn uses it. Creating the entry, a new grant, or a research-mode
+//! switch still needs a restart, offered as a chip and never run
+//! automatically (it would end the very session that typed the command).
+//! Which one a write was is decided in [`super::browser_live_effect`].
 //!
 //! The decision logic is pure ([`parse_hosts`], [`apply`]) so tests never
 //! touch a profile on disk or spawn the install probe `manage::mcp_add` runs.
@@ -16,9 +18,12 @@ use mur_common::agent::{FilesystemEntitlement, McpNetMode, McpServerEntry, McpSe
 use mur_common::host_pattern::{Normalization, normalize_host_pattern};
 use mur_common::proposal::Proposal;
 
+use super::browser_live_effect::Effect;
 pub(super) use super::browser_live_ops::ProfileOps;
 use super::browser_live_preview::render_preview;
-use super::manage::{self, Managed};
+#[cfg(test)]
+use super::manage;
+use super::manage::Managed;
 
 /// Profile entry name for the live browser server.
 pub(super) const LIVE_ENTRY: &str = "browser";
@@ -492,8 +497,9 @@ pub(super) trait LiveOps {
     /// Persist `servers` back to the profile, together with any missing
     /// [`live_fs`] grants and a [`repin_command`] onto this binary's absolute
     /// path (an entry made before those existed lacks both).
-    /// Returns one note per grant added. `Err` means nothing was written.
-    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>>;
+    /// Returns one note per grant added, and when the write reaches the
+    /// running agent. `Err` means nothing was written.
+    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<(Vec<String>, Effect)>;
     /// The notes [`LiveOps::save`] would report for `servers`, computed
     /// without writing — so a preview can tell "unchanged" from "needs repair".
     fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>>;
@@ -561,6 +567,12 @@ pub(super) fn run(
         if policy_same && profile_same && repairs.is_empty() {
             return Ok((unchanged_text(&hosts), None));
         }
+        let effect = Effect::predicted(
+            existing.and_then(|e| e.network.as_ref()).map(|n| n.mode),
+            after.mode,
+            !repairs.is_empty(),
+        );
+        let preview = with_effect_line(&preview, effect);
         let preview = if repairs.is_empty() {
             preview
         } else {
@@ -574,7 +586,7 @@ pub(super) fn run(
     }
     let mut notes = vec![preview];
     // `mcp_add` bails on a duplicate name by contract; decide here instead.
-    let previous = if servers.iter().any(|e| e.name == LIVE_ENTRY) {
+    let (previous, effect) = if servers.iter().any(|e| e.name == LIVE_ENTRY) {
         // Existing entry: overwrite its allowlist. The save is atomic
         // (`save_profile` → `write_atomic`), so a failed save leaves the old,
         // still-valid policy in place — nothing to roll back.
@@ -589,7 +601,7 @@ pub(super) fn run(
             entry.args = live_argv(agent, Some(site));
         }
         let entry_changed = servers != before;
-        let saved = ops
+        let (saved, effect) = ops
             .save(servers)
             .map_err(|e| e.context("could not save the browser live allowlist"))?;
         // `save` reports one note per change it made (re-pin, grant, spawn),
@@ -599,15 +611,18 @@ pub(super) fn run(
             return Ok((unchanged_text(&hosts), None));
         }
         notes.extend(saved);
-        out.previous
+        (out.previous, effect)
     } else {
         // New entry: created WITH its policy in a single save. The probe sees
         // it `Restricted` (so it runs behind the egress proxy, #1639), and
         // there is no on-disk moment where `browser` exists unrestricted — so
         // no rollback path is needed.
         notes.push(ops.mcp_add(&live_argv(agent, profile.as_deref()), after.clone())?);
-        Vec::new()
+        // D3: a new MCP server is a restart.
+        (Vec::new(), Effect::Restart)
     };
+    // The preview was rendered before the write; say what the write did.
+    notes[0] = with_effect_line(&notes[0], effect);
     if flags.research {
         notes.push("browser live mode may reach: any host (research mode, audited)".to_owned());
         // Telemetry must not undo a write that already succeeded.
@@ -634,8 +649,23 @@ pub(super) fn run(
             previous.join(", ")
         ));
     }
-    let (text, _) = manage::applied(&notes.join("\n"));
-    Ok((text, Some(Proposal::restart(RESTART_LABEL))))
+    notes.push(effect.applied_line().to_owned());
+    let text = notes.join("\n");
+    Ok(match effect {
+        Effect::NextTurn => (text, None),
+        Effect::Restart => (text, Some(Proposal::restart(RESTART_LABEL))),
+    })
+}
+
+/// `preview` with its "takes effect" line replaced by `effect`'s. The preview
+/// is shared with `/browser allow` and `mcp-network`, which keep theirs.
+fn with_effect_line(preview: &str, effect: Effect) -> String {
+    let cold = Effect::Restart.preview_line();
+    if preview.contains(cold) {
+        preview.replacen(cold, effect.preview_line(), 1)
+    } else {
+        preview.to_owned()
+    }
 }
 
 /// `mur browser setup`: ensure the agent HAS the `browser` entry at all, so

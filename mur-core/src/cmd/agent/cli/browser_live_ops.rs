@@ -6,6 +6,7 @@ use anyhow::Context;
 use mur_common::agent::{FilesystemEntitlement, McpServerEntry, McpServerNetwork};
 
 use super::browser_live_cmd::*;
+use super::browser_live_effect::Effect;
 use super::manage;
 
 /// Real profile-backed [`LiveOps`].
@@ -41,16 +42,18 @@ impl LiveOps for ProfileOps<'_> {
             .0,
         )
     }
-    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>> {
+    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<(Vec<String>, Effect)> {
         let fs = self.prepared_fs()?;
         let (path, mut profile) = crate::cmd::agent::load_profile_for_edit(self.0)?;
+        let before = profile.clone();
         let (servers_changed, notes) = apply_repairs(&mut profile, servers, &fs)?;
         // Nothing to persist: skip the write so `updated_at` stays put and the
         // caller can tell "no change" from "saved".
         if servers_changed || !notes.is_empty() {
             crate::cmd::agent::save_profile(&path, &mut profile)?;
         }
-        Ok(notes)
+        // Classified like the running agent will: by the reload diff.
+        Ok((notes, Effect::of_write(&before, &profile)))
     }
     fn pending_repairs(&mut self, servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>> {
         // Same computation as `save`, on a copy that is never written. No
