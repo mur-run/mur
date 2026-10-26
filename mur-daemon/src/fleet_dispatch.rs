@@ -66,10 +66,7 @@ pub fn spawn(mur_dir: PathBuf) {
 /// "requests in the inbox are being served", which only this loop can promise.
 /// tmp + rename inside the granted directory, so a sealed reader always sees a
 /// whole file and the directory grant keeps covering the replaced inode.
-pub(crate) fn write_heartbeat(
-    mur_dir: &Path,
-    now: chrono::DateTime<chrono::Utc>,
-) -> anyhow::Result<()> {
+pub fn write_heartbeat(mur_dir: &Path, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
     let path = mur_common::paths::daemon_heartbeat_path(mur_dir);
     let dir = path.parent().context("heartbeat path has no parent")?;
     std::fs::create_dir_all(dir)?;
@@ -106,12 +103,8 @@ fn valid_agent_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-pub(crate) fn sweep(
-    mur_dir: &Path,
-    dir: &Path,
-    cfg: &Config,
-    mur_bin: &Path,
-) -> anyhow::Result<()> {
+/// One pass over the request inbox. `pub` for the #2139 end-to-end test.
+pub fn sweep(mur_dir: &Path, dir: &Path, cfg: &Config, mur_bin: &Path) -> anyhow::Result<()> {
     if !dir.exists() {
         return Ok(());
     }

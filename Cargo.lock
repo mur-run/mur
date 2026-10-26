@@ -6727,6 +6727,7 @@ dependencies = [
  "axum 0.8.9",
  "base64 0.22.1",
  "chrono",
+ "ctor",
  "dirs 6.0.0",
  "fs2",
  "futures-util",
