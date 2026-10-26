@@ -215,6 +215,24 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The main checkout of the repository containing `dir` — the directory
+/// whose `.worktrees/` holds its turn tracks — even when `dir` is a linked
+/// worktree (a turn track itself, say). Errors for a bare repository, which
+/// has no checkout to hold tracks.
+pub fn project_root(dir: &Path) -> Result<PathBuf> {
+    let common = common_git_dir(dir)?;
+    if common.file_name().is_none_or(|n| n != ".git") {
+        bail!(
+            "{} has no main checkout (bare repository?)",
+            common.display()
+        );
+    }
+    let root = common
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent", common.display()))?;
+    super::canonicalize(root).with_context(|| format!("canonicalize {}", root.display()))
+}
+
 /// Where [`reclaim`] lists the paths the track deleted, beside `patch`.
 pub fn deleted_list(patch: &Path) -> PathBuf {
     patch.with_extension("deleted.txt")

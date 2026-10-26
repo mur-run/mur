@@ -51,6 +51,7 @@ changing any of these.
 - `mur limits <name>` / `mur fleet limits` / `mur agent limits` — the three execution knobs per scope (deadline / stuck / cost_usd). Iteration caps and token budgets are gone.
 - `mur model {connect|import|add|list|show|remove|migrate|prices|role|doctor}` — `~/.mur/models.yaml` registry. `doctor` is offline, read-only, warn-only, and never rewrites a model id.
 - `mur monitor {add|list|show|cancel|delete|prune|retry}` — durable monitors for async work. `unknown` is never reported as `failed`; above-`read`-tier actions park a pinned approval. There is no automatic GC: `prune --older-than` only takes stopped monitors (`completed`, plus `exhausted` opt-in), never one still being watched.
+- `mur track prune [--dry-run] [--grace] [--project]` — on-demand sweep of stale `.worktrees/turn-*` tracks, same `mur_track::turn::reclaim` rules as the runtime's automatic sweep. A track whose owner pid is alive and not released is never a candidate; the patch is saved before the worktree is removed.
 - `mur official {list|install <id>}` — official catalog; installs carry an account-bound license.
 - `mur deep-research {setup|""} [question]` — web research. Egress consent is explicit (`--grant-egress`).
 

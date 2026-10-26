@@ -105,6 +105,7 @@ pub(crate) mod sleep;
 pub(crate) mod sync_cmd;
 pub(crate) mod system_schedule;
 pub(crate) mod team_cmd;
+pub mod track;
 pub(crate) mod update;
 #[allow(dead_code)]
 pub(crate) mod var;
