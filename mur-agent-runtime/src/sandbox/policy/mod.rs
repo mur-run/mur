@@ -482,6 +482,16 @@ fn fleet_run_write_dirs(mur_home: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The cross-router dispatch pair (#2116): the request inbox a
+/// `fleet_run`-enabled agent writes, and the daemon heartbeat directory it
+/// reads before writing. One place, so the grant and its test cannot drift.
+pub(crate) fn fleet_dispatch_dirs(mur_home: &Path) -> (PathBuf, PathBuf) {
+    (
+        mur_home.join(mur_track::fleet_dispatch_request::FLEET_DISPATCH_REQUEST_DIR),
+        mur_home.join(mur_common::paths::DAEMON_HEARTBEAT_DIR),
+    )
+}
+
 fn system_read_paths() -> Vec<PathBuf> {
     // `mut` is only used inside the #[cfg(target_os = "macos")] block below;
     // allow the lint rather than restructure the initialization.

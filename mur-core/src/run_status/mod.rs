@@ -19,6 +19,7 @@
 //! no way to know which channel to fold.
 
 pub mod abandon;
+pub mod dispatch;
 pub mod heartbeat;
 pub mod rebuild;
 pub mod store;
@@ -251,7 +252,12 @@ pub fn status_of(mur_home: &std::path::Path, run_id: &str) -> anyhow::Result<Opt
     let loaded = store::load(mur_home, run_id);
     let record = match loaded {
         Ok(Some(record)) => Some(record),
-        Ok(None) => rebuild_for(mur_home, run_id)?,
+        // No record and no channel: the daemon's dispatch verdict is the
+        // only thing that can know about this run (#2116).
+        Ok(None) => match rebuild_for(mur_home, run_id)? {
+            Some(record) => Some(record),
+            None => dispatch::load(mur_home, run_id)?,
+        },
         // Rebuild first; re-propagate the cache error only when there is no
         // rebuild candidate — a run that has a channel to rebuild from must
         // not be hidden by a parse failure. A genuine rebuild I/O error is

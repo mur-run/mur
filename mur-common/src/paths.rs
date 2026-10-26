@@ -62,6 +62,30 @@ pub fn fleet_state_dir(mur_home: &Path, name: &str) -> PathBuf {
     mur_home.join(FLEET_STATE).join(name)
 }
 
+/// Directory holding the daemon's agent-readable heartbeat (#2116).
+///
+/// Not `murmurd.lock`: a sealed agent must know the daemon is up before it
+/// queues a request only the daemon serves, and on Linux it reads only what
+/// Landlock grants. A file grant is pinned to the inode present at seal time
+/// and is skipped outright when the file does not exist yet (the daemon has
+/// not started), so the grant is on this DIRECTORY, which the sandbox builder
+/// creates before sealing; the daemon replaces the file inside it with
+/// tmp + rename. Only a daemon that sweeps the fleet-dispatch inbox writes
+/// it, so an older daemon reads as "down" — correctly, since it would never
+/// serve the request.
+pub const DAEMON_HEARTBEAT_DIR: &str = "daemon-heartbeat";
+
+/// The heartbeat file inside [`DAEMON_HEARTBEAT_DIR`]: JSON carrying an
+/// RFC 3339 `heartbeat_at`.
+pub const DAEMON_HEARTBEAT_FILE: &str = "heartbeat.json";
+
+/// `<mur_home>/daemon-heartbeat/heartbeat.json`.
+pub fn daemon_heartbeat_path(mur_home: &Path) -> PathBuf {
+    mur_home
+        .join(DAEMON_HEARTBEAT_DIR)
+        .join(DAEMON_HEARTBEAT_FILE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

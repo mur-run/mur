@@ -330,11 +330,19 @@ fn fleet_run_carveins_are_config_gated() {
         policy.fs_write
     );
 
+    // Cross-router dispatch (#2116): the request inbox is writable and the
+    // daemon heartbeat DIRECTORY readable, both created before the seal.
+    let (inbox, heartbeat) = super::super::fleet_dispatch_dirs(mur_home);
+    assert!(policy.fs_write.contains(&inbox), "{:?}", policy.fs_write);
+    assert!(policy.fs_read.contains(&heartbeat), "{:?}", policy.fs_read);
+    assert!(inbox.is_dir() && heartbeat.is_dir());
+
     // A different (non-allowlisted) agent stays denied.
     let other_home = mur_home.join("agents").join("dr_worker_1");
     std::fs::create_dir_all(&other_home).unwrap();
     let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &other_home);
     assert!(!policy.fs_write.contains(&dr_state));
+    assert!(!policy.fs_write.contains(&inbox));
 }
 
 #[test]

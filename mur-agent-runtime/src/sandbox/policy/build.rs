@@ -316,6 +316,23 @@ impl SandboxPolicy {
                     fs_read.push(p);
                 }
             }
+            // Cross-router dispatch (#2116): a fleet routed by another agent
+            // is handed to the daemon as a signed request in this inbox, and
+            // the agent first checks the daemon's heartbeat. Both created
+            // here, before the seal, so the rules stick (a grant on an absent
+            // path is dropped). The heartbeat is a DIRECTORY read grant: the
+            // daemon replaces the file by rename, and Landlock pins a file
+            // grant to one inode. Writing a request authorizes nothing — the
+            // daemon re-verifies the signature and every gate from config.
+            let (inbox, heartbeat) = fleet_dispatch_dirs(mur_home);
+            let _ = std::fs::create_dir_all(&inbox);
+            if !fs_write.contains(&inbox) {
+                fs_write.push(inbox);
+            }
+            let _ = std::fs::create_dir_all(&heartbeat);
+            if std::fs::metadata(&heartbeat).is_ok() && !fs_read.contains(&heartbeat) {
+                fs_read.push(heartbeat);
+            }
         }
 
         // The runtime's OWN central-store reads. macOS is allow-default so this
