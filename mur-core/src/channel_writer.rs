@@ -6,8 +6,9 @@
 //!
 //! Migration-safe: if the router's identity is unavailable we fall back to an
 //! unsigned `append`, so existing channels (and tests that never created an
-//! identity) keep working. Enforcement is opt-in via `MUR_CHANNEL_REQUIRE_SIG`
-//! on the verification side.
+//! identity) keep working. Enforcement is opt-in via `MUR_CHANNEL_REQUIRE_SIG`;
+//! with it set, a write that could not be signed is refused here rather than
+//! appended unsigned for the reader to drop.
 use std::path::Path;
 
 use mur_channel::ChannelService;
@@ -200,10 +201,11 @@ fn record_refusal(home: &Path, router_agent: &str, reason: &str) {
 /// How this process signs as `router_agent`, resolved once for every kind of
 /// write.
 ///
-/// `Ok(Some(..))` — sign. `Ok(None)` — no key exists at all, which is the
-/// legitimate bootstrap case (a fresh home, a test, a workflow channel with
-/// no agent behind it); unsigned is correct there. `Err` — the key is present
-/// and unreadable while `MUR_CHANNEL_REQUIRE_SIG` is set.
+/// `Ok(Some(..))` — sign. `Ok(None)` — no key exists at all and enforcement
+/// is off, which is the legitimate bootstrap case (a fresh home, a test, a
+/// workflow channel with no agent behind it); unsigned is correct there.
+/// `Err` — `MUR_CHANNEL_REQUIRE_SIG` is set and the key is absent or
+/// unreadable (#2142: absent used to slip through as `Ok(None)`).
 ///
 /// One derivation on purpose: an append and a state transition on the same
 /// channel must not disagree about whether that channel is protected.
@@ -240,6 +242,21 @@ pub(crate) struct WriterKey {
 }
 
 pub(crate) fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Option<WriterKey>> {
+    writer_key_with(
+        home,
+        router_agent,
+        crate::channel_verify::require_sig_from_env(),
+    )
+}
+
+/// [`writer_key`] with the enforcement policy passed in rather than read from
+/// the environment, so both sides of it are testable without mutating
+/// process-global env (which `cargo test`'s parallel threads would race on).
+fn writer_key_with(
+    home: &Path,
+    router_agent: &str,
+    require_sig: bool,
+) -> anyhow::Result<Option<WriterKey>> {
     // A process sealed inside an agent's sandbox cannot read `keys/` — that
     // subtree is denied on purpose. Its parent loaded the key before sealing
     // and handed it over stdin, so prefer that when it is for THIS writer.
@@ -259,7 +276,24 @@ pub(crate) fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Opti
             id,
             source: KeySource::Disk,
         })),
-        Err(mur_common::identity::IdentityError::NotFound) => Ok(None),
+        // No key at all. With enforcement off this is the normal bootstrap
+        // state (a fresh home, a test fixture) and unsigned is the intended
+        // outcome. With it ON, the reader drops an unsigned event, so writing
+        // one only moves the failure to verification — where the event just
+        // vanishes and nothing says why (#2142). Refuse here instead, exactly
+        // as the unreadable case below does.
+        Err(mur_common::identity::IdentityError::NotFound) => {
+            if require_sig {
+                let reason = format!(
+                    "refusing to write an unsigned event as '{router_agent}': the writer key \
+                     does not exist (expected under {}), and MUR_CHANNEL_REQUIRE_SIG is set",
+                    agent_home.display()
+                );
+                record_refusal(home, router_agent, &reason);
+                anyhow::bail!(reason);
+            }
+            Ok(None)
+        }
         // The key is THERE and we may not read it — a sandbox deny (a spawned
         // `mur` cannot read a sibling's signing key since #975). Falling back
         // to unsigned here is a silent security downgrade: the event was meant
@@ -267,7 +301,7 @@ pub(crate) fn writer_key(home: &Path, router_agent: &str) -> anyhow::Result<Opti
         // the whole v3d signing guarantee lapses with nothing to show for it.
         // The mirror of the read-side fix in `channel_verify::verify_event`.
         Err(e) => {
-            if crate::channel_verify::require_sig_from_env() {
+            if require_sig {
                 // The reader would reject an unsigned event anyway; fail here,
                 // where the cause is still legible, instead of at verification.
                 let reason = format!(
@@ -383,6 +417,10 @@ pub(crate) fn append_with_key(
 }
 
 #[cfg(test)]
+#[path = "channel_writer_missing_key_tests.rs"]
+mod missing_key_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use mur_common::identity::AgentIdentity;
@@ -393,7 +431,7 @@ mod tests {
     /// Without it, an unrelated test recording a refusal lands inside another
     /// test's window and the assertion fails for a reason that has nothing to
     /// do with the behaviour under test.
-    static COUNTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(super) static COUNTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// An UNREADABLE writer key must not silently produce an unsigned event.
     ///

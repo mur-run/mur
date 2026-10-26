@@ -687,7 +687,7 @@ pub(super) async fn finalize_run(
     let refused = crate::channel_writer::refusals_since(refusal_mark);
     if refused > 0 {
         eprintln!(
-            "\n⚠ {refused} channel write(s) refused during this run — the channel's history is INCOMPLETE.\n   Writes are refused when MUR_CHANNEL_REQUIRE_SIG is set and the signing key cannot be read.\n   Details: {}",
+            "\n⚠ {refused} channel write(s) refused during this run — the channel's history is INCOMPLETE.\n   Writes are refused when MUR_CHANNEL_REQUIRE_SIG is set and the signing key is missing or cannot be read.\n   Details: {}",
             mur_home
                 .join("channels")
                 .join("write-refusals.jsonl")
