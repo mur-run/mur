@@ -279,6 +279,7 @@ fn a_monitor_whose_second_action_is_gated_waits_instead_of_completing() {
 fn a_row_whose_verb_drifted_out_from_under_it_is_retired_not_skipped_forever() {
     let d = tempfile::tempdir().unwrap();
     let home = d.path().to_path_buf();
+    crate::channel_writer::plant_writer_identity(&home);
     let spec = MonitorSpec::from_yaml(
         "schema_version: 1\nname: t\nsource: { type: mur_run, reference: r1 }\n\
          actions:\n  on_failure:\n    - type: rerun\n  on_success:\n    - type: notify\n\

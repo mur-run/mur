@@ -52,6 +52,7 @@ fn input_debounce_arms_and_fires_once() {
 
 /// Helper that borrows an existing TempDir so the directory survives the test.
 fn app_at(home: &tempfile::TempDir) -> App {
+    crate::channel_writer::plant_identity_for(home.path(), "a");
     let session = Session::create(home.path(), "a").unwrap();
     App::new(
         home.path().to_path_buf(),

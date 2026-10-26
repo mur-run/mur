@@ -8,6 +8,21 @@ fn app() -> App {
     App::test_fixture()
 }
 
+/// An app whose home outlives the call and holds the agent's writer key, for
+/// tests that read back what the session persisted. `test_fixture`'s home is
+/// gone by the time it returns, so a write there is refused under
+/// `MUR_CHANNEL_REQUIRE_SIG` and the refusal lands in the transcript (#2145).
+fn persisting_app(home: &tempfile::TempDir) -> App {
+    crate::channel_writer::plant_identity_for(home.path(), "a");
+    let session = Session::create(home.path(), "a").unwrap();
+    App::new(
+        home.path().to_path_buf(),
+        "a".into(),
+        session,
+        &super::super::super::theme::ANSI,
+    )
+}
+
 #[test]
 fn step_interleaves_between_text_segments() {
     let mut a = app();
@@ -217,7 +232,8 @@ fn update_step_completed_marks_card_done() {
 #[test]
 fn shell_card_opens_accumulates_and_stamps_exit() {
     use crate::cmd::agent::cli::shell::ShellEnd;
-    let mut a = app();
+    let home = tempfile::tempdir().unwrap();
+    let mut a = persisting_app(&home);
     a.begin_shell("cargo test");
     let card = a.messages.last().expect("card");
     assert_eq!(card.text, "$ cargo test");
@@ -234,7 +250,8 @@ fn shell_card_opens_accumulates_and_stamps_exit() {
     );
     assert_eq!(body, "running 3 tests\ntest result: FAILED\n[exit 1]");
 
-    let mut b = app();
+    let home_b = tempfile::tempdir().unwrap();
+    let mut b = persisting_app(&home_b);
     b.begin_shell("true");
     b.append_shell_output("ok");
     b.finish_shell(&ShellEnd::Exited(0));
@@ -277,7 +294,8 @@ fn a_silent_command_still_shows_a_live_card() {
 #[test]
 fn cancelled_shell_card_is_marked() {
     use crate::cmd::agent::cli::shell::ShellEnd;
-    let mut a = app();
+    let home = tempfile::tempdir().unwrap();
+    let mut a = persisting_app(&home);
     a.begin_shell("sleep 60");
     a.append_shell_output("partial");
     let body = a.finish_shell(&ShellEnd::Cancelled);
@@ -308,7 +326,8 @@ fn shell_card_cap_keeps_the_tail_and_the_command_line() {
 #[test]
 fn empty_output_leaves_one_card_and_a_cleared_one_absorbs_late_chunks() {
     use crate::cmd::agent::cli::shell::ShellEnd;
-    let mut a = app();
+    let home = tempfile::tempdir().unwrap();
+    let mut a = persisting_app(&home);
     a.begin_shell("true");
     a.finish_shell(&ShellEnd::Exited(0));
     assert_eq!(

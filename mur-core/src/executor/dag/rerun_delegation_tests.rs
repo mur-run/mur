@@ -13,6 +13,7 @@ async fn redispatching_a_delegate_step_records_a_second_delegation() {
     use mur_common::channel::EventKind;
 
     let tmp = tempfile::TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("rerun-wf").unwrap();
 

@@ -163,6 +163,17 @@ const NO_HEAD_INERT_KEY: [u8; 32] = [0u8; 32];
 /// Check `channel_id` under `mur_home`. Errors only when the check cannot run
 /// (no such channel, no router key); damage is a successful report.
 pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
+    check_with(
+        mur_home,
+        channel_id,
+        crate::channel_verify::require_sig_from_env(),
+    )
+}
+
+/// [`check`] with the signature policy passed in rather than read from the
+/// environment, so a test of a keyless channel means the same thing whether
+/// or not `MUR_CHANNEL_REQUIRE_SIG` is set in the test process (#2145).
+fn check_with(mur_home: &Path, channel_id: &str, require_sig: bool) -> Result<IntegrityReport> {
     mur_channel::check_channel_id(channel_id)?;
     // The store, not `ChannelService`: the service also opens the SQLite
     // index (creating dirs, migrating, enabling WAL), which would break the
@@ -221,7 +232,6 @@ pub fn check(mur_home: &Path, channel_id: &str) -> Result<IntegrityReport> {
     // `require_sig` is applied by the per-actor pass below, not here.
     let (events, damage) = store.load_events_with_damage(channel_id, &router_key, false)?;
 
-    let require_sig = crate::channel_verify::require_sig_from_env();
     report.events = events.len();
     report.unverified_seqs = events
         .iter()

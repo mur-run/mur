@@ -380,7 +380,35 @@ pub fn append_as_writer(
     payload: serde_json::Value,
     idem: Option<String>,
 ) -> anyhow::Result<ChannelEvent> {
-    match writer_key(home, router_agent)? {
+    append_as_writer_with(
+        svc,
+        home,
+        channel_id,
+        router_agent,
+        actor,
+        kind,
+        payload,
+        idem,
+        crate::channel_verify::require_sig_from_env(),
+    )
+}
+
+/// [`append_as_writer`] with the enforcement policy passed in, for the same
+/// reason as [`writer_key_with`]: a test of the keyless path must not change
+/// meaning when `MUR_CHANNEL_REQUIRE_SIG` is set in the test process (#2145).
+#[allow(clippy::too_many_arguments)]
+fn append_as_writer_with(
+    svc: &ChannelService,
+    home: &Path,
+    channel_id: &str,
+    router_agent: &str,
+    actor: ChannelActor,
+    kind: EventKind,
+    payload: serde_json::Value,
+    idem: Option<String>,
+    require_sig: bool,
+) -> anyhow::Result<ChannelEvent> {
+    match writer_key_with(home, router_agent, require_sig)? {
         Some(key) => {
             let key_home = home.join("agents").join(router_agent);
             append_with_key(svc, channel_id, key, &key_home, actor, kind, payload, idem)
@@ -570,7 +598,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let svc = ChannelService::open(tmp.path()).unwrap();
         let ch = svc.create_for_workflow("g").unwrap();
-        let ev = append_as_writer(
+        // Pinned to the non-enforcing policy: this is the bootstrap path, and
+        // under enforcement the same call is a refusal (covered separately in
+        // `missing_key_tests`).
+        let ev = append_as_writer_with(
             &svc,
             tmp.path(),
             &ch.id,
@@ -579,6 +610,7 @@ mod tests {
             EventKind::Note,
             serde_json::json!({ "text": "hi" }),
             None,
+            false,
         )
         .unwrap();
         assert!(ev.sig.is_none(), "no identity → unsigned (migration-safe)");

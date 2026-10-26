@@ -237,6 +237,18 @@ jobs:
         env:
           RUST_MIN_STACK: "16777216"
           MUR_TEST_SOCKETS: "1"
+      - name: mur-core under MUR_CHANNEL_REQUIRE_SIG (Linux)
+        # Production can set MUR_CHANNEL_REQUIRE_SIG, which refuses any channel
+        # write without a readable writer key (#2143). The workspace run above
+        # leaves it unset, so a fixture that forgets to plant a key passes there
+        # and only breaks for whoever exports the var (#2145). Rerun mur-core's
+        # lib tests with it set; reuses the binaries built above. One OS is
+        # enough: the signing policy has no platform-specific branch.
+        if: runner.os == 'Linux'
+        run: cargo nextest run -p mur-core --lib --locked --profile ci
+        env:
+          RUST_MIN_STACK: "16777216"
+          MUR_CHANNEL_REQUIRE_SIG: "1"
 
   clippy:
     name: Clippy
