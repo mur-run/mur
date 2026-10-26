@@ -437,6 +437,7 @@ async fn resume_skips_a_step_already_completed() {
     use mur_common::channel::EventKind;
 
     let tmp = tempfile::TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("resume-wf").unwrap();
 
@@ -481,6 +482,7 @@ async fn high_risk_step_gates_and_runs_when_preapproved() {
     use mur_common::hitl::RiskTier;
 
     let tmp = tempfile::TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("gated-wf").unwrap();
     let mut s = step("s0", &[], Some("echo done"));
@@ -517,6 +519,7 @@ fn channel_run_emits_attributed_event_trail() {
     use mur_common::channel::{ChannelActor, ChannelState, EventKind};
 
     let tmp = tempfile::TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("test-skill").unwrap();
 
@@ -832,6 +835,7 @@ async fn corrupt_run_json_falls_back_via_the_executors_channel_sidecar() {
 
     let tmp = tempfile::tempdir().unwrap();
     let mur_home = tmp.path();
+    crate::channel_writer::plant_writer_identity(mur_home);
     let svc = ChannelService::open(mur_home).unwrap();
     let ch = svc.create_for_workflow("sidecar-wf").unwrap();
 

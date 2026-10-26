@@ -496,6 +496,7 @@ fn repeated_pause_cycles_never_loosen_the_frozen_hitl_policy() {
 #[test]
 fn stop_while_paused_ends_both_run_ids_on_the_channel() {
     let home = paused_home(None);
+    crate::channel_writer::plant_writer_identity(home.path());
     let svc = mur_channel::ChannelService::open(home.path()).unwrap();
     svc.create_for_fleet("dev", "mur", &["pm".to_string()])
         .unwrap();
@@ -631,6 +632,7 @@ fn every_crash_point_of_a_resume_is_resumable_again_or_finished() {
     use crate::run_status::State;
     let home = paused_home(Some("job-1"));
     let h = home.path();
+    crate::channel_writer::plant_writer_identity(h);
     let svc = mur_channel::ChannelService::open(h).unwrap();
     svc.create_for_fleet("dev", "mur", &["pm".to_string()])
         .unwrap();

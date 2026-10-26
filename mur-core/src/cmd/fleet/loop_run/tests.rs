@@ -518,6 +518,7 @@ fn stop_maps_to_a_channel_terminal_state() {
 async fn a_guard_stop_is_written_to_the_channel_with_reason_and_remedy() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
+    crate::channel_writer::plant_writer_identity(home);
     let fleet = Fleet {
         name: "dev".into(),
         display_name: String::new(),

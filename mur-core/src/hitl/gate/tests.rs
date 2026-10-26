@@ -41,6 +41,7 @@ async fn read_tier_runs_unattended() {
 #[tokio::test]
 async fn gate_transitions_are_stamped_with_the_run_that_paused() {
     let tmp = TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("g").unwrap();
     drop(svc);
@@ -95,6 +96,7 @@ async fn gate_transitions_are_stamped_with_the_run_that_paused() {
 #[tokio::test]
 async fn high_tier_approved_via_prewritten_response() {
     let tmp = TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("g").unwrap();
     let r = req(RiskTier::Destructive);
@@ -458,6 +460,7 @@ fn answer(home: &Path, ch: &str, hitl_id: &str, allow: bool) {
 #[tokio::test]
 async fn defer_parks_immediately_instead_of_waiting() {
     let tmp = TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("g").unwrap();
     drop(svc);
@@ -783,6 +786,7 @@ fn write_policy(grant: bool) -> GatePolicy {
 #[tokio::test]
 async fn granted_write_tier_runs_and_is_audited() {
     let tmp = TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("g").unwrap();
     drop(svc);
@@ -867,6 +871,7 @@ async fn a_human_denial_outranks_a_tier_grant() {
 #[tokio::test]
 async fn an_ungrantable_tier_is_ignored_even_if_listed() {
     let tmp = TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("g").unwrap();
     drop(svc);

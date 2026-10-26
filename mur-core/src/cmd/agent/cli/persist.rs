@@ -275,6 +275,7 @@ mod tests {
     #[test]
     fn image_only_user_turn_is_never_saved_blank() {
         let tmp = TempDir::new().unwrap();
+        crate::channel_writer::plant_identity_for(tmp.path(), "qa");
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         s.append("user", "", None, &[]).unwrap();
         s.append("user", "  \n ", None, &[]).unwrap();
@@ -305,6 +306,7 @@ mod tests {
     #[test]
     fn current_is_none_until_first_append_then_some() {
         let tmp = TempDir::new().unwrap();
+        crate::channel_writer::plant_identity_for(tmp.path(), "qa");
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         assert!(s.current().is_none(), "no channel before first append");
         s.append("user", "hi", None, &[]).unwrap();
@@ -318,6 +320,7 @@ mod tests {
     #[test]
     fn agent_append_persists_offered_suggestions() {
         let tmp = TempDir::new().unwrap();
+        crate::channel_writer::plant_identity_for(tmp.path(), "qa");
         let mut s = Session::create(tmp.path(), "qa").unwrap();
         s.append("user", "run the fleet?", None, &[]).unwrap();
         let offered = vec![

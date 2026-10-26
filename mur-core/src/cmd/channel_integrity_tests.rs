@@ -33,15 +33,26 @@ impl Fixture {
     }
 
     /// A channel whose router has no key: events are unsigned, no head.
+    ///
+    /// A keyless router only exists with enforcement off — under
+    /// `MUR_CHANNEL_REQUIRE_SIG` the write is refused — so the events go in
+    /// unsigned directly rather than through `append_as_writer`, and the
+    /// fixture is read back with [`Fixture::check_unenforced`] (#2145).
     fn unanchored(n: usize) -> Self {
         let home = TempDir::new().unwrap();
         let svc = ChannelService::open(home.path()).unwrap();
         let id = svc.create_for_workflow("verify").unwrap().id;
-        let f = Self { home, svc, id };
         for i in 0..n {
-            f.append(i);
+            svc.append(
+                &id,
+                ChannelActor::System,
+                EventKind::Note,
+                serde_json::json!({ "text": format!("event {i}") }),
+                None,
+            )
+            .unwrap();
         }
-        f
+        Self { home, svc, id }
     }
 
     fn append(&self, i: usize) {
@@ -60,6 +71,11 @@ impl Fixture {
 
     fn check(&self) -> IntegrityReport {
         check(self.home.path(), &self.id).unwrap()
+    }
+
+    /// [`Fixture::check`] with signatures optional, for keyless fixtures.
+    fn check_unenforced(&self) -> IntegrityReport {
+        check_with(self.home.path(), &self.id, false).unwrap()
     }
 
     /// Drops the service so its SQLite index handle is closed, keeping the
@@ -108,7 +124,7 @@ fn an_anchored_untouched_channel_is_intact() {
 #[test]
 fn a_channel_with_no_head_is_intact_but_says_it_is_unanchored() {
     let f = Fixture::unanchored(2);
-    let r = f.check();
+    let r = f.check_unenforced();
     assert!(r.is_intact(), "{}", r.render());
     assert_eq!(r.anchored_lines, None);
     assert!(r.render().contains("not anchored"), "{}", r.render());
@@ -329,7 +345,7 @@ fn a_created_channel_with_no_events_is_intact_and_unanchored() {
     // no log yet. That is an existing, empty channel, not a missing one.
     let f = Fixture::unanchored(0);
     assert!(!f.log_path().exists(), "premise: no events file yet");
-    let r = f.check();
+    let r = f.check_unenforced();
     assert!(r.is_intact(), "{}", r.render());
     assert_eq!(r.events, 0);
     assert_eq!(r.anchored_lines, None);

@@ -119,6 +119,7 @@ async fn without_a_stop_signal_the_run_is_unchanged() {
 #[tokio::test]
 async fn a_stopped_run_is_canceled_in_the_channel_and_stopped_in_the_record() {
     let tmp = tempfile::TempDir::new().unwrap();
+    crate::channel_writer::plant_writer_identity(tmp.path());
     let svc = ChannelService::open(tmp.path()).unwrap();
     let ch = svc.create_for_workflow("t").unwrap();
     let (f, stop) = flag();
