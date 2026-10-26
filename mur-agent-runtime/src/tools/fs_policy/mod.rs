@@ -95,6 +95,16 @@ impl SessionCwd {
         self.read().tracks.get(id).cloned()
     }
 
+    /// `(turn, track)` for every track some turn is inside right now,
+    /// across all conversations.
+    pub fn live_tracks(&self) -> Vec<(String, PathBuf)> {
+        self.read()
+            .tracks
+            .iter()
+            .map(|(turn, (_, t))| (turn.clone(), t.clone()))
+            .collect()
+    }
+
     /// The directory every conversation starts in (the agent home).
     pub fn home(&self) -> &Path {
         self.home.as_ref()

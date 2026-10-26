@@ -4,6 +4,7 @@ pub mod bash;
 mod bash_cache_env_tests;
 pub mod bash_control;
 pub mod bash_env;
+pub(crate) mod bash_guard;
 pub mod bash_jobs;
 pub mod bash_track;
 pub(crate) mod denial;
