@@ -118,3 +118,50 @@ async fn a_stop_during_the_converging_iteration_is_recorded_stopped() {
     assert_eq!(p.outcome.as_deref(), Some("stopped"));
     assert_eq!(loop_terminal_state(stop), crate::run_status::State::Stopped);
 }
+
+/// #2116: a custom-router fleet's stop event must be signed and verify.
+///
+/// `emit_stop_event` writes a `System` actor, and `channel_verify` checks
+/// every non-Agent actor against `ROUTER_AGENT`. Signing it with the fleet's
+/// router (`router: orchestrator`) produced an event its own channel could not
+/// verify even unsealed — and, in a sealed child dispatched by `mur`, an
+/// UNSIGNED one: the handoff key is `mur`'s, so `orchestrator`'s key is read
+/// from disk, and the seal denies `keys/`.
+#[test]
+fn a_custom_router_stop_event_is_signed_by_the_writer_and_verifies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    crate::channel_writer::plant_writer_identity(home);
+    crate::channel_writer::plant_identity_for(home, "orchestrator");
+    let fleet = Fleet {
+        name: "council".into(),
+        display_name: String::new(),
+        goal: "g".into(),
+        router: Some("orchestrator".into()),
+        members: vec!["orchestrator".into()],
+        team_id: None,
+        channel_id: "fleet-council".into(),
+        procedure: vec![],
+        rules: vec![],
+        skills: vec![],
+        loop_cfg: None,
+        parallel: None,
+        hitl: None,
+        requires_programs: vec![],
+        limits: None,
+        needs: vec![],
+    };
+    let svc = mur_channel::ChannelService::open(home).unwrap();
+    svc.create_for_fleet("council", "orchestrator", &["orchestrator".into()])
+        .unwrap();
+
+    pause::emit_stop_event(&svc, home, &fleet, LoopStop::Budget, 0, 0.0, "run-1");
+
+    let ev = svc.load_events("fleet-council").unwrap().pop().unwrap();
+    assert_eq!(ev.kind, mur_common::channel::EventKind::StateChange);
+    assert!(ev.sig.is_some(), "the stop event must be signed");
+    assert!(
+        crate::channel_verify::verify_event(home, "fleet-council", &ev, true),
+        "a System stop event must verify against ROUTER_AGENT's key"
+    );
+}
