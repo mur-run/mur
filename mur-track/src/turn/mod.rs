@@ -19,8 +19,12 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+pub mod reclaim;
 pub mod target;
 pub mod warm;
+
+#[cfg(test)]
+mod reclaim_tests;
 
 #[cfg(test)]
 mod target_tests;
@@ -133,6 +137,13 @@ impl TurnTrack {
         };
         std::fs::write(git_dir.join(BASE_FILE), serde_json::to_vec(&sentinel)?)
             .context("write turn base")?;
+        reclaim::write_owner(
+            &git_dir,
+            &reclaim::Owner {
+                pid: std::process::id(),
+                released: false,
+            },
+        )?;
         Ok(Self {
             project,
             path,
@@ -275,6 +286,26 @@ impl TurnTrack {
         Ok(())
     }
 
+    /// Give the track up without destroying it (a kept or undestroyable
+    /// track): from now on [`reclaim::stale_tracks`] may take it once the
+    /// grace period passes, even while this process lives on.
+    pub fn release(&self) -> Result<()> {
+        // Found through the project: a gutted track may have lost its `.git`
+        // pointer, and git inside it would then answer for the project.
+        let name = self.path.file_name().context("track path has no name")?;
+        let git_dir = common_git_dir(&self.project)?.join("worktrees").join(name);
+        if !git_dir.join(BASE_FILE).is_file() {
+            bail!("no turn git dir for {}", self.path.display());
+        }
+        reclaim::write_owner(
+            &git_dir,
+            &reclaim::Owner {
+                pid: std::process::id(),
+                released: true,
+            },
+        )
+    }
+
     /// Remove the worktree and its registration. Branches and commits made
     /// in the track survive; a detached-HEAD commit without a branch does not
     /// (its reflog lives in the worktree's git dir).
@@ -408,7 +439,25 @@ fn absolute_git_dir(worktree: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(String::from_utf8(out.stdout)?.trim()))
 }
 
-fn run_git(cwd: &Path, args: &[&str], path_arg: Option<&Path>) -> Result<()> {
+/// The repository's shared git dir — where `worktrees/<name>` admin dirs
+/// live, even when `dir` is itself a linked worktree.
+pub(super) fn common_git_dir(dir: &Path) -> Result<PathBuf> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(dir)
+        .output()
+        .context("spawn git rev-parse --git-common-dir")?;
+    if !out.status.success() {
+        bail!(
+            "not a git repository: {} ({})",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(PathBuf::from(String::from_utf8(out.stdout)?.trim()))
+}
+
+pub(super) fn run_git(cwd: &Path, args: &[&str], path_arg: Option<&Path>) -> Result<()> {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(cwd);
     if let Some(p) = path_arg {

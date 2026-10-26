@@ -83,6 +83,11 @@ impl TaskRunner {
                 track.project().to_path_buf(),
                 track.path().to_path_buf(),
             );
+            super::track_reclaim::sweep_in_background(
+                turn,
+                track.project().to_path_buf(),
+                session.home(),
+            );
         }
         tracing::info!(
             turn,
@@ -298,6 +303,9 @@ fn close_track(
                     .collect(),
             );
             let turn_dir = turn_target_dir_of(&track);
+            // Released first because `destroy` consumes the track: if it
+            // then fails, the sweep can still take the leftover (#2152).
+            super::track_reclaim::release(turn, &track);
             if let Err(e) = track.destroy() {
                 tracing::warn!(turn, error = %e, "turn track promoted but not destroyed");
                 (TrackClose::PromotedNotDestroyed, count)
@@ -311,6 +319,7 @@ fn close_track(
         Err(e) => {
             tracing::error!(turn, track = %track.path().display(), error = %e, "promote failed; track kept for review");
             ledger.track_kept = Some(track.path().to_string_lossy().into_owned());
+            super::track_reclaim::release(turn, &track);
             (TrackClose::Kept, 0)
         }
     };

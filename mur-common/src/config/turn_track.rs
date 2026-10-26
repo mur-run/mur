@@ -12,11 +12,30 @@ pub const TURN_TRACK_DEFAULT_SKIP_SUBDIRS: &[&str] = &["incremental"];
 pub const TURN_TRACK_DEFAULT_MIN_FREE_GIB: u64 = 20;
 /// `<project>/target/<this>/<track-name>/` holds each turn's target dir.
 pub const TURN_TRACK_DEFAULT_TURN_TARGET_SUBDIR: &str = "turns";
+/// Minutes a released or orphaned turn track waits before it is reclaimed.
+pub const TURN_TRACK_DEFAULT_STALE_GRACE_MINS: u64 = 30;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnTrackConfig {
     #[serde(default)]
     pub warm_build_cache: WarmBuildCacheConfig,
+    /// A turn track whose owner released it or died is reclaimed (diff saved
+    /// as a patch, worktree removed) once quiet this many minutes.
+    #[serde(default = "turn_track_default_stale_grace_mins")]
+    pub stale_grace_mins: u64,
+}
+
+impl Default for TurnTrackConfig {
+    fn default() -> Self {
+        Self {
+            warm_build_cache: WarmBuildCacheConfig::default(),
+            stale_grace_mins: turn_track_default_stale_grace_mins(),
+        }
+    }
+}
+
+fn turn_track_default_stale_grace_mins() -> u64 {
+    TURN_TRACK_DEFAULT_STALE_GRACE_MINS
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +123,7 @@ mod tests {
         assert_eq!(w.skip_subdirs, vec!["incremental".to_string()]);
         assert_eq!(w.min_free_gib, 20);
         assert_eq!(w.turn_target_subdir, "turns");
+        assert_eq!(c.turn_track.stale_grace_mins, 30);
     }
 
     #[test]
