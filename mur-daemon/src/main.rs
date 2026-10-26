@@ -1,7 +1,6 @@
 mod action_tick;
 mod bonjour;
 mod consumer;
-mod fleet_dispatch;
 mod fleet_tick;
 mod inbox;
 mod lock;
@@ -139,7 +138,7 @@ async fn daemon_main() -> Result<()> {
     // #2116 — launch fleets a sealed agent requested but cannot sign for
     // (router != requester). Verified + re-authorized here, outside every
     // sandbox, so the run's child signs with the router's own key.
-    fleet_dispatch::spawn(mur_dir.clone());
+    mur_daemon::fleet_dispatch::spawn(mur_dir.clone());
 
     // Git push broker intake (plan T12). Off unless `git_push.enabled`; no
     // agent is enrolled before sub-project 2, so every request it takes is
