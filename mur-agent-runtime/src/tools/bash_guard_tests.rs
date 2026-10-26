@@ -86,7 +86,10 @@ fn refusal_message_names_the_owning_turn_and_track() {
     let r = refused("rm -rf .worktrees/turn-1", &project, &live).unwrap();
     let msg = r.message();
     assert!(msg.contains("turn turn-a"), "{msg}");
-    assert!(msg.contains("/w/repo/.worktrees/turn-1"), "{msg}");
+    // Compare paths by component, not as a `/`-joined literal: on Windows
+    // the message renders the track as `\w\repo\.worktrees\turn-1`.
+    assert!(r.track.ends_with(Path::new(".worktrees").join("turn-1")));
+    assert!(msg.contains(&r.track.display().to_string()), "{msg}");
     assert!(msg.contains("rm -rf .worktrees/turn-1"), "{msg}");
     assert_eq!(r.track_name(), "turn-1");
 }
