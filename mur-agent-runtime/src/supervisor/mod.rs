@@ -384,6 +384,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         )
         .await?;
     runner.attach_live(live.clone());
+    mcp_pool.iter().for_each(|p| p.follow(live.profile.clone()));
     runner.clone().drain_egress_denied(denied_rx);
     // Before the first turn: tracks a killed predecessor never closed (#1909).
     let unsettled = runner.report_unsettled_tracks(&mur_home);
