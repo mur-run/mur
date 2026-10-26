@@ -288,7 +288,9 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     // profiles + signing keys, and names not created yet — the regression a
     // path list cannot catch), re-allow this agent's own home, then re-assert
     // the SELF_PROTECTED_AGENT_FILES denies — the fs_deny
-    // emission above is overridden by the re-allow and must land last.
+    // emission above is overridden by the re-allow and must land last. The
+    // same holds for user fs_deny paths inside the own home (#2156), which
+    // are re-asserted right after.
     for path in policy.launch_chain.deny_paths() {
         let p = sbpl_escape(&path.to_string_lossy());
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
@@ -311,6 +313,24 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
             lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
         }
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
+    }
+
+    // User fs_deny under this agent's own home (#2156). The fs_deny block
+    // above lands before the own-home re-allow, so last-match-wins undid the
+    // write deny for any path inside the home. Re-assert it here. Writes only:
+    // nothing between here and the fs_deny block re-allows reads. The home
+    // itself and its ancestors are excluded — sealing them would stop the
+    // runtime writing its own home, which is why the re-allow exists. The
+    // self-protected files were re-denied by the loop just above.
+    let own_home = policy.launch_chain.agent_self_home();
+    for path in &policy.fs_deny {
+        let self_protected = crate::sandbox::policy::SELF_PROTECTED_AGENT_FILES
+            .iter()
+            .any(|f| own_home.join(f) == *path);
+        if path.starts_with(own_home) && path != own_home && !self_protected {
+            let p = sbpl_escape(&path.to_string_lossy());
+            lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
+        }
     }
 
     // Sibling signing keys (#850). The launch chain denies WRITES on the agents
@@ -474,5 +494,7 @@ unsafe extern "C" {
 
     fn sandbox_free_error(errorbuf: *mut libc::c_char);
 }
+#[cfg(test)]
+mod own_home_deny_tests;
 #[cfg(test)]
 mod tests;

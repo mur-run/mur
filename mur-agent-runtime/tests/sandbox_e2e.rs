@@ -496,6 +496,67 @@ fn sandbox_profile_bypass_subprocess_main() {
     std::process::exit(i32::from(failed));
 }
 
+/// Issue #2156 regression: a user `fs_deny` under the agent's own home must
+/// deny writes under the real kernel, not just in the SBPL text. The own-home
+/// re-allow is last-match-wins, so this fails if the deny is not re-asserted
+/// after it.
+#[test]
+#[cfg(target_os = "macos")]
+fn sandbox_denies_writes_under_own_home_fs_deny() {
+    let root = tempfile::tempdir().unwrap();
+    // SBPL matches resolved paths; macOS tempdirs sit behind /var -> /private/var.
+    let mur_home = root.path().canonicalize().unwrap().join("mur");
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(&exe)
+        .env("MUR_TEST_SANDBOX_OWN_HOME_DENY", &mur_home)
+        .env_remove("MUR_AGENT_SKIP_SANDBOX")
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "fs_deny under own home must block writes while the rest of the home stays writable"
+    );
+}
+
+/// Subprocess entry point for `sandbox_denies_writes_under_own_home_fs_deny`.
+#[cfg(target_os = "macos")]
+#[ctor::ctor]
+fn sandbox_own_home_deny_subprocess_main() {
+    let Some(mur_home) = std::env::var_os("MUR_TEST_SANDBOX_OWN_HOME_DENY") else {
+        return;
+    };
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::AgentProfile;
+    use std::path::PathBuf;
+
+    let agent_home = PathBuf::from(mur_home).join("agents").join("tester");
+    let denied = agent_home.join("frozen");
+    std::fs::create_dir_all(&denied).unwrap();
+
+    let mut profile = AgentProfile::default_for_tests();
+    profile
+        .entitlements
+        .filesystem
+        .deny
+        .push(denied.to_string_lossy().into_owned());
+    match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
+        Ok(s) if s.enforcing => {}
+        other => skip_or_fail_unenforced(&other),
+    }
+
+    // Control: without it, a "denied" below proves nothing.
+    if let Err(e) = std::fs::write(agent_home.join("ok.txt"), b"x") {
+        eprintln!("ERROR: control write inside agent_home failed ({e}); test proves nothing");
+        std::process::exit(2);
+    }
+    if std::fs::write(denied.join("x.txt"), b"x").is_ok() {
+        eprintln!("ERROR: write under own-home fs_deny SUCCEEDED");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
 /// Env var that turns "sandbox not enforcing" from a skip into a failure. CI sets
 /// it on runners whose kernel must seal (Linux Landlock, macOS SBPL) so a runner
 /// that silently can't sandbox shows red instead of a green that proved nothing.
