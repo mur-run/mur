@@ -206,3 +206,109 @@ fn creating_the_new_file_takes_over_from_the_legacy_block() {
     assert_eq!(live.current().deadline.as_deref(), Some("30m"));
     assert_eq!(live.generation(), generation, "legacy edit is not a reload");
 }
+
+/// `minimal_profile.yaml` with one MCP server `probe` at `command`, pinned.
+/// Spawn is `any` so this exercises the pin; the seal's own refusal is
+/// covered in `live_profile_mcp_tests`.
+fn with_probe(command: &Path, pin: &str) -> String {
+    let base: String = FIXTURE
+        .lines()
+        .filter(|l| !l.starts_with("mcp_servers"))
+        .map(|l| {
+            l.replace(
+                "spawn: { mode: allowlist, allowed: [] }",
+                "spawn: { mode: any }",
+            )
+        })
+        .map(|l| format!("{l}\n"))
+        .collect();
+    format!(
+        "{base}mcp_servers:\n  - name: probe\n    command: {}\n    binary_sha256: {pin}\n",
+        command.display()
+    )
+}
+
+fn sha(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+#[test]
+fn a_verified_mcp_command_change_is_served_and_a_tampered_one_is_refused() {
+    let bins = tempfile::tempdir().unwrap();
+    let (a, b) = (bins.path().join("a"), bins.path().join("b"));
+    std::fs::write(&a, b"a").unwrap();
+    std::fs::write(&b, b"b").unwrap();
+    let (d, live) = home_with(&with_probe(&a, &sha(b"a")));
+    let profile = d.path().join("profile.yaml");
+
+    write(&profile, &with_probe(&b, &sha(b"b")));
+    assert_eq!(
+        live.mcp_entry("probe").unwrap().command,
+        b.display().to_string()
+    );
+    assert!(live.state().mcp_refusals.is_empty());
+
+    // Same pin, different bytes: refused, and B — not boot's A — keeps serving.
+    std::fs::write(&a, b"tampered").unwrap();
+    write(&profile, &with_probe(&a, &sha(b"b")));
+    assert_eq!(
+        live.mcp_entry("probe").unwrap().command,
+        b.display().to_string()
+    );
+    let refusals = live.state().mcp_refusals;
+    assert!(
+        refusals["probe"].contains("changed since install"),
+        "{refusals:?}"
+    );
+    // The reload itself succeeded; only the one entry was held back.
+    assert!(live.state().last_reload_error.is_none());
+}
+
+/// [`with_probe`] with `probe`'s args and any extra lines for its entry, plus
+/// optional further servers.
+fn probe_with(command: &Path, pin: &str, args: &str, entry_extra: &str, more: &str) -> String {
+    format!(
+        "{}    args: [{args}]\n{entry_extra}{more}",
+        with_probe(command, pin)
+    )
+}
+
+#[test]
+fn a_cold_mcp_edit_after_a_hot_one_keeps_the_hot_entry() {
+    let bins = tempfile::tempdir().unwrap();
+    let a = bins.path().join("a");
+    std::fs::write(&a, b"a").unwrap();
+    let pin = sha(b"a");
+    let (d, live) = home_with(&probe_with(&a, &pin, "--old", "", ""));
+    let profile = d.path().join("profile.yaml");
+    let args = |live: &LiveProfile| live.mcp_entry("probe").unwrap().args;
+
+    write(&profile, &probe_with(&a, &pin, "--new", "", ""));
+    assert_eq!(args(&live), ["--new"]);
+
+    // A cold field on the same entry: a restart is pending, `--new` stays.
+    write(
+        &profile,
+        &probe_with(&a, &pin, "--new", "    future_key: true\n", ""),
+    );
+    assert_eq!(args(&live), ["--new"]);
+    assert!(
+        live.state()
+            .pending_cold_restart
+            .contains(&"mcp_servers.probe.future_key".to_string()),
+        "{:?}",
+        live.state()
+    );
+
+    // Adding a server is a restart too, and must not roll `probe` back either.
+    let other = format!("  - name: other\n    command: {}\n", a.display());
+    write(&profile, &probe_with(&a, &pin, "--new", "", &other));
+    assert_eq!(args(&live), ["--new"]);
+    assert!(live.mcp_entry("other").is_none());
+    assert!(
+        live.state()
+            .pending_cold_restart
+            .contains(&"mcp_servers".to_string())
+    );
+}

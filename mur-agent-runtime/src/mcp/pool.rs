@@ -11,13 +11,25 @@ use crate::protocol::mcp_client::{McpClient, McpError, ToolInfo};
 use crate::sandbox::SandboxPolicy;
 use crate::sandbox::egress_proxy::EgressProxyHandle;
 
+/// Where the pool reads a server's current entry: the hot-reloaded profile.
+/// Returns `None` for a server it does not know, and the boot entry is used.
+pub type EntrySource = Box<dyn Fn(&str) -> Option<McpServerEntry> + Send + Sync>;
+
+/// A warm client and the entry it was started from.
+type Warm = (McpServerEntry, Arc<Mutex<McpClient>>);
+
 pub struct McpPool {
+    /// The enabled servers at boot. Which servers exist never changes under a
+    /// running agent (adding or removing one is a restart); their entries can.
     entries: HashMap<String, McpServerEntry>,
+    /// Set once by the supervisor; unset (tests) means the boot entries.
+    live: std::sync::OnceLock<EntrySource>,
     policy: SandboxPolicy,
     /// Shared egress proxy for servers with a `Restricted` network policy.
     /// `None` when no server on this agent declares one (the common case).
     proxy: Option<EgressProxyHandle>,
-    clients: Mutex<HashMap<String, Arc<Mutex<McpClient>>>>,
+    /// Warm clients, each with the entry it was started from.
+    clients: Mutex<HashMap<String, Warm>>,
 }
 
 impl McpPool {
@@ -29,6 +41,7 @@ impl McpPool {
         let map = entries.into_iter().map(|e| (e.name.clone(), e)).collect();
         Arc::new(Self {
             entries: map,
+            live: std::sync::OnceLock::new(),
             policy,
             proxy,
             clients: Mutex::new(HashMap::new()),
@@ -43,16 +56,50 @@ impl McpPool {
         Some(self.proxy.as_ref()?.in_flight(server, &task))
     }
 
-    /// Return (or lazily spawn) the client for `server`.
-    pub async fn client(&self, server: &str) -> Result<Arc<Mutex<McpClient>>, McpError> {
-        let mut guard = self.clients.lock().await;
-        if let Some(c) = guard.get(server) {
-            return Ok(c.clone());
-        }
+    /// Read entries from the hot-reloaded profile from now on. Once; a second
+    /// call is ignored.
+    pub fn attach_live(&self, source: EntrySource) {
+        let _ = self.live.set(source);
+    }
 
-        let entry = self.entries.get(server).ok_or_else(|| {
+    /// Serve each server's entry from the hot-reloaded profile, so an edited
+    /// entry starts a new client generation on the next call.
+    pub fn follow(&self, profile: Arc<crate::live_profile::LiveProfile>) {
+        self.attach_live(Box::new(move |server| profile.mcp_entry(server)));
+    }
+
+    /// The entry `server` should run under now: the live one when attached,
+    /// else the boot one. `None` for a server this agent did not boot with.
+    fn current_entry(&self, server: &str) -> Option<McpServerEntry> {
+        let boot = self.entries.get(server)?;
+        Some(
+            self.live
+                .get()
+                .and_then(|f| f(server))
+                .unwrap_or_else(|| boot.clone()),
+        )
+    }
+
+    /// Return (or lazily spawn) the client for `server`.
+    ///
+    /// A warm client started from an entry that has since been hot-reloaded is
+    /// retired and a new generation started from the current entry. A call
+    /// still holding the old client finishes on it; the child is reaped when
+    /// the last reference drops (`StdioMcpClient`'s `Drop`).
+    pub async fn client(&self, server: &str) -> Result<Arc<Mutex<McpClient>>, McpError> {
+        let entry = self.current_entry(server).ok_or_else(|| {
             McpError::Server(format!("no MCP server named `{server}` on this agent"))
         })?;
+        let mut guard = self.clients.lock().await;
+        match guard.get(server) {
+            Some((started, c)) if *started == entry => return Ok(c.clone()),
+            Some(_) => {
+                tracing::info!(server = %server, "MCP entry changed; starting a new client generation");
+                guard.remove(server);
+            }
+            None => {}
+        }
+        let entry = &entry;
         // serena loads (and may migrate) its config before answering
         // `initialize`, so hash before spawn and compare after (#1688).
         let serena_cfg = crate::mcp::serena::rewrite::fingerprint(entry, self.policy.agent_home());
@@ -80,7 +127,7 @@ impl McpPool {
         }
 
         let shared = Arc::new(Mutex::new(client));
-        guard.insert(server.to_string(), shared.clone());
+        guard.insert(server.to_string(), (entry.clone(), shared.clone()));
         Ok(shared)
     }
 
@@ -93,7 +140,7 @@ impl McpPool {
     /// Shut down all warm clients gracefully.
     pub async fn shutdown(&self) {
         let mut guard = self.clients.lock().await;
-        let clients: Vec<_> = guard.drain().map(|(_, v)| v).collect();
+        let clients: Vec<_> = guard.drain().map(|(_, (_, c))| c).collect();
         drop(guard);
         for arc in clients {
             // Only shut down if we hold the last Arc reference. When another

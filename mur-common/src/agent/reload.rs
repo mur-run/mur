@@ -11,10 +11,15 @@
 //! includes entitlements and the sandbox.
 
 use super::AgentProfile;
+use super::reload_mcp::{MCP_SERVERS, diff_mcp_servers, overlay_hot_entries};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Dotted paths that take effect on the next turn.
+///
+/// `mcp_servers` is not listed: it is diffed per entry by name
+/// (`reload_mcp`), and a hot entry is reported as `mcp_servers.<name>`.
 ///
 /// `addons` is here for the skill gate; its MCP half is not hot (MCP servers
 /// are spawned at boot), so a changed `addons` is reported in both lists.
@@ -73,6 +78,11 @@ pub struct ReloadState {
     /// Changed paths that only take effect after `mur agent restart`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_cold_restart: Vec<String>,
+    /// MCP server → why its edited entry is not the one running. Separate from
+    /// `pending_cold_restart` because that holds paths only, and a refusal
+    /// (a pin mismatch, a client that failed to start) needs its reason.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_refusals: BTreeMap<String, String>,
 }
 
 impl ReloadState {
@@ -102,6 +112,7 @@ impl AgentProfile {
         };
         let mut diff = ReloadDiff::default();
         walk(&a, &b, "", &mut diff);
+        diff_mcp_servers(old, new, &mut diff);
         diff.hot.sort();
         diff.cold.sort();
         diff
@@ -116,6 +127,18 @@ impl AgentProfile {
     /// so a changed locked field cannot reach a reader by any route — the
     /// running process keeps the boot value until a restart.
     pub fn with_hot_fields_from(&self, newer: &AgentProfile) -> AgentProfile {
+        self.with_hot_fields_over(&self.mcp_servers, newer)
+    }
+
+    /// [`Self::with_hot_fields_from`] for a process that has already reloaded:
+    /// `served` is the `mcp_servers` the last reload served. A cold MCP edit
+    /// keeps that entry instead of falling back to boot's, so it cannot undo
+    /// a hot edit (args, hosts) applied earlier.
+    pub fn with_hot_fields_over(
+        &self,
+        served: &[super::McpServerEntry],
+        newer: &AgentProfile,
+    ) -> AgentProfile {
         let mut out = self.clone();
         out.limits = newer.limits.clone();
         out.disabled_skills = newer.disabled_skills.clone();
@@ -123,6 +146,7 @@ impl AgentProfile {
         out.hitl.autonomy = newer.hitl.autonomy;
         out.lifecycle.schedule = newer.lifecycle.schedule.clone();
         out.lifecycle.idle_triggers = newer.lifecycle.idle_triggers.clone();
+        out.mcp_servers = overlay_hot_entries(&self.mcp_servers, served, &newer.mcp_servers);
         out
     }
 }
@@ -145,7 +169,7 @@ fn walk(a: &Value, b: &Value, prefix: &str, diff: &mut ReloadDiff) {
             format!("{prefix}.{k}")
         };
         let (va, vb) = (ma.get(k).unwrap_or(&null), mb.get(k).unwrap_or(&null));
-        if va == vb || IGNORED_PATHS.contains(&path.as_str()) {
+        if va == vb || IGNORED_PATHS.contains(&path.as_str()) || path == MCP_SERVERS {
             continue;
         }
         if HOT_PATHS.contains(&path.as_str()) {

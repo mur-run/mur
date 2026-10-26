@@ -13,9 +13,11 @@
 //!   good snapshot serving; the error is kept for `doctor` and logged once per
 //!   file stamp, not once per turn.
 //! - **Only hot fields are applied.** The profile a reader sees is the boot
-//!   profile with [`AgentProfile::with_hot_fields_from`] laid over it, so a
+//!   profile with [`AgentProfile::with_hot_fields_over`] laid over it, so a
 //!   change to entitlements, sandbox, identity or transport cannot reach a
 //!   reader by any route; it is recorded as pending a cold restart instead.
+//!   A cold MCP edit keeps the entry the last reload served, so it never
+//!   rolls back a hot entry edit applied earlier.
 
 use mur_common::AgentProfile;
 use mur_common::agent::{RELOAD_STATE_FILE, ReloadState};
@@ -23,6 +25,8 @@ use mur_common::limits::Limits;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+#[path = "live_profile_mcp.rs"]
+mod mcp;
 #[path = "live_profile_stamp.rs"]
 mod stamp;
 pub use stamp::FileStamp;
@@ -184,6 +188,8 @@ impl<T> LiveFile<T> {
 pub struct LiveProfile {
     file: LiveFile<AgentProfile>,
     pending_cold: Arc<Mutex<Vec<String>>>,
+    /// Hot MCP entry edits the reload gate refused (see `live_profile_mcp`).
+    mcp_refusals: Arc<Mutex<mcp::Refusals>>,
 }
 
 impl LiveProfile {
@@ -198,6 +204,11 @@ impl LiveProfile {
         let home = agent_home.to_path_buf();
         let base = boot.clone();
         let pending = pending_cold.clone();
+        let mcp_refusals = Arc::new(Mutex::new(mcp::Refusals::new()));
+        let refusals = mcp_refusals.clone();
+        // What the last good reload served, so a refused edit keeps that entry.
+        let served = Mutex::new(boot.mcp_servers.clone());
+        let permitted = mcp::seal_permits(&boot, agent_home);
         let load = move |_: &Path| -> Result<AgentProfile, String> {
             let fresh = crate::profile::Profile::load(&home)
                 .map_err(|e| e.to_string())?
@@ -214,11 +225,26 @@ impl LiveProfile {
             }
             *pending.lock().unwrap_or_else(|e| e.into_inner()) =
                 AgentProfile::reload_diff(&base, &fresh).cold;
-            Ok(base.with_hot_fields_from(&fresh))
+            let mut served = served.lock().unwrap_or_else(|e| e.into_inner());
+            let mut out = base.with_hot_fields_over(&served, &fresh);
+            let (entries, refused) = mcp::gate_entries(
+                &base,
+                &served,
+                std::mem::take(&mut out.mcp_servers),
+                &permitted,
+            );
+            out.mcp_servers = entries;
+            served.clone_from(&out.mcp_servers);
+            *refusals.lock().unwrap_or_else(|e| e.into_inner()) = refused;
+            Ok(out)
         };
         let mut file = LiveFile::new(agent_home.join("profile.yaml"), "profile.yaml", boot, load);
         file.on_change = on_change;
-        Arc::new(LiveProfile { file, pending_cold })
+        Arc::new(LiveProfile {
+            file,
+            pending_cold,
+            mcp_refusals,
+        })
     }
 
     pub fn current(&self) -> Arc<AgentProfile> {
@@ -229,6 +255,16 @@ impl LiveProfile {
         self.file.generation()
     }
 
+    /// The MCP entry named `server` in the profile being served, for
+    /// [`crate::mcp::pool::McpPool::attach_live`].
+    pub fn mcp_entry(&self, server: &str) -> Option<mur_common::agent::McpServerEntry> {
+        self.current()
+            .mcp_servers
+            .iter()
+            .find(|e| e.name == server)
+            .cloned()
+    }
+
     pub fn state(&self) -> ReloadState {
         ReloadState {
             generation: self.file.generation(),
@@ -236,6 +272,11 @@ impl LiveProfile {
             config_limits_error: None,
             pending_cold_restart: self
                 .pending_cold
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            mcp_refusals: self
+                .mcp_refusals
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
