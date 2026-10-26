@@ -28,8 +28,11 @@ fn serena_legacy_home_recovery_command_parses() {
             project: Some(repo.clone()),
             ..Default::default()
         };
+        // #2136: entry-scoped, so the hint comes back in the skip list.
         let msg = verify_entries(&[entry], &agent_home)
-            .unwrap_err()
+            .unwrap()
+            .pop()
+            .expect("legacy home must be reported")
             .to_string();
 
         // The command is the last backtick-quoted span; the path inside

@@ -132,12 +132,12 @@ pub(crate) async fn prepare_runtime(
         .map_err(|e| anyhow::anyhow!(e))?;
 
     // code-nav 2.4: `kind: serena` entries must pin an existing project and
-    // pass the C1–C9 preflight. Same fail-closed path as rules 11/6 and for
-    // the same reason: the hook chain below can only warn.
-    // #1979: a missing `project` dir is the one entry-scoped exception — it
-    // is warned inside and comes back here instead of aborting. Its spawn
-    // gate still refuses, so the tools/list failure lands in
-    // `mcp_status.json`, which `mur agent doctor` reports.
+    // pass the C1–C9 preflight. Failures are entry-scoped (#1979, #2136):
+    // warned inside and returned here instead of aborting, so one bad entry
+    // cannot take the agent down. Its spawn gate reruns the same checks and
+    // still refuses, so the tools/list failure lands in `mcp_status.json`,
+    // which `mur agent doctor` reports. Only a tool-prefix clash still aborts
+    // startup — the spawn gate cannot see it.
     let _skipped =
         crate::mcp::serena::verify_entries(&profile.inner.enabled_mcp_servers(), agent_home)
             .map_err(|e| anyhow::anyhow!(e))?;

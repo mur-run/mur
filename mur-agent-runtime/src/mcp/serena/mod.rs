@@ -242,15 +242,17 @@ pub enum SerenaEntryError {
 
 /// Startup gate: every enabled `kind: serena` entry must name an absolute,
 /// existing `project` directory and pass [`preflight`]. Entries without a
-/// kind are untouched. The first failure wins; there is no fallback to the
-/// session cwd.
+/// kind are untouched; there is no fallback to the session cwd.
 ///
-/// #1979: one failure is entry-scoped instead — a `project` path that does
-/// not exist ([`SerenaEntryError::ProjectMissing`]). That entry is logged,
-/// returned in the `Ok` list, and left to the spawn gate
-/// ([`launch_additions`]), which still refuses it. A deleted repo must not
-/// put the whole agent into a launchd crash loop; every other check stays
-/// fail-closed for the agent.
+/// Failures are entry-scoped (#1979 for a missing `project`, #2136 for every
+/// other per-entry check): the entry is logged, returned in the `Ok` list,
+/// and left to the spawn gate ([`launch_additions`]), which reruns the same
+/// checks and still refuses it. One bad code-nav entry must not take the
+/// agent and its healthy servers down, or put it in a launchd crash loop.
+///
+/// The one agent-fatal error is [`SerenaEntryError::ToolPrefix`]: the spawn
+/// gate does not see sibling entries, so a clashing entry would still spawn
+/// and silently overwrite another server's tools.
 pub fn verify_entries(
     entries: &[McpServerEntry],
     agent_home: &Path,
@@ -268,14 +270,11 @@ pub fn verify_entries(
                 prefix: sanitize_server(&entry.name),
             });
         }
-        let paths = entry_paths(agent_home, entry)?;
-        match verify_entry(entry, &paths) {
-            Ok(_) => {}
-            Err(e @ SerenaEntryError::ProjectMissing { .. }) => {
-                tracing::warn!(server = %entry.name, "{e}");
-                skipped.push(e);
-            }
-            Err(e) => return Err(e),
+        let checked = entry_paths(agent_home, entry)
+            .and_then(|paths| verify_entry(entry, &paths).map(|_| ()));
+        if let Err(e) = checked {
+            tracing::warn!(server = %entry.name, "{e}");
+            skipped.push(e);
         }
     }
     Ok(skipped)

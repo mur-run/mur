@@ -107,7 +107,11 @@ fn the_runtime_project_gate_accepts_the_entry() {
     let f = fx();
     let e = build(&f.record, &f.repo).unwrap();
     let home = f.repo.parent().unwrap().join("agent");
-    let err = verify_entries(&[e], &home).unwrap_err().to_string();
+    let err = verify_entries(&[e], &home)
+        .unwrap()
+        .pop()
+        .expect("missing config must be reported")
+        .to_string();
     assert!(!err.contains("`project` is"), "{err}");
 }
 
