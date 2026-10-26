@@ -103,6 +103,88 @@ fn prune_from_inside_a_track_sweeps_the_main_project() {
     assert_eq!(names, ["turn-kept"]);
 }
 
+/// An ordinary linked checkout is a project in its own right: its tracks
+/// live under its own `.worktrees/`, and prune sweeps those — not the main
+/// checkout's.
+#[test]
+fn prune_in_a_linked_checkout_sweeps_its_own_tracks() {
+    let (td, p) = repo();
+    let home = tempfile::tempdir().unwrap();
+    let main_kept = TurnTrack::create(&p, "turn-main", TreeClone::Copy).unwrap();
+    main_kept.release().unwrap();
+    let linked = td.path().join("linked");
+    git(
+        &p,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            linked.to_str().unwrap(),
+        ],
+    );
+    let linked = mur_track::turn::canonicalize(&linked).unwrap();
+    let own = TurnTrack::create(&linked, "turn-own", TreeClone::Copy).unwrap();
+    own.release().unwrap();
+
+    assert_eq!(
+        mur_track::turn::reclaim::project_root(&linked).unwrap(),
+        linked
+    );
+    assert_eq!(
+        mur_track::turn::reclaim::project_root(own.path()).unwrap(),
+        linked
+    );
+    let rows = run_json(home.path(), &linked, false);
+    let names: Vec<_> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["turn-own"]);
+    assert!(!own.path().exists());
+    assert!(main_kept.path().exists(), "main checkout's track untouched");
+}
+
+/// Two repositories with the same checkout name get separate patch dirs,
+/// so neither salvage can land on the other's.
+#[test]
+fn same_basename_repos_get_distinct_patch_dirs() {
+    let home = tempfile::tempdir().unwrap();
+    let a = Path::new("/work/client/app");
+    let b = Path::new("/work/server/app");
+    assert_ne!(patch_dir(home.path(), a), patch_dir(home.path(), b));
+    assert_eq!(patch_dir(home.path(), a), patch_dir(home.path(), a));
+    let name = patch_dir(home.path(), a);
+    assert!(
+        name.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("app-")
+    );
+}
+
+/// Pruning a reused track name keeps the earlier salvage beside the new one.
+#[test]
+fn prune_keeps_an_earlier_patch_of_the_same_track_name() {
+    let (_td, p) = repo();
+    let home = tempfile::tempdir().unwrap();
+    let dir = patch_dir(home.path(), &p);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("turn-x.patch"), "earlier").unwrap();
+    let t = TurnTrack::create(&p, "turn-x", TreeClone::Copy).unwrap();
+    std::fs::write(t.path().join("a.txt"), "edited").unwrap();
+    t.release().unwrap();
+    let rows = run_json(home.path(), &p, false);
+    let patch = PathBuf::from(rows[0]["patch"].as_str().unwrap());
+    assert_eq!(patch, dir.join("turn-x-2.patch"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("turn-x.patch")).unwrap(),
+        "earlier"
+    );
+}
+
 #[test]
 fn empty_diff_reports_no_patch() {
     let (_td, p) = repo();

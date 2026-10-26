@@ -86,17 +86,23 @@ fn configured_grace(mur_home: &Path) -> Duration {
     Duration::from_secs(mins.saturating_mul(60))
 }
 
-/// Where patches for `project` go: one directory per repository, named after
-/// its checkout, so two projects' `turn-*` names never collide.
+/// Hex digits of the path hash in a [`patch_dir`] name.
+const PROJECT_ID_LEN: usize = 12;
+
+/// Where patches for `project` go: one directory per repository, named
+/// `<checkout>-<hash of its canonical path>` — readable, yet `/a/app` and
+/// `/b/app` never share one. Within it, [`reclaim`] never overwrites an
+/// earlier salvage of a reused track name.
 pub(crate) fn patch_dir(mur_home: &Path, project: &Path) -> PathBuf {
     let name = project
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "root".into());
+    let hash = blake3::hash(project.as_os_str().as_encoded_bytes()).to_hex();
     mur_home
         .join(ARTIFACTS_DIR)
         .join(PRUNE_ARTIFACT_DIR)
-        .join(name)
+        .join(format!("{name}-{}", &hash[..PROJECT_ID_LEN]))
 }
 
 fn reason_label(r: StaleReason) -> &'static str {
@@ -158,9 +164,9 @@ fn one(project: &Path, t: &StaleTrack, patches: &Path, dry_run: bool) -> Row {
     if dry_run {
         return row;
     }
-    let patch = patches.join(format!("{}.patch", t.name));
-    match reclaim(project, t, &patch) {
-        Ok(()) => {
+    let want = patches.join(format!("{}.patch", t.name));
+    match reclaim(project, t, &want) {
+        Ok(patch) => {
             row.status = "reclaimed";
             // An empty diff is nothing to point the user at.
             if std::fs::metadata(&patch).map(|m| m.len()).unwrap_or(0) > 0 {

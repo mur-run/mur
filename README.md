@@ -241,7 +241,7 @@ To sweep a project no agent has opened since, run it by hand — same rules, so 
 
 ```bash
 mur track prune --dry-run            # list what would go, from anywhere inside the repo
-mur track prune                      # reclaim; patches go to ~/.mur/artifacts/track-prune/<project>/
+mur track prune                      # reclaim; patches go to ~/.mur/artifacts/track-prune/<project>-<id>/
 mur track prune --grace 0 --json     # ignore the grace period, machine-readable
 ```
 

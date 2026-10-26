@@ -423,7 +423,7 @@ fn repo_root(dir: &Path) -> Result<PathBuf> {
     Ok(top)
 }
 
-fn absolute_git_dir(worktree: &Path) -> Result<PathBuf> {
+pub(super) fn absolute_git_dir(worktree: &Path) -> Result<PathBuf> {
     let out = Command::new("git")
         .args(["rev-parse", "--absolute-git-dir"])
         .current_dir(worktree)

@@ -66,9 +66,9 @@ pub(super) fn sweep(
     };
     let mut saved = Vec::new();
     for t in stale {
-        let patch = patches.join(format!("{}.patch", t.name));
-        match reclaim(project, &t, &patch) {
-            Ok(()) => {
+        let want = patches.join(format!("{}.patch", t.name));
+        match reclaim(project, &t, &want) {
+            Ok(patch) => {
                 tracing::warn!(
                     turn,
                     track_name = %t.name,
