@@ -131,6 +131,11 @@ pub fn build_policy(
     // …and to write the shared runtime media state it owns (co-watching:
     // watch.json + VLC snapshot dir), which lives outside agent_home.
     policy.allow_extra_write_paths(extra_write_paths);
+    // #2160: judged on the finished policy, so a deny swallowed by a grant
+    // added after `from_entitlements` is reported too. macOS carves denies in
+    // SBPL and needs no record.
+    #[cfg(target_os = "linux")]
+    policy.record_unenforceable_denies();
     policy
 }
 

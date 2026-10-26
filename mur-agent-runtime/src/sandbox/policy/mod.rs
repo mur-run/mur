@@ -4,7 +4,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 mod build;
+mod deny_carve;
 mod widen;
+
+use deny_carve::{partition_against_denies, record_deny_drops};
+
+/// Whether the kernel backend can close a path inside a grant. macOS SBPL can
+/// (a `deny` emitted after the allows wins); Landlock is a pure allow-list and
+/// cannot, so on Linux a grant overlapping a user `fs_deny` is dropped whole
+/// instead (#2160).
+const DENY_CARVES_GRANTS: bool = !cfg!(target_os = "linux");
 
 #[cfg(test)]
 mod tests;
@@ -111,6 +120,12 @@ pub struct SandboxPolicy {
     /// `None` when the path could not be derived (already logged once).
     pub scratch_dir: Option<PathBuf>,
     /// Paths that are explicitly denied (override fs_read/fs_write).
+    ///
+    /// Per platform: macOS emits these as `deny` clauses after every allow, so
+    /// they win over any grant. Linux (Landlock) cannot carve a deny out of a
+    /// grant, so a user grant overlapping one is dropped whole at build time;
+    /// a deny inside a runtime-owned grant (own home, system paths) is
+    /// recorded in `dropped` as not kernel-enforced (#2160).
     pub fs_deny: Vec<PathBuf>,
     /// Directories containing executable binaries the process may exec.
     pub fs_exec: Vec<PathBuf>,

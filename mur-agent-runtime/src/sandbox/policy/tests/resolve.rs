@@ -164,26 +164,33 @@ fn from_entitlements_adds_resolved_path_for_symlinked_fs_grants() {
     let link = tmp.path().join("link");
     std::os::unix::fs::symlink(&real, &link).expect("symlink");
     let real_canon = std::fs::canonicalize(&real).expect("canonicalize real");
+    // The deny uses its own link/target pair: a grant overlapping a deny is
+    // dropped whole on Linux (#2160), which is not what this test is about.
+    let denied_real = tmp.path().join("denied_real");
+    std::fs::create_dir(&denied_real).expect("mkdir denied_real");
+    let denied_link = tmp.path().join("denied_link");
+    std::os::unix::fs::symlink(&denied_real, &denied_link).expect("symlink");
+    let denied_canon = std::fs::canonicalize(&denied_real).expect("canonicalize");
 
     let mut ent = minimal_entitlements();
     ent.filesystem.read = vec![link.to_string_lossy().to_string()];
     ent.filesystem.write = vec![link.to_string_lossy().to_string()];
-    ent.filesystem.deny = vec![link.to_string_lossy().to_string()];
+    ent.filesystem.deny = vec![denied_link.to_string_lossy().to_string()];
     let agent_home = tmp.path().join("agents").join("symlink-grant-test");
     let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
 
-    for (verb, list) in [
-        ("read", &policy.fs_read),
-        ("write", &policy.fs_write),
-        ("deny", &policy.fs_deny),
+    for (verb, list, link, canon) in [
+        ("read", &policy.fs_read, &link, &real_canon),
+        ("write", &policy.fs_write, &link, &real_canon),
+        ("deny", &policy.fs_deny, &denied_link, &denied_canon),
     ] {
-        assert!(list.contains(&link), "{verb} keeps the link path: {list:?}");
+        assert!(list.contains(link), "{verb} keeps the link path: {list:?}");
         assert!(
-            list.contains(&real_canon),
+            list.contains(canon),
             "{verb} adds the resolved path: {list:?}"
         );
         assert_eq!(
-            list.iter().filter(|p| **p == real_canon).count(),
+            list.iter().filter(|p| *p == canon).count(),
             1,
             "{verb} adds the resolved path once: {list:?}"
         );
