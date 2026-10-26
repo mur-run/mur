@@ -186,12 +186,22 @@ fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_reque
     let requester = save_identity(&home, REQUESTER);
     save_identity(&home, ROUTER);
     let writer = save_identity(&home, mur_core::channel_writer::ROUTER_AGENT);
+    // The sealed child treats an unreadable key as isolation; that only means
+    // something if the key is really there to be refused.
+    for other in [ROUTER, mur_core::channel_writer::ROUTER_AGENT] {
+        let key = home.join("keys").join(other).join("identity.key");
+        assert!(key.is_file(), "expected private key at {}", key.display());
+    }
     beat(&home);
 
     // 1. Sealed submission.
     run_ok(reexec("submit", &home, &work), "sealed submit");
     let agent_home = home.join("agents").join(REQUESTER);
     if !agent_home.join(SEALED_MARKER).exists() {
+        assert!(
+            !require_sandbox(),
+            "{REQUIRE_SANDBOX_ENV}=1 but the sealed submit left no {SEALED_MARKER} marker"
+        );
         return; // sandbox not enforcing here; the child printed SKIP
     }
     let reqs: Vec<PathBuf> = std::fs::read_dir(home.join(FLEET_DISPATCH_REQUEST_DIR))
@@ -301,7 +311,8 @@ fn submit(home: &Path, work: &Path) -> ! {
         Ok(out) => fail(&format!("unexpected reply: {}", out.text)),
         Err(e) => fail(&format!("sealed submit refused: {e:?}")),
     }
-    let _ = std::fs::write(agent_home.join(SEALED_MARKER), b"");
+    std::fs::write(agent_home.join(SEALED_MARKER), b"")
+        .unwrap_or_else(|e| fail(&format!("write {SEALED_MARKER}: {e}")));
     std::process::exit(0);
 }
 
