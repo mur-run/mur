@@ -29,10 +29,11 @@ pub const FLEET_RUN: &str = "fleet_run";
 /// naming it once keeps a rename of either from silently half-applying.
 const DEEP_RESEARCH: &str = "deep-research";
 
+mod daemon_request;
 mod gate;
 mod messages;
 
-use gate::live_run_id;
+pub use gate::live_run_id;
 pub use gate::{allowed, enabled_in};
 pub(crate) use messages::spawn_error_message;
 use messages::unreadable_config_message;
@@ -214,20 +215,32 @@ cost_usd) and by `mur fleet stop`."
         // The handle: minted here, handed to the child with --run-id, and
         // what the caller polls. One path segment under ~/.mur/runs/.
         let run_id = format!("fleet-{fleet}-{}", uuid::Uuid::now_v7());
-        // Argv only — never a shell — so goal text cannot inject.
-        let mut args = child_args(&fleet, goal.as_deref(), job.as_deref());
-        args.push("--run-id".into());
-        args.push(run_id.clone());
-        // `mur deep-research` has no `--cwd`: research has no target tree.
-        if fleet != DEEP_RESEARCH
-            && let Some(dir) = &cwd
-        {
-            args.push("--cwd".into());
-            args.push(dir.display().to_string());
-            if cwd_inferred {
-                args.push("--cwd-inferred".into());
-            }
+
+        // #2116: a fleet routed by ANOTHER agent must be signed with that
+        // agent's key, which this sealed process can neither read nor hand
+        // over. Ask the daemon — outside every sandbox — to launch it instead.
+        let router = parsed.router_or_concierge();
+        if !router.eq_ignore_ascii_case(&self.agent_name) {
+            let dispatch = mur_track::fleet_dispatch_request::FleetDispatch {
+                requested_by: self.agent_name.clone(),
+                fleet: fleet.clone(),
+                goal,
+                job,
+                cwd: cwd.map(|d| d.display().to_string()),
+                cwd_inferred,
+                run_id,
+            };
+            return daemon_request::dispatch_via_daemon(self, dispatch, router, stale_timeout);
         }
+
+        let args = dispatch_argv(
+            &fleet,
+            goal.as_deref(),
+            job.as_deref(),
+            &run_id,
+            cwd.as_deref(),
+            cwd_inferred,
+        );
         // The child's stdio goes to a log beside its run record — `runs/` is
         // already inside the fleet_run carve-in — because nobody is waiting
         // on this pipe any more.
@@ -293,22 +306,61 @@ cost_usd) and by `mur fleet stop`."
         // Child with kill_on_drop(false) leaves the process running.
         drop(child);
 
-        let mut reply = serde_json::json!({
-            "run_id": run_id,
-            "fleet": fleet,
-            "status": "dispatched",
-            "log": log_path,
-            "follow": format!(
-                "mur_job_status {run_id} · mur fleet status {fleet} — the result lands in the fleet channel, not in this reply"
-            ),
-        });
-        if stale_timeout {
-            reply["note"] = serde_json::json!(
-                "timeout_secs is ignored since 2.80 — the run is bounded by the fleet's limits (mur limits <fleet>)"
-            );
-        }
-        Ok(reply.to_string().into())
+        Ok(dispatched_reply(&run_id, &fleet, &log_path, stale_timeout)
+            .to_string()
+            .into())
     }
+}
+
+/// The handle every dispatch returns, local spawn or daemon request alike.
+fn dispatched_reply(
+    run_id: &str,
+    fleet: &str,
+    log_path: &std::path::Path,
+    stale_timeout: bool,
+) -> serde_json::Value {
+    let mut reply = serde_json::json!({
+        "run_id": run_id,
+        "fleet": fleet,
+        "status": "dispatched",
+        "log": log_path,
+        "follow": format!(
+            "mur_job_status {run_id} · mur fleet status {fleet} — the result lands in the fleet channel, not in this reply"
+        ),
+    });
+    if stale_timeout {
+        reply["note"] = serde_json::json!(
+            "timeout_secs is ignored since 2.80 — the run is bounded by the fleet's limits (mur limits <fleet>)"
+        );
+    }
+    reply
+}
+
+/// The full `mur` argv for one dispatch. Shared with `mur-daemon`, which
+/// launches cross-router fleets (#2116): one builder, so the two launch paths
+/// cannot drift. Argv only — never a shell — so goal text cannot inject.
+pub fn dispatch_argv(
+    fleet: &str,
+    goal: Option<&str>,
+    job: Option<&str>,
+    run_id: &str,
+    cwd: Option<&std::path::Path>,
+    cwd_inferred: bool,
+) -> Vec<String> {
+    let mut args = child_args(fleet, goal, job);
+    args.push("--run-id".into());
+    args.push(run_id.into());
+    // `mur deep-research` has no `--cwd`: research has no target tree.
+    if fleet != DEEP_RESEARCH
+        && let Some(dir) = cwd
+    {
+        args.push("--cwd".into());
+        args.push(dir.display().to_string());
+        if cwd_inferred {
+            args.push("--cwd-inferred".into());
+        }
+    }
+    args
 }
 
 /// The `mur` argv for one dispatch (before `--run-id` / `--cwd`).
@@ -335,6 +387,9 @@ fn child_args(fleet: &str, goal: Option<&str>, job: Option<&str>) -> Vec<String>
     }
     args
 }
+
+#[cfg(test)]
+mod daemon_request_tests;
 
 #[cfg(test)]
 mod unreadable_tests;
