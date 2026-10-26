@@ -40,6 +40,15 @@ const BASE_FILE: &str = "mur-turn-base.json";
 /// other tracks, large and regenerable.
 pub const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", WORKTREES_DIR];
 
+/// A promote that deletes at least this many files AND more than
+/// [`MASS_DELETE_RATIO`] of the tracked files is refused as a gutted track,
+/// not a turn's edit. The floor keeps a tiny repo's legitimate cleanup legal.
+pub const MASS_DELETE_MIN: usize = 20;
+
+/// Fraction of tracked files a single promote may delete (see
+/// [`MASS_DELETE_MIN`]).
+pub const MASS_DELETE_RATIO: f64 = 0.5;
+
 /// How the project working tree is cloned into the track.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TreeClone {
@@ -197,8 +206,12 @@ impl TurnTrack {
     /// Copy the turn's changes over the project working tree — last write
     /// wins, deletions propagate. Returns what was promoted (relative paths).
     /// `.git` is untouched: commits are already in the shared store.
+    ///
+    /// Refuses (the track stays on disk) when the track is no longer a turn
+    /// track or looks gutted — see [`Self::check_promotable`].
     pub fn promote(&self) -> Result<Vec<PathBuf>> {
         let files = self.diff_files()?;
+        self.check_promotable(&files)?;
         for rel in &files {
             let src = self.path.join(rel);
             let dst = self.project.join(rel);
@@ -222,6 +235,44 @@ impl TurnTrack {
             }
         }
         Ok(files)
+    }
+
+    /// Refuse to promote a track that something else removed or emptied
+    /// while the turn ran. Without this, an emptied working tree reads as
+    /// "the turn deleted every tracked file" and the deletions are poured
+    /// into the project.
+    pub fn check_promotable(&self, files: &[PathBuf]) -> Result<()> {
+        if !self.path.join(".git").is_file() {
+            bail!(
+                "track {} has no .git pointer: removed while the turn ran?",
+                self.path.display()
+            );
+        }
+        // Without its own git dir, git in the track resolves to the project
+        // repo and every answer is about the wrong tree.
+        let git_dir = absolute_git_dir(&self.path)?;
+        if !git_dir.join(BASE_FILE).is_file() {
+            bail!(
+                "track {} resolves to {}, not its own turn git dir",
+                self.path.display(),
+                git_dir.display()
+            );
+        }
+        let deleted = files
+            .iter()
+            .filter(|rel| std::fs::symlink_metadata(self.path.join(rel)).is_err())
+            .count();
+        if deleted < MASS_DELETE_MIN {
+            return Ok(());
+        }
+        let tracked = tracked_file_count(&self.path)?;
+        if deleted as f64 > tracked as f64 * MASS_DELETE_RATIO {
+            bail!(
+                "refusing to promote {deleted} deletions of {tracked} tracked files from {}: track looks emptied, not edited",
+                self.path.display()
+            );
+        }
+        Ok(())
     }
 
     /// Remove the worktree and its registration. Branches and commits made
@@ -365,6 +416,26 @@ fn run_git(cwd: &Path, args: &[&str], path_arg: Option<&Path>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Files in the index of the worktree at `root` (`git ls-files`).
+fn tracked_file_count(root: &Path) -> Result<usize> {
+    let out = Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(root)
+        .output()
+        .context("spawn git ls-files")?;
+    if !out.status.success() {
+        bail!(
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|e| !e.is_empty())
+        .count())
 }
 
 /// Every path `git status` considers dirty or untracked under `root`, with

@@ -303,3 +303,71 @@ fn canonicalize_strips_the_verbatim_prefix() {
             .unwrap()
     );
 }
+
+/// A repo with `n` committed files under `src/`.
+fn repo_with_files(n: usize) -> tempfile::TempDir {
+    let td = tempfile::tempdir().unwrap();
+    git(td.path(), &["init", "-q"]);
+    std::fs::create_dir(td.path().join("src")).unwrap();
+    for i in 0..n {
+        std::fs::write(td.path().join(format!("src/f{i}.rs")), format!("{i}")).unwrap();
+    }
+    git(td.path(), &["add", "."]);
+    git(td.path(), &["commit", "-q", "-m", "init"]);
+    td
+}
+
+/// The 2026-10-26 incident: another turn ran `git worktree remove --force`
+/// on a live track; the working tree was emptied but the registration
+/// survived, and promote poured 2136 deletions into the project.
+#[test]
+fn promote_refuses_an_emptied_track() {
+    let td = repo_with_files(MASS_DELETE_MIN * 2);
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-h", TreeClone::Copy).unwrap();
+    std::fs::remove_dir_all(track.path().join("src")).unwrap();
+
+    let err = track.promote().unwrap_err().to_string();
+    assert!(err.contains("refusing to promote"), "{err}");
+    assert_eq!(
+        std::fs::read_dir(project.join("src")).unwrap().count(),
+        MASS_DELETE_MIN * 2,
+        "project untouched"
+    );
+    assert!(track.path().exists(), "track kept for review");
+}
+
+#[test]
+fn promote_refuses_a_track_without_its_git_pointer() {
+    let td = dirty_repo();
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-i", TreeClone::Copy).unwrap();
+    std::fs::remove_file(track.path().join("gone.txt")).unwrap();
+    std::fs::remove_file(track.path().join(".git")).unwrap();
+
+    assert!(track.promote().is_err());
+    assert!(project.join("gone.txt").exists(), "nothing promoted");
+}
+
+#[test]
+fn promote_allows_deleting_a_minority_of_a_large_repo() {
+    let td = repo_with_files(MASS_DELETE_MIN * 3);
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-j", TreeClone::Copy).unwrap();
+    for i in 0..MASS_DELETE_MIN {
+        std::fs::remove_file(track.path().join(format!("src/f{i}.rs"))).unwrap();
+    }
+    assert_eq!(track.promote().unwrap().len(), MASS_DELETE_MIN);
+    assert!(!project.join("src/f0.rs").exists());
+}
+
+#[test]
+fn promote_allows_a_small_repo_to_delete_most_of_itself() {
+    let td = repo_with_files(4);
+    let project = root(&td);
+    let track = TurnTrack::create(&project, "turn-k", TreeClone::Copy).unwrap();
+    for i in 0..3 {
+        std::fs::remove_file(track.path().join(format!("src/f{i}.rs"))).unwrap();
+    }
+    assert_eq!(track.promote().unwrap().len(), 3);
+}
