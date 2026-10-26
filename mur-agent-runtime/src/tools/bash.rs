@@ -225,11 +225,9 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
         };
 
         // Never let a command detach a turn track the runtime still owns.
-        if let Some(why) = super::bash_guard::refuse_track_detach(
-            &command,
-            &working_dir,
-            &self.session_cwd.live_tracks(),
-        ) {
+        if let Some(why) =
+            super::bash_guard::guard(&command, &working_dir, &self.session_cwd.live_tracks())
+        {
             return Err(ToolError::InvalidInput(why));
         }
 

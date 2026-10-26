@@ -95,12 +95,13 @@ impl SessionCwd {
         self.read().tracks.get(id).cloned()
     }
 
-    /// Every track some turn is inside right now, across all conversations.
-    pub fn live_tracks(&self) -> Vec<PathBuf> {
+    /// `(turn, track)` for every track some turn is inside right now,
+    /// across all conversations.
+    pub fn live_tracks(&self) -> Vec<(String, PathBuf)> {
         self.read()
             .tracks
-            .values()
-            .map(|(_, t)| t.clone())
+            .iter()
+            .map(|(turn, (_, t))| (turn.clone(), t.clone()))
             .collect()
     }
 
