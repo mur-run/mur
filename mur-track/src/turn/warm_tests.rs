@@ -182,3 +182,29 @@ fn warm_skips_and_drops_clone_when_sources_cannot_be_listed() {
         "a clone that may be stale must not stay"
     );
 }
+
+#[test]
+fn warm_drops_clone_when_track_is_not_a_work_tree_root() {
+    // A track whose own registration is gone resolves to whatever repo
+    // encloses it; its sources must not be listed from that repo.
+    let p = project();
+    let outer = git_track();
+    let nested = outer.path().join("gone-track");
+    fs::create_dir_all(&nested).unwrap();
+    let out = warm_with(
+        p.path(),
+        &nested,
+        TRACK,
+        &Default::default(),
+        plenty,
+        fake_clone,
+    );
+    let WarmOutcome::Skipped(SkipReason::Failed(why)) = out else {
+        panic!("expected a skip, got {out:?}");
+    };
+    assert!(why.contains("not a git work tree root"), "{why}");
+    assert!(
+        !dst(p.path()).exists(),
+        "a clone that may be stale must not stay"
+    );
+}

@@ -157,7 +157,14 @@ fn destroy_removes_dir_and_registration_but_keeps_branch_commits() {
 fn create_refuses_unsafe_names_and_non_repos() {
     let td = tempfile::tempdir().unwrap();
     let err = TurnTrack::create(td.path(), "turn-x", TreeClone::Copy).unwrap_err();
-    assert!(err.to_string().contains("not a git repository"), "{err}");
+    // A temp dir nested inside some repo (e.g. TMPDIR under ~/.mur) is not a
+    // repo root rather than not a repo; both are the refusal under test.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not a git repository") || msg.contains("repository root"),
+        "{err}"
+    );
+    assert!(!td.path().join(WORKTREES_DIR).exists());
 
     let td = dirty_repo();
     for evil in ["../up", "a/b", "UPPER", ""] {

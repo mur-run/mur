@@ -360,8 +360,11 @@ pub fn strip_verbatim(p: PathBuf) -> PathBuf {
     p
 }
 
-/// Canonical repository root of `dir`, or an error naming the problem.
-fn repo_root(dir: &Path) -> Result<PathBuf> {
+/// Canonical `(toplevel, dir)` for `dir`: the work tree git actually answers
+/// for, and `dir` itself. They differ when `dir` is not a root — including
+/// when `dir` is no repository at all but sits inside one, since git then
+/// silently answers for the enclosing repo. Callers must compare the pair.
+pub(super) fn git_toplevel(dir: &Path) -> Result<(PathBuf, PathBuf)> {
     let out = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(dir)
@@ -373,6 +376,12 @@ fn repo_root(dir: &Path) -> Result<PathBuf> {
     let top = PathBuf::from(String::from_utf8(out.stdout)?.trim());
     let top = canonicalize(&top).unwrap_or(top);
     let dir = canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    Ok((top, dir))
+}
+
+/// Canonical repository root of `dir`, or an error naming the problem.
+fn repo_root(dir: &Path) -> Result<PathBuf> {
+    let (top, dir) = git_toplevel(dir)?;
     if top != dir {
         bail!(
             "turn tracks are created at the repository root ({}), not {}",

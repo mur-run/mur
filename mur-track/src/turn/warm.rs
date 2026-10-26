@@ -122,6 +122,16 @@ fn warm_with(
 /// workspace crate rebuild; registry and git deps are content-pinned and
 /// still reuse the clone. Symlinks and missing (deleted) entries are skipped.
 fn freshen_sources(track: &Path) -> anyhow::Result<()> {
+    // A track that is not its own work tree root (deleted registration, or no
+    // repo at all) makes git list the enclosing repository instead.
+    let (top, dir) = super::git_toplevel(track)?;
+    if top != dir {
+        anyhow::bail!(
+            "track {} is not a git work tree root (git answers for {})",
+            dir.display(),
+            top.display()
+        );
+    }
     let out = Command::new("git")
         .args([
             "ls-files",
