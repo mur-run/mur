@@ -214,7 +214,12 @@ fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_reque
 
     // 2. The daemon's sweep, which launches 3. the fleet child.
     let mut sweep = reexec("sweep", &home, &work);
-    sweep.env("MUR_BIN", &mur);
+    // Set the way murmurd's own environment carries them; the fleet child
+    // the sweep launches inherits both.
+    sweep
+        .env("MUR_BIN", &mur)
+        .env(mur_common::home::MUR_HOME_ENV, &home)
+        .env(REQUIRE_SIG_ENV, "1");
     run_ok(sweep, "daemon sweep");
 
     let run_dir = home.join(mur_common::paths::RUNS).join(&run_id);
@@ -253,10 +258,19 @@ fn sealed_cross_router_dispatch_yields_verifiable_events_not_signed_by_the_reque
         "the child fell back to unsigned writes:\n{log_text}"
     );
 
-    // The child's own record now answers the handle, and it is terminal.
-    let status = mur_core::run_status::status_of(&home, &run_id)
-        .unwrap()
-        .expect("run recorded");
+    // The child's own record now answers the handle, and it is terminal. The
+    // stop event lands in the channel before the run record is rewritten, so
+    // poll the record rather than reading it once.
+    let deadline = Instant::now() + WAIT;
+    let status = loop {
+        let status = mur_core::run_status::status_of(&home, &run_id)
+            .unwrap()
+            .expect("run recorded");
+        if status.state != mur_core::run_status::State::Running || Instant::now() >= deadline {
+            break status;
+        }
+        std::thread::sleep(POLL);
+    };
     assert_eq!(
         status.state,
         mur_core::run_status::State::Stopped,
@@ -338,15 +352,7 @@ fn cross_router_e2e_subprocess_main() {
     let work = PathBuf::from(std::env::var_os(WORK_ENV).expect("work env"));
     match case.to_str() {
         Some("submit") => submit(&home, &work),
-        Some("sweep") => {
-            // SAFETY: single-threaded — a ctor runs before `main` and before
-            // any thread exists. Inherited by the fleet child, as from murmurd.
-            unsafe {
-                std::env::set_var(mur_common::home::MUR_HOME_ENV, &home);
-                std::env::set_var(REQUIRE_SIG_ENV, "1");
-            }
-            sweep(&home)
-        }
+        Some("sweep") => sweep(&home),
         _ => fail("unknown case"),
     }
 }
