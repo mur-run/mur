@@ -169,3 +169,29 @@ fn unwritable_patch_keeps_the_worktree() {
         "only copy"
     );
 }
+
+/// An earlier salvage under the same name — a reused track name, or another
+/// repo sharing the patch dir — is never overwritten: the new patch takes
+/// the next free `-N` name.
+#[test]
+fn reclaim_never_overwrites_an_existing_patch() {
+    let (td, p) = repo();
+    let want = td.path().join("out/turn-r.patch");
+    std::fs::create_dir_all(want.parent().unwrap()).unwrap();
+    std::fs::write(&want, "earlier salvage").unwrap();
+    std::fs::write(td.path().join("out/turn-r-2.deleted.txt"), "earlier list").unwrap();
+
+    let t = TurnTrack::create(&p, "turn-r", TreeClone::Copy).unwrap();
+    std::fs::write(t.path().join("a.txt"), "edited").unwrap();
+    t.release().unwrap();
+    let stale = stale_tracks(&p, Duration::ZERO).unwrap();
+    let got = reclaim(&p, &stale[0], &want).unwrap();
+
+    assert_eq!(got, td.path().join("out/turn-r-3.patch"));
+    assert_eq!(std::fs::read_to_string(&want).unwrap(), "earlier salvage");
+    assert_eq!(
+        std::fs::read_to_string(td.path().join("out/turn-r-2.deleted.txt")).unwrap(),
+        "earlier list"
+    );
+    assert!(std::fs::read_to_string(&got).unwrap().contains("+edited"));
+}

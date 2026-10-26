@@ -146,8 +146,12 @@ fn judge(git_dir: &Path, now: SystemTime, grace: Duration) -> Option<StaleReason
 /// their bytes are in the commit already, and a gutted track would otherwise
 /// produce a patch the size of the repo. An empty diff still writes an
 /// (empty) patch, so the caller can always say where the track went.
-pub fn reclaim(project: &Path, track: &StaleTrack, patch: &Path) -> Result<()> {
-    save_patch(track, patch)?;
+///
+/// `patch` is the preferred destination, never overwritten: if it (or its
+/// deleted-list) already holds an earlier salvage, a `-2`, `-3`, … suffix is
+/// reserved instead. Returns the path actually written.
+pub fn reclaim(project: &Path, track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
+    let patch = save_patch(track, patch)?;
     let removed = run_git(
         project,
         &["worktree", "remove", "--force", "--force"],
@@ -160,10 +164,51 @@ pub fn reclaim(project: &Path, track: &StaleTrack, patch: &Path) -> Result<()> {
         }
         run_git(project, &["worktree", "prune"], None).context("git worktree prune")?;
     }
-    Ok(())
+    Ok(patch)
 }
 
-fn save_patch(track: &StaleTrack, patch: &Path) -> Result<()> {
+/// Upper bound on `-N` suffixes tried before giving up on a destination.
+const MAX_PATCH_SUFFIX: u32 = 10_000;
+
+/// Create a fresh, empty file at `want` or the first free `<stem>-N.patch`
+/// beside it whose deleted-list is free too. `create_new` makes the
+/// reservation atomic, so two sweeps racing for one name never share it.
+fn reserve_patch(want: &Path) -> Result<(PathBuf, std::fs::File)> {
+    if let Some(parent) = want.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    let stem = want
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = want.extension().map(|e| e.to_string_lossy().into_owned());
+    for n in 1..=MAX_PATCH_SUFFIX {
+        let candidate = if n == 1 {
+            want.to_path_buf()
+        } else {
+            let name = match &ext {
+                Some(e) => format!("{stem}-{n}.{e}"),
+                None => format!("{stem}-{n}"),
+            };
+            want.with_file_name(name)
+        };
+        if deleted_list(&candidate).exists() {
+            continue;
+        }
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(f) => return Ok((candidate, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("create {}", candidate.display())),
+        }
+    }
+    bail!("no free patch name beside {}", want.display())
+}
+
+fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
     let index = track.git_dir.join(PATCH_INDEX);
     let git = |args: &[&str]| {
         Command::new("git")
@@ -204,15 +249,70 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<()> {
     })();
     let _ = std::fs::remove_file(&index);
     let (changes, deleted) = result?;
-    if let Some(parent) = patch.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let (patch, mut file) = reserve_patch(patch)?;
+    let written = (|| -> Result<()> {
+        use std::io::Write as _;
+        file.write_all(&changes)
+            .and_then(|()| file.sync_all())
+            .with_context(|| format!("write {}", patch.display()))?;
+        if !deleted.is_empty() {
+            let list = deleted_list(&patch);
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&list)
+                .with_context(|| format!("create {}", list.display()))?;
+            f.write_all(&deleted)
+                .with_context(|| format!("write {}", list.display()))?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = written {
+        // Nothing was removed yet; drop the half-written reservation.
+        let _ = std::fs::remove_file(&patch);
+        return Err(e);
     }
-    std::fs::write(patch, changes).with_context(|| format!("write {}", patch.display()))?;
-    if !deleted.is_empty() {
-        let list = deleted_list(patch);
-        std::fs::write(&list, deleted).with_context(|| format!("write {}", list.display()))?;
+    Ok(patch)
+}
+
+/// The project whose `.worktrees/` holds the turn tracks `dir` belongs to.
+///
+/// Inside a turn track (its private git dir carries the turn base file) that
+/// is the checkout owning the track, `<project>/.worktrees/<name>` → its
+/// `<project>`. Anywhere else it is `dir`'s own checkout root — including an
+/// ordinary linked worktree, which [`super::TurnTrack::create`] accepts as a
+/// project and gives its own `.worktrees/`. Errors for a bare repository,
+/// which has no checkout to hold tracks.
+pub fn project_root(dir: &Path) -> Result<PathBuf> {
+    let bare = Command::new("git")
+        .args(["rev-parse", "--is-bare-repository"])
+        .current_dir(dir)
+        .output()
+        .context("spawn git rev-parse --is-bare-repository")?;
+    if bare.status.success() && String::from_utf8_lossy(&bare.stdout).trim() == "true" {
+        bail!(
+            "{} is a bare repository: no checkout holds turn tracks",
+            dir.display()
+        );
     }
-    Ok(())
+    let (top, _) = super::git_toplevel(dir)?;
+    let is_track = super::absolute_git_dir(&top)
+        .map(|g| g.join(BASE_FILE).is_file())
+        .unwrap_or(false);
+    if !is_track {
+        return Ok(top);
+    }
+    let owner = top
+        .parent()
+        .filter(|w| w.file_name().is_some_and(|n| n == WORKTREES_DIR))
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "turn track {} is not under a project's {WORKTREES_DIR}/",
+                top.display()
+            )
+        })?;
+    super::canonicalize(owner).with_context(|| format!("canonicalize {}", owner.display()))
 }
 
 /// Where [`reclaim`] lists the paths the track deleted, beside `patch`.

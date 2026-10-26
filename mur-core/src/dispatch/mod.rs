@@ -228,6 +228,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 std::process::exit(code);
             }
         }
+        Commands::Track { action } => cmd::track::run(&crate::paths::mur_root(None), action)?,
         Commands::Monitor { action } => {
             let mur_home = crate::paths::mur_root(None);
             cmd::monitor::run(&mur_home, action)?
