@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use mur_common::agent::{McpServerEntry, ToolRule};
 use mur_common::mcp_naming::sanitize_server;
@@ -76,6 +77,10 @@ pub struct McpRefresh {
     agent: String,
     /// Held for the whole refresh: two turns starting together list once.
     state: tokio::sync::Mutex<State>,
+    /// Bound on one server's re-list (spawn, `initialize`, `tools/list`).
+    /// `None`: the server's own tool-call timeout, so a server configured as
+    /// slow is given the same patience here.
+    list_timeout: Option<Duration>,
 }
 
 impl McpRefresh {
@@ -102,7 +107,14 @@ impl McpRefresh {
                 listed,
                 said: HashSet::new(),
             }),
+            list_timeout: None,
         }
+    }
+
+    /// Bound every re-list by `t` instead of each server's tool-call timeout.
+    pub fn with_list_timeout(mut self, t: Duration) -> Self {
+        self.list_timeout = Some(t);
+        self
     }
 
     /// Re-list the servers whose entry changed and return the new tool set
@@ -130,7 +142,21 @@ impl McpRefresh {
         let mut tools: Vec<Arc<dyn ToolExecutor>> = current.to_vec();
         for (server, entry) in changed {
             let previous = state.listed.get(&server).cloned();
-            match self.pool.list_tools(&server).await {
+            let bound = self.list_timeout.unwrap_or_else(|| {
+                entry
+                    .timeout_secs
+                    .map_or(super::mcp::MCP_TOOL_TIMEOUT, |s| {
+                        Duration::from_secs(s.into())
+                    })
+            });
+            let listing = match tokio::time::timeout(bound, self.pool.list_tools(&server)).await {
+                Ok(r) => r.map_err(anyhow::Error::from),
+                Err(_) => Err(anyhow::anyhow!(
+                    "no answer within {}s (timed out)",
+                    bound.as_secs_f32()
+                )),
+            };
+            match listing {
                 Ok(listed_tools) => {
                     let listed_tools = crate::mcp::serena::admit_tools(entry.kind, listed_tools);
                     let fresh = server_executors(

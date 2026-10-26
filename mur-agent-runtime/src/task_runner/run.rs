@@ -83,8 +83,11 @@ impl TaskRunner {
         // Eager, before the prompt names the working directory: the model
         // must be handed the track path, never the project (spec §4.1).
         self.begin_turn_track(&id).await;
-        self.refresh_mcp_tools(&id).await;
         let generation = async {
+            // Inside the cancellable future: re-listing a server that never
+            // answers must not outlive a `tasks/cancel` (the re-list is also
+            // bounded, for the turn nobody cancels).
+            self.refresh_mcp_tools(&id).await;
             match &self.backend {
                 RunnerBackend::StubEcho => Ok((echo_response(&spec.input), None)),
                 RunnerBackend::StubSlow => {
@@ -287,17 +290,6 @@ impl TaskRunner {
                 // so callers read the file byte-by-byte instead of re-typing
                 // content through another LLM.
                 let artifacts = output_artifact_path.and_then(|p| detect_artifact(&p));
-                // A refused `TaskSpec.cwd` is the user's problem to fix (grant
-                // or restart), so it goes in the reply they read — same
-                // footer discipline as a refused write in bash's output.
-                let reply = match self.take_refused_cwd_hint(&id) {
-                    Some(note) => append_note(reply, &note),
-                    None => reply,
-                };
-                let reply = match mcp_notices {
-                    Some(n) => n.apply(reply),
-                    None => reply,
-                };
                 let reply = if let Some(ref arts) = artifacts {
                     Message {
                         role: reply.role.clone(),
@@ -310,6 +302,19 @@ impl TaskRunner {
                     }
                 } else {
                     reply
+                };
+                // Footers go on after the artifact rewrite, which replaces the
+                // reply's parts: a notice dropped there is never said again.
+                // A refused `TaskSpec.cwd` is the user's problem to fix (grant
+                // or restart), so it goes in the reply they read — same
+                // footer discipline as a refused write in bash's output.
+                let reply = match self.take_refused_cwd_hint(&id) {
+                    Some(note) => append_note(reply, &note),
+                    None => reply,
+                };
+                let reply = match mcp_notices {
+                    Some(n) => n.apply(reply),
+                    None => reply,
                 };
                 // Report this turn's real token usage (delta of the lifetime
                 // counters) so callers — notably the fleet budget guard — can

@@ -8,6 +8,9 @@ fn main() {
         .iter()
         .position(|a| a == "--extra-tool")
         .and_then(|i| argv.get(i + 1).cloned());
+    // `--silent`: stay alive, read every request, answer none — a server
+    // that hangs on `initialize` / `tools/list` after a hot edit.
+    let silent = argv.iter().any(|a| a == "--silent");
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -19,6 +22,9 @@ fn main() {
             Ok(v) => v,
             Err(_) => continue,
         };
+        if silent {
+            continue;
+        }
         let id = req["id"].clone();
         let method = req["method"].as_str().unwrap_or("");
         if method == "tools/call" && req["params"]["name"] == "garble" {

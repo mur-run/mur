@@ -324,3 +324,87 @@ async fn a_restart_notice_asks_for_the_chip_once_and_a_refusal_never_does() {
     assert!(!out.restart);
     r.pool.shutdown().await;
 }
+
+/// A hot edit to a server that never answers must not stall the turn past a
+/// cancel: the refresh runs inside the cancellable part of the turn.
+#[tokio::test]
+async fn a_turn_stuck_relisting_a_silent_server_is_cancellable() {
+    let r = rig(&[]).await;
+    let runner = mur_agent_runtime::task_runner::TaskRunner::with_llm(Arc::new(
+        mur_agent_runtime::llm::stub::SequenceLlm::new(vec![done("never")]),
+    ))
+    .with_tools(r.tools.clone())
+    .with_mcp_refresh(Arc::new(r.refresh));
+
+    *r.served.lock().unwrap() = mock(&["--silent"]);
+    let mut spec = turn("hang");
+    spec.task_id = Some("hung-turn".into());
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        runner.cancel("hung-turn").await
+    };
+    let (out, cancelled) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(runner.run_sync(spec), cancel)
+    })
+    .await
+    .expect("cancel must end a turn stuck in the MCP refresh");
+    assert!(cancelled.is_ok(), "{cancelled:?}");
+    assert!(
+        matches!(
+            out,
+            mur_agent_runtime::task_runner::TaskOutcome::Cancelled(_)
+        ),
+        "{out:?}"
+    );
+    r.pool.shutdown().await;
+}
+
+/// Unattended, nobody cancels: the re-list itself is bounded, and the miss is
+/// reported like any new config that failed to start.
+#[tokio::test]
+async fn a_silent_server_times_out_and_is_reported_once() {
+    let r = rig(&[]).await;
+    let refresh = r
+        .refresh
+        .with_list_timeout(std::time::Duration::from_millis(300));
+    *r.served.lock().unwrap() = mock(&["--silent"]);
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        refresh.refresh(&r.tools, &[], quiet),
+    )
+    .await
+    .expect("the re-list is bounded");
+    assert_eq!(out.notices.len(), 1, "{:?}", out.notices);
+    assert!(
+        out.notices[0].contains("`mock` new config failed to start")
+            && out.notices[0].contains("timed out"),
+        "{}",
+        out.notices[0]
+    );
+    let again = refresh.refresh(&r.tools, &[], quiet).await;
+    assert!(again.notices.is_empty(), "{:?}", again.notices);
+    r.pool.shutdown().await;
+}
+
+/// An artifact turn's reply is a path reference; the MCP notice must survive
+/// that rewrite, or it is lost for good (it is recorded as said).
+#[tokio::test]
+async fn an_artifact_reply_keeps_the_mcp_notice() {
+    let r = rig(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let artifact = dir.path().join("out.md");
+    std::fs::write(&artifact, "report").unwrap();
+    let runner = mur_agent_runtime::task_runner::TaskRunner::with_llm(Arc::new(
+        mur_agent_runtime::llm::stub::SequenceLlm::new(vec![done("wrote it")]),
+    ))
+    .with_tools(r.tools.clone())
+    .with_mcp_refresh(Arc::new(r.refresh));
+
+    *r.served.lock().unwrap() = mock(&["--extra-tool", "snap"]);
+    let mut spec = turn("write");
+    spec.output_artifact_path = Some(artifact.clone());
+    let text = reply(runner.run_sync(spec).await);
+    assert!(text.contains("[Artifact: "), "{text}");
+    assert!(text.contains("MCP `mock` reloaded: added `snap`"), "{text}");
+    r.pool.shutdown().await;
+}
