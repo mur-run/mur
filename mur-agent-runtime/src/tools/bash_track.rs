@@ -38,18 +38,23 @@ const SEPARATORS: &[&str] = &["&&", "||", ";", "|", "\n"];
 /// program's basename, after leading `VAR=value` tokens). Quotes are not
 /// parsed: a miss only means a cold build, never a wrong one.
 pub fn command_triggers(cmd: &str, triggers: &[String]) -> bool {
-    let mut segments = vec![cmd];
-    for sep in SEPARATORS {
-        segments = segments.iter().flat_map(|s| s.split(sep)).collect();
-    }
-    segments.iter().any(|seg| {
+    command_segments(cmd).iter().any(|seg| {
         let prog = seg.split_whitespace().find(|w| !is_assignment(w));
         prog.and_then(|p| p.rsplit('/').next())
             .is_some_and(|base| triggers.iter().any(|t| t == base))
     })
 }
 
-fn is_assignment(word: &str) -> bool {
+/// `cmd` split on every [`SEPARATORS`] entry. Quotes are not parsed.
+pub(crate) fn command_segments(cmd: &str) -> Vec<&str> {
+    let mut segments = vec![cmd];
+    for sep in SEPARATORS {
+        segments = segments.iter().flat_map(|s| s.split(sep)).collect();
+    }
+    segments
+}
+
+pub(crate) fn is_assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(k, _)| {
         !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     })

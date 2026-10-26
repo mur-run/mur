@@ -224,6 +224,15 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             None => self.session_cwd.current(),
         };
 
+        // Never let a command detach a turn track the runtime still owns.
+        if let Some(why) = super::bash_guard::refuse_track_detach(
+            &command,
+            &working_dir,
+            &self.session_cwd.live_tracks(),
+        ) {
+            return Err(ToolError::InvalidInput(why));
+        }
+
         let timeout_secs = resolve_timeout_secs(
             input
                 .get("timeout_secs")
