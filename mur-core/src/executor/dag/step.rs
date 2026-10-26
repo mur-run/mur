@@ -238,7 +238,7 @@ pub(super) async fn execute_step(
         emit(
             StepEventKind::Stopped,
             TokenUsage::default(),
-            Some(halted_reason_text(opts).into()),
+            Some(halted_reason_text(opts)),
         );
         return stopped_result(start.elapsed().as_millis() as u64);
     }
@@ -388,11 +388,7 @@ pub(super) async fn execute_step(
                 }
                 let why = halted_reason_text(opts);
                 eprintln!("  Step {sid}: delegate to {canonical} cancelled — {why}");
-                emit(
-                    StepEventKind::Stopped,
-                    TokenUsage::default(),
-                    Some(why.into()),
-                );
+                emit(StepEventKind::Stopped, TokenUsage::default(), Some(why));
                 return stopped_result(start.elapsed().as_millis() as u64);
             }
         };

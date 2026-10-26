@@ -541,11 +541,10 @@ pub async fn cmd_fleet_run(
         run_label: format!("fleet {}", fleet.name),
         // #2036: `mur fleet stop` halts this run at the next step boundary
         // and cancels in-flight member turns — not only before it starts.
-        // #2083: so does reaching `cost_usd`, through the same signal.
-        stop: Some(match &budget {
-            Some(b) => b.stop_signal(super::control::stop_signal(mur_home, name)),
-            None => super::control::stop_signal(mur_home, name),
-        }),
+        stop: Some(super::control::stop_signal(mur_home, name)),
+        // #2083: so does reaching `cost_usd`. It halts through `halt`, not
+        // `stop`, so halted steps say the cap stopped them (#2130).
+        halt: budget.as_ref().map(|b| b.halt_signal()),
         on_step: budget.as_ref().map(|b| b.observer()),
         // Cap fan-out so N agents don't cascade past API rate limits.
         max_concurrency: Some(if exec_parallel {

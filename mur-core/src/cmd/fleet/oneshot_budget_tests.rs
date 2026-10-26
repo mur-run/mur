@@ -91,14 +91,16 @@ fn budget() -> Arc<OneShotBudget> {
 #[test]
 fn trips_on_actual_billable_spend_and_halts_the_run() {
     let b = budget();
-    let stop = b.stop_signal(Arc::new(|| false));
+    let halt = b.halt_signal();
     b.record(&ev("api", StepEventKind::Done, 3_000));
-    assert!(!b.tripped() && !stop(), "$3 of $5 is under the cap");
-    b.record(&ev("api", StepEventKind::Failed, 2_000));
     assert!(
-        b.tripped() && stop(),
-        "$5 reaches the cap and halts the DAG"
+        !b.tripped() && halt().is_none(),
+        "$3 of $5 is under the cap"
     );
+    b.record(&ev("api", StepEventKind::Failed, 2_000));
+    assert!(b.tripped(), "$5 reaches the cap");
+    // #2130: the halt carries the cap's reason, never the kill-switch's.
+    assert_eq!(halt(), Some(HaltReason::Limit(b.stop_reason())));
     assert!(b.stop_reason().starts_with(BUDGET_STOP_REASON));
 }
 
@@ -127,12 +129,12 @@ fn non_terminal_events_carry_no_spend() {
 }
 
 #[test]
-fn the_kill_switch_still_stops_an_untripped_budget() {
+fn an_untripped_budget_never_halts() {
     let b = budget();
-    let stop = b.stop_signal(Arc::new(|| true));
+    b.record(&ev("api", StepEventKind::Done, 1_000));
     assert!(
-        stop() && !b.tripped(),
-        "the stop is the operator's, not the cap's"
+        b.halt_signal()().is_none(),
+        "the kill-switch is the run's `stop` signal; the cap only halts once tripped"
     );
 }
 
@@ -176,7 +178,7 @@ async fn reaching_the_cap_stops_the_dag_before_the_next_rank() {
         "t",
         &proc,
         &DagExecOptions {
-            stop: Some(b.stop_signal(Arc::new(|| false))),
+            halt: Some(b.halt_signal()),
             on_step: Some(feed),
             ..DagExecOptions::default()
         },
@@ -220,7 +222,7 @@ async fn the_same_run_on_local_members_finishes() {
         "t",
         &proc,
         &DagExecOptions {
-            stop: Some(b.stop_signal(Arc::new(|| false))),
+            halt: Some(b.halt_signal()),
             on_step: Some(feed),
             ..DagExecOptions::default()
         },
@@ -322,7 +324,7 @@ async fn a_router_that_reached_the_cap_stops_the_run_before_any_step() {
         "t",
         &proc,
         &DagExecOptions {
-            stop: Some(b.stop_signal(Arc::new(|| false))),
+            halt: Some(b.halt_signal()),
             on_step: Some(b.observer()),
             ..DagExecOptions::default()
         },
@@ -595,4 +597,150 @@ fn cached_prompt_tokens_are_priced_at_the_cache_rates() {
         "{}",
         unpriced.spent_usd()
     );
+}
+
+/// #2130 regression, with the issue's own numbers: a heavily cached turn on
+/// an unpriced model, priced at the registry's dearest rates. The old flat
+/// fallback billed every token at the dearest OUTPUT rate: $63.39.
+#[test]
+fn an_unpriced_cached_turn_is_priced_per_side_not_at_the_output_rate() {
+    let opus = ModelEntry {
+        cache_read_cost_per_1k: Some(0.0005),
+        ..model(BillingMode::UsageBilled, Some(0.005), Some(0.025))
+    };
+    let models = BTreeMap::from([
+        ("opus".to_string(), opus),
+        (
+            "flash".to_string(),
+            model(BillingMode::UsageBilled, None, None),
+        ),
+    ]);
+    let fallback = dearest_rates(&models).expect("the registry prices opus");
+    let agents = HashMap::from([("api".to_string(), agent(true, Some("flash")))]);
+    let b =
+        OneShotBudget::new(30.0, 0.025, "router".into(), agents, models).with_fallback(fallback);
+    let cached = ModelShare {
+        cache_read: 2_427_648,
+        ..share(Some("flash"), None, 2_497_380, 38_380)
+    };
+    b.record_turn(Some("api"), &turn(vec![cached]));
+    // 69,732 uncached in at $0.005 + 2,427,648 cached at $0.0005 + 38,380 out
+    // at $0.025, per 1k.
+    let want = 69.732 * 0.005 + 2_427.648 * 0.0005 + 38.38 * 0.025;
+    assert!((b.spent_usd() - want).abs() < 1e-9, "{}", b.spent_usd());
+    assert!(b.spent_usd() < 3.0 && !b.tripped(), "{}", b.spent_usd());
+}
+
+#[test]
+fn dearest_rates_takes_each_side_on_its_own() {
+    let models = BTreeMap::from([
+        (
+            "a".to_string(),
+            model(BillingMode::UsageBilled, Some(0.003), Some(0.015)),
+        ),
+        (
+            "b".to_string(),
+            model(BillingMode::UsageBilled, Some(0.005), Some(0.01)),
+        ),
+        ("free".to_string(), model(BillingMode::Local, None, None)),
+    ]);
+    let r = dearest_rates(&models).unwrap();
+    assert_eq!(r.input_cost_per_1k, Some(0.005));
+    assert_eq!(r.output_cost_per_1k, Some(0.015));
+    assert_eq!(
+        r.cache_read_cost_per_1k,
+        Some(0.005),
+        "no entry records one, so each caches at its own input rate"
+    );
+
+    let only_output = BTreeMap::from([(
+        "o".to_string(),
+        model(BillingMode::UsageBilled, None, Some(0.02)),
+    )]);
+    let r = dearest_rates(&only_output).unwrap();
+    assert_eq!(
+        r.input_cost_per_1k,
+        Some(0.02),
+        "one side stands in for the other"
+    );
+    assert!(dearest_rates(&BTreeMap::new()).is_none());
+}
+
+/// PR #2132 review: a model with no cache rate is billed cached tokens at its
+/// input rate, so that effective rate — not only explicit cache fields — must
+/// feed the ceiling. Otherwise one discounted-cache entry drags the fallback
+/// for every unpriced model far below what a priced model would cost.
+#[test]
+fn dearest_cache_rates_include_the_input_rate_a_missing_cache_rate_falls_back_to() {
+    let no_cache = model(BillingMode::UsageBilled, Some(0.005), Some(0.025));
+    let discounted = ModelEntry {
+        cache_read_cost_per_1k: Some(0.0001),
+        cache_write_cost_per_1k: Some(0.00125),
+        ..model(BillingMode::UsageBilled, Some(0.001), Some(0.004))
+    };
+    let models = BTreeMap::from([
+        ("no_cache".to_string(), no_cache.clone()),
+        ("discounted".to_string(), discounted),
+    ]);
+    let r = dearest_rates(&models).unwrap();
+    assert_eq!(
+        r.cache_read_cost_per_1k,
+        Some(0.005),
+        "no_cache reads at input"
+    );
+    assert_eq!(
+        r.cache_write_cost_per_1k,
+        Some(0.005),
+        "no_cache writes at input"
+    );
+
+    // An explicit cache-write premium above every input rate still wins.
+    let premium = ModelEntry {
+        cache_write_cost_per_1k: Some(0.00625),
+        ..model(BillingMode::UsageBilled, Some(0.004), Some(0.02))
+    };
+    let models = BTreeMap::from([
+        ("no_cache".to_string(), no_cache),
+        ("premium".to_string(), premium),
+    ]);
+    let r = dearest_rates(&models).unwrap();
+    assert_eq!(r.cache_read_cost_per_1k, Some(0.005));
+    assert_eq!(r.cache_write_cost_per_1k, Some(0.00625));
+
+    // Same ceiling end to end: the unpriced turn is never cheaper than it
+    // would be on the priced model whose cache falls back to input.
+    let fallback = r.clone();
+    let on_priced = fallback.cost_with_cache(1_000, 1_000, 0, 0).unwrap();
+    assert!((on_priced - 0.005).abs() < 1e-12, "{on_priced}");
+}
+
+/// PR #2132 review: a one-sided entry bills its missing side at the side it
+/// has, so the ceiling must resolve each entry's pair before maximising —
+/// a cheap fully-priced entry must not set the ceiling for that side.
+#[test]
+fn dearest_rates_resolve_one_sided_entries_before_maximising() {
+    let full = || model(BillingMode::UsageBilled, Some(0.001), Some(0.002));
+
+    let input_only = BTreeMap::from([
+        (
+            "a".to_string(),
+            model(BillingMode::UsageBilled, Some(0.02), None),
+        ),
+        ("b".to_string(), full()),
+    ]);
+    let r = dearest_rates(&input_only).unwrap();
+    assert_eq!(r.input_cost_per_1k, Some(0.02));
+    assert_eq!(r.output_cost_per_1k, Some(0.02), "a bills output at input");
+
+    let output_only = BTreeMap::from([
+        (
+            "a".to_string(),
+            model(BillingMode::UsageBilled, None, Some(0.02)),
+        ),
+        ("b".to_string(), full()),
+    ]);
+    let r = dearest_rates(&output_only).unwrap();
+    assert_eq!(r.input_cost_per_1k, Some(0.02), "a bills input at output");
+    assert_eq!(r.output_cost_per_1k, Some(0.02));
+    assert_eq!(r.cache_read_cost_per_1k, Some(0.02), "and caches at it");
 }

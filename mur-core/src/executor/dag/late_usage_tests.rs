@@ -419,7 +419,7 @@ async fn late_usage_past_the_cap_trips_the_one_shot_guard() {
             channel_id: Some(ch.id.clone()),
             run_id: "r".into(),
             on_step: Some(b.observer()),
-            stop: Some(b.stop_signal(Arc::new(|| false))),
+            halt: Some(b.halt_signal()),
             ..DagExecOptions::default()
         },
     )
