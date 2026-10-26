@@ -39,6 +39,28 @@ pub const KIND_RESTART: &str = "restart";
 /// Allowlist of `kind` values, in schema order.
 pub const KINDS: [&str; 3] = [KIND_SHELL, KIND_SLASH, KIND_RESTART];
 
+/// MIME of a proposal the runtime itself attaches to a reply as a
+/// `MessagePart::Data`, carrying the same args a `propose` call would. Used
+/// when the runtime, not the model, knows the user must act — e.g. an MCP edit
+/// that only a restart applies. Clients run [`vet`] on it like a tool call.
+pub const PROPOSAL_MIME: &str = "application/vnd.mur.proposal+json";
+
+/// The `propose` args for a restart chip with `label`.
+pub fn restart_args(label: &str) -> serde_json::Value {
+    serde_json::json!({ "label": label, "kind": KIND_RESTART })
+}
+
+/// The vetted proposal attached to a reply, given its A2A `parts` as JSON.
+/// The last [`PROPOSAL_MIME`] part wins; one that fails [`vet`] is ignored.
+pub fn attached(parts: &serde_json::Value) -> Option<Proposal> {
+    parts
+        .as_array()?
+        .iter()
+        .rev()
+        .filter(|p| p.get("mimeType").and_then(|m| m.as_str()) == Some(PROPOSAL_MIME))
+        .find_map(|p| vet(p.get("data")?).ok())
+}
+
 /// What a proposal does when the user accepts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposalKind {

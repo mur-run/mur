@@ -170,8 +170,8 @@ impl TaskRunner {
         }
     }
 
-    pub(super) fn tools_for_loop(&self) -> &[Arc<dyn crate::tools::ToolExecutor>] {
-        &self.tools
+    pub(super) fn tools_for_loop(&self) -> Arc<Vec<Arc<dyn crate::tools::ToolExecutor>>> {
+        self.tools()
     }
 
     /// Handle a final answer the provider cut off at the max_tokens ceiling:
@@ -272,7 +272,7 @@ impl TaskRunner {
     /// silently widens what a tool may do.
     pub(crate) fn guarded(&self) -> crate::tools::guarded::GuardedToolCall {
         crate::tools::guarded::GuardedToolCall {
-            tools: self.tools.clone(),
+            tools: self.tools().as_ref().clone(),
             tools_policy: self.tools_policy.clone(),
             secrets: self.secrets.clone(),
             notifier: self.notifier.clone(),

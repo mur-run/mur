@@ -348,6 +348,16 @@ pub async fn build_provider_runner(
         }
     }
     let tools: Vec<Arc<dyn crate::tools::ToolExecutor>> = tool_map.into_values().collect();
+    // Hot reload re-lists an edited MCP server at turn start; nothing to
+    // refresh on an agent with none.
+    let mcp_refresh = (!enabled_mcp.is_empty()).then(|| {
+        Arc::new(crate::tools::refresh::McpRefresh::new(
+            pool.clone(),
+            Some(session_cwd.clone()),
+            profile.inner.name.clone(),
+            &tools,
+        ))
+    });
 
     // Memory-capture directive (P2a): appended to the system prompt whenever
     // the remember tool is available, so the prompt contract and the tool's
@@ -409,6 +419,10 @@ pub async fn build_provider_runner(
     let build_base = |base: TaskRunner| {
         let base = match &intent {
             Some(c) => base.with_intent_checker(c.clone()),
+            None => base,
+        };
+        let base = match &mcp_refresh {
+            Some(r) => base.with_mcp_refresh(r.clone()),
             None => base,
         };
         crate::supervisor_runner::build_runner(

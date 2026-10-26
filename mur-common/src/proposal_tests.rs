@@ -176,3 +176,19 @@ fn reply_is_insert_only_verbatim_and_not_vettable() {
         vet(&serde_json::json!({"label": "x", "kind": "reply", "command": "hi"})).unwrap_err();
     assert!(matches!(err, VetError::UnknownKind(_)));
 }
+
+#[test]
+fn an_attached_restart_is_read_back_and_a_bad_one_is_ignored() {
+    let parts = json!([
+        { "kind": "text", "text": "hi" },
+        { "kind": "data", "mimeType": PROPOSAL_MIME, "data": restart_args("restart to apply") }
+    ]);
+    let p = attached(&parts).expect("attached");
+    assert_eq!(p.kind, ProposalKind::Restart);
+    assert_eq!(p.label, "restart to apply");
+
+    let bad = json!([{ "kind": "data", "mimeType": PROPOSAL_MIME,
+        "data": { "label": "x", "kind": "shell", "command": "stop <name>" } }]);
+    assert!(attached(&bad).is_none());
+    assert!(attached(&json!([{ "kind": "text", "text": "hi" }])).is_none());
+}

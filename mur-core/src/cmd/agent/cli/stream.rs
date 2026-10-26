@@ -498,6 +498,18 @@ pub fn extract_reply(task: &Value) -> (String, Option<String>) {
     (reply, task_id)
 }
 
+/// The restart (or other) chip the runtime attached to the final reply, if
+/// any — see [`mur_common::proposal::PROPOSAL_MIME`].
+pub fn attached_proposal(task: &Value) -> Option<mur_common::proposal::Proposal> {
+    let reply = task
+        .get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(Value::as_str) == Some("agent"))?;
+    mur_common::proposal::attached(reply.get("parts")?)
+}
+
 /// Interpret a final Task: `Ok((reply, task_id))` for a completed task, or
 /// `Err(cause)` for a failed/cancelled one. The runtime returns failed tasks as
 /// a *successful* JSON-RPC result with the cause in `task.error`, so callers
@@ -649,6 +661,22 @@ mod tests {
     fn task_outcome_cancelled_without_error_message() {
         let task = json!({ "id": "t", "state": "cancelled", "messages": [] });
         assert_eq!(task_outcome(&task).unwrap_err(), "agent task cancelled");
+    }
+
+    #[test]
+    fn attached_proposal_reads_the_reply_data_part() {
+        let task = json!({
+            "id": "t",
+            "state": "completed",
+            "messages": [{ "role": "agent", "parts": [
+                { "kind": "text", "text": "needs a restart" },
+                { "kind": "data", "mimeType": mur_common::proposal::PROPOSAL_MIME,
+                  "data": { "label": "restart to apply", "kind": "restart" } }
+            ]}]
+        });
+        let p = attached_proposal(&task).expect("chip");
+        assert!(p.is_executable());
+        assert_eq!(task_outcome(&task).unwrap().0, "needs a restart");
     }
 
     #[test]

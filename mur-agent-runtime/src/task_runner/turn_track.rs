@@ -35,7 +35,7 @@ pub(super) struct OpenTrack {
 impl TaskRunner {
     /// Does this runner's tool set make every turn write-capable?
     pub(super) fn turn_is_write_capable(&self) -> bool {
-        self.tools
+        self.tools()
             .iter()
             .any(|t| WRITE_CAPABLE_TOOLS.contains(&t.name()))
     }

@@ -252,6 +252,9 @@ struct Fake {
     fail_save: bool,
     fail_add: bool,
     save_notes: Vec<String>,
+    /// What `save` reports; `None` = derived like the runtime would: a
+    /// host-only edit with no grant notes is hot.
+    save_effect: Option<super::super::browser_live_effect::Effect>,
     repairs: Vec<String>,
     research_events: usize,
 }
@@ -271,13 +274,28 @@ impl LiveOps for Fake {
         self.servers.push(e);
         Ok("added".into())
     }
-    fn save(&mut self, servers: Vec<McpServerEntry>) -> anyhow::Result<Vec<String>> {
+    fn save(
+        &mut self,
+        servers: Vec<McpServerEntry>,
+    ) -> anyhow::Result<(Vec<String>, super::super::browser_live_effect::Effect)> {
+        use super::super::browser_live_effect::Effect;
         self.saves += 1;
         if self.fail_save {
             anyhow::bail!("disk full");
         }
+        let mode = |s: &[McpServerEntry]| {
+            s.iter()
+                .find(|e| e.name == LIVE_ENTRY)
+                .and_then(|e| e.network.as_ref())
+                .map(|n| n.mode)
+        };
+        let derived = if mode(&self.servers) == mode(&servers) && self.save_notes.is_empty() {
+            Effect::NextTurn
+        } else {
+            Effect::Restart
+        };
         self.servers = servers;
-        Ok(self.save_notes.clone())
+        Ok((self.save_notes.clone(), self.save_effect.unwrap_or(derived)))
     }
     fn pending_repairs(&mut self, _servers: &[McpServerEntry]) -> anyhow::Result<Vec<String>> {
         Ok(self.repairs.clone())
@@ -497,9 +515,76 @@ fn unchanged_rerun_offers_no_restart() {
     let (text, chip) = run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap();
     assert!(chip.is_none(), "{text}");
     assert!(text.contains("nothing changed"), "{text}");
-    // A different allowlist is a real change again.
-    let (_, chip) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
-    assert!(chip.is_some());
+    // A different allowlist is a real change again — and a hot one.
+    let (text, chip) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
+    assert!(chip.is_none(), "{text}");
+    assert!(text.contains("next turn uses this"), "{text}");
+}
+
+// Hot reload D1: editing the existing entry's hosts needs no restart, and the
+// reply says the open tab goes away.
+#[test]
+fn a_host_edit_applies_next_turn_and_says_the_tab_closes() {
+    let mut f = Fake::default();
+    let (text, chip) = run("bob", &s(&["--yes", "a.example.com"]), true, &mut f).unwrap();
+    assert_eq!(
+        chip,
+        Some(Proposal::restart(RESTART_LABEL)),
+        "new entry: {text}"
+    );
+    assert!(text.contains("Restart the agent"), "{text}");
+    assert!(text.contains("after the agent restarts"), "{text}");
+
+    let (text, chip) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
+    assert!(chip.is_none(), "{text}");
+    assert!(text.contains("tab will be closed"), "{text}");
+    assert!(text.contains("next turn uses it"), "preview line: {text}");
+    assert!(text.contains("no restart needed"), "{text}");
+    assert!(
+        !text.contains("Restart the agent") && !text.contains("after the agent restarts"),
+        "{text}"
+    );
+}
+
+// A write that adds a grant, or switches research mode, stays a restart.
+#[test]
+fn a_grant_or_a_mode_switch_still_needs_a_restart() {
+    let mut e = live_entry();
+    e.network = Some(live_network(&s(&["a.example.com"])));
+    let mut f = Fake {
+        servers: vec![e.clone()],
+        save_notes: vec!["granted write on /x/browser".into()],
+        ..Fake::default()
+    };
+    let (text, chip) = run("bob", &s(&["--yes", "b.example.com"]), true, &mut f).unwrap();
+    assert_eq!(chip, Some(Proposal::restart(RESTART_LABEL)), "{text}");
+
+    let mut f = Fake {
+        servers: vec![e],
+        ..Fake::default()
+    };
+    let (text, chip) = run("bob", &s(&["--yes", "--research"]), true, &mut f).unwrap();
+    assert_eq!(chip, Some(Proposal::restart(RESTART_LABEL)), "{text}");
+    assert!(text.contains("Restart the agent"), "{text}");
+}
+
+// The confirm preview (no `--yes`) predicts the same: hot for a same-mode
+// host edit, restart otherwise.
+#[test]
+fn the_preview_says_when_the_write_will_apply() {
+    let mut e = live_entry();
+    e.network = Some(live_network(&s(&["a.example.com"])));
+    let mut f = Fake {
+        servers: vec![e],
+        ..Fake::default()
+    };
+    let (text, _) = run("bob", &s(&["b.example.com"]), true, &mut f).unwrap();
+    assert!(text.contains("the agent's next turn uses it"), "{text}");
+    let (text, _) = run("bob", &s(&["--research"]), true, &mut f).unwrap();
+    assert!(text.contains("after the agent restarts"), "{text}");
+    let mut f = Fake::default();
+    let (text, _) = run("bob", &s(&["a.example.com"]), true, &mut f).unwrap();
+    assert!(text.contains("after the agent restarts"), "{text}");
 }
 
 // #1639: the sealed live server execs Playwright's headless shell, which

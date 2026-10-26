@@ -1,6 +1,16 @@
 use std::io::{self, BufRead, Write};
 
 fn main() {
+    // `--extra-tool <name>`: list one more tool, so a hot-reload test can
+    // change the tool names by editing only `args`.
+    let argv: Vec<String> = std::env::args().collect();
+    let extra = argv
+        .iter()
+        .position(|a| a == "--extra-tool")
+        .and_then(|i| argv.get(i + 1).cloned());
+    // `--silent`: stay alive, read every request, answer none — a server
+    // that hangs on `initialize` / `tools/list` after a hot edit.
+    let silent = argv.iter().any(|a| a == "--silent");
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -12,6 +22,9 @@ fn main() {
             Ok(v) => v,
             Err(_) => continue,
         };
+        if silent {
+            continue;
+        }
         let id = req["id"].clone();
         let method = req["method"].as_str().unwrap_or("");
         if method == "tools/call" && req["params"]["name"] == "garble" {
@@ -36,17 +49,28 @@ fn main() {
                 "capabilities": {"tools": {"listChanged": false}},
                 "serverInfo": {"name": "mock_mcp", "version": "0.0.1"}
             }),
-            "tools/list" => serde_json::json!({
-                "tools": [{
-                    "name": "echo",
-                    "description": "echoes",
-                    "inputSchema": {"type": "object"}
-                }, {
-                    "name": "connect",
-                    "description": "CONNECTs to `host` through HTTPS_PROXY, returns the status line",
-                    "inputSchema": {"type": "object"}
-                }]
-            }),
+            "tools/list" => {
+                let mut tools = vec![
+                    serde_json::json!({
+                        "name": "echo",
+                        "description": "echoes",
+                        "inputSchema": {"type": "object"}
+                    }),
+                    serde_json::json!({
+                        "name": "connect",
+                        "description": "CONNECTs to `host` through HTTPS_PROXY, returns the status line",
+                        "inputSchema": {"type": "object"}
+                    }),
+                ];
+                if let Some(name) = &extra {
+                    tools.push(serde_json::json!({
+                        "name": name,
+                        "description": "extra",
+                        "inputSchema": {"type": "object"}
+                    }));
+                }
+                serde_json::json!({ "tools": tools })
+            }
             "tools/call" if req["params"]["name"] == "connect" => {
                 let host = req["params"]["arguments"]["host"].as_str().unwrap_or("");
                 serde_json::json!({

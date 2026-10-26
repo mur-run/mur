@@ -85,7 +85,8 @@ impl TaskRunner {
             limits: (Default::default(), None),
             iteration_ceiling: ITERATION_CEILING,
             autonomy: mur_common::hitl::Autonomy::default(),
-            tools: vec![],
+            tools: Default::default(),
+            mcp_refresh: None,
             tools_policy: vec![],
             socket_path: None,
             secrets: None,
@@ -97,6 +98,7 @@ impl TaskRunner {
             session_cwd: None,
             turn_tracks: Mutex::new(HashMap::new()),
             refused_cwd: Mutex::new(HashMap::new()),
+            mcp_notices: Mutex::new(HashMap::new()),
             project_instructions: None,
             draining: Arc::new(AtomicBool::new(false)),
         }
@@ -188,9 +190,21 @@ impl TaskRunner {
             .collect()
     }
 
-    pub fn with_tools(mut self, tools: Vec<Arc<dyn crate::tools::ToolExecutor>>) -> Self {
-        self.tools = tools;
+    pub fn with_tools(self, tools: Vec<Arc<dyn crate::tools::ToolExecutor>>) -> Self {
+        *self.tools.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(tools);
         self
+    }
+
+    /// Re-list hot-reloaded MCP servers at turn start (spec §5).
+    pub fn with_mcp_refresh(mut self, refresh: Arc<crate::tools::refresh::McpRefresh>) -> Self {
+        self.mcp_refresh = Some(refresh);
+        self
+    }
+
+    /// The tool set now. A turn takes it once and keeps it, so a refresh
+    /// for a later turn never changes the tools of one in flight.
+    pub(crate) fn tools(&self) -> Arc<Vec<Arc<dyn crate::tools::ToolExecutor>>> {
+        self.tools.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The agent's own socket, so a spawned CLI's shim can dial back in.
@@ -404,7 +418,7 @@ impl TaskRunner {
         needs
             .iter()
             .filter(|n| {
-                !self.tools.iter().any(|t| t.name() == n.as_str())
+                !self.tools().iter().any(|t| t.name() == n.as_str())
                     || effective_tool_policy(&self.tools_policy, n)
                         == mur_common::agent::ToolPolicy::Deny
             })
