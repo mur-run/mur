@@ -21,7 +21,6 @@ pub mod companion_voice;
 pub mod compress;
 pub mod ledger;
 pub mod telemetry;
-pub mod trash_guard;
 pub mod voice_input;
 
 pub use b0::B0SafetyHook;
@@ -29,7 +28,6 @@ pub use chain::HookChain;
 pub use compress::CompressHook;
 pub use decision::Decision;
 pub use patch::{MessagePatch, PostToolUsePatch, PromptPatch, UntrustedWrapper};
-pub use trash_guard::TrashGuard;
 pub use types::{
     A2AEnvelopeView, AskDefault, ErrorAction, HookCtx, HookError, OutboundView, Phase, PromptView,
     ShutdownReason, Step, TelemetryEmitter, ToolCall, ToolResult, TriggerKind, TriggerPayload,

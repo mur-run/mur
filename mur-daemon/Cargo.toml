@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 mur-common = { path = "../mur-common" }
+mur-trash = { path = "../mur-trash" }
 mur-core = { path = "../mur-core" }
 mur-channel = { path = "../mur-channel" }
 mur-track = { path = "../mur-track" }

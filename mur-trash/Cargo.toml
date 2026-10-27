@@ -1,0 +1,19 @@
+[package]
+name = "mur-trash"
+version.workspace = true
+edition.workspace = true
+# Internal to the workspace: consumed only via path deps, never from crates.io.
+publish = false
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+mur-common = { path = "../mur-common" }
+shell-words = "1"
+chrono = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -133,7 +133,15 @@ pub async fn build_provider_runner(
             .with_secrets(secrets.clone())
             .with_jobs(bash_jobs.clone())
             // Same helper as the kernel grant; Err already logged there.
-            .with_scratch_dir(crate::agent_paths::agent_scratch_dir(agent_home).ok()),
+            .with_scratch_dir(crate::agent_paths::agent_scratch_dir(agent_home).ok())
+            // D10: `hooks.trash_guard` is the switch for `rm` → trash.
+            .with_trash(profile.inner.hooks.trash_guard.then(|| {
+                crate::tools::bash_trash::BashTrash {
+                    agent_home: agent_home.to_path_buf(),
+                    agent_name: profile.inner.name.clone(),
+                    deletion: profile.inner.action_pipeline.deletion.clone(),
+                }
+            })),
     );
     let bash_exec: Arc<dyn crate::tools::ToolExecutor> = bash.clone();
     let bash_def = bash_exec.def();

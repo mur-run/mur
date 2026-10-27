@@ -210,6 +210,13 @@ pub enum ActionEvent {
         entry_id: Uuid,
         reason: PermDeleteReason,
     },
+    /// An agent ran a delete MUR could not route through the trash (#2154).
+    /// Audit only: nothing is recoverable from it.
+    UnprotectedDelete {
+        command: String,
+        reason: String,
+        at: DateTime<Utc>,
+    },
 }
 
 // ── Profile Schema Types ──

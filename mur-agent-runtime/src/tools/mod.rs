@@ -7,6 +7,7 @@ pub mod bash_env;
 pub(crate) mod bash_guard;
 pub mod bash_jobs;
 pub mod bash_track;
+pub mod bash_trash;
 pub(crate) mod denial;
 pub mod edit_file;
 pub mod fleet_run;

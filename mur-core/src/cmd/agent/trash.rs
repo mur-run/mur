@@ -2,6 +2,7 @@ use crate::action_pipeline::Pipeline;
 use crate::action_pipeline::ledger::ActionLedger;
 use anyhow::{Context, Result, bail};
 use mur_common::action::{ActionEvent, PermDeleteReason};
+use std::path::Path;
 use uuid::Uuid;
 
 use super::resolve_mur_home;
@@ -74,10 +75,8 @@ pub fn cmd_trash_empty(name: &str) -> Result<()> {
 
     for event in &events {
         if let ActionEvent::TrashCreated { entry } = event {
-            if let Some(ref trash_path) = entry.trash_path
-                && trash_path.exists()
-            {
-                std::fs::remove_file(trash_path)?;
+            if let Some(ref trash_path) = entry.trash_path {
+                purge(&pipeline.trash_dir(), trash_path)?;
             }
             ledger.append(&ActionEvent::TrashPermDeleted {
                 entry_id: entry.id,
@@ -99,10 +98,8 @@ pub fn cmd_trash_now(name: &str, id: &str) -> Result<()> {
         if let ActionEvent::TrashCreated { entry } = event
             && entry.id == entry_id
         {
-            if let Some(ref trash_path) = entry.trash_path
-                && trash_path.exists()
-            {
-                std::fs::remove_file(trash_path)?;
+            if let Some(ref trash_path) = entry.trash_path {
+                purge(&pipeline.trash_dir(), trash_path)?;
             }
             let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;
             ledger.append(&ActionEvent::TrashPermDeleted {
@@ -116,6 +113,24 @@ pub fn cmd_trash_now(name: &str, id: &str) -> Result<()> {
     bail!("trash entry {id} not found");
 }
 
+/// Permanently delete one trashed object (D5): files, directories and links
+/// alike, never following a link out of the trash and never the root itself.
+/// The entry's own directory goes too once it is empty. Already gone is fine.
+fn purge(trash_root: &Path, trash_path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(trash_path).is_err() {
+        return Ok(());
+    }
+    mur_trash::remove_within(trash_root, trash_path)
+        .with_context(|| format!("cannot delete {}", trash_path.display()))?;
+    if let Some(dir) = trash_path.parent()
+        && dir != trash_root
+        && dir.starts_with(trash_root)
+    {
+        let _ = std::fs::remove_dir(dir); // only succeeds when empty
+    }
+    Ok(())
+}
+
 fn pipeline_for(name: &str) -> Result<Pipeline> {
     let mur_home = resolve_mur_home()?;
     let agent_home = mur_home.join("agents").join(name);
@@ -126,3 +141,7 @@ fn pipeline_for(name: &str) -> Result<Pipeline> {
     let config = profile.action_pipeline;
     Ok(Pipeline::new(agent_home, config))
 }
+
+#[cfg(all(test, unix))]
+#[path = "trash_tests.rs"]
+mod tests;

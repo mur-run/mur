@@ -74,6 +74,9 @@ pub struct BashTool {
     /// The runtime-wide job table (spec D3): shared with `bash_wait` and
     /// `bash_kill`, and with `TaskRunner` for deadline/cancel cleanup.
     pub jobs: std::sync::Arc<crate::tools::bash_jobs::JobTable>,
+    /// `rm` → trash (issue #2154). `None` = `hooks.trash_guard: false`, or a
+    /// test/embedded use: removers run as-is.
+    pub trash: Option<super::bash_trash::BashTrash>,
 }
 
 /// `timeout_secs` (alias `wait_secs`): missing/invalid → default; negative →
@@ -95,7 +98,14 @@ impl BashTool {
             secrets: None,
             scratch_dir: None,
             jobs: crate::tools::bash_jobs::JobTable::new(),
+            trash: None,
         }
+    }
+
+    /// Route the agent's `rm` / `rmdir` / `unlink` into its trash.
+    pub fn with_trash(mut self, trash: Option<super::bash_trash::BashTrash>) -> Self {
+        self.trash = trash;
+        self
     }
 
     /// Attach the agent identity used to resolve a spawn-denial route.
@@ -229,6 +239,13 @@ Call `bash_wait` to wait longer, `bash_kill` to stop it. Pass `timeout_secs: 0` 
             super::bash_guard::guard(&command, &working_dir, &self.session_cwd.live_tracks())
         {
             return Err(ToolError::InvalidInput(why));
+        }
+
+        // A refusal above wins; only then may a delete become a trash move.
+        if let Some(trash) = &self.trash
+            && let Some(out) = super::bash_trash::intercept(trash, &command, &working_dir).await
+        {
+            return Ok(out);
         }
 
         let timeout_secs = resolve_timeout_secs(
