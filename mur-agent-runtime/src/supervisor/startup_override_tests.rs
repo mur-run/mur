@@ -265,3 +265,40 @@ fn pre_seal_rejection_is_audited_exactly_once_on_a_full_boot() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["type"], "startup_override_rejected");
 }
+
+/// A duplicate boot that loses `running.lock` must not touch the override:
+/// the file stays live for the boot that holds the lock, and the loser
+/// writes no audit line.
+#[test]
+fn a_boot_that_loses_the_lock_leaves_the_override_for_the_winner() {
+    let h = homes();
+    publish(&h, &valid_file());
+    let lock_path = h.agent_home.join("running.lock");
+    let _held = crate::lock_file::LockHandle::acquire(&lock_path).unwrap();
+
+    let lost = lock_then_consume(&lock_path, &h.mur_home, &h.agent_home, AGENT, STOP, now());
+
+    assert!(lost.is_err(), "second boot must lose the lock");
+    assert!(live_exists(&h), "loser consumed the override");
+    assert!(audit_lines(&h.agent_home).is_empty(), "loser wrote audit");
+
+    drop(_held);
+    let (_lock, pending) =
+        lock_then_consume(&lock_path, &h.mur_home, &h.agent_home, AGENT, STOP, now()).unwrap();
+    assert!(matches!(pending, Pending::Accepted(_)), "{pending:?}");
+}
+
+/// The lock is now taken before `pin::verify`, so a refused boot exits holding
+/// it without ever writing `running.lock`. Dropping the handle (what process
+/// exit does) must leave the agent startable and not look running.
+#[test]
+fn a_boot_refused_after_the_lock_leaves_the_agent_startable() {
+    let h = homes();
+    let lock_path = h.agent_home.join("running.lock");
+    let (refused, _) =
+        lock_then_consume(&lock_path, &h.mur_home, &h.agent_home, AGENT, STOP, now()).unwrap();
+    drop(refused); // no `release()`: `pin::refuse` exits the process instead
+
+    assert!(crate::lock_file::is_stale(&lock_path).unwrap());
+    assert!(crate::lock_file::LockHandle::acquire(&lock_path).is_ok());
+}

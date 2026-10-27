@@ -6,7 +6,7 @@ use anyhow::Context;
 use crate::entitlements::detect_warnings;
 use crate::hooks::ShutdownReason;
 use crate::idle_scheduler::IdleScheduler;
-use crate::lock_file::{LockHandle, write_lock};
+use crate::lock_file::write_lock;
 use crate::multi_call::{DispatchError, extract_profile_name, verify_name_match};
 use crate::profile::Profile;
 use crate::protocol::a2a_server::Dispatcher;
@@ -219,16 +219,22 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }
     }
 
-    // 2a. Startup override steps 2–4, BEFORE pin::verify so a refused boot
-    //     cannot leave the file behind. Step 6 (merge) lands with the first
-    //     supported flag; `SUPPORTED` is all-false.
-    let pending_override = startup_override::consume_at_boot(
+    // 2a. Acquire running.lock, then startup override steps 2–4 — both
+    //     BEFORE pin::verify so a refused boot cannot leave the file behind,
+    //     and lock first so a duplicate boot exits before it can consume the
+    //     override (see `lock_then_consume`). A refused boot exits holding
+    //     the flock; the kernel drops it with the process. Step 6 (merge)
+    //     lands with the first supported flag; `SUPPORTED` is all-false.
+    let lock_path = agent_home.join("running.lock");
+    let (lock_handle, pending_override) = startup_override::lock_then_consume(
+        &lock_path,
         &mur_home,
         &agent_home,
         &profile.inner.name,
         profile.inner.lifecycle.stop_timeout_secs,
         chrono::Utc::now(),
-    );
+    )
+    .map_err(|e| anyhow::anyhow!("already running ({e})"))?;
 
     // 2b. #712: refuse entitlements that changed outside MUR (the agent's own
     //     bash can rewrite profile.yaml on Linux, where Landlock cannot deny it).
@@ -303,10 +309,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     )
     .await?;
 
-    // 5. Acquire running.lock
-    let lock_path = agent_home.join("running.lock");
-    let lock_handle =
-        LockHandle::acquire(&lock_path).map_err(|e| anyhow::anyhow!("already running ({e})"))?;
+    // 5. running.lock is held since step 2a.
 
     // 6. Build dispatcher (shared Arc so multiple transports can read it)
     let profile_arc = Arc::new(profile.clone());
