@@ -237,6 +237,14 @@ API keys are stored as `SecretRef`s (`env:`, `keychain:`, `file:`, `cmd:`) — n
 
 **Leftover turn tracks clean themselves up.** A track that could not be promoted, could not be removed, or belonged to a runtime that died is reclaimed when a later turn opens on the same project, once its owner is gone or has let it go and it has sat quiet for `turn_track.stale_grace_mins` (default 30). Its diff is saved first to `~/.mur/artifacts/<agent>/turn-tracks/<track>.patch` (deleted paths in `<track>.deleted.txt`), and a track that held edits leaves an open item with the `git apply` command. A track another live session still owns is never touched.
 
+To sweep a project no agent has opened since, run it by hand — same rules, so a live session's track is still safe:
+
+```bash
+mur track prune --dry-run            # list what would go, from anywhere inside the repo
+mur track prune                      # reclaim; patches go to ~/.mur/artifacts/track-prune/<project>-<id>/
+mur track prune --grace 0 --json     # ignore the grace period, machine-readable
+```
+
 **A 429 waits exactly as long as the server asks.** When a provider rate-limits a call and sends `retry-after`, MUR sleeps that long (seconds or an HTTP date, clamped to 120s) and retries — the agentic loop up to three times, the companion outbox on its usual four-attempt schedule. Without the header nothing changes: the same exponential backoff as before. The log line and the network-audit entry say which one was used (`source=retry-after` vs `source=backoff`), so a stall is never a mystery.
 
 **Claude Subscription, the same way.** The Model Library's **Claude Subscription** provider signs in through Claude Code (`claude auth login --claudeai`), lists models from the catalog, and writes `provider: claude` entries that can only reach the loopback gateway's `/v1` route — no `secret`, and a `base_url` edit to `api.anthropic.com` is refused at startup instead of quietly switching the bill. Entries you already point at the gateway as `provider: anthropic` keep working; `mur model doctor` shows which ones could carry the explicit label.

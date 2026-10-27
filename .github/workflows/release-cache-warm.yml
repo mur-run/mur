@@ -1,0 +1,129 @@
+name: Release cache warm
+
+# Why this exists: GitHub Actions caches are scoped by ref. A release run at
+# refs/tags/vX.Y.Z can read its own ref's caches and the default branch's —
+# never another tag's. Nothing on main used to write sccache entries, so every
+# release's hub-macos job compiled from scratch (sccache hit rate ~24%) and ran
+# 107–120 min; v2.97.0's first attempt hit the timeout. Re-running the same tag
+# hit 99.9% and finished in 41 min.
+#
+# This job compiles the same Rust graph as release.yml's hub-macos job, on main,
+# so the next tag restores those sccache entries. It must stay compile-identical
+# to hub-macos (runner image, toolchain, target, env that reaches rustc/cc,
+# cargo flags) or the hashes diverge and the warm-up is wasted. It does NOT sign,
+# bundle, notarize, or upload anything.
+#
+# Not on push:main — the release bump merges to main and tags in the same
+# minute, so a push-triggered warm-up would race the release it is meant to
+# feed. Daily keeps third-party crates (the bulk of the cold build) warm.
+
+on:
+  schedule:
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+  # Self-test when this file changes. Caches written under a PR ref are
+  # invisible to tags, so this proves the job runs, not that it warms main.
+  pull_request:
+    paths: ['.github/workflows/release-cache-warm.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cache-warm
+  cancel-in-progress: false
+
+jobs:
+  hub-macos-warm:
+    name: Warm sccache for MUR Hub (macOS arm64)
+    # Keep in sync with release.yml hub-macos.
+    # Fork PRs get no repository secrets, so MUR_APPLE_TEAM_ID would be empty
+    # while MUR_EMBED_RELEASE_MARKER is set, and mur-common/build.rs panics on
+    # that combination. A secret-free variant is no use either: it would change
+    # the env, so its compile hashes could never be the ones a release reads.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-latest
+    timeout-minutes: 180
+    env:
+      TAURI_CLI_VERSION: "2.11.3"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Disable ggml native arch (avoid unsupported -mcpu=native)
+        run: |
+          echo 'set(GGML_NATIVE OFF CACHE BOOL "" FORCE)' > "$RUNNER_TEMP/ggml-no-native.cmake"
+          echo "CMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/ggml-no-native.cmake" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: mur-hub-gui/ui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Run sccache
+        uses: mozilla/sccache-action@v0.0.9
+
+      - name: Install build tools
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf
+
+      # Same env as release.yml: MUR_EMBED_RELEASE_MARKER / MUR_APPLE_TEAM_ID
+      # are build-script inputs of mur-common, so leaving them out would change
+      # its fingerprint and everything downstream of it.
+      - name: Build Hub UI + mur sidecars (parallel)
+        env:
+          MUR_EMBED_RELEASE_MARKER: '1'
+          MUR_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          (cd mur-hub-gui/ui && npm ci && npm run build) &
+          UI_PID=$!
+          cargo build --release --locked --target aarch64-apple-darwin -p mur-core -p mur-agent-runtime
+          wait $UI_PID
+          mkdir -p mur-hub-gui/src-tauri/binaries
+          cp target/aarch64-apple-darwin/release/mur \
+             mur-hub-gui/src-tauri/binaries/mur-aarch64-apple-darwin
+          cp target/aarch64-apple-darwin/release/mur-agent-runtime \
+             mur-hub-gui/src-tauri/binaries/mur-agent-runtime-aarch64-apple-darwin
+
+      # tauri-build requires every externalBin to exist, but mlx-server is a
+      # PyInstaller binary — not compiled through sccache — so a placeholder
+      # is enough for a compile-only warm-up.
+      - name: Stub mlx-server sidecar
+        run: |
+          printf '#!/bin/sh\nexit 0\n' > mur-hub-gui/src-tauri/binaries/mlx-server-aarch64-apple-darwin
+          chmod +x mur-hub-gui/src-tauri/binaries/mlx-server-aarch64-apple-darwin
+
+      # Same key as release.yml, so a cargo-tauri compiled here is also
+      # restorable by the next tag (main's caches are visible to tags).
+      - name: Cache tauri CLI
+        id: tauri_cli_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: cargo-tauri-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-binstall
+        if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
+        uses: cargo-bins/cargo-binstall@v1.21.1
+      - name: Install tauri CLI
+        if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo binstall -y --locked tauri-cli --version "${{ env.TAURI_CLI_VERSION }}"
+
+      # --no-bundle: compile the same release graph as `cargo tauri build`,
+      # skip signing/bundling (no Apple or updater secrets needed here).
+      - name: Compile Hub (no bundle)
+        run: |
+          cd mur-hub-gui/src-tauri
+          cargo tauri build --target aarch64-apple-darwin --no-bundle
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats

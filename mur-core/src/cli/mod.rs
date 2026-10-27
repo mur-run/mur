@@ -151,6 +151,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: crate::cmd::git_push::GitPushAction,
     },
+    /// Turn tracks (`.worktrees/turn-*`): `prune` reclaims stale ones
+    Track {
+        #[command(subcommand)]
+        action: crate::cmd::track::TrackAction,
+    },
     /// Durable monitors for asynchronous work (CI runs, MUR runs, subprocesses)
     Monitor {
         #[command(subcommand)]

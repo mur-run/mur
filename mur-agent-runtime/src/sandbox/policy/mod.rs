@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 mod build;
 mod deny_carve;
+mod spawn;
 mod widen;
 
 use deny_carve::{partition_against_denies, record_deny_drops};
