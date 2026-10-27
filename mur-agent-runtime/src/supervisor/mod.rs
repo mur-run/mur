@@ -27,7 +27,7 @@ use crate::transport::unix_socket::serve_unix_gated;
 use crate::transport::webhook;
 use crate::watch_scheduler::WatchScheduler;
 use mur_common::identity::AgentIdentity;
-use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
+use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, agent::LockTransports};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -54,11 +54,12 @@ mod pin;
 mod seal;
 mod ssh_proxy_class;
 mod start_notice;
+mod startup_override;
 pub use seal::extra_write_paths;
 mod test_bridge;
 
 use bootstrap::{
-    load_muragent_and_home, parent_pid, read_flag_profile_from_args, resolve_embedded_agent_home,
+    build_lock, load_muragent_and_home, read_flag_profile_from_args, resolve_embedded_agent_home,
 };
 pub use bootstrap::{resolve_model_entry, stale_cap_warnings};
 #[cfg(test)]
@@ -75,6 +76,8 @@ mod self_approval_tests;
 
 #[cfg(test)]
 mod hitl_tests;
+#[cfg(test)]
+mod startup_override_tests;
 
 pub async fn entrypoint() -> anyhow::Result<()> {
     // Handle --help/--version before any side effects (process-group changes,
@@ -216,6 +219,17 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }
     }
 
+    // 2a. Startup override steps 2–4, BEFORE pin::verify so a refused boot
+    //     cannot leave the file behind. Step 6 (merge) lands with the first
+    //     supported flag; `SUPPORTED` is all-false.
+    let pending_override = startup_override::consume_at_boot(
+        &mur_home,
+        &agent_home,
+        &profile.inner.name,
+        profile.inner.lifecycle.stop_timeout_secs,
+        chrono::Utc::now(),
+    );
+
     // 2b. #712: refuse entitlements that changed outside MUR (the agent's own
     //     bash can rewrite profile.yaml on Linux, where Landlock cannot deny it).
     if let pin::Verdict::Refuse(msg) = pin::verify(&profile, &agent_home, &mur_home) {
@@ -230,40 +244,8 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         warn!(kind = ?w.kind, "{}", w.message);
     }
 
-    // 3a. Load agent identity (Ed25519 keypair) for Noise-XK TCP transport.
-    //     If missing, fall back to an ephemeral identity and warn that
-    //     cross-host TCP won't work (peers can't verify our static key).
-    // #850 option (c) step 2: move THIS agent's private key out of the agents
-    // tree, before it is loaded. Runs here rather than from `mur update`
-    // because that is not the only upgrade path — `build.sh --install` +
-    // `mur agent restart --stale` never invokes it. Scoped to one key, so
-    // concurrent agent starts cannot contend.
-    //
-    // Advisory: a failure leaves the key where it is, and step 1's fallback
-    // still loads it. What must NOT happen is starting anyway after a refusal
-    // to overwrite a different key — that case is reported loudly and the key
-    // is left untouched, so the next start retries.
-    match mur_common::identity::migrate_private_key(&agent_home) {
-        Ok(true) => info!("private key migrated out of the agents tree"),
-        Ok(false) => {}
-        Err(e) => warn!(
-            error = %e,
-            "could not migrate the private key; it stays where it is and still \
-             loads, but this agent's key remains readable to siblings created \
-             after the sandbox sealed"
-        ),
-    }
-
-    let identity = Arc::new(match AgentIdentity::load(&agent_home) {
-        Ok(id) => id,
-        Err(e) => {
-            warn!(
-                error = %e,
-                "no identity keypair found; generating ephemeral (cross-host TCP disabled)"
-            );
-            AgentIdentity::generate()
-        }
-    });
+    // 3a. Load agent identity — see `identity::load_boot_identity`.
+    let identity = Arc::new(identity::load_boot_identity(&agent_home));
 
     // 3b. M6.1: grace-period cleanup. If profile.identity.grace_expires_at
     //     has passed, shred identity.key.prev + clear the previous_pubkey
@@ -592,22 +574,14 @@ pub async fn entrypoint() -> anyhow::Result<()> {
         }));
     }
 
-    // 8. Write running.lock
-    let lock = LockFile {
-        schema: 1,
-        uuid: profile.inner.id.clone(),
-        name: profile.inner.name.clone(),
-        pid: std::process::id(),
-        ppid: parent_pid(),
-        started_at: chrono::Utc::now().to_rfc3339(),
-        binary_version: format!("mur-agent-runtime {}", env!("CARGO_PKG_VERSION")),
-        transports: lock_transports,
-        card_digest: profile.digest.clone(),
-        capabilities: profile.inner.capabilities.clone(),
-        build_sha: mur_common::build::SHORT_SHA.to_string(),
-        proto_version: mur_common::build::A2A_PROTO_VERSION,
-        sandbox: sandbox_record,
-    };
+    // 8. Write running.lock (also boot steps 8–10 of the startup override).
+    let lock = build_lock(
+        &profile,
+        lock_transports,
+        sandbox_record,
+        pending_override,
+        &agent_home,
+    );
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
 

@@ -43,6 +43,8 @@ fn write_running_lock(mur_home: &std::path::Path, name: &str, pid: u32) {
         build_sha: String::new(),
         proto_version: 0,
         sandbox: None,
+        startup_override: None,
+        override_rejected: None,
     };
     let bytes = serde_json::to_vec_pretty(&lock).unwrap();
     std::fs::write(agent_home.join("running.lock"), bytes).unwrap();

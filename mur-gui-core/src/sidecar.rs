@@ -457,6 +457,8 @@ mod tests {
             build_sha: String::new(),
             proto_version: 0,
             sandbox: None,
+            startup_override: None,
+            override_rejected: None,
         };
         std::fs::write(dir.join("running.lock"), serde_json::to_vec(&lock).unwrap()).unwrap();
         std::fs::write(dir.join("running.sentinel"), b"").unwrap();

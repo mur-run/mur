@@ -14,11 +14,7 @@ use mur_common::{AgentProfile as _AgentProfile, LockFile};
 use super::start::tail_of;
 use super::startup_error::{LogMark, last_error_line, startup_log};
 use super::{pid_alive, resolve_mur_home, restart_confirm, stale};
-
-/// Extra grace period added on top of the runtime's `stop_timeout_secs` before
-/// the SIGKILL fallback fires.  The SIGKILL wait MUST outlast the runtime's own
-/// drain bound so we never abort a turn mid-flight.
-const RESTART_KILL_GRACE_SECS: u64 = 5;
+use mur_common::startup_override::RESTART_KILL_GRACE_SECS;
 
 /// Fallback `stop_timeout_secs` used when the agent's `profile.yaml` cannot be
 /// read or parsed. Kept as a named const (not a bare literal) so the value

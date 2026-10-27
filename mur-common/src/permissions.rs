@@ -78,6 +78,23 @@ pub enum AuditEvent {
         ts: chrono::DateTime<chrono::Utc>,
         scope_key: ScopeKey,
     },
+    /// A startup override this boot applied (spec §Runtime boot sequence 10).
+    StartupOverrideApplied {
+        ts: chrono::DateTime<chrono::Utc>,
+        nonce: String,
+        flags: crate::agent::OverrideFlags,
+        confirmed_by: crate::startup_override::ConfirmedBy,
+    },
+    /// A startup override this boot claimed and refused. `nonce` is `None`
+    /// when the file could not be read or its nonce was not well formed.
+    StartupOverrideRejected {
+        ts: chrono::DateTime<chrono::Utc>,
+        nonce: Option<String>,
+        reason: String,
+    },
+    /// No live override, but a consumed one from an earlier boot is present:
+    /// a crash-restart does not reapply it.
+    StartupOverrideNotReapplied { ts: chrono::DateTime<chrono::Utc> },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

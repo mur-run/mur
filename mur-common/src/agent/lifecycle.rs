@@ -416,6 +416,13 @@ pub struct LockFile {
     /// this field existed, or a platform that installs no sandbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<SandboxRecord>,
+    /// The startup override this boot applied. Serialized as `override`
+    /// (a Rust keyword, hence the field name). `None` = no override.
+    #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
+    pub startup_override: Option<OverrideRecord>,
+    /// The startup override this boot found and refused, with the reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_rejected: Option<OverrideRejection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -678,5 +685,44 @@ mod lockfile_compat_tests {
         let lock: LockFile = serde_json::from_str(old).unwrap();
         assert_eq!(lock.build_sha, "");
         assert_eq!(lock.proto_version, 0);
+    }
+
+    const OLD_LOCK: &str = r#"{"schema":1,"uuid":"u","name":"a","pid":1,"ppid":1,
+      "started_at":"t","binary_version":"mur-agent-runtime 2.26.9",
+      "transports":{"stdio":true},"card_digest":"d","capabilities":[]}"#;
+
+    #[test]
+    fn old_lock_without_override_fields_still_parses() {
+        let lock: LockFile = serde_json::from_str(OLD_LOCK).unwrap();
+        assert_eq!(lock.startup_override, None);
+        assert_eq!(lock.override_rejected, None);
+        // Absent fields stay absent on the way back out.
+        let out = serde_json::to_value(&lock).unwrap();
+        assert!(out.get("override").is_none());
+        assert!(out.get("override_rejected").is_none());
+    }
+
+    #[test]
+    fn override_record_serializes_under_the_key_override() {
+        let mut lock: LockFile = serde_json::from_str(OLD_LOCK).unwrap();
+        lock.startup_override = Some(OverrideRecord {
+            nonce: "ovr-0123456789abcdef0123456789abcdef".into(),
+            flags: OverrideFlags {
+                no_hitl: true,
+                ..OverrideFlags::default()
+            },
+            confirmed_by: crate::startup_override::ConfirmedBy::Tty,
+        });
+        lock.override_rejected = Some(OverrideRejection {
+            nonce: None,
+            reason: "override rejected: unparseable".into(),
+        });
+        let out = serde_json::to_value(&lock).unwrap();
+        assert!(out.get("startup_override").is_none());
+        assert_eq!(out["override"]["flags"]["no_hitl"], true);
+        assert_eq!(out["override"]["confirmed_by"], "tty");
+        assert!(out["override_rejected"]["nonce"].is_null());
+        let back: LockFile = serde_json::from_value(out).unwrap();
+        assert_eq!(back, lock);
     }
 }

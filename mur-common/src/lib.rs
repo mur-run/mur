@@ -81,6 +81,7 @@ pub mod signal;
 pub mod skill;
 pub mod ssh_proxy_status;
 pub mod start_refusal;
+pub mod startup_override;
 pub mod sync_types;
 pub mod telemetry;
 pub mod test_env;

@@ -11,6 +11,7 @@ mod entitlements;
 mod lifecycle;
 mod mcp;
 mod mcp_status;
+mod override_record;
 mod reload;
 mod reload_mcp;
 mod transport;
@@ -20,6 +21,7 @@ pub use entitlements::*;
 pub use lifecycle::*;
 pub use mcp::*;
 pub use mcp_status::{MCP_STATUS_FILE, McpServerStatus, McpStatus};
+pub use override_record::{OverrideFlags, OverrideRecord, OverrideRejection};
 pub use reload::{HOT_PATHS, RELOAD_STATE_FILE, ReloadDiff, ReloadState};
 pub use transport::*;
 

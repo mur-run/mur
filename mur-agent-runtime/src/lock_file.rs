@@ -159,6 +159,8 @@ mod tests {
             build_sha: String::new(),
             proto_version: 0,
             sandbox: None,
+            startup_override: None,
+            override_rejected: None,
         }
     }
 
