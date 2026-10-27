@@ -446,15 +446,42 @@ impl LaunchChain {
     /// self-protection is macOS tier 3 only). Without the exemption the symmetric
     /// overlap test below would also catch the `<mur_home>/agents/<self>`
     /// force-grant and Linux agents would lose their own home.
+    ///
+    /// Compared under every spelling, not just as written: the policy builder
+    /// keeps a symlinked grant AND its resolved target, and Landlock resolves
+    /// the link when the rule is installed. A lexical test drops the target but
+    /// keeps `/work/link -> <mur_home>/secrets`, handing the kernel the very
+    /// subtree this list exists to close. See [`Self::partition_by_spelling`].
     pub fn partition_grants(&self, grants: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
-        let protected = self.write_protected_paths();
+        self.partition_by_spelling(grants, &self.write_protected_paths())
+    }
+
+    /// The shared body of both partitions. A grant is kept only if NO
+    /// spelling of it (as written, canonical) overlaps ANY spelling of a
+    /// protected path. The own-home exemption also needs every spelling of the
+    /// grant to stay under some spelling of the own home, so an alias placed
+    /// inside the agent's home cannot carry a protected target past it.
+    ///
+    /// A path that does not resolve keeps only its written form; the builder
+    /// already drops grants missing from disk, and a protected path that does
+    /// not exist yet is still matched as written.
+    fn partition_by_spelling(
+        &self,
+        grants: &[PathBuf],
+        protected: &[PathBuf],
+    ) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let protected: Vec<PathBuf> = protected.iter().flat_map(|p| spellings(p)).collect();
+        let own = spellings(self.agent_self_home());
         grants.iter().cloned().partition(|g| {
-            if g.starts_with(self.agent_self_home()) {
+            let forms = spellings(g);
+            if forms.iter().all(|f| own.iter().any(|o| f.starts_with(o))) {
                 return true;
             }
-            !protected
-                .iter()
-                .any(|p| p.starts_with(g) || g.starts_with(p))
+            !forms.iter().any(|f| {
+                protected
+                    .iter()
+                    .any(|p| p.starts_with(f) || f.starts_with(p))
+            })
         })
     }
     /// The paths no read grant may reach: the user's credential store and
@@ -490,15 +517,7 @@ impl LaunchChain {
     /// own profile and state. macOS tier-3 self-protection (own `identity.key`
     /// / `profile.yaml`) is emitted separately and is unaffected.
     pub fn partition_read_grants(&self, grants: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
-        let protected = self.read_protected_paths();
-        grants.iter().cloned().partition(|g| {
-            if g.starts_with(self.agent_self_home()) {
-                return true;
-            }
-            !protected
-                .iter()
-                .any(|p| p.starts_with(g) || g.starts_with(p))
-        })
+        self.partition_by_spelling(grants, &self.read_protected_paths())
     }
     fn existing_agent_symlinks(&self) -> Vec<PathBuf> {
         let Ok(entries) = std::fs::read_dir(&self.bin_dir) else {
@@ -514,6 +533,19 @@ impl LaunchChain {
             .map(|e| e.path())
             .collect()
     }
+}
+
+/// `p` as written, plus its canonical form when that differs. Symlinks in
+/// any component are resolved, so `/work/link/sub` and the target's `/sub`
+/// are both returned.
+fn spellings(p: &Path) -> Vec<PathBuf> {
+    let mut v = vec![p.to_path_buf()];
+    if let Ok(real) = std::fs::canonicalize(p)
+        && real != p
+    {
+        v.push(real);
+    }
+    v
 }
 
 impl Default for LaunchChain {

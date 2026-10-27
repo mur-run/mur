@@ -192,3 +192,65 @@ fn partition_drops_credential_grants_and_keeps_run_state() {
     assert_eq!(dropped, dropped_expected);
     assert_eq!(kept, kept_expected);
 }
+
+/// A grant named by a symlink is judged by where it lands, not how it is
+/// spelled: the builder keeps the link next to its target and Landlock
+/// resolves it at install time, so a lexical test lets it through.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_grant_into_a_protected_path_is_dropped() {
+    let f = fixture();
+    let secrets = f.mur.join("secrets");
+    std::fs::create_dir_all(secrets.join("startup-overrides")).unwrap();
+    let work = f.home.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let link = work.join("granted-cache");
+    std::os::unix::fs::symlink(&secrets, &link).unwrap();
+    let plain = work.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+
+    let grants = vec![link.clone(), plain.clone()];
+    let (kept, dropped) = f.chain.partition_grants(&grants);
+    assert_eq!(dropped, vec![link.clone()]);
+    assert_eq!(kept, vec![plain.clone()]);
+    let (kept_r, dropped_r) = f.chain.partition_read_grants(&grants);
+    assert_eq!(dropped_r, vec![link]);
+    assert_eq!(kept_r, vec![plain]);
+}
+
+/// The own-home exemption must not carry a protected target: an alias
+/// placed inside the agent's home still resolves outside it.
+#[cfg(unix)]
+#[test]
+fn an_alias_inside_the_own_home_does_not_bypass_the_check() {
+    let f = fixture();
+    let secrets = f.mur.join("secrets");
+    std::fs::create_dir_all(&secrets).unwrap();
+    let own = f.chain.agent_self_home().to_path_buf();
+    std::fs::create_dir_all(&own).unwrap();
+    let link = own.join("vault");
+    std::os::unix::fs::symlink(&secrets, &link).unwrap();
+    let state = own.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+
+    let (kept, dropped) = f
+        .chain
+        .partition_grants(&[own.clone(), link.clone(), state.clone()]);
+    assert_eq!(dropped, vec![link]);
+    assert_eq!(kept, vec![own, state]);
+}
+
+/// A symlink to a protected path's ANCESTOR (here the whole `<mur_home>`)
+/// reaches it too and is dropped.
+#[cfg(unix)]
+#[test]
+fn a_symlink_to_an_ancestor_of_a_protected_path_is_dropped() {
+    let f = fixture();
+    std::fs::create_dir_all(f.mur.join("secrets")).unwrap();
+    std::fs::create_dir_all(&f.home).unwrap();
+    let link = f.home.join("mur-alias");
+    std::os::unix::fs::symlink(&f.mur, &link).unwrap();
+    let (kept, dropped) = f.chain.partition_grants(std::slice::from_ref(&link));
+    assert!(kept.is_empty());
+    assert_eq!(dropped, vec![link]);
+}

@@ -121,6 +121,14 @@ fn fleet_child_reads_commander_public_keys_only() {
     run_case("commander_fleet");
 }
 
+/// A write grant named by a symlink into `secrets/` must not open it: the
+/// kernel resolves the link, so the partition has to as well. An unrelated
+/// grant beside it stays writable.
+#[test]
+fn a_symlinked_grant_cannot_reach_secrets() {
+    run_case("symlink_grant");
+}
+
 // ── child side ─────────────────────────────────────────────────────────────
 
 fn skip_or_fail_unenforced(why: &dyn std::fmt::Debug) -> ! {
@@ -255,6 +263,7 @@ fn write_protected_seal_subprocess_main() {
         "capture_nonfleet" => capture_nonfleet(&l),
         "capture_fleet" => capture_fleet(&l),
         "commander_fleet" => commander_fleet(&l),
+        "symlink_grant" => symlink_grant(&l),
         other => fail(&format!("unknown case {other}")),
     }
 }
@@ -446,4 +455,24 @@ fn commander_fleet(l: &Layout) -> ! {
         e.write(s, false);
     }
     e.finish();
+}
+
+fn symlink_grant(l: &Layout) -> ! {
+    let secrets = l.mur.join("secrets");
+    let overrides = secrets.join("startup-overrides");
+    std::fs::create_dir_all(&overrides).unwrap();
+    let work = l.home.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let link = work.join("granted-cache");
+    std::os::unix::fs::symlink(&secrets, &link).unwrap();
+    let plain = work.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+
+    seal(&[link.clone(), plain.clone()], &[], l);
+    let mut e = Expect::default();
+    e.write(&inside(&link.join("startup-overrides")), false);
+    e.write(&inside(&link), false);
+    e.write(&inside(&overrides), false);
+    e.write(&inside(&plain), true);
+    e.finish()
 }
