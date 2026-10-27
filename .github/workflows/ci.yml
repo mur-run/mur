@@ -490,6 +490,42 @@ jobs:
       - name: Run quick e2e smoke
         run: bash scripts/e2e/p1-export-gui.sh
 
+  # Old and new rust-cache keys sit side by side after a Cargo.lock, rustc,
+  # or runner-image change (the key embeds all three). When all three test
+  # OSes roll over together, main's Rust caches grow by ~4.35 GB, the repo
+  # passes 10 GB, and GitHub evicts the least-recently-read entry, which is
+  # the Hub sccache that release-cache-warm.yml keeps for release tags.
+  # rust-cache saves in its post step, so a job cannot prune its own
+  # predecessor. This job runs after test and clippy finish and keeps only
+  # the newest entry per job+OS. It is not in ci-pass: a failed prune must
+  # not fail main.
+  prune-rust-cache:
+    name: Prune superseded Rust caches
+    needs: [test, clippy]
+    if: always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CACHE_PREFIX: v0-rust-
+    steps:
+      - name: Delete all but the newest entry per job and OS
+        run: |
+          set -euo pipefail
+          # Key shape: v0-rust-<prefix>-<job>-<OS>-<arch>-<envhash>-<lockhash>.
+          # Group on everything before the two trailing hashes.
+          gh api --paginate \
+            "repos/${GH_REPO}/actions/caches?per_page=100&ref=${GITHUB_REF}&key=${CACHE_PREFIX}" \
+            --jq '.actions_caches[] | [.id, .key, .created_at] | @tsv' \
+          | sort -t$'\t' -k3,3r \
+          | awk -F'\t' '{ g = $2; sub(/-[^-]+-[^-]+$/, "", g); if (seen[g]++) print $1 "\t" $2 }' \
+          | while IFS=$'\t' read -r id key; do
+              echo "delete ${id} ${key}"
+              gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}"
+            done
+
   freebsd-platform-audit:
     name: FreeBSD platform audit
     runs-on: ubuntu-latest
