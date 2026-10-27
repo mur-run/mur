@@ -582,6 +582,18 @@ Agent** wizard offers the same catalog as a source.
   and offers the exact `/browser live … --profile <site>` command;
   `/browser status` shows which profile the browser launches with (or
   `none`).
+- **Use a saved login in testing and automation** — `/browser testing` and
+  `/browser automation` take `--profile <site>` directly, with no detour
+  through `/browser live`. Leave it off and the request names a URL that
+  exactly one saved profile covers, and that profile is used (the chat says
+  which). If several cover it, none is picked and the chat lists them. If
+  the URL's host is not on the browser's allow-list, the chat asks
+  *this time* / *always* / *no* before the run starts instead of letting the
+  first page load fail.
+- **Find a recorded run** — `/browser list [keyword]... [--tag <tag>]` shows
+  the `mur browser list` table in the chat, newest first. Keywords match a
+  run's name, description, tags, domain, and step intents. Once the browser
+  skill is attached, the `/browser` menu stops offering `--add`.
 - **Edit an MCP server without restarting the agent** — changing an existing
   server's `args`, `timeout_secs`, or network `allow_hosts` / `deny_hosts` in
   `profile.yaml` (or rerunning `/browser live` with new hosts or a new

@@ -17,6 +17,7 @@ mod browser_live_effect;
 mod browser_live_intent;
 mod browser_live_ops;
 pub(crate) mod browser_live_preview;
+mod browser_mode_cmd;
 mod browser_profile_hint;
 mod call_summary;
 mod code_nav_tip;
@@ -266,7 +267,7 @@ fn help_text() -> String {
         "  chat      /clear (new conversation) · /sessions · /channels [N|id-prefix] (list/switch) · /channels N --follow (live-tail) · /channels --stop",
         "  look      /card · /open (outstanding items) · /memories · /monitor (durable monitors; Ctrl+T / Alt+M)",
         settings.as_str(),
-        "  agent     /mcp · /skill · /browser [--add|auth|testing|automation|live <host>...] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
+        "  agent     /mcp · /skill · /browser [--add|auth|testing|automation [--profile <site>]|live <host>...|list [keyword]] · /secret <KEY> [--delete] (hidden input, never enters the chat) · /login [anthropic|chatgpt] (OAuth health; not `mur auth login`)",
         "  memory    /remember <text> (when relevant) · /instruct <text> (every turn) · /memories · /forget <name|last>",
         "            /pin <name> · /unpin <name> · /instruct-edit <name> <text>",
         "  review    /review --main <agent> --reviewer <agent> <task…> (main/reviewer loop in this pane) · /review resume <session> · /review (paused sessions)",

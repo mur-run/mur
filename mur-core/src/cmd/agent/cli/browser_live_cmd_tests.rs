@@ -92,6 +92,8 @@ fn existing_entry_network_is_replaced_not_merged() {
 #[test]
 fn routing_keeps_add_and_splits_live() {
     assert_eq!(route(&s(&["--add"])), Route::Add);
+    assert_eq!(route(&s(&["list"])), Route::List);
+    assert_eq!(route(&s(&["list", "deepseek"])), Route::List);
     assert_eq!(
         route(&s(&["live", "a.example.com"])),
         Route::Live(s(&["a.example.com"]))

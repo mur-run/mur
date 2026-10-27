@@ -1,6 +1,7 @@
 //! `/browser` command: browser skill hub. `--add` attaches the built-in
-//! `browser` skill to this agent; a mode argument (once attached) is sent to
-//! the model as a turn.
+//! `browser` skill to this agent; `list` shows recorded runs; a mode argument
+//! (once attached) is sent to the model as a turn, after the #2101 profile
+//! pick and host pre-check in [`super::browser_mode_cmd`].
 //!
 //! D5 (docs/superpowers/specs/2026-09-25-browser-skill-hub-design.md): this
 //! variant is typed, never `SlashCmd::Unknown`, so `turn.rs`'s `submit()`
@@ -41,6 +42,7 @@ fn setup_hint(agent: &str) -> String {
 
 pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<StreamMsg>) {
     use super::browser_live_cmd::{self as live, Route};
+    use super::browser_mode_cmd as mode;
     let route = live::route(&args);
     if let Route::Live(hosts) = route {
         use super::browser_live_intent::{
@@ -72,6 +74,13 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
                 "ok — `{host}` stays blocked; no more prompts for it this session"
             ));
             return;
+        }
+        // Remembered so the pre-turn host check (#2101) does not ask again:
+        // a session grant lives on the running proxy, not in the profile.
+        if let Ok(a) = super::browser_allow_cmd::parse_allow(&rest)
+            && a.session
+        {
+            app.egress_chips.session_allowed.insert(a.host);
         }
         let home = app.home.clone();
         run_manage(app, move |agent| {
@@ -127,18 +136,57 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
         return;
     }
 
+    if route == Route::List {
+        // Read-only and local: no skill or agent needed to see the table.
+        match mode::parse_list(&args[1..]) {
+            Ok(list_args) => {
+                let runs = mur_browser::paths::browser_root(&app.home).join("runs");
+                app.push_system(mode::render_list(&runs, &list_args, chrono::Utc::now()));
+            }
+            Err(e) => app.push_error(e),
+        }
+        return;
+    }
+
     if !app.skills.iter().any(|c| c.display == "/browser") {
         app.push_system("browser skill not attached — run /browser --add first");
         return;
     }
 
-    let instruction = if args.is_empty() {
-        "Use the browser skill.".to_string()
-    } else {
-        format!("Use the browser skill. {}", args.join(" "))
+    let saved = super::browser_profile_hint::load_saved_profiles(&app.home);
+    let plan = match mode::plan_turn(&args, &saved) {
+        Ok(p) => p,
+        Err(e) => {
+            app.push_error(e);
+            return;
+        }
     };
+    // #2101 item 4: ask before the turn, not after the first navigation fails.
+    let entry = crate::cmd::agent::load_profile_for_edit(&app.agent)
+        .ok()
+        .and_then(|(_, p)| {
+            p.mcp_servers
+                .into_iter()
+                .find(|e| e.name == live::LIVE_ENTRY)
+        });
+    let skip: std::collections::HashSet<String> = app
+        .egress_chips
+        .dismissed
+        .union(&app.egress_chips.session_allowed)
+        .cloned()
+        .collect();
+    let blocked = mode::blocked_hosts(&mode::url_hosts(&plan.args), entry.as_ref(), &skip);
+    if let Some((text, chips)) = mode::allow_prompt(&blocked) {
+        app.push_system(text);
+        app.pending_suggestions = chips;
+        app.reveal_suggestions();
+        return;
+    }
+    if let Some(note) = &plan.note {
+        app.push_system(note.clone());
+    }
     app.clear_input();
-    start_turn(app, instruction, tx);
+    start_turn(app, mode::instruction(&plan), tx);
 }
 
 #[cfg(test)]
