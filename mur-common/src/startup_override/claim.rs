@@ -2,6 +2,9 @@
 //! (withdraw) both take it with one `rename` to their own name. A rename of
 //! one source succeeds once, so exactly one side holds the file; the loser
 //! sees `ENOENT`. Nobody reads or deletes the live name in place.
+//!
+//! That holds for POSIX `rename(2)`. On Windows `std::fs::rename` does not
+//! give it, so the claim goes through `claim_windows::rename_exclusive`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -65,7 +68,11 @@ pub fn claim(dir: &Path, agent: &str, who: ClaimAs) -> Claimed {
         ClaimAs::Consume => consumed_path(dir, agent),
         ClaimAs::Withdraw => withdrawn_path(dir, agent),
     };
-    match std::fs::rename(live_path(dir, agent), &dest) {
+    #[cfg(windows)]
+    let renamed = super::claim_windows::rename_exclusive(&live_path(dir, agent), &dest);
+    #[cfg(not(windows))]
+    let renamed = std::fs::rename(live_path(dir, agent), &dest);
+    match renamed {
         Ok(()) => Claimed::Took(dest),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Claimed::Absent,
         Err(e) => Claimed::Failed(e),
