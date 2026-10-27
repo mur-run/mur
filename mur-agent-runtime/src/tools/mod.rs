@@ -219,3 +219,34 @@ mod tests {
         }
     }
 }
+
+/// #2147: the dead-rule lint (`mur_common::agent::BUILTIN_TOOL_NAMES`) must
+/// know every builtin tool name, or a miscased rule for a missing one goes
+/// unreported. Add new builtins here and there together.
+#[cfg(test)]
+#[test]
+fn builtin_tool_names_cover_every_builtin() {
+    let ours = [
+        "bash",
+        "read_file",
+        "write_file",
+        "edit_file",
+        bash_control::BASH_WAIT,
+        bash_control::BASH_KILL,
+        suggest::SUGGEST_REPLIES,
+        mur_common::proposal::PROPOSE_TOOL,
+        recall::RECALL,
+        remember::REMEMBER,
+        remind::REMIND,
+        open_item::OPEN_ITEM,
+        fleet_run::FLEET_RUN,
+        git_push::GIT_PUSH_REQUEST,
+        git_push::GIT_PUSH_STATUS,
+        git_push::GIT_PUSH_CANCEL,
+    ];
+    let mut a: Vec<&str> = ours.to_vec();
+    let mut b: Vec<&str> = mur_common::agent::BUILTIN_TOOL_NAMES.to_vec();
+    a.sort_unstable();
+    b.sort_unstable();
+    assert_eq!(a, b);
+}

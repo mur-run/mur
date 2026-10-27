@@ -8,6 +8,13 @@ use super::warn_if_running;
 
 pub fn cmd_perm_set_tool(name: &str, policy: ToolPolicy, pattern: &str) -> Result<()> {
     let (path, mut profile) = load_profile_for_edit(name)?;
+    // #2147: rules match case-sensitively; a case-only typo is a dead rule.
+    if let Some(fixed) = mur_common::agent::case_fix(pattern, &known_tools(&profile)) {
+        eprintln!(
+            "warning: `{pattern}` matches no tool; did you mean `{fixed}`? \
+             Tool names are case-sensitive, so this rule will have no effect."
+        );
+    }
     let rules = &mut profile.entitlements.tools;
     if let Some(r) = rules.iter_mut().find(|r| r.pattern == pattern) {
         r.policy = policy;
@@ -41,8 +48,24 @@ pub fn cmd_perm_list_tools(name: &str) -> Result<()> {
         for r in rules {
             println!("{}", rule_line(r));
         }
+        for line in dead_rule_lines(&profile) {
+            eprintln!("{line}");
+        }
     }
     Ok(())
+}
+
+/// Builtins plus every configured MCP server's `mcp__<server>__` prefix.
+pub(crate) fn known_tools(profile: &mur_common::AgentProfile) -> mur_common::agent::KnownTools {
+    mur_common::agent::KnownTools::for_servers(profile.mcp_servers.iter().map(|s| s.name.as_str()))
+}
+
+/// `warning:` lines for rules whose pattern is a case-only misspelling (#2147).
+pub(crate) fn dead_rule_lines(profile: &mur_common::AgentProfile) -> Vec<String> {
+    mur_common::agent::dead_rules(&profile.entitlements.tools, &known_tools(profile))
+        .iter()
+        .map(|d| format!("warning: {}", d.message()))
+        .collect()
 }
 
 /// One rule as `perm list-tools` prints it. #1600: a `risk:` above `write`

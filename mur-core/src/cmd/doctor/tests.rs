@@ -472,3 +472,34 @@ fn agent_doctor_honours_a_tilde_dir_grant() {
         "`~/mcp-servers` covers the bundled copy: {report:?}"
     );
 }
+
+/// #2147: a miscased deny rule matches nothing, so `bash` is not denied.
+/// Doctor must fail the check, name the real spelling, and say it is not in
+/// effect; a correctly spelled rule passes.
+#[test]
+fn a_miscased_deny_rule_is_reported_as_not_in_effect() {
+    use mur_common::agent::{ToolPolicy, ToolRule};
+    let rule = |pattern: &str, policy| ToolRule {
+        pattern: pattern.into(),
+        policy,
+        risk: None,
+        bypass_builtin_tier_floor: Default::default(),
+    };
+    let mut profile = mur_common::AgentProfile::default_for_tests();
+    profile.entitlements.tools = vec![
+        rule("Bash", ToolPolicy::Deny),
+        rule("Write_file", ToolPolicy::Allow),
+    ];
+    let c = super::check_tool_rule_case(&profile);
+    assert!(!c.ok);
+    assert!(c.detail.contains("did you mean `bash`"), "{}", c.detail);
+    assert!(c.detail.contains("NOT IN EFFECT"), "{}", c.detail);
+    assert!(
+        c.detail.contains("did you mean `write_file`"),
+        "{}",
+        c.detail
+    );
+
+    profile.entitlements.tools = vec![rule("bash", ToolPolicy::Deny)];
+    assert!(super::check_tool_rule_case(&profile).ok);
+}
