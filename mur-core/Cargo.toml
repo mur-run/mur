@@ -25,6 +25,7 @@ mur-agent-runtime = { path = "../mur-agent-runtime" }  # for cmd::agent::cmd_exp
 mur-channel = { path = "../mur-channel" }
 mur-open-items = { path = "../mur-open-items" }
 mur-track = { path = "../mur-track" }
+mur-trash = { path = "../mur-trash" }
 mur-monitor = { path = "../mur-monitor" }
 mur-browser = { path = "../mur-browser" }
 tar = "0.4"           # cmd::agent_export_gui template-mode identity stripping

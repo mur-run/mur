@@ -20,7 +20,8 @@ pub struct HooksConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_input: Option<bool>,
 
-    /// Whether `TrashGuard` runs. Default: true.
+    /// Whether the agent's `bash` tool moves `rm` / `rmdir` / `unlink`
+    /// targets into its trash instead of deleting them. Default: true.
     #[serde(default = "default_true")]
     pub trash_guard: bool,
 }

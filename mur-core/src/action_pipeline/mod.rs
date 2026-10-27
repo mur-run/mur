@@ -3,7 +3,6 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod error;
-pub mod guard;
 pub mod ingest;
 pub mod ledger;
 pub mod notify;

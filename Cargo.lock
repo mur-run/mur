@@ -6459,6 +6459,7 @@ dependencies = [
  "mur-mcp-proto",
  "mur-open-items",
  "mur-track",
+ "mur-trash",
  "ndarray 0.17.2",
  "ort",
  "rand 0.8.6",
@@ -6667,6 +6668,7 @@ dependencies = [
  "mur-monitor",
  "mur-open-items",
  "mur-track",
+ "mur-trash",
  "notify",
  "oauth2",
  "open",
@@ -6740,6 +6742,7 @@ dependencies = [
  "mur-core",
  "mur-git-broker",
  "mur-track",
+ "mur-trash",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6901,6 +6904,18 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.10.9",
  "tempfile",
+]
+
+[[package]]
+name = "mur-trash"
+version = "2.97.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "mur-common",
+ "shell-words",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
