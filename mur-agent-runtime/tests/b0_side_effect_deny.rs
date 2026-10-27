@@ -12,7 +12,15 @@ async fn b0_denies_send_tool_after_untrusted_input() {
     let call = ToolCall::test("messaging.send", serde_json::json!({"body": "hi"}));
     let tok = CancellationToken::new();
     match hook.pre_tool_use(&ctx, &call, &tok).await.unwrap() {
-        Decision::AskUser { scope_key, .. } => {
+        Decision::AskUser {
+            scope_key,
+            one_shot,
+            ..
+        } => {
+            assert!(
+                one_shot,
+                "rule 4 asks about this turn; never remembered (#2175)"
+            );
             assert!(
                 scope_key.tool_name.contains("after_untrusted_input"),
                 "scope key carries rule tag: {}",

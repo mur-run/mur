@@ -118,19 +118,87 @@ async fn a_rewrite_and_a_hook_failure_refuse_with_their_own_codes() {
 #[tokio::test]
 async fn an_ask_lifts_an_allow_call_into_the_approval_gate() {
     let calls = Arc::new(AtomicU64::new(0));
-    let r = with_gate(bash_allowed(calls.clone()), || {
-        Ok(Decision::AskUser {
-            prompt: "ok?".into(),
-            default: crate::hooks::AskDefault::Deny,
-            scope_key: mur_common::permissions::ScopeKey {
-                agent_id: "a".into(),
-                tool_name: "bash".into(),
-                input_schema_hash: String::new(),
-            },
-        })
-    });
+    let r = with_gate(bash_allowed(calls.clone()), || ask(false));
     r.mark_unattended("t").await;
     let err = run_one(&r, &bash("echo hi")).await.expect_err("held");
     assert_eq!(err.code, crate::task_runner::HITL_APPROVAL_REQUIRED);
     assert_eq!(calls.load(Ordering::Relaxed), 0);
+}
+
+/// Remembers an allow for every call and counts what is written back.
+struct AllowsEverything(Arc<AtomicU64>);
+#[async_trait::async_trait]
+impl crate::hitl::store::DecisionStore for AllowsEverything {
+    async fn lookup(&self, _h: &str) -> Option<crate::hitl::store::Settled> {
+        Some(crate::hitl::store::Settled::Allow)
+    }
+    async fn record(&self, _r: mur_common::hitl::HitlResponse) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn ask(one_shot: bool) -> Result<Decision, HookError> {
+    Ok(Decision::AskUser {
+        prompt: "ok?".into(),
+        default: crate::hooks::AskDefault::Deny,
+        scope_key: mur_common::permissions::ScopeKey {
+            agent_id: "a".into(),
+            tool_name: "bash".into(),
+            input_schema_hash: String::new(),
+        },
+        one_shot,
+    })
+}
+
+/// A gate behind a store that remembers "allow bash", answered by a human
+/// who says deny. Returns (ran, records written).
+async fn behind_a_remembered_allow(f: GateFn) -> (u64, u64) {
+    let calls = Arc::new(AtomicU64::new(0));
+    let records = Arc::new(AtomicU64::new(0));
+    let pa = empty_pending_approvals();
+    let (ntx, mut nrx) = tokio::sync::mpsc::channel::<serde_json::Value>(8);
+    let r = with_gate(bash_allowed(calls.clone()), f)
+        .with_decision_store(Arc::new(AllowsEverything(records.clone())))
+        .with_pending_approvals(pa.clone())
+        .with_notifier(ntx)
+        .with_hitl_timeout_secs(5);
+    let human = tokio::spawn(async move {
+        let n = nrx.recv().await?;
+        let id = n["params"]["hitl_id"].as_str()?.to_string();
+        let tx = pa.lock().await.remove(&id)?;
+        let _ = tx.send(crate::hitl::HitlDecision {
+            allow: false,
+            reason: None,
+            surface: Some("cli".into()),
+            awaiting_human: false,
+            refusal_code: None,
+        });
+        Some(())
+    });
+    let _ = run_one(&r, &bash("echo hi")).await;
+    drop(r);
+    let _ = human.await;
+    (
+        calls.load(Ordering::Relaxed),
+        records.load(Ordering::Relaxed),
+    )
+}
+
+/// Rule 4's question is about this turn's input, so a standing "allow
+/// bash" must not answer it, and the answer must not become one.
+#[tokio::test]
+async fn a_one_shot_ask_skips_the_decision_store() {
+    let (ran, records) = behind_a_remembered_allow(|| ask(true)).await;
+    assert_eq!(
+        ran, 0,
+        "the human's deny must win over the remembered allow"
+    );
+    assert_eq!(records, 0, "a one-shot answer must not be recorded");
+}
+
+/// Rule 1/2's question is a reusable permission: the store answers it.
+#[tokio::test]
+async fn a_remembering_ask_is_answered_by_the_decision_store() {
+    let (ran, _) = behind_a_remembered_allow(|| ask(false)).await;
+    assert_eq!(ran, 1, "the remembered allow answers without asking");
 }

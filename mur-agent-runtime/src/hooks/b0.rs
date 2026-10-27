@@ -338,6 +338,7 @@ impl Hook for B0SafetyHook {
                     call.name()
                 ),
                 default: AskDefault::Deny,
+                one_shot: true,
             });
         }
         // ── Rule 5: process.spawn / eval / shell deny by default. ────────
@@ -465,6 +466,7 @@ impl Hook for B0SafetyHook {
                         path,
                     ),
                     default: AskDefault::Deny,
+                    one_shot: false,
                 });
             }
         }
@@ -554,6 +556,7 @@ impl Hook for B0SafetyHook {
                                          allowlist. Allow once?"
                                     ),
                                     default: AskDefault::Deny,
+                                    one_shot: false,
                                 });
                             }
                         }

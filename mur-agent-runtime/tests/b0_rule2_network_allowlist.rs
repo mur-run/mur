@@ -94,8 +94,12 @@ async fn new_host_triggers_ask_user() {
         .unwrap();
     match decision {
         Decision::AskUser {
-            default, prompt, ..
+            default,
+            prompt,
+            one_shot,
+            ..
         } => {
+            assert!(!one_shot, "a permission answer is remembered (#2175)");
             assert!(matches!(default, AskDefault::Deny));
             assert!(prompt.contains("evil.example.com"));
         }

@@ -1,5 +1,5 @@
 //! Gate B, batched: every `Ask` call of one LLM response is resolved before
-//! any of them runs — a settled decision from the store, or ONE
+//! any of them runs â a settled decision from the store, or ONE
 //! `tool/approval_needed` carrying all of them. Each call keeps its own
 //! `hitl_id` and its own oneshot, so `tool/hitl_respond` is unchanged and no
 //! single answer can release more than one call.
@@ -24,6 +24,10 @@ pub struct PendingCall {
     /// with any layer-3 intent raise, so it is the FINAL tier, not the
     /// profile-declared one. `None` = undeclared and not raised.
     pub risk: Option<mur_common::hitl::RiskTier>,
+    /// #2175: this call alone neither reads nor writes `store`, whatever the
+    /// gate's `remember` says — a `pre_tool_use` hook asked a question about
+    /// this turn (B0 rule 4), not about the tool.
+    pub one_shot: bool,
 }
 
 pub struct BatchGate<'a> {
@@ -48,14 +52,14 @@ pub struct BatchGate<'a> {
 const TIMED_OUT: &str = "timed out";
 
 /// True for the decision [`BatchGate::ask`] gives a call nobody answered in
-/// time — no human said anything, so a headless caller reports it as still
+/// time â no human said anything, so a headless caller reports it as still
 /// needing approval rather than as a denial (#2085).
 pub fn is_timeout(d: &HitlDecision) -> bool {
     !d.allow && d.reason.as_deref() == Some(TIMED_OUT)
 }
 
 impl BatchGate<'_> {
-    /// Resolve every pending call. Returns `call_id → decision`; every input
+    /// Resolve every pending call. Returns `call_id â decision`; every input
     /// call has an entry (timeout and store-denials included).
     pub async fn resolve(&self, calls: Vec<PendingCall>) -> HashMap<String, HitlDecision> {
         let (mut out, ask) = self.recall(calls).await;
@@ -66,7 +70,7 @@ impl BatchGate<'_> {
     /// Split `calls` into those a remembered decision settles (answered here)
     /// and those only a human can answer (returned for [`Self::ask`]). Two
     /// steps so a caller can tell a call that stopped for a human from one
-    /// the store answered — #1814 counts only the first.
+    /// the store answered â #1814 counts only the first.
     pub async fn recall(
         &self,
         calls: Vec<PendingCall>,
@@ -75,7 +79,7 @@ impl BatchGate<'_> {
         let mut ask = Vec::new();
         for c in calls {
             let settled = match self.store {
-                Some(s) if self.remember => s.lookup(&c.action_hash).await,
+                Some(s) if self.remember && !c.one_shot => s.lookup(&c.action_hash).await,
                 _ => None,
             };
             match settled {
@@ -190,7 +194,7 @@ impl BatchGate<'_> {
             // A timeout is not a human decision: recording it would deny the
             // next identical call without asking anyone. Only answers settle.
             let answered = decision.reason.as_deref() != Some(TIMED_OUT);
-            if let (Some(s), true) = (self.store, answered && self.remember) {
+            if let (Some(s), true) = (self.store, answered && self.remember && !c.one_shot) {
                 s.record(mur_common::hitl::HitlResponse {
                     hitl_id: hitl_id.clone(),
                     action_hash: c.action_hash.clone(),
@@ -240,6 +244,7 @@ pub fn pending(
         action_hash: chat_action_hash(&call.tool_name, &call.input, agent),
         tool_name: call.tool_name.clone(),
         tool_input: call.input.clone(),
+        one_shot: false,
     }
 }
 
@@ -255,6 +260,7 @@ mod tests {
             tool_input: serde_json::json!({ "command": id }),
             action_hash: format!("hash-{id}"),
             risk: None,
+            one_shot: false,
         }
     }
 
@@ -267,7 +273,7 @@ mod tests {
     /// one task can be waiting together.
     ///
     /// It holds because the approvals map is keyed by a `hitl_id` minted per
-    /// pending call inside `resolve`, not by `task_id` or `step_id` — and the
+    /// pending call inside `resolve`, not by `task_id` or `step_id` â and the
     /// lock is released before any await. The risk this guards against is a
     /// future key that looks more readable and is shared: keying by `task_id`
     /// would make these two gates answer each other, and nothing else in the
@@ -307,7 +313,7 @@ mod tests {
             })
         };
 
-        // Same task_id on both — the collision case, not two unrelated tasks.
+        // Same task_id on both â the collision case, not two unrelated tasks.
         let g1 = BatchGate {
             task_id: "task-1",
             timeout: Duration::from_secs(5),
@@ -335,7 +341,7 @@ mod tests {
         // that hangs on regression is a guard that reports nothing.
         let answered = tokio::time::timeout(Duration::from_secs(5), responder)
             .await
-            .expect("responder did not finish — a hitl_id was never delivered")
+            .expect("responder did not finish â a hitl_id was never delivered")
             .expect("responder panicked");
         assert_eq!(answered, 2);
         assert!(a["yes"].allow, "the allowing gate got the other's answer");
@@ -346,8 +352,8 @@ mod tests {
         );
     }
 
-    /// #1600: the declared tier rides the wire — per call, and on the legacy
-    /// top-level fields that plain mode reads — so every CLI gate decides on
+    /// #1600: the declared tier rides the wire â per call, and on the legacy
+    /// top-level fields that plain mode reads â so every CLI gate decides on
     /// the same tier the runtime gated on. Absent = no rule declared one.
     #[tokio::test]
     async fn declared_risk_is_on_the_approval_request() {

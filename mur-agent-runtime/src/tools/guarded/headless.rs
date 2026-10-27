@@ -48,7 +48,7 @@ impl GuardedToolCall {
         let mut undecided = Vec::new();
         for c in pending {
             let settled = match &self.decision_store {
-                Some(s) if remember => s.lookup(&c.action_hash).await,
+                Some(s) if remember && !c.one_shot => s.lookup(&c.action_hash).await,
                 _ => None,
             };
             match settled {

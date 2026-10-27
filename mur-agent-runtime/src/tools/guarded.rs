@@ -141,13 +141,13 @@ impl GuardedToolCall {
             }
             // #2175: a gate hook's refusal stands whatever the policy says;
             // its ask lifts an `Allow` exactly as an intent raise does.
-            let hook_asks = match hooked.remove(&call.call_id) {
+            let (hook_asks, one_shot) = match hooked.remove(&call.call_id) {
                 Some(hook_gate::HookVerdict::Refuse(d)) => {
                     out.insert(call.call_id.clone(), d);
                     continue;
                 }
-                Some(hook_gate::HookVerdict::Ask) => true,
-                None => false,
+                Some(hook_gate::HookVerdict::Ask { one_shot }) => (true, one_shot),
+                None => (false, false),
             };
             // An intent raise turns an `Allow` into an ask: the model saw
             // something the static floor could not. It never turns an ask
@@ -169,12 +169,14 @@ impl GuardedToolCall {
             }
             let step_id = uuid::Uuid::now_v7().to_string();
             step_ids.insert(call.call_id.clone(), step_id.clone());
-            pending.push(crate::hitl::batch::pending(
+            let mut p = crate::hitl::batch::pending(
                 &self.agent_name,
                 step_id,
                 call,
                 approval_risk(&self.tools_policy, &call.tool_name, Some(&call.input)).max(lift),
-            ));
+            );
+            p.one_shot = one_shot;
+            pending.push(p);
         }
         // #2085: a caller that cannot approve is refused only AFTER the
         // decision store had its say, so an answer the human already gave

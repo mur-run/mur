@@ -37,7 +37,10 @@ pub(crate) struct HookGate {
 /// What the gate hooks said about one call, when it was not `Allow`.
 pub(super) enum HookVerdict {
     Refuse(HitlDecision),
-    Ask,
+    /// Ask a human. `one_shot` = keep the decision store out of it.
+    Ask {
+        one_shot: bool,
+    },
 }
 
 fn refusal(code: &'static str, reason: String) -> HookVerdict {
@@ -76,7 +79,7 @@ impl GuardedToolCall {
                     HOOK_REWRITE_UNSUPPORTED,
                     "a safety hook asked to rewrite this call, which is not supported".into(),
                 ),
-                Ok(Decision::AskUser { .. }) => HookVerdict::Ask,
+                Ok(Decision::AskUser { one_shot, .. }) => HookVerdict::Ask { one_shot },
                 Err(e) => refusal(HOOK_ERROR, format!("a safety hook failed: {e}")),
             };
             if let HookVerdict::Refuse(d) = &verdict {
