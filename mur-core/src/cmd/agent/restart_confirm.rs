@@ -18,23 +18,14 @@ use std::process::Command;
 
 use anyhow::bail;
 
-use super::restart::{RestartNote, direct_respawn, kickstart_service, poll_new_lock};
+use mur_common::startup_override::{RESPAWN_WAIT_SECS, SLOW_START_WAIT_SECS};
 
-/// Passive wait for launchd/systemd's natural respawn. Covers respawn latency
-/// (old-process shutdown + ExitTimeOut + any ThrottleInterval) with headroom —
-/// real launchd respawn can take ~2 min after rapid restarts.
-const RESPAWN_WAIT_SECS: u64 = 120;
+use super::restart::{RestartNote, direct_respawn, kickstart_service, poll_new_lock};
 
 /// Short window after an active kick / direct re-spawn. The passive wait
 /// already absorbed the service manager's worst-case latency; this one only
 /// needs to cover a fresh start.
 const RETRY_WAIT_SECS: u64 = 30;
-
-/// Extra patience for a slow cold start (sandbox apply + model load). Only
-/// spent while a runnable fresh process is alive — a process that dies fails
-/// fast instead of burning the whole window, and a wrongly-"runnable" zombie
-/// still gets kicked once the ceiling expires.
-const SLOW_START_WAIT_SECS: u64 = 240;
 
 /// Wait for a restarted agent's fresh `running.lock`, kicking the service only
 /// when the agent is genuinely not coming back.

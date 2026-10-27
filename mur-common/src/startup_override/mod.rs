@@ -6,6 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod timing;
+pub use timing::{
+    OVERRIDE_ACK_WAIT_SECS, OVERRIDE_AGE_MARGIN_SECS, RESPAWN_WAIT_SECS, RESTART_KILL_GRACE_SECS,
+    SLOW_START_WAIT_SECS, override_max_age,
+};
+
 /// Which surface wrote the override file.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IssuedBy {
@@ -40,3 +46,5 @@ pub fn is_valid_pair(issued: IssuedBy, confirmed: ConfirmedBy) -> bool {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timing_tests;
