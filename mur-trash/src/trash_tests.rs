@@ -235,6 +235,39 @@ fn over_capacity_is_deleted_for_real_and_recorded() {
 }
 
 #[test]
+fn capacity_comes_from_the_ledger_not_a_disk_walk() {
+    let h = home();
+    let cfg = DeletionConfig {
+        trash_max_mb: 1,
+        ..DeletionConfig::default()
+    };
+    // Bytes in the trash dir that no entry owns are not walked or counted.
+    let stray = h.home.join("trash").join("stray");
+    fs::create_dir_all(&stray).unwrap();
+    fs::write(stray.join("blob"), vec![0u8; 2 * 1024 * 1024]).unwrap();
+
+    let f = h.work.join("f");
+    fs::write(&f, vec![0u8; 600 * 1024]).unwrap();
+    let out = run(&h, &[target(f.clone(), RM)], &cfg);
+    assert!(matches!(out[0], TrashOutcome::Trashed { .. }), "{out:?}");
+
+    // A restore frees its bytes, so the same size fits again.
+    let ActionEvent::TrashCreated { entry } = &events(&h.home)[0] else {
+        panic!();
+    };
+    Ledger::<ActionEvent>::open(&ledger_dir(&h.home))
+        .unwrap()
+        .append(&ActionEvent::TrashRestored { entry_id: entry.id })
+        .unwrap();
+    fs::write(&f, vec![0u8; 600 * 1024]).unwrap();
+    let again = run(&h, &[target(f.clone(), RM)], &cfg);
+    assert!(
+        matches!(again[0], TrashOutcome::Trashed { .. }),
+        "{again:?}"
+    );
+}
+
+#[test]
 fn unprotected_delete_is_recorded() {
     let h = home();
     record_unprotected(&h.home, "rm *.log", "a glob").unwrap();
@@ -447,4 +480,38 @@ fn completed_cd_is_not_rechecked() {
         "{out:?}"
     );
     assert!(!a.exists() && !keep.exists());
+}
+
+/// Review #2177 P1: a retained entry whose creation record is older than the
+/// lookup window still holds its bytes, so the cap still counts them.
+#[test]
+fn aged_out_creation_record_still_counts_toward_the_cap() {
+    let h = home();
+    let cfg = DeletionConfig {
+        trash_max_mb: 1,
+        ..DeletionConfig::default()
+    };
+    let old = h.work.join("old");
+    fs::write(&old, vec![0u8; 900 * 1024]).unwrap();
+    let out = run(&h, &[target(old, RM)], &cfg);
+    assert!(matches!(out[0], TrashOutcome::Trashed { .. }), "{out:?}");
+
+    // Move today's ledger file far behind the lookup window.
+    let dir = ledger_dir(&h.home);
+    let today = chrono::Local::now().date_naive();
+    let age = i64::from(crate::expire::lookup_days(&cfg)) + 30;
+    let aged = today - chrono::Duration::days(age);
+    fs::rename(
+        dir.join(format!("{}.jsonl", today.format("%Y-%m-%d"))),
+        dir.join(format!("{}.jsonl", aged.format("%Y-%m-%d"))),
+    )
+    .unwrap();
+
+    let new = h.work.join("new");
+    fs::write(&new, vec![0u8; 900 * 1024]).unwrap();
+    let again = run(&h, &[target(new, RM)], &cfg);
+    assert!(
+        matches!(again[0], TrashOutcome::Evicted { cap_mb: 1, .. }),
+        "{again:?}"
+    );
 }

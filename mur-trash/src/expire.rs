@@ -52,6 +52,33 @@ pub fn lookup_days(deletion: &DeletionConfig) -> u32 {
         .saturating_add(LOOKUP_MARGIN_DAYS)
 }
 
+/// Bytes the trash holds, summed from the ledger rather than walked on disk.
+///
+/// Every byte in an entry directory was put there by a `TrashCreated` record
+/// (status `Retained`) and leaves with a `TrashExpired`, `TrashRestored` or
+/// `TrashPermDeleted`, so the open records are the trash's contents. Reading
+/// the ledger costs one pass over its day files, not one `stat` per trashed
+/// file. `.staging` leftovers from a crashed copy are not counted; the daemon
+/// sweeps them.
+///
+/// Replay starts at the expiry cursor, not at a window ending today (review
+/// #2177 P1): an open entry whose creation day is older than [`lookup_days`]
+/// — a backlog, a delete that keeps failing, a retention since shortened —
+/// still occupies the trash and must still count against the cap. The cursor
+/// never passes an outstanding entry, and without one the whole ledger is
+/// read, so nothing open is ever missed.
+pub fn retained_bytes(agent_home: &Path) -> u64 {
+    let events = Ledger::<ActionEvent>::scan_since(
+        &ledger_dir(agent_home),
+        read_cursor(&expiry_cursor_path(agent_home)),
+    );
+    let settled = settled_ids(events.iter().map(|(_, e)| e));
+    outstanding(&events, &settled)
+        .iter()
+        .map(|(_, entry)| entry.file_size_bytes)
+        .fold(0u64, u64::saturating_add)
+}
+
 /// What one expiry pass did.
 #[derive(Debug, Default, PartialEq)]
 pub struct ExpireReport {
