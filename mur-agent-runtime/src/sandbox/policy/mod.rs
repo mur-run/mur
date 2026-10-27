@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 mod build;
+mod spawn;
 mod widen;
 
 #[cfg(test)]
