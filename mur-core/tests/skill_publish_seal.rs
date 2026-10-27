@@ -26,6 +26,10 @@ const DOCUMENTED_ERRORS: [&str; 3] = [
     "Error: save publisher identity: io error:",
     "Error: load publisher identity: identity key exists but is not readable",
 ];
+/// The one a sealed first publish prints on macOS: `publisher/` cannot be
+/// created, so the bare `create_dir_all` error surfaces (R6-5, observed).
+#[cfg(target_os = "macos")]
+const MACOS_EXPECTED: &str = DOCUMENTED_ERRORS[0];
 const GH_MISSING: &str = "GitHub CLI (`gh`) not found";
 
 const SKILL: &str = "name: seal-probe
@@ -140,6 +144,9 @@ fn sealed_child(l: &Layout) -> ! {
     }
     let out = l.publish();
     let stderr = String::from_utf8_lossy(&out.stderr);
+    #[cfg(target_os = "macos")]
+    let documented = stderr.contains(MACOS_EXPECTED);
+    #[cfg(not(target_os = "macos"))]
     let documented = DOCUMENTED_ERRORS.iter().any(|e| stderr.contains(e));
     if out.status.success() || !documented {
         eprintln!(
