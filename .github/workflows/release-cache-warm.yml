@@ -37,6 +37,13 @@ jobs:
   hub-macos-warm:
     name: Warm sccache for MUR Hub (macOS arm64)
     # Keep in sync with release.yml hub-macos.
+    # Fork PRs get no repository secrets, so MUR_APPLE_TEAM_ID would be empty
+    # while MUR_EMBED_RELEASE_MARKER is set, and mur-common/build.rs panics on
+    # that combination. A secret-free variant is no use either: it would change
+    # the env, so its compile hashes could never be the ones a release reads.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-latest
     timeout-minutes: 180
     env:
