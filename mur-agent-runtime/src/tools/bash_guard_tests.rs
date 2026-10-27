@@ -57,6 +57,27 @@ fn refuses_removing_or_gutting_a_live_track() {
 }
 
 #[test]
+fn guard_covers_every_wrapper_and_remover_the_trash_interceptor_knows() {
+    // One shared list: adding a wrapper or remover in `mur_trash::detect`
+    // must widen the guard too, or the two would disagree on what deletes.
+    let (project, live) = live();
+    for remover in REMOVERS.iter().chain([&GUARD_ONLY_REMOVER]) {
+        let cmd = format!("{remover} .worktrees/turn-1");
+        assert!(
+            refused(&cmd, &project, &live).is_some(),
+            "{cmd:?} not refused"
+        );
+        for wrapper in WRAPPERS {
+            let cmd = format!("{wrapper} {remover} .worktrees/turn-1");
+            assert!(
+                refused(&cmd, &project, &live).is_some(),
+                "{cmd:?} not refused"
+            );
+        }
+    }
+}
+
+#[test]
 fn leaves_everything_else_alone() {
     let (project, live) = live();
     for cmd in [

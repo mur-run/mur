@@ -18,12 +18,18 @@
 //! [`SessionCwd::live_tracks`]: super::fs_policy::SessionCwd::live_tracks
 
 use super::bash_track::{command_segments, is_assignment};
+use mur_trash::detect::{REMOVERS, WRAPPERS};
 use std::path::{Component, Path, PathBuf};
 
-/// Prefixes that run the next word as the command.
-const WRAPPERS: &[&str] = &["sudo", "command", "env", "exec", "nohup", "time", "nice"];
-/// Commands whose every path argument is deleted.
-const REMOVERS: &[&str] = &["rm", "rmdir", "unlink", "trash"];
+/// Deletes its path arguments too. The trash interceptor leaves it out on
+/// purpose (it is already recoverable), but it still guts a live track.
+const GUARD_ONLY_REMOVER: &str = "trash";
+
+/// The trash interceptor's removers plus [`GUARD_ONLY_REMOVER`]; sharing the
+/// list keeps the guard and the interceptor agreeing on what deletes.
+fn is_remover(prog: &str) -> bool {
+    prog == GUARD_ONLY_REMOVER || REMOVERS.contains(&prog)
+}
 
 /// Why a command was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +135,7 @@ fn check_segment(
     };
     match basename(prog) {
         "git" => git_segment(args, base, live).map(|(hit, verb)| refusal(hit, verb)),
-        p if REMOVERS.contains(&p) => path_args(args)
+        p if is_remover(p) => path_args(args)
             .iter()
             .find_map(|a| contains_live(&join(base, a), live))
             .map(|hit| refusal(hit, "remove or gut")),

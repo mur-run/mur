@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// Programs that delete their path arguments. `trash` is already recoverable.
 pub const REMOVERS: &[&str] = &["rm", "rmdir", "unlink"];
 /// Prefixes that run the next word as the command.
-const WRAPPERS: &[&str] = &["sudo", "command", "env", "exec", "nohup", "time", "nice"];
+pub const WRAPPERS: &[&str] = &["sudo", "command", "env", "exec", "nohup", "time", "nice"];
 /// Prefixes that only matter for detection: they hand their arguments to a
 /// remover in ways that cannot be rewritten (`xargs rm`, `find -exec rm`).
 const DETECT_ONLY_WRAPPERS: &[&str] = &["xargs", "doas"];
