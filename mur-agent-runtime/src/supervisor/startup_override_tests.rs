@@ -231,3 +231,37 @@ fn audit_jsonl_has_one_line_per_outcome() {
         ]
     );
 }
+
+/// `pin::refuse` exits between `consume_at_boot` and `finish_after_seal`, so
+/// a pre-seal rejection must already be in the audit log when consume returns.
+#[test]
+fn pre_seal_rejection_is_audited_even_if_boot_is_refused_before_seal() {
+    let h = homes();
+    let mut body = valid_file();
+    body["no_hitl"] = json!(true);
+    publish(&h, &body);
+    let p = consume(&h);
+    assert!(matches!(p, Pending::Rejected(_)));
+    // No finish_after_seal: the boot was refused (pin::refuse exits).
+    let lines = audit_lines(&h.agent_home);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["type"], "startup_override_rejected");
+    assert_eq!(lines[0]["nonce"], NONCE);
+    assert_eq!(
+        lines[0]["reason"],
+        format!("{REASON_UNSUPPORTED_FLAG_PREFIX}no_hitl")
+    );
+}
+
+#[test]
+fn pre_seal_rejection_is_audited_exactly_once_on_a_full_boot() {
+    let h = homes();
+    let mut bad = valid_file();
+    bad["version"] = json!(9);
+    publish(&h, &bad);
+    let (_, rej) = finish_after_seal(consume(&h), true, &h.agent_home);
+    assert!(rej.is_some(), "the lock still records the rejection");
+    let lines = audit_lines(&h.agent_home);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["type"], "startup_override_rejected");
+}

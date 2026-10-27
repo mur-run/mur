@@ -24,6 +24,8 @@ const REASON_READ_FAILED_PREFIX: &str = "override rejected: read failed: ";
 pub(super) enum Pending {
     None,
     Accepted(OverrideRecord),
+    /// Already audited by `consume_at_boot`: `pin::refuse` can exit before
+    /// `finish_after_seal` runs, so the audit line cannot wait for the seal.
     Rejected(OverrideRejection),
 }
 
@@ -54,49 +56,65 @@ pub(super) fn consume_at_boot(
         }
         Claimed::Failed(e) => {
             warn!(error = %e, "could not claim the startup override; applying nothing");
-            return Pending::Rejected(OverrideRejection {
-                nonce: None,
-                reason: format!("{REASON_CLAIM_FAILED_PREFIX}{e}"),
-            });
+            return reject(
+                agent_home,
+                now,
+                OverrideRejection {
+                    nonce: None,
+                    reason: format!("{REASON_CLAIM_FAILED_PREFIX}{e}"),
+                },
+            );
         }
     };
     let bytes = match std::fs::read(&taken) {
         Ok(b) => b,
         Err(e) => {
             warn!(error = %e, "could not read the claimed startup override; applying nothing");
-            return Pending::Rejected(OverrideRejection {
-                nonce: None,
-                reason: format!("{REASON_READ_FAILED_PREFIX}{e}"),
-            });
+            return reject(
+                agent_home,
+                now,
+                OverrideRejection {
+                    nonce: None,
+                    reason: format!("{REASON_READ_FAILED_PREFIX}{e}"),
+                },
+            );
         }
     };
     match mur_common::startup_override::validate(&bytes, now, stop_timeout_secs) {
         Ok(record) => Pending::Accepted(record),
         Err(rejection) => {
             warn!(reason = %rejection.reason, "startup override rejected; applying nothing");
-            Pending::Rejected(rejection)
+            reject(agent_home, now, rejection)
         }
     }
 }
 
+/// Audit a pre-seal rejection now, before `pin::verify` gets a chance to exit.
+fn reject(agent_home: &Path, ts: DateTime<Utc>, rejection: OverrideRejection) -> Pending {
+    audit_rejected(agent_home, ts, &rejection);
+    Pending::Rejected(rejection)
+}
+
 /// Boot steps 8–10. An accepted override on a boot whose seal is not
-/// enforcing is reported as rejected (`unsealed`), never as active. Writes
-/// one audit line per claimed file and returns the two `LockFile` fields.
+/// enforcing is reported as rejected (`unsealed`), never as active. Together
+/// with `consume_at_boot` this writes one audit line per claimed file; it
+/// returns the two `LockFile` fields.
 pub(super) fn finish_after_seal(
     pending: Pending,
     enforcing: bool,
     agent_home: &Path,
 ) -> (Option<OverrideRecord>, Option<OverrideRejection>) {
     let ts = Utc::now();
-    let pending = match pending {
-        Pending::Accepted(record) if !enforcing => Pending::Rejected(OverrideRejection {
-            nonce: Some(record.nonce),
-            reason: REASON_UNSEALED.to_string(),
-        }),
-        other => other,
-    };
     match pending {
         Pending::None => (None, None),
+        Pending::Accepted(record) if !enforcing => {
+            let rejection = OverrideRejection {
+                nonce: Some(record.nonce),
+                reason: REASON_UNSEALED.to_string(),
+            };
+            audit_rejected(agent_home, ts, &rejection);
+            (None, Some(rejection))
+        }
         Pending::Accepted(record) => {
             warn!(
                 nonce = %record.nonce,
@@ -115,18 +133,20 @@ pub(super) fn finish_after_seal(
             );
             (Some(record), None)
         }
-        Pending::Rejected(rejection) => {
-            audit(
-                agent_home,
-                &AuditEvent::StartupOverrideRejected {
-                    ts,
-                    nonce: rejection.nonce.clone(),
-                    reason: rejection.reason.clone(),
-                },
-            );
-            (None, Some(rejection))
-        }
+        // Audited when it was produced, in `consume_at_boot`.
+        Pending::Rejected(rejection) => (None, Some(rejection)),
     }
+}
+
+fn audit_rejected(agent_home: &Path, ts: DateTime<Utc>, rejection: &OverrideRejection) {
+    audit(
+        agent_home,
+        &AuditEvent::StartupOverrideRejected {
+            ts,
+            nonce: rejection.nonce.clone(),
+            reason: rejection.reason.clone(),
+        },
+    );
 }
 
 /// Best-effort: an audit write failure is logged, never fatal to the boot.
