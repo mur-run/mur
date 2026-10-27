@@ -299,3 +299,48 @@ fn force_missing_does_not_break_the_chain() {
     run(&h, &targets, &DeletionConfig::default());
     assert!(!h.work.join("b").exists());
 }
+
+/// A cross-device trash must stage under `<trash>/.staging/`, never beside
+/// the entry: the sweep only looks there (review #2164 #1). Guards the
+/// `trash_into` → staged-move wiring, which the mover tests cannot see.
+#[test]
+fn exdev_trash_stages_under_staging_root() {
+    use std::cell::RefCell;
+    use std::io;
+
+    use crate::layout::{staging_root, trash_root};
+
+    let h = home();
+    let f = h.work.join("big.bin");
+    fs::write(&f, "payload").unwrap();
+    let calls = RefCell::new(Vec::<(PathBuf, PathBuf)>::new());
+    let out = crate::trash::trash_into_with(
+        &h.home,
+        &[target(f.clone(), RM)],
+        &DeletionConfig::default(),
+        Uuid::nil(),
+        &|a: &Path, b: &Path| {
+            calls.borrow_mut().push((a.to_path_buf(), b.to_path_buf()));
+            if a == f.as_path() {
+                return Err(io::Error::from(io::ErrorKind::CrossesDevices));
+            }
+            fs::rename(a, b)
+        },
+    );
+    let TrashOutcome::Trashed { trash_path, .. } = &out[0] else {
+        panic!("{out:?}");
+    };
+    assert!(!f.exists());
+    assert_eq!(fs::read_to_string(trash_path).unwrap(), "payload");
+
+    let stage = staging_root(&trash_root(&h.home));
+    let calls = calls.into_inner();
+    let into_entry = calls
+        .iter()
+        .rfind(|(_, b)| b.as_path() == trash_path.as_path())
+        .unwrap_or_else(|| panic!("no rename into the entry: {calls:?}"));
+    assert!(into_entry.0.starts_with(&stage), "{calls:?}");
+    // Nothing left behind in staging after a clean move.
+    let leftovers = fs::read_dir(&stage).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(leftovers, 0);
+}

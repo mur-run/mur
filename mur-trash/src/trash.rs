@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::detect::{Rule, TrashTarget};
 use crate::layout::{entry_dir, entry_path, ledger_dir, staging_root, trash_root};
-use crate::mover::{MoveOutcome, move_across, move_staged, remove_any};
+use crate::mover::{MoveOutcome, move_across, move_with_staging, remove_any};
 use crate::safety::check_target;
 
 const BYTES_PER_MB: u64 = 1024 * 1024;
@@ -62,6 +62,19 @@ pub fn trash_into(
     config: &DeletionConfig,
     task_id: Uuid,
 ) -> Vec<TrashOutcome> {
+    trash_into_with(agent_home, targets, config, task_id, &|a, b| {
+        fs::rename(a, b)
+    })
+}
+
+/// [`trash_into`] with an injectable `rename`, so tests can force EXDEV.
+pub(crate) fn trash_into_with(
+    agent_home: &Path,
+    targets: &[TrashTarget],
+    config: &DeletionConfig,
+    task_id: Uuid,
+    rename: &dyn Fn(&Path, &Path) -> io::Result<()>,
+) -> Vec<TrashOutcome> {
     let root = trash_root(agent_home);
     let cap = config.trash_max_mb.saturating_mul(BYTES_PER_MB);
     // Measured once, then kept current as this call adds to it.
@@ -75,7 +88,9 @@ pub fn trash_into(
             break; // targets are in command order, so the rest are later too
         }
         let outcome = match ledger.as_mut() {
-            Ok(l) => one(agent_home, &root, t, config, task_id, cap, &mut used, l),
+            Ok(l) => one(
+                agent_home, &root, t, config, task_id, cap, &mut used, l, rename,
+            ),
             Err(e) => failed(t, format!("cannot open trash ledger: {e}")),
         };
         if outcome.is_failure() {
@@ -96,6 +111,7 @@ fn one(
     cap: u64,
     used: &mut u64,
     ledger: &mut Ledger<ActionEvent>,
+    rename: &dyn Fn(&Path, &Path) -> io::Result<()>,
 ) -> TrashOutcome {
     let resolved = match check_target(&t.path, agent_home) {
         Ok(Ok(p)) => p,
@@ -139,7 +155,7 @@ fn one(
         restore_metadata: restore_meta(&meta),
     };
 
-    let kept = match move_staged(&resolved, &dst, &staging_root(root)) {
+    let kept = match move_with_staging(&resolved, &dst, &staging_root(root), rename) {
         Ok(MoveOutcome::Moved) => None,
         Ok(MoveOutcome::CopiedSourceKept(e)) => Some(e.to_string()),
         Err(e) => {
