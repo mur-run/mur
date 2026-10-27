@@ -31,8 +31,9 @@ pub fn move_across(src: &Path, dst: &Path) -> io::Result<MoveOutcome> {
     move_with(src, dst, |a, b| fs::rename(a, b))
 }
 
-/// [`move_across`] with an injectable first `rename`, so tests can force EXDEV.
-pub(crate) fn move_with(
+/// [`move_across`] with an injectable first `rename`, so callers' tests can
+/// force the cross-device path (macOS has no tmpfs to provoke a real EXDEV).
+pub fn move_with(
     src: &Path,
     dst: &Path,
     rename: impl Fn(&Path, &Path) -> io::Result<()>,
@@ -82,7 +83,7 @@ fn move_impl(
     if fs::symlink_metadata(dst).is_ok() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            format!("trash destination exists: {}", dst.display()),
+            format!("destination exists: {}", dst.display()),
         ));
     }
     if let Some(parent) = dst.parent() {

@@ -17,6 +17,6 @@ mod trash_tests;
 
 pub use detect::{RmPlan, Rule, TrashTarget, plan};
 pub use layout::{entry_path, ledger_dir, sweep_partials, trash_root};
-pub use mover::{MoveOutcome, move_across};
+pub use mover::{MoveOutcome, move_across, move_with};
 pub use safety::{Refusal, check_target, remove_within, resolve_no_follow};
 pub use trash::{TrashOutcome, record_unprotected, trash_into, tree_size};
