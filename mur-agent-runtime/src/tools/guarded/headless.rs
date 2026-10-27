@@ -148,5 +148,6 @@ fn remembered(s: Settled) -> HitlDecision {
         ),
         surface: None,
         awaiting_human: false,
+        refusal_code: None,
     }
 }

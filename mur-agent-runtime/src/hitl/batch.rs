@@ -183,6 +183,7 @@ impl BatchGate<'_> {
                         reason: Some(TIMED_OUT.into()),
                         surface: None,
                         awaiting_human: false,
+                        refusal_code: None,
                     }
                 }
             };
@@ -220,6 +221,7 @@ fn remembered(allow: bool) -> HitlDecision {
         }),
         surface: None,
         awaiting_human: false,
+        refusal_code: None,
     }
 }
 
@@ -292,6 +294,7 @@ mod tests {
                                 reason: None,
                                 surface: Some("test".into()),
                                 awaiting_human: false,
+                                refusal_code: None,
                             });
                             answered += 1;
                         }
@@ -409,6 +412,7 @@ mod tests {
                     reason: None,
                     surface: Some("cli".into()),
                     awaiting_human: false,
+                    refusal_code: None,
                 });
                 true
             });

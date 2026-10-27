@@ -272,6 +272,7 @@ pub(crate) fn decide_without_asking(
         )),
         surface: None,
         awaiting_human: true,
+        refusal_code: None,
     })
 }
 

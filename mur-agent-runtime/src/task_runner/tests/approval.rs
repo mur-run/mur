@@ -142,6 +142,7 @@ async fn ask_tool_executes_after_approval() {
                     reason: None,
                     surface: None,
                     awaiting_human: false,
+                    refusal_code: None,
                 });
                 return;
             }
@@ -204,6 +205,7 @@ async fn two_ask_calls_in_one_response_emit_one_notification() {
                     reason: None,
                     surface: None,
                     awaiting_human: false,
+                    refusal_code: None,
                 });
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;

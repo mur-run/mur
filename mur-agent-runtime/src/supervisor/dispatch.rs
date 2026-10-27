@@ -65,6 +65,7 @@ impl crate::protocol::a2a_server::MethodHandler for HitlRespondHandler {
             reason,
             surface,
             awaiting_human: false,
+            refusal_code: None,
         });
         Ok(serde_json::json!({}))
     }

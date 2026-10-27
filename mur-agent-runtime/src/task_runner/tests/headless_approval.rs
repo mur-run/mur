@@ -157,6 +157,7 @@ async fn run_parked(answer: Option<bool>, wait: std::time::Duration) -> (Run, bo
                     reason: None,
                     surface: Some("cli".into()),
                     awaiting_human: false,
+                    refusal_code: None,
                 });
             }
             break;

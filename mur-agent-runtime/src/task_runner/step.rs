@@ -288,7 +288,25 @@ impl TaskRunner {
             sandbox_enforcing: self.sandbox_enforcing,
             telemetry: self.telemetry.clone(),
             intent: self.intent.clone(),
+            hooks: self.hook_gate(),
         }
+    }
+
+    /// The gate hooks over this turn's context, or `None` when no chain is
+    /// wired (no rules, not a refusal).
+    fn hook_gate(&self) -> Option<crate::tools::guarded::hook_gate::HookGate> {
+        let (Some(chain), Some(ctx), Some(cancel)) =
+            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
+        else {
+            return None;
+        };
+        let mut ctx = ctx.clone();
+        ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
+        Some(crate::tools::guarded::hook_gate::HookGate {
+            chain: chain.clone(),
+            ctx,
+            cancel: cancel.clone(),
+        })
     }
 
     /// Fold the hook chain's `post_tool_use` patch into each tool result,
