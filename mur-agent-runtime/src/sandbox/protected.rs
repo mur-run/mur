@@ -235,10 +235,28 @@ mod tests {
     fn a_deny_beside_a_broad_grant_does_not_excuse_it() {
         let f = fixture();
         let heads = f.mur_home.join(HEADS_DIR);
+        // Build the grant directly: on Linux `from_entitlements` already drops
+        // a user grant overlapping a user deny (#2160), which would hide what
+        // this test pins — the check itself ignores `fs_deny`.
+        let mut policy = f.policy(&[], &[&heads]);
+        policy.fs_write.push(f.mur_home.clone());
         assert!(
-            f.check(&f.policy(&[&f.mur_home], &[&heads])).is_err(),
+            f.check(&policy).is_err(),
             "Landlock cannot express deny-within-allow"
         );
+    }
+
+    /// #2160: on Linux the overlapping user grant never reaches the policy, so
+    /// the heads directory stays unwritable without needing the refusal.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_a_broad_grant_beside_a_heads_deny_is_dropped() {
+        let f = fixture();
+        let heads = f.mur_home.join(HEADS_DIR);
+        let policy = f.policy(&[&f.mur_home], &[&heads]);
+        assert!(!policy.fs_write.contains(&f.mur_home));
+        assert!(policy.dropped.iter().any(|d| d.verb == "write"));
+        assert_eq!(f.check(&policy), Ok(()));
     }
 
     #[test]

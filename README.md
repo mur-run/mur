@@ -752,7 +752,15 @@ Agent** wizard offers the same catalog as a source.
   `mur agent perm list-paths <name>` shows the other half of that picture —
   every filesystem grant against what the sandbox actually installed, so a
   grant the kernel discarded is visible as `✗ dropped` rather than as an
-  entry in a config file that quietly does nothing. Some paths can never be granted at all — another agent's signing key,
+  entry in a config file that quietly does nothing.
+  Your own `deny:` entries follow the same split. macOS closes a denied path
+  even inside a granted one. Linux can't, so a `read:`/`write:` grant that
+  contains a `deny:` path (say `write: [~/work]` with `deny:
+  [~/work/secrets]`) is dropped whole and listed as `✗ dropped`; grant the
+  sibling directories you need instead. A deny inside a directory MUR itself
+  grants (the agent's own home) can't be enforced by Landlock, and
+  `list-paths` says so under DENY: file tools still refuse it, shell commands
+  don't. Some paths can never be granted at all — another agent's signing key,
   the runtime binary, an autostart directory, your credential store
   (`~/.mur/secrets`, `auth.json`, a `.env`), and your own `~/.ssh`, `~/.aws`
   and `~/.gnupg` — because they decide what starts next or are the keys

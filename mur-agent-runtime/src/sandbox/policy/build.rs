@@ -144,6 +144,26 @@ impl SandboxPolicy {
         // reach the target under a name the deny does not mention.
         let mut fs_deny: Vec<PathBuf> =
             with_resolved_aliases(ent.filesystem.deny.iter().map(|s| expand(s)).collect());
+        // Snapshot BEFORE the self-protected files join: those are emitted by
+        // the runtime, and any user grant reaching them is already dropped by
+        // the launch chain with its own reason.
+        let user_denies = fs_deny.clone();
+
+        // #2160: Landlock cannot carve a deny out of a grant, so on Linux a
+        // user-declared grant overlapping a user deny is dropped whole,
+        // fail-closed — the same rule as the launch chain. Done here, while
+        // `fs_read`/`fs_write` still hold only user-declared (and worktree-
+        // derived read) grants; runtime-owned grants are added below and are
+        // never dropped. macOS carves with a trailing `deny` clause instead.
+        if !DENY_CARVES_GRANTS {
+            let self_home = launch_chain.agent_self_home().to_path_buf();
+            let (r, dr) = partition_against_denies(fs_read, &user_denies, &self_home);
+            record_deny_drops(&dr, "read", &mut dropped);
+            fs_read = r;
+            let (w, dw) = partition_against_denies(fs_write, &user_denies, &self_home);
+            record_deny_drops(&dw, "write", &mut dropped);
+            fs_write = w;
+        }
 
         // Self-protection (issue #712): unconditionally deny the agent's own
         // SELF_PROTECTED_AGENT_FILES, even when a write grant covers them
@@ -480,6 +500,18 @@ impl SandboxPolicy {
             ent.filesystem.write.iter().map(|s| expand(s)).collect();
         for granted in declared_writes {
             for wt in mur_common::worktree::worktrees_of(&granted) {
+                // A derived grant gets the same deny treatment as a typed one
+                // (#2160); otherwise a worktree would smuggle the denied path
+                // back in after the check above.
+                if !DENY_CARVES_GRANTS {
+                    let self_home = launch_chain.agent_self_home();
+                    let (_, dw) =
+                        partition_against_denies(vec![wt.clone()], &user_denies, self_home);
+                    if !dw.is_empty() {
+                        record_deny_drops(&dw, "write", &mut dropped);
+                        continue;
+                    }
+                }
                 if !fs_write.contains(&wt) {
                     tracing::debug!(
                         worktree = %wt.display(),

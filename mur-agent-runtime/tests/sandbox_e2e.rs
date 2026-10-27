@@ -557,6 +557,81 @@ fn sandbox_own_home_deny_subprocess_main() {
     std::process::exit(0);
 }
 
+/// Issue #2160 regression: on Linux, Landlock cannot carve a deny out of a
+/// grant, so a write grant that contains a user `fs_deny` must be dropped
+/// whole (fail-closed) rather than installed with the deny silently ignored.
+#[test]
+#[cfg(target_os = "linux")]
+fn linux_grant_overlapping_fs_deny_is_dropped_fail_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new(&exe)
+        .env("MUR_TEST_SANDBOX_LINUX_FS_DENY", root.path())
+        .env_remove("MUR_AGENT_SKIP_SANDBOX")
+        .status()
+        .unwrap();
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "a write grant containing an fs_deny path must not reach Landlock"
+    );
+}
+
+/// Subprocess entry point for `linux_grant_overlapping_fs_deny_is_dropped_fail_closed`.
+#[cfg(target_os = "linux")]
+#[ctor::ctor]
+fn sandbox_linux_fs_deny_subprocess_main() {
+    let Some(root) = std::env::var_os("MUR_TEST_SANDBOX_LINUX_FS_DENY") else {
+        return;
+    };
+    use mur_agent_runtime::sandbox;
+    use mur_common::agent::AgentProfile;
+    use std::path::PathBuf;
+
+    let root = PathBuf::from(root);
+    let agent_home = root.join("mur").join("agents").join("tester");
+    let work = root.join("work");
+    let secrets = work.join("secrets");
+    let notes = root.join("notes");
+    for d in [&agent_home, &secrets, &notes] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let s = |p: &PathBuf| p.to_string_lossy().into_owned();
+    let mut profile = AgentProfile::default_for_tests();
+    let fs = &mut profile.entitlements.filesystem;
+    fs.write.push(s(&work));
+    fs.write.push(s(&notes));
+    fs.deny.push(s(&secrets));
+    match sandbox::apply(&profile.entitlements, &agent_home, &[], &[], &[]) {
+        Ok(st) if st.enforcing => {
+            if !st
+                .dropped
+                .iter()
+                .any(|d| d.path == s(&work) && d.verb == "write")
+            {
+                eprintln!(
+                    "ERROR: overlapping grant not recorded as dropped: {:?}",
+                    st.dropped
+                );
+                std::process::exit(3);
+            }
+        }
+        other => skip_or_fail_unenforced(&other),
+    }
+
+    // Control: an unrelated user grant still works, so a denied write below
+    // is the drop and not a sandbox that refuses everything.
+    if let Err(e) = std::fs::write(notes.join("ok.txt"), b"x") {
+        eprintln!("ERROR: control write to unrelated grant failed ({e}); test proves nothing");
+        std::process::exit(2);
+    }
+    if std::fs::write(secrets.join("x.txt"), b"x").is_ok() {
+        eprintln!("ERROR: write under fs_deny SUCCEEDED (deny ignored by Landlock)");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
 /// Env var that turns "sandbox not enforcing" from a skip into a failure. CI sets
 /// it on runners whose kernel must seal (Linux Landlock, macOS SBPL) so a runner
 /// that silently can't sandbox shows red instead of a green that proved nothing.
