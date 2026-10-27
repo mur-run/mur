@@ -15,7 +15,7 @@ const STALE_PARTIAL_AGE: Duration = Duration::from_secs(60 * 60);
 /// Scan all agent homes for action pipeline work:
 /// 1. Expire stale pending items (past TTL)
 /// 2. Execute deferred trash moves (cancel window elapsed, no Undo)
-/// 3. Mark expired trash entries (past retention)
+/// 3. Delete expired trash entries (past retention)
 ///
 /// Called every 30 seconds from mur-daemon's main loop.
 pub fn scan_all_agents(mur_home: &std::path::Path) -> Result<()> {
@@ -59,7 +59,7 @@ fn scan_one_agent(agent_home: &std::path::Path) -> Result<()> {
         }
     }
 
-    // 2 & 3. Trash work — replay recent events and process
+    // 2. Deferred deletes — replay recent events
     let events = ActionLedger::replay_days(&pipeline.ledger_dir(), 7);
     let now = Utc::now();
 
@@ -68,15 +68,18 @@ fn scan_one_agent(agent_home: &std::path::Path) -> Result<()> {
         execute_move_to_trash(&pipeline, entry)?;
     }
 
-    // Mark expirations (past retention)
-    for event in &events {
-        if let ActionEvent::TrashCreated { entry } = event
-            && entry.status == TrashStatus::Retained
-            && let Some(retention_until) = entry.retention_until
-            && retention_until < now
-        {
-            mark_expired(&pipeline, &entry.id)?;
+    // Delete expired entries (past retention), over the full retention
+    // window rather than the 7 days above (#2174).
+    match mur_trash::expire_due(&pipeline.agent_home, &config.deletion, now) {
+        Ok(report) => {
+            if !report.expired.is_empty() {
+                tracing::info!(agent = %profile.name, expired = report.expired.len(), "expired trash entries");
+            }
+            for (id, error) in &report.failed {
+                tracing::warn!(agent = %profile.name, entry = %id, %error, "trash expiry failed");
+            }
         }
+        Err(e) => tracing::warn!(agent = %profile.name, error = %e, "trash expiry pass failed"),
     }
 
     match mur_trash::sweep_partials(&pipeline.trash_dir(), STALE_PARTIAL_AGE) {
@@ -187,14 +190,6 @@ fn execute_move_to_trash_with(
 
     let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;
     ledger.append(&ActionEvent::TrashCreated { entry: updated })?;
-    Ok(())
-}
-
-fn mark_expired(pipeline: &Pipeline, entry_id: &uuid::Uuid) -> Result<()> {
-    let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;
-    ledger.append(&ActionEvent::TrashExpired {
-        entry_id: *entry_id,
-    })?;
     Ok(())
 }
 
