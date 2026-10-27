@@ -21,11 +21,18 @@ pub(super) fn parent_pid() -> u32 {
 }
 
 /// The `running.lock` this process advertises once its transports are bound.
+/// Also finishes the startup override (boot steps 8–10): an override on a
+/// boot whose seal is not enforcing is recorded as rejected, never active.
 pub(super) fn build_lock(
     profile: &Profile,
     lock_transports: LockTransports,
     sandbox_record: Option<mur_common::agent::SandboxRecord>,
+    pending_override: super::startup_override::Pending,
+    agent_home: &Path,
 ) -> mur_common::LockFile {
+    let enforcing = sandbox_record.as_ref().is_some_and(|r| r.enforcing);
+    let (startup_override, override_rejected) =
+        super::startup_override::finish_after_seal(pending_override, enforcing, agent_home);
     mur_common::LockFile {
         schema: 1,
         uuid: profile.inner.id.clone(),
@@ -40,8 +47,8 @@ pub(super) fn build_lock(
         build_sha: mur_common::build::SHORT_SHA.to_string(),
         proto_version: mur_common::build::A2A_PROTO_VERSION,
         sandbox: sandbox_record,
-        startup_override: None,
-        override_rejected: None,
+        startup_override,
+        override_rejected,
     }
 }
 
