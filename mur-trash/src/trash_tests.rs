@@ -44,6 +44,7 @@ fn target(path: PathBuf, rule: Rule) -> TrashTarget {
         spelled: path.display().to_string(),
         path,
         rule,
+        segment: 0,
     }
 }
 
@@ -246,4 +247,55 @@ fn unprotected_delete_is_recorded() {
         panic!("{ev:?}");
     };
     assert_eq!((command.as_str(), reason.as_str()), ("rm *.log", "a glob"));
+}
+
+/// Review #2164 #2: `rm missing && rm important` — bash stops after the
+/// failing `rm`, so `important` must stay where it is.
+#[test]
+fn failed_segment_short_circuits_the_and_chain() {
+    let h = home();
+    let important = h.work.join("important.txt");
+    fs::write(&important, "precious").unwrap();
+    let crate::RmPlan::Rewrite(targets) = crate::plan("rm missing && rm important.txt", &h.work)
+    else {
+        panic!("expected Rewrite");
+    };
+    let out = run(&h, &targets, &DeletionConfig::default());
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(matches!(out[0], TrashOutcome::Failed { .. }));
+    assert_eq!(fs::read_to_string(&important).unwrap(), "precious");
+}
+
+/// Within one `rm`, a bad operand does not stop the rest; and a successful
+/// first segment lets the next one run.
+#[test]
+fn operands_continue_and_successful_segment_continues() {
+    let h = home();
+    for f in ["a", "b", "c"] {
+        fs::write(h.work.join(f), f).unwrap();
+    }
+    let crate::RmPlan::Rewrite(targets) = crate::plan("rm a && rm missing b && rm c", &h.work)
+    else {
+        panic!("expected Rewrite");
+    };
+    let out = run(&h, &targets, &DeletionConfig::default());
+    // a: trashed; missing: failed; b: trashed (same rm); c: skipped.
+    assert_eq!(out.len(), 3, "{out:?}");
+    assert!(matches!(out[0], TrashOutcome::Trashed { .. }));
+    assert!(matches!(out[1], TrashOutcome::Failed { .. }));
+    assert!(matches!(out[2], TrashOutcome::Trashed { .. }));
+    assert!(!h.work.join("a").exists() && !h.work.join("b").exists());
+    assert_eq!(fs::read_to_string(h.work.join("c")).unwrap(), "c");
+}
+
+/// `rm -f missing && rm b`: `-f` makes the missing operand a success.
+#[test]
+fn force_missing_does_not_break_the_chain() {
+    let h = home();
+    fs::write(h.work.join("b"), "b").unwrap();
+    let crate::RmPlan::Rewrite(targets) = crate::plan("rm -f missing && rm b", &h.work) else {
+        panic!("expected Rewrite");
+    };
+    run(&h, &targets, &DeletionConfig::default());
+    assert!(!h.work.join("b").exists());
 }

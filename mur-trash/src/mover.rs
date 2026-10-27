@@ -4,9 +4,14 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::layout::partial_path;
+
+/// Name of the per-move directory under a staging root.
+fn stage_dir(staging_root: &Path) -> PathBuf {
+    staging_root.join(uuid::Uuid::new_v4().to_string())
+}
 
 /// How a move that did not error ended.
 #[derive(Debug)]
@@ -32,6 +37,46 @@ pub(crate) fn move_with(
     dst: &Path,
     rename: impl Fn(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<MoveOutcome> {
+    move_impl(src, dst, Staging::BesideDst, &|a, b| {
+        if a == src {
+            rename(a, b)
+        } else {
+            fs::rename(a, b)
+        }
+    })
+}
+
+/// Move into the trash: like [`move_across`], but a cross-device copy is
+/// staged in `<staging_root>/<uuid>/` instead of beside `dst`, so a crash
+/// never leaves anything inside an entry directory. `staging_root` must be on
+/// `dst`'s filesystem (it is: both live under the trash root).
+pub fn move_staged(src: &Path, dst: &Path, staging_root: &Path) -> io::Result<MoveOutcome> {
+    move_with_staging(src, dst, staging_root, |a, b| fs::rename(a, b))
+}
+
+/// [`move_staged`] with an injectable `rename`, used for every rename.
+pub(crate) fn move_with_staging(
+    src: &Path,
+    dst: &Path,
+    staging_root: &Path,
+    rename: impl Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<MoveOutcome> {
+    move_impl(src, dst, Staging::Under(staging_root), &rename)
+}
+
+enum Staging<'a> {
+    /// `<dst>.partial` — for moves out of the trash (restore).
+    BesideDst,
+    /// `<root>/<uuid>/<name>` — for moves into the trash.
+    Under(&'a Path),
+}
+
+fn move_impl(
+    src: &Path,
+    dst: &Path,
+    staging: Staging<'_>,
+    rename: &dyn Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<MoveOutcome> {
     // Fail before touching anything if the source is gone.
     fs::symlink_metadata(src)?;
     if fs::symlink_metadata(dst).is_ok() {
@@ -49,12 +94,27 @@ pub(crate) fn move_with(
         Err(e) => return Err(e),
     }
 
-    let partial = partial_path(dst);
-    if let Err(e) = copy_tree(src, &partial) {
-        let _ = remove_any(&partial);
+    // `cleanup` is what to remove if the copy does not make it to `dst`.
+    let (partial, cleanup) = match staging {
+        Staging::BesideDst => {
+            let p = partial_path(dst);
+            (p.clone(), p)
+        }
+        Staging::Under(root) => {
+            let dir = stage_dir(root);
+            fs::create_dir_all(&dir)?;
+            let name = dst.file_name().unwrap_or(std::ffi::OsStr::new("x"));
+            (dir.join(name), dir)
+        }
+    };
+    let staged = copy_tree(src, &partial).and_then(|()| rename(&partial, dst));
+    if let Err(e) = staged {
+        let _ = remove_any(&cleanup);
         return Err(e);
     }
-    fs::rename(&partial, dst)?;
+    if !matches!(staging, Staging::BesideDst) {
+        let _ = fs::remove_dir(&cleanup); // now empty
+    }
     match remove_any(src) {
         Ok(()) => Ok(MoveOutcome::Moved),
         Err(e) => Ok(MoveOutcome::CopiedSourceKept(e)),

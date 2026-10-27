@@ -6,8 +6,8 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::layout::{entry_path, partial_path, sweep_partials, trash_root};
-use crate::mover::{MoveOutcome, move_with};
+use crate::layout::{entry_path, partial_path, staging_root, sweep_partials, trash_root};
+use crate::mover::{MoveOutcome, move_with, move_with_staging};
 use crate::safety::{Refusal, check_target, remove_within};
 use crate::{move_across, resolve_no_follow};
 
@@ -120,25 +120,6 @@ fn move_refuses_existing_destination_and_missing_source() {
 }
 
 #[test]
-fn sweep_removes_only_stale_partials() {
-    let t = tempfile::tempdir().unwrap();
-    let root = t.path().join("trash");
-    fs::create_dir_all(root.join("crashed/x.partial/inner")).unwrap();
-    fs::create_dir_all(root.join("done")).unwrap();
-    fs::write(root.join("done/x"), "kept").unwrap();
-
-    assert_eq!(sweep_partials(&root, Duration::from_secs(3600)).unwrap(), 0);
-    assert!(root.join("crashed/x.partial").exists());
-    assert_eq!(sweep_partials(&root, Duration::ZERO).unwrap(), 1);
-    assert!(!root.join("crashed").exists());
-    assert_eq!(fs::read_to_string(root.join("done/x")).unwrap(), "kept");
-    assert_eq!(
-        sweep_partials(&t.path().join("nope"), Duration::ZERO).unwrap(),
-        0
-    );
-}
-
-#[test]
 fn check_target_refusals() {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("agents/pm");
@@ -192,4 +173,70 @@ fn remove_within_stays_inside_the_root() {
     assert!(remove_within(&root, &outside).is_err());
     assert!(remove_within(&root, &root.join("e2/../../outside")).is_err());
     assert!(root.exists() && outside.exists());
+}
+
+/// Review #2164 #1: a retained entry whose own name ends in `.partial`, with
+/// an mtime far in the past (rename and copy both keep it), is not staging.
+#[test]
+fn sweep_never_touches_retained_entries_named_partial() {
+    let t = tempfile::tempdir().unwrap();
+    let root = trash_root(t.path());
+    let old = std::time::SystemTime::now() - Duration::from_secs(7 * 24 * 3600);
+    let file = root
+        .join(uuid::Uuid::new_v4().to_string())
+        .join("report.partial");
+    let dir = root
+        .join(uuid::Uuid::new_v4().to_string())
+        .join("build.partial");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "keep me").unwrap();
+    fs::create_dir_all(dir.join("inner")).unwrap();
+    // Entry dirs too: a real retained entry is older than the sweep's floor.
+    for p in [&file, &dir, file.parent().unwrap(), dir.parent().unwrap()] {
+        fs::File::open(p).unwrap().set_modified(old).unwrap();
+    }
+
+    assert_eq!(sweep_partials(&root, Duration::from_secs(3600)).unwrap(), 0);
+    assert_eq!(fs::read_to_string(&file).unwrap(), "keep me");
+    assert!(dir.join("inner").is_dir());
+}
+
+/// A cross-device move into the trash stages outside every entry dir, so a
+/// crash leaves nothing inside `<trash>/<id>/` for the sweep to judge.
+#[test]
+fn exdev_into_trash_stages_outside_entry_dirs() {
+    let t = tempfile::tempdir().unwrap();
+    let root = trash_root(t.path());
+    let src = t.path().join("old.partial");
+    fs::write(&src, "x").unwrap();
+    let dst = entry_path(&root, uuid::Uuid::new_v4(), &src).unwrap();
+    // Copy fails on a FIFO-free path: make the first rename EXDEV and the
+    // staged copy observable by failing the final rename into the entry dir.
+    let staged = std::cell::RefCell::new(None);
+    let out = move_with_staging(&src, &dst, &staging_root(&root), |a, b| {
+        if b == dst.as_path() && a != src.as_path() {
+            *staged.borrow_mut() = Some(a.to_path_buf());
+            return Err(io::Error::other("crash before final rename"));
+        }
+        exdev(a, b)
+    });
+    assert!(out.is_err());
+    let staged = staged.into_inner().expect("copy was staged");
+    assert!(staged.starts_with(staging_root(&root)), "{staged:?}");
+}
+
+#[test]
+fn sweep_removes_stale_staging_but_not_fresh() {
+    let t = tempfile::tempdir().unwrap();
+    let root = trash_root(t.path());
+    let stage = staging_root(&root).join("crashed");
+    fs::create_dir_all(stage.join("x.partial/inner")).unwrap();
+    assert_eq!(sweep_partials(&root, Duration::from_secs(3600)).unwrap(), 0);
+    assert!(stage.exists());
+    assert_eq!(sweep_partials(&root, Duration::ZERO).unwrap(), 1);
+    assert!(!stage.exists());
+    assert_eq!(
+        sweep_partials(&t.path().join("nope"), Duration::ZERO).unwrap(),
+        0
+    );
 }

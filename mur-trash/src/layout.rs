@@ -9,8 +9,13 @@ use std::time::{Duration, SystemTime};
 
 /// Directory under the agent home that holds every trash entry.
 pub const TRASH_DIR_NAME: &str = "trash";
-/// Suffix of an in-flight cross-device copy (D4). Never a finished entry.
+/// Suffix of an in-flight cross-device copy made outside the trash (restore).
 pub const PARTIAL_SUFFIX: &str = ".partial";
+/// Directory under the trash root where cross-device copies INTO the trash are
+/// staged. Not a UUID, so it never collides with an entry directory, and the
+/// only place [`sweep_partials`] looks: a retained entry is never judged by
+/// its name (review #2164 #1 — `rm report.partial` must stay restorable).
+pub const STAGING_DIR_NAME: &str = ".staging";
 pub const ACTIONS_DIR_NAME: &str = "actions";
 pub const LEDGER_DIR_NAME: &str = "ledger";
 
@@ -22,6 +27,11 @@ pub fn ledger_dir(agent_home: &Path) -> PathBuf {
 /// `<agent_home>/trash`. Same root as `Pipeline::trash_dir()` in `mur-core`.
 pub fn trash_root(agent_home: &Path) -> PathBuf {
     agent_home.join(TRASH_DIR_NAME)
+}
+
+/// `<trash_root>/.staging` — see [`STAGING_DIR_NAME`].
+pub fn staging_root(trash_root: &Path) -> PathBuf {
+    trash_root.join(STAGING_DIR_NAME)
 }
 
 /// `<trash_root>/<id>` — the directory owned by one entry.
@@ -49,13 +59,15 @@ pub fn partial_path(dst: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Remove `.partial` leftovers older than `min_age` from crashed moves.
+/// Remove staging directories older than `min_age` left by crashed moves.
 ///
-/// The age floor keeps a sweep from deleting a copy that is still in flight.
-/// Never follows symlinks; an entry directory left empty is removed too.
-/// Returns how many partials were removed. A missing trash root is not an error.
+/// Only `<trash_root>/.staging/<move>/` is examined; entry directories are
+/// never walked, whatever their contents are named. Age is the staging dir's
+/// own mtime (created fresh per move), not the copied object's, which keeps
+/// the source's mtime. Never follows symlinks. Returns how many were removed.
+/// A missing trash root or staging dir is not an error.
 pub fn sweep_partials(trash_root: &Path, min_age: Duration) -> io::Result<usize> {
-    let entries = match std::fs::read_dir(trash_root) {
+    let entries = match std::fs::read_dir(staging_root(trash_root)) {
         Ok(e) => e,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
         Err(e) => return Err(e),
@@ -64,38 +76,21 @@ pub fn sweep_partials(trash_root: &Path, min_age: Duration) -> io::Result<usize>
     let mut removed = 0;
     for entry in entries {
         let entry = entry?;
-        // A symlinked "entry dir" is not ours to walk into.
-        if !entry.file_type()?.is_dir() {
+        let meta = entry.metadata()?; // DirEntry::metadata does not follow links
+        let age = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .unwrap_or(Duration::ZERO);
+        if age < min_age {
             continue;
         }
-        let dir = entry.path();
-        for child in std::fs::read_dir(&dir)? {
-            let child = child?;
-            let is_partial = child
-                .file_name()
-                .to_str()
-                .is_some_and(|n| n.ends_with(PARTIAL_SUFFIX));
-            if !is_partial {
-                continue;
-            }
-            let meta = child.metadata()?; // DirEntry::metadata does not follow links
-            let age = meta
-                .modified()
-                .ok()
-                .and_then(|m| now.duration_since(m).ok())
-                .unwrap_or(Duration::ZERO);
-            if age < min_age {
-                continue;
-            }
-            if meta.is_dir() {
-                std::fs::remove_dir_all(child.path())?;
-            } else {
-                std::fs::remove_file(child.path())?;
-            }
-            removed += 1;
+        if meta.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
         }
-        // Only succeeds when empty; a finished entry beside the partial stays.
-        let _ = std::fs::remove_dir(&dir);
+        removed += 1;
     }
     Ok(removed)
 }

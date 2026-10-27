@@ -39,6 +39,8 @@ pub struct TrashTarget {
     /// The argument as the model spelled it, for tool output.
     pub spelled: String,
     pub rule: Rule,
+    /// Index of the `&&` segment it came from: a failure stops later ones.
+    pub segment: usize,
 }
 
 /// The remover semantics a target must satisfy before it is moved.
@@ -88,7 +90,7 @@ pub fn plan(command: &str, cwd: &Path) -> RmPlan {
                 [dir] if !dir.is_empty() && dir != "-" => base = base.join(dir),
                 _ => return unrewritable("cd without a single plain directory".into()),
             },
-            p if REMOVERS.contains(&p) => match parse_remover(p, args, &base) {
+            p if REMOVERS.contains(&p) => match parse_remover(p, args, &base, i) {
                 Ok(mut t) => targets.append(&mut t),
                 Err(why) => return unrewritable(why),
             },
@@ -128,7 +130,12 @@ fn strip_prefixes(words: &[String]) -> Result<&[String], String> {
     Ok(rest)
 }
 
-fn parse_remover(prog: &str, args: &[String], base: &Path) -> Result<Vec<TrashTarget>, String> {
+fn parse_remover(
+    prog: &str,
+    args: &[String],
+    base: &Path,
+    segment: usize,
+) -> Result<Vec<TrashTarget>, String> {
     let (flags, paths) = split_options(args);
     let rule = match prog {
         "rm" => {
@@ -173,6 +180,7 @@ fn parse_remover(prog: &str, args: &[String], base: &Path) -> Result<Vec<TrashTa
                 path: base.join(p),
                 spelled: p.clone(),
                 rule,
+                segment,
             })
         })
         .collect()

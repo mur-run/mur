@@ -13,8 +13,8 @@ use mur_common::ledger::Ledger;
 use uuid::Uuid;
 
 use crate::detect::{Rule, TrashTarget};
-use crate::layout::{entry_dir, entry_path, ledger_dir, trash_root};
-use crate::mover::{MoveOutcome, move_across, remove_any};
+use crate::layout::{entry_dir, entry_path, ledger_dir, staging_root, trash_root};
+use crate::mover::{MoveOutcome, move_across, move_staged, remove_any};
 use crate::safety::check_target;
 
 const BYTES_PER_MB: u64 = 1024 * 1024;
@@ -51,7 +51,9 @@ impl TrashOutcome {
 
 /// Move every target of a `Rewrite` plan into `agent_home`'s trash, in order.
 ///
-/// Never returns early: like `rm`, one bad target does not stop the rest.
+/// Like the shell: within one `rm`, a bad operand does not stop the rest; but
+/// once a target fails, later `&&` segments are skipped and get no outcome,
+/// exactly as bash never runs them (review #2164 #2).
 /// `task_id` goes into `TrashEntry::created_by_task_id` (use the turn id, or
 /// `Uuid::nil()` when there is none).
 pub fn trash_into(
@@ -66,18 +68,22 @@ pub fn trash_into(
     let mut used = tree_size(&root);
     let mut ledger = Ledger::<ActionEvent>::open(&ledger_dir(agent_home));
 
-    targets
-        .iter()
-        .map(|t| {
-            let ledger = match ledger.as_mut() {
-                Ok(l) => l,
-                Err(e) => return failed(t, format!("cannot open trash ledger: {e}")),
-            };
-            one(
-                agent_home, &root, t, config, task_id, cap, &mut used, ledger,
-            )
-        })
-        .collect()
+    let mut out = Vec::with_capacity(targets.len());
+    let mut failed_segment: Option<usize> = None;
+    for t in targets {
+        if failed_segment.is_some_and(|s| t.segment > s) {
+            break; // targets are in command order, so the rest are later too
+        }
+        let outcome = match ledger.as_mut() {
+            Ok(l) => one(agent_home, &root, t, config, task_id, cap, &mut used, l),
+            Err(e) => failed(t, format!("cannot open trash ledger: {e}")),
+        };
+        if outcome.is_failure() {
+            failed_segment.get_or_insert(t.segment);
+        }
+        out.push(outcome);
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -133,7 +139,7 @@ fn one(
         restore_metadata: restore_meta(&meta),
     };
 
-    let kept = match move_across(&resolved, &dst) {
+    let kept = match move_staged(&resolved, &dst, &staging_root(root)) {
         Ok(MoveOutcome::Moved) => None,
         Ok(MoveOutcome::CopiedSourceKept(e)) => Some(e.to_string()),
         Err(e) => {
