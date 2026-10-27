@@ -99,6 +99,33 @@ fn claim_rename_failure_is_failed_not_absent() {
     assert!(live_path(tmp.path(), AGENT).exists());
 }
 
+/// Another process holding the live file open with no sharing (an antivirus
+/// scan, a backup agent) outlasts the retry window. The claim must come back
+/// `Failed` and leave the file in place — never `Absent`, which would read as
+/// "nothing was published".
+#[cfg(windows)]
+#[test]
+fn claim_blocked_by_sharing_violation_is_failed_not_absent() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
+
+    let tmp = tempfile::tempdir().unwrap();
+    publish(tmp.path(), "v1");
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(live_path(tmp.path(), AGENT))
+        .unwrap();
+    let got = claim(tmp.path(), AGENT, ClaimAs::Consume);
+    drop(holder);
+    match got {
+        Claimed::Failed(e) => assert_eq!(e.raw_os_error(), Some(ERROR_SHARING_VIOLATION as i32)),
+        other => panic!("expected Failed(sharing violation), got {other:?}"),
+    }
+    assert!(live_path(tmp.path(), AGENT).exists());
+    assert!(!consumed_path(tmp.path(), AGENT).exists());
+}
+
 #[test]
 fn claim_race_exactly_one_wins() {
     const ITERATIONS: usize = 500;
