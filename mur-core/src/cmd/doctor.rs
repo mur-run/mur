@@ -608,6 +608,28 @@ fn check_deny_list(fs: &mur_common::agent::FilesystemEntitlement, name: &str) ->
     )
 }
 
+/// #2147: tool rules whose pattern differs from a real tool only by case.
+/// Matching is exact, so such a rule does nothing — and a `deny`/`ask`/`risk:`
+/// rule that does nothing fails OPEN. MCP tool lists are not known offline, so
+/// an MCP pattern is only checked up to its `mcp__<server>__` prefix.
+pub(crate) fn check_tool_rule_case(profile: &mur_common::AgentProfile) -> Check {
+    let known = mur_common::agent::KnownTools::for_servers(
+        profile.mcp_servers.iter().map(|s| s.name.as_str()),
+    );
+    let dead = mur_common::agent::dead_rules(&profile.entitlements.tools, &known);
+    if dead.is_empty() {
+        return Check::new("tool_rules", true, "no case-misspelled tool rules");
+    }
+    Check::new(
+        "tool_rules",
+        false,
+        dead.iter()
+            .map(|d| d.message())
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
 pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>> {
     let (_path, profile) = crate::cmd::agent::load_profile_for_edit(name)?;
     let mut out = Vec::new();
@@ -689,6 +711,8 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
     ));
 
     out.push(check_deny_list(&profile.entitlements.filesystem, name));
+
+    out.push(check_tool_rule_case(&profile));
 
     // #1984: ast-grep installed under mur home but not wired to this agent.
     out.extend(ast_grep_reach::check(mur_home, name, &profile));

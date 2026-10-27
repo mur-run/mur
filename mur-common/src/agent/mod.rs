@@ -13,6 +13,7 @@ mod mcp;
 mod mcp_status;
 mod reload;
 mod reload_mcp;
+mod tool_rule_lint;
 mod transport;
 
 pub use companion::*;
@@ -21,6 +22,7 @@ pub use lifecycle::*;
 pub use mcp::*;
 pub use mcp_status::{MCP_STATUS_FILE, McpServerStatus, McpStatus};
 pub use reload::{HOT_PATHS, RELOAD_STATE_FILE, ReloadDiff, ReloadState};
+pub use tool_rule_lint::{BUILTIN_TOOL_NAMES, DeadRule, KnownTools, case_fix, dead_rules};
 pub use transport::*;
 
 /// Skill metadata broadcast in the Agent Card (Layer 1 + Layer 2).
