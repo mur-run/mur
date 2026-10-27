@@ -232,15 +232,17 @@ impl Hook for B0SafetyHook {
         }
 
         // ── M3.8: multimodal provenance ledger. ──────────────────────────
-        // Read this turn's ledger entries. Even if no entries are present,
-        // we may still have tool wrappers from Rule 3 above — the
-        // turn-flag is only raised when multimodal artifacts exist.
+        // Claim every entry appended since the previous turn (#2175).
+        // Not by turn id: bridges stage entries with `turn_id: 0` and the
+        // runner's counter restarts with the process, so the id cannot say
+        // which entries are new. Even if none are, we may still have tool
+        // wrappers from Rule 3 above — the turn-flag is only raised when
+        // multimodal artifacts exist.
         let agent_home = ctx.agent_home();
-        let turn_id = ctx.turn_id();
         let ledger = ProvenanceLedger::new(agent_home.join("telemetry/inputs.jsonl"));
         let entries = ledger
-            .read_turn(turn_id)
-            .map_err(|e| HookError::Runtime(format!("read_turn: {e}")))?;
+            .claim_new()
+            .map_err(|e| HookError::Runtime(format!("claim_new: {e}")))?;
         let has_multimodal = !entries.is_empty();
 
         for e in entries {
