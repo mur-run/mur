@@ -126,3 +126,38 @@ fn settled_ids_cover_created_and_cancelled() {
     assert!(s.contains(&a.id) && s.contains(&b.id));
     assert!(!s.contains(&c.id));
 }
+
+/// The daemon's EXDEV copy must stage under `<trash>/.staging/`, the only
+/// place `sweep_partials` looks, never as `<entry>/<name>.partial`
+/// (review #2164 P2).
+#[test]
+fn exdev_move_stages_under_staging_root() {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    let (_t, p) = setup();
+    let f = p.agent_home.join("work/big.bin");
+    fs::write(&f, "payload").unwrap();
+    let e = pending(f.clone());
+    let calls = RefCell::new(Vec::<(PathBuf, PathBuf)>::new());
+    execute_move_to_trash_with(&p, &e, &|a: &Path, b: &Path| {
+        calls.borrow_mut().push((a.to_path_buf(), b.to_path_buf()));
+        if a == f.as_path() {
+            return Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices));
+        }
+        fs::rename(a, b)
+    })
+    .unwrap();
+
+    let want = p.trash_dir().join(e.id.to_string()).join("big.bin");
+    assert!(!f.exists());
+    assert_eq!(fs::read_to_string(&want).unwrap(), "payload");
+    let stage = mur_trash::staging_root(&p.trash_dir());
+    let calls = calls.into_inner();
+    let into_entry = calls
+        .iter()
+        .rfind(|(_, b)| b == &want)
+        .unwrap_or_else(|| panic!("no rename into the entry: {calls:?}"));
+    assert!(into_entry.0.starts_with(&stage), "{calls:?}");
+    assert_eq!(created(&p).len(), 1);
+}

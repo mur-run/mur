@@ -45,6 +45,7 @@ fn target(path: PathBuf, rule: Rule) -> TrashTarget {
         path,
         rule,
         segment: 0,
+        after_cd: Vec::new(),
     }
 }
 
@@ -343,4 +344,107 @@ fn exdev_trash_stages_under_staging_root() {
     // Nothing left behind in staging after a clean move.
     let leftovers = fs::read_dir(&stage).map(|d| d.count()).unwrap_or(0);
     assert_eq!(leftovers, 0);
+}
+
+/// Bash stops at a failed `cd`; an absolute target after it is independent of
+/// the bad base, so only an explicit check keeps it (review #2164 P1).
+#[test]
+fn failed_cd_stops_later_segments() {
+    let h = home();
+    let keep = h.work.join("important");
+    fs::write(&keep, "keep").unwrap();
+    let done = h.work.join("a");
+    fs::write(&done, "a").unwrap();
+    for cmd in [
+        format!("cd missing && rm {}", keep.display()),
+        format!(
+            "rm {} && cd missing && rm {}",
+            done.display(),
+            keep.display()
+        ),
+    ] {
+        let crate::RmPlan::Rewrite(targets) = crate::plan(&cmd, &h.work) else {
+            panic!("{cmd}: not rewritten")
+        };
+        let out = trash_into(&h.home, &targets, &DeletionConfig::default(), Uuid::nil());
+        assert!(keep.exists(), "{cmd}: {out:?}");
+        assert!(
+            out.last().is_some_and(TrashOutcome::is_failure),
+            "{cmd}: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|o| matches!(o, TrashOutcome::Trashed { target, .. } if target.path == keep)),
+            "{cmd}: {out:?}"
+        );
+    }
+    assert!(!done.exists(), "the segment before the cd still runs");
+}
+
+/// A `cd` into a real directory still lets the rewrite proceed.
+#[test]
+fn successful_cd_runs_later_segments() {
+    let h = home();
+    fs::create_dir_all(h.work.join("sub")).unwrap();
+    let f = h.work.join("sub/x");
+    fs::write(&f, "x").unwrap();
+    let crate::RmPlan::Rewrite(targets) = crate::plan("cd sub && rm x", &h.work) else {
+        panic!()
+    };
+    let out = trash_into(&h.home, &targets, &DeletionConfig::default(), Uuid::nil());
+    assert!(matches!(out[..], [TrashOutcome::Trashed { .. }]), "{out:?}");
+    assert!(!f.exists());
+}
+
+/// A directory that exists but denies search permission fails `cd` just like
+/// a missing one, so later segments must not run (review #2172 #1).
+#[test]
+fn unsearchable_cd_stops_later_segments() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root bypasses permission bits; the shell would cd fine
+    }
+    let h = home();
+    let blocked = h.work.join("blocked");
+    fs::create_dir_all(&blocked).unwrap();
+    let keep = h.work.join("important");
+    fs::write(&keep, "keep").unwrap();
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o600)).unwrap();
+    let cmd = format!("cd blocked && rm {}", keep.display());
+    let crate::RmPlan::Rewrite(targets) = crate::plan(&cmd, &h.work) else {
+        panic!("not rewritten")
+    };
+    let out = trash_into(&h.home, &targets, &DeletionConfig::default(), Uuid::nil());
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(keep.exists(), "{out:?}");
+    assert!(matches!(&out[..], [o] if o.is_failure()), "{out:?}");
+}
+
+/// Each `cd` is checked once, when the shell would run it; a directory entered
+/// earlier and removed later must not fail a later segment (review #2172 #2).
+#[test]
+fn completed_cd_is_not_rechecked() {
+    let h = home();
+    let a = h.work.join("a");
+    fs::create_dir_all(&a).unwrap();
+    let keep = h.work.join("keep");
+    fs::write(&keep, "k").unwrap();
+    let cmd = format!(
+        "cd {} && cd {} && rmdir a && rm {}",
+        a.display(),
+        h.work.display(),
+        keep.display()
+    );
+    let crate::RmPlan::Rewrite(targets) = crate::plan(&cmd, &h.work) else {
+        panic!("not rewritten")
+    };
+    let out = trash_into(&h.home, &targets, &DeletionConfig::default(), Uuid::nil());
+    assert!(
+        matches!(
+            &out[..],
+            [TrashOutcome::Trashed { .. }, TrashOutcome::Trashed { .. }]
+        ),
+        "{out:?}"
+    );
+    assert!(!a.exists() && !keep.exists());
 }

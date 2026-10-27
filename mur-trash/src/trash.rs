@@ -87,9 +87,27 @@ pub(crate) fn trash_into_with(
 
     let mut out = Vec::with_capacity(targets.len());
     let mut failed_segment: Option<usize> = None;
+    let mut entered_segment: Option<usize> = None;
+    // `after_cd` only grows along the command, so the `cd`s already run are a
+    // prefix of every later target's list. Each runs once, when bash reaches
+    // it; a directory entered earlier may legitimately be gone by now.
+    let mut cds_run = 0;
     for t in targets {
         if failed_segment.is_some_and(|s| t.segment > s) {
             break; // targets are in command order, so the rest are later too
+        }
+        if entered_segment != Some(t.segment) {
+            entered_segment = Some(t.segment);
+            let new_cds = t.after_cd.get(cds_run..).unwrap_or_default();
+            cds_run = cds_run.max(t.after_cd.len());
+            if let Some((dir, e)) = new_cds
+                .iter()
+                .find_map(|d| cd_would_fail(d).err().map(|e| (d, e)))
+            {
+                // The `cd` fails, so bash runs nothing from here on.
+                out.push(failed(t, format!("cd: {}: {}", dir.display(), e)));
+                break;
+            }
         }
         let outcome = match ledger.as_mut() {
             Ok(l) => one(
@@ -103,6 +121,32 @@ pub(crate) fn trash_into_with(
         out.push(outcome);
     }
     out
+}
+
+/// Whether `cd dir` would succeed: it must be a directory (following
+/// symlinks, as `cd` does) the effective user may search. Returns the
+/// shell's wording for the failure.
+fn cd_would_fail(dir: &Path) -> Result<(), &'static str> {
+    match fs::metadata(dir) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => return Err("Not a directory"),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => return Err("Permission denied"),
+        Err(_) => return Err("No such file or directory"),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+            return Err("No such file or directory");
+        };
+        // SAFETY: `c` is a valid NUL-terminated path that outlives the call.
+        let rc =
+            unsafe { libc::faccessat(libc::AT_FDCWD, c.as_ptr(), libc::X_OK, libc::AT_EACCESS) };
+        if rc != 0 {
+            return Err("Permission denied");
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

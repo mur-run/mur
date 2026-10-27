@@ -60,8 +60,9 @@ pub fn move_staged(src: &Path, dst: &Path, staging_root: &Path) -> io::Result<Mo
     move_with_staging(src, dst, staging_root, rename_noreplace)
 }
 
-/// [`move_staged`] with an injectable `rename`, used for every rename.
-pub(crate) fn move_with_staging(
+/// [`move_staged`] with an injectable `rename`, used for every rename. Public
+/// so each caller can pin its own EXDEV path in tests (the daemon does).
+pub fn move_with_staging(
     src: &Path,
     dst: &Path,
     staging_root: &Path,
