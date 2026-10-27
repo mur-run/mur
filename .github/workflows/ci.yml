@@ -35,8 +35,12 @@ env:
 # Windows test cache (~1.1 GB) kept being the one evicted, and each cold
 # rebuild pushed that job from ~23m to 29-46m. So only the default branch
 # saves (PRs restore main's entry instead of writing a duplicate), and jobs
-# that stay off the critical path even when cold (GUI, Hub GUI on
-# Linux/macOS) restore but never save.
+# that stay off the critical path even when cold (GUI, Hub GUI on every OS,
+# E2E quick) restore but never save. The critical path is Test (windows),
+# 24-56m on main; Hub GUI Windows cold is 16-26m and E2E quick has peaked at
+# 23m, so their 1.7 GB + 1.0 GB entries bought no wall time. Dropping them
+# leaves room for release-cache-warm.yml's Hub sccache (~1.7 GB), which a
+# release tag can only read while it survives on main.
 
 jobs:
   # Decide what changed; downstream jobs gate on these outputs to skip
@@ -413,9 +417,9 @@ jobs:
         with:
           workspaces: mur-hub-gui/src-tauri
           key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
-          # Only the Windows leg saves (see CACHE BUDGET above): cold it runs
-          # 16-26m; the Linux/macOS legs stay off the critical path (9-16m).
-          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && runner.os == 'Windows' }}
+          # Restore-only on every OS (see CACHE BUDGET above): cold, even the
+          # Windows leg (16-26m) ends inside the Windows test job's wall time.
+          save-if: false
       - uses: actions/setup-node@v6
         with:
           node-version-file: 'mur-hub-gui/ui/.nvmrc'
@@ -479,7 +483,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ env.ImageOS }}-${{ env.ImageVersion }}
-          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          # Restore-only (see CACHE BUDGET above): peaks at 23m cold.
+          save-if: false
       - name: Install protobuf
         run: brew install protobuf
       - name: Run quick e2e smoke
