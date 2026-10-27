@@ -45,6 +45,8 @@ fn write_running_lock(mur_home: &Path, name: &str, sock: &str) {
         build_sha: String::new(),
         proto_version: 0,
         sandbox: None,
+        startup_override: None,
+        override_rejected: None,
     };
     std::fs::write(lock_path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
 }

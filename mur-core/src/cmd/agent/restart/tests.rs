@@ -22,6 +22,8 @@ fn write_lock(path: &Path, pid: u32, build_sha: &str) {
         build_sha: build_sha.to_string(),
         proto_version: 1,
         sandbox: None,
+        startup_override: None,
+        override_rejected: None,
     };
     fs::write(path, serde_json::to_vec(&lock).unwrap()).unwrap();
 }

@@ -48,6 +48,8 @@ fn write_lock_with_pid(mur_home: &std::path::Path, name: &str, pid: u32) {
         build_sha: String::new(),
         proto_version: 0,
         sandbox: None,
+        startup_override: None,
+        override_rejected: None,
     };
     std::fs::write(path, serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
 }

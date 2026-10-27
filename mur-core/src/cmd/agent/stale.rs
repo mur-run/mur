@@ -244,6 +244,8 @@ mod tests {
             build_sha: build_sha.to_string(),
             proto_version: 1,
             sandbox: None,
+            startup_override: None,
+            override_rejected: None,
         }
     }
 

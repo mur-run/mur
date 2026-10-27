@@ -28,6 +28,8 @@ fn lock_with(sandbox: Option<SandboxRecord>) -> LockFile {
         build_sha: String::new(),
         proto_version: 0,
         sandbox,
+        startup_override: None,
+        override_rejected: None,
     }
 }
 

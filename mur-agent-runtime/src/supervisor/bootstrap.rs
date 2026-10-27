@@ -40,6 +40,8 @@ pub(super) fn build_lock(
         build_sha: mur_common::build::SHORT_SHA.to_string(),
         proto_version: mur_common::build::A2A_PROTO_VERSION,
         sandbox: sandbox_record,
+        startup_override: None,
+        override_rejected: None,
     }
 }
 
