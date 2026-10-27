@@ -371,6 +371,9 @@ jobs:
   hub-macos:
     name: Build MUR Hub (macOS arm64)
     needs: validate-version
+    # release-cache-warm.yml mirrors this job's compile (runner, toolchain,
+    # target, rustc/cc env, cargo flags) on main so tags restore its sccache
+    # entries. Change one, change the other — drift silently costs cache hits.
     # macos-latest (not macos-14): the macos-14 image's current toolchain makes
     # ggml's CMake CPU detection fail and fall back to `-mcpu=native`, which its
     # clang rejects (whisper-rs-sys build). The CI Hub job builds whisper fine on
