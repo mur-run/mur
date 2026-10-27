@@ -27,7 +27,7 @@ use crate::transport::unix_socket::serve_unix_gated;
 use crate::transport::webhook;
 use crate::watch_scheduler::WatchScheduler;
 use mur_common::identity::AgentIdentity;
-use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, LockFile, agent::LockTransports};
+use mur_common::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, agent::LockTransports};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -58,7 +58,7 @@ pub use seal::extra_write_paths;
 mod test_bridge;
 
 use bootstrap::{
-    load_muragent_and_home, parent_pid, read_flag_profile_from_args, resolve_embedded_agent_home,
+    build_lock, load_muragent_and_home, read_flag_profile_from_args, resolve_embedded_agent_home,
 };
 pub use bootstrap::{resolve_model_entry, stale_cap_warnings};
 #[cfg(test)]
@@ -593,21 +593,7 @@ pub async fn entrypoint() -> anyhow::Result<()> {
     }
 
     // 8. Write running.lock
-    let lock = LockFile {
-        schema: 1,
-        uuid: profile.inner.id.clone(),
-        name: profile.inner.name.clone(),
-        pid: std::process::id(),
-        ppid: parent_pid(),
-        started_at: chrono::Utc::now().to_rfc3339(),
-        binary_version: format!("mur-agent-runtime {}", env!("CARGO_PKG_VERSION")),
-        transports: lock_transports,
-        card_digest: profile.digest.clone(),
-        capabilities: profile.inner.capabilities.clone(),
-        build_sha: mur_common::build::SHORT_SHA.to_string(),
-        proto_version: mur_common::build::A2A_PROTO_VERSION,
-        sandbox: sandbox_record,
-    };
+    let lock = build_lock(&profile, lock_transports, sandbox_record);
     write_lock(&lock_path, &lock)?;
     info!("agent {} ({}) ready", profile.inner.name, profile.inner.id);
 

@@ -20,6 +20,29 @@ pub(super) fn parent_pid() -> u32 {
     }
 }
 
+/// The `running.lock` this process advertises once its transports are bound.
+pub(super) fn build_lock(
+    profile: &Profile,
+    lock_transports: LockTransports,
+    sandbox_record: Option<mur_common::agent::SandboxRecord>,
+) -> mur_common::LockFile {
+    mur_common::LockFile {
+        schema: 1,
+        uuid: profile.inner.id.clone(),
+        name: profile.inner.name.clone(),
+        pid: std::process::id(),
+        ppid: parent_pid(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        binary_version: format!("mur-agent-runtime {}", env!("CARGO_PKG_VERSION")),
+        transports: lock_transports,
+        card_digest: profile.digest.clone(),
+        capabilities: profile.inner.capabilities.clone(),
+        build_sha: mur_common::build::SHORT_SHA.to_string(),
+        proto_version: mur_common::build::A2A_PROTO_VERSION,
+        sandbox: sandbox_record,
+    }
+}
+
 /// Extract the binary's embedded agent (idempotent across runs) and
 /// return the resolved agent_home directory.
 pub(super) fn resolve_embedded_agent_home() -> anyhow::Result<PathBuf> {
