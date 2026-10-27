@@ -54,8 +54,11 @@ pub const FLEET_RUN_OWNER_FILE: &str = "run.owner";
 /// carves in only the `fleet_run.fleets` subdirectories of it (see
 /// `mur-agent-runtime` `sandbox/policy/build.rs`), so an agent cannot queue work
 /// for a fleet the operator never let it run.
-pub const RUN_STATE_DIRS: [&str; 5] =
-    [FLEET_STATE, "commander", "conversations", "artifacts", RUNS];
+///
+/// `commander/` is deliberately absent: it holds the commander's private key
+/// and `.env`, and its public keys are trust anchors. A run writes nothing
+/// there; the sandbox grants read on the two public key files instead.
+pub const RUN_STATE_DIRS: [&str; 4] = [FLEET_STATE, "conversations", "artifacts", RUNS];
 
 /// `<mur_home>/fleet-state/<name>/` — every file a run of `name` writes.
 pub fn fleet_state_dir(mur_home: &Path, name: &str) -> PathBuf {
@@ -104,6 +107,13 @@ mod tests {
         assert!(!RUN_STATE_DIRS.contains(&FLEETS));
         assert!(RUN_STATE_DIRS.contains(&FLEET_STATE));
         assert_ne!(FLEET_STATE, RUNS);
+    }
+
+    #[test]
+    fn commander_is_not_run_state() {
+        // A grant on `commander/` reaches the commander's private key, its
+        // `.env` and the pinned public keys directives are verified against.
+        assert!(!RUN_STATE_DIRS.contains(&crate::commander::COMMANDER_DIR));
     }
 
     #[test]

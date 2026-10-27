@@ -191,6 +191,12 @@ pub struct SandboxPolicy {
     /// sibling's signing key. Read counterpart of `dropped_grants`; same
     /// fail-closed rule, reported by `mur agent doctor`.
     pub dropped_read_grants: Vec<PathBuf>,
+    /// True when this agent is `fleet_run`-enabled, so `<mur_home>/conversations`
+    /// in `fs_write` is the fleet runner's own grant. The macOS emitter then
+    /// omits its capture-store write-deny; otherwise that deny lands after
+    /// every allow and keeps the store closed. Recorded because the grant is a
+    /// plain `fs_write` entry, indistinguishable from a hand-written one.
+    pub fleet_conversations_grant: bool,
 }
 
 impl Default for SandboxPolicy {
@@ -213,6 +219,7 @@ impl Default for SandboxPolicy {
             dropped: Vec::new(),
             dropped_grants: Vec::new(),
             dropped_read_grants: Vec::new(),
+            fleet_conversations_grant: false,
         }
     }
 }

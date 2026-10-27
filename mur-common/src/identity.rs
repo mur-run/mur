@@ -62,8 +62,9 @@ impl std::fmt::Debug for AgentIdentity {
 /// share a directory with the public half.
 ///
 /// The narrow mapping is deliberate. Three callers pass a directory that is NOT
-/// under `agents/` and must be left alone, each already covered as a fixed path
-/// by `credential_paths()`:
+/// under `agents/` and must be left alone. Each one's `identity.key` is covered
+/// as a fixed path by the sandbox's `credential_paths()` and
+/// `write_protected_paths()` (the directory itself is not):
 ///
 /// - `<mur_home>/commander` (commander signing identity)
 /// - `<mur_home>/publisher` (skill publisher identity, #1013)

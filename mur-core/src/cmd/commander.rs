@@ -7,9 +7,7 @@ use anyhow::{Context, Result, bail};
 use mur_common::commander::{COMMANDER_DIRECTIVE_KEY, GovernanceState};
 use mur_common::identity::AgentIdentity;
 
-pub const COMMANDER_DIR: &str = "commander";
-pub const COMMANDER_PUB: &str = "identity.pub";
-pub const COMMANDER_PREV_PUB: &str = "identity.prev.pub";
+pub use mur_common::commander::{COMMANDER_DIR, COMMANDER_PREV_PUB, COMMANDER_PUB};
 
 fn decode_pub(multibase: &str) -> Option<[u8; 32]> {
     let (_, bytes) = multibase::decode(multibase.trim()).ok()?;
@@ -83,6 +81,10 @@ pub fn cmd_commander_pin(mur_home: &Path, pubkey_multibase: &str, force: bool) -
     }
     std::fs::write(&path, format!("{}\n", pubkey_multibase.trim()))?;
     println!("Pinned commander key → {}", path.display());
+    // A fleet-enabled agent's sandbox grants read on the key FILE, and on
+    // Linux that grant is pinned to the inode present when the agent started
+    // (a new `identity.prev.pub`, or a first pin, is invisible until then).
+    println!("Restart fleet-enabled agents to apply: mur agent restart <name>");
     Ok(())
 }
 

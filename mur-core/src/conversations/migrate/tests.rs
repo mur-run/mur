@@ -47,6 +47,52 @@ fn daemon_running_reports_false_when_pid_absent() {
     assert!(!daemon_running(Some(tmp.path().to_str().unwrap())));
 }
 
+/// A pid file that exists but cannot be opened is "maybe running", never
+/// "stopped": a migration under a live daemon corrupts the store.
+#[cfg(unix)]
+#[test]
+fn daemon_running_fails_closed_when_pid_unopenable() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let cmdr = tmp.path().join(".mur/commander");
+    std::fs::create_dir_all(&cmdr).unwrap();
+    let pid_path = cmdr.join("commander.pid");
+    std::fs::write(&pid_path, "12345").unwrap();
+    std::fs::set_permissions(&pid_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // root ignores mode bits, so the open succeeds there and proves nothing.
+    if std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&pid_path)
+        .is_ok()
+    {
+        return;
+    }
+    assert!(daemon_running(Some(tmp.path().to_str().unwrap())));
+}
+
+/// A pid file whose parent cannot be searched is also "maybe running":
+/// `Path::exists()` maps that EACCES to `false`, which is fail-open.
+#[cfg(unix)]
+#[test]
+fn daemon_running_fails_closed_when_pid_parent_unsearchable() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let cmdr = tmp.path().join(".mur/commander");
+    std::fs::create_dir_all(&cmdr).unwrap();
+    let pid_path = cmdr.join("commander.pid");
+    std::fs::write(&pid_path, "12345").unwrap();
+    std::fs::set_permissions(&cmdr, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // root ignores mode bits, so metadata succeeds there and proves nothing.
+    let denied = std::fs::metadata(&pid_path).is_err();
+    let running = daemon_running(Some(tmp.path().to_str().unwrap()));
+    // Restore before asserting so the tempdir can be cleaned up.
+    std::fs::set_permissions(&cmdr, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if denied {
+        assert!(running, "unsearchable pid parent must fail closed");
+    }
+}
+
 #[test]
 fn daemon_running_detects_held_flock() {
     // P3 amendment — real flock check, not file-existence only.

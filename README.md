@@ -774,6 +774,21 @@ Agent** wizard offers the same catalog as a source.
   A freshly seeded MUR owns
   `~/.mur/{skills,workflows,fleets,artifacts}`, so it can build the skill,
   workflow or fleet it just designed instead of handing you a list of commands.
+  On Linux a write grant that overlaps any credential — `~/.mur/secrets`,
+  `keys/`, `auth.json`, the commander and skill-publisher signing keys, your
+  `~/.ssh` / `~/.aws` / `~/.gnupg` — is now dropped whole and shown as dropped,
+  the same rule the read side already had; that includes a plain `~/.mur` or
+  `$HOME` write grant. The commander's and publisher's private keys are
+  unreadable on both platforms, and the pinned commander public keys are
+  readable but never writable, so no agent can plant its own key and sign its
+  own directives. Fleet-enabled agents no longer get write on
+  `~/.mur/commander` (no fleet code used it); they read the two pinned key
+  files instead, which on Linux are bound when the agent starts — after
+  `mur commander pin`, restart fleet-enabled agents. Because the publisher key
+  is sealed off, run your first `mur skill publish` from a normal shell, not
+  from inside an agent. On macOS one thing opens: a fleet-enabled agent's
+  fleet runs can now write `~/.mur/conversations` (reads stay denied, and an
+  `fs_deny` under it still wins).
 - **Delegation checks the write grant before it sends anyone** — `mur fleet
   run`, `parallel_jobs`, and a workflow's `delegate_to` steps tell each member
   which directory to work in (the git root of the target), and first check

@@ -122,15 +122,18 @@ fn dir_size_bytes(p: &std::path::Path) -> Result<u64> {
 pub fn daemon_running(home_override: Option<&str>) -> bool {
     use fs2::FileExt;
     let pid_path = mur_dir(home_override).join("commander/commander.pid");
-    if !pid_path.exists() {
-        return false;
-    }
-    let Ok(f) = std::fs::OpenOptions::new()
+    // No `exists()` precheck: it maps EACCES (unsearchable parent, sandbox
+    // metadata denial) to `false`, which is fail-open. Only a definite
+    // NotFound means "stopped"; any other error is unknown, and a migration
+    // under a live daemon corrupts the store, so fail closed.
+    let f = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(&pid_path)
-    else {
-        return false;
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
     };
     match f.try_lock_exclusive() {
         Ok(()) => {
