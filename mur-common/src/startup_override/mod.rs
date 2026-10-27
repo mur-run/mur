@@ -7,10 +7,13 @@
 use serde::{Deserialize, Serialize};
 
 pub mod timing;
+mod validate;
+pub use crate::agent::{OverrideFlags, OverrideRecord, OverrideRejection};
 pub use timing::{
     OVERRIDE_ACK_WAIT_SECS, OVERRIDE_AGE_MARGIN_SECS, RESPAWN_WAIT_SECS, RESTART_KILL_GRACE_SECS,
     SLOW_START_WAIT_SECS, override_max_age,
 };
+pub use validate::*;
 
 /// Which surface wrote the override file.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,3 +51,5 @@ pub fn is_valid_pair(issued: IssuedBy, confirmed: ConfirmedBy) -> bool {
 mod tests;
 #[cfg(test)]
 mod timing_tests;
+#[cfg(test)]
+mod validate_tests;
