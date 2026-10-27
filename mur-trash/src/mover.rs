@@ -1,17 +1,19 @@
 //! Move a path into the trash, across filesystems if needed (D4).
 //!
 //! Shared with #2158 (restore), which moves the other way with the same code.
+//! Nothing a move did not create is ever written or removed: every rename is
+//! no-replace ([`rename_noreplace`]) and every staging directory is created
+//! exclusively under a fresh name (review #2168).
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::layout::partial_path;
+use crate::publish::rename_noreplace;
 
-/// Name of the per-move directory under a staging root.
-fn stage_dir(staging_root: &Path) -> PathBuf {
-    staging_root.join(uuid::Uuid::new_v4().to_string())
-}
+/// Prefix of the hidden per-move staging directory a cross-device restore
+/// creates beside its destination: `.<name>.mur-restore-<uuid>`.
+pub const RESTORE_STAGING_PREFIX: &str = ".mur-restore-";
 
 /// How a move that did not error ended.
 #[derive(Debug)]
@@ -23,16 +25,19 @@ pub enum MoveOutcome {
     CopiedSourceKept(io::Error),
 }
 
-/// Move `src` to `dst`. `dst` must not exist; its parent is created.
+/// Move `src` to `dst`, never replacing anything at `dst`; its parent is
+/// created.
 ///
-/// `rename` first; on `EXDEV`, copy to `<dst>.partial` (links copied as links,
-/// mode and mtime kept), rename that to `dst`, then remove `src`.
+/// No-replace `rename` first; on `EXDEV`, copy into a freshly created
+/// directory beside `dst` (links copied as links, mode and mtime kept),
+/// publish it to `dst` with a no-replace rename, then remove `src`.
 pub fn move_across(src: &Path, dst: &Path) -> io::Result<MoveOutcome> {
-    move_with(src, dst, |a, b| fs::rename(a, b))
+    move_with(src, dst, rename_noreplace)
 }
 
-/// [`move_across`] with an injectable first `rename`, so callers' tests can
-/// force the cross-device path (macOS has no tmpfs to provoke a real EXDEV).
+/// [`move_across`] with an injectable first `rename` (the one from `src`), so
+/// callers' tests can force the cross-device path (macOS has no tmpfs to
+/// provoke a real EXDEV). Later renames are always [`rename_noreplace`].
 pub fn move_with(
     src: &Path,
     dst: &Path,
@@ -42,7 +47,7 @@ pub fn move_with(
         if a == src {
             rename(a, b)
         } else {
-            fs::rename(a, b)
+            rename_noreplace(a, b)
         }
     })
 }
@@ -52,7 +57,7 @@ pub fn move_with(
 /// never leaves anything inside an entry directory. `staging_root` must be on
 /// `dst`'s filesystem (it is: both live under the trash root).
 pub fn move_staged(src: &Path, dst: &Path, staging_root: &Path) -> io::Result<MoveOutcome> {
-    move_with_staging(src, dst, staging_root, |a, b| fs::rename(a, b))
+    move_with_staging(src, dst, staging_root, rename_noreplace)
 }
 
 /// [`move_staged`] with an injectable `rename`, used for every rename.
@@ -66,10 +71,27 @@ pub(crate) fn move_with_staging(
 }
 
 enum Staging<'a> {
-    /// `<dst>.partial` — for moves out of the trash (restore).
+    /// `<dst parent>/.<name>.mur-restore-<uuid>/` — for moves out of the
+    /// trash (restore): the only directory known to be on `dst`'s filesystem.
     BesideDst,
-    /// `<root>/<uuid>/<name>` — for moves into the trash.
+    /// `<root>/<uuid>/` — for moves into the trash.
     Under(&'a Path),
+}
+
+/// Create a staging directory that did not exist before, so cleanup can never
+/// touch anything this move did not make. A name clash is retried, not reused.
+fn create_stage_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
+    const ATTEMPTS: usize = 4;
+    let mut last = None;
+    for _ in 0..ATTEMPTS {
+        let dir = parent.join(format!("{prefix}{}", uuid::Uuid::new_v4()));
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("no staging directory")))
 }
 
 fn move_impl(
@@ -95,27 +117,26 @@ fn move_impl(
         Err(e) => return Err(e),
     }
 
-    // `cleanup` is what to remove if the copy does not make it to `dst`.
-    let (partial, cleanup) = match staging {
+    // `stage` is created by this move and is the only thing cleanup removes.
+    let name = dst.file_name().unwrap_or(std::ffi::OsStr::new("x"));
+    let stage = match staging {
         Staging::BesideDst => {
-            let p = partial_path(dst);
-            (p.clone(), p)
+            let parent = dst.parent().unwrap_or(Path::new("."));
+            let prefix = format!(".{}{RESTORE_STAGING_PREFIX}", name.to_string_lossy());
+            create_stage_dir(parent, &prefix)?
         }
         Staging::Under(root) => {
-            let dir = stage_dir(root);
-            fs::create_dir_all(&dir)?;
-            let name = dst.file_name().unwrap_or(std::ffi::OsStr::new("x"));
-            (dir.join(name), dir)
+            fs::create_dir_all(root)?;
+            create_stage_dir(root, "")?
         }
     };
+    let partial = stage.join(name);
     let staged = copy_tree(src, &partial).and_then(|()| rename(&partial, dst));
     if let Err(e) = staged {
-        let _ = remove_any(&cleanup);
+        let _ = remove_any(&stage);
         return Err(e);
     }
-    if !matches!(staging, Staging::BesideDst) {
-        let _ = fs::remove_dir(&cleanup); // now empty
-    }
+    let _ = fs::remove_dir(&stage); // now empty
     match remove_any(src) {
         Ok(()) => Ok(MoveOutcome::Moved),
         Err(e) => Ok(MoveOutcome::CopiedSourceKept(e)),

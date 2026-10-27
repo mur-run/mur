@@ -62,9 +62,13 @@ pub fn trash_into(
     config: &DeletionConfig,
     task_id: Uuid,
 ) -> Vec<TrashOutcome> {
-    trash_into_with(agent_home, targets, config, task_id, &|a, b| {
-        fs::rename(a, b)
-    })
+    trash_into_with(
+        agent_home,
+        targets,
+        config,
+        task_id,
+        &crate::publish::rename_noreplace,
+    )
 }
 
 /// [`trash_into`] with an injectable `rename`, so tests can force EXDEV.

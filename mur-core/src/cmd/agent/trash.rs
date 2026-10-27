@@ -111,19 +111,28 @@ fn restore_entry(
         );
     }
     let original = &entry.original_path;
+    // Early, friendly refusal. Not the guarantee: the mover's renames are
+    // no-replace, so something created after this check still wins.
     if std::fs::symlink_metadata(original).is_ok() {
-        bail!(
-            "{} already exists; not overwriting it. Move or delete it, then restore again",
-            original.display()
-        );
+        bail!(not_overwriting(original));
     }
-    mover(trash_path, original).with_context(|| {
-        format!(
-            "cannot restore {} to {}",
-            trash_path.display(),
-            original.display()
-        )
-    })
+    match mover(trash_path, original) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => bail!(not_overwriting(original)),
+        r => r.with_context(|| {
+            format!(
+                "cannot restore {} to {}",
+                trash_path.display(),
+                original.display()
+            )
+        }),
+    }
+}
+
+fn not_overwriting(original: &Path) -> String {
+    format!(
+        "{} already exists; not overwriting it. Move or delete it, then restore again",
+        original.display()
+    )
 }
 
 pub fn cmd_trash_empty(name: &str) -> Result<()> {

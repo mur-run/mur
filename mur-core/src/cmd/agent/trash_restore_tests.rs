@@ -158,3 +158,49 @@ fn finds_an_entry_written_forty_days_ago() {
     );
     assert_eq!(find_entry(&ledger, &long, e.id).unwrap().id, e.id);
 }
+
+/// Review #2168 #2: a file recreated after the up-front check — even during a
+/// long cross-device copy — is refused, not replaced; the trash copy stays.
+#[test]
+fn file_recreated_mid_restore_is_not_replaced() {
+    for cross_device in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let e = trashed(tmp.path(), "notes.md", "old");
+
+        let err = restore_entry(&e, |a, b| {
+            mur_trash::move_with(a, b, |a, b| {
+                fs::write(b, "recreated").unwrap(); // after restore_entry's check
+                if cross_device {
+                    exdev(a, b)
+                } else {
+                    mur_trash::rename_noreplace(a, b)
+                }
+            })
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("not overwriting"), "{err}");
+        assert_eq!(fs::read_to_string(&e.original_path).unwrap(), "recreated");
+        assert_eq!(
+            fs::read_to_string(e.trash_path.as_ref().unwrap()).unwrap(),
+            "old"
+        );
+    }
+}
+
+/// Review #2168 #1: an unrelated `<name>.partial` beside the original path
+/// is neither overwritten nor deleted by a cross-device restore.
+#[test]
+fn cross_device_restore_leaves_a_partial_named_sibling_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let e = trashed(tmp.path(), "report", "body");
+    let sibling = tmp.path().join("work/report.partial");
+    fs::create_dir(&sibling).unwrap();
+    fs::write(sibling.join("keep"), "theirs").unwrap();
+
+    restore_entry(&e, |a, b| mur_trash::move_with(a, b, exdev)).unwrap();
+
+    assert_eq!(fs::read_to_string(&e.original_path).unwrap(), "body");
+    assert_eq!(fs::read_to_string(sibling.join("keep")).unwrap(), "theirs");
+    assert_eq!(fs::read_dir(tmp.path().join("work")).unwrap().count(), 2);
+}

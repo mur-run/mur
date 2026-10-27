@@ -6912,6 +6912,7 @@ version = "2.97.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "libc",
  "mur-common",
  "shell-words",
  "tempfile",
