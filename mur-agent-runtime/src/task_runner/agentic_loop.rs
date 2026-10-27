@@ -48,6 +48,10 @@ impl TaskRunner {
         // step resends this same list, so it rides at index 1 throughout.
         let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id);
         let mut history: Vec<RichMessage> = seed_history(system_prompt, pinned, prior, input);
+        // #2175: this turn's untrusted wrappers, just before its message.
+        if let Some(m) = self.take_untrusted_message(task_id) {
+            history.insert(history.len() - 1, m);
+        }
 
         // Rolling window of recent tool-call fingerprints for doom-loop
         // detection: (tool_name, hash(canonical args), hash(result content)).

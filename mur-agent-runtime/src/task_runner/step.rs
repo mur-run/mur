@@ -41,7 +41,11 @@ impl TaskRunner {
         // Seed with prior conversation threaded via `context.task_id` so the
         // model has multi-turn memory (was: system + this message only).
         let (pinned, prior) = self.pinned_and_prior(task_id, context_task_id);
-        let messages = seed_history(system, pinned, prior, input);
+        let mut messages = seed_history(system, pinned, prior, input);
+        // #2175: this turn's untrusted wrappers, just before its message.
+        if let Some(m) = self.take_untrusted_message(task_id) {
+            messages.insert(messages.len() - 1, m);
+        }
         let req = LlmRequest {
             messages,
             temperature: None,
