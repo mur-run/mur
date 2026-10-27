@@ -250,7 +250,10 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
     let _ = std::fs::remove_file(&index);
     let (changes, deleted) = result?;
     let (patch, mut file) = reserve_patch(patch)?;
-    let written = (|| -> Result<()> {
+    // Set only once *this* call created the deleted-list, so the cleanup
+    // below never removes a list some other salvage owns.
+    let mut created_list: Option<PathBuf> = None;
+    let mut written = || -> Result<()> {
         use std::io::Write as _;
         file.write_all(&changes)
             .and_then(|()| file.sync_all())
@@ -262,14 +265,21 @@ fn save_patch(track: &StaleTrack, patch: &Path) -> Result<PathBuf> {
                 .create_new(true)
                 .open(&list)
                 .with_context(|| format!("create {}", list.display()))?;
+            created_list = Some(list.clone());
             f.write_all(&deleted)
+                .and_then(|()| f.sync_all())
                 .with_context(|| format!("write {}", list.display()))?;
         }
         Ok(())
-    })();
-    if let Err(e) = written {
-        // Nothing was removed yet; drop the half-written reservation.
+    };
+    if let Err(e) = written() {
+        // Nothing was removed yet; drop the half-written reservation. A
+        // leftover deleted-list would make `reserve_patch` skip this name
+        // forever, so it goes too.
         let _ = std::fs::remove_file(&patch);
+        if let Some(list) = created_list {
+            let _ = std::fs::remove_file(list);
+        }
         return Err(e);
     }
     Ok(patch)
