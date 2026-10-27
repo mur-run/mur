@@ -25,8 +25,34 @@ use std::path::{Path, PathBuf};
 use super::{SELF_PROTECTED_AGENT_FILES, SandboxPolicy};
 
 /// `true` when either path contains the other (component-wise).
-fn overlaps(a: &Path, b: &Path) -> bool {
+fn overlaps_lexically(a: &Path, b: &Path) -> bool {
     a.starts_with(b) || b.starts_with(a)
+}
+
+/// The path as written plus its symlink-resolved form, when that differs and
+/// resolves.
+fn forms(p: &Path) -> Vec<PathBuf> {
+    let mut v = vec![p.to_path_buf()];
+    if let Ok(real) = std::fs::canonicalize(p)
+        && real != p
+    {
+        v.push(real);
+    }
+    v
+}
+
+/// `true` when the two paths overlap as written OR once symlinks resolve.
+///
+/// `with_resolved_aliases` keeps a symlink grant beside its canonical target,
+/// and Landlock follows the link when it installs the rule. Comparing names
+/// alone would drop `/work` for `deny: [/work/secrets]` yet keep `/work-link`
+/// (→ `/work`), granting the denied directory anyway. Resolving both sides
+/// makes a grant and all of its aliases fall together.
+fn overlaps(a: &Path, b: &Path) -> bool {
+    let fb = forms(b);
+    forms(a)
+        .iter()
+        .any(|x| fb.iter().any(|y| overlaps_lexically(x, y)))
 }
 
 /// Split user-declared grants into those that overlap no deny and those that

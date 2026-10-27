@@ -34,6 +34,56 @@ fn overlap_is_component_wise_not_string_prefix() {
     assert!(dropped.is_empty());
 }
 
+/// A symlink grant and its canonical target are one unit: when the deny is
+/// spelled through the target, the link must fall too, or the kernel would
+/// follow it straight into the denied directory.
+#[cfg(unix)]
+#[test]
+fn a_symlink_grant_falls_with_its_canonical_alias() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let work = root.join("work");
+    let secrets = work.join("secrets");
+    let other = root.join("other");
+    std::fs::create_dir_all(&secrets).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let link = root.join("work-link");
+    std::os::unix::fs::symlink(&work, &link).unwrap();
+
+    let grants = super::super::with_resolved_aliases(vec![link.clone(), other.clone()]);
+    let (kept, dropped) =
+        partition_against_denies(grants, std::slice::from_ref(&secrets), &p("/m/a"));
+
+    let dropped: Vec<_> = dropped.into_iter().map(|(g, _)| g).collect();
+    assert!(
+        dropped.contains(&link),
+        "symlink alias must be dropped: {dropped:?}"
+    );
+    assert!(
+        dropped.contains(&work),
+        "canonical alias must be dropped: {dropped:?}"
+    );
+    assert_eq!(kept, vec![other], "negative control: unrelated grant kept");
+}
+
+/// The reporter must see the same alias overlap the filter does.
+#[cfg(unix)]
+#[test]
+fn unenforceable_denies_sees_through_a_symlink_grant() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let work = root.join("work");
+    let secrets = work.join("secrets");
+    std::fs::create_dir_all(&secrets).unwrap();
+    let link = root.join("work-link");
+    std::os::unix::fs::symlink(&work, &link).unwrap();
+
+    let mut policy = policy_with(&p("/m/agents/a"));
+    policy.fs_write = vec![link.clone()];
+    policy.fs_deny = vec![secrets.clone()];
+    assert_eq!(policy.unenforceable_denies(), vec![(secrets, link)]);
+}
+
 #[test]
 fn own_home_grants_are_never_dropped() {
     let home = p("/m/agents/a");
@@ -128,4 +178,44 @@ fn linux_drops_user_grants_that_overlap_a_user_deny() {
         .map(|d| d.verb.as_str())
         .collect();
     assert_eq!(rows, vec!["read", "write"]);
+}
+
+/// #2160 review: a symlink grant whose canonical target contains the deny
+/// must not survive `from_entitlements` on Linux.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_drops_a_symlink_grant_whose_target_contains_the_deny() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let agent_home = root.join("mur").join("agents").join("a");
+    let work = root.join("work");
+    let secrets = work.join("secrets");
+    for d in [&agent_home, &secrets] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let link = root.join("work-link");
+    std::os::unix::fs::symlink(&work, &link).unwrap();
+    let mut ent = mur_common::agent::AgentProfile::default_for_tests().entitlements;
+    let s = |q: &Path| q.to_string_lossy().into_owned();
+    ent.filesystem.write = vec![s(&link)];
+    ent.filesystem.deny = vec![s(&secrets)];
+
+    let policy = SandboxPolicy::from_entitlements(&ent, &agent_home);
+
+    assert!(
+        !policy.fs_write.contains(&link),
+        "symlink grant must be dropped"
+    );
+    assert!(
+        !policy.fs_write.contains(&work),
+        "canonical alias must be dropped"
+    );
+    assert!(
+        policy
+            .dropped
+            .iter()
+            .any(|d| d.path == s(&link) && d.verb == "write"),
+        "the grant as declared is reported dropped: {:?}",
+        policy.dropped
+    );
 }
