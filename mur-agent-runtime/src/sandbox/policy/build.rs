@@ -311,7 +311,17 @@ impl SandboxPolicy {
                     fs_write.push(dir);
                 }
             }
-            for p in [mur_home.join("models.yaml"), mur_home.join("cache")] {
+            // The pinned commander keys, as FILES: the fleet loop verifies
+            // directives against them (`accepted_pubkeys`), and without a read
+            // it runs ungoverned. Not the directory — that holds the private
+            // key and `.env`. Existence-checked: Landlock skips a missing path
+            // and pins a file grant to its inode, so a key pinned later needs
+            // an agent restart (`mur commander pin` says so).
+            let commander_pubs = launch_chain.commander_public_keys();
+            for p in [mur_home.join("models.yaml"), mur_home.join("cache")]
+                .into_iter()
+                .chain(commander_pubs)
+            {
                 if std::fs::metadata(&p).is_ok() && !fs_read.contains(&p) {
                     fs_read.push(p);
                 }
@@ -532,6 +542,7 @@ impl SandboxPolicy {
             launch_chain,
             dropped_grants,
             dropped_read_grants,
+            fleet_conversations_grant: fleet_run_enabled,
         }
     }
 }

@@ -580,3 +580,62 @@ fn key_source_invariant_keys_unreadable_iff_channel_heads_unwritable() {
         "KeySource invariant: keys/ readability and channel-heads/ writability must agree"
     );
 }
+
+/// Spec 2026-10-25 P0-B, N1: under `write_protected_paths()` the fleet grants
+/// all survive the partition, none reaches `commander/`, and the pinned
+/// commander keys are granted for reading as FILES, only when present.
+#[test]
+fn fleet_grants_survive_the_partition_and_commander_is_read_only_per_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mur_home = tmp.path();
+    let agent_home = mur_home.join("agents").join("mur");
+    std::fs::create_dir_all(&agent_home).unwrap();
+    std::fs::write(
+        mur_home.join("config.yaml"),
+        "fleet_run:\n  agents: [mur]\n  fleets: [deep-research]\n",
+    )
+    .unwrap();
+    let commander = mur_home.join(mur_common::commander::COMMANDER_DIR);
+    let pubs = [
+        commander.join(mur_common::commander::COMMANDER_PUB),
+        commander.join(mur_common::commander::COMMANDER_PREV_PUB),
+    ];
+
+    // No key pinned yet: nothing under commander/ is granted at all.
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    assert!(policy.fleet_conversations_grant);
+    assert!(policy.fs_read.iter().all(|p| !p.starts_with(&commander)));
+    assert!(policy.fs_write.iter().all(|p| !p.starts_with(&commander)));
+
+    std::fs::create_dir_all(&commander).unwrap();
+    for p in &pubs {
+        std::fs::write(p, "z6Mk\n").unwrap();
+    }
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &agent_home);
+    for p in &pubs {
+        assert!(policy.fs_read.contains(p), "{} not readable", p.display());
+    }
+    assert!(!policy.fs_read.contains(&commander));
+    assert!(policy.fs_write.iter().all(|p| !p.starts_with(&commander)));
+
+    let fleet_dirs = super::super::fleet_run_write_dirs(mur_home);
+    let (kept, dropped) =
+        crate::sandbox::linux::partition_write_grants(&policy.fs_write, &policy.launch_chain);
+    assert!(
+        policy.dropped_grants.is_empty(),
+        "{:?}",
+        policy.dropped_grants
+    );
+    assert!(dropped.is_empty(), "{dropped:?}");
+    for d in &fleet_dirs {
+        assert!(kept.contains(d), "{} dropped", d.display());
+        assert!(!d.starts_with(&commander));
+    }
+
+    // Not fleet-enabled → the flag stays false, so macOS keeps the deny.
+    let other = mur_home.join("agents").join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let policy = SandboxPolicy::from_entitlements(&minimal_entitlements(), &other);
+    assert!(!policy.fleet_conversations_grant);
+    assert!(policy.fs_read.iter().all(|p| !p.starts_with(&commander)));
+}

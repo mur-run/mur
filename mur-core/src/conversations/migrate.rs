@@ -130,7 +130,10 @@ pub fn daemon_running(home_override: Option<&str>) -> bool {
         .write(true)
         .open(&pid_path)
     else {
-        return false;
+        // The file exists but cannot be opened (permissions, or a sandbox
+        // denying it). Unknown is not "stopped": a migration under a live
+        // daemon corrupts the store, so fail closed.
+        return true;
     };
     match f.try_lock_exclusive() {
         Ok(()) => {

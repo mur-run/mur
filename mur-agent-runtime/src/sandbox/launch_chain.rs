@@ -21,6 +21,17 @@ const AGENT_SYMLINK_PREFIX: &str = "mur_agent_";
 /// Root of the `Default` chain: outside any real path, so it never fires.
 const INERT_ROOT: &str = "/nonexistent-launch-chain-root";
 
+/// The capture stores under `<mur_home>`: recordings of what was done, kept
+/// verbatim (see `protects_capture_store`). The one list of their names —
+/// the predicate, `credential_paths()` and the SBPL write-deny all read it.
+pub const CAPTURE_STORES: [&str; 5] = ["queue", "session", "conversations", "telemetry", "traces"];
+
+/// `<mur_home>/publisher`: the skill publisher identity (#1011). Not an agent
+/// home, so `private_key_dir` leaves its `identity.key` here.
+const PUBLISHER_DIR: &str = "publisher";
+/// The private half of an `AgentIdentity`, in whatever directory it lives.
+const IDENTITY_KEY: &str = "identity.key";
+
 #[derive(Clone, Debug)]
 pub struct LaunchChain {
     mur_home: PathBuf,
@@ -115,6 +126,12 @@ impl LaunchChain {
         if self.autostart.iter().any(|d| path.starts_with(d)) {
             return Some("an OS autostart directory — entries here run outside any sandbox");
         }
+        if self.commander_public_keys().iter().any(|k| path == k) {
+            return Some(
+                "a pinned commander public key — directives signed by it are \
+                 obeyed, so writing it lets an agent sign its own governance",
+            );
+        }
         if let Some(reason) = self.protects_credential(path) {
             return Some(reason);
         }
@@ -192,8 +209,16 @@ impl LaunchChain {
         if path == self.mur_home.join("identity.key") {
             return Some("the host signing key");
         }
-        if path == self.mur_home.join("commander").join("signing.key") {
+        // `identity.key` is the live key (`AgentIdentity::load` on the
+        // commander dir); `signing.key` is the legacy name older installs keep.
+        if self.commander_private_keys().iter().any(|k| path == k) {
             return Some("the commander's signing key — governance authority");
+        }
+        if path == self.publisher_private_key() {
+            return Some(
+                "the skill publisher's signing key — holding it forges the \
+                 signature on every skill this user publishes",
+            );
         }
         if path == self.mur_home.join("mobile").join("pair-token") {
             return Some("the phone pairing token");
@@ -265,8 +290,7 @@ impl LaunchChain {
     ///
     /// Nothing in the agent runtime reads any of them.
     fn protects_capture_store(&self, path: &Path) -> Option<&'static str> {
-        const STORES: [&str; 5] = ["queue", "session", "conversations", "telemetry", "traces"];
-        for s in STORES {
+        for s in CAPTURE_STORES {
             if path.starts_with(self.mur_home.join(s)) {
                 return Some(
                     "a capture store — an unredacted verbatim record of every \
@@ -275,6 +299,87 @@ impl LaunchChain {
             }
         }
         None
+    }
+
+    /// `<mur_home>/<store>` for each of [`CAPTURE_STORES`].
+    pub fn capture_store_paths(&self) -> Vec<PathBuf> {
+        CAPTURE_STORES
+            .iter()
+            .map(|s| self.mur_home.join(s))
+            .collect()
+    }
+
+    fn commander_dir(&self) -> PathBuf {
+        self.mur_home.join(mur_common::commander::COMMANDER_DIR)
+    }
+
+    /// The live commander key and its legacy name.
+    fn commander_private_keys(&self) -> [PathBuf; 2] {
+        let d = self.commander_dir();
+        [d.join(IDENTITY_KEY), d.join("signing.key")]
+    }
+
+    /// The pinned commander keys. Readable (the fleet loop verifies
+    /// directives against them), never writable.
+    pub fn commander_public_keys(&self) -> [PathBuf; 2] {
+        let d = self.commander_dir();
+        [
+            d.join(mur_common::commander::COMMANDER_PUB),
+            d.join(mur_common::commander::COMMANDER_PREV_PUB),
+        ]
+    }
+
+    fn publisher_private_key(&self) -> PathBuf {
+        self.mur_home.join(PUBLISHER_DIR).join(IDENTITY_KEY)
+    }
+
+    /// The credential files and subtrees outside the capture stores: what
+    /// `credential_paths()` denies for reading because holding it is holding
+    /// a credential. Also exactly the rows `write_protected_paths()` adds on
+    /// top of `deny_paths()`, minus the commander public keys.
+    fn credential_files(&self) -> Vec<PathBuf> {
+        let mut out = vec![
+            // Every agent's private key, as ONE subtree (#850 option (c)).
+            // This replaces the `sibling_signing_keys()` enumeration, and with
+            // it the after-seal gap: a key created here after the policy was
+            // sealed is still inside the denied subpath, whereas an enumerated
+            // list could never name it.
+            //
+            // No re-allow for the agent's own key, and none is needed: the
+            // runtime loads its identity in `supervisor::entrypoint` before
+            // `supervisor::seal` applies the sandbox, so nothing reads a
+            // private key after the seal.
+            self.mur_home.join("keys"),
+            self.mur_home.join("secrets"),
+            self.mur_home.join("auth.json"),
+            self.mur_home.join(IDENTITY_KEY),
+        ];
+        out.extend(self.commander_private_keys());
+        out.extend([
+            self.commander_dir().join(".env"),
+            self.publisher_private_key(),
+            self.mur_home.join("mobile").join("pair-token"),
+            self.mur_home.join("actions-runner"),
+            self.mur_home.join("runtime").join("vlc.json"),
+        ]);
+        out.extend(self.user_credential_dirs());
+        out
+    }
+
+    /// Paths no write grant may reach, as concrete paths for backends that
+    /// need a list (Landlock partition, SBPL write-deny). Write integrity,
+    /// not privacy: every entry is here because WRITING it gains authority.
+    ///
+    /// `deny_paths()` (the launch chain), the credential files, and the
+    /// pinned commander public keys. Deliberately NOT the capture stores:
+    /// writing a recording grants nothing, and the fleet runner's own
+    /// `conversations/` grant must survive the Landlock partition. Each
+    /// backend still write-denies them on its own terms.
+    pub fn write_protected_paths(&self) -> Vec<PathBuf> {
+        let mut out = self.deny_paths();
+        out.extend(self.credential_files());
+        out.extend(self.commander_public_keys());
+        out
     }
 
     /// Concrete paths for backends that need a list rather than a predicate
@@ -321,35 +426,9 @@ impl LaunchChain {
     /// and no after-seal gap: a `secrets/` file created later is still under
     /// the denied subtree.
     pub fn credential_paths(&self) -> Vec<PathBuf> {
-        vec![
-            // Every agent's private key, as ONE subtree (#850 option (c)).
-            // This replaces the `sibling_signing_keys()` enumeration, and with
-            // it the after-seal gap: a key created here after the policy was
-            // sealed is still inside the denied subpath, whereas an enumerated
-            // list could never name it.
-            //
-            // No re-allow for the agent's own key, and none is needed: the
-            // runtime loads its identity in `supervisor::entrypoint` before
-            // `supervisor::seal` applies the sandbox, so nothing reads a
-            // private key after the seal.
-            self.mur_home.join("keys"),
-            self.mur_home.join("secrets"),
-            self.mur_home.join("auth.json"),
-            self.mur_home.join("identity.key"),
-            self.mur_home.join("commander").join("signing.key"),
-            self.mur_home.join("mobile").join("pair-token"),
-            self.mur_home.join("actions-runner"),
-            self.mur_home.join("queue"),
-            self.mur_home.join("session"),
-            self.mur_home.join("conversations"),
-            self.mur_home.join("telemetry"),
-            self.mur_home.join("traces"),
-            self.mur_home.join("commander").join(".env"),
-            self.mur_home.join("runtime").join("vlc.json"),
-        ]
-        .into_iter()
-        .chain(self.user_credential_dirs())
-        .collect()
+        let mut out = self.credential_files();
+        out.extend(self.capture_store_paths());
+        out
     }
 
     /// Split write grants into those the sandbox can install and those it must
@@ -368,7 +447,7 @@ impl LaunchChain {
     /// overlap test below would also catch the `<mur_home>/agents/<self>`
     /// force-grant and Linux agents would lose their own home.
     pub fn partition_grants(&self, grants: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
-        let protected = self.deny_paths();
+        let protected = self.write_protected_paths();
         grants.iter().cloned().partition(|g| {
             if g.starts_with(self.agent_self_home()) {
                 return true;
@@ -495,3 +574,5 @@ pub fn is_overbroad_grant_root(path: &Path, home: &Path) -> bool {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_protected_tests;

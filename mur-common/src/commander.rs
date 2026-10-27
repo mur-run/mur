@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 /// Key under which a governance directive is placed in a `ChannelEvent.payload`.
 pub const COMMANDER_DIRECTIVE_KEY: &str = "commander_directive";
 
+/// `<mur_home>/commander`: the commander's identity, pinned keys and config.
+/// Here rather than in `mur-core` because the agent sandbox names files in it
+/// and `mur-agent-runtime` must not depend on `mur-core`.
+pub const COMMANDER_DIR: &str = "commander";
+/// The pinned commander public key, inside [`COMMANDER_DIR`].
+pub const COMMANDER_PUB: &str = "identity.pub";
+/// The previous pinned key, kept for one rotation, inside [`COMMANDER_DIR`].
+pub const COMMANDER_PREV_PUB: &str = "identity.prev.pub";
+
 /// A cryptographically-signed instruction from the Commander governance plane.
 ///
 /// Serialised as a JSON object and placed under [`COMMANDER_DIRECTIVE_KEY`]

@@ -237,6 +237,39 @@ pub(crate) fn unix_socket_allow_rules(
 /// posture for writes without the fragility of a full `(deny default)` that
 /// would also block dyld and system access. All interpolated paths/hosts are
 /// escaped to prevent s-expression injection via a malicious profile.
+/// The write-denies emitted after every allow: the write-protected rows that
+/// `deny_paths()` does not already deny before the own-home re-allow, plus
+/// the capture stores.
+///
+/// `deny_paths()` stays where it is (before the own-home allow) because it
+/// contains `agents/`; emitting it here would take every agent's own home
+/// away. `conversations/` is skipped for a fleet-enabled agent so the fleet
+/// runner's ordinary `fs_write` grant opens it — and since no allow follows,
+/// a user `fs_deny` under it still wins.
+fn credential_write_denies(policy: &SandboxPolicy) -> Vec<PathBuf> {
+    let chain = &policy.launch_chain;
+    let before_own_home = chain.deny_paths();
+    let stores = crate::sandbox::launch_chain::CAPTURE_STORES
+        .iter()
+        .zip(chain.capture_store_paths())
+        .filter(|(name, _)| !(policy.fleet_conversations_grant && **name == "conversations"))
+        .map(|(_, p)| p);
+    let out: Vec<PathBuf> = chain
+        .write_protected_paths()
+        .into_iter()
+        .filter(|p| !before_own_home.contains(p))
+        .chain(stores)
+        .collect();
+    // R5-1: a row covering the own home (or a parent of it) here would land
+    // after the own-home re-allow and lock the agent out of its own tree.
+    // Debug builds only; the unit test is the release guarantee.
+    debug_assert!(
+        out.iter().all(|p| !chain.agent_self_home().starts_with(p)),
+        "a post-allow write-deny covers the agent's own home"
+    );
+    out
+}
+
 pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     let mut lines = vec![
         "(version 1)".to_string(),
@@ -347,9 +380,14 @@ pub fn build_sbpl_profile(policy: &SandboxPolicy) -> String {
     // The user's credential store (#850). Fixed subtrees, so unlike the
     // sibling keys below there is no enumeration and no after-seal gap.
     // Emitted with the same last-match-wins reasoning: after every allow.
+    // Nothing after this block may emit an `allow file-write*`: it would beat
+    // these denies and a user `fs_deny` alike (spec R7-1).
     for p in policy.launch_chain.credential_paths() {
         let p = sbpl_escape(&p.to_string_lossy());
         lines.push(format!("(deny file-read* (subpath \"{p}\"))"));
+    }
+    for p in credential_write_denies(policy) {
+        let p = sbpl_escape(&p.to_string_lossy());
         lines.push(format!("(deny file-write* (subpath \"{p}\"))"));
     }
 
@@ -498,3 +536,5 @@ unsafe extern "C" {
 mod own_home_deny_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_deny_tests;
