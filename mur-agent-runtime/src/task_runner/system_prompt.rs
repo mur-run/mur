@@ -228,11 +228,49 @@ impl TaskRunner {
         let prompt = text_of(input);
         let (system, _fired) =
             self.assemble_system_prompt(Some(turn), &prompt, active_fleet, active_team);
-        if let (Some(chain), Some(ctx), Some(cancel)) =
-            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
-        {
-            let _ = (chain, ctx, cancel);
-        }
-        Ok(system)
+        let Some(patch) = self.prompt_submit(turn, &system, input).await else {
+            return Ok(system);
+        };
+        Ok(apply_system_patch(system, &patch))
     }
+
+    /// #2175: run the chain's `on_prompt_submit` for one turn and keep the
+    /// turn flags it raised for that turn's `pre_tool_use` gate. `None` = no
+    /// chain wired. The flags replace any earlier ones for `turn`: a flag is
+    /// about this turn's input, never a previous one's.
+    pub(super) async fn prompt_submit(
+        &self,
+        turn: &str,
+        system: &str,
+        input: &Message,
+    ) -> Option<crate::hooks::PromptPatch> {
+        let (Some(chain), Some(ctx), Some(cancel)) =
+            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
+        else {
+            return None;
+        };
+        let mut turn_ctx = ctx.clone();
+        turn_ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
+        let view = PromptView {
+            system: Some(system.to_string()),
+            messages: vec![serde_json::json!({"role": input.role, "content": text_of(input)})],
+        };
+        let patch = chain.on_prompt_submit(&turn_ctx, &view, cancel).await;
+        self.turn_flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(turn.to_string(), patch.turn_flags.clone());
+        Some(patch)
+    }
+}
+
+/// Fold a prompt patch's system prefix/suffix into `system`.
+pub(super) fn apply_system_patch(mut system: String, patch: &crate::hooks::PromptPatch) -> String {
+    if let Some(prefix) = &patch.set_system_prefix {
+        system = format!("{prefix}\n{system}");
+    }
+    if let Some(suffix) = &patch.set_system_suffix {
+        system = format!("{system}\n{suffix}");
+    }
+    system
 }

@@ -32,6 +32,8 @@ pub(crate) struct HookGate {
     pub(crate) chain: Arc<HookChain>,
     pub(crate) ctx: HookCtx,
     pub(crate) cancel: CancellationToken,
+    /// The flags each turn's `on_prompt_submit` raised, by turn task id.
+    pub(crate) turn_flags: crate::task_runner::TurnFlags,
 }
 
 /// What the gate hooks said about one call, when it was not `Allow`.
@@ -64,6 +66,14 @@ impl GuardedToolCall {
         let Some(g) = &self.hooks else {
             return out;
         };
+        let mut ctx = g.ctx.clone();
+        ctx.turn_flags = g
+            .turn_flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(task_id)
+            .cloned()
+            .unwrap_or_default();
         for call in calls {
             let tc = ToolCall {
                 tool_name: call.tool_name.clone(),
@@ -71,7 +81,7 @@ impl GuardedToolCall {
                 call_id: call.call_id.clone(),
                 input: call.input.clone(),
             };
-            let verdict = match g.chain.pre_tool_use(&g.ctx, &tc, &g.cancel).await {
+            let verdict = match g.chain.pre_tool_use(&ctx, &tc, &g.cancel).await {
                 Ok(Decision::Allow) => continue,
                 Ok(Decision::Deny { reason }) => refusal(HOOK_DENY, reason),
                 Ok(Decision::Abort) => refusal(HOOK_DENY, "aborted by a safety hook".into()),

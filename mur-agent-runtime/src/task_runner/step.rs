@@ -26,35 +26,16 @@ impl TaskRunner {
         }
 
         // Apply hook chain on_prompt_submit if wired.
-        let system = if let (Some(chain), Some(ctx), Some(cancel)) =
-            (&self.hook_chain, &self.hook_ctx, &self.hook_cancel)
-        {
-            if cancel.is_cancelled() {
-                return Err(task_error(
-                    "cancelled",
-                    "cancelled before prompt submit".to_string(),
-                    true,
-                ));
-            }
-            let mut turn_ctx = ctx.clone();
-            turn_ctx.turn_id = self.turn_counter.load(Ordering::Relaxed);
-            let view = PromptView {
-                system: Some(system),
-                messages: vec![serde_json::json!({"role": input.role, "content": prompt})],
-            };
-            let patch = chain.on_prompt_submit(&turn_ctx, &view, cancel).await;
-            {
-                let mut s = view.system.unwrap_or_default();
-                if let Some(prefix) = patch.set_system_prefix {
-                    s = format!("{prefix}\n{s}");
-                }
-                if let Some(suffix) = patch.set_system_suffix {
-                    s = format!("{s}\n{suffix}");
-                }
-                s
-            }
-        } else {
-            system
+        if self.hook_cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+            return Err(task_error(
+                "cancelled",
+                "cancelled before prompt submit".to_string(),
+                true,
+            ));
+        }
+        let system = match self.prompt_submit(task_id, &system, input).await {
+            Some(patch) => super::system_prompt::apply_system_patch(system, &patch),
+            None => system,
         };
 
         // Seed with prior conversation threaded via `context.task_id` so the
@@ -306,6 +287,7 @@ impl TaskRunner {
             chain: chain.clone(),
             ctx,
             cancel: cancel.clone(),
+            turn_flags: self.turn_flags.clone(),
         })
     }
 

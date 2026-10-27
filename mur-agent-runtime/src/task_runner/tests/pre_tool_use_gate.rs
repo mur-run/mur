@@ -202,3 +202,73 @@ async fn a_remembering_ask_is_answered_by_the_decision_store() {
     let (ran, _) = behind_a_remembered_allow(|| ask(false)).await;
     assert_eq!(ran, 1, "the remembered allow answers without asking");
 }
+
+/// Raises a turn flag at prompt submit; refuses any tool while it is set.
+struct FlagThenGate;
+#[async_trait::async_trait]
+impl crate::hooks::Hook for FlagThenGate {
+    fn name(&self) -> &str {
+        "FlagThenGate"
+    }
+    async fn on_prompt_submit(
+        &self,
+        _ctx: &HookCtx,
+        _view: &crate::hooks::PromptView,
+        _tok: &CancellationToken,
+    ) -> Result<crate::hooks::PromptPatch, HookError> {
+        Ok(crate::hooks::PromptPatch {
+            turn_flags: vec!["after_untrusted_input".into()],
+            ..Default::default()
+        })
+    }
+    async fn pre_tool_use(
+        &self,
+        ctx: &HookCtx,
+        _call: &crate::hooks::ToolCall,
+        _tok: &CancellationToken,
+    ) -> Result<Decision, HookError> {
+        Ok(if ctx.turn_flags().is_empty() {
+            Decision::Allow
+        } else {
+            Decision::Deny {
+                reason: "flag seen".into(),
+            }
+        })
+    }
+}
+
+/// The agentic loop runs `on_prompt_submit`, and the flags it raises reach
+/// that turn's `pre_tool_use` — B0 rule 4's whole mechanism.
+#[tokio::test]
+async fn a_turn_flag_from_prompt_submit_reaches_the_gate_in_the_agentic_loop() {
+    use crate::llm::stub::SequenceLlm;
+    let calls = Arc::new(AtomicU64::new(0));
+    let runner = TaskRunner::with_llm(Arc::new(SequenceLlm::new(vec![
+        tool_call_response("c-1", "echo hi"),
+        end_turn_response("OK"),
+    ])))
+    .with_tools(vec![Arc::new(CountingBashTool {
+        calls: calls.clone(),
+        ..Default::default()
+    })])
+    .with_tools_policy(vec![mur_common::agent::ToolRule {
+        pattern: "bash".into(),
+        policy: mur_common::agent::ToolPolicy::Allow,
+        risk: None,
+        bypass_builtin_tier_floor: Default::default(),
+    }])
+    .with_pending_approvals(empty_pending_approvals())
+    .with_sandbox_enforcing(true)
+    .with_iteration_ceiling(5)
+    .with_hook_chain(
+        Arc::new(HookChain::new(vec![Arc::new(FlagThenGate)])),
+        HookCtx::for_test_with_turn_flags(Vec::new()),
+        CancellationToken::new(),
+    );
+    let _ = runner.run_sync(loop_spec("look at this")).await;
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "the flagged turn's bash must not run"
+    );
+}

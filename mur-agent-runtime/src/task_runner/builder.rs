@@ -76,6 +76,7 @@ impl TaskRunner {
             client_notifiers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             approval_sinks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             one_shot_approvals: Default::default(),
+            turn_flags: Default::default(),
             steering: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             hitl_timeout_secs: 300,
             intent: None,
@@ -527,6 +528,10 @@ impl TaskRunner {
         self.client_notifiers.lock().await.remove(task_id);
         self.approval_sinks.lock().await.remove(task_id);
         self.one_shot_approvals.lock().await.remove(task_id);
+        self.turn_flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(task_id);
         self.parking.close_window(task_id);
     }
 
