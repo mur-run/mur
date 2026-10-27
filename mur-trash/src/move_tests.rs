@@ -6,7 +6,7 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::layout::{entry_path, partial_path, staging_root, sweep_partials, trash_root};
+use crate::layout::{entry_path, staging_root, sweep_partials, trash_root};
 use crate::mover::{MoveOutcome, move_with, move_with_staging};
 use crate::safety::{Refusal, check_target, remove_within};
 use crate::{move_across, resolve_no_follow};
@@ -77,7 +77,7 @@ fn exdev_copies_tree_then_removes_source() {
         MoveOutcome::Moved
     ));
     assert!(!src.exists());
-    assert!(!partial_path(&dst).exists());
+    assert_no_stage_left(dst.parent().unwrap());
     assert_eq!(fs::read_to_string(dst.join("sub/f")).unwrap(), "deep");
     assert_eq!(fs::read_link(dst.join("link")).unwrap(), Path::new("sub/f"));
 }
@@ -239,4 +239,14 @@ fn sweep_removes_stale_staging_but_not_fresh() {
         sweep_partials(&t.path().join("nope"), Duration::ZERO).unwrap(),
         0
     );
+}
+
+/// Nothing the mover staged is left in `dir`.
+fn assert_no_stage_left(dir: &Path) {
+    let left: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains(crate::mover::RESTORE_STAGING_PREFIX))
+        .collect();
+    assert!(left.is_empty(), "staging left behind: {left:?}");
 }

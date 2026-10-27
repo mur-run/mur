@@ -1,15 +1,32 @@
 use crate::action_pipeline::Pipeline;
 use crate::action_pipeline::ledger::ActionLedger;
 use anyhow::{Context, Result, bail};
-use mur_common::action::{ActionEvent, PermDeleteReason};
+use mur_common::action::{ActionEvent, DeletionConfig, PermDeleteReason, TrashEntry};
+use mur_trash::MoveOutcome;
+use std::io;
 use std::path::Path;
 use uuid::Uuid;
 
 use super::resolve_mur_home;
 
+/// Days of ledger always replayed, even when retention is configured shorter.
+const MIN_LOOKUP_DAYS: u32 = 30;
+/// Slack past retention: covers day-file boundaries and a daemon that has not
+/// yet expired an entry whose retention just ran out.
+const LOOKUP_MARGIN_DAYS: u32 = 2;
+
+/// How far back the ledger must be replayed to see every entry still on disk.
+pub(super) fn lookup_days(deletion: &DeletionConfig) -> u32 {
+    deletion
+        .trash_retention_days
+        .max(MIN_LOOKUP_DAYS)
+        .saturating_add(LOOKUP_MARGIN_DAYS)
+}
+
 pub fn cmd_trash_list(name: &str) -> Result<()> {
     let pipeline = pipeline_for(name)?;
-    let events = ActionLedger::replay_days(&pipeline.ledger_dir(), 30);
+    let days = lookup_days(&pipeline.config.deletion);
+    let events = ActionLedger::replay_days(&pipeline.ledger_dir(), days);
     let mut found = false;
     println!(
         "{:<36} {:<14} {:<40} ORIGINAL",
@@ -42,34 +59,88 @@ pub fn cmd_trash_list(name: &str) -> Result<()> {
 pub fn cmd_trash_restore(name: &str, id: &str) -> Result<()> {
     let pipeline = pipeline_for(name)?;
     let entry_id = Uuid::parse_str(id).context("invalid entry ID")?;
-    let events = ActionLedger::replay_days(&pipeline.ledger_dir(), 30);
+    let entry = find_entry(&pipeline.ledger_dir(), &pipeline.config.deletion, entry_id)?;
 
-    for event in &events {
-        if let ActionEvent::TrashCreated { entry } = event
-            && entry.id == entry_id
-        {
-            if let Some(ref trash_path) = entry.trash_path
-                && trash_path.exists()
-            {
-                std::fs::rename(trash_path, &entry.original_path)?;
-                let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;
-                ledger.append(&ActionEvent::TrashRestored { entry_id })?;
-                println!(
-                    "restored {} to {}",
-                    trash_path.display(),
-                    entry.original_path.display()
-                );
-                return Ok(());
-            }
-            bail!("trash file not found for entry {id}");
-        }
+    let outcome = restore_entry(&entry, mur_trash::move_across)?;
+    // The object is back at its original path in both outcomes.
+    let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;
+    ledger.append(&ActionEvent::TrashRestored { entry_id })?;
+    let trash_path = entry.trash_path.as_deref().unwrap_or(Path::new("?"));
+    println!(
+        "restored {} to {}",
+        trash_path.display(),
+        entry.original_path.display()
+    );
+    if let MoveOutcome::CopiedSourceKept(e) = outcome {
+        eprintln!(
+            "warning: restored, but the trash copy could not be removed: {e}\n  \
+             remove it with: mur agent trash now {name} {id}"
+        );
     }
-    bail!("trash entry {id} not found");
+    Ok(())
+}
+
+/// The `TrashCreated` record for `entry_id`, searched across the whole
+/// retention window rather than a fixed 30 days.
+fn find_entry(ledger_dir: &Path, deletion: &DeletionConfig, entry_id: Uuid) -> Result<TrashEntry> {
+    ActionLedger::replay_days(ledger_dir, lookup_days(deletion))
+        .into_iter()
+        .find_map(|e| match e {
+            ActionEvent::TrashCreated { entry } if entry.id == entry_id => Some(entry),
+            _ => None,
+        })
+        .with_context(|| format!("trash entry {entry_id} not found"))
+}
+
+/// Move one trashed object back to its original path. Refuses to overwrite:
+/// anything now at the original path (file, directory or dangling link) wins.
+/// `mover` is [`mur_trash::move_across`] outside tests.
+fn restore_entry(
+    entry: &TrashEntry,
+    mover: impl FnOnce(&Path, &Path) -> io::Result<MoveOutcome>,
+) -> Result<MoveOutcome> {
+    let id = entry.id;
+    let trash_path = entry
+        .trash_path
+        .as_deref()
+        .with_context(|| format!("entry {id} has no trash path"))?;
+    if std::fs::symlink_metadata(trash_path).is_err() {
+        bail!(
+            "trash file not found for entry {id}: {}",
+            trash_path.display()
+        );
+    }
+    let original = &entry.original_path;
+    // Early, friendly refusal. Not the guarantee: the mover's renames are
+    // no-replace, so something created after this check still wins.
+    if std::fs::symlink_metadata(original).is_ok() {
+        bail!(not_overwriting(original));
+    }
+    match mover(trash_path, original) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => bail!(not_overwriting(original)),
+        r => r.with_context(|| {
+            format!(
+                "cannot restore {} to {}",
+                trash_path.display(),
+                original.display()
+            )
+        }),
+    }
+}
+
+fn not_overwriting(original: &Path) -> String {
+    format!(
+        "{} already exists; not overwriting it. Move or delete it, then restore again",
+        original.display()
+    )
 }
 
 pub fn cmd_trash_empty(name: &str) -> Result<()> {
     let pipeline = pipeline_for(name)?;
-    let events = ActionLedger::replay_days(&pipeline.ledger_dir(), 30);
+    let events = ActionLedger::replay_days(
+        &pipeline.ledger_dir(),
+        lookup_days(&pipeline.config.deletion),
+    );
     let mut ledger = ActionLedger::open(&pipeline.ledger_dir())?;
     let mut count = 0;
 
@@ -92,7 +163,10 @@ pub fn cmd_trash_empty(name: &str) -> Result<()> {
 pub fn cmd_trash_now(name: &str, id: &str) -> Result<()> {
     let pipeline = pipeline_for(name)?;
     let entry_id = Uuid::parse_str(id).context("invalid entry ID")?;
-    let events = ActionLedger::replay_days(&pipeline.ledger_dir(), 30);
+    let events = ActionLedger::replay_days(
+        &pipeline.ledger_dir(),
+        lookup_days(&pipeline.config.deletion),
+    );
 
     for event in &events {
         if let ActionEvent::TrashCreated { entry } = event
@@ -145,3 +219,7 @@ fn pipeline_for(name: &str) -> Result<Pipeline> {
 #[cfg(all(test, unix))]
 #[path = "trash_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "trash_restore_tests.rs"]
+mod restore_tests;

@@ -9,8 +9,6 @@ use std::time::{Duration, SystemTime};
 
 /// Directory under the agent home that holds every trash entry.
 pub const TRASH_DIR_NAME: &str = "trash";
-/// Suffix of an in-flight cross-device copy made outside the trash (restore).
-pub const PARTIAL_SUFFIX: &str = ".partial";
 /// Directory under the trash root where cross-device copies INTO the trash are
 /// staged. Not a UUID, so it never collides with an entry directory, and the
 /// only place [`sweep_partials`] looks: a retained entry is never judged by
@@ -50,13 +48,6 @@ pub fn entry_path(
 ) -> Option<PathBuf> {
     let name = original.file_name()?;
     Some(entry_dir(trash_root, id).join(name))
-}
-
-/// `<path>.partial`, the staging name for a cross-device copy.
-pub fn partial_path(dst: &Path) -> PathBuf {
-    let mut s = dst.as_os_str().to_owned();
-    s.push(PARTIAL_SUFFIX);
-    PathBuf::from(s)
 }
 
 /// Remove staging directories older than `min_age` left by crashed moves.
