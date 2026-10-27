@@ -45,6 +45,7 @@ mur-monitor
 mur-open-items
 mur-research-gateway
 mur-track
+mur-trash
 mur-zfs-agent
 package-lock.json
 package.json
