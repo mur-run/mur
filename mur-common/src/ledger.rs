@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fs::{self, OpenOptions},
@@ -80,35 +80,68 @@ impl<E: Serialize + DeserializeOwned> Ledger<E> {
             .collect();
         dates.sort();
         for date in dates {
-            let p = base_dir.join(format!("{}.jsonl", date.format("%Y-%m-%d")));
-            if !p.exists() {
-                continue;
-            }
-            let f = match std::fs::File::open(&p) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            for (i, line) in BufReader::new(f).lines().enumerate() {
-                let line = match line {
-                    Ok(l) => l,
-                    Err(_) => continue,
-                };
-                if line.trim().is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<E>(&line) {
-                    Ok(e) => out.push(Ok(e)),
-                    Err(err) => {
-                        tracing::warn!(
-                            "ledger {}:{} skip malformed line: {err}",
-                            p.display(),
-                            i + 1
-                        );
-                    }
-                }
+            let p = day_path(base_dir, date);
+            if p.exists() {
+                read_day(&p, |e| out.push(Ok(e)));
             }
         }
         out
+    }
+
+    /// Scan every daily file dated `since` or later (all of them when `None`),
+    /// oldest first, tagging each event with its file's day.
+    ///
+    /// Unlike [`Self::scan_days`] the window is not tied to today, so a reader
+    /// that must not lose old records (trash expiry, #2174) can resume from a
+    /// day it chose. Files not named `YYYY-MM-DD.jsonl` and malformed lines are
+    /// skipped.
+    pub fn scan_since(base_dir: &Path, since: Option<NaiveDate>) -> Vec<(NaiveDate, E)> {
+        let Ok(dir) = fs::read_dir(base_dir) else {
+            return Vec::new();
+        };
+        let mut days: Vec<NaiveDate> = dir
+            .filter_map(|d| d.ok()?.file_name().into_string().ok())
+            .filter_map(|name| {
+                let stem = name.strip_suffix(".jsonl")?;
+                NaiveDate::parse_from_str(stem, DAY_FORMAT).ok()
+            })
+            .filter(|day| since.is_none_or(|s| *day >= s))
+            .collect();
+        days.sort();
+        let mut out = Vec::new();
+        for day in days {
+            read_day(&day_path(base_dir, day), |e| out.push((day, e)));
+        }
+        out
+    }
+}
+
+const DAY_FORMAT: &str = "%Y-%m-%d";
+
+fn day_path(base_dir: &Path, day: NaiveDate) -> PathBuf {
+    base_dir.join(format!("{}.jsonl", day.format(DAY_FORMAT)))
+}
+
+/// Feed every well-formed event in one day file to `push`.
+fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) {
+    let Ok(f) = fs::File::open(p) else {
+        return;
+    };
+    for (i, line) in BufReader::new(f).lines().enumerate() {
+        let Ok(line) = line else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<E>(&line) {
+            Ok(e) => push(e),
+            Err(err) => {
+                tracing::warn!(
+                    "ledger {}:{} skip malformed line: {err}",
+                    p.display(),
+                    i + 1
+                );
+            }
+        }
     }
 }
 
@@ -186,5 +219,36 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].msg, "ok");
         assert_eq!(events[1].msg, "also ok");
+    }
+
+    #[test]
+    fn scan_since_reads_old_files_and_respects_the_start_day() {
+        let tmp = TempDir::new().unwrap();
+        let today = Local::now().date_naive();
+        for (age, n) in [(400i64, 1u32), (40, 2), (0, 3)] {
+            let day = today - chrono::Duration::days(age);
+            std::fs::write(
+                day_path(tmp.path(), day),
+                format!("{{\"msg\":\"m\",\"n\":{n}}}\n"),
+            )
+            .unwrap();
+        }
+        std::fs::write(tmp.path().join("notes.jsonl"), "garbage\n").unwrap();
+
+        let all = Ledger::<TestEvent>::scan_since(tmp.path(), None);
+        let ns: Vec<u32> = all.iter().map(|(_, e)| e.n).collect();
+        assert_eq!(ns, vec![1, 2, 3], "every day file, oldest first");
+        assert_eq!(all[0].0, today - chrono::Duration::days(400));
+
+        let since = today - chrono::Duration::days(40);
+        let recent = Ledger::<TestEvent>::scan_since(tmp.path(), Some(since));
+        let ns: Vec<u32> = recent.iter().map(|(_, e)| e.n).collect();
+        assert_eq!(ns, vec![2, 3], "start day inclusive");
+    }
+
+    #[test]
+    fn scan_since_missing_dir_is_empty() {
+        let tmp = TempDir::new().unwrap();
+        assert!(Ledger::<TestEvent>::scan_since(&tmp.path().join("nope"), None).is_empty());
     }
 }

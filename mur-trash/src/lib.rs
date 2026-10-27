@@ -22,7 +22,7 @@ mod publish_tests;
 mod trash_tests;
 
 pub use detect::{RmPlan, Rule, TrashTarget, plan};
-pub use expire::{ExpireReport, expire_due, lookup_days};
+pub use expire::{EXPIRY_CURSOR_FILE, ExpireReport, expire_due, expiry_cursor_path, lookup_days};
 pub use layout::{entry_path, ledger_dir, staging_root, sweep_partials, trash_root};
 pub use mover::{MoveOutcome, move_across, move_staged, move_with, move_with_staging};
 pub use publish::rename_noreplace;

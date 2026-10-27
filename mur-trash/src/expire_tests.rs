@@ -9,7 +9,7 @@ use mur_common::action::{ActionEvent, DeletionConfig, RestoreMeta, TrashEntry, T
 use mur_common::ledger::Ledger;
 use uuid::Uuid;
 
-use crate::expire::{ExpireReport, expire_due, lookup_days};
+use crate::expire::{ExpireReport, expire_due, expiry_cursor_path, lookup_days};
 use crate::layout::{entry_path, ledger_dir, trash_root};
 
 fn deletion() -> DeletionConfig {
@@ -67,9 +67,9 @@ fn record_on_day(home: &Path, age_days: i64, event: &ActionEvent) {
 }
 
 fn expired_records(home: &Path) -> Vec<Uuid> {
-    Ledger::<ActionEvent>::scan_days(&ledger_dir(home), lookup_days(&deletion()))
+    Ledger::<ActionEvent>::scan_since(&ledger_dir(home), None)
         .into_iter()
-        .filter_map(|r| match r.ok()? {
+        .filter_map(|(_, e)| match e {
             ActionEvent::TrashExpired { entry_id } => Some(entry_id),
             _ => None,
         })
@@ -231,6 +231,126 @@ fn already_missing_file_still_expires() {
             entry: entry.clone(),
         },
     );
+
+    let report = expire_due(&home, &deletion(), Utc::now()).unwrap();
+
+    assert_eq!(report.expired, vec![entry.id]);
+}
+
+/// Review #2176 P1: a backlog entry created long before any replay window
+/// ending today (pre-fix backlog, daemon offline for weeks) still expires.
+#[test]
+fn entry_older_than_the_lookup_window_still_expires() {
+    let (_t, home) = home();
+    let age = i64::from(lookup_days(&deletion())) + 30;
+    let entry = trashed(&home, "ancient.txt", age);
+    let file = entry.trash_path.clone().unwrap();
+    record_on_day(
+        &home,
+        age,
+        &ActionEvent::TrashCreated {
+            entry: entry.clone(),
+        },
+    );
+
+    let report = expire_due(&home, &deletion(), Utc::now()).unwrap();
+
+    assert_eq!(report.expired, vec![entry.id]);
+    assert!(fs::symlink_metadata(&file).is_err(), "file deleted");
+    assert_eq!(expired_records(&home), vec![entry.id]);
+}
+
+/// Review #2176 P1: a delete that keeps failing until its creation day is
+/// past the lookup window is still retried, and succeeds once it can.
+#[test]
+fn failed_delete_is_retried_after_creation_leaves_the_window() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, home) = home();
+    let entry = trashed(&home, "stuck.txt", 31);
+    let file = entry.trash_path.clone().unwrap();
+    let entry_dir = file.parent().unwrap().to_path_buf();
+    record_on_day(
+        &home,
+        31,
+        &ActionEvent::TrashCreated {
+            entry: entry.clone(),
+        },
+    );
+
+    // Read-only entry dir: unlinking the file inside fails.
+    fs::set_permissions(&entry_dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let first = expire_due(&home, &deletion(), Utc::now()).unwrap();
+    fs::set_permissions(&entry_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    if first.failed.is_empty() {
+        return; // running as root: permissions do not block, nothing to test
+    }
+    assert!(first.expired.is_empty());
+    assert!(
+        expired_records(&home).is_empty(),
+        "not recorded until deleted"
+    );
+
+    // Much later: the creation day is now far outside `lookup_days`.
+    let later = Utc::now() + ChronoDuration::days(i64::from(lookup_days(&deletion())) * 2);
+    let retry = expire_due(&home, &deletion(), later).unwrap();
+
+    assert_eq!(retry.expired, vec![entry.id]);
+    assert!(
+        fs::symlink_metadata(&file).is_err(),
+        "file deleted on retry"
+    );
+    assert_eq!(expired_records(&home), vec![entry.id]);
+}
+
+/// The cursor never skips an entry still in retention, and advances past
+/// days whose entries are all settled.
+#[test]
+fn cursor_holds_at_outstanding_entries_and_advances_past_settled_ones() {
+    let (_t, home) = home();
+    let old = trashed(&home, "old.txt", 100);
+    record_on_day(
+        &home,
+        100,
+        &ActionEvent::TrashCreated { entry: old.clone() },
+    );
+    let mut kept = trashed(&home, "kept.txt", 60);
+    kept.retention_until = Some(Utc::now() + ChronoDuration::days(365));
+    record_on_day(
+        &home,
+        60,
+        &ActionEvent::TrashCreated {
+            entry: kept.clone(),
+        },
+    );
+
+    let report = expire_due(&home, &deletion(), Utc::now()).unwrap();
+    assert_eq!(report.expired, vec![old.id]);
+
+    let cursor = fs::read_to_string(expiry_cursor_path(&home)).unwrap();
+    let day_60 = Local::now().date_naive() - ChronoDuration::days(60);
+    assert_eq!(cursor.trim(), day_60.format("%Y-%m-%d").to_string());
+    assert!(
+        kept.trash_path.as_ref().unwrap().exists(),
+        "in retention: kept"
+    );
+}
+
+/// A corrupt cursor falls back to a full replay rather than skipping days.
+#[test]
+fn unreadable_cursor_replays_everything() {
+    let (_t, home) = home();
+    let age = i64::from(lookup_days(&deletion())) + 10;
+    let entry = trashed(&home, "x.txt", age);
+    record_on_day(
+        &home,
+        age,
+        &ActionEvent::TrashCreated {
+            entry: entry.clone(),
+        },
+    );
+    let cursor = expiry_cursor_path(&home);
+    fs::create_dir_all(cursor.parent().unwrap()).unwrap();
+    fs::write(&cursor, "not a date").unwrap();
 
     let report = expire_due(&home, &deletion(), Utc::now()).unwrap();
 

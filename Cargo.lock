@@ -6917,6 +6917,7 @@ dependencies = [
  "serde_json",
  "shell-words",
  "tempfile",
+ "tracing",
  "uuid",
 ]
 
