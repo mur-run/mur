@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod claim;
 pub mod timing;
 mod validate;
 pub use crate::agent::{OverrideFlags, OverrideRecord, OverrideRejection};
@@ -47,6 +48,8 @@ pub fn is_valid_pair(issued: IssuedBy, confirmed: ConfirmedBy) -> bool {
     )
 }
 
+#[cfg(test)]
+mod claim_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
