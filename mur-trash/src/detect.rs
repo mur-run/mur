@@ -41,6 +41,10 @@ pub struct TrashTarget {
     pub rule: Rule,
     /// Index of the `&&` segment it came from: a failure stops later ones.
     pub segment: usize,
+    /// Every directory a `cd` before this segment changed into, in order.
+    /// Each must be a directory when the segment runs; bash stops at the
+    /// first `cd` that fails, even for an absolute target (review #2164 P1).
+    pub after_cd: Vec<PathBuf>,
 }
 
 /// The remover semantics a target must satisfy before it is moved.
@@ -71,6 +75,7 @@ pub fn plan(command: &str, cwd: &Path) -> RmPlan {
         Err(ScanError::Unsupported(what)) => return unrewritable(format!("contains {what}")),
     };
     let mut base = cwd.to_path_buf();
+    let mut after_cd = Vec::new();
     let mut targets = Vec::new();
     let last = segments.len() - 1;
     for (i, seg) in segments.iter().enumerate() {
@@ -87,10 +92,13 @@ pub fn plan(command: &str, cwd: &Path) -> RmPlan {
         let name = prog.rsplit('/').next().unwrap_or(prog);
         match name {
             "cd" if i != last && prog == "cd" => match args {
-                [dir] if !dir.is_empty() && dir != "-" => base = base.join(dir),
+                [dir] if !dir.is_empty() && dir != "-" => {
+                    base = base.join(dir);
+                    after_cd.push(base.clone());
+                }
                 _ => return unrewritable("cd without a single plain directory".into()),
             },
-            p if REMOVERS.contains(&p) => match parse_remover(p, args, &base, i) {
+            p if REMOVERS.contains(&p) => match parse_remover(p, args, &base, i, &after_cd) {
                 Ok(mut t) => targets.append(&mut t),
                 Err(why) => return unrewritable(why),
             },
@@ -135,6 +143,7 @@ fn parse_remover(
     args: &[String],
     base: &Path,
     segment: usize,
+    after_cd: &[PathBuf],
 ) -> Result<Vec<TrashTarget>, String> {
     let (flags, paths) = split_options(args);
     let rule = match prog {
@@ -181,6 +190,7 @@ fn parse_remover(
                 spelled: p.clone(),
                 rule,
                 segment,
+                after_cd: after_cd.to_vec(),
             })
         })
         .collect()

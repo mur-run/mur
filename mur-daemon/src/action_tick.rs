@@ -130,6 +130,19 @@ fn execute_move_to_trash(
     pipeline: &Pipeline,
     entry: &mur_common::action::TrashEntry,
 ) -> Result<()> {
+    execute_move_to_trash_with(pipeline, entry, &mur_trash::rename_noreplace)
+}
+
+/// [`execute_move_to_trash`] with an injectable `rename`, so a test can force
+/// EXDEV and pin the staging layout `sweep_partials` cleans (review #2164 P2).
+/// Production passes [`mur_trash::rename_noreplace`]: the injected rename is
+/// used for every step, including the final publish into the entry, so a
+/// plain `std::fs::rename` here would silently overwrite (#2168).
+fn execute_move_to_trash_with(
+    pipeline: &Pipeline,
+    entry: &mur_common::action::TrashEntry,
+    rename: &dyn Fn(&std::path::Path, &std::path::Path) -> std::io::Result<()>,
+) -> Result<()> {
     let path = &entry.original_path;
     let resolved = match mur_trash::check_target(path, &pipeline.agent_home) {
         Ok(Ok(p)) => p,
@@ -147,7 +160,10 @@ fn execute_move_to_trash(
     };
     let entry_dir = trash_file.parent().map(std::path::Path::to_path_buf);
 
-    match mur_trash::move_across(&resolved, &trash_file) {
+    // Staged under `<trash>/.staging/`: the only place the sweep looks, so a
+    // crash mid-copy never strands a `.partial` inside the entry directory.
+    let staging = mur_trash::staging_root(&pipeline.trash_dir());
+    match mur_trash::move_with_staging(&resolved, &trash_file, &staging, rename) {
         Ok(MoveOutcome::Moved) => {}
         Ok(MoveOutcome::CopiedSourceKept(e)) => {
             // The copy is complete and restorable, so it is still recorded.

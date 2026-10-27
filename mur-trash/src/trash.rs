@@ -87,9 +87,19 @@ pub(crate) fn trash_into_with(
 
     let mut out = Vec::with_capacity(targets.len());
     let mut failed_segment: Option<usize> = None;
+    let mut entered_segment: Option<usize> = None;
     for t in targets {
         if failed_segment.is_some_and(|s| t.segment > s) {
             break; // targets are in command order, so the rest are later too
+        }
+        if entered_segment != Some(t.segment) {
+            entered_segment = Some(t.segment);
+            if let Some(dir) = t.after_cd.iter().find(|d| !d.is_dir()) {
+                // The `cd` fails, so bash runs nothing from here on.
+                let msg = format!("cd: {}: No such file or directory", dir.display());
+                out.push(failed(t, msg));
+                break;
+            }
         }
         let outcome = match ledger.as_mut() {
             Ok(l) => one(

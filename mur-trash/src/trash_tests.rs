@@ -45,6 +45,7 @@ fn target(path: PathBuf, rule: Rule) -> TrashTarget {
         path,
         rule,
         segment: 0,
+        after_cd: Vec::new(),
     }
 }
 
@@ -343,4 +344,54 @@ fn exdev_trash_stages_under_staging_root() {
     // Nothing left behind in staging after a clean move.
     let leftovers = fs::read_dir(&stage).map(|d| d.count()).unwrap_or(0);
     assert_eq!(leftovers, 0);
+}
+
+/// Bash stops at a failed `cd`; an absolute target after it is independent of
+/// the bad base, so only an explicit check keeps it (review #2164 P1).
+#[test]
+fn failed_cd_stops_later_segments() {
+    let h = home();
+    let keep = h.work.join("important");
+    fs::write(&keep, "keep").unwrap();
+    let done = h.work.join("a");
+    fs::write(&done, "a").unwrap();
+    for cmd in [
+        format!("cd missing && rm {}", keep.display()),
+        format!(
+            "rm {} && cd missing && rm {}",
+            done.display(),
+            keep.display()
+        ),
+    ] {
+        let crate::RmPlan::Rewrite(targets) = crate::plan(&cmd, &h.work) else {
+            panic!("{cmd}: not rewritten")
+        };
+        let out = trash_into(&h.home, &targets, &DeletionConfig::default(), Uuid::nil());
+        assert!(keep.exists(), "{cmd}: {out:?}");
+        assert!(
+            out.last().is_some_and(TrashOutcome::is_failure),
+            "{cmd}: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|o| matches!(o, TrashOutcome::Trashed { target, .. } if target.path == keep)),
+            "{cmd}: {out:?}"
+        );
+    }
+    assert!(!done.exists(), "the segment before the cd still runs");
+}
+
+/// A `cd` into a real directory still lets the rewrite proceed.
+#[test]
+fn successful_cd_runs_later_segments() {
+    let h = home();
+    fs::create_dir_all(h.work.join("sub")).unwrap();
+    let f = h.work.join("sub/x");
+    fs::write(&f, "x").unwrap();
+    let crate::RmPlan::Rewrite(targets) = crate::plan("cd sub && rm x", &h.work) else {
+        panic!()
+    };
+    let out = trash_into(&h.home, &targets, &DeletionConfig::default(), Uuid::nil());
+    assert!(matches!(out[..], [TrashOutcome::Trashed { .. }]), "{out:?}");
+    assert!(!f.exists());
 }
