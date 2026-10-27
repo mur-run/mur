@@ -376,7 +376,11 @@ jobs:
     # clang rejects (whisper-rs-sys build). The CI Hub job builds whisper fine on
     # macos-latest; both are Apple-Silicon runners so the aarch64 target is native.
     runs-on: macos-latest
-    timeout-minutes: 120 # cold Hub build ≈ 20 min; whisper/ggml can be slow
+    # A new tag cannot read the previous tag's sccache (Actions caches are
+    # ref-scoped and `main` holds no Hub sccache), so every release is a cold
+    # build: 107–120 min observed in recent releases, warm re-run ≈ 41 min.
+    # 120 cancelled v2.97.0's first attempt mid-`cargo tauri build`.
+    timeout-minutes: 180
     env:
       # tauri-cli has no binstall-compatible prebuilt for this version, so a
       # plain install recompiles it from source (~10 min) every release. Pin the
@@ -581,7 +585,13 @@ jobs:
   release:
     name: Publish Release
     needs: [build, package-macos, hub-macos]
-    if: always() && contains(needs.build.result, 'success')
+    # Hub is required: publishing without it ships a release whose page lacks
+    # the Hub DMG and whose `latest.json` the Hub updater cannot see, and
+    # Homebrew/crates.io go out with it. `package-macos` stays optional.
+    if: >-
+      always()
+      && contains(needs.build.result, 'success')
+      && needs.hub-macos.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -595,9 +605,9 @@ jobs:
         # — they are the Tauri updater's own signed chain, checked against its
         # embedded pubkey rather than against this file.
         #
-        # nullglob because this job publishes even when `package-macos` /
-        # `hub-macos` fail (see `if:` above), so the macOS globs may legitimately
-        # match nothing. An entirely empty set still fails: a release page with
+        # nullglob because this job publishes even when `package-macos` fails
+        # (see `if:` above), so the CLI `.pkg` glob may legitimately match
+        # nothing. An entirely empty set still fails: a release page with
         # an empty checksums.txt is a silent failure.
         shell: bash
         run: |
