@@ -97,6 +97,15 @@ pub(crate) enum PublishError {
     Io(io::Error),
 }
 
+impl std::fmt::Display for PublishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exists => f.write_str("another override file appeared"),
+            Self::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 /// Step 3. `<agent>.<nonce>.tmp` → `fsync` → `link` to `<agent>.json` (never
 /// replaces) → unlink the tmp → `fsync` the directory. The tmp name is gone
 /// on every return.
