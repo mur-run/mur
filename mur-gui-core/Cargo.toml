@@ -22,6 +22,7 @@ reqwest = { workspace = true }
 base64 = "0.22"
 chrono = { workspace = true }
 notify = "6"
+fs2 = { workspace = true }
 
 [features]
 audio = []

@@ -359,6 +359,11 @@ const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 ///
 /// Deleting `agent.sock` has the same shape: the path may already belong to a
 /// newer supervisor's listener.
+///
+/// The JSON pid alone is not enough: a booting supervisor takes the sentinel
+/// flock before it writes `running.lock` (it seals the startup override in
+/// between), so for that whole window the JSON is missing or names the previous
+/// owner. `sentinel_owned` covers it.
 fn clear_runtime_state(mur_home: &Path, slug: &str) {
     if let Some(pid) = lock_owner_pid(mur_home, slug) {
         warn!(
@@ -368,10 +373,51 @@ fn clear_runtime_state(mur_home: &Path, slug: &str) {
         );
         return;
     }
+    if sentinel_owned(mur_home, slug) {
+        warn!(
+            agent = %slug,
+            "refusing to clear runtime state: running.sentinel is flocked or names a live pid"
+        );
+        return;
+    }
     let dir = mur_home.join("agents").join(slug);
     for f in ["running.lock", "agent.sock", "running.sentinel"] {
         let _ = std::fs::remove_file(dir.join(f));
     }
+}
+
+/// Whether a live process owns `running.sentinel`: its startup flock is held,
+/// or the pid the runtime writes into it on acquire is alive.
+///
+/// Probing the flock means briefly taking it ourselves. That is harmless: the
+/// handle drops (releasing it) before this returns, and a supervisor that loses
+/// the race just fails its `try_lock_exclusive` and exits as a duplicate would.
+/// When the probe can't tell (open fails for a reason other than "no such
+/// file"), answer owned — keeping a dead runtime's files costs one manual clear,
+/// deleting a live one's sentinel is #790.
+fn sentinel_owned(mur_home: &Path, slug: &str) -> bool {
+    use fs2::FileExt;
+    use std::io::Read;
+
+    let path = mur_home.join("agents").join(slug).join("running.sentinel");
+    let mut file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    if file.try_lock_exclusive().is_err() {
+        return true;
+    }
+    let mut pid = String::new();
+    let _ = file.read_to_string(&mut pid);
+    let _ = FileExt::unlock(&file);
+    pid.trim()
+        .parse::<u32>()
+        .is_ok_and(mur_common::lock_file::pid_alive)
 }
 
 /// A non-empty regular file. The `binaries/` directory ships zero-byte
@@ -525,6 +571,54 @@ mod tests {
     fn clear_runtime_state_removes_state_left_by_a_dead_process() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = seed_runtime_state(tmp.path(), "dead", dead_pid());
+
+        clear_runtime_state(tmp.path(), "dead");
+
+        for f in ["running.lock", "agent.sock", "running.sentinel"] {
+            assert!(!dir.join(f).exists(), "{f} should have been cleared");
+        }
+    }
+
+    /// A booting supervisor holds the sentinel flock before `running.lock`
+    /// exists. Clearing in that window deletes the inode it locks — #790.
+    #[test]
+    fn clear_runtime_state_refuses_while_the_sentinel_is_flocked() {
+        use fs2::FileExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = seed_runtime_state(tmp.path(), "booting", dead_pid());
+        std::fs::remove_file(dir.join("running.lock")).unwrap();
+        let held = std::fs::File::open(dir.join("running.sentinel")).unwrap();
+        held.try_lock_exclusive().unwrap();
+
+        clear_runtime_state(tmp.path(), "booting");
+
+        assert!(
+            dir.join("running.sentinel").exists(),
+            "flocked sentinel must survive"
+        );
+        assert!(dir.join("agent.sock").exists());
+        drop(held);
+    }
+
+    /// The flock probe can't see a holder on a filesystem without flock
+    /// support; the pid the runtime writes into the sentinel is the fallback.
+    #[test]
+    fn clear_runtime_state_refuses_when_the_sentinel_names_a_live_pid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = seed_runtime_state(tmp.path(), "booting", dead_pid());
+        std::fs::remove_file(dir.join("running.lock")).unwrap();
+        std::fs::write(dir.join("running.sentinel"), std::process::id().to_string()).unwrap();
+
+        clear_runtime_state(tmp.path(), "booting");
+
+        assert!(dir.join("running.sentinel").exists());
+    }
+
+    #[test]
+    fn clear_runtime_state_clears_a_sentinel_naming_a_dead_pid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = seed_runtime_state(tmp.path(), "dead", dead_pid());
+        std::fs::write(dir.join("running.sentinel"), dead_pid().to_string()).unwrap();
 
         clear_runtime_state(tmp.path(), "dead");
 
