@@ -104,7 +104,10 @@ mod waiver {
     fn a_hook_ask_is_never_waived() {
         let w = waiver();
         for origin in [o(false, true, false, false), o(false, false, true, false)] {
-            assert!(!w.may_waive(hooked(origin), Some(RiskTier::Write)), "{origin:?}");
+            assert!(
+                !w.may_waive(hooked(origin), Some(RiskTier::Write)),
+                "{origin:?}"
+            );
         }
     }
 

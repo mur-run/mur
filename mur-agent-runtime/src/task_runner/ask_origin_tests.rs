@@ -151,7 +151,10 @@ fn runtime_defines_no_ask_origin() {
                 walk(&p, hits);
             } else if p.extension().is_some_and(|x| x == "rs") {
                 let s = std::fs::read_to_string(&p).unwrap();
-                let needles = [concat!("struct ", "AskOrigin"), concat!("enum ", "AskOrigin")];
+                let needles = [
+                    concat!("struct ", "AskOrigin"),
+                    concat!("enum ", "AskOrigin"),
+                ];
                 if needles.iter().any(|n| s.contains(n)) {
                     hits.push(p.display().to_string());
                 }

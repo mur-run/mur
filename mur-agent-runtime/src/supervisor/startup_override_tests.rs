@@ -122,7 +122,7 @@ fn second_boot_after_consume_is_normal_and_logs_one_shot() {
 fn rejected_file_is_still_consumed() {
     let h = homes();
     let mut body = valid_file();
-    body["no_hitl"] = json!(true);
+    body["net_unrestricted"] = json!(true);
     publish(&h, &body);
     let p = consume(&h);
     assert!(
@@ -134,7 +134,7 @@ fn rejected_file_is_still_consumed() {
     let rej = rej.expect("rejection is recorded");
     assert_eq!(
         rej.reason,
-        format!("{REASON_UNSUPPORTED_FLAG_PREFIX}no_hitl")
+        format!("{REASON_UNSUPPORTED_FLAG_PREFIX}net_unrestricted")
     );
     assert_eq!(rej.nonce.as_deref(), Some(NONCE));
 }
@@ -238,7 +238,7 @@ fn audit_jsonl_has_one_line_per_outcome() {
 fn pre_seal_rejection_is_audited_even_if_boot_is_refused_before_seal() {
     let h = homes();
     let mut body = valid_file();
-    body["no_hitl"] = json!(true);
+    body["net_unrestricted"] = json!(true);
     publish(&h, &body);
     let p = consume(&h);
     assert!(matches!(p, Pending::Rejected(_)));
@@ -249,7 +249,7 @@ fn pre_seal_rejection_is_audited_even_if_boot_is_refused_before_seal() {
     assert_eq!(lines[0]["nonce"], NONCE);
     assert_eq!(
         lines[0]["reason"],
-        format!("{REASON_UNSUPPORTED_FLAG_PREFIX}no_hitl")
+        format!("{REASON_UNSUPPORTED_FLAG_PREFIX}net_unrestricted")
     );
 }
 
@@ -301,4 +301,47 @@ fn a_boot_refused_after_the_lock_leaves_the_agent_startable() {
 
     assert!(crate::lock_file::is_stale(&lock_path).unwrap());
     assert!(crate::lock_file::LockHandle::acquire(&lock_path).is_ok());
+}
+
+#[test]
+fn accepted_no_hitl_builds_a_waiver() {
+    let h = homes();
+    let mut body = valid_file();
+    body["no_hitl"] = json!(true);
+    publish(&h, &body);
+    let p = consume(&h);
+    let w = waiver(&p, true).expect("an accepted no_hitl on a sealed boot");
+    assert_eq!(w.nonce(), NONCE);
+}
+
+#[test]
+fn rejected_absent_or_flagless_builds_none() {
+    let h = homes();
+    assert!(waiver(&consume(&h), true).is_none(), "absent");
+
+    let h = homes();
+    publish(&h, &valid_file());
+    assert!(waiver(&consume(&h), true).is_none(), "accepted, no flag");
+
+    let h = homes();
+    let mut body = valid_file();
+    body["no_hitl"] = json!(true);
+    body["version"] = json!(9);
+    publish(&h, &body);
+    assert!(waiver(&consume(&h), true).is_none(), "rejected");
+}
+
+/// An unsealed boot reports the override as rejected, so it must not apply it
+/// either: the runner gets no waiver.
+#[test]
+fn unsealed_no_hitl_is_recorded_rejected_and_not_applied() {
+    let h = homes();
+    let mut body = valid_file();
+    body["no_hitl"] = json!(true);
+    publish(&h, &body);
+    let p = consume(&h);
+    assert!(waiver(&p, false).is_none());
+    let (ovr, rej) = finish_after_seal(p, false, &h.agent_home);
+    assert_eq!(ovr, None);
+    assert_eq!(rej.expect("recorded").reason, REASON_UNSEALED);
 }

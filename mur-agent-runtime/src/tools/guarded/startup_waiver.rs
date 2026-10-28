@@ -113,4 +113,3 @@ fn denied_earlier() -> HitlDecision {
         refusal_code: None,
     }
 }
-

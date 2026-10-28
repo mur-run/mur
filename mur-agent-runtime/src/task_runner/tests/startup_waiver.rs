@@ -194,7 +194,10 @@ fn bash(cmd: &str) -> serde_json::Value {
 fn waived(r: &Run) {
     assert_eq!(r.executed, 1, "a waived call runs");
     assert_eq!(r.asked, 0, "nobody is asked");
-    assert_eq!(r.records, 0, "a waiver writes nothing to the decision store");
+    assert_eq!(
+        r.records, 0,
+        "a waiver writes nothing to the decision store"
+    );
 }
 
 fn still_asks(r: &Run) {
@@ -211,7 +214,11 @@ async fn a_default_destructive_ask_is_waived() {
 #[tokio::test]
 async fn destructive_tool_runs_without_a_hitl_request() {
     let mut s = Setup::new("mcp__db__drop", serde_json::json!({}));
-    s.rules = vec![rule("mcp__db__drop", ToolPolicy::Allow, Some(RiskTier::Destructive))];
+    s.rules = vec![rule(
+        "mcp__db__drop",
+        ToolPolicy::Allow,
+        Some(RiskTier::Destructive),
+    )];
     waived(&run(s).await);
 }
 
@@ -219,7 +226,11 @@ async fn destructive_tool_runs_without_a_hitl_request() {
 #[tokio::test]
 async fn destructive_tool_runs_headless_without_parking() {
     let mut s = Setup::new("mcp__db__drop", serde_json::json!({}));
-    s.rules = vec![rule("mcp__db__drop", ToolPolicy::Allow, Some(RiskTier::Destructive))];
+    s.rules = vec![rule(
+        "mcp__db__drop",
+        ToolPolicy::Allow,
+        Some(RiskTier::Destructive),
+    )];
     s.can_approve = false;
     waived(&run(s).await);
 }
@@ -331,4 +342,3 @@ async fn unsealed_boot_still_refuses() {
     let r = run(s).await;
     assert_eq!((r.executed, r.asked), (0, 0));
 }
-

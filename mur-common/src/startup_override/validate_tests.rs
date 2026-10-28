@@ -123,13 +123,22 @@ fn rejects_malformed_nonce() {
 
 #[test]
 fn rejects_every_flag_this_build_does_not_support() {
-    for flag in ["no_hitl", "net_unrestricted", "full_perms"] {
+    for flag in ["net_unrestricted", "full_perms"] {
         let mut v = file(0);
         v[flag] = json!(true);
         let r = rejected(&v);
         assert_eq!(r.reason, format!("{REASON_UNSUPPORTED_FLAG_PREFIX}{flag}"));
         assert_eq!(r.nonce.as_deref(), Some(NONCE));
     }
+}
+
+#[test]
+fn accepts_no_hitl() {
+    let mut v = file(0);
+    v["no_hitl"] = json!(true);
+    let r = check(&v).expect("no_hitl is supported");
+    assert!(r.flags.no_hitl);
+    assert!(!r.flags.net_unrestricted && !r.flags.full_perms);
 }
 
 #[test]
