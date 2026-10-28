@@ -24,6 +24,10 @@ pub struct AskOrigin {
     pub clamp: bool,
     /// The model raised this call's tier itself (intent lift).
     pub intent_raised: bool,
+    /// A `pre_tool_use` safety hook asked (B0 rule 4: a side effect after
+    /// untrusted input). A question about the turn, not the tool — never
+    /// waived, even when a default or a clamp would have asked anyway.
+    pub hook_raised: bool,
 }
 
 /// The audit-reason prefix on every decision a waiver settles, so it can never
@@ -58,10 +62,10 @@ impl StartupWaiver {
     }
 
     /// May this boot settle the ask without a human? Checked in this order:
-    /// an intent raise vetoes; an explicit `ask` is kept; only a default or a
-    /// clamp is eligible; and then only at a waivable tier.
+    /// an intent raise or a hook ask vetoes; an explicit `ask` is kept; only a
+    /// default or a clamp is eligible; and then only at a waivable tier.
     pub fn may_waive(&self, origin: AskOrigin, tier: Option<RiskTier>) -> bool {
-        if origin.intent_raised || origin.explicit {
+        if origin.intent_raised || origin.hook_raised || origin.explicit {
             return false;
         }
         if !(origin.default || origin.clamp) {

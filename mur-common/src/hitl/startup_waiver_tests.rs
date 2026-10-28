@@ -67,6 +67,14 @@ mod waiver {
             default,
             clamp,
             intent_raised,
+            hook_raised: false,
+        }
+    }
+
+    fn hooked(origin: AskOrigin) -> AskOrigin {
+        AskOrigin {
+            hook_raised: true,
+            ..origin
         }
     }
 
@@ -90,6 +98,16 @@ mod waiver {
         assert!(!w.may_waive(o(false, true, false, false), Some(RiskTier::Spend)));
     }
 
+    /// B0 rule 4 asks about the turn; a default or clamp underneath it must
+    /// not let the waiver answer for the human.
+    #[test]
+    fn a_hook_ask_is_never_waived() {
+        let w = waiver();
+        for origin in [o(false, true, false, false), o(false, false, true, false)] {
+            assert!(!w.may_waive(hooked(origin), Some(RiskTier::Write)), "{origin:?}");
+        }
+    }
+
     #[test]
     fn default_origin_is_never_waived() {
         assert!(!waiver().may_waive(AskOrigin::default(), Some(RiskTier::Write)));
@@ -98,8 +116,11 @@ mod waiver {
     #[test]
     fn never_passes_privileged_or_spend() {
         let w = waiver();
-        for bits in 0u8..16 {
-            let origin = o(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
+        for bits in 0u8..32 {
+            let origin = AskOrigin {
+                hook_raised: bits & 16 != 0,
+                ..o(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0)
+            };
             for tier in [Some(RiskTier::Privileged), Some(RiskTier::Spend), None] {
                 assert!(!w.may_waive(origin, tier), "{origin:?} at {tier:?}");
             }
