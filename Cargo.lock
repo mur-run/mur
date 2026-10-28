@@ -6456,6 +6456,7 @@ dependencies = [
  "mur-common",
  "mur-compress",
  "mur-git-broker",
+ "mur-gui-core",
  "mur-mcp-proto",
  "mur-open-items",
  "mur-track",
