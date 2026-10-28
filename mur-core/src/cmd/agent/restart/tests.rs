@@ -223,7 +223,7 @@ fn direct_respawn_refuses_unresolvable_runtime() {
     std::fs::create_dir_all(&agent_home).unwrap();
     let mut envg = mur_common::test_env::EnvGuard::hold();
     envg.set_var("MUR_AGENT_RUNTIME_BIN", "/nonexistent/mur_agent_nope");
-    let err = direct_respawn("test-agent", &agent_home).unwrap_err();
+    let err = direct_respawn("test-agent", &agent_home, tmp.path()).unwrap_err();
     envg.unset_var("MUR_AGENT_RUNTIME_BIN");
     let msg = format!("{err:#}");
     assert!(
@@ -296,17 +296,23 @@ fn unknown_shas_never_manufacture_a_failure() {
 #[test]
 fn restart_one_with_not_running_emits_no_notes() {
     let tmp = tempfile::tempdir().unwrap();
-    let agents_dir = tmp.path().join("agents");
-    std::fs::create_dir_all(agents_dir.join("idle-agent")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("agents/idle-agent")).unwrap();
+    let mut launcher = CliLauncher::new("idle-agent", tmp.path(), false);
     let mut notes: Vec<String> = Vec::new();
     let mut sink = |n: RestartNote| {
         notes.push(match n {
             RestartNote::Info(l) | RestartNote::Failure(l) => l,
         })
     };
-    let err = restart_one_with("idle-agent", &agents_dir, "deadbeef", &mut sink)
-        .err()
-        .expect("not-running agent must error");
+    let err = restart_one_with(
+        "idle-agent",
+        tmp.path(),
+        "deadbeef",
+        &mut launcher,
+        &mut sink,
+    )
+    .err()
+    .expect("not-running agent must error");
     assert!(format!("{err:#}").contains("is not running"));
     assert!(notes.is_empty(), "unexpected notes: {notes:?}");
 }
@@ -346,4 +352,83 @@ fn service_failure_report_silent_without_an_error() {
     fs::write(&log, "INFO started\nINFO draining\n").unwrap();
     assert!(service_failure_report("mur", &log).is_none());
     assert!(service_failure_report("mur", &tmp.path().join("missing.log")).is_none());
+}
+
+// ── Launcher seam ────────────────────────────────────────────────────
+
+/// Stands in for signals and spawns: `start` writes the fresh lock a real
+/// runtime would.
+struct FakeLauncher {
+    lock_path: std::path::PathBuf,
+    new_pid: u32,
+    new_sha: &'static str,
+    calls: Vec<&'static str>,
+}
+
+impl Launcher for FakeLauncher {
+    fn stop(&mut self, _old: u32, _wait: std::time::Duration) -> Result<(), launcher::StopFailed> {
+        self.calls.push("stop");
+        Ok(())
+    }
+    fn start(&mut self) -> Result<Option<u32>> {
+        self.calls.push("start");
+        write_lock(&self.lock_path, self.new_pid, self.new_sha);
+        Ok(Some(self.new_pid))
+    }
+    fn kick(&mut self, _note: &mut dyn FnMut(RestartNote)) -> Result<Option<u32>> {
+        self.calls.push("kick");
+        Ok(None)
+    }
+    fn fresh_pid(&self, _old: Option<u32>) -> Option<u32> {
+        None
+    }
+}
+
+/// The split must not change what a plain restart says: same lines, same
+/// order, as before the seam existed.
+#[test]
+fn restart_one_with_notes_are_unchanged_by_the_seam() {
+    let tmp = tempfile::tempdir().unwrap();
+    let name = "pin-agent-seam";
+    let agent_home = tmp.path().join("agents").join(name);
+    fs::create_dir_all(&agent_home).unwrap();
+    let lock_path = agent_home.join("running.lock");
+    write_lock(&lock_path, 4_000_001, "aaaaaaaa11");
+    let mut launcher = FakeLauncher {
+        lock_path: lock_path.clone(),
+        new_pid: 4_000_002,
+        new_sha: "bbbbbbbb22",
+        calls: vec![],
+    };
+    let mut notes: Vec<(bool, String)> = Vec::new();
+    let report = restart_one_with(name, tmp.path(), "bbbbbbbb22", &mut launcher, &mut |n| {
+        notes.push(match n {
+            RestartNote::Info(l) => (false, l),
+            RestartNote::Failure(l) => (true, l),
+        })
+    })
+    .unwrap();
+    assert!(report.ok, "{}", report.detail);
+    assert_eq!(launcher.calls, ["stop", "start"]);
+    let profile = agent_home.join("profile.yaml");
+    assert_eq!(
+        notes,
+        [
+            (
+                false,
+                format!(
+                    "agent '{name}': could not read stop_timeout_secs from {}; defaulting to 15s",
+                    profile.display()
+                )
+            ),
+            (
+                false,
+                format!("agent '{name}' has no service installed; respawning runtime directly")
+            ),
+            (
+                false,
+                format!("agent '{name}' restarted (aaaaaaaa → bbbbbbbb)")
+            ),
+        ]
+    );
 }
