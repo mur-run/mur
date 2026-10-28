@@ -100,6 +100,55 @@ pub enum AuditEvent {
     /// No live override, but a consumed one from an earlier boot is present:
     /// a crash-restart does not reapply it.
     StartupOverrideNotReapplied { ts: chrono::DateTime<chrono::Utc> },
+    // Writer side (CLI and Hub orchestrator; Hub spec §Audit). `window` is the
+    // Hub window label, `None` (and omitted) for the CLI.
+    /// The confirmation prompt was declined; nothing was written.
+    StartupOverrideDeclined {
+        ts: chrono::DateTime<chrono::Utc>,
+        flags: crate::agent::OverrideFlags,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
+    /// The override file was published for the next boot.
+    StartupOverrideIssued {
+        ts: chrono::DateTime<chrono::Utc>,
+        nonce: String,
+        flags: crate::agent::OverrideFlags,
+        issued_by: crate::startup_override::IssuedBy,
+        confirmed_by: crate::startup_override::ConfirmedBy,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
+    /// The sweep withdrew an orphan left by a writer that crashed.
+    StartupOverrideDiscarded {
+        ts: chrono::DateTime<chrono::Utc>,
+        nonce: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
+    /// Cleanup took the writer's own file back before any boot claimed it.
+    StartupOverrideWithdrawn {
+        ts: chrono::DateTime<chrono::Utc>,
+        nonce: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
+    /// A boot consumed the file but never acknowledged it on its lock.
+    StartupOverrideUnacknowledged {
+        ts: chrono::DateTime<chrono::Utc>,
+        nonce: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
+    /// The sweep or Cleanup could not withdraw; a live file remains.
+    StartupOverrideWithdrawFailed {
+        ts: chrono::DateTime<chrono::Utc>,
+        nonce: Option<String>,
+        error: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<String>,
+    },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -324,3 +373,7 @@ mod tests {
         assert!(body.contains("revoked"));
     }
 }
+
+#[cfg(test)]
+#[path = "permissions_override_audit_tests.rs"]
+mod override_audit_tests;
