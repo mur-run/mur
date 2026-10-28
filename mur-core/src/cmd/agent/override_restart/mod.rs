@@ -9,4 +9,6 @@
 
 // The orchestrator that calls these lands in the same PR, task by task.
 #[allow(dead_code)]
+mod outcome;
+#[allow(dead_code)]
 mod writer;
