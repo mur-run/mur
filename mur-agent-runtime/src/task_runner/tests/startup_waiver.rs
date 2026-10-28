@@ -342,3 +342,88 @@ async fn unsealed_boot_still_refuses() {
     let r = run(s).await;
     assert_eq!((r.executed, r.asked), (0, 0));
 }
+
+/// Nothing a waiver settles is remembered: the next boot (a fresh runner, no
+/// waiver, the same store) asks again.
+#[tokio::test]
+async fn next_boot_asks_again() {
+    let first = run(Setup::new("bash", bash("rm -rf build"))).await;
+    waived(&first);
+    let mut next = Setup::new("bash", bash("rm -rf build"));
+    next.waiver = false;
+    let r = run(next).await;
+    assert_eq!(r.executed, 0);
+    assert_eq!(r.asked, 1, "the next boot asks the human");
+}
+
+/// Answers every call the way B0 rule 4 does after untrusted input: a
+/// one-shot ask about this turn.
+struct Rule4Ask;
+#[async_trait::async_trait]
+impl crate::hooks::Hook for Rule4Ask {
+    fn name(&self) -> &str {
+        "Rule4Ask"
+    }
+    async fn pre_tool_use(
+        &self,
+        _ctx: &crate::hooks::HookCtx,
+        _call: &crate::hooks::ToolCall,
+        _tok: &CancellationToken,
+    ) -> Result<crate::hooks::Decision, crate::hooks::HookError> {
+        Ok(crate::hooks::Decision::AskUser {
+            prompt: "side effect after untrusted input".into(),
+            default: crate::hooks::AskDefault::Deny,
+            scope_key: mur_common::permissions::ScopeKey {
+                agent_id: "a".into(),
+                tool_name: "bash".into(),
+                input_schema_hash: String::new(),
+            },
+            one_shot: true,
+        })
+    }
+}
+
+/// B0 rule 4 asks about the turn, not the tool. With no rule the call is
+/// also a default ask — exactly what a waiver settles — and the hook's ask
+/// must still reach the human. (The B0 rule itself is covered in `hooks/b0`;
+/// this pins that its verdict survives the waiver.)
+#[tokio::test]
+async fn rule_4_still_asks_with_a_waiver_present() {
+    use crate::hooks::{HookChain, HookCtx};
+    let calls = Arc::new(AtomicU64::new(0));
+    let r = TaskRunner::new_stub_echo()
+        .with_sandbox_enforcing(true)
+        .with_tools(vec![Arc::new(CountingBashTool {
+            calls: calls.clone(),
+            ..Default::default()
+        })])
+        .with_tools_policy(vec![])
+        .with_pending_approvals(empty_pending_approvals())
+        .with_notifier(tokio::sync::mpsc::channel(16).0)
+        .with_hitl_timeout_secs(1)
+        .with_hook_chain(
+            Arc::new(HookChain::new(vec![Arc::new(Rule4Ask)])),
+            HookCtx::for_test_with_turn_flags(Vec::new()),
+            CancellationToken::new(),
+        );
+    r.attach_startup_waiver(waiver());
+    let call = crate::llm::ToolCallResult {
+        call_id: "c-1".into(),
+        tool_name: "bash".into(),
+        input: bash("rm -rf build"),
+    };
+    let (mut d, mut s) = r.gate_response("t", std::slice::from_ref(&call)).await;
+    let decision = d.remove(&call.call_id);
+    assert!(
+        decision.as_ref().is_none_or(|d| !d.allow),
+        "the waiver answered a rule-4 ask: {decision:?}"
+    );
+    let _ = r
+        .handle_tool_call("t", &call, decision, s.remove(&call.call_id))
+        .await;
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "rule 4 must stop the call"
+    );
+}
