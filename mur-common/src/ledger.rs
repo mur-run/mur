@@ -102,6 +102,7 @@ impl<E: Serialize + DeserializeOwned> Ledger<E> {
         let mut scan = DayScan {
             events: Vec::new(),
             unreadable_days: Vec::new(),
+            malformed_days: Vec::new(),
             listing_failed: false,
         };
         let dir = match fs::read_dir(base_dir) {
@@ -135,8 +136,12 @@ impl<E: Serialize + DeserializeOwned> Ledger<E> {
         }
         days.sort();
         for day in days {
-            if !read_day(&day_path(base_dir, day), |e| scan.events.push((day, e))) {
+            let read = read_day(&day_path(base_dir, day), |e| scan.events.push((day, e)));
+            if !read.complete {
                 scan.unreadable_days.push(day);
+            }
+            if read.malformed {
+                scan.malformed_days.push(day);
             }
         }
         scan
@@ -151,6 +156,9 @@ pub struct DayScan<E> {
     /// Days whose file could not be opened or read to the end; their records
     /// may be missing from `events`.
     pub unreadable_days: Vec<NaiveDate>,
+    /// Days with at least one line that did not parse; that record is lost,
+    /// so a reader that must account for every record cannot trust the sum.
+    pub malformed_days: Vec<NaiveDate>,
     /// The directory listing failed, so whole days may be missing.
     pub listing_failed: bool,
 }
@@ -160,6 +168,20 @@ impl<E> DayScan<E> {
     pub fn is_complete(&self) -> bool {
         !self.listing_failed && self.unreadable_days.is_empty()
     }
+
+    /// [`Self::is_complete`] and no malformed line either: every record that
+    /// was written is in `events`.
+    pub fn is_exact(&self) -> bool {
+        self.is_complete() && self.malformed_days.is_empty()
+    }
+}
+
+/// What reading one day file found.
+struct DayRead {
+    /// The file opened and every line was read (I/O-wise).
+    complete: bool,
+    /// At least one line did not parse.
+    malformed: bool,
 }
 
 const DAY_FORMAT: &str = "%Y-%m-%d";
@@ -168,18 +190,21 @@ fn day_path(base_dir: &Path, day: NaiveDate) -> PathBuf {
     base_dir.join(format!("{}.jsonl", day.format(DAY_FORMAT)))
 }
 
-/// Feed every well-formed event in one day file to `push`. Returns false
-/// when the file could not be opened or a line could not be read (an I/O
-/// error, not a malformed record), i.e. records may have been missed.
-fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) -> bool {
+/// Feed every well-formed event in one day file to `push`, reporting whether
+/// the file was read in full and whether any line failed to parse.
+fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) -> DayRead {
     let f = match fs::File::open(p) {
         Ok(f) => f,
         Err(err) => {
             tracing::warn!("ledger {} not readable: {err}", p.display());
-            return false;
+            return DayRead {
+                complete: false,
+                malformed: false,
+            };
         }
     };
     let mut complete = true;
+    let mut malformed = false;
     for (i, line) in BufReader::new(f).lines().enumerate() {
         let line = match line {
             Ok(line) => line,
@@ -195,6 +220,7 @@ fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) -> bool {
         match serde_json::from_str::<E>(&line) {
             Ok(e) => push(e),
             Err(err) => {
+                malformed = true;
                 tracing::warn!(
                     "ledger {}:{} skip malformed line: {err}",
                     p.display(),
@@ -203,7 +229,10 @@ fn read_day<E: DeserializeOwned>(p: &Path, mut push: impl FnMut(E)) -> bool {
             }
         }
     }
-    complete
+    DayRead {
+        complete,
+        malformed,
+    }
 }
 
 #[cfg(test)]
@@ -333,5 +362,21 @@ mod tests {
         }
         assert!(!scan.is_complete());
         assert_eq!(scan.unreadable_days, vec![day]);
+    }
+
+    #[test]
+    fn scan_since_reports_a_malformed_line_without_calling_the_day_unreadable() {
+        let tmp = TempDir::new().unwrap();
+        let day = Local::now().date_naive();
+        std::fs::write(
+            day_path(tmp.path(), day),
+            "{\"msg\":\"m\",\"n\":1}\ngarbage\n",
+        )
+        .unwrap();
+        let scan = Ledger::<TestEvent>::scan_since(tmp.path(), None);
+        assert_eq!(scan.events.len(), 1);
+        assert!(scan.is_complete(), "a parse error is not an I/O failure");
+        assert!(!scan.is_exact());
+        assert_eq!(scan.malformed_days, vec![day]);
     }
 }

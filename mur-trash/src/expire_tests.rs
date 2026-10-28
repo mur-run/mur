@@ -9,7 +9,7 @@ use mur_common::action::{ActionEvent, DeletionConfig, RestoreMeta, TrashEntry, T
 use mur_common::ledger::Ledger;
 use uuid::Uuid;
 
-use crate::expire::{ExpireReport, expire_due, expiry_cursor_path, lookup_days};
+use crate::expire::{ExpireReport, expire_due, expiry_cursor_path, lookup_days, retained_bytes};
 use crate::layout::{entry_path, ledger_dir, trash_root};
 
 fn deletion() -> DeletionConfig {
@@ -429,4 +429,120 @@ fn unreadable_settlement_day_does_not_duplicate_the_expiry_record() {
     let again = expire_due(&home, &deletion(), Utc::now()).unwrap();
     assert_eq!(again, ExpireReport::default(), "already settled");
     assert_eq!(expired_records(&home), vec![entry.id], "recorded once");
+}
+
+#[test]
+fn retained_bytes_counts_open_entries_only() {
+    let (_t, home) = home();
+    let mut old = trashed(&home, "old.txt", 20); // past the old 7-day replay
+    old.file_size_bytes = 1000;
+    let mut gone = trashed(&home, "gone.txt", 2);
+    gone.file_size_bytes = 500;
+    record_on_day(&home, 20, &ActionEvent::TrashCreated { entry: old });
+    record_on_day(
+        &home,
+        2,
+        &ActionEvent::TrashCreated {
+            entry: gone.clone(),
+        },
+    );
+    record_on_day(&home, 1, &ActionEvent::TrashRestored { entry_id: gone.id });
+
+    assert_eq!(retained_bytes(&home), 1000);
+}
+
+#[test]
+fn expiry_frees_its_bytes() {
+    let (_t, home) = home();
+    let mut entry = trashed(&home, "old.txt", 31);
+    entry.file_size_bytes = 4096;
+    record_on_day(&home, 31, &ActionEvent::TrashCreated { entry });
+    assert_eq!(retained_bytes(&home), 4096);
+
+    expire_due(&home, &deletion(), Utc::now()).unwrap();
+
+    assert_eq!(retained_bytes(&home), 0);
+}
+
+/// Review #2177 P1: an open entry whose creation day is past the lookup
+/// window still occupies the trash, so it still counts.
+#[test]
+fn retained_bytes_counts_an_open_entry_older_than_the_lookup_window() {
+    let (_t, home) = home();
+    let age = i64::from(lookup_days(&deletion())) + 30;
+    let mut old = trashed(&home, "old.txt", age);
+    old.retention_until = Some(Utc::now() + ChronoDuration::days(365));
+    old.file_size_bytes = 900 * 1024;
+    record_on_day(&home, age, &ActionEvent::TrashCreated { entry: old });
+
+    assert_eq!(retained_bytes(&home), 900 * 1024);
+    // An expiry pass keeps the cursor at the open entry, so it still counts.
+    expire_due(&home, &deletion(), Utc::now()).unwrap();
+    assert_eq!(retained_bytes(&home), 900 * 1024);
+}
+
+/// Review #2177 P1: shortening retention does not hide entries trashed under
+/// the longer one; they stay counted until they actually leave.
+#[test]
+fn retained_bytes_survives_a_shortened_retention() {
+    let (_t, home) = home();
+    let mut kept = trashed(&home, "kept.txt", 80);
+    kept.retention_until = Some(Utc::now() + ChronoDuration::days(10));
+    kept.file_size_bytes = 2048;
+    record_on_day(&home, 80, &ActionEvent::TrashCreated { entry: kept });
+    let short = DeletionConfig {
+        trash_retention_days: 1,
+        ..deletion()
+    };
+
+    let report = expire_due(&home, &short, Utc::now()).unwrap();
+
+    assert!(report.expired.is_empty(), "still within its own retention");
+    assert_eq!(retained_bytes(&home), 2048);
+}
+
+/// Review #2177 P2: a creation record in a day file that cannot be read must
+/// not read as free space; its bytes still on disk are counted.
+#[cfg(unix)]
+#[test]
+fn retained_bytes_does_not_trust_a_replay_with_an_unreadable_day() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, home) = home();
+    let mut old = trashed(&home, "old.bin", 10);
+    let body = vec![0u8; 64 * 1024];
+    fs::write(old.trash_path.as_ref().unwrap(), &body).unwrap();
+    old.file_size_bytes = body.len() as u64;
+    record_on_day(&home, 10, &ActionEvent::TrashCreated { entry: old });
+    let day = Local::now().date_naive() - ChronoDuration::days(10);
+    let day_file = ledger_dir(&home).join(format!("{}.jsonl", day.format("%Y-%m-%d")));
+    assert_eq!(retained_bytes(&home), body.len() as u64);
+
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o000)).unwrap();
+    let used = retained_bytes(&home);
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(
+        used >= body.len() as u64,
+        "unreadable record must not become free space, got {used}"
+    );
+}
+
+/// Review #2177 P2: a malformed line may be a lost creation record, so the
+/// ledger sum is not trusted and the bytes on disk still count.
+#[test]
+fn retained_bytes_does_not_trust_a_replay_with_a_malformed_line() {
+    let (_t, home) = home();
+    let entry = trashed(&home, "kept.bin", 3);
+    let body = vec![0u8; 32 * 1024];
+    fs::write(entry.trash_path.as_ref().unwrap(), &body).unwrap();
+    let dir = ledger_dir(&home);
+    fs::create_dir_all(&dir).unwrap();
+    let day = Local::now().date_naive() - ChronoDuration::days(3);
+    // The creation record was torn: present on disk, unparseable.
+    fs::write(
+        dir.join(format!("{}.jsonl", day.format("%Y-%m-%d"))),
+        "{\"TrashCreated\":{\"entry\":{\"id\":\n",
+    )
+    .unwrap();
+
+    assert!(retained_bytes(&home) >= body.len() as u64);
 }

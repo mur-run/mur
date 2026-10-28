@@ -52,6 +52,49 @@ pub fn lookup_days(deletion: &DeletionConfig) -> u32 {
         .saturating_add(LOOKUP_MARGIN_DAYS)
 }
 
+/// Bytes the trash holds, summed from the ledger rather than walked on disk.
+///
+/// Every byte in an entry directory was put there by a `TrashCreated` record
+/// (status `Retained`) and leaves with a `TrashExpired`, `TrashRestored` or
+/// `TrashPermDeleted`, so the open records are the trash's contents. Reading
+/// the ledger costs one pass over its day files, not one `stat` per trashed
+/// file. `.staging` leftovers from a crashed copy are not counted; the daemon
+/// sweeps them.
+///
+/// Replay starts at the expiry cursor, not at a window ending today (review
+/// #2177 P1): an open entry whose creation day is older than [`lookup_days`]
+/// — a backlog, a delete that keeps failing, a retention since shortened —
+/// still occupies the trash and must still count against the cap. The cursor
+/// never passes an outstanding entry, and without one the whole ledger is
+/// read, so nothing open is ever missed.
+///
+/// A replay that missed records is not taken as the usage (review #2177 P2):
+/// a day file that could not be read, a directory that could not be listed,
+/// or a line that did not parse may hide a `TrashCreated`, and a lost record
+/// would read as free space. Then the trash is measured on disk instead, as
+/// before, and the larger of the two figures is used.
+pub fn retained_bytes(agent_home: &Path) -> u64 {
+    let scan = Ledger::<ActionEvent>::scan_since(
+        &ledger_dir(agent_home),
+        read_cursor(&expiry_cursor_path(agent_home)),
+    );
+    let settled = settled_ids(scan.events.iter().map(|(_, e)| e));
+    let from_ledger = outstanding(&scan.events, &settled)
+        .iter()
+        .map(|(_, entry)| entry.file_size_bytes)
+        .fold(0u64, u64::saturating_add);
+    if scan.is_exact() {
+        return from_ledger;
+    }
+    tracing::warn!(
+        unreadable = ?scan.unreadable_days,
+        malformed = ?scan.malformed_days,
+        listing_failed = scan.listing_failed,
+        "ledger replay incomplete; measuring trash usage on disk"
+    );
+    from_ledger.max(crate::trash::tree_size(&trash_root(agent_home)))
+}
+
 /// What one expiry pass did.
 #[derive(Debug, Default, PartialEq)]
 pub struct ExpireReport {

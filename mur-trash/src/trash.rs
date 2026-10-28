@@ -81,8 +81,9 @@ pub(crate) fn trash_into_with(
 ) -> Vec<TrashOutcome> {
     let root = trash_root(agent_home);
     let cap = config.trash_max_mb.saturating_mul(BYTES_PER_MB);
-    // Measured once, then kept current as this call adds to it.
-    let mut used = tree_size(&root);
+    // Read once from the ledger (not walked on disk), then kept current as
+    // this call adds to it.
+    let mut used = crate::expire::retained_bytes(agent_home);
     let mut ledger = Ledger::<ActionEvent>::open(&ledger_dir(agent_home));
 
     let mut out = Vec::with_capacity(targets.len());
