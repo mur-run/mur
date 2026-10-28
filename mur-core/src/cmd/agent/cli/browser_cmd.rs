@@ -75,25 +75,31 @@ pub(super) async fn handle(app: &mut App, args: Vec<String>, tx: &mpsc::Sender<S
             ));
             return;
         }
-        // Remembered so the pre-turn host check (#2101) does not ask again:
-        // a session grant lives on the running proxy, not in the profile.
-        if let Ok(a) = super::browser_allow_cmd::parse_allow(&rest)
-            && a.session
-        {
-            app.egress_chips.session_allowed.insert(a.host);
-        }
         let home = app.home.clone();
-        run_manage(app, move |agent| {
+        let agent = app.agent.clone();
+        let args = rest.clone();
+        let res = match tokio::task::spawn_blocking(move || {
             super::browser_allow_cmd::run_allow(
                 &agent,
-                &rest,
+                &args,
                 &mut super::browser_allow_cmd::ProfileAllowOps {
                     agent: &agent,
                     home,
                 },
             )
         })
-        .await;
+        .await
+        {
+            Ok(r) => r.map_err(|e| format!("error: {e:#}")),
+            Err(e) => Err(format!("task failed: {e}")),
+        };
+        // Remembered so the pre-turn host check (#2101) does not ask again —
+        // a session grant lives on the running proxy, not in the profile.
+        // Only after it succeeded: a failed grant left the host blocked.
+        if let Some(host) = super::browser_allow_cmd::granted_session_host(&rest, &res) {
+            app.egress_chips.session_allowed.insert(host);
+        }
+        apply_managed(app, res);
         return;
     }
     if route == Route::Status {
