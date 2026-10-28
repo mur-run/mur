@@ -1,11 +1,19 @@
 //! The startup-override flags shared by `mur agent start` and `restart`
 //! (spec §CLI). One struct, flattened into both, so the two cannot drift.
 
-use clap::{Args, ValueEnum};
+use clap::{ArgGroup, Args, ValueEnum};
 use mur_common::agent::OverrideFlags;
 
+/// The group `--confirm` requires. Built by hand with `#[group(skip)]`:
+/// the derive's own struct group appends every field after any `args = [..]`,
+/// so `--confirm` would sit in the group it requires and satisfy itself.
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
-#[group(id = "override_flag", multiple = true, args = ["no_hitl", "net", "full_perms", "dangerously_skip_all"])]
+#[group(skip)]
+#[command(group(
+    ArgGroup::new("override_flag")
+        .multiple(true)
+        .args(["no_hitl", "net", "full_perms", "dangerously_skip_all"])
+))]
 pub struct OverrideArgs {
     /// Next boot only: calls that would ask for approval run without asking
     /// (Spend, Privileged and undeclared-tier calls still ask)
