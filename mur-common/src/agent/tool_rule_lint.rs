@@ -99,10 +99,19 @@ pub fn case_fix(pattern: &str, known: &KnownTools) -> Option<String> {
         }
     }
     for p in &known.prefixes {
-        if lower.starts_with(&p.to_ascii_lowercase())
+        let p_lower = p.to_ascii_lowercase();
+        if lower.starts_with(&p_lower)
             && let Some(rest) = body.get(p.len()..)
         {
             return Some(format!("{p}{rest}{star}"));
+        }
+        // A glob shorter than the prefix (`MCP__*` for `mcp__github__`):
+        // keep the length the operator wrote.
+        if glob
+            && p_lower.starts_with(&lower)
+            && let Some(fixed) = p.get(..body.len())
+        {
+            return Some(format!("{fixed}{star}"));
         }
     }
     None
@@ -207,6 +216,18 @@ mod tests {
             case_fix("MCP__github__merge_pr", &known()).as_deref(),
             Some("mcp__github__merge_pr")
         );
+    }
+
+    #[test]
+    fn miscased_globs_shorter_than_a_server_prefix_are_fixed() {
+        // The glob covers the whole `mcp__github__` prefix; the suggestion
+        // keeps the length the operator wrote.
+        assert_eq!(case_fix("MCP__*", &known()).as_deref(), Some("mcp__*"));
+        assert_eq!(
+            case_fix("mcp__Git*", &known()).as_deref(),
+            Some("mcp__git*")
+        );
+        assert_eq!(case_fix("mcp__Gitlab*", &known()), None, "no such server");
     }
 
     #[test]
