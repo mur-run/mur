@@ -39,3 +39,79 @@ fn spend_tools_match_by_leaf() {
         assert_eq!(spend_floor(name), None, "{name}");
     }
 }
+
+mod waiver {
+    use crate::agent::{OverrideFlags, OverrideRecord};
+    use crate::hitl::RiskTier;
+    use crate::hitl::startup_waiver::{AskOrigin, STARTUP_WAIVER_REASON_PREFIX, StartupWaiver};
+    use crate::startup_override::ConfirmedBy;
+
+    fn record(no_hitl: bool) -> OverrideRecord {
+        OverrideRecord {
+            nonce: "n-1".into(),
+            flags: OverrideFlags {
+                no_hitl,
+                ..OverrideFlags::default()
+            },
+            confirmed_by: ConfirmedBy::Tty,
+        }
+    }
+
+    fn waiver() -> StartupWaiver {
+        StartupWaiver::from_record(&record(true)).expect("no_hitl builds a waiver")
+    }
+
+    fn o(explicit: bool, default: bool, clamp: bool, intent_raised: bool) -> AskOrigin {
+        AskOrigin {
+            explicit,
+            default,
+            clamp,
+            intent_raised,
+        }
+    }
+
+    #[test]
+    fn may_waive_order() {
+        let w = waiver();
+        let tier = Some(RiskTier::Write);
+        let cases = [
+            ("default", o(false, true, false, false), true),
+            ("clamp", o(false, false, true, false), true),
+            ("raise alone", o(false, false, false, true), false),
+            ("default + raise", o(false, true, false, true), false),
+            ("clamp + raise", o(false, false, true, true), false),
+            ("explicit", o(true, false, false, false), false),
+            ("explicit + default", o(true, true, false, false), false),
+            ("explicit + clamp", o(true, false, true, false), false),
+        ];
+        for (name, origin, want) in cases {
+            assert_eq!(w.may_waive(origin, tier), want, "{name}");
+        }
+        assert!(!w.may_waive(o(false, true, false, false), Some(RiskTier::Spend)));
+    }
+
+    #[test]
+    fn default_origin_is_never_waived() {
+        assert!(!waiver().may_waive(AskOrigin::default(), Some(RiskTier::Write)));
+    }
+
+    #[test]
+    fn never_passes_privileged_or_spend() {
+        let w = waiver();
+        for bits in 0u8..16 {
+            let origin = o(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
+            for tier in [Some(RiskTier::Privileged), Some(RiskTier::Spend), None] {
+                assert!(!w.may_waive(origin, tier), "{origin:?} at {tier:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn from_record_needs_no_hitl() {
+        assert!(StartupWaiver::from_record(&record(false)).is_none());
+        let w = waiver();
+        assert_eq!(w.nonce(), "n-1");
+        assert_eq!(w.reason(), format!("{STARTUP_WAIVER_REASON_PREFIX}n-1"));
+        assert_eq!(w.reason(), "startup-override:n-1");
+    }
+}
