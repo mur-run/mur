@@ -56,7 +56,9 @@ mod who;
 #[allow(dead_code)]
 pub mod mcp_remote;
 pub mod model_resolve;
+mod override_cmd;
 mod override_restart;
+pub use override_cmd::{cmd_restart_override, cmd_start_override};
 mod peers;
 mod perm;
 pub mod perm_view;
