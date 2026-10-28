@@ -394,3 +394,39 @@ fn unreadable_day_file_is_not_skipped_by_the_cursor() {
     assert!(fs::symlink_metadata(entry.trash_path.as_ref().unwrap()).is_err());
     assert_eq!(expired_records(&home), vec![entry.id]);
 }
+
+/// Review #2176 P2: an unreadable day file may hold the entry's existing
+/// `TrashExpired`. Acting on that partial history would record it twice, so
+/// a pass over an incomplete scan deletes and records nothing.
+#[cfg(unix)]
+#[test]
+fn unreadable_settlement_day_does_not_duplicate_the_expiry_record() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_t, home) = home();
+    let entry = trashed(&home, "old.txt", 100);
+    record_on_day(
+        &home,
+        100,
+        &ActionEvent::TrashCreated {
+            entry: entry.clone(),
+        },
+    );
+    // Already expired by an earlier pass: files gone, record on day 60.
+    fs::remove_file(entry.trash_path.as_ref().unwrap()).unwrap();
+    record_on_day(&home, 60, &ActionEvent::TrashExpired { entry_id: entry.id });
+    let day = Local::now().date_naive() - ChronoDuration::days(60);
+    let day_file = ledger_dir(&home).join(format!("{}.jsonl", day.format("%Y-%m-%d")));
+
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o000)).unwrap();
+    let blind = expire_due(&home, &deletion(), Utc::now()).unwrap();
+    fs::set_permissions(&day_file, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(
+        blind,
+        ExpireReport::default(),
+        "no action on partial history"
+    );
+    let again = expire_due(&home, &deletion(), Utc::now()).unwrap();
+    assert_eq!(again, ExpireReport::default(), "already settled");
+    assert_eq!(expired_records(&home), vec![entry.id], "recorded once");
+}

@@ -13,6 +13,9 @@
 //! Nor does it move past a day file that could not be read (review #2176
 //! P2): its records were not seen, so they are not known to be settled. When
 //! the ledger directory itself cannot be listed the cursor is left untouched.
+//! And an incomplete scan deletes and records nothing: the unread day may hold
+//! the very `TrashExpired` that settles an entry, so acting on the partial
+//! history would record it a second time.
 
 use std::collections::HashSet;
 use std::io;
@@ -83,8 +86,16 @@ pub fn expire_due(
     let mut report = ExpireReport::default();
     let mut keep_from = floor;
 
+    // An unread day may hold an entry's settlement, so on partial history an
+    // "outstanding" entry may already be expired or restored: acting on it
+    // would record it twice. Defer every side effect until a complete scan.
+    let complete = scan.is_complete();
+    if !complete {
+        tracing::warn!(dir = %dir.display(), "ledger scan incomplete; trash expiry deferred");
+    }
     let due: Vec<_> = outstanding
         .iter()
+        .filter(|_| complete)
         .filter(|(_, entry)| entry.retention_until.is_some_and(|until| until < now))
         .collect();
     if !due.is_empty() {
