@@ -21,7 +21,7 @@ pub struct LockHandle {
     /// Held open so the exclusive flock stays active for this process's
     /// lifetime.  This is the *sentinel* file, never renamed by `write_lock`,
     /// so the flock inode is always stable — see `is_stale` for why.
-    _sentinel: File,
+    sentinel: File,
     /// Path of the JSON data file (`running.lock`), removed on `release`.
     path: PathBuf,
 }
@@ -59,12 +59,21 @@ impl LockHandle {
             let _ = file.write_all(std::process::id().to_string().as_bytes());
         }
         Ok(Self {
-            _sentinel: file,
+            sentinel: file,
             path: path.to_path_buf(),
         })
     }
 
     pub fn release(self) {
+        // Erase our pid from the sentinel while we still hold its flock, so a
+        // later reader can't mistake a reused pid for this runtime. Only when
+        // it still names us: without flock support a newer instance may have
+        // written its own pid here, and that one must survive.
+        if fs::read_to_string(sentinel_path(&self.path))
+            .is_ok_and(|s| s.trim() == std::process::id().to_string())
+        {
+            let _ = self.sentinel.set_len(0);
+        }
         // Only remove the lock if we still own it: a stale duplicate instance
         // shutting down must not clobber the lock a newer instance has since
         // written (its release would leave the live agent looking stopped).
@@ -193,5 +202,31 @@ mod tests {
             sentinel_path(&path).exists(),
             "the sentinel is never unlinked; only its flock carries ownership"
         );
+    }
+
+    #[test]
+    fn release_erases_own_pid_from_sentinel() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("running.lock");
+        let handle = LockHandle::acquire(&path).unwrap();
+        let sentinel = sentinel_path(&path);
+        assert_eq!(
+            fs::read_to_string(&sentinel).unwrap(),
+            std::process::id().to_string()
+        );
+        handle.release();
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "");
+    }
+
+    #[test]
+    fn release_keeps_a_sentinel_naming_another_pid() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("running.lock");
+        let handle = LockHandle::acquire(&path).unwrap();
+        // No-flock filesystem: a newer instance overwrote the sentinel pid.
+        let other = (std::process::id() + 1).to_string();
+        fs::write(sentinel_path(&path), &other).unwrap();
+        handle.release();
+        assert_eq!(fs::read_to_string(sentinel_path(&path)).unwrap(), other);
     }
 }
