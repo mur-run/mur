@@ -115,9 +115,9 @@ async fn hub_start_during_boot_window_does_not_admit_a_second_runtime() {
     seed_home(home);
 
     let bin = env!("CARGO_BIN_EXE_mur-agent-runtime");
-    // SAFETY: this file is its own test binary with a single test, so no other
-    // thread reads the environment concurrently.
-    unsafe { std::env::set_var("MUR_AGENT_RUNTIME_BIN", bin) };
+    // The Hub's `find_runtime_binary` reads this; the guard restores it.
+    let mut env = mur_common::test_env::EnvGuard::hold();
+    env.set_var("MUR_AGENT_RUNTIME_BIN", bin);
 
     // A: boots, takes the sentinel flock, claims the FIFO and blocks reading it.
     let mut a = Reaped(
