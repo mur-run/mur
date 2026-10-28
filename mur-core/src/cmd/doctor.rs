@@ -13,12 +13,14 @@ use std::process::Command;
 
 mod ast_grep_reach;
 mod fs_grants;
+mod tool_rules;
 
 #[cfg(test)]
 use fs_grants::grant_scope_verdict;
 use fs_grants::{
     check_deny_list, check_dropped_launch_chain_grants, check_filesystem_entitlements,
 };
+use tool_rules::check_tool_rule_case;
 
 /// [`ast_grep_reach::gaps`] for tests outside this module (`code_nav`).
 #[cfg(test)]
@@ -497,6 +499,8 @@ pub fn agent_doctor(mur_home: &std::path::Path, name: &str) -> Result<Vec<Check>
     ));
 
     out.push(check_deny_list(&profile.entitlements.filesystem, name));
+
+    out.push(check_tool_rule_case(&profile));
 
     // #1984: ast-grep installed under mur home but not wired to this agent.
     out.extend(ast_grep_reach::check(mur_home, name, &profile));

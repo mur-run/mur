@@ -143,8 +143,13 @@ pub async fn build_tools(
         record_status(path, &discovered);
     }
 
+    // Every name a server listed, before `deny` rules drop any: the case
+    // lint must see a denied `Run` beside a live `run`, or it calls the
+    // (working) deny on `Run` a typo of `run`.
+    let mut listed_names: Vec<String> = Vec::new();
     for item in discovered.into_iter().flatten() {
-        let (server, _, tools, timeout_secs, serena_project) = item;
+        let (server, sanitized, tools, timeout_secs, serena_project) = item;
+        listed_names.extend(tools.iter().map(|t| wire_name(&sanitized, &t.name)));
         let listed = ListedServer {
             server: &server,
             timeout_secs,
@@ -156,7 +161,30 @@ pub async fn build_tools(
         }
     }
 
+    warn_dead_rules(rules, &map, listed_names);
+
     (defs, map)
+}
+
+/// #2147: log every rule whose pattern differs from a registered tool only by
+/// case — matching is exact, so it does nothing (a deny/ask fails open).
+/// Tools registered elsewhere (bash_wait, recall, …) count via the builtins;
+/// MCP tools count by `listed` (pre-deny), so a denied tool is still known.
+fn warn_dead_rules(
+    rules: &[ToolRule],
+    map: &HashMap<String, Arc<dyn ToolExecutor>>,
+    listed: Vec<String>,
+) {
+    let mut known = mur_common::agent::KnownTools::names(map.keys().map(String::as_str));
+    known.names.extend(listed);
+    known.names.extend(
+        mur_common::agent::BUILTIN_TOOL_NAMES
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    for d in mur_common::agent::dead_rules(rules, &known) {
+        tracing::warn!(pattern = %d.pattern, suggestion = %d.suggestion, "{}", d.message());
+    }
 }
 
 /// What a server's executors are built from besides its tool list.

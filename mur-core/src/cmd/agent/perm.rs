@@ -93,6 +93,11 @@ pub fn cmd_perm_show(name: &str, section: Option<&str>) -> Result<()> {
         print!("{v}");
         print!("{intent_block}");
     }
+    if section.is_none_or(|s| s == "tools") {
+        for line in tools::dead_rule_lines(&profile) {
+            eprintln!("{line}");
+        }
+    }
     if !profile.mcp_servers.is_empty() {
         eprintln!();
         eprintln!("# outbound scope (`mur agent perm list-hosts {name}` for detail)");
